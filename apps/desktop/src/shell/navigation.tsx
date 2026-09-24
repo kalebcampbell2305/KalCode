@@ -53,7 +53,6 @@ export const SURFACES: Record<SurfaceId, SurfaceMeta> = {
     label: "Threads",
     icon: MessagesSquare,
     summary: "Persistent units of AI work that run Claude Code, Codex or Gemini CLI in your projects.",
-    dependsOn: "Provider connections",
   },
   agents: {
     id: "agents",

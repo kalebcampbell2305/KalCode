@@ -19,6 +19,22 @@ fn v1_only() -> &'static [Migration] {
     &MIGRATIONS[..1]
 }
 
+/// Schema v2 (v1 + Z1 workspaces and terminals).
+fn v2_only() -> &'static [Migration] {
+    &MIGRATIONS[..2]
+}
+
+/// The final numbering of this build's migrations. Versions must stay contiguous and each
+/// released migration's number, name and checksum is fixed forever.
+#[test]
+fn migrations_are_numbered_contiguously() {
+    let numbering: Vec<(i64, &str)> = MIGRATIONS.iter().map(|m| (m.version, m.name)).collect();
+    assert_eq!(
+        numbering,
+        vec![(1, "foundation"), (2, "workspaces"), (3, "threads")]
+    );
+}
+
 /// A hypothetical migration after the current latest, to exercise refusal paths.
 fn current_plus_next() -> Vec<Migration> {
     let mut all = MIGRATIONS.to_vec();
@@ -133,12 +149,12 @@ fn upgrade_from_v1_keeps_data_and_writes_backup() {
         .find_map(|e| match e.event {
             EventPayload::DatabaseMigrated {
                 from_version: 1,
-                to_version: 2,
+                to_version: 3,
                 backup_created,
             } => Some(backup_created),
             _ => None,
         })
-        .expect("database.migrated 1 -> 2");
+        .expect("database.migrated 1 -> 3");
     assert!(migrated);
 
     // Backup file exists and is a valid v1 database with the pre-upgrade data.
@@ -170,6 +186,114 @@ fn upgrade_from_v1_keeps_data_and_writes_backup() {
         core.active_workspace().expect("active").map(|w| w.id),
         Some(workspace.id)
     );
+
+    // The v3 thread tables exist.
+    assert_eq!(thread_tables(&core), THREAD_TABLES);
+}
+
+const THREAD_TABLES: [&str; 4] = ["thread_files", "thread_messages", "threads", "tool_calls"];
+
+fn thread_tables(core: &Core) -> Vec<String> {
+    core.read(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table'
+               AND name IN ('threads', 'thread_messages', 'tool_calls', 'thread_files')
+             ORDER BY name",
+        )?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    })
+    .expect("list tables")
+}
+
+fn backup_versions(dir: &std::path::Path) -> Vec<i64> {
+    let mut versions: Vec<i64> = std::fs::read_dir(dir.join("backups"))
+        .expect("backups dir")
+        .filter_map(|e| e.ok())
+        .map(|e| {
+            let conn = rusqlite::Connection::open(e.path()).expect("open backup");
+            db::schema_version(&conn).expect("backup version")
+        })
+        .collect();
+    versions.sort_unstable();
+    versions
+}
+
+/// v1 (first release) → v2 (a build with Z1) → v3 (this build), one step at a time, with data
+/// written at every version. Each upgrade writes a backup of the version it started from.
+#[test]
+fn upgrade_v1_to_v2_to_v3_keeps_data_and_backs_up_each_step() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = tempfile::tempdir().expect("project");
+    {
+        let core = Core::open_with_migrations(config(dir.path()), v1_only()).expect("v1 open");
+        core.update_settings(&SettingsPatch {
+            theme: Some(ThemePreference::Light),
+            density: Some(Density::Compact),
+            ..Default::default()
+        })
+        .expect("update");
+        core.shutdown();
+    }
+    let workspace_id = {
+        let core = Core::open_with_migrations(config(dir.path()), v2_only()).expect("v2 open");
+        assert_eq!(
+            core.diagnostics().expect("diagnostics").database.schema_version,
+            2
+        );
+        assert!(
+            thread_tables(&core).is_empty(),
+            "v2 has no thread tables yet"
+        );
+        let workspace = core.open_workspace(project.path()).expect("open workspace");
+        core.shutdown();
+        workspace.id
+    };
+    assert_eq!(backup_versions(dir.path()), vec![1]);
+
+    let core = Core::open(config(dir.path())).expect("v3 open");
+    assert_eq!(backup_versions(dir.path()), vec![1, 2]);
+    assert_eq!(
+        core.diagnostics().expect("diagnostics").database.schema_version,
+        3
+    );
+
+    // v1 settings, v2 workspace and the whole event history survive.
+    let settings = core.settings().expect("settings");
+    assert_eq!(settings.theme, ThemePreference::Light);
+    assert_eq!(settings.density, Density::Compact);
+    assert_eq!(
+        core.active_workspace().expect("active").map(|w| w.id),
+        Some(workspace_id)
+    );
+    let migrations: Vec<(i64, i64, bool)> = core
+        .recent_events(100, None)
+        .expect("events")
+        .iter()
+        .rev()
+        .filter_map(|e| match e.event {
+            EventPayload::DatabaseMigrated {
+                from_version,
+                to_version,
+                backup_created,
+            } => Some((from_version, to_version, backup_created)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        migrations,
+        vec![(0, 1, false), (1, 2, true), (2, 3, true)],
+        "each step recorded, backups for every existing database"
+    );
+    let types: Vec<&str> = core
+        .recent_events(100, None)
+        .expect("events")
+        .iter()
+        .map(|e| e.event.type_name())
+        .collect();
+    assert!(types.contains(&"settings.changed"));
+    assert!(types.contains(&"workspace.created"));
+    assert_eq!(thread_tables(&core), THREAD_TABLES);
 }
 
 #[test]

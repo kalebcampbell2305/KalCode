@@ -67,8 +67,8 @@ const text = (id: string) => screen.getByTestId(id).textContent;
 describe("Dashboard data layer", () => {
   it("reports the sources this build lacks as unavailable", async () => {
     await mount("default");
-    await waitFor(() => expect(text("threads")).toBe("unavailable"));
-    expect(text("approvals")).toBe("unavailable");
+    await waitFor(() => expect(text("approvals")).toBe("unavailable"));
+    await waitFor(() => expect(text("threads")).toBe("ready:0"));
     await waitFor(() => expect(text("terminals")).toBe("ready"));
   });
 

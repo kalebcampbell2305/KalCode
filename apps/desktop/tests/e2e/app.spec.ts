@@ -198,3 +198,29 @@ test("the Providers page detects the installed Claude Code CLI", async () => {
     removeDataDir(dataDir);
   }
 });
+
+test("the Threads surface runs on the native thread runtime", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-"));
+  try {
+    const app = await launch(dataDir);
+    await expect(app.page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await app.page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Threads" }).click();
+    await expect(app.page.getByRole("heading", { level: 1, name: "Threads" })).toBeVisible();
+
+    // `thread_list` answered from the native runtime: an empty list, not an error.
+    await expect(app.page.getByRole("heading", { name: "No threads yet" })).toBeVisible();
+    await expect(app.page.getByText("Threads couldn't load")).toHaveCount(0);
+
+    // `thread_options` answered natively: this build registers no provider adapters yet.
+    await app.page.getByRole("button", { name: "New thread" }).first().click();
+    await expect(app.page.getByRole("heading", { name: "No providers connected" })).toBeVisible();
+    await closeGracefully(app);
+
+    // The threads schema was created in the isolated database.
+    const script = `import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(",".join(r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('threads','thread_messages','tool_calls','thread_files') ORDER BY name")))`;
+    const tables = execFileSync("python", ["-c", script, join(dataDir, "kalcode.db")], { encoding: "utf8" }).trim();
+    expect(tables).toBe("thread_files,thread_messages,threads,tool_calls");
+  } finally {
+    removeDataDir(dataDir);
+  }
+});

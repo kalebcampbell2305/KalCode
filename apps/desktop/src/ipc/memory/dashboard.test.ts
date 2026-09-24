@@ -35,16 +35,13 @@ describe("commands missing from this build", () => {
     expect(toKalCodeError("thread_list not allowed by ACL").code).toBe("ipc_rejected");
   });
 
-  it("is what the default (native-equivalent) transport reports for every Dashboard command", async () => {
+  it("is what the default (native-equivalent) transport reports for the approval commands", async () => {
     const client = new KalCodeClient(createMemoryTransport("default"));
-    const calls = [
-      client.listThreads(),
-      client.listApprovals(),
-      client.decideApproval("01999a4e-0004-7001-8a2e-000000004001", "deny"),
-      client.stopThread("01999a4e-0002-7001-8a2e-000000002001"),
-    ];
+    // Approvals arrive with Z4; this build doesn't register them.
+    const calls = [client.listApprovals(), client.decideApproval("01999a4e-0004-7001-8a2e-000000004001", "deny")];
     for (const call of calls) await expect(call).rejects.toMatchObject({ code: COMMAND_UNAVAILABLE });
-    // Terminals are native since Z1: nothing runs in a fresh session.
+    // Threads (Z3) and terminals (Z1) are native: nothing exists in a fresh session.
+    await expect(client.listThreads()).resolves.toEqual([]);
     await expect(client.runningTerminals()).resolves.toEqual([]);
   });
 });

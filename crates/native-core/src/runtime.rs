@@ -268,6 +268,34 @@ impl Core {
         &self.shells
     }
 
+    /// Runs `write` in one transaction and persists the events it returns in the same
+    /// transaction, then publishes them. A domain state change and its events therefore commit
+    /// together or not at all. Publishing happens while the connection lock is held (as in
+    /// [`Core::emit`]), so event subscribers must never call back into the core synchronously.
+    pub fn write_with_events<T>(
+        &self,
+        write: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<(T, Vec<NewEvent>)>,
+    ) -> Result<(T, Vec<EventEnvelope>)> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let (value, events) = write(&tx)?;
+        let mut envelopes = Vec::with_capacity(events.len());
+        for event in events {
+            envelopes.push(EventStore::append(&tx, event)?);
+        }
+        tx.commit()?;
+        for envelope in &envelopes {
+            self.bus.publish(envelope);
+        }
+        drop(conn);
+        Ok((value, envelopes))
+    }
+
+    /// Runs a read-only query against the database.
+    pub fn read<T>(&self, read: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+        read(&self.conn())
+    }
+
     pub fn app_info(&self) -> AppInfo {
         AppInfo::current(&self.config.app_version, self.config.channel)
     }

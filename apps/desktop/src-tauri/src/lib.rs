@@ -5,6 +5,7 @@ mod code_commands;
 mod commands;
 pub mod environment;
 mod provider_commands;
+mod thread_commands;
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -19,6 +20,7 @@ use kalcode_core::logging::{self, LogGuard};
 use kalcode_core::{AppInfo, Core, CoreConfig, ErrorCategory, IpcError, KalError, Paths};
 use tauri::webview::PageLoadEvent;
 use tauri::{Manager, RunEvent};
+use thread_commands::ThreadsState;
 
 /// Shared state for command handlers. `core` is `None` when startup failed; the UI then shows
 /// `startup_error` with recovery options instead of a broken shell.
@@ -200,12 +202,17 @@ pub fn run(removed_overrides: Vec<&'static str>) {
             {
                 state.drop_subscription(webview.label());
                 code_commands::drop_views(webview);
+                if let Some(threads) = webview.try_state::<ThreadsState>() {
+                    threads.drop_stream(webview.label());
+                }
             }
         })
         .setup(move |app| {
             let state = start(app, &removed_overrides);
+            let threads = ThreadsState::start(state.core.as_ref());
             app.manage(state);
             app.manage(provider_commands::ProviderState::from_process());
+            app.manage(threads);
 
             // Safety net: the frontend shows the window after its first themed paint
             // (`window_ready`). If that never happens, show it anyway so the user is never
@@ -252,6 +259,19 @@ pub fn run(removed_overrides: Vec<&'static str>) {
             code_commands::terminal_ack,
             code_commands::terminal_set_active,
             code_commands::terminals_running,
+            thread_commands::thread_list,
+            thread_commands::thread_get,
+            thread_commands::thread_messages,
+            thread_commands::thread_tool_calls,
+            thread_commands::thread_options,
+            thread_commands::thread_create,
+            thread_commands::thread_send,
+            thread_commands::thread_interrupt,
+            thread_commands::thread_resume,
+            thread_commands::thread_stop,
+            thread_commands::thread_rename,
+            thread_commands::thread_archive,
+            thread_commands::thread_stream,
         ])
         .build(tauri::generate_context!());
 
@@ -267,6 +287,11 @@ pub fn run(removed_overrides: Vec<&'static str>) {
         if let RunEvent::Exit = event
             && let Some(state) = handle.try_state::<AppState>()
         {
+            // End provider sessions (and their process trees) before the core records its
+            // shutdown; their threads become `interrupted`, resumable.
+            if let Some(threads) = handle.try_state::<ThreadsState>() {
+                threads.shutdown();
+            }
             if let Some(core) = &state.core {
                 core.shutdown();
             }

@@ -1,16 +1,21 @@
 import type {
+  AgentEvent,
   ApprovalDecision,
   ApprovalRequest,
   BootState,
   Diagnostics,
   EventEnvelope,
+  PermissionMode,
   ProviderStatus,
   SecureStoreCheck,
   Settings,
   SettingsPatch,
-  ThreadSummary,
   ShellOption,
   TerminalInfo,
+  ThreadMessage,
+  ThreadOptions,
+  ThreadSummary,
+  ToolCallRecord,
   Workspace,
 } from "@kalcode/protocol";
 import { toKalCodeError } from "./errors.ts";
@@ -33,6 +38,22 @@ export interface TerminalSize {
 export function clampTerminalSize({ cols, rows }: TerminalSize): TerminalSize {
   const clamp = (n: number) => Math.max(2, Math.min(1000, Math.floor(Number.isFinite(n) ? n : 2)));
   return { cols: clamp(cols), rows: clamp(rows) };
+}
+
+/** Maximum page size accepted by `thread_messages` / `thread_tool_calls`. */
+export const MAX_THREAD_PAGE = 500;
+
+export interface CreateThreadInput {
+  providerId: string;
+  workspaceId: string;
+  model: string | null;
+  permissionMode: PermissionMode;
+  prompt: string;
+  name: string | null;
+}
+
+function clampPage(limit: number): number {
+  return Math.max(1, Math.min(MAX_THREAD_PAGE, Math.floor(limit)));
 }
 
 /** The only module that talks to the native runtime. Every failure becomes a KalCodeError. */
@@ -102,33 +123,62 @@ export class KalCodeClient {
     return this.call("providers_detect");
   }
 
-  // ---- Contract commands consumed by the Dashboard (docs/CONTRACTS.md) ----
-  // Implemented natively by Z3 (threads), Z4 (approvals) and Z1 (terminals). Until then they
-  // reject with `command_unavailable` (see `isCommandUnavailable`). Arguments are the top-level
-  // camelCase keys listed in the contract table.
+  // Threads (Z3). `thread_list`, `thread_interrupt`, `thread_resume`, `thread_stop` and
+  // `thread_archive` are also consumed by the Dashboard.
 
-  listThreads(input: { workspaceId?: string; includeArchived?: boolean } = {}): Promise<ThreadSummary[]> {
+  listThreads(options: { workspaceId?: string; includeArchived?: boolean } = {}): Promise<ThreadSummary[]> {
     return this.call("thread_list", {
-      workspaceId: input.workspaceId ?? null,
-      includeArchived: input.includeArchived ?? false,
+      workspaceId: options.workspaceId ?? null,
+      includeArchived: options.includeArchived ?? false,
     });
+  }
+
+  getThread(threadId: string): Promise<ThreadSummary> {
+    return this.call("thread_get", { threadId });
+  }
+
+  threadMessages(threadId: string, limit: number, before?: string): Promise<ThreadMessage[]> {
+    return this.call("thread_messages", { threadId, limit: clampPage(limit), before: before ?? null });
+  }
+
+  threadToolCalls(threadId: string, limit: number): Promise<ToolCallRecord[]> {
+    return this.call("thread_tool_calls", { threadId, limit: clampPage(limit) });
+  }
+
+  threadOptions(): Promise<ThreadOptions> {
+    return this.call("thread_options");
+  }
+
+  createThread(input: CreateThreadInput): Promise<ThreadSummary> {
+    return this.call("thread_create", { ...input });
+  }
+
+  sendToThread(threadId: string, text: string): Promise<ThreadSummary> {
+    return this.call("thread_send", { threadId, text });
   }
 
   interruptThread(threadId: string): Promise<ThreadSummary> {
     return this.call("thread_interrupt", { threadId });
   }
 
-  resumeThread(threadId: string): Promise<ThreadSummary> {
-    return this.call("thread_resume", { threadId });
+  resumeThread(threadId: string, text?: string): Promise<ThreadSummary> {
+    return this.call("thread_resume", { threadId, text: text ?? null });
   }
 
   stopThread(threadId: string): Promise<ThreadSummary> {
     return this.call("thread_stop", { threadId });
   }
 
+  renameThread(threadId: string, name: string): Promise<ThreadSummary> {
+    return this.call("thread_rename", { threadId, name });
+  }
+
   archiveThread(threadId: string): Promise<ThreadSummary> {
     return this.call("thread_archive", { threadId });
   }
+
+  // Approvals (Z4, not merged yet): until Z4 lands these reject with `command_unavailable`
+  // (see `isCommandUnavailable`) and the Dashboard hides the approval queue.
 
   listApprovals(status: "pending" | null = "pending"): Promise<ApprovalRequest[]> {
     return this.call("approval_list", { status });
@@ -206,6 +256,14 @@ export class KalCodeClient {
   async attachTerminal(terminalId: string, onOutput: (bytes: Uint8Array) => void): Promise<number | null> {
     try {
       return await this.transport.attachTerminal(terminalId, onOutput);
+    } catch (error) {
+      throw toKalCodeError(error);
+    }
+  }
+
+  async streamThread(threadId: string, onEvent: (event: AgentEvent) => void): Promise<Unsubscribe> {
+    try {
+      return await this.transport.streamThread(threadId, onEvent);
     } catch (error) {
       throw toKalCodeError(error);
     }

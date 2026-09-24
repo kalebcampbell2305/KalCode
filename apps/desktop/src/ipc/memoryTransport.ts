@@ -8,6 +8,8 @@
  *   startup-error      — the core failed to start (newer database)
  *   keychain-failure   — the credential store check fails
  *   code               — workspaces with terminal tabs already open (Code, Dashboard)
+ *   threads            — threads in every state (Threads surface fixtures)
+ *   no-providers       — no provider is connected (New thread flow empty state)
  *   providers-error    — provider detection fails
  *   providers-none     — no provider CLI is installed
  *   providers-outdated — Claude Code is installed but too old, and signed out
@@ -20,15 +22,18 @@
 import type {
   AppInfo,
   BootState,
+  Correlation,
   Diagnostics,
   EventEnvelope,
   EventPayload,
+  EventSource,
   IpcError,
   ProviderStatus,
   SecureStoreCheck,
   Settings,
   SettingsPatch,
   SurfaceFlag,
+  Workspace,
 } from "@kalcode/protocol";
 import {
   createDashboardFixtures,
@@ -39,6 +44,7 @@ import {
   isDashboardScenario,
 } from "./memory/dashboard.ts";
 import { detectFake, type ProviderScenario, providerCatalog } from "./memoryProviders.ts";
+import { createThreadsMemory } from "./memory/threads.ts";
 import { createMemoryWorkspaces, type MemoryWorkspaces } from "./memoryWorkspaces.ts";
 import type { CommandName, Transport } from "./transport.ts";
 
@@ -47,16 +53,24 @@ export type MemoryScenario =
   | "startup-error"
   | "keychain-failure"
   | "code"
+  | "threads"
+  | "no-providers"
   | ProviderScenario
   | DashboardScenario;
 
 const PROVIDER_SCENARIOS: readonly string[] = ["providers-error", "providers-none", "providers-outdated"];
 
 /** Surfaces that work in this build (mirrors crates/native-core/src/flags.rs). */
-const AVAILABLE_SURFACES: ReadonlySet<SurfaceFlag["id"]> = new Set(["dashboard", "code", "providers", "settings"]);
+const AVAILABLE_SURFACES: ReadonlySet<SurfaceFlag["id"]> = new Set([
+  "dashboard",
+  "code",
+  "threads",
+  "providers",
+  "settings",
+]);
 
 /** Latest schema version (mirrors crates/native-core/src/db.rs). */
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 export interface MemoryTransportOptions {
   /** How long fake provider detection takes (the UI shows its busy state meanwhile). */
@@ -137,7 +151,7 @@ export function createMemoryTransport(
       seq: events.length + 1,
       version: 1,
       occurredAt: options.occurredAt ?? new Date().toISOString(),
-      source: "core",
+      source: options.source ?? "core",
       correlation: {
         workspaceId: null,
         threadId: null,
@@ -226,8 +240,19 @@ export function createMemoryTransport(
     preload: scenario === "code",
   });
 
+  const threads = createThreadsMemory(
+    (event, correlation = {}, source = "core") => emit(event, { correlation, source }),
+    requireCore,
+    scenario === "threads" || scenario === "no-providers" ? scenario : "default",
+    () =>
+      (code.handlers.workspace_list?.({}) as Workspace[])
+        .filter((w) => w.available)
+        .map((w) => ({ id: w.id, name: w.name })),
+  );
+
   const handlers: DashboardHandlers = {
     ...code.handlers,
+    ...threads.handlers,
     boot: (): BootState => ({ info, startupError }),
     window_ready: () => undefined,
     settings_get: () => {
@@ -360,6 +385,11 @@ export function createMemoryTransport(
       };
     },
     attachTerminal: (terminalId, onOutput) => code.attachTerminal(terminalId, onOutput),
+    async streamThread(threadId, onEvent) {
+      await Promise.resolve();
+      const stop = threads.stream(threadId, onEvent);
+      return async () => stop();
+    },
     async setNativeTheme() {},
     subscriberCount: () => subscribers.size,
     dashboard: dashboard?.controls ?? null,
@@ -392,7 +422,14 @@ export function sharedMemoryTransport(): MemoryTransport {
 function readScenario(): MemoryScenario {
   if (typeof location === "undefined") return "default";
   const value = new URLSearchParams(location.search).get("scenario");
-  if (value === "startup-error" || value === "keychain-failure" || value === "code" || isDashboardScenario(value)) {
+  if (
+    value === "startup-error" ||
+    value === "keychain-failure" ||
+    value === "code" ||
+    value === "threads" ||
+    value === "no-providers" ||
+    isDashboardScenario(value)
+  ) {
     return value;
   }
   if (value !== null && PROVIDER_SCENARIOS.includes(value)) return value as ProviderScenario;

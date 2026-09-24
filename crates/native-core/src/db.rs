@@ -33,6 +33,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "workspaces",
         sql: include_str!("../migrations/0002_workspaces.sql"),
     },
+    Migration {
+        version: 3,
+        name: "threads",
+        sql: include_str!("../migrations/0003_threads.sql"),
+    },
 ];
 
 /// How many pre-migration backups to keep.

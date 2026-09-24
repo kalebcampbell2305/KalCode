@@ -33,6 +33,19 @@ const COMMANDS: &[&str] = &[
     "terminal_ack",
     "terminal_set_active",
     "terminals_running",
+    "thread_list",
+    "thread_get",
+    "thread_messages",
+    "thread_tool_calls",
+    "thread_options",
+    "thread_create",
+    "thread_send",
+    "thread_interrupt",
+    "thread_resume",
+    "thread_stop",
+    "thread_rename",
+    "thread_archive",
+    "thread_stream",
 ];
 
 fn main() {

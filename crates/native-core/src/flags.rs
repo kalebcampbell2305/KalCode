@@ -43,7 +43,7 @@ impl FeatureFlags {
             (Dashboard, Available),
             (KalVoice, Gated),
             (Code, Available),
-            (Threads, Gated),
+            (Threads, Available),
             (Agents, Gated),
             (Missions, Gated),
             (Automations, Gated),

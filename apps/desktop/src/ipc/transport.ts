@@ -1,4 +1,4 @@
-import type { EventEnvelope } from "@kalcode/protocol";
+import type { AgentEvent, EventEnvelope } from "@kalcode/protocol";
 
 /** Every command the native runtime exposes (mirrors src-tauri/build.rs). */
 export type CommandName =
@@ -15,14 +15,22 @@ export type CommandName =
   | "secure_store_check"
   | "providers_list"
   | "providers_detect"
-  // Contract commands the Dashboard consumes (docs/CONTRACTS.md). They are implemented natively
-  // by Z1 (terminals), Z3 (threads) and Z4 (approvals); until those land, the native runtime
-  // rejects them and the client reports `command_unavailable`.
+  // Threads (Z3)
   | "thread_list"
+  | "thread_get"
+  | "thread_messages"
+  | "thread_tool_calls"
+  | "thread_options"
+  | "thread_create"
+  | "thread_send"
   | "thread_interrupt"
   | "thread_resume"
   | "thread_stop"
+  | "thread_rename"
   | "thread_archive"
+  | "thread_stream"
+  // Approvals (Z4, not merged yet): the Dashboard consumes them; until Z4 lands the native
+  // runtime rejects them and the client reports `command_unavailable`.
   | "approval_list"
   | "approval_decide"
   // Workspaces and terminals (Z1)
@@ -60,6 +68,11 @@ export interface Transport {
    * no session); acknowledge rendered bytes with `terminal_ack` and detach with `terminal_detach`.
    */
   attachTerminal(terminalId: string, onOutput: (bytes: Uint8Array) => void): Promise<number | null>;
+  /**
+   * Live stream of one thread's message deltas (`thread_stream`). The native side keeps one
+   * stream per window: opening another thread's stream replaces this one.
+   */
+  streamThread(threadId: string, onEvent: (event: AgentEvent) => void): Promise<Unsubscribe>;
   /** Syncs the OS window chrome (title bar) with the app theme. */
   setNativeTheme(theme: NativeTheme): Promise<void>;
 }
@@ -85,6 +98,18 @@ export async function createTauriTransport(): Promise<Transport> {
       const channel = new Channel<ArrayBuffer>();
       channel.onmessage = (buffer) => onOutput(new Uint8Array(buffer));
       return invoke<number | null>("terminal_attach", { terminalId, onOutput: channel });
+    },
+    async streamThread(threadId, onEvent) {
+      const channel = new Channel<AgentEvent>();
+      let open = true;
+      channel.onmessage = (event) => {
+        if (open) onEvent(event);
+      };
+      await invoke<number>("thread_stream", { threadId, onEvent: channel });
+      // Native replaces a window's stream when another is opened and drops it on reload.
+      return async () => {
+        open = false;
+      };
     },
     async setNativeTheme(theme) {
       await getCurrentWindow().setTheme(theme);

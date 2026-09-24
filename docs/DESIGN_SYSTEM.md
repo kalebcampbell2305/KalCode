@@ -35,8 +35,11 @@ Terminal palettes (Code surface) live with the surface in `apps/desktop/src/surf
 and are derived from the tokens; see `docs/CODE_MODE.md` §6.
 Accessible behaviour comes from Radix UI; styling is tokens only.
 
-Planned as surfaces need them: `Input`, `Textarea`, `Select`, `ContextMenu`,
-`Dialog`, `Sheet`, `Tabs`, `Table`, `PermissionPrompt`.
+Added in Z3: `Field` (label, optional marker, help text wired by `${id}-hint`), `TextInput`,
+`TextArea` and `Select` (native control, token styling, chevron) — used by the New thread flow.
+
+Planned as surfaces need them: `ContextMenu`, `Dialog`, `Sheet`, `Tabs`, `Table`,
+`PermissionPrompt`.
 
 ## Brand
 

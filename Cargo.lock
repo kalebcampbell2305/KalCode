@@ -2229,9 +2229,11 @@ dependencies = [
 name = "kalcode-desktop"
 version = "0.1.0"
 dependencies = [
+ "kalcode-contracts",
  "kalcode-native-core",
  "kalcode-providers",
  "kalcode-secure-store",
+ "kalcode-threads",
  "serde",
  "serde_json",
  "tauri",
@@ -2308,6 +2310,20 @@ dependencies = [
  "thiserror 2.0.21",
  "uuid",
  "zeroize",
+]
+
+[[package]]
+name = "kalcode-threads"
+version = "0.1.0"
+dependencies = [
+ "kalcode-contracts",
+ "kalcode-native-core",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "ts-rs",
 ]
 
 [[package]]

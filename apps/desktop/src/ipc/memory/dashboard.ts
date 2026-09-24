@@ -22,6 +22,7 @@ import type {
   Correlation,
   EventEnvelope,
   EventPayload,
+  EventSource,
   IpcError,
   PermissionMode,
   PermissionScope,
@@ -48,6 +49,7 @@ export function isDashboardScenario(value: string | null): value is DashboardSce
 export interface EmitOptions {
   correlation?: Partial<Correlation>;
   occurredAt?: string;
+  source?: EventSource;
 }
 
 export type Emit = (event: EventPayload, options?: EmitOptions) => EventEnvelope;
