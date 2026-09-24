@@ -2144,6 +2144,18 @@ impl<'a> Cx<'a> {
                     self.add(S::TerminalExecute);
                 }
                 self.add(S::GitRead);
+                // `git diff --no-index /etc/passwd …` and `git grep --no-index` read any file;
+                // revisions (`HEAD:src/a`, `main..dev`) are left alone.
+                for arg in &positional {
+                    let text = arg.text.trim();
+                    if is_absolute_like(text)
+                        || text.starts_with("..")
+                        || text.starts_with('~')
+                        || arg.expansion
+                    {
+                        self.path(arg, Access::Read);
+                    }
+                }
             }
             "branch" => {
                 if has(&[
@@ -3991,7 +4003,7 @@ impl<'a> Cx<'a> {
                     self.path(&Word::plain("."), Access::Read);
                 } else {
                     let skip = usize::from(starts.first().is_some_and(|w| w.quoted));
-                    self.file_args(&starts[skip..], Access::Read, true);
+                    self.file_args(&starts[skip..], Access::Read, false);
                 }
             }
             "fd" | "fdfind" => {

@@ -382,6 +382,11 @@ fn path_arguments_outside_the_workspace_are_flagged() {
         "cat \\\\.\\PhysicalDrive0".to_owned(),
         "ln -s /etc src/etc".to_owned(),
         "tar -xf a.tar -C ../outside".to_owned(),
+        "find /etc -name passwd".to_owned(),
+        "find / -name id_rsa".to_owned(),
+        "git diff --no-index ../outside/secret.txt src/a.txt".to_owned(),
+        "git grep --no-index foo /etc".to_owned(),
+        "git show ~/.gitconfig".to_owned(),
     ] {
         let facts = classify_command(&text, &[], "", &ws);
         assert!(
