@@ -1,7 +1,7 @@
 ---
 import PageHead from "../components/PageHead.astro";
 import Base from "../layouts/Base.astro";
-import { getPage } from "../lib/site";
+import { CONTACT_EMAIL, getPage } from "../lib/site";
 
 const page = getPage("/terms");
 ---
@@ -81,9 +81,9 @@ const page = getPage("/terms");
 
       <h2>9. Contact</h2>
       <p>
-        A contact address for legal and privacy requests will be published on this site once a
-        monitored mailbox is in place. Until then, you can remove your email address at any time
-        with the form on the <a href="/privacy#remove">privacy page</a>.
+        Questions about these terms, or legal and privacy requests:
+        <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>. You can also remove
+        your email address at any time with the form on the <a href="/privacy#remove">privacy page</a>.
       </p>
     </div>
   </section>

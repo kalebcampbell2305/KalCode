@@ -2,7 +2,7 @@
 import PageHead from "../components/PageHead.astro";
 import RemovalForm from "../components/RemovalForm.astro";
 import Base from "../layouts/Base.astro";
-import { getPage } from "../lib/site";
+import { CONTACT_EMAIL, getPage } from "../lib/site";
 
 const page = getPage("/privacy");
 ---
@@ -80,6 +80,12 @@ const page = getPage("/privacy");
       </p>
       <RemovalForm />
 
+      <h2>Contact</h2>
+      <p>
+        kalcoded.com is run by the KalCode team. For privacy questions or requests, including
+        asking what we hold about you, email
+        <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>.
+      </p>
       <h2>Changes</h2>
       <p>
         If what we collect changes — for example, when KalCode accounts arrive at launch — we will

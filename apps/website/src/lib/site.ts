@@ -9,6 +9,9 @@ export const SITE_NAME = "KalCode";
 /** Version of the consent text shown under the early-access form (stored with each email). */
 export const CONSENT_VERSION = "2026-09-24";
 
+/** The published contact for privacy, legal and security matters. */
+export const CONTACT_EMAIL = "kalcodebuilds@gmail.com";
+
 export interface PageInfo {
   path: string;
   title: string;

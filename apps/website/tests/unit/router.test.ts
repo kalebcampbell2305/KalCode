@@ -165,7 +165,8 @@ describe("handleRequest routing", () => {
     expect(response.headers.get("permissions-policy")).toContain("camera=()");
     expect(response.headers.get("permissions-policy")).toContain("microphone=()");
     expect(response.headers.get("permissions-policy")).toContain("geolocation=()");
-    expect(response.headers.get("cache-control")).toBeNull();
+    // Pages are served as-is: the proxy may not inject scripts (e.g. an analytics beacon).
+    expect(response.headers.get("cache-control")).toBe("no-transform");
   });
 
   it("marks hashed build assets as immutable", async () => {

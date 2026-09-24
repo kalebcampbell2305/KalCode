@@ -22,6 +22,10 @@ Status: built and tested in Z0 · Canonical origin: **https://kalcoded.com**
 | `POST /api/early-access/remove` `{email}` | 200 with the same body whether or not the address existed |
 | Everything else | Static asset, or the styled 404 page |
 
+HTML responses carry `Cache-Control: … no-transform`, so the Cloudflare proxy never rewrites
+pages — in particular it cannot inject the Web Analytics beacon, which is enabled at the zone
+level but would contradict the site's no-analytics promise.
+
 All responses carry: CSP with a SHA-256 hash for the single inline theme script, HSTS,
 `X-Content-Type-Options: nosniff`, `Referrer-Policy`, `Permissions-Policy`, and
 `frame-ancestors 'none'`. Hashed `/_astro/*` assets are immutable-cached.
@@ -41,6 +45,10 @@ pnpm test:e2e            # Playwright against wrangler dev with isolated local D
 ```
 
 ## Deployment
+
+Production: Worker `kalcode-website`, D1 `kalcode-web` (`f7b3e324-c093-4231-b768-2a4a930d2744`),
+custom domains `kalcoded.com` and `www.kalcoded.com`. First deployed 2026-09-24.
+Contact published on the site: `CONTACT_EMAIL` in `src/lib/site.ts`.
 
 ```bash
 wrangler d1 create kalcode-web                      # once; put the id in wrangler.jsonc

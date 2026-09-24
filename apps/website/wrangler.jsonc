@@ -16,9 +16,8 @@
     {
       "binding": "DB",
       "database_name": "kalcode-web",
-      // LOCAL-ONLY placeholder: the deployer replaces this with the real D1 database id
-      // (`wrangler d1 create kalcode-web`) before `wrangler deploy`.
-      "database_id": "LOCAL-ONLY-REPLACED-AT-DEPLOY",
+      // Production database (created 2026-09-24). Local dev and tests use a local copy.
+      "database_id": "f7b3e324-c093-4231-b768-2a4a930d2744",
       "migrations_dir": "migrations"
     }
   ],

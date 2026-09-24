@@ -47,5 +47,5 @@ code review checks for imported private material.
 
 ## 5. Reporting
 
-A security contact address will be published on https://kalcoded.com/security once a
-monitored mailbox is configured.
+Report security issues to kalcodebuilds@gmail.com (also listed at
+https://kalcoded.com/security).

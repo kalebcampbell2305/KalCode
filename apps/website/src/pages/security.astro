@@ -1,7 +1,7 @@
 ---
 import PageHead from "../components/PageHead.astro";
 import Base from "../layouts/Base.astro";
-import { getPage } from "../lib/site";
+import { CONTACT_EMAIL, getPage } from "../lib/site";
 
 const page = getPage("/security");
 ---
@@ -98,8 +98,9 @@ const page = getPage("/security");
 
       <h2>Reporting a vulnerability</h2>
       <p>
-        A security contact address will be published on this page once a monitored mailbox is in
-        place. We will not list an address that nobody reads.
+        If you find a security issue in KalCode or this site, email
+        <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a> with the details and
+        steps to reproduce. Please give us a chance to fix it before sharing it publicly.
       </p>
     </div>
   </section>

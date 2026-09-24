@@ -54,6 +54,20 @@ export function isHashedAssetPath(pathname: string): boolean {
   return pathname.startsWith("/_astro/");
 }
 
+/**
+ * `no-transform` stops the Cloudflare proxy from rewriting pages — including injecting the Web
+ * Analytics beacon when it is enabled for the zone. The site promises no analytics, so HTML is
+ * always served as-is.
+ */
+export function withNoTransform(cacheControl: string | null): string {
+  const directives = (cacheControl ?? "")
+    .split(",")
+    .map((d) => d.trim())
+    .filter(Boolean);
+  if (!directives.some((d) => d.toLowerCase() === "no-transform")) directives.push("no-transform");
+  return directives.join(", ");
+}
+
 /** Returns a copy of `response` with the security headers (and asset caching) applied. */
 export function withSecurityHeaders(response: Response, pathname: string, csp: string): Response {
   const secured = new Response(response.body, response);
@@ -64,6 +78,8 @@ export function withSecurityHeaders(response: Response, pathname: string, csp: s
   }
   if (isHashedAssetPath(pathname) && (response.status === 200 || response.status === 304)) {
     headers.set("cache-control", IMMUTABLE_CACHE);
+  } else if (headers.get("content-type")?.includes("text/html")) {
+    headers.set("cache-control", withNoTransform(headers.get("cache-control")));
   }
   return secured;
 }
