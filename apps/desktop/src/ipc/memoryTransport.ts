@@ -7,6 +7,7 @@
  * `?scenario=` (ui-test builds only) selects a starting state:
  *   startup-error      — the core failed to start (newer database)
  *   keychain-failure   — the credential store check fails
+ *   approvals          — agents are waiting on approvals (Z4)
  */
 import type {
   AppInfo,
@@ -20,9 +21,10 @@ import type {
   SettingsPatch,
   SurfaceFlag,
 } from "@kalcode/protocol";
+import { createPermissionMemory, type PermissionMemory } from "./memory/permissions.ts";
 import type { CommandName, Transport } from "./transport.ts";
 
-export type MemoryScenario = "default" | "startup-error" | "keychain-failure";
+export type MemoryScenario = "default" | "startup-error" | "keychain-failure" | "approvals";
 
 const SURFACES: SurfaceFlag["id"][] = [
   "dashboard",
@@ -60,6 +62,8 @@ function fail(error: IpcError): never {
 export interface MemoryTransport extends Transport {
   /** Test hook: number of live subscribers. */
   subscriberCount(): number;
+  /** Test hook: permission state (Z4), e.g. an agent asking for approval. */
+  permissions: PermissionMemory;
 }
 
 export function createMemoryTransport(scenario: MemoryScenario = readScenario()): MemoryTransport {
@@ -125,7 +129,10 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
     if (startupError) fail(startupError);
   };
 
+  const permissions = createPermissionMemory({ emit, requireCore, seed: scenario === "approvals" && !startupError });
+
   const handlers: Record<CommandName, (args: Record<string, unknown>) => unknown> = {
+    ...permissions.handlers,
     boot: (): BootState => ({ info, startupError }),
     window_ready: () => undefined,
     settings_get: () => {
@@ -248,11 +255,12 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
     },
     async setNativeTheme() {},
     subscriberCount: () => subscribers.size,
+    permissions,
   };
 }
 
 function readScenario(): MemoryScenario {
   if (typeof location === "undefined") return "default";
   const value = new URLSearchParams(location.search).get("scenario");
-  return value === "startup-error" || value === "keychain-failure" ? value : "default";
+  return value === "startup-error" || value === "keychain-failure" || value === "approvals" ? value : "default";
 }

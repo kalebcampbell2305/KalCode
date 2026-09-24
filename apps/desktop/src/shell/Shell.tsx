@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { Dashboard } from "../surfaces/dashboard/Dashboard.tsx";
 import { GatedSurface } from "../surfaces/gated/GatedSurface.tsx";
+import { ApprovalAnnouncer, ApprovalsPanel, PermissionsProvider } from "../surfaces/permissions/index.ts";
 import { SettingsPage } from "../surfaces/settings/SettingsPage.tsx";
 import { useAppearance } from "./appearance.ts";
 import { CommandPalette } from "./CommandPalette.tsx";
@@ -15,7 +16,9 @@ export function Shell() {
   useAppearance(settings, client);
   return (
     <NavigationProvider flags={info.flags.surfaces}>
-      <ShellLayout />
+      <PermissionsProvider>
+        <ShellLayout />
+      </PermissionsProvider>
     </NavigationProvider>
   );
 }
@@ -46,6 +49,8 @@ function ShellLayout() {
         )}
       </main>
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+      <ApprovalsPanel />
+      <ApprovalAnnouncer />
     </div>
   );
 }

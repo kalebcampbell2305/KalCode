@@ -1,10 +1,16 @@
 import type {
+  ApprovalDecision,
+  ApprovalView,
   BootState,
   Diagnostics,
   EventEnvelope,
+  PermissionMode,
+  PermissionProfile,
+  PermissionSettings,
   SecureStoreCheck,
   Settings,
   SettingsPatch,
+  ThreadSummary,
 } from "@kalcode/protocol";
 import { toKalCodeError } from "./errors.ts";
 import type { CommandName, NativeTheme, Transport, Unsubscribe } from "./transport.ts";
@@ -67,6 +73,50 @@ export class KalCodeClient {
 
   checkSecureStore(): Promise<SecureStoreCheck> {
     return this.call("secure_store_check");
+  }
+
+  // ---- Permissions (Z4) ----
+
+  /** Approval requests, newest first; `"pending"` lists only those awaiting an answer. */
+  listApprovals(status?: "pending"): Promise<ApprovalView[]> {
+    return this.call("approval_list", { status: status ?? null });
+  }
+
+  decideApproval(requestId: string, decision: ApprovalDecision): Promise<ApprovalView> {
+    return this.call("approval_decide", { requestId, decision });
+  }
+
+  listPermissionProfiles(): Promise<PermissionProfile[]> {
+    return this.call("permission_profiles_list");
+  }
+
+  /** Bypass requires `confirmBypass: true`, sent only after the user confirms in the UI. */
+  setThreadPermissionMode(
+    threadId: string,
+    mode: PermissionMode,
+    options: { confirmBypass?: boolean; profileId?: string } = {},
+  ): Promise<ThreadSummary> {
+    return this.call("thread_set_permission_mode", {
+      threadId,
+      mode,
+      confirmBypass: options.confirmBypass ?? null,
+      profileId: options.profileId ?? null,
+    });
+  }
+
+  getPermissionSettings(): Promise<PermissionSettings> {
+    return this.call("permission_settings_get");
+  }
+
+  updatePermissionSettings(
+    defaultMode: PermissionMode,
+    options: { confirmBypass?: boolean; profileId?: string | null } = {},
+  ): Promise<PermissionSettings> {
+    return this.call("permission_settings_update", {
+      defaultMode,
+      profileId: options.profileId ?? null,
+      confirmBypass: options.confirmBypass ?? null,
+    });
   }
 
   async setNativeTheme(theme: NativeTheme): Promise<void> {

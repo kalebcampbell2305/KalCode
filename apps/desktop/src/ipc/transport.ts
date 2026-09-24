@@ -12,7 +12,14 @@ export type CommandName =
   | "diagnostics_get"
   | "diagnostics_open_log_dir"
   | "diagnostics_open_data_dir"
-  | "secure_store_check";
+  | "secure_store_check"
+  // Z4: permissions
+  | "approval_list"
+  | "approval_decide"
+  | "permission_profiles_list"
+  | "thread_set_permission_mode"
+  | "permission_settings_get"
+  | "permission_settings_update";
 
 export type Unsubscribe = () => Promise<void>;
 
@@ -56,7 +63,11 @@ export async function resolveTransport(): Promise<Transport | null> {
   // The in-memory transport is compiled only into the `ui-test` build (see vite.config.ts).
   if (__KALCODE_MEMORY_TRANSPORT__) {
     const { createMemoryTransport } = await import("./memoryTransport.ts");
-    return createMemoryTransport();
+    // One in-memory runtime per page (StrictMode boots twice). ui-test builds only: the page
+    // exposes it so Playwright can act as an agent, e.g. asking for an approval.
+    const page = window as unknown as { __kalcodeMemory?: Transport };
+    page.__kalcodeMemory ??= createMemoryTransport();
+    return page.__kalcodeMemory;
   }
   return null;
 }

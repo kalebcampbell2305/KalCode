@@ -12,7 +12,6 @@ import {
   MessagesSquare,
   PlugZap,
   Settings as SettingsIcon,
-  Sparkles,
   Workflow,
 } from "lucide-react";
 import { createContext, type ReactNode, useCallback, useContext, useMemo, useState } from "react";
