@@ -28,6 +28,7 @@ KalCode controls powerful tools on a user's machine. Security is architecture, n
 | Database | Parameterized SQL only; migrations checksummed; pre-migration backups; refuse downgrade. |
 | Supply chain | Lockfiles committed; `cargo audit` and `pnpm audit` run in CI; pnpm allows install scripts only for esbuild, workerd, sharp and the Tauri CLI. |
 | Website | Security headers (CSP, HSTS, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, frame-ancestors none); JSON-only API with size limits, strict email validation, honeypot field, per-IP rate limiting via Workers Rate Limiting binding; no secrets in client bundles. |
+| Entitlements (built; local only until Z13) | Server-authoritative: only the API (`apps/api`) decides a tier, from D1. OWNER is a database grant that only operator tools with the owner's Cloudflare credentials can write; the database refuses OWNER from billing, OWNER expiry and duplicate active OWNER grants, keeps grants immutable, and writes `audit_log` in the same statement. No email or account id is hardcoded anywhere; no endpoint changes a tier; account routes answer 401 until sign-in exists. Documents and KalVoice usage receipts are Ed25519-signed JWS (private key only in a Worker secret); the desktop (`crates/entitlements`) trusts only compiled-in public keys, binds documents to the signed-in account, and falls back to Free after at most 7 days offline. Details and threat model: `docs/BILLING.md` §10. |
 
 ## 3. Private-system boundary
 
@@ -42,8 +43,10 @@ code review checks for imported private material.
   process-tree cleanup.
 - Z2: provider process isolation, sanitized environment for child processes, credential scoping.
 - Z4: permission engine (see `docs/PERMISSIONS.md`) with audit log of consequential decisions.
-- Z13: signed updates (Tauri updater with minisign keys), code-signed installers, webhook
-  signature verification for billing, server-side entitlement authority.
+- Z13: signed updates (Tauri updater with minisign keys), code-signed installers, sign-in and
+  per-account rate limiting on the API, Stripe webhook signature verification (billing may only
+  write Pro/MAX grants; the database already refuses billing OWNER), production signing key and
+  its public key compiled into the desktop.
 
 ## 5. Zero company AI cost
 

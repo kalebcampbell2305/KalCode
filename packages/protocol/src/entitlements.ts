@@ -17,10 +17,9 @@
  * by the API (Ed25519) and falls back to Free otherwise.
  */
 
-import { getPlan, type PlanId } from "./plans.ts";
+import { type EntitlementTier, getPlan } from "./plans.ts";
 
-/** Every tier an account can hold. `owner` is deliberately not a `PlanId`: it is never sold. */
-export type EntitlementTier = PlanId | "owner";
+export type { EntitlementTier };
 
 export const ENTITLEMENT_TIERS: readonly EntitlementTier[] = ["free", "pro", "max", "owner"];
 
@@ -34,8 +33,11 @@ export const FEATURES = [
 ] as const;
 export type FeatureId = (typeof FEATURES)[number];
 
-/** Numeric limits gated by plan today. */
-export const LIMITS = ["concurrentThreads"] as const;
+/**
+ * Numeric limits gated by plan today. `kalvoiceRequestsPerMonth` counts top-level KalVoice
+ * assistant requests per cycle — never provider model tokens; dictation is never metered.
+ */
+export const LIMITS = ["concurrentThreads", "kalvoiceRequestsPerMonth"] as const;
 export type LimitId = (typeof LIMITS)[number];
 
 /** Current entitlement document format. */
@@ -82,14 +84,16 @@ export interface TierGrants {
 
 /**
  * The grants for a tier. Free/Pro/MAX derive from the public catalog in `plans.ts` (the single
- * source of truth for prices and plan entitlements). Owner enumerates nothing: it is
- * unrestricted by construction.
+ * source of truth for prices and plan limits). Owner enumerates nothing: it is unrestricted by
+ * construction — `OWNER_LIMITS` in `plans.ts` describes it for display, but evaluation never
+ * consults a list for it. Provider connections, permission modes and local dictation are never
+ * gated, so they are not features here.
  */
 export function tierGrants(tier: EntitlementTier): TierGrants {
   if (tier === "owner") {
     return { unrestricted: true, features: [], limits: {} };
   }
-  const plan = getPlan(tier).entitlements;
+  const plan = getPlan(tier).limits;
   const flags: Record<FeatureId, boolean> = {
     persistentAgents: plan.persistentAgents,
     multiAgentWorkflows: plan.multiAgentWorkflows,
@@ -97,7 +101,10 @@ export function tierGrants(tier: EntitlementTier): TierGrants {
     eventAutomations: plan.automations === "scheduled_and_event",
     advancedMissions: plan.advancedMissions,
   };
-  const limits: Record<LimitId, number | null> = { concurrentThreads: plan.concurrentThreads };
+  const limits: Record<LimitId, number | null> = {
+    concurrentThreads: plan.concurrentThreads,
+    kalvoiceRequestsPerMonth: plan.kalvoiceRequestsPerMonth,
+  };
   return { unrestricted: false, features: FEATURES.filter((feature) => flags[feature]), limits };
 }
 

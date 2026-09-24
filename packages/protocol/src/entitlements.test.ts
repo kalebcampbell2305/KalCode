@@ -11,7 +11,7 @@ import {
   parseEntitlement,
   tierGrants,
 } from "./entitlements.ts";
-import { getPlan, PLANS } from "./plans.ts";
+import { getPlan, OWNER_LIMITS, PLANS } from "./plans.ts";
 
 const T0 = 1_790_000_000;
 
@@ -47,8 +47,12 @@ describe("owner tier", () => {
     expect(owner).toEqual({ unrestricted: true, features: [], limits: {} });
   });
 
-  it("grants every current feature and unlimited limits", () => {
+  it("grants every current feature and unlimited limits, including KalVoice Requests", () => {
     const owner = tierGrants("owner");
+    expect(limitFor(owner, "kalvoiceRequestsPerMonth")).toBeNull();
+    // The display description of OWNER in plans.ts agrees with the evaluator.
+    expect(OWNER_LIMITS.kalvoiceRequestsPerMonth).toBeNull();
+    expect(OWNER_LIMITS.concurrentThreads).toBeNull();
     for (const feature of FEATURES) expect(hasFeature(owner, feature)).toBe(true);
     for (const limit of LIMITS) expect(limitFor(owner, limit)).toBeNull();
   });
@@ -70,10 +74,13 @@ describe("restricted tiers", () => {
     for (const plan of PLANS) {
       const grants = tierGrants(plan.id);
       expect(grants.unrestricted).toBe(false);
-      expect(limitFor(grants, "concurrentThreads")).toBe(plan.entitlements.concurrentThreads);
-      expect(hasFeature(grants, "persistentAgents")).toBe(plan.entitlements.persistentAgents);
-      expect(hasFeature(grants, "advancedMissions")).toBe(plan.entitlements.advancedMissions);
+      expect(limitFor(grants, "concurrentThreads")).toBe(plan.limits.concurrentThreads);
+      expect(hasFeature(grants, "persistentAgents")).toBe(plan.limits.persistentAgents);
+      expect(hasFeature(grants, "advancedMissions")).toBe(plan.limits.advancedMissions);
     }
+    expect(limitFor(tierGrants("free"), "kalvoiceRequestsPerMonth")).toBe(250);
+    expect(limitFor(tierGrants("pro"), "kalvoiceRequestsPerMonth")).toBe(2500);
+    expect(limitFor(tierGrants("max"), "kalvoiceRequestsPerMonth")).toBe(10000);
     expect(tierGrants("free").features).toEqual([]);
     expect(tierGrants("pro").features).toEqual(["persistentAgents", "multiAgentWorkflows", "scheduledAutomations"]);
     expect(tierGrants("max").features).toEqual([...FEATURES]);
