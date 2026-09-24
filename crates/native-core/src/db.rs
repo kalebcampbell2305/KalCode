@@ -28,6 +28,15 @@ pub const MIGRATIONS: &[Migration] = &[Migration {
     sql: include_str!("../migrations/0001_foundation.sql"),
 }];
 
+/// Migration 0005 (campaign Z4, permissions). Kept out of [`MIGRATIONS`] on the Z4 branch
+/// because 0002–0004 belong to Z1–Z3; at integration it is appended to [`MIGRATIONS`] right
+/// after 0004 (see `docs/campaigns/Z4.md`). It has no dependency on 0002–0004.
+pub const PERMISSIONS_MIGRATION: Migration = Migration {
+    version: 5,
+    name: "permissions",
+    sql: include_str!("../migrations/0005_permissions.sql"),
+};
+
 /// How many pre-migration backups to keep.
 const BACKUPS_RETAINED: usize = 5;
 

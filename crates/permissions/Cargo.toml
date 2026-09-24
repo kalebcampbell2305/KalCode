@@ -1,0 +1,26 @@
+[package]
+name = "kalcode-permissions"
+description = "KalCode permission engine: deterministic action classification and policy evaluation, approval persistence, standing grants and the audit trail. Implements the shared PermissionGate contract."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "kalcode_permissions"
+
+[dependencies]
+kalcode-contracts = { path = "../contracts" }
+kalcode-native-core = { path = "../native-core" }
+rusqlite = { workspace = true, features = ["bundled"] }
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+ts-rs = { version = "12", features = ["serde-json-impl", "uuid-impl"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

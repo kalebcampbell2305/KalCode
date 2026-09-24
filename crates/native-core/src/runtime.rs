@@ -237,6 +237,33 @@ impl Core {
         Ok(envelope)
     }
 
+    /// Runs `work` in one database transaction. The events it returns are appended in the same
+    /// transaction and published after commit, so a state change and its events are recorded
+    /// together or not at all. Used by domain crates that own their own tables (e.g. Z4).
+    pub fn transact<R>(
+        &self,
+        work: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<(R, Vec<NewEvent>)>,
+    ) -> Result<(R, Vec<EventEnvelope>)> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let (value, events) = work(&tx)?;
+        let mut envelopes = Vec::with_capacity(events.len());
+        for event in events {
+            envelopes.push(EventStore::append(&tx, event)?);
+        }
+        tx.commit()?;
+        for envelope in &envelopes {
+            self.bus.publish(envelope);
+        }
+        drop(conn);
+        Ok((value, envelopes))
+    }
+
+    /// Read-only access to the database for domain crates.
+    pub fn read<R>(&self, work: impl FnOnce(&Connection) -> Result<R>) -> Result<R> {
+        work(&self.conn())
+    }
+
     pub fn app_info(&self) -> AppInfo {
         AppInfo::current(&self.config.app_version, self.config.channel)
     }
