@@ -112,7 +112,8 @@ pnpm release:publish:dry-run   # all checks + the exact wrangler commands and ma
 pnpm release:publish           # the real thing
 ```
 
-`publish` refuses unless: the working tree is clean, HEAD is the build commit, `verify.json`
+`publish` refuses unless: the working tree is clean, HEAD is the build commit (or a later commit
+that only adds `docs/releases/` notes, since the notes carry the SHA-256), `verify.json`
 says `passed` for this exact build (commit and SHA-256; or `--without-install-test` with the
 notes saying so), the staged file still matches its SHA-256, the release notes exist
 and list the SHA-256, the manifest validates, and the live `https://kalcoded.com/releases/latest.json`

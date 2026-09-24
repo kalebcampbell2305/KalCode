@@ -23,6 +23,7 @@ import {
   assertCleanTree,
   fail,
   formatBytes,
+  git,
   headCommit,
   R2_BUCKET,
   RELEASE_NOTES_DIR,
@@ -86,12 +87,23 @@ if (mode !== "local") {
     console.log("  WARNING: publishing without a passing install/uninstall test for this exact build.");
   }
 }
-if (mode === "remote") {
-  assertCleanTree("A publish");
+if (mode !== "local") {
+  // HEAD must be the build commit, or a descendant that only adds release notes (the notes
+  // carry the build's SHA-256, so they are necessarily written after the build).
   const head = headCommit();
-  if (head !== build.commit)
-    problems.push(`HEAD ${head.slice(0, 12)} is not the build commit ${build.commit.slice(0, 12)}`);
+  if (head !== build.commit) {
+    const descendant =
+      spawnSync("git", ["merge-base", "--is-ancestor", build.commit, head], { cwd: ROOT }).status === 0;
+    const changed = descendant ? git(["diff", "--name-only", build.commit, head]).split(/\r?\n/).filter(Boolean) : [];
+    const other = changed.filter((file) => !file.startsWith("docs/releases/"));
+    if (!descendant || other.length > 0) {
+      problems.push(
+        `HEAD ${head.slice(0, 12)} is not the build commit ${build.commit.slice(0, 12)} plus release notes only${other.length ? ` (also changed: ${other.join(", ")})` : ""}; rebuild`,
+      );
+    }
+  }
 }
+if (mode === "remote") assertCleanTree("A publish");
 
 const manifest = buildManifest({
   version,
