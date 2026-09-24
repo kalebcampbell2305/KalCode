@@ -22,15 +22,17 @@ const visibleTerminal = (page: Page) => page.locator('[role="tabpanel"]:not([hid
 
 async function queueFolders(page: Page, ...folders: (string | null)[]) {
   await page.evaluate((list) => {
-    (window as unknown as { __kalcodeMemory: { queueFolders: (...f: (string | null)[]) => void } }).__kalcodeMemory.queueFolders(
-      ...list,
-    );
+    (
+      window as unknown as { __kalcodeMemory: { queueFolders: (...f: (string | null)[]) => void } }
+    ).__kalcodeMemory.queueFolders(...list);
   }, folders);
 }
 
 async function runningProcesses(page: Page): Promise<number> {
   return page.evaluate(() =>
-    (window as unknown as { __kalcodeMemory: { runningProcessCount: () => number } }).__kalcodeMemory.runningProcessCount(),
+    (
+      window as unknown as { __kalcodeMemory: { runningProcessCount: () => number } }
+    ).__kalcodeMemory.runningProcessCount(),
   );
 }
 
@@ -140,7 +142,10 @@ test.describe("terminals", () => {
 
     // The close control on a tab.
     await page.getByRole("tab", { name: /^PowerShell 7$/ }).hover();
-    await page.getByRole("tab", { name: /^PowerShell 7$/ }).locator('[class*="tabClose"]').click();
+    await page
+      .getByRole("tab", { name: /^PowerShell 7$/ })
+      .locator('[class*="tabClose"]')
+      .click();
     await expect(page.getByRole("tab")).toHaveCount(1);
     expect(await runningProcesses(page)).toBe(1);
   });
@@ -252,9 +257,9 @@ test.describe("workspaces list", () => {
     await page.getByRole("button", { name: "Open folder…" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "second-project" })).toBeVisible();
     await page.evaluate(() =>
-      (window as unknown as { __kalcodeMemory: { makeUnavailable: (n: string) => void } }).__kalcodeMemory.makeUnavailable(
-        "second-project",
-      ),
+      (
+        window as unknown as { __kalcodeMemory: { makeUnavailable: (n: string) => void } }
+      ).__kalcodeMemory.makeUnavailable("second-project"),
     );
     // The active workspace's folder disappeared: explained, with a way out.
     await page.getByRole("button", { name: "Dashboard" }).click();

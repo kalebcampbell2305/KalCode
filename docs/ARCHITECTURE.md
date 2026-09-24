@@ -23,7 +23,9 @@ belongs here or in an ADR under `docs/adr/`.
 │                    provider/permission contracts   ├─ diagnostics/                  │
 │                                                    ├─ error.rs   KalError taxonomy  │
 │                                                    ├─ logging.rs structured logs    │
-│                                                    └─ flags.rs   feature flags      │
+│                                                    ├─ flags.rs   feature flags      │
+│                                                    └─ workspaces.rs folders + tabs  │
+│                                                   crates/pty (ConPTY/openpty shells) │
 │                                                   crates/secure-store (OS keychain)  │
 └─────────────────────────────────────────────────────────────────────────────────────┘
 
@@ -43,7 +45,9 @@ KalCode/
 │   ├── desktop/            React frontend + src-tauri (Tauri shell crate `kalcode-desktop`)
 │   └── website/            kalcoded.com — Astro static site + Cloudflare Worker + D1
 ├── crates/
-│   ├── native-core/        `kalcode_core`: db, migrations, events, settings, errors, logging
+│   ├── native-core/        `kalcode_core`: db, migrations, events, settings, errors, logging,
+│   │                       workspaces and terminal tabs
+│   ├── pty/                `kalcode_pty`: pseudo-terminal sessions, scrollback, shell detection
 │   └── secure-store/       `kalcode_secure_store`: SecretStore trait + OS keychain backend
 ├── packages/
 │   ├── protocol/           `@kalcode/protocol`: generated IPC/event types, plans, contracts
@@ -93,8 +97,26 @@ All IPC types are defined in Rust and exported to TypeScript with `ts-rs` into
 | `diagnostics_open_log_dir` | — | — | native resolves the path |
 | `diagnostics_open_data_dir` | — | — | native resolves the path (startup-error screen) |
 | `secure_store_check` | — | `SecureStoreCheck` | writes, reads, deletes a probe credential; 2 s cooldown, serialized |
+| `workspace_list` | — | `Workspace[]` | most recently opened first; `available` reflects whether the folder exists |
+| `workspace_active` | — | `Workspace \| null` | |
+| `workspace_open_dialog` | — | `Workspace \| null` | shows the **native** folder picker from Rust; `null` when cancelled; the WebView never passes a path. Test builds only: `KALCODE_E2E_PICK_FOLDER` replaces the dialog |
+| `workspace_activate` | `{ workspaceId }` | `Workspace` | |
+| `workspace_remove` | `{ workspaceId }` | — | forgets the workspace; files untouched; refused while its terminals run |
+| `shells_list` | — | `ShellOption[]` | detected at startup; ids and names only, never paths |
+| `terminal_list` | `{ workspaceId }` | `TerminalInfo[]` | tab order |
+| `terminals_running` | — | `TerminalInfo[]` | all workspaces (Dashboard) |
+| `terminal_create` | `{ workspaceId, shellId?, cols, rows }` | `TerminalInfo` | starts a detected shell in the workspace folder; at most 12 tabs per workspace |
+| `terminal_restart` | `{ terminalId, cols, rows }` | `TerminalInfo` | fresh shell in an ended tab |
+| `terminal_close` | `{ terminalId }` | — | ends the shell and programs started in it; forgets the tab |
+| `terminal_write` | `{ terminalId, data }` | — | UTF-8 input, at most 64 KB; queued, never blocks (sync, ordered) |
+| `terminal_resize` | `{ terminalId, cols, rows }` | — | 2..=1000 each (sync) |
+| `terminal_attach` | `{ terminalId }` + `Channel<ArrayBuffer>` | `bool` | raw output bytes: replay first, then live; one per (webview, terminal); dropped on page reload (sync) |
+| `terminal_detach` | `{ terminalId }` | `bool` | the calling webview's attachment only (sync) |
+| `terminal_set_active` | `{ workspaceId, terminalId }` | — | remembers the tab in front |
 
-Database-backed commands run off the main thread (`#[tauri::command(async)]`).
+Database-backed commands run off the main thread (`#[tauri::command(async)]`). Terminal input,
+resize, attach and detach touch no storage and stay synchronous so they are handled in the order
+the WebView sent them (see `docs/CODE_MODE.md`).
 
 Errors cross the boundary as `IpcError { category, code, message, retryable }` (see §7). The
 frontend client (`apps/desktop/src/ipc`) is the only module allowed to call `invoke`.

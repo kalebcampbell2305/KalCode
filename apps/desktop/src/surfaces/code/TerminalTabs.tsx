@@ -111,6 +111,7 @@ export function TerminalTabs({
           const label = labels.get(terminal.id) ?? terminal.title;
           const status = describeTerminalStatus(terminal);
           return (
+            // biome-ignore lint/a11y/useKeyWithClickEvents: the tablist handles keys for every tab (roving focus).
             <div
               key={terminal.id}
               id={tabId(terminal.id)}
@@ -133,7 +134,7 @@ export function TerminalTabs({
               <span className={styles.tabDot} data-tone={statusTone(terminal)} aria-hidden="true" />
               <span className={styles.tabLabel}>{label}</span>
               {terminal.status === "running" ? null : <span className={styles.tabState}>Ended</span>}
-              {/* biome-ignore lint/a11y/useKeyWithClickEvents: keyboard users close with Delete or Ctrl+Shift+W. */}
+              {/* Mouse affordance; keyboard users close with Delete or Ctrl+Shift+W. */}
               <span
                 className={styles.tabClose}
                 aria-hidden="true"
@@ -161,7 +162,12 @@ export function TerminalTabs({
         <DropdownMenu>
           <Tooltip content="Choose a shell">
             <DropdownMenuTrigger asChild>
-              <IconButton size="sm" label="Choose a shell" icon={<ChevronDown />} disabled={disabled || shells.length === 0} />
+              <IconButton
+                size="sm"
+                label="Choose a shell"
+                icon={<ChevronDown />}
+                disabled={disabled || shells.length === 0}
+              />
             </DropdownMenuTrigger>
           </Tooltip>
           <DropdownMenuContent

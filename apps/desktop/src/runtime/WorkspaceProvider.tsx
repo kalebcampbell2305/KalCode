@@ -1,15 +1,6 @@
 import type { ShellOption, TerminalInfo, Workspace } from "@kalcode/protocol";
 import { useToast } from "@kalcode/ui/components";
-import {
-  createContext,
-  type ReactNode,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { TerminalSize } from "../ipc/client.ts";
 import { type KalCodeError, toKalCodeError } from "../ipc/errors.ts";
 import { useRuntime } from "./RuntimeProvider.tsx";
@@ -76,10 +67,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [picking, setPicking] = useState(false);
   const [selected, setSelected] = useState<{ workspaceId: string; terminalId: string } | null>(null);
   const [focusRequest, setFocusRequest] = useState({ terminalId: "", n: 0 });
-  const requestFocus = useCallback(
-    (terminalId: string) => setFocusRequest((f) => ({ terminalId, n: f.n + 1 })),
-    [],
-  );
+  const requestFocus = useCallback((terminalId: string) => setFocusRequest((f) => ({ terminalId, n: f.n + 1 })), []);
   const lastSize = useRef<TerminalSize>({ cols: 120, rows: 30 });
   const generation = useRef(0);
 

@@ -109,23 +109,31 @@ const encoder = new TextEncoder();
 const ESC = "\x1b";
 const c = (code: string, text: string) => `${ESC}[${code}m${text}${ESC}[0m`;
 
-export function createMemoryWorkspaces({ emit, requireCore, preload = false }: MemoryWorkspacesOptions): MemoryWorkspaces {
+export function createMemoryWorkspaces({
+  emit,
+  requireCore,
+  preload = false,
+}: MemoryWorkspacesOptions): MemoryWorkspaces {
   const workspaces = new Map<string, Workspace>();
   const tabs = new Map<string, Tab>();
   let activeWorkspaceId: string | null = null;
   const pickQueue: PickedFolder[] = [];
   const defaultPicks = ["kalcode-site", "api-server", "design-notes"];
   let clock = Date.now() - 120_000;
-  const now = () => new Date((clock += 1000)).toISOString();
+  const now = () => {
+    clock += 1000;
+    return new Date(clock).toISOString();
+  };
 
   const folderPath = (name: string) => `${HOME}\\Projects\\${name}`;
   const displayPath = (name: string) => `~\\Projects\\${name}`;
 
-  const sortedWorkspaces = () =>
-    [...workspaces.values()].sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt));
+  const sortedWorkspaces = () => [...workspaces.values()].sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt));
 
   const tabsOf = (workspaceId: string) =>
-    [...tabs.values()].filter((t) => t.info.workspaceId === workspaceId).sort((a, b) => a.info.position - b.info.position);
+    [...tabs.values()]
+      .filter((t) => t.info.workspaceId === workspaceId)
+      .sort((a, b) => a.info.position - b.info.position);
 
   const status = (tab: Tab): TerminalStatus => tab.info.status;
 
@@ -226,11 +234,7 @@ export function createMemoryWorkspaces({ emit, requireCore, preload = false }: M
         else out(`${c("1;31", "fatal:")} only 'git log' works in this test shell`);
         break;
       case "colors":
-        out(
-          [0, 1, 2, 3, 4, 5, 6, 7]
-            .map((n) => `${c(`3${n}`, `color${n}`)} ${c(`9${n}`, `bright${n}`)}`)
-            .join("  "),
-        );
+        out([0, 1, 2, 3, 4, 5, 6, 7].map((n) => `${c(`3${n}`, `color${n}`)} ${c(`9${n}`, `bright${n}`)}`).join("  "));
         break;
       case "cls":
       case "clear":

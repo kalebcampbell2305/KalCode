@@ -53,8 +53,12 @@ Status legend: **I** implemented and emitted · **D** defined, emitted from its 
 | `database.migrated` | 1 | I | `{ fromVersion, toVersion, backupCreated }` |
 | `settings.changed` | 1 | I | `{ keys: string[] }` |
 | `secure_store.checked` | 1 | I | `{ ok, backend }` |
-| `workspace.created` / `.opened` / `.closed` | 1 | D (Z1) | `{ workspaceId, name }` |
-| `shell.started` / `.completed` / `.failed` | 1 | D (Z1) | `{ terminalId, shell, exitCode? }` |
+| `workspace.created` | 1 | I (Z1) | `{ workspaceId, name }` — a folder was opened for the first time |
+| `workspace.opened` | 1 | I (Z1) | `{ workspaceId, name }` — an existing workspace became active |
+| `workspace.removed` | 1 | I (Z1) | `{ workspaceId, name }` — removed from KalCode's list (files untouched) |
+| `shell.started` | 1 | I (Z1) | `{ terminalId, shellId, shellName }` — new tab or Restart |
+| `shell.completed` | 1 | I (Z1) | `{ terminalId, exitCode, closedByUser }` — exit code 0, or the user closed the tab |
+| `shell.failed` | 1 | I (Z1) | `{ terminalId, exitCode }` — the shell exited on its own with a non-zero code |
 | `provider.detected` / `.connected` / `.disconnected` / `.error` | 1 | D (Z2) | `{ providerId, version?, error? }` |
 | `thread.created` / `.started` / `.status_changed` / `.idle` / `.paused` / `.resumed` / `.completed` / `.failed` | 1 | D (Z3) | `{ threadId, status, … }` |
 | `agent.message` | 1 | D (Z3) | `{ threadId, messageId, role }` |
@@ -67,6 +71,11 @@ Status legend: **I** implemented and emitted · **D** defined, emitted from its 
 
 Streaming high-volume data (terminal bytes, token deltas) is **not** sent as persisted events;
 it uses dedicated channels, and only lifecycle transitions are events.
+
+Z1 events carry `correlation.workspaceId`. A tab and its `shell.started` event commit in one
+transaction; so does a close and its `shell.completed { closedByUser: true }`. Shells that end
+because KalCode exits are not individually recorded: `app.stopped` marks the end of the session
+and their tabs are stored as ended by the app (see `docs/CODE_MODE.md`).
 
 ## 4. Storage
 

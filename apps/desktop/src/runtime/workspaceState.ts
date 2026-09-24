@@ -58,9 +58,7 @@ export function describeTerminalStatus(terminal: TerminalInfo): string {
     case "running":
       return "Running";
     case "exited":
-      return terminal.exitCode === 0 || terminal.exitCode === null
-        ? "Exited"
-        : `Exited with code ${terminal.exitCode}`;
+      return terminal.exitCode === 0 || terminal.exitCode === null ? "Exited" : `Exited with code ${terminal.exitCode}`;
     case "ended_by_app":
       return "Ended when KalCode closed";
   }

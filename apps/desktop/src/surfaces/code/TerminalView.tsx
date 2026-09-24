@@ -121,7 +121,8 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme }: 
     });
     term.onBinary((data) => {
       // Legacy mouse reports; only 7-bit data survives the UTF-8 input path unchanged.
-      if (!replaying && runningRef.current && !/[^\x00-\x7f]/.test(data)) send(data);
+      const sevenBit = [...data].every((ch) => ch.charCodeAt(0) < 0x80);
+      if (!replaying && runningRef.current && sevenBit) send(data);
     });
 
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;

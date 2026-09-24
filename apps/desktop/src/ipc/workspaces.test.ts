@@ -58,10 +58,14 @@ describe("memory runtime: workspaces and terminals", () => {
   it("validates ids, sizes, shells and input like native", async () => {
     const { client, workspace } = await setup();
     await expect(client.listTerminals("nope")).rejects.toMatchObject({ code: "invalid_id" });
-    await expect(client.transport.invoke("terminal_create", { workspaceId: workspace.id, cols: 1, rows: 30 })).rejects.toMatchObject({
+    await expect(
+      client.transport.invoke("terminal_create", { workspaceId: workspace.id, cols: 1, rows: 30 }),
+    ).rejects.toMatchObject({
       code: "invalid_size",
     });
-    await expect(client.transport.invoke("terminal_create", { workspaceId: workspace.id, cols: -1, rows: 30 })).rejects.toMatchObject({
+    await expect(
+      client.transport.invoke("terminal_create", { workspaceId: workspace.id, cols: -1, rows: 30 }),
+    ).rejects.toMatchObject({
       code: "ipc_rejected",
     });
     await expect(client.createTerminal(workspace.id, "C:\\evil.exe", { cols: 80, rows: 24 })).rejects.toMatchObject({

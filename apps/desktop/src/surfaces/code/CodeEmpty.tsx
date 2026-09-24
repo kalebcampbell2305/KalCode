@@ -22,8 +22,8 @@ export function CodeEmpty() {
         }
       >
         <p>
-          KalCode starts terminals in the folder you choose, with the shells already installed on this computer.
-          Opening or removing a workspace never changes your files.
+          KalCode starts terminals in the folder you choose, with the shells already installed on this computer. Opening
+          or removing a workspace never changes your files.
         </p>
       </EmptyState>
       {workspaces.length > 0 ? (
@@ -50,7 +50,11 @@ function RecentWorkspace({ workspace }: { workspace: Workspace }) {
         </span>
       </div>
       {workspace.available ? (
-        <time className={styles.recentTime} dateTime={workspace.lastOpenedAt} title={formatAbsolute(workspace.lastOpenedAt)}>
+        <time
+          className={styles.recentTime}
+          dateTime={workspace.lastOpenedAt}
+          title={formatAbsolute(workspace.lastOpenedAt)}
+        >
           Opened {formatRelative(workspace.lastOpenedAt)}
         </time>
       ) : (

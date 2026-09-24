@@ -38,8 +38,12 @@ code review checks for imported private material.
 
 ## 4. Planned controls (by campaign)
 
-- Z1: path canonicalization, workspace-root containment checks, symlink escape detection, PTY
-  process-tree cleanup.
+- Z1 (implemented): workspace folders come only from the native picker and are canonicalized;
+  shells are chosen by detected id (no executable, arguments or working directory from the
+  WebView); every id is validated (`is_valid_id`), sizes and input length are bounded; closing a
+  tab closes its pseudo-terminal, ending programs started in it; KalCode and test variables are
+  stripped from shell environments; the dialog plugin is used from Rust only. Workspace-root
+  containment and symlink-escape checks for file access arrive with file tools (Z3/Z4).
 - Z2: provider process isolation, sanitized environment for child processes, credential scoping.
 - Z4: permission engine (see `docs/PERMISSIONS.md`) with audit log of consequential decisions.
 - Z13: signed updates (Tauri updater with minisign keys), code-signed installers, webhook

@@ -211,7 +211,16 @@ interface TerminalPanelProps {
   onClose: () => void;
 }
 
-function TerminalPanel({ terminal, label, visible, focusRequest, theme, workspace, onRestart, onClose }: TerminalPanelProps) {
+function TerminalPanel({
+  terminal,
+  label,
+  visible,
+  focusRequest,
+  theme,
+  workspace,
+  onRestart,
+  onClose,
+}: TerminalPanelProps) {
   const endedBeforeLaunch = terminal.status === "ended_by_app";
   return (
     <section

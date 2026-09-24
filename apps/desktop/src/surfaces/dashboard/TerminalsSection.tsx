@@ -53,7 +53,11 @@ export function TerminalsSection() {
                     <StatusIndicator tone="live">Running</StatusIndicator>
                     <span className={styles.title}>{labels.get(terminal.id) ?? terminal.title}</span>
                     {terminal.startedAt ? (
-                      <time className={styles.time} dateTime={terminal.startedAt} title={formatAbsolute(terminal.startedAt)}>
+                      <time
+                        className={styles.time}
+                        dateTime={terminal.startedAt}
+                        title={formatAbsolute(terminal.startedAt)}
+                      >
                         Started {formatRelative(terminal.startedAt, now)}
                       </time>
                     ) : null}

@@ -135,7 +135,10 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
   const code = createMemoryWorkspaces({ emit, requireCore, preload: scenario === "code" });
 
   const handlers: Record<CommandName, (args: Record<string, unknown>) => unknown> = {
-    ...(code.handlers as Record<Extract<CommandName, `workspace_${string}` | `terminal${string}` | "shells_list">, (args: Record<string, unknown>) => unknown>),
+    ...(code.handlers as Record<
+      Extract<CommandName, `workspace_${string}` | `terminal${string}` | "shells_list">,
+      (args: Record<string, unknown>) => unknown
+    >),
     boot: (): BootState => ({ info, startupError }),
     window_ready: () => undefined,
     settings_get: () => {

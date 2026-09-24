@@ -80,7 +80,11 @@ describe("workspace state helpers", () => {
 
   it("groups running terminals by workspace in list order", () => {
     const groups = groupRunning(
-      [tab("a", "x", { workspaceId: "w2" }), tab("b", "x", { workspaceId: "w1" }), tab("c", "x", { workspaceId: "w2" })],
+      [
+        tab("a", "x", { workspaceId: "w2" }),
+        tab("b", "x", { workspaceId: "w1" }),
+        tab("c", "x", { workspaceId: "w2" }),
+      ],
       [workspace("w1", "site"), workspace("w2", "api")],
     );
     expect(groups.map((g) => [g.workspace?.name, g.terminals.map((t) => t.id)])).toEqual([
