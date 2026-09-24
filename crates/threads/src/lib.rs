@@ -23,6 +23,6 @@ pub use registry::{
 };
 pub use runtime::{StreamId, ThreadRuntime};
 pub use types::{
-    BulkOutcome, CreateThread, ProviderOption, StatusCount, ThreadOptions, ThreadsStatusSummary,
-    ToolCallRecord, ToolCallStatus, WorkspaceOption,
+    BulkOutcome, CreateIdleThread, CreateThread, ProviderOption, StatusCount, ThreadOptions,
+    ThreadsStatusSummary, ToolCallRecord, ToolCallStatus, WorkspaceOption,
 };

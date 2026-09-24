@@ -85,6 +85,17 @@ pub struct CreateThread {
     pub name: Option<String>,
 }
 
+/// Input for creating a thread that starts without a task and waits for input (for example,
+/// "create three Claude Code threads" from the voice layer).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateIdleThread {
+    pub provider_id: String,
+    pub workspace_id: String,
+    pub model: Option<String>,
+    pub permission_mode: PermissionMode,
+    pub name: Option<String>,
+}
+
 /// Counts of threads by status, for non-UI callers that report what threads are doing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

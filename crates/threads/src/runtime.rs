@@ -22,6 +22,7 @@ use kalcode_contracts::agent::{
 };
 use kalcode_contracts::events::{Correlation, EventPayload, EventSource, NewEvent};
 use kalcode_contracts::ids::new_id;
+use kalcode_contracts::kalvoice::ThreadScope;
 use kalcode_contracts::permissions::{
     ApprovalDecision, NormalizedAction, PermissionGate, PermissionMode, PolicyEffect,
 };
@@ -36,8 +37,8 @@ use crate::naming;
 use crate::registry::{ProviderEntry, ProviderRegistry, WorkspaceResolver};
 use crate::store::{self, NewThreadRow, ThreadRow};
 use crate::types::{
-    BulkOutcome, CreateThread, ProviderOption, StatusCount, ThreadOptions, ThreadsStatusSummary,
-    ToolCallRecord, WorkspaceOption,
+    BulkOutcome, CreateIdleThread, CreateThread, ProviderOption, StatusCount, ThreadOptions,
+    ThreadsStatusSummary, ToolCallRecord, WorkspaceOption,
 };
 use crate::validate;
 
@@ -182,6 +183,15 @@ impl LiveThread {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
+}
+
+/// Fields shared by the public create paths (validated in `Inner::create`).
+struct NewThread<'a> {
+    provider_id: &'a str,
+    workspace_id: &'a str,
+    model: Option<&'a str>,
+    permission_mode: PermissionMode,
+    name: String,
 }
 
 enum EndReason {
@@ -473,7 +483,60 @@ impl ThreadRuntime {
     /// Creates a thread and starts its provider session with `prompt` as the first message.
     /// A provider that fails to start yields a `failed` thread (with the reason), not an error.
     pub fn create(&self, request: CreateThread) -> Result<ThreadSummary> {
-        self.inner.create(request)
+        let prompt = validate::prompt(&request.prompt)?;
+        let name = match request.name.as_deref().filter(|n| !n.trim().is_empty()) {
+            Some(name) => validate::name(name)?,
+            None => naming::name_from_prompt(&prompt),
+        };
+        self.inner.create(
+            NewThread {
+                provider_id: &request.provider_id,
+                workspace_id: &request.workspace_id,
+                model: request.model.as_deref(),
+                permission_mode: request.permission_mode,
+                name,
+            },
+            Some(prompt),
+        )
+    }
+
+    /// Creates a thread whose session starts without a task; it waits (`idle`) for input.
+    pub fn create_idle(&self, request: CreateIdleThread) -> Result<ThreadSummary> {
+        let name = match request.name.as_deref().filter(|n| !n.trim().is_empty()) {
+            Some(name) => validate::name(name)?,
+            None => naming::FALLBACK_NAME.to_owned(),
+        };
+        self.inner.create(
+            NewThread {
+                provider_id: &request.provider_id,
+                workspace_id: &request.workspace_id,
+                model: request.model.as_deref(),
+                permission_mode: request.permission_mode,
+                name,
+            },
+            None,
+        )
+    }
+
+    /// Creates `count` (1-16) task-less threads with the same provider and workspace. Each
+    /// result is independent.
+    pub fn create_idle_threads(
+        &self,
+        request: &CreateIdleThread,
+        count: u8,
+    ) -> Result<Vec<Result<ThreadSummary>>> {
+        if count == 0 || usize::from(count) > validate::MAX_BULK_CREATE {
+            return Err(KalError::validation(
+                "invalid_thread_count",
+                format!(
+                    "Create between 1 and {} threads at a time.",
+                    validate::MAX_BULK_CREATE
+                ),
+            ));
+        }
+        Ok((0..count)
+            .map(|_| self.create_idle(request.clone()))
+            .collect())
     }
 
     /// Creates several threads (at most 16). Each result is independent.
@@ -492,7 +555,7 @@ impl ThreadRuntime {
         }
         Ok(requests
             .into_iter()
-            .map(|request| self.inner.create(request))
+            .map(|request| self.create(request))
             .collect())
     }
 
@@ -565,29 +628,77 @@ impl ThreadRuntime {
         self.inner.summary(thread_id)
     }
 
-    /// Pauses every thread whose provider is working.
-    pub fn pause_all(&self) -> Vec<BulkOutcome> {
+    /// Pauses every working thread in `scope`. A single named thread is always attempted, so
+    /// the caller hears why it couldn't be paused.
+    pub fn pause_threads(&self, scope: &ThreadScope) -> Vec<BulkOutcome> {
         self.bulk(
+            scope,
             |t| t.status.is_live() || t.status == ThreadStatus::WaitingForPermission,
             |id| self.pause(id).map(|_| ()),
         )
     }
 
-    /// Resumes every paused thread.
-    pub fn resume_all(&self) -> Vec<BulkOutcome> {
+    /// Resumes every paused thread in `scope`.
+    pub fn resume_threads(&self, scope: &ThreadScope) -> Vec<BulkOutcome> {
         self.bulk(
+            scope,
             |t| t.status == ThreadStatus::Paused,
             |id| self.resume(id, None).map(|_| ()),
         )
     }
 
-    /// Stops every thread that has a running session.
+    /// Stops every thread in `scope` that has a running session.
+    pub fn stop_threads(&self, scope: &ThreadScope) -> Vec<BulkOutcome> {
+        let running: std::collections::HashSet<String> =
+            self.inner.running_ids().into_iter().collect();
+        self.bulk(
+            scope,
+            |t| running.contains(&t.id),
+            |id| self.stop(id).map(|_| ()),
+        )
+    }
+
+    pub fn pause_all(&self) -> Vec<BulkOutcome> {
+        self.pause_threads(&ThreadScope::All)
+    }
+
+    pub fn resume_all(&self) -> Vec<BulkOutcome> {
+        self.resume_threads(&ThreadScope::All)
+    }
+
     pub fn stop_all(&self) -> Vec<BulkOutcome> {
-        let running: Vec<String> = self.inner.running_ids();
-        running
+        self.stop_threads(&ThreadScope::All)
+    }
+
+    /// Open threads whose name, provider or workspace contains `query` (case-insensitive):
+    /// exact name matches first, then name matches, then the rest; most recent first in each.
+    pub fn find(&self, query: &str) -> Result<Vec<ThreadSummary>> {
+        let query = query.trim().to_lowercase();
+        if query.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut matches: Vec<(u8, ThreadSummary)> = self
+            .list(None, false)?
             .into_iter()
-            .map(|id| outcome(&id, self.stop(&id).map(|_| ())))
-            .collect()
+            .filter_map(|t| {
+                let name = t.name.to_lowercase();
+                let rank = if name == query {
+                    0
+                } else if name.contains(&query) {
+                    1
+                } else if t.provider_name.to_lowercase().contains(&query)
+                    || t.workspace_name.to_lowercase().contains(&query)
+                {
+                    2
+                } else {
+                    return None;
+                };
+                Some((rank, t))
+            })
+            .collect();
+        // `list` is most recent first and the sort is stable.
+        matches.sort_by_key(|(rank, _)| *rank);
+        Ok(matches.into_iter().map(|(_, t)| t).collect())
     }
 
     /// Subscribes to a thread's live stream (message deltas and completions). Text already
@@ -640,10 +751,18 @@ impl ThreadRuntime {
 
     fn bulk(
         &self,
+        scope: &ThreadScope,
         select: impl Fn(&ThreadSummary) -> bool,
         apply: impl Fn(&str) -> Result<()>,
     ) -> Vec<BulkOutcome> {
-        match self.list(None, false) {
+        if let ThreadScope::Thread { thread_id } = scope {
+            return vec![outcome(thread_id, apply(thread_id))];
+        }
+        let workspace = match scope {
+            ThreadScope::Workspace { workspace_id } => Some(workspace_id.as_str()),
+            _ => None,
+        };
+        match self.list(workspace, false) {
             Ok(threads) => threads
                 .iter()
                 .filter(|t| select(t))
@@ -915,20 +1034,13 @@ impl Inner {
         }
     }
 
-    fn create(&self, request: CreateThread) -> Result<ThreadSummary> {
-        let provider_id = validate::provider_id(&request.provider_id)?;
-        validate::workspace_id(&request.workspace_id)?;
-        let model = validate::model(request.model.as_deref())?;
+    /// Creates a thread and starts its session; `prompt`, when given, is the first message.
+    fn create(&self, request: NewThread<'_>, prompt: Option<String>) -> Result<ThreadSummary> {
+        let provider_id = validate::provider_id(request.provider_id)?;
+        validate::workspace_id(request.workspace_id)?;
+        let model = validate::model(request.model)?;
         let mode = validate::creation_mode(request.permission_mode)?;
-        let prompt = validate::prompt(&request.prompt)?;
-        let name = match request
-            .name
-            .as_deref()
-            .filter(|name| !name.trim().is_empty())
-        {
-            Some(name) => validate::name(name)?,
-            None => naming::name_from_prompt(&prompt),
-        };
+        let name = request.name;
         let entry = self
             .providers
             .get(&provider_id)
@@ -943,7 +1055,7 @@ impl Inner {
                 ));
             }
         }
-        let workspace = self.workspaces.resolve(&request.workspace_id)?;
+        let workspace = self.workspaces.resolve(request.workspace_id)?;
         let cwd = workspace.root.to_string_lossy().into_owned();
 
         let id = new_id();
@@ -979,7 +1091,7 @@ impl Inner {
         tracing::info!(event = "thread.created", thread_id = %id, provider_id = %provider_id);
 
         let row = self.row(&id)?;
-        self.start_session(&row, &entry, None, Some(prompt), None)?;
+        self.start_session(&row, &entry, None, prompt, None)?;
         self.summary(&id)
     }
 

@@ -1195,3 +1195,110 @@ fn crash_recovery_interrupts_threads_left_running() {
     let messages = runtime.messages(&running, 10, None).unwrap();
     assert_eq!(messages[0].content, "running", "history survived the crash");
 }
+
+#[test]
+fn idle_threads_start_without_a_task() {
+    let h = Harness::new();
+    let request = kalcode_threads::CreateIdleThread {
+        provider_id: "fake".into(),
+        workspace_id: h.workspace_id.clone(),
+        model: None,
+        permission_mode: PermissionMode::Approve,
+        name: None,
+    };
+    let created = h.runtime.create_idle_threads(&request, 3).expect("bulk");
+    assert_eq!(created.len(), 3);
+    for thread in created {
+        let thread = thread.expect("created");
+        assert_eq!(thread.status, ThreadStatus::Idle, "waiting for input");
+        assert_eq!(thread.name, "New thread");
+        assert!(h.runtime.messages(&thread.id, 10, None).unwrap().is_empty());
+    }
+    assert!(
+        h.provider.last_session().calls().is_empty(),
+        "nothing was sent"
+    );
+    assert_code(
+        h.runtime.create_idle_threads(&request, 0),
+        "invalid_thread_count",
+    );
+    assert_code(
+        h.runtime.create_idle_threads(&request, 17),
+        "invalid_thread_count",
+    );
+
+    let named = h
+        .runtime
+        .create_idle(kalcode_threads::CreateIdleThread {
+            name: Some("Reviewer".into()),
+            ..request
+        })
+        .expect("named");
+    assert_eq!(named.name, "Reviewer");
+    h.runtime.send(&named.id, "review the diff").expect("send");
+    assert_eq!(status(&h, &named.id), ThreadStatus::Active);
+}
+
+#[test]
+fn scoped_operations_and_search_for_non_ui_callers() {
+    use kalcode_contracts::kalvoice::ThreadScope;
+    let h = Harness::new();
+    let a = started(&h, "fix the login flow");
+    let b = started(&h, "write release notes");
+
+    // A named thread in the wrong state reports why.
+    h.runtime.stop(&b).expect("stop b");
+    let outcome = h.runtime.pause_threads(&ThreadScope::Thread {
+        thread_id: b.clone(),
+    });
+    assert_eq!(outcome.len(), 1);
+    assert!(!outcome[0].ok);
+    assert!(
+        outcome[0]
+            .message
+            .as_deref()
+            .unwrap_or("")
+            .contains("isn't running")
+    );
+
+    // Workspace scope only touches that workspace's threads.
+    let other = kalcode_threads::ResolvedWorkspace {
+        id: new_id(),
+        name: "other".into(),
+        root: h.dir.path().join("other"),
+    };
+    assert!(
+        h.runtime
+            .pause_threads(&ThreadScope::Workspace {
+                workspace_id: other.id.clone()
+            })
+            .is_empty()
+    );
+    let paused = h.runtime.pause_threads(&ThreadScope::Workspace {
+        workspace_id: h.workspace_id.clone(),
+    });
+    assert_eq!(
+        paused
+            .iter()
+            .map(|o| o.thread_id.as_str())
+            .collect::<Vec<_>>(),
+        [a.as_str()]
+    );
+    assert_eq!(status(&h, &a), ThreadStatus::Paused);
+    let resumed = h.runtime.resume_threads(&ThreadScope::All);
+    assert_eq!(resumed.len(), 1);
+    assert_eq!(status(&h, &a), ThreadStatus::Idle);
+    let stopped = h.runtime.stop_threads(&ThreadScope::All);
+    assert_eq!(stopped.len(), 1, "only threads with a session are stopped");
+
+    let found = h.runtime.find("  LOGIN ").unwrap();
+    assert_eq!(
+        found.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+        [a.as_str()]
+    );
+    let by_workspace = h.runtime.find("kalcode").unwrap();
+    assert_eq!(by_workspace.len(), 2);
+    assert!(h.runtime.find("   ").unwrap().is_empty());
+    let exact = h.runtime.find("write release notes").unwrap();
+    assert_eq!(exact[0].id, b, "exact name first");
+}

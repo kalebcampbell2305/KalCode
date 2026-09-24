@@ -197,20 +197,29 @@ at creation).
 The same `ThreadRuntime` serves callers other than the UI (the voice layer, missions,
 automations) — no duplicate systems:
 
-`create`, `create_threads` (≤ 16 at once), `send`, `interrupt`, `pause`, `stop`, `resume`,
-`rename`, `archive`, `set_permission_mode`, `pause_all`, `resume_all`, `stop_all`,
-`status_summary` (counts by status, working / needs-attention / pending approvals, and every
-open thread), `list`, `get`, `messages`, `tool_calls`, `options`, `subscribe_stream`,
-`shutdown`.
+| KalVoice intent (`crates/contracts/src/kalvoice.rs`) | Runtime call |
+| --- | --- |
+| `CreateThreads { providerId, count, workspaceId? }` | `create_idle_threads(&CreateIdleThread, count)` (1–16; each starts `idle`, waiting for input; the caller resolves the workspace) |
+| `OpenThread { query }` | `find(query)` (exact name, then name, then provider/workspace matches) |
+| `PauseThreads { scope }` | `pause_threads(&ThreadScope)` |
+| `ResumeThreads { scope }` | `resume_threads(&ThreadScope)` |
+| `StopThreads { scope }` | `stop_threads(&ThreadScope)` |
+| `StatusReport` | `status_summary()` (counts by status, working / needs-attention / pending approvals, every open thread) |
+
+Bulk calls return one `BulkOutcome { threadId, ok, message }` per thread; a single named thread
+(`ThreadScope::Thread`) is always attempted so the caller can say why it couldn't act. Also
+available: `create`, `create_threads` (with tasks), `create_idle`, `send`, `interrupt`, `pause`,
+`stop`, `resume`, `rename`, `archive`, `set_permission_mode`, `pause_all` / `resume_all` /
+`stop_all`, `list`, `get`, `messages`, `tool_calls`, `options`, `subscribe_stream`, `shutdown`.
 
 ## 9. Testing
 
-- `crates/threads/tests/runtime.rs` — 31 integration tests against a real `Core` with a fake
+- `crates/threads/tests/runtime.rs` — 33 integration tests against a real `Core` with a fake
   provider (`tests/common`: scripted turns, slow turns, crashes, failed starts/sends,
   interrupt support, resume support), a scriptable permission gate and a fake resolver:
   lifecycle, status rules, message assembly and streaming, tool calls, files/usage, approval
   allow/deny/ask/deny-on-failure/early-decision, interrupt/pause/stop/resume, crash recovery,
-  provider crash isolation, validation, bulk operations.
+  provider crash isolation, validation, bulk and scoped operations, task-less creation, search.
 - `crates/threads/tests/migration.rs` — v1 database with data upgrades; schema constraints.
 - Unit tests for naming, validation, store and path handling.
 - UI: Vitest (`model.test.ts`, `ipc/memory/threads.test.ts`), Playwright `tests/ui/threads.spec.ts`
