@@ -4,6 +4,7 @@ import { ClipboardCopy, FolderOpen, KeyRound, Monitor, Moon, Sun } from "lucide-
 import type { ReactNode } from "react";
 import kalcodeGlobe362 from "../../assets/brand/kalcode-globe-362.webp";
 import kalcodeGlobe724 from "../../assets/brand/kalcode-globe-724.webp";
+import { KalVoiceSettings } from "../../kalvoice/KalVoiceSettings.tsx";
 import { formatAbsolute } from "../../runtime/describeEvent.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useDiagnostics } from "../../runtime/useDiagnostics.ts";
@@ -22,6 +23,7 @@ export function SettingsPage() {
   return (
     <Page title="Settings" description="Changes apply immediately and are saved on this device." width="narrow">
       <Appearance />
+      <KalVoiceSettings />
       <DiagnosticsSection />
       <About />
     </Page>

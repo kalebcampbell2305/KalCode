@@ -43,18 +43,15 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, S
 /// longer records a spoken command.
 const TAP: Duration = Duration::from_millis(400);
 
-/// Tauri-managed state. `None` when the core failed to start.
-pub struct KalVoiceState(pub Option<Arc<KalVoiceRuntime>>);
+/// Tauri-managed state. `None` when the core failed to start or KalVoice is off in this
+/// build channel (then no shortcut is registered and every command explains why).
+pub struct KalVoiceState(pub Option<Arc<KalVoiceRuntime>>, &'static str);
 
 impl KalVoiceState {
     fn runtime(&self) -> Result<&Arc<KalVoiceRuntime>, IpcError> {
-        self.0.as_ref().ok_or_else(|| {
-            KalError::internal(
-                "kalvoice_unavailable",
-                "KalVoice isn't available because KalCode's runtime didn't start.",
-            )
-            .to_ipc()
-        })
+        self.0
+            .as_ref()
+            .ok_or_else(|| KalError::internal("kalvoice_unavailable", self.1).to_ipc())
     }
 }
 
@@ -338,8 +335,19 @@ pub fn init(
     info: &AppInfo,
     registry: Arc<ProviderRegistry>,
 ) -> KalVoiceState {
+    let enabled = info.flags.surfaces.iter().any(|s| {
+        s.id == SurfaceId::KalVoice
+            && s.visible
+            && s.state != kalcode_core::flags::SurfaceState::Gated
+    });
+    if !enabled {
+        return KalVoiceState(None, "KalVoice isn't enabled in this build.");
+    }
     let Some(core) = core else {
-        return KalVoiceState(None);
+        return KalVoiceState(
+            None,
+            "KalVoice isn't available because KalCode's runtime didn't start.",
+        );
     };
     let providers = Arc::new(DesktopProviders {
         registry,
@@ -387,7 +395,7 @@ pub fn init(
         register_shortcuts(app, &runtime, &prefs);
     }
     follow_approvals(&runtime);
-    KalVoiceState(Some(runtime))
+    KalVoiceState(Some(runtime), "")
 }
 
 /// Resumes KalVoice commands that waited for approval. The bus delivers events while the

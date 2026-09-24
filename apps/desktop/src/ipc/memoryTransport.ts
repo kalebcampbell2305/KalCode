@@ -12,6 +12,7 @@
  *   providers-outdated — Claude Code is installed but too old, and signed out
  *   busy | empty | approvals-flood | errors | loading
  *                      — Dashboard data scenarios (see ./memory/dashboard.ts)
+ *   kalvoice-*         — KalVoice scenarios (see ./memoryKalVoice.ts, a labelled test double)
  *
  * Without a Dashboard scenario the transport mirrors the current native build: commands that no
  * campaign has registered yet are rejected exactly the way Tauri rejects them.
@@ -37,10 +38,17 @@ import {
   type EmitOptions,
   isDashboardScenario,
 } from "./memory/dashboard.ts";
+import { createMemoryKalVoice, isKalVoiceScenario, type KalVoiceScenario } from "./memoryKalVoice.ts";
 import { detectFake, type ProviderScenario, providerCatalog } from "./memoryProviders.ts";
 import type { CommandName, Transport } from "./transport.ts";
 
-export type MemoryScenario = "default" | "startup-error" | "keychain-failure" | ProviderScenario | DashboardScenario;
+export type MemoryScenario =
+  | "default"
+  | "startup-error"
+  | "keychain-failure"
+  | ProviderScenario
+  | DashboardScenario
+  | KalVoiceScenario;
 
 const PROVIDER_SCENARIOS: readonly string[] = ["providers-error", "providers-none", "providers-outdated"];
 
@@ -105,7 +113,7 @@ export function createMemoryTransport(
     flags: {
       surfaces: SURFACES.map((id) => ({
         id,
-        state: AVAILABLE_SURFACES.has(id) ? "available" : "gated",
+        state: AVAILABLE_SURFACES.has(id) ? "available" : id === "kalvoice" ? "preview" : "gated",
         visible: true,
       })),
     },
@@ -174,6 +182,8 @@ export function createMemoryTransport(
   const requireCore = () => {
     if (startupError) fail(startupError);
   };
+
+  const kalvoice = createMemoryKalVoice(emit, scenario);
 
   /** Mirrors the native registry: serialized, cached, events only for changes. */
   const detectProviders = async (): Promise<ProviderStatus[]> => {
@@ -320,6 +330,7 @@ export function createMemoryTransport(
       return detecting;
     },
     ...dashboard?.handlers,
+    ...(kalvoice.handlers as DashboardHandlers),
   };
 
   // Playwright drives live Dashboard changes (e.g. an approval arriving) through this hook. React
@@ -343,6 +354,10 @@ export function createMemoryTransport(
         subscribers.delete(onEvent);
       };
     },
+    async subscribeKalVoice(onSignal) {
+      requireCore();
+      kalvoice.subscribe(onSignal);
+    },
     async setNativeTheme() {},
     subscriberCount: () => subscribers.size,
     dashboard: dashboard?.controls ?? null,
@@ -353,6 +368,7 @@ function readScenario(): MemoryScenario {
   if (typeof location === "undefined") return "default";
   const value = new URLSearchParams(location.search).get("scenario");
   if (value === "startup-error" || value === "keychain-failure" || isDashboardScenario(value)) return value;
+  if (isKalVoiceScenario(value)) return value;
   if (value !== null && PROVIDER_SCENARIOS.includes(value)) return value as ProviderScenario;
   return "default";
 }

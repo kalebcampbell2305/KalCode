@@ -1,4 +1,4 @@
-import type { EventEnvelope } from "@kalcode/protocol";
+import type { EventEnvelope, KalVoiceSignal } from "@kalcode/protocol";
 
 /** Every command the native runtime exposes (mirrors src-tauri/build.rs). */
 export type CommandName =
@@ -15,6 +15,16 @@ export type CommandName =
   | "secure_store_check"
   | "providers_list"
   | "providers_detect"
+  | "kalvoice_subscribe"
+  | "kalvoice_status"
+  | "kalvoice_request"
+  | "kalvoice_preferences_update"
+  | "kalvoice_listen_start"
+  | "kalvoice_listen_stop"
+  | "kalvoice_listen_cancel"
+  | "kalvoice_model_download"
+  | "kalvoice_model_cancel"
+  | "kalvoice_model_delete"
   // Contract commands the Dashboard consumes (docs/CONTRACTS.md). They are implemented natively
   // by Z1 (terminals), Z3 (threads) and Z4 (approvals); until those land, the native runtime
   // rejects them and the client reports `command_unavailable`.
@@ -36,6 +46,8 @@ export interface Transport {
   readonly kind: "tauri" | "memory";
   invoke<T>(command: CommandName, args?: Record<string, unknown>): Promise<T>;
   subscribe(onEvent: (event: EventEnvelope) => void): Promise<Unsubscribe>;
+  /** Live KalVoice signals for this window (listening, level, transcripts, downloads). */
+  subscribeKalVoice(onSignal: (signal: KalVoiceSignal) => void): Promise<void>;
   /** Syncs the OS window chrome (title bar) with the app theme. */
   setNativeTheme(theme: NativeTheme): Promise<void>;
 }
@@ -55,6 +67,11 @@ export async function createTauriTransport(): Promise<Transport> {
       return async () => {
         await invoke<boolean>("events_unsubscribe", { id });
       };
+    },
+    async subscribeKalVoice(onSignal) {
+      const channel = new Channel<KalVoiceSignal>();
+      channel.onmessage = onSignal;
+      await invoke("kalvoice_subscribe", { onSignal: channel });
     },
     async setNativeTheme(theme) {
       await getCurrentWindow().setTheme(theme);

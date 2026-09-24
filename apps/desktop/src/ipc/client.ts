@@ -2,12 +2,19 @@ import type {
   ApprovalDecision,
   ApprovalRequest,
   BootState,
+  CommandRequest,
   Diagnostics,
   EventEnvelope,
+  KalVoiceMode,
+  KalVoicePreferencesPatch,
+  KalVoiceResponse,
+  KalVoiceSignal,
+  KalVoiceStatus,
   ProviderStatus,
   SecureStoreCheck,
   Settings,
   SettingsPatch,
+  SpeechModelInfo,
   ThreadSummary,
 } from "@kalcode/protocol";
 import { toKalCodeError } from "./errors.ts";
@@ -72,6 +79,53 @@ export class KalCodeClient {
 
   checkSecureStore(): Promise<SecureStoreCheck> {
     return this.call("secure_store_check");
+  }
+
+  // ---- KalVoice ----
+
+  async subscribeKalVoice(onSignal: (signal: KalVoiceSignal) => void): Promise<void> {
+    try {
+      await this.transport.subscribeKalVoice(onSignal);
+    } catch (error) {
+      throw toKalCodeError(error);
+    }
+  }
+
+  kalvoiceStatus(): Promise<KalVoiceStatus> {
+    return this.call("kalvoice_status");
+  }
+
+  kalvoiceRequest(request: CommandRequest): Promise<KalVoiceResponse> {
+    return this.call("kalvoice_request", { request });
+  }
+
+  kalvoiceUpdatePreferences(patch: KalVoicePreferencesPatch): Promise<KalVoiceStatus> {
+    return this.call("kalvoice_preferences_update", { patch });
+  }
+
+  kalvoiceListenStart(mode: KalVoiceMode): Promise<string> {
+    return this.call("kalvoice_listen_start", { mode });
+  }
+
+  kalvoiceListenStop(sessionId: string): Promise<void> {
+    return this.call("kalvoice_listen_stop", { sessionId });
+  }
+
+  kalvoiceListenCancel(): Promise<boolean> {
+    return this.call("kalvoice_listen_cancel");
+  }
+
+  /** `consent` must come from the user confirming the download dialog. */
+  kalvoiceModelDownload(modelId: string, consent: boolean): Promise<void> {
+    return this.call("kalvoice_model_download", { modelId, consent });
+  }
+
+  kalvoiceModelCancel(modelId: string): Promise<boolean> {
+    return this.call("kalvoice_model_cancel", { modelId });
+  }
+
+  kalvoiceModelDelete(modelId: string): Promise<SpeechModelInfo[]> {
+    return this.call("kalvoice_model_delete", { modelId });
   }
 
   /** Cached provider status; `detection` is null for providers not checked yet. */

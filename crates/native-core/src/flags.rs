@@ -41,7 +41,9 @@ impl FeatureFlags {
         use SurfaceState::*;
         let table = [
             (Dashboard, Available),
-            (KalVoice, Gated),
+            // Z12: dictation, commands and the floating assistant work; parts that depend on
+            // campaigns not in this build say so honestly.
+            (KalVoice, Preview),
             (Code, Gated),
             (Threads, Gated),
             (Agents, Gated),

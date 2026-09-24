@@ -13,6 +13,14 @@ const SETTING_LABELS: Record<string, string> = {
   "appearance.motion": "Motion",
   "appearance.density": "Density",
   "layout.sidebarCollapsed": "Sidebar",
+  "kalvoice.dictationShortcut": "KalVoice dictation shortcut",
+  "kalvoice.commandShortcut": "KalVoice command shortcut",
+  "kalvoice.intelligence": "KalVoice intelligence",
+  "kalvoice.speechModel": "KalVoice speech model",
+  "kalvoice.voiceReplies": "KalVoice spoken replies",
+  "kalvoice.panelDefault": "KalVoice assistant position",
+  "kalvoice.panelVisible": "KalVoice assistant visibility",
+  "kalvoice.panelPlacements": "KalVoice assistant layout",
 };
 
 const PROVIDER_NAMES: Record<string, string> = {

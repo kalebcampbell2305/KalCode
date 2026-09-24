@@ -1,4 +1,7 @@
 import { useState } from "react";
+import { FloatingAssistant } from "../kalvoice/FloatingAssistant.tsx";
+import { KalVoicePage } from "../kalvoice/KalVoicePage.tsx";
+import { KalVoiceProvider } from "../kalvoice/KalVoiceProvider.tsx";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { Dashboard } from "../surfaces/dashboard/Dashboard.tsx";
 import { GatedSurface } from "../surfaces/gated/GatedSurface.tsx";
@@ -14,14 +17,23 @@ import { useShortcuts } from "./shortcuts.ts";
 export function Shell() {
   const { info, settings, client } = useRuntime();
   useAppearance(settings, client);
+  // KalVoice (Z12) runs when its surface is enabled for this build channel.
+  const kalvoiceFlag = info.flags.surfaces.find((s) => s.id === "kalvoice");
+  const kalvoiceEnabled = Boolean(kalvoiceFlag?.visible && kalvoiceFlag.state !== "gated");
   return (
     <NavigationProvider flags={info.flags.surfaces}>
-      <ShellLayout />
+      {kalvoiceEnabled ? (
+        <KalVoiceProvider>
+          <ShellLayout kalvoice />
+        </KalVoiceProvider>
+      ) : (
+        <ShellLayout kalvoice={false} />
+      )}
     </NavigationProvider>
   );
 }
 
-function ShellLayout() {
+function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
   const { settings, updateSettings } = useRuntime();
   const { current } = useNavigation();
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -38,7 +50,9 @@ function ShellLayout() {
       </a>
       <Sidebar collapsed={settings.sidebarCollapsed} onOpenPalette={() => setPaletteOpen(true)} />
       <main id="main" className={styles.main} tabIndex={-1} aria-label={SURFACES[current].label}>
-        {current === "dashboard" ? (
+        {current === "kalvoice" && kalvoice ? (
+          <KalVoicePage />
+        ) : current === "dashboard" ? (
           <Dashboard />
         ) : current === "settings" ? (
           <SettingsPage />
@@ -49,6 +63,7 @@ function ShellLayout() {
         )}
       </main>
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+      {kalvoice ? <FloatingAssistant /> : null}
     </div>
   );
 }
