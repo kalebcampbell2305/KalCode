@@ -21,8 +21,8 @@
   color: var(--color-text-secondary);
 }
 
-/* The JARVIS artwork keeps its own dark ground in both themes. */
-.jarvis {
+/* The KalVoice artwork keeps its own dark ground in both themes. */
+.kalvoice {
   --artwork-bg: #010205;
   display: flex;
   align-items: center;
@@ -51,11 +51,17 @@
   min-width: 0;
 }
 
-.jarvisWordmark {
-  height: 1.6rem;
+.kalvoiceName {
+  font-family: var(--font-wider);
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-light);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
 }
 
-.jarvisTagline {
-  height: 0.55rem;
-  opacity: 0.85;
+.kalvoiceLine {
+  max-width: 32ch;
+  color: #aebbd0;
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
 }

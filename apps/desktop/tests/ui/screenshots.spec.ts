@@ -41,8 +41,8 @@ for (const theme of ["dark", "light"] as const) {
       await page.getByRole("button", { name: "Dashboard" }).click();
       await shot(page, `dashboard-${theme}-${size.name}`);
       if (size.name === "1440") {
-        await page.getByRole("button", { name: "JARVIS" }).click();
-        await shot(page, `jarvis-${theme}-${size.name}`);
+        await page.getByRole("button", { name: "KalVoice" }).click();
+        await shot(page, `kalvoice-${theme}-${size.name}`);
         await page.getByRole("button", { name: "Threads" }).click();
         await shot(page, `gated-${theme}-${size.name}`);
         await page.keyboard.press(process.platform === "darwin" ? "Meta+k" : "Control+k");

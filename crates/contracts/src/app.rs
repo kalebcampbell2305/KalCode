@@ -12,6 +12,26 @@ pub enum BuildChannel {
     Development,
 }
 
+/// Top-level product surfaces (navigation, feature flags, KalVoice navigation commands).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum SurfaceId {
+    Dashboard,
+    #[serde(rename = "kalvoice")]
+    KalVoice,
+    Code,
+    Threads,
+    Agents,
+    Missions,
+    Automations,
+    Skills,
+    Plugins,
+    Memory,
+    Providers,
+    Settings,
+}
+
 impl BuildChannel {
     /// Channel baked in at compile time via `KALCODE_CHANNEL` (default: development).
     pub fn current() -> Self {

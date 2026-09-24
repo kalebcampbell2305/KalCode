@@ -71,11 +71,28 @@ const page = getPage("/security");
         </div>
       </dl>
 
+      <h2>Zero company AI cost: your provider, your account</h2>
+      <p>
+        KalCode connects Claude Code, Codex and Gemini CLI through their documented integration
+        methods, using your own accounts. Model usage is billed by each provider under your
+        account. KalCode holds no company provider credentials for your use, does not charge for,
+        resell or meter provider usage, and never falls back to a KalCode-paid service. Your
+        provider credentials stay in your operating system's credential store.
+      </p>
+
+      <h2>Local voice</h2>
+      <p>
+        KalVoice, in development, transcribes dictation with a speech model that runs on your own
+        computer. Audio is held in memory only while it is transcribed, then discarded: it is not
+        stored and not uploaded. The speech model is downloaded only with your consent and its
+        checksum is verified. Events record that a dictation or request happened, never its words.
+      </p>
+
       <h2>The permission model</h2>
       <p>
         Every action an AI agent wants to take is checked against the permission mode you choose.
-        Providers and their output are treated as untrusted input. JARVIS is not above the model: it
-        cannot raise its own authority or enable Bypass. Consequential decisions are recorded in an
+        Providers and their output are treated as untrusted input. KalVoice is not above the model:
+        it cannot raise its own authority or enable Bypass. Consequential decisions are recorded in an
         audit log. Read the <a href="/docs/permissions">permission documentation</a> for details.
       </p>
 
@@ -85,7 +102,7 @@ const page = getPage("/security");
         <li>Provider isolation with sanitized environments and scoped credentials.</li>
         <li>The permission engine with an audit log of consequential decisions.</li>
         <li>Code-signed installers and signed updates.</li>
-        <li>Server-side entitlement checks and verified billing webhooks when paid plans launch.</li>
+        <li>Server-side plan and usage checks, and verified billing webhooks, when paid plans launch.</li>
       </ul>
 
       <h2>This website</h2>

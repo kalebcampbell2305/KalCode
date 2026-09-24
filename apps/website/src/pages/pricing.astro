@@ -1,5 +1,12 @@
 ---
-import { PLANS, type PlanEntitlements, formatInterval, formatPrice } from "@kalcode/protocol/plans";
+import {
+  ALL_PERMISSION_MODES,
+  PLANS,
+  type PlanLimits,
+  formatInterval,
+  formatKalVoiceAllowance,
+  formatPrice,
+} from "@kalcode/protocol/plans";
 import EarlyAccessForm from "../components/EarlyAccessForm.astro";
 import Icon from "../components/Icon.astro";
 import PageHead from "../components/PageHead.astro";
@@ -9,25 +16,36 @@ import { getPage } from "../lib/site";
 const page = getPage("/pricing");
 
 const yesNo = (value: boolean) => (value ? "Included" : "—");
-const automations: Record<PlanEntitlements["automations"], string> = {
+const automations: Record<PlanLimits["automations"], string> = {
   none: "—",
   scheduled: "Scheduled",
   scheduled_and_event: "Scheduled and event-triggered",
 };
+const capitalize = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
+const modeNames = ALL_PERMISSION_MODES.map(capitalize).join(", ");
 
-const rows: { label: string; value: (e: PlanEntitlements) => string }[] = [
-  { label: "Threads running at once", value: (e) => String(e.concurrentThreads) },
-  { label: "Provider connections", value: (e) => (e.providerConnections === "unlimited" ? "Unlimited" : "—") },
-  { label: "Persistent agents", value: (e) => yesNo(e.persistentAgents) },
-  { label: "Pair and team workflows", value: (e) => yesNo(e.multiAgentWorkflows) },
-  { label: "Automations", value: (e) => automations[e.automations] },
-  { label: "Advanced missions with verification", value: (e) => yesNo(e.advancedMissions) },
+const rows: { label: string; value: (limits: PlanLimits) => string }[] = [
+  { label: "KalVoice Requests / month", value: (l) => formatKalVoiceAllowance(l) },
+  { label: "Local KalVoice dictation", value: (l) => (l.kalvoiceDictation === "unlimited" ? "Unlimited" : "—") },
+  { label: "Provider connections", value: (l) => (l.providerConnections === "unlimited" ? "All" : "—") },
+  {
+    label: `Permission modes (${modeNames})`,
+    value: (l) => (ALL_PERMISSION_MODES.every((mode) => l.permissionModes.includes(mode)) ? "All" : "—"),
+  },
+  {
+    label: "Threads running at once",
+    value: (l) => (l.concurrentThreads === null ? "Unlimited" : String(l.concurrentThreads)),
+  },
+  { label: "Persistent agents", value: (l) => yesNo(l.persistentAgents) },
+  { label: "Pair and team workflows", value: (l) => yesNo(l.multiAgentWorkflows) },
+  { label: "Automations", value: (l) => automations[l.automations] },
+  { label: "Advanced missions with verification", value: (l) => yesNo(l.advancedMissions) },
 ];
 ---
 <Base title={page.title} description={page.description} path={page.path}>
   <PageHead
     title="Pricing"
-    lead="Three plans. Connecting your AI providers is free on every one of them."
+    lead="Three plans. Your AI providers connect free on every one of them, and your AI usage stays on your own provider account."
     devNote="Plans become available when KalCode launches. Nothing is for sale today."
   />
 
@@ -64,13 +82,14 @@ const rows: { label: string; value: (e: PlanEntitlements) => string }[] = [
       <div class="section-head">
         <h2 id="compare-title" class="h2">Compare plans.</h2>
         <p>
-          These are the planned entitlements. They are provisional and may change before launch;
-          the plan catalog on this page is updated from the same configuration KalCode itself uses.
+          These are the planned limits. They are provisional and may change before launch; the plan
+          catalog on this page is built from the same configuration KalCode itself uses. KalVoice is
+          in development, so its allowances apply once it ships.
         </p>
       </div>
       <div class="table-wrap" role="region" aria-label="Plan comparison" tabindex="0">
         <table class="table">
-          <caption class="visually-hidden">Planned entitlements by plan (provisional)</caption>
+          <caption class="visually-hidden">Planned limits by plan (provisional)</caption>
           <thead>
             <tr>
               <th scope="col">Feature</th>
@@ -83,7 +102,7 @@ const rows: { label: string; value: (e: PlanEntitlements) => string }[] = [
                 <tr>
                   <th scope="row">{row.label}</th>
                   {PLANS.map((plan) => (
-                    <td>{row.value(plan.entitlements)}</td>
+                    <td>{row.value(plan.limits)}</td>
                   ))}
                 </tr>
               ))
@@ -101,10 +120,40 @@ const rows: { label: string; value: (e: PlanEntitlements) => string }[] = [
       </div>
       <dl class="definition-list">
         <div>
-          <dt class="h3">Do I pay KalCode to use my existing subscriptions?</dt>
+          <dt class="h3">What is a KalVoice Request?</dt>
           <dd>
-            No. Connecting Claude Code, Codex or Gemini CLI is free on every plan. Your usage of
-            each provider is billed by that provider under your own account, as it is today.
+            One top-level request to KalVoice in command mode, however many steps it takes. “Open
+            four Codex threads” is one request. “Have Claude implement this, Codex review it, then
+            run the tests” is also one request.
+          </dd>
+        </div>
+        <div>
+          <dt class="h3">Does dictation count?</dt>
+          <dd>
+            No. KalVoice dictation runs on your device and is unlimited on every plan. It is never
+            counted as a KalVoice Request.
+          </dd>
+        </div>
+        <div>
+          <dt class="h3">Do I pay for AI usage through KalCode?</dt>
+          <dd>
+            No. Claude Code, Codex and Gemini CLI run on your own provider accounts, and your usage
+            is billed by each provider, as it is today. KalCode never charges for, resells or meters
+            provider usage.
+          </dd>
+        </div>
+        <div>
+          <dt class="h3">What happens when I reach my limit?</dt>
+          <dd>
+            Dictation and everything else in KalCode keep working. KalVoice command requests pause
+            until your monthly allowance resets or you upgrade.
+          </dd>
+        </div>
+        <div>
+          <dt class="h3">Are permission modes limited by plan?</dt>
+          <dd>
+            No. Plan, Approve, Auto, Bypass and Custom are safety controls, and every plan includes
+            all of them.
           </dd>
         </div>
         <div>
@@ -117,8 +166,8 @@ const rows: { label: string; value: (e: PlanEntitlements) => string }[] = [
         <div>
           <dt class="h3">Are these limits final?</dt>
           <dd>
-            No. Prices are set, but the entitlements in the comparison table are provisional and may
-            change before launch.
+            No. Prices are set, but the limits in the comparison table are provisional and may change
+            before launch.
           </dd>
         </div>
         <div>
