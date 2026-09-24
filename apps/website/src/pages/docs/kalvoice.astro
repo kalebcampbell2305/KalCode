@@ -1,0 +1,134 @@
+---
+import { PLANS, formatKalVoiceAllowance } from "@kalcode/protocol/plans";
+import KalVoiceLockup from "../../components/KalVoiceLockup.astro";
+import Shortcut from "../../components/Shortcut.astro";
+import Docs from "../../layouts/Docs.astro";
+import { KALVOICE } from "../../lib/site";
+---
+<Docs
+  path="/docs/kalvoice"
+  heading="KalVoice"
+  lead="KalVoice is the coding assistant and voice layer built into KalCode. Speak your prompts. Control your workspace. Coordinate your coding agents."
+>
+  <KalVoiceLockup sizes="(min-width: 56rem) 18rem, min(calc(100vw - 5rem), 18rem)" />
+
+  <p>
+    {KALVOICE.summary} KalVoice is in development: this page describes how it is designed, and it
+    is not available in any build yet.
+  </p>
+
+  <h2>Two modes, two shortcuts</h2>
+  <div class="table-wrap" role="region" aria-label="KalVoice modes" tabindex="0">
+    <table class="table">
+      <caption class="visually-hidden">KalVoice modes, their default shortcuts, and how they count</caption>
+      <thead>
+        <tr>
+          <th scope="col">Mode</th>
+          <th scope="col">Default shortcut</th>
+          <th scope="col">Result</th>
+          <th scope="col">Counting</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th scope="row">Dictation</th>
+          <td>Hold <Shortcut keys={KALVOICE.dictationKeys} /></td>
+          <td>Your words, transcribed on your device, typed into the focused input.</td>
+          <td>Never counted. Unlimited on every plan.</td>
+        </tr>
+        <tr>
+          <th scope="row">Command</th>
+          <td>Press <Shortcut keys={KALVOICE.commandKeys} />, then speak or type</td>
+          <td>A KalCode action and a short report.</td>
+          <td>One KalVoice Request per top-level request.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    On macOS the defaults use <kbd>Cmd</kbd> in place of <kbd>Ctrl</kbd>. Both shortcuts can be
+    changed in Settings, and KalCode checks them for conflicts with its own bindings.
+  </p>
+
+  <h2>Dictation</h2>
+  <p>
+    Hold the dictation shortcut, speak, and release. The microphone starts the moment you press the
+    keys. When you let go, a speech-recognition model running on your own computer turns the audio
+    into text, and KalVoice types it into whatever you were focused on:
+  </p>
+  <ul>
+    <li>a Claude Code, Codex or Gemini CLI thread composer,</li>
+    <li>a terminal,</li>
+    <li>the command palette, a search box, or another KalCode text input.</li>
+  </ul>
+  <p>
+    The target is fixed when you press the shortcut, so switching windows mid-sentence cannot send
+    your words somewhere else. Press <kbd>Esc</kbd> to cancel.
+  </p>
+  <p>
+    The speech model is downloaded only after you agree to it, from the model's official
+    distribution, and its checksum is verified before use. Nothing is downloaded automatically.
+  </p>
+
+  <h2>Command mode</h2>
+  <p>Press the command shortcut and say or type what you want done, for example:</p>
+  <ul>
+    <li>“Open four Codex threads.”</li>
+    <li>“Pause every active thread.”</li>
+    <li>“Show me anything waiting for permission.”</li>
+    <li>“What are my threads doing?”</li>
+  </ul>
+  <p>
+    Structured commands like these are understood directly by KalCode and run without any AI model.
+    Requests that need reasoning, such as “Have Claude implement this, Codex review it, then run the
+    tests”, use the provider you choose from the ones you have connected: a global default, with
+    optional defaults per workspace. If no provider is connected, KalVoice tells you so instead of
+    guessing: “Connect a supported AI provider to use KalVoice reasoning for this request.”
+  </p>
+
+  <h2>KalVoice Requests</h2>
+  <p>
+    Each top-level request in command mode counts as one KalVoice Request, however many steps it
+    takes. “Open four Codex threads” is one request. “Have Claude implement this, Codex review it,
+    then run the tests” is also one request.
+  </p>
+  <ul>
+    {
+      PLANS.map((plan) => (
+        <li>
+          <strong>{plan.name}</strong>: {formatKalVoiceAllowance(plan.limits)} KalVoice Requests a
+          month
+        </li>
+      ))
+    }
+  </ul>
+  <p>
+    Dictation is never counted, and neither is the usage on your provider accounts. When you reach
+    your monthly allowance, dictation and the rest of KalCode keep working; command requests pause
+    until the allowance resets or you change plans. See <a href="/pricing">pricing</a> for details.
+  </p>
+
+  <h2>Your provider, your account</h2>
+  <p>
+    KalVoice reasoning runs on the provider accounts you already have — your Claude Code, Codex or
+    Gemini CLI sign-in or API key. Your usage is billed by that provider, as it is when you use it
+    directly. KalCode does not charge for, resell or meter provider usage, and there is no
+    KalCode-paid fallback.
+  </p>
+
+  <h2>Private by default</h2>
+  <p>
+    Audio is captured into memory, transcribed on your device, and then discarded. Recordings are
+    not stored or uploaded. KalCode's event log records that a dictation or request happened, never
+    what you said or typed. Spoken replies, if you turn them on, use your operating system's own
+    speech synthesis.
+  </p>
+
+  <h2>Inside your permissions</h2>
+  <p>
+    KalVoice calls the same runtime as the rest of KalCode: the same workspaces, terminals, threads
+    and approvals. Every consequential action it takes goes through your permission mode. It cannot
+    raise its own permissions, cannot approve its own requests, and can never enable Bypass. Read
+    the <a href="/docs/permissions">permission model</a>.
+  </p>
+</Docs>

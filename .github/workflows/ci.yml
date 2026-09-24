@@ -34,6 +34,8 @@ jobs:
         run: node tooling/check-branding.mjs
       - name: Desktop IPC capability check
         run: node tooling/check-capabilities.mjs
+      - name: Zero company AI cost check
+        run: node tooling/check-zero-cost.mjs
       - name: Typecheck
         run: pnpm -r --if-present typecheck
       - name: TypeScript unit tests

@@ -6,6 +6,7 @@ use ts_rs::TS;
 
 use crate::agent::ProviderId;
 use crate::app::BuildChannel;
+use crate::kalvoice::{KalVoiceInput, KalVoiceIntelligence};
 use crate::permissions::{ApprovalDecision, PermissionMode, PermissionScope};
 use crate::threads::ThreadStatus;
 
@@ -17,9 +18,10 @@ pub enum EventSource {
     Core,
     Ui,
     Provider,
-    Jarvis,
     Supervisor,
     Automation,
+    #[serde(rename = "kalvoice")]
+    KalVoice,
 }
 
 impl EventSource {
@@ -28,7 +30,7 @@ impl EventSource {
             Self::Core => "core",
             Self::Ui => "ui",
             Self::Provider => "provider",
-            Self::Jarvis => "jarvis",
+            Self::KalVoice => "kalvoice",
             Self::Supervisor => "supervisor",
             Self::Automation => "automation",
         }
@@ -38,7 +40,7 @@ impl EventSource {
         match value {
             "ui" => Self::Ui,
             "provider" => Self::Provider,
-            "jarvis" => Self::Jarvis,
+            "kalvoice" => Self::KalVoice,
             "supervisor" => Self::Supervisor,
             "automation" => Self::Automation,
             _ => Self::Core,
@@ -241,6 +243,42 @@ pub enum EventPayload {
         to: PermissionMode,
     },
 
+    // ---- KalVoice (never carries transcripts or audio) ----
+    #[serde(rename = "kalvoice.dictation_started")]
+    KalVoiceDictationStarted { session_id: String },
+    #[serde(rename = "kalvoice.dictation_completed")]
+    KalVoiceDictationCompleted {
+        session_id: String,
+        duration_ms: u64,
+        characters: u32,
+    },
+    #[serde(rename = "kalvoice.dictation_failed")]
+    KalVoiceDictationFailed { session_id: String, code: String },
+    #[serde(rename = "kalvoice.request_started")]
+    KalVoiceRequestStarted {
+        request_id: String,
+        input: KalVoiceInput,
+    },
+    #[serde(rename = "kalvoice.command_recognized")]
+    KalVoiceCommandRecognized { request_id: String, intent: String },
+    #[serde(rename = "kalvoice.command_executed")]
+    KalVoiceCommandExecuted { request_id: String, intent: String },
+    #[serde(rename = "kalvoice.request_completed")]
+    KalVoiceRequestCompleted { request_id: String },
+    #[serde(rename = "kalvoice.request_failed")]
+    KalVoiceRequestFailed { request_id: String, code: String },
+    #[serde(rename = "kalvoice.limit_reached")]
+    KalVoiceLimitReached { allowance: u32, resets_at: String },
+    #[serde(rename = "kalvoice.provider_selected")]
+    KalVoiceProviderSelected {
+        intelligence: KalVoiceIntelligence,
+        scope: String,
+    },
+    #[serde(rename = "kalvoice.voice_output_started")]
+    KalVoiceVoiceOutputStarted { request_id: String },
+    #[serde(rename = "kalvoice.voice_output_completed")]
+    KalVoiceVoiceOutputCompleted { request_id: String },
+
     /// A stored event this build does not understand (written by a newer build or a removed
     /// type). Kept so history stays complete.
     #[serde(rename = "unrecognized")]
@@ -290,6 +328,18 @@ impl EventPayload {
             Self::ApprovalDenied { .. } => "approval.denied",
             Self::ApprovalExpired { .. } => "approval.expired",
             Self::PermissionModeChanged { .. } => "permission.mode_changed",
+            Self::KalVoiceDictationStarted { .. } => "kalvoice.dictation_started",
+            Self::KalVoiceDictationCompleted { .. } => "kalvoice.dictation_completed",
+            Self::KalVoiceDictationFailed { .. } => "kalvoice.dictation_failed",
+            Self::KalVoiceRequestStarted { .. } => "kalvoice.request_started",
+            Self::KalVoiceCommandRecognized { .. } => "kalvoice.command_recognized",
+            Self::KalVoiceCommandExecuted { .. } => "kalvoice.command_executed",
+            Self::KalVoiceRequestCompleted { .. } => "kalvoice.request_completed",
+            Self::KalVoiceRequestFailed { .. } => "kalvoice.request_failed",
+            Self::KalVoiceLimitReached { .. } => "kalvoice.limit_reached",
+            Self::KalVoiceProviderSelected { .. } => "kalvoice.provider_selected",
+            Self::KalVoiceVoiceOutputStarted { .. } => "kalvoice.voice_output_started",
+            Self::KalVoiceVoiceOutputCompleted { .. } => "kalvoice.voice_output_completed",
             Self::Unrecognized { .. } => "unrecognized",
         }
     }
@@ -500,6 +550,43 @@ mod tests {
                 from: PermissionMode::Approve,
                 to: PermissionMode::Auto,
             },
+            EventPayload::KalVoiceDictationStarted { session_id: s() },
+            EventPayload::KalVoiceDictationCompleted {
+                session_id: s(),
+                duration_ms: 1,
+                characters: 1,
+            },
+            EventPayload::KalVoiceDictationFailed {
+                session_id: s(),
+                code: s(),
+            },
+            EventPayload::KalVoiceRequestStarted {
+                request_id: s(),
+                input: KalVoiceInput::Voice,
+            },
+            EventPayload::KalVoiceCommandRecognized {
+                request_id: s(),
+                intent: s(),
+            },
+            EventPayload::KalVoiceCommandExecuted {
+                request_id: s(),
+                intent: s(),
+            },
+            EventPayload::KalVoiceRequestCompleted { request_id: s() },
+            EventPayload::KalVoiceRequestFailed {
+                request_id: s(),
+                code: s(),
+            },
+            EventPayload::KalVoiceLimitReached {
+                allowance: 250,
+                resets_at: s(),
+            },
+            EventPayload::KalVoiceProviderSelected {
+                intelligence: KalVoiceIntelligence::Local,
+                scope: s(),
+            },
+            EventPayload::KalVoiceVoiceOutputStarted { request_id: s() },
+            EventPayload::KalVoiceVoiceOutputCompleted { request_id: s() },
             EventPayload::Unrecognized {
                 original_type: s(),
                 original_version: 1,
@@ -524,7 +611,7 @@ mod tests {
         }
         // Keep in step with the enum: the `type_name` match is exhaustive, so a new variant
         // compiles only once named there — and this count must be raised with a new sample.
-        assert_eq!(samples.len(), 37);
+        assert_eq!(samples.len(), 49);
     }
 
     #[test]

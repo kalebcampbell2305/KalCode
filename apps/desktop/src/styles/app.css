@@ -22,6 +22,26 @@ pre,
 }
 
 .boot-screen {
+  display: grid;
+  place-items: center;
   height: 100%;
   background: var(--color-bg);
+}
+
+/* Starting is usually instant: the mark only fades in if startup takes a noticeable moment. */
+.boot-screen__mark {
+  opacity: 0;
+  animation: boot-mark-in 400ms ease-out 250ms forwards;
+}
+
+@keyframes boot-mark-in {
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .boot-screen__mark {
+    animation-duration: 1ms;
+  }
 }

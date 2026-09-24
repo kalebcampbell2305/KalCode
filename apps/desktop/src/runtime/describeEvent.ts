@@ -147,6 +147,47 @@ export function describeEvent(event: EventEnvelope): EventDescription {
         detail: `${event.payload.from} to ${event.payload.to}`,
         tone: "waiting",
       };
+    case "kalvoice.dictation_started":
+      return { title: "KalVoice dictation started", detail: null, tone: "live" };
+    case "kalvoice.dictation_completed":
+      return {
+        title: "KalVoice dictation inserted",
+        detail: `${event.payload.characters.toLocaleString()} characters`,
+        tone: "success",
+      };
+    case "kalvoice.dictation_failed":
+      return { title: "KalVoice dictation failed", detail: event.payload.code.replaceAll("_", " "), tone: "danger" };
+    case "kalvoice.request_started":
+      return { title: "KalVoice request", detail: event.payload.input === "voice" ? "Spoken" : "Typed", tone: "live" };
+    case "kalvoice.command_recognized":
+      return {
+        title: "KalVoice understood a command",
+        detail: event.payload.intent.replaceAll("_", " "),
+        tone: "live",
+      };
+    case "kalvoice.command_executed":
+      return { title: "KalVoice ran a command", detail: event.payload.intent.replaceAll("_", " "), tone: "success" };
+    case "kalvoice.request_completed":
+      return { title: "KalVoice request completed", detail: null, tone: "success" };
+    case "kalvoice.request_failed":
+      return { title: "KalVoice request failed", detail: event.payload.code.replaceAll("_", " "), tone: "danger" };
+    case "kalvoice.limit_reached":
+      return {
+        title: "Monthly KalVoice Requests used",
+        detail: `${event.payload.allowance.toLocaleString()} requests; resets ${formatAbsolute(event.payload.resetsAt)}`,
+        tone: "waiting",
+      };
+    case "kalvoice.provider_selected":
+      return {
+        title: "KalVoice intelligence changed",
+        detail:
+          event.payload.intelligence.kind === "provider" ? event.payload.intelligence.providerId : "On-device model",
+        tone: "idle",
+      };
+    case "kalvoice.voice_output_started":
+      return { title: "KalVoice speaking", detail: null, tone: "live" };
+    case "kalvoice.voice_output_completed":
+      return { title: "KalVoice finished speaking", detail: null, tone: "idle" };
     case "unrecognized":
       return {
         title: "Event from a newer KalCode",

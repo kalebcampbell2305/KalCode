@@ -3,8 +3,9 @@
 Status: architecture defined in Z0 · Implementation: campaign Z4 · Contract types:
 `packages/protocol/src/permissions.ts`
 
-Permissions are security infrastructure. They govern every provider, agent, JARVIS action,
-automation and plugin. **JARVIS is not above the permission model.**
+Permissions are security infrastructure. They govern every provider, agent, KalVoice action,
+automation and plugin. **KalVoice is not above the permission model.** Every permission mode —
+Plan, Approve, Auto, Bypass and Custom — is available on every plan, including Free.
 
 ## 1. Model
 
@@ -35,7 +36,7 @@ Deny · Approve once · Approve for thread · Approve for workspace · Allow via
 | **Plan** | Read and plan; no modification. | Reads allowed; any write/execute/network-mutation denied or asked. |
 | **Approve** (default) | Safe work proceeds; authority-requiring work pauses. | Workspace reads allowed; writes/commands ask unless covered by a rule. |
 | **Auto** | Automatically approve what the active policy covers. | Policy-covered actions allowed; everything else still asks. `always_ask` scopes always ask. |
-| **Bypass** | Broad **local** execution authority. | Local workspace actions allowed. Remote-consequential scopes (`git.push`, `deploy.production`, `cloud.modify`, `billing.spend`, `messaging.send`) still follow their own rules. Requires explicit user selection, warning, persistent indicator. Never enabled by an agent or JARVIS. |
+| **Bypass** | Broad **local** execution authority. | Local workspace actions allowed. Remote-consequential scopes (`git.push`, `deploy.production`, `cloud.modify`, `billing.spend`, `messaging.send`) still follow their own rules. Requires explicit user selection, warning, persistent indicator. Never enabled by an agent or KalVoice. |
 | **Custom** | Named rule sets (e.g. "Code Reviewer", "Local Builder"). | Per-scope allow / ask / deny / never. |
 
 ## 3. Provider mapping
