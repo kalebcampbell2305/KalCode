@@ -19,9 +19,15 @@
     "test:e2e": "pnpm -r --if-present test:e2e",
     "gen:protocol": "cargo test -p kalcode-native-core --lib && node tooling/gen-protocol-index.mjs",
     "check:branding": "node tooling/check-branding.mjs",
-    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm check:branding && pnpm check:capabilities && pnpm check:zero-cost",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm check:branding && pnpm check:capabilities && pnpm check:zero-cost && pnpm check:releases",
     "check:capabilities": "node tooling/check-capabilities.mjs",
-    "check:zero-cost": "node tooling/check-zero-cost.mjs"
+    "check:zero-cost": "node tooling/check-zero-cost.mjs",
+    "check:releases": "node tooling/release/check-manifest.mjs",
+    "release:build": "node tooling/release/build-windows.mjs",
+    "release:verify": "node tooling/release/verify-windows.mjs",
+    "release:publish": "node tooling/release/publish.mjs",
+    "release:publish:dry-run": "node tooling/release/publish.mjs --dry-run",
+    "release:smoke:local": "node tooling/release/smoke-local.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
