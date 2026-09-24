@@ -74,6 +74,14 @@ The Tauri uninstaller intentionally keeps `HKCU\Software\KalCode\KalCode` (the l
 location) unless "Delete the application data" is ticked. Because the preflight proved the key
 did not exist, the script removes the copy its own run created and records that in `verify.json`.
 
+**Where to run it.** Since 2026-09-24 the development machine has the owner's real KalCode
+install, so `release:verify` stops at the preflight there (by design) and must not be forced.
+Run build + verify on a clean Windows machine instead: a GitHub Actions `windows-latest` runner,
+a spare Windows VM, or Windows Sandbox on a Pro/Enterprise edition (this machine runs Windows 11
+Home, which has no Sandbox). If a release has to be published without that test, pass
+`--without-install-test` to `publish`; it then requires the release notes to say, on one line,
+that the install test was not run for this build.
+
 ### 3. Functional evidence (same commit)
 
 The E2E suite drives the real compiled app (release profile with the `e2e` feature, built into
@@ -105,7 +113,8 @@ pnpm release:publish           # the real thing
 ```
 
 `publish` refuses unless: the working tree is clean, HEAD is the build commit, `verify.json`
-says `passed` for that commit, the staged file still matches its SHA-256, the release notes exist
+says `passed` for this exact build (commit and SHA-256; or `--without-install-test` with the
+notes saying so), the staged file still matches its SHA-256, the release notes exist
 and list the SHA-256, the manifest validates, and the live `https://kalcoded.com/releases/latest.json`
 does not already have this version with different bytes (pinned URLs are cached as immutable, so
 a changed build needs a version bump).

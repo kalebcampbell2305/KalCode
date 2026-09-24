@@ -56,6 +56,7 @@ const report = {
   version,
   commit: build.commit,
   file: build.file,
+  sha256: build.sha256,
   verifiedAt: new Date().toISOString(),
   status: "running",
   launchedApp: false,

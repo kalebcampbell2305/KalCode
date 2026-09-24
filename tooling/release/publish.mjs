@@ -5,6 +5,12 @@
 //   pnpm release:publish --dry-run    every check, prints the exact commands, uploads nothing
 //   pnpm release:publish --local      uploads to the local R2 simulation that `wrangler dev`
 //                                     in apps/website uses; leaves the committed manifest alone
+//                                     (no verification or notes needed: nothing is public)
+//
+//   --without-install-test            publish although `pnpm release:verify` did not pass for this
+//                                     exact build (for example because KalCode is installed on the
+//                                     build machine, so the temp install test is skipped). The
+//                                     release notes must then say the install test was not run.
 //
 // Upload order: the installer first, then releases/latest.json, so the manifest never points at
 // a file that is not there yet. A version is never re-uploaded with different bytes: pinned
@@ -39,10 +45,10 @@ const version = appVersion();
 const outDir = stagingDir(version);
 const buildPath = join(outDir, "build.json");
 const verifyPath = join(outDir, "verify.json");
+const withoutInstallTest = args.has("--without-install-test");
 if (!existsSync(buildPath)) fail(`No build record at ${buildPath}. Run pnpm release:build.`);
-if (!existsSync(verifyPath)) fail(`No verification record at ${verifyPath}. Run pnpm release:verify.`);
 const build = readJson(buildPath);
-const verify = readJson(verifyPath);
+const verify = existsSync(verifyPath) ? readJson(verifyPath) : null;
 const installer = join(outDir, build.file);
 
 console.log(`Publishing ${build.file} (${mode})`);
@@ -55,13 +61,30 @@ else {
   const sha256 = await sha256File(installer);
   if (sha256 !== build.sha256) problems.push(`staged installer SHA-256 ${sha256} does not match build.json`);
 }
-if (verify.status !== "passed") problems.push(`verification status is "${verify.status}", not "passed"`);
-if (verify.commit !== build.commit) problems.push("verify.json and build.json are for different commits");
 if (build.signed !== false && build.signatureStatus !== "Valid") problems.push("build.json claims a signature");
+const verified = verify?.status === "passed" && verify.commit === build.commit && verify.sha256 === build.sha256;
 const notes = join(RELEASE_NOTES_DIR, `${version}.md`);
-if (!existsSync(notes)) problems.push(`release notes missing: ${relative(ROOT, notes)}`);
-else if (!readFileSync(notes, "utf8").includes(build.sha256)) {
-  problems.push(`${relative(ROOT, notes)} does not list this build's SHA-256 (${build.sha256})`);
+if (mode !== "local") {
+  if (!verified && !withoutInstallTest) {
+    problems.push(
+      verify
+        ? `verify.json is "${verify.status}" for ${verify.sha256 ?? verify.commit}, not "passed" for this build; run pnpm release:verify`
+        : "no verify.json for this build; run pnpm release:verify",
+    );
+  }
+  const text = existsSync(notes) ? readFileSync(notes, "utf8") : null;
+  if (text === null) problems.push(`release notes missing: ${relative(ROOT, notes)}`);
+  else {
+    if (!text.includes(build.sha256)) {
+      problems.push(`${relative(ROOT, notes)} does not list this build's SHA-256 (${build.sha256})`);
+    }
+    if (!verified && !/install test.*not run/i.test(text)) {
+      problems.push(`${relative(ROOT, notes)} must say the install test was not run for this build`);
+    }
+  }
+  if (!verified && withoutInstallTest) {
+    console.log("  WARNING: publishing without a passing install/uninstall test for this exact build.");
+  }
 }
 if (mode === "remote") {
   assertCleanTree("A publish");
@@ -102,7 +125,11 @@ if (mode !== "local") {
 }
 
 if (problems.length > 0) fail(`refusing to publish:\n  ${problems.join("\n  ")}`);
-console.log("  ok   build, verification, notes and manifest checks passed");
+console.log(
+  mode === "local"
+    ? "  ok   build and manifest checks passed (local: verification and notes not required)"
+    : `  ok   build, ${verified ? "verification, " : ""}notes and manifest checks passed`,
+);
 
 // ---- Upload -----------------------------------------------------------------------------------
 const latestJsonPath = join(outDir, "latest.json");
