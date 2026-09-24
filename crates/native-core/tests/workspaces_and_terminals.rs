@@ -309,18 +309,25 @@ fn terminal_runs_in_the_workspace_folder_with_input_and_output() {
     core.resize_terminal(&terminal.id, TerminalSize::new(120, 30).expect("size"))
         .expect("resize");
 
-    let started = events.lock().expect("lock").iter().find_map(|e| match &e.event {
-        EventPayload::ShellStarted {
-            terminal_id,
-            shell_id,
-            ..
-        } => Some((terminal_id.clone(), shell_id.clone(), e.correlation.clone())),
-        _ => None,
-    });
+    let started = events
+        .lock()
+        .expect("lock")
+        .iter()
+        .find_map(|e| match &e.event {
+            EventPayload::ShellStarted {
+                terminal_id,
+                shell_id,
+                ..
+            } => Some((terminal_id.clone(), shell_id.clone(), e.correlation.clone())),
+            _ => None,
+        });
     let (terminal_id, shell_id, correlation) = started.expect("shell.started");
     assert_eq!(terminal_id, terminal.id);
     assert_eq!(shell_id, shell);
-    assert_eq!(correlation.workspace_id.as_deref(), Some(workspace.id.as_str()));
+    assert_eq!(
+        correlation.workspace_id.as_deref(),
+        Some(workspace.id.as_str())
+    );
 
     assert_eq!(
         core.running_terminals().expect("running")[0].id,
@@ -348,7 +355,8 @@ fn exit_codes_are_recorded_as_completed_or_failed() {
     let _ok_out = Output::attach(&core, &ok.id);
     let _failing_out = Output::attach(&core, &failing.id);
     core.write_terminal(&ok.id, b"exit 0\r").expect("exit 0");
-    core.write_terminal(&failing.id, b"exit 3\r").expect("exit 3");
+    core.write_terminal(&failing.id, b"exit 3\r")
+        .expect("exit 3");
 
     let ended = |id: &str| {
         core.terminals(&workspace.id)
@@ -357,7 +365,8 @@ fn exit_codes_are_recorded_as_completed_or_failed() {
             .find(|t| t.id == id)
             .is_some_and(|t| t.status == TerminalStatus::Exited && t.ended_at.is_some())
     };
-    assert!(wait_until(Duration::from_secs(20), || ended(&ok.id) && ended(&failing.id)));
+    assert!(wait_until(Duration::from_secs(20), || ended(&ok.id)
+        && ended(&failing.id)));
     let tabs = core.terminals(&workspace.id).expect("list");
     assert_eq!(tabs[0].exit_code, Some(0));
     assert_eq!(tabs[1].exit_code, Some(3));
@@ -395,14 +404,17 @@ fn restart_starts_a_fresh_shell_in_the_same_tab() {
         .create_terminal(&workspace.id, Some(&shell), size())
         .expect("create");
     let _out = Output::attach(&core, &terminal.id);
-    core.write_terminal(&terminal.id, b"exit 5\r").expect("exit");
+    core.write_terminal(&terminal.id, b"exit 5\r")
+        .expect("exit");
     assert!(wait_until(Duration::from_secs(20), || {
         core.terminal(&terminal.id)
             .is_ok_and(|t| t.status == TerminalStatus::Exited)
     }));
 
     let events = collect_events(&core);
-    let restarted = core.restart_terminal(&terminal.id, size()).expect("restart");
+    let restarted = core
+        .restart_terminal(&terminal.id, size())
+        .expect("restart");
     assert_eq!(restarted.id, terminal.id);
     assert_eq!(restarted.status, TerminalStatus::Running);
     assert_eq!(restarted.exit_code, None);
@@ -461,7 +473,9 @@ fn closing_a_tab_ends_its_shell_and_records_it() {
         "not_found"
     );
     assert_eq!(
-        core.write_terminal(&terminal.id, b"x").expect_err("gone").code,
+        core.write_terminal(&terminal.id, b"x")
+            .expect_err("gone")
+            .code,
         "terminal_not_running"
     );
 }
@@ -538,7 +552,9 @@ fn shutdown_ends_shells_and_restores_tabs_as_ended() {
             .expect("attach")
             .is_none()
     );
-    let restarted = core.restart_terminal(&terminal_id, size()).expect("restart");
+    let restarted = core
+        .restart_terminal(&terminal_id, size())
+        .expect("restart");
     assert_eq!(restarted.status, TerminalStatus::Running);
     let output = Output::attach(&core, &terminal_id);
     let (command, expected) = echo_computed("kc-after-restart");
@@ -581,7 +597,9 @@ fn terminal_inputs_are_validated() {
     let shell = test_shell(&core);
 
     assert_eq!(
-        core.create_terminal("x", None, size()).expect_err("id").code,
+        core.create_terminal("x", None, size())
+            .expect_err("id")
+            .code,
         "invalid_id"
     );
     assert_eq!(
@@ -641,6 +659,8 @@ fn attachments_are_independent_and_do_not_survive_a_restart() {
     let terminal = core
         .create_terminal(&workspace.id, Some(&shell), size())
         .expect("create");
+    // A view that answers the shell's startup cursor request, as xterm.js does.
+    let _view = Output::attach(&core, &terminal.id);
     let first = core
         .attach_terminal(&terminal.id, |_| true)
         .expect("attach")
@@ -658,7 +678,8 @@ fn attachments_are_independent_and_do_not_survive_a_restart() {
         core.terminal(&terminal.id)
             .is_ok_and(|t| t.status != TerminalStatus::Running)
     }));
-    core.restart_terminal(&terminal.id, size()).expect("restart");
+    core.restart_terminal(&terminal.id, size())
+        .expect("restart");
     assert!(
         !core.detach_terminal(second),
         "views of the previous session were released by the restart"

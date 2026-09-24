@@ -12,7 +12,10 @@ pub struct Scrollback {
 
 impl Scrollback {
     pub fn new(capacity: usize) -> Self {
-        Self { bytes: VecDeque::with_capacity(capacity.min(64 * 1024)), capacity }
+        Self {
+            bytes: VecDeque::with_capacity(capacity.min(64 * 1024)),
+            capacity,
+        }
     }
 
     pub fn push(&mut self, chunk: &[u8]) {
@@ -25,7 +28,13 @@ impl Scrollback {
         if self.bytes.len() > self.capacity {
             let mut excess = self.bytes.len() - self.capacity;
             // Advance to just past the next newline within a small window, if there is one.
-            if let Some(newline) = self.bytes.iter().skip(excess).take(4096).position(|&b| b == b'\n') {
+            if let Some(newline) = self
+                .bytes
+                .iter()
+                .skip(excess)
+                .take(4096)
+                .position(|&b| b == b'\n')
+            {
                 excess += newline + 1;
             }
             self.bytes.drain(..excess.min(self.bytes.len()));

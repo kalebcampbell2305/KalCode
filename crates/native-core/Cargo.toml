@@ -12,6 +12,7 @@ name = "kalcode_core"
 
 [dependencies]
 kalcode-pty = { path = "../pty" }
+kalcode-contracts = { path = "../contracts" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

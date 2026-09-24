@@ -19,8 +19,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
-use kalcode_pty::{AttachId, ExitInfo, PtySession, ShellInfo, SpawnSpec};
+use kalcode_contracts::ids::{is_valid_id, new_id};
 pub use kalcode_pty::TerminalSize;
+use kalcode_pty::{AttachId, ExitInfo, PtySession, ShellInfo, SpawnSpec};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -175,16 +176,10 @@ fn not_found(what: &'static str) -> KalError {
     KalError::validation("not_found", format!("That {what} no longer exists."))
 }
 
-/// Ids crossing IPC must be canonical hyphenated UUIDs; anything else is rejected before it
-/// reaches storage.
+/// Ids crossing IPC must be canonical hyphenated UUIDs (`kalcode_contracts::ids`); anything
+/// else is rejected before it reaches storage.
 pub fn validate_id(id: &str) -> Result<()> {
-    let bytes = id.as_bytes();
-    let ok = bytes.len() == 36
-        && bytes.iter().enumerate().all(|(i, b)| match i {
-            8 | 13 | 18 | 23 => *b == b'-',
-            _ => b.is_ascii_hexdigit(),
-        });
-    if ok {
+    if is_valid_id(id) {
         Ok(())
     } else {
         Err(KalError::validation("invalid_id", "Invalid identifier."))
@@ -323,7 +318,10 @@ fn delete_terminal_row(conn: &Connection, terminal_id: &str) -> Result<()> {
     Ok(())
 }
 
-fn terminal_error(code: &'static str, message: &'static str) -> impl FnOnce(kalcode_pty::PtyError) -> KalError {
+fn terminal_error(
+    code: &'static str,
+    message: &'static str,
+) -> impl FnOnce(kalcode_pty::PtyError) -> KalError {
     move |e| KalError::new(ErrorCategory::Terminal, code, message).with_source(e)
 }
 
@@ -372,7 +370,7 @@ impl Core {
                 (id, false)
             }
             None => {
-                let id = uuid::Uuid::now_v7().to_string();
+                let id = new_id();
                 tx.execute(
                     "INSERT INTO workspaces (id, name, root_path, created_at, last_opened_at)
                      VALUES (?1, ?2, ?3, ?4, ?4)",
@@ -571,7 +569,7 @@ impl Core {
             validate_shell_id(shell_id)?;
         }
         let shell = self.shell(shell_id)?;
-        let id = uuid::Uuid::now_v7().to_string();
+        let id = new_id();
 
         let mut conn = self.conn();
         let workspace =
@@ -601,7 +599,14 @@ impl Core {
         tx.execute(
             "INSERT INTO terminals (id, workspace_id, shell_id, title, position, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![id, workspace_id, shell.id, shell.name, position, now_rfc3339()],
+            params![
+                id,
+                workspace_id,
+                shell.id,
+                shell.name,
+                position,
+                now_rfc3339()
+            ],
         )?;
         tx.execute(
             "UPDATE workspaces SET active_terminal_id = ?1 WHERE id = ?2",
@@ -623,15 +628,19 @@ impl Core {
 
     /// Starts a fresh shell in an ended tab (same tab, same shell when still available).
     /// A running tab is returned unchanged.
-    pub fn restart_terminal(self: &Arc<Self>, id: &str, size: TerminalSize) -> Result<TerminalInfo> {
+    pub fn restart_terminal(
+        self: &Arc<Self>,
+        id: &str,
+        size: TerminalSize,
+    ) -> Result<TerminalInfo> {
         validate_id(id)?;
         let mut conn = self.conn();
         let terminal = self.terminal_in(&conn, id)?;
         if terminal.status == TerminalStatus::Running {
             return Ok(terminal);
         }
-        let workspace = load_workspace(&conn, &terminal.workspace_id)?
-            .ok_or_else(|| not_found("workspace"))?;
+        let workspace =
+            load_workspace(&conn, &terminal.workspace_id)?.ok_or_else(|| not_found("workspace"))?;
         if !workspace.available {
             return Err(folder_missing());
         }
@@ -999,7 +1008,7 @@ mod tests {
     #[test]
     fn ids_must_be_canonical_uuids() {
         assert!(validate_id("0192f3c4-0000-7000-8000-000000000000").is_ok());
-        assert!(validate_id(&uuid::Uuid::now_v7().to_string()).is_ok());
+        assert!(validate_id(&new_id()).is_ok());
         for bad in [
             "",
             "not-a-uuid",

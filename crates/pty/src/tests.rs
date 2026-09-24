@@ -17,10 +17,17 @@ fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
 /// A command that prints `text` and exits with `code`, run through the platform shell.
 fn command_spec(script: &str) -> SpawnSpec {
     let (program, args) = if cfg!(windows) {
-        let cmd = std::env::var("ComSpec").unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".into());
-        (PathBuf::from(cmd), vec!["/d".to_owned(), "/c".to_owned(), script.to_owned()])
+        let cmd =
+            std::env::var("ComSpec").unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".into());
+        (
+            PathBuf::from(cmd),
+            vec!["/d".to_owned(), "/c".to_owned(), script.to_owned()],
+        )
     } else {
-        (PathBuf::from("/bin/sh"), vec!["-c".to_owned(), script.to_owned()])
+        (
+            PathBuf::from("/bin/sh"),
+            vec!["-c".to_owned(), script.to_owned()],
+        )
     };
     SpawnSpec {
         program,
@@ -60,7 +67,10 @@ impl Captured {
 fn start(spec: SpawnSpec) -> Captured {
     let exit = Arc::new(Mutex::new(None));
     let exit_sink = exit.clone();
-    let session = PtySession::spawn(spec, move |info| *exit_sink.lock().expect("lock") = Some(info)).expect("spawn");
+    let session = PtySession::spawn(spec, move |info| {
+        *exit_sink.lock().expect("lock") = Some(info)
+    })
+    .expect("spawn");
     let output = Arc::new(Mutex::new(Vec::new()));
     let sink = output.clone();
     // Behave like a real terminal view (xterm.js): answer cursor-position requests.
@@ -72,14 +82,28 @@ fn start(spec: SpawnSpec) -> Captured {
         }
         true
     });
-    Captured { output, exit, session }
+    Captured {
+        output,
+        exit,
+        session,
+    }
 }
 
 #[test]
 fn runs_a_command_and_reports_success() {
     let run = start(command_spec("echo kalcode-pty-ok"));
-    assert!(wait_until(Duration::from_secs(15), || run.exit().is_some()), "did not exit; output so far: {:?}", run.text());
-    assert!(wait_until(Duration::from_secs(5), || run.text().contains("kalcode-pty-ok")), "output: {:?}", run.text());
+    assert!(
+        wait_until(Duration::from_secs(15), || run.exit().is_some()),
+        "did not exit; output so far: {:?}",
+        run.text()
+    );
+    assert!(
+        wait_until(Duration::from_secs(5), || run
+            .text()
+            .contains("kalcode-pty-ok")),
+        "output: {:?}",
+        run.text()
+    );
     let exit = run.exit().expect("exit");
     assert!(exit.success);
     assert_eq!(exit.code, 0);
@@ -100,21 +124,36 @@ fn accepts_interactive_input() {
     let run = start(interactive_spec());
     run.session.write(b"echo interactive-ok\r").expect("write");
     assert!(
-        wait_until(Duration::from_secs(15), || run.text().matches("interactive-ok").count() >= 2),
+        wait_until(Duration::from_secs(15), || run
+            .text()
+            .matches("interactive-ok")
+            .count()
+            >= 2),
         "expected the echoed command and its output: {:?}",
         run.text()
     );
     run.session.write(b"exit\r").expect("write exit");
-    assert!(wait_until(Duration::from_secs(15), || run.exit().is_some()), "shell did not exit");
+    assert!(
+        wait_until(Duration::from_secs(15), || run.exit().is_some()),
+        "shell did not exit"
+    );
     assert!(matches!(run.session.write(b"x"), Err(PtyError::Exited)));
 }
 
 #[test]
 fn resizes_and_validates_sizes() {
     let run = start(interactive_spec());
-    run.session.resize(TerminalSize::new(120, 40).expect("size")).expect("resize");
-    assert!(matches!(TerminalSize::new(0, 40), Err(PtyError::InvalidSize)));
-    assert!(matches!(TerminalSize::new(80, 1001), Err(PtyError::InvalidSize)));
+    run.session
+        .resize(TerminalSize::new(120, 40).expect("size"))
+        .expect("resize");
+    assert!(matches!(
+        TerminalSize::new(0, 40),
+        Err(PtyError::InvalidSize)
+    ));
+    assert!(matches!(
+        TerminalSize::new(80, 1001),
+        Err(PtyError::InvalidSize)
+    ));
     run.session.kill().expect("kill");
     assert!(wait_until(Duration::from_secs(15), || run.exit().is_some()));
 }
@@ -123,17 +162,23 @@ fn resizes_and_validates_sizes() {
 fn kill_ends_the_session_and_marks_it_killed() {
     let run = start(interactive_spec());
     run.session.kill().expect("kill");
-    assert!(wait_until(Duration::from_secs(15), || run.exit().is_some()), "did not exit after kill");
+    assert!(
+        wait_until(Duration::from_secs(15), || run.exit().is_some()),
+        "did not exit after kill"
+    );
     let exit = run.exit().expect("exit");
     assert!(exit.killed);
     assert!(!exit.success);
-    run.session.kill().expect("killing an exited session is a no-op");
+    run.session
+        .kill()
+        .expect("killing an exited session is a no-op");
 }
 
 #[test]
 fn late_attach_replays_scrollback_once() {
     let run = start(command_spec("echo replay-marker"));
-    assert!(wait_until(Duration::from_secs(15), || run.exit().is_some() && run.text().contains("replay-marker")));
+    assert!(wait_until(Duration::from_secs(15), || run.exit().is_some()
+        && run.text().contains("replay-marker")));
     let replay = Arc::new(Mutex::new(Vec::new()));
     let sink = replay.clone();
     let id = run.session.attach(move |chunk| {
@@ -151,10 +196,17 @@ fn answers_cursor_requests_when_no_view_is_attached() {
     // No listener: the session itself must answer ConPTY's startup request, or this hangs.
     let exit = Arc::new(Mutex::new(None));
     let sink = exit.clone();
-    let session =
-        PtySession::spawn(command_spec("echo unattended-ok"), move |info| *sink.lock().expect("lock") = Some(info))
-            .expect("spawn");
-    assert!(wait_until(Duration::from_secs(15), || exit.lock().expect("lock").is_some()), "hung without a view");
+    let session = PtySession::spawn(command_spec("echo unattended-ok"), move |info| {
+        *sink.lock().expect("lock") = Some(info)
+    })
+    .expect("spawn");
+    assert!(
+        wait_until(Duration::from_secs(15), || exit
+            .lock()
+            .expect("lock")
+            .is_some()),
+        "hung without a view"
+    );
     let replay = Arc::new(Mutex::new(Vec::new()));
     let r = replay.clone();
     session.attach(move |chunk| {
@@ -163,7 +215,10 @@ fn answers_cursor_requests_when_no_view_is_attached() {
     });
     let text = String::from_utf8_lossy(&replay.lock().expect("lock")).into_owned();
     assert!(text.contains("unattended-ok"), "{text:?}");
-    assert!(!text.contains("\x1b[6n"), "answered requests are not replayed: {text:?}");
+    assert!(
+        !text.contains("\x1b[6n"),
+        "answered requests are not replayed: {text:?}"
+    );
 }
 
 #[test]
@@ -179,7 +234,10 @@ fn scrollback_is_bounded_and_trims_at_line_starts() {
     scrollback.push(b"line-four\n");
     let text = String::from_utf8(scrollback.contents()).expect("utf8");
     assert!(scrollback.len() <= 32);
-    assert!(text.starts_with("line-"), "trimmed at a line start: {text:?}");
+    assert!(
+        text.starts_with("line-"),
+        "trimmed at a line start: {text:?}"
+    );
     assert!(text.ends_with("line-four\n"));
 
     let mut big = Scrollback::new(8);
@@ -193,7 +251,9 @@ fn scrollback_is_bounded_and_trims_at_line_starts() {
 fn closing_a_terminal_ends_programs_started_in_it() {
     let run = start(interactive_spec());
     let shell_pid = run.session.pid().expect("pid");
-    run.session.write(b"ping -n 120 127.0.0.1\r").expect("start child");
+    run.session
+        .write(b"ping -n 120 127.0.0.1\r")
+        .expect("start child");
 
     let child_pid = || -> Option<u32> {
         let query = format!(
@@ -203,7 +263,13 @@ fn closing_a_terminal_ends_programs_started_in_it() {
             .args(["-NoProfile", "-Command", &query])
             .output()
             .ok()?;
-        String::from_utf8_lossy(&out.stdout).trim().lines().next()?.trim().parse().ok()
+        String::from_utf8_lossy(&out.stdout)
+            .trim()
+            .lines()
+            .next()?
+            .trim()
+            .parse()
+            .ok()
     };
     let mut ping = None;
     assert!(
@@ -223,7 +289,10 @@ fn closing_a_terminal_ends_programs_started_in_it() {
             .map(|o| String::from_utf8_lossy(&o.stdout).contains(&ping.to_string()))
             .unwrap_or(false)
     };
-    assert!(wait_until(Duration::from_secs(20), || !alive()), "child {ping} outlived its terminal");
+    assert!(
+        wait_until(Duration::from_secs(20), || !alive()),
+        "child {ping} outlived its terminal"
+    );
 }
 
 #[test]
@@ -238,14 +307,24 @@ fn attach_always_delivers_the_replay_first() {
         true
     });
     let calls = calls.lock().expect("lock");
-    assert_eq!(calls.len(), 1, "exactly one replay call for an exited session");
+    assert_eq!(
+        calls.len(),
+        1,
+        "exactly one replay call for an exited session"
+    );
     assert!(String::from_utf8_lossy(&calls[0]).contains("first-replay"));
 }
 
 #[test]
 fn cursor_requests_are_stripped_from_scrollback_chunks() {
-    assert_eq!(&*strip_cursor_requests(b"before\x1b[6nafter"), b"beforeafter");
-    assert!(matches!(strip_cursor_requests(b"plain"), std::borrow::Cow::Borrowed(_)));
+    assert_eq!(
+        &*strip_cursor_requests(b"before\x1b[6nafter"),
+        b"beforeafter"
+    );
+    assert!(matches!(
+        strip_cursor_requests(b"plain"),
+        std::borrow::Cow::Borrowed(_)
+    ));
 }
 
 #[test]
@@ -261,6 +340,14 @@ fn removed_variables_do_not_reach_the_shell() {
     spec.env_remove.push(name.into());
     let run = start(spec);
     assert!(wait_until(Duration::from_secs(15), || run.exit().is_some()));
-    assert!(wait_until(Duration::from_secs(5), || run.text().contains(']')), "{:?}", run.text());
-    assert!(!run.text().contains(&format!("[{inherited}]")), "{:?}", run.text());
+    assert!(
+        wait_until(Duration::from_secs(5), || run.text().contains(']')),
+        "{:?}",
+        run.text()
+    );
+    assert!(
+        !run.text().contains(&format!("[{inherited}]")),
+        "{:?}",
+        run.text()
+    );
 }

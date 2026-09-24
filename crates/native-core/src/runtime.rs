@@ -188,7 +188,10 @@ impl Core {
         // No shell survives a previous run: tabs still marked running were left by a crash.
         let orphaned_terminals = mark_running_terminals_ended(&conn)?;
         if orphaned_terminals > 0 {
-            tracing::info!(event = "terminal.recovered_after_crash", count = orphaned_terminals);
+            tracing::info!(
+                event = "terminal.recovered_after_crash",
+                count = orphaned_terminals
+            );
         }
         let shells = kalcode_pty::detect_shells();
         tracing::info!(event = "terminal.shells_detected", count = shells.len());

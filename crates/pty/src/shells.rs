@@ -66,13 +66,23 @@ fn platform_shells() -> Vec<ShellInfo> {
     if let Some(pwsh) = find_on_path("pwsh") {
         shells.push(shell("pwsh", "PowerShell 7", pwsh, &["-NoLogo"]));
     }
-    let system_root = std::env::var_os("SystemRoot").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
+    let system_root =
+        std::env::var_os("SystemRoot").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
     let powershell = system_root.join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
     if powershell.is_file() {
-        shells.push(shell("powershell", "Windows PowerShell", powershell, &["-NoLogo"]));
+        shells.push(shell(
+            "powershell",
+            "Windows PowerShell",
+            powershell,
+            &["-NoLogo"],
+        ));
     }
-    let cmd = std::env::var_os("ComSpec").map(PathBuf::from).filter(|p| p.is_file());
-    if let Some(cmd) = cmd.or_else(|| Some(system_root.join(r"System32\cmd.exe")).filter(|p| p.is_file())) {
+    let cmd = std::env::var_os("ComSpec")
+        .map(PathBuf::from)
+        .filter(|p| p.is_file());
+    if let Some(cmd) =
+        cmd.or_else(|| Some(system_root.join(r"System32\cmd.exe")).filter(|p| p.is_file()))
+    {
         shells.push(shell("cmd", "Command Prompt", cmd, &[]));
     }
     let git_bash = ["ProgramFiles", "ProgramW6432"]
@@ -88,7 +98,12 @@ fn platform_shells() -> Vec<ShellInfo> {
 
 #[cfg(not(windows))]
 fn platform_shells() -> Vec<ShellInfo> {
-    let known = [("zsh", "Zsh"), ("bash", "Bash"), ("fish", "Fish"), ("sh", "sh")];
+    let known = [
+        ("zsh", "Zsh"),
+        ("bash", "Bash"),
+        ("fish", "Fish"),
+        ("sh", "sh"),
+    ];
     let mut shells: Vec<ShellInfo> = known
         .iter()
         .filter_map(|(id, name)| {
@@ -101,7 +116,9 @@ fn platform_shells() -> Vec<ShellInfo> {
         .collect();
     // The user's login shell goes first when it is one we found.
     if let Some(login) = std::env::var_os("SHELL").map(PathBuf::from)
-        && let Some(index) = shells.iter().position(|s| s.program == login || login.ends_with(&s.id))
+        && let Some(index) = shells
+            .iter()
+            .position(|s| s.program == login || login.ends_with(&s.id))
     {
         let preferred = shells.remove(index);
         shells.insert(0, preferred);

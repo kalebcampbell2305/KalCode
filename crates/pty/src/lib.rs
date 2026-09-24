@@ -44,7 +44,12 @@ impl TerminalSize {
     }
 
     fn to_pty(self) -> PtySize {
-        PtySize { rows: self.rows, cols: self.cols, pixel_width: 0, pixel_height: 0 }
+        PtySize {
+            rows: self.rows,
+            cols: self.cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        }
     }
 }
 
@@ -113,15 +118,22 @@ pub struct PtySession {
 
 impl std::fmt::Debug for PtySession {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PtySession").field("pid", &self.inner.pid).finish_non_exhaustive()
+        f.debug_struct("PtySession")
+            .field("pid", &self.inner.pid)
+            .finish_non_exhaustive()
     }
 }
 
 impl PtySession {
     /// Starts `spec`. `on_exit` runs once, on a background thread, when the process ends.
-    pub fn spawn(spec: SpawnSpec, on_exit: impl FnOnce(ExitInfo) + Send + 'static) -> Result<Self, PtyError> {
+    pub fn spawn(
+        spec: SpawnSpec,
+        on_exit: impl FnOnce(ExitInfo) + Send + 'static,
+    ) -> Result<Self, PtyError> {
         let system = native_pty_system();
-        let pair = system.openpty(spec.size.to_pty()).map_err(|e| PtyError::Spawn(e.to_string()))?;
+        let pair = system
+            .openpty(spec.size.to_pty())
+            .map_err(|e| PtyError::Spawn(e.to_string()))?;
 
         let mut command = CommandBuilder::new(&spec.program);
         command.args(&spec.args);
@@ -132,12 +144,21 @@ impl PtySession {
         for (key, value) in &spec.env {
             command.env(key, value);
         }
-        let mut child = pair.slave.spawn_command(command).map_err(|e| PtyError::Spawn(e.to_string()))?;
+        let mut child = pair
+            .slave
+            .spawn_command(command)
+            .map_err(|e| PtyError::Spawn(e.to_string()))?;
         // Dropping the slave lets the reader see end-of-file once the shell exits.
         drop(pair.slave);
 
-        let reader = pair.master.try_clone_reader().map_err(|e| PtyError::Spawn(e.to_string()))?;
-        let writer = pair.master.take_writer().map_err(|e| PtyError::Spawn(e.to_string()))?;
+        let reader = pair
+            .master
+            .try_clone_reader()
+            .map_err(|e| PtyError::Spawn(e.to_string()))?;
+        let writer = pair
+            .master
+            .take_writer()
+            .map_err(|e| PtyError::Spawn(e.to_string()))?;
         let killer = child.clone_killer();
         let pid = child.process_id();
 
@@ -145,7 +166,10 @@ impl PtySession {
             master: Mutex::new(Some(pair.master)),
             writer: Mutex::new(Some(writer)),
             killer: Mutex::new(killer),
-            shared: Mutex::new(Shared { scrollback: Scrollback::new(SCROLLBACK_BYTES), listeners: HashMap::new() }),
+            shared: Mutex::new(Shared {
+                scrollback: Scrollback::new(SCROLLBACK_BYTES),
+                listeners: HashMap::new(),
+            }),
             exit: Mutex::new(None),
             killed: std::sync::atomic::AtomicBool::new(false),
             next_attach: AtomicU64::new(1),
@@ -165,8 +189,16 @@ impl PtySession {
                 let status = child.wait();
                 let killed = waiter_inner.killed.load(Ordering::SeqCst);
                 let info = match status {
-                    Ok(status) => ExitInfo { code: status.exit_code(), success: status.success() && !killed, killed },
-                    Err(_) => ExitInfo { code: 1, success: false, killed },
+                    Ok(status) => ExitInfo {
+                        code: status.exit_code(),
+                        success: status.success() && !killed,
+                        killed,
+                    },
+                    Err(_) => ExitInfo {
+                        code: 1,
+                        success: false,
+                        killed,
+                    },
                 };
                 *lock(&waiter_inner.exit) = Some(info);
                 // Release the pseudo-terminal so the reader reaches end-of-file.
@@ -190,13 +222,18 @@ impl PtySession {
     pub fn write(&self, data: &[u8]) -> Result<(), PtyError> {
         let mut writer = lock(&self.inner.writer);
         let writer = writer.as_mut().ok_or(PtyError::Exited)?;
-        writer.write_all(data).and_then(|()| writer.flush()).map_err(|e| PtyError::Io(e.to_string()))
+        writer
+            .write_all(data)
+            .and_then(|()| writer.flush())
+            .map_err(|e| PtyError::Io(e.to_string()))
     }
 
     pub fn resize(&self, size: TerminalSize) -> Result<(), PtyError> {
         let master = lock(&self.inner.master);
         let master = master.as_ref().ok_or(PtyError::Exited)?;
-        master.resize(size.to_pty()).map_err(|e| PtyError::Io(e.to_string()))
+        master
+            .resize(size.to_pty())
+            .map_err(|e| PtyError::Io(e.to_string()))
     }
 
     /// Replays the scrollback to `listener`, then streams new output to it. Replay and
@@ -280,7 +317,10 @@ fn read_loop(mut reader: Box<dyn Read + Send>, inner: &Inner) {
 
 /// Replies to each cursor-position request in `chunk` and returns the chunk without them.
 fn answer_cursor_requests<'a>(chunk: &'a [u8], inner: &Inner) -> std::borrow::Cow<'a, [u8]> {
-    let count = chunk.windows(CURSOR_POSITION_REQUEST.len()).filter(|w| *w == CURSOR_POSITION_REQUEST).count();
+    let count = chunk
+        .windows(CURSOR_POSITION_REQUEST.len())
+        .filter(|w| *w == CURSOR_POSITION_REQUEST)
+        .count();
     if count == 0 {
         return std::borrow::Cow::Borrowed(chunk);
     }
@@ -294,7 +334,10 @@ fn answer_cursor_requests<'a>(chunk: &'a [u8], inner: &Inner) -> std::borrow::Co
 }
 
 fn strip_cursor_requests(chunk: &[u8]) -> std::borrow::Cow<'_, [u8]> {
-    if chunk.windows(CURSOR_POSITION_REQUEST.len()).any(|w| w == CURSOR_POSITION_REQUEST) {
+    if chunk
+        .windows(CURSOR_POSITION_REQUEST.len())
+        .any(|w| w == CURSOR_POSITION_REQUEST)
+    {
         std::borrow::Cow::Owned(strip_all(chunk, CURSOR_POSITION_REQUEST))
     } else {
         std::borrow::Cow::Borrowed(chunk)
