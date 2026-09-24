@@ -238,6 +238,8 @@
 
 .xtermHost :global(.xterm .xterm-viewport) {
   background-color: var(--terminal-bg);
+  /* xterm.js draws its own scrollbar; the app-wide thin native one would show beside it. */
+  scrollbar-width: none;
 }
 
 .xtermHost :global(.xterm:focus-within) {

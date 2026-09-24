@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { expect, type Page, test } from "@playwright/test";
 import { closeGracefully, EXE, launch, processesMatching, removeDir } from "./harness.ts";
 
@@ -20,6 +21,14 @@ async function typeInTerminal(page: Page, command: string) {
   await page.locator('[role="tabpanel"]:not([hidden]) .xterm-screen').click();
   await page.keyboard.type(command);
   await page.keyboard.press("Enter");
+}
+
+/** Real-app screenshots for visual review (apps/desktop/qa/screenshots, git-ignored). */
+async function shot(page: Page, name: string) {
+  const dir = fileURLToPath(new URL("../../qa/screenshots/", import.meta.url));
+  mkdirSync(dir, { recursive: true });
+  await page.waitForTimeout(300);
+  await page.screenshot({ path: join(dir, `${name}.png`) });
 }
 
 async function newTerminal(page: Page, shell: string) {
@@ -61,6 +70,14 @@ test("open a folder, run commands in real shells, restart KalCode, restore and r
       })
       .toBeGreaterThanOrEqual(2); // the typed command and its output
 
+    // ANSI colour from a real shell (Windows' default shells are PowerShell) renders as colour.
+    await typeInTerminal(page, "Write-Host kalcode-red -ForegroundColor Red");
+    const red = visibleTerminal(page)
+      .locator("span")
+      .filter({ hasText: /^kalcode-red$/ });
+    await expect(red.first()).toHaveClass(/xterm-fg-(1|9)\b/, { timeout: 20_000 });
+    await shot(page, "e2e-real-powershell");
+
     // Command Prompt: working directory is the workspace folder; large output streams intact.
     await newTerminal(page, "Command Prompt");
     await expect(visibleTerminal(page)).toContainText("Microsoft Windows", { timeout: 30_000 });
@@ -68,6 +85,31 @@ test("open a folder, run commands in real shells, restart KalCode, restore and r
     await expect(visibleTerminal(page)).toContainText(`cwd=[${canonical}]`, { timeout: 20_000 });
     await typeInTerminal(page, "type big.txt");
     await expect(visibleTerminal(page)).toContainText("kalcode-big-end", { timeout: 30_000 });
+
+    // Resizing the view resizes the pseudo-terminal: collapsing the sidebar widens the shell.
+    const columns = async () => {
+      await typeInTerminal(page, "cls");
+      await typeInTerminal(page, "mode con");
+      let found = 0;
+      await expect
+        .poll(
+          async () => {
+            const match = /Columns:\s+(\d+)/.exec((await visibleTerminal(page).textContent()) ?? "");
+            found = Number(match?.[1] ?? 0);
+            return found;
+          },
+          { timeout: 20_000 },
+        )
+        .toBeGreaterThan(0);
+      return found;
+    };
+    const narrow = await columns();
+    await page.keyboard.press("Control+Shift+E"); // leave the terminal so Ctrl+B reaches KalCode
+    await page.keyboard.press("Control+B");
+    await expect(page.getByRole("button", { name: "Expand sidebar" })).toBeVisible();
+    await page.waitForTimeout(500); // fit, then the debounced resize reaches ConPTY
+    expect(await columns()).toBeGreaterThan(narrow);
+    await page.getByRole("button", { name: "Expand sidebar" }).click();
 
     // Closing a tab ends programs started in it (the whole console, not just the shell).
     await newTerminal(page, "Command Prompt");
@@ -99,6 +141,7 @@ test("open a folder, run commands in real shells, restart KalCode, restore and r
     await expect(app.page.getByRole("tab")).toHaveCount(2);
     await expect(app.page.getByRole("tab", { name: /Ended/ })).toHaveCount(2);
     await expect(app.page.getByRole("heading", { name: "This terminal ended when KalCode closed" })).toBeVisible();
+    await shot(app.page, "e2e-real-restored");
     await app.page.locator('[role="tabpanel"]:not([hidden])').getByRole("button", { name: "Restart" }).click();
     await expect(app.page.getByRole("tab", { name: /Ended/ })).toHaveCount(1);
     await expect(visibleTerminal(app.page)).toContainText(basename(project), { timeout: 30_000 });
@@ -109,6 +152,7 @@ test("open a folder, run commands in real shells, restart KalCode, restore and r
         { timeout: 20_000 },
       )
       .toBeGreaterThanOrEqual(2);
+    await shot(app.page, "e2e-real-restarted");
 
     await closeGracefully(app);
   } finally {
