@@ -12,6 +12,22 @@ export const CONSENT_VERSION = "2026-09-24";
 /** The published contact for privacy, legal and security matters. */
 export const CONTACT_EMAIL = "kalcodebuilds@gmail.com";
 
+/**
+ * KalVoice facts shown across the site (docs/KALVOICE.md). KalVoice is in development
+ * (campaign Z12): pages must describe it as designed, never as shipped.
+ */
+export const KALVOICE = {
+  name: "KalVoice",
+  line: "Speak your prompts. Control your workspace. Coordinate your coding agents.",
+  summary:
+    "KalVoice turns your voice into coding prompts and KalCode commands. Dictate directly into Claude Code, Codex, Gemini CLI and your terminals, or ask KalVoice to run your workspace.",
+  status: "In development",
+  /** Default shortcuts (Windows and Linux; macOS uses Cmd). Both are configurable. */
+  dictationKeys: ["Ctrl", "Shift", "Space"],
+  commandKeys: ["Ctrl", "Shift", "K"],
+  globeAlt: "KalVoice globe: a sphere of connected points of light",
+} as const;
+
 export interface PageInfo {
   path: string;
   title: string;
@@ -27,19 +43,19 @@ export const PAGES = [
     path: "/",
     title: "KalCode — One intelligence that operates your entire AI workspace",
     description:
-      "KalCode is a desktop workspace in private development that connects Claude Code, Codex and Gemini CLI, runs them as persistent threads, and keeps you in control of every permission.",
+      "KalCode is a desktop workspace in private development that connects Claude Code, Codex and Gemini CLI on your own accounts, runs them as persistent threads, keeps you in control of every permission, and adds KalVoice for voice prompts and commands.",
   },
   {
     path: "/product",
     title: "Product — KalCode",
     description:
-      "How KalCode is being built: provider connections, persistent threads, a live Dashboard, permission modes, JARVIS coordination, and local-first storage.",
+      "How KalCode is being built: bring-your-own-provider connections, persistent threads, a live Dashboard, permission modes, KalVoice dictation and commands, and local-first storage.",
   },
   {
     path: "/pricing",
     title: "Pricing — KalCode",
     description:
-      "KalCode plans: Free, Pro and MAX. Plans become available at launch, and connecting your AI providers is free on every plan.",
+      "KalCode plans: Free, Pro and MAX, with KalVoice Request allowances, unlimited local dictation, and every provider connection and permission mode on every plan. AI usage stays on your own provider account.",
   },
   {
     path: "/download",
@@ -51,25 +67,25 @@ export const PAGES = [
     path: "/docs",
     title: "Docs — KalCode",
     description:
-      "Documentation for KalCode as it is designed: permissions, providers, JARVIS, and local-first storage.",
+      "Documentation for KalCode as it is designed: permissions, providers, KalVoice, and local-first storage.",
   },
   {
     path: "/docs/permissions",
     title: "Permissions — KalCode Docs",
     description:
-      "How KalCode permission modes (Plan, Approve, Auto, Bypass, Custom) decide what agents and JARVIS may do.",
+      "How KalCode permission modes (Plan, Approve, Auto, Bypass, Custom) decide what agents and KalVoice may do.",
   },
   {
     path: "/docs/providers",
     title: "Providers — KalCode Docs",
     description:
-      "How KalCode connects Claude Code, Codex and Gemini CLI through documented integration methods, on every plan.",
+      "How KalCode connects Claude Code, Codex and Gemini CLI through documented integration methods using your own accounts, on every plan.",
   },
   {
-    path: "/docs/jarvis",
-    title: "JARVIS — KalCode Docs",
+    path: "/docs/kalvoice",
+    title: "KalVoice — KalCode Docs",
     description:
-      "JARVIS is the intelligence inside KalCode that coordinates providers, threads and missions within your permissions.",
+      "KalVoice, in development, is the coding assistant and voice layer in KalCode: local dictation into any input, and commands that run your workspace with your own provider.",
   },
   {
     path: "/docs/local-first",
@@ -80,19 +96,20 @@ export const PAGES = [
   {
     path: "/changelog",
     title: "Changelog — KalCode",
-    description: "Development milestones for KalCode, starting with 0.1.0 — Foundation.",
+    description:
+      "Development milestones for KalCode: 0.1.0 — Foundation, and the KalVoice and bring-your-own-provider announcement.",
   },
   {
     path: "/security",
     title: "Security — KalCode",
     description:
-      "KalCode security commitments: local-first data, an IPC allow-list, OS keychain secrets, no telemetry in current builds, and a permission model agents cannot bypass.",
+      "KalCode security commitments: local-first data, on-device voice, your own provider accounts, an IPC allow-list, OS keychain secrets, no telemetry in current builds, and a permission model agents cannot bypass.",
   },
   {
     path: "/privacy",
     title: "Privacy — KalCode",
     description:
-      "What kalcoded.com collects (only early-access emails), where it is stored, and how to remove your email.",
+      "What kalcoded.com collects (only early-access emails), where it is stored, how to remove your email, and how KalVoice keeps voice audio on your device.",
   },
   {
     path: "/terms",
@@ -141,7 +158,7 @@ export const FOOTER_NAV = {
     { href: "/docs", label: "Overview" },
     { href: "/docs/permissions", label: "Permissions" },
     { href: "/docs/providers", label: "Providers" },
-    { href: "/docs/jarvis", label: "JARVIS" },
+    { href: "/docs/kalvoice", label: "KalVoice" },
     { href: "/docs/local-first", label: "Local-first" },
   ],
   legal: [
