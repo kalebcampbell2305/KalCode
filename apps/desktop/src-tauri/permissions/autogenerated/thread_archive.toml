@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-thread-archive"
+description = "Enables the thread_archive command without any pre-configured scope."
+commands.allow = ["thread_archive"]
+
+[[permission]]
+identifier = "deny-thread-archive"
+description = "Denies the thread_archive command without any pre-configured scope."
+commands.deny = ["thread_archive"]

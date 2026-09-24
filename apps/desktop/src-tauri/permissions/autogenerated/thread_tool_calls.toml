@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-thread-tool-calls"
+description = "Enables the thread_tool_calls command without any pre-configured scope."
+commands.allow = ["thread_tool_calls"]
+
+[[permission]]
+identifier = "deny-thread-tool-calls"
+description = "Denies the thread_tool_calls command without any pre-configured scope."
+commands.deny = ["thread_tool_calls"]

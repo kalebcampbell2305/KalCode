@@ -16,6 +16,19 @@
     "allow-diagnostics-get",
     "allow-diagnostics-open-log-dir",
     "allow-diagnostics-open-data-dir",
-    "allow-secure-store-check"
+    "allow-secure-store-check",
+    "allow-thread-list",
+    "allow-thread-get",
+    "allow-thread-messages",
+    "allow-thread-tool-calls",
+    "allow-thread-options",
+    "allow-thread-create",
+    "allow-thread-send",
+    "allow-thread-interrupt",
+    "allow-thread-resume",
+    "allow-thread-stop",
+    "allow-thread-rename",
+    "allow-thread-archive",
+    "allow-thread-stream"
   ]
 }

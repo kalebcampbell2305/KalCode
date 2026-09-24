@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-thread-rename"
+description = "Enables the thread_rename command without any pre-configured scope."
+commands.allow = ["thread_rename"]
+
+[[permission]]
+identifier = "deny-thread-rename"
+description = "Denies the thread_rename command without any pre-configured scope."
+commands.deny = ["thread_rename"]

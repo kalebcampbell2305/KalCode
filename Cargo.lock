@@ -2116,8 +2116,10 @@ dependencies = [
 name = "kalcode-desktop"
 version = "0.1.0"
 dependencies = [
+ "kalcode-contracts",
  "kalcode-native-core",
  "kalcode-secure-store",
+ "kalcode-threads",
  "serde",
  "serde_json",
  "tauri",
