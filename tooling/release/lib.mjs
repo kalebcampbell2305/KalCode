@@ -22,12 +22,23 @@ export function fail(message) {
   process.exit(1);
 }
 
+/**
+ * On Windows, pnpm/npx are .cmd shims that need a shell. Node warns about passing an argument
+ * array together with `shell`, so those calls get one pre-quoted command line instead.
+ */
+function spawnArgs(command, args) {
+  if (process.platform !== "win32" || !["pnpm", "npx"].includes(command)) return [command, args, {}];
+  const quoted = args.map((a) => (/^[\w@./:=-]+$/.test(a) ? a : `"${a.replaceAll('"', '\\"')}"`));
+  return [[command, ...quoted].join(" "), [], { shell: true }];
+}
+
 /** Runs a command, streaming its output. Throws on a non-zero exit. */
 export function run(command, args, options = {}) {
-  const result = spawnSync(command, args, {
+  const [cmd, argv, extra] = spawnArgs(command, args);
+  const result = spawnSync(cmd, argv, {
     cwd: ROOT,
     stdio: "inherit",
-    shell: process.platform === "win32" && ["pnpm", "npx"].includes(command),
+    ...extra,
     ...options,
   });
   if (result.error) throw result.error;
@@ -39,10 +50,11 @@ export function run(command, args, options = {}) {
 
 /** Runs a command and returns trimmed stdout. Throws on a non-zero exit. */
 export function capture(command, args, options = {}) {
-  const result = spawnSync(command, args, {
+  const [cmd, argv, extra] = spawnArgs(command, args);
+  const result = spawnSync(cmd, argv, {
     cwd: ROOT,
     encoding: "utf8",
-    shell: process.platform === "win32" && ["pnpm", "npx"].includes(command),
+    ...extra,
     ...options,
   });
   if (result.error) throw result.error;

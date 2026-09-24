@@ -91,11 +91,14 @@ if (mode !== "local") {
       }
       console.log(`  live manifest: ${live?.latest ? `version ${live.latest.version}` : "no release"}`);
     } else {
+      await response.body?.cancel();
       console.log(`  live manifest: HTTP ${response.status} (nothing published yet, or the Worker is not deployed)`);
     }
   } catch (error) {
     console.log(`  live manifest: unreachable (${error instanceof Error ? error.message : error})`);
   }
+  // Let fetch's sockets finish closing: exiting mid-close aborts Node on Windows (libuv assertion).
+  await new Promise((resolve) => setTimeout(resolve, 100));
 }
 
 if (problems.length > 0) fail(`refusing to publish:\n  ${problems.join("\n  ")}`);

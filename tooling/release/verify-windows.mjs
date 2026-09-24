@@ -20,7 +20,7 @@
 //
 // Usage: pnpm release:verify      Writes dist/release/<version>/verify.json.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import {
@@ -152,6 +152,42 @@ function listFiles(dir) {
   return files.sort((a, b) => a.path.localeCompare(b.path));
 }
 
+/**
+ * The Tauri bundler stamps the bundle type into the shipped binary (the 3 bytes after
+ * `__TAURI_BUNDLE_TYPE_VAR_`: `NSS` for NSIS) and then restores `UNK` in target/release. So the
+ * installed exe must equal the built one everywhere except that marker.
+ */
+function compareWithBuild(installedPath, builtPath) {
+  const installed = readFileSync(installedPath);
+  const built = readFileSync(builtPath);
+  const marker = Buffer.from("__TAURI_BUNDLE_TYPE_VAR_");
+  const differing = [];
+  if (installed.length === built.length) {
+    for (let i = 0; i < installed.length && differing.length <= 16; i++) {
+      if (installed[i] !== built[i]) differing.push(i);
+    }
+  }
+  // Start of the 3-byte marker value that byte `i` belongs to, or -1.
+  const valueStart = (i) => {
+    for (let k = 0; k < 3; k++) {
+      const at = i - k;
+      if (at >= marker.length && installed.subarray(at - marker.length, at).equals(marker)) return at;
+    }
+    return -1;
+  };
+  const at = differing.length > 0 ? valueStart(differing[0]) : -1;
+  return {
+    sameSize: installed.length === built.length,
+    differingBytes: differing.length,
+    onlyBundleMarkerDiffers:
+      installed.length === built.length &&
+      differing.length <= 3 &&
+      differing.every((i) => valueStart(i) === at && at >= 0),
+    installedMarker: at >= 0 ? installed.subarray(at, at + 3).toString("latin1") : null,
+    builtMarker: at >= 0 ? built.subarray(at, at + 3).toString("latin1") : null,
+  };
+}
+
 async function waitFor(predicate, timeoutMs, label) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -184,6 +220,7 @@ async function pass(name, extraArgs, expectShortcuts) {
   const shortcuts = shortcutPaths();
   const result = { name, args: ["/S", ...extraArgs, "/D=<temp>\\KalCode"], installDir };
   report.passes.push(result);
+  let after = {};
   try {
     // /D= must be the last argument and unquoted (NSIS rule).
     const install = spawnSync(installer, ["/S", ...extraArgs, `/D=${installDir}`], { stdio: "ignore" });
@@ -201,9 +238,13 @@ async function pass(name, extraArgs, expectShortcuts) {
     check(`${name}: kalcode.exe product version is ${version}`, result.exeVersionInfo?.ProductVersion === version);
     const builtExe = join(TARGET_DIR, "release", "kalcode.exe");
     if (existsSync(builtExe)) {
-      const same = (await sha256File(exe)) === (await sha256File(builtExe));
-      result.exeMatchesBuild = same;
-      check(`${name}: installed kalcode.exe is byte-identical to target/release/kalcode.exe`, same);
+      const comparison = compareWithBuild(exe, builtExe);
+      result.exeComparedToBuild = comparison;
+      check(
+        `${name}: installed kalcode.exe is target/release/kalcode.exe with only the bundle-type marker set to NSIS`,
+        comparison.onlyBundleMarkerDiffers && comparison.installedMarker === "NSS",
+        JSON.stringify(comparison),
+      );
     }
 
     const reg = registry(UNINSTALL_KEY);
@@ -229,29 +270,37 @@ async function pass(name, extraArgs, expectShortcuts) {
       check(`${name}: no shortcuts created with /NS`, !created.desktop && !created.startMenu);
     }
   } finally {
+    // Always uninstall and clean up, even after a failed check, before reporting.
     await uninstall(installDir);
+    after = {
+      uninstallEntry: registry(UNINSTALL_KEY) !== null,
+      installFolder: existsSync(installDir),
+      desktopShortcut: existsSync(shortcuts.desktop),
+      startMenuShortcut: existsSync(shortcuts.startMenu),
+    };
+    // By design the Tauri uninstaller keeps HKCUSoftwareKalCodeKalCode (the last install
+    // location) unless "delete app data" is ticked. Preflight proved it did not exist, so this
+    // run created it: remove it (only if it points at this temp folder) and record that.
+    const leftover = registry(PRODUCT_KEY);
+    result.leftoverInstallLocationKey = leftover?.["(default)"] ?? null;
+    if (leftover?.["(default)"] === installDir) {
+      powershell(`Remove-Item -LiteralPath ${psQuote(PRODUCT_KEY)} -Recurse -Force`);
+      powershell(
+        `$k = Get-Item -LiteralPath ${psQuote(MANUFACTURER_KEY)} -ErrorAction SilentlyContinue; if ($k -and $k.SubKeyCount -eq 0 -and $k.ValueCount -eq 0) { Remove-Item -LiteralPath ${psQuote(MANUFACTURER_KEY)} -Force }`,
+      );
+    }
+    rmSync(root, { recursive: true, force: true });
   }
 
-  check(`${name}: uninstall entry removed`, registry(UNINSTALL_KEY) === null);
-  check(`${name}: install folder removed`, !existsSync(installDir));
+  result.afterUninstall = after;
+  check(`${name}: uninstall entry removed`, !after.uninstallEntry);
+  check(`${name}: install folder removed`, !after.installFolder);
   check(
     `${name}: no shortcuts left`,
-    !existsSync(shortcuts.desktop) && !existsSync(shortcuts.startMenu),
+    !after.desktopShortcut && !after.startMenuShortcut,
     `${shortcuts.desktop}, ${shortcuts.startMenu}`,
   );
-  // By design the Tauri uninstaller keeps HKCU\Software\KalCode\KalCode (the last install
-  // location) unless "delete app data" is ticked. Preflight proved it did not exist, so this run
-  // created it: remove it and record that.
-  const leftover = registry(PRODUCT_KEY);
-  result.leftoverInstallLocationKey = leftover !== null;
-  if (leftover !== null) {
-    powershell(`Remove-Item -LiteralPath ${psQuote(PRODUCT_KEY)} -Recurse -Force`);
-    powershell(
-      `$k = Get-Item -LiteralPath ${psQuote(MANUFACTURER_KEY)} -ErrorAction SilentlyContinue; if ($k -and $k.SubKeyCount -eq 0 -and $k.ValueCount -eq 0) { Remove-Item -LiteralPath ${psQuote(MANUFACTURER_KEY)} -Force }`,
-    );
-  }
   check(`${name}: no KalCode registry keys left after cleanup`, registry(MANUFACTURER_KEY) === null);
-  rmSync(root, { recursive: true, force: true });
 }
 
 console.log(`Verifying ${build.file} (${build.commit.slice(0, 12)})`);

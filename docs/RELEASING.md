@@ -59,7 +59,8 @@ database, so the verification only installs and uninstalls:
    It also stops if any `kalcode.exe` is running: the Tauri installer and uninstaller silently
    kill running `kalcode.exe` processes of the current user.
 3. **Pass `no-shortcuts`**: `KalCode_<v>_x64-setup.exe /S /NS /D=<temp>\KalCode`. Checks
-   `kalcode.exe` (product version, byte-identical to `target/release/kalcode.exe`) and
+   `kalcode.exe` (product version; identical to `target/release/kalcode.exe` except the 3-byte
+   bundle-type marker Tauri stamps as `NSS`) and
    `uninstall.exe`, the per-user uninstall entry
    (`HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\KalCode`: DisplayName,
    DisplayVersion, Publisher, InstallLocation, UninstallString), no autostart value and no
