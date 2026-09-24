@@ -1,0 +1,328 @@
+/* Code surface: workspace header, terminal tab strip, terminal panels. */
+
+.code {
+  --terminal-bg: var(--color-code-bg);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+:global([data-theme="light"]) .code {
+  --terminal-bg: var(--color-surface);
+}
+
+.loading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: calc(var(--page-py) + var(--space-2)) var(--page-px);
+}
+
+/* ---------- Header ---------- */
+
+.header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-6);
+  padding: calc(var(--page-py) + var(--space-2)) var(--page-px) var(--space-4);
+}
+
+.heading {
+  min-width: 0;
+}
+
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.title {
+  overflow: hidden;
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-regular);
+  letter-spacing: var(--tracking-tight);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.path {
+  margin-top: var(--space-1);
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.headerActions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.headerActions:focus-visible {
+  outline-offset: 4px;
+}
+
+/* ---------- Tab strip ---------- */
+
+.tabBar {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+  padding: 0 var(--page-px);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.tablist {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: flex-end;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tab {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 15rem;
+  height: 2.25rem;
+  padding: 0 var(--space-1-5) 0 var(--space-3);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.tab:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.tab[aria-selected="true"] {
+  background: var(--terminal-bg);
+  color: var(--color-text);
+}
+
+.tab[aria-selected="true"]::after {
+  content: "";
+  position: absolute;
+  right: var(--space-2);
+  bottom: 0;
+  left: var(--space-2);
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--color-accent);
+}
+
+.tab:focus-visible {
+  outline-offset: -2px;
+}
+
+.tabDot {
+  flex: none;
+  width: 0.4375rem;
+  height: 0.4375rem;
+  border-radius: var(--radius-full);
+  background: var(--color-idle);
+}
+
+.tabDot[data-tone="live"] {
+  background: var(--color-live);
+}
+
+.tabDot[data-tone="danger"] {
+  background: var(--color-danger);
+}
+
+.tabLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tabState {
+  color: var(--color-text-faint);
+  font-size: var(--text-xs);
+}
+
+.tabClose {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: var(--radius-xs);
+  color: var(--color-text-faint);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.tab:hover .tabClose,
+.tab[aria-selected="true"] .tabClose {
+  opacity: 1;
+}
+
+.tabClose:hover {
+  background: var(--color-surface-active);
+  color: var(--color-text);
+}
+
+.tabClose svg {
+  width: 0.8125rem;
+  height: 0.8125rem;
+  stroke-width: 2;
+}
+
+.tabActions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 1px;
+  height: 2.25rem;
+}
+
+/* ---------- Panels ---------- */
+
+.panels {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: var(--terminal-bg);
+}
+
+.panel {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.panel[hidden] {
+  display: none;
+}
+
+.panelMessage {
+  display: flex;
+  flex: 1;
+  align-items: flex-start;
+  padding: var(--space-10) var(--page-px);
+}
+
+.xtermHost {
+  flex: 1;
+  min-height: 0;
+  padding-left: calc(var(--page-px) - var(--space-3));
+}
+
+/* xterm.js lays out inside its element; padding here is subtracted by the fit addon. */
+.xtermHost :global(.xterm) {
+  height: 100%;
+  padding: var(--space-3) var(--space-3) var(--space-2);
+}
+
+.xtermHost :global(.xterm .xterm-viewport) {
+  background-color: var(--terminal-bg);
+}
+
+.xtermHost :global(.xterm:focus-within) {
+  outline: none;
+}
+
+.endedBar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--page-px);
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+  font-size: var(--text-sm);
+}
+
+.endedText {
+  margin-right: auto;
+  color: var(--color-text-secondary);
+}
+
+/* ---------- Empty state and recents ---------- */
+
+.emptyArt {
+  width: 1.75rem;
+  height: 1.75rem;
+  stroke-width: 1.5;
+}
+
+.recentList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.recentRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--space-4);
+  min-height: var(--row-h);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.recentRow:last-child {
+  border-bottom: 0;
+}
+
+.recentText {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.recentName {
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: var(--text-md);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recentRow[data-available="false"] .recentName {
+  color: var(--color-text-secondary);
+}
+
+.recentPath {
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recentTime {
+  color: var(--color-text-faint);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.recentActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}

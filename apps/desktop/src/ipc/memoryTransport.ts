@@ -7,6 +7,7 @@
  * `?scenario=` (ui-test builds only) selects a starting state:
  *   startup-error      — the core failed to start (newer database)
  *   keychain-failure   — the credential store check fails
+ *   code               — workspaces with terminal tabs already open (Code, Dashboard)
  */
 import type {
   AppInfo,
@@ -20,9 +21,13 @@ import type {
   SettingsPatch,
   SurfaceFlag,
 } from "@kalcode/protocol";
+import { createMemoryWorkspaces, type MemoryWorkspaces } from "./memoryWorkspaces.ts";
 import type { CommandName, Transport } from "./transport.ts";
 
-export type MemoryScenario = "default" | "startup-error" | "keychain-failure";
+export type MemoryScenario = "default" | "startup-error" | "keychain-failure" | "code";
+
+/** Surfaces that work in this build (mirrors native feature flags). */
+const AVAILABLE: ReadonlySet<SurfaceFlag["id"]> = new Set(["dashboard", "code", "settings"]);
 
 const SURFACES: SurfaceFlag["id"][] = [
   "dashboard",
@@ -60,6 +65,8 @@ function fail(error: IpcError): never {
 export interface MemoryTransport extends Transport {
   /** Test hook: number of live subscribers. */
   subscriberCount(): number;
+  /** Test hooks for workspaces and terminals (folder picker results, moved folders). */
+  workspaces: Omit<MemoryWorkspaces, "handlers" | "attachTerminal">;
 }
 
 export function createMemoryTransport(scenario: MemoryScenario = readScenario()): MemoryTransport {
@@ -73,7 +80,7 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
     flags: {
       surfaces: SURFACES.map((id) => ({
         id,
-        state: id === "dashboard" || id === "settings" ? "available" : "gated",
+        state: AVAILABLE.has(id) ? "available" : "gated",
         visible: true,
       })),
     },
@@ -83,14 +90,14 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
   const subscribers = new Set<(event: EventEnvelope) => void>();
   let lastCheck: { at: string; ok: boolean; backend: string } | null = null;
 
-  const emit = (event: EventPayload) => {
+  const emit = (event: EventPayload, workspaceId: string | null = null) => {
     const envelope = {
       id: crypto.randomUUID(),
       seq: events.length + 1,
       version: 1,
       occurredAt: new Date().toISOString(),
       source: "core",
-      correlation: { workspaceId: null, threadId: null, missionId: null, providerId: null, requestId: null },
+      correlation: { workspaceId, threadId: null, missionId: null, providerId: null, requestId: null },
       ...event,
     } as EventEnvelope;
     events.push(envelope);
@@ -114,7 +121,7 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
       : null;
 
   if (!startupError) {
-    emit({ type: "database.migrated", payload: { fromVersion: 0, toVersion: 1, backupCreated: false } });
+    emit({ type: "database.migrated", payload: { fromVersion: 0, toVersion: 2, backupCreated: false } });
     emit({
       type: "app.started",
       payload: { version: info.version, channel: info.channel, platform: info.platform, arch: info.arch },
@@ -125,7 +132,10 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
     if (startupError) fail(startupError);
   };
 
+  const code = createMemoryWorkspaces({ emit, requireCore, preload: scenario === "code" });
+
   const handlers: Record<CommandName, (args: Record<string, unknown>) => unknown> = {
+    ...(code.handlers as Record<Extract<CommandName, `workspace_${string}` | `terminal${string}` | "shells_list">, (args: Record<string, unknown>) => unknown>),
     boot: (): BootState => ({ info, startupError }),
     window_ready: () => undefined,
     settings_get: () => {
@@ -195,8 +205,8 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
         uptimeMs: Date.now() - startedAt,
         startedAt: new Date(startedAt).toISOString(),
         database: {
-          schemaVersion: 1,
-          latestSchemaVersion: 1,
+          schemaVersion: 2,
+          latestSchemaVersion: 2,
           sizeBytes: 98_304,
           eventCount: events.length,
           journalMode: "wal",
@@ -233,7 +243,7 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
     },
   };
 
-  return {
+  const transport: MemoryTransport = {
     kind: "memory",
     async invoke<T>(command: CommandName, args: Record<string, unknown> = {}): Promise<T> {
       await Promise.resolve();
@@ -246,13 +256,33 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
         subscribers.delete(onEvent);
       };
     },
+    attachTerminal: (terminalId, onOutput) => code.attachTerminal(terminalId, onOutput),
     async setNativeTheme() {},
     subscriberCount: () => subscribers.size,
+    workspaces: {
+      queueFolders: code.queueFolders,
+      makeUnavailable: code.makeUnavailable,
+      runningProcessCount: code.runningProcessCount,
+    },
   };
+  // UI tests drive the fake folder picker and filesystem through this hook (ui-test builds only).
+  if (typeof window !== "undefined") {
+    (window as unknown as { __kalcodeMemory?: MemoryTransport["workspaces"] }).__kalcodeMemory = transport.workspaces;
+  }
+  return transport;
+}
+
+let shared: MemoryTransport | null = null;
+
+/** The page's single in-memory runtime (a real app has one native runtime, even when React
+ *  StrictMode boots the UI twice in development). */
+export function sharedMemoryTransport(): MemoryTransport {
+  shared ??= createMemoryTransport();
+  return shared;
 }
 
 function readScenario(): MemoryScenario {
   if (typeof location === "undefined") return "default";
   const value = new URLSearchParams(location.search).get("scenario");
-  return value === "startup-error" || value === "keychain-failure" ? value : "default";
+  return value === "startup-error" || value === "keychain-failure" || value === "code" ? value : "default";
 }

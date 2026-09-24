@@ -4,6 +4,7 @@ import { ActivityFeed } from "./ActivityFeed.tsx";
 import { ConstellationArt } from "./ConstellationArt.tsx";
 import styles from "./Dashboard.module.css";
 import { RuntimeHealth } from "./RuntimeHealth.tsx";
+import { TerminalsSection } from "./TerminalsSection.tsx";
 
 export function Dashboard() {
   return (
@@ -19,6 +20,7 @@ export function Dashboard() {
               <p>Threads arrive with provider connections in an upcoming build.</p>
             </EmptyState>
           </Section>
+          <TerminalsSection />
           <ActivityFeed />
         </div>
         <aside className={styles.aside} aria-label="Runtime health">

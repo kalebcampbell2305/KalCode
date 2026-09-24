@@ -1,8 +1,22 @@
 import type { SettingsPatch, SurfaceId } from "@kalcode/protocol";
 import { Command } from "cmdk";
-import { ClipboardCopy, FolderOpen, KeyRound, Monitor, Moon, PanelLeft, Rows3, Sun } from "lucide-react";
+import {
+  ArrowRightLeft,
+  ClipboardCopy,
+  FolderOpen,
+  FolderPlus,
+  KeyRound,
+  Monitor,
+  Moon,
+  PanelLeft,
+  Rows3,
+  SquareTerminal,
+  Sun,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
+import { useWorkspaces } from "../runtime/WorkspaceProvider.tsx";
+import { CODE_SHORTCUT_LABELS } from "../surfaces/code/shortcuts.ts";
 import { useDiagnosticsActions } from "../surfaces/settings/useDiagnosticsActions.ts";
 import styles from "./CommandPalette.module.css";
 import { PRIMARY_ORDER, SURFACES, useNavigation } from "./navigation.tsx";
@@ -17,6 +31,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const { info, settings, updateSettings } = useRuntime();
   const { navigate } = useNavigation();
   const diagnostics = useDiagnosticsActions();
+  const workspaces = useWorkspaces();
 
   const run = (action: () => unknown) => () => {
     onOpenChange(false);
@@ -51,6 +66,46 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
               </Item>
             );
           })}
+        </Command.Group>
+
+        <Command.Group heading="Code" className={styles.group}>
+          {workspaces.active?.available ? (
+            <Item
+              icon={<SquareTerminal />}
+              onSelect={run(() => {
+                navigate("code");
+                return workspaces.createTerminal(null);
+              })}
+              shortcut={CODE_SHORTCUT_LABELS["new-terminal"]}
+              keywords={["shell", "console", "command line", workspaces.active.name]}
+            >
+              New terminal
+            </Item>
+          ) : null}
+          <Item
+            icon={<FolderPlus />}
+            onSelect={run(async () => {
+              const opened = await workspaces.openFolder();
+              if (opened) navigate("code");
+            })}
+            keywords={["workspace", "project", "folder"]}
+          >
+            Open folder…
+          </Item>
+          {workspaces.workspaces
+            .filter((w) => w.id !== workspaces.active?.id && w.available)
+            .map((workspace) => (
+              <Item
+                key={workspace.id}
+                icon={<ArrowRightLeft />}
+                onSelect={run(async () => {
+                  if (await workspaces.activate(workspace.id)) navigate("code");
+                })}
+                keywords={["switch workspace", workspace.displayPath]}
+              >
+                {`Switch to ${workspace.name}`}
+              </Item>
+            ))}
         </Command.Group>
 
         <Command.Group heading="Appearance" className={styles.group}>

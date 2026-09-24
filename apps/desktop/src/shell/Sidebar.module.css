@@ -28,6 +28,10 @@
   height: 0.62rem;
 }
 
+.workspace {
+  margin-bottom: var(--space-2);
+}
+
 .search {
   margin-bottom: var(--space-4);
 }

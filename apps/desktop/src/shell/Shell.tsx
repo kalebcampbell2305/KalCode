@@ -1,5 +1,8 @@
 import { useState } from "react";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
+import { WorkspaceProvider } from "../runtime/WorkspaceProvider.tsx";
+import { CodePage } from "../surfaces/code/CodePage.tsx";
+import { useNewTerminalShortcut } from "../surfaces/code/useNewTerminalShortcut.ts";
 import { Dashboard } from "../surfaces/dashboard/Dashboard.tsx";
 import { GatedSurface } from "../surfaces/gated/GatedSurface.tsx";
 import { SettingsPage } from "../surfaces/settings/SettingsPage.tsx";
@@ -15,7 +18,9 @@ export function Shell() {
   useAppearance(settings, client);
   return (
     <NavigationProvider flags={info.flags.surfaces}>
-      <ShellLayout />
+      <WorkspaceProvider>
+        <ShellLayout />
+      </WorkspaceProvider>
     </NavigationProvider>
   );
 }
@@ -29,6 +34,7 @@ function ShellLayout() {
     openPalette: () => setPaletteOpen(true),
     toggleSidebar: () => void updateSettings({ sidebarCollapsed: !settings.sidebarCollapsed }),
   });
+  useNewTerminalShortcut();
 
   return (
     <div className={styles.shell} data-sidebar={settings.sidebarCollapsed ? "collapsed" : "expanded"}>
@@ -36,9 +42,11 @@ function ShellLayout() {
         Skip to content
       </a>
       <Sidebar collapsed={settings.sidebarCollapsed} onOpenPalette={() => setPaletteOpen(true)} />
-      <main id="main" className={styles.main} tabIndex={-1} aria-label={SURFACES[current].label}>
+      <main id="main" className={styles.main} tabIndex={-1} aria-label={SURFACES[current].label} data-surface={current}>
         {current === "dashboard" ? (
           <Dashboard />
+        ) : current === "code" ? (
+          <CodePage />
         ) : current === "settings" ? (
           <SettingsPage />
         ) : (

@@ -8,6 +8,20 @@ export {
   type IconButtonProps,
 } from "./Button.tsx";
 export { cx } from "./cx.ts";
+export {
+  DropdownMenu,
+  DropdownMenuContent,
+  type DropdownMenuContentProps,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  type DropdownMenuItemProps,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  type DropdownMenuRadioItemProps,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "./DropdownMenu.tsx";
 export { Kbd, type KeyValueItem, KeyValueList, Section, type SectionProps } from "./Layout.tsx";
 export { SegmentedControl, type SegmentedControlProps, type SegmentedOption } from "./SegmentedControl.tsx";
 export { EmptyState, ErrorState, Skeleton } from "./States.tsx";
