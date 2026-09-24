@@ -24,9 +24,17 @@ export function useDiagnosticsActions() {
     try {
       const report = await buildDiagnosticReport(() => client.getDiagnostics());
       await navigator.clipboard.writeText(report);
-      toast.show({ tone: "success", title: "Diagnostic report copied", description: "Paste it into a support request." });
+      toast.show({
+        tone: "success",
+        title: "Diagnostic report copied",
+        description: "Paste it into a support request.",
+      });
     } catch (error) {
-      toast.show({ tone: "danger", title: "Couldn't copy the diagnostic report", description: toKalCodeError(error).message });
+      toast.show({
+        tone: "danger",
+        title: "Couldn't copy the diagnostic report",
+        description: toKalCodeError(error).message,
+      });
     }
   }, [client, toast]);
 
@@ -34,7 +42,11 @@ export function useDiagnosticsActions() {
     try {
       await client.openLogFolder();
     } catch (error) {
-      toast.show({ tone: "danger", title: "Couldn't open the logs folder", description: toKalCodeError(error).message });
+      toast.show({
+        tone: "danger",
+        title: "Couldn't open the logs folder",
+        description: toKalCodeError(error).message,
+      });
     }
   }, [client, toast]);
 
@@ -44,12 +56,20 @@ export function useDiagnosticsActions() {
       const result = await client.checkSecureStore();
       toast.show(
         result.ok
-          ? { tone: "success", title: "Credential store verified", description: `${result.backend} saved, read and removed a test entry.` }
+          ? {
+              tone: "success",
+              title: "Credential store verified",
+              description: `${result.backend} saved, read and removed a test entry.`,
+            }
           : { tone: "danger", title: "Credential store check failed", description: result.message ?? undefined },
       );
       return result;
     } catch (error) {
-      toast.show({ tone: "danger", title: "Couldn't run the credential store check", description: toKalCodeError(error).message });
+      toast.show({
+        tone: "danger",
+        title: "Couldn't run the credential store check",
+        description: toKalCodeError(error).message,
+      });
       return null;
     } finally {
       setChecking(false);

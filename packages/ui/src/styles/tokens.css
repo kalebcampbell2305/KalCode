@@ -135,7 +135,7 @@
   --color-text: #e6edf8; /* Starlight */
   --color-text-secondary: #a8b4c9;
   --color-text-muted: #8593ab; /* Nebula */
-  --color-text-faint: #5d6a82;
+  --color-text-faint: #7a879e; /* ≥4.6:1 on every dark surface */
   --color-text-inverse: #05080f;
 
   --color-accent: #4c8dff; /* Constellation */
@@ -188,7 +188,7 @@
   --color-text: #0b1424; /* navy ink */
   --color-text-secondary: #37445a;
   --color-text-muted: #5b6880;
-  --color-text-faint: #8d98ab;
+  --color-text-faint: #616c82; /* ≥4.5:1 on every light surface */
   --color-text-inverse: #ffffff;
 
   --color-accent: #1d5be0;
@@ -201,9 +201,9 @@
 
   --color-live: #1d5be0;
   --color-live-soft: rgb(29 91 224 / 0.09);
-  --color-waiting: #a86a00;
+  --color-waiting: #8f5a00;
   --color-waiting-soft: rgb(214 140 0 / 0.12);
-  --color-success: #0f8a5c;
+  --color-success: #0b7a51;
   --color-success-soft: rgb(15 138 92 / 0.1);
   --color-danger: #cc2f3d;
   --color-danger-soft: rgb(204 47 61 / 0.09);

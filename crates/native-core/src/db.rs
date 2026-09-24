@@ -48,13 +48,19 @@ impl MigrationOutcome {
 pub fn open(path: &Path) -> Result<Connection> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| {
-            KalError::new(ErrorCategory::Filesystem, "data_dir_unavailable", "KalCode couldn't create its data folder.")
-                .with_source(e)
+            KalError::new(
+                ErrorCategory::Filesystem,
+                "data_dir_unavailable",
+                "KalCode couldn't create its data folder.",
+            )
+            .with_source(e)
         })?;
     }
     let conn = Connection::open_with_flags(
         path,
-        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        OpenFlags::SQLITE_OPEN_READ_WRITE
+            | OpenFlags::SQLITE_OPEN_CREATE
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     configure(&conn)?;
     Ok(conn)
@@ -74,7 +80,11 @@ fn configure(conn: &Connection) -> Result<()> {
     conn.pragma_update(None, "foreign_keys", "ON")?;
     let fk: i64 = conn.pragma_query_value(None, "foreign_keys", |row| row.get(0))?;
     if fk != 1 {
-        return Err(KalError::new(ErrorCategory::Database, "foreign_keys_unavailable", "KalCode's database engine is misconfigured."));
+        return Err(KalError::new(
+            ErrorCategory::Database,
+            "foreign_keys_unavailable",
+            "KalCode's database engine is misconfigured.",
+        ));
     }
     Ok(())
 }
@@ -87,7 +97,11 @@ pub fn checksum(sql: &str) -> String {
 /// Current schema version (0 for a fresh database).
 pub fn schema_version(conn: &Connection) -> Result<i64> {
     ensure_migrations_table(conn)?;
-    Ok(conn.query_row("SELECT COALESCE(MAX(version), 0) FROM schema_migrations", [], |row| row.get(0))?)
+    Ok(conn.query_row(
+        "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+        [],
+        |row| row.get(0),
+    )?)
 }
 
 fn ensure_migrations_table(conn: &Connection) -> Result<()> {
@@ -103,12 +117,17 @@ fn ensure_migrations_table(conn: &Connection) -> Result<()> {
 }
 
 /// Applies pending `migrations`. `backup_dir` receives a copy of an existing database first.
-pub fn migrate(conn: &mut Connection, migrations: &[Migration], backup_dir: Option<&Path>) -> Result<MigrationOutcome> {
+pub fn migrate(
+    conn: &mut Connection,
+    migrations: &[Migration],
+    backup_dir: Option<&Path>,
+) -> Result<MigrationOutcome> {
     validate_sequence(migrations)?;
     ensure_migrations_table(conn)?;
 
     let applied: Vec<(i64, String)> = {
-        let mut stmt = conn.prepare("SELECT version, checksum FROM schema_migrations ORDER BY version")?;
+        let mut stmt =
+            conn.prepare("SELECT version, checksum FROM schema_migrations ORDER BY version")?;
         let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
         rows.collect::<std::result::Result<_, _>>()?
     };
@@ -136,9 +155,16 @@ pub fn migrate(conn: &mut Connection, migrations: &[Migration], backup_dir: Opti
         }
     }
 
-    let pending: Vec<&Migration> = migrations.iter().filter(|m| m.version > from_version).collect();
+    let pending: Vec<&Migration> = migrations
+        .iter()
+        .filter(|m| m.version > from_version)
+        .collect();
     if pending.is_empty() {
-        return Ok(MigrationOutcome { from_version, to_version: from_version, backup: None });
+        return Ok(MigrationOutcome {
+            from_version,
+            to_version: from_version,
+            backup: None,
+        });
     }
 
     let backup = match (from_version > 0, backup_dir) {
@@ -148,24 +174,36 @@ pub fn migrate(conn: &mut Connection, migrations: &[Migration], backup_dir: Opti
 
     for migration in pending {
         let tx = conn.transaction()?;
-        tx.execute_batch(migration.sql).map_err(|e| migration_failed(migration, e))?;
+        tx.execute_batch(migration.sql)
+            .map_err(|e| migration_failed(migration, e))?;
         tx.execute(
             "INSERT INTO schema_migrations (version, name, checksum, applied_at) VALUES (?1, ?2, ?3, ?4)",
             params![migration.version, migration.name, checksum(migration.sql), now_rfc3339()],
         )
         .map_err(|e| migration_failed(migration, e))?;
         tx.commit().map_err(|e| migration_failed(migration, e))?;
-        tracing::info!(event = "database.migration_applied", version = migration.version, name = migration.name);
+        tracing::info!(
+            event = "database.migration_applied",
+            version = migration.version,
+            name = migration.name
+        );
     }
 
-    Ok(MigrationOutcome { from_version, to_version: latest_known, backup })
+    Ok(MigrationOutcome {
+        from_version,
+        to_version: latest_known,
+        backup,
+    })
 }
 
 fn migration_failed(migration: &Migration, error: rusqlite::Error) -> KalError {
     KalError::new(
         ErrorCategory::Database,
         "migration_failed",
-        format!("KalCode couldn't upgrade its database (step {}). Your data was left unchanged.", migration.version),
+        format!(
+            "KalCode couldn't upgrade its database (step {}). Your data was left unchanged.",
+            migration.version
+        ),
     )
     .with_source(error)
 }
@@ -174,7 +212,10 @@ fn validate_sequence(migrations: &[Migration]) -> Result<()> {
     for (index, migration) in migrations.iter().enumerate() {
         let expected = i64::try_from(index).unwrap_or(i64::MAX).saturating_add(1);
         if migration.version != expected {
-            return Err(KalError::internal("migration_sequence_invalid", "KalCode's database migrations are misnumbered."));
+            return Err(KalError::internal(
+                "migration_sequence_invalid",
+                "KalCode's database migrations are misnumbered.",
+            ));
         }
     }
     Ok(())
@@ -182,8 +223,12 @@ fn validate_sequence(migrations: &[Migration]) -> Result<()> {
 
 fn backup_database(conn: &Connection, dir: &Path, next_version: i64) -> Result<PathBuf> {
     let fs_err = |e: std::io::Error| {
-        KalError::new(ErrorCategory::Filesystem, "backup_failed", "KalCode couldn't back up its database before upgrading, so it didn't upgrade.")
-            .with_source(e)
+        KalError::new(
+            ErrorCategory::Filesystem,
+            "backup_failed",
+            "KalCode couldn't back up its database before upgrading, so it didn't upgrade.",
+        )
+        .with_source(e)
     };
     fs::create_dir_all(dir).map_err(fs_err)?;
     let stamp = now_rfc3339().replace([':', '.'], "-");
@@ -220,7 +265,11 @@ fn prune_backups(dir: &Path) -> std::io::Result<()> {
 
 /// Reads a value from `app_meta`.
 pub fn meta_get(conn: &Connection, key: &str) -> Result<Option<String>> {
-    Ok(conn.query_row("SELECT value FROM app_meta WHERE key = ?1", [key], |row| row.get(0)).optional()?)
+    Ok(conn
+        .query_row("SELECT value FROM app_meta WHERE key = ?1", [key], |row| {
+            row.get(0)
+        })
+        .optional()?)
 }
 
 /// Writes a value to `app_meta`.
@@ -244,7 +293,10 @@ mod tests {
         assert_eq!(outcome.from_version, 0);
         assert_eq!(outcome.to_version, MIGRATIONS.len() as i64);
         assert!(outcome.backup.is_none());
-        assert_eq!(schema_version(&conn).expect("version"), MIGRATIONS.len() as i64);
+        assert_eq!(
+            schema_version(&conn).expect("version"),
+            MIGRATIONS.len() as i64
+        );
     }
 
     #[test]
@@ -258,7 +310,11 @@ mod tests {
     #[test]
     fn misnumbered_migrations_are_rejected() {
         let mut conn = open_in_memory().expect("open");
-        let bad = [Migration { version: 2, name: "skip", sql: "SELECT 1;" }];
+        let bad = [Migration {
+            version: 2,
+            name: "skip",
+            sql: "SELECT 1;",
+        }];
         let err = migrate(&mut conn, &bad, None).expect_err("must fail");
         assert_eq!(err.code, "migration_sequence_invalid");
     }
@@ -268,13 +324,21 @@ mod tests {
         let mut conn = open_in_memory().expect("open");
         let bad = [
             MIGRATIONS[0],
-            Migration { version: 2, name: "broken", sql: "CREATE TABLE ok_table (x INTEGER); THIS IS NOT SQL;" },
+            Migration {
+                version: 2,
+                name: "broken",
+                sql: "CREATE TABLE ok_table (x INTEGER); THIS IS NOT SQL;",
+            },
         ];
         let err = migrate(&mut conn, &bad, None).expect_err("must fail");
         assert_eq!(err.code, "migration_failed");
         assert_eq!(schema_version(&conn).expect("version"), 1);
         let exists: i64 = conn
-            .query_row("SELECT COUNT(*) FROM sqlite_master WHERE name = 'ok_table'", [], |r| r.get(0))
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'ok_table'",
+                [],
+                |r| r.get(0),
+            )
             .expect("query");
         assert_eq!(exists, 0, "partial migration must be rolled back");
     }

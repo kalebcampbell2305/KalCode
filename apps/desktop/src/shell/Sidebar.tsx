@@ -4,8 +4,8 @@ import { PanelLeftClose, PanelLeftOpen, Search } from "lucide-react";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { Mark, Wordmark } from "./Brand.tsx";
 import { PRIMARY_ORDER, SURFACES, useNavigation } from "./navigation.tsx";
-import { MOD_LABEL } from "./shortcuts.ts";
 import styles from "./Sidebar.module.css";
+import { MOD_LABEL } from "./shortcuts.ts";
 
 interface SidebarProps {
   collapsed: boolean;
@@ -40,7 +40,7 @@ export function Sidebar({ collapsed, onOpenPalette }: SidebarProps) {
         />
       </div>
 
-      <ul className={styles.list} role="list">
+      <ul className={styles.list}>
         {available.map((id) => (
           <NavItem key={id} id={id} collapsed={collapsed} />
         ))}
@@ -55,7 +55,7 @@ export function Sidebar({ collapsed, onOpenPalette }: SidebarProps) {
               In development
             </p>
           )}
-          <ul className={styles.list} role="list" aria-labelledby={collapsed ? undefined : "nav-in-development"}>
+          <ul className={styles.list} aria-labelledby={collapsed ? undefined : "nav-in-development"}>
             {inDevelopment.map((id) => (
               <NavItem key={id} id={id} collapsed={collapsed} gated />
             ))}
@@ -64,13 +64,13 @@ export function Sidebar({ collapsed, onOpenPalette }: SidebarProps) {
       ) : null}
 
       <div className={styles.footer}>
-        <ul className={styles.list} role="list">
-          {visible("settings") ? <NavItem id="settings" collapsed={collapsed} /> : null}
-        </ul>
+        <ul className={styles.list}>{visible("settings") ? <NavItem id="settings" collapsed={collapsed} /> : null}</ul>
         <div className={styles.footerRow}>
           {collapsed ? null : (
             <p className={styles.build}>
-              {info.channel === "stable" ? `Version ${info.version}` : `${capitalize(info.channel)} build ${info.version}`}
+              {info.channel === "stable"
+                ? `Version ${info.version}`
+                : `${capitalize(info.channel)} build ${info.version}`}
             </p>
           )}
           <Tooltip content={`${collapsed ? "Expand" : "Collapse"} sidebar (${MOD_LABEL} B)`} side="right">

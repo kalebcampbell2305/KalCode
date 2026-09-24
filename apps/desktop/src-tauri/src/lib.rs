@@ -26,7 +26,8 @@ impl AppState {
     pub fn core(&self) -> Result<&Arc<Core>, IpcError> {
         self.core.as_ref().ok_or_else(|| {
             self.startup_error.clone().unwrap_or_else(|| {
-                KalError::internal("core_unavailable", "KalCode's runtime is not available.").to_ipc()
+                KalError::internal("core_unavailable", "KalCode's runtime is not available.")
+                    .to_ipc()
             })
         })
     }
@@ -37,15 +38,22 @@ fn resolve_data_dir(app: &tauri::App) -> Result<PathBuf, KalError> {
         return Ok(PathBuf::from(dir));
     }
     app.path().app_data_dir().map_err(|e| {
-        KalError::new(kalcode_core::ErrorCategory::Filesystem, "data_dir_unavailable", "KalCode couldn't locate its data folder.")
-            .with_source(e)
+        KalError::new(
+            kalcode_core::ErrorCategory::Filesystem,
+            "data_dir_unavailable",
+            "KalCode couldn't locate its data folder.",
+        )
+        .with_source(e)
     })
 }
 
 fn install_panic_hook() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let location = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_default();
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_default();
         let payload = info
             .payload()
             .downcast_ref::<&str>()
@@ -86,12 +94,28 @@ fn start(app: &tauri::App) -> AppState {
     };
     install_panic_hook();
 
-    let config = CoreConfig { paths: paths.clone(), app_version: version, channel };
+    let config = CoreConfig {
+        paths: paths.clone(),
+        app_version: version,
+        channel,
+    };
     match Core::open(config) {
-        Ok(core) => AppState { core: Some(Arc::new(core)), startup_error: None, info, paths, _log_guard: log_guard },
+        Ok(core) => AppState {
+            core: Some(Arc::new(core)),
+            startup_error: None,
+            info,
+            paths,
+            _log_guard: log_guard,
+        },
         Err(error) => {
             tracing::error!(event = "app.startup_failed", error_code = error.code, error = %error.diagnostic());
-            AppState { core: None, startup_error: Some(error.to_ipc()), info, paths, _log_guard: log_guard }
+            AppState {
+                core: None,
+                startup_error: Some(error.to_ipc()),
+                info,
+                paths,
+                _log_guard: log_guard,
+            }
         }
     }
 }

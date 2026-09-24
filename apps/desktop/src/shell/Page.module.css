@@ -4,7 +4,7 @@
   gap: var(--space-8);
   width: 100%;
   max-width: var(--content-max);
-  margin: 0 auto;
+  margin: 0;
   padding: calc(var(--page-py) + var(--space-2)) var(--page-px) var(--space-16);
 }
 

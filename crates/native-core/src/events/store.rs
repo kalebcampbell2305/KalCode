@@ -17,7 +17,10 @@ impl EventStore {
     /// Persists an event and returns the stored envelope with its assigned `seq`.
     pub fn append(conn: &Connection, new: NewEvent) -> Result<EventEnvelope> {
         let wire = serde_json::to_value(&new.event)?;
-        let payload = wire.get("payload").cloned().unwrap_or(Value::Object(Default::default()));
+        let payload = wire
+            .get("payload")
+            .cloned()
+            .unwrap_or(Value::Object(Default::default()));
         let id = uuid::Uuid::now_v7().to_string();
         let occurred_at = now_rfc3339();
         let version = new.event.version();
@@ -40,13 +43,28 @@ impl EventStore {
             ],
         )?;
         let seq = conn.last_insert_rowid();
-        Ok(EventEnvelope { id, seq, version, occurred_at, source: new.source, correlation: new.correlation, event: new.event })
+        Ok(EventEnvelope {
+            id,
+            seq,
+            version,
+            occurred_at,
+            source: new.source,
+            correlation: new.correlation,
+            event: new.event,
+        })
     }
 
     /// Newest-first page of events, optionally strictly older than `before_seq`.
-    pub fn recent(conn: &Connection, limit: u32, before_seq: Option<i64>) -> Result<Vec<EventEnvelope>> {
+    pub fn recent(
+        conn: &Connection,
+        limit: u32,
+        before_seq: Option<i64>,
+    ) -> Result<Vec<EventEnvelope>> {
         if limit == 0 || limit > MAX_PAGE {
-            return Err(KalError::validation("invalid_page_size", format!("Page size must be between 1 and {MAX_PAGE}.")));
+            return Err(KalError::validation(
+                "invalid_page_size",
+                format!("Page size must be between 1 and {MAX_PAGE}."),
+            ));
         }
         let mut stmt = conn.prepare(
             "SELECT seq, id, type, version, occurred_at, source, workspace_id, thread_id, mission_id, provider_id, request_id, payload
@@ -85,14 +103,18 @@ fn row_to_envelope(row: &Row<'_>) -> rusqlite::Result<EventEnvelope> {
 /// Decodes a stored payload; unknown or undecodable types become `Unrecognized` so one odd
 /// row never breaks history.
 fn decode_payload(event_type: &str, version: u32, payload_text: &str) -> EventPayload {
-    let unrecognized = || EventPayload::Unrecognized { original_type: event_type.to_owned(), original_version: version };
+    let unrecognized = || EventPayload::Unrecognized {
+        original_type: event_type.to_owned(),
+        original_version: version,
+    };
     if version != 1 || event_type == "unrecognized" {
         return unrecognized();
     }
     let Ok(payload) = serde_json::from_str::<Value>(payload_text) else {
         return unrecognized();
     };
-    serde_json::from_value(json!({ "type": event_type, "payload": payload })).unwrap_or_else(|_| unrecognized())
+    serde_json::from_value(json!({ "type": event_type, "payload": payload }))
+        .unwrap_or_else(|_| unrecognized())
 }
 
 #[cfg(test)]
@@ -107,7 +129,9 @@ mod tests {
     }
 
     fn settings_changed(key: &str) -> NewEvent {
-        NewEvent::core(EventPayload::SettingsChanged { keys: vec![key.into()] })
+        NewEvent::core(EventPayload::SettingsChanged {
+            keys: vec![key.into()],
+        })
     }
 
     #[test]
@@ -123,19 +147,35 @@ mod tests {
     #[test]
     fn recent_pages_newest_first() {
         let conn = conn();
-        let appended: Vec<_> = (0..5).map(|i| EventStore::append(&conn, settings_changed(&i.to_string())).expect("append")).collect();
+        let appended: Vec<_> = (0..5)
+            .map(|i| EventStore::append(&conn, settings_changed(&i.to_string())).expect("append"))
+            .collect();
         let page1 = EventStore::recent(&conn, 2, None).expect("page1");
-        assert_eq!(page1.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![appended[4].seq, appended[3].seq]);
+        assert_eq!(
+            page1.iter().map(|e| e.seq).collect::<Vec<_>>(),
+            vec![appended[4].seq, appended[3].seq]
+        );
         let page2 = EventStore::recent(&conn, 2, Some(page1[1].seq)).expect("page2");
-        assert_eq!(page2.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![appended[2].seq, appended[1].seq]);
+        assert_eq!(
+            page2.iter().map(|e| e.seq).collect::<Vec<_>>(),
+            vec![appended[2].seq, appended[1].seq]
+        );
         assert_eq!(page2[0], appended[2]);
     }
 
     #[test]
     fn page_size_is_validated() {
         let conn = conn();
-        assert_eq!(EventStore::recent(&conn, 0, None).expect_err("zero").code, "invalid_page_size");
-        assert_eq!(EventStore::recent(&conn, MAX_PAGE + 1, None).expect_err("big").code, "invalid_page_size");
+        assert_eq!(
+            EventStore::recent(&conn, 0, None).expect_err("zero").code,
+            "invalid_page_size"
+        );
+        assert_eq!(
+            EventStore::recent(&conn, MAX_PAGE + 1, None)
+                .expect_err("big")
+                .code,
+            "invalid_page_size"
+        );
         assert!(EventStore::recent(&conn, MAX_PAGE, None).is_ok());
     }
 
@@ -165,7 +205,19 @@ mod tests {
         )
         .expect("insert");
         let events = EventStore::recent(&conn, 10, None).expect("recent");
-        assert_eq!(events[1].event, EventPayload::Unrecognized { original_type: "thread.teleported".into(), original_version: 3 });
-        assert_eq!(events[0].event, EventPayload::Unrecognized { original_type: "settings.changed".into(), original_version: 1 });
+        assert_eq!(
+            events[1].event,
+            EventPayload::Unrecognized {
+                original_type: "thread.teleported".into(),
+                original_version: 3
+            }
+        );
+        assert_eq!(
+            events[0].event,
+            EventPayload::Unrecognized {
+                original_type: "settings.changed".into(),
+                original_version: 1
+            }
+        );
     }
 }

@@ -3,9 +3,7 @@
   place-items: center;
   min-height: 100vh;
   padding: var(--space-8);
-  background:
-    radial-gradient(60rem 40rem at 50% -10%, var(--color-accent-soft), transparent 70%),
-    var(--color-bg);
+  background: radial-gradient(60rem 40rem at 50% -10%, var(--color-accent-soft), transparent 70%), var(--color-bg);
 }
 
 .panel {

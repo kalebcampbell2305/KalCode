@@ -43,7 +43,8 @@ export function RuntimeHealth() {
   if (!data) {
     return (
       <Section title="Runtime">
-        <div aria-busy="true" aria-label="Loading runtime status" style={{ display: "grid", gap: "var(--space-3)" }}>
+        <div role="status" aria-busy="true" className={styles.loading}>
+          <span className="visually-hidden">Loading runtime status</span>
           <Skeleton width="70%" />
           <Skeleton width="55%" />
           <Skeleton width="62%" />

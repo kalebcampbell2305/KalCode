@@ -45,3 +45,53 @@
   display: grid;
   gap: var(--space-3);
 }
+
+/* The brand artwork keeps its own dark ground in both themes. */
+.about {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  margin: 0;
+  padding: var(--space-5) var(--space-8);
+  border-radius: var(--radius-xl);
+  background: #000104;
+  color: #eef3fb;
+}
+
+.aboutGlobe {
+  flex: none;
+  width: 10rem;
+  height: 10rem;
+  -webkit-mask: radial-gradient(closest-side, #000 86%, transparent 100%);
+  mask: radial-gradient(closest-side, #000 86%, transparent 100%);
+}
+
+.aboutText {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.aboutLockup {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-4);
+  align-self: flex-start;
+}
+
+.aboutWordmark {
+  height: 1.35rem;
+}
+
+.aboutTagline {
+  height: 0.5rem;
+  opacity: 0.85;
+}
+
+.aboutMeta {
+  margin-top: var(--space-2);
+  color: #9aa7bd;
+  font-size: var(--text-xs);
+}

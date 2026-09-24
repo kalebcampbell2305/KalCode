@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
-import styles from "./StatusIndicator.module.css";
 import { cx } from "./cx.ts";
+import styles from "./StatusIndicator.module.css";
 
 export type StatusTone = "live" | "success" | "waiting" | "danger" | "idle";
 

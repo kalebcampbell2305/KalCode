@@ -21,31 +21,41 @@
   color: var(--color-text-secondary);
 }
 
+/* The JARVIS artwork keeps its own dark ground in both themes. */
 .jarvis {
+  --artwork-bg: #010205;
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--space-4);
+  align-items: center;
+  gap: var(--space-8);
+  width: 100%;
   margin: 0 0 var(--space-4);
+  padding: var(--space-6) var(--space-8);
+  border-radius: var(--radius-xl);
+  background: var(--artwork-bg);
+  color: #eef3fb;
 }
 
 .globe {
-  width: 13rem;
-  height: 13rem;
-  border-radius: var(--radius-full);
-  -webkit-mask: radial-gradient(circle, #000 58%, transparent 71%);
-  mask: radial-gradient(circle, #000 58%, transparent 71%);
+  flex: none;
+  width: 11rem;
+  height: 11rem;
+  /* Blend the artwork's square crop into its ground. */
+  -webkit-mask: radial-gradient(closest-side, #000 82%, transparent 100%);
+  mask: radial-gradient(closest-side, #000 82%, transparent 100%);
 }
 
-[data-theme="light"] .globe {
-  background: #05080f;
+.lockup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
 }
 
-.tagline {
-  color: var(--color-text-muted);
-  font-family: var(--font-wide);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-light);
-  letter-spacing: var(--tracking-brand);
-  text-transform: uppercase;
+.jarvisWordmark {
+  height: 1.6rem;
+}
+
+.jarvisTagline {
+  height: 0.55rem;
+  opacity: 0.85;
 }

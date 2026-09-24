@@ -37,7 +37,13 @@ function ShellLayout() {
       </a>
       <Sidebar collapsed={settings.sidebarCollapsed} onOpenPalette={() => setPaletteOpen(true)} />
       <main id="main" className={styles.main} tabIndex={-1} aria-label={SURFACES[current].label}>
-        {current === "dashboard" ? <Dashboard /> : current === "settings" ? <SettingsPage /> : <GatedSurface id={current} />}
+        {current === "dashboard" ? (
+          <Dashboard />
+        ) : current === "settings" ? (
+          <SettingsPage />
+        ) : (
+          <GatedSurface id={current} />
+        )}
       </main>
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
     </div>

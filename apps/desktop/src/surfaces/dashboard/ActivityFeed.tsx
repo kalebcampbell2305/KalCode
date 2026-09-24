@@ -37,7 +37,8 @@ export function ActivityFeed() {
   return (
     <Section id="activity" title="Activity" description="Recorded by KalCode's event log. Updates live.">
       {state === "loading" ? (
-        <div className={styles.list} aria-busy="true" aria-label="Loading activity">
+        <div className={styles.list} role="status" aria-busy="true">
+          <span className="visually-hidden">Loading activity</span>
           {[0, 1, 2].map((i) => (
             <div key={i} className={styles.row}>
               <Skeleton width="0.5rem" height="0.5rem" />

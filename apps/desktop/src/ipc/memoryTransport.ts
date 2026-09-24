@@ -104,7 +104,10 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
 
   if (!startupError) {
     emit({ type: "database.migrated", payload: { fromVersion: 0, toVersion: 1, backupCreated: false } });
-    emit({ type: "app.started", payload: { version: info.version, channel: info.channel, platform: info.platform, arch: info.arch } });
+    emit({
+      type: "app.started",
+      payload: { version: info.version, channel: info.channel, platform: info.platform, arch: info.arch },
+    });
   }
 
   const requireCore = () => {
@@ -123,7 +126,12 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
       const patch = (args.patch ?? {}) as SettingsPatch;
       const entries = Object.entries(patch).filter(([, v]) => v !== undefined) as [keyof Settings, never][];
       if (entries.length === 0) {
-        fail({ category: "validation", code: "empty_settings_patch", message: "No settings were provided to update.", retryable: false });
+        fail({
+          category: "validation",
+          code: "empty_settings_patch",
+          message: "No settings were provided to update.",
+          retryable: false,
+        });
       }
       const changed = entries.filter(([key, value]) => settings[key] !== value);
       settings = { ...settings, ...Object.fromEntries(entries) };
@@ -136,7 +144,12 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
       requireCore();
       const limit = Number(args.limit);
       if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
-        fail({ category: "validation", code: "invalid_page_size", message: "Page size must be between 1 and 500.", retryable: false });
+        fail({
+          category: "validation",
+          code: "invalid_page_size",
+          message: "Page size must be between 1 and 500.",
+          retryable: false,
+        });
       }
       const before = typeof args.beforeSeq === "number" ? args.beforeSeq : Number.POSITIVE_INFINITY;
       return events
@@ -144,7 +157,8 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
         .slice(-limit)
         .reverse();
     },
-    events_subscribe: () => fail({ category: "internal", code: "use_subscribe", message: "Use subscribe().", retryable: false }),
+    events_subscribe: () =>
+      fail({ category: "internal", code: "use_subscribe", message: "Use subscribe().", retryable: false }),
     events_unsubscribe: () => true,
     diagnostics_get: (): Diagnostics => {
       requireCore();
@@ -154,7 +168,13 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
         os: { family: "windows", version: "10.0.26200", arch: "x86_64" },
         uptimeMs: Date.now() - startedAt,
         startedAt: new Date(startedAt).toISOString(),
-        database: { schemaVersion: 1, latestSchemaVersion: 1, sizeBytes: 98_304, eventCount: events.length, journalMode: "wal" },
+        database: {
+          schemaVersion: 1,
+          latestSchemaVersion: 1,
+          sizeBytes: 98_304,
+          eventCount: events.length,
+          journalMode: "wal",
+        },
         secureStore: {
           lastCheckedAt: lastCheck?.at ?? null,
           lastCheckOk: lastCheck?.ok ?? null,

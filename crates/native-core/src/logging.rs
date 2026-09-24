@@ -25,14 +25,23 @@ const REDACTED: &str = "[REDACTED]";
 static PATTERNS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
     let rules: [(&str, &'static str); 9] = [
         // PEM private keys (multi-line)
-        (r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----", REDACTED),
+        (
+            r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----",
+            REDACTED,
+        ),
         // Credentials embedded in URLs: scheme://user:pass@host
-        (r"([a-zA-Z][a-zA-Z0-9+.-]*://)[^/\s:@]+:[^/\s@]+@", "${1}[REDACTED]@"),
+        (
+            r"([a-zA-Z][a-zA-Z0-9+.-]*://)[^/\s:@]+:[^/\s@]+@",
+            "${1}[REDACTED]@",
+        ),
         // Authorization: Bearer <token>
         (r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{12,}", "${1}[REDACTED]"),
         // Common provider key formats
         (r"\bsk-[A-Za-z0-9_-]{16,}", REDACTED),
-        (r"\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})", REDACTED),
+        (
+            r"\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})",
+            REDACTED,
+        ),
         (r"\bAKIA[0-9A-Z]{16}\b", REDACTED),
         (r"\bAIza[0-9A-Za-z_-]{35}\b", REDACTED),
         (r"\bxox[abprs]-[A-Za-z0-9-]{10,}", REDACTED),
@@ -91,7 +100,9 @@ impl<'a, M: MakeWriter<'a>> MakeWriter<'a> for RedactingMakeWriter<M> {
     type Writer = RedactingWriter<M::Writer>;
 
     fn make_writer(&'a self) -> Self::Writer {
-        RedactingWriter { inner: self.inner.make_writer() }
+        RedactingWriter {
+            inner: self.inner.make_writer(),
+        }
     }
 }
 
@@ -104,7 +115,12 @@ pub struct LogGuard {
 pub fn init(log_dir: &Path, console: bool) -> Result<LogGuard> {
     // The appender prunes old files on startup and fails noisily if the folder is missing.
     std::fs::create_dir_all(log_dir).map_err(|e| {
-        KalError::new(ErrorCategory::Filesystem, "log_dir_unavailable", "KalCode couldn't create its log folder.").with_source(e)
+        KalError::new(
+            ErrorCategory::Filesystem,
+            "log_dir_unavailable",
+            "KalCode couldn't create its log folder.",
+        )
+        .with_source(e)
     })?;
     let appender = RollingFileAppender::builder()
         .rotation(Rotation::DAILY)
@@ -113,11 +129,17 @@ pub fn init(log_dir: &Path, console: bool) -> Result<LogGuard> {
         .max_log_files(LOG_FILES_RETAINED)
         .build(log_dir)
         .map_err(|e| {
-            KalError::new(ErrorCategory::Filesystem, "log_dir_unavailable", "KalCode couldn't open its log folder.").with_source(e)
+            KalError::new(
+                ErrorCategory::Filesystem,
+                "log_dir_unavailable",
+                "KalCode couldn't open its log folder.",
+            )
+            .with_source(e)
         })?;
     let (writer, guard) = tracing_appender::non_blocking(appender);
 
-    let filter = || EnvFilter::try_from_env("KALCODE_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter =
+        || EnvFilter::try_from_env("KALCODE_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
     let file_layer = tracing_subscriber::fmt::layer()
         .json()
         .with_current_span(true)
@@ -136,7 +158,10 @@ pub fn init(log_dir: &Path, console: bool) -> Result<LogGuard> {
         .with(file_layer)
         .with(console_layer)
         .try_init()
-        .map_err(|e| KalError::internal("logging_init_failed", "KalCode couldn't start logging.").with_source(e.to_string()))?;
+        .map_err(|e| {
+            KalError::internal("logging_init_failed", "KalCode couldn't start logging.")
+                .with_source(e.to_string())
+        })?;
     Ok(LogGuard { _guard: guard })
 }
 
@@ -147,15 +172,30 @@ mod tests {
     #[test]
     fn redacts_known_secret_shapes() {
         let cases = [
-            ("key sk-ant-api03-abcdefghijklmnopqrstuvwx used", "sk-ant-api03"),
-            ("Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig", "eyJhbGci"),
-            ("token ghp_abcdefghijklmnopqrstuvwxyz0123456789", "ghp_abcdef"),
+            (
+                "key sk-ant-api03-abcdefghijklmnopqrstuvwx used",
+                "sk-ant-api03",
+            ),
+            (
+                "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload.sig",
+                "eyJhbGci",
+            ),
+            (
+                "token ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+                "ghp_abcdef",
+            ),
             ("aws AKIAABCDEFGHIJKLMNOP", "AKIAABCD"),
-            ("google AIzaSyA1234567890abcdefghijklmnopqrstuv", "AIzaSyA12"),
+            (
+                "google AIzaSyA1234567890abcdefghijklmnopqrstuv",
+                "AIzaSyA12",
+            ),
             ("https://user:hunter22@example.com/repo.git", "hunter22"),
             (r#"{"api_key":"abc123def456"}"#, "abc123def456"),
             ("password=correcthorse", "correcthorse"),
-            ("-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n-----END RSA PRIVATE KEY-----", "MIIEow"),
+            (
+                "-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n-----END RSA PRIVATE KEY-----",
+                "MIIEow",
+            ),
         ];
         for (input, secret) in cases {
             let output = redact(input);
@@ -166,7 +206,8 @@ mod tests {
 
     #[test]
     fn leaves_ordinary_text_alone() {
-        let text = r#"{"level":"INFO","fields":{"event":"app.started","version":"0.1.0","seq":42}}"#;
+        let text =
+            r#"{"level":"INFO","fields":{"event":"app.started","version":"0.1.0","seq":42}}"#;
         assert!(matches!(redact(text), Cow::Borrowed(_)));
     }
 
@@ -175,7 +216,9 @@ mod tests {
         let mut out = Vec::new();
         {
             let mut writer = RedactingWriter { inner: &mut out };
-            writer.write_all(b"leaked sk-proj-ABCDEFGHIJKLMNOPQRSTUV here\n").expect("write");
+            writer
+                .write_all(b"leaked sk-proj-ABCDEFGHIJKLMNOPQRSTUV here\n")
+                .expect("write");
         }
         let written = String::from_utf8(out).expect("utf8");
         assert_eq!(written, "leaked [REDACTED] here\n");

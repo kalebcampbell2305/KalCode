@@ -48,7 +48,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       const id = nextId.current++;
       setToasts((current) => [...current.slice(-(MAX_VISIBLE - 1)), { id, tone, title, description }]);
       const ms = duration ?? (tone === "danger" ? 0 : 4500);
-      if (ms > 0) timers.current.set(id, setTimeout(() => dismiss(id), ms));
+      if (ms > 0)
+        timers.current.set(
+          id,
+          setTimeout(() => dismiss(id), ms),
+        );
     },
     [dismiss],
   );

@@ -5,9 +5,9 @@
 //! Secret Service on Linux — behind the [`SecretStore`] trait. They never go to SQLite, logs,
 //! events, analytics or the UI. Database rows reference a secret by its [`SecretKey`] account.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Mutex;
-use std::collections::HashMap;
 
 use zeroize::Zeroizing;
 
@@ -119,7 +119,9 @@ impl SecretStore for OsSecretStore {
     }
 
     fn set(&self, key: &SecretKey, value: &SecretString) -> Result<(), SecretStoreError> {
-        Self::entry(key)?.set_password(value.expose_secret()).map_err(map_keyring_error)
+        Self::entry(key)?
+            .set_password(value.expose_secret())
+            .map_err(map_keyring_error)
     }
 
     fn get(&self, key: &SecretKey) -> Result<Option<SecretString>, SecretStoreError> {
@@ -150,7 +152,9 @@ impl MemorySecretStore {
         Self::default()
     }
 
-    fn lock(&self) -> Result<std::sync::MutexGuard<'_, HashMap<SecretKey, SecretString>>, SecretStoreError> {
+    fn lock(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, HashMap<SecretKey, SecretString>>, SecretStoreError> {
         self.secrets
             .lock()
             .map_err(|_| SecretStoreError::Access("memory store poisoned".into()))
@@ -179,7 +183,10 @@ impl SecretStore for MemorySecretStore {
 /// Verifies a store end to end: writes a random probe secret, reads it back, deletes it.
 /// The probe value is random and never leaves this function.
 pub fn probe(store: &dyn SecretStore) -> Result<(), SecretStoreError> {
-    let key = SecretKey::new(format!("diagnostics:probe:{}", uuid::Uuid::now_v7().simple()))?;
+    let key = SecretKey::new(format!(
+        "diagnostics:probe:{}",
+        uuid::Uuid::now_v7().simple()
+    ))?;
     let value = SecretString::new(uuid::Uuid::new_v4().to_string());
     store.set(&key, &value)?;
     let read = store.get(&key);
@@ -209,7 +216,14 @@ mod tests {
     fn secret_key_validation() {
         assert!(SecretKey::new("provider:claude-code:personal").is_ok());
         assert!(SecretKey::new("a").is_ok());
-        for bad in ["", "Upper", "has space", "slash/path", "semi;colon", &"x".repeat(129)] {
+        for bad in [
+            "",
+            "Upper",
+            "has space",
+            "slash/path",
+            "semi;colon",
+            &"x".repeat(129),
+        ] {
             assert!(SecretKey::new(bad).is_err(), "{bad:?} should be rejected");
         }
     }
@@ -220,7 +234,13 @@ mod tests {
         let key = SecretKey::new("test:key").expect("valid key");
         assert!(store.get(&key).expect("get").is_none());
         store.set(&key, &SecretString::new("value")).expect("set");
-        assert_eq!(store.get(&key).expect("get").map(|s| s.expose_secret().to_owned()), Some("value".into()));
+        assert_eq!(
+            store
+                .get(&key)
+                .expect("get")
+                .map(|s| s.expose_secret().to_owned()),
+            Some("value".into())
+        );
         assert!(store.delete(&key).expect("delete"));
         assert!(!store.delete(&key).expect("delete twice"));
     }
@@ -240,7 +260,11 @@ mod tests {
         }
         let store = OsSecretStore::new();
         probe(&store).expect("OS credential store probe");
-        let key = SecretKey::new(format!("test:os-roundtrip:{}", uuid::Uuid::now_v7().simple())).expect("key");
+        let key = SecretKey::new(format!(
+            "test:os-roundtrip:{}",
+            uuid::Uuid::now_v7().simple()
+        ))
+        .expect("key");
         assert!(store.get(&key).expect("get missing").is_none());
         assert!(!store.delete(&key).expect("delete missing"));
     }

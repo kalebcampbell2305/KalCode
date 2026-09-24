@@ -18,7 +18,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const { navigate } = useNavigation();
   const diagnostics = useDiagnosticsActions();
 
-  const run = (action: () => void | Promise<unknown>) => () => {
+  const run = (action: () => unknown) => () => {
     onOpenChange(false);
     void action();
   };
@@ -69,7 +69,11 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           >
             {settings.density === "compact" ? "Use comfortable density" : "Use compact density"}
           </Item>
-          <Item icon={<PanelLeft />} onSelect={set({ sidebarCollapsed: !settings.sidebarCollapsed })} shortcut={`${MOD_LABEL} B`}>
+          <Item
+            icon={<PanelLeft />}
+            onSelect={set({ sidebarCollapsed: !settings.sidebarCollapsed })}
+            shortcut={`${MOD_LABEL} B`}
+          >
             {settings.sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
           </Item>
         </Command.Group>

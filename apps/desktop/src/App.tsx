@@ -60,7 +60,11 @@ export function App() {
 
   switch (result.kind) {
     case "booting":
-      return <div className="boot-screen" aria-busy="true" aria-label="Starting KalCode" />;
+      return (
+        <div className="boot-screen" role="status" aria-busy="true">
+          <span className="visually-hidden">Starting KalCode</span>
+        </div>
+      );
     case "no-runtime":
       return <NoRuntime />;
     case "failed":

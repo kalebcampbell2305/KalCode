@@ -71,6 +71,7 @@ export function RuntimeProvider({ client, info, initialSettings, children }: Run
   const [eventsError, setEventsError] = useState<KalCodeError | null>(null);
   const [attempt, setAttempt] = useState(0);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` re-runs the subscription on retry.
   useEffect(() => {
     let cancelled = false;
     let unsubscribe: (() => Promise<void>) | null = null;
@@ -129,5 +130,12 @@ export function useRuntime(): RuntimeValue {
 export function useEvents() {
   const { feed, eventsState, eventsError, retryEvents, loadOlderEvents } = useRuntime();
   const events = useSyncExternalStore(feed.subscribe, feed.getSnapshot);
-  return { events, state: eventsState, error: eventsError, retry: retryEvents, loadOlder: loadOlderEvents, reachedStart: feed.reachedStart };
+  return {
+    events,
+    state: eventsState,
+    error: eventsError,
+    retry: retryEvents,
+    loadOlder: loadOlderEvents,
+    reachedStart: feed.reachedStart,
+  };
 }

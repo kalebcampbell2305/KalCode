@@ -119,7 +119,12 @@ mod tests {
     fn stable_hides_everything_not_available() {
         let flags = FeatureFlags::for_channel(BuildChannel::Stable);
         for surface in &flags.surfaces {
-            assert_eq!(surface.visible, surface.state == SurfaceState::Available, "{:?}", surface.id);
+            assert_eq!(
+                surface.visible,
+                surface.state == SurfaceState::Available,
+                "{:?}",
+                surface.id
+            );
         }
     }
 
@@ -127,7 +132,12 @@ mod tests {
     fn development_shows_gated_surfaces() {
         let flags = FeatureFlags::for_channel(BuildChannel::Development);
         assert!(flags.surfaces.iter().all(|s| s.visible));
-        assert!(flags.surfaces.iter().any(|s| s.state == SurfaceState::Gated));
+        assert!(
+            flags
+                .surfaces
+                .iter()
+                .any(|s| s.state == SurfaceState::Gated)
+        );
     }
 
     #[test]

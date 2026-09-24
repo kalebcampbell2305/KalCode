@@ -5,9 +5,19 @@ import { createMemoryTransport } from "./memoryTransport.ts";
 
 describe("toKalCodeError", () => {
   it("preserves native IPC errors", () => {
-    const err = toKalCodeError({ category: "database", code: "schema_too_new", message: "Update KalCode.", retryable: false });
+    const err = toKalCodeError({
+      category: "database",
+      code: "schema_too_new",
+      message: "Update KalCode.",
+      retryable: false,
+    });
     expect(err).toBeInstanceOf(KalCodeError);
-    expect(err.toIpcError()).toEqual({ category: "database", code: "schema_too_new", message: "Update KalCode.", retryable: false });
+    expect(err.toIpcError()).toEqual({
+      category: "database",
+      code: "schema_too_new",
+      message: "Update KalCode.",
+      retryable: false,
+    });
   });
 
   it("hides unexpected error details behind a generic message", () => {
@@ -45,7 +55,10 @@ describe("KalCodeClient with the memory transport", () => {
   });
 
   it("rejects an empty settings patch like the native runtime", async () => {
-    await expect(client().updateSettings({})).rejects.toMatchObject({ code: "empty_settings_patch", category: "validation" });
+    await expect(client().updateSettings({})).rejects.toMatchObject({
+      code: "empty_settings_patch",
+      category: "validation",
+    });
   });
 
   it("clamps page sizes before calling the runtime", async () => {

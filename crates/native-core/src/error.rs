@@ -47,7 +47,13 @@ pub struct KalError {
 
 impl KalError {
     pub fn new(category: ErrorCategory, code: &'static str, message: impl Into<String>) -> Self {
-        Self { category, code, message: message.into(), retryable: false, source: None }
+        Self {
+            category,
+            code,
+            message: message.into(),
+            retryable: false,
+            source: None,
+        }
     }
 
     pub fn retryable(mut self) -> Self {
@@ -71,8 +77,10 @@ impl KalError {
     /// Full internal description including the source chain, for logs only.
     pub fn diagnostic(&self) -> String {
         let mut out = format!("{:?}/{}: {}", self.category, self.code, self.message);
-        let mut next: Option<&(dyn std::error::Error + 'static)> =
-            self.source.as_deref().map(|e| e as &(dyn std::error::Error + 'static));
+        let mut next: Option<&(dyn std::error::Error + 'static)> = self
+            .source
+            .as_deref()
+            .map(|e| e as &(dyn std::error::Error + 'static));
         while let Some(err) = next {
             out.push_str(" <- ");
             out.push_str(&err.to_string());
@@ -99,7 +107,9 @@ impl fmt::Display for KalError {
 
 impl std::error::Error for KalError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.source.as_deref().map(|e| e as &(dyn std::error::Error + 'static))
+        self.source
+            .as_deref()
+            .map(|e| e as &(dyn std::error::Error + 'static))
     }
 }
 
@@ -112,7 +122,11 @@ impl From<rusqlite::Error> for KalError {
         );
         let err = KalError::new(
             ErrorCategory::Database,
-            if busy { "database_busy" } else { "database_error" },
+            if busy {
+                "database_busy"
+            } else {
+                "database_error"
+            },
             if busy {
                 "KalCode's local database is busy. Try again in a moment."
             } else {
@@ -126,7 +140,11 @@ impl From<rusqlite::Error> for KalError {
 
 impl From<serde_json::Error> for KalError {
     fn from(error: serde_json::Error) -> Self {
-        KalError::internal("serialization_failed", "KalCode couldn't process stored data.").with_source(error)
+        KalError::internal(
+            "serialization_failed",
+            "KalCode couldn't process stored data.",
+        )
+        .with_source(error)
     }
 }
 

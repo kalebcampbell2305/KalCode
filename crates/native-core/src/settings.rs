@@ -71,7 +71,9 @@ const KEY_SIDEBAR: &str = "layout.sidebarCollapsed";
 pub fn load(conn: &Connection) -> Result<Settings> {
     let mut settings = Settings::default();
     let mut stmt = conn.prepare("SELECT key, value FROM settings")?;
-    let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
     for row in rows {
         let (key, raw) = row?;
         let Ok(value) = serde_json::from_str::<Value>(&raw) else {
@@ -79,10 +81,18 @@ pub fn load(conn: &Connection) -> Result<Settings> {
             continue;
         };
         let applied = match key.as_str() {
-            KEY_THEME => serde_json::from_value(value).map(|v| settings.theme = v).is_ok(),
-            KEY_MOTION => serde_json::from_value(value).map(|v| settings.motion = v).is_ok(),
-            KEY_DENSITY => serde_json::from_value(value).map(|v| settings.density = v).is_ok(),
-            KEY_SIDEBAR => serde_json::from_value(value).map(|v| settings.sidebar_collapsed = v).is_ok(),
+            KEY_THEME => serde_json::from_value(value)
+                .map(|v| settings.theme = v)
+                .is_ok(),
+            KEY_MOTION => serde_json::from_value(value)
+                .map(|v| settings.motion = v)
+                .is_ok(),
+            KEY_DENSITY => serde_json::from_value(value)
+                .map(|v| settings.density = v)
+                .is_ok(),
+            KEY_SIDEBAR => serde_json::from_value(value)
+                .map(|v| settings.sidebar_collapsed = v)
+                .is_ok(),
             _ => true, // written by a newer build; keep but ignore
         };
         if !applied {
@@ -95,7 +105,10 @@ pub fn load(conn: &Connection) -> Result<Settings> {
 /// Applies a patch in one transaction. Returns the new settings and the keys that changed.
 pub fn apply(conn: &mut Connection, patch: &SettingsPatch) -> Result<(Settings, Vec<String>)> {
     if *patch == SettingsPatch::default() {
-        return Err(KalError::validation("empty_settings_patch", "No settings were provided to update."));
+        return Err(KalError::validation(
+            "empty_settings_patch",
+            "No settings were provided to update.",
+        ));
     }
     let tx = conn.transaction()?;
     let current = load(&tx)?;
@@ -114,7 +127,10 @@ pub fn apply(conn: &mut Connection, patch: &SettingsPatch) -> Result<(Settings, 
         next.density = v;
         changed.push((KEY_DENSITY, serde_json::to_value(v)?));
     }
-    if let Some(v) = patch.sidebar_collapsed.filter(|v| *v != current.sidebar_collapsed) {
+    if let Some(v) = patch
+        .sidebar_collapsed
+        .filter(|v| *v != current.sidebar_collapsed)
+    {
         next.sidebar_collapsed = v;
         changed.push((KEY_SIDEBAR, Value::Bool(v)));
     }
@@ -128,7 +144,10 @@ pub fn apply(conn: &mut Connection, patch: &SettingsPatch) -> Result<(Settings, 
         )?;
     }
     tx.commit()?;
-    Ok((next, changed.into_iter().map(|(k, _)| k.to_owned()).collect()))
+    Ok((
+        next,
+        changed.into_iter().map(|(k, _)| k.to_owned()).collect(),
+    ))
 }
 
 #[cfg(test)]
@@ -150,7 +169,11 @@ mod tests {
     #[test]
     fn apply_persists_and_reports_changed_keys() {
         let mut conn = conn();
-        let patch = SettingsPatch { theme: Some(ThemePreference::Dark), density: Some(Density::Compact), ..Default::default() };
+        let patch = SettingsPatch {
+            theme: Some(ThemePreference::Dark),
+            density: Some(Density::Compact),
+            ..Default::default()
+        };
         let (settings, keys) = apply(&mut conn, &patch).expect("apply");
         assert_eq!(settings.theme, ThemePreference::Dark);
         assert_eq!(keys, vec![KEY_THEME.to_owned(), KEY_DENSITY.to_owned()]);
@@ -160,7 +183,10 @@ mod tests {
     #[test]
     fn unchanged_values_report_no_keys() {
         let mut conn = conn();
-        let patch = SettingsPatch { theme: Some(ThemePreference::System), ..Default::default() };
+        let patch = SettingsPatch {
+            theme: Some(ThemePreference::System),
+            ..Default::default()
+        };
         let (_, keys) = apply(&mut conn, &patch).expect("apply");
         assert!(keys.is_empty());
     }
@@ -176,16 +202,21 @@ mod tests {
         let conn = conn();
         conn.execute("INSERT INTO settings (key, value, updated_at) VALUES ('appearance.theme', '\"neon\"', 'x')", [])
             .expect("insert");
-        conn.execute("INSERT INTO settings (key, value, updated_at) VALUES ('future.key', '42', 'x')", [])
-            .expect("insert");
+        conn.execute(
+            "INSERT INTO settings (key, value, updated_at) VALUES ('future.key', '42', 'x')",
+            [],
+        )
+        .expect("insert");
         assert_eq!(load(&conn).expect("load"), Settings::default());
     }
 
     #[test]
     fn patch_rejects_unknown_fields() {
-        let result: std::result::Result<SettingsPatch, _> = serde_json::from_str(r#"{"theme":"dark","telemetry":true}"#);
+        let result: std::result::Result<SettingsPatch, _> =
+            serde_json::from_str(r#"{"theme":"dark","telemetry":true}"#);
         assert!(result.is_err());
-        let ok: SettingsPatch = serde_json::from_str(r#"{"sidebarCollapsed":true}"#).expect("parse");
+        let ok: SettingsPatch =
+            serde_json::from_str(r#"{"sidebarCollapsed":true}"#).expect("parse");
         assert_eq!(ok.sidebar_collapsed, Some(true));
     }
 }

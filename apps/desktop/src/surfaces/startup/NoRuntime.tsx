@@ -8,7 +8,7 @@ export function NoRuntime() {
     <main className={styles.screen}>
       <div className={styles.panel}>
         <Wordmark className={styles.wordmark} />
-        <ErrorState title="Open KalCode from the desktop app">
+        <ErrorState headingLevel={1} title="Open KalCode from the desktop app">
           <p>
             This interface needs KalCode's native runtime, which only runs inside the desktop app. Start it with{" "}
             <code>pnpm dev:desktop</code> from the repository root.

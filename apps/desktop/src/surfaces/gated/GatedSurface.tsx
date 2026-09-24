@@ -1,9 +1,11 @@
 import type { SurfaceId } from "@kalcode/protocol";
 import { Badge } from "@kalcode/ui/components";
+import jarvisGlobe300 from "../../assets/brand/jarvis-globe-300.webp";
+import jarvisGlobe600 from "../../assets/brand/jarvis-globe-600.webp";
+import { JarvisTagline, JarvisWordmark } from "../../shell/Brand.tsx";
 import { SURFACES } from "../../shell/navigation.tsx";
 import { Page } from "../../shell/Page.tsx";
 import styles from "./GatedSurface.module.css";
-import jarvisGlobe from "./jarvis-globe.webp";
 
 /**
  * Honest status page for a surface that hasn't shipped. Visible only in development builds;
@@ -11,16 +13,10 @@ import jarvisGlobe from "./jarvis-globe.webp";
  */
 export function GatedSurface({ id }: { id: SurfaceId }) {
   const meta = SURFACES[id];
-  const isJarvis = id === "jarvis";
   return (
     <Page title={meta.label} width="narrow">
       <div className={styles.body} data-surface={id}>
-        {isJarvis ? (
-          <figure className={styles.jarvis}>
-            <img src={jarvisGlobe} alt="" width={320} height={320} className={styles.globe} />
-            <figcaption className={styles.tagline}>Global thinking. Personal impact.</figcaption>
-          </figure>
-        ) : null}
+        {id === "jarvis" ? <JarvisBrand /> : null}
         <Badge tone="outline">Not available in this build</Badge>
         <p className={styles.summary}>{meta.summary}</p>
         {meta.dependsOn ? (
@@ -30,5 +26,26 @@ export function GatedSurface({ id }: { id: SurfaceId }) {
         ) : null}
       </div>
     </Page>
+  );
+}
+
+/** The JARVIS artwork: its globe and lettering, on the artwork's own dark ground. */
+function JarvisBrand() {
+  return (
+    <figure className={styles.jarvis}>
+      <img
+        src={jarvisGlobe300}
+        srcSet={`${jarvisGlobe300} 300w, ${jarvisGlobe600} 600w`}
+        sizes="15rem"
+        width={300}
+        height={300}
+        alt="JARVIS globe: a sphere of connected points of light"
+        className={styles.globe}
+      />
+      <figcaption className={styles.lockup}>
+        <JarvisWordmark className={styles.jarvisWordmark} />
+        <JarvisTagline className={styles.jarvisTagline} />
+      </figcaption>
+    </figure>
   );
 }

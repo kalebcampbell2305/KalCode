@@ -17,25 +17,38 @@ function envelope(payload: EventPayload): EventEnvelope {
 
 describe("describeEvent", () => {
   it("describes a fresh database differently from an upgrade", () => {
-    expect(describeEvent(envelope({ type: "database.migrated", payload: { fromVersion: 0, toVersion: 1, backupCreated: false } })).title).toBe(
-      "Local database created",
+    expect(
+      describeEvent(
+        envelope({ type: "database.migrated", payload: { fromVersion: 0, toVersion: 1, backupCreated: false } }),
+      ).title,
+    ).toBe("Local database created");
+    const upgrade = describeEvent(
+      envelope({ type: "database.migrated", payload: { fromVersion: 1, toVersion: 2, backupCreated: true } }),
     );
-    const upgrade = describeEvent(envelope({ type: "database.migrated", payload: { fromVersion: 1, toVersion: 2, backupCreated: true } }));
     expect(upgrade.title).toBe("Local database upgraded");
     expect(upgrade.detail).toBe("Schema 1 to 2, backup saved");
   });
 
   it("names changed settings in plain language", () => {
-    const d = describeEvent(envelope({ type: "settings.changed", payload: { keys: ["appearance.theme", "appearance.density", "layout.sidebarCollapsed"] } }));
+    const d = describeEvent(
+      envelope({
+        type: "settings.changed",
+        payload: { keys: ["appearance.theme", "appearance.density", "layout.sidebarCollapsed"] },
+      }),
+    );
     expect(d.detail).toBe("Theme, Density and Sidebar");
   });
 
   it("marks failed credential checks as danger", () => {
-    expect(describeEvent(envelope({ type: "secure_store.checked", payload: { ok: false, backend: "Keychain" } })).tone).toBe("danger");
+    expect(
+      describeEvent(envelope({ type: "secure_store.checked", payload: { ok: false, backend: "Keychain" } })).tone,
+    ).toBe("danger");
   });
 
   it("handles events from newer builds", () => {
-    const d = describeEvent(envelope({ type: "unrecognized", payload: { originalType: "thread.created", originalVersion: 2 } }));
+    const d = describeEvent(
+      envelope({ type: "unrecognized", payload: { originalType: "thread.created", originalVersion: 2 } }),
+    );
     expect(d.title).toBe("Event from a newer KalCode");
   });
 });

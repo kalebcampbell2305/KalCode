@@ -31,6 +31,7 @@ export function StartupError({ client, info, error }: StartupErrorProps) {
       <div className={styles.panel}>
         <Wordmark className={styles.wordmark} />
         <ErrorState
+          headingLevel={1}
           title="KalCode couldn't start"
           code={`${error.category}/${error.code}`}
           actions={

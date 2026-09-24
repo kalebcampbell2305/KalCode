@@ -66,14 +66,23 @@ pub struct Correlation {
 #[ts(export)]
 pub enum EventPayload {
     #[serde(rename = "app.started")]
-    AppStarted { version: String, channel: BuildChannel, platform: String, arch: String },
+    AppStarted {
+        version: String,
+        channel: BuildChannel,
+        platform: String,
+        arch: String,
+    },
     #[serde(rename = "app.stopped")]
     AppStopped { uptime_ms: u64 },
     /// The previous session ended without `app.stopped` (crash, force quit, power loss).
     #[serde(rename = "app.previous_session_interrupted")]
     PreviousSessionInterrupted { last_event_at: String },
     #[serde(rename = "database.migrated")]
-    DatabaseMigrated { from_version: i64, to_version: i64, backup_created: bool },
+    DatabaseMigrated {
+        from_version: i64,
+        to_version: i64,
+        backup_created: bool,
+    },
     #[serde(rename = "settings.changed")]
     SettingsChanged { keys: Vec<String> },
     #[serde(rename = "secure_store.checked")]
@@ -81,7 +90,10 @@ pub enum EventPayload {
     /// A stored event this build does not understand (written by a newer build or a removed
     /// type). Kept so history stays complete.
     #[serde(rename = "unrecognized")]
-    Unrecognized { original_type: String, original_version: u32 },
+    Unrecognized {
+        original_type: String,
+        original_version: u32,
+    },
 }
 
 impl EventPayload {
@@ -101,7 +113,9 @@ impl EventPayload {
     /// Payload schema version for this type.
     pub fn version(&self) -> u32 {
         match self {
-            Self::Unrecognized { original_version, .. } => *original_version,
+            Self::Unrecognized {
+                original_version, ..
+            } => *original_version,
             _ => 1,
         }
     }
@@ -132,7 +146,11 @@ pub struct NewEvent {
 
 impl NewEvent {
     pub fn core(event: EventPayload) -> Self {
-        Self { source: EventSource::Core, correlation: Correlation::default(), event }
+        Self {
+            source: EventSource::Core,
+            correlation: Correlation::default(),
+            event,
+        }
     }
 }
 
@@ -154,8 +172,10 @@ mod tests {
 
     #[test]
     fn envelope_wire_format_is_flat() {
-        let json = serde_json::to_value(envelope(EventPayload::SettingsChanged { keys: vec!["appearance.theme".into()] }))
-            .expect("serialize");
+        let json = serde_json::to_value(envelope(EventPayload::SettingsChanged {
+            keys: vec!["appearance.theme".into()],
+        }))
+        .expect("serialize");
         assert_eq!(json["type"], "settings.changed");
         assert_eq!(json["payload"]["keys"][0], "appearance.theme");
         assert_eq!(json["seq"], 7);
@@ -165,8 +185,12 @@ mod tests {
 
     #[test]
     fn payload_fields_are_camel_case() {
-        let json = serde_json::to_value(EventPayload::DatabaseMigrated { from_version: 1, to_version: 2, backup_created: true })
-            .expect("serialize");
+        let json = serde_json::to_value(EventPayload::DatabaseMigrated {
+            from_version: 1,
+            to_version: 2,
+            backup_created: true,
+        })
+        .expect("serialize");
         assert_eq!(json["payload"]["fromVersion"], 1);
         assert_eq!(json["payload"]["backupCreated"], true);
     }
@@ -187,13 +211,30 @@ mod tests {
     #[test]
     fn type_names_match_serde_tags() {
         let samples = [
-            EventPayload::AppStarted { version: String::new(), channel: BuildChannel::Stable, platform: String::new(), arch: String::new() },
+            EventPayload::AppStarted {
+                version: String::new(),
+                channel: BuildChannel::Stable,
+                platform: String::new(),
+                arch: String::new(),
+            },
             EventPayload::AppStopped { uptime_ms: 1 },
-            EventPayload::PreviousSessionInterrupted { last_event_at: String::new() },
-            EventPayload::DatabaseMigrated { from_version: 0, to_version: 1, backup_created: false },
+            EventPayload::PreviousSessionInterrupted {
+                last_event_at: String::new(),
+            },
+            EventPayload::DatabaseMigrated {
+                from_version: 0,
+                to_version: 1,
+                backup_created: false,
+            },
             EventPayload::SettingsChanged { keys: vec![] },
-            EventPayload::SecureStoreChecked { ok: true, backend: String::new() },
-            EventPayload::Unrecognized { original_type: "x".into(), original_version: 1 },
+            EventPayload::SecureStoreChecked {
+                ok: true,
+                backend: String::new(),
+            },
+            EventPayload::Unrecognized {
+                original_type: "x".into(),
+                original_version: 1,
+            },
         ];
         for sample in samples {
             let json = serde_json::to_value(&sample).expect("serialize");

@@ -22,7 +22,10 @@ impl EventBus {
         Self::default()
     }
 
-    pub fn subscribe(&self, subscriber: impl Fn(&EventEnvelope) -> bool + Send + Sync + 'static) -> SubscriptionId {
+    pub fn subscribe(
+        &self,
+        subscriber: impl Fn(&EventEnvelope) -> bool + Send + Sync + 'static,
+    ) -> SubscriptionId {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
         self.lock().push((id, Box::new(subscriber)));
         id
@@ -52,7 +55,9 @@ impl EventBus {
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Vec<(SubscriptionId, Subscriber)>> {
         // A panicking subscriber must not take the bus down with it.
-        self.subscribers.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.subscribers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 

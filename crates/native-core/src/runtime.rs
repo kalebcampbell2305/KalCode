@@ -194,7 +194,9 @@ impl Core {
         }
         if let Some(last_event_at) = interrupted {
             tracing::warn!(event = "app.previous_session_interrupted", last_event_at = %last_event_at);
-            core.emit(NewEvent::core(EventPayload::PreviousSessionInterrupted { last_event_at }))?;
+            core.emit(NewEvent::core(EventPayload::PreviousSessionInterrupted {
+                last_event_at,
+            }))?;
         }
         let info = core.app_info();
         core.emit(NewEvent::core(EventPayload::AppStarted {
@@ -214,7 +216,9 @@ impl Core {
     fn conn(&self) -> MutexGuard<'_, Connection> {
         // The connection holds no invariants that a panic elsewhere could break mid-way
         // (all writes are transactional), so recover from poisoning.
-        self.conn.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.conn
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Persists then publishes an event. Publishing happens while the connection lock is held
@@ -239,7 +243,10 @@ impl Core {
         let mut conn = self.conn();
         let (next, keys) = settings::apply(&mut conn, patch)?;
         if !keys.is_empty() {
-            let envelope = EventStore::append(&conn, NewEvent::core(EventPayload::SettingsChanged { keys }))?;
+            let envelope = EventStore::append(
+                &conn,
+                NewEvent::core(EventPayload::SettingsChanged { keys }),
+            )?;
             self.bus.publish(&envelope);
         }
         Ok(next)
@@ -249,7 +256,10 @@ impl Core {
         EventStore::recent(&self.conn(), limit, before_seq)
     }
 
-    pub fn subscribe(&self, subscriber: impl Fn(&EventEnvelope) -> bool + Send + Sync + 'static) -> SubscriptionId {
+    pub fn subscribe(
+        &self,
+        subscriber: impl Fn(&EventEnvelope) -> bool + Send + Sync + 'static,
+    ) -> SubscriptionId {
         self.bus.subscribe(subscriber)
     }
 
@@ -259,14 +269,18 @@ impl Core {
 
     /// Records the outcome of a secure-store check performed by the shell.
     pub fn record_secure_store_check(&self, ok: bool, backend: &str) -> Result<EventEnvelope> {
-        self.emit(NewEvent::core(EventPayload::SecureStoreChecked { ok, backend: backend.to_owned() }))
+        self.emit(NewEvent::core(EventPayload::SecureStoreChecked {
+            ok,
+            backend: backend.to_owned(),
+        }))
     }
 
     pub fn diagnostics(&self) -> Result<Diagnostics> {
         let conn = self.conn();
         let schema_version = db::schema_version(&conn)?;
         let event_count = EventStore::count(&conn)?;
-        let journal_mode: String = conn.pragma_query_value(None, "journal_mode", |row| row.get(0))?;
+        let journal_mode: String =
+            conn.pragma_query_value(None, "journal_mode", |row| row.get(0))?;
         let last_check: Option<(String, String)> = conn
             .query_row(
                 "SELECT occurred_at, payload FROM events WHERE type = 'secure_store.checked' ORDER BY seq DESC LIMIT 1",
@@ -282,10 +296,17 @@ impl Core {
                 SecureStoreSummary {
                     last_checked_at: Some(at),
                     last_check_ok: value.get("ok").and_then(serde_json::Value::as_bool),
-                    backend: value.get("backend").and_then(|v| v.as_str()).map(str::to_owned),
+                    backend: value
+                        .get("backend")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_owned),
                 }
             }
-            None => SecureStoreSummary { last_checked_at: None, last_check_ok: None, backend: None },
+            None => SecureStoreSummary {
+                last_checked_at: None,
+                last_check_ok: None,
+                backend: None,
+            },
         };
 
         let paths = &self.config.paths;
@@ -330,10 +351,15 @@ impl Core {
         let uptime_ms = u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX);
         match self.emit(NewEvent::core(EventPayload::AppStopped { uptime_ms })) {
             Ok(_) => tracing::info!(event = "app.stopped", uptime_ms),
-            Err(error) => tracing::error!(event = "app.stop_record_failed", error = %error.diagnostic()),
+            Err(error) => {
+                tracing::error!(event = "app.stop_record_failed", error = %error.diagnostic())
+            }
         }
         // Checkpoint the WAL so the database file is self-contained after exit.
-        if let Err(error) = self.conn().execute_batch("PRAGMA wal_checkpoint(TRUNCATE);") {
+        if let Err(error) = self
+            .conn()
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+        {
             tracing::warn!(event = "database.checkpoint_failed", error = %error);
         }
     }
@@ -352,7 +378,13 @@ fn previous_session_interrupted(conn: &Connection) -> Result<Option<String>> {
     if last_lifecycle.as_deref() != Some("app.started") {
         return Ok(None);
     }
-    Ok(conn.query_row("SELECT occurred_at FROM events ORDER BY seq DESC LIMIT 1", [], |row| row.get(0)).optional()?)
+    Ok(conn
+        .query_row(
+            "SELECT occurred_at FROM events ORDER BY seq DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?)
 }
 
 fn wal_path(database: &Path) -> PathBuf {
@@ -363,7 +395,9 @@ fn wal_path(database: &Path) -> PathBuf {
 
 /// Replaces the user's home directory prefix with `~` so reports don't reveal the username.
 pub fn display_path(path: &Path) -> String {
-    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from);
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from);
     match home.and_then(|home| path.strip_prefix(&home).ok().map(Path::to_path_buf)) {
         Some(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
         None => path.display().to_string(),
