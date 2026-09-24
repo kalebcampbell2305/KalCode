@@ -16,6 +16,12 @@
     "allow-diagnostics-get",
     "allow-diagnostics-open-log-dir",
     "allow-diagnostics-open-data-dir",
-    "allow-secure-store-check"
+    "allow-secure-store-check",
+    "allow-approval-list",
+    "allow-approval-decide",
+    "allow-permission-profiles-list",
+    "allow-thread-set-permission-mode",
+    "allow-permission-settings-get",
+    "allow-permission-settings-update"
   ]
 }

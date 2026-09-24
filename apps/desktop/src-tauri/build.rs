@@ -13,6 +13,13 @@ const COMMANDS: &[&str] = &[
     "diagnostics_open_log_dir",
     "diagnostics_open_data_dir",
     "secure_store_check",
+    // Z4: permissions.
+    "approval_list",
+    "approval_decide",
+    "permission_profiles_list",
+    "thread_set_permission_mode",
+    "permission_settings_get",
+    "permission_settings_update",
 ];
 
 fn main() {

@@ -2116,7 +2116,9 @@ dependencies = [
 name = "kalcode-desktop"
 version = "0.1.0"
 dependencies = [
+ "kalcode-contracts",
  "kalcode-native-core",
+ "kalcode-permissions",
  "kalcode-secure-store",
  "serde",
  "serde_json",
@@ -2124,6 +2126,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
+ "tempfile",
  "tracing",
 ]
 

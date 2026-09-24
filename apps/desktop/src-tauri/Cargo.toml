@@ -21,12 +21,17 @@ tauri-build = { version = "2.6", features = [] }
 [dependencies]
 kalcode-native-core = { path = "../../../crates/native-core" }
 kalcode-secure-store = { path = "../../../crates/secure-store" }
+kalcode-permissions = { path = "../../../crates/permissions" }
+kalcode-contracts = { path = "../../../crates/contracts" }
 tauri = { version = "2.11", features = [] }
 tauri-plugin-opener = "2.5"
 tauri-plugin-single-instance = "2.4"
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

@@ -3,6 +3,8 @@
 
 mod commands;
 pub mod environment;
+// Z4: permission IPC.
+pub mod permission_commands;
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -158,7 +160,8 @@ fn start(app: &tauri::App, removed_overrides: &[&str]) -> AppState {
         app_version: version,
         channel,
     };
-    match Core::open(config) {
+    // Z4 branch: 0005 needs placeholders for 0002-0004 until Z1-Z3 merge (docs/campaigns/Z4.md).
+    match Core::open_with_migrations(config, &permission_commands::branch_migrations()) {
         Ok(core) => state.core = Some(Arc::new(core)),
         Err(error) => {
             tracing::error!(event = "app.startup_failed", error_code = error.code, error = %error.diagnostic());
@@ -198,6 +201,10 @@ pub fn run(removed_overrides: Vec<&'static str>) {
         })
         .setup(move |app| {
             let state = start(app, &removed_overrides);
+            // Z4: the permission engine (Z1 workspaces / Z3 threads are wired at integration).
+            app.manage(permission_commands::PermissionState::unwired(
+                state.core.clone(),
+            ));
             app.manage(state);
 
             // Safety net: the frontend shows the window after its first themed paint
@@ -226,6 +233,12 @@ pub fn run(removed_overrides: Vec<&'static str>) {
             commands::diagnostics_open_log_dir,
             commands::diagnostics_open_data_dir,
             commands::secure_store_check,
+            permission_commands::approval_list,
+            permission_commands::approval_decide,
+            permission_commands::permission_profiles_list,
+            permission_commands::thread_set_permission_mode,
+            permission_commands::permission_settings_get,
+            permission_commands::permission_settings_update,
         ])
         .build(tauri::generate_context!());
 
