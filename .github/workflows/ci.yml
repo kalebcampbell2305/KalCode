@@ -6,20 +6,25 @@ on:
   pull_request:
   workflow_dispatch:
 
+# One run per ref. Superseded PR runs are cancelled; runs on main always finish, so every
+# merged commit gets a complete result.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 env:
   CARGO_TERM_COLOR: always
+  # Incremental compilation only helps local rebuilds; in CI it bloats the cache.
+  CARGO_INCREMENTAL: 0
 
 jobs:
   checks:
     name: Format, lint, typecheck, unit tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
@@ -46,6 +51,7 @@ jobs:
       matrix:
         os: [windows-latest, macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     env:
       # Headless Linux runners have no Secret Service daemon for the keychain round-trip test.
       KALCODE_SKIP_OS_KEYCHAIN_TEST: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
@@ -61,6 +67,9 @@ jobs:
           toolchain: stable
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          # Only main writes caches; PRs restore them. Keeps the 10 GB cache budget for main.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Frontend placeholder for tauri::generate_context
         shell: bash
         run: mkdir -p apps/desktop/dist && echo '<!doctype html>' > apps/desktop/dist/index.html
@@ -74,9 +83,28 @@ jobs:
           node tooling/gen-protocol-index.mjs
           git diff --exit-code -- packages/protocol/src/generated
 
+  cargo-deny:
+    name: Rust dependency policy (cargo-deny)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # Licenses, bans and sources are properties of this commit: failures block the PR.
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check
+          command-arguments: bans licenses sources
+      # Advisories change without code changes; report them here, gate them in the nightly run.
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        continue-on-error: true
+        with:
+          command: check
+          command-arguments: advisories
+
   desktop-ui:
     name: Desktop UI tests (Playwright + axe)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
@@ -85,12 +113,38 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @kalcode/desktop exec playwright install --with-deps chromium
+      - name: Playwright version
+        id: playwright
+        shell: bash
+        run: echo "version=$(node -p "require('./apps/desktop/node_modules/@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}-chromium
+      - name: Install Chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm --filter @kalcode/desktop exec playwright install --with-deps chromium
+      - name: Install Chromium system dependencies
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: pnpm --filter @kalcode/desktop exec playwright install-deps chromium
       - run: pnpm --filter @kalcode/desktop test:ui --grep-invert @screenshots
+      - name: Upload Playwright traces and screenshots
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-ui-test-results
+          path: |
+            apps/desktop/test-results/
+            apps/desktop/playwright-report/
+          if-no-files-found: ignore
+          retention-days: 14
 
   desktop-e2e:
     name: Desktop E2E (real app, Windows)
     runs-on: windows-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
@@ -102,15 +156,38 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          # build:e2e compiles into its own target directory (release + `e2e` feature).
+          workspaces: ". -> target/e2e"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: pnpm install --frozen-lockfile
       - name: Build release app
         run: pnpm --filter @kalcode/desktop build:e2e
+      - name: Playwright version
+        id: playwright
+        shell: bash
+        run: echo "version=$(node -p "require('./apps/desktop/node_modules/@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/AppData/Local/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}-chromium
+      # A no-op when the cache restored the browser.
       - run: pnpm --filter @kalcode/desktop exec playwright install chromium
       - run: pnpm --filter @kalcode/desktop test:e2e
+      - name: Upload Playwright traces
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-e2e-test-results
+          path: apps/desktop/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
 
   website:
     name: Website build + E2E
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
@@ -119,12 +196,38 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @kalcode/website exec playwright install --with-deps chromium
+      - name: Playwright version
+        id: playwright
+        shell: bash
+        run: echo "version=$(node -p "require('./apps/website/node_modules/@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}-chromium
+      - name: Install Chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm --filter @kalcode/website exec playwright install --with-deps chromium
+      - name: Install Chromium system dependencies
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: pnpm --filter @kalcode/website exec playwright install-deps chromium
       - run: pnpm --filter @kalcode/website test:e2e
+      - name: Upload Playwright traces and screenshots
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: website-test-results
+          path: |
+            apps/website/test-results/
+            apps/website/playwright-report/
+          if-no-files-found: ignore
+          retention-days: 14
 
   audit:
     name: Dependency audit
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
