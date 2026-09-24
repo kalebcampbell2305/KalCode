@@ -15,6 +15,8 @@ Status: test architecture with shared fixtures, a performance harness and a flak
 | Desktop E2E (real app) | Playwright over WebView2 DevTools protocol | `apps/desktop/tests/e2e/` | launches a release binary built with the `e2e` feature (`pnpm build:e2e` → `target/e2e/`) with an isolated `KALCODE_DATA_DIR`; refuses to run if the binary ignores it. Covers persistence across restart, the real credential store, crash detection, newer-schema refusal |
 | Performance | Node + Playwright over CDP + OS probes | `apps/desktop/tests/perf/` | startup, shutdown, IPC latency, event append throughput, idle memory/CPU, database size of the real binary; budgets and regression check (see `docs/PERFORMANCE.md`) |
 | Website | Playwright + axe; Vitest for Worker | `apps/website/tests/` | pages render, navigation (desktop & mobile), no dead links, form validation, API validation/rate-limit paths, accessibility |
+| API (entitlements, KalVoice ledger) | Vitest; local D1 via `wrangler d1 migrations apply --local` + `getPlatformProxy`; real workerd via `wrangler dev` | `apps/api/tests/` | resolution precedence, OWNER constraints in the database, audit triggers, operator tools against local D1, Ed25519 signing in workerd, 401 without sign-in, no tier-changing routes, idempotent/atomic usage ledger, zero outbound calls |
+| Cross-language entitlement vectors | Vitest + `cargo test` | `apps/api/tests/unit/vectors.test.ts`, `crates/entitlements/tests/vectors.rs` | documents and usage receipts signed in TypeScript verify (or fail) identically in Rust; RFC 8032 known answers on both sides |
 
 The in-memory transport exists only for UI tests; it is excluded from production builds by a
 build-time flag and the app refuses to start without a native runtime otherwise.
@@ -32,6 +34,7 @@ pnpm --filter @kalcode/website test:e2e     # website E2E
 pnpm perf                                   # performance harness against target/e2e (Windows)
 pnpm perf:check <results.json>              # fail on budget breaks / regressions vs. the baseline
 pnpm test:repeat <spec> --times 50          # rerun one spec N times to detect flakiness
+pnpm --filter @kalcode/api test             # API unit + integration (local D1, wrangler dev on 18433/18434)
 ```
 
 ## 3. Ports and isolation

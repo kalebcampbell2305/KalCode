@@ -6,7 +6,9 @@
   "description": "KalCode shared protocol: generated IPC/event types, plan configuration, provider and permission contracts.",
   "exports": {
     ".": "./src/index.ts",
-    "./plans": "./src/plans.ts"
+    "./plans": "./src/plans.ts",
+    "./entitlements": "./src/entitlements.ts",
+    "./usage-receipts": "./src/usage-receipts.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

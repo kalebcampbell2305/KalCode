@@ -81,5 +81,55 @@ early_access(
 )
 ```
 
-No IP addresses or user agents are stored. Accounts, subscriptions and entitlements
-(PostgreSQL) arrive in Z13 and are documented in `docs/BILLING.md` then.
+No IP addresses or user agents are stored.
+
+## 4. Cloud data (API, Cloudflare D1 `kalcode-api`)
+
+Local only until Z13 deploys the API (`apps/api`, docs/BILLING.md). Migrations:
+`apps/api/migrations/`. Timestamps are UTC ISO-8601 with milliseconds, so string order is time
+order. Most invariants are enforced by the database itself (CHECK constraints, a partial unique
+index and triggers), not only by application code.
+
+```sql
+-- 0001_entitlements.sql
+accounts(
+  id TEXT PRIMARY KEY,                       -- server-generated
+  email TEXT NOT NULL UNIQUE COLLATE NOCASE, -- verified identity (sign-in verifies before insert)
+  email_verified_at TEXT NOT NULL,
+  created_at TEXT NOT NULL                   -- Free KalVoice cycle anchor
+)
+entitlement_grants(                          -- Free = no active grant
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id TEXT NOT NULL REFERENCES accounts(id),
+  tier TEXT NOT NULL CHECK (tier IN ('pro','max','owner')),
+  source TEXT NOT NULL CHECK (source IN ('billing','grant')),
+  granted_by TEXT NOT NULL, reason TEXT NOT NULL, granted_at TEXT NOT NULL,
+  expires_at TEXT,                           -- billing: end of paid period (required); owner: always NULL
+  revoked_at TEXT, revoked_by TEXT, revoke_reason TEXT,
+  CHECK (tier <> 'owner' OR source = 'grant'),       -- owner_requires_operator_grant
+  CHECK (tier <> 'owner' OR expires_at IS NULL),     -- owner_never_expires
+  CHECK (source <> 'billing' OR expires_at IS NOT NULL)
+)
+-- UNIQUE (account_id) WHERE tier = 'owner' AND revoked_at IS NULL   one active OWNER per account
+-- triggers: identity fields immutable, revocation final, no deletes;
+--           every insert / revocation / period change writes audit_log in the same statement
+audit_log(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  occurred_at TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL,
+  account_id TEXT, details TEXT NOT NULL /* JSON, never secrets */
+)                                            -- append-only (UPDATE/DELETE abort)
+
+-- 0002_kalvoice_requests.sql
+kalvoice_requests(                           -- one row per counted top-level KalVoice Request
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  account_id TEXT NOT NULL REFERENCES accounts(id),
+  client_request_id TEXT NOT NULL,           -- opaque idempotency key, [A-Za-z0-9_-]{8,128}
+  recorded_at TEXT NOT NULL,
+  source TEXT NOT NULL CHECK (source IN ('online','offline_replay')),
+  over_allowance INTEGER NOT NULL DEFAULT 0, -- offline replay that landed beyond the allowance
+  UNIQUE (account_id, client_request_id)
+)                                            -- append-only; index (account_id, recorded_at)
+```
+
+The ledger stores no request text, transcripts, audio, model names or provider output, and never
+provider model tokens. Stripe customer/subscription ids arrive with the Z13 billing webhook.

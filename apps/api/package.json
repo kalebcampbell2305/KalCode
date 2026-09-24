@@ -1,0 +1,25 @@
+{
+  "name": "@kalcode/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "KalCode API (Cloudflare Worker + D1): accounts and server-authoritative entitlements. Local only until campaign Z13.",
+  "scripts": {
+    "dev": "wrangler dev --port 8790 --ip 127.0.0.1",
+    "db:migrate:local": "wrangler d1 migrations apply kalcode-api --local",
+    "keys:dev": "node ../../tooling/admin/gen-signing-key.mjs --dev-vars .dev.vars",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.tests.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@kalcode/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260924.1",
+    "@types/node": "24.13.6",
+    "esbuild": "0.28.1",
+    "miniflare": "5.20260921.1-alpha",
+    "vitest": "5.0.1",
+    "wrangler": "4.138.0"
+  }
+}

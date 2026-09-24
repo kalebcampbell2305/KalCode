@@ -31,23 +31,32 @@ belongs here or in an ADR under `docs/adr/`.
 ┌──────────────── kalcoded.com (Cloudflare Worker + static assets) ────────────────┐
 │ apps/website: Astro (static HTML) + Worker (`/api/*`) + D1 (early-access list)    │
 └────────────────────────────────────────────────────────────────────────────────────┘
+
+┌──────────── KalCode API (Cloudflare Worker + D1) — built, local only until Z13 ────────────┐
+│ apps/api: accounts, entitlement grants (OWNER only via operator tools), audit log,         │
+│ KalVoice Request ledger; Ed25519-signed entitlement documents and usage receipts           │
+│      ▲ signed documents                                                                   │
+│ crates/entitlements (desktop): verifies with embedded public keys, bounded offline grace  │
+└──────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 `crates/providers` (Z2) detects provider CLIs and supervises provider processes; the Claude Code
 adapter implements the shared `AgentProvider` contract (`crates/contracts`). See
 `docs/PROVIDERS.md`.
 
-Future: `apps/api` (accounts, billing, entitlement — Z13), PTY / filesystem / permissions crates
-(Z1, Z4), mission engine (Z9).
+Future: PTY / filesystem / permissions crates (Z1, Z4), mission engine (Z9).
+Not built yet: sign-in, Stripe billing and deployment of `apps/api` (Z13); see `docs/BILLING.md`.
 
 ## 2. Repository layout
 
 ```text
 KalCode/
 ├── apps/
+│   ├── api/                KalCode API — Cloudflare Worker + D1: entitlements, KalVoice ledger
 │   ├── desktop/            React frontend + src-tauri (Tauri shell crate `kalcode-desktop`)
 │   └── website/            kalcoded.com — Astro static site + Cloudflare Worker + D1
 ├── crates/
+│   ├── entitlements/       `kalcode_entitlements`: signed entitlement/usage verification
 │   ├── native-core/        `kalcode_core`: db, migrations, events, settings, errors, logging
 │   ├── providers/          `kalcode_providers`: provider detection, process supervision, adapters
 │   └── secure-store/       `kalcode_secure_store`: SecretStore trait + OS keychain backend
@@ -70,6 +79,8 @@ needs them begins, so the tree never contains empty placeholder packages.
 | WebView (React) | **Untrusted by default** | May only call the explicitly allow-listed KalCode commands. No `fs`, `shell`, `http` plugins, no arbitrary IPC. |
 | Provider processes | Untrusted | Supervised child processes (Z2): argv-only spawn, sanitized per-provider environment, bounded output, redacted stderr, timeouts, process-tree kill. They run under the stricter provider-native mapping of the thread's permission mode, and from Z4 every action passes through the permission engine. |
 | Website Worker | Trusted server | Validates all input; stores only early-access emails. |
+| API Worker (`apps/api`) | Trusted server, **sole entitlement authority** | Decides every account's tier from D1; signs documents with a secret Ed25519 key; exposes no endpoint that changes a tier; writes only the caller's KalVoice Request rows. |
+| Operator tools (`tooling/admin`) | Trusted operator (own Cloudflare credentials) | The only way to grant or revoke OWNER; audited in the database. |
 
 Consequences:
 
@@ -194,6 +205,8 @@ Windows, macOS and Linux.
 - `docs/adr/0001-monorepo-and-toolchain.md`
 - `docs/adr/0002-rust-owned-protocol-types.md`
 - `docs/adr/0003-website-on-cloudflare-workers.md`
+
+Entitlements, the OWNER tier, signing keys and the KalVoice usage ledger: `docs/BILLING.md`.
 
 ## 14. KalVoice and the zero-cost rule
 
