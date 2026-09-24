@@ -9,9 +9,9 @@ use std::collections::BTreeMap;
 
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use kalcode_entitlements::{
-    CLOCK_SKEW_SECONDS, CachedEntitlement, DOCUMENT_VERSION, EntitlementStatus, Grants, Limit,
-    MAX_DOCUMENT_LIFETIME_SECONDS, MAX_TOKEN_LENGTH, TOKEN_ALGORITHM, TOKEN_TYPE, Tier, Verifier,
-    VerifyError,
+    CLOCK_SKEW_SECONDS, CachedEntitlement, DOCUMENT_VERSION, EntitlementStatus, Grants,
+    KalVoiceDecision, Limit, MAX_DOCUMENT_LIFETIME_SECONDS, MAX_TOKEN_LENGTH, TOKEN_ALGORITHM,
+    TOKEN_TYPE, Tier, USAGE_RECEIPT_MAX_LIFETIME_SECONDS, USAGE_TOKEN_TYPE, Verifier, VerifyError,
 };
 use serde::Deserialize;
 use time::OffsetDateTime;
@@ -26,6 +26,22 @@ struct Vectors {
     keys: Vec<Key>,
     rfc8032: Vec<Rfc8032>,
     cases: Vec<Case>,
+    receipt_cases: Vec<ReceiptCase>,
+}
+
+#[derive(Deserialize)]
+struct ReceiptCase {
+    name: String,
+    token: String,
+    now: i64,
+    expect: ReceiptExpect,
+}
+
+#[derive(Deserialize)]
+struct ReceiptExpect {
+    ok: bool,
+    error: Option<String>,
+    receipt: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -36,6 +52,8 @@ struct Constants {
     clock_skew_seconds: i64,
     max_token_length: usize,
     token_type: String,
+    usage_token_type: String,
+    usage_receipt_max_lifetime_seconds: i64,
     algorithm: String,
 }
 
@@ -102,6 +120,11 @@ fn constants_match_the_typescript_protocol() {
     assert_eq!(v.constants.clock_skew_seconds, CLOCK_SKEW_SECONDS);
     assert_eq!(v.constants.max_token_length, MAX_TOKEN_LENGTH);
     assert_eq!(v.constants.token_type, TOKEN_TYPE);
+    assert_eq!(v.constants.usage_token_type, USAGE_TOKEN_TYPE);
+    assert_eq!(
+        v.constants.usage_receipt_max_lifetime_seconds,
+        USAGE_RECEIPT_MAX_LIFETIME_SECONDS
+    );
     assert_eq!(v.constants.algorithm, TOKEN_ALGORITHM);
     assert_eq!(
         v.free_grants,
@@ -257,4 +280,146 @@ fn ed25519_known_answers_rfc8032() {
                 .is_err()
         );
     }
+}
+
+#[test]
+fn every_usage_receipt_verifies_exactly_as_in_typescript() {
+    let v = vectors();
+    let verifier = verifier(&v);
+    assert!(v.receipt_cases.len() >= 9);
+    for case in &v.receipt_cases {
+        let result = verifier.verify_usage_receipt(&case.token, case.now);
+        if case.expect.ok {
+            let receipt =
+                result.unwrap_or_else(|e| panic!("{}: expected valid, got {e:?}", case.name));
+            let expected = case.expect.receipt.clone().expect("receipt");
+            assert_eq!(
+                serde_json::to_value(&receipt).expect("serialize"),
+                expected,
+                "{}",
+                case.name
+            );
+        } else {
+            let error = result.expect_err(&case.name);
+            assert_eq!(
+                Some(error.code()),
+                case.expect.error.as_deref(),
+                "{}",
+                case.name
+            );
+        }
+    }
+}
+
+#[test]
+fn kalvoice_allowance_decisions_offline() {
+    let v = vectors();
+    let verifier = verifier(&v);
+    let token = |name: &str| {
+        v.cases
+            .iter()
+            .find(|c| c.name == name)
+            .map(|c| (c.token.clone(), c.now))
+            .expect("vector")
+    };
+    let receipt = |name: &str| {
+        let case = v
+            .receipt_cases
+            .iter()
+            .find(|c| c.name == name)
+            .expect("receipt vector");
+        verifier
+            .verify_usage_receipt(&case.token, case.now)
+            .expect("valid receipt")
+    };
+    let at = |unix: i64| OffsetDateTime::from_unix_timestamp(unix).expect("time");
+    let effective = |name: &str, account: &str| {
+        let (token, now) = token(name);
+        let cached = CachedEntitlement {
+            token,
+            account_id: account.to_owned(),
+        };
+        verifier.effective_entitlement(Some(&cached), at(now))
+    };
+    let account = v.cases[0]
+        .expect
+        .entitlement
+        .as_ref()
+        .and_then(|e| e["accountId"].as_str())
+        .expect("account")
+        .to_owned();
+
+    // Pro: 412 used of 2,500 per the signed receipt.
+    let pro = effective("pro", &account);
+    let pro_receipt = receipt("pro-receipt");
+    assert_eq!(
+        pro.kalvoice_decision(Some(&pro_receipt), 0),
+        KalVoiceDecision::Allowed {
+            remaining: Some(2500 - 412 - 1)
+        }
+    );
+    assert_eq!(
+        pro.kalvoice_decision(Some(&pro_receipt), 2500 - 412 - 1),
+        KalVoiceDecision::Allowed { remaining: Some(0) }
+    );
+    assert_eq!(
+        pro.kalvoice_decision(Some(&pro_receipt), 2500 - 412),
+        KalVoiceDecision::Denied {
+            resets_at: Some("2026-10-10T08:00:00.000Z".into())
+        }
+    );
+    // Without a receipt the provisional local count is checked against the plan allowance.
+    assert_eq!(
+        pro.kalvoice_decision(None, 2499),
+        KalVoiceDecision::Allowed { remaining: Some(0) }
+    );
+    assert_eq!(
+        pro.kalvoice_decision(None, 2500),
+        KalVoiceDecision::Denied { resets_at: None }
+    );
+
+    // OWNER is never denied, whatever any receipt or local count says.
+    let owner = effective("owner", &account);
+    let exhausted = receipt("free-receipt-exhausted");
+    for (r, unsynced) in [
+        (None, u64::MAX),
+        (Some(&exhausted), u64::MAX),
+        (Some(&pro_receipt), 1_000_000),
+    ] {
+        assert_eq!(
+            owner.kalvoice_decision(r, unsynced),
+            KalVoiceDecision::Allowed { remaining: None }
+        );
+    }
+
+    // Free fallback (no valid document): 250 per cycle, exhausted receipts are not trusted
+    // without a verified account, so only the local count applies.
+    let free = verifier.effective_entitlement(None, at(v.cases[0].now));
+    assert_eq!(
+        free.kalvoice_decision(Some(&exhausted), 0),
+        KalVoiceDecision::Allowed {
+            remaining: Some(249)
+        }
+    );
+    assert_eq!(
+        free.kalvoice_decision(None, 250),
+        KalVoiceDecision::Denied { resets_at: None }
+    );
+    let signed_free = effective("free", &account);
+    assert_eq!(
+        signed_free.kalvoice_decision(Some(&exhausted), 0),
+        KalVoiceDecision::Denied {
+            resets_at: Some("2026-10-10T08:00:00.000Z".into())
+        }
+    );
+
+    // A receipt for another account is ignored.
+    let mut foreign = pro_receipt.clone();
+    foreign.account_id = "someone-else".into();
+    assert_eq!(
+        pro.kalvoice_decision(Some(&foreign), 0),
+        KalVoiceDecision::Allowed {
+            remaining: Some(2499)
+        }
+    );
 }

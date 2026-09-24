@@ -79,11 +79,7 @@
           "accountId": "0b6f1c1e-5a39-4d0c-9a0f-2b1f7d9e4c11",
           "tier": "pro",
           "unrestricted": false,
-          "features": [
-            "persistentAgents",
-            "multiAgentWorkflows",
-            "scheduledAutomations"
-          ],
+          "features": ["persistentAgents", "multiAgentWorkflows", "scheduledAutomations"],
           "limits": {
             "concurrentThreads": 8
           },

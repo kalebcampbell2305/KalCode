@@ -18,7 +18,7 @@ let ownerDoc: Entitlement;
 beforeAll(async () => {
   signer = await generateSigningKey("test-a");
   other = await generateSigningKey("test-b");
-  ownerDoc = buildEntitlement(ACCOUNT, { tier: "owner", grantExpiresAt: null }, NOW, "test-a");
+  ownerDoc = buildEntitlement(ACCOUNT, { tier: "owner", grantExpiresAt: null, billingAnchor: null }, NOW, "test-a");
 });
 
 function replaceSegment(token: string, index: number, value: string): string {
@@ -62,7 +62,7 @@ describe("Ed25519 entitlement tokens (WebCrypto)", () => {
   });
 
   it("rejects a tampered payload (e.g. pro rewritten to owner)", async () => {
-    const pro = buildEntitlement(ACCOUNT, { tier: "pro", grantExpiresAt: null }, NOW, "test-a");
+    const pro = buildEntitlement(ACCOUNT, { tier: "pro", grantExpiresAt: null, billingAnchor: null }, NOW, "test-a");
     const token = await signEntitlement(pro, signer.key);
     const forged = encodeBase64UrlText(
       JSON.stringify({ ...pro, tier: "owner", unrestricted: true, features: [], limits: {} }),
@@ -135,7 +135,7 @@ describe("Ed25519 entitlement tokens (WebCrypto)", () => {
 
   it("rejects validly signed but invalid documents", async () => {
     const liar = {
-      ...buildEntitlement(ACCOUNT, { tier: "pro", grantExpiresAt: null }, NOW, "test-a"),
+      ...buildEntitlement(ACCOUNT, { tier: "pro", grantExpiresAt: null, billingAnchor: null }, NOW, "test-a"),
       unrestricted: true,
     };
     const token = await signEntitlement(liar, signer.key);

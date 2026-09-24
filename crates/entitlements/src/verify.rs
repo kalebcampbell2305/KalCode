@@ -16,8 +16,12 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signature, VerifyingKey};
 
 use crate::document::{CLOCK_SKEW_SECONDS, Entitlement, is_valid_key_id};
+use crate::usage::UsageReceipt;
 
 pub const TOKEN_TYPE: &str = "kalcode-entitlement.v1";
+/// Header `typ` of signed KalVoice usage receipts. Covered by the signature, so an entitlement
+/// can never be accepted as a receipt or the reverse.
+pub const USAGE_TOKEN_TYPE: &str = "kalcode-usage.v1";
 pub const TOKEN_ALGORITHM: &str = "EdDSA";
 /// Upper bound on an accepted token, checked before any decoding.
 pub const MAX_TOKEN_LENGTH: usize = 8192;
@@ -109,8 +113,32 @@ impl Verifier {
         self.keys.keys().map(String::as_str)
     }
 
-    /// Verifies `token` at `now_unix` (epoch seconds) and returns its entitlement.
+    /// Verifies an entitlement token at `now_unix` (epoch seconds) and returns its entitlement.
     pub fn verify(&self, token: &str, now_unix: i64) -> Result<Entitlement, VerifyError> {
+        let (kid, payload) = self.verify_jws(token, TOKEN_TYPE)?;
+        let entitlement = parse_payload::<Entitlement>(&payload)
+            .filter(|entitlement| entitlement.validate() && entitlement.key_id == kid)
+            .ok_or(VerifyError::InvalidDocument)?;
+        check_time(entitlement.issued_at, entitlement.expires_at, now_unix)?;
+        Ok(entitlement)
+    }
+
+    /// Verifies a KalVoice usage receipt token at `now_unix` (epoch seconds).
+    pub fn verify_usage_receipt(
+        &self,
+        token: &str,
+        now_unix: i64,
+    ) -> Result<UsageReceipt, VerifyError> {
+        let (kid, payload) = self.verify_jws(token, USAGE_TOKEN_TYPE)?;
+        let receipt = parse_payload::<UsageReceipt>(&payload)
+            .filter(|receipt| receipt.validate() && receipt.key_id == kid)
+            .ok_or(VerifyError::InvalidDocument)?;
+        check_time(receipt.issued_at, receipt.expires_at, now_unix)?;
+        Ok(receipt)
+    }
+
+    /// Shape → header → key → signature. Returns the key id and the signed payload bytes.
+    fn verify_jws(&self, token: &str, typ: &str) -> Result<(String, Vec<u8>), VerifyError> {
         if token.len() > MAX_TOKEN_LENGTH {
             return Err(VerifyError::Malformed);
         }
@@ -125,27 +153,29 @@ impl Verifier {
         let header = json_segment(header_segment).ok_or(VerifyError::Malformed)?;
         let payload = decode(payload_segment).ok_or(VerifyError::Malformed)?;
 
-        let kid = check_header(&header).ok_or(VerifyError::UnsupportedHeader)?;
+        let kid = check_header(&header, typ).ok_or(VerifyError::UnsupportedHeader)?;
         let key = self.keys.get(kid).ok_or(VerifyError::UnknownKey)?;
 
         let signing_input = format!("{header_segment}.{payload_segment}");
         key.verify_strict(signing_input.as_bytes(), &signature)
             .map_err(|_| VerifyError::BadSignature)?;
-
-        let entitlement = std::str::from_utf8(&payload)
-            .ok()
-            .and_then(|text| serde_json::from_str::<Entitlement>(text).ok())
-            .filter(|entitlement| entitlement.validate() && entitlement.key_id == kid)
-            .ok_or(VerifyError::InvalidDocument)?;
-
-        if now_unix.saturating_add(CLOCK_SKEW_SECONDS) < entitlement.issued_at {
-            return Err(VerifyError::NotYetValid);
-        }
-        if now_unix >= entitlement.expires_at {
-            return Err(VerifyError::Expired);
-        }
-        Ok(entitlement)
+        Ok((kid.to_owned(), payload))
     }
+}
+
+fn parse_payload<T: serde::de::DeserializeOwned>(payload: &[u8]) -> Option<T> {
+    serde_json::from_str(std::str::from_utf8(payload).ok()?).ok()
+}
+
+/// Document → time: not yet valid (beyond the clock-skew tolerance), then expired.
+fn check_time(issued_at: i64, expires_at: i64, now_unix: i64) -> Result<(), VerifyError> {
+    if now_unix.saturating_add(CLOCK_SKEW_SECONDS) < issued_at {
+        return Err(VerifyError::NotYetValid);
+    }
+    if now_unix >= expires_at {
+        return Err(VerifyError::Expired);
+    }
+    Ok(())
 }
 
 /// Strict unpadded base64url: padding and non-zero trailing bits are rejected.
@@ -158,13 +188,13 @@ fn json_segment(segment: &str) -> Option<serde_json::Value> {
     serde_json::from_str(std::str::from_utf8(&bytes).ok()?).ok()
 }
 
-/// Returns the key id when the header is `{"alg":"EdDSA","typ":"kalcode-entitlement.v1","kid":…}`.
-fn check_header(header: &serde_json::Value) -> Option<&str> {
+/// Returns the key id when the header is `{"alg":"EdDSA","typ":<typ>,"kid":…}`.
+fn check_header<'a>(header: &'a serde_json::Value, expected_typ: &str) -> Option<&'a str> {
     let object = header.as_object()?;
     let alg = object.get("alg")?.as_str()?;
     let typ = object.get("typ")?.as_str()?;
     let kid = object.get("kid")?.as_str()?;
-    (alg == TOKEN_ALGORITHM && typ == TOKEN_TYPE && is_valid_key_id(kid)).then_some(kid)
+    (alg == TOKEN_ALGORITHM && typ == expected_typ && is_valid_key_id(kid)).then_some(kid)
 }
 
 #[cfg(test)]

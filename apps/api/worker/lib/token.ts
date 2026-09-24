@@ -1,10 +1,14 @@
 /**
- * Signed entitlement documents: compact JWS (RFC 7515) with EdDSA/Ed25519 (RFC 8037).
+ * Signed documents: compact JWS (RFC 7515) with EdDSA/Ed25519 (RFC 8037).
  *
  *   token = base64url(header) "." base64url(payload) "." base64url(signature)
- *   header  = {"alg":"EdDSA","kid":"<key id>","typ":"kalcode-entitlement.v1"}
- *   payload = the `Entitlement` JSON (packages/protocol/src/entitlements.ts)
+ *   header  = {"alg":"EdDSA","kid":"<key id>","typ":"<document type>"}
  *   signature = Ed25519 over the ASCII bytes of `base64url(header) "." base64url(payload)`
+ *
+ * Two document types share the key and format:
+ *   - `kalcode-entitlement.v1`: an `Entitlement` (packages/protocol/src/entitlements.ts)
+ *   - `kalcode-usage.v1`: a KalVoice `UsageReceipt` (packages/protocol/src/usage-receipts.ts)
+ * The `typ` is covered by the signature, so one kind can never be replayed as the other.
  *
  * Signing the transmitted bytes (not a re-serialization) means no canonical-JSON rules are
  * needed: the desktop verifier (`crates/entitlements`) checks exactly what it received. Both
@@ -18,19 +22,23 @@ import {
   isValidKeyId,
   parseEntitlement,
 } from "@kalcode/protocol/entitlements";
+import { parseUsageReceipt, type UsageReceipt } from "@kalcode/protocol/usage-receipts";
 import { decodeBase64Url, encodeBase64Url, encodeBase64UrlText } from "./base64url";
 
 export const TOKEN_TYPE = "kalcode-entitlement.v1";
+export const USAGE_TOKEN_TYPE = "kalcode-usage.v1";
 export const TOKEN_ALGORITHM = "EdDSA";
 /** Upper bound on an accepted token, checked before any decoding. */
 export const MAX_TOKEN_LENGTH = 8192;
+
+type DocumentType = typeof TOKEN_TYPE | typeof USAGE_TOKEN_TYPE;
 
 const ED25519 = { name: "Ed25519" } as const;
 
 export interface TokenHeader {
   alg: typeof TOKEN_ALGORITHM;
   kid: string;
-  typ: typeof TOKEN_TYPE;
+  typ: DocumentType;
 }
 
 export interface EntitlementSigningKey {
@@ -50,10 +58,20 @@ export type VerifyError =
   | "expired";
 
 export type VerifyResult = { ok: true; entitlement: Entitlement } | { ok: false; error: VerifyError };
+export type UsageVerifyResult = { ok: true; receipt: UsageReceipt } | { ok: false; error: VerifyError };
 
-/** Header and payload segments, exactly as signed. Key order is fixed by construction. */
+function signingInput(typ: DocumentType, keyId: string, payload: unknown): string {
+  const header: TokenHeader = { alg: TOKEN_ALGORITHM, kid: keyId, typ };
+  return `${encodeBase64UrlText(JSON.stringify(header))}.${encodeBase64UrlText(JSON.stringify(payload))}`;
+}
+
+async function sign(input: string, key: EntitlementSigningKey): Promise<string> {
+  const signature = await crypto.subtle.sign(ED25519, key.privateKey, new TextEncoder().encode(input));
+  return `${input}.${encodeBase64Url(new Uint8Array(signature))}`;
+}
+
+/** Header and payload segments of an entitlement token, exactly as signed (fixed key order). */
 export function encodeSigningInput(entitlement: Entitlement): string {
-  const header: TokenHeader = { alg: TOKEN_ALGORITHM, kid: entitlement.keyId, typ: TOKEN_TYPE };
   const payload: Entitlement = {
     version: entitlement.version,
     accountId: entitlement.accountId,
@@ -65,16 +83,38 @@ export function encodeSigningInput(entitlement: Entitlement): string {
     expiresAt: entitlement.expiresAt,
     keyId: entitlement.keyId,
   };
-  return `${encodeBase64UrlText(JSON.stringify(header))}.${encodeBase64UrlText(JSON.stringify(payload))}`;
+  return signingInput(TOKEN_TYPE, entitlement.keyId, payload);
+}
+
+/** Header and payload segments of a usage receipt token, exactly as signed. */
+export function encodeUsageSigningInput(receipt: UsageReceipt): string {
+  const payload: UsageReceipt = {
+    version: receipt.version,
+    accountId: receipt.accountId,
+    tier: receipt.tier,
+    used: receipt.used,
+    allowance: receipt.allowance,
+    periodStart: receipt.periodStart,
+    resetsAt: receipt.resetsAt,
+    issuedAt: receipt.issuedAt,
+    expiresAt: receipt.expiresAt,
+    keyId: receipt.keyId,
+  };
+  return signingInput(USAGE_TOKEN_TYPE, receipt.keyId, payload);
 }
 
 export async function signEntitlement(entitlement: Entitlement, key: EntitlementSigningKey): Promise<string> {
   if (entitlement.keyId !== key.keyId) {
     throw new Error("entitlement keyId does not match the signing key");
   }
-  const signingInput = encodeSigningInput(entitlement);
-  const signature = await crypto.subtle.sign(ED25519, key.privateKey, new TextEncoder().encode(signingInput));
-  return `${signingInput}.${encodeBase64Url(new Uint8Array(signature))}`;
+  return sign(encodeSigningInput(entitlement), key);
+}
+
+export async function signUsageReceipt(receipt: UsageReceipt, key: EntitlementSigningKey): Promise<string> {
+  if (receipt.keyId !== key.keyId) {
+    throw new Error("usage receipt keyId does not match the signing key");
+  }
+  return sign(encodeUsageSigningInput(receipt), key);
 }
 
 export async function importPublicKey(x: string): Promise<CryptoKey | null> {
@@ -101,16 +141,11 @@ function parseJsonSegment(segment: string): unknown {
   }
 }
 
-/**
- * Verifies a token against a set of trusted public keys (by key id) at `nowSeconds`.
- * Check order (identical in Rust): shape → header → key → signature → document → time.
- */
-export async function verifyEntitlementToken(
-  token: string,
-  keys: ReadonlyMap<string, CryptoKey>,
-  nowSeconds: number,
-): Promise<VerifyResult> {
-  const fail = (error: VerifyError): VerifyResult => ({ ok: false, error });
+type JwsResult = { ok: true; kid: string; payload: unknown } | { ok: false; error: VerifyError };
+
+/** Shape → header → key → signature. Identical order in Rust (`crates/entitlements`). */
+async function verifyJws(token: string, typ: DocumentType, keys: ReadonlyMap<string, CryptoKey>): Promise<JwsResult> {
+  const fail = (error: VerifyError): JwsResult => ({ ok: false, error });
   if (token.length > MAX_TOKEN_LENGTH) return fail("malformed");
   const segments = token.split(".");
   if (segments.length !== 3) return fail("malformed");
@@ -121,28 +156,56 @@ export async function verifyEntitlementToken(
   if (header === undefined || decodeBase64Url(payloadSegment) === null) return fail("malformed");
 
   if (typeof header !== "object" || header === null || Array.isArray(header)) return fail("unsupported_header");
-  const { alg, kid, typ } = header as Record<string, unknown>;
-  if (alg !== TOKEN_ALGORITHM || typ !== TOKEN_TYPE || typeof kid !== "string" || !isValidKeyId(kid)) {
+  const { alg, kid, typ: headerTyp } = header as Record<string, unknown>;
+  if (alg !== TOKEN_ALGORITHM || headerTyp !== typ || typeof kid !== "string" || !isValidKeyId(kid)) {
     return fail("unsupported_header");
   }
 
   const key = keys.get(kid);
   if (!key) return fail("unknown_key");
 
-  const signingInput = new TextEncoder().encode(`${headerSegment}.${payloadSegment}`);
+  const input = new TextEncoder().encode(`${headerSegment}.${payloadSegment}`);
   let valid: boolean;
   try {
-    valid = await crypto.subtle.verify(ED25519, key, signature, signingInput);
+    valid = await crypto.subtle.verify(ED25519, key, signature, input);
   } catch {
     valid = false;
   }
   if (!valid) return fail("bad_signature");
+  return { ok: true, kid, payload: parseJsonSegment(payloadSegment) };
+}
 
-  const parsed = parseEntitlement(parseJsonSegment(payloadSegment));
-  if (!parsed.ok || parsed.value.keyId !== kid) return fail("invalid_document");
+/** Then document → time. */
+function checkTime(issuedAt: number, expiresAt: number, nowSeconds: number): VerifyError | null {
+  if (nowSeconds + ENTITLEMENT_CLOCK_SKEW_SECONDS < issuedAt) return "not_yet_valid";
+  if (nowSeconds >= expiresAt) return "expired";
+  return null;
+}
 
-  const entitlement = parsed.value;
-  if (nowSeconds + ENTITLEMENT_CLOCK_SKEW_SECONDS < entitlement.issuedAt) return fail("not_yet_valid");
-  if (nowSeconds >= entitlement.expiresAt) return fail("expired");
-  return { ok: true, entitlement };
+/** Verifies an entitlement token against trusted public keys (by key id) at `nowSeconds`. */
+export async function verifyEntitlementToken(
+  token: string,
+  keys: ReadonlyMap<string, CryptoKey>,
+  nowSeconds: number,
+): Promise<VerifyResult> {
+  const jws = await verifyJws(token, TOKEN_TYPE, keys);
+  if (!jws.ok) return jws;
+  const parsed = parseEntitlement(jws.payload);
+  if (!parsed.ok || parsed.value.keyId !== jws.kid) return { ok: false, error: "invalid_document" };
+  const timeError = checkTime(parsed.value.issuedAt, parsed.value.expiresAt, nowSeconds);
+  return timeError ? { ok: false, error: timeError } : { ok: true, entitlement: parsed.value };
+}
+
+/** Verifies a KalVoice usage receipt token. */
+export async function verifyUsageReceipt(
+  token: string,
+  keys: ReadonlyMap<string, CryptoKey>,
+  nowSeconds: number,
+): Promise<UsageVerifyResult> {
+  const jws = await verifyJws(token, USAGE_TOKEN_TYPE, keys);
+  if (!jws.ok) return jws;
+  const parsed = parseUsageReceipt(jws.payload);
+  if (!parsed.ok || parsed.value.keyId !== jws.kid) return { ok: false, error: "invalid_document" };
+  const timeError = checkTime(parsed.value.issuedAt, parsed.value.expiresAt, nowSeconds);
+  return timeError ? { ok: false, error: timeError } : { ok: true, receipt: parsed.value };
 }

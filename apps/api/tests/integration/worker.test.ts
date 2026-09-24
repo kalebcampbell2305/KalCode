@@ -6,14 +6,20 @@
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { importPublicKey, verifyEntitlementToken } from "../../worker/lib/token";
+import { importPublicKey, verifyEntitlementToken, verifyUsageReceipt } from "../../worker/lib/token";
 import { type DevServer, startDevServer } from "../support/dev-server";
 import { generateSigningSecret } from "../support/keys";
 import { TEST_ACCOUNT_HEADER } from "../support/test-auth";
 import { createMigratedDatabase, execSql, REPO_ROOT, removeDatabase } from "../support/wrangler";
 
-// Ports reserved for the owner worktree's API integration tests (docs/DEVELOPMENT.md).
-const PORTS = { production: 18433, testEntry: 18434, inspector: [19433, 19434] as const };
+// Ports reserved for the owner worktree's API integration tests (docs/DEVELOPMENT.md); override
+// with KALCODE_API_TEST_PORT when another checkout runs these tests at the same time.
+const BASE_PORT = Number(process.env.KALCODE_API_TEST_PORT ?? 18433);
+const PORTS = {
+  production: BASE_PORT,
+  testEntry: BASE_PORT + 1,
+  inspector: [BASE_PORT + 1000, BASE_PORT + 1001] as const,
+};
 const OWNER = "5d7c1f0a-3e2b-4a9c-8d6e-1f2a3b4c5d6e";
 const FREE = "9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b";
 const REVOKED = "2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f";
@@ -77,10 +83,16 @@ describe("production entry point (worker/index.ts)", () => {
     await server?.stop();
   });
 
-  it("never serves an entitlement: sign-in does not exist yet", async () => {
+  it("never serves an account route: sign-in does not exist yet", async () => {
     for (const headers of [{}, { [TEST_ACCOUNT_HEADER]: OWNER }, { authorization: `Bearer ${OWNER}` }]) {
-      const response = await fetch(`${server.origin}/v1/entitlement`, { headers });
-      expect(response.status).toBe(401);
+      expect((await fetch(`${server.origin}/v1/entitlement`, { headers })).status).toBe(401);
+      expect((await fetch(`${server.origin}/v1/kalvoice/usage`, { headers })).status).toBe(401);
+      const post = await fetch(`${server.origin}/v1/kalvoice/requests`, {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({ requestId: "req-prod-0001" }),
+      });
+      expect(post.status).toBe(401);
     }
   });
 
@@ -154,5 +166,42 @@ describe("test entry point (test authenticator, otherwise production code)", () 
   it("serves Free once the operator has revoked OWNER", async () => {
     const { entitlement } = await fetchEntitlement(REVOKED);
     expect(entitlement).toMatchObject({ tier: "free", unrestricted: false });
+  });
+
+  async function kalvoice(accountId: string, requestId: string) {
+    const response = await fetch(`${server.origin}/v1/kalvoice/requests`, {
+      method: "POST",
+      headers: { [TEST_ACCOUNT_HEADER]: accountId, "content-type": "application/json" },
+      body: JSON.stringify({ requestId }),
+    });
+    expect(response.status).toBe(200);
+    return (await response.json()) as {
+      allowed: boolean;
+      outcome: string;
+      usage: { used: number; allowance: number | null };
+      receipt: string;
+    };
+  }
+
+  it("meters KalVoice Requests in the ledger: idempotent, OWNER unlimited, signed receipts", async () => {
+    const key = await importPublicKey(JSON.parse(secret).x);
+    if (!key) throw new Error("key import failed");
+    const keys = new Map([["dev-integration", key]]);
+    const now = Math.floor(Date.now() / 1000);
+
+    const owner = await kalvoice(OWNER, "req-owner-e2e-1");
+    expect(owner).toMatchObject({ allowed: true, outcome: "recorded", usage: { used: 1, allowance: null } });
+    expect(await verifyUsageReceipt(owner.receipt, keys, now)).toMatchObject({
+      ok: true,
+      receipt: { accountId: OWNER, tier: "owner", used: 1, allowance: null },
+    });
+
+    const free = await kalvoice(FREE, "req-free-e2e-1");
+    expect(free).toMatchObject({ allowed: true, outcome: "recorded", usage: { used: 1, allowance: 250 } });
+    const again = await kalvoice(FREE, "req-free-e2e-1");
+    expect(again).toMatchObject({ allowed: true, outcome: "duplicate", usage: { used: 1 } });
+
+    const usage = await fetch(`${server.origin}/v1/kalvoice/usage`, { headers: { [TEST_ACCOUNT_HEADER]: FREE } });
+    expect(await usage.json()).toMatchObject({ usage: { used: 1, allowance: 250 } });
   });
 });

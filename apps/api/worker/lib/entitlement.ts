@@ -13,6 +13,11 @@ export interface ResolvedEntitlement {
   tier: EntitlementTier;
   /** When the deciding grant ends (ISO), or null if it has no end (owner, free, open grants). */
   grantExpiresAt: string | null;
+  /**
+   * Start of the deciding paid subscription (ISO) — the KalVoice cycle anchor — or null when no
+   * billing grant decides the tier (the account's creation time is the anchor then).
+   */
+  billingAnchor: string | null;
 }
 
 const RANK: Readonly<Record<EntitlementTier, number>> = { free: 0, pro: 1, max: 2, owner: 3 };
@@ -23,12 +28,13 @@ const RANK: Readonly<Record<EntitlementTier, number>> = { free: 0, pro: 1, max: 
  * database already refuses such rows; this is defence in depth.
  */
 export function pickEntitlement(grants: readonly ActiveGrant[]): ResolvedEntitlement {
-  let best: ResolvedEntitlement = { tier: "free", grantExpiresAt: null };
+  let best: ResolvedEntitlement = { tier: "free", grantExpiresAt: null, billingAnchor: null };
   for (const grant of grants) {
     if (grant.tier === "owner" && grant.source !== "grant") continue;
     const candidate: ResolvedEntitlement = {
       tier: grant.tier,
       grantExpiresAt: grant.tier === "owner" ? null : grant.expiresAt,
+      billingAnchor: grant.source === "billing" ? grant.grantedAt : null,
     };
     const better =
       RANK[candidate.tier] > RANK[best.tier] ||

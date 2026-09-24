@@ -201,15 +201,21 @@ describe("resolveEntitlement against D1", () => {
     expect(await resolveEntitlement(store, id, at(T))).toEqual({
       tier: "pro",
       grantExpiresAt: "2026-10-24T12:00:00.000Z",
+      billingAnchor: T,
     });
     await insertGrant(id, { tier: "max", source: "billing", expiresAt: "2026-10-24T12:00:00.000Z" });
     expect((await resolveEntitlement(store, id, at(T))).tier).toBe("max");
     await insertGrant(id, { tier: "owner", source: "grant" });
-    expect(await resolveEntitlement(store, id, at(T))).toEqual({ tier: "owner", grantExpiresAt: null });
+    expect(await resolveEntitlement(store, id, at(T))).toEqual({
+      tier: "owner",
+      grantExpiresAt: null,
+      billingAnchor: null,
+    });
     // Decades later, billing has lapsed; OWNER has not.
     expect(await resolveEntitlement(store, id, at("2099-12-31T23:59:59.000Z"))).toEqual({
       tier: "owner",
       grantExpiresAt: null,
+      billingAnchor: null,
     });
   });
 
@@ -225,9 +231,10 @@ describe("resolveEntitlement against D1", () => {
     expect((await resolveEntitlement(store, id, at(T))).tier).toBe("free");
   });
 
-  it("knows which accounts exist", async () => {
+  it("knows which accounts exist and when they were created", async () => {
     const store = d1Store(db);
-    expect(await store.accountExists(await account())).toBe(true);
-    expect(await store.accountExists("acct-missing")).toBe(false);
+    const id = await account();
+    expect(await store.account(id)).toEqual({ id, createdAt: T });
+    expect(await store.account("acct-missing")).toBeNull();
   });
 });

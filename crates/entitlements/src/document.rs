@@ -56,7 +56,10 @@ impl Grants {
         Self {
             unrestricted: false,
             features: Vec::new(),
-            limits: BTreeMap::from([(limits::CONCURRENT_THREADS.to_owned(), Some(2))]),
+            limits: BTreeMap::from([
+                (limits::CONCURRENT_THREADS.to_owned(), Some(2)),
+                (limits::KALVOICE_REQUESTS_PER_MONTH.to_owned(), Some(250)),
+            ]),
         }
     }
 
@@ -81,6 +84,8 @@ pub mod features {
 /// Limit ids gated by plan today (`LIMITS` in the protocol package).
 pub mod limits {
     pub const CONCURRENT_THREADS: &str = "concurrentThreads";
+    /// Top-level KalVoice assistant requests per monthly cycle (never provider tokens).
+    pub const KALVOICE_REQUESTS_PER_MONTH: &str = "kalvoiceRequestsPerMonth";
 }
 
 fn evaluate_feature(unrestricted: bool, features: &[String], feature: &str) -> bool {
@@ -246,6 +251,10 @@ mod tests {
         assert!(!free.unrestricted);
         assert!(!free.has_feature(features::PERSISTENT_AGENTS));
         assert_eq!(free.limit(limits::CONCURRENT_THREADS), Limit::AtMost(2));
+        assert_eq!(
+            free.limit(limits::KALVOICE_REQUESTS_PER_MONTH),
+            Limit::AtMost(250)
+        );
     }
 
     #[test]

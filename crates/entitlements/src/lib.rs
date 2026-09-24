@@ -7,6 +7,9 @@
 //! Nothing on the device can raise an entitlement: without a valid, unexpired document signed
 //! by a trusted key and issued to the signed-in account, the result is Free.
 //!
+//! It also verifies signed KalVoice usage receipts and makes the offline-capable KalVoice Request
+//! allowance decision (`EffectiveEntitlement::kalvoice_decision`).
+//!
 //! The OWNER tier is `unrestricted`: it grants every feature and unlimited limits by
 //! construction, including features that do not exist yet — there is no list to keep in sync.
 //!
@@ -17,6 +20,7 @@
 mod document;
 mod effective;
 pub mod keys;
+mod usage;
 mod verify;
 
 pub use document::{
@@ -26,6 +30,10 @@ pub use document::{
 pub use effective::{
     CachedEntitlement, EffectiveEntitlement, EntitlementStatus, effective_entitlement,
 };
+pub use usage::{
+    KalVoiceDecision, USAGE_RECEIPT_MAX_LIFETIME_SECONDS, USAGE_RECEIPT_VERSION, UsageReceipt,
+};
 pub use verify::{
-    KeyError, MAX_TOKEN_LENGTH, TOKEN_ALGORITHM, TOKEN_TYPE, TrustedKey, Verifier, VerifyError,
+    KeyError, MAX_TOKEN_LENGTH, TOKEN_ALGORITHM, TOKEN_TYPE, TrustedKey, USAGE_TOKEN_TYPE,
+    Verifier, VerifyError,
 };
