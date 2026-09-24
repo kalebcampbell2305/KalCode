@@ -81,14 +81,19 @@ export function positionFor(
 }
 
 /** Where a drop at `point` lands: docked to an edge or corner when close to it, else free. */
-export function placementAt(point: Point, viewport: Size, panel: Size): { anchor: PanelAnchor; x: number; y: number } {
+export function placementAt(
+  point: Point,
+  viewport: Size,
+  panel: Size,
+  snap: number = SNAP_DISTANCE,
+): { anchor: PanelAnchor; x: number; y: number } {
   const b = bounds(viewport, panel);
   const left = Math.min(b.maxLeft, Math.max(b.minLeft, point.left));
   const top = Math.min(b.maxTop, Math.max(b.minTop, point.top));
-  const nearLeft = left - b.minLeft <= SNAP_DISTANCE;
-  const nearRight = b.maxLeft - left <= SNAP_DISTANCE;
-  const nearTop = top - b.minTop <= SNAP_DISTANCE;
-  const nearBottom = b.maxTop - top <= SNAP_DISTANCE;
+  const nearLeft = left - b.minLeft <= snap;
+  const nearRight = b.maxLeft - left <= snap;
+  const nearTop = top - b.minTop <= snap;
+  const nearBottom = b.maxTop - top <= snap;
   const x = toFraction(left, b.minLeft, b.maxLeft);
   const y = toFraction(top, b.minTop, b.maxTop);
   let anchor: PanelAnchor = "free";
@@ -103,7 +108,8 @@ export function placementAt(point: Point, viewport: Size, panel: Size): { anchor
   return { anchor, x, y };
 }
 
-/** Moves the panel by a pixel offset (keyboard), re-docking as needed. */
+/** Moves the panel by a pixel offset (keyboard). Docks only when it reaches an edge, so small
+ * steps away from a corner aren't pulled back into it. */
 export function nudge(
   placement: { anchor: PanelAnchor; x: number; y: number },
   dx: number,
@@ -112,7 +118,7 @@ export function nudge(
   panel: Size,
 ): { anchor: PanelAnchor; x: number; y: number } {
   const from = positionFor(placement, viewport, panel);
-  return placementAt({ left: from.left + dx, top: from.top + dy }, viewport, panel);
+  return placementAt({ left: from.left + dx, top: from.top + dy }, viewport, panel, 0);
 }
 
 /** The saved placement for a size class, or the default anchor in compact view. */

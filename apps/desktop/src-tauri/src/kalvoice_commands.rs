@@ -785,9 +785,8 @@ pub async fn kalvoice_preferences_update(
                 return Err(KalError::validation(
                     "shortcut_in_use",
                     format!(
-                        "{} {}",
-                        shortcuts::display(&issue.accelerator),
-                        issue.message
+                        "{} is already used by another app. Choose a different one.",
+                        shortcuts::display(&issue.accelerator)
                     ),
                 )
                 .to_ipc());

@@ -539,7 +539,7 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
         accelerator !== prefs.dictationShortcut &&
         accelerator !== prefs.commandShortcut
       ) {
-        fail("shortcut_in_use", "Ctrl+Alt+O Another app is already using this shortcut. Choose a different one.");
+        fail("shortcut_in_use", "Ctrl+Alt+O is already used by another app. Choose a different one.");
       }
     }
     if (patch.intelligence) {

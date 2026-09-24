@@ -129,9 +129,16 @@ function onSignal(state: AssistantState, signal: KalVoiceSignal): AssistantState
     case "listening_failed":
       return { ...state, phase: "error", mode: null, sessionId: null, message: signal.message, code: signal.code };
     case "cancelled":
-      return state.sessionId === signal.sessionId
-        ? { ...state, phase: "idle", mode: null, sessionId: null, message: "Cancelled.", code: null }
-        : state;
+      if (state.sessionId !== signal.sessionId) return state;
+      // A quick tap of the command shortcut opens the assistant for typing: nothing to report.
+      return {
+        ...state,
+        phase: "idle",
+        mode: null,
+        sessionId: null,
+        message: signal.mode === "command" ? null : "Cancelled.",
+        code: null,
+      };
     case "request_stage":
       if (state.requestId !== signal.requestId) return state;
       if (state.phase !== "thinking" && state.phase !== "executing") return state;

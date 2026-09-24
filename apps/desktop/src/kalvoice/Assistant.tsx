@@ -53,7 +53,7 @@ export function RequestForm({ id, autoFocusToken }: { id: string; autoFocusToken
           disabled={busy || state.phase === "transcribing"}
         />
       ) : null}
-      <IconButton label="Send to KalVoice" icon={<Send />} type="submit" disabled={!text.trim() || busy} />
+      <IconButton label="Send" icon={<Send />} type="submit" disabled={!text.trim() || busy} />
     </form>
   );
 }

@@ -79,11 +79,18 @@ export function FloatingAssistant() {
   const position = drag ?? resting;
   const view = panel.view;
   const commandKeys = displayShortcut(status.preferences.commandShortcut, IS_MAC);
+  // The compact panel has no result area, so it shows a result's message on its state line.
+  const stateText =
+    view !== "expanded" && (state.phase === "error" || state.phase === "done") && state.message
+      ? state.message
+      : stateLine(state);
 
   const onPointerDown = (event: ReactPointerEvent<HTMLElement>) => {
     if (event.button !== 0) return;
     // Controls inside the handle keep their own behaviour.
-    if ((event.target as HTMLElement).closest("[data-no-drag]")) return;
+    // (Events from portalled menus bubble through React but aren't inside the panel.)
+    const target = event.target as HTMLElement;
+    if (!event.currentTarget.contains(target) || target.closest("[data-no-drag]")) return;
     dragStart.current = { pointer: { left: event.clientX, top: event.clientY }, origin: resting, moved: false };
     event.currentTarget.setPointerCapture(event.pointerId);
   };
@@ -161,7 +168,7 @@ export function FloatingAssistant() {
         <button
           type="button"
           className={styles.orbOnly}
-          aria-label={`KalVoice, ${stateLine(state)}. Open the panel. Arrow keys move it.`}
+          aria-label={`Open the assistant (${stateLine(state)}). Arrow keys move it.`}
           onClick={() => {
             if (suppressClick.current) {
               suppressClick.current = false;
@@ -184,7 +191,7 @@ export function FloatingAssistant() {
               <button
                 type="button"
                 className={styles.handle}
-                aria-label="Move the KalVoice panel"
+                aria-label="Move the assistant"
                 title="Drag to move, or use the arrow keys"
                 onKeyDown={onMoveKey}
               >
@@ -194,19 +201,19 @@ export function FloatingAssistant() {
               <div className={styles.controls} data-no-drag>
                 <IconButton
                   size="sm"
-                  label={view === "expanded" ? "Minimize KalVoice" : "Expand KalVoice"}
+                  label={view === "expanded" ? "Minimize the assistant" : "Expand the assistant"}
                   icon={view === "expanded" ? <ChevronDown /> : <ChevronUp />}
                   onClick={() => setPanel({ view: view === "expanded" ? "compact" : "expanded" })}
                 />
                 <IconButton
                   size="sm"
-                  label="Collapse KalVoice to the orb"
+                  label="Collapse to the orb"
                   icon={<Circle />}
                   onClick={() => setPanel({ view: "orb" })}
                 />
                 <DropdownMenu.Root>
                   <DropdownMenu.Trigger asChild>
-                    <IconButton size="sm" label="Dock KalVoice" icon={<PanelsTopLeft />} />
+                    <IconButton size="sm" label="Dock the assistant" icon={<PanelsTopLeft />} />
                   </DropdownMenu.Trigger>
                   <DropdownMenu.Portal>
                     <DropdownMenu.Content className={styles.menu} sideOffset={6} align="end">
@@ -226,7 +233,7 @@ export function FloatingAssistant() {
                 </DropdownMenu.Root>
                 <IconButton
                   size="sm"
-                  label={`Close KalVoice (reopen with ${commandKeys})`}
+                  label={`Close the assistant (reopen with ${commandKeys})`}
                   icon={<X />}
                   onClick={() => setPanelVisible(false)}
                 />
@@ -234,7 +241,9 @@ export function FloatingAssistant() {
             </header>
             <p className={styles.stateLine}>
               <span className={styles.phaseName}>{PHASE_NAMES[state.phase]}</span>
-              <span className={styles.stateText}>{stateLine(state)}</span>
+              <span className={styles.stateText} title={stateText}>
+                {stateText}
+              </span>
             </p>
             <Waveform phase={state.phase} levelRef={levelRef} />
             {view === "expanded" ? (
