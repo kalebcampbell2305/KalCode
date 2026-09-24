@@ -15,6 +15,17 @@ const SETTING_LABELS: Record<string, string> = {
   "layout.sidebarCollapsed": "Sidebar",
 };
 
+const PROVIDER_NAMES: Record<string, string> = {
+  "claude-code": "Claude Code",
+  codex: "Codex",
+  "gemini-cli": "Gemini CLI",
+};
+
+/** A provider's display name; unknown ids are shown as-is. */
+export function providerName(id: string): string {
+  return PROVIDER_NAMES[id] ?? id;
+}
+
 export function formatDuration(ms: number): string {
   const seconds = Math.round(ms / 1000);
   if (seconds < 60) return `${seconds} s`;
@@ -82,23 +93,27 @@ export function describeEvent(event: EventEnvelope): EventDescription {
     case "provider.detected":
       return {
         title: event.payload.installed ? "Provider detected" : "Provider not installed",
-        detail: [event.payload.providerId, event.payload.version].filter(Boolean).join(" "),
+        detail: [providerName(event.payload.providerId), event.payload.version].filter(Boolean).join(" "),
         tone: event.payload.installed ? "success" : "idle",
       };
     case "provider.connected":
       return {
         title: "Provider connected",
-        detail: event.payload.accountLabel ?? event.payload.providerId,
+        detail: event.payload.accountLabel ?? providerName(event.payload.providerId),
         tone: "success",
       };
     case "provider.disconnected":
       return {
         title: "Provider disconnected",
-        detail: event.payload.accountLabel ?? event.payload.providerId,
+        detail: event.payload.accountLabel ?? providerName(event.payload.providerId),
         tone: "waiting",
       };
     case "provider.error":
-      return { title: "Provider problem", detail: event.payload.message, tone: "danger" };
+      return {
+        title: `${providerName(event.payload.providerId)} couldn't be checked`,
+        detail: event.payload.message,
+        tone: "danger",
+      };
     case "thread.created":
       return { title: "Thread created", detail: event.payload.name, tone: "success" };
     case "thread.started":

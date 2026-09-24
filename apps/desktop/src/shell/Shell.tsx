@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { Dashboard } from "../surfaces/dashboard/Dashboard.tsx";
 import { GatedSurface } from "../surfaces/gated/GatedSurface.tsx";
+import { ProvidersPage } from "../surfaces/providers/ProvidersPage.tsx";
 import { SettingsPage } from "../surfaces/settings/SettingsPage.tsx";
 import { useAppearance } from "./appearance.ts";
 import { CommandPalette } from "./CommandPalette.tsx";
@@ -41,6 +42,8 @@ function ShellLayout() {
           <Dashboard />
         ) : current === "settings" ? (
           <SettingsPage />
+        ) : current === "providers" ? (
+          <ProvidersPage />
         ) : (
           <GatedSurface id={current} />
         )}

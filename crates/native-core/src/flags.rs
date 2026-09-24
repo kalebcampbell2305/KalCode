@@ -50,7 +50,7 @@ impl FeatureFlags {
             (Skills, Gated),
             (Plugins, Gated),
             (Memory, Gated),
-            (Providers, Gated),
+            (Providers, Available),
             (Settings, Available),
         ];
         let surfaces = table

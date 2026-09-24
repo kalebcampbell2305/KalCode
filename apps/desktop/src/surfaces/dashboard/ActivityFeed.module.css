@@ -56,6 +56,16 @@
   font-size: var(--text-sm);
 }
 
+.thread {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .detail {
   min-width: 0;
   overflow: hidden;

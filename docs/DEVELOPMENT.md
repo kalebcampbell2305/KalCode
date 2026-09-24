@@ -38,7 +38,9 @@ KalCode is developed in coordinated threads, each on its own branch in its own g
    | infra | 1437 | 9437 | same |
 
    UI tests never reuse an existing server, so a port collision fails loudly instead of testing
-   another worktree's code.
+   another worktree's code. The API integration tests (`apps/api`) start `wrangler dev` on
+   18433/18434 (inspector 19433/19434) against a temporary local D1; set `KALCODE_API_TEST_PORT`
+   to move them when two checkouts run those tests at once.
 3. **Migration numbers are reserved per thread** (see `docs/CONTRACTS.md`). Schema changes are
    append-only.
 4. **Shared contracts** (`crates/contracts`) are owned by the lead. Consume them; request changes

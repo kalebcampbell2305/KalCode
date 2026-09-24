@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-providers-detect"
+description = "Enables the providers_detect command without any pre-configured scope."
+commands.allow = ["providers_detect"]
+
+[[permission]]
+identifier = "deny-providers-detect"
+description = "Denies the providers_detect command without any pre-configured scope."
+commands.deny = ["providers_detect"]
