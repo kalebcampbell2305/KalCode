@@ -69,7 +69,8 @@ with their own SQL.
 
 Rules that bind every command: ids validated with `is_valid_id`; the WebView never supplies paths,
 executables or shell strings; Bypass can only be set by a user action with `confirmBypass: true`
-and never by an agent or JARVIS; every consequential decision is an event.
+and never by an agent or KalVoice; every consequential decision is an event. Every
+permission mode is available on every plan.
 
 ## Test and dev isolation
 

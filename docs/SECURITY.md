@@ -31,8 +31,8 @@ KalCode controls powerful tools on a user's machine. Security is architecture, n
 
 ## 3. Private-system boundary
 
-The owner's private JARVIS system is not part of KalCode. The repository must never contain its
-code, prompts, memories, model files, training data, or architecture, and must not depend on
+The owner's separate private projects are not part of KalCode. The repository must never contain their
+code, prompts, memories, model files, training data, branding or architecture, and must not depend on
 private repositories. `tooling/check-branding.mjs` enforces product-naming rules in CI, and
 code review checks for imported private material.
 
@@ -49,7 +49,14 @@ code review checks for imported private material.
 - Z13: signed updates (Tauri updater with minisign keys), code-signed installers, webhook
   signature verification for billing, server-side entitlement authority.
 
-## 5. Reporting
+## 5. Zero company AI cost
+
+KalCode never calls hosted AI or speech APIs with company credentials. Provider work runs through
+the user's own provider CLI/account; KalVoice dictation uses on-device speech recognition and
+the OS speech synthesizer. `tooling/check-zero-cost.mjs` enforces this in CI by rejecting product
+code that references hosted inference or speech endpoints or company API-key variables.
+
+## 6. Reporting
 
 Report security issues to kalcodebuilds@gmail.com (also listed at
 https://kalcoded.com/security).

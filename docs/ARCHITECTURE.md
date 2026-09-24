@@ -208,3 +208,13 @@ Windows, macOS and Linux.
 - `docs/adr/0001-monorepo-and-toolchain.md`
 - `docs/adr/0002-rust-owned-protocol-types.md`
 - `docs/adr/0003-website-on-cloudflare-workers.md`
+
+## 14. KalVoice and the zero-cost rule
+
+KalVoice (docs/KALVOICE.md) is a client of the same runtime APIs as the UI; it adds a native audio
+capture + on-device speech-recognition module, a deterministic command grammar producing typed
+`KalVoiceIntent`s (crates/contracts), and a reasoning path that runs on the user's selected,
+connected provider. KalCode never calls hosted AI or speech services with company credentials:
+provider work runs through the user's own provider CLI/account, and speech runs on the device
+(`tooling/check-zero-cost.mjs` enforces this in CI). The only KalCode backend cost is the
+lightweight account, entitlement and KalVoice usage-ledger service.

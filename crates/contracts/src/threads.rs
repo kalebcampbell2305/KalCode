@@ -81,7 +81,7 @@ pub struct ThreadError {
     pub message: String,
 }
 
-/// The thread fields every surface shows (Threads list, Dashboard cards, JARVIS summaries).
+/// The thread fields every surface shows (Threads list, Dashboard cards, KalVoice status reports).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]

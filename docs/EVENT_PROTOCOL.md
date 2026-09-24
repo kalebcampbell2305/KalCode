@@ -18,7 +18,7 @@ diagnostics through one pipeline instead of many ad-hoc state channels.
   "type": "settings.changed",       // dotted name: <domain>.<verb_or_state>
   "version": 1,                     // payload schema version for this type
   "occurredAt": "2026-09-24T18:02:11.412Z", // RFC 3339, UTC
-  "source": "core",                 // "core" | "ui" | "provider" | "jarvis" | "supervisor" | …
+  "source": "core",                 // "core" | "ui" | "provider" | "kalvoice" | "supervisor" | …
   "correlation": {                  // all optional; indexed for filtering
     "workspaceId": null,
     "threadId": null,
@@ -66,6 +66,11 @@ Status legend: **I** implemented and emitted · **D** defined, emitted from its 
 | `file.created` / `.modified` / `.deleted` | 1 | D (Z3) | `{ workspaceId, path }` |
 | `approval.requested` / `.approved` / `.denied` | 1 | D (Z4) | `{ requestId, scope, decision? }` |
 | `git.branch_changed` / `.diff_changed` / `.commit_created` | 1 | D (Z6) | `{ workspaceId, … }` |
+| `kalvoice.dictation_started` / `.dictation_completed` / `.dictation_failed` | 1 | D (Z12) | `{ sessionId, durationMs?, characters?, code? }` — never the transcript |
+| `kalvoice.request_started` / `.command_recognized` / `.command_executed` / `.request_completed` / `.request_failed` | 1 | D (Z12) | `{ requestId, input?, intent?, code? }` — never the request text |
+| `kalvoice.limit_reached` | 1 | D (Z12) | `{ allowance, resetsAt }` |
+| `kalvoice.provider_selected` | 1 | D (Z12) | `{ intelligence, scope }` |
+| `kalvoice.voice_output_started` / `.voice_output_completed` | 1 | D (Z12) | `{ requestId }` |
 | `mission.*`, `verification.*` | 1 | D (Z9/Z10) | |
 | `automation.*`, `notification.created` | 1 | D (Z11) | |
 

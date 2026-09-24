@@ -1,11 +1,11 @@
 ---
-import { PLANS, formatInterval, formatPrice } from "@kalcode/protocol/plans";
+import { PLANS, formatInterval, formatKalVoiceAllowance, formatPrice } from "@kalcode/protocol/plans";
 import DashboardPreview from "../components/DashboardPreview.astro";
 import EarlyAccessForm from "../components/EarlyAccessForm.astro";
-import Globe from "../components/Globe.astro";
-import Lettering from "../components/Lettering.astro";
+import BrandBoard from "../components/BrandBoard.astro";
+import Shortcut from "../components/Shortcut.astro";
 import Base from "../layouts/Base.astro";
-import { getPage } from "../lib/site";
+import { KALVOICE, getPage } from "../lib/site";
 
 const page = getPage("/");
 
@@ -16,7 +16,7 @@ const steps = [
   },
   {
     title: "Give it the objective",
-    body: "Start a thread in a real workspace and terminal, or hand the objective to JARVIS to plan it and delegate the parts.",
+    body: "Start a thread in a real workspace and terminal, dictate the prompt instead of typing it, or ask KalVoice to open the threads for you.",
   },
   {
     title: "Watch the work happen",
@@ -35,7 +35,7 @@ const principles = [
   },
   {
     title: "Your authority",
-    body: "Permission modes govern every provider, every agent and JARVIS itself. JARVIS is not above your authority, and consequential decisions are written to an audit log.",
+    body: "Permission modes govern every provider, every agent and KalVoice itself. KalVoice is not above your authority, and consequential decisions are written to an audit log.",
   },
   {
     title: "Evidence over claims",
@@ -43,11 +43,11 @@ const principles = [
   },
   {
     title: "Local-first",
-    body: "Projects, threads, events and settings stay on your device by default. Secrets are kept in your operating system's keychain.",
+    body: "Projects, threads, events and settings stay on your device by default. Secrets are kept in your operating system's keychain, and dictation audio is transcribed on your device and never stored.",
   },
   {
-    title: "Provider freedom",
-    body: "Bring the subscriptions and API keys you already have. You never pay KalCode to connect a provider.",
+    title: "Your provider, your account",
+    body: "Bring the subscriptions and API keys you already have. AI usage runs on your own provider account: KalCode never charges for it, resells it or meters it.",
   },
 ];
 ---
@@ -60,9 +60,9 @@ const principles = [
           One intelligence that operates your entire AI workspace.
         </h1>
         <p class="lead hero__lead">
-          Connect Claude, Codex, Gemini and the coding tools you already use. KalCode is being built
-          to run them from one workspace, keep you in control of permissions, and let JARVIS
-          coordinate the work when you want it to.
+          Connect Claude, Codex, Gemini and the coding tools you already use, on your own accounts.
+          KalCode is being built to run them from one workspace, keep you in control of
+          permissions, and let you speak your prompts and commands with KalVoice.
         </p>
         <div class="button-row hero__actions">
           <a class="button button--primary" href="#early-access">Join early access</a>
@@ -70,11 +70,11 @@ const principles = [
         </div>
       </div>
       <div class="hero__visual">
-        <Globe
-          variant="kalcode"
-          hero
-          alt="KalCode constellation globe with a K formed by connected points of light"
-          sizes="(min-width: 60rem) min(44rem, 50vw), min(calc(100vw - 2rem), 26rem)"
+        <BrandBoard
+          board="kalcode"
+          priority
+          alt="The KalCode brand board: a glowing globe with a terminal prompt, orbited by connected points labelled IDE, AI, Build, Code, Terminal and Deploy, above the KalCode name and the line One intelligence. A brighter tomorrow."
+          sizes="(min-width: 60rem) min(36rem, 44vw), min(calc(100vw - 2rem), 30rem)"
         />
       </div>
     </div>
@@ -113,28 +113,47 @@ const principles = [
       </div>
       <DashboardPreview />
 
-      <div class="jarvis" id="jarvis">
-        <div class="jarvis__visual">
-          <Globe variant="jarvis" alt="" sizes="(min-width: 56rem) 28rem, min(calc(100vw - 2rem), 22rem)" />
+      <section class="kalvoice" id="kalvoice" aria-labelledby="kalvoice-title">
+        <div class="kalvoice__visual">
+          <BrandBoard
+            board="kalvoice"
+            alt="The KalVoice brand board: a glowing orb of points of light carrying a sound wave, above the KalVoice name and the line Human voice. Brighter possibilities."
+            sizes="(min-width: 56rem) 28rem, min(calc(100vw - 2rem), 26rem)"
+          />
         </div>
-        <div class="jarvis__copy">
-          <p class="lockup" role="img" aria-label="JARVIS — Global thinking. Personal impact.">
-            <Lettering name="jarvis-wordmark" />
-            <Lettering name="jarvis-tagline" />
+        <div class="kalvoice__copy">
+          <p class="kalvoice-lockup">
+            <span class="kalvoice-name">{KALVOICE.name}</span>
+            <span class="dev-note">{KALVOICE.status}</span>
           </p>
-          <h2 class="h2">The intelligence inside KalCode.</h2>
+          <h2 id="kalvoice-title" class="h2">{KALVOICE.line}</h2>
+          <p>{KALVOICE.summary}</p>
+          <dl class="kalvoice-modes">
+            <div>
+              <dt>Dictation</dt>
+              <dd>
+                Hold <Shortcut keys={KALVOICE.dictationKeys} />, speak, release. Your words are
+                transcribed on your device and typed into the focused input. Unlimited on every
+                plan, never counted.
+              </dd>
+            </div>
+            <div>
+              <dt>Command</dt>
+              <dd>
+                Press <Shortcut keys={KALVOICE.commandKeys} /> and speak or type: “Open four Codex
+                threads.” Structured commands run without any model; anything that needs reasoning
+                uses your own connected provider. One request counts as one KalVoice Request.
+              </dd>
+            </div>
+          </dl>
           <p>
-            Talk to JARVIS and let it coordinate Claude, Codex, Gemini, your projects, and your
-            tools. It is being built to plan an objective, delegate threads to the providers you
-            choose, and report back with the evidence.
+            Both shortcuts are configurable. KalVoice works inside the same permission model as
+            every other agent: it cannot grant itself more authority, and it can never switch on
+            Bypass.
           </p>
-          <p>
-            JARVIS works inside the same permission model as every other agent. It cannot grant
-            itself more authority, and it can never switch on Bypass.
-          </p>
-          <a class="text-link" href="/docs/jarvis">How JARVIS is designed</a>
+          <a class="text-link" href="/docs/kalvoice">How KalVoice works</a>
         </div>
-      </div>
+      </section>
     </div>
   </section>
 
@@ -142,7 +161,7 @@ const principles = [
     <div class="container split">
       <div class="split__aside section-head">
         <h2 id="principles-title" class="h2">What KalCode holds to.</h2>
-        <p>These rules shape every surface, from the Dashboard to JARVIS.</p>
+        <p>These rules shape every surface, from the Dashboard to KalVoice.</p>
       </div>
       <dl class="definition-list">
         {
@@ -163,7 +182,8 @@ const principles = [
         <h2 id="pricing-title" class="h2">Three plans. Provider connections free on all of them.</h2>
         <p>
           Plans become available when KalCode launches. Connecting Claude Code, Codex or Gemini CLI
-          is never behind a paywall.
+          is never behind a paywall, and your AI usage stays on your own provider account. Plans
+          differ in KalVoice Requests and KalCode features, never in safety controls.
         </p>
       </div>
       <div class="plans plans-compact">
@@ -176,6 +196,9 @@ const principles = [
                 <span class="plan__interval">{formatInterval(plan.price)}</span>
               </p>
               <p class="plan__summary">{plan.summary}</p>
+              <p class="plan__allowance">
+                {formatKalVoiceAllowance(plan.limits)} KalVoice Requests a month
+              </p>
             </div>
           ))
         }
