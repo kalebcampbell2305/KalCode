@@ -1,0 +1,65 @@
+.groups {
+  container: threads / inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.groupTitle {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-normal);
+}
+
+.groupCount {
+  color: var(--color-text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.group[data-group="attention"] .groupTitle {
+  color: var(--color-text);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.empty {
+  padding: var(--space-4) 0 var(--space-2);
+}
+
+.skeleton {
+  display: flex;
+  flex-direction: column;
+}
+
+.skeletonRow {
+  display: grid;
+  grid-template-columns: 10.5rem minmax(0, 1fr) 4rem;
+  gap: var(--space-5);
+  align-items: start;
+  padding: var(--space-3) 0;
+}
+
+.skeletonRow + .skeletonRow {
+  border-top: 1px solid var(--color-border);
+}
+
+.skeletonMain {
+  display: grid;
+  gap: var(--space-2);
+}

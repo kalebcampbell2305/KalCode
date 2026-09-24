@@ -1,0 +1,217 @@
+.row {
+  display: grid;
+  grid-template-columns: 9.25rem minmax(0, 1fr) auto;
+  grid-template-areas: "status main side";
+  align-items: start;
+  gap: var(--space-1) var(--space-5);
+  padding: var(--space-3) var(--space-2);
+  margin: 0 calc(-1 * var(--space-2));
+  border-radius: var(--radius-sm);
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.row:hover,
+.row:focus-within {
+  background: var(--color-surface-hover);
+}
+
+.row + .row {
+  box-shadow: 0 -1px 0 var(--color-border);
+}
+
+.status {
+  grid-area: status;
+  min-width: 0;
+  padding-top: 1px;
+}
+
+.main {
+  grid-area: main;
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.nameLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  min-width: 0;
+}
+
+.name {
+  min-width: 0;
+  color: var(--color-text);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-snug);
+  overflow-wrap: anywhere;
+}
+
+.flag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.flag svg {
+  width: 0.8125rem;
+  height: 0.8125rem;
+}
+
+.flag[data-tone="waiting"] {
+  color: var(--color-waiting);
+}
+
+.activity,
+.error {
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.error {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  color: var(--color-text-secondary);
+  white-space: normal;
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-0-5) var(--space-4);
+  margin: var(--space-0-5) 0 0;
+}
+
+.meta > div {
+  min-width: 0;
+}
+
+.meta dd {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.meta svg {
+  width: 0.75rem;
+  height: 0.75rem;
+  color: var(--color-text-faint);
+}
+
+.meta .provider {
+  gap: var(--space-2);
+  color: var(--color-text-secondary);
+  font-weight: var(--weight-medium);
+}
+
+.model {
+  color: var(--color-text-muted);
+  font-weight: var(--weight-regular);
+}
+
+.side {
+  grid-area: side;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-1-5);
+  min-width: 10.5rem;
+}
+
+.when {
+  display: flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding-top: 2px;
+  text-align: right;
+}
+
+.duration {
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.relative {
+  color: var(--color-text-faint);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-1);
+  margin-right: calc(-1 * var(--space-1));
+}
+
+.confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1);
+  max-width: 14rem;
+}
+
+.confirmText {
+  width: 100%;
+  color: var(--color-text);
+  font-size: var(--text-xs);
+  text-align: right;
+}
+
+.row[data-variant="outcome"] .activity {
+  color: var(--color-text-muted);
+}
+
+@container threads (max-width: 50rem) {
+  .row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "status side"
+      "main side";
+    row-gap: var(--space-1-5);
+  }
+}
+
+@container threads (max-width: 34rem) {
+  .row {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "status"
+      "main"
+      "side";
+  }
+
+  .side {
+    flex-direction: row-reverse;
+    align-items: center;
+    justify-content: space-between;
+    min-width: 0;
+  }
+
+  .actions {
+    justify-content: flex-start;
+    margin: 0 0 0 calc(-1 * var(--space-2));
+  }
+}

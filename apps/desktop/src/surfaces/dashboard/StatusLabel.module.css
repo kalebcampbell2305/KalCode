@@ -1,0 +1,63 @@
+.label {
+  --_c: var(--color-idle);
+  --_soft: var(--color-idle-soft);
+  display: inline-flex;
+  align-items: flex-start;
+  gap: var(--space-1-5);
+  max-width: 100%;
+  min-width: 0;
+  padding: var(--space-0-5) var(--space-1-5) var(--space-0-5) var(--space-1);
+  margin-left: calc(-1 * var(--space-1));
+  border-radius: var(--radius-xs);
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+}
+
+.label[data-tone="live"] {
+  --_c: var(--color-live);
+  --_soft: var(--color-live-soft);
+}
+
+.label[data-tone="waiting"] {
+  --_c: var(--color-waiting);
+  --_soft: var(--color-waiting-soft);
+  color: var(--color-text);
+}
+
+.label[data-tone="success"] {
+  --_c: var(--color-success);
+  --_soft: var(--color-success-soft);
+}
+
+.label[data-tone="danger"] {
+  --_c: var(--color-danger);
+  --_soft: var(--color-danger-soft);
+  color: var(--color-text);
+}
+
+.icon {
+  flex: none;
+  margin-top: 0.125rem;
+  width: 0.9375rem;
+  height: 0.9375rem;
+  color: var(--_c);
+}
+
+.text {
+  min-width: 0;
+}
+
+.label[data-changed] {
+  animation: changed var(--dur-deliberate) var(--ease-out) 2;
+  animation-direction: alternate;
+}
+
+@keyframes changed {
+  from {
+    background: transparent;
+  }
+  to {
+    background: var(--_soft);
+  }
+}

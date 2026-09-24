@@ -1,0 +1,46 @@
+import type { ThreadStatus } from "@kalcode/protocol";
+import { isLive } from "./status.ts";
+
+/**
+ * Thread actions the Dashboard offers, each bound to one Z3 contract command:
+ *   open      → navigates to the thread (Threads surface)
+ *   interrupt → `thread_interrupt` (pause the current turn; the thread stays open)
+ *   resume    → `thread_resume` (continue a paused, stopped or offline thread)
+ *   retry     → `thread_resume` on a failed thread (run the failed turn again)
+ *   stop      → `thread_stop` (end the thread's process; asks for confirmation)
+ *   archive   → `thread_archive` (hide a finished or idle thread from the Dashboard)
+ */
+export type ThreadAction = "open" | "interrupt" | "resume" | "retry" | "stop" | "archive";
+
+export const ACTION_LABELS: Record<ThreadAction, string> = {
+  open: "Open",
+  interrupt: "Pause",
+  resume: "Resume",
+  retry: "Retry",
+  stop: "Stop",
+  archive: "Archive",
+};
+
+/** The actions valid for a thread in `status`, in display order. Never offers an invalid action. */
+export function availableActions(status: ThreadStatus): ThreadAction[] {
+  const actions: ThreadAction[] = ["open"];
+  if (isLive(status) || status === "waiting_for_permission" || status === "waiting_for_dependency") {
+    actions.push("interrupt");
+  }
+  if (status === "paused" || status === "interrupted" || status === "offline") actions.push("resume");
+  if (status === "failed") actions.push("retry");
+  if (
+    isLive(status) ||
+    status === "waiting_for_permission" ||
+    status === "waiting_for_user" ||
+    status === "waiting_for_dependency" ||
+    status === "paused" ||
+    status === "idle"
+  ) {
+    actions.push("stop");
+  }
+  if (status === "completed" || status === "failed" || status === "interrupted" || status === "idle") {
+    actions.push("archive");
+  }
+  return actions;
+}
