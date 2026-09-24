@@ -111,6 +111,18 @@ test("open a folder, run commands in real shells, restart KalCode, restore and r
     expect(await columns()).toBeGreaterThan(narrow);
     await page.getByRole("button", { name: "Expand sidebar" }).click();
 
+    // Reloading the page drops its attachments natively; the new page re-attaches and the
+    // scrollback replays. The shells keep running.
+    await typeInTerminal(page, "echo before-reload-%OS%");
+    await expect(visibleTerminal(page)).toContainText("before-reload-Windows_NT");
+    await page.reload();
+    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await codeNav(page).click();
+    await expect(page.getByRole("tab", { name: /Command Prompt/ })).toHaveAttribute("aria-selected", "true");
+    await expect(visibleTerminal(page)).toContainText("before-reload-Windows_NT", { timeout: 20_000 });
+    await typeInTerminal(page, "echo after-reload-%OS%");
+    await expect(visibleTerminal(page)).toContainText("after-reload-Windows_NT", { timeout: 20_000 });
+
     // Closing a tab ends programs started in it (the whole console, not just the shell).
     await newTerminal(page, "Command Prompt");
     await expect(visibleTerminal(page)).toContainText("Microsoft Windows", { timeout: 30_000 });
