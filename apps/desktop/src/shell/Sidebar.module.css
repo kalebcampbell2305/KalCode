@@ -200,8 +200,8 @@
 
 .badgeDot {
   position: absolute;
-  top: 0.35rem;
-  right: 0.55rem;
+  top: 0.3rem;
+  right: 0.4rem;
   width: 0.5rem;
   height: 0.5rem;
   border-radius: var(--radius-full);

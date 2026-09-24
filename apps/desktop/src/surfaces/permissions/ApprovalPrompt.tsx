@@ -29,7 +29,9 @@ export interface ApprovalPromptProps {
 export function ApprovalPrompt({ request, onDecide, headingLevel = 3, className }: ApprovalPromptProps) {
   const [busy, setBusy] = useState<ApprovalDecision | null>(null);
   const context = request.context;
-  const coverage = request.grantCoverage ? `covers ${request.grantCoverage}.` : undefined;
+  const coverage = request.grantCoverage
+    ? request.grantCoverage.charAt(0).toUpperCase() + request.grantCoverage.slice(1)
+    : "This request";
 
   const options: PermissionPromptOption<ApprovalDecision>[] = PROMPT_DECISIONS.filter((decision) =>
     request.allowedDecisions.includes(decision),
@@ -39,9 +41,9 @@ export function ApprovalPrompt({ request, onDecide, headingLevel = 3, className 
     variant: decision === "deny" ? "danger" : decision === "approve_once" ? "primary" : "secondary",
     description:
       decision === "approve_for_thread"
-        ? `until this thread stops (at most 24 hours), ${coverage}`
+        ? `${coverage}, in this thread until it stops (24 hours at most).`
         : decision === "approve_for_workspace"
-          ? `every thread in this workspace for 30 days, ${coverage}`
+          ? `${coverage}, in every thread of this workspace for 30 days.`
           : undefined,
   }));
 

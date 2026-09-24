@@ -133,6 +133,11 @@ fn obfuscation_table() -> Vec<(String, Vec<S>, bool)> {
         ("xargs -I{} rm -rf {}".into(), vec![S::Destructive], true),
         ("start \"\" cmd /c del /s /q src".into(), vec![S::Destructive], false),
         ("wsl rm -rf /mnt/c".into(), vec![S::Destructive, S::FilesystemOutsideWorkspace], false),
+        ("Start-Process cmd -ArgumentList '/c del /s /q src'".into(), vec![S::Destructive], false),
+        ("saps -FilePath powershell -ArgumentList '-c git push -f'".into(), vec![S::GitPush, S::Destructive], false),
+        ("git.exe push --force".into(), vec![S::GitPush, S::Destructive], false),
+        ("GIT PUSH --FORCE".into(), vec![S::GitPush, S::Destructive], false),
+        ("docker run -v /:/host alpine rm -rf /host".into(), vec![S::FilesystemOutsideWorkspace], false),
     ]
 }
 
