@@ -11,6 +11,7 @@
 //! - [`voice`]: listening sessions (microphone, transcription, audio dropped afterwards).
 //! - [`orchestrator`]: request pipeline (allowance, grammar, provider, permission, execute).
 //! - [`speech_output`]: optional spoken replies through the OS voice.
+//! - [`signals`]: status snapshot and live signals for the KalVoice UI.
 //!
 //! Zero company AI cost: nothing here calls a hosted AI or speech service. Speech runs on the
 //! device; reasoning runs on the user's own connected provider.
@@ -23,6 +24,7 @@ pub mod orchestrator;
 pub mod plan;
 pub mod prefs;
 pub mod shortcuts;
+pub mod signals;
 pub mod speech_output;
 pub mod stt;
 pub mod voice;

@@ -3,6 +3,7 @@
 
 mod commands;
 pub mod environment;
+mod kalvoice_commands;
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -188,6 +189,13 @@ pub fn run(removed_overrides: Vec<&'static str>) {
     }
     let app = builder
         .plugin(tauri_plugin_opener::init())
+        // KalVoice shortcuts are registered from Rust only; the WebView has no permission to
+        // call this plugin's commands.
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(kalvoice_commands::on_shortcut)
+                .build(),
+        )
         .on_page_load(|webview, payload| {
             // A (re)load starts a fresh page whose JS callbacks no longer exist.
             if payload.event() == PageLoadEvent::Started
@@ -198,6 +206,8 @@ pub fn run(removed_overrides: Vec<&'static str>) {
         })
         .setup(move |app| {
             let state = start(app, &removed_overrides);
+            let kalvoice = kalvoice_commands::init(app.handle(), state.core.clone(), &state.info);
+            app.manage(kalvoice);
             app.manage(state);
 
             // Safety net: the frontend shows the window after its first themed paint
@@ -226,6 +236,16 @@ pub fn run(removed_overrides: Vec<&'static str>) {
             commands::diagnostics_open_log_dir,
             commands::diagnostics_open_data_dir,
             commands::secure_store_check,
+            kalvoice_commands::kalvoice_subscribe,
+            kalvoice_commands::kalvoice_status,
+            kalvoice_commands::kalvoice_request,
+            kalvoice_commands::kalvoice_preferences_update,
+            kalvoice_commands::kalvoice_listen_start,
+            kalvoice_commands::kalvoice_listen_stop,
+            kalvoice_commands::kalvoice_listen_cancel,
+            kalvoice_commands::kalvoice_model_download,
+            kalvoice_commands::kalvoice_model_cancel,
+            kalvoice_commands::kalvoice_model_delete,
         ])
         .build(tauri::generate_context!());
 

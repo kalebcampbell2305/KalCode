@@ -13,6 +13,16 @@ const COMMANDS: &[&str] = &[
     "diagnostics_open_log_dir",
     "diagnostics_open_data_dir",
     "secure_store_check",
+    "kalvoice_subscribe",
+    "kalvoice_status",
+    "kalvoice_request",
+    "kalvoice_preferences_update",
+    "kalvoice_listen_start",
+    "kalvoice_listen_stop",
+    "kalvoice_listen_cancel",
+    "kalvoice_model_download",
+    "kalvoice_model_cancel",
+    "kalvoice_model_delete",
 ];
 
 fn main() {

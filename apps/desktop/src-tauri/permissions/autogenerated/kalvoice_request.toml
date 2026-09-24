@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-kalvoice-request"
+description = "Enables the kalvoice_request command without any pre-configured scope."
+commands.allow = ["kalvoice_request"]
+
+[[permission]]
+identifier = "deny-kalvoice-request"
+description = "Denies the kalvoice_request command without any pre-configured scope."
+commands.deny = ["kalvoice_request"]

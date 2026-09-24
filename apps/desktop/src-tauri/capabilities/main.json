@@ -16,6 +16,16 @@
     "allow-diagnostics-get",
     "allow-diagnostics-open-log-dir",
     "allow-diagnostics-open-data-dir",
-    "allow-secure-store-check"
+    "allow-secure-store-check",
+    "allow-kalvoice-subscribe",
+    "allow-kalvoice-status",
+    "allow-kalvoice-request",
+    "allow-kalvoice-preferences-update",
+    "allow-kalvoice-listen-start",
+    "allow-kalvoice-listen-stop",
+    "allow-kalvoice-listen-cancel",
+    "allow-kalvoice-model-download",
+    "allow-kalvoice-model-cancel",
+    "allow-kalvoice-model-delete"
   ]
 }

@@ -21,6 +21,9 @@ tauri-build = { version = "2.6", features = [] }
 [dependencies]
 kalcode-native-core = { path = "../../../crates/native-core" }
 kalcode-secure-store = { path = "../../../crates/secure-store" }
+kalcode-contracts = { path = "../../../crates/contracts" }
+kalcode-kalvoice = { path = "../../../crates/kalvoice" }
+tauri-plugin-global-shortcut = "2.3"
 tauri = { version = "2.11", features = [] }
 tauri-plugin-opener = "2.5"
 tauri-plugin-single-instance = "2.4"
@@ -35,3 +38,7 @@ workspace = true
 # Keeps test hooks (WebView2 debugging variables, KALCODE_DATA_DIR) in release builds.
 # Used only to build the binary the end-to-end suite drives; never for shipped installers.
 e2e = []
+# On-device speech recognition (whisper.cpp). Needs libclang at build time: install LLVM and set
+# LIBCLANG_PATH (docs/KALVOICE.md, "Building"). Without it, dictation shows that the speech
+# engine isn't included in this build.
+kalvoice-whisper = ["kalcode-kalvoice/whisper"]

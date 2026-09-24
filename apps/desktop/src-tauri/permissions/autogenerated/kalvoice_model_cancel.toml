@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-kalvoice-model-cancel"
+description = "Enables the kalvoice_model_cancel command without any pre-configured scope."
+commands.allow = ["kalvoice_model_cancel"]
+
+[[permission]]
+identifier = "deny-kalvoice-model-cancel"
+description = "Denies the kalvoice_model_cancel command without any pre-configured scope."
+commands.deny = ["kalvoice_model_cancel"]

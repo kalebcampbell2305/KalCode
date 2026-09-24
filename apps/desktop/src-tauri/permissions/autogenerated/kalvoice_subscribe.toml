@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-kalvoice-subscribe"
+description = "Enables the kalvoice_subscribe command without any pre-configured scope."
+commands.allow = ["kalvoice_subscribe"]
+
+[[permission]]
+identifier = "deny-kalvoice-subscribe"
+description = "Denies the kalvoice_subscribe command without any pre-configured scope."
+commands.deny = ["kalvoice_subscribe"]
