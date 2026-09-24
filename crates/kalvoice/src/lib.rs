@@ -6,13 +6,17 @@
 //! - [`prefs`]: shortcuts, reasoning provider, speech model, spoken replies.
 //! - [`shortcuts`]: shortcut parsing and conflict detection.
 //! - [`models`]: on-device speech model catalog and consented, verified downloads.
+//! - [`audio`]: microphone capture into memory, resampled to 16 kHz.
+//! - [`stt`]: on-device speech recognition (whisper.cpp behind the `whisper` feature).
 //!
 //! Zero company AI cost: nothing here calls a hosted AI or speech service. Speech runs on the
 //! device; reasoning runs on the user's own connected provider.
 
+pub mod audio;
 pub mod grammar;
 pub mod ledger;
 pub mod models;
 pub mod plan;
 pub mod prefs;
 pub mod shortcuts;
+pub mod stt;
