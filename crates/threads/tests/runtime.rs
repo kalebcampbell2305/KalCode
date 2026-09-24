@@ -609,11 +609,27 @@ fn interrupt_stops_a_slow_turn_and_keeps_partial_output() {
         !seen.lock().unwrap().is_empty()
     });
 
+    let streamed = Arc::new(Mutex::new(Vec::new()));
+    let sink = streamed.clone();
+    h.runtime
+        .subscribe_stream(&id, move |e| {
+            sink.lock().unwrap().push(e.clone());
+            true
+        })
+        .unwrap();
     let thread = h.runtime.interrupt(&id).expect("interrupt");
     assert_eq!(thread.status, ThreadStatus::Idle);
     assert_eq!(
         thread.current_activity.as_deref(),
         Some(INTERRUPTED_ACTIVITY)
+    );
+    // Live viewers learn the partial message is finished.
+    assert_eq!(
+        streamed.lock().unwrap().last(),
+        Some(&AgentEvent::MessageCompleted {
+            message_id: "m".into(),
+            text: "Working on it".into()
+        })
     );
     assert!(h.provider.last_session().calls().contains(&Call::Interrupt));
     let messages = h.runtime.messages(&id, 50, None).unwrap();
@@ -1170,7 +1186,12 @@ fn crash_recovery_interrupts_threads_left_running() {
 
     // Recovered threads resume.
     let resumed = runtime.resume(&running, None).expect("resume");
-    assert_eq!(resumed.status, ThreadStatus::Starting);
+    assert_eq!(
+        resumed.status,
+        ThreadStatus::Idle,
+        "resumed and waiting for input"
+    );
+    assert_eq!(resumed.current_activity, None);
     let messages = runtime.messages(&running, 10, None).unwrap();
     assert_eq!(messages[0].content, "running", "history survived the crash");
 }

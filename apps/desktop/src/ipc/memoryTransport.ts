@@ -7,22 +7,30 @@
  * `?scenario=` (ui-test builds only) selects a starting state:
  *   startup-error      — the core failed to start (newer database)
  *   keychain-failure   — the credential store check fails
+ *   threads            — threads in every state (Threads surface fixtures)
+ *   no-providers       — no provider is connected (New thread flow empty state)
  */
 import type {
   AppInfo,
   BootState,
+  Correlation,
   Diagnostics,
   EventEnvelope,
   EventPayload,
+  EventSource,
   IpcError,
   SecureStoreCheck,
   Settings,
   SettingsPatch,
   SurfaceFlag,
 } from "@kalcode/protocol";
+import { createThreadsMemory } from "./memory/threads.ts";
 import type { CommandName, Transport } from "./transport.ts";
 
-export type MemoryScenario = "default" | "startup-error" | "keychain-failure";
+export type MemoryScenario = "default" | "startup-error" | "keychain-failure" | "threads" | "no-providers";
+
+/** Surfaces that work in this build (mirrors crates/native-core/src/flags.rs). */
+const AVAILABLE: ReadonlySet<SurfaceFlag["id"]> = new Set(["dashboard", "threads", "settings"]);
 
 const SURFACES: SurfaceFlag["id"][] = [
   "dashboard",
@@ -73,7 +81,7 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
     flags: {
       surfaces: SURFACES.map((id) => ({
         id,
-        state: id === "dashboard" || id === "settings" ? "available" : "gated",
+        state: AVAILABLE.has(id) ? "available" : "gated",
         visible: true,
       })),
     },
@@ -83,14 +91,21 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
   const subscribers = new Set<(event: EventEnvelope) => void>();
   let lastCheck: { at: string; ok: boolean; backend: string } | null = null;
 
-  const emit = (event: EventPayload) => {
+  const emit = (event: EventPayload, correlation: Partial<Correlation> = {}, source: EventSource = "core") => {
     const envelope = {
       id: crypto.randomUUID(),
       seq: events.length + 1,
       version: 1,
       occurredAt: new Date().toISOString(),
-      source: "core",
-      correlation: { workspaceId: null, threadId: null, missionId: null, providerId: null, requestId: null },
+      source,
+      correlation: {
+        workspaceId: null,
+        threadId: null,
+        missionId: null,
+        providerId: null,
+        requestId: null,
+        ...correlation,
+      },
       ...event,
     } as EventEnvelope;
     events.push(envelope);
@@ -124,6 +139,12 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
   const requireCore = () => {
     if (startupError) fail(startupError);
   };
+
+  const threads = createThreadsMemory(
+    emit,
+    requireCore,
+    scenario === "threads" || scenario === "no-providers" ? scenario : "default",
+  );
 
   const handlers: Record<CommandName, (args: Record<string, unknown>) => unknown> = {
     boot: (): BootState => ({ info, startupError }),
@@ -215,6 +236,7 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
     },
     diagnostics_open_log_dir: () => requireCore(),
     diagnostics_open_data_dir: () => undefined,
+    ...threads.handlers,
     secure_store_check: (): SecureStoreCheck => {
       requireCore();
       const ok = scenario !== "keychain-failure";
@@ -246,6 +268,11 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
         subscribers.delete(onEvent);
       };
     },
+    async streamThread(threadId, onEvent) {
+      await Promise.resolve();
+      const stop = threads.stream(threadId, onEvent);
+      return async () => stop();
+    },
     async setNativeTheme() {},
     subscriberCount: () => subscribers.size,
   };
@@ -254,5 +281,7 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
 function readScenario(): MemoryScenario {
   if (typeof location === "undefined") return "default";
   const value = new URLSearchParams(location.search).get("scenario");
-  return value === "startup-error" || value === "keychain-failure" ? value : "default";
+  return value === "startup-error" || value === "keychain-failure" || value === "threads" || value === "no-providers"
+    ? value
+    : "default";
 }

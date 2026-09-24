@@ -1058,8 +1058,10 @@ impl Inner {
         if let Some(notice) = notice {
             self.persist_message(ctx, MessageRole::System, notice, None, EventSource::Core)?;
         }
-        if let Some(text) = first_input {
-            self.send_locked(&live, &mut state, text)?;
+        match first_input {
+            Some(text) => self.send_locked(&live, &mut state, text)?,
+            // The session is up and no turn is running: the thread waits for input.
+            None => self.transition(ctx, ThreadStatus::Idle, None)?,
         }
         Ok(())
     }
@@ -1458,18 +1460,23 @@ impl Inner {
     }
 
     /// Persists partially streamed assistant text (interrupt, stop, crash) so nothing the user
-    /// saw is lost.
+    /// saw is lost, and tells live-stream subscribers those messages are finished.
     fn flush_buffers(&self, ctx: &Ctx, state: &mut LiveState) -> Result<()> {
         for (message_id, text) in std::mem::take(&mut state.buffers) {
+            let text = cap_message(text);
             if !text.trim().is_empty() {
                 self.persist_message(
                     ctx,
                     MessageRole::Assistant,
-                    &cap_message(text),
+                    &text,
                     Some(&message_id),
                     EventSource::Provider,
                 )?;
             }
+            self.streams.publish(
+                &ctx.thread_id,
+                &AgentEvent::MessageCompleted { message_id, text },
+            );
         }
         Ok(())
     }

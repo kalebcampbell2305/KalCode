@@ -1,9 +1,21 @@
 import type { SettingsPatch, SurfaceId } from "@kalcode/protocol";
 import { Command } from "cmdk";
-import { ClipboardCopy, FolderOpen, KeyRound, Monitor, Moon, PanelLeft, Rows3, Sun } from "lucide-react";
+import {
+  ClipboardCopy,
+  FolderOpen,
+  KeyRound,
+  MessageSquarePlus,
+  Monitor,
+  Moon,
+  PanelLeft,
+  Rows3,
+  Search,
+  Sun,
+} from "lucide-react";
 import type { ReactNode } from "react";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { useDiagnosticsActions } from "../surfaces/settings/useDiagnosticsActions.ts";
+import { useThreadsIntent } from "../surfaces/threads/intent.tsx";
 import styles from "./CommandPalette.module.css";
 import { PRIMARY_ORDER, SURFACES, useNavigation } from "./navigation.tsx";
 import { MOD_LABEL } from "./shortcuts.ts";
@@ -17,6 +29,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const { info, settings, updateSettings } = useRuntime();
   const { navigate } = useNavigation();
   const diagnostics = useDiagnosticsActions();
+  const threadsIntent = useThreadsIntent();
 
   const run = (action: () => unknown) => () => {
     onOpenChange(false);
@@ -40,6 +53,29 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       <Command.Input className={styles.input} placeholder="Search commands and destinations" />
       <Command.List className={styles.list}>
         <Command.Empty className={styles.empty}>No matching commands.</Command.Empty>
+
+        {visible.has("threads") ? (
+          <Command.Group heading="Threads" className={styles.group}>
+            <Item
+              icon={<MessageSquarePlus />}
+              onSelect={run(() => {
+                navigate("threads");
+                threadsIntent.request("new");
+              })}
+            >
+              New thread
+            </Item>
+            <Item
+              icon={<Search />}
+              onSelect={run(() => {
+                navigate("threads");
+                threadsIntent.request("search");
+              })}
+            >
+              Search threads
+            </Item>
+          </Command.Group>
+        ) : null}
 
         <Command.Group heading="Go to" className={styles.group}>
           {destinations.map((id) => {

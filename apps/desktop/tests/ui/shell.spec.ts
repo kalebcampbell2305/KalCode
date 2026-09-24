@@ -125,8 +125,8 @@ test.describe("navigation and commands", () => {
 
   test("gated surfaces explain that they are not available yet", async ({ page }) => {
     await open(page);
-    await page.getByRole("button", { name: "Threads" }).click();
-    await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toBeVisible();
+    await page.getByRole("button", { name: "Agents" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Agents" })).toBeVisible();
     await expect(page.getByText("Not available in this build")).toBeVisible();
     await expect(page.getByText("Nothing on this page runs yet.")).toBeVisible();
   });

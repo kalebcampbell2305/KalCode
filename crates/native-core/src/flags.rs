@@ -61,7 +61,7 @@ impl FeatureFlags {
             (Dashboard, Available),
             (Jarvis, Gated),
             (Code, Gated),
-            (Threads, Gated),
+            (Threads, Available),
             (Agents, Gated),
             (Missions, Gated),
             (Automations, Gated),

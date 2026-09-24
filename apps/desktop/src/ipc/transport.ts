@@ -1,4 +1,4 @@
-import type { EventEnvelope } from "@kalcode/protocol";
+import type { AgentEvent, EventEnvelope } from "@kalcode/protocol";
 
 /** Every command the native runtime exposes (mirrors src-tauri/build.rs). */
 export type CommandName =
@@ -12,7 +12,20 @@ export type CommandName =
   | "diagnostics_get"
   | "diagnostics_open_log_dir"
   | "diagnostics_open_data_dir"
-  | "secure_store_check";
+  | "secure_store_check"
+  | "thread_list"
+  | "thread_get"
+  | "thread_messages"
+  | "thread_tool_calls"
+  | "thread_options"
+  | "thread_create"
+  | "thread_send"
+  | "thread_interrupt"
+  | "thread_resume"
+  | "thread_stop"
+  | "thread_rename"
+  | "thread_archive"
+  | "thread_stream";
 
 export type Unsubscribe = () => Promise<void>;
 
@@ -23,6 +36,11 @@ export interface Transport {
   readonly kind: "tauri" | "memory";
   invoke<T>(command: CommandName, args?: Record<string, unknown>): Promise<T>;
   subscribe(onEvent: (event: EventEnvelope) => void): Promise<Unsubscribe>;
+  /**
+   * Live stream of one thread's message deltas (`thread_stream`). The native side keeps one
+   * stream per window: opening another thread's stream replaces this one.
+   */
+  streamThread(threadId: string, onEvent: (event: AgentEvent) => void): Promise<Unsubscribe>;
   /** Syncs the OS window chrome (title bar) with the app theme. */
   setNativeTheme(theme: NativeTheme): Promise<void>;
 }
@@ -41,6 +59,18 @@ export async function createTauriTransport(): Promise<Transport> {
       const id = await invoke<number>("events_subscribe", { onEvent: channel });
       return async () => {
         await invoke<boolean>("events_unsubscribe", { id });
+      };
+    },
+    async streamThread(threadId, onEvent) {
+      const channel = new Channel<AgentEvent>();
+      let open = true;
+      channel.onmessage = (event) => {
+        if (open) onEvent(event);
+      };
+      await invoke<number>("thread_stream", { threadId, onEvent: channel });
+      // Native replaces a window's stream when another is opened and drops it on reload.
+      return async () => {
+        open = false;
       };
     },
     async setNativeTheme(theme) {
