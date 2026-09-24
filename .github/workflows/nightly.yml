@@ -1,0 +1,94 @@
+name: Nightly
+
+# The slow, real-app checks: the desktop E2E suite and the performance harness on a Windows
+# runner, plus a dependency-advisory scan (advisories change without code changes).
+on:
+  schedule:
+    - cron: "17 6 * * *" # 06:17 UTC daily
+  workflow_dispatch:
+    inputs:
+      perf-runs:
+        description: Cold and warm launches per perf run
+        default: "5"
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  desktop-real-app:
+    name: Desktop E2E + performance (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      KALCODE_E2E_CDP_PORT: "9437"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: ". -> target/e2e"
+      - run: pnpm install --frozen-lockfile
+      - name: Build release app (e2e feature)
+        run: pnpm --filter @kalcode/desktop build:e2e
+      - run: pnpm --filter @kalcode/desktop exec playwright install chromium
+      - name: Real-app E2E
+        run: pnpm --filter @kalcode/desktop test:e2e
+      - name: Performance harness
+        shell: bash
+        env:
+          PERF_RUNS: ${{ inputs.perf-runs || '5' }}
+        run: |
+          [[ "$PERF_RUNS" =~ ^[0-9]+$ ]] || { echo "perf-runs must be a number"; exit 1; }
+          pnpm perf --cold "$PERF_RUNS" --warm "$PERF_RUNS" --out target/perf/nightly
+      # CI runners are not the reference machine, so only absolute budgets gate here; the
+      # baseline comparison is meaningful on the machine the baseline came from (see
+      # docs/PERFORMANCE.md).
+      - name: Performance budgets
+        run: pnpm perf:check target/perf/nightly/results.json --no-baseline
+      - name: Performance summary
+        if: always()
+        shell: bash
+        run: |
+          if [ -f target/perf/nightly/summary.md ]; then cat target/perf/nightly/summary.md >> "$GITHUB_STEP_SUMMARY"; fi
+      - name: Upload performance results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: perf-windows-x64
+          path: target/perf/nightly/
+          if-no-files-found: ignore
+          retention-days: 90
+      - name: Upload Playwright traces
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nightly-desktop-e2e-test-results
+          path: apps/desktop/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  advisories:
+    name: Rust advisories (cargo-deny)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check
+          command-arguments: advisories

@@ -1,0 +1,20 @@
+{
+  "name": "@kalcode/testing",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "KalCode test fixtures: typed, deterministic builders and scenarios for the shared contracts.",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@kalcode/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "5.0.1"
+  }
+}

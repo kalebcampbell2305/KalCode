@@ -1,0 +1,25 @@
+{
+  "$comment": "Absolute budgets (max/min) apply on every machine, including CI runners. Regression limits apply against baselines/<platform>.json and are only meaningful on the machine that produced it. See docs/PERFORMANCE.md.",
+  "defaults": { "regressionPct": 25 },
+  "metrics": {
+    "startup.cold.windowVisibleMs": { "max": 3000, "regressionPct": 30, "minDelta": 150 },
+    "startup.cold.windowReadyIpcMs": { "max": 3000, "regressionPct": 30, "minDelta": 150 },
+    "startup.warm.windowVisibleMs": { "max": 2000, "regressionPct": 30, "minDelta": 150 },
+    "startup.warm.windowReadyIpcMs": { "max": 2000, "regressionPct": 30, "minDelta": 150 },
+    "shutdown.gracefulMs": { "max": 3000, "regressionPct": 50, "minDelta": 200 },
+    "ipc.boot.roundTripMs": { "max": 10, "regressionPct": 50, "minDelta": 1 },
+    "ipc.settingsGet.roundTripMs": { "max": 10, "regressionPct": 50, "minDelta": 1 },
+    "ipc.eventsRecent50.roundTripMs": { "max": 15, "regressionPct": 50, "minDelta": 1 },
+    "ipc.diagnosticsGet.roundTripMs": { "max": 15, "regressionPct": 50, "minDelta": 1 },
+    "events.append.roundTripMs": { "max": 20, "regressionPct": 50, "minDelta": 2 },
+    "events.append.perSecond": { "min": 50, "regressionPct": 40, "minDelta": 25 },
+    "memory.idle.workingSetMB": { "max": 600, "regressionPct": 15, "minDelta": 30 },
+    "memory.idle.privateMB": { "max": 350, "regressionPct": 15, "minDelta": 25 },
+    "memory.idle.mainWorkingSetMB": { "max": 80, "regressionPct": 20, "minDelta": 8 },
+    "memory.afterEvents.workingSetMB": { "max": 700, "regressionPct": 15, "minDelta": 30 },
+    "cpu.idle.percentOfOneCore": { "max": 50, "regressionPct": 50, "minDelta": 10 },
+    "cpu.idle.mainPercentOfOneCore": { "max": 5, "regressionPct": 100, "minDelta": 1 },
+    "db.fresh.bytes": { "max": 524288, "regressionPct": 25, "minDelta": 16384 },
+    "binary.exeBytes": { "max": 20971520, "regressionPct": 10, "minDelta": 262144 }
+  }
+}

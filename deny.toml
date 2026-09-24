@@ -1,0 +1,83 @@
+# cargo-deny policy for the KalCode Rust workspace (run: `cargo deny check`).
+# KalCode is proprietary and ships binaries, so dependencies must be under permissive
+# licenses (or file-level weak copyleft that we use unmodified), come from crates.io, and
+# carry no unaddressed security advisories.
+
+[graph]
+# The platforms KalCode ships on. Linux/macOS-only crates (GTK, WebKitGTK, objc2) are checked too.
+targets = [
+  "x86_64-pc-windows-msvc",
+  "aarch64-pc-windows-msvc",
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+]
+# Include the `e2e` test feature: CI builds it, so its dependencies are held to the same policy.
+all-features = true
+
+[advisories]
+# Unmaintained crates are errors only when a workspace crate depends on them directly; deep
+# transitive ones (often in Tauri's Linux stack) are reported by the RustSec job instead.
+unmaintained = "workspace"
+unsound = "all"
+yanked = "deny"
+# Every ignore needs an id, a reason and a review date.
+ignore = [
+  # glib 0.18 (Linux only: tauri -> tao/wry -> gtk/webkit2gtk). Fixed in glib >= 0.20, which the
+  # GTK3 stack Tauri 2 depends on cannot use yet. KalCode never calls `VariantStrIter`.
+  # Review when Tauri moves off gtk-rs 0.18 (re-check 2026-12-31).
+  { id = "RUSTSEC-2024-0429", reason = "transitive via Tauri's Linux GTK3 stack; no fixed version usable; API unused" },
+]
+
+[licenses]
+confidence-threshold = 0.93
+# Permissive licenses, plus MPL-2.0: file-level copyleft that only binds modified MPL files.
+# We use those crates unmodified; patching one means publishing the patched file.
+allow = [
+  "0BSD",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "CC0-1.0",
+  "ISC",
+  "MIT",
+  "MIT-0",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+]
+# Listing a license we do not currently use is fine; the list is the policy, not an inventory.
+unused-allowed-license = "allow"
+
+[licenses.private]
+# KalCode's own crates are `publish = false` and proprietary (LicenseRef-KalCode-Proprietary).
+ignore = true
+
+[bans]
+# Duplicate versions are common in the Tauri/windows-sys graph and are reported, not failed.
+# Crates where two copies would be a real defect (two SQLite builds, two async runtimes, two
+# Tauri runtimes, split serde/uuid types across IPC) are denied individually below.
+multiple-versions = "warn"
+wildcards = "deny"
+# Workspace path dependencies have no version; allowed because every workspace crate is private.
+allow-wildcard-paths = true
+highlight = "simplest-path"
+deny = [
+  { crate = "openssl", use-instead = "rustls / OS TLS", reason = "no OpenSSL in shipped binaries" },
+  { crate = "openssl-sys", use-instead = "rustls / OS TLS", reason = "no OpenSSL in shipped binaries" },
+  { crate = "libsqlite3-sys", deny-multiple-versions = true, reason = "one bundled SQLite per binary" },
+  { crate = "rusqlite", deny-multiple-versions = true, reason = "one SQLite binding" },
+  { crate = "tauri", deny-multiple-versions = true, reason = "one Tauri runtime" },
+  { crate = "tokio", deny-multiple-versions = true, reason = "one async runtime" },
+  { crate = "serde", deny-multiple-versions = true, reason = "IPC types must share one serde" },
+  { crate = "uuid", deny-multiple-versions = true, reason = "ids must share one uuid type" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
