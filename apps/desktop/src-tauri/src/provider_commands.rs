@@ -21,6 +21,11 @@ impl ProviderState {
     pub fn from_process() -> Self {
         Self(Arc::new(ProviderRegistry::new(DetectEnv::from_process())))
     }
+
+    /// The shared registry (KalVoice picks its reasoning provider from the same cache).
+    pub fn registry(&self) -> Arc<ProviderRegistry> {
+        Arc::clone(&self.0)
+    }
 }
 
 /// The cached status of every provider (`detection` is null until the first check).

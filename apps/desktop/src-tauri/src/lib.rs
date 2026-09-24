@@ -207,10 +207,16 @@ pub fn run(removed_overrides: Vec<&'static str>) {
         })
         .setup(move |app| {
             let state = start(app, &removed_overrides);
-            let kalvoice = kalvoice_commands::init(app.handle(), state.core.clone(), &state.info);
+            let providers = provider_commands::ProviderState::from_process();
+            let kalvoice = kalvoice_commands::init(
+                app.handle(),
+                state.core.clone(),
+                &state.info,
+                providers.registry(),
+            );
             app.manage(kalvoice);
             app.manage(state);
-            app.manage(provider_commands::ProviderState::from_process());
+            app.manage(providers);
 
             // Safety net: the frontend shows the window after its first themed paint
             // (`window_ready`). If that never happens, show it anyway so the user is never

@@ -52,6 +52,19 @@ pub trait ActiveCapture: Send {
     fn finish(self: Box<Self>) -> Result<Vec<f32>, CaptureError>;
     /// Stops recording and discards the audio.
     fn cancel(self: Box<Self>);
+    /// Loudness of the most recent audio, 0.0–1.0 (for the listening waveform). Only this
+    /// number leaves the capture; the audio itself stays in memory.
+    fn level(&self) -> f32 {
+        0.0
+    }
+}
+
+/// Maps an RMS amplitude to a 0–1 display level (speech sits around 0.3–0.8).
+pub fn display_level(rms: f32) -> f32 {
+    if !rms.is_finite() || rms <= 0.0 {
+        return 0.0;
+    }
+    (rms * 6.0).sqrt().min(1.0)
 }
 
 /// Resamples mono audio to 16 kHz. Downsampling low-passes first (windowed sinc) so speech
@@ -137,6 +150,8 @@ mod mic {
     #[derive(Default)]
     struct Shared {
         samples: Mutex<Vec<f32>>,
+        /// RMS of the latest callback buffer, as `f32` bits.
+        level: AtomicU32,
         rate: AtomicU32,
         full: AtomicBool,
         error: Mutex<Option<CaptureError>>,
@@ -167,13 +182,22 @@ mod mic {
             .samples
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
+        let mut energy = 0.0f32;
+        let mut frames = 0usize;
         for frame in data.chunks(channels.max(1)) {
             if samples.len() >= max {
                 shared.full.store(true, Ordering::Relaxed);
                 break;
             }
             let sum: f32 = frame.iter().map(|s| to_f32(*s)).sum();
-            samples.push(sum / frame.len() as f32);
+            let mono = sum / frame.len() as f32;
+            energy += mono * mono;
+            frames += 1;
+            samples.push(mono);
+        }
+        if frames > 0 {
+            let rms = (energy / frames as f32).sqrt();
+            shared.level.store(rms.to_bits(), Ordering::Relaxed);
         }
     }
 
@@ -290,6 +314,10 @@ mod mic {
         fn cancel(mut self: Box<Self>) {
             self.stop_thread();
         }
+
+        fn level(&self) -> f32 {
+            super::display_level(f32::from_bits(self.shared.level.load(Ordering::Relaxed)))
+        }
     }
 
     impl AudioSource for MicrophoneSource {
@@ -384,6 +412,14 @@ mod tests {
         let x = sine(12_000.0, 48_000, 0.5);
         let y = resample_to_16k(&x, 48_000);
         assert!(rms(&y[100..y.len() - 100]) < 0.02, "aliasing: {}", rms(&y));
+    }
+
+    #[test]
+    fn display_level_is_bounded() {
+        assert_eq!(display_level(0.0), 0.0);
+        assert_eq!(display_level(f32::NAN), 0.0);
+        assert!(display_level(0.05) > 0.4 && display_level(0.05) < 0.7);
+        assert_eq!(display_level(10.0), 1.0);
     }
 
     #[test]

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::models::SpeechModelInfo;
+use crate::orchestrator::RequestStage;
 use crate::orchestrator::{KalVoiceResponse, ProviderChoice};
 use crate::prefs::KalVoicePreferences;
 use crate::shortcuts::ReservedShortcut;
@@ -54,7 +55,7 @@ pub struct ListeningSession {
     pub mode: KalVoiceMode,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(
     tag = "kind",
     rename_all = "snake_case",
@@ -66,6 +67,12 @@ pub enum KalVoiceSignal {
     ListeningStarted {
         session_id: String,
         mode: KalVoiceMode,
+    },
+    /// Microphone input level (0–1), about 20 times a second while listening. Only this
+    /// number is sent; the audio stays in native memory.
+    Level {
+        session_id: String,
+        level: f32,
     },
     /// Recording stopped; recognizing on the device.
     Transcribing {
@@ -102,6 +109,11 @@ pub enum KalVoiceSignal {
         model_id: String,
         code: String,
         message: String,
+    },
+    /// A request moved to a new stage of the pipeline.
+    RequestStage {
+        request_id: String,
+        stage: RequestStage,
     },
     /// A command that waited for approval finished.
     RequestResolved {

@@ -3,7 +3,8 @@
 //!
 //! Seams for other campaigns (each returns an honest "not available in this build" today):
 //! - [`DesktopExecutor`]: workspaces and terminals (Z1), threads and status (Z3), approvals (Z4).
-//! - Providers: [`NoProviders`] until the provider runtime (Z2) supplies a [`ProviderDirectory`].
+//! - Providers: [`DesktopProviders`] over the provider runtime (Z2): KalVoice reasoning runs on
+//!   the user's own signed-in Claude Code, read-only, in an empty KalVoice folder.
 //! - Permissions: [`AskUnlessReadGate`] until the permission engine (Z4) supplies a gate.
 
 use std::collections::HashMap;
@@ -13,24 +14,27 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use kalcode_contracts::agent::{AgentProvider, ProviderId, SessionConfig};
 use kalcode_contracts::app::SurfaceId;
 use kalcode_contracts::events::EventPayload;
 use kalcode_contracts::kalvoice::{KalVoiceIntent, KalVoiceMode, KalVoiceOutcome};
+use kalcode_contracts::permissions::PermissionMode;
 use kalcode_contracts::permissions::{ApprovalDecision, AskUnlessReadGate};
 use kalcode_core::{AppInfo, Core, IpcError, KalError};
 use kalcode_kalvoice::audio::MicrophoneSource;
 use kalcode_kalvoice::models::{self, ModelError, ModelStore, SpeechModelInfo};
 use kalcode_kalvoice::orchestrator::{
-    CommandRequest, ExecContext, ExecError, Executed, Executor, KalVoiceResponse, NoProviders,
-    Orchestrator, ProviderDirectory, UiDirective,
+    CommandRequest, ExecContext, ExecError, Executed, Executor, KalVoiceResponse, Orchestrator,
+    ProviderChoice, ProviderDirectory, RequestStage, UiDirective, provider_display_name,
 };
 use kalcode_kalvoice::plan::ProvisionalEntitlement;
 use kalcode_kalvoice::prefs::{KalVoicePreferences, KalVoicePreferencesPatch};
+use kalcode_kalvoice::shortcuts;
 use kalcode_kalvoice::signals::{KalVoiceSignal, KalVoiceStatus, ListeningSession, ShortcutIssue};
 use kalcode_kalvoice::speech_output::{SpeechOutput, spoken_text};
 use kalcode_kalvoice::stt::{ENGINE_AVAILABLE, RecognizerCache, SpeechRecognizer, SttError};
 use kalcode_kalvoice::voice::{RecognizerSource, VoiceController, VoiceError};
-use kalcode_kalvoice::shortcuts;
+use kalcode_providers::{ClaudeCodeProvider, DetectEnv, ProviderRegistry};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State, Webview};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, ShortcutState};
@@ -63,6 +67,7 @@ struct Registered {
 
 pub struct KalVoiceRuntime {
     core: Arc<Core>,
+    providers: Arc<DesktopProviders>,
     orchestrator: Orchestrator,
     voice: VoiceController,
     models: Arc<ModelStore>,
@@ -100,7 +105,7 @@ impl KalVoiceRuntime {
             speech_engine: ENGINE_AVAILABLE,
             microphone_supported: self.microphone_supported,
             voice_output_available: self.speech().available(),
-            providers: NoProviders.connected(),
+            providers: self.providers.connected(),
             reserved_shortcuts: shortcuts::reserved(),
             shortcut_issues: registered.issues.clone(),
             listening: self
@@ -230,6 +235,74 @@ impl Executor for DesktopExecutor {
     }
 }
 
+/// The user's providers, from the provider runtime's cached detection.
+pub struct DesktopProviders {
+    registry: Arc<ProviderRegistry>,
+    reasoning_dir: std::path::PathBuf,
+}
+
+impl DesktopProviders {
+    fn ensure_detected(&self) {
+        if self.registry.list().iter().all(|s| s.detection.is_none()) {
+            // First use before the Providers page ran detection: read-only version and
+            // sign-in checks.
+            let _ = self.registry.detect_all();
+        }
+    }
+}
+
+impl ProviderDirectory for DesktopProviders {
+    fn connected(&self) -> Vec<ProviderChoice> {
+        let usable = self.registry.usable();
+        self.registry
+            .list()
+            .into_iter()
+            .filter(|s| s.adapter == kalcode_providers::AdapterState::Implemented)
+            .filter(|s| {
+                s.detection
+                    .as_ref()
+                    .is_some_and(|d| d.state == kalcode_contracts::agent::DetectionState::Installed)
+            })
+            .map(|s| ProviderChoice {
+                available: usable.contains(&s.id),
+                display_name: provider_display_name(&s.id),
+                id: s.id,
+            })
+            .collect()
+    }
+
+    fn provider(&self, id: &ProviderId) -> Option<Arc<dyn AgentProvider>> {
+        self.ensure_detected();
+        if !self.registry.usable().contains(id) {
+            return None;
+        }
+        match id.as_str() {
+            ProviderId::CLAUDE_CODE => {
+                Some(Arc::new(ClaudeCodeProvider::new(DetectEnv::from_process())))
+            }
+            _ => None,
+        }
+    }
+
+    fn session_config(
+        &self,
+        request_id: &str,
+        workspace_id: Option<&str>,
+    ) -> Option<SessionConfig> {
+        // Until workspaces land, reasoning runs in an empty KalVoice folder, read-only.
+        std::fs::create_dir_all(&self.reasoning_dir).ok()?;
+        Some(SessionConfig {
+            thread_id: request_id.to_owned(),
+            workspace_id: workspace_id.unwrap_or_default().to_owned(),
+            working_directory: self.reasoning_dir.to_string_lossy().into_owned(),
+            model: None,
+            permission_mode: PermissionMode::Plan,
+            resume_session_id: None,
+            secret_ref: None,
+        })
+    }
+}
+
 fn surface_label(surface: SurfaceId) -> &'static str {
     match surface {
         SurfaceId::Dashboard => "the Dashboard",
@@ -259,10 +332,19 @@ fn speech_output() -> Arc<dyn SpeechOutput> {
 }
 
 /// Builds the KalVoice runtime, registers the shortcuts, and follows approval decisions.
-pub fn init(app: &AppHandle, core: Option<Arc<Core>>, info: &AppInfo) -> KalVoiceState {
+pub fn init(
+    app: &AppHandle,
+    core: Option<Arc<Core>>,
+    info: &AppInfo,
+    registry: Arc<ProviderRegistry>,
+) -> KalVoiceState {
     let Some(core) = core else {
         return KalVoiceState(None);
     };
+    let providers = Arc::new(DesktopProviders {
+        registry,
+        reasoning_dir: core.paths().data_dir.join("kalvoice").join("reasoning"),
+    });
     let models = Arc::new(ModelStore::new(&core.paths().data_dir));
     let recognizers = Arc::new(DesktopRecognizers {
         core: core.clone(),
@@ -281,7 +363,7 @@ pub fn init(app: &AppHandle, core: Option<Arc<Core>>, info: &AppInfo) -> KalVoic
         Arc::new(ProvisionalEntitlement),
         Arc::new(DesktopExecutor { visible }),
         Arc::new(AskUnlessReadGate),
-        Arc::new(NoProviders),
+        providers.clone(),
     );
     let voice = VoiceController::new(
         core.clone(),
@@ -290,6 +372,7 @@ pub fn init(app: &AppHandle, core: Option<Arc<Core>>, info: &AppInfo) -> KalVoic
     );
     let runtime = Arc::new(KalVoiceRuntime {
         core: core.clone(),
+        providers,
         orchestrator,
         voice,
         models,
@@ -464,7 +547,7 @@ pub fn on_shortcut(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {
 }
 
 fn start_listening(
-    runtime: &KalVoiceRuntime,
+    runtime: &Arc<KalVoiceRuntime>,
     mode: KalVoiceMode,
     quiet: bool,
 ) -> Result<String, VoiceError> {
@@ -474,6 +557,7 @@ fn start_listening(
                 session_id: session_id.clone(),
                 mode,
             });
+            stream_level(runtime.clone(), session_id.clone());
             Ok(session_id)
         }
         Err(VoiceError::AlreadyListening) => Err(VoiceError::AlreadyListening),
@@ -489,6 +573,21 @@ fn start_listening(
             Err(error)
         }
     }
+}
+
+/// Sends the live input level (not audio) about 20 times a second while the session listens.
+fn stream_level(runtime: Arc<KalVoiceRuntime>, session_id: String) {
+    let _ = std::thread::Builder::new()
+        .name("kalvoice-level".into())
+        .spawn(move || {
+            while let Some(level) = runtime.voice.level(&session_id) {
+                runtime.signal(&KalVoiceSignal::Level {
+                    session_id: session_id.clone(),
+                    level,
+                });
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
 }
 
 /// Stops the microphone and transcribes on a background thread; the result arrives as a signal.
@@ -575,9 +674,17 @@ pub async fn kalvoice_request(
 ) -> Result<KalVoiceResponse, IpcError> {
     let runtime = state.runtime()?.clone();
     blocking("kalvoice_request", move || {
+        let request_id = request.request_id.clone();
+        let stage_runtime = runtime.clone();
+        let on_stage = move |stage: RequestStage| {
+            stage_runtime.signal(&KalVoiceSignal::RequestStage {
+                request_id: request_id.clone(),
+                stage,
+            });
+        };
         let response = runtime
             .orchestrator
-            .handle(request)
+            .handle_with_stages(request, &on_stage)
             .map_err(to_ipc("kalvoice_request"))?;
         speak_reply(&runtime, &response);
         Ok(response)

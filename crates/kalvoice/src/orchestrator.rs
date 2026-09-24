@@ -56,6 +56,17 @@ const REASONING_PREAMBLE: &str = "You are KalVoice, the assistant inside KalCode
 request the user spoke or typed. Reply briefly (a few sentences), in plain text. You are in \
 read-only planning mode: do not modify files or run commands.\n\nRequest: ";
 
+/// Where a request is in the pipeline (for the assistant's state display).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum RequestStage {
+    /// Understanding the request, or waiting for the user's provider to answer.
+    Thinking,
+    /// Running a command through the runtime.
+    Executing,
+}
+
 /// A top-level command request from the command bar.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -304,6 +315,15 @@ impl Orchestrator {
     /// Handles one top-level request. Blocking (a reasoning request waits for the provider);
     /// call from a background thread.
     pub fn handle(&self, req: CommandRequest) -> Result<KalVoiceResponse> {
+        self.handle_with_stages(req, &|_| {})
+    }
+
+    /// As [`Self::handle`], reporting each pipeline stage as it starts.
+    pub fn handle_with_stages(
+        &self,
+        req: CommandRequest,
+        on_stage: &dyn Fn(RequestStage),
+    ) -> Result<KalVoiceResponse> {
         if !is_valid_id(&req.request_id) {
             return Err(KalError::validation(
                 "invalid_request_id",
@@ -337,6 +357,7 @@ impl Orchestrator {
             usage,
             intent: None,
             counted: false,
+            on_stage,
         };
         if duplicate {
             return Ok(run.respond(KalVoiceOutcome::Failed {
@@ -355,6 +376,7 @@ impl Orchestrator {
             request_id: req.request_id.clone(),
             input: req.input,
         })]);
+        on_stage(RequestStage::Thinking);
 
         match grammar::understand(&req.text) {
             Understood::Rejected { code, message } => Ok(run.fail(code, message)),
@@ -435,6 +457,7 @@ impl Orchestrator {
             usage,
             intent: Some(pending.intent.kind_name().to_owned()),
             counted: true,
+            on_stage: &|_| {},
         };
         Some(match decision {
             Some(ApprovalDecision::Deny) | None => run.fail(
@@ -549,6 +572,7 @@ struct Run<'a> {
     usage: KalVoiceUsage,
     intent: Option<String>,
     counted: bool,
+    on_stage: &'a dyn Fn(RequestStage),
 }
 
 impl Run<'_> {
@@ -720,6 +744,7 @@ impl Run<'_> {
     }
 
     fn execute(&mut self, intent: &KalVoiceIntent, ctx: &ExecContext) -> KalVoiceResponse {
+        (self.on_stage)(RequestStage::Executing);
         match self.o.executor.execute(intent, ctx) {
             Ok(done) => {
                 self.o.emit(vec![

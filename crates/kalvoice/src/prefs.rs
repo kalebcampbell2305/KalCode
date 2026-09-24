@@ -13,6 +13,58 @@ use ts_rs::TS;
 use crate::models;
 use crate::shortcuts;
 
+/// Where the floating KalVoice panel sits: docked to an edge or corner, or placed freely.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum PanelAnchor {
+    Free,
+    TopLeft,
+    Top,
+    TopRight,
+    Left,
+    Right,
+    BottomLeft,
+    Bottom,
+    BottomRight,
+}
+
+/// How much of the panel is shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum PanelView {
+    /// The orb only.
+    Orb,
+    /// Orb, name, state line and waveform.
+    Compact,
+    /// Compact plus the request box and results.
+    Expanded,
+}
+
+/// Window width classes; the panel remembers a placement for each.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum SizeClass {
+    Narrow,
+    Regular,
+    Wide,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PanelPlacement {
+    pub size_class: SizeClass,
+    pub anchor: PanelAnchor,
+    /// Free position of the panel's top-left corner in thousandths (0–1000) of the space the
+    /// panel can move in, so it stays in proportion when the window is resized.
+    pub x: u16,
+    pub y: u16,
+    pub view: PanelView,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -28,6 +80,12 @@ pub struct KalVoicePreferences {
     pub speech_model: String,
     /// Speak short replies with the operating system's speech synthesis. Off by default.
     pub voice_replies: bool,
+    /// Where the floating panel starts in a window size class it hasn't been placed in.
+    pub panel_default: PanelAnchor,
+    /// Whether the floating panel is shown (it reopens with the command shortcut).
+    pub panel_visible: bool,
+    /// Remembered placement per window size class.
+    pub panel_placements: Vec<PanelPlacement>,
 }
 
 impl Default for KalVoicePreferences {
@@ -38,6 +96,9 @@ impl Default for KalVoicePreferences {
             intelligence: None,
             speech_model: models::DEFAULT_MODEL.to_owned(),
             voice_replies: false,
+            panel_default: PanelAnchor::BottomRight,
+            panel_visible: true,
+            panel_placements: Vec::new(),
         }
     }
 }
@@ -62,6 +123,17 @@ pub struct KalVoicePreferencesPatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub voice_replies: Option<bool>,
+    /// Also forgets remembered placements, so the panel moves to the new default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub panel_default: Option<PanelAnchor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub panel_visible: Option<bool>,
+    /// Saves the placement for one window size class.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub panel_placement: Option<PanelPlacement>,
 }
 
 /// The reasoning provider a user picks in Settings.
@@ -97,6 +169,9 @@ const KEY_COMMAND: &str = "commandShortcut";
 const KEY_INTELLIGENCE: &str = "intelligence";
 const KEY_MODEL: &str = "speechModel";
 const KEY_REPLIES: &str = "voiceReplies";
+const KEY_PANEL_DEFAULT: &str = "panelDefault";
+const KEY_PANEL_VISIBLE: &str = "panelVisible";
+const KEY_PANEL_PLACEMENTS: &str = "panelPlacements";
 
 /// Reads preferences; missing or invalid stored values fall back to defaults.
 pub fn load(conn: &Connection) -> Result<KalVoicePreferences> {
@@ -129,6 +204,15 @@ pub fn load(conn: &Connection) -> Result<KalVoicePreferences> {
                 .is_some(),
             KEY_REPLIES => serde_json::from_value(value)
                 .map(|v| prefs.voice_replies = v)
+                .is_ok(),
+            KEY_PANEL_DEFAULT => serde_json::from_value(value)
+                .map(|v| prefs.panel_default = v)
+                .is_ok(),
+            KEY_PANEL_VISIBLE => serde_json::from_value(value)
+                .map(|v| prefs.panel_visible = v)
+                .is_ok(),
+            KEY_PANEL_PLACEMENTS => serde_json::from_value::<Vec<PanelPlacement>>(value)
+                .map(|v| prefs.panel_placements = normalize_placements(v))
                 .is_ok(),
             _ => true,
         };
@@ -204,6 +288,25 @@ pub fn apply(
     if let Some(v) = patch.voice_replies {
         next.voice_replies = v;
     }
+    if let Some(anchor) = patch.panel_default {
+        next.panel_default = anchor;
+        next.panel_placements.clear();
+    }
+    if let Some(v) = patch.panel_visible {
+        next.panel_visible = v;
+    }
+    if let Some(placement) = patch.panel_placement {
+        if placement.x > 1000 || placement.y > 1000 {
+            return Err(KalError::validation(
+                "invalid_panel_position",
+                "The KalVoice panel position is out of range.",
+            ));
+        }
+        next.panel_placements
+            .retain(|p| p.size_class != placement.size_class);
+        next.panel_placements.push(placement);
+        next.panel_placements = normalize_placements(std::mem::take(&mut next.panel_placements));
+    }
 
     let mut changes = Changes::default();
     let mut writes: Vec<(&str, Value)> = Vec::new();
@@ -226,6 +329,18 @@ pub fn apply(
     if next.voice_replies != current.voice_replies {
         writes.push((KEY_REPLIES, Value::Bool(next.voice_replies)));
     }
+    if next.panel_default != current.panel_default {
+        writes.push((KEY_PANEL_DEFAULT, serde_json::to_value(next.panel_default)?));
+    }
+    if next.panel_visible != current.panel_visible {
+        writes.push((KEY_PANEL_VISIBLE, Value::Bool(next.panel_visible)));
+    }
+    if next.panel_placements != current.panel_placements {
+        writes.push((
+            KEY_PANEL_PLACEMENTS,
+            serde_json::to_value(&next.panel_placements)?,
+        ));
+    }
     let now = now_rfc3339();
     for (key, value) in &writes {
         conn.execute(
@@ -236,6 +351,22 @@ pub fn apply(
         changes.keys.push(format!("kalvoice.{key}"));
     }
     Ok((next, changes))
+}
+
+/// One placement per size class, positions clamped, in a stable order.
+fn normalize_placements(mut placements: Vec<PanelPlacement>) -> Vec<PanelPlacement> {
+    let mut seen = Vec::new();
+    placements.retain(|p| {
+        let fresh = !seen.contains(&p.size_class);
+        seen.push(p.size_class);
+        fresh
+    });
+    for p in &mut placements {
+        p.x = p.x.min(1000);
+        p.y = p.y.min(1000);
+    }
+    placements.sort_by_key(|p| p.size_class as u8);
+    placements
 }
 
 fn problem(p: shortcuts::ShortcutProblem) -> KalError {
@@ -394,6 +525,47 @@ mod tests {
             serde_json::from_str::<KalVoicePreferencesPatch>(r#"{"permissionMode":"bypass"}"#)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn panel_placement_per_size_class() {
+        let conn = conn();
+        let place = |size_class, x, view| KalVoicePreferencesPatch {
+            panel_placement: Some(PanelPlacement {
+                size_class,
+                anchor: PanelAnchor::Free,
+                x,
+                y: 500,
+                view,
+            }),
+            ..Default::default()
+        };
+        apply(&conn, &place(SizeClass::Wide, 100, PanelView::Orb)).expect("wide");
+        apply(&conn, &place(SizeClass::Narrow, 900, PanelView::Expanded)).expect("narrow");
+        let (prefs, changes) =
+            apply(&conn, &place(SizeClass::Wide, 200, PanelView::Compact)).expect("again");
+        assert_eq!(changes.keys, vec!["kalvoice.panelPlacements"]);
+        assert_eq!(prefs.panel_placements.len(), 2);
+        assert_eq!(prefs.panel_placements[0].size_class, SizeClass::Narrow);
+        assert_eq!(prefs.panel_placements[1].x, 200);
+        assert_eq!(load(&conn).expect("reload"), prefs);
+
+        let err = apply(&conn, &place(SizeClass::Wide, 1001, PanelView::Orb)).expect_err("range");
+        assert_eq!(err.code, "invalid_panel_position");
+
+        // A new default position clears remembered placements.
+        let (prefs, _) = apply(
+            &conn,
+            &KalVoicePreferencesPatch {
+                panel_default: Some(PanelAnchor::TopLeft),
+                panel_visible: Some(false),
+                ..Default::default()
+            },
+        )
+        .expect("default");
+        assert!(prefs.panel_placements.is_empty());
+        assert_eq!(prefs.panel_default, PanelAnchor::TopLeft);
+        assert!(!prefs.panel_visible);
     }
 
     #[test]

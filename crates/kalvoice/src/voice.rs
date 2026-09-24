@@ -119,6 +119,16 @@ impl VoiceController {
             .map(|s| (s.id.clone(), s.mode))
     }
 
+    /// Live input level (0–1) of the session listening now, for the waveform.
+    pub fn level(&self, session_id: &str) -> Option<f32> {
+        self.active
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .filter(|s| s.id == session_id)
+            .map(|s| s.capture.level())
+    }
+
     /// Opens the microphone. Returns the session id.
     pub fn begin(&self, mode: KalVoiceMode) -> Result<String, VoiceError> {
         let mut active = self.active.lock().unwrap_or_else(PoisonError::into_inner);

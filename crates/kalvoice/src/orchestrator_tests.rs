@@ -367,6 +367,32 @@ fn typed_navigation_runs_counts_once_and_records_facts_only() {
 }
 
 #[test]
+fn stages_are_reported_in_order() {
+    let h = harness();
+    let seen = Mutex::new(Vec::new());
+    h.orchestrator
+        .handle_with_stages(request("go to settings"), &|s| {
+            seen.lock().expect("lock").push(s)
+        })
+        .expect("handle");
+    assert_eq!(
+        *seen.lock().expect("lock"),
+        [RequestStage::Thinking, RequestStage::Executing]
+    );
+    let refused = Mutex::new(Vec::new());
+    h.orchestrator
+        .handle_with_stages(request("plan the release"), &|s| {
+            refused.lock().expect("lock").push(s)
+        })
+        .expect("handle");
+    assert_eq!(
+        *refused.lock().expect("lock"),
+        [RequestStage::Thinking],
+        "never executes"
+    );
+}
+
+#[test]
 fn a_retried_request_id_is_neither_counted_nor_run_twice() {
     let h = harness();
     let req = request("go to dashboard");
