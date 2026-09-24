@@ -399,6 +399,32 @@ a:hover {
   gap: var(--space-2);
 }
 
+/* X account links (header icon, footer handles). */
+.x-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: inherit;
+}
+
+.x-link__glyph {
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+}
+
+.header-social {
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+}
+
+.header-social:hover {
+  color: var(--color-text);
+}
+
 .menu-button {
   display: none;
   align-items: center;
@@ -608,7 +634,7 @@ a:hover {
 
 @media (min-width: 48rem) {
   .site-footer__grid {
-    grid-template-columns: 2fr repeat(3, minmax(0, 1fr));
+    grid-template-columns: 2fr repeat(4, minmax(0, 1fr));
   }
 
   .site-footer__brand {

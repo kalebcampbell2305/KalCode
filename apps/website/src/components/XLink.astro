@@ -1,0 +1,30 @@
+---
+/**
+ * A link to an X account from `SOCIAL` (src/lib/site.ts). Shows the X glyph; `withHandle` adds the
+ * handle as visible text. External, so it opens in a new tab with `rel="me noopener"`.
+ */
+import { SOCIAL } from "../lib/site";
+
+interface Props {
+  account: keyof typeof SOCIAL;
+  withHandle?: boolean;
+  class?: string;
+}
+const { account, withHandle = false, class: className } = Astro.props;
+const { url, label, handle } = SOCIAL[account];
+---
+<a
+  class:list={["x-link", className]}
+  href={url}
+  target="_blank"
+  rel="me noopener"
+  aria-label={withHandle ? undefined : `${label} (opens in a new tab)`}
+>
+  <svg class="x-link__glyph" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path
+      fill="currentColor"
+      d="M17.75 3h3.07l-6.7 7.66L22 21h-6.17l-4.83-6.32L5.47 21H2.4l7.17-8.2L2 3h6.33l4.37 5.77L17.75 3Zm-1.08 16.18h1.7L7.4 4.73H5.58l11.09 14.45Z"
+    />
+  </svg>
+  {withHandle && <span>{handle}<span class="visually-hidden"> — {label} (opens in a new tab)</span></span>}
+</a>

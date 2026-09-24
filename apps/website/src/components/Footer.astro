@@ -2,6 +2,7 @@
 import { FOOTER_NAV } from "../lib/site";
 import BrandMark from "./BrandMark.astro";
 import Lettering from "./Lettering.astro";
+import XLink from "./XLink.astro";
 
 const columns = [
   { heading: "Product", links: FOOTER_NAV.product },
@@ -35,6 +36,13 @@ const columns = [
           </nav>
         ))
       }
+      <nav aria-label="Follow">
+        <h2>Follow</h2>
+        <ul role="list">
+          <li><XLink account="official" withHandle /></li>
+          <li><XLink account="founder" withHandle /></li>
+        </ul>
+      </nav>
     </div>
     <div class="site-footer__base">
       <p>© 2026 KalCode</p>

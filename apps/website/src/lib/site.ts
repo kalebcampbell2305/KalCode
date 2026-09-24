@@ -13,6 +13,20 @@ export const CONSENT_VERSION = "2026-09-24";
 export const CONTACT_EMAIL = "kalcodebuilds@gmail.com";
 
 /**
+ * Official social accounts (owner-supplied, 2026-09-24). Every social link on the site reads from
+ * here; `official` is the KalCode product account, `founder` the founder's own account.
+ */
+export const SOCIAL = {
+  official: { network: "X", handle: "@KalCodeDev", url: "https://x.com/KalCodeDev", label: "KalCode on X" },
+  founder: {
+    network: "X",
+    handle: "@CampbellKaleb23",
+    url: "https://x.com/CampbellKaleb23",
+    label: "KalCode's founder on X",
+  },
+} as const;
+
+/**
  * KalVoice facts shown across the site (docs/KALVOICE.md). KalVoice is in development
  * (campaign Z12): pages must describe it as designed, never as shipped.
  */

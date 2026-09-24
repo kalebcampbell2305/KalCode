@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { CONTACT_EMAIL, PAGES } from "../../src/lib/site";
+import { CONTACT_EMAIL, PAGES, SOCIAL } from "../../src/lib/site";
 
 /**
  * Crawls every internal link starting from all known pages. Every target must answer 200
@@ -27,7 +27,9 @@ test("no dead internal links or anchors", async ({ page, request }) => {
       .evaluateAll((anchors) => anchors.map((anchor) => anchor.getAttribute("href") ?? ""));
 
     for (const href of hrefs) {
-      if (href === `mailto:${CONTACT_EMAIL}`) continue; // the one intended external link
+      // The intended external links: the published contact and the configured social accounts.
+      if (href === `mailto:${CONTACT_EMAIL}`) continue;
+      if (Object.values(SOCIAL).some((account) => account.url === href)) continue;
       if (/^(https?:|mailto:|tel:)/.test(href)) {
         problems.push(`${path}: unexpected external link ${href}`);
         continue;
