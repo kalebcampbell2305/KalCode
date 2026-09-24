@@ -117,8 +117,9 @@ export function ApprovalItem({ request, thread, busy, arrived, now, onDecide }: 
         </div>
         <div>
           <dt>Mode</dt>
-          <dd>{PERMISSION_MODE_LABELS[request.permissionMode]}</dd>
-          <dd className={styles.sub}>{PERMISSION_MODE_HINTS[request.permissionMode]}</dd>
+          <dd title={PERMISSION_MODE_HINTS[request.permissionMode]}>
+            {PERMISSION_MODE_LABELS[request.permissionMode]}
+          </dd>
         </div>
       </dl>
 
