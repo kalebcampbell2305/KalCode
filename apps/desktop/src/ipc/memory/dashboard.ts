@@ -25,10 +25,10 @@ import type {
   IpcError,
   PermissionMode,
   PermissionScope,
+  TerminalInfo,
   ThreadStatus,
   ThreadSummary,
 } from "@kalcode/protocol";
-import type { TerminalInfo } from "../pendingContracts.ts";
 import type { CommandName } from "../transport.ts";
 
 export type DashboardScenario = "busy" | "empty" | "approvals-flood" | "errors" | "loading";

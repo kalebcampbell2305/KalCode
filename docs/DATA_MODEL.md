@@ -1,6 +1,7 @@
 # KalCode Data Model
 
-Status: Z0 schema v1 implemented; later entities defined for planning.
+Status: schema v2 implemented (Z0 v1 + Z1 workspaces and terminals); later entities defined for
+planning.
 
 ## 1. Local database (SQLite, `<app-data>/kalcode.db`)
 
@@ -26,6 +27,34 @@ events(
 
 `schema_migrations` is created by the migration runner itself (not by a migration), so the
 runner can always determine the current version.
+
+### Implemented — schema version 2 (`0002_workspaces.sql`, Z1)
+
+```sql
+workspaces(
+  id TEXT PK,                      -- UUIDv7
+  name TEXT NOT NULL,              -- folder name
+  root_path TEXT NOT NULL UNIQUE,  -- canonical absolute path; one workspace per folder
+  created_at TEXT NOT NULL,
+  last_opened_at TEXT NOT NULL,    -- orders the list
+  active_terminal_id TEXT          -- tab in front (layout state)
+) -- index: workspaces(last_opened_at DESC)
+terminals(
+  id TEXT PK,
+  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  shell_id TEXT NOT NULL,          -- detected shell id, e.g. "pwsh"
+  title TEXT NOT NULL,             -- shell display name
+  position INTEGER NOT NULL,       -- tab order
+  created_at TEXT NOT NULL,
+  started_at TEXT, ended_at TEXT, exit_code INTEGER,
+  end_reason TEXT CHECK (end_reason IN ('exited', 'app_closed'))
+) -- index: terminals(workspace_id, position)
+```
+
+`app_meta.active_workspace_id` holds the active workspace. Terminal output is never stored. A
+tab with `started_at` set and `ended_at` null is running; at startup any such tab (left by a
+crash) is marked `app_closed`. The v1 to v2 upgrade is tested with v1 data
+(`crates/native-core/tests/upgrade_and_persistence.rs`).
 
 ### Migration rules
 
@@ -55,8 +84,6 @@ and are logged.
 
 | Entity | Key fields | Campaign |
 | --- | --- | --- |
-| `workspaces` | id, name, root_path (canonical), created_at, last_opened_at, layout JSON | Z1 |
-| `terminals` | id, workspace_id FK, shell, cwd, created_at, exited_at, exit_code | Z1 |
 | `providers` | id, kind, display_name, detected_version, capabilities JSON, last_ok_at | Z2 |
 | `provider_accounts` | id, provider_id FK, label, auth_kind, secret_ref (→ secure store) | Z2 |
 | `threads` | id, name, provider_id, account_id, model, workspace_id, cwd, permission_profile_id, status, branch, worktree, created_at, last_activity_at, error JSON | Z3 |

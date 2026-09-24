@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-terminals-running"
+description = "Enables the terminals_running command without any pre-configured scope."
+commands.allow = ["terminals_running"]
+
+[[permission]]
+identifier = "deny-terminals-running"
+description = "Denies the terminals_running command without any pre-configured scope."
+commands.deny = ["terminals_running"]

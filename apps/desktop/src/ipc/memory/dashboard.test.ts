@@ -40,11 +40,12 @@ describe("commands missing from this build", () => {
     const calls = [
       client.listThreads(),
       client.listApprovals(),
-      client.runningTerminals(),
       client.decideApproval("01999a4e-0004-7001-8a2e-000000004001", "deny"),
       client.stopThread("01999a4e-0002-7001-8a2e-000000002001"),
     ];
     for (const call of calls) await expect(call).rejects.toMatchObject({ code: COMMAND_UNAVAILABLE });
+    // Terminals are native since Z1: nothing runs in a fresh session.
+    await expect(client.runningTerminals()).resolves.toEqual([]);
   });
 });
 

@@ -15,6 +15,24 @@ const COMMANDS: &[&str] = &[
     "secure_store_check",
     "providers_list",
     "providers_detect",
+    // Workspaces and terminals (Z1)
+    "workspace_list",
+    "workspace_active",
+    "workspace_open_dialog",
+    "workspace_activate",
+    "workspace_remove",
+    "shells_list",
+    "terminal_list",
+    "terminal_create",
+    "terminal_restart",
+    "terminal_close",
+    "terminal_write",
+    "terminal_resize",
+    "terminal_attach",
+    "terminal_detach",
+    "terminal_ack",
+    "terminal_set_active",
+    "terminals_running",
 ];
 
 fn main() {

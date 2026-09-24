@@ -25,6 +25,23 @@ export type CommandName =
   | "thread_archive"
   | "approval_list"
   | "approval_decide"
+  // Workspaces and terminals (Z1)
+  | "workspace_list"
+  | "workspace_active"
+  | "workspace_open_dialog"
+  | "workspace_activate"
+  | "workspace_remove"
+  | "shells_list"
+  | "terminal_list"
+  | "terminal_create"
+  | "terminal_restart"
+  | "terminal_close"
+  | "terminal_write"
+  | "terminal_resize"
+  | "terminal_attach"
+  | "terminal_detach"
+  | "terminal_ack"
+  | "terminal_set_active"
   | "terminals_running";
 
 export type Unsubscribe = () => Promise<void>;
@@ -36,6 +53,13 @@ export interface Transport {
   readonly kind: "tauri" | "memory";
   invoke<T>(command: CommandName, args?: Record<string, unknown>): Promise<T>;
   subscribe(onEvent: (event: EventEnvelope) => void): Promise<Unsubscribe>;
+  /**
+   * Streams a terminal's output bytes to `onOutput`: the first call is the scrollback replay
+   * (possibly empty), then live output. Resolves to false when the terminal has no session
+   * (it ended before this launch). Resolves to the attachment id (null when the terminal has
+   * no session); acknowledge rendered bytes with `terminal_ack` and detach with `terminal_detach`.
+   */
+  attachTerminal(terminalId: string, onOutput: (bytes: Uint8Array) => void): Promise<number | null>;
   /** Syncs the OS window chrome (title bar) with the app theme. */
   setNativeTheme(theme: NativeTheme): Promise<void>;
 }
@@ -56,6 +80,12 @@ export async function createTauriTransport(): Promise<Transport> {
         await invoke<boolean>("events_unsubscribe", { id });
       };
     },
+    async attachTerminal(terminalId, onOutput) {
+      // Raw channel messages arrive as ArrayBuffers (InvokeResponseBody::Raw).
+      const channel = new Channel<ArrayBuffer>();
+      channel.onmessage = (buffer) => onOutput(new Uint8Array(buffer));
+      return invoke<number | null>("terminal_attach", { terminalId, onOutput: channel });
+    },
     async setNativeTheme(theme) {
       await getCurrentWindow().setTheme(theme);
     },
@@ -68,8 +98,8 @@ export async function resolveTransport(): Promise<Transport | null> {
   if (isTauri()) return createTauriTransport();
   // The in-memory transport is compiled only into the `ui-test` build (see vite.config.ts).
   if (__KALCODE_MEMORY_TRANSPORT__) {
-    const { createMemoryTransport } = await import("./memoryTransport.ts");
-    return createMemoryTransport();
+    const { sharedMemoryTransport } = await import("./memoryTransport.ts");
+    return sharedMemoryTransport();
   }
   return null;
 }

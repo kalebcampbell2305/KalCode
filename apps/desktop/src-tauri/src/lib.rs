@@ -1,6 +1,7 @@
 //! KalCode desktop shell. A thin layer over `kalcode_core::Core`: it resolves platform paths,
 //! starts logging, exposes the allow-listed IPC commands, and manages the window lifecycle.
 
+mod code_commands;
 mod commands;
 pub mod environment;
 mod provider_commands;
@@ -189,12 +190,16 @@ pub fn run(removed_overrides: Vec<&'static str>) {
     }
     let app = builder
         .plugin(tauri_plugin_opener::init())
+        // Used from Rust only (the native folder picker); the WebView gets no dialog permissions.
+        .plugin(tauri_plugin_dialog::init())
+        .manage(code_commands::TerminalViews::default())
         .on_page_load(|webview, payload| {
             // A (re)load starts a fresh page whose JS callbacks no longer exist.
             if payload.event() == PageLoadEvent::Started
                 && let Some(state) = webview.try_state::<AppState>()
             {
                 state.drop_subscription(webview.label());
+                code_commands::drop_views(webview);
             }
         })
         .setup(move |app| {
@@ -230,6 +235,23 @@ pub fn run(removed_overrides: Vec<&'static str>) {
             commands::secure_store_check,
             provider_commands::providers_list,
             provider_commands::providers_detect,
+            code_commands::workspace_list,
+            code_commands::workspace_active,
+            code_commands::workspace_open_dialog,
+            code_commands::workspace_activate,
+            code_commands::workspace_remove,
+            code_commands::shells_list,
+            code_commands::terminal_list,
+            code_commands::terminal_create,
+            code_commands::terminal_restart,
+            code_commands::terminal_close,
+            code_commands::terminal_write,
+            code_commands::terminal_resize,
+            code_commands::terminal_attach,
+            code_commands::terminal_detach,
+            code_commands::terminal_ack,
+            code_commands::terminal_set_active,
+            code_commands::terminals_running,
         ])
         .build(tauri::generate_context!());
 

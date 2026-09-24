@@ -14,17 +14,19 @@ fn config(dir: &std::path::Path) -> CoreConfig {
     }
 }
 
-/// A hypothetical next migration used to exercise the upgrade path end to end.
-const TEST_V2: Migration = Migration {
-    version: 2,
-    name: "test_workspaces",
-    sql: "CREATE TABLE workspaces (id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL) STRICT;
-          ALTER TABLE events ADD COLUMN test_marker TEXT;",
-};
+/// The schema as shipped in the first release (v1).
+fn v1_only() -> &'static [Migration] {
+    &MIGRATIONS[..1]
+}
 
-fn v1_plus_v2() -> Vec<Migration> {
+/// A hypothetical migration after the current latest, to exercise refusal paths.
+fn current_plus_next() -> Vec<Migration> {
     let mut all = MIGRATIONS.to_vec();
-    all.push(TEST_V2);
+    all.push(Migration {
+        version: MIGRATIONS.len() as i64 + 1,
+        name: "test_next",
+        sql: "CREATE TABLE test_next (id TEXT PRIMARY KEY NOT NULL) STRICT;",
+    });
     all
 }
 
@@ -100,7 +102,8 @@ fn unclean_exit_is_detected_on_next_start() {
 fn upgrade_from_v1_keeps_data_and_writes_backup() {
     let dir = tempfile::tempdir().expect("tempdir");
     {
-        let core = Core::open(config(dir.path())).expect("v1 open");
+        // A user on the first release (schema v1) with real data.
+        let core = Core::open_with_migrations(config(dir.path()), v1_only()).expect("v1 open");
         core.update_settings(&SettingsPatch {
             theme: Some(ThemePreference::Dark),
             ..Default::default()
@@ -109,8 +112,8 @@ fn upgrade_from_v1_keeps_data_and_writes_backup() {
         core.shutdown();
     }
 
-    let migrations = v1_plus_v2();
-    let core = Core::open_with_migrations(config(dir.path()), &migrations).expect("v2 open");
+    // Upgrade to the current build's schema.
+    let core = Core::open(config(dir.path())).expect("current open");
 
     // Data intact.
     assert_eq!(
@@ -156,16 +159,25 @@ fn upgrade_from_v1_keeps_data_and_writes_backup() {
     assert_eq!(theme, "\"dark\"");
 
     let diagnostics = core.diagnostics().expect("diagnostics");
-    assert_eq!(diagnostics.database.schema_version, 2);
+    assert_eq!(diagnostics.database.schema_version, MIGRATIONS.len() as i64);
     assert_eq!(diagnostics.database.journal_mode.to_lowercase(), "wal");
+
+    // The v2 tables exist and are usable after the upgrade.
+    assert!(core.workspaces().expect("workspaces").is_empty());
+    let project = tempfile::tempdir().expect("project");
+    let workspace = core.open_workspace(project.path()).expect("open workspace");
+    assert_eq!(
+        core.active_workspace().expect("active").map(|w| w.id),
+        Some(workspace.id)
+    );
 }
 
 #[test]
 fn newer_schema_is_refused_without_changes() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let migrations = v1_plus_v2();
+    let migrations = current_plus_next();
     Core::open_with_migrations(config(dir.path()), &migrations)
-        .expect("open with v2")
+        .expect("open with the next schema")
         .shutdown();
 
     let err = match Core::open(config(dir.path())) {
@@ -177,7 +189,7 @@ fn newer_schema_is_refused_without_changes() {
     let conn = rusqlite::Connection::open(dir.path().join("kalcode.db")).expect("reopen");
     assert_eq!(
         db::schema_version(&conn).expect("version"),
-        2,
+        MIGRATIONS.len() as i64 + 1,
         "database untouched"
     );
 }
@@ -187,10 +199,11 @@ fn edited_migration_is_detected() {
     let dir = tempfile::tempdir().expect("tempdir");
     Core::open(config(dir.path())).expect("open").shutdown();
 
-    let tampered = [Migration {
+    let mut tampered = MIGRATIONS.to_vec();
+    tampered[0] = Migration {
         sql: "CREATE TABLE something_else (x INTEGER);",
         ..MIGRATIONS[0]
-    }];
+    };
     let err = match Core::open_with_migrations(config(dir.path()), &tampered) {
         Ok(_) => panic!("checksum mismatch must be refused"),
         Err(err) => err,

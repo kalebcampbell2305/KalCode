@@ -18,6 +18,12 @@
   outline: none;
 }
 
+/* The Code surface fills the window and scrolls inside its terminals. */
+.main[data-surface="code"] {
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+
 .skipLink {
   position: fixed;
   top: var(--space-2);

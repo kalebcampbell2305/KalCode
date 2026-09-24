@@ -6,6 +6,7 @@ import { Mark, Wordmark } from "./Brand.tsx";
 import { PRIMARY_ORDER, SURFACES, useNavigation } from "./navigation.tsx";
 import styles from "./Sidebar.module.css";
 import { MOD_LABEL } from "./shortcuts.ts";
+import { WorkspaceSwitcher } from "./WorkspaceSwitcher.tsx";
 
 interface SidebarProps {
   collapsed: boolean;
@@ -27,6 +28,10 @@ export function Sidebar({ collapsed, onOpenPalette }: SidebarProps) {
       <div className={styles.brand}>
         <Mark size={22} />
         {collapsed ? null : <Wordmark className={styles.wordmark} />}
+      </div>
+
+      <div className={styles.workspace}>
+        <WorkspaceSwitcher collapsed={collapsed} />
       </div>
 
       <div className={styles.search}>

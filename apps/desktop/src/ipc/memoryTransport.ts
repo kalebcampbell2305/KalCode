@@ -7,14 +7,15 @@
  * `?scenario=` (ui-test builds only) selects a starting state:
  *   startup-error      — the core failed to start (newer database)
  *   keychain-failure   — the credential store check fails
+ *   code               — workspaces with terminal tabs already open (Code, Dashboard)
  *   providers-error    — provider detection fails
  *   providers-none     — no provider CLI is installed
  *   providers-outdated — Claude Code is installed but too old, and signed out
  *   busy | empty | approvals-flood | errors | loading
  *                      — Dashboard data scenarios (see ./memory/dashboard.ts)
  *
- * Without a Dashboard scenario the transport mirrors the current native build: commands that no
- * campaign has registered yet are rejected exactly the way Tauri rejects them.
+ * Commands that no merged campaign registers natively yet are rejected exactly the way Tauri
+ * rejects them (Dashboard scenarios implement those contract commands as fixtures).
  */
 import type {
   AppInfo,
@@ -38,13 +39,24 @@ import {
   isDashboardScenario,
 } from "./memory/dashboard.ts";
 import { detectFake, type ProviderScenario, providerCatalog } from "./memoryProviders.ts";
+import { createMemoryWorkspaces, type MemoryWorkspaces } from "./memoryWorkspaces.ts";
 import type { CommandName, Transport } from "./transport.ts";
 
-export type MemoryScenario = "default" | "startup-error" | "keychain-failure" | ProviderScenario | DashboardScenario;
+export type MemoryScenario =
+  | "default"
+  | "startup-error"
+  | "keychain-failure"
+  | "code"
+  | ProviderScenario
+  | DashboardScenario;
 
 const PROVIDER_SCENARIOS: readonly string[] = ["providers-error", "providers-none", "providers-outdated"];
 
-const AVAILABLE_SURFACES: ReadonlySet<SurfaceFlag["id"]> = new Set(["dashboard", "providers", "settings"]);
+/** Surfaces that work in this build (mirrors crates/native-core/src/flags.rs). */
+const AVAILABLE_SURFACES: ReadonlySet<SurfaceFlag["id"]> = new Set(["dashboard", "code", "providers", "settings"]);
+
+/** Latest schema version (mirrors crates/native-core/src/db.rs). */
+const SCHEMA_VERSION = 2;
 
 export interface MemoryTransportOptions {
   /** How long fake provider detection takes (the UI shows its busy state meanwhile). */
@@ -89,6 +101,8 @@ export interface MemoryTransport extends Transport {
   subscriberCount(): number;
   /** Test hooks for Dashboard scenarios (null in scenarios without Dashboard data). */
   readonly dashboard: DashboardControls | null;
+  /** Test hooks for workspaces and terminals (folder picker results, moved folders). */
+  workspaces: Omit<MemoryWorkspaces, "handlers" | "attachTerminal">;
 }
 
 export function createMemoryTransport(
@@ -160,7 +174,7 @@ export function createMemoryTransport(
   const sessionStart = dashboard ? { occurredAt: new Date(sessionStartMs).toISOString() } : {};
 
   if (!startupError) {
-    emit({ type: "database.migrated", payload: { fromVersion: 0, toVersion: 1, backupCreated: false } }, sessionStart);
+    emit({ type: "database.migrated", payload: { fromVersion: 0, toVersion: SCHEMA_VERSION, backupCreated: false } }, sessionStart);
     emit(
       {
         type: "app.started",
@@ -206,7 +220,14 @@ export function createMemoryTransport(
     return providers;
   };
 
+  const code = createMemoryWorkspaces({
+    emit: (event, workspaceId) => emit(event, { correlation: { workspaceId } }),
+    requireCore,
+    preload: scenario === "code",
+  });
+
   const handlers: DashboardHandlers = {
+    ...code.handlers,
     boot: (): BootState => ({ info, startupError }),
     window_ready: () => undefined,
     settings_get: () => {
@@ -276,8 +297,8 @@ export function createMemoryTransport(
         uptimeMs: Date.now() - sessionStartMs,
         startedAt: new Date(sessionStartMs).toISOString(),
         database: {
-          schemaVersion: 1,
-          latestSchemaVersion: 1,
+          schemaVersion: SCHEMA_VERSION,
+          latestSchemaVersion: SCHEMA_VERSION,
           sizeBytes: 98_304,
           eventCount: events.length,
           journalMode: "wal",
@@ -322,12 +343,7 @@ export function createMemoryTransport(
     ...dashboard?.handlers,
   };
 
-  // Playwright drives live Dashboard changes (e.g. an approval arriving) through this hook. React
-  // StrictMode boots twice in development, so the hook forwards to every transport created on the
-  // page; only the one the app kept has subscribers, so the others' events go nowhere.
-  if (dashboard && typeof window !== "undefined") registerTestHook(dashboard.controls);
-
-  return {
+  const transport: MemoryTransport = {
     kind: "memory",
     async invoke<T>(command: CommandName, args: Record<string, unknown> = {}): Promise<T> {
       await Promise.resolve();
@@ -343,32 +359,42 @@ export function createMemoryTransport(
         subscribers.delete(onEvent);
       };
     },
+    attachTerminal: (terminalId, onOutput) => code.attachTerminal(terminalId, onOutput),
     async setNativeTheme() {},
     subscriberCount: () => subscribers.size,
     dashboard: dashboard?.controls ?? null,
+    workspaces: {
+      queueFolders: code.queueFolders,
+      makeUnavailable: code.makeUnavailable,
+      runningProcessCount: code.runningProcessCount,
+    },
   };
+  // UI tests drive the fake folder picker and filesystem, and live Dashboard changes (e.g. an
+  // approval arriving), through this hook (ui-test builds only).
+  if (typeof window !== "undefined") {
+    (window as unknown as { __kalcodeMemory?: unknown }).__kalcodeMemory = {
+      ...transport.workspaces,
+      dashboard: transport.dashboard,
+    };
+  }
+  return transport;
+}
+
+let shared: MemoryTransport | null = null;
+
+/** The page's single in-memory runtime (a real app has one native runtime, even when React
+ *  StrictMode boots the UI twice in development). */
+export function sharedMemoryTransport(): MemoryTransport {
+  shared ??= createMemoryTransport();
+  return shared;
 }
 
 function readScenario(): MemoryScenario {
   if (typeof location === "undefined") return "default";
   const value = new URLSearchParams(location.search).get("scenario");
-  if (value === "startup-error" || value === "keychain-failure" || isDashboardScenario(value)) return value;
+  if (value === "startup-error" || value === "keychain-failure" || value === "code" || isDashboardScenario(value)) {
+    return value;
+  }
   if (value !== null && PROVIDER_SCENARIOS.includes(value)) return value as ProviderScenario;
   return "default";
-}
-
-const hookTargets: DashboardControls[] = [];
-
-function registerTestHook(controls: DashboardControls) {
-  hookTargets.push(controls);
-  const forward: DashboardControls = {
-    requestApproval: () => hookTargets.map((c) => c.requestApproval()).at(-1) ?? null,
-    setThreadStatus: (...args) => {
-      for (const c of hookTargets) c.setThreadStatus(...args);
-    },
-    recover: () => {
-      for (const c of hookTargets) c.recover();
-    },
-  };
-  (window as unknown as { __kalcodeMemory?: unknown }).__kalcodeMemory = { dashboard: forward };
 }

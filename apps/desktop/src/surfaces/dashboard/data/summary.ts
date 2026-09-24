@@ -1,5 +1,4 @@
-import type { ApprovalRequest, ThreadSummary } from "@kalcode/protocol";
-import type { TerminalInfo } from "../../../ipc/pendingContracts.ts";
+import type { ApprovalRequest, TerminalInfo, ThreadSummary } from "@kalcode/protocol";
 import { countThreads, type DashboardCounts, isTerminal, STATUS_META } from "./status.ts";
 
 /**

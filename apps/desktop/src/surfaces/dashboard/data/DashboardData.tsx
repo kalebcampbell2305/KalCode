@@ -1,8 +1,7 @@
-import type { ApprovalDecision, ApprovalRequest, ThreadSummary } from "@kalcode/protocol";
+import type { ApprovalDecision, ApprovalRequest, TerminalInfo, ThreadSummary } from "@kalcode/protocol";
 import { useToast } from "@kalcode/ui/components";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { toKalCodeError } from "../../../ipc/errors.ts";
-import type { TerminalInfo } from "../../../ipc/pendingContracts.ts";
 import { useEvents, useRuntime } from "../../../runtime/RuntimeProvider.tsx";
 import { ACTION_LABELS, type ThreadAction } from "./actions.ts";
 import { DECISION_LABELS } from "./format.ts";

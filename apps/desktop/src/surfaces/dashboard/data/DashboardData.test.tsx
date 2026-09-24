@@ -65,11 +65,11 @@ async function mount(scenario: MemoryScenario): Promise<MemoryTransport> {
 const text = (id: string) => screen.getByTestId(id).textContent;
 
 describe("Dashboard data layer", () => {
-  it("reports every source as unavailable when this build lacks the commands", async () => {
+  it("reports the sources this build lacks as unavailable", async () => {
     await mount("default");
     await waitFor(() => expect(text("threads")).toBe("unavailable"));
     expect(text("approvals")).toBe("unavailable");
-    expect(text("terminals")).toBe("unavailable");
+    await waitFor(() => expect(text("terminals")).toBe("ready"));
   });
 
   it("loads typed data from the contract commands", async () => {

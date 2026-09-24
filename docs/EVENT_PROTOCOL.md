@@ -54,8 +54,12 @@ Status legend: **I** implemented and emitted · **D** defined, emitted from its 
 | `database.migrated` | 1 | I | `{ fromVersion, toVersion, backupCreated }` |
 | `settings.changed` | 1 | I | `{ keys: string[] }` |
 | `secure_store.checked` | 1 | I | `{ ok, backend }` |
-| `workspace.created` / `.opened` / `.closed` | 1 | D (Z1) | `{ workspaceId, name }` |
-| `shell.started` / `.completed` / `.failed` | 1 | D (Z1) | `{ terminalId, shell, exitCode? }` |
+| `workspace.created` | 1 | I (Z1) | `{ workspaceId, name }` — a folder was opened for the first time |
+| `workspace.opened` | 1 | I (Z1) | `{ workspaceId, name }` — an existing workspace became active |
+| `workspace.removed` | 1 | I (Z1) | `{ workspaceId, name }` — removed from KalCode's list (files untouched) |
+| `shell.started` | 1 | I (Z1) | `{ terminalId, shellId, shellName }` — new tab or Restart |
+| `shell.completed` | 1 | I (Z1) | `{ terminalId, exitCode, closedByUser }` — exit code 0, or the user closed the tab |
+| `shell.failed` | 1 | I (Z1) | `{ terminalId, exitCode }` — the shell exited on its own with a non-zero code |
 | `provider.detected` | 1 | I (Z2) | `{ providerId, installed, version? }` — on the first detection and whenever the state or version changes; `installed` is true for installed and outdated |
 | `provider.error` | 1 | I (Z2) | `{ providerId, code, message }` — when detection first ends in error (not repeated while it stays in error); `code` e.g. `version_timeout` |
 | `provider.connected` / `.disconnected` | 1 | D (accounts, later campaign) | `{ providerId, accountLabel? }` |
@@ -81,6 +85,11 @@ Provider sessions emit normalized `AgentEvent`s (message deltas, tool status, us
 thread runtime (`thread_stream`, Z3), which records only lifecycle transitions (`thread.*`,
 `tool.*`, `agent.message`) in the event log. `provider.*` events come from detection, recorded
 by `providers_detect`.
+
+Z1 events carry `correlation.workspaceId`. A tab and its `shell.started` event commit in one
+transaction; so does a close and its `shell.completed { closedByUser: true }`. Shells that end
+because KalCode exits are not individually recorded: `app.stopped` marks the end of the session
+and their tabs are stored as ended by the app (see `docs/CODE_MODE.md`).
 
 ## 4. Storage
 

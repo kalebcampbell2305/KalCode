@@ -42,7 +42,7 @@ impl FeatureFlags {
         let table = [
             (Dashboard, Available),
             (KalVoice, Gated),
-            (Code, Gated),
+            (Code, Available),
             (Threads, Gated),
             (Agents, Gated),
             (Missions, Gated),
@@ -98,6 +98,23 @@ mod tests {
                 .iter()
                 .any(|s| s.state == SurfaceState::Gated)
         );
+    }
+
+    #[test]
+    fn code_surface_is_available_on_every_channel() {
+        for channel in [
+            BuildChannel::Stable,
+            BuildChannel::Beta,
+            BuildChannel::Development,
+        ] {
+            let code = FeatureFlags::for_channel(channel)
+                .surfaces
+                .into_iter()
+                .find(|s| s.id == SurfaceId::Code)
+                .expect("code surface");
+            assert_eq!(code.state, SurfaceState::Available);
+            assert!(code.visible);
+        }
     }
 
     #[test]

@@ -18,6 +18,23 @@
     "allow-diagnostics-open-data-dir",
     "allow-secure-store-check",
     "allow-providers-list",
-    "allow-providers-detect"
+    "allow-providers-detect",
+    "allow-workspace-list",
+    "allow-workspace-active",
+    "allow-workspace-open-dialog",
+    "allow-workspace-activate",
+    "allow-workspace-remove",
+    "allow-shells-list",
+    "allow-terminal-list",
+    "allow-terminal-create",
+    "allow-terminal-restart",
+    "allow-terminal-close",
+    "allow-terminal-write",
+    "allow-terminal-resize",
+    "allow-terminal-attach",
+    "allow-terminal-detach",
+    "allow-terminal-ack",
+    "allow-terminal-set-active",
+    "allow-terminals-running"
   ]
 }

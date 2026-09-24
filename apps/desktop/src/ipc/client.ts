@@ -9,13 +9,31 @@ import type {
   Settings,
   SettingsPatch,
   ThreadSummary,
+  ShellOption,
+  TerminalInfo,
+  Workspace,
 } from "@kalcode/protocol";
 import { toKalCodeError } from "./errors.ts";
-import type { TerminalInfo } from "./pendingContracts.ts";
 import type { CommandName, NativeTheme, Transport, Unsubscribe } from "./transport.ts";
 
 /** Maximum page size accepted by `events_recent` (mirrors the native limit). */
 export const MAX_EVENT_PAGE = 500;
+
+/** Largest single `terminal_write` the native runtime accepts, in bytes. */
+export const MAX_TERMINAL_WRITE_BYTES = 64 * 1024;
+/** Input is sent in pieces of at most this many UTF-16 units (≤ 24 KB of UTF-8). */
+const TERMINAL_WRITE_CHUNK = 8 * 1024;
+
+export interface TerminalSize {
+  cols: number;
+  rows: number;
+}
+
+/** Clamps a measured size to what native accepts (2..=1000). */
+export function clampTerminalSize({ cols, rows }: TerminalSize): TerminalSize {
+  const clamp = (n: number) => Math.max(2, Math.min(1000, Math.floor(Number.isFinite(n) ? n : 2)));
+  return { cols: clamp(cols), rows: clamp(rows) };
+}
 
 /** The only module that talks to the native runtime. Every failure becomes a KalCodeError. */
 export class KalCodeClient {
@@ -120,8 +138,90 @@ export class KalCodeClient {
     return this.call("approval_decide", { requestId, decision });
   }
 
+  // ---------- Workspaces and terminals ----------
+
+  listWorkspaces(): Promise<Workspace[]> {
+    return this.call("workspace_list");
+  }
+
+  activeWorkspace(): Promise<Workspace | null> {
+    return this.call("workspace_active");
+  }
+
+  /** Shows the native folder picker; resolves to null when the user cancels. */
+  openWorkspaceDialog(): Promise<Workspace | null> {
+    return this.call("workspace_open_dialog");
+  }
+
+  activateWorkspace(workspaceId: string): Promise<Workspace> {
+    return this.call("workspace_activate", { workspaceId });
+  }
+
+  removeWorkspace(workspaceId: string): Promise<void> {
+    return this.call("workspace_remove", { workspaceId });
+  }
+
+  listShells(): Promise<ShellOption[]> {
+    return this.call("shells_list");
+  }
+
+  listTerminals(workspaceId: string): Promise<TerminalInfo[]> {
+    return this.call("terminal_list", { workspaceId });
+  }
+
   runningTerminals(): Promise<TerminalInfo[]> {
     return this.call("terminals_running");
+  }
+
+  createTerminal(workspaceId: string, shellId: string | null, size: TerminalSize): Promise<TerminalInfo> {
+    return this.call("terminal_create", { workspaceId, shellId, ...clampTerminalSize(size) });
+  }
+
+  restartTerminal(terminalId: string, size: TerminalSize): Promise<TerminalInfo> {
+    return this.call("terminal_restart", { terminalId, ...clampTerminalSize(size) });
+  }
+
+  closeTerminal(terminalId: string): Promise<void> {
+    return this.call("terminal_close", { terminalId });
+  }
+
+  /** Sends input in order, split so no single write exceeds the native limit. */
+  async writeTerminal(terminalId: string, data: string): Promise<void> {
+    let start = 0;
+    while (start < data.length) {
+      let end = Math.min(data.length, start + TERMINAL_WRITE_CHUNK);
+      // Never split a surrogate pair across two writes.
+      const last = data.charCodeAt(end - 1);
+      if (end < data.length && last >= 0xd800 && last <= 0xdbff) end -= 1;
+      await this.call("terminal_write", { terminalId, data: data.slice(start, end) });
+      start = end;
+    }
+  }
+
+  resizeTerminal(terminalId: string, size: TerminalSize): Promise<void> {
+    return this.call("terminal_resize", { terminalId, ...clampTerminalSize(size) });
+  }
+
+  /** Streams output (replay first); resolves to the attachment id, or null if nothing to show. */
+  async attachTerminal(terminalId: string, onOutput: (bytes: Uint8Array) => void): Promise<number | null> {
+    try {
+      return await this.transport.attachTerminal(terminalId, onOutput);
+    } catch (error) {
+      throw toKalCodeError(error);
+    }
+  }
+
+  detachTerminal(attachmentId: number): Promise<boolean> {
+    return this.call("terminal_detach", { attachmentId });
+  }
+
+  /** Acknowledges rendered output; false means the view fell behind and must re-attach. */
+  ackTerminal(attachmentId: number, bytes: number): Promise<boolean> {
+    return this.call("terminal_ack", { attachmentId, bytes: Math.max(0, Math.min(0xffffffff, Math.floor(bytes))) });
+  }
+
+  setActiveTerminal(workspaceId: string, terminalId: string): Promise<void> {
+    return this.call("terminal_set_active", { workspaceId, terminalId });
   }
 
   async setNativeTheme(theme: NativeTheme): Promise<void> {

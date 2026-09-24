@@ -1,6 +1,5 @@
-import type { ApprovalRequest, ThreadSummary } from "@kalcode/protocol";
+import type { ApprovalRequest, TerminalInfo, ThreadSummary } from "@kalcode/protocol";
 import { useMemo } from "react";
-import type { TerminalInfo } from "../../ipc/pendingContracts.ts";
 import { Page } from "../../shell/Page.tsx";
 import { ActivityFeed } from "./ActivityFeed.tsx";
 import { Announcer } from "./Announcer.tsx";
