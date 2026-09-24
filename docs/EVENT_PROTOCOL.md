@@ -1,7 +1,8 @@
 # KalCode Event Protocol — v1
 
-Status: v1 defined in Z0 · Source of truth: `crates/native-core/src/events/` (Rust) → generated
-TypeScript in `packages/protocol/src/generated/`.
+Status: v1 defined in Z0 · Source of truth: `crates/contracts/src/events.rs` (Rust; stored and
+delivered by `crates/native-core/src/events/`) → generated TypeScript in
+`packages/protocol/src/generated/`.
 
 ## 1. Goals
 
@@ -55,7 +56,9 @@ Status legend: **I** implemented and emitted · **D** defined, emitted from its 
 | `secure_store.checked` | 1 | I | `{ ok, backend }` |
 | `workspace.created` / `.opened` / `.closed` | 1 | D (Z1) | `{ workspaceId, name }` |
 | `shell.started` / `.completed` / `.failed` | 1 | D (Z1) | `{ terminalId, shell, exitCode? }` |
-| `provider.detected` / `.connected` / `.disconnected` / `.error` | 1 | D (Z2) | `{ providerId, version?, error? }` |
+| `provider.detected` | 1 | I (Z2) | `{ providerId, installed, version? }` — on the first detection and whenever the state or version changes; `installed` is true for installed and outdated |
+| `provider.error` | 1 | I (Z2) | `{ providerId, code, message }` — when detection first ends in error (not repeated while it stays in error); `code` e.g. `version_timeout` |
+| `provider.connected` / `.disconnected` | 1 | D (accounts, later campaign) | `{ providerId, accountLabel? }` |
 | `thread.created` / `.started` / `.status_changed` / `.idle` / `.paused` / `.resumed` / `.completed` / `.failed` | 1 | D (Z3) | `{ threadId, status, … }` |
 | `agent.message` | 1 | D (Z3) | `{ threadId, messageId, role }` |
 | `tool.requested` / `.started` / `.completed` / `.failed` | 1 | D (Z3) | `{ threadId, toolCallId, tool }` |
@@ -67,6 +70,12 @@ Status legend: **I** implemented and emitted · **D** defined, emitted from its 
 
 Streaming high-volume data (terminal bytes, token deltas) is **not** sent as persisted events;
 it uses dedicated channels, and only lifecycle transitions are events.
+
+Provider sessions emit normalized `AgentEvent`s (message deltas, tool status, usage, errors; see
+`docs/PROVIDERS.md` §8). These are **not** persisted events either: they stream live to the
+thread runtime (`thread_stream`, Z3), which records only lifecycle transitions (`thread.*`,
+`tool.*`, `agent.message`) in the event log. `provider.*` events come from detection, recorded
+by `providers_detect`.
 
 ## 4. Storage
 

@@ -2117,6 +2117,7 @@ name = "kalcode-desktop"
 version = "0.1.0"
 dependencies = [
  "kalcode-native-core",
+ "kalcode-providers",
  "kalcode-secure-store",
  "serde",
  "serde_json",

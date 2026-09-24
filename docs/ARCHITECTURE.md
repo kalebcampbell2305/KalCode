@@ -24,6 +24,7 @@ belongs here or in an ADR under `docs/adr/`.
 │                                                    ├─ error.rs   KalError taxonomy  │
 │                                                    ├─ logging.rs structured logs    │
 │                                                    └─ flags.rs   feature flags      │
+│                                                   crates/providers  (provider CLIs)  │
 │                                                   crates/secure-store (OS keychain)  │
 └─────────────────────────────────────────────────────────────────────────────────────┘
 
@@ -32,8 +33,12 @@ belongs here or in an ADR under `docs/adr/`.
 └────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Future (not built in Z0): `apps/api` (accounts, billing, entitlement — Z13), provider packages
-(Z2), PTY / filesystem / permissions crates (Z1, Z4), mission engine (Z9).
+`crates/providers` (Z2) detects provider CLIs and supervises provider processes; the Claude Code
+adapter implements the shared `AgentProvider` contract (`crates/contracts`). See
+`docs/PROVIDERS.md`.
+
+Future: `apps/api` (accounts, billing, entitlement — Z13), PTY / filesystem / permissions crates
+(Z1, Z4), mission engine (Z9).
 
 ## 2. Repository layout
 
@@ -44,6 +49,7 @@ KalCode/
 │   └── website/            kalcoded.com — Astro static site + Cloudflare Worker + D1
 ├── crates/
 │   ├── native-core/        `kalcode_core`: db, migrations, events, settings, errors, logging
+│   ├── providers/          `kalcode_providers`: provider detection, process supervision, adapters
 │   └── secure-store/       `kalcode_secure_store`: SecretStore trait + OS keychain backend
 ├── packages/
 │   ├── protocol/           `@kalcode/protocol`: generated IPC/event types, plans, contracts
@@ -62,7 +68,7 @@ needs them begins, so the tree never contains empty placeholder packages.
 | --- | --- | --- |
 | Native runtime (Rust) | Trusted | Owns the database, filesystem, processes, secrets, OS integration. |
 | WebView (React) | **Untrusted by default** | May only call the explicitly allow-listed KalCode commands. No `fs`, `shell`, `http` plugins, no arbitrary IPC. |
-| Provider processes (Z2+) | Untrusted | Run as child processes supervised by native code; all actions pass through the permission engine (Z4). |
+| Provider processes | Untrusted | Supervised child processes (Z2): argv-only spawn, sanitized per-provider environment, bounded output, redacted stderr, timeouts, process-tree kill. They run under the stricter provider-native mapping of the thread's permission mode, and from Z4 every action passes through the permission engine. |
 | Website Worker | Trusted server | Validates all input; stores only early-access emails. |
 
 Consequences:
@@ -93,6 +99,8 @@ All IPC types are defined in Rust and exported to TypeScript with `ts-rs` into
 | `diagnostics_open_log_dir` | — | — | native resolves the path |
 | `diagnostics_open_data_dir` | — | — | native resolves the path (startup-error screen) |
 | `secure_store_check` | — | `SecureStoreCheck` | writes, reads, deletes a probe credential; 2 s cooldown, serialized |
+| `providers_list` | — | `ProviderStatus[]` | cached statuses (`detection` is null until the first check); async |
+| `providers_detect` | — | `ProviderStatus[]` | runs detection off the main thread (each provider on its own thread, serialized); records `provider.detected` / `provider.error` |
 
 Database-backed commands run off the main thread (`#[tauri::command(async)]`).
 

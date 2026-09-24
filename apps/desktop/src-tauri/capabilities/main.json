@@ -16,6 +16,8 @@
     "allow-diagnostics-get",
     "allow-diagnostics-open-log-dir",
     "allow-diagnostics-open-data-dir",
-    "allow-secure-store-check"
+    "allow-secure-store-check",
+    "allow-providers-list",
+    "allow-providers-detect"
   ]
 }

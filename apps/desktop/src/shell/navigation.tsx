@@ -100,8 +100,7 @@ export const SURFACES: Record<SurfaceId, SurfaceMeta> = {
     id: "providers",
     label: "Providers",
     icon: PlugZap,
-    summary: "Detect and connect Claude Code, Codex, Gemini CLI and future providers.",
-    dependsOn: "The provider adapter framework",
+    summary: "See which provider CLIs are installed and signed in, and how KalCode's permission modes map to each.",
   },
   settings: {
     id: "settings",

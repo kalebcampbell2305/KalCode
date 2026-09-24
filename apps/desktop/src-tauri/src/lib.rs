@@ -3,6 +3,7 @@
 
 mod commands;
 pub mod environment;
+mod provider_commands;
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -199,6 +200,7 @@ pub fn run(removed_overrides: Vec<&'static str>) {
         .setup(move |app| {
             let state = start(app, &removed_overrides);
             app.manage(state);
+            app.manage(provider_commands::ProviderState::from_process());
 
             // Safety net: the frontend shows the window after its first themed paint
             // (`window_ready`). If that never happens, show it anyway so the user is never
@@ -226,6 +228,8 @@ pub fn run(removed_overrides: Vec<&'static str>) {
             commands::diagnostics_open_log_dir,
             commands::diagnostics_open_data_dir,
             commands::secure_store_check,
+            provider_commands::providers_list,
+            provider_commands::providers_detect,
         ])
         .build(tauri::generate_context!());
 

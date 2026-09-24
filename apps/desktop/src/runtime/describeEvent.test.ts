@@ -45,6 +45,32 @@ describe("describeEvent", () => {
     ).toBe("danger");
   });
 
+  it("names providers by their display names", () => {
+    const found = envelope({
+      type: "provider.detected",
+      payload: { providerId: "claude-code", installed: true, version: "2.1.282" },
+    });
+    expect(describeEvent(found)).toEqual({
+      title: "Provider detected",
+      detail: "Claude Code 2.1.282",
+      tone: "success",
+    });
+    const missing = envelope({
+      type: "provider.detected",
+      payload: { providerId: "gemini-cli", installed: false, version: null },
+    });
+    expect(describeEvent(missing)).toEqual({ title: "Provider not installed", detail: "Gemini CLI", tone: "idle" });
+    const failed = envelope({
+      type: "provider.error",
+      payload: { providerId: "codex", code: "version_timeout", message: "The version check didn't finish in time." },
+    });
+    expect(describeEvent(failed)).toEqual({
+      title: "Codex couldn't be checked",
+      detail: "The version check didn't finish in time.",
+      tone: "danger",
+    });
+  });
+
   it("handles events from newer builds", () => {
     const d = describeEvent(
       envelope({ type: "unrecognized", payload: { originalType: "thread.created", originalVersion: 2 } }),
