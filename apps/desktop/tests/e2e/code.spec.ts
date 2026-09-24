@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, type Page, test } from "@playwright/test";
-import { closeGracefully, EXE, launch, processesMatching, removeDir } from "./harness.ts";
+import { closeGracefully, closeWindowNamed, EXE, launch, processesMatching, removeDir } from "./harness.ts";
 
 /**
  * Z1 end to end against the real app: open a real folder, run real shells in real
@@ -158,5 +158,26 @@ test("open a folder, run commands in real shells, restart KalCode, restore and r
   } finally {
     removeDir(dataDir);
     removeDir(projectRoot);
+  }
+});
+
+test("the native folder picker opens from Rust; cancelling it changes nothing", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-"));
+  try {
+    // No KALCODE_E2E_PICK_FOLDER: the real system dialog is shown.
+    const app = await launch(dataDir);
+    await expect(app.page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await codeNav(app.page).click();
+    const open = app.page.getByRole("button", { name: "Open folder…" });
+    await open.click();
+    await expect(open).toHaveAttribute("aria-busy", "true"); // waiting on the dialog
+    const pid = app.child.pid ?? 0;
+    await expect.poll(() => closeWindowNamed(pid, "Open a project folder"), { timeout: 20_000 }).toBe(true);
+    await expect(open).not.toHaveAttribute("aria-busy", "true");
+    await expect(app.page.getByRole("heading", { name: "Open a project folder" })).toBeVisible();
+    await expect(app.page.getByRole("heading", { name: "Recent workspaces" })).toHaveCount(0);
+    await closeGracefully(app);
+  } finally {
+    removeDir(dataDir);
   }
 });

@@ -85,3 +85,25 @@ export function processesMatching(needle: string): number[] {
     .map((l) => Number.parseInt(l.trim(), 10))
     .filter((n) => Number.isFinite(n));
 }
+
+/**
+ * Finds a window titled `name` belonging to process `pid` with Windows UI Automation and closes
+ * it (for a file dialog, the same as Cancel). Returns whether one was found.
+ */
+export function closeWindowNamed(pid: number, name: string): boolean {
+  const script = [
+    "Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes",
+    "$A = [System.Windows.Automation.AutomationElement]",
+    "$S = [System.Windows.Automation.TreeScope]",
+    `$byPid = New-Object System.Windows.Automation.PropertyCondition($A::ProcessIdProperty, ${pid})`,
+    `$byName = New-Object System.Windows.Automation.PropertyCondition($A::NameProperty, '${name.replaceAll("'", "''")}')`,
+    "$found = $null",
+    "foreach ($top in $A::RootElement.FindAll($S::Children, $byPid)) {",
+    "  if ($top.Current.Name -eq '" + name.replaceAll("'", "''") + "') { $found = $top; break }",
+    "  $found = $top.FindFirst($S::Descendants, $byName); if ($found) { break }",
+    "}",
+    "if ($found) { $found.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close(); 'closed' } else { 'none' }",
+  ].join("\n");
+  const out = execFileSync("powershell", ["-NoProfile", "-Command", script], { encoding: "utf8" });
+  return out.trim().endsWith("closed");
+}
