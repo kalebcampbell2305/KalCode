@@ -1,5 +1,11 @@
 //! IPC commands. Each handler validates input natively and returns `IpcError` on failure —
 //! internal error details are logged, never sent to the WebView.
+//!
+//! Commands that touch the database or the filesystem are `async`, so Tauri runs them off the
+//! main (UI event loop) thread.
+
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use kalcode_core::events::{EventEnvelope, SubscriptionId};
 use kalcode_core::settings::{Settings, SettingsPatch};
@@ -7,10 +13,16 @@ use kalcode_core::time::now_rfc3339;
 use kalcode_core::{BootState, Diagnostics, ErrorCategory, IpcError, KalError, SecureStoreCheck};
 use kalcode_secure_store::{OsSecretStore, SecretStore, SecretStoreError};
 use tauri::ipc::Channel;
-use tauri::{State, WebviewWindow};
+use tauri::{State, Webview, WebviewWindow};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::AppState;
+
+/// Minimum interval between credential-store checks (each writes to the OS store).
+const STORE_CHECK_COOLDOWN: Duration = Duration::from_secs(2);
+
+/// Serializes probes: they share one probe account in the OS store.
+static PROBE_LOCK: Mutex<()> = Mutex::new(());
 
 #[tauri::command]
 pub fn boot(state: State<'_, AppState>) -> BootState {
@@ -36,7 +48,7 @@ pub fn window_ready(window: WebviewWindow) -> Result<(), IpcError> {
         })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn settings_get(state: State<'_, AppState>) -> Result<Settings, IpcError> {
     state
         .core()?
@@ -44,7 +56,7 @@ pub fn settings_get(state: State<'_, AppState>) -> Result<Settings, IpcError> {
         .map_err(|e| e.log_and_convert("settings_get"))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn settings_update(
     state: State<'_, AppState>,
     patch: SettingsPatch,
@@ -55,7 +67,7 @@ pub fn settings_update(
         .map_err(|e| e.log_and_convert("settings_update"))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn events_recent(
     state: State<'_, AppState>,
     limit: u32,
@@ -72,24 +84,47 @@ pub fn events_recent(
         .map_err(|e| e.log_and_convert("events_recent"))
 }
 
+/// Streams events to the calling webview. Each webview holds at most one subscription: a new
+/// subscription replaces the previous one, and a page (re)load drops it (see `lib.rs`).
 #[tauri::command]
 pub fn events_subscribe(
+    webview: Webview,
     state: State<'_, AppState>,
     on_event: Channel<EventEnvelope>,
 ) -> Result<SubscriptionId, IpcError> {
     let core = state.core()?;
-    Ok(core.subscribe(move |event| on_event.send(event.clone()).is_ok()))
+    let id = core.subscribe(move |event| on_event.send(event.clone()).is_ok());
+    let previous = state
+        .subscriptions
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(webview.label().to_owned(), id);
+    if let Some(previous) = previous {
+        core.unsubscribe(previous);
+    }
+    Ok(id)
 }
 
 #[tauri::command]
 pub fn events_unsubscribe(
+    webview: Webview,
     state: State<'_, AppState>,
     id: SubscriptionId,
 ) -> Result<bool, IpcError> {
+    let mut subscriptions = state
+        .subscriptions
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // A webview may only cancel its own subscription.
+    if subscriptions.get(webview.label()) != Some(&id) {
+        return Ok(false);
+    }
+    subscriptions.remove(webview.label());
+    drop(subscriptions);
     Ok(state.core()?.unsubscribe(id))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn diagnostics_get(state: State<'_, AppState>) -> Result<Diagnostics, IpcError> {
     state
         .core()?
@@ -147,7 +182,25 @@ pub fn diagnostics_open_data_dir(
 #[tauri::command]
 pub async fn secure_store_check(state: State<'_, AppState>) -> Result<SecureStoreCheck, IpcError> {
     let core = state.core()?.clone();
+    {
+        let mut last = state
+            .last_store_check
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if last.is_some_and(|at| at.elapsed() < STORE_CHECK_COOLDOWN) {
+            return Err(KalError::validation(
+                "check_too_soon",
+                "A credential store check just ran. Try again in a moment.",
+            )
+            .to_ipc());
+        }
+        *last = Some(Instant::now());
+    }
+
     let outcome = tauri::async_runtime::spawn_blocking(|| {
+        let _serialized = PROBE_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let store = OsSecretStore::new();
         (store.backend(), kalcode_secure_store::probe(&store))
     })
@@ -164,9 +217,15 @@ pub async fn secure_store_check(state: State<'_, AppState>) -> Result<SecureStor
     let (backend, result) = outcome;
     let message = match &result {
         Ok(()) => None,
-        Err(SecretStoreError::Unavailable(_)) => Some("Your system credential store isn't available. KalCode can't save provider credentials securely until it is.".to_owned()),
-        Err(SecretStoreError::Access(_)) => Some("Your system credential store refused access. Check that it's unlocked, then run the check again.".to_owned()),
-        Err(SecretStoreError::Mismatch | SecretStoreError::InvalidKey) => Some("The credential store returned unexpected data. Run the check again; if it keeps failing, export diagnostics.".to_owned()),
+        Err(SecretStoreError::Unavailable(_)) => Some(
+            "Your system credential store isn't available. KalCode can't save provider credentials securely until it is.".to_owned(),
+        ),
+        Err(SecretStoreError::Access(_)) => Some(
+            "Your system credential store refused access. Check that it's unlocked, then run the check again.".to_owned(),
+        ),
+        Err(SecretStoreError::Mismatch | SecretStoreError::InvalidKey) => Some(
+            "The credential store returned unexpected data. Run the check again; if it keeps failing, export diagnostics.".to_owned(),
+        ),
     };
     if let Err(error) = &result {
         tracing::warn!(event = "secure_store.check_failed", backend, error = %error);

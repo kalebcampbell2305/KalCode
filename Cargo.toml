@@ -5,7 +5,7 @@ members = ["crates/*", "apps/desktop/src-tauri"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 license = "LicenseRef-KalCode-Proprietary"
 authors = ["KalCode"]
 repository = "https://kalcoded.com"
@@ -21,7 +21,9 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 tempfile = "3"
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# `deny`, not `forbid`: exactly one audited call site (apps/desktop/src-tauri/src/main.rs)
+# opts in, to strip browser-runtime overrides from the environment before any thread starts.
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

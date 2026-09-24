@@ -74,8 +74,9 @@ pub fn open_in_memory() -> Result<Connection> {
 }
 
 fn configure(conn: &Connection) -> Result<()> {
+    // Connection-scoped settings only. The persistent journal mode is switched to WAL by
+    // `enable_wal` after migrations succeed, so a database this build refuses stays untouched.
     conn.busy_timeout(Duration::from_secs(5))?;
-    conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     let fk: i64 = conn.pragma_query_value(None, "foreign_keys", |row| row.get(0))?;
@@ -86,6 +87,12 @@ fn configure(conn: &Connection) -> Result<()> {
             "KalCode's database engine is misconfigured.",
         ));
     }
+    Ok(())
+}
+
+/// Switches the database to write-ahead logging (a persistent setting).
+pub fn enable_wal(conn: &Connection) -> Result<()> {
+    conn.pragma_update(None, "journal_mode", "WAL")?;
     Ok(())
 }
 
@@ -221,25 +228,41 @@ fn validate_sequence(migrations: &[Migration]) -> Result<()> {
     Ok(())
 }
 
+fn backup_failed(source: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> KalError {
+    KalError::new(
+        ErrorCategory::Filesystem,
+        "backup_failed",
+        "KalCode couldn't back up its database before upgrading, so it didn't upgrade.",
+    )
+    .with_source(source)
+}
+
+/// Writes a consistent copy to `<name>.partial` and renames it into place only when complete,
+/// so an interrupted backup never looks like a valid one. Pruning old backups is best-effort:
+/// failing to delete an old copy must not block an upgrade that already has a fresh backup.
 fn backup_database(conn: &Connection, dir: &Path, next_version: i64) -> Result<PathBuf> {
-    let fs_err = |e: std::io::Error| {
-        KalError::new(
-            ErrorCategory::Filesystem,
-            "backup_failed",
-            "KalCode couldn't back up its database before upgrading, so it didn't upgrade.",
-        )
-        .with_source(e)
-    };
-    fs::create_dir_all(dir).map_err(fs_err)?;
+    fs::create_dir_all(dir).map_err(backup_failed)?;
     let stamp = now_rfc3339().replace([':', '.'], "-");
     let path = dir.join(format!("kalcode-pre-v{next_version}-{stamp}.db"));
-    let mut target = Connection::open(&path)?;
-    {
+    let partial = path.with_extension("db.partial");
+
+    let written = (|| -> std::result::Result<(), rusqlite::Error> {
+        let mut target = Connection::open(&partial)?;
         let backup = rusqlite::backup::Backup::new(conn, &mut target)?;
         backup.run_to_completion(256, Duration::from_millis(0), None)?;
+        Ok(())
+    })();
+    if let Err(error) = written {
+        let _ = fs::remove_file(&partial);
+        return Err(backup_failed(error));
     }
-    drop(target);
-    prune_backups(dir).map_err(fs_err)?;
+    if let Err(error) = fs::rename(&partial, &path) {
+        let _ = fs::remove_file(&partial);
+        return Err(backup_failed(error));
+    }
+    if let Err(error) = prune_backups(dir) {
+        tracing::warn!(event = "database.backup_prune_failed", error = %error);
+    }
     tracing::info!(event = "database.backup_created", next_version);
     Ok(path)
 }
@@ -257,10 +280,14 @@ fn prune_backups(dir: &Path) -> std::io::Result<()> {
     // sort by modification time to be robust across versions.
     backups.sort_by_key(|p| fs::metadata(p).and_then(|m| m.modified()).ok());
     let excess = backups.len().saturating_sub(BACKUPS_RETAINED);
+    // Try every file; report the first failure after attempting the rest.
+    let mut first_error = None;
     for old in backups.into_iter().take(excess) {
-        fs::remove_file(old)?;
+        if let Err(error) = fs::remove_file(old) {
+            first_error.get_or_insert(error);
+        }
     }
-    Ok(())
+    first_error.map_or(Ok(()), Err)
 }
 
 /// Reads a value from `app_meta`.
@@ -341,6 +368,41 @@ mod tests {
             )
             .expect("query");
         assert_eq!(exists, 0, "partial migration must be rolled back");
+    }
+
+    #[test]
+    fn prune_keeps_the_newest_backups_and_ignores_partials() {
+        use std::time::{Duration as StdDuration, SystemTime};
+        let dir = tempfile::tempdir().expect("tempdir");
+        let base = SystemTime::now() - StdDuration::from_secs(3600);
+        for i in 0..7u64 {
+            let path = dir.path().join(format!("kalcode-pre-v2-{i}.db"));
+            let file = fs::File::create(&path).expect("create");
+            file.set_modified(base + StdDuration::from_secs(i * 60))
+                .expect("mtime");
+        }
+        fs::write(dir.path().join("kalcode-pre-v2-9.db.partial"), b"x").expect("partial");
+        fs::write(dir.path().join("unrelated.db"), b"x").expect("unrelated");
+
+        prune_backups(dir.path()).expect("prune");
+
+        let mut remaining: Vec<String> = fs::read_dir(dir.path())
+            .expect("read")
+            .filter_map(|e| e.ok().and_then(|e| e.file_name().into_string().ok()))
+            .collect();
+        remaining.sort();
+        assert_eq!(
+            remaining,
+            vec![
+                "kalcode-pre-v2-2.db",
+                "kalcode-pre-v2-3.db",
+                "kalcode-pre-v2-4.db",
+                "kalcode-pre-v2-5.db",
+                "kalcode-pre-v2-6.db",
+                "kalcode-pre-v2-9.db.partial",
+                "unrelated.db",
+            ]
+        );
     }
 
     #[test]

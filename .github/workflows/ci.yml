@@ -99,7 +99,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: pnpm install --frozen-lockfile
       - name: Build release app
-        run: pnpm --filter @kalcode/desktop tauri build --no-bundle
+        run: pnpm --filter @kalcode/desktop build:e2e
       - run: pnpm --filter @kalcode/desktop exec playwright install chromium
       - run: pnpm --filter @kalcode/desktop test:e2e
 

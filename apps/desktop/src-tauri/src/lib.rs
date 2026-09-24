@@ -2,14 +2,20 @@
 //! starts logging, exposes the allow-listed IPC commands, and manages the window lifecycle.
 
 mod commands;
+pub mod environment;
 
+use std::collections::HashMap;
+use std::io::Write;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
+use environment::DataDirOverride;
+use kalcode_core::events::SubscriptionId;
 use kalcode_core::flags::BuildChannel;
 use kalcode_core::logging::{self, LogGuard};
-use kalcode_core::{AppInfo, Core, CoreConfig, IpcError, KalError, Paths};
+use kalcode_core::{AppInfo, Core, CoreConfig, ErrorCategory, IpcError, KalError, Paths};
+use tauri::webview::PageLoadEvent;
 use tauri::{Manager, RunEvent};
 
 /// Shared state for command handlers. `core` is `None` when startup failed; the UI then shows
@@ -19,7 +25,13 @@ pub struct AppState {
     pub startup_error: Option<IpcError>,
     pub info: AppInfo,
     pub paths: Paths,
-    _log_guard: Option<LogGuard>,
+    /// One live event subscription per webview label. A page reload or a new subscription
+    /// from the same webview replaces the previous one, so dead channels never accumulate.
+    pub subscriptions: Mutex<HashMap<String, SubscriptionId>>,
+    /// Time of the last credential-store check, for a short cooldown.
+    pub last_store_check: Mutex<Option<Instant>>,
+    /// Dropped on exit so buffered log lines are flushed before the process ends.
+    log_guard: Mutex<Option<LogGuard>>,
 }
 
 impl AppState {
@@ -31,15 +43,46 @@ impl AppState {
             })
         })
     }
+
+    /// Removes the event subscription held by `label`, if any.
+    pub fn drop_subscription(&self, label: &str) {
+        let removed = self
+            .subscriptions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(label);
+        if let (Some(id), Some(core)) = (removed, &self.core) {
+            core.unsubscribe(id);
+        }
+    }
+
+    fn new(info: AppInfo, paths: Paths) -> Self {
+        Self {
+            core: None,
+            startup_error: None,
+            info,
+            paths,
+            subscriptions: Mutex::new(HashMap::new()),
+            last_store_check: Mutex::new(None),
+            log_guard: Mutex::new(None),
+        }
+    }
 }
 
 fn resolve_data_dir(app: &tauri::App) -> Result<PathBuf, KalError> {
-    if let Some(dir) = std::env::var_os("KALCODE_DATA_DIR").filter(|v| !v.is_empty()) {
-        return Ok(PathBuf::from(dir));
+    match environment::data_dir_override() {
+        DataDirOverride::Path(dir) => return Ok(dir),
+        DataDirOverride::Invalid => {
+            return Err(KalError::validation(
+                "invalid_data_dir",
+                "KALCODE_DATA_DIR must be an absolute path.",
+            ));
+        }
+        DataDirOverride::None => {}
     }
     app.path().app_data_dir().map_err(|e| {
         KalError::new(
-            kalcode_core::ErrorCategory::Filesystem,
+            ErrorCategory::Filesystem,
             "data_dir_unavailable",
             "KalCode couldn't locate its data folder.",
         )
@@ -47,7 +90,10 @@ fn resolve_data_dir(app: &tauri::App) -> Result<PathBuf, KalError> {
     })
 }
 
-fn install_panic_hook() {
+/// Records panics synchronously to `logs/crash.log` (the structured log writer runs on a
+/// background thread and would not flush before `panic = "abort"` ends the process), and to
+/// the structured log for development builds.
+fn install_panic_hook(log_dir: PathBuf) {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let location = info
@@ -60,12 +106,25 @@ fn install_panic_hook() {
             .map(|s| (*s).to_owned())
             .or_else(|| info.payload().downcast_ref::<String>().cloned())
             .unwrap_or_default();
-        tracing::error!(event = "app.panic", location = %location, message = %logging::redact(&payload));
+        let message = logging::redact(&payload);
+        let record = format!(
+            "{} panic at {location}: {message}\n",
+            kalcode_core::time::now_rfc3339()
+        );
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_dir.join("crash.log"))
+        {
+            let _ = file.write_all(record.as_bytes());
+            let _ = file.sync_all();
+        }
+        tracing::error!(event = "app.panic", location = %location, message = %message);
         default_hook(info);
     }));
 }
 
-fn start(app: &tauri::App) -> AppState {
+fn start(app: &tauri::App, removed_overrides: &[&str]) -> AppState {
     let channel = BuildChannel::current();
     let version = app.package_info().version.to_string();
     let info = AppInfo::current(&version, channel);
@@ -73,60 +132,52 @@ fn start(app: &tauri::App) -> AppState {
     let data_dir = match resolve_data_dir(app) {
         Ok(dir) => dir,
         Err(error) => {
-            let fallback = std::env::temp_dir().join("KalCode");
-            return AppState {
-                core: None,
-                startup_error: Some(error.to_ipc()),
-                info,
-                paths: Paths::new(fallback),
-                _log_guard: None,
-            };
+            let mut state = AppState::new(info, Paths::new(std::env::temp_dir().join("KalCode")));
+            state.startup_error = Some(error.to_ipc());
+            return state;
         }
     };
-    let paths = Paths::new(&data_dir);
+    let mut state = AppState::new(info, Paths::new(&data_dir));
 
-    let log_guard = match logging::init(&paths.logs, cfg!(debug_assertions)) {
-        Ok(guard) => Some(guard),
-        Err(error) => {
-            eprintln!("KalCode logging unavailable: {}", error.diagnostic());
-            None
+    match logging::init(&state.paths.logs, cfg!(debug_assertions)) {
+        Ok(guard) => {
+            *state
+                .log_guard
+                .get_mut()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(guard)
         }
-    };
-    install_panic_hook();
+        Err(error) => eprintln!("KalCode logging unavailable: {}", error.diagnostic()),
+    }
+    install_panic_hook(state.paths.logs.clone());
+    if !removed_overrides.is_empty() {
+        tracing::warn!(event = "environment.webview_overrides_removed", variables = ?removed_overrides);
+    }
 
     let config = CoreConfig {
-        paths: paths.clone(),
+        paths: state.paths.clone(),
         app_version: version,
         channel,
     };
     match Core::open(config) {
-        Ok(core) => AppState {
-            core: Some(Arc::new(core)),
-            startup_error: None,
-            info,
-            paths,
-            _log_guard: log_guard,
-        },
+        Ok(core) => state.core = Some(Arc::new(core)),
         Err(error) => {
             tracing::error!(event = "app.startup_failed", error_code = error.code, error = %error.diagnostic());
-            AppState {
-                core: None,
-                startup_error: Some(error.to_ipc()),
-                info,
-                paths,
-                _log_guard: log_guard,
-            }
+            state.startup_error = Some(error.to_ipc());
         }
     }
+    state
+}
+
+fn uses_default_data_dir() -> bool {
+    matches!(environment::data_dir_override(), DataDirOverride::None)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
+pub fn run(removed_overrides: Vec<&'static str>) {
     let mut builder = tauri::Builder::default();
-    // A second launch against the default data folder focuses the running window instead of
-    // opening another runtime on the same database. Launches with an explicit, isolated
-    // KALCODE_DATA_DIR (tests, diagnostics) are independent and may run side by side.
-    if std::env::var_os("KALCODE_DATA_DIR").is_none_or(|v| v.is_empty()) {
+    // A second launch against the default data folder focuses the running window. (Exclusive
+    // use of a data folder is enforced separately by the core's lock file, in every mode.)
+    if uses_default_data_dir() {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();
@@ -137,8 +188,16 @@ pub fn run() {
     }
     let app = builder
         .plugin(tauri_plugin_opener::init())
-        .setup(|app| {
-            let state = start(app);
+        .on_page_load(|webview, payload| {
+            // A (re)load starts a fresh page whose JS callbacks no longer exist.
+            if payload.event() == PageLoadEvent::Started
+                && let Some(state) = webview.try_state::<AppState>()
+            {
+                state.drop_subscription(webview.label());
+            }
+        })
+        .setup(move |app| {
+            let state = start(app, &removed_overrides);
             app.manage(state);
 
             // Safety net: the frontend shows the window after its first themed paint
@@ -180,9 +239,19 @@ pub fn run() {
 
     app.run(|handle, event| {
         if let RunEvent::Exit = event
-            && let Some(core) = handle.try_state::<AppState>().and_then(|s| s.core.clone())
+            && let Some(state) = handle.try_state::<AppState>()
         {
-            core.shutdown();
+            if let Some(core) = &state.core {
+                core.shutdown();
+            }
+            // Flush and stop the background log writer before the process exits.
+            drop(
+                state
+                    .log_guard
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take(),
+            );
         }
     });
 }

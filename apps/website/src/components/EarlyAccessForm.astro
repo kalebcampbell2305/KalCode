@@ -13,7 +13,7 @@ const statusId = `${id}-status`;
 const consentId = `${id}-consent`;
 const trapId = `${id}-website`;
 ---
-<form class="form needs-js" data-api-form="signup" data-source={source} novalidate>
+<form method="post" class="form needs-js" data-api-form="signup" data-source={source} novalidate>
   <label class="form__label" for={emailId}>Email address</label>
   <div class="form__row">
     <input

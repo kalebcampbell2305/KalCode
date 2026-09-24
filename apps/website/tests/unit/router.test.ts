@@ -5,6 +5,7 @@ import {
   clientKey,
   type Deps,
   handleRequest,
+  networkKey,
   REMOVE_OK,
   REMOVE_PATH,
   SIGNUP_OK,
@@ -348,5 +349,28 @@ describe("clientKey", () => {
     const withIp = new Request(ORIGIN, { headers: { "cf-connecting-ip": " 198.51.100.4 " } });
     expect(clientKey(withIp, "signup")).toBe("signup:198.51.100.4");
     expect(clientKey(new Request(ORIGIN), "remove")).toBe("remove:unknown");
+  });
+});
+
+describe("networkKey", () => {
+  it("keeps IPv4 addresses as-is", () => {
+    expect(networkKey("203.0.113.7")).toBe("203.0.113.7");
+  });
+
+  it("groups IPv6 addresses by /64 so rotating within a prefix shares one limit", () => {
+    expect(networkKey("2001:db8:abcd:12:1::5")).toBe("2001:db8:abcd:12::/64");
+    expect(networkKey("2001:0db8:abcd:0012:ffff:eeee:dddd:cccc")).toBe("2001:db8:abcd:12::/64");
+    expect(networkKey("2001:db8::1")).toBe("2001:db8:0:0::/64");
+    expect(networkKey("::1")).toBe("0:0:0:0::/64");
+  });
+});
+
+describe("protocol-relative paths", () => {
+  it("answers paths starting with // with 404 before assets or redirects", async () => {
+    const response = await handleRequest(new Request("https://kalcoded.com//evil.example/docs/"), h.deps);
+    expect(response.status).toBe(404);
+    expect(response.headers.get("location")).toBeNull();
+    expect(response.headers.get("content-security-policy")).toBeTruthy();
+    expect(h.assetRequests).toEqual([]);
   });
 });

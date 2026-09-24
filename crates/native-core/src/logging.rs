@@ -22,38 +22,62 @@ pub const LOG_FILE_PREFIX: &str = "kalcode";
 
 const REDACTED: &str = "[REDACTED]";
 
+/// Redaction rules, applied in order to every formatted log line. Each is (pattern, replacement).
+/// Patterns tolerate JSON-escaped quotes (`\"`) because the file sink writes JSON lines.
+/// False positives (redacting something harmless) are acceptable; false negatives are not.
+const RULES: &[(&str, &str)] = &[
+    // Private keys (PEM, PGP), including truncated blocks with no END line.
+    (
+        r"-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?(?:-----END[^-]*-----|$)",
+        REDACTED,
+    ),
+    // Credentials embedded in URLs: scheme://user:pass@host and scheme://token@host.
+    (
+        r"([a-zA-Z][a-zA-Z0-9+.-]*://)[^/\s:@]+:[^/\s@]+@",
+        "${1}[REDACTED]@",
+    ),
+    (
+        r"([a-zA-Z][a-zA-Z0-9+.-]*://)[^/\s:@]{16,}@",
+        "${1}[REDACTED]@",
+    ),
+    // Authorization headers.
+    (r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{8,}", "${1}[REDACTED]"),
+    (
+        r#"(?i)(authorization\\?["']?\s*[:=]?\s*(?:\\?["'])*\s*basic\s+)[A-Za-z0-9+/=]{8,}"#,
+        "${1}[REDACTED]",
+    ),
+    // JSON Web Tokens.
+    (
+        r"\beyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}",
+        REDACTED,
+    ),
+    // Provider and platform key formats.
+    (r"\bsk-[A-Za-z0-9_-]{16,}", REDACTED),
+    (r"\b[spr]k_(?:live|test)_[A-Za-z0-9]{10,}", REDACTED),
+    (
+        r"\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})",
+        REDACTED,
+    ),
+    (r"\bglpat-[A-Za-z0-9_-]{20,}", REDACTED),
+    (r"\bhf_[A-Za-z0-9]{30,}", REDACTED),
+    (r"\bnpm_[A-Za-z0-9]{36}", REDACTED),
+    (r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b", REDACTED),
+    (r"\bAIza[0-9A-Za-z_-]{35}", REDACTED),
+    (r"\bxox[abprse]-[A-Za-z0-9-]{10,}", REDACTED),
+    (r"\bxapp-[A-Za-z0-9-]{10,}", REDACTED),
+    // key=value / "key": "value" where the key name ends in a sensitive word
+    // (api_key, AWS_SECRET_ACCESS_KEY, private_key, refresh_token, db_password, ...).
+    (
+        r#"(?i)([\w.-]*(?:key|token|secret|password|passwd|pwd|passphrase|credential|signature)\\?["']?\s*[:=]\s*(?:\\?["'])*)[^\s"'\\,;}&]{6,}"#,
+        "${1}[REDACTED]",
+    ),
+];
+
 static PATTERNS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
-    let rules: [(&str, &'static str); 9] = [
-        // PEM private keys (multi-line)
-        (
-            r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----",
-            REDACTED,
-        ),
-        // Credentials embedded in URLs: scheme://user:pass@host
-        (
-            r"([a-zA-Z][a-zA-Z0-9+.-]*://)[^/\s:@]+:[^/\s@]+@",
-            "${1}[REDACTED]@",
-        ),
-        // Authorization: Bearer <token>
-        (r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{12,}", "${1}[REDACTED]"),
-        // Common provider key formats
-        (r"\bsk-[A-Za-z0-9_-]{16,}", REDACTED),
-        (
-            r"\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})",
-            REDACTED,
-        ),
-        (r"\bAKIA[0-9A-Z]{16}\b", REDACTED),
-        (r"\bAIza[0-9A-Za-z_-]{35}\b", REDACTED),
-        (r"\bxox[abprs]-[A-Za-z0-9-]{10,}", REDACTED),
-        // key=value / "key": "value" pairs with sensitive names
-        (
-            r#"(?i)((?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|secret|password|passwd|token)["']?\s*[:=]\s*["']?)[^\s"',;}&]{6,}"#,
-            "${1}[REDACTED]",
-        ),
-    ];
-    rules
-        .into_iter()
-        .filter_map(|(pattern, replacement)| Regex::new(pattern).ok().map(|re| (re, replacement)))
+    // An invalid pattern would silently weaken redaction; `every_rule_compiles` guards it.
+    RULES
+        .iter()
+        .filter_map(|(pattern, replacement)| Regex::new(pattern).ok().map(|re| (re, *replacement)))
         .collect()
 });
 
@@ -202,6 +226,145 @@ mod tests {
             assert!(!output.contains(secret), "{input:?} -> {output:?}");
             assert!(output.contains("[REDACTED]"), "{input:?} -> {output:?}");
         }
+    }
+
+    /// Runs `log` under a real JSON fmt layer writing through `RedactingMakeWriter`, exactly as
+    /// the file sink is configured, and returns the written output.
+    fn capture_json(log: impl FnOnce()) -> String {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone, Default)]
+        struct Buffer(Arc<Mutex<Vec<u8>>>);
+        impl Write for Buffer {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.0.lock().expect("lock").extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let buffer = Buffer::default();
+        let sink = buffer.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .json()
+            .with_writer(RedactingMakeWriter::new(move || sink.clone()))
+            .finish();
+        tracing::subscriber::with_default(subscriber, log);
+        let bytes = buffer.0.lock().expect("lock").clone();
+        String::from_utf8(bytes).expect("utf8")
+    }
+
+    #[test]
+    fn redacts_secrets_in_real_json_log_output() {
+        #[derive(Debug)]
+        #[allow(dead_code)]
+        struct ProviderConfig {
+            api_key: &'static str,
+            region: &'static str,
+        }
+        let config = ProviderConfig {
+            api_key: "sk_live_abcdef123456",
+            region: "us",
+        };
+        let output = capture_json(|| {
+            tracing::info!(r#"connecting with token="secretvalue123""#);
+            tracing::info!(password = ?"hunter2222", "login attempt");
+            tracing::info!(password = %"correcthorse99", "login attempt");
+            tracing::info!(config = ?config, "provider configured");
+            tracing::info!("header Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123");
+        });
+        for secret in [
+            "secretvalue123",
+            "hunter2222",
+            "correcthorse99",
+            "sk_live_abcdef123456",
+            "abcdefghijklmnop",
+        ] {
+            assert!(!output.contains(secret), "{secret} leaked into: {output}");
+        }
+        assert!(output.contains("[REDACTED]"));
+        assert!(output.contains("us"), "non-secret fields survive: {output}");
+    }
+
+    #[test]
+    fn every_rule_compiles() {
+        assert_eq!(
+            PATTERNS.len(),
+            RULES.len(),
+            "a redaction pattern failed to compile"
+        );
+    }
+
+    #[test]
+    fn redacts_reviewer_bypass_samples() {
+        let cases = [
+            (
+                "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIK7MDENGbPxRfiCY",
+                "wJalrXUtnFEMI",
+            ),
+            ("secret_key: abcdef123456", "abcdef123456"),
+            ("private_key = 'mysecretkeydata'", "mysecretkeydata"),
+            (
+                "Authorization: Basic dXNlcjpwYXNzd29yZA==",
+                "dXNlcjpwYXNzd29yZA",
+            ),
+            ("stripe sk_live_51HxAbCdEfGhIjKlMn", "sk_live_51Hx"),
+            (
+                "git https://glpat-abcdefghijklmnopqrstu@gitlab.com/x.git",
+                "glpat-abcdef",
+            ),
+            (
+                "jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.dozjgNryP4J3jVmNHl0w",
+                "eyJzdWIi",
+            ),
+            (
+                "key AIzaSyA1234567890abcdefghijklmnopqrstu- next",
+                "AIzaSyA12345",
+            ),
+            ("slack xapp-1-A0123456789-abcdef", "xapp-1-A0123"),
+            ("hub hf_abcdefghijklmnopqrstuvwxyz0123456", "hf_abcdefghij"),
+            (
+                "-----BEGIN PGP PRIVATE KEY BLOCK-----
+lQOYBF
+-----END PGP PRIVATE KEY BLOCK-----",
+                "lQOYBF",
+            ),
+            (
+                "-----BEGIN RSA PRIVATE KEY-----
+MIIEtruncated",
+                "MIIEtruncated",
+            ),
+            (
+                r#"{\"api_key\":\"abc123def456ghi\",\"error\":\"bad\"}"#,
+                "abc123def456ghi",
+            ),
+        ];
+        for (input, secret) in cases {
+            let output = redact(input);
+            assert!(!output.contains(secret), "{input:?} -> {output:?}");
+        }
+    }
+
+    #[test]
+    fn init_writes_redacted_json_to_the_log_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let guard = init(dir.path(), false).expect("init");
+        tracing::info!(body = %r#"{"api_key":"abc123def456ghi","error":"bad"}"#, event = "provider.error");
+        tracing::info!(event = "cfg", "loaded config password=\"hunter2hunter2\"");
+        drop(guard); // flushes the background writer
+        let contents: String = std::fs::read_dir(dir.path())
+            .expect("log dir")
+            .filter_map(|e| e.ok())
+            .map(|e| std::fs::read_to_string(e.path()).unwrap_or_default())
+            .collect();
+        assert!(
+            contents.contains("provider.error"),
+            "log written: {contents}"
+        );
+        assert!(!contents.contains("abc123def456ghi"), "{contents}");
+        assert!(!contents.contains("hunter2hunter2"), "{contents}");
     }
 
     #[test]

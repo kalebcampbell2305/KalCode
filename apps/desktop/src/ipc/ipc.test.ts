@@ -50,6 +50,7 @@ describe("KalCodeClient with the memory transport", () => {
     await c.subscribeEvents((e) => received.push(e.type));
     await c.updateSettings({ theme: "light" });
     await c.updateSettings({ theme: "light" });
+    await new Promise((r) => setTimeout(r, 0)); // events are delivered asynchronously
     expect(received).toEqual(["settings.changed"]);
     expect((await c.getSettings()).theme).toBe("light");
   });
@@ -59,6 +60,13 @@ describe("KalCodeClient with the memory transport", () => {
       code: "empty_settings_patch",
       category: "validation",
     });
+  });
+
+  it("rejects unknown settings fields and invalid values like native serde", async () => {
+    const c = client();
+    await expect(c.updateSettings({ theme: "neon" } as never)).rejects.toMatchObject({ code: "ipc_rejected" });
+    await expect(c.updateSettings({ telemetry: true } as never)).rejects.toMatchObject({ code: "ipc_rejected" });
+    expect((await c.getSettings()).theme).toBe("dark");
   });
 
   it("clamps page sizes before calling the runtime", async () => {

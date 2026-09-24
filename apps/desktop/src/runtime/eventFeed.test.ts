@@ -15,7 +15,7 @@ function event(seq: number): EventEnvelope {
   };
 }
 
-const seqs = (feed: EventFeed) => feed.getSnapshot().map((e) => e.seq);
+const seqs = (feed: EventFeed) => feed.getSnapshot().events.map((e) => e.seq);
 
 describe("EventFeed", () => {
   it("orders newest first regardless of arrival order", () => {
@@ -51,11 +51,23 @@ describe("EventFeed", () => {
     expect(feed.oldestSeq).toBe(3);
   });
 
-  it("tracks when history is exhausted", () => {
+  it("tracks when history is exhausted as part of the snapshot", () => {
     const feed = new EventFeed();
-    expect(feed.reachedStart).toBe(false);
+    const listener = vi.fn();
+    feed.subscribe(listener);
+    const before = feed.getSnapshot();
     feed.markReachedStart();
-    expect(feed.reachedStart).toBe(true);
+    expect(feed.getSnapshot().reachedStart).toBe(true);
+    expect(feed.getSnapshot()).not.toBe(before);
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps older pages the user asked for even when at capacity", () => {
+    const feed = new EventFeed(3);
+    feed.merge([10, 11, 12].map(event));
+    feed.mergeOlder([7, 8, 9].map(event));
+    expect(seqs(feed)).toEqual([12, 11, 10, 9, 8, 7]);
+    expect(feed.oldestSeq).toBe(7);
   });
 
   it("stops notifying after unsubscribe", () => {

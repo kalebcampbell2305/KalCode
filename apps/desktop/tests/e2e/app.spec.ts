@@ -4,11 +4,22 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { type Browser, chromium, expect, type Page, test } from "@playwright/test";
 
-const EXE = resolve(import.meta.dirname, "../../../../target/release/kalcode.exe");
+// A binary built with the `e2e` feature (test hooks enabled) into its own target directory:
+//   CARGO_TARGET_DIR=target/e2e pnpm tauri build --no-bundle --features e2e
+// Normal release builds ignore KALCODE_DATA_DIR and WebView2 overrides by design.
+const EXE = process.env.KALCODE_E2E_EXE ?? resolve(import.meta.dirname, "../../../../target/e2e/release/kalcode.exe");
 const PORT = 9333;
 
 test.skip(process.platform !== "win32", "Real-app E2E drives WebView2 and runs on Windows.");
 test.skip(!existsSync(EXE), `Build the app first: ${EXE}`);
+
+// WebView2's crash reporter can hold files in a finished run's folder for a while; sweep
+// folders left by earlier runs before starting.
+test.beforeAll(() => {
+  for (const name of readdirSync(tmpdir())) {
+    if (name.startsWith("kalcode-e2e-")) removeDataDir(join(tmpdir(), name));
+  }
+});
 
 interface Running {
   child: ChildProcess;
@@ -37,6 +48,16 @@ async function launch(dataDir: string): Promise<Running> {
       await new Promise((r) => setTimeout(r, 250));
     }
   }
+  // Safety: never drive an app that is using the real data folder.
+  const deadlineDb = Date.now() + 10_000;
+  while (!existsSync(join(dataDir, "kalcode.db"))) {
+    if (Date.now() > deadlineDb) {
+      await browser.close();
+      execFileSync("taskkill", ["/F", "/PID", String(child.pid)]);
+      throw new Error(`${EXE} did not use the isolated data folder; build it with --features e2e`);
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
   const context = browser.contexts()[0];
   if (!context) throw new Error("No WebView2 browser context");
   let page = context.pages().find((p) => !p.url().startsWith("devtools"));
@@ -63,9 +84,9 @@ async function kill(app: Running) {
 /** WebView2 helper processes release file locks shortly after the app exits. */
 function removeDataDir(dir: string) {
   try {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 60, retryDelay: 250 });
-  } catch (error) {
-    console.warn(`Could not remove ${dir}:`, error);
+    rmSync(dir, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });
+  } catch {
+    // Left for the next run's sweep.
   }
 }
 

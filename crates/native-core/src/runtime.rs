@@ -150,6 +150,9 @@ pub struct Diagnostics {
 }
 
 pub struct Core {
+    /// Exclusive OS lock on `<data_dir>/kalcode.lock`, held for the life of the core so only
+    /// one KalCode process can use a data folder at a time.
+    _data_lock: std::fs::File,
     conn: Mutex<Connection>,
     bus: EventBus,
     config: CoreConfig,
@@ -167,8 +170,10 @@ impl Core {
 
     /// As [`Core::open`] with an explicit migration set (upgrade tests).
     pub fn open_with_migrations(config: CoreConfig, migrations: &[Migration]) -> Result<Self> {
+        let data_lock = lock_data_dir(&config.paths.data_dir)?;
         let mut conn = db::open(&config.paths.database)?;
         let outcome = db::migrate(&mut conn, migrations, Some(&config.paths.backups))?;
+        db::enable_wal(&conn)?;
         let interrupted = previous_session_interrupted(&conn)?;
         let first_run = db::meta_get(&conn, "first_run_at")?.is_none();
         if first_run {
@@ -177,6 +182,7 @@ impl Core {
         db::meta_set(&conn, "last_version", &config.app_version)?;
 
         let core = Self {
+            _data_lock: data_lock,
             conn: Mutex::new(conn),
             bus: EventBus::new(),
             latest_schema: migrations.last().map_or(0, |m| m.version),
@@ -241,12 +247,19 @@ impl Core {
 
     pub fn update_settings(&self, patch: &SettingsPatch) -> Result<Settings> {
         let mut conn = self.conn();
-        let (next, keys) = settings::apply(&mut conn, patch)?;
-        if !keys.is_empty() {
-            let envelope = EventStore::append(
-                &conn,
+        // The settings write and its `settings.changed` event commit together, or not at all.
+        let tx = conn.transaction()?;
+        let (next, keys) = settings::apply(&tx, patch)?;
+        let envelope = if keys.is_empty() {
+            None
+        } else {
+            Some(EventStore::append(
+                &tx,
                 NewEvent::core(EventPayload::SettingsChanged { keys }),
-            )?;
+            )?)
+        };
+        tx.commit()?;
+        if let Some(envelope) = envelope {
             self.bus.publish(&envelope);
         }
         Ok(next)
@@ -365,6 +378,34 @@ impl Core {
     }
 }
 
+/// Takes the exclusive lock that makes a data folder single-writer.
+fn lock_data_dir(data_dir: &Path) -> Result<std::fs::File> {
+    let fs_error = |e: std::io::Error| {
+        KalError::new(
+            crate::error::ErrorCategory::Filesystem,
+            "data_dir_unavailable",
+            "KalCode couldn't open its data folder.",
+        )
+        .with_source(e)
+    };
+    std::fs::create_dir_all(data_dir).map_err(fs_error)?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(data_dir.join("kalcode.lock"))
+        .map_err(fs_error)?;
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(std::fs::TryLockError::WouldBlock) => Err(KalError::new(
+            crate::error::ErrorCategory::Internal,
+            "already_running",
+            "KalCode is already running with this data folder. Switch to the open KalCode window.",
+        )),
+        Err(std::fs::TryLockError::Error(e)) => Err(fs_error(e)),
+    }
+}
+
 /// If the most recent lifecycle event is `app.started` (no matching `app.stopped`), the last
 /// session ended unexpectedly. Returns the time of the last event recorded in that session.
 fn previous_session_interrupted(conn: &Connection) -> Result<Option<String>> {
@@ -395,13 +436,39 @@ fn wal_path(database: &Path) -> PathBuf {
 
 /// Replaces the user's home directory prefix with `~` so reports don't reveal the username.
 pub fn display_path(path: &Path) -> String {
-    let home = std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from);
-    match home.and_then(|home| path.strip_prefix(&home).ok().map(Path::to_path_buf)) {
-        Some(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
-        None => path.display().to_string(),
+    let full = path.display().to_string();
+    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"));
+    match home.and_then(|home| strip_home(&full, &home.to_string_lossy(), cfg!(windows))) {
+        Some(rest) => format!("~{rest}"),
+        None => full,
     }
+}
+
+/// Returns the part of `path` after the `home` prefix (starting with a separator, or empty).
+/// Windows comparison ignores case and a `\\?\` verbatim prefix. The prefix must end at a
+/// path boundary, so `C:\Users\Kal` does not match `C:\Users\Kaleb`.
+fn strip_home<'a>(path: &'a str, home: &str, windows: bool) -> Option<&'a str> {
+    const VERBATIM: &str = r"\\?\";
+    let (path, home) = if windows {
+        (
+            path.strip_prefix(VERBATIM).unwrap_or(path),
+            home.strip_prefix(VERBATIM).unwrap_or(home),
+        )
+    } else {
+        (path, home)
+    };
+    let home = home.trim_end_matches(['/', '\\']);
+    if home.is_empty() || !path.is_char_boundary(home.len()) || path.len() < home.len() {
+        return None;
+    }
+    let (head, rest) = path.split_at(home.len());
+    let same = if windows {
+        head.to_lowercase() == home.to_lowercase()
+    } else {
+        head == home
+    };
+    let at_boundary = rest.is_empty() || rest.starts_with(['/', '\\']);
+    (same && at_boundary).then_some(rest)
 }
 
 impl KalError {
@@ -409,5 +476,51 @@ impl KalError {
     pub fn log_and_convert(self, command: &'static str) -> crate::error::IpcError {
         tracing::error!(event = "ipc.command_failed", command, error_code = self.code, error = %self.diagnostic());
         self.to_ipc()
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::strip_home;
+
+    #[test]
+    fn strips_home_case_insensitively_on_windows() {
+        assert_eq!(
+            strip_home(r"c:\USERS\kaleb\AppData\x.db", r"C:\Users\Kaleb", true),
+            Some(r"\AppData\x.db")
+        );
+        assert_eq!(
+            strip_home(r"\\?\C:\Users\Kaleb\data", r"C:\Users\Kaleb", true),
+            Some(r"\data")
+        );
+        assert_eq!(
+            strip_home(r"C:\Users\Kaleb", r"C:\Users\Kaleb\", true),
+            Some("")
+        );
+    }
+
+    #[test]
+    fn requires_a_path_boundary() {
+        assert_eq!(
+            strip_home(r"C:\Users\Kaleb2\data", r"C:\Users\Kaleb", true),
+            None
+        );
+        assert_eq!(strip_home("/home/kal/x", "/home/kaleb", false), None);
+        assert_eq!(strip_home("/home/kalebx/x", "/home/kaleb", false), None);
+    }
+
+    #[test]
+    fn unix_comparison_is_case_sensitive() {
+        assert_eq!(
+            strip_home("/home/kaleb/x", "/home/kaleb", false),
+            Some("/x")
+        );
+        assert_eq!(strip_home("/HOME/kaleb/x", "/home/kaleb", false), None);
+    }
+
+    #[test]
+    fn non_ascii_does_not_panic() {
+        assert_eq!(strip_home("/home/é", "/home/éé", false), None);
+        assert_eq!(strip_home("/hé", "/h", false), None);
     }
 }

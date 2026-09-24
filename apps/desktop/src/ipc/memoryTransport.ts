@@ -46,6 +46,13 @@ const SETTINGS_KEYS: Record<keyof Settings, string> = {
   sidebarCollapsed: "layout.sidebarCollapsed",
 };
 
+const PATCH_VALUES: Record<keyof Settings, readonly unknown[]> = {
+  theme: ["system", "light", "dark"],
+  motion: ["system", "reduced", "full"],
+  density: ["comfortable", "compact"],
+  sidebarCollapsed: [true, false],
+};
+
 function fail(error: IpcError): never {
   throw error;
 }
@@ -87,7 +94,11 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
       ...event,
     } as EventEnvelope;
     events.push(envelope);
-    for (const subscriber of subscribers) subscriber(envelope);
+    // Like native: published to the subscribers present now, delivered asynchronously.
+    const targets = [...subscribers];
+    setTimeout(() => {
+      for (const subscriber of targets) if (subscribers.has(subscriber)) subscriber(envelope);
+    }, 0);
     return envelope;
   };
 
@@ -123,8 +134,23 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
     },
     settings_update: (args) => {
       requireCore();
-      const patch = (args.patch ?? {}) as SettingsPatch;
-      const entries = Object.entries(patch).filter(([, v]) => v !== undefined) as [keyof Settings, never][];
+      const patch = (args.patch ?? {}) as Record<string, unknown>;
+      // Mirrors native serde: unknown fields and invalid values are rejected before anything runs.
+      for (const [key, value] of Object.entries(patch)) {
+        const allowed = PATCH_VALUES[key as keyof Settings];
+        if (!allowed || (value !== undefined && !allowed.includes(value as never))) {
+          fail({
+            category: "internal",
+            code: "ipc_rejected",
+            message: "KalCode couldn't complete that request.",
+            retryable: false,
+          });
+        }
+      }
+      const entries = Object.entries(patch as SettingsPatch).filter(([, v]) => v !== undefined) as [
+        keyof Settings,
+        never,
+      ][];
       if (entries.length === 0) {
         fail({
           category: "validation",

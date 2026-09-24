@@ -19,12 +19,14 @@ KalCode controls powerful tools on a user's machine. Security is architecture, n
 | Area | Control |
 | --- | --- |
 | IPC | Command allow-list via Tauri capabilities generated from `build.rs`; each command validates input natively; no frontend-supplied paths or shell arguments. |
-| WebView | Strict CSP (`default-src 'self'`; no remote scripts; no `unsafe-eval`); no remote content; devtools disabled in release builds. |
+| WebView | Strict CSP (`default-src 'self'`; no remote scripts; no `unsafe-eval`; `style-src 'unsafe-inline'` only, with no external image/font/connect sources to exfiltrate through); no remote content; the Tauri `devtools` feature is off. |
+| Environment | Normal builds remove WebView2 override variables (`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`, `WEBVIEW2_BROWSER_EXECUTABLE_FOLDER`, `WEBVIEW2_USER_DATA_FOLDER`, …) as the first action of `main`, so a persistent user environment cannot open a DevTools port or swap the browser runtime; `KALCODE_DATA_DIR` is ignored. Only debug builds and the `e2e`-feature test binary keep them. Verified against a release binary. |
+| Unsafe code | `unsafe_code = "deny"` workspace-wide. The single exception is the audited `std::env::remove_var` call at the start of `main` (no other thread exists yet). |
+| Single writer | Exclusive OS file lock per data folder; a second process gets `already_running`. |
 | Secrets | `SecretStore` trait backed by the OS credential store (Windows Credential Manager, macOS Keychain, Secret Service/keyutils on Linux). `SecretString` redacts `Debug`/`Display` and zeroizes on drop. Secrets never go to SQLite, logs, events, or the UI. |
-| Logs | Structured, local only; redaction pass for credential patterns (API keys, bearer tokens, private keys, URL credentials). |
+| Logs | Structured, local only. Every line passes a redaction pass (provider key formats, JWTs, bearer/basic auth, URL credentials, private keys, and `*key/token/secret/password…=value` pairs including JSON-escaped values), tested against real JSON formatter output. Panics are also written synchronously to `logs/crash.log`. |
 | Database | Parameterized SQL only; migrations checksummed; pre-migration backups; refuse downgrade. |
-| Unsafe Rust | `unsafe_code = "forbid"` workspace-wide. |
-| Supply chain | Lockfiles committed; `cargo audit`, `cargo deny`, and `pnpm audit` run in CI. |
+| Supply chain | Lockfiles committed; `cargo audit` and `pnpm audit` run in CI; pnpm allows install scripts only for esbuild, workerd, sharp and the Tauri CLI. |
 | Website | Security headers (CSP, HSTS, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, frame-ancestors none); JSON-only API with size limits, strict email validation, honeypot field, per-IP rate limiting via Workers Rate Limiting binding; no secrets in client bundles. |
 
 ## 3. Private-system boundary

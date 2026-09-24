@@ -18,3 +18,7 @@ keyring = "4"
 
 [lints]
 workspace = true
+
+[features]
+# Exposes MemorySecretStore to other crates' tests.
+test-support = []

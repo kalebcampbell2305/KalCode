@@ -1,38 +1,61 @@
 import type { EventEnvelope } from "@kalcode/protocol";
 
+export interface EventFeedSnapshot {
+  /** Newest first, deduplicated by `seq`. */
+  readonly events: readonly EventEnvelope[];
+  /** True once history has been paged back to the first event. */
+  readonly reachedStart: boolean;
+}
+
 /**
- * Client-side view of the event log: newest-first, deduplicated by `seq`, bounded in size.
- * Live events and backfilled history may arrive in any order and may overlap; merging is
- * idempotent. Implements the useSyncExternalStore contract.
+ * Client-side view of the event log. Live events and backfilled history may arrive in any
+ * order and may overlap; merging is idempotent. Live growth is bounded by `capacity` (oldest
+ * dropped first); history the user explicitly pages in raises the bound so it is never
+ * immediately discarded. Implements the useSyncExternalStore contract.
  */
 export class EventFeed {
-  private events: EventEnvelope[] = [];
+  private snapshot: EventFeedSnapshot = { events: [], reachedStart: false };
   private readonly listeners = new Set<() => void>();
-  private exhausted = false;
 
-  constructor(private readonly capacity = 500) {}
+  constructor(private capacity = 500) {}
 
-  getSnapshot = (): readonly EventEnvelope[] => this.events;
+  getSnapshot = (): EventFeedSnapshot => this.snapshot;
 
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   };
 
-  /** True once history has been paged back to the first event. */
   get reachedStart(): boolean {
-    return this.exhausted;
+    return this.snapshot.reachedStart;
   }
 
   /** The oldest loaded `seq`, used as the cursor for loading older history. */
   get oldestSeq(): number | undefined {
-    return this.events.at(-1)?.seq;
+    return this.snapshot.events.at(-1)?.seq;
   }
 
+  /** Live events and the initial backfill. */
   merge(incoming: readonly EventEnvelope[]): void {
+    this.apply(incoming);
+  }
+
+  /** An older history page the user asked for: grows the bound to keep it. */
+  mergeOlder(page: readonly EventEnvelope[]): void {
+    this.capacity = Math.max(this.capacity, this.snapshot.events.length + page.length);
+    this.apply(page);
+  }
+
+  markReachedStart(): void {
+    if (this.snapshot.reachedStart) return;
+    this.snapshot = { ...this.snapshot, reachedStart: true };
+    this.emit();
+  }
+
+  private apply(incoming: readonly EventEnvelope[]): void {
     if (incoming.length === 0) return;
     const bySeq = new Map<number, EventEnvelope>();
-    for (const event of this.events) bySeq.set(event.seq, event);
+    for (const event of this.snapshot.events) bySeq.set(event.seq, event);
     let changed = false;
     for (const event of incoming) {
       if (!bySeq.has(event.seq)) {
@@ -41,14 +64,8 @@ export class EventFeed {
       }
     }
     if (!changed) return;
-    this.events = [...bySeq.values()].sort((a, b) => b.seq - a.seq).slice(0, this.capacity);
-    this.emit();
-  }
-
-  /** Records that a history page returned fewer rows than requested. */
-  markReachedStart(): void {
-    if (this.exhausted) return;
-    this.exhausted = true;
+    const events = [...bySeq.values()].sort((a, b) => b.seq - a.seq).slice(0, this.capacity);
+    this.snapshot = { ...this.snapshot, events };
     this.emit();
   }
 

@@ -17,10 +17,11 @@ type BootResult =
   | { kind: "ready"; client: KalCodeClient; info: AppInfo; settings: Settings };
 
 async function boot(): Promise<BootResult> {
-  const transport = await resolveTransport();
-  if (!transport) return { kind: "no-runtime" };
-  const client = new KalCodeClient(transport);
+  let client: KalCodeClient | null = null;
   try {
+    const transport = await resolveTransport();
+    if (!transport) return { kind: "no-runtime" };
+    client = new KalCodeClient(transport);
     const state = await client.boot();
     if (state.startupError) return { kind: "failed", client, info: state.info, error: state.startupError };
     const settings = await client.getSettings();

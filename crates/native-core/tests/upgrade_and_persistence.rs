@@ -268,3 +268,86 @@ fn diagnostics_are_sanitized() {
         }
     }
 }
+
+#[test]
+fn a_data_folder_can_only_be_opened_once() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let first = Core::open(config(dir.path())).expect("first open");
+    let err = match Core::open(config(dir.path())) {
+        Ok(_) => panic!("a second core on the same data folder must be refused"),
+        Err(err) => err,
+    };
+    assert_eq!(err.code, "already_running");
+    first.shutdown();
+    drop(first);
+    Core::open(config(dir.path())).expect("reopen after the first core closed");
+}
+
+#[test]
+fn settings_change_and_its_event_commit_atomically() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let core = Core::open(config(dir.path())).expect("open");
+
+    // Make every event insert fail, simulating a write error after the settings row is written.
+    let other =
+        rusqlite::Connection::open(dir.path().join("kalcode.db")).expect("second connection");
+    other
+        .execute_batch(
+            "CREATE TRIGGER reject_events BEFORE INSERT ON events BEGIN SELECT RAISE(ABORT, 'disk full'); END;",
+        )
+        .expect("trigger");
+
+    let result = core.update_settings(&SettingsPatch {
+        theme: Some(ThemePreference::Light),
+        ..Default::default()
+    });
+    assert!(
+        result.is_err(),
+        "the update must fail when its event cannot be recorded"
+    );
+    assert_eq!(
+        core.settings().expect("settings").theme,
+        ThemePreference::System,
+        "the settings write must roll back with the failed event"
+    );
+
+    other
+        .execute_batch("DROP TRIGGER reject_events;")
+        .expect("drop trigger");
+    core.update_settings(&SettingsPatch {
+        theme: Some(ThemePreference::Light),
+        ..Default::default()
+    })
+    .expect("succeeds once events can be written");
+    assert_eq!(
+        core.settings().expect("settings").theme,
+        ThemePreference::Light
+    );
+}
+
+#[test]
+fn refused_newer_database_keeps_its_journal_mode() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    {
+        let conn = rusqlite::Connection::open(dir.path().join("kalcode.db")).expect("create");
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;
+             INSERT INTO schema_migrations VALUES (99, 'future', 'x', '2030-01-01T00:00:00.000Z');",
+        )
+        .expect("future schema");
+    }
+    let err = match Core::open(config(dir.path())) {
+        Ok(_) => panic!("must refuse"),
+        Err(err) => err,
+    };
+    assert_eq!(err.code, "schema_too_new");
+    let conn = rusqlite::Connection::open(dir.path().join("kalcode.db")).expect("reopen");
+    let mode: String = conn
+        .pragma_query_value(None, "journal_mode", |r| r.get(0))
+        .expect("mode");
+    assert_eq!(
+        mode.to_lowercase(),
+        "delete",
+        "a refused database is not switched to WAL"
+    );
+}

@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "test:ui": "playwright test --config tests/ui/playwright.config.ts",
+    "build:e2e": "node scripts/build-e2e.mjs",
     "test:e2e": "playwright test --config tests/e2e/playwright.config.ts",
     "tauri": "tauri"
   },

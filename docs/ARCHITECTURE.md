@@ -82,15 +82,19 @@ All IPC types are defined in Rust and exported to TypeScript with `ts-rs` into
 
 | Command | Input | Output | Notes |
 | --- | --- | --- | --- |
-| `app_info` | — | `AppInfo` | version, channel, platform, feature flags |
+| `boot` | — | `BootState` | build info, feature flags, and the startup error if the core failed to start |
+| `window_ready` | — | — | shows the main window after the first themed paint |
 | `settings_get` | — | `Settings` | |
-| `settings_update` | `SettingsPatch` | `Settings` | validated; emits `settings.changed` |
-| `events_recent` | `{ limit, beforeSeq? }` | `EventEnvelope[]` | limit clamped to 1..=500 |
-| `events_subscribe` | `Channel<EventEnvelope>` | `SubscriptionId` | live stream, ordered by `seq` |
-| `events_unsubscribe` | `SubscriptionId` | — | |
+| `settings_update` | `SettingsPatch` | `Settings` | validated; settings and `settings.changed` commit in one transaction |
+| `events_recent` | `{ limit, beforeSeq? }` | `EventEnvelope[]` | native rejects limits outside 1..=500; the TS client clamps |
+| `events_subscribe` | `Channel<EventEnvelope>` | `SubscriptionId` | one per webview; replaced on resubscribe, dropped on page reload |
+| `events_unsubscribe` | `SubscriptionId` | `bool` | a webview can cancel only its own subscription |
 | `diagnostics_get` | — | `Diagnostics` | sanitized, no project content |
 | `diagnostics_open_log_dir` | — | — | native resolves the path |
-| `secure_store_check` | — | `SecureStoreStatus` | writes, reads, deletes a probe credential |
+| `diagnostics_open_data_dir` | — | — | native resolves the path (startup-error screen) |
+| `secure_store_check` | — | `SecureStoreCheck` | writes, reads, deletes a probe credential; 2 s cooldown, serialized |
+
+Database-backed commands run off the main thread (`#[tauri::command(async)]`).
 
 Errors cross the boundary as `IpcError { category, code, message, retryable }` (see §7). The
 frontend client (`apps/desktop/src/ipc`) is the only module allowed to call `invoke`.
@@ -108,8 +112,11 @@ by `seq` (deduplicating), so no event can fall between the two calls.
   SQLite backup API to `<app-data>/backups/kalcode-pre-v{N}-{timestamp}.db` (last 5 retained).
 - A checksum mismatch or a database newer than the app is a hard, user-visible error — never a
   silent rewrite. See `docs/DATA_MODEL.md`.
-- Data directory: the OS app-data directory for identifier `com.kalcode.desktop`;
-  `KALCODE_DATA_DIR` overrides it (used by tests and diagnostics).
+- Data directory: the OS app-data directory for identifier `com.kalcode.desktop`. An exclusive
+  lock on `<data>/kalcode.lock` guarantees one KalCode process per data folder.
+  `KALCODE_DATA_DIR` (absolute paths only) overrides it in debug and `e2e`-feature builds only.
+- WAL journal mode is enabled only after migrations succeed, so a database this build refuses
+  (e.g. one from a newer KalCode) is left untouched.
 
 ## 6. Event protocol
 

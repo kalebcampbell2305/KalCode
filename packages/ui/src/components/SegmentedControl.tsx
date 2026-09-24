@@ -1,5 +1,5 @@
 import { RadioGroup } from "radix-ui";
-import type { ReactNode } from "react";
+import { type ReactNode, useRef } from "react";
 import { cx } from "./cx.ts";
 import styles from "./SegmentedControl.module.css";
 
@@ -33,11 +33,21 @@ export function SegmentedControl<T extends string>({
   className,
   ...aria
 }: SegmentedControlProps<T>) {
+  // Tracks the latest selection so each change is reported exactly once, whichever path
+  // (Radix's own selection or the arrow-key fallback below) observes it first.
+  const latest = useRef(value);
+  latest.current = value;
+  const select = (next: string) => {
+    if (next === latest.current || !options.some((option) => option.value === next)) return;
+    latest.current = next as T;
+    onValueChange(next as T);
+  };
+
   return (
     <RadioGroup.Root
       className={cx(styles.root, className)}
       value={value}
-      onValueChange={(next) => onValueChange(next as T)}
+      onValueChange={select}
       orientation="horizontal"
       loop
       disabled={disabled}
@@ -48,7 +58,7 @@ export function SegmentedControl<T extends string>({
         setTimeout(() => {
           const focused = document.activeElement;
           const next = focused?.getAttribute("role") === "radio" ? focused.getAttribute("value") : null;
-          if (next && next !== value && options.some((option) => option.value === next)) onValueChange(next as T);
+          if (next) select(next);
         }, 0);
       }}
       {...aria}

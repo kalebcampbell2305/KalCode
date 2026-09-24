@@ -82,7 +82,22 @@ export function canonicalRedirect(url: URL, request?: Request): string | null {
 /** Rate-limit key: the client IP Cloudflare reports, namespaced per action. */
 export function clientKey(request: Request, action: string): string {
   const ip = request.headers.get("cf-connecting-ip")?.trim() || "unknown";
-  return `${action}:${ip}`;
+  return `${action}:${networkKey(ip)}`;
+}
+
+/**
+ * The unit a client controls. IPv4: the address. IPv6: the /64 prefix, since one end user
+ * typically holds a whole /64 and could otherwise rotate addresses to evade the limit.
+ */
+export function networkKey(ip: string): string {
+  if (!ip.includes(":")) return ip;
+  const [head = "", tail = ""] = ip.toLowerCase().split("::");
+  const headGroups = head ? head.split(":") : [];
+  const tailGroups = tail ? tail.split(":") : [];
+  const missing = Math.max(0, 8 - headGroups.length - tailGroups.length);
+  const groups = ip.includes("::") ? [...headGroups, ...Array(missing).fill("0"), ...tailGroups] : headGroups;
+  const prefix = groups.slice(0, 4).map((g) => g.replace(/^0+(?=.)/, "") || "0");
+  return `${prefix.join(":")}::/64`;
 }
 
 /** A page on another site must not be able to submit on a visitor's behalf. */
@@ -196,6 +211,10 @@ export async function handleRequest(request: Request, deps: Deps): Promise<Respo
   const csp = await siteCsp();
 
   let response: Response;
+  // A leading `//` could be echoed into a Location header as a protocol-relative URL.
+  if (url.pathname.startsWith("//")) {
+    return withSecurityHeaders(new Response("Not found", { status: 404 }), url.pathname, csp);
+  }
   const redirect = canonicalRedirect(url, request);
   if (redirect) {
     response = new Response(null, { status: 301, headers: { location: redirect } });

@@ -34,10 +34,22 @@ const page = getPage("/privacy");
         not sell it, share it for marketing, or add it to anyone else's list.
       </p>
 
+      <h2>Confirming your address</h2>
+      <p>
+        We haven't sent any email yet. Before we send anything else, our first message will ask
+        you to confirm that you signed up. Addresses that aren't confirmed are deleted. The form
+        can't check who owns an address, so if you get a confirmation request you didn't expect,
+        ignore it and your address will be removed.
+      </p>
       <h2>Where it is kept</h2>
       <p>
         The list is stored in a Cloudflare D1 database operated for kalcoded.com. We keep your
         address until you remove it or until we close the early-access list, whichever comes first.
+      </p>
+      <p>
+        Removing your address deletes it from the list immediately. Cloudflare keeps
+        point-in-time recovery copies of D1 databases for up to 30 days, so a removed address
+        can remain in those copies until they expire.
       </p>
 
       <h2>Cloudflare as our infrastructure provider</h2>

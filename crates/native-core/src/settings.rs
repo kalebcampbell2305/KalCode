@@ -1,6 +1,6 @@
 //! Typed, validated user settings persisted in the `settings` table (docs/DATA_MODEL.md).
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, Transaction, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use ts_rs::TS;
@@ -103,15 +103,16 @@ pub fn load(conn: &Connection) -> Result<Settings> {
 }
 
 /// Applies a patch in one transaction. Returns the new settings and the keys that changed.
-pub fn apply(conn: &mut Connection, patch: &SettingsPatch) -> Result<(Settings, Vec<String>)> {
+/// Applies a patch inside the caller's transaction (so the caller can record the matching
+/// event atomically). Returns the new settings and the keys that changed.
+pub fn apply(tx: &Transaction<'_>, patch: &SettingsPatch) -> Result<(Settings, Vec<String>)> {
     if *patch == SettingsPatch::default() {
         return Err(KalError::validation(
             "empty_settings_patch",
             "No settings were provided to update.",
         ));
     }
-    let tx = conn.transaction()?;
-    let current = load(&tx)?;
+    let current = load(tx)?;
     let mut next = current.clone();
     let mut changed: Vec<(&'static str, Value)> = Vec::new();
 
@@ -143,7 +144,6 @@ pub fn apply(conn: &mut Connection, patch: &SettingsPatch) -> Result<(Settings, 
             params![key, value.to_string(), now],
         )?;
     }
-    tx.commit()?;
     Ok((
         next,
         changed.into_iter().map(|(k, _)| k.to_owned()).collect(),
@@ -154,6 +154,16 @@ pub fn apply(conn: &mut Connection, patch: &SettingsPatch) -> Result<(Settings, 
 mod tests {
     use super::*;
     use crate::db;
+
+    fn apply_committed(
+        conn: &mut Connection,
+        patch: &SettingsPatch,
+    ) -> Result<(Settings, Vec<String>)> {
+        let tx = conn.transaction()?;
+        let result = apply(&tx, patch)?;
+        tx.commit()?;
+        Ok(result)
+    }
 
     fn conn() -> Connection {
         let mut conn = db::open_in_memory().expect("open");
@@ -174,7 +184,7 @@ mod tests {
             density: Some(Density::Compact),
             ..Default::default()
         };
-        let (settings, keys) = apply(&mut conn, &patch).expect("apply");
+        let (settings, keys) = apply_committed(&mut conn, &patch).expect("apply");
         assert_eq!(settings.theme, ThemePreference::Dark);
         assert_eq!(keys, vec![KEY_THEME.to_owned(), KEY_DENSITY.to_owned()]);
         assert_eq!(load(&conn).expect("reload"), settings);
@@ -187,13 +197,13 @@ mod tests {
             theme: Some(ThemePreference::System),
             ..Default::default()
         };
-        let (_, keys) = apply(&mut conn, &patch).expect("apply");
+        let (_, keys) = apply_committed(&mut conn, &patch).expect("apply");
         assert!(keys.is_empty());
     }
 
     #[test]
     fn empty_patch_is_rejected() {
-        let err = apply(&mut conn(), &SettingsPatch::default()).expect_err("empty");
+        let err = apply_committed(&mut conn(), &SettingsPatch::default()).expect_err("empty");
         assert_eq!(err.code, "empty_settings_patch");
     }
 

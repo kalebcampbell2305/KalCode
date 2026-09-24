@@ -44,23 +44,38 @@ interface RuntimeProviderProps {
 export function RuntimeProvider({ client, info, initialSettings, children }: RuntimeProviderProps) {
   const toast = useToast();
   const [settings, setSettings] = useState(initialSettings);
-  const confirmed = useRef(initialSettings);
   const requestSeq = useRef(0);
+  const inFlight = useRef(0);
+  const needsReconcile = useRef(false);
 
+  /**
+   * Optimistic update. A lone request applies its own response. When requests overlap (their
+   * responses may arrive in any order) or one fails, the UI re-reads the saved settings once
+   * nothing is in flight, so it always converges on what is actually persisted.
+   */
   const updateSettings = useCallback(
     async (patch: SettingsPatch) => {
       const id = ++requestSeq.current;
+      inFlight.current += 1;
+      if (inFlight.current > 1) needsReconcile.current = true;
       setSettings((current) => ({ ...current, ...patch }));
       try {
         const next = await client.updateSettings(patch);
-        confirmed.current = next;
-        // Only the latest request may overwrite local state, so out-of-order responses
-        // can't undo a newer change.
-        if (id === requestSeq.current) setSettings(next);
+        if (id === requestSeq.current && !needsReconcile.current) setSettings(next);
       } catch (error) {
-        const err = toKalCodeError(error);
-        if (id === requestSeq.current) setSettings(confirmed.current);
-        toast.show({ tone: "danger", title: "Settings not saved", description: err.message });
+        needsReconcile.current = true;
+        toast.show({ tone: "danger", title: "Settings not saved", description: toKalCodeError(error).message });
+      } finally {
+        inFlight.current -= 1;
+        if (inFlight.current === 0 && needsReconcile.current) {
+          needsReconcile.current = false;
+          try {
+            const saved = await client.getSettings();
+            if (inFlight.current === 0) setSettings(saved);
+          } catch {
+            needsReconcile.current = true; // try again after the next update
+          }
+        }
       }
     },
     [client, toast],
@@ -79,8 +94,13 @@ export function RuntimeProvider({ client, info, initialSettings, children }: Run
     (async () => {
       try {
         // Subscribe before backfilling so no event can fall between the two calls.
-        unsubscribe = await client.subscribeEvents((event) => feed.merge([event]));
-        if (cancelled) return;
+        const unsub = await client.subscribeEvents((event) => feed.merge([event]));
+        if (cancelled) {
+          // Cleaned up while subscribing (StrictMode, retry, unmount): release it now.
+          void unsub();
+          return;
+        }
+        unsubscribe = unsub;
         const page = await client.recentEvents(INITIAL_PAGE);
         if (cancelled) return;
         feed.merge(page);
@@ -104,7 +124,7 @@ export function RuntimeProvider({ client, info, initialSettings, children }: Run
     if (cursor === undefined || feed.reachedStart) return;
     try {
       const page = await client.recentEvents(OLDER_PAGE, cursor);
-      feed.merge(page);
+      feed.mergeOlder(page);
       if (page.length < OLDER_PAGE) feed.markReachedStart();
     } catch (error) {
       toast.show({ tone: "danger", title: "Couldn't load older activity", description: toKalCodeError(error).message });
@@ -129,13 +149,13 @@ export function useRuntime(): RuntimeValue {
 
 export function useEvents() {
   const { feed, eventsState, eventsError, retryEvents, loadOlderEvents } = useRuntime();
-  const events = useSyncExternalStore(feed.subscribe, feed.getSnapshot);
+  const { events, reachedStart } = useSyncExternalStore(feed.subscribe, feed.getSnapshot);
   return {
     events,
+    reachedStart,
     state: eventsState,
     error: eventsError,
     retry: retryEvents,
     loadOlder: loadOlderEvents,
-    reachedStart: feed.reachedStart,
   };
 }

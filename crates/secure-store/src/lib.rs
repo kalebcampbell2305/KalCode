@@ -5,16 +5,16 @@
 //! Secret Service on Linux — behind the [`SecretStore`] trait. They never go to SQLite, logs,
 //! events, analytics or the UI. Database rows reference a secret by its [`SecretKey`] account.
 
-use std::collections::HashMap;
 use std::fmt;
-use std::sync::Mutex;
 
 use zeroize::Zeroizing;
 
 /// Keychain service name for every KalCode secret.
 pub const SERVICE: &str = "com.kalcode.desktop";
 
-/// A secret value. `Debug` is redacted, there is no `Display`, and memory is zeroized on drop.
+/// A secret value. `Debug` is redacted, there is no `Display`/`Serialize`, and KalCode-owned
+/// buffers are zeroized on drop. Zeroization cannot cover copies made outside this type: the
+/// `&str`/`String` passed to [`SecretString::new`], or the OS credential store's own buffers.
 #[derive(Clone, PartialEq, Eq)]
 pub struct SecretString(Zeroizing<String>);
 
@@ -100,9 +100,11 @@ impl OsSecretStore {
 
 fn map_keyring_error(error: keyring::Error) -> SecretStoreError {
     match error {
-        keyring::Error::NoDefaultStore | keyring::Error::NoStorageAccess(_) => {
-            SecretStoreError::Unavailable(error.to_string())
-        }
+        // No usable store on this system (e.g. no Secret Service daemon on Linux). Note: the
+        // keyring crate caches store initialization per process, so this persists until restart.
+        keyring::Error::NoDefaultStore => SecretStoreError::Unavailable(error.to_string()),
+        // The store exists but refused access (e.g. a locked keychain).
+        keyring::Error::NoStorageAccess(_) => SecretStoreError::Access(error.to_string()),
         other => SecretStoreError::Access(other.to_string()),
     }
 }
@@ -141,12 +143,14 @@ impl SecretStore for OsSecretStore {
     }
 }
 
-/// In-memory store for tests. Never used by release builds.
+/// In-memory store for tests. Compiled only for tests or with the `test-support` feature.
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Default)]
 pub struct MemorySecretStore {
-    secrets: Mutex<HashMap<SecretKey, SecretString>>,
+    secrets: std::sync::Mutex<std::collections::HashMap<SecretKey, SecretString>>,
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl MemorySecretStore {
     pub fn new() -> Self {
         Self::default()
@@ -154,13 +158,17 @@ impl MemorySecretStore {
 
     fn lock(
         &self,
-    ) -> Result<std::sync::MutexGuard<'_, HashMap<SecretKey, SecretString>>, SecretStoreError> {
+    ) -> Result<
+        std::sync::MutexGuard<'_, std::collections::HashMap<SecretKey, SecretString>>,
+        SecretStoreError,
+    > {
         self.secrets
             .lock()
             .map_err(|_| SecretStoreError::Access("memory store poisoned".into()))
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 impl SecretStore for MemorySecretStore {
     fn backend(&self) -> &'static str {
         "In-memory (test)"
@@ -180,13 +188,14 @@ impl SecretStore for MemorySecretStore {
     }
 }
 
+/// Account used by [`probe`]. Fixed, so a failed cleanup can leave at most one entry behind.
+pub const PROBE_ACCOUNT: &str = "diagnostics:probe";
+
 /// Verifies a store end to end: writes a random probe secret, reads it back, deletes it.
-/// The probe value is random and never leaves this function.
+/// The probe value is random and never leaves this function. Callers should not run probes
+/// concurrently against the same store (they share [`PROBE_ACCOUNT`]).
 pub fn probe(store: &dyn SecretStore) -> Result<(), SecretStoreError> {
-    let key = SecretKey::new(format!(
-        "diagnostics:probe:{}",
-        uuid::Uuid::now_v7().simple()
-    ))?;
+    let key = SecretKey::new(PROBE_ACCOUNT)?;
     let value = SecretString::new(uuid::Uuid::new_v4().to_string());
     store.set(&key, &value)?;
     let read = store.get(&key);

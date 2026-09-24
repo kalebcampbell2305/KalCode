@@ -30,3 +30,8 @@ tracing.workspace = true
 
 [lints]
 workspace = true
+
+[features]
+# Keeps test hooks (WebView2 debugging variables, KALCODE_DATA_DIR) in release builds.
+# Used only to build the binary the end-to-end suite drives; never for shipped installers.
+e2e = []
