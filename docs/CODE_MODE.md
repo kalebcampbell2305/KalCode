@@ -46,13 +46,21 @@ executable path and arguments never leave native code. Unknown ids are refused
 
 Each tab runs one shell in a native pseudo-terminal — ConPTY on Windows, openpty on macOS and
 Linux (`portable-pty`) — started in the workspace folder with `TERM=xterm-256color`,
-`COLORTERM=truecolor` and `TERM_PROGRAM=KalCode`. KalCode's own settings and test hooks
-(`KALCODE_*`, WebView2 overrides) are removed from the shell's environment.
+`COLORTERM=truecolor` and `TERM_PROGRAM=KalCode`. Every `KALCODE_*` variable and the WebView2
+test overrides are removed from the shell's environment. Only a real `pwsh.exe` on `PATH` counts
+as PowerShell 7 (a `pwsh.cmd` or `.bat` does not).
 
 - **Streaming.** `terminal_attach` streams output over a per-view Tauri channel as raw bytes
   (`InvokeResponseBody::Raw`, an `ArrayBuffer` in JS). The first message is always the
-  scrollback replay (possibly empty), then live output. One attachment per (webview, terminal);
-  attaching again replaces it; a page reload drops the page's attachments.
+  scrollback replay (possibly empty), then live output. Each attach returns its own attachment
+  id, owned by the calling webview; a view detaches exactly that id, so overlapping
+  attach/detach requests can never release another view's stream. A webview holds at most 4
+  attachments per terminal (the oldest is released beyond that); a page reload drops all of the
+  page's attachments.
+- **Flow control.** A view acknowledges the bytes it has rendered (`terminal_ack`, every
+  64 KB). A view that falls more than 4 MB behind stops receiving output; its next ack returns
+  `false` and it re-attaches, resetting and replaying from the scrollback. Native memory held
+  for a slow or unresponsive view is bounded.
 - **Scrollback.** Each session keeps the last 512 KB of output in memory, trimmed at line starts.
   Output is never written to the database or the event log.
 - **Views.** The UI renders with xterm.js 6 and its DOM renderer. Tabs of the active workspace
@@ -73,8 +81,17 @@ Linux (`portable-pty`) — started in the workspace folder with `TERM=xterm-256c
   action. Exit code 0 records `shell.completed`; anything else `shell.failed`.
 - **Close.** Closing a tab ends the shell by closing its pseudo-terminal — on Windows every
   process attached to that console, including programs started from the shell, receives the
-  close — then forgets the tab. A running shell's end is recorded as `shell.completed` with
-  `closedByUser: true`.
+  close; on macOS and Linux the shell's process group gets SIGHUP and, if anything is still
+  running after 3 s, SIGKILL — then forgets the tab. A running shell's end is recorded as
+  `shell.completed` with `closedByUser: true`. If the exit is not reported within 5 s the tab is
+  forgotten anyway, but its session stays tracked until it exits (and shutdown ends it).
+  Closing a tab never asks for confirmation, like other terminal apps.
+- **Sessions and restarts.** Every started shell gets a new generation number. An exit report
+  from a session that Restart has replaced is ignored, so it can never end the new shell.
+- **Locking.** A shell is started while the database connection lock is held, so the tab row,
+  the process and `shell.started` appear together and an exit racing the start is recorded
+  after it. Starting a process normally takes milliseconds; an unusually slow start (for
+  example, antivirus scanning the shell) briefly delays other database commands.
 
 ## 4. Restart semantics
 
@@ -135,3 +152,8 @@ or shell string from the WebView.
   text). SGR mouse mode, which modern programs use, is unaffected.
 - A shell that exits at the same moment its tab is closed may not get its own exit event; the
   close is still recorded.
+- A cursor-position request split across two reads of the pseudo-terminal is not recognised.
+  With a view attached, xterm.js still answers it; with no view attached (rare: ConPTY sends it
+  once at startup, in one piece), the shell may wait until a view attaches.
+- Unix process-group cleanup is implemented and type-checked but was not exercised on macOS or
+  Linux in this campaign (development and E2E ran on Windows); CI runs the PTY tests there.
