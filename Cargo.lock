@@ -2149,6 +2149,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "kalcode-providers"
+version = "0.1.0"
+dependencies = [
+ "kalcode-contracts",
+ "kalcode-native-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tracing",
+ "ts-rs",
+ "uuid",
+]
+
+[[package]]
 name = "kalcode-secure-store"
 version = "0.1.0"
 dependencies = [
