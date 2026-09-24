@@ -320,18 +320,6 @@ a:hover {
   mask-image: url("/assets/brand/kalcode-tagline.png");
 }
 
-.lettering--jarvis-wordmark {
-  aspect-ratio: 781 / 83;
-  -webkit-mask-image: url("/assets/brand/jarvis-wordmark.png");
-  mask-image: url("/assets/brand/jarvis-wordmark.png");
-}
-
-.lettering--jarvis-tagline {
-  aspect-ratio: 766 / 29;
-  -webkit-mask-image: url("/assets/brand/jarvis-tagline.png");
-  mask-image: url("/assets/brand/jarvis-tagline.png");
-}
-
 @media (forced-colors: active) {
   .lettering {
     forced-color-adjust: none;
@@ -1148,65 +1136,133 @@ a:hover {
   }
 }
 
-/* ---------- JARVIS ---------- */
+/* ---------- KalVoice ---------- */
 
-.jarvis {
+.kalvoice {
   display: grid;
   gap: var(--space-10);
   align-items: center;
   margin-top: var(--site-section-y);
   padding-top: var(--site-section-y);
   border-top: 1px solid var(--color-border);
+  scroll-margin-top: var(--space-6);
 }
 
-.jarvis__visual {
+.kalvoice__visual {
   width: min(100%, 22rem);
   aspect-ratio: 1;
+  justify-self: center;
 }
 
-.jarvis__copy {
+.kalvoice__copy {
   display: grid;
   gap: var(--space-5);
   justify-items: start;
 }
 
-/* The one brand moment with wide tracking, echoing the JARVIS lockup. */
-.lockup {
-  display: grid;
-  gap: var(--space-3);
-}
-
-.lockup {
-  justify-items: start;
-  gap: var(--space-4);
-  color: var(--color-text);
-}
-
-.lockup .lettering--jarvis-wordmark {
-  height: clamp(1.25rem, 0.95rem + 1.2vw, 1.875rem);
-}
-
-.lockup .lettering--jarvis-tagline {
-  height: clamp(0.5625rem, 0.5rem + 0.25vw, 0.75rem);
-  color: var(--color-text-secondary);
-}
-
-.jarvis__copy p {
+.kalvoice__copy > p:not(.kalvoice-lockup) {
   color: var(--color-text-secondary);
   max-width: 52ch;
 }
 
+/* The KalVoice name, set live in the widest Lexend with brand tracking (no image lettering). */
+.kalvoice-lockup {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-5);
+  align-items: baseline;
+  color: var(--color-text);
+}
+
+.kalvoice-lockup--centered {
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.kalvoice-name {
+  font-family: var(--font-wider);
+  font-size: clamp(1.25rem, 1rem + 1vw, 1.75rem);
+  font-weight: var(--weight-light);
+  letter-spacing: 0.18em;
+  line-height: 1.1;
+  text-transform: uppercase;
+  /* Tracking adds space after the last letter; pull it back so centring stays optical. */
+  margin-right: -0.18em;
+}
+
+.kalvoice-line {
+  max-width: 30ch;
+  color: var(--color-text-secondary);
+  font-size: var(--site-text-small);
+  line-height: var(--leading-snug);
+}
+
+.kalvoice-modes {
+  display: grid;
+  width: 100%;
+  max-width: 52ch;
+  border-top: 1px solid var(--color-border);
+}
+
+.kalvoice-modes > div {
+  display: grid;
+  gap: var(--space-1);
+  padding-block: var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.kalvoice-modes dt {
+  color: var(--color-text);
+  font-weight: var(--weight-medium);
+}
+
+.kalvoice-modes dd {
+  color: var(--color-text-secondary);
+}
+
+@media (min-width: 40rem) {
+  .kalvoice-modes > div {
+    grid-template-columns: 7rem minmax(0, 1fr);
+    gap: var(--space-5);
+  }
+}
+
 @media (min-width: 56rem) {
-  .jarvis {
+  .kalvoice {
     grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
     gap: var(--space-16);
   }
 
-  .jarvis__visual {
+  .kalvoice__visual {
     width: 100%;
     max-width: 28rem;
-    justify-self: center;
   }
+}
+
+/* Keyboard shortcuts: nested <kbd>, readable at body size inside running text. */
+kbd.shortcut {
+  display: inline;
+  height: auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: inherit;
+  white-space: nowrap;
+}
+
+kbd.shortcut > kbd,
+.prose kbd:not(.shortcut) {
+  height: auto;
+  padding: 0.1em 0.4em;
+  font-size: 0.8em;
+  line-height: 1.3;
+  vertical-align: 0.05em;
+}
+
+kbd.shortcut > kbd {
+  margin-inline: 0.1em;
 }
 
 /* ---------- Plans ---------- */
@@ -1257,6 +1313,12 @@ a:hover {
 
 .plan__summary {
   color: var(--color-text-secondary);
+}
+
+.plan__allowance {
+  color: var(--color-text);
+  font-size: var(--site-text-small);
+  font-weight: var(--weight-medium);
 }
 
 .plan__highlights {
@@ -1617,6 +1679,7 @@ a:hover {
 
 .docs__content {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-8);
   min-width: 0;
 }
@@ -1870,7 +1933,7 @@ a:hover {
   margin-bottom: 0;
 }
 
-/* JARVIS lockup tile: the artwork on its own background, in either theme. */
+/* KalVoice lockup tile: the globe artwork on its own dark ground, in either theme. */
 .artwork-tile {
   display: grid;
   justify-items: center;
@@ -1887,10 +1950,6 @@ a:hover {
 .artwork-tile__globe {
   width: 100%;
   aspect-ratio: 1;
-}
-
-.lockup--centered {
-  justify-items: center;
 }
 
 .feature__lead {

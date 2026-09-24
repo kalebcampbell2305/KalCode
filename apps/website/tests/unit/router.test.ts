@@ -133,9 +133,9 @@ describe("canonicalRedirect", () => {
 
 describe("handleRequest routing", () => {
   it("answers www requests with a 301 to the apex before anything else", async () => {
-    const response = await handleRequest(new Request("https://www.kalcoded.com/docs/jarvis?x=1"), h.deps);
+    const response = await handleRequest(new Request("https://www.kalcoded.com/docs/kalvoice?x=1"), h.deps);
     expect(response.status).toBe(301);
-    expect(response.headers.get("location")).toBe("https://kalcoded.com/docs/jarvis?x=1");
+    expect(response.headers.get("location")).toBe("https://kalcoded.com/docs/kalvoice?x=1");
     expect(response.headers.get("strict-transport-security")).toContain("max-age=31536000");
     expect(h.assetRequests).toEqual([]);
   });
