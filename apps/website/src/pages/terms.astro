@@ -1,0 +1,90 @@
+---
+import PageHead from "../components/PageHead.astro";
+import Base from "../layouts/Base.astro";
+import { getPage } from "../lib/site";
+
+const page = getPage("/terms");
+---
+<Base title={page.title} description={page.description} path={page.path}>
+  <PageHead
+    title="Terms of use"
+    lead="These terms cover your use of kalcoded.com and the KalCode early-access list."
+  >
+    <p class="muted small">Last updated September 24, 2026</p>
+  </PageHead>
+  <section class="section">
+    <div class="container prose">
+      <h2>1. About these terms</h2>
+      <p>
+        By using kalcoded.com (the “site”) or joining the early-access list, you agree to these
+        terms. If you do not agree, please do not use the site. The KalCode desktop application is
+        not yet available; it will be offered under its own terms when it is released.
+      </p>
+
+      <h2>2. The site</h2>
+      <p>
+        The site describes KalCode, a product in private development. Descriptions of features,
+        plans and prices reflect current plans and may change before release. Nothing on the site is
+        an offer to sell, and no purchase can be made through it today.
+      </p>
+
+      <h2>3. The early-access list</h2>
+      <ul>
+        <li>Joining is free and requires only an email address that you are entitled to use.</li>
+        <li>
+          Joining does not guarantee access to any build, on any date, and does not create an
+          account or any other obligation for you or for us.
+        </li>
+        <li>
+          We will use your address only as described in the <a href="/privacy">privacy notice</a>.
+          You can remove it at any time on that page.
+        </li>
+        <li>Pre-release builds, if offered, may come with additional terms that you will see first.</li>
+      </ul>
+
+      <h2>4. Acceptable use</h2>
+      <p>You agree not to:</p>
+      <ul>
+        <li>submit an email address that is not yours, or submit addresses in bulk;</li>
+        <li>attempt to disrupt, overload, probe or bypass the security of the site or its API;</li>
+        <li>scrape the site in a way that degrades it for others;</li>
+        <li>use the site to break any law.</li>
+      </ul>
+
+      <h2>5. Names and marks</h2>
+      <p>
+        KalCode, JARVIS as used within KalCode, the KalCode wordmark and the constellation globe
+        artwork are ours. You may not use them in a way that suggests endorsement or affiliation
+        without permission. Claude Code, Codex and Gemini CLI are products and trademarks of their
+        respective owners; naming them describes compatibility and does not imply endorsement.
+      </p>
+
+      <h2>6. No warranty</h2>
+      <p>
+        The site is provided “as is” and “as available”. To the extent the law allows, we make no
+        warranties about the site, including that it will be uninterrupted or error-free, or that
+        KalCode will be released in any particular form or on any particular date.
+      </p>
+
+      <h2>7. Limitation of liability</h2>
+      <p>
+        To the extent the law allows, we are not liable for any indirect, incidental or
+        consequential loss arising from your use of the site or the early-access list. Nothing in
+        these terms limits liability that cannot be limited by law.
+      </p>
+
+      <h2>8. Changes</h2>
+      <p>
+        We may update these terms. When we do, we will change the date at the top of this page.
+        Continuing to use the site after an update means you accept the updated terms.
+      </p>
+
+      <h2>9. Contact</h2>
+      <p>
+        A contact address for legal and privacy requests will be published on this site once a
+        monitored mailbox is in place. Until then, you can remove your email address at any time
+        with the form on the <a href="/privacy#remove">privacy page</a>.
+      </p>
+    </div>
+  </section>
+</Base>

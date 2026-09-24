@@ -1,0 +1,144 @@
+---
+import { PLANS, type PlanEntitlements, formatInterval, formatPrice } from "@kalcode/protocol/plans";
+import EarlyAccessForm from "../components/EarlyAccessForm.astro";
+import Icon from "../components/Icon.astro";
+import PageHead from "../components/PageHead.astro";
+import Base from "../layouts/Base.astro";
+import { getPage } from "../lib/site";
+
+const page = getPage("/pricing");
+
+const yesNo = (value: boolean) => (value ? "Included" : "—");
+const automations: Record<PlanEntitlements["automations"], string> = {
+  none: "—",
+  scheduled: "Scheduled",
+  scheduled_and_event: "Scheduled and event-triggered",
+};
+
+const rows: { label: string; value: (e: PlanEntitlements) => string }[] = [
+  { label: "Threads running at once", value: (e) => String(e.concurrentThreads) },
+  { label: "Provider connections", value: (e) => (e.providerConnections === "unlimited" ? "Unlimited" : "—") },
+  { label: "Persistent agents", value: (e) => yesNo(e.persistentAgents) },
+  { label: "Pair and team workflows", value: (e) => yesNo(e.multiAgentWorkflows) },
+  { label: "Automations", value: (e) => automations[e.automations] },
+  { label: "Advanced missions with verification", value: (e) => yesNo(e.advancedMissions) },
+];
+---
+<Base title={page.title} description={page.description} path={page.path}>
+  <PageHead
+    title="Pricing"
+    lead="Three plans. Connecting your AI providers is free on every one of them."
+    devNote="Plans become available when KalCode launches. Nothing is for sale today."
+  />
+
+  <section class="section" aria-labelledby="plans-title">
+    <div class="container">
+      <h2 id="plans-title" class="visually-hidden">Plans</h2>
+      <div class="plans">
+        {
+          PLANS.map((plan) => (
+            <section class="plan" aria-labelledby={`plan-${plan.id}`}>
+              <h3 class="plan__name" id={`plan-${plan.id}`}>{plan.name}</h3>
+              <p class="plan__price">
+                <span class="plan__amount">{formatPrice(plan.price)}</span>
+                <span class="plan__interval">{formatInterval(plan.price)}</span>
+              </p>
+              <p class="plan__summary">{plan.summary}</p>
+              <ul class="plan__highlights" role="list">
+                {plan.highlights.map((line) => (
+                  <li>
+                    <Icon name="check" />
+                    <span>{line}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))
+        }
+      </div>
+    </div>
+  </section>
+
+  <section class="section" aria-labelledby="compare-title">
+    <div class="container">
+      <div class="section-head">
+        <h2 id="compare-title" class="h2">Compare plans.</h2>
+        <p>
+          These are the planned entitlements. They are provisional and may change before launch;
+          the plan catalog on this page is updated from the same configuration KalCode itself uses.
+        </p>
+      </div>
+      <div class="table-wrap" role="region" aria-label="Plan comparison" tabindex="0">
+        <table class="table">
+          <caption class="visually-hidden">Planned entitlements by plan (provisional)</caption>
+          <thead>
+            <tr>
+              <th scope="col">Feature</th>
+              {PLANS.map((plan) => <th scope="col">{plan.name}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {
+              rows.map((row) => (
+                <tr>
+                  <th scope="row">{row.label}</th>
+                  {PLANS.map((plan) => (
+                    <td>{row.value(plan.entitlements)}</td>
+                  ))}
+                </tr>
+              ))
+            }
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" aria-labelledby="faq-title">
+    <div class="container split">
+      <div class="split__aside section-head">
+        <h2 id="faq-title" class="h2">Questions.</h2>
+      </div>
+      <dl class="definition-list">
+        <div>
+          <dt class="h3">Do I pay KalCode to use my existing subscriptions?</dt>
+          <dd>
+            No. Connecting Claude Code, Codex or Gemini CLI is free on every plan. Your usage of
+            each provider is billed by that provider under your own account, as it is today.
+          </dd>
+        </div>
+        <div>
+          <dt class="h3">When can I buy a plan?</dt>
+          <dd>
+            At launch. KalCode is in private development and there is no billing yet. Early-access
+            members will hear first when plans open.
+          </dd>
+        </div>
+        <div>
+          <dt class="h3">Are these limits final?</dt>
+          <dd>
+            No. Prices are set, but the entitlements in the comparison table are provisional and may
+            change before launch.
+          </dd>
+        </div>
+        <div>
+          <dt class="h3">Do I need an account to join early access?</dt>
+          <dd>
+            No. Early access only needs an email address. KalCode accounts arrive with the paid
+            plans at launch.
+          </dd>
+        </div>
+      </dl>
+    </div>
+  </section>
+
+  <section class="section" id="early-access" aria-labelledby="early-access-title">
+    <div class="container signup">
+      <div class="section-head">
+        <h2 id="early-access-title" class="h2">Hear when plans open.</h2>
+        <p>Join early access and we'll email you when there is a build to try.</p>
+      </div>
+      <EarlyAccessForm source="/pricing" />
+    </div>
+  </section>
+</Base>

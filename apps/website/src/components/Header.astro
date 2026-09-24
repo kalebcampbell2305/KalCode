@@ -1,0 +1,56 @@
+---
+import { PRIMARY_NAV } from "../lib/site";
+import Icon from "./Icon.astro";
+import ThemeToggle from "./ThemeToggle.astro";
+import BrandMark from "./BrandMark.astro";
+import Lettering from "./Lettering.astro";
+
+interface Props {
+  path: string;
+}
+const { path } = Astro.props;
+
+function current(href: string): "page" | "true" | undefined {
+  if (path === href) return "page";
+  if (href !== "/" && path.startsWith(`${href}/`)) return "true";
+  return undefined;
+}
+---
+<header class="site-header">
+  <div class="container site-header__inner">
+    <a class="brand-link" href="/" aria-label="KalCode home">
+      <BrandMark size={28} />
+      <Lettering name="kalcode-wordmark" class="wordmark" />
+    </a>
+    <nav class="site-nav" id="site-nav" aria-label="Main" data-site-nav>
+      <ul class="site-nav__list" role="list">
+        {
+          PRIMARY_NAV.map((item) => (
+            <li>
+              <a class="site-nav__link" href={item.href} aria-current={current(item.href)}>
+                {item.label}
+              </a>
+            </li>
+          ))
+        }
+        <li class="site-nav__cta">
+          <a class="button button--primary" href="/download">Join early access</a>
+        </li>
+      </ul>
+    </nav>
+    <div class="header-tools">
+      <ThemeToggle />
+      <button
+        type="button"
+        class="menu-button"
+        aria-expanded="false"
+        aria-controls="site-nav"
+        aria-label="Menu"
+        data-menu-button
+      >
+        <Icon name="menu" class="icon-menu" />
+        <Icon name="close" class="icon-close" />
+      </button>
+    </div>
+  </div>
+</header>

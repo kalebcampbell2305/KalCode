@@ -1,0 +1,106 @@
+---
+import PageHead from "../components/PageHead.astro";
+import Base from "../layouts/Base.astro";
+import { getPage } from "../lib/site";
+
+const page = getPage("/security");
+---
+<Base title={page.title} description={page.description} path={page.path}>
+  <PageHead
+    title="Security"
+    lead="KalCode controls powerful tools on your machine, so security is part of its architecture, not a feature added later."
+    devNote="KalCode is in private development. This page lists the controls in current development builds and the ones planned before release."
+  />
+  <section class="section">
+    <div class="container prose">
+      <h2>Commitments in current builds</h2>
+      <dl>
+        <div>
+          <dt>Local-first</dt>
+          <dd>
+            Projects, threads, events and settings are stored on your device. Current development
+            builds send no user data off the device.
+          </dd>
+        </div>
+        <div>
+          <dt>No telemetry</dt>
+          <dd>Current builds include no telemetry or analytics of any kind.</dd>
+        </div>
+        <div>
+          <dt>IPC allow-list</dt>
+          <dd>
+            The app's interface can call only an explicit allow-list of KalCode commands, each of
+            which validates its input natively. The interface cannot pass file paths, shell
+            arguments or SQL to the native side, and generic file-system, shell and HTTP plugins
+            are not available to it.
+          </dd>
+        </div>
+        <div>
+          <dt>Strict content policy</dt>
+          <dd>
+            The app's interface runs under a strict Content-Security-Policy: no remote scripts, no
+            remote content, and no <code>eval</code>. Developer tools are disabled in release builds.
+          </dd>
+        </div>
+        <div>
+          <dt>OS keychain for secrets</dt>
+          <dd>
+            Credentials are stored in your operating system's credential store. Secret values are
+            redacted from debug output, cleared from memory when dropped, and never written to the
+            database, logs, events or interface.
+          </dd>
+        </div>
+        <div>
+          <dt>Redacted local logs</dt>
+          <dd>Logs stay local and pass through a redaction step for credential patterns.</dd>
+        </div>
+        <div>
+          <dt>Safe database handling</dt>
+          <dd>
+            Parameterized SQL only, checksummed migrations, a backup before each upgrade, and a
+            refusal to downgrade.
+          </dd>
+        </div>
+        <div>
+          <dt>Memory-safe native code</dt>
+          <dd>Unsafe Rust is forbidden across the native codebase.</dd>
+        </div>
+        <div>
+          <dt>Supply chain</dt>
+          <dd>Lockfiles are committed, and dependency audits run in continuous integration.</dd>
+        </div>
+      </dl>
+
+      <h2>The permission model</h2>
+      <p>
+        Every action an AI agent wants to take is checked against the permission mode you choose.
+        Providers and their output are treated as untrusted input. JARVIS is not above the model: it
+        cannot raise its own authority or enable Bypass. Consequential decisions are recorded in an
+        audit log. Read the <a href="/docs/permissions">permission documentation</a> for details.
+      </p>
+
+      <h2>Planned before release</h2>
+      <ul>
+        <li>Workspace containment: path canonicalization and symlink-escape detection.</li>
+        <li>Provider isolation with sanitized environments and scoped credentials.</li>
+        <li>The permission engine with an audit log of consequential decisions.</li>
+        <li>Code-signed installers and signed updates.</li>
+        <li>Server-side entitlement checks and verified billing webhooks when paid plans launch.</li>
+      </ul>
+
+      <h2>This website</h2>
+      <p>
+        kalcoded.com is served with a strict Content-Security-Policy, HSTS, and headers that block
+        framing, MIME sniffing and access to your camera, microphone and location. The early-access
+        endpoint accepts only small JSON requests, validates every field, and is rate-limited. It
+        stores only the email addresses people submit; see the <a href="/privacy">privacy notice</a>.
+      </p>
+
+      <h2>Reporting a vulnerability</h2>
+      <p>
+        A security contact address will be published on this page once a monitored mailbox is in
+        place. We will not list an address that nobody reads.
+      </p>
+    </div>
+  </section>
+</Base>

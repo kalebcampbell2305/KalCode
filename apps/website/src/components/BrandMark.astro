@@ -1,0 +1,21 @@
+---
+/**
+ * The KalCode globe from the brand artwork, cut to a circle (kalcode-mark-*.png from
+ * tooling/generate-brand-assets.py). Decorative next to the wordmark: the link carries the name.
+ */
+interface Props {
+  size: number;
+}
+const { size } = Astro.props;
+const oneX = size <= 32 ? 64 : 128;
+const twoX = size <= 32 ? 128 : 256;
+---
+<img
+  class="brand-mark"
+  src={`/assets/brand/kalcode-mark-${oneX}.png`}
+  srcset={`/assets/brand/kalcode-mark-${oneX}.png 1x, /assets/brand/kalcode-mark-${twoX}.png 2x`}
+  width={size}
+  height={size}
+  alt=""
+  decoding="async"
+/>

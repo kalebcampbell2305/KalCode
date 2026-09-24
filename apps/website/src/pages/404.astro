@@ -1,0 +1,20 @@
+---
+import Base from "../layouts/Base.astro";
+import { NOT_FOUND_PAGE } from "../lib/site";
+---
+<Base
+  title={NOT_FOUND_PAGE.title}
+  description={NOT_FOUND_PAGE.description}
+  path={NOT_FOUND_PAGE.path}
+  noindex
+>
+  <section class="container not-found" aria-labelledby="not-found-title">
+    <p class="muted">Error 404</p>
+    <h1 id="not-found-title" class="display">This page is not here.</h1>
+    <p class="lead">The address may be mistyped, or the page may have moved.</p>
+    <div class="button-row">
+      <a class="button button--primary" href="/">Go to the home page</a>
+      <a class="button button--secondary" href="/docs">Read the docs</a>
+    </div>
+  </section>
+</Base>

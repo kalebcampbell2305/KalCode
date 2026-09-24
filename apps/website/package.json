@@ -1,0 +1,35 @@
+{
+  "name": "@kalcode/website",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "kalcoded.com — Astro static site served by a Cloudflare Worker with an early-access API on D1.",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "wrangler dev",
+    "db:migrate:local": "wrangler d1 migrations apply kalcode-web --local",
+    "typecheck": "astro check && tsc --noEmit -p tsconfig.worker.json",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "qa:screenshots": "node scripts/screenshots.mjs"
+  },
+  "dependencies": {
+    "@fontsource-variable/lexend-deca": "5.3.0",
+    "@fontsource-variable/lexend-exa": "5.3.0",
+    "@kalcode/protocol": "workspace:*",
+    "@kalcode/ui": "workspace:*"
+  },
+  "devDependencies": {
+    "@astrojs/check": "0.9.10",
+    "@astrojs/sitemap": "3.7.4",
+    "@axe-core/playwright": "4.13.0",
+    "@cloudflare/workers-types": "5.20260924.1",
+    "@playwright/test": "1.63.0",
+    "astro": "7.3.5",
+    "sharp": "0.35.4",
+    "typescript": "6.0.3",
+    "vitest": "5.0.1",
+    "wrangler": "4.138.0"
+  }
+}

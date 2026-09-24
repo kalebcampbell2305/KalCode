@@ -16,6 +16,9 @@ playwright-report/
 test-results/
 blob-report/
 /qa/screenshots/tmp/
+apps/website/.wrangler/
+apps/desktop/test-results/
+apps/website/test-results/
 
 # env & secrets
 .env
@@ -33,3 +36,5 @@ Thumbs.db
 .idea/
 apps/desktop/src-tauri/gen/
 apps/desktop/dist-ui-test/
+apps/website/qa/
+apps/desktop/qa/

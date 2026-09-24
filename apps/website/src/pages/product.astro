@@ -1,0 +1,142 @@
+---
+import DashboardPreview from "../components/DashboardPreview.astro";
+import JarvisLockup from "../components/JarvisLockup.astro";
+import PageHead from "../components/PageHead.astro";
+import Base from "../layouts/Base.astro";
+import { getPage } from "../lib/site";
+
+const page = getPage("/product");
+
+const modes = [
+  { name: "Plan", text: "Read and plan. Nothing is modified; writes, commands and network changes are denied or asked." },
+  { name: "Approve", text: "The default. Safe work proceeds; anything that needs your authority pauses for a decision." },
+  { name: "Auto", text: "Actions covered by your rules run automatically. Everything else still asks." },
+  { name: "Bypass", text: "Broad local authority, only when you choose it, with a persistent indicator. Pushes, deploys and spending still follow their own rules." },
+  { name: "Custom", text: "Named rule sets you define, such as a read-only reviewer or a local builder." },
+];
+---
+<Base title={page.title} description={page.description} path={page.path}>
+  <PageHead
+    title="One command center for the coding agents you already use."
+    lead="KalCode is a desktop workspace for developers who work with AI coding agents. This page describes what it is being built to do."
+    devNote="KalCode is in private development. Nothing here is available to download yet."
+  >
+    <div class="button-row">
+      <a class="button button--primary" href="/download">Join early access</a>
+      <a class="button button--secondary" href="#dashboard">See the Dashboard design</a>
+    </div>
+  </PageHead>
+
+  <section class="section" aria-label="What KalCode does">
+    <div class="container feature-list">
+      <article class="feature" id="providers">
+        <h2 class="h2">Bring your providers.</h2>
+        <div class="feature__body">
+          <p>
+            KalCode connects to Claude Code, Codex and Gemini CLI through their documented
+            integration methods: your own signed-in local CLI, or an API key you provide. It never
+            copies hidden tokens or scrapes browser sessions.
+          </p>
+          <ul>
+            <li>Connecting a provider is free on every plan, including Free.</li>
+            <li>Each provider runs in its own supervised process, so one failing never stops the others.</li>
+            <li>No single provider is a dependency: the architecture treats them all the same way.</li>
+          </ul>
+          <a class="text-link" href="/docs/providers">How provider connections work</a>
+        </div>
+      </article>
+
+      <article class="feature" id="threads">
+        <h2 class="h2">Threads in real workspaces.</h2>
+        <div class="feature__body">
+          <p>
+            A thread is a persistent unit of AI work. It runs in a real project directory with a real
+            terminal, and it keeps its history so you can stop, resume and review it later.
+          </p>
+          <p>
+            The Code workspace puts threads next to the tools you use to check them: terminal,
+            files, Git, and diffs.
+          </p>
+        </div>
+      </article>
+
+      <article class="feature" id="permissions">
+        <h2 class="h2">Permissions you set, for every agent.</h2>
+        <div class="feature__body">
+          <p>
+            Every action an agent wants to take is classified and checked against your permission
+            mode before it runs. When a decision is needed, you choose: deny, approve once, approve
+            for the thread or workspace, or allow it with a rule.
+          </p>
+          <dl class="mode-list">
+            {
+              modes.map((mode) => (
+                <div>
+                  <dt>{mode.name}</dt>
+                  <dd>{mode.text}</dd>
+                </div>
+              ))
+            }
+          </dl>
+          <a class="text-link" href="/docs/permissions">Read the permission model</a>
+        </div>
+      </article>
+
+      <article class="feature" id="jarvis">
+        <div class="feature__lead">
+          <h2 class="h2">JARVIS coordinates, you decide.</h2>
+          <JarvisLockup sizes="(min-width: 56rem) 18rem, min(calc(100vw - 5rem), 18rem)" />
+        </div>
+        <div class="feature__body">
+          <p>
+            JARVIS is the intelligence inside KalCode. Talk to it and it can plan an objective,
+            split it into threads, delegate each one to the provider that fits, and bring the results
+            back together.
+          </p>
+          <p>
+            Larger objectives become missions: multi-step work that is not called done until there is
+            verification evidence, such as tests that ran or checks that passed.
+          </p>
+          <p>
+            JARVIS operates inside your permission model. It cannot raise its own authority or turn on
+            Bypass.
+          </p>
+          <a class="text-link" href="/docs/jarvis">How JARVIS is designed</a>
+        </div>
+      </article>
+
+      <article class="feature" id="local-first">
+        <h2 class="h2">Local-first by default.</h2>
+        <div class="feature__body">
+          <p>
+            Projects, threads, events, settings and memory stay on your device. Credentials are
+            stored in your operating system's keychain and never written to the database, logs or
+            the interface.
+          </p>
+          <a class="text-link" href="/docs/local-first">What stays on your device</a>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <section class="band section preview-band" id="dashboard" data-theme="dark" aria-labelledby="dashboard-title">
+    <div class="container">
+      <div class="section-head">
+        <h2 id="dashboard-title" class="h2">The Dashboard: runtime truth.</h2>
+        <p>
+          Status on the Dashboard comes from structured runtime events — a thread started, a tool
+          was called, an approval was requested — never from a model's own account of its progress.
+        </p>
+      </div>
+      <DashboardPreview />
+    </div>
+  </section>
+
+  <section class="section" aria-labelledby="cta-title">
+    <div class="container cta">
+      <h2 id="cta-title" class="h2">Be first to try it.</h2>
+      <p class="lead">Join early access and we'll email you when there is a build to try.</p>
+      <a class="button button--primary" href="/download">Join early access</a>
+    </div>
+  </section>
+</Base>

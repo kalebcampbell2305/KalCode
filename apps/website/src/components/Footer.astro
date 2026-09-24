@@ -1,0 +1,44 @@
+---
+import { FOOTER_NAV } from "../lib/site";
+import BrandMark from "./BrandMark.astro";
+import Lettering from "./Lettering.astro";
+
+const columns = [
+  { heading: "Product", links: FOOTER_NAV.product },
+  { heading: "Docs", links: FOOTER_NAV.docs },
+  { heading: "Legal", links: FOOTER_NAV.legal },
+] as const;
+---
+<footer class="site-footer">
+  <div class="container">
+    <div class="site-footer__grid">
+      <div class="site-footer__brand">
+        <a class="brand-link" href="/" aria-label="KalCode home">
+          <BrandMark size={36} />
+          <Lettering name="kalcode-wordmark" class="wordmark" />
+        </a>
+        <p class="site-footer__tagline">
+          <Lettering name="kalcode-tagline" label="Code a brighter tomorrow." />
+        </p>
+      </div>
+      {
+        columns.map((column) => (
+          <nav aria-label={column.heading}>
+            <h2>{column.heading}</h2>
+            <ul role="list">
+              {column.links.map((link) => (
+                <li>
+                  <a href={link.href}>{link.label}</a>
+                </li>
+              ))}
+            </ul>
+          </nav>
+        ))
+      }
+    </div>
+    <div class="site-footer__base">
+      <p>© 2026 KalCode</p>
+      <p>KalCode is in private development.</p>
+    </div>
+  </div>
+</footer>

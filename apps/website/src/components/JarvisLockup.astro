@@ -1,0 +1,24 @@
+---
+import Globe from "./Globe.astro";
+import Lettering from "./Lettering.astro";
+
+/**
+ * The JARVIS primary lockup assembled from the actual artwork's pixels: the globe crop and the
+ * extracted JARVIS lettering and tagline (all from tooling/generate-brand-assets.py). The full
+ * JARVIS artwork is a brand sheet with layout annotations, so it is not shown as a page image.
+ * Always rendered on the artwork's own background, in both themes.
+ */
+interface Props {
+  sizes: string;
+}
+const { sizes } = Astro.props;
+---
+<figure class="artwork-tile" data-theme="dark">
+  <div class="artwork-tile__globe">
+    <Globe variant="jarvis" alt="" sizes={sizes} />
+  </div>
+  <p class="lockup lockup--centered" role="img" aria-label="JARVIS — Global thinking. Personal impact.">
+    <Lettering name="jarvis-wordmark" />
+    <Lettering name="jarvis-tagline" />
+  </p>
+</figure>

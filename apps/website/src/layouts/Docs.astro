@@ -1,0 +1,43 @@
+---
+import { DOCS_NAV, type PagePath, getPage } from "../lib/site";
+import Base from "./Base.astro";
+
+interface Props {
+  path: PagePath;
+  heading: string;
+  lead: string;
+}
+const { path, heading, lead } = Astro.props;
+const page = getPage(path);
+---
+<Base title={page.title} description={page.description} path={page.path}>
+  <div class="container docs">
+    <nav class="docs__nav" aria-label="Documentation">
+      <h2>Documentation</h2>
+      <ul role="list">
+        {
+          DOCS_NAV.map((item) => (
+            <li>
+              <a href={item.href} aria-current={item.href === path ? "page" : undefined}>
+                {item.label}
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+    </nav>
+    <article class="docs__content">
+      <header class="page-head__inner">
+        <h1 class="h1">{heading}</h1>
+        <p class="lead">{lead}</p>
+        <p class="dev-note dev-note--boxed">
+          KalCode is in private development. This page describes the product as it is designed;
+          details may change before release.
+        </p>
+      </header>
+      <div class="prose">
+        <slot />
+      </div>
+    </article>
+  </div>
+</Base>

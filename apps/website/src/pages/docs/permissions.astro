@@ -1,0 +1,104 @@
+---
+import Docs from "../../layouts/Docs.astro";
+---
+<Docs
+  path="/docs/permissions"
+  heading="Permissions"
+  lead="Every provider, agent, automation and JARVIS itself acts inside the permission model you choose. Nothing is above it."
+>
+  <h2>How a decision is made</h2>
+  <p>
+    When an agent wants to do something — read a file, run a command, install a package, push a
+    branch — KalCode classifies the request by scope, then evaluates it against your active
+    permission mode, your standing rules, and the workspace and thread it belongs to. The result is
+    one of three outcomes:
+  </p>
+  <ul>
+    <li><strong>Allow</strong> — the action runs. Consequential actions are recorded in the audit log.</li>
+    <li><strong>Ask</strong> — the thread pauses and the request appears on the Dashboard for your decision.</li>
+    <li><strong>Deny</strong> — the provider receives a denial and the action does not run.</li>
+  </ul>
+
+  <h2>Permission modes</h2>
+  <div class="table-wrap" role="region" aria-label="Permission modes" tabindex="0">
+    <table class="table">
+      <caption class="visually-hidden">Permission modes and their default behaviour</caption>
+      <thead>
+        <tr>
+          <th scope="col">Mode</th>
+          <th scope="col">Intent</th>
+          <th scope="col">Default behaviour</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th scope="row">Plan</th>
+          <td>Read and plan; no modification.</td>
+          <td>Reads are allowed. Writes, commands and network changes are denied or asked.</td>
+        </tr>
+        <tr>
+          <th scope="row">Approve</th>
+          <td>The default. Safe work proceeds; work that needs authority pauses.</td>
+          <td>Workspace reads are allowed. Writes and commands ask unless a rule covers them.</td>
+        </tr>
+        <tr>
+          <th scope="row">Auto</th>
+          <td>Approve what your policy covers automatically.</td>
+          <td>Covered actions are allowed; everything else still asks. Always-ask scopes always ask.</td>
+        </tr>
+        <tr>
+          <th scope="row">Bypass</th>
+          <td>Broad local execution authority.</td>
+          <td>
+            Local workspace actions are allowed. Pushing, production deploys, cloud changes,
+            spending and sending messages still follow their own rules.
+          </td>
+        </tr>
+        <tr>
+          <th scope="row">Custom</th>
+          <td>Named rule sets, such as “Code reviewer” or “Local builder”.</td>
+          <td>Per-scope allow, ask, deny or never.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    Bypass requires your explicit selection, shows a warning, and keeps a persistent indicator on
+    screen while it is active. It is never enabled by an agent or by JARVIS.
+  </p>
+
+  <h2>Your choices when asked</h2>
+  <p>
+    When a request needs your decision you can <strong>deny</strong> it, <strong>approve once</strong>,
+    <strong>approve for the thread</strong>, <strong>approve for the workspace</strong>, or
+    <strong>allow it with a rule</strong> that covers similar requests in future.
+  </p>
+  <p>
+    Requests expire when their thread stops, the provider process exits, or a newer request
+    supersedes them. An expired request is shown as expired and cannot be approved.
+  </p>
+
+  <h2>Scopes</h2>
+  <p>Requests are classified into scopes such as:</p>
+  <ul>
+    <li><code>filesystem.read</code>, <code>filesystem.write</code>, <code>filesystem.outside_workspace</code></li>
+    <li><code>terminal.read_only</code>, <code>terminal.execute</code>, <code>package.install</code></li>
+    <li><code>git.read</code>, <code>git.commit</code>, <code>git.push</code></li>
+    <li><code>network.docs</code>, <code>network.other</code>, <code>browser.navigate</code>, <code>browser.interact</code></li>
+    <li><code>credentials.access</code>, <code>messaging.send</code>, <code>deploy.production</code>, <code>cloud.modify</code>, <code>billing.spend</code>, <code>destructive</code></li>
+  </ul>
+
+  <h2>Across different providers</h2>
+  <p>
+    You see one permission experience, but each provider exposes its own controls. For every mode,
+    each provider adapter declares whether its mapping is exact, approximate, or unsupported. KalCode
+    never silently grants more authority than your mode implies: if a provider cannot express a mode
+    exactly, KalCode uses the closest stricter setting and shows you the difference.
+  </p>
+
+  <h2>Audit</h2>
+  <p>
+    Approvals, denials, mode changes and Bypass activation are written as events to the local event
+    log, where they cannot be edited.
+  </p>
+</Docs>

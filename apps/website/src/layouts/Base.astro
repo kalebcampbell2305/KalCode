@@ -1,0 +1,75 @@
+---
+import "@kalcode/ui/fonts.css";
+import "@kalcode/ui/tokens.css";
+import "@kalcode/ui/base.css";
+import "../styles/site.css";
+
+import decaLatin from "@fontsource-variable/lexend-deca/files/lexend-deca-latin-wght-normal.woff2?url";
+import exaLatin from "@fontsource-variable/lexend-exa/files/lexend-exa-latin-wght-normal.woff2?url";
+import Footer from "../components/Footer.astro";
+import Header from "../components/Header.astro";
+import { SITE_NAME, SITE_ORIGIN } from "../lib/site";
+import { THEME_SCRIPT } from "../lib/theme-script";
+
+interface Props {
+  title: string;
+  description: string;
+  /** Canonical path, e.g. "/pricing". */
+  path: string;
+  noindex?: boolean;
+}
+
+const { title, description, path, noindex = false } = Astro.props;
+const canonical = new URL(path, SITE_ORIGIN).href;
+const ogImage = new URL("/og.png", SITE_ORIGIN).href;
+---
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script is:inline set:html={THEME_SCRIPT} />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    {noindex ? <meta name="robots" content="noindex" /> : <link rel="canonical" href={canonical} />}
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#05080F" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#F5F7FB" media="(prefers-color-scheme: light)" />
+
+    <link rel="preload" href={decaLatin} as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href={exaLatin} as="font" type="font/woff2" crossorigin />
+    <slot name="head" />
+
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="sitemap" href="/sitemap-index.xml" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content={SITE_NAME} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="KalCode constellation globe with a K formed by connected points of light, beside the KalCode wordmark and the line Code a brighter tomorrow." />
+    <meta property="og:locale" content="en_US" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={ogImage} />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <Header path={path} />
+    <main id="main" tabindex="-1">
+      <slot />
+    </main>
+    <Footer />
+    <script>
+      import "../scripts/theme";
+      import "../scripts/nav";
+    </script>
+  </body>
+</html>

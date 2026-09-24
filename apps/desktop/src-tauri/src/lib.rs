@@ -122,16 +122,20 @@ fn start(app: &tauri::App) -> AppState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let app = tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            // A second launch focuses the existing window instead of opening another runtime
-            // against the same database.
+    let mut builder = tauri::Builder::default();
+    // A second launch against the default data folder focuses the running window instead of
+    // opening another runtime on the same database. Launches with an explicit, isolated
+    // KALCODE_DATA_DIR (tests, diagnostics) are independent and may run side by side.
+    if std::env::var_os("KALCODE_DATA_DIR").is_none_or(|v| v.is_empty()) {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();
                 let _ = window.show();
                 let _ = window.set_focus();
             }
-        }))
+        }));
+    }
+    let app = builder
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let state = start(app);

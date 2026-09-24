@@ -1,0 +1,44 @@
+---
+import Docs from "../../layouts/Docs.astro";
+---
+<Docs
+  path="/docs/local-first"
+  heading="Local-first"
+  lead="Your projects, threads and settings live on your machine. KalCode is designed so that nothing leaves it unless you choose to send it."
+>
+  <h2>What stays on your device</h2>
+  <p>
+    Projects, threads, events, settings and memory are stored locally in a single SQLite database in
+    your operating system's app-data directory. The database uses write-ahead logging and versioned
+    migrations, and a backup is written before any migration runs.
+  </p>
+  <p>
+    If a database was created by a newer version of KalCode, or a migration has been altered, KalCode
+    stops with a clear error instead of silently rewriting your data.
+  </p>
+
+  <h2>Secrets</h2>
+  <p>
+    API keys and other credentials are stored in your operating system's credential store: Windows
+    Credential Manager, macOS Keychain, or Secret Service on Linux. They are never written to the
+    database, logs, events, or the interface, and they are cleared from memory when no longer
+    needed.
+  </p>
+
+  <h2>Logs</h2>
+  <p>
+    Logs are structured and stay local. Before anything is written, a redaction pass removes
+    credential patterns such as API keys, bearer tokens, private keys, and passwords in URLs.
+  </p>
+
+  <h2>What leaves your device</h2>
+  <p>
+    Current development builds send no telemetry and no user data off your device. When you run a
+    provider, that provider's own CLI talks to its service under your account, exactly as it does
+    when you use it directly.
+  </p>
+  <p>
+    Accounts and billing will arrive with the paid plans at launch. They will be documented here
+    before they ship.
+  </p>
+</Docs>

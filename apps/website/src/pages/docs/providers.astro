@@ -1,0 +1,53 @@
+---
+import Docs from "../../layouts/Docs.astro";
+---
+<Docs
+  path="/docs/providers"
+  heading="Providers"
+  lead="KalCode works with the AI coding tools you already use. Connecting them is free on every plan."
+>
+  <h2>Supported providers</h2>
+  <p>The first providers KalCode is being built to connect:</p>
+  <ul>
+    <li><strong>Claude Code</strong> — the local CLI, using your own signed-in session or API key.</li>
+    <li><strong>Codex</strong> — the local CLI, with its documented approval and sandbox settings.</li>
+    <li><strong>Gemini CLI</strong> — the local CLI, with its documented non-interactive output modes.</li>
+  </ul>
+  <p>
+    More providers can be added later through a documented adapter contract. Each integration is
+    verified against the provider's current official documentation before it ships.
+  </p>
+
+  <h2>How connections work</h2>
+  <p>
+    KalCode uses only legitimate, documented integration methods: an authenticated local CLI,
+    documented sign-in flows, API keys you provide, or enterprise credentials. It never scrapes
+    browser credentials, copies hidden tokens, or reverse-engineers private authentication.
+  </p>
+  <p>
+    Your usage of each provider is billed by that provider under your account, exactly as it is when
+    you use it directly. KalCode does not resell provider access.
+  </p>
+
+  <h2>Detection</h2>
+  <p>
+    To find installed providers, KalCode looks for their executables on your <code>PATH</code> and in
+    documented install locations, then runs only version and status commands, with a timeout. It
+    reports whether each provider is installed, its version, whether it is signed in where the CLI
+    exposes that, and what it can do. Detection never changes your machine; installing a provider
+    only happens when you ask for it.
+  </p>
+
+  <h2>Isolation</h2>
+  <p>
+    Each provider session runs in its own supervised child process with a sanitized environment. If
+    one provider fails, the others — and your terminals, workspaces and Dashboard — keep running.
+  </p>
+
+  <h2>One model for every provider</h2>
+  <p>
+    Provider-specific details are translated at the adapter boundary into KalCode's own concepts:
+    normalized events, statuses, approval requests and capabilities. That is what lets the Dashboard,
+    the permission model and JARVIS treat every provider the same way.
+  </p>
+</Docs>

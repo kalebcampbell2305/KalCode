@@ -1,0 +1,53 @@
+---
+import type { PagePath } from "../lib/site";
+
+interface Props {
+  /** Page the form is on; stored with the address. */
+  source: PagePath;
+  /** Prefix for element ids, unique per page. */
+  id?: string;
+}
+const { source, id = "early-access" } = Astro.props;
+const emailId = `${id}-email`;
+const statusId = `${id}-status`;
+const consentId = `${id}-consent`;
+const trapId = `${id}-website`;
+---
+<form class="form needs-js" data-api-form="signup" data-source={source} novalidate>
+  <label class="form__label" for={emailId}>Email address</label>
+  <div class="form__row">
+    <input
+      id={emailId}
+      class="form__input"
+      type="email"
+      name="email"
+      autocomplete="email"
+      inputmode="email"
+      autocapitalize="off"
+      spellcheck="false"
+      maxlength="254"
+      required
+      aria-describedby={`${statusId} ${consentId}`}
+      placeholder="name@example.com"
+    />
+    <button class="button button--primary" type="submit">Join early access</button>
+  </div>
+  <div class="form__trap" aria-hidden="true">
+    <label for={trapId}>Leave this field empty</label>
+    <input id={trapId} type="text" name="website" tabindex="-1" autocomplete="off" />
+  </div>
+  <p id={statusId} class="form__status" role="status" aria-live="polite"></p>
+  <p id={consentId} class="form__consent">
+    We use your address only to email you about KalCode early access and launch. Read the
+    <a href="/privacy">privacy notice</a>; you can remove your email at any time.
+  </p>
+</form>
+<noscript>
+  <p class="form__consent">
+    Joining early access needs JavaScript, which is turned off in this browser. Turn it on and
+    reload this page to join.
+  </p>
+</noscript>
+<script>
+  import "../scripts/forms";
+</script>

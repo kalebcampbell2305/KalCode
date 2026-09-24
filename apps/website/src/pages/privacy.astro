@@ -1,0 +1,79 @@
+---
+import PageHead from "../components/PageHead.astro";
+import RemovalForm from "../components/RemovalForm.astro";
+import Base from "../layouts/Base.astro";
+import { getPage } from "../lib/site";
+
+const page = getPage("/privacy");
+---
+<Base title={page.title} description={page.description} path={page.path}>
+  <PageHead
+    title="Privacy"
+    lead="This site collects one thing: the email address you give us to join early access."
+  >
+    <p class="muted small">Last updated September 24, 2026</p>
+  </PageHead>
+  <section class="section">
+    <div class="container prose">
+      <h2>What we store</h2>
+      <p>When you join early access, we store:</p>
+      <ul>
+        <li>your email address,</li>
+        <li>the date and time you joined,</li>
+        <li>the page you joined from (for example, <code>/download</code>),</li>
+        <li>the version of the consent text shown next to the form.</li>
+      </ul>
+      <p>
+        That is all. We do not store your IP address, your browser's user agent, or any other
+        information about your device.
+      </p>
+
+      <h2>What we use it for</h2>
+      <p>
+        We use your email address only to contact you about KalCode early access and launch. We do
+        not sell it, share it for marketing, or add it to anyone else's list.
+      </p>
+
+      <h2>Where it is kept</h2>
+      <p>
+        The list is stored in a Cloudflare D1 database operated for kalcoded.com. We keep your
+        address until you remove it or until we close the early-access list, whichever comes first.
+      </p>
+
+      <h2>Cloudflare as our infrastructure provider</h2>
+      <p>
+        kalcoded.com runs on Cloudflare. Like any network provider, Cloudflare processes technical
+        request data — such as your IP address — to deliver pages and protect the site from abuse,
+        under its own privacy policy. To stop automated abuse, the early-access form counts
+        requests per IP address using Cloudflare's rate limiting; that short-lived counter is not
+        stored by us. Our own server logs record errors only and never contain email addresses or
+        IP addresses.
+      </p>
+
+      <h2>No analytics, no cookies</h2>
+      <p>
+        This site has no analytics, no tracking pixels, no advertising, and no third-party scripts.
+        We set no cookies. Cloudflare may set a strictly necessary security cookie if its bot
+        protection is triggered for a request.
+      </p>
+      <p>
+        If you choose a light or dark theme, that choice is saved in your browser's local storage
+        and never sent to us.
+      </p>
+
+      <h2 id="remove">Remove your email</h2>
+      <p>
+        Enter the address you used and we will delete it from the early-access list. For your
+        privacy, the confirmation is the same whether or not the address was on the list.
+      </p>
+      <RemovalForm />
+
+      <h2>Changes</h2>
+      <p>
+        If what we collect changes — for example, when KalCode accounts arrive at launch — we will
+        update this notice before the change takes effect and change the date at the top of the
+        page.
+      </p>
+    </div>
+  </section>
+</Base>

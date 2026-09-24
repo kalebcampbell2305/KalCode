@@ -1,0 +1,17 @@
+---
+interface Props {
+  title: string;
+  lead?: string;
+  /** Shows the quiet in-development note above the title. */
+  devNote?: string;
+}
+const { title, lead, devNote } = Astro.props;
+---
+<header class="page-head">
+  <div class="container page-head__inner">
+    {devNote && <p class="dev-note">{devNote}</p>}
+    <h1 class="h1">{title}</h1>
+    {lead && <p class="lead">{lead}</p>}
+    <slot />
+  </div>
+</header>

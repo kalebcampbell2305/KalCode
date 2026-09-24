@@ -1,0 +1,31 @@
+# Branding denylist — one regular expression per line (JavaScript syntax, `u` flag).
+# Enforced by tooling/check-branding.mjs in CI. Supported AI providers (Claude, Claude Code,
+# Codex, Gemini, Gemini CLI) are integrations, not competitors, and are allowed.
+
+# Other AI coding products must never be named in KalCode.
+\bCursor (IDE|AI|editor|app)\b
+\bWindsurf\b
+\bCodeium\b
+\bCopilot\b
+\bDevin\b
+\bCline\b
+\bRoo ?Code\b
+\bAider\b
+\bReplit\b
+\bLovable\b
+\bBolt\.new\b
+\bZed (editor|IDE)\b
+\bJetBrains AI\b
+\bAmazon Q\b
+\bTabnine\b
+\bSourcegraph\b
+\bCody\b
+
+# The owner's private JARVIS system is not part of KalCode.
+JARVIS_(ADVANCED|CODEX|Kaleb|MCU|HUD|LM|Z\d)
+jarvis-p\d+
+[Jj]arvis[ _-]?[Ll]abs
+jarvisorigin
+JARVIS[ _-]?ORIGIN
+
+# Previous product name(s): add here when known.

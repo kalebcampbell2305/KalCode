@@ -1,0 +1,42 @@
+---
+/**
+ * The owner's actual brand artwork: square globe crops produced byte-for-byte from the master
+ * PNGs by tooling/generate-brand-assets.py (public/assets/brand/, owned by that pipeline).
+ * Served as AVIF with a WebP fallback at 1x/2x widths, with explicit dimensions.
+ */
+interface Props {
+  variant: "kalcode" | "jarvis";
+  /** Hero use: eager, high fetch priority, arrival animation. */
+  hero?: boolean;
+  sizes: string;
+  /** Empty for decorative repeats. */
+  alt: string;
+}
+
+const { variant, hero = false, sizes, alt } = Astro.props;
+
+const SOURCES = {
+  kalcode: { base: "/assets/brand/kalcode-globe", widths: [362, 724] },
+  jarvis: { base: "/assets/brand/jarvis-globe", widths: [300, 600] },
+} as const;
+
+const { base, widths } = SOURCES[variant];
+const native = widths[1];
+const srcset = (format: "avif" | "webp") =>
+  widths.map((width) => `${base}-${width}.${format} ${width}w`).join(", ");
+---
+<div class:list={["globe", { "globe--animate": hero }]}>
+  <picture>
+    <source type="image/avif" srcset={srcset("avif")} sizes={sizes} />
+    <source type="image/webp" srcset={srcset("webp")} sizes={sizes} />
+    <img
+      src={`${base}-${native}.webp`}
+      width={native}
+      height={native}
+      alt={alt}
+      decoding="async"
+      loading={hero ? "eager" : "lazy"}
+      fetchpriority={hero ? "high" : "auto"}
+    />
+  </picture>
+</div>

@@ -1,0 +1,49 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "kalcode-website",
+  "main": "worker/index.ts",
+  // Latest date supported by the workerd bundled with the pinned wrangler (1.20260921.1).
+  "compatibility_date": "2026-09-21",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "404-page",
+    // Every request goes through the Worker so it can redirect www, serve /api/* and add
+    // security headers to static responses too.
+    "run_worker_first": true
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "kalcode-web",
+      // LOCAL-ONLY placeholder: the deployer replaces this with the real D1 database id
+      // (`wrangler d1 create kalcode-web`) before `wrangler deploy`.
+      "database_id": "LOCAL-ONLY-REPLACED-AT-DEPLOY",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "ratelimits": [
+    {
+      "name": "EARLY_ACCESS_LIMITER",
+      // Any unique positive integer string for this account's rate-limit namespace.
+      "namespace_id": "1001",
+      // 5 requests per 60 seconds per client IP (applies to both early-access endpoints).
+      "simple": { "limit": 5, "period": 60 }
+    }
+  ],
+  "routes": [
+    { "pattern": "kalcoded.com", "custom_domain": true },
+    { "pattern": "www.kalcoded.com", "custom_domain": true }
+  ],
+  "workers_dev": false,
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      // Per-request invocation logs would record request metadata such as client IP and
+      // user agent. The privacy page promises we do not store those, so only the Worker's own
+      // structured logs (which never contain emails or IPs) are kept.
+      "invocation_logs": false
+    }
+  }
+}

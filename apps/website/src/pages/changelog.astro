@@ -1,0 +1,39 @@
+---
+import PageHead from "../components/PageHead.astro";
+import Base from "../layouts/Base.astro";
+import { getPage } from "../lib/site";
+
+const page = getPage("/changelog");
+---
+<Base title={page.title} description={page.description} path={page.path}>
+  <PageHead
+    title="Changelog"
+    lead="Development milestones for KalCode. Entries marked as development builds have not been publicly released."
+  />
+  <section class="section" aria-label="Releases">
+    <div class="container">
+      <article class="release" aria-labelledby="release-0-1-0">
+        <div class="release__meta">
+          <h2 class="release__version" id="release-0-1-0">0.1.0 — Foundation</h2>
+          <p><time datetime="2026-09-24">September 24, 2026</time></p>
+          <p>Development build · not publicly released</p>
+        </div>
+        <div class="prose">
+          <p>
+            The foundation every later part of KalCode builds on. There is nothing to download from
+            this release; it exists so the next ones can be built on tested ground.
+          </p>
+          <ul>
+            <li><strong>Desktop shell.</strong> The KalCode desktop app with its navigation shell, Dashboard and Settings.</li>
+            <li><strong>Local SQLite persistence.</strong> One local database with versioned, checksummed migrations and a backup before each upgrade.</li>
+            <li><strong>Typed event protocol.</strong> Every state change is a structured event, shared as generated types between the native runtime and the interface.</li>
+            <li><strong>Structured logging.</strong> Local JSON logs with rotation and a redaction pass for credentials.</li>
+            <li><strong>OS keychain secret storage.</strong> Credentials stored in the operating system's credential store, never in the database or logs.</li>
+            <li><strong>Design system.</strong> Shared tokens, typography and brand assets for the app and this website, in light and dark themes.</li>
+            <li><strong>This website.</strong> kalcoded.com, with early-access registration.</li>
+          </ul>
+        </div>
+      </article>
+    </div>
+  </section>
+</Base>

@@ -1,0 +1,23 @@
+---
+/**
+ * Lettering extracted from the owner's brand artwork (white-on-transparent PNGs from
+ * tooling/generate-brand-assets.py), drawn as a CSS mask filled with `currentColor` so the
+ * real letterforms work in both light and dark themes.
+ *
+ * Pass `label` when the lettering carries meaning on its own; omit it when a surrounding
+ * element (for example a labelled link) already names it.
+ */
+interface Props {
+  name: "kalcode-wordmark" | "kalcode-tagline" | "jarvis-wordmark" | "jarvis-tagline";
+  label?: string;
+  class?: string;
+}
+const { name, label, class: className } = Astro.props;
+---
+{
+  label ? (
+    <span class:list={["lettering", `lettering--${name}`, className]} role="img" aria-label={label} />
+  ) : (
+    <span class:list={["lettering", `lettering--${name}`, className]} aria-hidden="true" />
+  )
+}

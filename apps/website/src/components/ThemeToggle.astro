@@ -1,0 +1,25 @@
+---
+import Icon from "./Icon.astro";
+
+const options = [
+  { value: "system", label: "Use system theme" },
+  { value: "light", label: "Use light theme" },
+  { value: "dark", label: "Use dark theme" },
+] as const;
+---
+<div class="theme-toggle needs-js" role="group" aria-label="Color theme" data-theme-toggle>
+  {
+    options.map((option) => (
+      <button
+        type="button"
+        class="theme-toggle__option"
+        aria-pressed={option.value === "system" ? "true" : "false"}
+        aria-label={option.label}
+        title={option.label}
+        data-theme-choice={option.value}
+      >
+        <Icon name={option.value} />
+      </button>
+    ))
+  }
+</div>
