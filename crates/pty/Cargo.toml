@@ -1,0 +1,19 @@
+[package]
+name = "kalcode-pty"
+description = "KalCode terminal sessions: native pseudo-terminals with scrollback, input, resize and exit tracking."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "kalcode_pty"
+
+[dependencies]
+portable-pty = "0.9"
+thiserror.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

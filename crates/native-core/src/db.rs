@@ -22,11 +22,18 @@ pub struct Migration {
 }
 
 /// All migrations shipped with this build, in order.
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "foundation",
-    sql: include_str!("../migrations/0001_foundation.sql"),
-}];
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "foundation",
+        sql: include_str!("../migrations/0001_foundation.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "workspaces",
+        sql: include_str!("../migrations/0002_workspaces.sql"),
+    },
+];
 
 /// How many pre-migration backups to keep.
 const BACKUPS_RETAINED: usize = 5;
