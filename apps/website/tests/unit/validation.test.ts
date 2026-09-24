@@ -3,9 +3,10 @@ import { validateRemoval, validateSignup } from "../../worker/lib/validation";
 
 describe("validateSignup", () => {
   it("normalizes the email and keeps a known source", () => {
-    expect(validateSignup({ email: "  Ada@Example.com ", source: "/download", website: "" })).toEqual(
-      { ok: true, value: { email: "ada@example.com", source: "/download", isBot: false } },
-    );
+    expect(validateSignup({ email: "  Ada@Example.com ", source: "/download", website: "" })).toEqual({
+      ok: true,
+      value: { email: "ada@example.com", source: "/download", isBot: false },
+    });
   });
 
   it("allows a missing or null source", () => {
@@ -26,15 +27,12 @@ describe("validateSignup", () => {
     },
   );
 
-  it.each([undefined, null, 42, "", "not-an-email", ["a@example.com"]])(
-    "rejects email %j",
-    (email) => {
-      expect(validateSignup({ email, source: "/" })).toMatchObject({
-        ok: false,
-        error: "invalid_email",
-      });
-    },
-  );
+  it.each([undefined, null, 42, "", "not-an-email", ["a@example.com"]])("rejects email %j", (email) => {
+    expect(validateSignup({ email, source: "/" })).toMatchObject({
+      ok: false,
+      error: "invalid_email",
+    });
+  });
 
   it.each([null, "a@example.com", [], 3])("rejects non-object body %j", (body) => {
     expect(validateSignup(body)).toMatchObject({ ok: false, error: "invalid_body" });

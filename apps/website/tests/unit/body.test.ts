@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_BODY_BYTES, isJsonContentType, readJsonBody } from "../../worker/lib/body";
+import { isJsonContentType, MAX_BODY_BYTES, readJsonBody } from "../../worker/lib/body";
 
 function post(body: BodyInit | null, headers: Record<string, string> = {}): Request {
   const init: RequestInit & { duplex?: "half" } = {
@@ -23,13 +23,11 @@ function stream(chunks: string[]): ReadableStream<Uint8Array> {
 }
 
 describe("isJsonContentType", () => {
-  it.each(["application/json", "Application/JSON", "application/json; charset=utf-8"])(
-    "accepts %s",
-    (value) => expect(isJsonContentType(value)).toBe(true),
+  it.each(["application/json", "Application/JSON", "application/json; charset=utf-8"])("accepts %s", (value) =>
+    expect(isJsonContentType(value)).toBe(true),
   );
-  it.each([null, "", "text/plain", "application/x-www-form-urlencoded", "application/jsonp"])(
-    "rejects %j",
-    (value) => expect(isJsonContentType(value)).toBe(false),
+  it.each([null, "", "text/plain", "application/x-www-form-urlencoded", "application/jsonp"])("rejects %j", (value) =>
+    expect(isJsonContentType(value)).toBe(false),
   );
 });
 

@@ -72,9 +72,7 @@ function enhance(form: HTMLFormElement): void {
     setStatus(status, "pending", "");
 
     const payload =
-      kind === "signup"
-        ? { email, source: form.dataset.source ?? null, website: trap?.value ?? "" }
-        : { email };
+      kind === "signup" ? { email, source: form.dataset.source ?? null, website: trap?.value ?? "" } : { email };
 
     try {
       const response = await fetch(ENDPOINTS[kind], {

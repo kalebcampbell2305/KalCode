@@ -73,6 +73,7 @@ main {
 
 /* JS-only controls are hidden until the head script marks the document as scripted. */
 html:not(.js) .needs-js {
+  /* biome-ignore lint/complexity/noImportantStyles: must hide JS-only controls whatever their own display is. */
   display: none !important;
 }
 
@@ -537,9 +538,9 @@ a:hover {
     font-size: var(--site-text-body);
   }
 
-  .site-nav__cta {
+  .site-nav .site-nav__cta {
     margin: var(--space-4) 0 0;
-    border-top: 0 !important;
+    border-top: 0;
   }
 
   .site-nav__cta .button {
@@ -1448,6 +1449,7 @@ a:hover {
 
 /* Honeypot: off-screen for people, still present for naive bots. */
 .form__trap {
+  /* biome-ignore lint/complexity/noImportantStyles: the honeypot must stay off-screen regardless of form styles. */
   position: absolute !important;
   left: -10000px;
   width: 1px;
@@ -1802,8 +1804,11 @@ a:hover {
   *,
   *::before,
   *::after {
+    /* biome-ignore lint/complexity/noImportantStyles: reduced motion must override component animations. */
     animation-duration: 0.01ms !important;
+    /* biome-ignore lint/complexity/noImportantStyles: reduced motion must override component animations. */
     animation-iteration-count: 1 !important;
+    /* biome-ignore lint/complexity/noImportantStyles: reduced motion must override component transitions. */
     transition-duration: 0.01ms !important;
   }
 }
@@ -1817,7 +1822,6 @@ a:hover {
   display: grid;
   gap: var(--space-5);
 }
-
 
 .page-head + .section {
   padding-top: clamp(2.5rem, 2rem + 2.5vw, 4.5rem);

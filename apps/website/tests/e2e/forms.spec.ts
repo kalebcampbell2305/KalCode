@@ -15,10 +15,7 @@ test.describe("early-access form", () => {
 
     await input.fill(`  ${email.toUpperCase()} `);
     const button = form.getByRole("button", { name: "Join early access" });
-    const [response] = await Promise.all([
-      page.waitForResponse("**/api/early-access"),
-      button.click(),
-    ]);
+    const [response] = await Promise.all([page.waitForResponse("**/api/early-access"), button.click()]);
     expect(response.status()).toBe(200);
     await expect(status).toHaveText(SIGNUP_SUCCESS);
     await expect(input).toHaveValue("");
@@ -49,9 +46,7 @@ test.describe("early-access form", () => {
 
     await input.fill("name@example");
     await form.getByRole("button", { name: "Join early access" }).click();
-    await expect(form.getByRole("status")).toHaveText(
-      "Enter a complete email address, like name@example.com.",
-    );
+    await expect(form.getByRole("status")).toHaveText("Enter a complete email address, like name@example.com.");
     expect(requests).toBe(0);
 
     await input.fill("name@example.com");

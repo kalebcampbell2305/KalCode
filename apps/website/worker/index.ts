@@ -1,4 +1,4 @@
-import { type Env, depsFromEnv, handleRequest } from "./lib/router";
+import { depsFromEnv, type Env, handleRequest } from "./lib/router";
 
 export default {
   fetch(request, env) {

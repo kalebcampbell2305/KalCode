@@ -69,10 +69,7 @@ test.describe("theme", () => {
       const page = await context.newPage();
       await page.goto("/");
       await expect(page.locator("html")).toHaveAttribute("data-theme", scheme);
-      await expect(page.getByRole("button", { name: "Use system theme" })).toHaveAttribute(
-        "aria-pressed",
-        "true",
-      );
+      await expect(page.getByRole("button", { name: "Use system theme" })).toHaveAttribute("aria-pressed", "true");
       // The hero stays in the Space palette in both themes.
       await expect(page.locator(".hero")).toHaveAttribute("data-theme", "dark");
       await context.close();

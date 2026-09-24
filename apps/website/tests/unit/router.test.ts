@@ -1,14 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { CONSENT_VERSION } from "../../src/lib/site";
 import {
+  canonicalRedirect,
+  clientKey,
   type Deps,
+  handleRequest,
   REMOVE_OK,
   REMOVE_PATH,
   SIGNUP_OK,
   SIGNUP_PATH,
-  canonicalRedirect,
-  clientKey,
-  handleRequest,
 } from "../../worker/lib/router";
 import { IMMUTABLE_CACHE } from "../../worker/lib/security";
 import type { EarlyAccessEntry } from "../../worker/lib/store";

@@ -2,7 +2,7 @@ import { CONSENT_VERSION } from "../../src/lib/site";
 import { readJsonBody } from "./body";
 import { apiError, json } from "./http";
 import { siteCsp, withSecurityHeaders } from "./security";
-import { type EarlyAccessStore, d1Store } from "./store";
+import { d1Store, type EarlyAccessStore } from "./store";
 import { validateRemoval, validateSignup } from "./validation";
 
 export interface Env {
@@ -45,6 +45,7 @@ export function depsFromEnv(env: Env): Deps {
     limiter: env.EARLY_ACCESS_LIMITER,
     now: () => new Date(),
     // Structured logs only. Never pass emails, IP addresses or request bodies here.
+    // biome-ignore lint/suspicious/noConsole: console is the Workers structured-logging sink.
     log: (entry) => console.log(JSON.stringify(entry)),
   };
 }

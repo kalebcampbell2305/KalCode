@@ -16,19 +16,10 @@ test.describe("every page", () => {
 
       const head = tab.locator("head");
       await expect(head.locator('meta[name="description"]')).toHaveAttribute("content", page.description);
-      await expect(head.locator('link[rel="canonical"]')).toHaveAttribute(
-        "href",
-        new URL(page.path, SITE_ORIGIN).href,
-      );
+      await expect(head.locator('link[rel="canonical"]')).toHaveAttribute("href", new URL(page.path, SITE_ORIGIN).href);
       await expect(head.locator('meta[property="og:title"]')).toHaveAttribute("content", page.title);
-      await expect(head.locator('meta[property="og:image"]')).toHaveAttribute(
-        "content",
-        `${SITE_ORIGIN}/og.png`,
-      );
-      await expect(head.locator('meta[name="twitter:card"]')).toHaveAttribute(
-        "content",
-        "summary_large_image",
-      );
+      await expect(head.locator('meta[property="og:image"]')).toHaveAttribute("content", `${SITE_ORIGIN}/og.png`);
+      await expect(head.locator('meta[name="twitter:card"]')).toHaveAttribute("content", "summary_large_image");
       await expect(head.locator('meta[name="theme-color"]').first()).toHaveAttribute("content", /#/);
       await expect(tab.locator("h1")).toHaveCount(1);
       await expect(tab.locator("main#main")).toBeVisible();
@@ -75,7 +66,13 @@ test.describe("every page", () => {
       expect(xml).toContain(`<loc>${new URL(entry.path, SITE_ORIGIN).href}</loc>`);
     }
     expect(xml).not.toContain("404");
-    for (const icon of ["/favicon.ico", "/favicon-32.png", "/apple-touch-icon.png", "/og.png", "/assets/brand/kalcode-wordmark.png"]) {
+    for (const icon of [
+      "/favicon.ico",
+      "/favicon-32.png",
+      "/apple-touch-icon.png",
+      "/og.png",
+      "/assets/brand/kalcode-wordmark.png",
+    ]) {
       expect((await request.get(icon)).status(), icon).toBe(200);
     }
   });

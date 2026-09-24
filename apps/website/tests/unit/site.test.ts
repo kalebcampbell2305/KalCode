@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PLANS } from "@kalcode/protocol/plans";
 import { describe, expect, it } from "vitest";
-import { PAGES, isKnownPagePath } from "../../src/lib/site";
+import { isKnownPagePath, PAGES } from "../../src/lib/site";
 import { THEME_SCRIPT } from "../../src/lib/theme-script";
 import { buildCsp, cspHash } from "../../worker/lib/security";
 
@@ -82,15 +82,11 @@ describe("content security policy", () => {
 
   const dist = resolve(root, "dist");
   it.runIf(existsSync(dist))("matches every inline script in the built HTML", () => {
-    const htmlFiles = readdirSync(dist, { recursive: true, encoding: "utf8" }).filter((file) =>
-      file.endsWith(".html"),
-    );
+    const htmlFiles = readdirSync(dist, { recursive: true, encoding: "utf8" }).filter((file) => file.endsWith(".html"));
     expect(htmlFiles.length).toBeGreaterThan(0);
     for (const file of htmlFiles) {
       const html = readFileSync(resolve(dist, file), "utf8");
-      const inline = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)].map(
-        (match) => match[1],
-      );
+      const inline = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)].map((match) => match[1]);
       expect(inline, file).toEqual([THEME_SCRIPT]);
       expect(html, file).not.toMatch(/<style[\s>]/);
       expect(html, file).not.toMatch(/\sstyle="/);

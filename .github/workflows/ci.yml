@@ -1,0 +1,132 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  checks:
+    name: Format, lint, typecheck, unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Biome (format + lint)
+        run: pnpm exec biome ci .
+      - name: Branding check
+        run: node tooling/check-branding.mjs
+      - name: Typecheck
+        run: pnpm -r --if-present typecheck
+      - name: TypeScript unit tests
+        run: pnpm -r --if-present test
+
+  rust:
+    name: Rust (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      # Headless Linux runners have no Secret Service daemon for the keychain round-trip test.
+      KALCODE_SKIP_OS_KEYCHAIN_TEST: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux system libraries for Tauri
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev libdbus-1-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Frontend placeholder for tauri::generate_context
+        shell: bash
+        run: mkdir -p apps/desktop/dist && echo '<!doctype html>' > apps/desktop/dist/index.html
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - name: Protocol types are up to date
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          node tooling/gen-protocol-index.mjs
+          git diff --exit-code -- packages/protocol/src/generated
+
+  desktop-ui:
+    name: Desktop UI tests (Playwright + axe)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @kalcode/desktop exec playwright install --with-deps chromium
+      - run: pnpm --filter @kalcode/desktop test:ui --grep-invert @screenshots
+
+  desktop-e2e:
+    name: Desktop E2E (real app, Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: pnpm install --frozen-lockfile
+      - name: Build release app
+        run: pnpm --filter @kalcode/desktop tauri build --no-bundle
+      - run: pnpm --filter @kalcode/desktop exec playwright install chromium
+      - run: pnpm --filter @kalcode/desktop test:e2e
+
+  website:
+    name: Website build + E2E
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @kalcode/website exec playwright install --with-deps chromium
+      - run: pnpm --filter @kalcode/website test:e2e
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: pnpm audit --prod --audit-level high
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
