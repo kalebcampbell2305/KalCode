@@ -310,7 +310,10 @@ test.describe("dashboard", () => {
     await page.getByRole("menuitemradio", { name: /api-server/ }).click();
     await expect(page.getByRole("heading", { level: 1, name: "api-server" })).toBeVisible();
     await page.getByRole("button", { name: "Dashboard" }).click();
-    await page.getByRole("region", { name: "Terminals" }).getByRole("button", { name: /Show Git Bash/ }).click();
+    await page
+      .getByRole("region", { name: "Terminals" })
+      .getByRole("button", { name: /Show Git Bash/ })
+      .click();
     await expect(page.getByRole("heading", { level: 1, name: "kalcode-site" })).toBeVisible();
     await expect(page.getByRole("tab", { name: /Git Bash/ })).toHaveAttribute("aria-selected", "true");
     await page.keyboard.type("echo shown");
