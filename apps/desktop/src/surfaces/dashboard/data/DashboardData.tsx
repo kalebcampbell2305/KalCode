@@ -77,7 +77,7 @@ function useInvalidation(): [Record<DashboardResource, number>, (stale: Iterable
  */
 export function DashboardDataProvider({ children }: { children: ReactNode }) {
   const { client } = useRuntime();
-  const { events } = useEvents();
+  const { events, state: eventsState } = useEvents();
   const toast = useToast();
   const [versions, invalidate] = useInvalidation();
 
@@ -94,17 +94,18 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
     versions.terminals,
   );
 
-  // Event-driven refresh: each new event invalidates the sources it can change.
+  // Event-driven refresh: each new event invalidates the sources it can change. The tracker starts
+  // once the event history has loaded, at its newest event: history is covered by the first reads.
   const tracker = useRef<RefreshTracker | null>(null);
   useEffect(() => {
+    if (eventsState !== "ready") return;
     if (!tracker.current) {
-      // Events already in the feed when the Dashboard mounts are covered by the first read.
       tracker.current = new RefreshTracker(events[0]?.seq ?? 0);
       return;
     }
     const stale = tracker.current.observe(events);
     if (stale.size > 0) invalidate(stale);
-  }, [events, invalidate]);
+  }, [events, eventsState, invalidate]);
 
   // Announcements.
   const [urgent, setUrgent] = useState<Announcement | null>(null);

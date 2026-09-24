@@ -265,10 +265,10 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
     ...dashboard?.handlers,
   };
 
-  // Playwright drives live Dashboard changes (e.g. an approval arriving) through this hook.
-  if (dashboard && typeof window !== "undefined") {
-    (window as unknown as { __kalcodeMemory?: unknown }).__kalcodeMemory = { dashboard: dashboard.controls };
-  }
+  // Playwright drives live Dashboard changes (e.g. an approval arriving) through this hook. React
+  // StrictMode boots twice in development, so the hook forwards to every transport created on the
+  // page; only the one the app kept has subscribers, so the others' events go nowhere.
+  if (dashboard && typeof window !== "undefined") registerTestHook(dashboard.controls);
 
   return {
     kind: "memory",
@@ -297,4 +297,20 @@ function readScenario(): MemoryScenario {
   const value = new URLSearchParams(location.search).get("scenario");
   if (value === "startup-error" || value === "keychain-failure" || isDashboardScenario(value)) return value;
   return "default";
+}
+
+const hookTargets: DashboardControls[] = [];
+
+function registerTestHook(controls: DashboardControls) {
+  hookTargets.push(controls);
+  const forward: DashboardControls = {
+    requestApproval: () => hookTargets.map((c) => c.requestApproval()).at(-1) ?? null,
+    setThreadStatus: (...args) => {
+      for (const c of hookTargets) c.setThreadStatus(...args);
+    },
+    recover: () => {
+      for (const c of hookTargets) c.recover();
+    },
+  };
+  (window as unknown as { __kalcodeMemory?: unknown }).__kalcodeMemory = { dashboard: forward };
 }
