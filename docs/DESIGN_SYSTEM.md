@@ -28,8 +28,11 @@ Implemented in Z0: `Button`, `IconButton`, `Badge`, `StatusIndicator`, `Segmente
 `EmptyState`, `ErrorState`, `Skeleton`, `Section`, `KeyValueList`, `Kbd`.
 Accessible behaviour comes from Radix UI; styling is tokens only.
 
-Planned as surfaces need them: `Input`, `Textarea`, `Select`, `Dropdown`, `ContextMenu`,
-`Dialog`, `Sheet`, `Tabs`, `Table`, `PermissionPrompt`.
+Added in Z3: `Field` (label, optional marker, help text wired by `${id}-hint`), `TextInput`,
+`TextArea` and `Select` (native control, token styling, chevron) — used by the New thread flow.
+
+Planned as surfaces need them: `Dropdown`, `ContextMenu`, `Dialog`, `Sheet`, `Tabs`, `Table`,
+`PermissionPrompt`.
 
 ## Brand
 
