@@ -6,6 +6,7 @@ import { toKalCodeError } from "./ipc/errors.ts";
 import { resolveTransport } from "./ipc/transport.ts";
 import { RuntimeProvider } from "./runtime/RuntimeProvider.tsx";
 import { applyAppearance, systemPrefersDark } from "./shell/appearance.ts";
+import { Mark } from "./shell/Brand.tsx";
 import { Shell } from "./shell/Shell.tsx";
 import { NoRuntime } from "./surfaces/startup/NoRuntime.tsx";
 import { StartupError } from "./surfaces/startup/StartupError.tsx";
@@ -63,6 +64,7 @@ export function App() {
     case "booting":
       return (
         <div className="boot-screen" role="status" aria-busy="true">
+          <Mark size={88} className="boot-screen__mark" />
           <span className="visually-hidden">Starting KalCode</span>
         </div>
       );

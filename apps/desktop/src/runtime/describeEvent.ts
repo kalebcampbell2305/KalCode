@@ -65,6 +65,129 @@ export function describeEvent(event: EventEnvelope): EventDescription {
       return event.payload.ok
         ? { title: "Credential store verified", detail: event.payload.backend, tone: "success" }
         : { title: "Credential store check failed", detail: event.payload.backend, tone: "danger" };
+    case "workspace.created":
+      return { title: "Workspace added", detail: event.payload.name, tone: "success" };
+    case "workspace.opened":
+      return { title: "Workspace opened", detail: event.payload.name, tone: "idle" };
+    case "workspace.removed":
+      return { title: "Workspace removed from KalCode", detail: event.payload.name, tone: "idle" };
+    case "shell.started":
+      return { title: "Terminal started", detail: event.payload.shellName, tone: "live" };
+    case "shell.completed":
+      return event.payload.closedByUser
+        ? { title: "Terminal closed", detail: null, tone: "idle" }
+        : { title: "Terminal exited", detail: `Exit code ${event.payload.exitCode}`, tone: "idle" };
+    case "shell.failed":
+      return { title: "Terminal exited with an error", detail: `Exit code ${event.payload.exitCode}`, tone: "danger" };
+    case "provider.detected":
+      return {
+        title: event.payload.installed ? "Provider detected" : "Provider not installed",
+        detail: [event.payload.providerId, event.payload.version].filter(Boolean).join(" "),
+        tone: event.payload.installed ? "success" : "idle",
+      };
+    case "provider.connected":
+      return {
+        title: "Provider connected",
+        detail: event.payload.accountLabel ?? event.payload.providerId,
+        tone: "success",
+      };
+    case "provider.disconnected":
+      return {
+        title: "Provider disconnected",
+        detail: event.payload.accountLabel ?? event.payload.providerId,
+        tone: "waiting",
+      };
+    case "provider.error":
+      return { title: "Provider problem", detail: event.payload.message, tone: "danger" };
+    case "thread.created":
+      return { title: "Thread created", detail: event.payload.name, tone: "success" };
+    case "thread.started":
+      return { title: "Thread started", detail: null, tone: "live" };
+    case "thread.status_changed":
+      return {
+        title: "Thread status changed",
+        detail: event.payload.detail ?? event.payload.to.replaceAll("_", " "),
+        tone: "live",
+      };
+    case "thread.renamed":
+      return { title: "Thread renamed", detail: event.payload.name, tone: "idle" };
+    case "thread.completed":
+      return { title: "Thread completed", detail: null, tone: "success" };
+    case "thread.failed":
+      return { title: "Thread failed", detail: event.payload.message, tone: "danger" };
+    case "thread.archived":
+      return { title: "Thread archived", detail: null, tone: "idle" };
+    case "agent.message":
+      return { title: event.payload.role === "user" ? "Message sent" : "Message received", detail: null, tone: "idle" };
+    case "tool.requested":
+      return { title: "Tool requested", detail: event.payload.summary, tone: "live" };
+    case "tool.started":
+      return { title: "Tool running", detail: null, tone: "live" };
+    case "tool.completed":
+      return { title: "Tool finished", detail: null, tone: "success" };
+    case "tool.failed":
+      return { title: "Tool failed", detail: event.payload.summary, tone: "danger" };
+    case "file.created":
+      return { title: "File created", detail: event.payload.path, tone: "idle" };
+    case "file.modified":
+      return { title: "File changed", detail: event.payload.path, tone: "idle" };
+    case "file.deleted":
+      return { title: "File deleted", detail: event.payload.path, tone: "waiting" };
+    case "approval.requested":
+      return { title: "Approval needed", detail: event.payload.summary, tone: "waiting" };
+    case "approval.approved":
+      return { title: "Approved", detail: event.payload.decision.replaceAll("_", " "), tone: "success" };
+    case "approval.denied":
+      return { title: "Denied", detail: null, tone: "idle" };
+    case "approval.expired":
+      return { title: "Approval request expired", detail: null, tone: "idle" };
+    case "permission.mode_changed":
+      return {
+        title: "Permission mode changed",
+        detail: `${event.payload.from} to ${event.payload.to}`,
+        tone: "waiting",
+      };
+    case "kalvoice.dictation_started":
+      return { title: "KalVoice dictation started", detail: null, tone: "live" };
+    case "kalvoice.dictation_completed":
+      return {
+        title: "KalVoice dictation inserted",
+        detail: `${event.payload.characters.toLocaleString()} characters`,
+        tone: "success",
+      };
+    case "kalvoice.dictation_failed":
+      return { title: "KalVoice dictation failed", detail: event.payload.code.replaceAll("_", " "), tone: "danger" };
+    case "kalvoice.request_started":
+      return { title: "KalVoice request", detail: event.payload.input === "voice" ? "Spoken" : "Typed", tone: "live" };
+    case "kalvoice.command_recognized":
+      return {
+        title: "KalVoice understood a command",
+        detail: event.payload.intent.replaceAll("_", " "),
+        tone: "live",
+      };
+    case "kalvoice.command_executed":
+      return { title: "KalVoice ran a command", detail: event.payload.intent.replaceAll("_", " "), tone: "success" };
+    case "kalvoice.request_completed":
+      return { title: "KalVoice request completed", detail: null, tone: "success" };
+    case "kalvoice.request_failed":
+      return { title: "KalVoice request failed", detail: event.payload.code.replaceAll("_", " "), tone: "danger" };
+    case "kalvoice.limit_reached":
+      return {
+        title: "Monthly KalVoice Requests used",
+        detail: `${event.payload.allowance.toLocaleString()} requests; resets ${formatAbsolute(event.payload.resetsAt)}`,
+        tone: "waiting",
+      };
+    case "kalvoice.provider_selected":
+      return {
+        title: "KalVoice intelligence changed",
+        detail:
+          event.payload.intelligence.kind === "provider" ? event.payload.intelligence.providerId : "On-device model",
+        tone: "idle",
+      };
+    case "kalvoice.voice_output_started":
+      return { title: "KalVoice speaking", detail: null, tone: "live" };
+    case "kalvoice.voice_output_completed":
+      return { title: "KalVoice finished speaking", detail: null, tone: "idle" };
     case "unrecognized":
       return {
         title: "Event from a newer KalCode",
