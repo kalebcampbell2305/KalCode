@@ -30,6 +30,12 @@ describe("plans", () => {
     expect(pro).toBeLessThan(max ?? 0);
   });
 
+  it("never lists the private owner entitlement (it is not purchasable)", () => {
+    const catalog = JSON.stringify(PLANS).toLowerCase();
+    expect(catalog).not.toContain("owner");
+    expect(catalog).not.toContain("unrestricted");
+  });
+
   it("rejects unknown plan ids", () => {
     // @ts-expect-error — deliberately invalid id
     expect(() => getPlan("enterprise")).toThrow(/Unknown plan/);
