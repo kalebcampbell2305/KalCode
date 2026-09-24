@@ -1,0 +1,21 @@
+[package]
+name = "kalcode-contracts"
+description = "KalCode shared contracts: IDs, the event catalog, thread states, normalized agent events, provider and permission types. Owned by the lead; consumed by every campaign."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "kalcode_contracts"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+ts-rs = { version = "12", features = ["serde-json-impl", "uuid-impl"] }
+
+[lints]
+workspace = true
