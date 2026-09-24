@@ -21,12 +21,21 @@ pub struct Migration {
     pub sql: &'static str,
 }
 
-/// All migrations shipped with this build, in order.
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "foundation",
-    sql: include_str!("../migrations/0001_foundation.sql"),
-}];
+/// All migrations shipped with this build, in ascending order. Numbers are reserved per
+/// campaign (docs/CONTRACTS.md), so a build may skip numbers another campaign owns; the runner
+/// applies every migration a database has not seen yet, in ascending order.
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "foundation",
+        sql: include_str!("../migrations/0001_foundation.sql"),
+    },
+    Migration {
+        version: 6,
+        name: "kalvoice",
+        sql: include_str!("../migrations/0006_kalvoice.sql"),
+    },
+];
 
 /// How many pre-migration backups to keep.
 const BACKUPS_RETAINED: usize = 5;
@@ -36,11 +45,13 @@ pub struct MigrationOutcome {
     pub from_version: i64,
     pub to_version: i64,
     pub backup: Option<PathBuf>,
+    /// Versions applied by this run, ascending.
+    pub applied: Vec<i64>,
 }
 
 impl MigrationOutcome {
     pub fn applied_any(&self) -> bool {
-        self.to_version > self.from_version
+        !self.applied.is_empty()
     }
 }
 
@@ -162,15 +173,19 @@ pub fn migrate(
         }
     }
 
+    // Every known migration this database has not recorded, ascending. Usually these are all
+    // newer than `from_version`; a lower number appears when a campaign's reserved migration
+    // lands after a later-numbered one (reserved migrations own disjoint tables).
     let pending: Vec<&Migration> = migrations
         .iter()
-        .filter(|m| m.version > from_version)
+        .filter(|m| !applied.iter().any(|(version, _)| *version == m.version))
         .collect();
     if pending.is_empty() {
         return Ok(MigrationOutcome {
             from_version,
             to_version: from_version,
             backup: None,
+            applied: Vec::new(),
         });
     }
 
@@ -179,6 +194,7 @@ pub fn migrate(
         _ => None,
     };
 
+    let mut applied_now = Vec::with_capacity(pending.len());
     for migration in pending {
         let tx = conn.transaction()?;
         tx.execute_batch(migration.sql)
@@ -194,12 +210,14 @@ pub fn migrate(
             version = migration.version,
             name = migration.name
         );
+        applied_now.push(migration.version);
     }
 
     Ok(MigrationOutcome {
         from_version,
         to_version: latest_known,
         backup,
+        applied: applied_now,
     })
 }
 
@@ -215,15 +233,16 @@ fn migration_failed(migration: &Migration, error: rusqlite::Error) -> KalError {
     .with_source(error)
 }
 
+/// The foundation migration comes first and versions strictly increase. Gaps are allowed:
+/// they are numbers reserved for other campaigns (docs/CONTRACTS.md).
 fn validate_sequence(migrations: &[Migration]) -> Result<()> {
-    for (index, migration) in migrations.iter().enumerate() {
-        let expected = i64::try_from(index).unwrap_or(i64::MAX).saturating_add(1);
-        if migration.version != expected {
-            return Err(KalError::internal(
-                "migration_sequence_invalid",
-                "KalCode's database migrations are misnumbered.",
-            ));
-        }
+    let starts_with_foundation = migrations.first().is_none_or(|m| m.version == 1);
+    let increasing = migrations.windows(2).all(|w| w[0].version < w[1].version);
+    if !starts_with_foundation || !increasing {
+        return Err(KalError::internal(
+            "migration_sequence_invalid",
+            "KalCode's database migrations are misnumbered.",
+        ));
     }
     Ok(())
 }
@@ -318,12 +337,11 @@ mod tests {
         let mut conn = open_in_memory().expect("open");
         let outcome = migrate(&mut conn, MIGRATIONS, None).expect("migrate");
         assert_eq!(outcome.from_version, 0);
-        assert_eq!(outcome.to_version, MIGRATIONS.len() as i64);
+        let latest = MIGRATIONS.last().map_or(0, |m| m.version);
+        assert_eq!(outcome.to_version, latest);
+        assert_eq!(outcome.applied.len(), MIGRATIONS.len());
         assert!(outcome.backup.is_none());
-        assert_eq!(
-            schema_version(&conn).expect("version"),
-            MIGRATIONS.len() as i64
-        );
+        assert_eq!(schema_version(&conn).expect("version"), latest);
     }
 
     #[test]
@@ -344,6 +362,60 @@ mod tests {
         }];
         let err = migrate(&mut conn, &bad, None).expect_err("must fail");
         assert_eq!(err.code, "migration_sequence_invalid");
+    }
+
+    #[test]
+    fn out_of_order_and_duplicate_versions_are_rejected() {
+        let mut conn = open_in_memory().expect("open");
+        let v = |version| Migration {
+            version,
+            name: "x",
+            sql: "SELECT 1;",
+        };
+        for bad in [vec![v(1), v(3), v(2)], vec![v(1), v(2), v(2)]] {
+            let err = migrate(&mut conn, &bad, None).expect_err("must fail");
+            assert_eq!(err.code, "migration_sequence_invalid");
+        }
+    }
+
+    #[test]
+    fn reserved_gaps_are_filled_later_without_touching_applied_migrations() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut conn = open(&dir.path().join("k.db")).expect("open");
+        let later = Migration {
+            version: 6,
+            name: "later",
+            sql: "CREATE TABLE later_table (x INTEGER) STRICT;",
+        };
+        let reserved = Migration {
+            version: 2,
+            name: "reserved",
+            sql: "CREATE TABLE reserved_table (x INTEGER) STRICT;",
+        };
+        let first = migrate(&mut conn, &[MIGRATIONS[0], later], None).expect("with gap");
+        assert_eq!(first.applied, vec![1, 6]);
+
+        // A later build ships the reserved number: only it runs, after a backup.
+        let backups = dir.path().join("backups");
+        let second =
+            migrate(&mut conn, &[MIGRATIONS[0], reserved, later], Some(&backups)).expect("fill");
+        assert_eq!(second.applied, vec![2]);
+        assert!(second.backup.is_some());
+        assert_eq!(second.from_version, 6);
+        for table in ["reserved_table", "later_table"] {
+            let n: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE name = ?1",
+                    [table],
+                    |r| r.get(0),
+                )
+                .expect("query");
+            assert_eq!(n, 1, "{table}");
+        }
+
+        // A build that doesn't know version 6 refuses the database.
+        let err = migrate(&mut conn, &[MIGRATIONS[0], reserved], None).expect_err("too new");
+        assert_eq!(err.code, "schema_too_new");
     }
 
     #[test]

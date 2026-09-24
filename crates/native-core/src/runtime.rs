@@ -237,6 +237,33 @@ impl Core {
         Ok(envelope)
     }
 
+    /// Runs `work` in one transaction for a module that owns its own tables (e.g. KalVoice).
+    /// The events it returns are stored in the same transaction and published after commit, so
+    /// state and history change together (persist-before-publish).
+    pub fn transact<T>(
+        &self,
+        work: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<(T, Vec<NewEvent>)>,
+    ) -> Result<(T, Vec<EventEnvelope>)> {
+        let mut conn = self.conn();
+        let tx = conn.transaction()?;
+        let (value, events) = work(&tx)?;
+        let mut envelopes = Vec::with_capacity(events.len());
+        for event in events {
+            envelopes.push(EventStore::append(&tx, event)?);
+        }
+        tx.commit()?;
+        for envelope in &envelopes {
+            self.bus.publish(envelope);
+        }
+        drop(conn);
+        Ok((value, envelopes))
+    }
+
+    /// Read-only access for a module that owns its own tables.
+    pub fn read<T>(&self, work: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
+        work(&self.conn())
+    }
+
     pub fn app_info(&self) -> AppInfo {
         AppInfo::current(&self.config.app_version, self.config.channel)
     }
