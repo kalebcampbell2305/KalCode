@@ -23,7 +23,7 @@ export function TerminalsSection() {
   const open = async (terminal: TerminalInfo) => {
     if (active?.id !== terminal.workspaceId && !(await activate(terminal.workspaceId))) return;
     navigate("code");
-    selectTerminal(terminal.id, true);
+    selectTerminal(terminal.id, true, terminal.workspaceId);
   };
 
   return (

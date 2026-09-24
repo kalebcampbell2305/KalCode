@@ -23,6 +23,8 @@ interface TerminalTabsProps {
   activeId: string | null;
   shells: readonly ShellOption[];
   disabled: boolean;
+  /** Whether terminal panels are rendered (not while the folder is missing). */
+  hasPanels: boolean;
   /** Selects a tab; `focusTerminal` moves keyboard focus into its terminal. */
   onSelect: (terminalId: string, focusTerminal: boolean) => void;
   onClose: (terminalId: string) => void;
@@ -46,6 +48,7 @@ export function TerminalTabs({
   activeId,
   shells,
   disabled,
+  hasPanels,
   onSelect,
   onClose,
   onNew,
@@ -118,7 +121,7 @@ export function TerminalTabs({
               role="tab"
               tabIndex={selected ? 0 : -1}
               aria-selected={selected}
-              aria-controls={panelId(terminal.id)}
+              aria-controls={hasPanels ? panelId(terminal.id) : undefined}
               className={styles.tab}
               data-status={terminal.status}
               title={`${label} — ${status}`}

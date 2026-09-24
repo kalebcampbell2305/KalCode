@@ -12,6 +12,8 @@ import { MINIMUM_CONTRAST, TERMINAL_THEMES } from "./terminalTheme.ts";
 
 const FONT_SIZE = 13;
 const RESIZE_DEBOUNCE_MS = 80;
+/** Rendered output is acknowledged to native in steps of this many bytes. */
+const ACK_EVERY_BYTES = 64 * 1024;
 
 interface TerminalViewProps {
   terminal: TerminalInfo;
@@ -114,7 +116,6 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme }: 
     });
 
     let replaying = false;
-    let first = true;
     const send = inputQueue((data) => client.writeTerminal(terminalId, data));
     term.onData((data) => {
       if (!replaying && runningRef.current) send(data);
@@ -161,35 +162,74 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme }: 
       fitNow();
     });
 
-    client
-      .attachTerminal(terminalId, (bytes) => {
-        if (disposed) return;
-        if (first) {
-          first = false;
-          if (bytes.length === 0) return;
-          replaying = true;
-          term.write(bytes, () => {
-            replaying = false;
-          });
-          return;
-        }
-        term.write(bytes);
-      })
-      .then((attached) => {
-        if (disposed) return;
-        fitNow();
-        if (attached) sendSize();
-      })
-      .catch((error: unknown) => {
-        if (!disposed) term.write(`\r\n${toKalCodeError(error).message}\r\n`);
-      });
+    // Attachment lifecycle. Each attach gets its own id; this view detaches exactly that id, so
+    // overlapping attach/detach calls (StrictMode, resync) never release another view's stream.
+    // Rendered bytes are acknowledged so native can bound what it holds for this view; if the
+    // view falls too far behind, native stops streaming and the view resyncs from scrollback.
+    let attachment: number | null = null;
+    let generation = 0;
+    let unacked = 0;
+    const acknowledge = (bytes: number) => {
+      unacked += bytes;
+      if (attachment === null || unacked < ACK_EVERY_BYTES) return;
+      const [id, amount, current] = [attachment, unacked, generation];
+      unacked = 0;
+      client
+        .ackTerminal(id, amount)
+        .then((streaming) => {
+          if (!streaming && !disposed && current === generation) connect(true);
+        })
+        .catch(() => undefined);
+    };
+    const connect = (resync: boolean) => {
+      const current = ++generation;
+      if (attachment !== null) client.detachTerminal(attachment).catch(() => undefined);
+      attachment = null;
+      unacked = 0;
+      let first = true;
+      if (resync) term.reset();
+      client
+        .attachTerminal(terminalId, (bytes) => {
+          if (disposed || current !== generation) return;
+          if (first) {
+            first = false;
+            if (bytes.length === 0) return;
+            replaying = true;
+            term.write(bytes, () => {
+              replaying = false;
+              // The replay may show the cursor again; an ended shell has none.
+              if (!runningRef.current) term.write("\x1b[?25l");
+              acknowledge(bytes.length);
+            });
+            return;
+          }
+          term.write(bytes, () => acknowledge(bytes.length));
+        })
+        .then((id) => {
+          if (disposed || current !== generation) {
+            if (id !== null) client.detachTerminal(id).catch(() => undefined);
+            return;
+          }
+          attachment = id;
+          acknowledge(0);
+          fitNow();
+          if (id !== null) sendSize();
+          else if (!resync)
+            term.write("\x1b[2mThis shell ended before KalCode last started; its output isn't kept.\x1b[0m");
+        })
+        .catch((error: unknown) => {
+          if (!disposed) term.write(`\r\n${toKalCodeError(error).message}\r\n`);
+        });
+    };
+    connect(false);
 
     return () => {
       disposed = true;
       observer.disconnect();
       cancelAnimationFrame(frame);
       if (resizeTimer) clearTimeout(resizeTimer);
-      client.detachTerminal(terminalId).catch(() => undefined);
+      // An attach still in flight detaches itself when it resolves (see `connect`).
+      if (attachment !== null) client.detachTerminal(attachment).catch(() => undefined);
       termRef.current = null;
       term.dispose();
     };
@@ -211,7 +251,7 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme }: 
     term.options.disableStdin = !running;
     term.options.cursorBlink = running;
     // An ended shell has no cursor; showing one suggests it still accepts input.
-    if (!running) term.write("[?25l");
+    if (!running) term.write("\x1b[?25l");
   }, [running]);
 
   useEffect(() => {

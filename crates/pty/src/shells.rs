@@ -1,7 +1,7 @@
 //! Shell detection. Read-only: looks for shells that are already installed and never installs,
 //! downloads or changes anything.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// A shell KalCode can start. `id` is what the WebView refers to; the path never leaves native.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,35 +35,16 @@ fn shell(id: &str, name: &str, program: PathBuf, args: &[&str]) -> ShellInfo {
     }
 }
 
-/// Finds `name` on PATH (honouring PATHEXT on Windows).
-pub fn find_on_path(name: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    let extensions: Vec<String> = if cfg!(windows) {
-        std::env::var("PATHEXT")
-            .unwrap_or_else(|_| ".EXE;.CMD;.BAT".into())
-            .split(';')
-            .filter(|e| !e.is_empty())
-            .map(str::to_owned)
-            .collect()
-    } else {
-        vec![String::new()]
-    };
-    std::env::split_paths(&path).find_map(|dir| {
-        extensions.iter().find_map(|ext| {
-            let candidate = dir.join(format!("{name}{}", ext.to_lowercase()));
-            is_executable(&candidate).then_some(candidate)
-        })
-    })
-}
-
-fn is_executable(path: &Path) -> bool {
-    path.is_file()
-}
-
 #[cfg(windows)]
 fn platform_shells() -> Vec<ShellInfo> {
     let mut shells = Vec::new();
-    if let Some(pwsh) = find_on_path("pwsh") {
+    // Only a real executable: a `pwsh.cmd` or `.bat` earlier on PATH is not PowerShell.
+    let pwsh = std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path)
+            .map(|dir| dir.join("pwsh.exe"))
+            .find(|p| p.is_file())
+    });
+    if let Some(pwsh) = pwsh {
         shells.push(shell("pwsh", "PowerShell 7", pwsh, &["-NoLogo"]));
     }
     let system_root =
@@ -109,7 +90,7 @@ fn platform_shells() -> Vec<ShellInfo> {
         .filter_map(|(id, name)| {
             ["/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin"]
                 .iter()
-                .map(|dir| Path::new(dir).join(id))
+                .map(|dir| std::path::Path::new(dir).join(id))
                 .find(|p| p.is_file())
                 .map(|path| shell(id, name, path, &["-l"]))
         })

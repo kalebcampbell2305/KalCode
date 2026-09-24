@@ -20,7 +20,7 @@ export interface MemoryWorkspacesOptions {
 
 export interface MemoryWorkspaces {
   handlers: Record<string, (args: Record<string, unknown>) => unknown>;
-  attachTerminal(terminalId: string, onOutput: (bytes: Uint8Array) => void): Promise<boolean>;
+  attachTerminal(terminalId: string, onOutput: (bytes: Uint8Array) => void): Promise<number | null>;
   /** Test hook: the folders the fake picker returns next (null = the user cancels). */
   queueFolders(...folders: PickedFolder[]): void;
   /** Test hook: simulates a folder moved or deleted outside KalCode. */
@@ -497,13 +497,18 @@ export function createMemoryWorkspaces({
     },
     terminal_detach: (args) => {
       requireCore();
-      const id = requireId(args.terminalId);
-      const tab = tabs.get(id);
-      const had = attached.get(id);
-      if (!had || !tab?.session) return false;
-      tab.session.listeners.delete(had);
-      attached.delete(id);
+      const attachment = attachments.get(requireAttachmentId(args.attachmentId));
+      if (!attachment) return false;
+      attachment.session.listeners.delete(attachment.listener);
+      attachments.delete(requireAttachmentId(args.attachmentId));
       return true;
+    },
+    terminal_ack: (args) => {
+      requireCore();
+      const id = requireAttachmentId(args.attachmentId);
+      const bytes = args.bytes;
+      if (typeof bytes !== "number" || !Number.isInteger(bytes) || bytes < 0 || bytes > 0xffffffff) fail(rejected());
+      return attachments.has(id);
     },
     terminal_set_active: (args) => {
       requireCore();
@@ -518,8 +523,14 @@ export function createMemoryWorkspaces({
     terminal_attach: () => fail(rejected()),
   };
 
-  /** This webview's attachment per terminal (native keys by webview label too). */
-  const attached = new Map<string, (bytes: Uint8Array) => void>();
+  /** Attachments by id (native also records the owning webview). */
+  const attachments = new Map<number, { session: Session; listener: (bytes: Uint8Array) => void }>();
+  let nextAttachment = 0;
+  /** Mirrors Tauri's u64 deserialization of an attachment id. */
+  function requireAttachmentId(value: unknown): number {
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) fail(rejected());
+    return value;
+  }
 
   return {
     handlers,
@@ -528,10 +539,7 @@ export function createMemoryWorkspaces({
       requireCore();
       const id = requireId(terminalId);
       const tab = tabs.get(id);
-      const previous = attached.get(id);
-      if (previous) tab?.session?.listeners.delete(previous);
-      attached.delete(id);
-      if (!tab?.session) return false;
+      if (!tab?.session) return null;
       const session = tab.session;
       const replay = new Uint8Array(session.scrollbackBytes);
       let offset = 0;
@@ -540,11 +548,10 @@ export function createMemoryWorkspaces({
         offset += chunk.length;
       }
       onOutput(replay);
-      if (!session.exited) {
-        session.listeners.add(onOutput);
-        attached.set(id, onOutput);
-      }
-      return true;
+      if (!session.exited) session.listeners.add(onOutput);
+      nextAttachment += 1;
+      attachments.set(nextAttachment, { session, listener: onOutput });
+      return nextAttachment;
     },
     queueFolders(...folders) {
       pickQueue.push(...folders);

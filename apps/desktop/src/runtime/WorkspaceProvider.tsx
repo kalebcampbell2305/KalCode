@@ -34,8 +34,11 @@ export interface WorkspaceValue {
   createTerminal: (shellId?: string | null) => Promise<TerminalInfo | null>;
   closeTerminal: (terminalId: string) => Promise<void>;
   restartTerminal: (terminalId: string) => Promise<TerminalInfo | null>;
-  /** Selects a tab; `focus` also moves keyboard focus into its terminal. */
-  selectTerminal: (terminalId: string, focus?: boolean) => void;
+  /**
+   * Selects a tab; `focus` also moves keyboard focus into its terminal. Pass `workspaceId` when
+   * the tab belongs to a workspace being activated in the same step.
+   */
+  selectTerminal: (terminalId: string, focus?: boolean, workspaceId?: string) => void;
   /** The terminal that should take keyboard focus; `n` changes on every request. */
   focusRequest: { terminalId: string; n: number };
 }
@@ -203,12 +206,12 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   );
 
   const selectTerminal = useCallback(
-    (terminalId: string, focus = false) => {
-      if (!active) return;
-      setSelected({ workspaceId: active.id, terminalId });
+    (terminalId: string, focus = false, workspaceId: string | undefined = active?.id) => {
+      if (!workspaceId) return;
+      setSelected({ workspaceId, terminalId });
       if (focus) requestFocus(terminalId);
       // Remembered natively so the same tab is in front after a restart.
-      client.setActiveTerminal(active.id, terminalId).catch(() => undefined);
+      client.setActiveTerminal(workspaceId, terminalId).catch(() => undefined);
     },
     [client, active, requestFocus],
   );

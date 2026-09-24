@@ -304,6 +304,20 @@ test.describe("dashboard", () => {
     await expect(section.getByRole("listitem")).toHaveCount(3);
   });
 
+  test("Show switches to the terminal's workspace and selects it", async ({ page }) => {
+    await open(page, "code");
+    await page.getByRole("button", { name: /^Workspace\s/ }).click();
+    await page.getByRole("menuitemradio", { name: /api-server/ }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "api-server" })).toBeVisible();
+    await page.getByRole("button", { name: "Dashboard" }).click();
+    await page.getByRole("region", { name: "Terminals" }).getByRole("button", { name: /Show Git Bash/ }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "kalcode-site" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: /Git Bash/ })).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.type("echo shown");
+    await page.keyboard.press("Enter");
+    await expect(visibleTerminal(page)).toContainText("shown");
+  });
+
   test("says so when nothing is running", async ({ page }) => {
     await open(page);
     await expect(page.getByRole("region", { name: "Terminals" }).getByText("No terminals are running.")).toBeVisible();

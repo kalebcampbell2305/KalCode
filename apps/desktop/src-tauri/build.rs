@@ -28,6 +28,7 @@ const COMMANDS: &[&str] = &[
     "terminal_resize",
     "terminal_attach",
     "terminal_detach",
+    "terminal_ack",
     "terminal_set_active",
     "terminals_running",
 ];

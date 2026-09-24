@@ -5,13 +5,19 @@
 //! validated natively. Terminal output streams over a per-view channel as raw bytes.
 //!
 //! Threading: commands that touch the database run off the main thread (`async`). Input,
-//! resize, attach and detach touch no storage and stay synchronous, so they are handled in the
-//! order the WebView sent them (typing never reorders, and a detach never overtakes the attach
-//! it undoes). `terminal_write` only queues input; it never blocks on the shell.
+//! resize, attach, ack and detach touch no storage and stay synchronous. `terminal_write` only
+//! queues input; it never blocks on the shell. Views detach by the attachment id they were
+//! given, so a detach can never remove a newer attachment, whatever order requests arrive in.
+//!
+//! Flow control: a view acknowledges the output bytes it has rendered (`terminal_ack`). A view
+//! that falls more than `MAX_UNACKED_BYTES` behind stops receiving output, and its next ack
+//! returns `false` so it can re-attach and resync from the scrollback. Native memory held for a
+//! slow or unresponsive view is therefore bounded.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use kalcode_core::workspaces::{
     AttachmentId, ShellOption, TerminalInfo, TerminalSize, Workspace, validate_id,
@@ -24,13 +30,26 @@ use tauri_plugin_dialog::DialogExt;
 use crate::AppState;
 use crate::environment;
 
-/// Which terminal each webview is attached to: (webview label, terminal id) → attachment.
-/// One attachment per pair; a page (re)load drops all of that page's attachments.
+/// Output a view may be behind (sent but not yet acknowledged) before it is dropped.
+const MAX_UNACKED_BYTES: usize = 4 * 1024 * 1024;
+/// Attachments one webview may hold to one terminal (one per view; a few more while a view
+/// re-attaches). The oldest is released beyond this.
+const MAX_VIEWS_PER_TERMINAL: usize = 4;
+
+struct View {
+    label: String,
+    terminal_id: String,
+    unacked: Arc<AtomicUsize>,
+    lagged: Arc<AtomicBool>,
+}
+
+/// Terminal attachments by id, each owned by the webview that made it. A page (re)load drops
+/// all of that page's attachments.
 #[derive(Default)]
-pub struct TerminalViews(Mutex<HashMap<(String, String), AttachmentId>>);
+pub struct TerminalViews(Mutex<HashMap<AttachmentId, View>>);
 
 impl TerminalViews {
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<(String, String), AttachmentId>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<AttachmentId, View>> {
         self.0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -48,8 +67,14 @@ pub fn drop_views(webview: &Webview) {
     let label = webview.label().to_owned();
     let released: Vec<AttachmentId> = {
         let mut map = views.lock();
-        let keys: Vec<_> = map.keys().filter(|(l, _)| *l == label).cloned().collect();
-        keys.into_iter().filter_map(|k| map.remove(&k)).collect()
+        let ids: Vec<AttachmentId> = map
+            .iter()
+            .filter(|(_, v)| v.label == label)
+            .map(|(id, _)| *id)
+            .collect();
+        ids.into_iter()
+            .filter(|id| map.remove(id).is_some())
+            .collect()
     };
     if let Some(core) = &state.core {
         for attachment in released {
@@ -249,9 +274,9 @@ pub fn terminal_resize(
 }
 
 /// Streams a terminal's output to the calling view as raw bytes (an `ArrayBuffer` in JS):
-/// the first message is the scrollback replay (possibly empty), then live output. Returns
-/// `false` when the terminal has no session to show (it ended before this launch). A view
-/// attaching again to the same terminal replaces its previous attachment.
+/// the first message is the scrollback replay (possibly empty), then live output. Returns the
+/// attachment id, or `null` when the terminal has no session to show (it ended before this
+/// launch). The view acknowledges rendered bytes with `terminal_ack` and detaches by id.
 #[tauri::command]
 pub fn terminal_attach(
     webview: Webview,
@@ -259,45 +284,100 @@ pub fn terminal_attach(
     views: State<'_, TerminalViews>,
     terminal_id: String,
     on_output: Channel<InvokeResponseBody>,
-) -> Result<bool, IpcError> {
+) -> Result<Option<AttachmentId>, IpcError> {
     let core = state.core()?;
     validate_id(&terminal_id).map_err(|e| e.to_ipc())?;
-    let key = (webview.label().to_owned(), terminal_id.clone());
-    if let Some(previous) = views.lock().remove(&key) {
-        core.detach_terminal(previous);
+    let label = webview.label().to_owned();
+
+    // Bound attachments per (webview, terminal): release the oldest beyond the limit.
+    let excess: Vec<AttachmentId> = {
+        let mut map = views.lock();
+        let mut mine: Vec<AttachmentId> = map
+            .iter()
+            .filter(|(_, v)| v.label == label && v.terminal_id == terminal_id)
+            .map(|(id, _)| *id)
+            .collect();
+        mine.sort_unstable();
+        let over = (mine.len() + 1).saturating_sub(MAX_VIEWS_PER_TERMINAL);
+        mine.into_iter()
+            .take(over)
+            .filter(|id| map.remove(id).is_some())
+            .collect()
+    };
+    for id in excess {
+        core.detach_terminal(id);
     }
+
+    let unacked = Arc::new(AtomicUsize::new(0));
+    let lagged = Arc::new(AtomicBool::new(false));
+    let (sent, behind) = (unacked.clone(), lagged.clone());
     let attachment = core
         .attach_terminal(&terminal_id, move |bytes| {
+            if sent.fetch_add(bytes.len(), Ordering::SeqCst) + bytes.len() > MAX_UNACKED_BYTES {
+                behind.store(true, Ordering::SeqCst);
+                return false; // stop streaming; the view resyncs on its next ack
+            }
             on_output
                 .send(InvokeResponseBody::Raw(bytes.to_vec()))
                 .is_ok()
         })
         .map_err(|e| e.log_and_convert("terminal_attach"))?;
-    match attachment {
-        Some(attachment) => {
-            views.lock().insert(key, attachment);
-            Ok(true)
-        }
-        None => Ok(false),
+    if let Some(id) = attachment {
+        views.lock().insert(
+            id,
+            View {
+                label,
+                terminal_id,
+                unacked,
+                lagged,
+            },
+        );
     }
+    Ok(attachment)
 }
 
-/// Stops streaming a terminal to the calling view. Returns whether it was attached.
+/// Acknowledges `bytes` of output rendered by the calling view. Returns `false` when the view
+/// no longer receives output (it fell too far behind, or was released) and must re-attach.
+#[tauri::command]
+pub fn terminal_ack(
+    webview: Webview,
+    views: State<'_, TerminalViews>,
+    attachment_id: AttachmentId,
+    bytes: u32,
+) -> bool {
+    let map = views.lock();
+    let Some(view) = map
+        .get(&attachment_id)
+        .filter(|v| v.label == webview.label())
+    else {
+        return false;
+    };
+    let bytes = usize::try_from(bytes).unwrap_or(usize::MAX);
+    let _ = view
+        .unacked
+        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+            Some(n.saturating_sub(bytes))
+        });
+    !view.lagged.load(Ordering::SeqCst)
+}
+
+/// Stops streaming to one of the calling view's attachments. Returns whether it existed.
 #[tauri::command]
 pub fn terminal_detach(
     webview: Webview,
     state: State<'_, AppState>,
     views: State<'_, TerminalViews>,
-    terminal_id: String,
+    attachment_id: AttachmentId,
 ) -> Result<bool, IpcError> {
-    validate_id(&terminal_id).map_err(|e| e.to_ipc())?;
-    let removed = views
-        .lock()
-        .remove(&(webview.label().to_owned(), terminal_id));
-    Ok(match removed {
-        Some(attachment) => state.core()?.detach_terminal(attachment),
-        None => false,
-    })
+    let removed = {
+        let mut map = views.lock();
+        // A webview may only release its own attachments.
+        let owned = map
+            .get(&attachment_id)
+            .is_some_and(|v| v.label == webview.label());
+        owned && map.remove(&attachment_id).is_some()
+    };
+    Ok(removed && state.core()?.detach_terminal(attachment_id))
 }
 
 /// Remembers the tab in front for a workspace, restored on the next launch.

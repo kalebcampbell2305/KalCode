@@ -85,7 +85,18 @@ describe("memory runtime: workspaces and terminals", () => {
     const terminal = await client.createTerminal(workspace.id, "cmd", { cols: 80, rows: 24 });
     const chunks: string[] = [];
     const decoder = new TextDecoder();
-    expect(await client.attachTerminal(terminal.id, (b) => chunks.push(decoder.decode(b)))).toBe(true);
+    const attachment = await client.attachTerminal(terminal.id, (b) => chunks.push(decoder.decode(b)));
+    expect(attachment).toEqual(expect.any(Number));
+    // A second view gets its own id; detaching one never releases the other.
+    const other: string[] = [];
+    const second = await client.attachTerminal(terminal.id, (b) => other.push(decoder.decode(b)));
+    expect(second).not.toBe(attachment);
+    expect(await client.detachTerminal(second as number)).toBe(true);
+    expect(await client.detachTerminal(second as number)).toBe(false);
+    expect(await client.ackTerminal(attachment as number, 10)).toBe(true);
+    await expect(client.transport.invoke("terminal_detach", { attachmentId: "x" })).rejects.toMatchObject({
+      code: "ipc_rejected",
+    });
     expect(chunks[0]).toContain("Microsoft Windows");
     await client.writeTerminal(terminal.id, "echo hi\r");
     await tick();

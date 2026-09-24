@@ -245,6 +245,7 @@ pub fn run(removed_overrides: Vec<&'static str>) {
             code_commands::terminal_resize,
             code_commands::terminal_attach,
             code_commands::terminal_detach,
+            code_commands::terminal_ack,
             code_commands::terminal_set_active,
             code_commands::terminals_running,
         ])

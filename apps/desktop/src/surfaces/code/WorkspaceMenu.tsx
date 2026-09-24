@@ -28,7 +28,11 @@ export function WorkspaceMenuContent({ onChosen, align = "start", side = "bottom
       minWidth={17}
       // After a choice, focus belongs to the workspace that opened, not the menu's trigger.
       onCloseAutoFocus={(event) => {
-        if (chosen.current) event.preventDefault();
+        if (chosen.current) {
+          // Focus moves to the content that changed rather than back to the menu's trigger.
+          event.preventDefault();
+          document.getElementById("main")?.focus();
+        }
         chosen.current = false;
       }}
     >

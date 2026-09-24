@@ -135,6 +135,7 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
         activeId={activeTerminalId}
         shells={shells}
         disabled={!workspace.available}
+        hasPanels={workspace.available}
         onSelect={select}
         onClose={(id) => void closeTerminal(id)}
         onNew={(shellId) => void create(shellId)}

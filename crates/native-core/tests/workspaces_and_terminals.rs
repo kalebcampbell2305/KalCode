@@ -411,7 +411,8 @@ fn restart_starts_a_fresh_shell_in_the_same_tab() {
         .expect("exit");
     assert!(wait_until(Duration::from_secs(20), || {
         core.terminal(&terminal.id)
-            .is_ok_and(|t| t.status == TerminalStatus::Exited)
+            // The recorded exit, not just the process ending (the recorder runs after it).
+            .is_ok_and(|t| t.status == TerminalStatus::Exited && t.ended_at.is_some())
     }));
 
     let events = collect_events(&core);
@@ -679,7 +680,7 @@ fn attachments_are_independent_and_do_not_survive_a_restart() {
     core.write_terminal(&terminal.id, b"exit\r").expect("exit");
     assert!(wait_until(Duration::from_secs(20), || {
         core.terminal(&terminal.id)
-            .is_ok_and(|t| t.status != TerminalStatus::Running)
+            .is_ok_and(|t| t.ended_at.is_some())
     }));
     core.restart_terminal(&terminal.id, size())
         .expect("restart");

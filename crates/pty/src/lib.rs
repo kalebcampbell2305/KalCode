@@ -158,14 +158,19 @@ impl PtySession {
         // Dropping the slave lets the reader see end-of-file once the shell exits.
         drop(pair.slave);
 
-        let reader = pair
-            .master
-            .try_clone_reader()
-            .map_err(|e| PtyError::Spawn(e.to_string()))?;
-        let writer = pair
-            .master
-            .take_writer()
-            .map_err(|e| PtyError::Spawn(e.to_string()))?;
+        // From here on a failure must not leave the started shell running.
+        let started = (|| {
+            let reader = pair.master.try_clone_reader()?;
+            let writer = pair.master.take_writer()?;
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>((reader, writer))
+        })();
+        let (reader, writer) = match started {
+            Ok(io) => io,
+            Err(error) => {
+                let _ = child.kill();
+                return Err(PtyError::Spawn(error.to_string()));
+            }
+        };
         let killer = child.clone_killer();
         let pid = child.process_id();
 
@@ -184,18 +189,24 @@ impl PtySession {
             pid,
         });
 
+        let spawn_failed =
+            |error: std::io::Error, killer: &mut Box<dyn ChildKiller + Send + Sync>| {
+                let _ = killer.kill();
+                PtyError::Spawn(error.to_string())
+            };
         std::thread::Builder::new()
             .name("kalcode-pty-writer".into())
             .spawn(move || write_loop(writer, &queued))
-            .map_err(|e| PtyError::Spawn(e.to_string()))?;
+            .map_err(|e| spawn_failed(e, &mut lock(&inner.killer)))?;
 
         let reader_inner = inner.clone();
         std::thread::Builder::new()
             .name("kalcode-pty-reader".into())
             .spawn(move || read_loop(reader, &reader_inner))
-            .map_err(|e| PtyError::Spawn(e.to_string()))?;
+            .map_err(|e| spawn_failed(e, &mut lock(&inner.killer)))?;
 
         let waiter_inner = inner.clone();
+        let waiter_killer = &inner.killer;
         std::thread::Builder::new()
             .name("kalcode-pty-wait".into())
             .spawn(move || {
@@ -219,7 +230,7 @@ impl PtySession {
                 lock(&waiter_inner.master).take();
                 on_exit(info);
             })
-            .map_err(|e| PtyError::Spawn(e.to_string()))?;
+            .map_err(|e| spawn_failed(e, &mut lock(waiter_killer)))?;
 
         Ok(Self { inner })
     }
@@ -283,6 +294,8 @@ impl PtySession {
         // an error carrying a stale OS error), so the return value carries no information there;
         // the exit waiter observes the real outcome. Elsewhere, a failed kill is only an error if
         // the process is still running (it may have exited between the check and the kill).
+        #[cfg(unix)]
+        escalate_kill(self);
         if cfg!(not(windows))
             && let Err(error) = result
             && self.exit_info().is_none()
@@ -291,6 +304,30 @@ impl PtySession {
         }
         Ok(())
     }
+}
+
+/// On Unix the shell gets SIGHUP when its pseudo-terminal closes, but a shell or job that ignores
+/// it would keep running. The shell leads its own session and process group (portable-pty calls
+/// `setsid`), so after a grace period the whole group is killed with SIGKILL.
+#[cfg(unix)]
+fn escalate_kill(session: &PtySession) {
+    const GRACE: std::time::Duration = std::time::Duration::from_secs(3);
+    let Some(pid) = session.inner.pid else {
+        return;
+    };
+    let inner = session.inner.clone();
+    let _ = std::thread::Builder::new()
+        .name("kalcode-pty-reaper".into())
+        .spawn(move || {
+            std::thread::sleep(GRACE);
+            if lock(&inner.exit).is_none() {
+                tracing::warn!(event = "pty.kill_escalated", pid);
+                // `kill -KILL -- -PGID` signals every process in the shell's group.
+                let _ = std::process::Command::new("kill")
+                    .args(["-KILL", "--", &format!("-{pid}")])
+                    .status();
+            }
+        });
 }
 
 /// Device Status Report: "where is the cursor?". ConPTY sends it at startup and blocks until a

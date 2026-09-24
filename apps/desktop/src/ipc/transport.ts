@@ -28,6 +28,7 @@ export type CommandName =
   | "terminal_resize"
   | "terminal_attach"
   | "terminal_detach"
+  | "terminal_ack"
   | "terminal_set_active"
   | "terminals_running";
 
@@ -43,9 +44,10 @@ export interface Transport {
   /**
    * Streams a terminal's output bytes to `onOutput`: the first call is the scrollback replay
    * (possibly empty), then live output. Resolves to false when the terminal has no session
-   * (it ended before this launch). Detach with `terminal_detach`.
+   * (it ended before this launch). Resolves to the attachment id (null when the terminal has
+   * no session); acknowledge rendered bytes with `terminal_ack` and detach with `terminal_detach`.
    */
-  attachTerminal(terminalId: string, onOutput: (bytes: Uint8Array) => void): Promise<boolean>;
+  attachTerminal(terminalId: string, onOutput: (bytes: Uint8Array) => void): Promise<number | null>;
   /** Syncs the OS window chrome (title bar) with the app theme. */
   setNativeTheme(theme: NativeTheme): Promise<void>;
 }
@@ -70,7 +72,7 @@ export async function createTauriTransport(): Promise<Transport> {
       // Raw channel messages arrive as ArrayBuffers (InvokeResponseBody::Raw).
       const channel = new Channel<ArrayBuffer>();
       channel.onmessage = (buffer) => onOutput(new Uint8Array(buffer));
-      return invoke<boolean>("terminal_attach", { terminalId, onOutput: channel });
+      return invoke<number | null>("terminal_attach", { terminalId, onOutput: channel });
     },
     async setNativeTheme(theme) {
       await getCurrentWindow().setTheme(theme);

@@ -152,7 +152,8 @@ export class KalCodeClient {
     return this.call("terminal_resize", { terminalId, ...clampTerminalSize(size) });
   }
 
-  async attachTerminal(terminalId: string, onOutput: (bytes: Uint8Array) => void): Promise<boolean> {
+  /** Streams output (replay first); resolves to the attachment id, or null if nothing to show. */
+  async attachTerminal(terminalId: string, onOutput: (bytes: Uint8Array) => void): Promise<number | null> {
     try {
       return await this.transport.attachTerminal(terminalId, onOutput);
     } catch (error) {
@@ -160,8 +161,13 @@ export class KalCodeClient {
     }
   }
 
-  detachTerminal(terminalId: string): Promise<boolean> {
-    return this.call("terminal_detach", { terminalId });
+  detachTerminal(attachmentId: number): Promise<boolean> {
+    return this.call("terminal_detach", { attachmentId });
+  }
+
+  /** Acknowledges rendered output; false means the view fell behind and must re-attach. */
+  ackTerminal(attachmentId: number, bytes: number): Promise<boolean> {
+    return this.call("terminal_ack", { attachmentId, bytes: Math.max(0, Math.min(0xffffffff, Math.floor(bytes))) });
   }
 
   setActiveTerminal(workspaceId: string, terminalId: string): Promise<void> {

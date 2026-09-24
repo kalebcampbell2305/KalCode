@@ -41,10 +41,9 @@ const MAX_SHELL_ID_LEN: usize = 32;
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 const META_ACTIVE_WORKSPACE: &str = "active_workspace_id";
 
-/// Variables never passed to a user's shell: KalCode's own settings and test hooks.
+/// Variables never passed to a user's shell, besides every `KALCODE_*` variable: browser-runtime
+/// overrides used by test builds.
 const SHELL_ENV_REMOVE: &[&str] = &[
-    "KALCODE_DATA_DIR",
-    "KALCODE_E2E_PICK_FOLDER",
     "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
     "WEBVIEW2_BROWSER_EXECUTABLE_FOLDER",
     "WEBVIEW2_USER_DATA_FOLDER",
@@ -124,8 +123,11 @@ struct Attachment {
 /// Live terminal sessions and the views attached to them.
 #[derive(Default)]
 pub struct TerminalRegistry {
-    /// Terminal id → its current session (running, or exited and kept for its scrollback).
-    sessions: Mutex<HashMap<String, PtySession>>,
+    /// Terminal id → its current session (running, or exited and kept for its scrollback) and
+    /// the session's generation. A restarted tab gets a new generation, so a late exit report
+    /// from the session it replaced is recognised and ignored.
+    sessions: Mutex<HashMap<String, (u64, PtySession)>>,
+    next_generation: AtomicU64,
     /// Tabs being closed by the user: terminal id → workspace id.
     closing: Mutex<HashMap<String, String>>,
     attachments: Mutex<HashMap<AttachmentId, Attachment>>,
@@ -139,7 +141,27 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 impl TerminalRegistry {
     fn session(&self, id: &str) -> Option<PtySession> {
-        lock(&self.sessions).get(id).cloned()
+        lock(&self.sessions).get(id).map(|(_, s)| s.clone())
+    }
+
+    fn generation(&self, id: &str) -> Option<u64> {
+        lock(&self.sessions).get(id).map(|(g, _)| *g)
+    }
+
+    fn register(&self, id: &str, generation: u64, session: PtySession) {
+        lock(&self.sessions).insert(id.to_owned(), (generation, session));
+    }
+
+    /// Stops streaming a terminal to every view attached to it.
+    fn detach_views(&self, terminal_id: &str) {
+        let mut attachments = lock(&self.attachments);
+        attachments.retain(|_, a| {
+            let keep = a.terminal_id != terminal_id;
+            if !keep {
+                a.session.detach(a.attach);
+            }
+            keep
+        });
     }
 
     fn status_of_open_tab(&self, id: &str) -> TerminalStatus {
@@ -153,8 +175,8 @@ impl TerminalRegistry {
 
     /// Forgets a terminal's session and every view attached to it.
     fn forget(&self, terminal_id: &str) -> Option<PtySession> {
-        lock(&self.attachments).retain(|_, a| a.terminal_id != terminal_id);
-        lock(&self.sessions).remove(terminal_id)
+        self.detach_views(terminal_id);
+        lock(&self.sessions).remove(terminal_id).map(|(_, s)| s)
     }
 }
 
@@ -166,7 +188,7 @@ impl Drop for TerminalRegistry {
             .sessions
             .get_mut()
             .unwrap_or_else(PoisonError::into_inner);
-        for (_, session) in sessions.drain() {
+        for (_, (_, session)) in sessions.drain() {
             let _ = session.kill();
         }
     }
@@ -612,13 +634,13 @@ impl Core {
             "UPDATE workspaces SET active_terminal_id = ?1 WHERE id = ?2",
             params![id, workspace_id],
         )?;
-        let (session, envelope) =
+        let (session, generation, envelope) =
             self.start_shell(&tx, &id, workspace_id, &workspace.root_path, &shell, size)?;
         if let Err(error) = tx.commit() {
             let _ = session.kill();
             return Err(error.into());
         }
-        lock(&self.terminal_registry().sessions).insert(id.clone(), session);
+        self.terminal_registry().register(&id, generation, session);
         self.publish(&envelope);
         let info = self.terminal_in(&conn, &id)?;
         drop(conn);
@@ -646,7 +668,7 @@ impl Core {
         }
         let shell = self.shell(Some(&terminal.shell_id))?;
         let tx = conn.transaction()?;
-        let (session, envelope) = self.start_shell(
+        let (session, generation, envelope) = self.start_shell(
             &tx,
             id,
             &terminal.workspace_id,
@@ -658,9 +680,12 @@ impl Core {
             let _ = session.kill();
             return Err(error.into());
         }
-        // The previous session (if kept for its scrollback) and its views are replaced.
-        self.terminal_registry().forget(id);
-        lock(&self.terminal_registry().sessions).insert(id.to_owned(), session);
+        // The previous session (kept for its scrollback) and its views are replaced. It has
+        // exited, but its exit may not be recorded yet; ending it here is a no-op otherwise.
+        if let Some(previous) = self.terminal_registry().forget(id) {
+            let _ = previous.kill();
+        }
+        self.terminal_registry().register(id, generation, session);
         self.publish(&envelope);
         let info = self.terminal_in(&conn, id)?;
         drop(conn);
@@ -678,7 +703,16 @@ impl Core {
         root: &str,
         shell: &ShellInfo,
         size: TerminalSize,
-    ) -> Result<(PtySession, EventEnvelope)> {
+    ) -> Result<(PtySession, u64, EventEnvelope)> {
+        let env_remove = SHELL_ENV_REMOVE
+            .iter()
+            .map(|v| (*v).to_owned())
+            .chain(
+                std::env::vars_os()
+                    .filter_map(|(key, _)| key.into_string().ok())
+                    .filter(|key| key.to_ascii_uppercase().starts_with("KALCODE_")),
+            )
+            .collect();
         let spec = SpawnSpec {
             program: shell.program.clone(),
             args: shell.args.clone(),
@@ -689,14 +723,19 @@ impl Core {
                 ("TERM_PROGRAM".into(), "KalCode".into()),
                 ("TERM_PROGRAM_VERSION".into(), self.app_info().version),
             ],
-            env_remove: SHELL_ENV_REMOVE.iter().map(|v| (*v).to_owned()).collect(),
+            env_remove,
             size,
         };
         let weak: Weak<Core> = Arc::downgrade(self);
         let terminal_id = id.to_owned();
+        let generation = self
+            .terminal_registry()
+            .next_generation
+            .fetch_add(1, Ordering::Relaxed)
+            + 1;
         let session = PtySession::spawn(spec, move |exit| {
             if let Some(core) = weak.upgrade() {
-                core.on_terminal_exit(&terminal_id, exit);
+                core.on_terminal_exit(&terminal_id, generation, exit);
             }
         })
         .map_err(terminal_error(
@@ -720,7 +759,7 @@ impl Core {
             )
         })();
         match recorded {
-            Ok(envelope) => Ok((session, envelope)),
+            Ok(envelope) => Ok((session, generation, envelope)),
             Err(error) => {
                 let _ = session.kill();
                 Err(error)
@@ -730,14 +769,30 @@ impl Core {
 
     /// Records a shell's exit: `shell.completed` for exit code 0 or a tab the user closed,
     /// `shell.failed` otherwise. Runs on the session's exit-watcher thread.
-    fn on_terminal_exit(&self, id: &str, exit: ExitInfo) {
+    pub(crate) fn on_terminal_exit(&self, id: &str, generation: u64, exit: ExitInfo) {
         let registry = self.terminal_registry();
         if registry.shutting_down.load(Ordering::SeqCst) {
             return; // shutdown already recorded running tabs as ended by the app
         }
         let mut conn = self.conn();
+        // Checked under the connection lock, which restart holds while it replaces a session:
+        // an exit from a session that was replaced must not end the tab's new shell.
+        if registry
+            .generation(id)
+            .is_some_and(|current| current != generation)
+        {
+            tracing::debug!(event = "terminal.stale_exit_ignored", terminal_id = %id);
+            return;
+        }
         // Taken after the connection lock, so a close in progress has registered itself.
         let closing = lock(&registry.closing).remove(id);
+        if closing.is_some() {
+            // A tab closed by the user: its session is no longer needed.
+            let mut sessions = lock(&registry.sessions);
+            if sessions.get(id).is_some_and(|(g, _)| *g == generation) {
+                sessions.remove(id);
+            }
+        }
         let result = (|| -> Result<Option<EventEnvelope>> {
             let tx = conn.transaction()?;
             let exit_code = i64::from(exit.code);
@@ -819,7 +874,11 @@ impl Core {
             running
         });
         if !running {
-            delete_terminal_row(&conn, id)?;
+            // Already ended (its exit is recorded, or it ended before this launch): no event.
+            let mut conn = conn;
+            let tx = conn.transaction()?;
+            delete_terminal_row(&tx, id)?;
+            tx.commit()?;
             drop(conn);
             registry.forget(id);
             return Ok(());
@@ -843,10 +902,17 @@ impl Core {
             std::thread::sleep(Duration::from_millis(15));
         }
         if lock(&registry.closing).contains_key(id) {
-            // The shell did not report its exit in time. Forget the tab now; the recorder
-            // still records the event when the exit arrives.
+            // The shell did not report its exit in time. Forget the tab now, but keep the
+            // session tracked: the recorder still records the event and releases it when the
+            // exit arrives, and shutdown ends it if it never does.
             tracing::warn!(event = "terminal.close_timeout", terminal_id = %id);
-            delete_terminal_row(&self.conn(), id)?;
+            let mut conn = self.conn();
+            let tx = conn.transaction()?;
+            delete_terminal_row(&tx, id)?;
+            tx.commit()?;
+            drop(conn);
+            registry.detach_views(id);
+            return Ok(());
         }
         registry.forget(id);
         Ok(())
@@ -963,7 +1029,10 @@ impl Core {
             }
         }
         lock(&registry.attachments).clear();
-        let sessions: Vec<PtySession> = lock(&registry.sessions).drain().map(|(_, s)| s).collect();
+        let sessions: Vec<PtySession> = lock(&registry.sessions)
+            .drain()
+            .map(|(_, (_, s))| s)
+            .collect();
         for session in sessions {
             let _ = session.kill();
         }
@@ -1008,6 +1077,100 @@ pub(crate) fn mark_running_terminals_ended(conn: &Connection) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::flags::BuildChannel;
+    use crate::runtime::{CoreConfig, Paths};
+
+    /// Regression: an exit report from a session that Restart replaced must not end the tab's
+    /// new shell (it used to mark the new row exited and publish `shell.failed`).
+    #[test]
+    fn a_late_exit_from_a_replaced_session_is_ignored() {
+        let data = tempfile::tempdir().expect("data");
+        let project = tempfile::tempdir().expect("project");
+        let core = Arc::new(
+            Core::open(CoreConfig {
+                paths: Paths::new(data.path()),
+                app_version: "0.1.0-test".into(),
+                channel: BuildChannel::Development,
+            })
+            .expect("open"),
+        );
+        let workspace = core.open_workspace(project.path()).expect("workspace");
+        let shell = if cfg!(windows) { "cmd" } else { "sh" };
+        let terminal = core
+            .create_terminal(
+                &workspace.id,
+                Some(shell),
+                TerminalSize::new(80, 24).expect("size"),
+            )
+            .expect("create");
+        let first = core
+            .terminal_registry()
+            .generation(&terminal.id)
+            .expect("generation");
+        // The shell exits and its exit is recorded; then Restart replaces the session.
+        core.write_terminal(&terminal.id, b"exit\r").expect("exit");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while core
+            .terminal(&terminal.id)
+            .expect("terminal")
+            .ended_at
+            .is_none()
+        {
+            assert!(Instant::now() < deadline, "shell did not exit");
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        let terminal = core
+            .restart_terminal(&terminal.id, TerminalSize::new(80, 24).expect("size"))
+            .expect("restart");
+        assert_eq!(terminal.status, TerminalStatus::Running);
+        let current = core
+            .terminal_registry()
+            .generation(&terminal.id)
+            .expect("generation");
+        assert_ne!(first, current);
+
+        let published = Arc::new(Mutex::new(Vec::new()));
+        let sink = published.clone();
+        core.subscribe(move |e| {
+            sink.lock().expect("lock").push(e.event.type_name());
+            true
+        });
+        core.on_terminal_exit(
+            &terminal.id,
+            first,
+            ExitInfo {
+                code: 5,
+                success: false,
+                killed: false,
+            },
+        );
+        let after = core.terminal(&terminal.id).expect("terminal");
+        assert_eq!(after.status, TerminalStatus::Running);
+        assert_eq!(after.ended_at, None);
+        assert!(
+            published.lock().expect("lock").is_empty(),
+            "no event for a stale exit"
+        );
+
+        // The current session's own exit is still recorded.
+        core.on_terminal_exit(
+            &terminal.id,
+            current,
+            ExitInfo {
+                code: 5,
+                success: false,
+                killed: false,
+            },
+        );
+        assert!(
+            core.terminal(&terminal.id)
+                .expect("terminal")
+                .ended_at
+                .is_some()
+        );
+        assert_eq!(*published.lock().expect("lock"), vec!["shell.failed"]);
+        core.shutdown();
+    }
 
     #[test]
     fn ids_must_be_canonical_uuids() {
