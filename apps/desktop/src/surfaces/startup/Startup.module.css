@@ -1,0 +1,26 @@
+.screen {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: var(--space-8);
+  background:
+    radial-gradient(60rem 40rem at 50% -10%, var(--color-accent-soft), transparent 70%),
+    var(--color-bg);
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  width: min(34rem, 100%);
+}
+
+.wordmark {
+  height: 0.9rem;
+  color: var(--color-text);
+}
+
+.meta {
+  color: var(--color-text-faint);
+  font-size: var(--text-xs);
+}

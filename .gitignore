@@ -1,0 +1,35 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# build output
+dist/
+target/
+.astro/
+.wrangler/
+apps/website/.dev.vars*
+!apps/website/.dev.vars.example
+
+# test output
+coverage/
+playwright-report/
+test-results/
+blob-report/
+/qa/screenshots/tmp/
+
+# env & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# os / editor
+.DS_Store
+Thumbs.db
+*.log
+.vscode/*
+!.vscode/extensions.json
+.idea/
+apps/desktop/src-tauri/gen/
+apps/desktop/dist-ui-test/

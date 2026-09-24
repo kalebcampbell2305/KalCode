@@ -1,0 +1,33 @@
+{
+  "name": "@kalcode/ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "KalCode design system: tokens, brand assets and accessible React primitives.",
+  "exports": {
+    "./tokens.css": "./src/styles/tokens.css",
+    "./fonts.css": "./src/styles/fonts.css",
+    "./base.css": "./src/styles/base.css",
+    "./brand/*": "./src/brand/*",
+    "./components": "./src/components/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@fontsource-variable/jetbrains-mono": "5.3.0",
+    "@fontsource-variable/lexend-deca": "5.3.0",
+    "@fontsource-variable/lexend-exa": "5.3.0",
+    "@fontsource-variable/lexend-giga": "5.3.0",
+    "radix-ui": "1.6.7",
+    "lucide-react": "1.48.0"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "react": "19.3.0",
+    "vite": "8.3.1"
+  }
+}

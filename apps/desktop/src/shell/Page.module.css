@@ -1,0 +1,43 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  width: 100%;
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: calc(var(--page-py) + var(--space-2)) var(--page-px) var(--space-16);
+}
+
+.page[data-width="narrow"] {
+  max-width: 48rem;
+}
+
+.header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-6);
+}
+
+.heading {
+  min-width: 0;
+}
+
+.title {
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-regular);
+  letter-spacing: var(--tracking-tight);
+}
+
+.description {
+  margin-top: var(--space-1-5);
+  max-width: 60ch;
+  color: var(--color-text-muted);
+  font-size: var(--text-md);
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-2);
+  flex: none;
+}

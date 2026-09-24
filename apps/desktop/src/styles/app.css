@@ -1,0 +1,27 @@
+/* App-wide rules for the desktop shell. Component styles live in CSS modules. */
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  overflow: hidden;
+  user-select: none;
+  cursor: default;
+}
+
+/* Text the user may want to copy stays selectable. */
+input,
+textarea,
+code,
+pre,
+[data-selectable] {
+  user-select: text;
+}
+
+.boot-screen {
+  height: 100%;
+  background: var(--color-bg);
+}

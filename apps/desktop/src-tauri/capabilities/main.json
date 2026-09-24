@@ -1,0 +1,21 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Least-privilege capability for the KalCode main window: KalCode's own commands, event plumbing, and theme sync. No filesystem, shell, HTTP, or opener access from the WebView.",
+  "windows": ["main"],
+  "permissions": [
+    "core:event:default",
+    "core:window:allow-set-theme",
+    "allow-boot",
+    "allow-window-ready",
+    "allow-settings-get",
+    "allow-settings-update",
+    "allow-events-recent",
+    "allow-events-subscribe",
+    "allow-events-unsubscribe",
+    "allow-diagnostics-get",
+    "allow-diagnostics-open-log-dir",
+    "allow-diagnostics-open-data-dir",
+    "allow-secure-store-check"
+  ]
+}

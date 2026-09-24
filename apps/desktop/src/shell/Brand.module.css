@@ -1,0 +1,8 @@
+.wordmark {
+  display: inline-block;
+  aspect-ratio: 902 / 112;
+  height: 0.8rem;
+  background-color: currentColor;
+  -webkit-mask: var(--wordmark-url) center / contain no-repeat;
+  mask: var(--wordmark-url) center / contain no-repeat;
+}

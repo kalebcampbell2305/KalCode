@@ -1,0 +1,20 @@
+[package]
+name = "kalcode-secure-store"
+description = "KalCode secret storage: OS credential store backend behind a SecretStore trait."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "kalcode_secure_store"
+
+[dependencies]
+thiserror.workspace = true
+uuid = { workspace = true, features = ["v4", "v7"] }
+zeroize = "1"
+keyring = "4"
+
+[lints]
+workspace = true

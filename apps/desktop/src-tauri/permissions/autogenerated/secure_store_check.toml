@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-secure-store-check"
+description = "Enables the secure_store_check command without any pre-configured scope."
+commands.allow = ["secure_store_check"]
+
+[[permission]]
+identifier = "deny-secure-store-check"
+description = "Denies the secure_store_check command without any pre-configured scope."
+commands.deny = ["secure_store_check"]

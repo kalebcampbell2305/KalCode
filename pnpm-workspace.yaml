@@ -1,0 +1,10 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+  - "tooling"
+
+onlyBuiltDependencies:
+  - esbuild
+  - workerd
+  - sharp
+  - "@tauri-apps/cli"

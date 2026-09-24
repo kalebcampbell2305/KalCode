@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-6 -6 902 112" fill="none" stroke="currentColor" stroke-width="7" stroke-linejoin="miter" role="img" aria-label="KalCode">
+  <path d="M0 0v100M58 0 10 50l48 50"/>
+  <path d="M120 100 160 0l40 100"/>
+  <path d="M262 0v100h58"/>
+  <path d="M452 0h-40c-17 0-30 13-30 30v40c0 17 13 30 30 30h40"/>
+  <rect x="514" y="0" width="92" height="100" rx="30"/>
+  <path d="M668 0v100h42c17 0 30-13 30-30V30c0-17-13-30-30-30z"/>
+  <path d="M870 0h-66v100h66M804 50h54"/>
+</svg>

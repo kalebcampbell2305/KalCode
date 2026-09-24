@@ -1,0 +1,47 @@
+.rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-8);
+  padding: var(--space-3) 0;
+}
+
+.row + .row {
+  border-top: 1px solid var(--color-border);
+}
+
+.rowText {
+  min-width: 0;
+}
+
+.rowLabel {
+  color: var(--color-text);
+  font-size: var(--text-md);
+}
+
+.rowHelp {
+  margin-top: var(--space-0-5);
+  max-width: 44ch;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.rowControl {
+  flex: none;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.loading {
+  display: grid;
+  gap: var(--space-3);
+}

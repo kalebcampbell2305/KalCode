@@ -1,0 +1,23 @@
+.content {
+  z-index: var(--z-tooltip);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 18rem;
+  padding: var(--space-1-5) var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-overlay);
+  box-shadow: var(--shadow-md);
+  color: var(--color-text);
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+  transform-origin: var(--radix-tooltip-content-transform-origin);
+  animation: appear var(--dur-fast) var(--ease-out);
+}
+
+@keyframes appear {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}

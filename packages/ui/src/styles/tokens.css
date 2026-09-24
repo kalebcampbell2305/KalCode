@@ -1,0 +1,253 @@
+/*
+ * KalCode design tokens.
+ *
+ * Palette (brand references: constellation globe on deep space):
+ *   Space        #05080F  base background (dark)
+ *   Hull         #0B1322  surfaces (dark)
+ *   Constellation#4C8DFF  accent, focus, live state
+ *   Starlight    #E6EDF8  primary text (dark)
+ *   Nebula       #8593AB  secondary text (dark)
+ * Light theme is designed separately: navy ink on cool paper, never an inversion.
+ *
+ * Theme is selected with [data-theme="light"|"dark"] on <html>; density with
+ * [data-density="compact"]; motion with [data-motion="reduced"].
+ */
+
+:root {
+  /* ---------- Typography ---------- */
+  --font-sans: "Lexend Deca Variable", "Lexend Deca", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-wide: "Lexend Exa Variable", "Lexend Exa", var(--font-sans);
+  --font-wider: "Lexend Giga Variable", "Lexend Giga", var(--font-wide);
+  --font-mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
+
+  /* Operational scale (desktop UI): modest, 1.125 ratio around 14px */
+  --text-2xs: 0.6875rem; /* 11 */
+  --text-xs: 0.75rem; /* 12 */
+  --text-sm: 0.8125rem; /* 13 */
+  --text-md: 0.875rem; /* 14 — body */
+  --text-lg: 1rem; /* 16 */
+  --text-xl: 1.25rem; /* 20 */
+  --text-2xl: 1.625rem; /* 26 */
+  --text-3xl: 2.125rem; /* 34 */
+
+  /* Display scale (website, empty states) */
+  --display-sm: clamp(1.75rem, 1.2rem + 2vw, 2.5rem);
+  --display-md: clamp(2.25rem, 1.4rem + 3.2vw, 3.75rem);
+  --display-lg: clamp(2.75rem, 1.5rem + 4.8vw, 5.25rem);
+
+  --weight-light: 300;
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+
+  --leading-tight: 1.15;
+  --leading-snug: 1.3;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.65;
+
+  --tracking-tight: -0.02em;
+  --tracking-normal: 0;
+  --tracking-wide: 0.04em;
+  --tracking-brand: 0.32em;
+
+  /* ---------- Spacing (4px base) ---------- */
+  --space-0: 0;
+  --space-px: 1px;
+  --space-0-5: 0.125rem;
+  --space-1: 0.25rem;
+  --space-1-5: 0.375rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+  --space-20: 5rem;
+  --space-24: 6rem;
+
+  /* Density-aware control metrics */
+  --control-h-sm: 1.75rem;
+  --control-h-md: 2.125rem;
+  --control-h-lg: 2.5rem;
+  --control-px: var(--space-3);
+  --row-h: 2.5rem;
+  --page-px: var(--space-8);
+  --page-py: var(--space-6);
+
+  /* ---------- Radius: small for controls, larger only for floating layers ---------- */
+  --radius-xs: 3px;
+  --radius-sm: 5px;
+  --radius-md: 7px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-full: 999px;
+
+  /* ---------- Layout ---------- */
+  --sidebar-w: 15rem;
+  --sidebar-w-collapsed: 3.5rem;
+  --titlebar-h: 2.75rem;
+  --content-max: 72rem;
+  --prose-max: 40rem;
+
+  /* ---------- Z-index ---------- */
+  --z-base: 0;
+  --z-sticky: 10;
+  --z-sidebar: 20;
+  --z-dropdown: 40;
+  --z-overlay: 50;
+  --z-dialog: 60;
+  --z-palette: 70;
+  --z-toast: 80;
+  --z-tooltip: 90;
+
+  /* ---------- Motion ---------- */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-instant: 80ms;
+  --dur-fast: 140ms;
+  --dur-base: 220ms;
+  --dur-slow: 380ms;
+  --dur-deliberate: 640ms;
+
+  color-scheme: dark;
+}
+
+/* ---------- Dark theme (default) ---------- */
+:root,
+[data-theme="dark"] {
+  --color-bg: #05080f; /* Space */
+  --color-bg-sunken: #03050b;
+  --color-surface: #0b1322; /* Hull */
+  --color-surface-raised: #101a2d;
+  --color-surface-overlay: #121d33;
+  --color-surface-hover: rgb(120 160 230 / 0.07);
+  --color-surface-active: rgb(120 160 230 / 0.12);
+  --color-surface-selected: rgb(76 141 255 / 0.14);
+
+  --color-border: rgb(142 170 220 / 0.12);
+  --color-border-strong: rgb(142 170 220 / 0.22);
+  --color-border-focus: #4c8dff;
+
+  --color-text: #e6edf8; /* Starlight */
+  --color-text-secondary: #a8b4c9;
+  --color-text-muted: #8593ab; /* Nebula */
+  --color-text-faint: #5d6a82;
+  --color-text-inverse: #05080f;
+
+  --color-accent: #4c8dff; /* Constellation */
+  --color-accent-hover: #6aa1ff;
+  --color-accent-pressed: #3a78ea;
+  --color-accent-fg: #03060d;
+  --color-accent-soft: rgb(76 141 255 / 0.14);
+  --color-accent-text: #8db6ff;
+  --color-glow: rgb(76 141 255 / 0.45);
+
+  /* Status semantics */
+  --color-live: #4c8dff;
+  --color-live-soft: rgb(76 141 255 / 0.14);
+  --color-waiting: #f2b544;
+  --color-waiting-soft: rgb(242 181 68 / 0.13);
+  --color-success: #35c48d;
+  --color-success-soft: rgb(53 196 141 / 0.13);
+  --color-danger: #ef5f6b;
+  --color-danger-soft: rgb(239 95 107 / 0.13);
+  --color-danger-text: #ff8a93;
+  --color-idle: #8593ab;
+  --color-idle-soft: rgb(133 147 171 / 0.14);
+
+  --color-code-bg: #070c17;
+  --color-scrim: rgb(2 4 9 / 0.66);
+
+  --shadow-sm: 0 1px 0 rgb(0 0 0 / 0.4);
+  --shadow-md: 0 8px 24px -8px rgb(0 0 0 / 0.6), 0 0 0 1px var(--color-border);
+  --shadow-lg: 0 24px 64px -16px rgb(0 0 0 / 0.75), 0 0 0 1px var(--color-border-strong);
+  --shadow-focus: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-border-focus);
+
+  color-scheme: dark;
+}
+
+/* ---------- Light theme ---------- */
+[data-theme="light"] {
+  --color-bg: #f5f7fb; /* cool paper */
+  --color-bg-sunken: #eceff5;
+  --color-surface: #ffffff;
+  --color-surface-raised: #ffffff;
+  --color-surface-overlay: #ffffff;
+  --color-surface-hover: rgb(20 40 80 / 0.045);
+  --color-surface-active: rgb(20 40 80 / 0.08);
+  --color-surface-selected: rgb(29 91 224 / 0.09);
+
+  --color-border: rgb(16 32 64 / 0.1);
+  --color-border-strong: rgb(16 32 64 / 0.18);
+  --color-border-focus: #1d5be0;
+
+  --color-text: #0b1424; /* navy ink */
+  --color-text-secondary: #37445a;
+  --color-text-muted: #5b6880;
+  --color-text-faint: #8d98ab;
+  --color-text-inverse: #ffffff;
+
+  --color-accent: #1d5be0;
+  --color-accent-hover: #174ec4;
+  --color-accent-pressed: #1343a8;
+  --color-accent-fg: #ffffff;
+  --color-accent-soft: rgb(29 91 224 / 0.09);
+  --color-accent-text: #1a52cb;
+  --color-glow: rgb(29 91 224 / 0.22);
+
+  --color-live: #1d5be0;
+  --color-live-soft: rgb(29 91 224 / 0.09);
+  --color-waiting: #a86a00;
+  --color-waiting-soft: rgb(214 140 0 / 0.12);
+  --color-success: #0f8a5c;
+  --color-success-soft: rgb(15 138 92 / 0.1);
+  --color-danger: #cc2f3d;
+  --color-danger-soft: rgb(204 47 61 / 0.09);
+  --color-danger-text: #b3222f;
+  --color-idle: #66728a;
+  --color-idle-soft: rgb(102 114 138 / 0.12);
+
+  --color-code-bg: #f0f3f8;
+  --color-scrim: rgb(11 20 36 / 0.36);
+
+  --shadow-sm: 0 1px 2px rgb(16 32 64 / 0.06);
+  --shadow-md: 0 8px 24px -10px rgb(16 32 64 / 0.22), 0 0 0 1px var(--color-border);
+  --shadow-lg: 0 24px 60px -18px rgb(16 32 64 / 0.3), 0 0 0 1px var(--color-border);
+  --shadow-focus: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-border-focus);
+
+  color-scheme: light;
+}
+
+/* ---------- Density ---------- */
+[data-density="compact"] {
+  --control-h-sm: 1.5rem;
+  --control-h-md: 1.875rem;
+  --control-h-lg: 2.25rem;
+  --control-px: var(--space-2);
+  --row-h: 2.125rem;
+  --page-px: var(--space-6);
+  --page-py: var(--space-4);
+}
+
+/* ---------- Motion ---------- */
+[data-motion="reduced"] {
+  --dur-instant: 0ms;
+  --dur-fast: 0ms;
+  --dur-base: 0ms;
+  --dur-slow: 0ms;
+  --dur-deliberate: 0ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion="full"]) {
+    --dur-instant: 0ms;
+    --dur-fast: 0ms;
+    --dur-base: 0ms;
+    --dur-slow: 0ms;
+    --dur-deliberate: 0ms;
+  }
+}

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none" role="img" aria-label="KalCode">
+<defs><radialGradient id="kcs" cx="40%" cy="36%" r="72%"><stop offset="0" stop-color="#153063"/><stop offset="1" stop-color="#050b19"/></radialGradient></defs>
+<circle cx="50" cy="50" r="46" fill="url(#kcs)"/>
+<circle cx="50" cy="50" r="44.5" stroke="#5b97ff" stroke-width="3"/>
+<g stroke="#eef4ff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M37 24v52"/><path d="M37 49 72 22"/><path d="M37 49l33 27"/></g>
+<g fill="#ffffff"><circle cx="37" cy="24" r="5.5"/><circle cx="37" cy="76" r="5.5"/><circle cx="72" cy="22" r="5.5"/><circle cx="70" cy="76" r="5.5"/><circle cx="37" cy="49" r="6"/></g>
+</svg>

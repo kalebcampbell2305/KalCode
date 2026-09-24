@@ -1,0 +1,5 @@
+/* Self-hosted fonts (no network requests at runtime; works offline in the desktop app). */
+@import "@fontsource-variable/lexend-deca/wght.css";
+@import "@fontsource-variable/lexend-exa/wght.css";
+@import "@fontsource-variable/lexend-giga/wght.css";
+@import "@fontsource-variable/jetbrains-mono/wght.css";

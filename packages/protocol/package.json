@@ -1,0 +1,18 @@
+{
+  "name": "@kalcode/protocol",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "KalCode shared protocol: generated IPC/event types, plan configuration, provider and permission contracts.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./plans": "./src/plans.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "5.0.1"
+  }
+}

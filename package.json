@@ -1,0 +1,28 @@
+{
+  "name": "kalcode",
+  "private": true,
+  "description": "KalCode — one intelligence that operates your entire AI workspace.",
+  "license": "UNLICENSED",
+  "packageManager": "pnpm@10.33.2",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev:desktop": "pnpm --filter @kalcode/desktop tauri dev",
+    "dev:website": "pnpm --filter @kalcode/website dev",
+    "build": "pnpm -r --if-present build",
+    "format": "biome format --write . && cargo fmt --all",
+    "format:check": "biome format . && cargo fmt --all -- --check",
+    "lint": "biome lint . && cargo clippy --workspace --all-targets -- -D warnings",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "pnpm -r --if-present test && cargo test --workspace",
+    "test:e2e": "pnpm -r --if-present test:e2e",
+    "gen:protocol": "cargo test -p kalcode-native-core --lib && node tooling/gen-protocol-index.mjs",
+    "check:branding": "node tooling/check-branding.mjs",
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm check:branding"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.14",
+    "typescript": "7.0.2"
+  }
+}
