@@ -8,6 +8,9 @@
 //! - [`models`]: on-device speech model catalog and consented, verified downloads.
 //! - [`audio`]: microphone capture into memory, resampled to 16 kHz.
 //! - [`stt`]: on-device speech recognition (whisper.cpp behind the `whisper` feature).
+//! - [`voice`]: listening sessions (microphone, transcription, audio dropped afterwards).
+//! - [`orchestrator`]: request pipeline (allowance, grammar, provider, permission, execute).
+//! - [`speech_output`]: optional spoken replies through the OS voice.
 //!
 //! Zero company AI cost: nothing here calls a hosted AI or speech service. Speech runs on the
 //! device; reasoning runs on the user's own connected provider.
@@ -16,7 +19,10 @@ pub mod audio;
 pub mod grammar;
 pub mod ledger;
 pub mod models;
+pub mod orchestrator;
 pub mod plan;
 pub mod prefs;
 pub mod shortcuts;
+pub mod speech_output;
 pub mod stt;
+pub mod voice;

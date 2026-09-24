@@ -115,6 +115,18 @@ pub fn usage(
     })
 }
 
+/// Whether this client request id has already been counted.
+pub fn is_recorded(conn: &Connection, request_id: &str) -> Result<bool> {
+    Ok(conn
+        .query_row(
+            "SELECT 1 FROM kalvoice_requests WHERE request_id = ?1",
+            [request_id],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
+}
+
 /// Counts one top-level request, atomically with the allowance check. Call inside the
 /// transaction that records the request's events.
 pub fn consume(
