@@ -8,7 +8,8 @@ the lettering so it can sit on light or dark surfaces. Nothing is redrawn.
 Usage:
   python tooling/generate-brand-assets.py [--source-dir ~/Downloads]
 
-Masters (source of truth):   packages/ui/src/brand/masters/
+Masters (source of truth):   packages/ui/src/brand/masters/ (kalcode-brand.png = original;
+                             kalvoice-globe.png = lossless globe crop of the voice artwork)
 Originals served on the web: apps/website/public/assets/brand/  (unmodified copies)
 Derivatives:                 apps/website/public/assets/brand/, apps/desktop/src/assets/brand/,
                              apps/desktop/src-tauri/icons/ (via `cargo tauri icon`)
@@ -34,8 +35,10 @@ ICONS = ROOT / "apps" / "desktop" / "src-tauri" / "icons"
 
 SOURCES = {
     "kalcode-brand.png": "KALCODE UI FOR WEBSITE LOGO AND FOR THEME.png",
-    "jarvis-brand.png": "JARVIS UI FOR JARVIS VOICE IN KALCODE.png",
 }
+# KalVoice's master is `kalvoice-globe.png`: a lossless crop of the globe region (no lettering)
+# of the owner-supplied voice artwork, committed once. It is used as-is; see docs/BRAND.md.
+KALVOICE_MASTER = "kalvoice-globe.png"
 
 # Regions measured from the masters (1122 x 1402). See docs/BRAND.md.
 KALCODE_GLOBE_CENTER = (545, 511)
@@ -43,10 +46,6 @@ KALCODE_GLOBE_HALF = 362  # includes the outer constellation network
 KALCODE_SPHERE_HALF = 318  # sphere + rim glow, for the icon mark
 KALCODE_WORDMARK_BOX = (116, 919, 1015, 1001)
 KALCODE_TAGLINE_BOX = (230, 1046, 888, 1076)
-JARVIS_GLOBE_CENTER = (553, 372)
-JARVIS_GLOBE_HALF = 300
-JARVIS_WORDMARK_BOX = (177, 679, 958, 762)
-JARVIS_TAGLINE_BOX = (178, 790, 944, 819)
 
 
 def sha256(path: Path) -> str:
@@ -143,23 +142,20 @@ def main() -> int:
 
     copy_masters(args.source_dir)
     kalcode = Image.open(MASTERS / "kalcode-brand.png").convert("RGB")
-    jarvis = Image.open(MASTERS / "jarvis-brand.png").convert("RGB")
-    print(f"artwork background: rgb{background(kalcode)} / rgb{background(jarvis)}")
+    kalvoice = Image.open(MASTERS / KALVOICE_MASTER).convert("RGB")
+    print(f"artwork background: rgb{background(kalcode)}")
 
     # Full artwork (brand presentation sections).
     save_web(kalcode, "kalcode-artwork", [1122, 560], [WEB, DESKTOP])
-    save_web(jarvis, "jarvis-artwork", [1122, 560], [WEB, DESKTOP])
 
     # Globes.
     save_web(square(kalcode, KALCODE_GLOBE_CENTER, KALCODE_GLOBE_HALF), "kalcode-globe", [724, 362], [WEB, DESKTOP])
-    save_web(square(jarvis, JARVIS_GLOBE_CENTER, JARVIS_GLOBE_HALF), "jarvis-globe", [600, 300], [WEB, DESKTOP])
+    save_web(kalvoice, "kalvoice-globe", [600, 300], [WEB, DESKTOP])
 
     # Lettering as transparent PNGs (usable as CSS masks or images on any surface).
     lettering = {
         "kalcode-wordmark.png": lettering_alpha(kalcode, KALCODE_WORDMARK_BOX),
         "kalcode-tagline.png": lettering_alpha(kalcode, KALCODE_TAGLINE_BOX),
-        "jarvis-wordmark.png": lettering_alpha(jarvis, JARVIS_WORDMARK_BOX),
-        "jarvis-tagline.png": lettering_alpha(jarvis, JARVIS_TAGLINE_BOX),
     }
     for name, image in lettering.items():
         for directory in (WEB, DESKTOP):

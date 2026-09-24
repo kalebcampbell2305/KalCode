@@ -1,6 +1,4 @@
 import type { CSSProperties } from "react";
-import jarvisTaglineUrl from "../assets/brand/jarvis-tagline.png";
-import jarvisWordmarkUrl from "../assets/brand/jarvis-wordmark.png";
 import mark64Url from "../assets/brand/kalcode-mark-64.png";
 import mark128Url from "../assets/brand/kalcode-mark-128.png";
 import kalcodeTaglineUrl from "../assets/brand/kalcode-tagline.png";
@@ -36,21 +34,6 @@ export function Wordmark({ className }: LetteringProps) {
 /** "Code a brighter tomorrow", from the brand artwork. */
 export function KalCodeTagline({ className }: LetteringProps) {
   return <Lettering url={kalcodeTaglineUrl} label="Code a brighter tomorrow" ratio="658 / 30" className={className} />;
-}
-
-export function JarvisWordmark({ className }: LetteringProps) {
-  return <Lettering url={jarvisWordmarkUrl} label="JARVIS" ratio="781 / 83" className={className} />;
-}
-
-export function JarvisTagline({ className }: LetteringProps) {
-  return (
-    <Lettering
-      url={jarvisTaglineUrl}
-      label="Global thinking. Personal impact."
-      ratio="766 / 29"
-      className={className}
-    />
-  );
 }
 
 /** The constellation globe from the brand artwork, cut to a circle. `size` in CSS px. */

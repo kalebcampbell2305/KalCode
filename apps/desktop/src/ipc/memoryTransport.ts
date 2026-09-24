@@ -26,7 +26,7 @@ export type MemoryScenario = "default" | "startup-error" | "keychain-failure";
 
 const SURFACES: SurfaceFlag["id"][] = [
   "dashboard",
-  "jarvis",
+  "kalvoice",
   "code",
   "threads",
   "agents",

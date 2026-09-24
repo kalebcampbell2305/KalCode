@@ -48,7 +48,7 @@
     "copyright": "© 2026 KalCode",
     "category": "DeveloperTool",
     "shortDescription": "One intelligence that operates your entire AI workspace.",
-    "longDescription": "KalCode connects the AI coding providers you already use, runs them in real workspaces, keeps you in control of permissions, and lets JARVIS coordinate the work.",
+    "longDescription": "KalCode connects the AI coding providers you already use, runs them in real workspaces, keeps you in control of permissions, and lets KalVoice turn your voice into prompts and KalCode commands.",
     "homepage": "https://kalcoded.com",
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
     "windows": {

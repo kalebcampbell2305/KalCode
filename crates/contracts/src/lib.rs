@@ -12,5 +12,6 @@ pub mod agent;
 pub mod app;
 pub mod events;
 pub mod ids;
+pub mod kalvoice;
 pub mod permissions;
 pub mod threads;

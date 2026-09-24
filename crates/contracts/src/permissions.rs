@@ -1,5 +1,6 @@
-//! Permission contract (enforced from Z4). See docs/PERMISSIONS.md. JARVIS, agents,
-//! automations and plugins are all subject to these rules.
+//! Permission contract (enforced from Z4). See docs/PERMISSIONS.md. KalVoice, agents,
+//! automations and plugins are all subject to these rules. Every permission mode is available on
+//! every plan.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;

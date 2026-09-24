@@ -1,5 +1,6 @@
 import type { SurfaceFlag, SurfaceId } from "@kalcode/protocol";
 import {
+  AudioLines,
   Blocks,
   Bot,
   BrainCircuit,
@@ -33,12 +34,13 @@ export const SURFACES: Record<SurfaceId, SurfaceMeta> = {
     icon: LayoutDashboard,
     summary: "What's running, who is doing it, and what needs your approval.",
   },
-  jarvis: {
-    id: "jarvis",
-    label: "JARVIS",
-    icon: Sparkles,
-    summary: "Talk to JARVIS and let it coordinate providers, threads and missions for you — inside your permissions.",
-    dependsOn: "Threads, permissions and missions",
+  kalvoice: {
+    id: "kalvoice",
+    label: "KalVoice",
+    icon: AudioLines,
+    summary:
+      "Dictate prompts into any input and run KalCode by voice or text. Dictation runs on your computer; reasoning uses your own connected provider.",
+    dependsOn: "Local speech recognition and the thread runtime",
   },
   code: {
     id: "code",
@@ -114,7 +116,7 @@ export const SURFACES: Record<SurfaceId, SurfaceMeta> = {
 /** Navigation order within the sidebar. Settings is pinned to the bottom separately. */
 export const PRIMARY_ORDER: readonly SurfaceId[] = [
   "dashboard",
-  "jarvis",
+  "kalvoice",
   "code",
   "threads",
   "agents",

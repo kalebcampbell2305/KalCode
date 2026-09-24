@@ -4,7 +4,8 @@
 
 KalCode is a desktop application that connects the AI coding providers you already use
 (Claude Code, Codex, Gemini CLI), runs them in real workspaces, keeps you in control of what
-every agent may do, and lets JARVIS — the intelligence inside KalCode — coordinate the work.
+every agent may do, and lets KalVoice — the coding assistant and voice layer inside KalCode —
+take dictation and run KalCode for you. Model inference runs on your own provider accounts.
 Website: https://kalcoded.com
 
 > Status: private development. Campaign **Z0 — Foundation**. See `docs/campaigns/Z0.md`.
