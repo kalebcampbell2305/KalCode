@@ -75,7 +75,7 @@ test.describe("KalVoice commands", () => {
     await open(page);
     await ask(page, "Go to settings");
     await expect(page.getByRole("heading", { level: 1, name: "Settings" })).toBeVisible();
-    const panel = assistant(page);
+    const _panel = assistant(page);
     await expect(shown(page).getByText("Opened Settings.")).toBeVisible();
     await expect(shown(page).getByText("Used 1 of 250 · resets")).toBeVisible();
     await expect(shown(page).getByText("DONE", { exact: true })).toBeVisible();
@@ -118,9 +118,11 @@ test.describe("KalVoice commands", () => {
   test("a command that needs approval waits, then finishes", async ({ page }) => {
     await open(page, "?scenario=kalvoice-approvals");
     await ask(page, "stop all threads");
-    const panel = assistant(page);
+    const _panel = assistant(page);
     await expect(shown(page).getByText("WAITING FOR PERMISSION", { exact: true })).toBeVisible();
-    await page.evaluate(() => (window as unknown as { __kalvoiceTest: { approveAll(): void } }).__kalvoiceTest.approveAll());
+    await page.evaluate(() =>
+      (window as unknown as { __kalvoiceTest: { approveAll(): void } }).__kalvoiceTest.approveAll(),
+    );
     await expect(shown(page).getByText("Done: the approved command ran (test double).")).toBeVisible();
   });
 });
@@ -185,7 +187,9 @@ test.describe("KalVoice dictation (fake recognizer)", () => {
     await holdDictation(page);
     await releaseDictation(page);
     const panel = assistant(page);
-    await expect(shown(page).getByText("Download a speech model in Settings, KalVoice, to use dictation.")).toBeVisible();
+    await expect(
+      shown(page).getByText("Download a speech model in Settings, KalVoice, to use dictation."),
+    ).toBeVisible();
     await panel.getByRole("button", { name: "Open KalVoice settings" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "Settings" })).toBeVisible();
   });
@@ -221,7 +225,9 @@ test.describe("KalVoice command shortcut", () => {
 
   test("the shortcut reopens a closed assistant", async ({ page }) => {
     await open(page);
-    await assistant(page).getByRole("button", { name: /Close the assistant/ }).click();
+    await assistant(page)
+      .getByRole("button", { name: /Close the assistant/ })
+      .click();
     await expect(assistant(page)).toHaveCount(0);
     await page.keyboard.press(`${MOD}+Shift+K`);
     await expect(assistant(page).getByRole("textbox", { name: "Request for KalVoice" })).toBeFocused();
@@ -256,7 +262,9 @@ test.describe("KalVoice floating assistant", () => {
     await expect(assistant(page)).toHaveAttribute("data-anchor", "top_left");
 
     // The placement survives the assistant closing and reopening.
-    await assistant(page).getByRole("button", { name: /Close the assistant/ }).click();
+    await assistant(page)
+      .getByRole("button", { name: /Close the assistant/ })
+      .click();
     await page.keyboard.press(`${MOD}+Shift+K`);
     await expect(assistant(page)).toHaveAttribute("data-anchor", "top_left");
   });

@@ -101,7 +101,9 @@ for (const theme of ["dark", "light"] as const) {
     await ask(page, "stop all threads");
     await expect(phase(page, "WAITING FOR PERMISSION")).toBeVisible();
     await panelShot(page, `waiting-for-permission-${theme}`);
-    await assistant(page).getByRole("button", { name: /Close the assistant/ }).click();
+    await assistant(page)
+      .getByRole("button", { name: /Close the assistant/ })
+      .click();
 
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     await page.locator("#kalvoice").scrollIntoViewIfNeeded();
