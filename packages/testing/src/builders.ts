@@ -423,5 +423,6 @@ export type Fixtures = ReturnType<typeof createFixtures>;
 function defaultSource(type: EventType): EventSource {
   if (type.startsWith("provider.") || type.startsWith("agent.") || type.startsWith("tool.")) return "provider";
   if (type === "settings.changed") return "ui";
+  if (type.startsWith("kalvoice.")) return "kalvoice";
   return "core";
 }

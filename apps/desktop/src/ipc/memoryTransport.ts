@@ -29,7 +29,6 @@ import type {
   SettingsPatch,
   SurfaceFlag,
 } from "@kalcode/protocol";
-import { detectFake, type ProviderScenario, providerCatalog } from "./memoryProviders.ts";
 import {
   createDashboardFixtures,
   type DashboardControls,
@@ -38,6 +37,7 @@ import {
   type EmitOptions,
   isDashboardScenario,
 } from "./memory/dashboard.ts";
+import { detectFake, type ProviderScenario, providerCatalog } from "./memoryProviders.ts";
 import type { CommandName, Transport } from "./transport.ts";
 
 export type MemoryScenario = "default" | "startup-error" | "keychain-failure" | ProviderScenario | DashboardScenario;

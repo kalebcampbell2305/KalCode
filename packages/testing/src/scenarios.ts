@@ -111,6 +111,36 @@ export function samplePayloads(fx: Fixtures = createFixtures()): {
     "approval.denied": { type: "approval.denied", payload: { requestId, threadId } },
     "approval.expired": { type: "approval.expired", payload: { requestId, threadId } },
     "permission.mode_changed": { type: "permission.mode_changed", payload: { threadId, from: "approve", to: "plan" } },
+    "kalvoice.dictation_started": { type: "kalvoice.dictation_started", payload: { sessionId: requestId } },
+    "kalvoice.dictation_completed": {
+      type: "kalvoice.dictation_completed",
+      payload: { sessionId: requestId, durationMs: 2_400, characters: 64 },
+    },
+    "kalvoice.dictation_failed": {
+      type: "kalvoice.dictation_failed",
+      payload: { sessionId: requestId, code: "microphone_unavailable" },
+    },
+    "kalvoice.request_started": { type: "kalvoice.request_started", payload: { requestId, input: "voice" } },
+    "kalvoice.command_recognized": {
+      type: "kalvoice.command_recognized",
+      payload: { requestId, intent: "create_threads" },
+    },
+    "kalvoice.command_executed": {
+      type: "kalvoice.command_executed",
+      payload: { requestId, intent: "create_threads" },
+    },
+    "kalvoice.request_completed": { type: "kalvoice.request_completed", payload: { requestId } },
+    "kalvoice.request_failed": { type: "kalvoice.request_failed", payload: { requestId, code: "needs_provider" } },
+    "kalvoice.limit_reached": {
+      type: "kalvoice.limit_reached",
+      payload: { allowance: 250, resetsAt: fx.clock.offset(86_400_000) },
+    },
+    "kalvoice.provider_selected": {
+      type: "kalvoice.provider_selected",
+      payload: { intelligence: { kind: "provider", providerId: "claude-code" }, scope: "global" },
+    },
+    "kalvoice.voice_output_started": { type: "kalvoice.voice_output_started", payload: { requestId } },
+    "kalvoice.voice_output_completed": { type: "kalvoice.voice_output_completed", payload: { requestId } },
     unrecognized: { type: "unrecognized", payload: { originalType: "future.event", originalVersion: 2 } },
   };
 }
