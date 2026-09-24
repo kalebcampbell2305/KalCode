@@ -115,7 +115,7 @@ export function createMemoryWorkspaces({ emit, requireCore, preload = false }: M
   let activeWorkspaceId: string | null = null;
   const pickQueue: PickedFolder[] = [];
   const defaultPicks = ["kalcode-site", "api-server", "design-notes"];
-  let clock = Date.now() - 3_600_000;
+  let clock = Date.now() - 120_000;
   const now = () => new Date((clock += 1000)).toISOString();
 
   const folderPath = (name: string) => `${HOME}\\Projects\\${name}`;

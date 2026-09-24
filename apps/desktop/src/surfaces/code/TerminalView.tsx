@@ -209,6 +209,8 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme }: 
     if (!term) return;
     term.options.disableStdin = !running;
     term.options.cursorBlink = running;
+    // An ended shell has no cursor; showing one suggests it still accepts input.
+    if (!running) term.write("[?25l");
   }, [running]);
 
   useEffect(() => {

@@ -22,7 +22,11 @@ import { WorkspaceMenuContent } from "./WorkspaceMenu.tsx";
 
 /** The Code surface: the active workspace and its terminals. */
 export function CodePage() {
-  const { state, error, active, retry } = useWorkspaces();
+  const { state, error, active, retry, refresh } = useWorkspaces();
+  // Folder availability can change outside KalCode; re-read it whenever Code is shown.
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
 
   if (state === "loading") {
     return (

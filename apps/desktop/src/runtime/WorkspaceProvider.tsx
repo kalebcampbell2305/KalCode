@@ -35,6 +35,8 @@ export interface WorkspaceValue {
   /** Last measured terminal size, used to start new shells at the right size. */
   lastSize: React.RefObject<TerminalSize>;
   retry: () => void;
+  /** Re-reads workspaces and terminals (folder availability changes without events). */
+  refresh: () => Promise<void>;
   openFolder: () => Promise<Workspace | null>;
   activate: (workspaceId: string) => Promise<boolean>;
   remove: (workspace: Workspace) => Promise<boolean>;
@@ -122,6 +124,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       cancelled = true;
     };
   }, [client, load, attempt]);
+
+  // Folders can be moved or deleted while KalCode is in the background.
+  useEffect(() => {
+    const onFocus = () => void refresh();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [refresh]);
 
   // Live updates: refresh once per burst of workspace/shell events.
   useEffect(() => {
@@ -278,6 +287,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       picking,
       lastSize,
       retry,
+      refresh,
       openFolder,
       activate,
       remove,
@@ -296,6 +306,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       activeTerminalId,
       picking,
       retry,
+      refresh,
       openFolder,
       activate,
       remove,

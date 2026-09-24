@@ -11,6 +11,7 @@ export function Dashboard() {
     <Page title="Dashboard" description="Everything running in KalCode, as it happens.">
       <div className={styles.layout}>
         <div className={styles.primary}>
+          <TerminalsSection />
           <Section id="threads" title="Threads">
             <EmptyState art={<ConstellationArt />} title="No threads yet" className={styles.threadsEmpty}>
               <p>
@@ -20,7 +21,6 @@ export function Dashboard() {
               <p>Threads arrive with provider connections in an upcoming build.</p>
             </EmptyState>
           </Section>
-          <TerminalsSection />
           <ActivityFeed />
         </div>
         <aside className={styles.aside} aria-label="Runtime health">
