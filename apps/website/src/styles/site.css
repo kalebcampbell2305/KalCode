@@ -309,13 +309,13 @@ a:hover {
 }
 
 .lettering--kalcode-wordmark {
-  aspect-ratio: 899 / 82;
+  aspect-ratio: 687 / 69;
   -webkit-mask-image: url("/assets/brand/kalcode-wordmark.png");
   mask-image: url("/assets/brand/kalcode-wordmark.png");
 }
 
 .lettering--kalcode-tagline {
-  aspect-ratio: 658 / 30;
+  aspect-ratio: 645 / 21;
   -webkit-mask-image: url("/assets/brand/kalcode-tagline.png");
   mask-image: url("/assets/brand/kalcode-tagline.png");
 }
@@ -655,9 +655,7 @@ a:hover {
   position: relative;
   order: -1;
   justify-self: center;
-  width: min(82%, 24rem);
-  aspect-ratio: 1;
-  margin-block: calc(-1 * var(--space-4)) calc(-1 * var(--space-6));
+  width: min(100%, 30rem);
 }
 
 @media (min-width: 60rem) {
@@ -668,19 +666,35 @@ a:hover {
 
   .hero__visual {
     order: 0;
-    margin-block: 0;
     grid-column: 2;
     grid-row: 1;
-    width: 118%;
-    max-width: 44rem;
+    width: 100%;
+    max-width: 36rem;
     justify-self: end;
-    margin-right: -9%;
   }
 
   .hero__copy {
     grid-column: 1;
     grid-row: 1;
   }
+}
+
+/* A full brand board: the owner's poster, framed on its own dark ground in both themes. */
+.brand-board {
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in oklab, #5b8cff 26%, transparent);
+  border-radius: var(--radius-xl);
+  background: #000001;
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 0.4),
+    0 24px 80px -24px color-mix(in oklab, #2f6bff 45%, transparent);
+}
+
+.brand-board img {
+  display: block;
+  width: 100%;
+  height: auto;
 }
 
 /* The globe: masked so its square crop dissolves into Space with no visible edge. */
@@ -1149,8 +1163,7 @@ a:hover {
 }
 
 .kalvoice__visual {
-  width: min(100%, 22rem);
-  aspect-ratio: 1;
+  width: min(100%, 28rem);
   justify-self: center;
 }
 

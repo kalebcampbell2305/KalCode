@@ -181,7 +181,7 @@ function About() {
           sizes="10rem"
           width={362}
           height={362}
-          alt="KalCode constellation globe with a K formed by connected points of light"
+          alt="The KalCode globe with a terminal prompt, orbited by connected points of light"
           className={styles.aboutGlobe}
         />
         <figcaption className={styles.aboutText}>

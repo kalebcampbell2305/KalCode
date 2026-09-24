@@ -2,7 +2,7 @@
 import { PLANS, formatInterval, formatKalVoiceAllowance, formatPrice } from "@kalcode/protocol/plans";
 import DashboardPreview from "../components/DashboardPreview.astro";
 import EarlyAccessForm from "../components/EarlyAccessForm.astro";
-import Globe from "../components/Globe.astro";
+import BrandBoard from "../components/BrandBoard.astro";
 import Shortcut from "../components/Shortcut.astro";
 import Base from "../layouts/Base.astro";
 import { KALVOICE, getPage } from "../lib/site";
@@ -70,11 +70,11 @@ const principles = [
         </div>
       </div>
       <div class="hero__visual">
-        <Globe
-          variant="kalcode"
-          hero
-          alt="KalCode constellation globe with a K formed by connected points of light"
-          sizes="(min-width: 60rem) min(44rem, 50vw), min(calc(100vw - 2rem), 26rem)"
+        <BrandBoard
+          board="kalcode"
+          priority
+          alt="The KalCode brand board: a glowing globe with a terminal prompt, orbited by connected points labelled IDE, AI, Build, Code, Terminal and Deploy, above the KalCode name and the line One intelligence. A brighter tomorrow."
+          sizes="(min-width: 60rem) min(36rem, 44vw), min(calc(100vw - 2rem), 30rem)"
         />
       </div>
     </div>
@@ -115,10 +115,10 @@ const principles = [
 
       <section class="kalvoice" id="kalvoice" aria-labelledby="kalvoice-title">
         <div class="kalvoice__visual">
-          <Globe
-            variant="kalvoice"
-            alt={KALVOICE.globeAlt}
-            sizes="(min-width: 56rem) 28rem, min(calc(100vw - 2rem), 22rem)"
+          <BrandBoard
+            board="kalvoice"
+            alt="The KalVoice brand board: a glowing orb of points of light carrying a sound wave, above the KalVoice name and the line Human voice. Brighter possibilities."
+            sizes="(min-width: 56rem) 28rem, min(calc(100vw - 2rem), 26rem)"
           />
         </div>
         <div class="kalvoice__copy">
