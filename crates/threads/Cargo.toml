@@ -1,0 +1,26 @@
+[package]
+name = "kalcode-threads"
+description = "KalCode thread runtime: persistent units of AI work driven through the provider contract, with permission gating, persistence and crash recovery (campaign Z3)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "kalcode_threads"
+
+[dependencies]
+kalcode-contracts = { path = "../contracts" }
+kalcode-native-core = { path = "../native-core" }
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+ts-rs = { version = "12", features = ["serde-json-impl", "uuid-impl"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

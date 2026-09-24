@@ -14,17 +14,21 @@ fn config(dir: &std::path::Path) -> CoreConfig {
     }
 }
 
-/// A hypothetical next migration used to exercise the upgrade path end to end.
-const TEST_V2: Migration = Migration {
-    version: 2,
-    name: "test_workspaces",
-    sql: "CREATE TABLE workspaces (id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL) STRICT;
-          ALTER TABLE events ADD COLUMN test_marker TEXT;",
-};
+/// Version of a hypothetical migration after every migration this build ships.
+fn next_version() -> i64 {
+    MIGRATIONS.len() as i64 + 1
+}
 
+/// This build's migrations plus a hypothetical next one, to exercise the upgrade path end to
+/// end independently of how many migrations exist.
 fn v1_plus_v2() -> Vec<Migration> {
     let mut all = MIGRATIONS.to_vec();
-    all.push(TEST_V2);
+    all.push(Migration {
+        version: next_version(),
+        name: "test_next",
+        sql: "CREATE TABLE test_next (id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL) STRICT;
+              ALTER TABLE events ADD COLUMN test_marker TEXT;",
+    });
     all
 }
 
@@ -100,7 +104,8 @@ fn unclean_exit_is_detected_on_next_start() {
 fn upgrade_from_v1_keeps_data_and_writes_backup() {
     let dir = tempfile::tempdir().expect("tempdir");
     {
-        let core = Core::open(config(dir.path())).expect("v1 open");
+        let core =
+            Core::open_with_migrations(config(dir.path()), &MIGRATIONS[..1]).expect("v1 open");
         core.update_settings(&SettingsPatch {
             theme: Some(ThemePreference::Dark),
             ..Default::default()
@@ -130,12 +135,12 @@ fn upgrade_from_v1_keeps_data_and_writes_backup() {
         .find_map(|e| match e.event {
             EventPayload::DatabaseMigrated {
                 from_version: 1,
-                to_version: 2,
+                to_version,
                 backup_created,
-            } => Some(backup_created),
+            } if to_version == next_version() => Some(backup_created),
             _ => None,
         })
-        .expect("database.migrated 1 -> 2");
+        .expect("database.migrated 1 -> next");
     assert!(migrated);
 
     // Backup file exists and is a valid v1 database with the pre-upgrade data.
@@ -156,7 +161,7 @@ fn upgrade_from_v1_keeps_data_and_writes_backup() {
     assert_eq!(theme, "\"dark\"");
 
     let diagnostics = core.diagnostics().expect("diagnostics");
-    assert_eq!(diagnostics.database.schema_version, 2);
+    assert_eq!(diagnostics.database.schema_version, next_version());
     assert_eq!(diagnostics.database.journal_mode.to_lowercase(), "wal");
 }
 
@@ -177,7 +182,7 @@ fn newer_schema_is_refused_without_changes() {
     let conn = rusqlite::Connection::open(dir.path().join("kalcode.db")).expect("reopen");
     assert_eq!(
         db::schema_version(&conn).expect("version"),
-        2,
+        next_version(),
         "database untouched"
     );
 }
@@ -187,10 +192,11 @@ fn edited_migration_is_detected() {
     let dir = tempfile::tempdir().expect("tempdir");
     Core::open(config(dir.path())).expect("open").shutdown();
 
-    let tampered = [Migration {
+    let mut tampered = MIGRATIONS.to_vec();
+    tampered[0] = Migration {
         sql: "CREATE TABLE something_else (x INTEGER);",
         ..MIGRATIONS[0]
-    }];
+    };
     let err = match Core::open_with_migrations(config(dir.path()), &tampered) {
         Ok(_) => panic!("checksum mismatch must be refused"),
         Err(err) => err,

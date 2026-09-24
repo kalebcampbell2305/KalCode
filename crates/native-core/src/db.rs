@@ -22,11 +22,23 @@ pub struct Migration {
 }
 
 /// All migrations shipped with this build, in order.
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "foundation",
-    sql: include_str!("../migrations/0001_foundation.sql"),
-}];
+///
+/// INTEGRATION NOTE (Z3 branch): `0004_threads.sql` is Z3's reserved migration. Versions must
+/// be contiguous, and 0002 (Z1) / 0003 (Z2) are not on this branch yet, so it is registered
+/// here as version 2. At integration it becomes version 4, after Z1's 0002 and Z2's 0003 (see
+/// docs/AGENT_RUNTIME.md §Persistence). Databases created on this branch are development-only.
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "foundation",
+        sql: include_str!("../migrations/0001_foundation.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "threads",
+        sql: include_str!("../migrations/0004_threads.sql"),
+    },
+];
 
 /// How many pre-migration backups to keep.
 const BACKUPS_RETAINED: usize = 5;
