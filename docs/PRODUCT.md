@@ -33,7 +33,7 @@ Open KalCode → connect Claude / Codex / Gemini → open a project → run seve
 | **KalVoice** | The coding assistant and voice interface inside KalCode: dictation and command mode. |
 
 KalVoice line: **"Speak your prompts. Control your workspace. Coordinate your coding agents."**
-KalCode tagline (brand artwork): **"Code a brighter tomorrow."**
+KalCode tagline (brand board): **"One intelligence. A brighter tomorrow."**
 
 KalCode is independent of any of the owner's private projects. No private code, data or branding
 enters this repository (enforced by `tooling/check-branding.mjs`).

@@ -4,7 +4,7 @@ import Docs from "../../layouts/Docs.astro";
 <Docs
   path="/docs/providers"
   heading="Providers"
-  lead="KalCode works with the AI coding tools you already use. Connecting them is free on every plan."
+  lead="KalCode works with the AI coding tools you already use, on your own accounts. Connecting them is free on every plan."
 >
   <h2>Supported providers</h2>
   <p>The first providers KalCode is being built to connect:</p>
@@ -22,11 +22,14 @@ import Docs from "../../layouts/Docs.astro";
   <p>
     KalCode uses only legitimate, documented integration methods: an authenticated local CLI,
     documented sign-in flows, API keys you provide, or enterprise credentials. It never scrapes
-    browser credentials, copies hidden tokens, or reverse-engineers private authentication.
+    browser credentials, copies hidden session credentials, or reverse-engineers private
+    authentication.
   </p>
   <p>
     Your usage of each provider is billed by that provider under your account, exactly as it is when
-    you use it directly. KalCode does not resell provider access.
+    you use it directly. KalCode does not charge for, resell or meter provider usage, holds no
+    company provider credentials for your use, and has no KalCode-paid fallback. The same applies
+    to KalVoice: requests that need reasoning run on the provider you choose.
   </p>
 
   <h2>Detection</h2>
@@ -48,6 +51,6 @@ import Docs from "../../layouts/Docs.astro";
   <p>
     Provider-specific details are translated at the adapter boundary into KalCode's own concepts:
     normalized events, statuses, approval requests and capabilities. That is what lets the Dashboard,
-    the permission model and JARVIS treat every provider the same way.
+    the permission model and KalVoice treat every provider the same way.
   </p>
 </Docs>

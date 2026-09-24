@@ -1,17 +1,40 @@
 ---
+import { PLANS, formatKalVoiceAllowance } from "@kalcode/protocol/plans";
 import PageHead from "../components/PageHead.astro";
 import Base from "../layouts/Base.astro";
 import { getPage } from "../lib/site";
 
 const page = getPage("/changelog");
+const allowances = PLANS.map((plan) => `${plan.name} ${formatKalVoiceAllowance(plan.limits)}`).join(", ");
 ---
 <Base title={page.title} description={page.description} path={page.path}>
   <PageHead
     title="Changelog"
-    lead="Development milestones for KalCode. Entries marked as development builds have not been publicly released."
+    lead="Development milestones and announcements for KalCode. Entries marked as development builds or in development have not been publicly released."
   />
   <section class="section" aria-label="Releases">
     <div class="container">
+      <article class="release" aria-labelledby="release-kalvoice">
+        <div class="release__meta">
+          <h2 class="release__version" id="release-kalvoice">KalVoice and your own providers</h2>
+          <p><time datetime="2026-09-24">September 24, 2026</time></p>
+          <p>Announcement · in development</p>
+        </div>
+        <div class="prose">
+          <p>
+            KalVoice is the coding assistant and voice layer built into KalCode: speak your prompts,
+            control your workspace, and coordinate your coding agents. It is in development and not
+            part of any build yet.
+          </p>
+          <ul>
+            <li><strong>Dictation.</strong> Hold a shortcut, speak, and the text is typed into the focused input: a Claude Code, Codex or Gemini CLI thread, a terminal, or a search box. Speech recognition runs on your device; audio is not stored or uploaded. Unlimited on every plan.</li>
+            <li><strong>Command mode.</strong> Press a second shortcut and speak or type a request such as “Open four Codex threads”. Structured commands run without any model; reasoning uses the provider you connected.</li>
+            <li><strong>Bring your own provider.</strong> Claude Code, Codex and Gemini CLI run on your own accounts. KalCode does not charge for, resell or meter provider usage, and there is no KalCode-paid fallback.</li>
+            <li><strong>Plan allowances.</strong> Plans now include KalVoice Requests each month ({allowances}). Every plan includes all provider connections, all permission modes and unlimited local dictation.</li>
+          </ul>
+          <p>Read more in the <a href="/docs/kalvoice">KalVoice docs</a> and on the <a href="/pricing">pricing page</a>.</p>
+        </div>
+      </article>
       <article class="release" aria-labelledby="release-0-1-0">
         <div class="release__meta">
           <h2 class="release__version" id="release-0-1-0">0.1.0 — Foundation</h2>
@@ -29,7 +52,7 @@ const page = getPage("/changelog");
             <li><strong>Typed event protocol.</strong> Every state change is a structured event, shared as generated types between the native runtime and the interface.</li>
             <li><strong>Structured logging.</strong> Local JSON logs with rotation and a redaction pass for credentials.</li>
             <li><strong>OS keychain secret storage.</strong> Credentials stored in the operating system's credential store, never in the database or logs.</li>
-            <li><strong>Design system.</strong> Shared tokens, typography and brand assets for the app and this website, in light and dark themes.</li>
+            <li><strong>Design system.</strong> Shared colours, typography and brand assets for the app and this website, in light and dark themes.</li>
             <li><strong>This website.</strong> kalcoded.com, with early-access registration.</li>
           </ul>
         </div>

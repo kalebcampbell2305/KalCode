@@ -1,13 +1,17 @@
 import type { CSSProperties } from "react";
 import mark64Url from "../assets/brand/kalcode-mark-64.png";
 import mark128Url from "../assets/brand/kalcode-mark-128.png";
+import mark256Url from "../assets/brand/kalcode-mark-256.png";
 import kalcodeTaglineUrl from "../assets/brand/kalcode-tagline.png";
 import kalcodeWordmarkUrl from "../assets/brand/kalcode-wordmark.png";
+import voiceMark64Url from "../assets/brand/kalvoice-mark-64.png";
+import voiceMark128Url from "../assets/brand/kalvoice-mark-128.png";
+import voiceMark256Url from "../assets/brand/kalvoice-mark-256.png";
 import styles from "./Brand.module.css";
 
 /*
- * All brand imagery comes from the owner's artwork (packages/ui/src/brand/masters), derived by
- * tooling/generate-brand-assets.py. Lettering is the artwork's own pixels used as an alpha
+ * All brand imagery comes from the owner's brand boards (packages/ui/src/brand/masters), derived
+ * by tooling/generate-brand-assets.py. Lettering is the artwork's own pixels used as an alpha
  * mask, so it takes the current text color in light and dark themes.
  */
 
@@ -28,24 +32,68 @@ function Lettering({ url, label, ratio, className }: LetteringProps & { url: str
 
 /** The KALCODE wordmark from the brand artwork. */
 export function Wordmark({ className }: LetteringProps) {
-  return <Lettering url={kalcodeWordmarkUrl} label="KalCode" ratio="899 / 82" className={className} />;
+  return <Lettering url={kalcodeWordmarkUrl} label="KalCode" ratio="687 / 69" className={className} />;
 }
 
-/** "Code a brighter tomorrow", from the brand artwork. */
+/** "One intelligence. A brighter tomorrow.", from the KalCode board. */
 export function KalCodeTagline({ className }: LetteringProps) {
-  return <Lettering url={kalcodeTaglineUrl} label="Code a brighter tomorrow" ratio="658 / 30" className={className} />;
+  return (
+    <Lettering
+      url={kalcodeTaglineUrl}
+      label="One intelligence. A brighter tomorrow."
+      ratio="645 / 21"
+      className={className}
+    />
+  );
 }
 
-/** The constellation globe from the brand artwork, cut to a circle. `size` in CSS px. */
-export function Mark({ size = 28, className }: { size?: number; className?: string }) {
+function markSource(size: number, urls: readonly [string, string, string]): string {
+  // Sources are 2x the largest CSS size they serve, so marks stay sharp on high-DPI displays.
+  if (size <= 32) return urls[0];
+  if (size <= 64) return urls[1];
+  return urls[2];
+}
+
+interface MarkProps {
+  /** CSS px. */
+  size?: number;
+  className?: string;
+}
+
+/** The KalCode symbol (terminal globe) isolated from the KalCode board. Decorative. */
+export function Mark({ size = 28, className }: MarkProps) {
   return (
     <img
-      src={size <= 32 ? mark64Url : mark128Url}
+      src={markSource(size, [mark64Url, mark128Url, mark256Url])}
       width={size}
       height={size}
       alt=""
       className={className}
       draggable={false}
     />
+  );
+}
+
+/** The KalVoice orb isolated from the KalVoice board. Decorative. */
+export function KalVoiceMark({ size = 28, className }: MarkProps) {
+  return (
+    <img
+      src={markSource(size, [voiceMark64Url, voiceMark128Url, voiceMark256Url])}
+      width={size}
+      height={size}
+      alt=""
+      className={className}
+      draggable={false}
+    />
+  );
+}
+
+/** Symbol and wordmark side by side, for standalone screens (startup, errors). */
+export function Lockup({ className }: { className?: string }) {
+  return (
+    <span className={[styles.lockup, className].filter(Boolean).join(" ")}>
+      <Mark size={36} />
+      <Wordmark className={styles.lockupWordmark} />
+    </span>
   );
 }
