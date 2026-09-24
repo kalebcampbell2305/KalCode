@@ -1,12 +1,16 @@
 import type {
+  ApprovalDecision,
+  ApprovalRequest,
   BootState,
   Diagnostics,
   EventEnvelope,
   SecureStoreCheck,
   Settings,
   SettingsPatch,
+  ThreadSummary,
 } from "@kalcode/protocol";
 import { toKalCodeError } from "./errors.ts";
+import type { TerminalInfo } from "./pendingContracts.ts";
 import type { CommandName, NativeTheme, Transport, Unsubscribe } from "./transport.ts";
 
 /** Maximum page size accepted by `events_recent` (mirrors the native limit). */
@@ -20,7 +24,7 @@ export class KalCodeClient {
     try {
       return await this.transport.invoke<T>(command, args);
     } catch (error) {
-      throw toKalCodeError(error);
+      throw toKalCodeError(error, command);
     }
   }
 
@@ -67,6 +71,46 @@ export class KalCodeClient {
 
   checkSecureStore(): Promise<SecureStoreCheck> {
     return this.call("secure_store_check");
+  }
+
+  // ---- Contract commands consumed by the Dashboard (docs/CONTRACTS.md) ----
+  // Implemented natively by Z3 (threads), Z4 (approvals) and Z1 (terminals). Until then they
+  // reject with `command_unavailable` (see `isCommandUnavailable`). Arguments are the top-level
+  // camelCase keys listed in the contract table.
+
+  listThreads(input: { workspaceId?: string; includeArchived?: boolean } = {}): Promise<ThreadSummary[]> {
+    return this.call("thread_list", {
+      workspaceId: input.workspaceId ?? null,
+      includeArchived: input.includeArchived ?? false,
+    });
+  }
+
+  interruptThread(threadId: string): Promise<ThreadSummary> {
+    return this.call("thread_interrupt", { threadId });
+  }
+
+  resumeThread(threadId: string): Promise<ThreadSummary> {
+    return this.call("thread_resume", { threadId });
+  }
+
+  stopThread(threadId: string): Promise<ThreadSummary> {
+    return this.call("thread_stop", { threadId });
+  }
+
+  archiveThread(threadId: string): Promise<ThreadSummary> {
+    return this.call("thread_archive", { threadId });
+  }
+
+  listApprovals(status: "pending" | null = "pending"): Promise<ApprovalRequest[]> {
+    return this.call("approval_list", { status });
+  }
+
+  decideApproval(requestId: string, decision: ApprovalDecision): Promise<ApprovalRequest> {
+    return this.call("approval_decide", { requestId, decision });
+  }
+
+  runningTerminals(): Promise<TerminalInfo[]> {
+    return this.call("terminals_running");
   }
 
   async setNativeTheme(theme: NativeTheme): Promise<void> {

@@ -1,0 +1,231 @@
+.item {
+  position: relative;
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5) var(--space-4) calc(var(--space-5) + 2px);
+  border-radius: var(--radius-sm);
+  outline-offset: -2px;
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+/* The amber rule is the request's signal: present, not loud. */
+.item::before {
+  content: "";
+  position: absolute;
+  inset: var(--space-4) auto var(--space-4) 0;
+  width: 2px;
+  border-radius: var(--radius-full);
+  background: var(--color-waiting);
+}
+
+.item + .item {
+  border-top: 1px solid var(--color-border);
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.item:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  background: var(--color-surface-hover);
+}
+
+.item[data-busy] {
+  opacity: 0.72;
+}
+
+.item[data-arrived] {
+  animation: arrive var(--dur-deliberate) var(--ease-expo) both;
+}
+
+.item[data-arrived]::before {
+  animation: signal calc(var(--dur-deliberate) * 2) var(--ease-out) both;
+}
+
+@keyframes arrive {
+  from {
+    background: var(--color-waiting-soft);
+    transform: translateY(-4px);
+  }
+  to {
+    background: transparent;
+    transform: none;
+  }
+}
+
+@keyframes signal {
+  0% {
+    box-shadow: 0 0 0 0 var(--color-waiting-soft);
+  }
+  40% {
+    box-shadow: 0 0 0 4px var(--color-waiting-soft);
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.what {
+  display: grid;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+
+.title {
+  color: var(--color-text);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-normal);
+  line-height: var(--leading-snug);
+  overflow-wrap: anywhere;
+}
+
+.kind {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.actions {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-1-5);
+}
+
+.target {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xs);
+  background: var(--color-code-bg);
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.target code {
+  font-size: var(--text-sm);
+}
+
+.context {
+  color: var(--color-text-muted);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+}
+
+.meta {
+  display: grid;
+  grid-template-columns: 1.25fr 1fr 1fr 1.5fr;
+  gap: var(--space-2) var(--space-5);
+  margin: 0;
+}
+
+.meta > div {
+  display: grid;
+  align-content: start;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+
+.meta dt {
+  color: var(--color-text-faint);
+  font-size: var(--text-xs);
+}
+
+.meta dd {
+  margin: 0;
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meta dd.sub {
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  white-space: normal;
+}
+
+.foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-6);
+}
+
+.reason {
+  flex: 1 1 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.scopes {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.when {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  color: var(--color-text-faint);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.keys {
+  display: none;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.keys kbd + kbd,
+.keys kbd {
+  margin-left: var(--space-1);
+}
+
+.item:focus .keys {
+  display: inline-flex;
+}
+
+@container approvals (max-width: 38rem) {
+  .head {
+    flex-direction: column;
+  }
+
+  .actions {
+    justify-content: flex-start;
+  }
+
+  .meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .keys {
+    display: none;
+  }
+}

@@ -1,0 +1,109 @@
+.strip {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.meter {
+  display: flex;
+  gap: 2px;
+  height: 2px;
+  border-radius: var(--radius-full);
+  background: var(--color-border);
+  overflow: hidden;
+}
+
+.meter > span {
+  flex-basis: 0;
+  min-width: 0;
+  transition: flex-grow var(--dur-slow) var(--ease-out);
+}
+
+.meter > span[data-tone="live"] {
+  background: var(--color-live);
+}
+
+.meter > span[data-tone="waiting"] {
+  background: var(--color-waiting);
+}
+
+.meter > span[data-tone="idle"] {
+  background: var(--color-idle);
+  opacity: 0.55;
+}
+
+.segments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-8);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.segment {
+  --_c: var(--color-idle);
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: calc(-1 * var(--space-1)) calc(-1 * var(--space-2));
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text);
+  text-align: left;
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.segment:hover {
+  background: var(--color-surface-hover);
+}
+
+.segment[data-tone="live"] {
+  --_c: var(--color-live);
+}
+
+.segment[data-tone="waiting"] {
+  --_c: var(--color-waiting);
+}
+
+.segment[data-tone="danger"] {
+  --_c: var(--color-danger-text);
+}
+
+.count {
+  font-family: var(--font-wide);
+  font-size: var(--text-xl);
+  font-weight: var(--weight-regular);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--tracking-tight);
+  line-height: 1;
+}
+
+.label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+}
+
+.icon {
+  width: 0.875rem;
+  height: 0.875rem;
+  color: var(--_c);
+}
+
+.segment[data-zero] .count {
+  color: var(--color-text-faint);
+}
+
+.segment[data-zero] .icon {
+  color: var(--color-text-faint);
+}
+
+.segment:not([data-zero])[data-tone="waiting"] .count,
+.segment:not([data-zero])[data-tone="danger"] .count {
+  color: var(--_c);
+}

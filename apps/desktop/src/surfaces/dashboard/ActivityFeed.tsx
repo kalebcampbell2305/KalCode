@@ -1,22 +1,26 @@
+import type { EventEnvelope } from "@kalcode/protocol";
 import { Button, ErrorState, Section, Skeleton } from "@kalcode/ui/components";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { describeEvent, formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
 import { useEvents } from "../../runtime/RuntimeProvider.tsx";
 import styles from "./ActivityFeed.module.css";
+import { useNow } from "./useNow.ts";
 
 const VISIBLE_STEP = 25;
 
-/** Re-renders periodically so relative timestamps stay accurate. */
-function useNow(intervalMs = 30_000): number {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), intervalMs);
-    return () => clearInterval(id);
-  }, [intervalMs]);
-  return now;
+/** The thread an event belongs to, from its correlation or its payload. */
+function threadIdOf(event: EventEnvelope): string | null {
+  if (event.correlation.threadId) return event.correlation.threadId;
+  const payload = event.payload as { threadId?: unknown };
+  return typeof payload.threadId === "string" ? payload.threadId : null;
 }
 
-export function ActivityFeed() {
+interface ActivityFeedProps {
+  /** Thread names by id, so thread events say which thread they are about. */
+  threadNames?: ReadonlyMap<string, string>;
+}
+
+export function ActivityFeed({ threadNames }: ActivityFeedProps = {}) {
   const { events, state, error, retry, loadOlder, reachedStart } = useEvents();
   const [visible, setVisible] = useState(VISIBLE_STEP);
   const [loadingOlder, setLoadingOlder] = useState(false);
@@ -60,11 +64,14 @@ export function ActivityFeed() {
           <ol className={styles.list} aria-live="polite" aria-relevant="additions">
             {shown.map((event) => {
               const description = describeEvent(event);
+              const threadId = threadIdOf(event);
+              const threadName = threadId ? threadNames?.get(threadId) : undefined;
               return (
                 <li key={event.seq} className={styles.row}>
                   <span className={styles.dot} data-tone={description.tone} aria-hidden="true" />
                   <span className={styles.text}>
                     <span className={styles.title}>{description.title}</span>
+                    {threadName ? <span className={styles.thread}>{threadName}</span> : null}
                     {description.detail ? <span className={styles.detail}>{description.detail}</span> : null}
                   </span>
                   <time className={styles.time} dateTime={event.occurredAt} title={formatAbsolute(event.occurredAt)}>

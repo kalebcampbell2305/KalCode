@@ -7,6 +7,11 @@
  * `?scenario=` (ui-test builds only) selects a starting state:
  *   startup-error      — the core failed to start (newer database)
  *   keychain-failure   — the credential store check fails
+ *   busy | empty | approvals-flood | errors | loading
+ *                      — Dashboard data scenarios (see ./memory/dashboard.ts)
+ *
+ * Without a Dashboard scenario the transport mirrors the current native build: commands that no
+ * campaign has registered yet are rejected exactly the way Tauri rejects them.
  */
 import type {
   AppInfo,
@@ -20,9 +25,17 @@ import type {
   SettingsPatch,
   SurfaceFlag,
 } from "@kalcode/protocol";
+import {
+  createDashboardFixtures,
+  type DashboardControls,
+  type DashboardHandlers,
+  type DashboardScenario,
+  type EmitOptions,
+  isDashboardScenario,
+} from "./memory/dashboard.ts";
 import type { CommandName, Transport } from "./transport.ts";
 
-export type MemoryScenario = "default" | "startup-error" | "keychain-failure";
+export type MemoryScenario = "default" | "startup-error" | "keychain-failure" | DashboardScenario;
 
 const SURFACES: SurfaceFlag["id"][] = [
   "dashboard",
@@ -60,6 +73,8 @@ function fail(error: IpcError): never {
 export interface MemoryTransport extends Transport {
   /** Test hook: number of live subscribers. */
   subscriberCount(): number;
+  /** Test hooks for Dashboard scenarios (null in scenarios without Dashboard data). */
+  readonly dashboard: DashboardControls | null;
 }
 
 export function createMemoryTransport(scenario: MemoryScenario = readScenario()): MemoryTransport {
@@ -83,14 +98,21 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
   const subscribers = new Set<(event: EventEnvelope) => void>();
   let lastCheck: { at: string; ok: boolean; backend: string } | null = null;
 
-  const emit = (event: EventPayload) => {
+  const emit = (event: EventPayload, options: EmitOptions = {}) => {
     const envelope = {
       id: crypto.randomUUID(),
       seq: events.length + 1,
       version: 1,
-      occurredAt: new Date().toISOString(),
+      occurredAt: options.occurredAt ?? new Date().toISOString(),
       source: "core",
-      correlation: { workspaceId: null, threadId: null, missionId: null, providerId: null, requestId: null },
+      correlation: {
+        workspaceId: null,
+        threadId: null,
+        missionId: null,
+        providerId: null,
+        requestId: null,
+        ...options.correlation,
+      },
       ...event,
     } as EventEnvelope;
     events.push(envelope);
@@ -113,19 +135,28 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
         }
       : null;
 
+  const dashboard = isDashboardScenario(scenario) ? createDashboardFixtures(scenario, emit, startedAt) : null;
+  // Dashboard scenarios simulate a session that has been running for a while.
+  const sessionStartMs = startedAt - (dashboard?.sessionAgeMs ?? 0);
+  const sessionStart = dashboard ? { occurredAt: new Date(sessionStartMs).toISOString() } : {};
+
   if (!startupError) {
-    emit({ type: "database.migrated", payload: { fromVersion: 0, toVersion: 1, backupCreated: false } });
-    emit({
-      type: "app.started",
-      payload: { version: info.version, channel: info.channel, platform: info.platform, arch: info.arch },
-    });
+    emit({ type: "database.migrated", payload: { fromVersion: 0, toVersion: 1, backupCreated: false } }, sessionStart);
+    emit(
+      {
+        type: "app.started",
+        payload: { version: info.version, channel: info.channel, platform: info.platform, arch: info.arch },
+      },
+      sessionStart,
+    );
+    dashboard?.seedHistory();
   }
 
   const requireCore = () => {
     if (startupError) fail(startupError);
   };
 
-  const handlers: Record<CommandName, (args: Record<string, unknown>) => unknown> = {
+  const handlers: DashboardHandlers = {
     boot: (): BootState => ({ info, startupError }),
     window_ready: () => undefined,
     settings_get: () => {
@@ -192,8 +223,8 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
         generatedAt: new Date().toISOString(),
         app: info,
         os: { family: "windows", version: "10.0.26200", arch: "x86_64" },
-        uptimeMs: Date.now() - startedAt,
-        startedAt: new Date(startedAt).toISOString(),
+        uptimeMs: Date.now() - sessionStartMs,
+        startedAt: new Date(sessionStartMs).toISOString(),
         database: {
           schemaVersion: 1,
           latestSchemaVersion: 1,
@@ -231,13 +262,22 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
           : "Your system credential store refused access. Check that it's unlocked, then run the check again.",
       };
     },
+    ...dashboard?.handlers,
   };
+
+  // Playwright drives live Dashboard changes (e.g. an approval arriving) through this hook.
+  if (dashboard && typeof window !== "undefined") {
+    (window as unknown as { __kalcodeMemory?: unknown }).__kalcodeMemory = { dashboard: dashboard.controls };
+  }
 
   return {
     kind: "memory",
     async invoke<T>(command: CommandName, args: Record<string, unknown> = {}): Promise<T> {
       await Promise.resolve();
-      return handlers[command](args) as T;
+      const handler = handlers[command];
+      // Like Tauri with an app manifest: a command this build doesn't register never runs.
+      if (!handler) throw `Command ${command} not allowed by ACL`;
+      return (await handler(args)) as T;
     },
     async subscribe(onEvent) {
       requireCore();
@@ -248,11 +288,13 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
     },
     async setNativeTheme() {},
     subscriberCount: () => subscribers.size,
+    dashboard: dashboard?.controls ?? null,
   };
 }
 
 function readScenario(): MemoryScenario {
   if (typeof location === "undefined") return "default";
   const value = new URLSearchParams(location.search).get("scenario");
-  return value === "startup-error" || value === "keychain-failure" ? value : "default";
+  if (value === "startup-error" || value === "keychain-failure" || isDashboardScenario(value)) return value;
+  return "default";
 }
