@@ -55,6 +55,9 @@ pub struct SpawnSpec {
     pub args: Vec<String>,
     pub cwd: PathBuf,
     pub env: Vec<(String, String)>,
+    /// Variables removed from the inherited environment (KalCode's own settings and test hooks
+    /// must not leak into the user's shell).
+    pub env_remove: Vec<String>,
     pub size: TerminalSize,
 }
 
@@ -123,6 +126,9 @@ impl PtySession {
         let mut command = CommandBuilder::new(&spec.program);
         command.args(&spec.args);
         command.cwd(&spec.cwd);
+        for key in &spec.env_remove {
+            command.env_remove(key);
+        }
         for (key, value) in &spec.env {
             command.env(key, value);
         }
@@ -195,12 +201,14 @@ impl PtySession {
 
     /// Replays the scrollback to `listener`, then streams new output to it. Replay and
     /// registration happen under one lock, so no output is lost or duplicated between them.
-    /// The listener returns `false` to detach itself (e.g. its channel closed).
+    /// The first call to `listener` is always the replay (empty when there is no output yet),
+    /// so a view can tell history from live output. The listener returns `false` to detach
+    /// itself (e.g. its channel closed).
     pub fn attach(&self, listener: impl Fn(&[u8]) -> bool + Send + Sync + 'static) -> AttachId {
         let id = self.inner.next_attach.fetch_add(1, Ordering::Relaxed);
         let mut shared = lock(&self.inner.shared);
         let replay = shared.scrollback.contents();
-        if replay.is_empty() || listener(&replay) {
+        if listener(&replay) {
             shared.listeners.insert(id, Box::new(listener));
         }
         id
@@ -248,8 +256,7 @@ fn read_loop(mut reader: Box<dyn Read + Send>, inner: &Inner) {
                 let mut shared = lock(&inner.shared);
                 let chunk = if shared.listeners.is_empty() {
                     // No terminal view is attached to answer, so answer here — otherwise the
-                    // shell waits forever — and keep the request out of the scrollback so a view
-                    // attaching later doesn't replay it and answer a second time.
+                    // shell waits forever.
                     answer_cursor_requests(&buffer[..n], inner)
                 } else {
                     std::borrow::Cow::Borrowed(&buffer[..n])
@@ -257,7 +264,9 @@ fn read_loop(mut reader: Box<dyn Read + Send>, inner: &Inner) {
                 if chunk.is_empty() {
                     continue;
                 }
-                shared.scrollback.push(&chunk);
+                // Requests are never kept in the scrollback: a view that re-attaches must not
+                // answer a request that was already answered.
+                shared.scrollback.push(&strip_cursor_requests(&chunk));
                 shared.listeners.retain(|_, deliver| deliver(&chunk));
             }
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
@@ -282,6 +291,14 @@ fn answer_cursor_requests<'a>(chunk: &'a [u8], inner: &Inner) -> std::borrow::Co
         let _ = writer.flush();
     }
     std::borrow::Cow::Owned(strip_all(chunk, CURSOR_POSITION_REQUEST))
+}
+
+fn strip_cursor_requests(chunk: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    if chunk.windows(CURSOR_POSITION_REQUEST.len()).any(|w| w == CURSOR_POSITION_REQUEST) {
+        std::borrow::Cow::Owned(strip_all(chunk, CURSOR_POSITION_REQUEST))
+    } else {
+        std::borrow::Cow::Borrowed(chunk)
+    }
 }
 
 fn strip_all(haystack: &[u8], needle: &[u8]) -> Vec<u8> {

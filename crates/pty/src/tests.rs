@@ -27,6 +27,7 @@ fn command_spec(script: &str) -> SpawnSpec {
         args,
         cwd: std::env::temp_dir(),
         env: vec![("TERM".into(), "xterm-256color".into())],
+        env_remove: vec![],
         size: TerminalSize::new(100, 30).expect("size"),
     }
 }
@@ -66,8 +67,8 @@ fn start(spec: SpawnSpec) -> Captured {
     let responder = session.clone();
     session.attach(move |chunk| {
         sink.lock().expect("lock").extend_from_slice(chunk);
-        for _ in 0..chunk.windows(4).filter(|w| *w == b"[6n").count() {
-            let _ = responder.write(b"[1;1R");
+        for _ in 0..chunk.windows(4).filter(|w| *w == b"\x1b[6n").count() {
+            let _ = responder.write(b"\x1b[1;1R");
         }
         true
     });
@@ -162,13 +163,13 @@ fn answers_cursor_requests_when_no_view_is_attached() {
     });
     let text = String::from_utf8_lossy(&replay.lock().expect("lock")).into_owned();
     assert!(text.contains("unattended-ok"), "{text:?}");
-    assert!(!text.contains("[6n"), "answered requests are not replayed: {text:?}");
+    assert!(!text.contains("\x1b[6n"), "answered requests are not replayed: {text:?}");
 }
 
 #[test]
 fn strip_all_removes_every_occurrence() {
-    assert_eq!(strip_all(b"a[6nb[6n", b"[6n"), b"ab");
-    assert_eq!(strip_all(b"plain", b"[6n"), b"plain");
+    assert_eq!(strip_all(b"a\x1b[6nb\x1b[6n", b"\x1b[6n"), b"ab");
+    assert_eq!(strip_all(b"plain", b"\x1b[6n"), b"plain");
 }
 
 #[test]
@@ -223,4 +224,43 @@ fn closing_a_terminal_ends_programs_started_in_it() {
             .unwrap_or(false)
     };
     assert!(wait_until(Duration::from_secs(20), || !alive()), "child {ping} outlived its terminal");
+}
+
+#[test]
+fn attach_always_delivers_the_replay_first() {
+    let run = start(command_spec("echo first-replay"));
+    assert!(wait_until(Duration::from_secs(15), || run.exit().is_some()
+        && run.text().contains("first-replay")));
+    let calls = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
+    let sink = calls.clone();
+    run.session.attach(move |chunk| {
+        sink.lock().expect("lock").push(chunk.to_vec());
+        true
+    });
+    let calls = calls.lock().expect("lock");
+    assert_eq!(calls.len(), 1, "exactly one replay call for an exited session");
+    assert!(String::from_utf8_lossy(&calls[0]).contains("first-replay"));
+}
+
+#[test]
+fn cursor_requests_are_stripped_from_scrollback_chunks() {
+    assert_eq!(&*strip_cursor_requests(b"before\x1b[6nafter"), b"beforeafter");
+    assert!(matches!(strip_cursor_requests(b"plain"), std::borrow::Cow::Borrowed(_)));
+}
+
+#[test]
+fn removed_variables_do_not_reach_the_shell() {
+    // A variable every process inherits on this platform.
+    let (name, script) = if cfg!(windows) {
+        ("OS", "echo [%OS%]")
+    } else {
+        ("HOME", "echo [$HOME]")
+    };
+    let inherited = std::env::var(name).expect("inherited variable");
+    let mut spec = command_spec(script);
+    spec.env_remove.push(name.into());
+    let run = start(spec);
+    assert!(wait_until(Duration::from_secs(15), || run.exit().is_some()));
+    assert!(wait_until(Duration::from_secs(5), || run.text().contains(']')), "{:?}", run.text());
+    assert!(!run.text().contains(&format!("[{inherited}]")), "{:?}", run.text());
 }

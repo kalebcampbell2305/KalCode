@@ -164,6 +164,12 @@ fn upgrade_from_v1_keeps_data_and_writes_backup() {
 
     // The v2 tables exist and are usable after the upgrade.
     assert!(core.workspaces().expect("workspaces").is_empty());
+    let project = tempfile::tempdir().expect("project");
+    let workspace = core.open_workspace(project.path()).expect("open workspace");
+    assert_eq!(
+        core.active_workspace().expect("active").map(|w| w.id),
+        Some(workspace.id)
+    );
 }
 
 #[test]

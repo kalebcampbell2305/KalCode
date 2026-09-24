@@ -2143,6 +2143,7 @@ dependencies = [
 name = "kalcode-native-core"
 version = "0.1.0"
 dependencies = [
+ "kalcode-pty",
  "os_info",
  "regex",
  "rusqlite",

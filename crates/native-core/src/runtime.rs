@@ -16,6 +16,7 @@ use crate::events::{EventBus, EventEnvelope, EventPayload, EventStore, NewEvent,
 use crate::flags::{BuildChannel, FeatureFlags};
 use crate::settings::{self, Settings, SettingsPatch};
 use crate::time::now_rfc3339;
+use crate::workspaces::{TerminalRegistry, mark_running_terminals_ended};
 
 pub const PRODUCT_NAME: &str = "KalCode";
 
@@ -160,6 +161,10 @@ pub struct Core {
     started: Instant,
     started_at: String,
     stopped: AtomicBool,
+    /// Live terminal sessions (Z1).
+    terminals: TerminalRegistry,
+    /// Shells present on this machine, detected once at startup (read-only detection).
+    shells: Vec<kalcode_pty::ShellInfo>,
 }
 
 impl Core {
@@ -180,6 +185,13 @@ impl Core {
             db::meta_set(&conn, "first_run_at", &now_rfc3339())?;
         }
         db::meta_set(&conn, "last_version", &config.app_version)?;
+        // No shell survives a previous run: tabs still marked running were left by a crash.
+        let orphaned_terminals = mark_running_terminals_ended(&conn)?;
+        if orphaned_terminals > 0 {
+            tracing::info!(event = "terminal.recovered_after_crash", count = orphaned_terminals);
+        }
+        let shells = kalcode_pty::detect_shells();
+        tracing::info!(event = "terminal.shells_detected", count = shells.len());
 
         let core = Self {
             _data_lock: data_lock,
@@ -189,6 +201,8 @@ impl Core {
             started: Instant::now(),
             started_at: now_rfc3339(),
             stopped: AtomicBool::new(false),
+            terminals: TerminalRegistry::default(),
+            shells,
             config,
         };
         if outcome.applied_any() {
@@ -219,7 +233,7 @@ impl Core {
         &self.config.paths
     }
 
-    fn conn(&self) -> MutexGuard<'_, Connection> {
+    pub(crate) fn conn(&self) -> MutexGuard<'_, Connection> {
         // The connection holds no invariants that a panic elsewhere could break mid-way
         // (all writes are transactional), so recover from poisoning.
         self.conn
@@ -235,6 +249,20 @@ impl Core {
         self.bus.publish(&envelope);
         drop(conn);
         Ok(envelope)
+    }
+
+    /// Publishes an already-persisted event. Callers hold the connection lock (they just
+    /// committed the event), which keeps delivery in `seq` order.
+    pub(crate) fn publish(&self, envelope: &EventEnvelope) {
+        self.bus.publish(envelope);
+    }
+
+    pub(crate) fn terminal_registry(&self) -> &TerminalRegistry {
+        &self.terminals
+    }
+
+    pub(crate) fn detected_shells(&self) -> &[kalcode_pty::ShellInfo] {
+        &self.shells
     }
 
     pub fn app_info(&self) -> AppInfo {
@@ -356,11 +384,12 @@ impl Core {
         })
     }
 
-    /// Records `app.stopped` once. Safe to call multiple times.
+    /// Ends every terminal, then records `app.stopped` once. Safe to call multiple times.
     pub fn shutdown(&self) {
         if self.stopped.swap(true, Ordering::SeqCst) {
             return;
         }
+        self.stop_all_terminals();
         let uptime_ms = u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX);
         match self.emit(NewEvent::core(EventPayload::AppStopped { uptime_ms })) {
             Ok(_) => tracing::info!(event = "app.stopped", uptime_ms),

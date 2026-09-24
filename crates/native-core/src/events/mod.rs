@@ -87,6 +87,32 @@ pub enum EventPayload {
     SettingsChanged { keys: Vec<String> },
     #[serde(rename = "secure_store.checked")]
     SecureStoreChecked { ok: bool, backend: String },
+    /// A folder was opened in KalCode for the first time.
+    #[serde(rename = "workspace.created")]
+    WorkspaceCreated { workspace_id: String, name: String },
+    /// An existing workspace became the active one.
+    #[serde(rename = "workspace.opened")]
+    WorkspaceOpened { workspace_id: String, name: String },
+    /// A workspace was removed from KalCode's list (its folder is untouched).
+    #[serde(rename = "workspace.removed")]
+    WorkspaceRemoved { workspace_id: String, name: String },
+    /// A shell started in a terminal tab.
+    #[serde(rename = "shell.started")]
+    ShellStarted {
+        terminal_id: String,
+        shell_id: String,
+        shell_name: String,
+    },
+    /// A shell exited with code 0, or was ended by the user closing its tab.
+    #[serde(rename = "shell.completed")]
+    ShellCompleted {
+        terminal_id: String,
+        exit_code: i64,
+        closed_by_user: bool,
+    },
+    /// A shell exited with a non-zero code on its own.
+    #[serde(rename = "shell.failed")]
+    ShellFailed { terminal_id: String, exit_code: i64 },
     /// A stored event this build does not understand (written by a newer build or a removed
     /// type). Kept so history stays complete.
     #[serde(rename = "unrecognized")]
@@ -106,6 +132,12 @@ impl EventPayload {
             Self::DatabaseMigrated { .. } => "database.migrated",
             Self::SettingsChanged { .. } => "settings.changed",
             Self::SecureStoreChecked { .. } => "secure_store.checked",
+            Self::WorkspaceCreated { .. } => "workspace.created",
+            Self::WorkspaceOpened { .. } => "workspace.opened",
+            Self::WorkspaceRemoved { .. } => "workspace.removed",
+            Self::ShellStarted { .. } => "shell.started",
+            Self::ShellCompleted { .. } => "shell.completed",
+            Self::ShellFailed { .. } => "shell.failed",
             Self::Unrecognized { .. } => "unrecognized",
         }
     }
@@ -231,6 +263,32 @@ mod tests {
                 ok: true,
                 backend: String::new(),
             },
+            EventPayload::WorkspaceCreated {
+                workspace_id: String::new(),
+                name: String::new(),
+            },
+            EventPayload::WorkspaceOpened {
+                workspace_id: String::new(),
+                name: String::new(),
+            },
+            EventPayload::WorkspaceRemoved {
+                workspace_id: String::new(),
+                name: String::new(),
+            },
+            EventPayload::ShellStarted {
+                terminal_id: String::new(),
+                shell_id: String::new(),
+                shell_name: String::new(),
+            },
+            EventPayload::ShellCompleted {
+                terminal_id: String::new(),
+                exit_code: 0,
+                closed_by_user: false,
+            },
+            EventPayload::ShellFailed {
+                terminal_id: String::new(),
+                exit_code: 1,
+            },
             EventPayload::Unrecognized {
                 original_type: "x".into(),
                 original_version: 1,
@@ -240,5 +298,34 @@ mod tests {
             let json = serde_json::to_value(&sample).expect("serialize");
             assert_eq!(json["type"], sample.type_name());
         }
+    }
+
+    #[test]
+    fn workspace_and_shell_payloads_use_camel_case() {
+        let json = serde_json::to_value(EventPayload::ShellCompleted {
+            terminal_id: "t".into(),
+            exit_code: 0,
+            closed_by_user: true,
+        })
+        .expect("serialize");
+        assert_eq!(json["type"], "shell.completed");
+        assert_eq!(json["payload"]["terminalId"], "t");
+        assert_eq!(json["payload"]["exitCode"], 0);
+        assert_eq!(json["payload"]["closedByUser"], true);
+
+        let json = serde_json::to_value(EventPayload::WorkspaceCreated {
+            workspace_id: "w".into(),
+            name: "site".into(),
+        })
+        .expect("serialize");
+        assert_eq!(json["payload"]["workspaceId"], "w");
+        let back: EventPayload = serde_json::from_value(json).expect("deserialize");
+        assert_eq!(
+            back,
+            EventPayload::WorkspaceCreated {
+                workspace_id: "w".into(),
+                name: "site".into()
+            }
+        );
     }
 }
