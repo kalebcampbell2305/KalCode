@@ -9,6 +9,10 @@ KalCode is developed in coordinated threads, each on its own branch in its own g
 | --- | --- | --- | --- |
 | 1 — Workspace + Terminal (Z1) | `z1/workspace-terminal` | `.worktrees/z1` | `crates/pty`, workspaces/terminals in native-core, Code surface, migration `0002` |
 | 2 — Provider runtime (Z2) | `z2/provider-runtime` | `.worktrees/z2` | `crates/providers`, provider contracts, Providers surface, migration `0003` if needed |
+| 3a — Threads (Z3) | `z3/threads` | `.worktrees/z3` | thread runtime, Threads surface, migration `0004` |
+| 4 — Permission engine (Z4) | `z4/permissions` | `.worktrees/z4` | `crates/permissions`, approvals UI, migration `0005` |
+| 5 — Dashboard (Z5) | `z5/dashboard` | `.worktrees/z5` | Dashboard surface (fixtures until Z3/Z4 land) |
+| 6 — Test & integration infrastructure | `infra/testing` | `.worktrees/infra` | CI, performance harness, `packages/testing` |
 | Entitlements (OWNER) | `z13/owner-entitlement` | `.worktrees/owner` | `apps/api`, `crates/entitlements`, entitlement contracts |
 | 3 — Integration / QA (lead) | `main` | repository root | review, runtime/visual/security QA, merges, acceptance docs |
 
@@ -28,15 +32,22 @@ KalCode is developed in coordinated threads, each on its own branch in its own g
    | z1 | 1431 | 9431 | do not run `tauri dev`; use tests and `build:e2e` |
    | z2 | 1432 | 9432 | same |
    | owner | 1433 | 9433 | same |
+   | z3 | 1434 | 9434 | same |
+   | z4 | 1435 | 9435 | same |
+   | z5 | 1436 | 9436 | same |
+   | infra | 1437 | 9437 | same |
 
    UI tests never reuse an existing server, so a port collision fails loudly instead of testing
    another worktree's code.
-3. **Migration numbers are reserved per thread** (above). Schema changes are append-only.
-4. **Shared files** (`crates/native-core/src/{events/mod.rs,runtime.rs,flags.rs}`,
+3. **Migration numbers are reserved per thread** (see `docs/CONTRACTS.md`). Schema changes are
+   append-only.
+4. **Shared contracts** (`crates/contracts`) are owned by the lead. Consume them; request changes
+   in your hand-off instead of editing them on a campaign branch.
+5. **Shared files** (`crates/native-core/src/{events/mod.rs,runtime.rs,flags.rs}`,
    `apps/desktop/src-tauri/{build.rs,src/lib.rs,src/commands.rs,capabilities/main.json}`,
    `apps/desktop/src/{shell/*,ipc/*}`, `packages/protocol/src/index.ts`) get additive, minimal
    edits only, listed in the thread's hand-off so the lead can integrate them.
-5. Never deploy, create cloud resources, push, or merge from a thread. Commit to the thread's
+6. Never deploy, create cloud resources, push, or merge from a thread. Commit to the thread's
    branch only.
 
 ## Merge policy
