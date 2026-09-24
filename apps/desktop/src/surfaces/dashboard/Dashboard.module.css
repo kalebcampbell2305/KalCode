@@ -1,36 +1,71 @@
 .layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 20rem;
-  gap: var(--space-10);
+  grid-template-columns: minmax(0, 1fr) 17.5rem;
+  grid-template-rows: auto auto auto 1fr;
+  grid-template-areas:
+    "approvals aside"
+    "threads aside"
+    "recent aside"
+    "activity aside";
+  column-gap: var(--space-10);
   align-items: start;
 }
 
-.primary {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-10);
+.approvals {
+  grid-area: approvals;
   min-width: 0;
 }
 
+.threads {
+  grid-area: threads;
+  min-width: 0;
+}
+
+.recent {
+  grid-area: recent;
+  min-width: 0;
+}
+
+.activity {
+  grid-area: activity;
+  min-width: 0;
+}
+
+/* Sections collapse to nothing when their source is absent; spacing lives on the non-empty ones. */
+.approvals:not(:empty),
+.threads:not(:empty),
+.recent:not(:empty) {
+  margin-bottom: var(--space-10);
+}
+
 .aside {
+  grid-area: aside;
   position: sticky;
   top: var(--space-6);
   display: flex;
   flex-direction: column;
   gap: var(--space-8);
-}
-
-.threadsEmpty {
-  padding: var(--space-4) 0 var(--space-2);
+  min-width: 0;
 }
 
 @media (max-width: 1180px) {
   .layout {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+    grid-template-areas:
+      "approvals"
+      "threads"
+      "recent"
+      "aside"
+      "activity";
   }
 
   .aside {
     position: static;
-    order: -1;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+    column-gap: var(--space-10);
+    row-gap: var(--space-8);
+    margin-bottom: var(--space-10);
   }
 }

@@ -12,7 +12,20 @@ export type CommandName =
   | "diagnostics_get"
   | "diagnostics_open_log_dir"
   | "diagnostics_open_data_dir"
-  | "secure_store_check";
+  | "secure_store_check"
+  | "providers_list"
+  | "providers_detect"
+  // Contract commands the Dashboard consumes (docs/CONTRACTS.md). They are implemented natively
+  // by Z1 (terminals), Z3 (threads) and Z4 (approvals); until those land, the native runtime
+  // rejects them and the client reports `command_unavailable`.
+  | "thread_list"
+  | "thread_interrupt"
+  | "thread_resume"
+  | "thread_stop"
+  | "thread_archive"
+  | "approval_list"
+  | "approval_decide"
+  | "terminals_running";
 
 export type Unsubscribe = () => Promise<void>;
 

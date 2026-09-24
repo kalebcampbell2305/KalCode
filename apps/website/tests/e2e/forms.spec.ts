@@ -77,12 +77,31 @@ test.describe("early-access form", () => {
   });
 
   test("the honeypot is hidden from people and assistive technology", async ({ page }) => {
+    // The trap is hidden only by site.css. If the stylesheet is not applied (for example the
+    // E2E server's dist folder was rebuilt mid-run), the trap renders in the page flow; name that
+    // cause instead of failing on an opaque boolean. See docs/TESTING.md, "Flaky tests".
+    const stylesheetErrors: string[] = [];
+    page.on("response", (response) => {
+      if (response.request().resourceType() === "stylesheet" && !response.ok()) {
+        stylesheetErrors.push(`${response.status()} ${response.url()}`);
+      }
+    });
+    page.on("requestfailed", (request) => {
+      if (request.resourceType() === "stylesheet") {
+        stylesheetErrors.push(`${request.failure()?.errorText ?? "failed"} ${request.url()}`);
+      }
+    });
     await page.goto("/");
+    expect(stylesheetErrors, "site stylesheet failed to load").toEqual([]);
+
     const trap = page.locator("form[data-api-form='signup'] input[name='website']");
+    const container = page.locator(".form__trap");
     await expect(trap).toHaveAttribute("tabindex", "-1");
+    await expect(container, "site.css must position the honeypot").toHaveCSS("position", "absolute");
     const box = await trap.boundingBox();
-    expect(box === null || box.x < 0).toBe(true);
-    await expect(page.locator(".form__trap")).toHaveAttribute("aria-hidden", "true");
+    // Hidden (no box) or entirely left of the viewport.
+    if (box !== null) expect(box.x + box.width, `honeypot box ${JSON.stringify(box)}`).toBeLessThanOrEqual(0);
+    await expect(container).toHaveAttribute("aria-hidden", "true");
   });
 
   test("API status codes: 405, 415, 413 and 429", async ({ request }) => {

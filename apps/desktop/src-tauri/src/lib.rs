@@ -4,6 +4,7 @@
 mod commands;
 pub mod environment;
 mod kalvoice_commands;
+mod provider_commands;
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -209,6 +210,7 @@ pub fn run(removed_overrides: Vec<&'static str>) {
             let kalvoice = kalvoice_commands::init(app.handle(), state.core.clone(), &state.info);
             app.manage(kalvoice);
             app.manage(state);
+            app.manage(provider_commands::ProviderState::from_process());
 
             // Safety net: the frontend shows the window after its first themed paint
             // (`window_ready`). If that never happens, show it anyway so the user is never
@@ -246,6 +248,8 @@ pub fn run(removed_overrides: Vec<&'static str>) {
             kalvoice_commands::kalvoice_model_download,
             kalvoice_commands::kalvoice_model_cancel,
             kalvoice_commands::kalvoice_model_delete,
+            provider_commands::providers_list,
+            provider_commands::providers_detect,
         ])
         .build(tauri::generate_context!());
 

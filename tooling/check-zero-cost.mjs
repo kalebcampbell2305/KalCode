@@ -57,7 +57,14 @@ for (const file of files) {
   } catch {
     continue;
   }
-  text.split(/\r?\n/).forEach((line, index) => {
+  let lines = text.split(/\r?\n/);
+  // Rust keeps unit tests in an inline `#[cfg(test)]` module at the end of the file; like other
+  // tests, it may name the variables the product code must never read.
+  if (file.endsWith(".rs")) {
+    const testModule = lines.findIndex((line) => line.trim() === "#[cfg(test)]");
+    if (testModule !== -1) lines = lines.slice(0, testModule);
+  }
+  lines.forEach((line, index) => {
     for (const re of FORBIDDEN) if (re.test(line)) findings.push(`${file}:${index + 1}: ${re}`);
   });
 }

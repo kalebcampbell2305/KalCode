@@ -23,6 +23,8 @@ const COMMANDS: &[&str] = &[
     "kalvoice_model_download",
     "kalvoice_model_cancel",
     "kalvoice_model_delete",
+    "providers_list",
+    "providers_detect",
 ];
 
 fn main() {

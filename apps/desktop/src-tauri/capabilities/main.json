@@ -26,6 +26,8 @@
     "allow-kalvoice-listen-cancel",
     "allow-kalvoice-model-download",
     "allow-kalvoice-model-cancel",
-    "allow-kalvoice-model-delete"
+    "allow-kalvoice-model-delete",
+    "allow-providers-list",
+    "allow-providers-detect"
   ]
 }

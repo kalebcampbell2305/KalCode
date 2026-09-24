@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // KalCode API: accounts and server-authoritative entitlements (docs/BILLING.md).
+  // LOCAL ONLY until campaign Z13: no routes, no workers.dev URL, no remote database yet.
+  "name": "kalcode-api",
+  "main": "worker/index.ts",
+  // Latest date supported by the workerd bundled with the pinned wrangler (1.20260921.1).
+  "compatibility_date": "2026-09-21",
+  "workers_dev": false,
+  "preview_urls": false,
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "kalcode-api",
+      // Placeholder for local development and tests. Z13 creates the production database with
+      // `wrangler d1 create kalcode-api` and puts its id here before any deploy.
+      "database_id": "00000000-0000-4000-8000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // Secrets (never in this file or the repository):
+  //   ENTITLEMENT_SIGNING_KEY — Ed25519 private JWK; see docs/BILLING.md §6.
+  // Local development reads them from .dev.vars (git-ignored; `pnpm keys:dev` creates one).
+  "vars": {
+    // JSON array of retired public keys ([{"kid":"…","x":"…"}]) still published during rotation.
+    "ENTITLEMENT_PREVIOUS_PUBLIC_KEYS": "[]"
+  },
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "invocation_logs": false }
+  }
+}

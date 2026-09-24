@@ -7,6 +7,14 @@
  * `?scenario=` (ui-test builds only) selects a starting state:
  *   startup-error      — the core failed to start (newer database)
  *   keychain-failure   — the credential store check fails
+ *   providers-error    — provider detection fails
+ *   providers-none     — no provider CLI is installed
+ *   providers-outdated — Claude Code is installed but too old, and signed out
+ *   busy | empty | approvals-flood | errors | loading
+ *                      — Dashboard data scenarios (see ./memory/dashboard.ts)
+ *
+ * Without a Dashboard scenario the transport mirrors the current native build: commands that no
+ * campaign has registered yet are rejected exactly the way Tauri rejects them.
  */
 import type {
   AppInfo,
@@ -15,14 +23,33 @@ import type {
   EventEnvelope,
   EventPayload,
   IpcError,
+  ProviderStatus,
   SecureStoreCheck,
   Settings,
   SettingsPatch,
   SurfaceFlag,
 } from "@kalcode/protocol";
+import {
+  createDashboardFixtures,
+  type DashboardControls,
+  type DashboardHandlers,
+  type DashboardScenario,
+  type EmitOptions,
+  isDashboardScenario,
+} from "./memory/dashboard.ts";
+import { detectFake, type ProviderScenario, providerCatalog } from "./memoryProviders.ts";
 import type { CommandName, Transport } from "./transport.ts";
 
-export type MemoryScenario = "default" | "startup-error" | "keychain-failure";
+export type MemoryScenario = "default" | "startup-error" | "keychain-failure" | ProviderScenario | DashboardScenario;
+
+const PROVIDER_SCENARIOS: readonly string[] = ["providers-error", "providers-none", "providers-outdated"];
+
+const AVAILABLE_SURFACES: ReadonlySet<SurfaceFlag["id"]> = new Set(["dashboard", "providers", "settings"]);
+
+export interface MemoryTransportOptions {
+  /** How long fake provider detection takes (the UI shows its busy state meanwhile). */
+  detectDelayMs?: number;
+}
 
 const SURFACES: SurfaceFlag["id"][] = [
   "dashboard",
@@ -60,9 +87,14 @@ function fail(error: IpcError): never {
 export interface MemoryTransport extends Transport {
   /** Test hook: number of live subscribers. */
   subscriberCount(): number;
+  /** Test hooks for Dashboard scenarios (null in scenarios without Dashboard data). */
+  readonly dashboard: DashboardControls | null;
 }
 
-export function createMemoryTransport(scenario: MemoryScenario = readScenario()): MemoryTransport {
+export function createMemoryTransport(
+  scenario: MemoryScenario = readScenario(),
+  { detectDelayMs = 400 }: MemoryTransportOptions = {},
+): MemoryTransport {
   const startedAt = Date.now();
   const info: AppInfo = {
     name: "KalCode",
@@ -73,7 +105,7 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
     flags: {
       surfaces: SURFACES.map((id) => ({
         id,
-        state: id === "dashboard" || id === "settings" ? "available" : "gated",
+        state: AVAILABLE_SURFACES.has(id) ? "available" : "gated",
         visible: true,
       })),
     },
@@ -82,15 +114,24 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
   const events: EventEnvelope[] = [];
   const subscribers = new Set<(event: EventEnvelope) => void>();
   let lastCheck: { at: string; ok: boolean; backend: string } | null = null;
+  let providers: ProviderStatus[] = providerCatalog();
+  let detecting: Promise<ProviderStatus[]> | null = null;
 
-  const emit = (event: EventPayload) => {
+  const emit = (event: EventPayload, options: EmitOptions = {}) => {
     const envelope = {
       id: crypto.randomUUID(),
       seq: events.length + 1,
       version: 1,
-      occurredAt: new Date().toISOString(),
+      occurredAt: options.occurredAt ?? new Date().toISOString(),
       source: "core",
-      correlation: { workspaceId: null, threadId: null, missionId: null, providerId: null, requestId: null },
+      correlation: {
+        workspaceId: null,
+        threadId: null,
+        missionId: null,
+        providerId: null,
+        requestId: null,
+        ...options.correlation,
+      },
       ...event,
     } as EventEnvelope;
     events.push(envelope);
@@ -113,19 +154,59 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
         }
       : null;
 
+  const dashboard = isDashboardScenario(scenario) ? createDashboardFixtures(scenario, emit, startedAt) : null;
+  // Dashboard scenarios simulate a session that has been running for a while.
+  const sessionStartMs = startedAt - (dashboard?.sessionAgeMs ?? 0);
+  const sessionStart = dashboard ? { occurredAt: new Date(sessionStartMs).toISOString() } : {};
+
   if (!startupError) {
-    emit({ type: "database.migrated", payload: { fromVersion: 0, toVersion: 1, backupCreated: false } });
-    emit({
-      type: "app.started",
-      payload: { version: info.version, channel: info.channel, platform: info.platform, arch: info.arch },
-    });
+    emit({ type: "database.migrated", payload: { fromVersion: 0, toVersion: 1, backupCreated: false } }, sessionStart);
+    emit(
+      {
+        type: "app.started",
+        payload: { version: info.version, channel: info.channel, platform: info.platform, arch: info.arch },
+      },
+      sessionStart,
+    );
+    dashboard?.seedHistory();
   }
 
   const requireCore = () => {
     if (startupError) fail(startupError);
   };
 
-  const handlers: Record<CommandName, (args: Record<string, unknown>) => unknown> = {
+  /** Mirrors the native registry: serialized, cached, events only for changes. */
+  const detectProviders = async (): Promise<ProviderStatus[]> => {
+    await new Promise((resolve) => setTimeout(resolve, detectDelayMs));
+    if (scenario === "providers-error") {
+      fail({
+        category: "internal",
+        code: "detection_interrupted",
+        message: "Checking providers was interrupted.",
+        retryable: true,
+      });
+    }
+    const { next, changed } = detectFake(providers, scenario as ProviderScenario, new Date().toISOString());
+    providers = next;
+    for (const status of changed) {
+      const detection = status.detection;
+      if (!detection) continue;
+      emit(
+        {
+          type: "provider.detected",
+          payload: {
+            providerId: status.id,
+            installed: detection.state === "installed" || detection.state === "outdated",
+            version: detection.version,
+          },
+        },
+        { correlation: { providerId: status.id } },
+      );
+    }
+    return providers;
+  };
+
+  const handlers: DashboardHandlers = {
     boot: (): BootState => ({ info, startupError }),
     window_ready: () => undefined,
     settings_get: () => {
@@ -192,8 +273,8 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
         generatedAt: new Date().toISOString(),
         app: info,
         os: { family: "windows", version: "10.0.26200", arch: "x86_64" },
-        uptimeMs: Date.now() - startedAt,
-        startedAt: new Date(startedAt).toISOString(),
+        uptimeMs: Date.now() - sessionStartMs,
+        startedAt: new Date(sessionStartMs).toISOString(),
         database: {
           schemaVersion: 1,
           latestSchemaVersion: 1,
@@ -231,13 +312,29 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
           : "Your system credential store refused access. Check that it's unlocked, then run the check again.",
       };
     },
+    providers_list: () => providers,
+    providers_detect: () => {
+      detecting ??= detectProviders().finally(() => {
+        detecting = null;
+      });
+      return detecting;
+    },
+    ...dashboard?.handlers,
   };
+
+  // Playwright drives live Dashboard changes (e.g. an approval arriving) through this hook. React
+  // StrictMode boots twice in development, so the hook forwards to every transport created on the
+  // page; only the one the app kept has subscribers, so the others' events go nowhere.
+  if (dashboard && typeof window !== "undefined") registerTestHook(dashboard.controls);
 
   return {
     kind: "memory",
     async invoke<T>(command: CommandName, args: Record<string, unknown> = {}): Promise<T> {
       await Promise.resolve();
-      return handlers[command](args) as T;
+      const handler = handlers[command];
+      // Like Tauri with an app manifest: a command this build doesn't register never runs.
+      if (!handler) throw `Command ${command} not allowed by ACL`;
+      return (await handler(args)) as T;
     },
     async subscribe(onEvent) {
       requireCore();
@@ -248,11 +345,30 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
     },
     async setNativeTheme() {},
     subscriberCount: () => subscribers.size,
+    dashboard: dashboard?.controls ?? null,
   };
 }
 
 function readScenario(): MemoryScenario {
   if (typeof location === "undefined") return "default";
   const value = new URLSearchParams(location.search).get("scenario");
-  return value === "startup-error" || value === "keychain-failure" ? value : "default";
+  if (value === "startup-error" || value === "keychain-failure" || isDashboardScenario(value)) return value;
+  if (value !== null && PROVIDER_SCENARIOS.includes(value)) return value as ProviderScenario;
+  return "default";
+}
+
+const hookTargets: DashboardControls[] = [];
+
+function registerTestHook(controls: DashboardControls) {
+  hookTargets.push(controls);
+  const forward: DashboardControls = {
+    requestApproval: () => hookTargets.map((c) => c.requestApproval()).at(-1) ?? null,
+    setThreadStatus: (...args) => {
+      for (const c of hookTargets) c.setThreadStatus(...args);
+    },
+    recover: () => {
+      for (const c of hookTargets) c.recover();
+    },
+  };
+  (window as unknown as { __kalcodeMemory?: unknown }).__kalcodeMemory = { dashboard: forward };
 }

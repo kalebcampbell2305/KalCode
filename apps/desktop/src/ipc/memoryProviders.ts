@@ -1,0 +1,217 @@
+/**
+ * Provider catalog and fake detection for the in-memory transport (unit tests and the `ui-test`
+ * build only). Static values mirror `crates/providers/src/catalog.rs` and
+ * `crates/providers/src/claude/argv.rs` (Windows build) so the UI is tested against real copy.
+ */
+import type { PermissionMapping, ProviderDetection, ProviderStatus } from "@kalcode/protocol";
+
+export type ProviderScenario = "default" | "providers-error" | "providers-none" | "providers-outdated";
+
+const stricter = (mode: PermissionMapping["mode"], providerSetting: string, notes: string): PermissionMapping => ({
+  mode,
+  fidelity: "approximate_stricter",
+  providerSetting,
+  notes,
+});
+
+export function providerCatalog(): ProviderStatus[] {
+  const codexReadOnly = "--sandbox read-only --ask-for-approval never";
+  return [
+    {
+      id: "claude-code",
+      displayName: "Claude Code",
+      detection: null,
+      detectionErrorCode: null,
+      authCheck: "claude auth status",
+      capabilities: {
+        streaming: true,
+        interrupt: true,
+        resume: true,
+        hostApprovals: false,
+        models: [
+          { id: "default", displayName: "Account default", isDefault: true },
+          { id: "opus", displayName: "Opus", isDefault: false },
+          { id: "sonnet", displayName: "Sonnet", isDefault: false },
+          { id: "haiku", displayName: "Haiku", isDefault: false },
+          { id: "fable", displayName: "Fable", isDefault: false },
+        ],
+        permissionMappings: [
+          stricter(
+            "plan",
+            "--restricted --permission-mode plan --permission-prompts none",
+            "Claude Code can read and plan but has no tools that run commands or fetch web pages, so even read-only commands are unavailable. Edits are blocked.",
+          ),
+          stricter(
+            "approve",
+            "--setting-sources user --permission-mode default --permission-prompts none",
+            "Reads and read-only commands run. Edits and other commands are denied instead of asking, until KalCode can answer Claude Code's permission prompts.",
+          ),
+          stricter(
+            "auto",
+            "--setting-sources user --permission-mode default --permission-prompts none",
+            "Runs like Approve. Claude Code's own auto mode is not used, because its classifier's decisions are not your KalCode policy.",
+          ),
+          stricter(
+            "bypass",
+            "--setting-sources user --permission-mode acceptEdits --permission-prompts none",
+            "File edits and common file commands in the workspace run without asking. Other commands and network access are denied. Claude Code's bypassPermissions mode is never used, because it would also allow actions like git push.",
+          ),
+        ],
+      },
+      adapter: "implemented",
+      modelSource: "documented_aliases",
+      integration: "Headless mode (claude -p) with stream-JSON input and output",
+      signInCommand: "claude auth login",
+      installCommand: "irm https://claude.ai/install.ps1 | iex",
+      docsUrl: "https://code.claude.com/docs/en/setup",
+    },
+    {
+      id: "codex",
+      displayName: "Codex",
+      detection: null,
+      detectionErrorCode: null,
+      authCheck: "codex login status",
+      capabilities: {
+        streaming: false,
+        interrupt: false,
+        resume: false,
+        hostApprovals: false,
+        models: [],
+        permissionMappings: [
+          stricter(
+            "plan",
+            codexReadOnly,
+            "Reads and commands run inside Codex's read-only sandbox; anything that needs more is refused.",
+          ),
+          stricter(
+            "approve",
+            codexReadOnly,
+            "Edits are refused instead of asking until KalCode can answer Codex approval requests.",
+          ),
+          stricter(
+            "auto",
+            codexReadOnly,
+            "Runs like Approve until KalCode's policy engine can answer Codex approval requests.",
+          ),
+          stricter(
+            "bypass",
+            "--sandbox workspace-write --ask-for-approval never",
+            "Edits and commands inside the workspace, with network access off (Codex's default). danger-full-access is never used.",
+          ),
+        ],
+      },
+      adapter: "planned",
+      modelSource: "not_discoverable",
+      integration: "codex exec --json (JSON Lines events), or codex app-server (JSON-RPC with host approvals)",
+      signInCommand: "codex login",
+      installCommand: "npm install -g @openai/codex",
+      docsUrl: "https://github.com/openai/codex",
+    },
+    {
+      id: "gemini-cli",
+      displayName: "Gemini CLI",
+      detection: null,
+      detectionErrorCode: null,
+      authCheck: null,
+      capabilities: {
+        streaming: false,
+        interrupt: false,
+        resume: false,
+        hostApprovals: false,
+        models: [],
+        permissionMappings: [
+          stricter("plan", "--approval-mode plan", "Gemini CLI's read-only plan mode."),
+          stricter(
+            "approve",
+            "--approval-mode default",
+            "Tool calls that need confirmation can't be answered in headless mode, so they don't run.",
+          ),
+          stricter("auto", "--approval-mode default", "Runs like Approve until KalCode's policy engine exists."),
+          stricter(
+            "bypass",
+            "--approval-mode auto_edit",
+            "File edits are approved automatically; other tools don't run. yolo mode is never used.",
+          ),
+        ],
+      },
+      adapter: "planned",
+      modelSource: "not_discoverable",
+      integration: "Headless mode (gemini -p) with --output-format stream-json",
+      signInCommand: "gemini",
+      installCommand: "npm install -g @google/gemini-cli",
+      docsUrl: "https://geminicli.com/docs/",
+    },
+  ];
+}
+
+type Fake = Pick<ProviderDetection, "state" | "displayPath" | "version" | "auth" | "message">;
+
+const NOT_INSTALLED: Fake = {
+  state: "not_installed",
+  displayPath: null,
+  version: null,
+  auth: "unknown",
+  message: null,
+};
+
+/** What detection finds on the fake machine for each scenario. */
+function fakeMachine(scenario: ProviderScenario): Record<string, Fake> {
+  if (scenario === "providers-none") {
+    return { "claude-code": NOT_INSTALLED, codex: NOT_INSTALLED, "gemini-cli": NOT_INSTALLED };
+  }
+  const claude: Fake =
+    scenario === "providers-outdated"
+      ? {
+          state: "outdated",
+          displayPath: "~\\.local\\bin\\claude.exe",
+          version: "2.1.100",
+          auth: "not_authenticated",
+          message: "KalCode needs version 2.1.259 or later to run Claude Code threads.",
+        }
+      : {
+          state: "installed",
+          displayPath: "~\\.local\\bin\\claude.exe",
+          version: "2.1.282",
+          auth: "authenticated",
+          message: null,
+        };
+  return {
+    "claude-code": claude,
+    codex: {
+      state: "installed",
+      displayPath: "~\\AppData\\Roaming\\npm\\codex.cmd",
+      version: "0.155.1",
+      auth: "authenticated",
+      message: null,
+    },
+    "gemini-cli": NOT_INSTALLED,
+  };
+}
+
+const MINIMUM_VERSIONS: Record<string, string | null> = { "claude-code": "2.1.259", codex: null, "gemini-cli": null };
+
+/** Applies one fake detection to the cached statuses; returns whether each provider changed. */
+export function detectFake(
+  statuses: ProviderStatus[],
+  scenario: ProviderScenario,
+  checkedAt: string,
+): { next: ProviderStatus[]; changed: ProviderStatus[] } {
+  const machine = fakeMachine(scenario);
+  const changed: ProviderStatus[] = [];
+  const next = statuses.map((status) => {
+    const found = machine[status.id] ?? NOT_INSTALLED;
+    const detection: ProviderDetection = {
+      providerId: status.id,
+      displayName: status.displayName,
+      minimumVersion: MINIMUM_VERSIONS[status.id] ?? null,
+      checkedAt,
+      ...found,
+    };
+    const updated = { ...status, detection, detectionErrorCode: null };
+    if (status.detection?.state !== detection.state || status.detection?.version !== detection.version) {
+      changed.push(updated);
+    }
+    return updated;
+  });
+  return { next, changed };
+}

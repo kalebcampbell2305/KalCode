@@ -1,0 +1,36 @@
+[package]
+name = "kalcode-providers"
+description = "KalCode provider runtime: detection, capabilities, permission mapping, process supervision and provider adapters."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "kalcode_providers"
+
+# Test support only: a stand-in provider CLI that replays documented stream-JSON fixtures so the
+# spawn -> parse -> event pipeline is tested without running a real provider (no AI quota used).
+# It is not part of the desktop bundle.
+[[bin]]
+name = "kalcode-fake-provider"
+path = "src/bin/fake_provider.rs"
+test = false
+doc = false
+
+[dependencies]
+kalcode-contracts = { path = "../contracts" }
+kalcode-native-core = { path = "../native-core" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+ts-rs = { version = "12", features = ["serde-json-impl", "uuid-impl"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
