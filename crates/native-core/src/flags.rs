@@ -7,25 +7,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-pub use kalcode_contracts::app::BuildChannel;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(export)]
-pub enum SurfaceId {
-    Dashboard,
-    Jarvis,
-    Code,
-    Threads,
-    Agents,
-    Missions,
-    Automations,
-    Skills,
-    Plugins,
-    Memory,
-    Providers,
-    Settings,
-}
+pub use kalcode_contracts::app::{BuildChannel, SurfaceId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -59,7 +41,7 @@ impl FeatureFlags {
         use SurfaceState::*;
         let table = [
             (Dashboard, Available),
-            (Jarvis, Gated),
+            (KalVoice, Gated),
             (Code, Gated),
             (Threads, Available),
             (Agents, Gated),

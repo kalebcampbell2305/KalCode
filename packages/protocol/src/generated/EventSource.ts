@@ -3,4 +3,4 @@
 /**
  * Where an event originated.
  */
-export type EventSource = "core" | "ui" | "provider" | "jarvis" | "supervisor" | "automation";
+export type EventSource = "core" | "ui" | "provider" | "supervisor" | "automation" | "kalvoice";

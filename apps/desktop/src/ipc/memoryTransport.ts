@@ -34,7 +34,7 @@ const AVAILABLE: ReadonlySet<SurfaceFlag["id"]> = new Set(["dashboard", "threads
 
 const SURFACES: SurfaceFlag["id"][] = [
   "dashboard",
-  "jarvis",
+  "kalvoice",
   "code",
   "threads",
   "agents",

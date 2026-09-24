@@ -19,8 +19,9 @@
     "test:e2e": "pnpm -r --if-present test:e2e",
     "gen:protocol": "cargo test -p kalcode-native-core -p kalcode-threads --lib && node tooling/gen-protocol-index.mjs",
     "check:branding": "node tooling/check-branding.mjs",
-    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm check:branding && pnpm check:capabilities",
-    "check:capabilities": "node tooling/check-capabilities.mjs"
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm check:branding && pnpm check:capabilities && pnpm check:zero-cost",
+    "check:capabilities": "node tooling/check-capabilities.mjs",
+    "check:zero-cost": "node tooling/check-zero-cost.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",

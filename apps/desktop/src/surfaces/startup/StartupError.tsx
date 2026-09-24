@@ -3,7 +3,7 @@ import { Button, ErrorState } from "@kalcode/ui/components";
 import { FolderOpen } from "lucide-react";
 import { useState } from "react";
 import type { KalCodeClient } from "../../ipc/client.ts";
-import { Wordmark } from "../../shell/Brand.tsx";
+import { Lockup } from "../../shell/Brand.tsx";
 import styles from "./Startup.module.css";
 
 interface StartupErrorProps {
@@ -29,7 +29,7 @@ export function StartupError({ client, info, error }: StartupErrorProps) {
   return (
     <main className={styles.screen}>
       <div className={styles.panel}>
-        <Wordmark className={styles.wordmark} />
+        <Lockup className={styles.lockup} />
         <ErrorState
           headingLevel={1}
           title="KalCode couldn't start"

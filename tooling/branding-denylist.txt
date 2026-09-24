@@ -21,7 +21,9 @@
 \bSourcegraph\b
 \bCody\b
 
-# The owner's private JARVIS system is not part of KalCode.
+# The assistant inside KalCode is KalVoice. The former assistant name, and the owner's separate
+# private project, must never appear in KalCode.
+\b[Jj][Aa][Rr][Vv][Ii][Ss]\b
 JARVIS_(ADVANCED|CODEX|Kaleb|MCU|HUD|LM|Z\d)
 jarvis-p\d+
 [Jj]arvis[ _-]?[Ll]abs

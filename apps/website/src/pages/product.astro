@@ -1,9 +1,10 @@
 ---
 import DashboardPreview from "../components/DashboardPreview.astro";
-import JarvisLockup from "../components/JarvisLockup.astro";
+import KalVoiceLockup from "../components/KalVoiceLockup.astro";
 import PageHead from "../components/PageHead.astro";
+import Shortcut from "../components/Shortcut.astro";
 import Base from "../layouts/Base.astro";
-import { getPage } from "../lib/site";
+import { KALVOICE, getPage } from "../lib/site";
 
 const page = getPage("/product");
 
@@ -35,7 +36,12 @@ const modes = [
           <p>
             KalCode connects to Claude Code, Codex and Gemini CLI through their documented
             integration methods: your own signed-in local CLI, or an API key you provide. It never
-            copies hidden tokens or scrapes browser sessions.
+            copies hidden credentials or scrapes browser sessions.
+          </p>
+          <p>
+            Model usage runs on your own provider account and is billed by that provider, as it is
+            today. KalCode never charges for, resells or meters it, and there is no KalCode-paid
+            fallback.
           </p>
           <ul>
             <li>Connecting a provider is free on every plan, including Free.</li>
@@ -82,26 +88,41 @@ const modes = [
         </div>
       </article>
 
-      <article class="feature" id="jarvis">
+      <article class="feature" id="kalvoice">
         <div class="feature__lead">
-          <h2 class="h2">JARVIS coordinates, you decide.</h2>
-          <JarvisLockup sizes="(min-width: 56rem) 18rem, min(calc(100vw - 5rem), 18rem)" />
+          <h2 class="h2">KalVoice: speak your prompts, run your workspace.</h2>
+          <KalVoiceLockup sizes="(min-width: 56rem) 18rem, min(calc(100vw - 5rem), 18rem)" />
         </div>
         <div class="feature__body">
+          <p class="dev-note">{KALVOICE.status}</p>
           <p>
-            JARVIS is the intelligence inside KalCode. Talk to it and it can plan an objective,
-            split it into threads, delegate each one to the provider that fits, and bring the results
-            back together.
+            KalVoice is the coding assistant and voice layer built into KalCode.
+            {KALVOICE.summary}
           </p>
+          <dl class="mode-list">
+            <div>
+              <dt>Dictation</dt>
+              <dd>
+                Hold <Shortcut keys={KALVOICE.dictationKeys} /> and speak. Speech recognition runs on
+                your device, and the text lands in the focused input: a Claude Code, Codex or Gemini
+                CLI thread, a terminal, or a search box. Unlimited on every plan and never counted.
+              </dd>
+            </div>
+            <div>
+              <dt>Command</dt>
+              <dd>
+                Press <Shortcut keys={KALVOICE.commandKeys} />, then speak or type: “Pause every active
+                thread”, “Show me anything waiting for permission”. Structured commands run without
+                any model; requests that need reasoning use the provider you choose from the ones you
+                connected. Each top-level request is one KalVoice Request.
+              </dd>
+            </div>
+          </dl>
           <p>
-            Larger objectives become missions: multi-step work that is not called done until there is
-            verification evidence, such as tests that ran or checks that passed.
+            KalVoice uses the same runtime as the rest of KalCode and operates inside your permission
+            model. It cannot raise its own authority or turn on Bypass.
           </p>
-          <p>
-            JARVIS operates inside your permission model. It cannot raise its own authority or turn on
-            Bypass.
-          </p>
-          <a class="text-link" href="/docs/jarvis">How JARVIS is designed</a>
+          <a class="text-link" href="/docs/kalvoice">How KalVoice works</a>
         </div>
       </article>
 

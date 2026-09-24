@@ -5,3 +5,13 @@
   -webkit-mask: var(--lettering-url) center / contain no-repeat;
   mask: var(--lettering-url) center / contain no-repeat;
 }
+
+.lockup {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.lockupWordmark {
+  height: 1rem;
+}

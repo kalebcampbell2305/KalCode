@@ -5,7 +5,7 @@ import type { ThreadError } from "./ThreadError.ts";
 import type { ThreadStatus } from "./ThreadStatus.ts";
 
 /**
- * The thread fields every surface shows (Threads list, Dashboard cards, JARVIS summaries).
+ * The thread fields every surface shows (Threads list, Dashboard cards, KalVoice status reports).
  */
 export type ThreadSummary = { id: string, name: string, providerId: ProviderId, providerName: string, model: string | null, 
 /**

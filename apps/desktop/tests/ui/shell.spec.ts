@@ -169,7 +169,7 @@ test.describe("accessibility", () => {
       await expect(page.getByRole("region", { name: "Diagnostics" }).getByText("Recorded events")).toBeVisible();
       await expectNoSeriousA11yViolations(page);
 
-      await page.getByRole("button", { name: "JARVIS" }).click();
+      await page.getByRole("button", { name: "KalVoice" }).click();
       await expectNoSeriousA11yViolations(page);
 
       await page.keyboard.press(`${MOD}+k`);

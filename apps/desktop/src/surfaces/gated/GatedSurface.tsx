@@ -1,8 +1,7 @@
 import type { SurfaceId } from "@kalcode/protocol";
 import { Badge } from "@kalcode/ui/components";
-import jarvisGlobe300 from "../../assets/brand/jarvis-globe-300.webp";
-import jarvisGlobe600 from "../../assets/brand/jarvis-globe-600.webp";
-import { JarvisTagline, JarvisWordmark } from "../../shell/Brand.tsx";
+import kalvoiceGlobe300 from "../../assets/brand/kalvoice-globe-300.webp";
+import kalvoiceGlobe600 from "../../assets/brand/kalvoice-globe-600.webp";
 import { SURFACES } from "../../shell/navigation.tsx";
 import { Page } from "../../shell/Page.tsx";
 import styles from "./GatedSurface.module.css";
@@ -16,7 +15,7 @@ export function GatedSurface({ id }: { id: SurfaceId }) {
   return (
     <Page title={meta.label} width="narrow">
       <div className={styles.body} data-surface={id}>
-        {id === "jarvis" ? <JarvisBrand /> : null}
+        {id === "kalvoice" ? <KalVoiceBrand /> : null}
         <Badge tone="outline">Not available in this build</Badge>
         <p className={styles.summary}>{meta.summary}</p>
         {meta.dependsOn ? (
@@ -29,22 +28,24 @@ export function GatedSurface({ id }: { id: SurfaceId }) {
   );
 }
 
-/** The JARVIS artwork: its globe and lettering, on the artwork's own dark ground. */
-function JarvisBrand() {
+/** KalVoice identity: the voice artwork's globe with the KalVoice name, on the artwork's ground. */
+function KalVoiceBrand() {
   return (
-    <figure className={styles.jarvis}>
+    <figure className={styles.kalvoice}>
       <img
-        src={jarvisGlobe300}
-        srcSet={`${jarvisGlobe300} 300w, ${jarvisGlobe600} 600w`}
-        sizes="15rem"
+        src={kalvoiceGlobe300}
+        srcSet={`${kalvoiceGlobe300} 300w, ${kalvoiceGlobe600} 600w`}
+        sizes="11rem"
         width={300}
         height={300}
-        alt="JARVIS globe: a sphere of connected points of light"
+        alt="KalVoice globe: a sphere of connected points of light"
         className={styles.globe}
       />
       <figcaption className={styles.lockup}>
-        <JarvisWordmark className={styles.jarvisWordmark} />
-        <JarvisTagline className={styles.jarvisTagline} />
+        <span className={styles.kalvoiceName}>KalVoice</span>
+        <span className={styles.kalvoiceLine}>
+          Speak your prompts. Control your workspace. Coordinate your coding agents.
+        </span>
       </figcaption>
     </figure>
   );

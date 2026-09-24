@@ -67,6 +67,28 @@ describe("pricing source of truth", () => {
   });
 });
 
+describe("plan wording on the public site", () => {
+  const dist = resolve(root, "dist");
+  it.runIf(existsSync(dist))("never shows the private tier or calls usage tokens", () => {
+    const htmlFiles = readdirSync(dist, { recursive: true, encoding: "utf8" }).filter((file) => file.endsWith(".html"));
+    for (const file of htmlFiles) {
+      const text = readFileSync(resolve(dist, file), "utf8")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/\s+/g, " ");
+      expect(text, file).not.toMatch(/\bOWNER\b/);
+      expect(text, file).not.toMatch(/\btokens?\b/i);
+      expect(text, file).not.toMatch(/\bentitlements?\b/i);
+    }
+  });
+
+  it("shows every plan's KalVoice Request allowance on the pricing page", () => {
+    const pricing = readFileSync(pageFile("/pricing"), "utf8");
+    expect(pricing).toContain("formatKalVoiceAllowance");
+    expect(pricing).toContain("plan.limits");
+    expect(pricing).not.toContain("OWNER");
+  });
+});
+
 describe("content security policy", () => {
   it("hashes the theme script with SHA-256", async () => {
     const expected = createHash("sha256").update(THEME_SCRIPT, "utf8").digest("base64");
