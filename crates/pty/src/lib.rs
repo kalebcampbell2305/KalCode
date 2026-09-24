@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -22,6 +23,8 @@ pub use shells::{ShellInfo, detect_shells};
 /// Default scrollback retained per session for replay.
 pub const SCROLLBACK_BYTES: usize = 512 * 1024;
 const READ_CHUNK: usize = 16 * 1024;
+/// Input writes queued for the writer thread before `write` reports the terminal busy.
+const INPUT_QUEUE: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TerminalSize {
@@ -85,6 +88,8 @@ pub enum PtyError {
     Spawn(String),
     #[error("terminal I/O failed: {0}")]
     Io(String),
+    #[error("the terminal is not reading input")]
+    Busy,
 }
 
 pub type AttachId = u64;
@@ -97,7 +102,9 @@ struct Shared {
 
 struct Inner {
     master: Mutex<Option<Box<dyn MasterPty + Send>>>,
-    writer: Mutex<Option<Box<dyn Write + Send>>>,
+    /// Input queue drained by the writer thread, so `write` never blocks its caller (a shell
+    /// that stops reading would otherwise stall it) and writes keep their order.
+    input: Mutex<Option<SyncSender<Vec<u8>>>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     shared: Mutex<Shared>,
     exit: Mutex<Option<ExitInfo>>,
@@ -162,9 +169,10 @@ impl PtySession {
         let killer = child.clone_killer();
         let pid = child.process_id();
 
+        let (input, queued) = sync_channel::<Vec<u8>>(INPUT_QUEUE);
         let inner = Arc::new(Inner {
             master: Mutex::new(Some(pair.master)),
-            writer: Mutex::new(Some(writer)),
+            input: Mutex::new(Some(input)),
             killer: Mutex::new(killer),
             shared: Mutex::new(Shared {
                 scrollback: Scrollback::new(SCROLLBACK_BYTES),
@@ -175,6 +183,11 @@ impl PtySession {
             next_attach: AtomicU64::new(1),
             pid,
         });
+
+        std::thread::Builder::new()
+            .name("kalcode-pty-writer".into())
+            .spawn(move || write_loop(writer, &queued))
+            .map_err(|e| PtyError::Spawn(e.to_string()))?;
 
         let reader_inner = inner.clone();
         std::thread::Builder::new()
@@ -202,7 +215,7 @@ impl PtySession {
                 };
                 *lock(&waiter_inner.exit) = Some(info);
                 // Release the pseudo-terminal so the reader reaches end-of-file.
-                lock(&waiter_inner.writer).take();
+                lock(&waiter_inner.input).take();
                 lock(&waiter_inner.master).take();
                 on_exit(info);
             })
@@ -219,13 +232,14 @@ impl PtySession {
         *lock(&self.inner.exit)
     }
 
+    /// Queues input for the shell. Never blocks; writes are delivered in order.
     pub fn write(&self, data: &[u8]) -> Result<(), PtyError> {
-        let mut writer = lock(&self.inner.writer);
-        let writer = writer.as_mut().ok_or(PtyError::Exited)?;
-        writer
-            .write_all(data)
-            .and_then(|()| writer.flush())
-            .map_err(|e| PtyError::Io(e.to_string()))
+        let input = lock(&self.inner.input);
+        let input = input.as_ref().ok_or(PtyError::Exited)?;
+        input.try_send(data.to_vec()).map_err(|e| match e {
+            TrySendError::Full(_) => PtyError::Busy,
+            TrySendError::Disconnected(_) => PtyError::Exited,
+        })
     }
 
     pub fn resize(&self, size: TerminalSize) -> Result<(), PtyError> {
@@ -263,7 +277,7 @@ impl PtySession {
         }
         self.inner.killed.store(true, Ordering::SeqCst);
         let result = lock(&self.inner.killer).kill();
-        lock(&self.inner.writer).take();
+        lock(&self.inner.input).take();
         lock(&self.inner.master).take();
         // On Windows, portable-pty 0.9 inverts TerminateProcess's result (success comes back as
         // an error carrying a stale OS error), so the return value carries no information there;
@@ -283,6 +297,16 @@ impl PtySession {
 /// terminal answers.
 const CURSOR_POSITION_REQUEST: &[u8] = b"\x1b[6n";
 const CURSOR_POSITION_REPLY: &[u8] = b"\x1b[1;1R";
+
+fn write_loop(mut writer: Box<dyn Write + Send>, queued: &Receiver<Vec<u8>>) {
+    // Ends when the session drops its sender (exit or kill) or the pseudo-terminal closes.
+    for data in queued {
+        if let Err(error) = writer.write_all(&data).and_then(|()| writer.flush()) {
+            tracing::debug!(event = "pty.write_ended", error = %error);
+            break;
+        }
+    }
+}
 
 fn read_loop(mut reader: Box<dyn Read + Send>, inner: &Inner) {
     let mut buffer = vec![0u8; READ_CHUNK];
@@ -324,11 +348,10 @@ fn answer_cursor_requests<'a>(chunk: &'a [u8], inner: &Inner) -> std::borrow::Co
     if count == 0 {
         return std::borrow::Cow::Borrowed(chunk);
     }
-    if let Some(writer) = lock(&inner.writer).as_mut() {
+    if let Some(input) = lock(&inner.input).as_ref() {
         for _ in 0..count {
-            let _ = writer.write_all(CURSOR_POSITION_REPLY);
+            let _ = input.try_send(CURSOR_POSITION_REPLY.to_vec());
         }
-        let _ = writer.flush();
     }
     std::borrow::Cow::Owned(strip_all(chunk, CURSOR_POSITION_REQUEST))
 }

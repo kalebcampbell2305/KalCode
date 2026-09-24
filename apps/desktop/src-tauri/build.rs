@@ -13,6 +13,23 @@ const COMMANDS: &[&str] = &[
     "diagnostics_open_log_dir",
     "diagnostics_open_data_dir",
     "secure_store_check",
+    // Workspaces and terminals (Z1)
+    "workspace_list",
+    "workspace_active",
+    "workspace_open_dialog",
+    "workspace_activate",
+    "workspace_remove",
+    "shells_list",
+    "terminal_list",
+    "terminal_create",
+    "terminal_restart",
+    "terminal_close",
+    "terminal_write",
+    "terminal_resize",
+    "terminal_attach",
+    "terminal_detach",
+    "terminal_set_active",
+    "terminals_running",
 ];
 
 fn main() {

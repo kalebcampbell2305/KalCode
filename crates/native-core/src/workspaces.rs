@@ -864,9 +864,15 @@ impl Core {
         let session = self
             .terminal_registry()
             .session(id)
-            .ok_or_else(|| not_running())?;
+            .ok_or_else(not_running)?;
         session.write(data).map_err(|e| match e {
             kalcode_pty::PtyError::Exited => not_running(),
+            kalcode_pty::PtyError::Busy => KalError::new(
+                ErrorCategory::Terminal,
+                "terminal_busy",
+                "The terminal isn't reading input right now. Try again in a moment.",
+            )
+            .retryable(),
             other => KalError::new(
                 ErrorCategory::Terminal,
                 "terminal_write_failed",
@@ -894,16 +900,15 @@ impl Core {
     }
 
     /// Streams a terminal's output to `listener`: first its scrollback (possibly empty), then
-    /// live output. Returns `None` when the tab has no session (it ended before KalCode last
-    /// started), so there is nothing to show.
+    /// live output. Returns `None` when the terminal has no session — the tab ended before
+    /// KalCode last started, or does not exist — so there is nothing to show. Touches no
+    /// storage, so the shell can serve it synchronously, in order with detaches.
     pub fn attach_terminal(
         &self,
         id: &str,
         listener: impl Fn(&[u8]) -> bool + Send + Sync + 'static,
     ) -> Result<Option<AttachmentId>> {
         validate_id(id)?;
-        let conn = self.conn();
-        self.terminal_in(&conn, id)?; // the tab must exist
         let registry = self.terminal_registry();
         let Some(session) = registry.session(id) else {
             return Ok(None);
@@ -918,7 +923,6 @@ impl Core {
                 terminal_id: id.to_owned(),
             },
         );
-        drop(conn);
         Ok(Some(attachment))
     }
 

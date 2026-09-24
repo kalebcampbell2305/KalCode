@@ -1,6 +1,9 @@
 //! Integration tests for workspaces and terminal tabs, with real shells in real
 //! pseudo-terminals (ConPTY on Windows, openpty elsewhere).
 
+// Test helpers outside `#[test]` functions panic on setup failures by design.
+#![allow(clippy::expect_used)]
+
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
