@@ -2,6 +2,8 @@ import { Button, ErrorState, KeyValueList, Section, Skeleton, StatusIndicator } 
 import { type ReactNode, useEffect, useState } from "react";
 import { formatDuration, formatRelative } from "../../runtime/describeEvent.ts";
 import { useDiagnostics } from "../../runtime/useDiagnostics.ts";
+import type { ProvidersSummary } from "../providers/providerLabels.ts";
+import { useProvidersSummary } from "../providers/useProvidersSummary.ts";
 import { useDiagnosticsActions } from "../settings/useDiagnosticsActions.ts";
 import styles from "./RuntimeHealth.module.css";
 
@@ -20,8 +22,24 @@ function Detail({ status, detail }: { status: ReactNode; detail: string }) {
   );
 }
 
+function providersValue({ summary, failed }: { summary: ProvidersSummary | null; failed: boolean }): ReactNode {
+  if (!summary) return failed ? "Unavailable" : <Skeleton width="60%" />;
+  if (!summary.checked) return <StatusIndicator tone="idle">Not checked</StatusIndicator>;
+  return (
+    <Detail
+      status={
+        <StatusIndicator tone={summary.installed > 0 ? "success" : "idle"}>
+          {summary.installed} of {summary.total} installed
+        </StatusIndicator>
+      }
+      detail={summary.installedNames.length > 0 ? summary.installedNames.join(", ") : "No provider CLI found"}
+    />
+  );
+}
+
 export function RuntimeHealth() {
   const { data, error, refresh } = useDiagnostics();
+  const providers = useProvidersSummary();
   const { checkSecureStore, checking } = useDiagnosticsActions();
   const [now, setNow] = useState(() => Date.now());
 
@@ -108,6 +126,7 @@ export function RuntimeHealth() {
                 />
               ),
           },
+          { key: "providers", label: "Providers", value: providersValue(providers) },
           {
             key: "build",
             label: "Build",

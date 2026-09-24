@@ -7,6 +7,9 @@
  * `?scenario=` (ui-test builds only) selects a starting state:
  *   startup-error      — the core failed to start (newer database)
  *   keychain-failure   — the credential store check fails
+ *   providers-error    — provider detection fails
+ *   providers-none     — no provider CLI is installed
+ *   providers-outdated — Claude Code is installed but too old, and signed out
  */
 import type {
   AppInfo,
@@ -15,14 +18,32 @@ import type {
   EventEnvelope,
   EventPayload,
   IpcError,
+  ProviderStatus,
   SecureStoreCheck,
   Settings,
   SettingsPatch,
   SurfaceFlag,
 } from "@kalcode/protocol";
+import { detectFake, type ProviderScenario, providerCatalog } from "./memoryProviders.ts";
 import type { CommandName, Transport } from "./transport.ts";
 
-export type MemoryScenario = "default" | "startup-error" | "keychain-failure";
+export type MemoryScenario = "startup-error" | "keychain-failure" | ProviderScenario;
+
+const SCENARIOS: readonly MemoryScenario[] = [
+  "default",
+  "startup-error",
+  "keychain-failure",
+  "providers-error",
+  "providers-none",
+  "providers-outdated",
+];
+
+const AVAILABLE_SURFACES: ReadonlySet<SurfaceFlag["id"]> = new Set(["dashboard", "providers", "settings"]);
+
+export interface MemoryTransportOptions {
+  /** How long fake provider detection takes (the UI shows its busy state meanwhile). */
+  detectDelayMs?: number;
+}
 
 const SURFACES: SurfaceFlag["id"][] = [
   "dashboard",
@@ -62,7 +83,10 @@ export interface MemoryTransport extends Transport {
   subscriberCount(): number;
 }
 
-export function createMemoryTransport(scenario: MemoryScenario = readScenario()): MemoryTransport {
+export function createMemoryTransport(
+  scenario: MemoryScenario = readScenario(),
+  { detectDelayMs = 400 }: MemoryTransportOptions = {},
+): MemoryTransport {
   const startedAt = Date.now();
   const info: AppInfo = {
     name: "KalCode",
@@ -73,7 +97,7 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
     flags: {
       surfaces: SURFACES.map((id) => ({
         id,
-        state: id === "dashboard" || id === "settings" ? "available" : "gated",
+        state: AVAILABLE_SURFACES.has(id) ? "available" : "gated",
         visible: true,
       })),
     },
@@ -82,15 +106,17 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
   const events: EventEnvelope[] = [];
   const subscribers = new Set<(event: EventEnvelope) => void>();
   let lastCheck: { at: string; ok: boolean; backend: string } | null = null;
+  let providers: ProviderStatus[] = providerCatalog();
+  let detecting: Promise<ProviderStatus[]> | null = null;
 
-  const emit = (event: EventPayload) => {
+  const emit = (event: EventPayload, providerId: string | null = null) => {
     const envelope = {
       id: crypto.randomUUID(),
       seq: events.length + 1,
       version: 1,
       occurredAt: new Date().toISOString(),
       source: "core",
-      correlation: { workspaceId: null, threadId: null, missionId: null, providerId: null, requestId: null },
+      correlation: { workspaceId: null, threadId: null, missionId: null, providerId, requestId: null },
       ...event,
     } as EventEnvelope;
     events.push(envelope);
@@ -123,6 +149,37 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
 
   const requireCore = () => {
     if (startupError) fail(startupError);
+  };
+
+  /** Mirrors the native registry: serialized, cached, events only for changes. */
+  const detectProviders = async (): Promise<ProviderStatus[]> => {
+    await new Promise((resolve) => setTimeout(resolve, detectDelayMs));
+    if (scenario === "providers-error") {
+      fail({
+        category: "internal",
+        code: "detection_interrupted",
+        message: "Checking providers was interrupted.",
+        retryable: true,
+      });
+    }
+    const { next, changed } = detectFake(providers, scenario as ProviderScenario, new Date().toISOString());
+    providers = next;
+    for (const status of changed) {
+      const detection = status.detection;
+      if (!detection) continue;
+      emit(
+        {
+          type: "provider.detected",
+          payload: {
+            providerId: status.id,
+            installed: detection.state === "installed" || detection.state === "outdated",
+            version: detection.version,
+          },
+        },
+        status.id,
+      );
+    }
+    return providers;
   };
 
   const handlers: Record<CommandName, (args: Record<string, unknown>) => unknown> = {
@@ -231,6 +288,13 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
           : "Your system credential store refused access. Check that it's unlocked, then run the check again.",
       };
     },
+    providers_list: () => providers,
+    providers_detect: () => {
+      detecting ??= detectProviders().finally(() => {
+        detecting = null;
+      });
+      return detecting;
+    },
   };
 
   return {
@@ -254,5 +318,5 @@ export function createMemoryTransport(scenario: MemoryScenario = readScenario())
 function readScenario(): MemoryScenario {
   if (typeof location === "undefined") return "default";
   const value = new URLSearchParams(location.search).get("scenario");
-  return value === "startup-error" || value === "keychain-failure" ? value : "default";
+  return SCENARIOS.find((scenario) => scenario === value) ?? "default";
 }

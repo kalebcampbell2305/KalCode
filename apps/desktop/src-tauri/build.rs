@@ -13,6 +13,8 @@ const COMMANDS: &[&str] = &[
     "diagnostics_open_log_dir",
     "diagnostics_open_data_dir",
     "secure_store_check",
+    "providers_list",
+    "providers_detect",
 ];
 
 fn main() {

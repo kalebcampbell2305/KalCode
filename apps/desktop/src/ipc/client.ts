@@ -2,6 +2,7 @@ import type {
   BootState,
   Diagnostics,
   EventEnvelope,
+  ProviderStatus,
   SecureStoreCheck,
   Settings,
   SettingsPatch,
@@ -67,6 +68,16 @@ export class KalCodeClient {
 
   checkSecureStore(): Promise<SecureStoreCheck> {
     return this.call("secure_store_check");
+  }
+
+  /** Cached provider status; `detection` is null for providers not checked yet. */
+  listProviders(): Promise<ProviderStatus[]> {
+    return this.call("providers_list");
+  }
+
+  /** Runs read-only detection (version and sign-in status) for every provider. */
+  detectProviders(): Promise<ProviderStatus[]> {
+    return this.call("providers_detect");
   }
 
   async setNativeTheme(theme: NativeTheme): Promise<void> {

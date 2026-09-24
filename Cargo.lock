@@ -2117,6 +2117,7 @@ name = "kalcode-desktop"
 version = "0.1.0"
 dependencies = [
  "kalcode-native-core",
+ "kalcode-providers",
  "kalcode-secure-store",
  "serde",
  "serde_json",
@@ -2144,6 +2145,21 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "ts-rs",
+ "uuid",
+]
+
+[[package]]
+name = "kalcode-providers"
+version = "0.1.0"
+dependencies = [
+ "kalcode-contracts",
+ "kalcode-native-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tracing",
  "ts-rs",
  "uuid",
 ]

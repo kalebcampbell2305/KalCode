@@ -169,3 +169,32 @@ test("a database from a newer KalCode is refused with a clear explanation", asyn
     removeDataDir(dataDir);
   }
 });
+
+// Detection only runs `--version` and each provider's documented sign-in status command
+// (`claude auth status`, `codex login status`); it never sends a prompt or signs in.
+test("the Providers page detects the installed Claude Code CLI", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-"));
+  try {
+    const app = await launch(dataDir);
+    await expect(app.page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await app.page.getByRole("button", { name: "Providers" }).click();
+    await expect(app.page.getByRole("heading", { level: 1, name: "Providers" })).toBeVisible();
+
+    const claude = app.page.getByRole("region", { name: "Claude Code", exact: true });
+    await expect(claude.getByText(/^Installed, version \d+\.\d+\.\d+/)).toBeVisible({ timeout: 30_000 });
+    await expect(claude.getByText(/^(Signed in|Signed out|Sign-in status unknown)$/)).toBeVisible();
+    // Every provider ends with a definite result, never a spinner.
+    for (const name of ["Codex", "Gemini CLI"]) {
+      const region = app.page.getByRole("region", { name, exact: true });
+      await expect(region.getByText(/^(Installed, version|Outdated|Not installed|Couldn't check)/)).toBeVisible();
+    }
+    await expect(app.page.getByRole("button", { name: "Check again" })).toBeEnabled();
+
+    // The first detection is recorded in the event log.
+    await app.page.getByRole("button", { name: "Dashboard" }).click();
+    await expect(activity(app.page).getByText(/^Claude Code \d+\.\d+\.\d+/)).toBeVisible();
+    await closeGracefully(app);
+  } finally {
+    removeDataDir(dataDir);
+  }
+});
