@@ -1,5 +1,5 @@
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { type Browser, chromium, expect, type Page, test } from "@playwright/test";
@@ -8,16 +8,18 @@ import { type Browser, chromium, expect, type Page, test } from "@playwright/tes
 //   CARGO_TARGET_DIR=target/e2e pnpm tauri build --no-bundle --features e2e
 // Normal release builds ignore KALCODE_DATA_DIR and WebView2 overrides by design.
 const EXE = process.env.KALCODE_E2E_EXE ?? resolve(import.meta.dirname, "../../../../target/e2e/release/kalcode.exe");
-const PORT = 9333;
+const PORT = Number(process.env.KALCODE_E2E_CDP_PORT ?? 9333);
 
 test.skip(process.platform !== "win32", "Real-app E2E drives WebView2 and runs on Windows.");
 test.skip(!existsSync(EXE), `Build the app first: ${EXE}`);
 
 // WebView2's crash reporter can hold files in a finished run's folder for a while; sweep
-// folders left by earlier runs before starting.
+// folders left by earlier runs. Only stale ones: parallel runs may be using recent folders.
 test.beforeAll(() => {
+  const staleBefore = Date.now() - 30 * 60_000;
   for (const name of readdirSync(tmpdir())) {
-    if (name.startsWith("kalcode-e2e-")) removeDataDir(join(tmpdir(), name));
+    const dir = join(tmpdir(), name);
+    if (name.startsWith("kalcode-e2e-") && statSync(dir).mtimeMs < staleBefore) removeDataDir(dir);
   }
 });
 

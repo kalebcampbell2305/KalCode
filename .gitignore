@@ -38,3 +38,6 @@ apps/desktop/src-tauri/gen/
 apps/desktop/dist-ui-test/
 apps/website/qa/
 apps/desktop/qa/
+
+# Parallel development worktrees (see docs/DEVELOPMENT.md)
+.worktrees/
