@@ -389,8 +389,21 @@ fn file_changes_and_usage_are_recorded() {
             cost_usd_micros: None,
         },
     });
+    // Three file events for two distinct files: wait for the count and for every event, since the
+    // repeat edit of `src/main.rs` is recorded after the count has already reached two.
+    let file_events = |h: &Harness| {
+        h.events_for(&id)
+            .into_iter()
+            .filter(|e| {
+                matches!(
+                    e.event,
+                    EventPayload::FileModified { .. } | EventPayload::FileCreated { .. }
+                )
+            })
+            .count()
+    };
     wait_until("files", || {
-        h.runtime.get(&id).unwrap().files_changed == Some(2)
+        h.runtime.get(&id).unwrap().files_changed == Some(2) && file_events(&h) == 3
     });
     let paths: Vec<String> =
         h.events_for(&id)
