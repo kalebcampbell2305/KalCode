@@ -1,15 +1,16 @@
-/* Code surface: workspace header, terminal tab strip, terminal panels. */
+/*
+ * Code surface: a compact workspace header, then one framed terminal window that fills the rest
+ * of the window — a surface-2 tab strip on top of a terminal well in the shared terminal palette
+ * (--term-bg from @kalcode/ui/terminal.css, identical to the xterm theme).
+ */
 
 .code {
-  --terminal-bg: var(--color-code-bg);
+  --terminal-bg: var(--term-bg, var(--color-code-bg));
   display: flex;
   flex-direction: column;
   height: 100%;
   min-height: 0;
-}
-
-:global([data-theme="light"]) .code {
-  --terminal-bg: var(--color-surface);
+  padding-bottom: var(--space-4);
 }
 
 .loading {
@@ -23,38 +24,48 @@
 
 .header {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   gap: var(--space-6);
-  padding: calc(var(--page-py) + var(--space-2)) var(--page-px) var(--space-4);
+  padding: calc(var(--page-py) + var(--space-1)) var(--page-px) var(--space-3);
 }
 
 .heading {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
   min-width: 0;
 }
 
 .titleRow {
   display: flex;
+  flex: none;
   align-items: center;
   gap: var(--space-3);
   min-width: 0;
+  max-width: 60%;
 }
 
 .title {
   overflow: hidden;
-  font-size: var(--text-2xl);
-  font-weight: var(--weight-regular);
-  letter-spacing: var(--tracking-tight);
+  font-family: var(--font-display);
+  font-size: var(--type-headline);
+  font-weight: var(--type-headline-weight);
+  letter-spacing: var(--type-headline-tracking);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .path {
-  margin-top: var(--space-1);
+  min-width: 0;
   overflow: hidden;
+  padding: 0.125rem var(--space-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-xs);
+  background: var(--color-surface-2);
   color: var(--color-text-muted);
   font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  font-size: var(--type-small);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -70,21 +81,25 @@
   outline-offset: 4px;
 }
 
-/* ---------- Tab strip ---------- */
+/* ---------- Tab strip: the top of the terminal window ---------- */
 
 .tabBar {
   display: flex;
   align-items: flex-end;
   gap: var(--space-2);
-  padding: 0 var(--page-px);
-  border-bottom: 1px solid var(--color-border);
+  margin: 0 var(--page-px);
+  padding: var(--space-1) var(--space-1-5) 0;
+  border: 1px solid var(--color-border);
+  border-bottom-color: var(--color-border-subtle);
+  border-radius: var(--radius-panel) var(--radius-panel) 0 0;
+  background: var(--panel-sheen), var(--color-surface-2);
 }
 
 .tablist {
   display: flex;
   flex: 0 1 auto;
   align-items: flex-end;
-  gap: var(--space-1);
+  gap: 2px;
   min-width: 0;
   overflow-x: auto;
   scrollbar-width: none;
@@ -97,11 +112,13 @@
   align-items: center;
   gap: var(--space-2);
   max-width: 15rem;
-  height: 2.25rem;
-  padding: 0 var(--space-1-5) 0 var(--space-3);
+  height: 2.125rem;
+  padding: 0 var(--space-1-5) 0 var(--space-2-5);
+  border: 1px solid transparent;
+  border-bottom: 0;
   border-radius: var(--radius-sm) var(--radius-sm) 0 0;
   color: var(--color-text-muted);
-  font-size: var(--text-sm);
+  font-size: var(--type-ui);
   white-space: nowrap;
   cursor: pointer;
   transition:
@@ -114,24 +131,43 @@
   color: var(--color-text);
 }
 
+/* The active tab opens into the terminal well, lit along its top edge. */
 .tab[aria-selected="true"] {
+  border-color: var(--color-border);
   background: var(--terminal-bg);
   color: var(--color-text);
 }
 
+.tab[aria-selected="true"]::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  right: var(--space-1-5);
+  left: var(--space-1-5);
+  height: 2px;
+  border-radius: 0 0 2px 2px;
+  background: var(--color-accent);
+  box-shadow: 0 0 10px var(--color-glow);
+}
+
+/* Covers the strip's bottom hairline so the tab and the well read as one surface. */
 .tab[aria-selected="true"]::after {
   content: "";
   position: absolute;
-  right: var(--space-2);
-  bottom: 0;
-  left: var(--space-2);
-  height: 2px;
-  border-radius: 2px 2px 0 0;
-  background: var(--color-accent);
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 1px;
+  background: var(--terminal-bg);
 }
 
 .tab:focus-visible {
   outline-offset: -2px;
+}
+
+.tabGlyph {
+  display: inline-flex;
+  flex: none;
 }
 
 .tabDot {
@@ -139,15 +175,16 @@
   width: 0.4375rem;
   height: 0.4375rem;
   border-radius: var(--radius-full);
-  background: var(--color-idle);
+  background: var(--status-muted);
 }
 
-.tabDot[data-tone="live"] {
-  background: var(--color-live);
+.tabDot[data-tone="working"] {
+  background: var(--status-working);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--status-working) 60%, transparent);
 }
 
-.tabDot[data-tone="danger"] {
-  background: var(--color-danger);
+.tabDot[data-tone="failed"] {
+  background: var(--status-failed);
 }
 
 .tabLabel {
@@ -156,8 +193,12 @@
 }
 
 .tabState {
-  color: var(--color-text-faint);
-  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  font-family: var(--font-label);
+  font-size: var(--type-label);
+  font-weight: var(--type-label-weight);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
 }
 
 .tabClose {
@@ -194,16 +235,24 @@
   flex: none;
   align-items: center;
   gap: 1px;
-  height: 2.25rem;
+  height: 2.125rem;
 }
 
-/* ---------- Panels ---------- */
+/* ---------- Panels: the terminal well ---------- */
 
 .panels {
   position: relative;
   flex: 1;
   min-height: 0;
+  margin: 0 var(--page-px);
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-top: 0;
+  border-radius: 0 0 var(--radius-panel) var(--radius-panel);
   background: var(--terminal-bg);
+  box-shadow:
+    var(--shadow-panel),
+    inset 0 1px 0 var(--color-border-subtle);
 }
 
 .panel {
@@ -221,13 +270,13 @@
   display: flex;
   flex: 1;
   align-items: flex-start;
-  padding: var(--space-10) var(--page-px);
+  padding: var(--space-8) var(--space-8);
 }
 
 .xtermHost {
   flex: 1;
   min-height: 0;
-  padding-left: calc(var(--page-px) - var(--space-3));
+  padding-left: var(--space-1);
 }
 
 /* xterm.js lays out inside its element; padding here is subtracted by the fit addon. */
@@ -246,20 +295,83 @@
   outline: none;
 }
 
+/* Keyboard focus inside the terminal lights the well. */
+.panels:has(:global(.xterm:focus-within)) {
+  border-color: var(--color-border-lit-soft);
+}
+
 .endedBar {
   display: flex;
   flex: none;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-2) var(--page-px);
+  padding: var(--space-2) var(--space-4);
   border-top: 1px solid var(--color-border);
-  background: var(--color-surface);
-  font-size: var(--text-sm);
+  background: var(--color-surface-2);
+  font-size: var(--type-ui);
 }
 
 .endedText {
   margin-right: auto;
   color: var(--color-text-secondary);
+}
+
+/* ---------- Status bar: the foot of the terminal window ---------- */
+
+.code:has(.statusBar) .panels {
+  border-radius: 0;
+}
+
+.statusBar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-4);
+  min-width: 0;
+  height: 1.75rem;
+  margin: 0 var(--page-px);
+  padding: 0 var(--space-3);
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-top-color: var(--color-border-subtle);
+  border-radius: 0 0 var(--radius-panel) var(--radius-panel);
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
+  white-space: nowrap;
+}
+
+.statusItem {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.statusStrong {
+  color: var(--color-text-secondary);
+  font-weight: var(--weight-medium);
+}
+
+.statusKeys {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-left: auto;
+  color: var(--color-text-muted);
+}
+
+.statusKeys > span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+@media (max-width: 1100px) {
+  .statusKeys > span:not(:first-child) {
+    display: none;
+  }
 }
 
 /* ---------- Empty state and recents ---------- */
@@ -272,7 +384,11 @@
 
 .recentList {
   margin: 0;
-  padding: 0;
+  padding: var(--space-1) var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-panel);
+  background: var(--panel-sheen), var(--color-surface-1);
+  box-shadow: var(--shadow-panel);
   list-style: none;
 }
 
@@ -283,7 +399,7 @@
   gap: var(--space-4);
   min-height: var(--row-h);
   padding: var(--space-2) 0;
-  border-bottom: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .recentRow:last-child {
@@ -299,7 +415,8 @@
 .recentName {
   overflow: hidden;
   color: var(--color-text);
-  font-size: var(--text-md);
+  font-size: var(--type-ui);
+  font-weight: var(--weight-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -312,14 +429,14 @@
   overflow: hidden;
   color: var(--color-text-muted);
   font-family: var(--font-mono);
-  font-size: var(--text-xs);
+  font-size: var(--type-small);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .recentTime {
   color: var(--color-text-faint);
-  font-size: var(--text-xs);
+  font-size: var(--type-small);
   white-space: nowrap;
 }
 

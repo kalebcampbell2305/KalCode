@@ -1,3 +1,4 @@
+/* New thread: a launch form inside the framed thread pane. */
 .pane {
   flex: 1;
   min-height: 0;
@@ -7,25 +8,38 @@
 .inner {
   display: flex;
   flex-direction: column;
-  gap: var(--space-6);
-  max-width: 40rem;
-  padding: var(--space-5) var(--page-px) var(--space-10);
+  gap: var(--space-5);
+  max-width: 46rem;
+  padding: var(--space-5) var(--space-6) var(--space-10);
 }
 
 .header {
   display: flex;
   flex-direction: column;
   gap: var(--space-1);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.eyebrow {
+  color: var(--color-accent-text);
+  font-family: var(--font-label);
+  font-size: var(--type-label);
+  font-weight: var(--type-label-weight);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
 }
 
 .title {
-  font-size: var(--text-xl);
-  font-weight: var(--weight-regular);
+  font-family: var(--font-display);
+  font-size: 1.125rem;
+  font-weight: var(--type-headline-weight);
+  letter-spacing: var(--type-headline-tracking);
 }
 
 .description {
   color: var(--color-text-muted);
-  font-size: var(--text-sm);
+  font-size: var(--type-ui);
 }
 
 .loading {
@@ -38,6 +52,40 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
+}
+
+/* What will launch: provider identity, model, workspace, mode. Mirrors the controls below. */
+.launch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-3) var(--space-3-5);
+  border: 1px solid var(--color-border-lit-soft);
+  border-radius: var(--radius-md);
+  background: radial-gradient(18rem 6rem at 0% 0%, var(--color-accent-soft), transparent 70%), var(--color-surface-2);
+  box-shadow: 0 0 24px -14px var(--color-glow);
+}
+
+.launchWhere {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
+}
+
+.launchWhere strong {
+  overflow: hidden;
+  color: var(--color-text);
+  font-weight: var(--weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.launchMode {
+  margin-left: auto;
 }
 
 .pair {
@@ -55,13 +103,14 @@
 
 .label {
   color: var(--color-text);
-  font-size: var(--text-sm);
+  font-size: var(--type-ui);
   font-weight: var(--weight-medium);
 }
 
 .hint {
   color: var(--color-text-muted);
-  font-size: var(--text-xs);
+  font-size: var(--type-small);
+  line-height: var(--leading-normal);
 }
 
 .providerGroup {
@@ -77,13 +126,14 @@
   padding: 0;
   list-style: none;
   color: var(--color-text-muted);
-  font-size: var(--text-xs);
+  font-size: var(--type-small);
   text-align: left;
 }
 
 .unavailable li {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: var(--space-1-5);
 }
 
@@ -99,8 +149,8 @@
 }
 
 .error {
-  color: var(--color-danger-text);
-  font-size: var(--text-sm);
+  color: var(--status-failed-text);
+  font-size: var(--type-ui);
 }
 
 .footer {
@@ -108,13 +158,16 @@
   align-items: center;
   gap: var(--space-2);
   padding-top: var(--space-4);
-  border-top: 1px solid var(--color-border);
+  border-top: 1px solid var(--color-border-subtle);
 }
 
 .shortcut {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
   margin-left: auto;
-  color: var(--color-text-faint);
-  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
 }
 
 @media (max-width: 1100px) {

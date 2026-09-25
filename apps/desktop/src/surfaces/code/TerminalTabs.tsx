@@ -6,6 +6,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
   IconButton,
+  ProviderGlyph,
   Tooltip,
 } from "@kalcode/ui/components";
 import { ChevronDown, Plus, SquareTerminal, X } from "lucide-react";
@@ -31,10 +32,11 @@ interface TerminalTabsProps {
   onNew: (shellId: string | null) => void;
 }
 
-function statusTone(terminal: TerminalInfo): "live" | "idle" | "danger" {
-  if (terminal.status === "running") return "live";
-  if (terminal.status === "exited" && terminal.exitCode !== 0 && terminal.exitCode !== null) return "danger";
-  return "idle";
+/** Contract tones: a running shell is working (green), a failed exit is failed (red), else muted. */
+function statusTone(terminal: TerminalInfo): "working" | "muted" | "failed" {
+  if (terminal.status === "running") return "working";
+  if (terminal.status === "exited" && terminal.exitCode !== 0 && terminal.exitCode !== null) return "failed";
+  return "muted";
 }
 
 /**
@@ -134,9 +136,12 @@ export function TerminalTabs({
                 }
               }}
             >
-              <span className={styles.tabDot} data-tone={statusTone(terminal)} aria-hidden="true" />
+              <span className={styles.tabGlyph} aria-hidden="true">
+                <ProviderGlyph provider="shell" size="xs" />
+              </span>
               <span className={styles.tabLabel}>{label}</span>
               {terminal.status === "running" ? null : <span className={styles.tabState}>Ended</span>}
+              <span className={styles.tabDot} data-tone={statusTone(terminal)} aria-hidden="true" />
               {/* Mouse affordance; keyboard users close with Delete or Ctrl+Shift+W. */}
               <span
                 className={styles.tabClose}
