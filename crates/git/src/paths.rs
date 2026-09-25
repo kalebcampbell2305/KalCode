@@ -123,6 +123,51 @@ impl WorkspaceRoot {
         }
     }
 
+    /// Opens a workspace file for reading **and then** verifies the opened handle.
+    ///
+    /// Resolving a path and opening it afterwards is a check-then-use race: a symlink or
+    /// junction swapped in between redirects the open outside the workspace. Here the open
+    /// comes first; [`Self::verify_opened`] then asks the operating system where the opened
+    /// handle really is and refuses it unless that is inside the workspace (and not in `.git`).
+    /// A handle obtained through a swap — even one swapped back afterwards — points outside
+    /// and is refused. Hard links are the same file by definition and pass: their content lives
+    /// inside the workspace.
+    ///
+    /// Every read of workspace file content in this crate goes through here; consumers that
+    /// read by handle use [`crate::handles::HandleRegistry::open`].
+    pub fn open_verified(&self, rel: &RelPath) -> Result<OpenedFile> {
+        let file = std::fs::File::open(rel.to_native(&self.root)).map_err(|e| {
+            KalError::new(
+                ErrorCategory::Filesystem,
+                "file_unavailable",
+                "KalCode couldn't read that file.",
+            )
+            .with_source(e)
+        })?;
+        let path = self.verify_opened(rel, &file)?;
+        if !file.metadata().is_ok_and(|m| m.is_file()) {
+            return Err(KalError::validation(
+                "path_not_a_file",
+                "That isn't a file KalCode can read.",
+            ));
+        }
+        Ok(OpenedFile { file, path })
+    }
+
+    /// Verifies an already opened `file` (opened through `rel`): its final path — asked of the
+    /// opened handle itself (`GetFinalPathNameByHandleW` on Windows, `/proc/self/fd` on Linux;
+    /// elsewhere the handle's device + inode must equal those of `rel`'s canonical path now) —
+    /// must be inside the workspace. Returns that path.
+    pub fn verify_opened(&self, rel: &RelPath, file: &std::fs::File) -> Result<PathBuf> {
+        let swapped = || outside("That file changed while KalCode was opening it.");
+        let path = opened_path(file, || {
+            self.resolve(rel).ok().filter(|r| r.exists).map(|r| r.path)
+        })
+        .ok_or_else(swapped)?;
+        self.check_inside(&path)?;
+        Ok(path)
+    }
+
     fn check_inside(&self, canonical: &Path) -> Result<()> {
         if self.contains(canonical) {
             Ok(())
@@ -173,6 +218,159 @@ fn is_git_dir_name(name: &std::ffi::OsStr) -> bool {
         let trimmed = n.trim_end_matches(['.', ' ']);
         trimmed.eq_ignore_ascii_case(".git")
     })
+}
+
+/// A workspace file opened by [`WorkspaceRoot::open_verified`].
+#[derive(Debug)]
+pub struct OpenedFile {
+    pub file: std::fs::File,
+    /// The canonical path the opened handle was verified against.
+    pub path: PathBuf,
+}
+
+/// The final path of an opened handle, asked of the operating system. `canonical_now` is only
+/// used where no such query exists: the handle is accepted as `canonical_now()` when both name
+/// the same device + inode.
+#[cfg(windows)]
+fn opened_path(
+    file: &std::fs::File,
+    _canonical_now: impl FnOnce() -> Option<PathBuf>,
+) -> Option<PathBuf> {
+    final_path_by_handle(file).ok()
+}
+
+#[cfg(target_os = "linux")]
+fn opened_path(
+    file: &std::fs::File,
+    _canonical_now: impl FnOnce() -> Option<PathBuf>,
+) -> Option<PathBuf> {
+    use std::os::fd::AsRawFd;
+    std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())).ok()
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn opened_path(
+    file: &std::fs::File,
+    canonical_now: impl FnOnce() -> Option<PathBuf>,
+) -> Option<PathBuf> {
+    let path = canonical_now()?;
+    let expected = same_file::Handle::from_path(&path).ok()?;
+    let actual = same_file::Handle::from_file(file.try_clone().ok()?).ok()?;
+    (expected == actual).then_some(path)
+}
+
+/// `GetFinalPathNameByHandleW` (normalized, DOS volume name — the same form
+/// `std::fs::canonicalize` returns, `\\?\C:\…`).
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn final_path_by_handle(file: &std::fs::File) -> std::io::Result<PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_NAME_NORMALIZED, GetFinalPathNameByHandleW, VOLUME_NAME_DOS,
+    };
+    let handle = file.as_raw_handle();
+    let mut buffer = vec![0u16; 512];
+    loop {
+        let capacity = u32::try_from(buffer.len()).unwrap_or(u32::MAX);
+        // SAFETY: `handle` is the live handle owned by `file`, borrowed for the duration of the
+        // call; `buffer` is writable for `capacity` UTF-16 units and the API writes at most that
+        // many (it returns the required size instead when the buffer is too small).
+        let written = unsafe {
+            GetFinalPathNameByHandleW(
+                handle,
+                buffer.as_mut_ptr(),
+                capacity,
+                FILE_NAME_NORMALIZED | VOLUME_NAME_DOS,
+            )
+        } as usize;
+        if written == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if written < buffer.len() {
+            buffer.truncate(written);
+            return Ok(PathBuf::from(std::ffi::OsString::from_wide(&buffer)));
+        }
+        if written > 32 * 1024 + 1 {
+            return Err(std::io::Error::other("final path too long"));
+        }
+        buffer.resize(written + 1, 0);
+    }
+}
+
+/// Where `path` is, as far as the filesystem can tell today: the nearest existing ancestor is
+/// canonicalized (links, junctions, 8.3 names and letter case resolved) and the missing rest is
+/// appended lexically (`.` dropped, `..` popped). Used for locations that may not exist yet.
+pub fn resolve_nearest(path: &Path) -> PathBuf {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    };
+    let mut rest: Vec<Component<'_>> = Vec::new();
+    let mut current: &Path = &absolute;
+    loop {
+        if let Ok(canonical) = std::fs::canonicalize(current) {
+            let mut out = canonical;
+            for component in rest.iter().rev() {
+                match component {
+                    Component::CurDir => {}
+                    Component::ParentDir => {
+                        out.pop();
+                    }
+                    other => out.push(other.as_os_str()),
+                }
+            }
+            return out;
+        }
+        match (current.parent(), current.components().next_back()) {
+            (Some(parent), Some(last)) => {
+                rest.push(last);
+                current = parent;
+            }
+            _ => return lexical(&absolute),
+        }
+    }
+}
+
+/// `.` dropped and `..` popped without touching the filesystem.
+pub fn lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Component-wise "`path` is `ancestor` or below it", after removing Windows verbatim
+/// prefixes; letter case is ignored on Windows (NTFS folders are case-insensitive).
+pub fn is_within(path: &Path, ancestor: &Path) -> bool {
+    let path = plain(path);
+    let ancestor = plain(ancestor);
+    let mut inner = path.components();
+    for want in ancestor.components() {
+        let Some(have) = inner.next() else {
+            return false;
+        };
+        let same = if cfg!(windows) {
+            have.as_os_str().to_string_lossy().to_lowercase()
+                == want.as_os_str().to_string_lossy().to_lowercase()
+        } else {
+            have == want
+        };
+        if !same {
+            return false;
+        }
+    }
+    true
 }
 
 /// A location inside a workspace, checked at the time it was resolved.

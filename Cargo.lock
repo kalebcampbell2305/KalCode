@@ -2375,12 +2375,14 @@ dependencies = [
  "kalcode-native-core",
  "notify",
  "rusqlite",
+ "same-file",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
  "tracing",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

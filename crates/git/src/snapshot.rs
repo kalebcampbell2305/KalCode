@@ -18,7 +18,7 @@
 
 use std::collections::HashMap;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::mpsc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -325,28 +325,27 @@ fn import_blobs(
 ) -> Result<Vec<(usize, String)>> {
     let marks = shadow.join(format!("kalcode-marks-{}", uuid::Uuid::new_v4()));
     let root = ws.path().to_path_buf();
-    let jobs: Vec<(usize, PathBuf, bool)> = to_hash
+    let workspace = ws.clone();
+    let jobs: Vec<(usize, Option<RelPath>, bool)> = to_hash
         .iter()
         .map(|&i| {
             let f = &files[i];
-            (
-                i,
-                RelPath::parse(&f.rel)
-                    .map(|r| r.to_native(&root))
-                    .unwrap_or_default(),
-                f.mode == 0o120000,
-            )
+            (i, RelPath::parse(&f.rel).ok(), f.mode == 0o120000)
         })
         .collect();
     let writer = Box::new(move |pipe: &mut dyn Write| -> std::io::Result<()> {
-        for (i, path, link) in jobs {
+        for (i, rel, link) in jobs {
+            let Some(rel) = rel else {
+                continue;
+            };
             let content = if link {
-                match std::fs::read_link(&path) {
+                // The link's own target text is stored; the link is never followed.
+                match std::fs::read_link(rel.to_native(&root)) {
                     Ok(target) => target.to_string_lossy().replace('\\', "/").into_bytes(),
                     Err(_) => continue,
                 }
             } else {
-                match read_capped(&path, large_limit) {
+                match read_capped(&workspace, &rel, large_limit) {
                     Some(bytes) => bytes,
                     None => continue,
                 }
@@ -382,9 +381,12 @@ fn import_blobs(
 }
 
 /// Reads a file that must still be within the size limit (it may have grown since the walk).
-fn read_capped(path: &Path, limit: u64) -> Option<Vec<u8>> {
+/// Open-then-verify ([`WorkspaceRoot::open_verified`]): a file swapped for a link to somewhere
+/// outside the workspace after the walk is refused (skipped like any unreadable file), so
+/// outside content never enters a checkpoint.
+fn read_capped(ws: &WorkspaceRoot, rel: &RelPath, limit: u64) -> Option<Vec<u8>> {
     use std::io::Read;
-    let file = std::fs::File::open(path).ok()?;
+    let file = ws.open_verified(rel).ok()?.file;
     let mut bytes = Vec::new();
     file.take(limit + 1).read_to_end(&mut bytes).ok()?;
     (bytes.len() as u64 <= limit).then_some(bytes)

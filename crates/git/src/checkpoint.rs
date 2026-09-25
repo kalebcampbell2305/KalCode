@@ -214,22 +214,41 @@ impl CheckpointStore {
             ])
     }
 
-    /// Creates the shadow repository on first use.
-    fn prepare(&self, git: &Git, ws: &WorkspaceRoot) -> Result<PathBuf> {
-        let shadow = self.shadow_dir(ws.id())?;
-        if let Ok(base) = std::fs::canonicalize(&self.base_dir)
-            && base.starts_with(ws.path())
-        {
+    /// The store and the workspace must never overlap, in either direction: a store inside
+    /// the workspace would be snapshotted into itself and could be overwritten by a restore; a
+    /// workspace inside the store could overwrite shadow repositories. Checked on **every**
+    /// use, including the first one when the store folder doesn't exist yet: the nearest
+    /// existing ancestor is canonicalized (links, junctions, letter case) and the missing rest
+    /// appended ([`crate::paths::resolve_nearest`]); the plain lexical form is checked too.
+    fn check_location(&self, ws: &WorkspaceRoot) -> Result<()> {
+        let candidates = [
+            crate::paths::resolve_nearest(&self.base_dir),
+            crate::paths::resolve_nearest(&crate::paths::lexical(&self.base_dir)),
+        ];
+        let overlaps = candidates.iter().any(|base| {
+            crate::paths::is_within(base, ws.path()) || crate::paths::is_within(ws.path(), base)
+        });
+        if overlaps {
             return Err(git_error(
                 "checkpoint_store_inside_workspace",
                 "KalCode's checkpoint folder is inside this workspace, so checkpoints are unavailable here.",
             ));
         }
+        Ok(())
+    }
+
+    /// Creates the shadow repository on first use.
+    fn prepare(&self, git: &Git, ws: &WorkspaceRoot) -> Result<PathBuf> {
+        let shadow = self.shadow_dir(ws.id())?;
+        // Before anything is created: on first use the folder doesn't exist yet.
+        self.check_location(ws)?;
         if !shadow.join("HEAD").exists() {
             std::fs::create_dir_all(&self.base_dir).map_err(fs_error(
                 "checkpoint_store_unavailable",
                 "KalCode couldn't create its checkpoint folder.",
             ))?;
+            // Again now that it exists (a link swapped in meanwhile resolves differently).
+            self.check_location(ws)?;
             git.cmd()
                 .args(["init", "--bare", "--quiet"])
                 .arg(crate::paths::plain(&shadow))

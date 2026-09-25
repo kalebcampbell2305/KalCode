@@ -145,6 +145,30 @@ impl HandleRegistry {
         })
     }
 
+    /// Resolves a handle and opens its file for reading with open-then-verify
+    /// ([`WorkspaceRoot::open_verified`]): the opened handle is proven to be the file the handle's
+    /// path resolves to inside the workspace **after** opening, so a link swapped in between
+    /// the check and the open can't redirect the read. Consumers that read file content by
+    /// handle use this, never `resolve` followed by their own open.
+    pub fn open(
+        &self,
+        workspace: &WorkspaceRoot,
+        handle: &FileHandle,
+    ) -> Result<(ResolvedFile, std::fs::File)> {
+        let resolved = self.resolve(workspace, handle)?;
+        let opened = workspace.open_verified(&resolved.rel)?;
+        Ok((
+            ResolvedFile {
+                rel: resolved.rel,
+                location: Resolved {
+                    path: opened.path,
+                    exists: true,
+                },
+            },
+            opened.file,
+        ))
+    }
+
     /// The relative path behind a handle without touching the filesystem (for git pathspecs;
     /// git itself never leaves the repository).
     pub fn rel_path(&self, workspace_id: &str, handle: &FileHandle) -> Result<RelPath> {

@@ -22,6 +22,15 @@ sha2 = "0.10"
 ignore = "0.4"
 notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
 
+# Open-then-verify reads (`paths::opened_path`): the final path of an opened handle.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+
+# Handle identity (device + inode) where no final-path query exists (macOS, BSDs). Already in the
+# tree through `ignore` → `walkdir`.
+[target.'cfg(all(unix, not(target_os = "linux")))'.dependencies]
+same-file = "1"
+
 [dev-dependencies]
 tempfile.workspace = true
 
