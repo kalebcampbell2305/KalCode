@@ -80,6 +80,7 @@ fn creates_threads_with_counts_and_providers() {
         ),
         ("open a new Claude Code thread", ProviderId::CLAUDE_CODE, 1),
         ("open seventeen more codex threads", ProviderId::CODEX, 17),
+        ("Open 4 codecs threads.", ProviderId::CODEX, 4),
     ];
     for (text, provider, count) in cases {
         assert_eq!(intent(text), create(provider, *count), "{text}");

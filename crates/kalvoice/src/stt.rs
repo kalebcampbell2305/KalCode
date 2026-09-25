@@ -158,6 +158,9 @@ mod whisper {
 
     use super::{SpeechRecognizer, SttError, clean_transcript};
 
+    const VOCABULARY: &str =
+        "KalCode, KalVoice, Claude Code, Codex, Gemini CLI, threads, workspace, terminal.";
+
     pub struct WhisperRecognizer {
         context: WhisperContext,
         english_only: bool,
@@ -199,6 +202,8 @@ mod whisper {
             params.set_print_progress(false);
             params.set_print_realtime(false);
             params.set_print_timestamps(false);
+            // Primes the model with KalCode's vocabulary (product and provider names).
+            params.set_initial_prompt(VOCABULARY);
             state
                 .full(params, audio)
                 .map_err(|e| SttError::Failed(e.to_string()))?;

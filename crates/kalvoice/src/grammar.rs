@@ -544,7 +544,8 @@ fn provider_words(words: &[String]) -> Option<&'static str> {
     let joined = words.join(" ");
     Some(match joined.as_str() {
         "claude code" | "claude" => ProviderId::CLAUDE_CODE,
-        "codex" => ProviderId::CODEX,
+        // "codecs" and "code x": how speech recognition often hears "Codex".
+        "codex" | "codecs" | "code x" => ProviderId::CODEX,
         "gemini cli" | "gemini" => ProviderId::GEMINI_CLI,
         _ => return None,
     })
