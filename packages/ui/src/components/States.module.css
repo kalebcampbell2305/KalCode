@@ -25,18 +25,14 @@
   align-items: center;
 }
 
-/* A designed well: sunken surface, hairline, and a faint constellation field in the corner. */
+/* A quiet surface keeps the next action and the actual state prominent. */
 .framed {
   position: relative;
   padding: var(--space-6) var(--space-6);
   overflow: hidden;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-panel);
-  background:
-    radial-gradient(circle at 88% 22%, var(--color-glow) 0 1.5px, transparent 2px),
-    radial-gradient(circle at 76% 58%, var(--color-border-strong) 0 1px, transparent 1.5px),
-    radial-gradient(circle at 94% 74%, var(--color-border-strong) 0 1px, transparent 1.5px),
-    radial-gradient(28rem 12rem at 100% 0%, var(--color-accent-soft), transparent 70%), var(--color-bg-sunken);
+  background: var(--color-bg-sunken);
 }
 
 .art {
@@ -52,8 +48,7 @@
   height: 2.75rem;
   border: 1px solid var(--color-border-lit-soft);
   border-radius: var(--radius-md);
-  background: linear-gradient(180deg, var(--color-accent-soft), transparent), var(--color-surface-2);
-  box-shadow: 0 0 22px -8px var(--color-glow);
+  background: var(--color-surface-2);
   color: var(--color-accent-text);
 }
 

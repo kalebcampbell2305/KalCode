@@ -1,4 +1,4 @@
-/* Full-window startup screens: calm and cinematic. A soft constellation glow behind one framed card. */
+/* Full-window startup screens keep setup and recovery actions prominent. */
 .screen {
   position: relative;
   display: grid;
@@ -6,13 +6,7 @@
   min-height: 100vh;
   padding: var(--space-8);
   overflow: hidden;
-  background:
-    radial-gradient(circle at 18% 22%, var(--color-glow) 0 1.5px, transparent 2px),
-    radial-gradient(circle at 78% 16%, var(--color-border-strong) 0 1px, transparent 1.5px),
-    radial-gradient(circle at 86% 72%, var(--color-border-strong) 0 1px, transparent 1.5px),
-    radial-gradient(circle at 10% 80%, var(--color-border-strong) 0 1px, transparent 1.5px),
-    radial-gradient(60rem 40rem at 50% -10%, var(--color-accent-soft), transparent 70%),
-    radial-gradient(40rem 24rem at 50% 110%, var(--color-accent-soft), transparent 70%), var(--color-bg);
+  background: var(--color-bg);
 }
 
 .panel {

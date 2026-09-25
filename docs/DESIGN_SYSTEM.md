@@ -5,6 +5,13 @@ one product family.
 
 ## Principles
 
+- **Desktop visuals must earn their place.** Every technical element conveys actual state,
+  enables an action, improves navigation, or supports the KalCode brand without distracting
+  from work. No decorative node networks, fake graphs, random sparklines, fabricated analytics,
+  or placeholder technical art. Charts require a real, identified data source; unavailable
+  telemetry stays unavailable. The Dashboard's true empty state is plain guidance plus
+  Open Code and New Session actions, without an illustration. This rule applies throughout
+  the desktop app; the marketing website may retain its cinematic brand treatment.
 - **Dark, polished, cinematic, technical.** Near-black space, navy panels, fine hairlines, and
   electric blue used sparingly. The brand artwork is the one bold element; the product UI is
   composed of framed panels with quiet sheen, not of cards, gradients or glow for their own sake.

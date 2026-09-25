@@ -16,7 +16,6 @@ import { useNavigation } from "../../shell/navigation.tsx";
 import { usePermissions } from "../permissions/PermissionsProvider.tsx";
 import { useThreadsIntent } from "../threads/intent.tsx";
 import { AgentCard } from "./AgentCard.tsx";
-import { ConstellationArt } from "./ConstellationArt.tsx";
 import styles from "./DashboardBoard.module.css";
 import {
   CHIP_LABELS,
@@ -255,12 +254,7 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
   let body: React.ReactNode;
   if (state.status === "unavailable") {
     body = (
-      <EmptyState
-        art={<ConstellationArt />}
-        artStyle="free"
-        title="Agents arrive with provider support"
-        className={styles.state}
-      >
+      <EmptyState title="Agents arrive with provider support" className={styles.state}>
         <p>
           When Claude Code, Codex or Gemini CLI run in your projects, each one appears here with its provider, model,
           what it is doing now and its status. This build doesn't run threads yet, so there's nothing to show.
@@ -295,9 +289,7 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
   } else if (counts.all === 0) {
     body = (
       <EmptyState
-        art={<ConstellationArt />}
-        artStyle="free"
-        title="No agents yet"
+        title="No active sessions yet."
         className={styles.state}
         actions={
           <>
@@ -310,12 +302,15 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
                 threadsIntent.request("new");
               }}
             >
-              New thread
+              New Session
             </Button>
           </>
         }
       >
-        <p>No threads are open. Start a Claude Code pane in a project, or a thread, and it appears here live.</p>
+        <p>
+          Open <ProviderMark provider="claude-code" size="sm" />, <ProviderMark provider="codex" size="sm" />, or{" "}
+          <ProviderMark provider="gemini-cli" name="Gemini" size="sm" /> to start working.
+        </p>
       </EmptyState>
     );
   } else if (groups.length === 0) {

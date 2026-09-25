@@ -442,8 +442,8 @@ test.describe("states", () => {
 
   test("empty: guides the person to start work", async ({ page }) => {
     await open(page, "empty");
-    await expect(board(page).getByRole("heading", { name: "No agents yet" })).toBeVisible();
-    await board(page).getByRole("button", { name: "New thread" }).click();
+    await expect(board(page).getByRole("heading", { name: "No active sessions yet." })).toBeVisible();
+    await board(page).getByRole("button", { name: "New Session" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toBeVisible();
   });
 });

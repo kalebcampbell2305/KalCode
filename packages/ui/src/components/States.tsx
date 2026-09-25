@@ -16,7 +16,7 @@ export interface EmptyStateProps {
   children?: ReactNode;
   actions?: ReactNode;
   /**
-   * Frame the state as a designed well: a sunken surface with a faint constellation field.
+   * Frame the state with a quiet sunken surface and border.
    * Default true; pass false when the state already sits inside a Panel.
    */
   framed?: boolean;
