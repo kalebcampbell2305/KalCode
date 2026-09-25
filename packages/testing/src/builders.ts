@@ -114,6 +114,25 @@ export function defaultScopesFor(action: ActionKind): PermissionScope[] {
       return ["deploy.production"];
     case "tool":
       return ["terminal.execute"];
+    case "process_signal":
+      return ["process.control"];
+    case "remote_connect":
+      return ["remote.connect"];
+    case "context_share":
+      return ["context.share"];
+    case "memory_write":
+      return ["memory.write"];
+    case "delegate":
+      return ["agent.delegate"];
+    case "restore":
+      return ["filesystem.write", "destructive"];
+    case "automation_change":
+      return ["automation.manage"];
+    case "doctor_fix":
+      return ["terminal.execute"];
+    case "create_threads":
+    case "resume_threads":
+      return ["thread.start"];
   }
 }
 
@@ -139,6 +158,29 @@ function summarize(action: ActionKind): string {
       return `Deploy to ${action.target}`;
     case "tool":
       return `Use ${action.tool}`;
+    case "process_signal":
+      return `${action.signal === "kill" ? "Kill" : "Stop"} ${action.processName} (pid ${action.pid})`;
+    case "remote_connect":
+      return `Connect to ${action.address}`;
+    case "context_share":
+      return `Share ${action.items} context items (${action.bytes} bytes)`;
+    case "memory_write":
+      return `Save to ${action.scope.kind} memory`;
+    case "delegate":
+      return `Delegate to agent ${action.delegateAgentId}`;
+    case "restore":
+      return `Restore ${action.files} files from a checkpoint${action.resetBranch ? " and reset the branch" : ""}`;
+    case "automation_change":
+      return `${action.change.charAt(0).toUpperCase()}${action.change.slice(1)} an automation`;
+    case "doctor_fix":
+      return `Apply fix ${action.fixCode} to ${action.target}`;
+    case "create_threads": {
+      const provider = PROVIDER_NAMES[action.providerId] ?? action.providerId;
+      return `Open ${action.count} ${provider} thread${action.count === 1 ? "" : "s"}`;
+    }
+    case "resume_threads":
+      if (action.scope.kind === "all") return "Resume all threads";
+      return action.scope.kind === "workspace" ? "Resume threads in a workspace" : "Resume a thread";
   }
 }
 
@@ -153,6 +195,24 @@ const DEFAULT_ACTIONS: { [K in ActionKindName]: ActionOf<K> } = {
   browser: { kind: "browser", action: "navigate", url: "http://localhost:5173/" },
   deploy: { kind: "deploy", target: "production" },
   tool: { kind: "tool", tool: "web_search", inputSummary: "query: vite 8 migration" },
+  process_signal: { kind: "process_signal", pid: 4242, processName: "node", signal: "terminate" },
+  remote_connect: { kind: "remote_connect", hostId: "0192f3c4-0000-7000-8000-000000000001", address: "build-box:22" },
+  context_share: { kind: "context_share", packageId: "0192f3c4-0000-7000-8000-000000000002", items: 3, bytes: 4096 },
+  memory_write: { kind: "memory_write", memoryId: null, scope: { kind: "global" } },
+  delegate: {
+    kind: "delegate",
+    contractId: "0192f3c4-0000-7000-8000-000000000003",
+    delegateAgentId: "0192f3c4-0000-7000-8000-000000000004",
+  },
+  restore: { kind: "restore", checkpointId: "0192f3c4-0000-7000-8000-000000000005", files: 4, resetBranch: false },
+  automation_change: {
+    kind: "automation_change",
+    automationId: "0192f3c4-0000-7000-8000-000000000006",
+    change: "enable",
+  },
+  doctor_fix: { kind: "doctor_fix", fixCode: "path.missing_node", target: "PATH" },
+  create_threads: { kind: "create_threads", providerId: "codex", count: 3, workspaceId: null },
+  resume_threads: { kind: "resume_threads", scope: { kind: "all" } },
 };
 
 function resolvedDecisionFor(status: ApprovalStatus): ApprovalDecision | null {
@@ -239,6 +299,11 @@ export function createFixtures(options: FixtureOptions = {}) {
         filesChanged: null,
         branch: null,
         error: ERROR_BY_STATUS[status] ?? null,
+        archivedAt: null,
+        resumable: false,
+        permissionProfileId: null,
+        runtimeKind: null,
+        terminalId: null,
       },
       overrides,
     );
@@ -272,6 +337,7 @@ export function createFixtures(options: FixtureOptions = {}) {
         action,
         summary: summarize(action),
         requestedAt: clock.now(),
+        origin: null,
       },
       overrides,
     );
@@ -302,6 +368,11 @@ export function createFixtures(options: FixtureOptions = {}) {
         status,
         resolvedDecision: resolvedDecisionFor(status),
         resolvedAt: resolved ? clock.offset(30_000) : null,
+        allowedDecisions: ["deny", "approve_once", "approve_for_thread", "approve_for_workspace", "allow_via_rule"],
+        grantCoverage: "only this exact request",
+        context: null,
+        createdAt: action.requestedAt,
+        expireReason: status === "expired" ? "thread_stopped" : null,
       },
       overrides,
     );
@@ -309,7 +380,17 @@ export function createFixtures(options: FixtureOptions = {}) {
 
   function buildCorrelation(overrides: Partial<Correlation> = {}): Correlation {
     return withOverrides<Correlation>(
-      { workspaceId: null, threadId: null, missionId: null, providerId: null, requestId: null },
+      {
+        workspaceId: null,
+        threadId: null,
+        missionId: null,
+        providerId: null,
+        requestId: null,
+        agentId: null,
+        taskId: null,
+        automationId: null,
+        causationId: null,
+      },
       overrides,
     );
   }
@@ -367,6 +448,7 @@ export function createFixtures(options: FixtureOptions = {}) {
           { mode: "plan", fidelity: "exact", providerSetting: "--permission-mode plan", notes: "" },
           { mode: "approve", fidelity: "exact", providerSetting: "--permission-mode default", notes: "" },
         ],
+        interactive: null,
       },
       overrides,
     );

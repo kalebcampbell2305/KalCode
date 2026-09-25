@@ -37,6 +37,10 @@ export function samplePayloads(fx: Fixtures = createFixtures()): {
   const workspaceId = fx.defaultWorkspace().id;
   const requestId = fx.id();
   const terminalId = fx.id();
+  const worktreeId = fx.id();
+  const checkpointId = fx.id();
+  const packageId = fx.id();
+  const taskId = fx.id();
   const at = fx.clock.now();
   return {
     "app.started": {
@@ -111,6 +115,72 @@ export function samplePayloads(fx: Fixtures = createFixtures()): {
     "approval.denied": { type: "approval.denied", payload: { requestId, threadId } },
     "approval.expired": { type: "approval.expired", payload: { requestId, threadId } },
     "permission.mode_changed": { type: "permission.mode_changed", payload: { threadId, from: "approve", to: "plan" } },
+    "permission.default_mode_changed": {
+      type: "permission.default_mode_changed",
+      payload: { from: "approve", to: "plan" },
+    },
+    "git.branch_changed": { type: "git.branch_changed", payload: { workspaceId, from: "main", to: "kal/fix-login" } },
+    "git.diff_changed": { type: "git.diff_changed", payload: { workspaceId, worktreeId: null, files: 3 } },
+    "git.commit_created": {
+      type: "git.commit_created",
+      payload: { workspaceId, worktreeId: null, oid: "4b825dc642cb6eb9a060e54bf8d69288fbee4904", byKalCode: true },
+    },
+    "git.worktree_created": {
+      type: "git.worktree_created",
+      payload: { workspaceId, worktreeId, branch: "kal/fix-login", purpose: "thread" },
+    },
+    "git.worktree_removed": {
+      type: "git.worktree_removed",
+      payload: { workspaceId, worktreeId, branch: "kal/fix-login", purpose: "thread" },
+    },
+    "timeline.checkpoint_created": {
+      type: "timeline.checkpoint_created",
+      payload: { checkpointId, workspaceId, trigger: "thread_turn", files: 4, bytesAdded: 12_288 },
+    },
+    "timeline.checkpoint_pruned": {
+      type: "timeline.checkpoint_pruned",
+      payload: { checkpointId, reason: "retention" },
+    },
+    "context.package_created": {
+      type: "context.package_created",
+      payload: { packageId, purpose: "handoff", items: 3, bytes: 4_096 },
+    },
+    "context.blocked": { type: "context.blocked", payload: { packageId, rule: "secret.env_file", items: 1 } },
+    "context.redacted": { type: "context.redacted", payload: { packageId, items: 1, spans: 2 } },
+    "context.override_confirmed": {
+      type: "context.override_confirmed",
+      payload: { packageId, position: 0, rule: "sensitive.path" },
+    },
+    "context.shared": {
+      type: "context.shared",
+      payload: { packageId, threadId, providerId: "claude-code", items: 3, bytes: 4_096, redactions: 2 },
+    },
+    "context.discarded": { type: "context.discarded", payload: { packageId } },
+    "resource.pressure_changed": {
+      type: "resource.pressure_changed",
+      payload: {
+        resource: "memory",
+        from: "normal",
+        to: "high",
+        mode: "balanced",
+        signal: { signal: "memory_used_percent" },
+        value: 91,
+        threshold: 90,
+      },
+    },
+    "resource.mode_changed": { type: "resource.mode_changed", payload: { from: "balanced", to: "conservative" } },
+    "resource.task_held": {
+      type: "resource.task_held",
+      payload: {
+        taskId,
+        reasons: [{ kind: "user_limit", running: 4, limit: 4, mode: "balanced" }],
+        mode: "balanced",
+      },
+    },
+    "resource.task_released": {
+      type: "resource.task_released",
+      payload: { taskId, heldMs: 12_000, cause: "limit_freed" },
+    },
     "kalvoice.dictation_started": { type: "kalvoice.dictation_started", payload: { sessionId: requestId } },
     "kalvoice.dictation_completed": {
       type: "kalvoice.dictation_completed",
@@ -141,6 +211,7 @@ export function samplePayloads(fx: Fixtures = createFixtures()): {
     },
     "kalvoice.voice_output_started": { type: "kalvoice.voice_output_started", payload: { requestId } },
     "kalvoice.voice_output_completed": { type: "kalvoice.voice_output_completed", payload: { requestId } },
+    "kalvoice.talk_routed": { type: "kalvoice.talk_routed", payload: { requestId, outcome: "command" } },
     unrecognized: { type: "unrecognized", payload: { originalType: "future.event", originalVersion: 2 } },
   };
 }

@@ -95,6 +95,7 @@ fn row_to_envelope(row: &Row<'_>) -> rusqlite::Result<EventEnvelope> {
             mission_id: row.get(8)?,
             provider_id: row.get(9)?,
             request_id: row.get(10)?,
+            ..Correlation::default()
         },
         event: decode_payload(&event_type, version, &payload_text),
     })

@@ -148,6 +148,12 @@ impl From<serde_json::Error> for KalError {
     }
 }
 
+impl From<kalcode_contracts::refs::PageError> for KalError {
+    fn from(error: kalcode_contracts::refs::PageError) -> Self {
+        KalError::validation(error.code(), error.to_string())
+    }
+}
+
 /// The only error shape that crosses the IPC boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]

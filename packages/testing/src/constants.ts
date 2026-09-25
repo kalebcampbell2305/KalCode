@@ -104,6 +104,16 @@ export const ACTION_KINDS = [
   "browser",
   "deploy",
   "tool",
+  "process_signal",
+  "remote_connect",
+  "context_share",
+  "memory_write",
+  "delegate",
+  "restore",
+  "automation_change",
+  "doctor_fix",
+  "create_threads",
+  "resume_threads",
 ] as const satisfies readonly ActionKind["kind"][];
 
 const exhaustive: [

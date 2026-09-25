@@ -43,6 +43,11 @@ function summary(partial: Partial<ThreadSummary>): ThreadSummary {
     filesChanged: 0,
     branch: null,
     error: null,
+    archivedAt: null,
+    resumable: false,
+    permissionProfileId: null,
+    runtimeKind: null,
+    terminalId: null,
     ...partial,
   };
 }

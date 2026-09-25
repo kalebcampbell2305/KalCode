@@ -1,4 +1,4 @@
-import type { EventEnvelope } from "@kalcode/protocol";
+import type { EventEnvelope, ResourceKind, TalkRoute } from "@kalcode/protocol";
 
 export type EventTone = "live" | "success" | "waiting" | "danger" | "idle";
 
@@ -34,6 +34,27 @@ export function formatDuration(ms: number): string {
   const hours = Math.floor(minutes / 60);
   const rest = minutes % 60;
   return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`;
+}
+
+const TALK_ROUTE_TITLES: Record<TalkRoute, string> = {
+  command: "KalVoice ran a command",
+  dictation: "KalVoice typed into the focused box",
+  request: "KalVoice sent a request",
+};
+
+const RESOURCE_LABELS: Record<ResourceKind, string> = {
+  cpu: "CPU",
+  memory: "Memory",
+  gpu: "GPU",
+  vram: "GPU memory",
+  disk_io: "Disk activity",
+  disk_space: "Disk space",
+  network: "Network",
+  process_count: "Process count",
+};
+
+function plural(count: number, noun: string): string {
+  return `${count.toLocaleString()} ${noun}${count === 1 ? "" : "s"}`;
 }
 
 function joinList(items: string[]): string {
@@ -162,6 +183,78 @@ export function describeEvent(event: EventEnvelope): EventDescription {
         detail: `${event.payload.from} to ${event.payload.to}`,
         tone: "waiting",
       };
+    case "permission.default_mode_changed":
+      return {
+        title: "Default permission mode changed",
+        detail: `${event.payload.from} to ${event.payload.to}`,
+        tone: "waiting",
+      };
+    case "git.branch_changed":
+      return {
+        title: "Branch changed",
+        detail: event.payload.from ? `${event.payload.from} to ${event.payload.to}` : event.payload.to,
+        tone: "idle",
+      };
+    case "git.diff_changed":
+      return { title: "Changes updated", detail: plural(event.payload.files, "file"), tone: "idle" };
+    case "git.commit_created":
+      return {
+        title: event.payload.byKalCode ? "Commit created by KalCode" : "Commit created",
+        detail: event.payload.oid.slice(0, 7),
+        tone: "success",
+      };
+    case "git.worktree_created":
+      return { title: "Worktree created", detail: event.payload.branch, tone: "success" };
+    case "git.worktree_removed":
+      return { title: "Worktree removed", detail: event.payload.branch, tone: "idle" };
+    case "timeline.checkpoint_created":
+      return { title: "Checkpoint saved", detail: plural(event.payload.files, "file"), tone: "success" };
+    case "timeline.checkpoint_pruned":
+      return { title: "Old checkpoint removed", detail: event.payload.reason.replaceAll("_", " "), tone: "idle" };
+    case "context.package_created":
+      return {
+        title: "Context prepared",
+        detail: `${plural(event.payload.items, "item")} for ${event.payload.purpose}`,
+        tone: "idle",
+      };
+    case "context.blocked":
+      return { title: "Context blocked", detail: plural(event.payload.items, "item"), tone: "waiting" };
+    case "context.redacted":
+      return {
+        title: "Sensitive text redacted",
+        detail: `${plural(event.payload.spans, "span")} in ${plural(event.payload.items, "item")}`,
+        tone: "idle",
+      };
+    case "context.override_confirmed":
+      return { title: "Blocked context included by you", detail: null, tone: "waiting" };
+    case "context.shared":
+      return {
+        title: "Context shared",
+        detail: `${plural(event.payload.items, "item")} with ${providerName(event.payload.providerId)}`,
+        tone: "idle",
+      };
+    case "context.discarded":
+      return { title: "Context discarded", detail: null, tone: "idle" };
+    case "resource.pressure_changed":
+      return {
+        title: `${RESOURCE_LABELS[event.payload.resource]} pressure ${event.payload.to}`,
+        detail: `Was ${event.payload.from}`,
+        tone: event.payload.to === "critical" ? "danger" : event.payload.to === "normal" ? "idle" : "waiting",
+      };
+    case "resource.mode_changed":
+      return {
+        title: "Resource mode changed",
+        detail: `${event.payload.from} to ${event.payload.to}`,
+        tone: "idle",
+      };
+    case "resource.task_held":
+      return { title: "Task held to protect your machine", detail: `${event.payload.mode} mode`, tone: "waiting" };
+    case "resource.task_released":
+      return {
+        title: "Held task started",
+        detail: `Waited ${formatDuration(event.payload.heldMs)}`,
+        tone: "live",
+      };
     case "kalvoice.dictation_started":
       return { title: "KalVoice dictation started", detail: null, tone: "live" };
     case "kalvoice.dictation_completed":
@@ -203,6 +296,8 @@ export function describeEvent(event: EventEnvelope): EventDescription {
       return { title: "KalVoice speaking", detail: null, tone: "live" };
     case "kalvoice.voice_output_completed":
       return { title: "KalVoice finished speaking", detail: null, tone: "idle" };
+    case "kalvoice.talk_routed":
+      return { title: TALK_ROUTE_TITLES[event.payload.outcome], detail: null, tone: "idle" };
     case "unrecognized":
       return {
         title: "Event from a newer KalCode",

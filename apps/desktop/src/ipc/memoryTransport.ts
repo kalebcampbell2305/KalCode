@@ -24,11 +24,9 @@ import type {
   AppInfo,
   ApprovalView,
   BootState,
-  Correlation,
   Diagnostics,
   EventEnvelope,
   EventPayload,
-  EventSource,
   IpcError,
   ProviderStatus,
   SecureStoreCheck,
@@ -37,6 +35,7 @@ import type {
   SurfaceFlag,
   Workspace,
 } from "@kalcode/protocol";
+import { PRODUCT_FEATURES } from "@kalcode/protocol";
 import {
   createDashboardFixtures,
   type DashboardControls,
@@ -94,6 +93,7 @@ const SURFACES: SurfaceFlag["id"][] = [
   "memory",
   "providers",
   "settings",
+  "command_center",
 ];
 
 const SETTINGS_KEYS: Record<keyof Settings, string> = {
@@ -142,6 +142,9 @@ export function createMemoryTransport(
         state: AVAILABLE_SURFACES.has(id) ? "available" : "gated",
         visible: true,
       })),
+      // Every product feature is gated until its campaign merges (crates/native-core/src/flags.rs);
+      // development builds show gated features.
+      features: PRODUCT_FEATURES.map((id) => ({ id, state: "gated", visible: true })),
     },
   };
   let settings: Settings = { theme: "dark", motion: "system", density: "comfortable", sidebarCollapsed: false };

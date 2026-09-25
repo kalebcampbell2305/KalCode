@@ -3,4 +3,4 @@
 /**
  * Built-in authority scopes. Plugin capability scopes are added with the plugin system (Z11).
  */
-export type PermissionScope = "filesystem.read" | "filesystem.write" | "filesystem.outside_workspace" | "terminal.read_only" | "terminal.execute" | "package.install" | "git.read" | "git.commit" | "git.push" | "network.docs" | "network.other" | "browser.navigate" | "browser.interact" | "credentials.access" | "messaging.send" | "deploy.production" | "cloud.modify" | "billing.spend" | "destructive";
+export type PermissionScope = "filesystem.read" | "filesystem.write" | "filesystem.outside_workspace" | "terminal.read_only" | "terminal.execute" | "package.install" | "git.read" | "git.commit" | "git.push" | "network.docs" | "network.other" | "browser.navigate" | "browser.interact" | "credentials.access" | "messaging.send" | "deploy.production" | "cloud.modify" | "billing.spend" | "destructive" | "process.control" | "remote.connect" | "context.share" | "memory.write" | "automation.manage" | "agent.delegate" | "thread.start" | "tool.unknown";

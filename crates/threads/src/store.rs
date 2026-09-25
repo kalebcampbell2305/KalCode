@@ -57,6 +57,7 @@ pub struct ThreadRow {
     pub error_message: Option<String>,
     pub unread_messages: u32,
     pub files_changed: u32,
+    pub permission_profile_id: Option<String>,
 }
 
 const THREAD_COLUMNS: &str =
@@ -66,7 +67,8 @@ const THREAD_COLUMNS: &str =
     t.error_code, t.error_message,
     (SELECT COUNT(*) FROM thread_messages m
        WHERE m.thread_id = t.id AND m.role = 'assistant' AND m.seq > t.last_read_seq),
-    (SELECT COUNT(*) FROM thread_files f WHERE f.thread_id = t.id)";
+    (SELECT COUNT(*) FROM thread_files f WHERE f.thread_id = t.id),
+    t.permission_profile_id";
 
 fn row_to_thread(row: &Row<'_>) -> rusqlite::Result<ThreadRow> {
     Ok(ThreadRow {
@@ -91,6 +93,7 @@ fn row_to_thread(row: &Row<'_>) -> rusqlite::Result<ThreadRow> {
         error_message: row.get(18)?,
         unread_messages: row.get(19)?,
         files_changed: row.get(20)?,
+        permission_profile_id: row.get(21)?,
     })
 }
 

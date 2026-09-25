@@ -26,12 +26,28 @@ pub const ALL_SCOPES: [PermissionScope; 19] = [
     PermissionScope::Destructive,
 ];
 
-/// Position of `scope` in [`ALL_SCOPES`].
+/// Scopes adopted in CA-1 (Trust Kernel phase 1 and KalVoice). They are not in the built-in
+/// profiles ([`ALL_SCOPES`]) until TK-1 gives them baselines there. `thread.start` is evaluated
+/// today (KalVoice's create/resume threads, always Approve mode, approve once); the action
+/// kinds behind the others are evaluated as opaque, which always asks.
+pub const TRUST_KERNEL_SCOPES: [PermissionScope; 8] = [
+    PermissionScope::ProcessControl,
+    PermissionScope::RemoteConnect,
+    PermissionScope::ContextShare,
+    PermissionScope::MemoryWrite,
+    PermissionScope::AutomationManage,
+    PermissionScope::AgentDelegate,
+    PermissionScope::ThreadStart,
+    PermissionScope::ToolUnknown,
+];
+
+/// Position of `scope` in [`ALL_SCOPES`], then [`TRUST_KERNEL_SCOPES`].
 pub fn rank(scope: PermissionScope) -> usize {
     ALL_SCOPES
         .iter()
+        .chain(TRUST_KERNEL_SCOPES.iter())
         .position(|s| *s == scope)
-        .unwrap_or(ALL_SCOPES.len())
+        .unwrap_or(ALL_SCOPES.len() + TRUST_KERNEL_SCOPES.len())
 }
 
 /// Dotted wire name (`"git.push"`).
@@ -56,6 +72,14 @@ pub fn wire_name(scope: PermissionScope) -> &'static str {
         PermissionScope::CloudModify => "cloud.modify",
         PermissionScope::BillingSpend => "billing.spend",
         PermissionScope::Destructive => "destructive",
+        PermissionScope::ProcessControl => "process.control",
+        PermissionScope::RemoteConnect => "remote.connect",
+        PermissionScope::ContextShare => "context.share",
+        PermissionScope::MemoryWrite => "memory.write",
+        PermissionScope::AutomationManage => "automation.manage",
+        PermissionScope::AgentDelegate => "agent.delegate",
+        PermissionScope::ThreadStart => "thread.start",
+        PermissionScope::ToolUnknown => "tool.unknown",
     }
 }
 
@@ -81,6 +105,14 @@ pub fn label(scope: PermissionScope) -> &'static str {
         PermissionScope::CloudModify => "Changing remote or cloud resources",
         PermissionScope::BillingSpend => "Spending money",
         PermissionScope::Destructive => "Destructive operations",
+        PermissionScope::ProcessControl => "Stopping or signalling processes",
+        PermissionScope::RemoteConnect => "Connecting to a remote machine",
+        PermissionScope::ContextShare => "Sharing context with an AI provider",
+        PermissionScope::MemoryWrite => "Saving to memory",
+        PermissionScope::AutomationManage => "Creating or enabling automations",
+        PermissionScope::AgentDelegate => "Delegating work to another agent",
+        PermissionScope::ThreadStart => "Starting or resuming agent threads",
+        PermissionScope::ToolUnknown => "Using a tool KalCode doesn't recognize",
     }
 }
 
@@ -108,7 +140,7 @@ mod tests {
 
     #[test]
     fn wire_names_match_serde() {
-        for scope in ALL_SCOPES {
+        for scope in PermissionScope::ALL {
             let json = serde_json::to_string(&scope).expect("json");
             assert_eq!(json, format!("\"{}\"", wire_name(scope)));
         }

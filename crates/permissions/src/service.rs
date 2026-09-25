@@ -16,8 +16,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use kalcode_contracts::events::{Correlation, EventPayload, EventSource, NewEvent};
 use kalcode_contracts::ids::{is_valid_id, new_id};
 use kalcode_contracts::permissions::{
-    ApprovalDecision, ApprovalRequest, ApprovalStatus, NormalizedAction, PermissionGate,
-    PermissionMode, PermissionProfile, PermissionRule, PolicyDecision, PolicyEffect,
+    ActionOrigin, ApprovalDecision, ApprovalRequest, ApprovalStatus, NormalizedAction,
+    PermissionGate, PermissionMode, PermissionProfile, PermissionRule, PolicyDecision,
+    PolicyEffect,
 };
 use kalcode_contracts::threads::ThreadSummary;
 use kalcode_core::logging::redact;
@@ -171,6 +172,32 @@ fn thread_not_found() -> KalError {
 
 fn invalid_id(what: &str) -> KalError {
     KalError::validation("invalid_id", format!("The {what} id is invalid."))
+}
+
+/// The result of evaluating an action from a non-thread origin
+/// ([`PermissionService::request_for_origin`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OriginDecision {
+    pub decision: PolicyDecision,
+    /// The pending approval request when the policy asks; `None` when it allows or denies.
+    pub approval: Option<ApprovalView>,
+}
+
+/// The audit actor for an origin (the v4 `permission_audit.actor` CHECK values).
+fn audit_actor(origin: &ActionOrigin) -> &'static str {
+    match origin {
+        ActionOrigin::User => Actor::User.as_str(),
+        ActionOrigin::System | ActionOrigin::Doctor { .. } | ActionOrigin::Continuity { .. } => {
+            Actor::System.as_str()
+        }
+        ActionOrigin::KalVoice { .. } => Actor::KalVoice.as_str(),
+        ActionOrigin::Automation { .. } => Actor::Automation.as_str(),
+        ActionOrigin::Thread { .. }
+        | ActionOrigin::Agent { .. }
+        | ActionOrigin::Delegation { .. }
+        | ActionOrigin::Utility { .. }
+        | ActionOrigin::Remote { .. } => Actor::Agent.as_str(),
+    }
 }
 
 fn clean_text(text: &str, max: usize) -> String {
@@ -345,6 +372,147 @@ impl PermissionService {
             return Err(invalid_id("action"));
         }
         Ok(())
+    }
+
+    /// Evaluates an action from a **non-thread origin** and, when the policy asks, files an
+    /// approval request with `origin_kind` = that origin (thread, workspace and provider may be
+    /// absent, as schema v4 allows). Today the supported origin is KalVoice
+    /// (`ActionOrigin::KalVoice { request_id }`); the Trust Kernel (TK-1) extends this to every
+    /// origin with ceilings.
+    ///
+    /// Rules: the action is always evaluated under **Approve** (a non-thread origin never selects
+    /// or changes a mode); standing grants and "Allow via rule" rules never apply to it, and its
+    /// requests can only be approved once or denied. Only the user answers (`decide` refuses
+    /// every other actor, KalVoice included).
+    pub fn request_for_origin(&self, action: NormalizedAction) -> Result<OriginDecision> {
+        let origin = match &action.origin {
+            Some(origin @ ActionOrigin::KalVoice { request_id }) => {
+                if !is_valid_id(request_id) {
+                    return Err(invalid_id("request"));
+                }
+                origin.clone()
+            }
+            Some(ActionOrigin::Thread { .. }) | None => {
+                return Err(KalError::validation(
+                    "origin_is_a_thread",
+                    "Thread actions go through the thread's permission gate.",
+                ));
+            }
+            Some(other) => {
+                tracing::warn!(
+                    event = "permissions.origin_not_supported",
+                    origin = other.kind()
+                );
+                return Err(KalError::new(
+                    ErrorCategory::Permission,
+                    "origin_not_supported",
+                    "KalCode can't evaluate actions from this source yet.",
+                ));
+            }
+        };
+        for (id, what) in [
+            (&action.thread_id, "thread"),
+            (&action.workspace_id, "workspace"),
+        ] {
+            if !id.is_empty() && !is_valid_id(id) {
+                return Err(invalid_id(what));
+            }
+        }
+        if action.id.is_empty() || action.id.len() > 256 || action.id.chars().any(char::is_control)
+        {
+            return Err(invalid_id("action"));
+        }
+        let mode = PermissionMode::Approve;
+        let workspace = self.workspace(&action.workspace_id);
+        let c = classify(&action.action, &workspace);
+        let decision = policy::evaluate(
+            &c,
+            &PolicyInput {
+                action: &action,
+                mode,
+                profile: None,
+                user_rules: &[],
+                grants: &[],
+                now_ms: self.clock.now_ms(),
+            },
+        );
+        if decision.effect != PolicyEffect::Ask {
+            return Ok(OriginDecision {
+                decision,
+                approval: None,
+            });
+        }
+        let allowed: Vec<ApprovalDecision> = grants::allowed_decisions(&decision, &c)
+            .into_iter()
+            .filter(|d| matches!(d, ApprovalDecision::Deny | ApprovalDecision::ApproveOnce))
+            .collect();
+        let context = ApprovalContext {
+            thread_name: None,
+            workspace_name: None,
+            provider_name: provider_display_name(action.provider_id.as_str()).map(str::to_owned),
+        };
+        let id = new_id();
+        let summary = clean_text(&action.summary, 300);
+        let actor = audit_actor(&origin);
+        let (view, _) = self.core.transact(|tx| {
+            store::insert_approval(
+                tx,
+                &NewApproval {
+                    id: &id,
+                    action: &action,
+                    decision: &decision,
+                    mode,
+                    allowed: &allowed,
+                    context: Some(&context),
+                    fingerprint: &c.fingerprint,
+                    grant_matcher: None,
+                    grant_coverage: "only this request",
+                },
+            )?;
+            let workspace_id =
+                (!action.workspace_id.is_empty()).then_some(action.workspace_id.as_str());
+            store::audit(
+                tx,
+                &AuditEntry {
+                    kind: "approval.requested",
+                    actor,
+                    thread_id: None,
+                    workspace_id,
+                    request_id: Some(&id),
+                    detail: json!({
+                        "mode": mode,
+                        "scopes": decision.scopes,
+                        "summary": summary,
+                        "opaque": c.opaque,
+                        "origin": origin.kind(),
+                        "originId": origin.id(),
+                    }),
+                },
+            )?;
+            let event = NewEvent {
+                source: EventSource::KalVoice,
+                correlation: correlation(
+                    &action.workspace_id,
+                    &action.thread_id,
+                    action.provider_id.as_str(),
+                    &id,
+                ),
+                event: EventPayload::ApprovalRequested {
+                    request_id: id.clone(),
+                    thread_id: action.thread_id.clone(),
+                    scopes: decision.scopes.clone(),
+                    summary: summary.clone(),
+                },
+            };
+            let view = store::get_approval(tx, &id)?
+                .ok_or_else(|| KalError::internal("approval_missing", "The request wasn't saved."))?
+                .view;
+            Ok((view, vec![event]))
+        })?;
+        Ok(OriginDecision {
+            decision,
+            approval: Some(view),
+        })
     }
 
     fn open(
@@ -531,7 +699,7 @@ impl PermissionService {
             let stored = store::get_approval(tx, request_id)?.ok_or_else(|| {
                 KalError::new(ErrorCategory::Validation, "approval_not_found", "That approval request doesn't exist.")
             })?;
-            let request = &stored.view.request;
+            let request = &stored.view;
             match request.status {
                 ApprovalStatus::Pending => {}
                 ApprovalStatus::Expired => {
@@ -934,12 +1102,15 @@ fn correlation(
     provider_id: &str,
     request_id: &str,
 ) -> Correlation {
+    // Non-thread origins (KalVoice) may have no thread, workspace or provider.
+    let present = |value: &str| (!value.is_empty()).then(|| value.to_owned());
     Correlation {
-        workspace_id: Some(workspace_id.to_owned()),
-        thread_id: Some(thread_id.to_owned()),
+        workspace_id: present(workspace_id),
+        thread_id: present(thread_id),
         mission_id: None,
-        provider_id: Some(provider_id.to_owned()),
-        request_id: Some(request_id.to_owned()),
+        provider_id: present(provider_id),
+        request_id: present(request_id),
+        ..Correlation::default()
     }
 }
 
@@ -971,12 +1142,10 @@ impl PermissionGate for PermissionService {
         mode: PermissionMode,
         decision: PolicyDecision,
     ) -> std::result::Result<ApprovalRequest, String> {
-        self.open(action, mode, &decision)
-            .map(|view| view.request)
-            .map_err(|error| {
-                tracing::warn!(event = "permissions.open_request_failed", error = %error.diagnostic());
-                error.message
-            })
+        self.open(action, mode, &decision).map_err(|error| {
+            tracing::warn!(event = "permissions.open_request_failed", error = %error.diagnostic());
+            error.message
+        })
     }
 
     fn expire_for_thread(&self, thread_id: &str) {

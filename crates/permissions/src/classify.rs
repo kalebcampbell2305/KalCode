@@ -125,7 +125,87 @@ pub fn classify(kind: &ActionKind, workspace: &Workspace) -> Classification {
             tool,
             input_summary,
         } => unknown_tool(tool, input_summary),
+        ActionKind::ProcessSignal {
+            pid, process_name, ..
+        } => pending_kernel_kind(
+            S::ProcessControl,
+            format!("process:{pid}:{}", clip(process_name)),
+            "Stopping a process",
+        ),
+        ActionKind::RemoteConnect { host_id, .. } => pending_kernel_kind(
+            S::RemoteConnect,
+            format!("remote:{}", clip(host_id)),
+            "Connecting to a remote machine",
+        ),
+        ActionKind::ContextShare { package_id, .. } => pending_kernel_kind(
+            S::ContextShare,
+            format!("context:{}", clip(package_id)),
+            "Sharing context with a provider",
+        ),
+        ActionKind::MemoryWrite { memory_id, .. } => pending_kernel_kind(
+            S::MemoryWrite,
+            format!("memory:{}", clip(memory_id.as_deref().unwrap_or("new"))),
+            "Saving to memory",
+        ),
+        ActionKind::Delegate { contract_id, .. } => pending_kernel_kind(
+            S::AgentDelegate,
+            format!("delegate:{}", clip(contract_id)),
+            "Delegating work to another agent",
+        ),
+        ActionKind::Restore { checkpoint_id, .. } => {
+            let mut c = pending_kernel_kind(
+                S::FilesystemWrite,
+                format!("restore:{}", clip(checkpoint_id)),
+                "Restoring files from a checkpoint",
+            );
+            c.add(S::Destructive);
+            c.finish()
+        }
+        ActionKind::AutomationChange { automation_id, .. } => pending_kernel_kind(
+            S::AutomationManage,
+            format!("automation:{}", clip(automation_id)),
+            "Changing an automation",
+        ),
+        ActionKind::DoctorFix { fix_code, .. } => pending_kernel_kind(
+            S::TerminalExecute,
+            format!("doctor:{}", clip(fix_code)),
+            "Applying an Environment Doctor fix",
+        ),
+        ActionKind::CreateThreads {
+            provider_id, count, ..
+        } => thread_start(
+            format!("threads.create:{}:{count}", clip(provider_id.as_str())),
+            format!("Opens {count} new agent thread(s) that will start working."),
+        ),
+        ActionKind::ResumeThreads { scope } => thread_start(
+            format!("threads.resume:{}", clip(&format!("{scope:?}"))),
+            "Resumes agent threads so they continue working.".to_owned(),
+        ),
     }
+}
+
+/// Starting or resuming agent threads on the user's behalf: fully visible (not opaque), but
+/// never covered by a standing approval (`sensitive`), so each request is approved once.
+fn thread_start(fingerprint: String, note: String) -> Classification {
+    let mut c = Classification::new(fingerprint);
+    c.add(S::ThreadStart);
+    c.sensitive = true;
+    c.note(note);
+    c.grant_coverage = "only this request".into();
+    c.finish()
+}
+
+/// Action kinds adopted for the Trust Kernel in CA-1 that the engine does not classify precisely
+/// until TK-1: evaluated as opaque (always an explicit, one-time approval), with their scope.
+fn pending_kernel_kind(scope: S, fingerprint: String, what: &str) -> Classification {
+    let mut c = Classification::new(fingerprint);
+    c.add(scope);
+    c.opaque = true;
+    c.note(format!(
+        "{what} is always confirmed by you until KalCode can check it in detail."
+    ));
+    c.grant_coverage = "only this request".into();
+    c.finish()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

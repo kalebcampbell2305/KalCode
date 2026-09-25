@@ -30,7 +30,13 @@ export type PermissionCommand =
   | "permission_settings_get"
   | "permission_settings_update";
 
-export const ALL_SCOPES: readonly PermissionScope[] = [
+/**
+ * The scopes the engine's built-in profiles list (`scopes::ALL_SCOPES` in crates/permissions).
+ * The scopes added in CA-1 (`process.control`, `remote.connect`, `context.share`, `memory.write`,
+ * `automation.manage`, `agent.delegate`, `tool.unknown`) join the built-in profiles with the
+ * Trust Kernel campaign; until then the profiles keep exactly these 19 rules.
+ */
+export const ALL_SCOPES = [
   "filesystem.read",
   "filesystem.write",
   "filesystem.outside_workspace",
@@ -50,7 +56,10 @@ export const ALL_SCOPES: readonly PermissionScope[] = [
   "cloud.modify",
   "billing.spend",
   "destructive",
-];
+] as const satisfies readonly PermissionScope[];
+
+/** A scope the built-in profiles carry a rule for today. */
+type LegacyScope = (typeof ALL_SCOPES)[number];
 
 const REMOTE: readonly PermissionScope[] = [
   "git.push",
@@ -106,7 +115,7 @@ export function baseline(mode: PermissionMode, scope: PermissionScope): RuleEffe
   }
 }
 
-const rules = (entries: Record<PermissionScope, RuleEffect>): PermissionRule[] =>
+const rules = (entries: Record<LegacyScope, RuleEffect>): PermissionRule[] =>
   ALL_SCOPES.map((scope) => ({ scope, effect: entries[scope], matcher: null }));
 
 const modeProfile = (id: string, name: string, mode: PermissionMode): PermissionProfile => ({
@@ -242,6 +251,7 @@ function buildRequest(seed: ApprovalSeed, createdAt: string): ApprovalView {
     action: kind,
     summary,
     requestedAt: createdAt,
+    origin: null,
   });
   const mode = thread.mode === "custom" ? "Custom" : thread.mode.charAt(0).toUpperCase() + thread.mode.slice(1);
   const make = (

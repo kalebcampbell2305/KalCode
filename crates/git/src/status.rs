@@ -11,37 +11,24 @@ use kalcode_core::Result;
 use crate::handles::HandleRegistry;
 use crate::repo::Repo;
 use crate::runner::Git;
-use crate::types::{FileRef, GitFileChange, GitStatusSummary};
+pub use crate::types::{BranchState, ConflictKind, StatusFile};
+use crate::types::{GitFileChange, GitStatusSummary};
 
 /// Most status lines kept; beyond this `truncated` is set (the counts still cover everything).
 pub const MAX_STATUS_ENTRIES: usize = 200_000;
 
-/// Which side of a merge conflict changed what.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ConflictKind {
-    BothDeleted,
-    AddedByUs,
-    DeletedByThem,
-    AddedByThem,
-    DeletedByUs,
-    BothAdded,
-    BothModified,
-}
-
-impl ConflictKind {
-    fn parse(xy: &str) -> Option<Self> {
-        Some(match xy {
-            "DD" => Self::BothDeleted,
-            "AU" => Self::AddedByUs,
-            "UD" => Self::DeletedByThem,
-            "UA" => Self::AddedByThem,
-            "DU" => Self::DeletedByUs,
-            "AA" => Self::BothAdded,
-            "UU" => Self::BothModified,
-            _ => return None,
-        })
-    }
+/// The conflict of an unmerged porcelain `XY` code.
+fn conflict_kind(xy: &str) -> Option<ConflictKind> {
+    Some(match xy {
+        "DD" => ConflictKind::BothDeleted,
+        "AU" => ConflictKind::AddedByUs,
+        "UD" => ConflictKind::DeletedByThem,
+        "UA" => ConflictKind::AddedByThem,
+        "DU" => ConflictKind::DeletedByUs,
+        "AA" => ConflictKind::BothAdded,
+        "UU" => ConflictKind::BothModified,
+        _ => return None,
+    })
 }
 
 /// One parsed status line (paths relative to the repository top level).
@@ -58,41 +45,12 @@ pub struct StatusEntry {
     pub score: Option<u8>,
 }
 
-/// Branch facts from the `# branch.*` headers.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BranchState {
-    /// `None` before the first commit.
-    pub head_oid: Option<String>,
-    /// `None` when HEAD is detached.
-    pub branch: Option<String>,
-    pub upstream: Option<String>,
-    pub ahead: Option<u32>,
-    pub behind: Option<u32>,
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Status {
     pub branch: BranchState,
     pub entries: Vec<StatusEntry>,
     /// More lines existed than [`MAX_STATUS_ENTRIES`] or the output cap allowed.
     pub truncated: bool,
-}
-
-/// A status line as the UI receives it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct StatusFile {
-    /// `None` when the file is outside the workspace or its name isn't a valid path.
-    pub file: Option<FileRef>,
-    /// Workspace-relative when inside the workspace, otherwise repository-relative.
-    pub path: String,
-    pub orig_path: Option<String>,
-    pub staged: Option<GitFileChange>,
-    pub unstaged: Option<GitFileChange>,
-    pub untracked: bool,
-    pub conflict: Option<ConflictKind>,
-    pub submodule: bool,
 }
 
 /// Status for IPC: the summary plus every file (the IPC layer pages `files`).
@@ -174,7 +132,7 @@ pub fn parse_porcelain_v2(bytes: &[u8]) -> Status {
                         staged: Some(GitFileChange::Unmerged),
                         unstaged: Some(GitFileChange::Unmerged),
                         untracked: false,
-                        conflict: ConflictKind::parse(xy),
+                        conflict: conflict_kind(xy),
                         submodule: sub.starts_with('S'),
                         score: None,
                     });

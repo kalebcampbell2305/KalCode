@@ -30,6 +30,21 @@ pub enum Tier {
     Owner,
 }
 
+impl Tier {
+    /// Whether this tier includes a product feature (ADVANCED.md §14a decision 1). OWNER is
+    /// unrestricted; safety features are on every plan. Mirrors `featureIncluded` in
+    /// `packages/protocol/src/features.ts` (the placement table there is the source of truth and
+    /// `kalcode_contracts::app::FeatureId::placement` is kept identical to it).
+    pub fn includes(self, feature: kalcode_contracts::app::FeatureId) -> bool {
+        match self {
+            Tier::Owner => true,
+            Tier::Free => feature.placement().included_in(0),
+            Tier::Pro => feature.placement().included_in(1),
+            Tier::Max => feature.placement().included_in(2),
+        }
+    }
+}
+
 /// A numeric limit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Limit {

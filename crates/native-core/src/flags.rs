@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-pub use kalcode_contracts::app::{BuildChannel, SurfaceId};
+pub use kalcode_contracts::app::{BuildChannel, FeatureId, FeaturePlacement, SurfaceId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -28,11 +28,78 @@ pub struct SurfaceFlag {
     pub visible: bool,
 }
 
+/// A per-feature flag (CA-1 / L-1). Features ship inside surfaces; a gated feature is hidden on
+/// stable and beta and shown with an honest status in development builds, like surfaces. Plan
+/// placement is separate (`FeatureId::placement`, evaluated on the signed entitlement).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct FeatureFlag {
+    pub id: FeatureId,
+    pub state: SurfaceState,
+    pub visible: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct FeatureFlags {
     pub surfaces: Vec<SurfaceFlag>,
+    /// Added in CA-1; absent in older payloads.
+    #[serde(default)]
+    pub features: Vec<FeatureFlag>,
+}
+
+fn visible(state: SurfaceState, channel: BuildChannel) -> bool {
+    use SurfaceState::*;
+    match (state, channel) {
+        (Available, _) => true,
+        (Preview, BuildChannel::Stable) => false,
+        (Preview, _) => true,
+        (Gated, BuildChannel::Development) => true,
+        (Gated, _) => false,
+    }
+}
+
+/// The build state of a feature. Every advanced-systems feature is gated until its campaign
+/// merges and flips its row here (a hot file: writers list their line in the hand-off).
+fn feature_state(feature: FeatureId) -> SurfaceState {
+    match feature {
+        FeatureId::ProviderHealth
+        | FeatureId::ProviderProfiles
+        | FeatureId::ContextDrop
+        | FeatureId::UtilityDock
+        | FeatureId::ResourceGovernor
+        | FeatureId::SessionLocator
+        | FeatureId::ProcessContinuity
+        | FeatureId::GitCore
+        | FeatureId::TrustKernelExplain
+        | FeatureId::AgentOrganization
+        | FeatureId::Missions
+        | FeatureId::Verification
+        | FeatureId::TimeMachine
+        | FeatureId::RemoteWorkspaces
+        | FeatureId::Scheduler
+        | FeatureId::DiffIntelligence
+        | FeatureId::Automations
+        | FeatureId::Memory
+        | FeatureId::EnvironmentDoctor
+        | FeatureId::Blueprints
+        | FeatureId::CommandCenter
+        | FeatureId::ProviderHandoff
+        | FeatureId::BenchmarkLab
+        | FeatureId::FailureAutopsy
+        | FeatureId::WorkspaceHome
+        | FeatureId::WorkspaceRail
+        | FeatureId::PaneSystem
+        | FeatureId::ProviderPanes
+        | FeatureId::NotificationCenter
+        | FeatureId::AccountSignIn
+        | FeatureId::ContextFirewall
+        | FeatureId::HostKeyVerification
+        | FeatureId::SafeRestore
+        | FeatureId::AutomationKillSwitch => SurfaceState::Gated,
+    }
 }
 
 impl FeatureFlags {
@@ -52,22 +119,33 @@ impl FeatureFlags {
             (Memory, Gated),
             (Providers, Available),
             (Settings, Available),
+            (CommandCenter, Gated),
         ];
         let surfaces = table
             .into_iter()
             .map(|(id, state)| SurfaceFlag {
                 id,
                 state,
-                visible: match (state, channel) {
-                    (Available, _) => true,
-                    (Preview, BuildChannel::Stable) => false,
-                    (Preview, _) => true,
-                    (Gated, BuildChannel::Development) => true,
-                    (Gated, _) => false,
-                },
+                visible: visible(state, channel),
             })
             .collect();
-        Self { surfaces }
+        let features = FeatureId::ALL
+            .into_iter()
+            .map(|id| {
+                let state = feature_state(id);
+                FeatureFlag {
+                    id,
+                    state,
+                    visible: visible(state, channel),
+                }
+            })
+            .collect();
+        Self { surfaces, features }
+    }
+
+    /// The flag of `feature` (every feature has one).
+    pub fn feature(&self, feature: FeatureId) -> Option<&FeatureFlag> {
+        self.features.iter().find(|flag| flag.id == feature)
     }
 }
 
@@ -122,5 +200,38 @@ mod tests {
         assert_eq!(BuildChannel::parse("stable"), BuildChannel::Stable);
         assert_eq!(BuildChannel::parse("beta"), BuildChannel::Beta);
         assert_eq!(BuildChannel::parse("nonsense"), BuildChannel::Development);
+    }
+
+    #[test]
+    fn every_feature_has_one_flag_and_advanced_features_are_gated() {
+        for channel in [
+            BuildChannel::Stable,
+            BuildChannel::Beta,
+            BuildChannel::Development,
+        ] {
+            let flags = FeatureFlags::for_channel(channel);
+            assert_eq!(flags.features.len(), FeatureId::ALL.len());
+            for feature in FeatureId::ALL {
+                let flag = flags.feature(feature).expect("flag");
+                assert_eq!(flag.state, SurfaceState::Gated, "{feature:?}");
+                assert_eq!(flag.visible, channel == BuildChannel::Development);
+            }
+        }
+    }
+
+    #[test]
+    fn command_center_is_a_gated_surface() {
+        let stable = FeatureFlags::for_channel(BuildChannel::Stable);
+        let surface = stable
+            .surfaces
+            .iter()
+            .find(|s| s.id == SurfaceId::CommandCenter)
+            .expect("command center");
+        assert_eq!(surface.state, SurfaceState::Gated);
+        assert!(!surface.visible);
+        // Older payloads without `features` still decode.
+        let old: FeatureFlags =
+            serde_json::from_value(serde_json::json!({"surfaces": []})).expect("decode");
+        assert!(old.features.is_empty());
     }
 }
