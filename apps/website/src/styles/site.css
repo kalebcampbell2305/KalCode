@@ -774,8 +774,8 @@ a:hover {
   --hero-orb-top: clamp(0.5rem, 0.25rem + 1vw, 1.5rem);
   /* Stacked layout: the stream dims to a trace behind the copy and resumes faintly below it,
      so no line of text sits on the bright core (HeroOrb's text-safe band). */
-  --hero-beam-safe-top: calc(var(--hero-orb-top) + 0.9 * var(--hero-orb-max));
-  --hero-beam-safe-inset: 2.5rem;
+  --hero-beam-safe-top: calc(var(--hero-orb-top) + 0.98 * var(--hero-orb-max));
+  --hero-beam-safe-inset: 1.5rem;
   --hero-beam-safe-level: 0.12;
   --hero-beam-safe-resume: 0.4;
   position: relative;
@@ -803,7 +803,8 @@ a:hover {
   display: grid;
   justify-items: center;
   text-align: center;
-  padding-block: calc(var(--hero-orb-top) + 0.86 * var(--hero-orb-max)) clamp(3rem, 2rem + 3vw, 4.5rem);
+  /* The copy starts where the text-safe band begins, just under the sphere. */
+  padding-block: calc(var(--hero-orb-top) + 0.98 * var(--hero-orb-max)) clamp(3rem, 2rem + 3vw, 4.5rem);
 }
 
 .hero__title {
@@ -871,8 +872,7 @@ a:hover {
 .hero__note {
   margin-top: var(--space-4);
   color: var(--color-text-muted);
-  font-family: var(--font-mono);
-  font-size: var(--site-text-xs);
+  font-size: var(--site-text-small);
 }
 
 /* 1024 px and up: a split hero. The copy sits left, clear of the energy stream; the orb owns the

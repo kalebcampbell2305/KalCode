@@ -1,4 +1,5 @@
 ---
+import { buildStatus, RELEASES } from "../lib/releases";
 import { FOOTER_NAV, TAGLINE } from "../lib/site";
 import BrandMark from "./BrandMark.astro";
 import Lettering from "./Lettering.astro";
@@ -16,7 +17,7 @@ const columns = [
     <div class="site-footer__grid">
       <div class="site-footer__brand">
         <a class="brand-link" href="/" aria-label="KalCode home">
-          <BrandMark size={36} />
+          <BrandMark size={36} lazy />
           <Lettering name="kalcode-wordmark" class="wordmark" />
         </a>
         <p class="tagline">{TAGLINE.split(". ").map((part, index, all) => <span>{index < all.length - 1 ? `${part}.` : part}</span>)}</p>
@@ -46,7 +47,7 @@ const columns = [
     <div class="site-footer__base">
       <div class="site-footer__legal">
         <p>© 2026 KalCode</p>
-        <p>KalCode is in private development.</p>
+        <p>{RELEASES.latest ? `${buildStatus()}. More in development.` : "KalCode is in private development."}</p>
       </div>
       <ThemeToggle />
     </div>

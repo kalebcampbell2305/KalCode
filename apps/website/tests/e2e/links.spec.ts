@@ -36,6 +36,9 @@ test("no dead internal links or anchors", async ({ page, request }) => {
       }
       const url = new URL(href, `http://local${path}`);
       const target = url.pathname;
+      // Installer files are served by the Worker from R2 (worker/downloads.ts and its tests);
+      // a local run has no R2 object behind them.
+      if (target.startsWith("/download/")) continue;
       if (url.hash) {
         const id = decodeURIComponent(url.hash.slice(1));
         if (target === path) {

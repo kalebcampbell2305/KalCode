@@ -1,6 +1,7 @@
 import { PLANS } from "@kalcode/protocol/plans";
 import { expect, test } from "@playwright/test";
 import { NOT_FOUND_PAGE, PAGES, SITE_ORIGIN, SOCIAL } from "../../src/lib/site";
+import { MANIFEST, WINDOWS_BUILD } from "./helpers";
 
 test.describe("every page", () => {
   for (const page of PAGES) {
@@ -86,12 +87,19 @@ test.describe("every page", () => {
     await expect(h1).toContainText("One intelligence that operates your entire AI workspace.");
     const hero = page.locator(".hero");
     await expect(hero).toContainText("Claude Code, Codex and Gemini CLI");
-    // No public build: the primary action is early access, on this page, and nothing links to a file.
     const primary = hero.locator(".button--primary");
-    await expect(primary).toHaveText("Join early access");
-    await expect(primary).toHaveAttribute("href", "#early-access");
-    await expect(hero).toContainText("No public build yet");
-    await expect(page.locator('a[href^="/download/"]')).toHaveCount(0);
+    if (WINDOWS_BUILD && MANIFEST.latest) {
+      // A published Windows build: the primary action offers it, on the download page.
+      await expect(primary).toHaveText("Download for Windows");
+      await expect(primary).toHaveAttribute("href", "/download#windows");
+      await expect(hero).toContainText(`Preview ${MANIFEST.latest.version}`);
+    } else {
+      // No public build: the primary action is early access, on this page, and nothing links to a file.
+      await expect(primary).toHaveText("Join early access");
+      await expect(primary).toHaveAttribute("href", "#early-access");
+      await expect(hero).toContainText("No public build yet");
+      await expect(page.locator('a[href^="/download/"]')).toHaveCount(0);
+    }
     await hero.getByRole("link", { name: "See it in action" }).click();
     await expect(page).toHaveURL(/#story$/);
     // Provider bar: honest adapter status.
@@ -100,7 +108,7 @@ test.describe("every page", () => {
     await expect(providers).toContainText("adapter planned");
   });
 
-  test("the header offers Download (plain label) while there is no public build", async ({ page }) => {
+  test("the header offers Download (plain label) in every manifest state", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto("/");
     const cta = page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Download", exact: true });

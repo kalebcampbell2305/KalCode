@@ -23,12 +23,12 @@ const heading =
 ---
 <section class="section" id="early-access" aria-labelledby="closing-title">
   <div class="container closing">
-    <BrandMark size={64} />
+    <BrandMark size={64} lazy />
     <h2 id="closing-title" class="h2">{heading}</h2>
     {
       cta.kind === "download" ? (
         <>
-          <p>The Windows preview is out. Your providers, your projects, one workspace.</p>
+          <p>The first preview is out for Windows. Your providers, your projects, one workspace.</p>
           <div class="button-row">
             <a class="button button--primary button--lg" href={cta.href}>
               <Icon name="download" />

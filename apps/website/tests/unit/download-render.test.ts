@@ -1,20 +1,29 @@
 import { experimental_AstroContainer as AstroContainer } from "astro/container";
 import { describe, expect, it } from "vitest";
 import DownloadPlatforms from "../../src/components/DownloadPlatforms.astro";
-import { RELEASES } from "../../src/lib/releases";
+import type { ReleaseManifest } from "../../src/data/releases";
 import { publishedManifest } from "./fixtures/releases";
+
+const EMPTY: ReleaseManifest = {
+  ...publishedManifest,
+  latest: null,
+  unavailable: [
+    { os: "windows", label: "Windows 10 (1809) or later, 64-bit", reason: "No public build has been published yet." },
+    ...publishedManifest.unavailable,
+  ],
+};
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
 
 describe("download page platforms", () => {
   it("with no public build: every OS is unavailable, with its reason, and there are no links", async () => {
     const container = await AstroContainer.create();
-    const html = await container.renderToString(DownloadPlatforms, { props: { manifest: RELEASES } });
+    const html = await container.renderToString(DownloadPlatforms, { props: { manifest: EMPTY } });
     expect(html).not.toMatch(/<a\s/);
     expect(html).not.toContain("download=");
     const body = text(html);
     expect(body.match(/Not yet available/g)).toHaveLength(3);
-    for (const entry of RELEASES.unavailable) expect(body).toContain(entry.reason);
+    for (const entry of EMPTY.unavailable) expect(body).toContain(entry.reason);
   });
 
   it("with an unsigned Windows preview: a download, the checksum and the SmartScreen note", async () => {

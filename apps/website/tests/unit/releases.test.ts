@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import committed from "../../src/data/releases.json";
 import {
   assertManifest,
+  buildStatus,
   downloadCta,
   formatBytes,
   platformRows,
@@ -10,11 +11,25 @@ import {
 } from "../../src/lib/releases";
 import { publishedManifest } from "./fixtures/releases";
 
+const EMPTY: ReleaseManifest = {
+  ...publishedManifest,
+  latest: null,
+  unavailable: [
+    { os: "windows", label: "Windows 10 (1809) or later, 64-bit", reason: "No public build has been published yet." },
+    ...publishedManifest.unavailable,
+  ],
+};
+
 describe("committed release manifest", () => {
-  it("is the honest empty state: no public build, every OS unavailable with a reason", () => {
-    expect(RELEASES.latest).toBeNull();
-    expect(committed.latest).toBeNull();
-    const rows = platformRows(RELEASES);
+  it("passes the website's guard and lists every OS once", () => {
+    expect(assertManifest(committed)).toBe(committed);
+    expect(platformRows(RELEASES).map((row) => row.os)).toEqual(["windows", "macos", "linux"]);
+  });
+});
+
+describe("with no public build (empty manifest)", () => {
+  it("is the honest empty state: every OS unavailable with a reason", () => {
+    const rows = platformRows(EMPTY);
     expect(rows.map((row) => row.os)).toEqual(["windows", "macos", "linux"]);
     for (const row of rows) {
       expect(row.state).toBe("unavailable");
@@ -23,13 +38,14 @@ describe("committed release manifest", () => {
   });
 
   it("makes every call to action point at early access", () => {
-    expect(downloadCta()).toEqual({
+    expect(downloadCta(EMPTY)).toEqual({
       kind: "early-access",
       label: "Join early access",
       href: "/download#early-access",
       note: "No public build yet",
     });
-    expect(downloadCta(RELEASES, "#early-access").href).toBe("#early-access");
+    expect(downloadCta(EMPTY, "#early-access").href).toBe("#early-access");
+    expect(buildStatus(EMPTY)).toBe("In private development");
   });
 });
 
@@ -52,6 +68,7 @@ describe("with a published Windows preview (fixture)", () => {
       href: "/download#windows",
       note: "Preview 0.1.0 · 3.8 MB · Windows 10 (1809) or later, 64-bit",
     });
+    expect(buildStatus(manifest)).toBe("Preview 0.1.0 for Windows");
   });
 });
 

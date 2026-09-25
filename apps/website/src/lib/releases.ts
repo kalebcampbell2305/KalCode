@@ -115,6 +115,17 @@ export function downloadCta(
   };
 }
 
+/**
+ * The one-line build status used in the footer and on pages that describe the product:
+ * "In private development" until a build is public, then "Preview 0.1.0 for Windows".
+ */
+export function buildStatus(manifest: ReleaseManifest = RELEASES): string {
+  const latest = manifest.latest;
+  if (!latest) return "In private development";
+  const systems = latest.platforms.map((platform) => OS_NAMES[platform.os]);
+  return `Preview ${latest.version} for ${systems.join(" and ")}`;
+}
+
 /** "84.2 MB" — decimal units, one decimal place from 1 MB up. */
 export function formatBytes(bytes: number): string {
   if (bytes >= 1_000_000_000) return `${(bytes / 1_000_000_000).toFixed(1)} GB`;

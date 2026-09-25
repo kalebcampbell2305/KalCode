@@ -1,6 +1,7 @@
 ---
 import PageHead from "../components/PageHead.astro";
 import Base from "../layouts/Base.astro";
+import { buildStatus } from "../lib/releases";
 import { CONTACT_EMAIL, getPage } from "../lib/site";
 
 const page = getPage("/security");
@@ -9,7 +10,7 @@ const page = getPage("/security");
   <PageHead
     title="Security"
     lead="KalCode controls powerful tools on your machine, so security is part of its architecture, not a feature added later."
-    status="In private development"
+    status={buildStatus()}
   >
     <p class="status-line">This page lists the controls in current development builds and the ones planned before release.</p>
   </PageHead>

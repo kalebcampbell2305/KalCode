@@ -9,6 +9,7 @@ import SectionHead from "../components/SectionHead.astro";
 import StageSlot from "../components/StageSlot.astro";
 import Base from "../layouts/Base.astro";
 import { downloadCta } from "../lib/releases";
+import { HERO_POSTER_SIZES, HERO_POSTER_SRCSET } from "../lib/hero";
 import { structuredData } from "../lib/seo";
 import { KALVOICE, PROVIDERS, getPage } from "../lib/site";
 
@@ -37,6 +38,15 @@ const facts = [
 ];
 ---
 <Base title={page.title} description={page.description} path={page.path} nightHeader jsonLd={structuredData()}>
+  <link
+    slot="head"
+    rel="preload"
+    as="image"
+    type="image/avif"
+    imagesrcset={HERO_POSTER_SRCSET}
+    imagesizes={HERO_POSTER_SIZES}
+    fetchpriority="high"
+  />
   <section class="hero" data-theme="dark" aria-labelledby="hero-title">
     <div class="hero__orb">
       <HeroOrbSlot size="full" />

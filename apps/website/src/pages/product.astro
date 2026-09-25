@@ -4,6 +4,7 @@ import Icon from "../components/Icon.astro";
 import PageHead from "../components/PageHead.astro";
 import StageSlot from "../components/StageSlot.astro";
 import Base from "../layouts/Base.astro";
+import { buildStatus } from "../lib/releases";
 import { KALVOICE, PROVIDERS, getPage } from "../lib/site";
 
 const page = getPage("/product");
@@ -52,7 +53,7 @@ const roadmap: { capability: string; state: State; note: string }[] = [
   <PageHead
     title="The workspace, piece by piece."
     lead="What each part of KalCode does, and how far along it is. Previews use sample data; the table at the end says what is built today."
-    status="In private development"
+    status={buildStatus()}
   >
     <div class="button-row">
       <a class="button button--secondary" href="#status">What is built today <Icon name="arrow-down" /></a>
@@ -215,7 +216,7 @@ const roadmap: { capability: string; state: State; note: string }[] = [
     <div class="container">
       <header class="section-head section-head--split">
         <h2 id="status-title" class="h2">What is built today.</h2>
-        <p>Updated with every milestone. Nothing here is publicly released yet.</p>
+        <p>Updated with every milestone. Built means in the current development build, which can be ahead of the public preview.</p>
       </header>
       <div class="table-wrap" role="region" aria-label="Build status by capability" tabindex="0">
         <table class="table">
