@@ -41,11 +41,11 @@ impl FeatureFlags {
         use SurfaceState::*;
         let table = [
             (Dashboard, Available),
-            // Z12: dictation, commands and the floating assistant work; parts that depend on
+            // Z12: push to talk, commands and the voice widget work; parts that depend on
             // campaigns not in this build say so honestly.
             (KalVoice, Preview),
-            (Code, Gated),
-            (Threads, Gated),
+            (Code, Available),
+            (Threads, Available),
             (Agents, Gated),
             (Missions, Gated),
             (Automations, Gated),
@@ -100,6 +100,23 @@ mod tests {
                 .iter()
                 .any(|s| s.state == SurfaceState::Gated)
         );
+    }
+
+    #[test]
+    fn code_surface_is_available_on_every_channel() {
+        for channel in [
+            BuildChannel::Stable,
+            BuildChannel::Beta,
+            BuildChannel::Development,
+        ] {
+            let code = FeatureFlags::for_channel(channel)
+                .surfaces
+                .into_iter()
+                .find(|s| s.id == SurfaceId::Code)
+                .expect("code surface");
+            assert_eq!(code.state, SurfaceState::Available);
+            assert!(code.visible);
+        }
     }
 
     #[test]

@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "latest": {
+    "version": "0.1.0",
+    "channel": "preview",
+    "publishedAt": "2026-09-25T01:05:21.614Z",
+    "commit": "8815e106cb26612da0f3deb7d360b43df1f26f4b",
+    "notesUrl": "/changelog#release-0-1-0",
+    "platforms": [
+      {
+        "os": "windows",
+        "arch": "x64",
+        "label": "Windows 10 (1809) or later, 64-bit",
+        "kind": "nsis",
+        "file": "KalCode_0.1.0_x64-setup.exe",
+        "url": "/download/windows-x64",
+        "pinnedUrl": "/download/0.1.0/KalCode_0.1.0_x64-setup.exe",
+        "size": 4373507,
+        "sha256": "db4f35d0207a9b804b67d8c8332875f4427958c6fa1a6c8e5d628613ced210df",
+        "signed": false
+      }
+    ]
+  },
+  "unavailable": [
+    {
+      "os": "macos",
+      "label": "macOS",
+      "reason": "Not available yet. macOS builds need a macOS build machine and Apple code signing, which are not set up."
+    },
+    {
+      "os": "linux",
+      "label": "Linux",
+      "reason": "Not available yet. Linux builds need a Linux build machine and have not been tested."
+    }
+  ]
+}

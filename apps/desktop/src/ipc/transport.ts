@@ -1,4 +1,4 @@
-import type { EventEnvelope, KalVoiceSignal } from "@kalcode/protocol";
+import type { AgentEvent, EventEnvelope, KalVoiceSignal } from "@kalcode/protocol";
 
 /** Every command the native runtime exposes (mirrors src-tauri/build.rs). */
 export type CommandName =
@@ -29,16 +29,44 @@ export type CommandName =
   | "kalvoice_type_instead"
   | "kalvoice_latency"
   | "kalvoice_latency_record"
-  // Contract commands the Dashboard consumes (docs/CONTRACTS.md). They are implemented natively
-  // by Z1 (terminals), Z3 (threads) and Z4 (approvals); until those land, the native runtime
-  // rejects them and the client reports `command_unavailable`.
+  // Threads (Z3)
   | "thread_list"
+  | "thread_get"
+  | "thread_messages"
+  | "thread_tool_calls"
+  | "thread_options"
+  | "thread_create"
+  | "thread_send"
   | "thread_interrupt"
   | "thread_resume"
   | "thread_stop"
+  | "thread_rename"
   | "thread_archive"
+  | "thread_stream"
+  // Permissions (Z4)
   | "approval_list"
   | "approval_decide"
+  | "permission_profiles_list"
+  | "thread_set_permission_mode"
+  | "permission_settings_get"
+  | "permission_settings_update"
+  // Workspaces and terminals (Z1)
+  | "workspace_list"
+  | "workspace_active"
+  | "workspace_open_dialog"
+  | "workspace_activate"
+  | "workspace_remove"
+  | "shells_list"
+  | "terminal_list"
+  | "terminal_create"
+  | "terminal_restart"
+  | "terminal_close"
+  | "terminal_write"
+  | "terminal_resize"
+  | "terminal_attach"
+  | "terminal_detach"
+  | "terminal_ack"
+  | "terminal_set_active"
   | "terminals_running";
 
 export type Unsubscribe = () => Promise<void>;
@@ -52,6 +80,18 @@ export interface Transport {
   subscribe(onEvent: (event: EventEnvelope) => void): Promise<Unsubscribe>;
   /** Live KalVoice signals for this window (listening, level, transcripts, downloads). */
   subscribeKalVoice(onSignal: (signal: KalVoiceSignal) => void): Promise<void>;
+  /**
+   * Streams a terminal's output bytes to `onOutput`: the first call is the scrollback replay
+   * (possibly empty), then live output. Resolves to false when the terminal has no session
+   * (it ended before this launch). Resolves to the attachment id (null when the terminal has
+   * no session); acknowledge rendered bytes with `terminal_ack` and detach with `terminal_detach`.
+   */
+  attachTerminal(terminalId: string, onOutput: (bytes: Uint8Array) => void): Promise<number | null>;
+  /**
+   * Live stream of one thread's message deltas (`thread_stream`). The native side keeps one
+   * stream per window: opening another thread's stream replaces this one.
+   */
+  streamThread(threadId: string, onEvent: (event: AgentEvent) => void): Promise<Unsubscribe>;
   /** Syncs the OS window chrome (title bar) with the app theme. */
   setNativeTheme(theme: NativeTheme): Promise<void>;
 }
@@ -77,6 +117,24 @@ export async function createTauriTransport(): Promise<Transport> {
       channel.onmessage = onSignal;
       await invoke("kalvoice_subscribe", { onSignal: channel });
     },
+    async attachTerminal(terminalId, onOutput) {
+      // Raw channel messages arrive as ArrayBuffers (InvokeResponseBody::Raw).
+      const channel = new Channel<ArrayBuffer>();
+      channel.onmessage = (buffer) => onOutput(new Uint8Array(buffer));
+      return invoke<number | null>("terminal_attach", { terminalId, onOutput: channel });
+    },
+    async streamThread(threadId, onEvent) {
+      const channel = new Channel<AgentEvent>();
+      let open = true;
+      channel.onmessage = (event) => {
+        if (open) onEvent(event);
+      };
+      await invoke<number>("thread_stream", { threadId, onEvent: channel });
+      // Native replaces a window's stream when another is opened and drops it on reload.
+      return async () => {
+        open = false;
+      };
+    },
     async setNativeTheme(theme) {
       await getCurrentWindow().setTheme(theme);
     },
@@ -89,8 +147,10 @@ export async function resolveTransport(): Promise<Transport | null> {
   if (isTauri()) return createTauriTransport();
   // The in-memory transport is compiled only into the `ui-test` build (see vite.config.ts).
   if (__KALCODE_MEMORY_TRANSPORT__) {
-    const { createMemoryTransport } = await import("./memoryTransport.ts");
-    return createMemoryTransport();
+    // One in-memory runtime per page, even when React StrictMode boots the UI twice. Its test
+    // hooks are on `window.__kalcodeMemory` (see memoryTransport.ts).
+    const { sharedMemoryTransport } = await import("./memoryTransport.ts");
+    return sharedMemoryTransport();
   }
   return null;
 }

@@ -14,20 +14,41 @@ fn config(dir: &std::path::Path) -> CoreConfig {
     }
 }
 
-/// The newest schema version this build ships.
-const LATEST: i64 = MIGRATIONS[MIGRATIONS.len() - 1].version;
+/// The schema as shipped in the first release (v1).
+fn v1_only() -> &'static [Migration] {
+    &MIGRATIONS[..1]
+}
 
-/// A hypothetical next migration used to exercise the upgrade path end to end.
-const TEST_V2: Migration = Migration {
-    version: LATEST + 1,
-    name: "test_workspaces",
-    sql: "CREATE TABLE workspaces (id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL) STRICT;
-          ALTER TABLE events ADD COLUMN test_marker TEXT;",
-};
+/// Schema v2 (v1 + Z1 workspaces and terminals).
+fn v2_only() -> &'static [Migration] {
+    &MIGRATIONS[..2]
+}
 
-fn v1_plus_v2() -> Vec<Migration> {
+/// The final numbering of this build's migrations. Versions must stay contiguous and each
+/// released migration's number, name and checksum is fixed forever.
+#[test]
+fn migrations_are_numbered_contiguously() {
+    let numbering: Vec<(i64, &str)> = MIGRATIONS.iter().map(|m| (m.version, m.name)).collect();
+    assert_eq!(
+        numbering,
+        vec![
+            (1, "foundation"),
+            (2, "workspaces"),
+            (3, "threads"),
+            (4, "permissions"),
+            (5, "kalvoice")
+        ]
+    );
+}
+
+/// A hypothetical migration after the current latest, to exercise refusal paths.
+fn current_plus_next() -> Vec<Migration> {
     let mut all = MIGRATIONS.to_vec();
-    all.push(TEST_V2);
+    all.push(Migration {
+        version: MIGRATIONS.len() as i64 + 1,
+        name: "test_next",
+        sql: "CREATE TABLE test_next (id TEXT PRIMARY KEY NOT NULL) STRICT;",
+    });
     all
 }
 
@@ -103,7 +124,8 @@ fn unclean_exit_is_detected_on_next_start() {
 fn upgrade_from_v1_keeps_data_and_writes_backup() {
     let dir = tempfile::tempdir().expect("tempdir");
     {
-        let core = Core::open(config(dir.path())).expect("v1 open");
+        // A user on the first release (schema v1) with real data.
+        let core = Core::open_with_migrations(config(dir.path()), v1_only()).expect("v1 open");
         core.update_settings(&SettingsPatch {
             theme: Some(ThemePreference::Dark),
             ..Default::default()
@@ -112,8 +134,8 @@ fn upgrade_from_v1_keeps_data_and_writes_backup() {
         core.shutdown();
     }
 
-    let migrations = v1_plus_v2();
-    let core = Core::open_with_migrations(config(dir.path()), &migrations).expect("v2 open");
+    // Upgrade to the current build's schema.
+    let core = Core::open(config(dir.path())).expect("current open");
 
     // Data intact.
     assert_eq!(
@@ -132,13 +154,13 @@ fn upgrade_from_v1_keeps_data_and_writes_backup() {
         .iter()
         .find_map(|e| match e.event {
             EventPayload::DatabaseMigrated {
-                from_version,
-                to_version,
+                from_version: 1,
+                to_version: 5,
                 backup_created,
-            } if from_version == LATEST && to_version == LATEST + 1 => Some(backup_created),
+            } => Some(backup_created),
             _ => None,
         })
-        .expect("database.migrated to the next version");
+        .expect("database.migrated 1 -> 5");
     assert!(migrated);
 
     // Backup file exists and is a valid v1 database with the pre-upgrade data.
@@ -148,7 +170,7 @@ fn upgrade_from_v1_keeps_data_and_writes_backup() {
         .collect();
     assert_eq!(backups.len(), 1);
     let backup = rusqlite::Connection::open(backups[0].path()).expect("open backup");
-    assert_eq!(db::schema_version(&backup).expect("backup version"), LATEST);
+    assert_eq!(db::schema_version(&backup).expect("backup version"), 1);
     let theme: String = backup
         .query_row(
             "SELECT value FROM settings WHERE key = 'appearance.theme'",
@@ -159,16 +181,262 @@ fn upgrade_from_v1_keeps_data_and_writes_backup() {
     assert_eq!(theme, "\"dark\"");
 
     let diagnostics = core.diagnostics().expect("diagnostics");
-    assert_eq!(diagnostics.database.schema_version, LATEST + 1);
+    assert_eq!(diagnostics.database.schema_version, MIGRATIONS.len() as i64);
     assert_eq!(diagnostics.database.journal_mode.to_lowercase(), "wal");
+
+    // The v2 tables exist and are usable after the upgrade.
+    assert!(core.workspaces().expect("workspaces").is_empty());
+    let project = tempfile::tempdir().expect("project");
+    let workspace = core.open_workspace(project.path()).expect("open workspace");
+    assert_eq!(
+        core.active_workspace().expect("active").map(|w| w.id),
+        Some(workspace.id)
+    );
+
+    // The v3 thread tables, the v4 permission tables and the v5 KalVoice tables exist.
+    assert_eq!(thread_tables(&core), THREAD_TABLES);
+    assert_eq!(permission_tables(&core), PERMISSION_TABLES);
+    assert_eq!(kalvoice_tables(&core), KALVOICE_TABLES);
+}
+
+const KALVOICE_TABLES: [&str; 2] = ["kalvoice_preferences", "kalvoice_requests"];
+
+// Test helper: panics on setup failures by design.
+#[allow(clippy::expect_used)]
+fn kalvoice_tables(core: &Core) -> Vec<String> {
+    core.read(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table'
+               AND name IN ('kalvoice_preferences', 'kalvoice_requests')
+             ORDER BY name",
+        )?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    })
+    .expect("list tables")
+}
+
+/// Schema v4 (v3 + Z4 permissions).
+fn v4_only() -> &'static [Migration] {
+    &MIGRATIONS[..4]
+}
+
+const THREAD_TABLES: [&str; 4] = ["thread_files", "thread_messages", "threads", "tool_calls"];
+
+const PERMISSION_TABLES: [&str; 5] = [
+    "approvals",
+    "permission_audit",
+    "permission_grants",
+    "permission_profiles",
+    "permission_settings",
+];
+
+// Test helper: panics on setup failures by design.
+#[allow(clippy::expect_used)]
+fn permission_tables(core: &Core) -> Vec<String> {
+    core.read(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table'
+               AND name IN ('approvals', 'permission_audit', 'permission_grants',
+                            'permission_profiles', 'permission_settings')
+             ORDER BY name",
+        )?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    })
+    .expect("list tables")
+}
+
+/// Schema v3 (v2 + Z3 threads).
+fn v3_only() -> &'static [Migration] {
+    &MIGRATIONS[..3]
+}
+
+// Test helper: panics on setup failures by design.
+#[allow(clippy::expect_used)]
+fn thread_tables(core: &Core) -> Vec<String> {
+    core.read(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table'
+               AND name IN ('threads', 'thread_messages', 'tool_calls', 'thread_files')
+             ORDER BY name",
+        )?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    })
+    .expect("list tables")
+}
+
+// Test helper: panics on setup failures by design.
+#[allow(clippy::expect_used)]
+fn backup_versions(dir: &std::path::Path) -> Vec<i64> {
+    let mut versions: Vec<i64> = std::fs::read_dir(dir.join("backups"))
+        .expect("backups dir")
+        .filter_map(|e| e.ok())
+        .map(|e| {
+            let conn = rusqlite::Connection::open(e.path()).expect("open backup");
+            db::schema_version(&conn).expect("backup version")
+        })
+        .collect();
+    versions.sort_unstable();
+    versions
+}
+
+/// v1 (first release) → v2 (Z1) → v3 (Z3) → v4 (Z4) → v5 (Z12 KalVoice, this build), one step
+/// at a time, with data written at every version. Each upgrade writes a backup of the version it
+/// started from.
+#[test]
+fn upgrade_v1_to_v5_step_by_step_keeps_data_and_backs_up_each_step() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = tempfile::tempdir().expect("project");
+    {
+        let core = Core::open_with_migrations(config(dir.path()), v1_only()).expect("v1 open");
+        core.update_settings(&SettingsPatch {
+            theme: Some(ThemePreference::Light),
+            density: Some(Density::Compact),
+            ..Default::default()
+        })
+        .expect("update");
+        core.shutdown();
+    }
+    let workspace_id = {
+        let core = Core::open_with_migrations(config(dir.path()), v2_only()).expect("v2 open");
+        assert_eq!(
+            core.diagnostics()
+                .expect("diagnostics")
+                .database
+                .schema_version,
+            2
+        );
+        assert!(
+            thread_tables(&core).is_empty(),
+            "v2 has no thread tables yet"
+        );
+        let workspace = core.open_workspace(project.path()).expect("open workspace");
+        core.shutdown();
+        workspace.id
+    };
+    assert_eq!(backup_versions(dir.path()), vec![1]);
+
+    let thread_id = kalcode_contracts::ids::new_id();
+    {
+        let core = Core::open_with_migrations(config(dir.path()), v3_only()).expect("v3 open");
+        assert!(
+            permission_tables(&core).is_empty(),
+            "v3 has no permission tables yet"
+        );
+        // A thread row as Z3 writes it (raw SQL: this test stays independent of the runtime).
+        core.write_with_events(|tx| {
+            tx.execute(
+                "INSERT INTO threads (id, name, provider_id, provider_name, workspace_id,
+                   workspace_name, cwd, permission_mode, status, created_at, last_activity_at)
+                 VALUES (?1, 'Fix login', 'claude-code', 'Claude Code', ?2, 'project', 'C:\\p',
+                   'approve', 'interrupted', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z')",
+                [&thread_id, &workspace_id],
+            )?;
+            Ok(((), Vec::new()))
+        })
+        .expect("insert thread");
+        core.shutdown();
+    }
+    assert_eq!(backup_versions(dir.path()), vec![1, 2]);
+
+    {
+        let core = Core::open_with_migrations(config(dir.path()), v4_only()).expect("v4 open");
+        assert!(
+            kalvoice_tables(&core).is_empty(),
+            "v4 has no KalVoice tables yet"
+        );
+        assert_eq!(permission_tables(&core), PERMISSION_TABLES);
+        core.update_settings(&SettingsPatch {
+            sidebar_collapsed: Some(true),
+            ..Default::default()
+        })
+        .expect("update at v4");
+        core.shutdown();
+    }
+    assert_eq!(backup_versions(dir.path()), vec![1, 2, 3]);
+
+    let core = Core::open(config(dir.path())).expect("v5 open");
+    assert_eq!(backup_versions(dir.path()), vec![1, 2, 3, 4]);
+    assert_eq!(
+        core.diagnostics()
+            .expect("diagnostics")
+            .database
+            .schema_version,
+        5
+    );
+
+    // v1 settings, the v2 workspace, the v3 thread and the whole event history survive.
+    let settings = core.settings().expect("settings");
+    assert_eq!(settings.theme, ThemePreference::Light);
+    assert_eq!(settings.density, Density::Compact);
+    assert_eq!(
+        core.active_workspace().expect("active").map(|w| w.id),
+        Some(workspace_id)
+    );
+    let migrations: Vec<(i64, i64, bool)> = core
+        .recent_events(100, None)
+        .expect("events")
+        .iter()
+        .rev()
+        .filter_map(|e| match e.event {
+            EventPayload::DatabaseMigrated {
+                from_version,
+                to_version,
+                backup_created,
+            } => Some((from_version, to_version, backup_created)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        migrations,
+        vec![
+            (0, 1, false),
+            (1, 2, true),
+            (2, 3, true),
+            (3, 4, true),
+            (4, 5, true)
+        ],
+        "each step recorded, backups for every existing database"
+    );
+    let types: Vec<&str> = core
+        .recent_events(100, None)
+        .expect("events")
+        .iter()
+        .map(|e| e.event.type_name())
+        .collect();
+    assert!(types.contains(&"settings.changed"));
+    assert!(types.contains(&"workspace.created"));
+    assert_eq!(thread_tables(&core), THREAD_TABLES);
+    let name: String = core
+        .read(|conn| {
+            Ok(conn.query_row(
+                "SELECT name FROM threads WHERE id = ?1",
+                [&thread_id],
+                |r| r.get(0),
+            )?)
+        })
+        .expect("thread kept");
+    assert_eq!(name, "Fix login");
+    assert_eq!(permission_tables(&core), PERMISSION_TABLES);
+    // The v4 write survives and the v5 KalVoice tables are empty and usable.
+    assert!(settings.sidebar_collapsed);
+    assert_eq!(kalvoice_tables(&core), KALVOICE_TABLES);
+    let requests: i64 = core
+        .read(
+            |conn| Ok(conn.query_row("SELECT COUNT(*) FROM kalvoice_requests", [], |r| r.get(0))?),
+        )
+        .expect("count");
+    assert_eq!(requests, 0);
 }
 
 #[test]
 fn newer_schema_is_refused_without_changes() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let migrations = v1_plus_v2();
+    let migrations = current_plus_next();
     Core::open_with_migrations(config(dir.path()), &migrations)
-        .expect("open with v2")
+        .expect("open with the next schema")
         .shutdown();
 
     let err = match Core::open(config(dir.path())) {
@@ -180,7 +448,7 @@ fn newer_schema_is_refused_without_changes() {
     let conn = rusqlite::Connection::open(dir.path().join("kalcode.db")).expect("reopen");
     assert_eq!(
         db::schema_version(&conn).expect("version"),
-        LATEST + 1,
+        MIGRATIONS.len() as i64 + 1,
         "database untouched"
     );
 }

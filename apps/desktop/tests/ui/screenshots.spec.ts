@@ -43,7 +43,7 @@ for (const theme of ["dark", "light"] as const) {
       if (size.name === "1440") {
         await page.getByRole("button", { name: "KalVoice" }).click();
         await shot(page, `kalvoice-${theme}-${size.name}`);
-        await page.getByRole("button", { name: "Threads", exact: true }).click();
+        await page.getByRole("button", { name: "Agents" }).click();
         await shot(page, `gated-${theme}-${size.name}`);
         await page.keyboard.press(process.platform === "darwin" ? "Meta+k" : "Control+k");
         await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();

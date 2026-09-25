@@ -83,8 +83,11 @@ export function needsInstall(status: ProviderStatus): boolean {
 
 export function adapterLabel(adapter: AdapterState): { badge: string; description: string } {
   return adapter === "implemented"
-    ? { badge: "Adapter ready", description: "Ready for threads. Threads arrive in an upcoming build." }
-    : { badge: "Detection only", description: "Detection only. KalCode's adapter for it is planned." };
+    ? { badge: "Adapter ready", description: "Ready for threads when installed and signed in." }
+    : {
+        badge: "Detection only",
+        description: "Detection only. Threads can't use it until KalCode's adapter for it ships.",
+      };
 }
 
 const FIDELITY: Record<MappingFidelity, string> = {

@@ -23,7 +23,9 @@ belongs here or in an ADR under `docs/adr/`.
 │                    provider/permission contracts   ├─ diagnostics/                  │
 │                                                    ├─ error.rs   KalError taxonomy  │
 │                                                    ├─ logging.rs structured logs    │
-│                                                    └─ flags.rs   feature flags      │
+│                                                    ├─ flags.rs   feature flags      │
+│                                                    └─ workspaces.rs folders + tabs  │
+│                                                   crates/pty (ConPTY/openpty shells) │
 │                                                   crates/providers  (provider CLIs)  │
 │                                                   crates/secure-store (OS keychain)  │
 └─────────────────────────────────────────────────────────────────────────────────────┘
@@ -57,7 +59,9 @@ KalCode/
 │   └── website/            kalcoded.com — Astro static site + Cloudflare Worker + D1
 ├── crates/
 │   ├── entitlements/       `kalcode_entitlements`: signed entitlement/usage verification
-│   ├── native-core/        `kalcode_core`: db, migrations, events, settings, errors, logging
+│   ├── native-core/        `kalcode_core`: db, migrations, events, settings, errors, logging,
+│   │                       workspaces and terminal tabs
+│   ├── pty/                `kalcode_pty`: pseudo-terminal sessions, scrollback, shell detection
 │   ├── providers/          `kalcode_providers`: provider detection, process supervision, adapters
 │   └── secure-store/       `kalcode_secure_store`: SecretStore trait + OS keychain backend
 ├── packages/
@@ -112,8 +116,27 @@ All IPC types are defined in Rust and exported to TypeScript with `ts-rs` into
 | `secure_store_check` | — | `SecureStoreCheck` | writes, reads, deletes a probe credential; 2 s cooldown, serialized |
 | `providers_list` | — | `ProviderStatus[]` | cached statuses (`detection` is null until the first check); async |
 | `providers_detect` | — | `ProviderStatus[]` | runs detection off the main thread (each provider on its own thread, serialized); records `provider.detected` / `provider.error` |
+| `workspace_list` | — | `Workspace[]` | most recently opened first; `available` reflects whether the folder exists |
+| `workspace_active` | — | `Workspace \| null` | |
+| `workspace_open_dialog` | — | `Workspace \| null` | shows the **native** folder picker from Rust; `null` when cancelled; the WebView never passes a path. Test builds only: `KALCODE_E2E_PICK_FOLDER` replaces the dialog |
+| `workspace_activate` | `{ workspaceId }` | `Workspace` | |
+| `workspace_remove` | `{ workspaceId }` | — | forgets the workspace; files untouched; refused while its terminals run |
+| `shells_list` | — | `ShellOption[]` | detected at startup; ids and names only, never paths |
+| `terminal_list` | `{ workspaceId }` | `TerminalInfo[]` | tab order |
+| `terminals_running` | — | `TerminalInfo[]` | all workspaces (Dashboard) |
+| `terminal_create` | `{ workspaceId, shellId?, cols, rows }` | `TerminalInfo` | starts a detected shell in the workspace folder; at most 12 tabs per workspace |
+| `terminal_restart` | `{ terminalId, cols, rows }` | `TerminalInfo` | fresh shell in an ended tab |
+| `terminal_close` | `{ terminalId }` | — | ends the shell and programs started in it; forgets the tab |
+| `terminal_write` | `{ terminalId, data }` | — | UTF-8 input, at most 64 KB; queued, never blocks (sync, ordered) |
+| `terminal_resize` | `{ terminalId, cols, rows }` | — | 2..=1000 each (sync) |
+| `terminal_attach` | `{ terminalId }` + `Channel<ArrayBuffer>` | `number \| null` | raw output bytes: replay first, then live; returns the attachment id (null: nothing to show); at most 4 per (webview, terminal); dropped on page reload (sync) |
+| `terminal_ack` | `{ attachmentId, bytes }` | `bool` | flow control: rendered bytes; `false` means the view fell > 4 MB behind, was cut off, and must re-attach (sync) |
+| `terminal_detach` | `{ attachmentId }` | `bool` | only the calling webview's own attachments (sync) |
+| `terminal_set_active` | `{ workspaceId, terminalId }` | — | remembers the tab in front |
 
-Database-backed commands run off the main thread (`#[tauri::command(async)]`).
+Database-backed commands run off the main thread (`#[tauri::command(async)]`). Terminal input,
+resize, attach and detach touch no storage and stay synchronous so they are handled in the order
+the WebView sent them (see `docs/CODE_MODE.md`).
 
 Errors cross the boundary as `IpcError { category, code, message, retryable }` (see §7). The
 frontend client (`apps/desktop/src/ipc`) is the only module allowed to call `invoke`.

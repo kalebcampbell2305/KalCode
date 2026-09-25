@@ -1,0 +1,316 @@
+.rows {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Label above control: the five modes need the full column width. */
+.row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+}
+
+.row + .row {
+  border-top: 1px solid var(--color-border);
+}
+
+.rowText {
+  min-width: 0;
+}
+
+.rowLabel {
+  color: var(--color-text);
+  font-size: var(--text-md);
+}
+
+.rowHelp {
+  margin-top: var(--space-0-5);
+  max-width: 60ch;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+/* Persistent indicator while Bypass is the default. */
+.bypassBanner {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid color-mix(in srgb, var(--color-danger) 45%, transparent);
+  border-radius: var(--radius-md);
+  background: var(--color-danger-soft);
+  color: var(--color-danger-text);
+}
+
+.bypassBanner > svg {
+  width: 1.125rem;
+  height: 1.125rem;
+  margin-top: 0.1rem;
+}
+
+.bannerTitle {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.bannerText {
+  margin-top: var(--space-0-5);
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+}
+
+.profiles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding-top: var(--space-2);
+}
+
+.profileGroup {
+  display: flex;
+  flex-direction: column;
+}
+
+.groupTitle {
+  padding-bottom: var(--space-1-5);
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
+.profile {
+  border-top: 1px solid var(--color-border);
+}
+
+.profile:last-child {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2-5, 0.625rem) var(--space-1);
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  list-style: none;
+  border-radius: var(--radius-sm);
+}
+
+.summary::-webkit-details-marker {
+  display: none;
+}
+
+.summary::before {
+  content: "›";
+  display: inline-block;
+  width: 1ch;
+  margin-right: var(--space-2);
+  color: var(--color-text-muted);
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.profile[open] > .summary::before {
+  transform: rotate(90deg);
+}
+
+.summary:hover {
+  background: var(--color-surface-hover);
+}
+
+.summary:focus-visible {
+  box-shadow: var(--shadow-focus);
+  outline: none;
+}
+
+.profileName {
+  flex: 1;
+  font-weight: var(--weight-medium);
+}
+
+.profileMeta {
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.rules {
+  width: 100%;
+  margin: var(--space-1) 0 var(--space-3);
+  border-collapse: collapse;
+  font-size: var(--text-sm);
+}
+
+.rules thead th {
+  padding: var(--space-1) var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  text-align: left;
+}
+
+.rules tbody th,
+.rules td {
+  padding: var(--space-1) var(--space-2);
+  border-top: 1px solid var(--color-border);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.rules tbody th {
+  color: var(--color-text-secondary);
+  font-weight: var(--weight-regular);
+}
+
+.rules td {
+  width: 7rem;
+}
+
+.matcher {
+  margin-left: var(--space-2);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+/* Bypass confirmation */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-dialog);
+  background: var(--color-scrim);
+}
+
+.dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: var(--z-dialog);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: min(32rem, calc(100vw - 2 * var(--space-6)));
+  max-height: calc(100vh - 2 * var(--space-6));
+  padding: var(--space-6);
+  overflow-y: auto;
+  border-radius: var(--radius-xl);
+  background: var(--color-surface-overlay);
+  box-shadow: var(--shadow-lg);
+  transform: translate(-50%, -50%);
+}
+
+.dialogIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: var(--radius-full);
+  background: var(--color-danger-soft);
+  color: var(--color-danger-text);
+}
+
+.dialogIcon svg {
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
+.dialogTitle {
+  color: var(--color-text);
+  font-size: var(--text-xl);
+  font-weight: var(--weight-medium);
+}
+
+.dialogBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+.dialogBody ul {
+  margin: 0;
+  padding-left: var(--space-5);
+}
+
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.check input {
+  width: 1rem;
+  height: 1rem;
+  margin-top: 0.1rem;
+  accent-color: var(--color-danger);
+}
+
+.dialogActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+}
+
+/* Rule effects: coloured text plus a shape, never colour alone. Plain text keeps contrast on
+   every surface in both themes. */
+.effect {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
+.effect::before {
+  content: "";
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: var(--radius-full);
+  background: currentColor;
+}
+
+.effect[data-effect="allow"] {
+  color: var(--color-success);
+}
+
+.effect[data-effect="ask"] {
+  color: var(--color-waiting);
+}
+
+.effect[data-effect="ask"]::before {
+  border-radius: 1px;
+  transform: rotate(45deg);
+}
+
+.effect[data-effect="deny"] {
+  color: var(--color-text-secondary);
+}
+
+.effect[data-effect="deny"]::before {
+  border-radius: 1px;
+}
+
+.effect[data-effect="never"] {
+  color: var(--color-danger-text);
+}
+
+.effect[data-effect="never"]::before {
+  width: 0.625rem;
+  height: 2px;
+  border-radius: 1px;
+}

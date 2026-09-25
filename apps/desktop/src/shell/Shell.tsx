@@ -3,10 +3,16 @@ import { FloatingAssistant } from "../kalvoice/FloatingAssistant.tsx";
 import { KalVoicePage } from "../kalvoice/KalVoicePage.tsx";
 import { KalVoiceProvider } from "../kalvoice/KalVoiceProvider.tsx";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
+import { WorkspaceProvider } from "../runtime/WorkspaceProvider.tsx";
+import { CodePage } from "../surfaces/code/CodePage.tsx";
+import { useNewTerminalShortcut } from "../surfaces/code/useNewTerminalShortcut.ts";
 import { Dashboard } from "../surfaces/dashboard/Dashboard.tsx";
 import { GatedSurface } from "../surfaces/gated/GatedSurface.tsx";
+import { ApprovalAnnouncer, ApprovalsPanel, PermissionsProvider } from "../surfaces/permissions/index.ts";
 import { ProvidersPage } from "../surfaces/providers/ProvidersPage.tsx";
 import { SettingsPage } from "../surfaces/settings/SettingsPage.tsx";
+import { ThreadsIntentProvider } from "../surfaces/threads/intent.tsx";
+import { ThreadsSurface } from "../surfaces/threads/ThreadsSurface.tsx";
 import { useAppearance } from "./appearance.ts";
 import { CommandPalette } from "./CommandPalette.tsx";
 import { NavigationProvider, SURFACES, useNavigation } from "./navigation.tsx";
@@ -22,13 +28,19 @@ export function Shell() {
   const kalvoiceEnabled = Boolean(kalvoiceFlag?.visible && kalvoiceFlag.state !== "gated");
   return (
     <NavigationProvider flags={info.flags.surfaces}>
-      {kalvoiceEnabled ? (
-        <KalVoiceProvider>
-          <ShellLayout kalvoice />
-        </KalVoiceProvider>
-      ) : (
-        <ShellLayout kalvoice={false} />
-      )}
+      <WorkspaceProvider>
+        <PermissionsProvider>
+          <ThreadsIntentProvider>
+            {kalvoiceEnabled ? (
+              <KalVoiceProvider>
+                <ShellLayout kalvoice />
+              </KalVoiceProvider>
+            ) : (
+              <ShellLayout kalvoice={false} />
+            )}
+          </ThreadsIntentProvider>
+        </PermissionsProvider>
+      </WorkspaceProvider>
     </NavigationProvider>
   );
 }
@@ -42,6 +54,7 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
     openPalette: () => setPaletteOpen(true),
     toggleSidebar: () => void updateSettings({ sidebarCollapsed: !settings.sidebarCollapsed }),
   });
+  useNewTerminalShortcut();
 
   return (
     <div className={styles.shell} data-sidebar={settings.sidebarCollapsed ? "collapsed" : "expanded"}>
@@ -49,21 +62,27 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
         Skip to content
       </a>
       <Sidebar collapsed={settings.sidebarCollapsed} onOpenPalette={() => setPaletteOpen(true)} />
-      <main id="main" className={styles.main} tabIndex={-1} aria-label={SURFACES[current].label}>
+      <main id="main" className={styles.main} tabIndex={-1} aria-label={SURFACES[current].label} data-surface={current}>
         {current === "kalvoice" && kalvoice ? (
           <KalVoicePage />
         ) : current === "dashboard" ? (
           <Dashboard />
+        ) : current === "code" ? (
+          <CodePage />
         ) : current === "settings" ? (
           <SettingsPage />
         ) : current === "providers" ? (
           <ProvidersPage />
+        ) : current === "threads" ? (
+          <ThreadsSurface />
         ) : (
           <GatedSurface id={current} />
         )}
       </main>
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
       {kalvoice ? <FloatingAssistant /> : null}
+      <ApprovalsPanel />
+      <ApprovalAnnouncer />
     </div>
   );
 }

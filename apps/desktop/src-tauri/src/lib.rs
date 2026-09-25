@@ -1,10 +1,13 @@
 //! KalCode desktop shell. A thin layer over `kalcode_core::Core`: it resolves platform paths,
 //! starts logging, exposes the allow-listed IPC commands, and manages the window lifecycle.
 
+mod code_commands;
 mod commands;
 pub mod environment;
 mod kalvoice_commands;
+pub mod permission_commands;
 mod provider_commands;
+mod thread_commands;
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -19,6 +22,7 @@ use kalcode_core::logging::{self, LogGuard};
 use kalcode_core::{AppInfo, Core, CoreConfig, ErrorCategory, IpcError, KalError, Paths};
 use tauri::webview::PageLoadEvent;
 use tauri::{Manager, RunEvent};
+use thread_commands::ThreadsState;
 
 /// Shared state for command handlers. `core` is `None` when startup failed; the UI then shows
 /// `startup_error` with recovery options instead of a broken shell.
@@ -190,24 +194,50 @@ pub fn run(removed_overrides: Vec<&'static str>) {
     }
     let app = builder
         .plugin(tauri_plugin_opener::init())
-        // KalVoice shortcuts are registered from Rust only; the WebView has no permission to
-        // call this plugin's commands.
+        // Used from Rust only (the native folder picker); the WebView gets no dialog permissions.
+        .plugin(tauri_plugin_dialog::init())
+        // KalVoice's push-to-talk key is registered from Rust only; the WebView has no
+        // permission to call this plugin's commands.
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(kalvoice_commands::on_shortcut)
                 .build(),
         )
+        .manage(code_commands::TerminalViews::default())
         .on_page_load(|webview, payload| {
             // A (re)load starts a fresh page whose JS callbacks no longer exist.
             if payload.event() == PageLoadEvent::Started
                 && let Some(state) = webview.try_state::<AppState>()
             {
                 state.drop_subscription(webview.label());
+                code_commands::drop_views(webview);
+                if let Some(threads) = webview.try_state::<ThreadsState>() {
+                    threads.drop_stream(webview.label());
+                }
             }
         })
         .setup(move |app| {
             let state = start(app, &removed_overrides);
             let providers = provider_commands::ProviderState::from_process();
+            // Z4 over Z1 (workspace roots) and Z3 (thread modes, bound once the runtime starts).
+            let modes = Arc::new(thread_commands::ThreadModes::default());
+            let permissions = permission_commands::PermissionState::new(
+                state.core.clone(),
+                state.core.clone().map_or_else(
+                    || {
+                        Arc::new(kalcode_permissions::NoWorkspaces)
+                            as Arc<dyn kalcode_permissions::WorkspaceRoots>
+                    },
+                    |core| Arc::new(kalcode_permissions::CoreWorkspaceRoots::new(core)),
+                ),
+                modes.clone(),
+            );
+            let threads = ThreadsState::start(
+                state.core.as_ref(),
+                providers.registry(),
+                permissions.service(),
+                &modes,
+            );
             let kalvoice = kalvoice_commands::init(
                 app.handle(),
                 state.core.clone(),
@@ -217,6 +247,8 @@ pub fn run(removed_overrides: Vec<&'static str>) {
             app.manage(kalvoice);
             app.manage(state);
             app.manage(providers);
+            app.manage(permissions);
+            app.manage(threads);
 
             // Safety net: the frontend shows the window after its first themed paint
             // (`window_ready`). If that never happens, show it anyway so the user is never
@@ -260,6 +292,43 @@ pub fn run(removed_overrides: Vec<&'static str>) {
             kalvoice_commands::kalvoice_latency_record,
             provider_commands::providers_list,
             provider_commands::providers_detect,
+            code_commands::workspace_list,
+            code_commands::workspace_active,
+            code_commands::workspace_open_dialog,
+            code_commands::workspace_activate,
+            code_commands::workspace_remove,
+            code_commands::shells_list,
+            code_commands::terminal_list,
+            code_commands::terminal_create,
+            code_commands::terminal_restart,
+            code_commands::terminal_close,
+            code_commands::terminal_write,
+            code_commands::terminal_resize,
+            code_commands::terminal_attach,
+            code_commands::terminal_detach,
+            code_commands::terminal_ack,
+            code_commands::terminal_set_active,
+            code_commands::terminals_running,
+            thread_commands::thread_list,
+            thread_commands::thread_get,
+            thread_commands::thread_messages,
+            thread_commands::thread_tool_calls,
+            thread_commands::thread_options,
+            thread_commands::thread_create,
+            thread_commands::thread_send,
+            thread_commands::thread_interrupt,
+            thread_commands::thread_resume,
+            thread_commands::thread_stop,
+            thread_commands::thread_rename,
+            thread_commands::thread_archive,
+            thread_commands::thread_stream,
+            permission_commands::approval_list,
+            permission_commands::approval_decide,
+            permission_commands::permission_profiles_list,
+            permission_commands::thread_set_permission_mode,
+            permission_commands::permission_settings_get,
+            permission_commands::permission_settings_update,
+            permission_commands::test_permission_probe,
         ])
         .build(tauri::generate_context!());
 
@@ -275,6 +344,11 @@ pub fn run(removed_overrides: Vec<&'static str>) {
         if let RunEvent::Exit = event
             && let Some(state) = handle.try_state::<AppState>()
         {
+            // End provider sessions (and their process trees) before the core records its
+            // shutdown; their threads become `interrupted`, resumable.
+            if let Some(threads) = handle.try_state::<ThreadsState>() {
+                threads.shutdown();
+            }
             if let Some(core) = &state.core {
                 core.shutdown();
             }

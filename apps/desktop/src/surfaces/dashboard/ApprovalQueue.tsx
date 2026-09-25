@@ -1,51 +1,43 @@
-import type { ApprovalDecision, ApprovalRequest, ThreadSummary } from "@kalcode/protocol";
+import type { ApprovalDecision } from "@kalcode/protocol";
 import { Button, ErrorState, Skeleton } from "@kalcode/ui/components";
 import { Shield, ShieldAlert, ShieldCheck } from "lucide-react";
-import { useRef, useState } from "react";
-import { ApprovalItem } from "./ApprovalItem.tsx";
+import { useMemo, useRef, useState } from "react";
+import { ApprovalPrompt, usePermissions } from "../permissions/index.ts";
 import styles from "./ApprovalQueue.module.css";
-import { usePendingApprovals } from "./data/DashboardData.tsx";
 
 const VISIBLE = 5;
 
-interface ApprovalQueueProps {
-  threadsById: ReadonlyMap<string, ThreadSummary>;
-  now: number;
-}
-
 /**
- * Pending approval requests, longest waiting first. Rendered above everything else so a thread
- * blocked on the user is impossible to miss. Hidden entirely when this build has no approvals.
+ * Pending approval requests, longest waiting first, rendered with the same approval prompt as
+ * the Approvals panel (Z4). Placed above everything else so a thread blocked on the user is
+ * impossible to miss.
  */
-export function ApprovalQueue({ threadsById, now }: ApprovalQueueProps) {
-  const { state, reload, deciding, decide } = usePendingApprovals();
+export function ApprovalQueue() {
+  const { pending, pendingState, pendingError, refreshPending, decide } = usePermissions();
   const [expanded, setExpanded] = useState(false);
-  const listRef = useRef<HTMLDivElement>(null);
-  const initialIds = useRef<Set<string> | null>(null);
+  const listRef = useRef<HTMLOListElement>(null);
 
-  if (state.status === "unavailable") return null;
+  const queue = useMemo(() => [...pending].sort((a, b) => a.createdAt.localeCompare(b.createdAt)), [pending]);
 
-  if (state.status === "ready" && initialIds.current === null) {
-    initialIds.current = new Set(state.data.map((r) => r.id));
-  }
-
-  const onDecide = async (request: ApprovalRequest, decision: ApprovalDecision) => {
+  const onDecide = async (requestId: string, decision: ApprovalDecision) => {
     const items = [...(listRef.current?.querySelectorAll<HTMLElement>("[data-approval-id]") ?? [])];
-    const index = items.findIndex((el) => el.dataset.approvalId === request.id);
+    const index = items.findIndex((el) => el.dataset.approvalId === requestId);
     const hadFocus = index >= 0 && items[index]?.contains(document.activeElement);
-    await decide(request, decision);
-    if (!hadFocus) return;
-    // Keep keyboard users in the queue: focus the next request, else the previous, else the heading.
+    const result = await decide(requestId, decision);
+    if (!result || !hadFocus) return;
+    // Keep keyboard users in the queue: focus the next request's first answer, else the heading.
     requestAnimationFrame(() => {
       const remaining = [...(listRef.current?.querySelectorAll<HTMLElement>("[data-approval-id]") ?? [])];
       const next = remaining[Math.min(index, remaining.length - 1)];
-      if (next) next.focus();
+      const target = next?.querySelector<HTMLElement>("button:not([disabled])");
+      if (target) target.focus();
       else document.getElementById("approvals-title")?.focus();
     });
   };
 
-  const count = state.status === "ready" ? state.data.length : 0;
-  const tone = state.status !== "ready" ? "unknown" : count > 0 ? "waiting" : "calm";
+  const ready = pendingState === "ready" || (pendingState === "error" && pending.length > 0);
+  const count = ready ? queue.length : 0;
+  const tone = !ready ? "unknown" : count > 0 ? "waiting" : "calm";
   const Icon = tone === "waiting" ? ShieldAlert : tone === "calm" ? ShieldCheck : Shield;
 
   return (
@@ -56,18 +48,18 @@ export function ApprovalQueue({ threadsById, now }: ApprovalQueueProps) {
           Needs approval
           {count > 0 ? <span className={styles.count}>{count}</span> : null}
         </h2>
-        {state.status === "ready" && state.error ? (
+        {pendingState === "error" && pending.length > 0 ? (
           <p className={styles.stale} role="status">
-            Couldn't refresh: {state.error.message}{" "}
-            <Button variant="ghost" size="sm" onClick={reload}>
+            Couldn't refresh: {pendingError?.message}{" "}
+            <Button variant="ghost" size="sm" onClick={() => void refreshPending()}>
               Try again
             </Button>
           </p>
         ) : null}
       </header>
 
-      {state.status === "loading" ? (
-        <div className={styles.panel} role="status" aria-busy="true">
+      {pendingState === "loading" && pending.length === 0 ? (
+        <div className={styles.loading} role="status" aria-busy="true">
           <span className="visually-hidden">Loading approval requests</span>
           {[0, 1].map((i) => (
             <div key={i} className={styles.skeletonItem}>
@@ -77,35 +69,29 @@ export function ApprovalQueue({ threadsById, now }: ApprovalQueueProps) {
             </div>
           ))}
         </div>
-      ) : state.status === "error" ? (
+      ) : pendingState === "error" && pending.length === 0 ? (
         <ErrorState
           title="Approval requests couldn't load"
-          code={`${state.error.category}/${state.error.code}`}
-          actions={<Button onClick={reload}>Try again</Button>}
+          code={pendingError ? `${pendingError.category}/${pendingError.code}` : undefined}
+          actions={<Button onClick={() => void refreshPending()}>Try again</Button>}
         >
-          <p>{state.error.message}</p>
+          <p>{pendingError?.message}</p>
         </ErrorState>
-      ) : state.data.length === 0 ? (
+      ) : queue.length === 0 ? (
         <p className={styles.clear}>Nothing is waiting for your approval.</p>
       ) : (
         <>
-          <div ref={listRef} className={styles.panel}>
-            {(expanded ? state.data : state.data.slice(0, VISIBLE)).map((request) => (
-              <ApprovalItem
-                key={request.id}
-                request={request}
-                thread={threadsById.get(request.action.threadId)}
-                busy={deciding.has(request.id)}
-                arrived={!initialIds.current?.has(request.id)}
-                now={now}
-                onDecide={(decision) => void onDecide(request, decision)}
-              />
+          <ol ref={listRef} className={styles.list} aria-label="Pending approvals">
+            {(expanded ? queue : queue.slice(0, VISIBLE)).map((request) => (
+              <li key={request.id} data-approval-id={request.id}>
+                <ApprovalPrompt request={request} onDecide={onDecide} headingLevel={3} />
+              </li>
             ))}
-          </div>
-          {state.data.length > VISIBLE ? (
+          </ol>
+          {queue.length > VISIBLE ? (
             <div>
               <Button variant="ghost" size="sm" onClick={() => setExpanded((v) => !v)} aria-expanded={expanded}>
-                {expanded ? "Show fewer" : `Show ${state.data.length - VISIBLE} more`}
+                {expanded ? "Show fewer" : `Show ${queue.length - VISIBLE} more`}
               </Button>
             </div>
           ) : null}

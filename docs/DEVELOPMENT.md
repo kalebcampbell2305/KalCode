@@ -7,10 +7,10 @@ KalCode is developed in coordinated threads, each on its own branch in its own g
 
 | Thread | Branch | Worktree | Owns |
 | --- | --- | --- | --- |
-| 1 — Workspace + Terminal (Z1) | `z1/workspace-terminal` | `.worktrees/z1` | `crates/pty`, workspaces/terminals in native-core, Code surface, migration `0002` |
-| 2 — Provider runtime (Z2) | `z2/provider-runtime` | `.worktrees/z2` | `crates/providers`, provider contracts, Providers surface, migration `0003` if needed |
-| 3a — Threads (Z3) | `z3/threads` | `.worktrees/z3` | thread runtime, Threads surface, migration `0004` |
-| 4 — Permission engine (Z4) | `z4/permissions` | `.worktrees/z4` | `crates/permissions`, approvals UI, migration `0005` |
+| 1 — Workspace + Terminal (Z1) | `z1/workspace-terminal` | `.worktrees/z1` | `crates/pty`, workspaces/terminals in native-core, Code surface, migration `0002` (v2) |
+| 2 — Provider runtime (Z2) | `z2/provider-runtime` | `.worktrees/z2` | `crates/providers`, provider contracts, Providers surface (no migration) |
+| 3a — Threads (Z3) | `z3/threads` | `.worktrees/z3` | thread runtime, Threads surface, migration `0003` (v3) |
+| 4 — Permission engine (Z4) | `z4/permissions` | `.worktrees/z4` | `crates/permissions`, approvals UI, migration `0004` (v4) |
 | 5 — Dashboard (Z5) | `z5/dashboard` | `.worktrees/z5` | Dashboard surface (fixtures until Z3/Z4 land) |
 | 6 — Test & integration infrastructure | `infra/testing` | `.worktrees/infra` | CI, performance harness, `packages/testing` |
 | Entitlements (OWNER) | `z13/owner-entitlement` | `.worktrees/owner` | `apps/api`, `crates/entitlements`, entitlement contracts |

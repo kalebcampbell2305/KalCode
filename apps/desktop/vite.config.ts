@@ -1,5 +1,37 @@
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
+
+/**
+ * The app runs with Object.prototype frozen (`freezePrototype` in tauri.conf.json). xterm.js
+ * assigns `toString` on a plain namespace object, which throws when the prototype's `toString` is
+ * read-only (the "override mistake"). Define the property instead. Fails loudly if xterm.js
+ * changes, so an upgrade can't silently reintroduce a blank window.
+ */
+function xtermFrozenPrototype(): Plugin {
+  return {
+    name: "kalcode:xterm-frozen-prototype",
+    enforce: "pre",
+    transform(code, id) {
+      if (!/[\\/]@xterm[\\/]xterm[\\/]lib[\\/]xterm\.mjs$/.test(id.split("?")[0] ?? id)) return null;
+      const pattern = /([\w$]+)\.toString=([\w$]+)/g;
+      const found = code.match(pattern)?.length ?? 0;
+      if (found !== 1) this.error(`expected one toString assignment in xterm.mjs, found ${found}`);
+      return {
+        code: code.replace(pattern, 'Object.defineProperty($1,"toString",{value:$2,writable:!0,configurable:!0})'),
+        map: null,
+      };
+    },
+  };
+}
+
+/** UI-test builds freeze Object.prototype like the desktop app, so tests run under the same rules. */
+function freezePrototypeInTests(enabled: boolean): Plugin {
+  return {
+    name: "kalcode:freeze-prototype-in-tests",
+    transformIndexHtml: () =>
+      enabled ? [{ tag: "script", children: "Object.freeze(Object.prototype);", injectTo: "head-prepend" }] : [],
+  };
+}
 
 // The in-memory IPC transport is only compiled into the `ui-test` mode build used by
 // Playwright UI tests. Production and dev builds always talk to the native runtime.
@@ -7,7 +39,9 @@ import { defineConfig } from "vite";
 const uiTestPort = Number(process.env.KALCODE_UI_TEST_PORT ?? 1421);
 
 export default defineConfig(({ mode }) => ({
-  plugins: [react()],
+  plugins: [react(), xtermFrozenPrototype(), freezePrototypeInTests(mode === "ui-test")],
+  // Pre-bundled dependencies skip plugin transforms; xterm.js must pass through the fix above.
+  optimizeDeps: { exclude: ["@xterm/xterm"] },
   clearScreen: false,
   define: {
     __KALCODE_MEMORY_TRANSPORT__: JSON.stringify(mode === "ui-test"),

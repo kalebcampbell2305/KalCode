@@ -12,7 +12,6 @@ import {
   MessagesSquare,
   PlugZap,
   Settings as SettingsIcon,
-  Sparkles,
   Workflow,
 } from "lucide-react";
 import { createContext, type ReactNode, useCallback, useContext, useMemo, useState } from "react";
@@ -46,15 +45,13 @@ export const SURFACES: Record<SurfaceId, SurfaceMeta> = {
     id: "code",
     label: "Code",
     icon: Code2,
-    summary: "A pane-based workspace with threads, terminals, files, Git, diffs and a browser preview.",
-    dependsOn: "Workspaces and the terminal runtime",
+    summary: "Your project folders with real terminals, restored after a restart.",
   },
   threads: {
     id: "threads",
     label: "Threads",
     icon: MessagesSquare,
-    summary: "Persistent units of AI work that run Claude Code, Codex or Gemini CLI in your projects.",
-    dependsOn: "Provider connections",
+    summary: "Persistent units of AI work that run Claude Code in your projects.",
   },
   agents: {
     id: "agents",

@@ -28,6 +28,10 @@
   height: 0.62rem;
 }
 
+.workspace {
+  margin-bottom: var(--space-2);
+}
+
 .search {
   margin-bottom: var(--space-4);
 }
@@ -170,4 +174,53 @@
   font-size: var(--text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ---- Z4: approvals indicator and Bypass notice ---- */
+
+.approvalsWaiting {
+  color: var(--color-text);
+}
+
+.approvalsWaiting .icon {
+  color: var(--color-waiting);
+}
+
+.countBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  margin-left: auto;
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-full);
+  background: var(--color-waiting);
+  color: var(--color-text-inverse);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+}
+
+.badgeDot {
+  position: absolute;
+  top: 0.3rem;
+  right: 0.4rem;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: var(--radius-full);
+  background: var(--color-waiting);
+  box-shadow: 0 0 0 2px var(--color-bg-sunken);
+}
+
+.bypassNotice {
+  border: 1px solid color-mix(in srgb, var(--color-danger) 40%, transparent);
+  background: var(--color-danger-soft);
+  color: var(--color-danger-text);
+  font-weight: var(--weight-medium);
+}
+
+.bypassNotice:hover {
+  background: color-mix(in srgb, var(--color-danger) 18%, transparent);
+  color: var(--color-danger-text);
 }

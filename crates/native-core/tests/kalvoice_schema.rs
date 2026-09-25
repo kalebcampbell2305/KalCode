@@ -1,4 +1,4 @@
-//! Migration 0006 (KalVoice) upgrade test and `Core::transact` semantics.
+//! Migration 0005 (KalVoice) upgrade test and `Core::transact` semantics.
 
 use std::sync::{Arc, Mutex};
 
@@ -26,10 +26,10 @@ fn table_exists(conn: &rusqlite::Connection, name: &str) -> rusqlite::Result<boo
 }
 
 #[test]
-fn upgrade_from_foundation_adds_kalvoice_tables_and_keeps_data() {
+fn upgrade_from_v4_adds_kalvoice_tables_and_keeps_data() {
     let dir = tempfile::tempdir().expect("tempdir");
     {
-        let core = Core::open_with_migrations(config(dir.path()), &MIGRATIONS[..1]).expect("v1");
+        let core = Core::open_with_migrations(config(dir.path()), &MIGRATIONS[..4]).expect("v4");
         core.update_settings(&SettingsPatch {
             theme: Some(ThemePreference::Light),
             ..Default::default()
@@ -46,7 +46,7 @@ fn upgrade_from_foundation_adds_kalvoice_tables_and_keeps_data() {
     core.read(|conn| {
         assert!(table_exists(conn, "kalvoice_requests")?);
         assert!(table_exists(conn, "kalvoice_preferences")?);
-        assert_eq!(db::schema_version(conn)?, 6);
+        assert_eq!(db::schema_version(conn)?, 5);
         Ok(())
     })
     .expect("read");
@@ -65,8 +65,8 @@ fn upgrade_from_foundation_adds_kalvoice_tables_and_keeps_data() {
             matches!(
                 e.event,
                 EventPayload::DatabaseMigrated {
-                    from_version: 1,
-                    to_version: 6,
+                    from_version: 4,
+                    to_version: 5,
                     backup_created: true
                 }
             )

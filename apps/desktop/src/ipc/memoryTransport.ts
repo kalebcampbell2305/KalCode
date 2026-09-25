@@ -7,6 +7,10 @@
  * `?scenario=` (ui-test builds only) selects a starting state:
  *   startup-error      — the core failed to start (newer database)
  *   keychain-failure   — the credential store check fails
+ *   code               — workspaces with terminal tabs already open (Code, Dashboard)
+ *   threads            — threads in every state (Threads surface fixtures)
+ *   no-providers       — no provider is connected (New thread flow empty state)
+ *   approvals          — agents are waiting on approvals (Z4)
  *   providers-error    — provider detection fails
  *   providers-none     — no provider CLI is installed
  *   providers-outdated — Claude Code is installed but too old, and signed out
@@ -14,21 +18,25 @@
  *                      — Dashboard data scenarios (see ./memory/dashboard.ts)
  *   kalvoice-*         — KalVoice scenarios (see ./memoryKalVoice.ts, a labelled test double)
  *
- * Without a Dashboard scenario the transport mirrors the current native build: commands that no
- * campaign has registered yet are rejected exactly the way Tauri rejects them.
+ * Commands that no merged campaign registers natively yet are rejected exactly the way Tauri
+ * rejects them (Dashboard scenarios implement those contract commands as fixtures).
  */
 import type {
   AppInfo,
+  ApprovalView,
   BootState,
+  Correlation,
   Diagnostics,
   EventEnvelope,
   EventPayload,
+  EventSource,
   IpcError,
   ProviderStatus,
   SecureStoreCheck,
   Settings,
   SettingsPatch,
   SurfaceFlag,
+  Workspace,
 } from "@kalcode/protocol";
 import {
   createDashboardFixtures,
@@ -38,21 +46,38 @@ import {
   type EmitOptions,
   isDashboardScenario,
 } from "./memory/dashboard.ts";
+import { createPermissionMemory, type PermissionMemory } from "./memory/permissions.ts";
+import { createThreadsMemory } from "./memory/threads.ts";
 import { createMemoryKalVoice, isKalVoiceScenario, type KalVoiceScenario } from "./memoryKalVoice.ts";
 import { detectFake, type ProviderScenario, providerCatalog } from "./memoryProviders.ts";
+import { createMemoryWorkspaces, type MemoryWorkspaces } from "./memoryWorkspaces.ts";
 import type { CommandName, Transport } from "./transport.ts";
 
 export type MemoryScenario =
   | "default"
   | "startup-error"
   | "keychain-failure"
+  | "code"
+  | "threads"
+  | "no-providers"
+  | "approvals"
   | ProviderScenario
   | DashboardScenario
   | KalVoiceScenario;
 
 const PROVIDER_SCENARIOS: readonly string[] = ["providers-error", "providers-none", "providers-outdated"];
 
-const AVAILABLE_SURFACES: ReadonlySet<SurfaceFlag["id"]> = new Set(["dashboard", "providers", "settings"]);
+/** Surfaces that work in this build (mirrors crates/native-core/src/flags.rs). */
+const AVAILABLE_SURFACES: ReadonlySet<SurfaceFlag["id"]> = new Set([
+  "dashboard",
+  "code",
+  "threads",
+  "providers",
+  "settings",
+]);
+
+/** Latest schema version (mirrors crates/native-core/src/db.rs). */
+const SCHEMA_VERSION = 4;
 
 export interface MemoryTransportOptions {
   /** How long fake provider detection takes (the UI shows its busy state meanwhile). */
@@ -97,6 +122,10 @@ export interface MemoryTransport extends Transport {
   subscriberCount(): number;
   /** Test hooks for Dashboard scenarios (null in scenarios without Dashboard data). */
   readonly dashboard: DashboardControls | null;
+  /** Test hooks for workspaces and terminals (folder picker results, moved folders). */
+  workspaces: Omit<MemoryWorkspaces, "handlers" | "attachTerminal">;
+  /** Test hook: permission state (Z4), e.g. an agent asking for approval. */
+  permissions: PermissionMemory;
 }
 
 export function createMemoryTransport(
@@ -131,7 +160,7 @@ export function createMemoryTransport(
       seq: events.length + 1,
       version: 1,
       occurredAt: options.occurredAt ?? new Date().toISOString(),
-      source: "core",
+      source: options.source ?? "core",
       correlation: {
         workspaceId: null,
         threadId: null,
@@ -168,7 +197,10 @@ export function createMemoryTransport(
   const sessionStart = dashboard ? { occurredAt: new Date(sessionStartMs).toISOString() } : {};
 
   if (!startupError) {
-    emit({ type: "database.migrated", payload: { fromVersion: 0, toVersion: 1, backupCreated: false } }, sessionStart);
+    emit(
+      { type: "database.migrated", payload: { fromVersion: 0, toVersion: SCHEMA_VERSION, backupCreated: false } },
+      sessionStart,
+    );
     emit(
       {
         type: "app.started",
@@ -216,7 +248,76 @@ export function createMemoryTransport(
     return providers;
   };
 
+  const code = createMemoryWorkspaces({
+    emit: (event, workspaceId) => emit(event, { correlation: { workspaceId } }),
+    requireCore,
+    preload: scenario === "code",
+  });
+
+  const ensureDetected = async () => {
+    if (providers.some((p) => p.detection !== null)) return;
+    detecting ??= detectProviders().finally(() => {
+      detecting = null;
+    });
+    await detecting.catch(() => undefined);
+  };
+
+  // The permission engine is the thread runtime's gate (Z4), as in native: requests a thread
+  // opens are answered in the Approvals panel or on the Dashboard, and answers reach the thread.
+  let answer: (view: ApprovalView) => void = () => undefined;
+  const permissions = createPermissionMemory({
+    emit,
+    requireCore,
+    seed: scenario === "approvals" && !startupError,
+    onDecided: (view) => answer(view),
+  });
+
+  const threads = createThreadsMemory(
+    (event, correlation = {}, source = "core") => emit(event, { correlation, source }),
+    requireCore,
+    scenario === "threads" || scenario === "no-providers" ? scenario : "default",
+    () =>
+      ((code.handlers.workspace_list?.({}) ?? []) as Workspace[])
+        .filter((w) => w.available)
+        .map((w) => ({ id: w.id, name: w.name })),
+    () => usableProviders(providers),
+    {
+      open: (summary) =>
+        permissions.openRequest(
+          {
+            threadId: summary.id,
+            threadName: summary.name,
+            workspaceId: summary.workspaceId,
+            workspaceName: summary.workspaceName,
+            providerId: summary.providerId,
+            providerName: summary.providerName,
+            mode: summary.permissionMode,
+          },
+          "install",
+        ).id,
+      expireForThread: (threadId) => permissions.expireForThread(threadId),
+    },
+  );
+  answer = (view) => threads.resolveApproval(view.id, view.status === "approved");
+
   const handlers: DashboardHandlers = {
+    ...code.handlers,
+    ...threads.handlers,
+    ...permissions.handlers,
+    // Like native: the first thread operation detects providers once, so threads use exactly
+    // the providers detection reports usable.
+    thread_options: async (args) => {
+      await ensureDetected();
+      return threads.handlers.thread_options(args);
+    },
+    thread_create: async (args) => {
+      await ensureDetected();
+      return threads.handlers.thread_create(args);
+    },
+    thread_resume: async (args) => {
+      await ensureDetected();
+      return threads.handlers.thread_resume(args);
+    },
     boot: (): BootState => ({ info, startupError }),
     window_ready: () => undefined,
     settings_get: () => {
@@ -286,8 +387,8 @@ export function createMemoryTransport(
         uptimeMs: Date.now() - sessionStartMs,
         startedAt: new Date(sessionStartMs).toISOString(),
         database: {
-          schemaVersion: 1,
-          latestSchemaVersion: 1,
+          schemaVersion: SCHEMA_VERSION,
+          latestSchemaVersion: SCHEMA_VERSION,
           sizeBytes: 98_304,
           eventCount: events.length,
           journalMode: "wal",
@@ -333,12 +434,7 @@ export function createMemoryTransport(
     ...(kalvoice.handlers as DashboardHandlers),
   };
 
-  // Playwright drives live Dashboard changes (e.g. an approval arriving) through this hook. React
-  // StrictMode boots twice in development, so the hook forwards to every transport created on the
-  // page; only the one the app kept has subscribers, so the others' events go nowhere.
-  if (dashboard && typeof window !== "undefined") registerTestHook(dashboard.controls);
-
-  return {
+  const transport: MemoryTransport = {
     kind: "memory",
     async invoke<T>(command: CommandName, args: Record<string, unknown> = {}): Promise<T> {
       await Promise.resolve();
@@ -358,33 +454,68 @@ export function createMemoryTransport(
       requireCore();
       kalvoice.subscribe(onSignal);
     },
+    attachTerminal: (terminalId, onOutput) => code.attachTerminal(terminalId, onOutput),
+    async streamThread(threadId, onEvent) {
+      await Promise.resolve();
+      const stop = threads.stream(threadId, onEvent);
+      return async () => stop();
+    },
     async setNativeTheme() {},
     subscriberCount: () => subscribers.size,
     dashboard: dashboard?.controls ?? null,
+    workspaces: {
+      queueFolders: code.queueFolders,
+      makeUnavailable: code.makeUnavailable,
+      runningProcessCount: code.runningProcessCount,
+    },
+    permissions,
   };
+  // UI tests drive the fake folder picker and filesystem, live Dashboard changes and agents
+  // asking for approval through this hook (ui-test builds only).
+  if (typeof window !== "undefined") {
+    (window as unknown as { __kalcodeMemory?: unknown }).__kalcodeMemory = {
+      ...transport.workspaces,
+      dashboard: transport.dashboard,
+      permissions: transport.permissions,
+    };
+  }
+  return transport;
+}
+
+let shared: MemoryTransport | null = null;
+
+/** The page's single in-memory runtime (a real app has one native runtime, even when React
+ *  StrictMode boots the UI twice in development). */
+export function sharedMemoryTransport(): MemoryTransport {
+  shared ??= createMemoryTransport();
+  return shared;
 }
 
 function readScenario(): MemoryScenario {
   if (typeof location === "undefined") return "default";
   const value = new URLSearchParams(location.search).get("scenario");
-  if (value === "startup-error" || value === "keychain-failure" || isDashboardScenario(value)) return value;
+  if (
+    value === "startup-error" ||
+    value === "keychain-failure" ||
+    value === "code" ||
+    value === "threads" ||
+    value === "no-providers" ||
+    value === "approvals" ||
+    isDashboardScenario(value)
+  ) {
+    return value;
+  }
   if (isKalVoiceScenario(value)) return value;
   if (value !== null && PROVIDER_SCENARIOS.includes(value)) return value as ProviderScenario;
   return "default";
 }
 
-const hookTargets: DashboardControls[] = [];
-
-function registerTestHook(controls: DashboardControls) {
-  hookTargets.push(controls);
-  const forward: DashboardControls = {
-    requestApproval: () => hookTargets.map((c) => c.requestApproval()).at(-1) ?? null,
-    setThreadStatus: (...args) => {
-      for (const c of hookTargets) c.setThreadStatus(...args);
-    },
-    recover: () => {
-      for (const c of hookTargets) c.recover();
-    },
-  };
-  (window as unknown as { __kalcodeMemory?: unknown }).__kalcodeMemory = { dashboard: forward };
+/** Mirrors `ProviderRegistry::usable` (crates/providers/src/registry.rs). */
+function usableProviders(statuses: readonly ProviderStatus[]): string[] {
+  return statuses
+    .filter(
+      (s) =>
+        s.adapter === "implemented" && s.detection?.state === "installed" && s.detection.auth !== "not_authenticated",
+    )
+    .map((s) => s.id);
 }

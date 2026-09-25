@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-thread-messages"
+description = "Enables the thread_messages command without any pre-configured scope."
+commands.allow = ["thread_messages"]
+
+[[permission]]
+identifier = "deny-thread-messages"
+description = "Denies the thread_messages command without any pre-configured scope."
+commands.deny = ["thread_messages"]
