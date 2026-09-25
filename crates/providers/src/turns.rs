@@ -237,11 +237,13 @@ impl Shared {
                                         *known = Some(id.to_owned());
                                     }
                                 }
-                                for event in events {
-                                    shared.sink.emit(event);
-                                }
+                                // Before the events go out: the runtime may send the next
+                                // message as soon as it sees the turn complete.
                                 if normalizer.turn_ended() {
                                     shared.reported_end.store(turn, Ordering::SeqCst);
+                                }
+                                for event in events {
+                                    shared.sink.emit(event);
                                 }
                             }
                             Err(reason) => shared.protocol_error(&reason),
