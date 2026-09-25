@@ -93,6 +93,35 @@ Upgrades are tested v1 → v3 in one step and v1 → v2 → v3 step by step, eac
 version it started from and settings, workspaces and events preserved
 (`crates/native-core/tests/upgrade_and_persistence.rs`, `crates/threads/tests/migration.rs`).
 
+### Implemented — schema version 4 (`0004_permissions.sql`, Z4)
+
+`permission_profiles`, `permission_settings`, `approvals` (with `origin_kind` / `origin_id`),
+`permission_grants`, `permission_audit`. See `docs/PERMISSIONS.md` and `docs/CONTRACTS.md`.
+
+### Implemented — schema version 5 (`0005_event_correlation.sql`, lead task L-1)
+
+```sql
+ALTER TABLE events ADD COLUMN agent_id TEXT;
+ALTER TABLE events ADD COLUMN task_id TEXT;
+ALTER TABLE events ADD COLUMN automation_id TEXT;
+ALTER TABLE events ADD COLUMN causation_id TEXT;   -- id of the event that caused this one
+-- partial indexes (WHERE <column> IS NOT NULL): events(agent_id), events(task_id),
+--   events(automation_id), events(causation_id), and events(request_id) (new; used by queries)
+```
+
+The optional correlation fields of Event Protocol v1 (`docs/EVENT_PROTOCOL.md` §6). Existing rows
+keep `NULL`, so an upgraded log reads back identically. `EventStore` writes the v5 columns only
+when an event carries one of the new ids, and reads them only when they exist, so a core opened
+with an older migration set (tests only) still works. The installed app is at v4: the v4 → v5
+upgrade is tested with a backup of the untouched v4 file and every row preserved
+(`upgrade_v4_to_v5_backs_up_and_preserves_everything` in
+`crates/native-core/tests/upgrade_and_persistence.rs`) and end to end against the real app
+(`apps/desktop/tests/e2e/integrity.spec.ts`).
+
+Schema versions 6 (KalVoice), 7 (`crates/git`, `GIT_MIGRATION`) and 8 (`crates/context`,
+`MIGRATION_V8`) stay isolated constants in their crates until the lead registers them; their
+tests fill the versions between the registered migrations and theirs with stand-ins.
+
 ### Migration rules
 
 1. Migrations are append-only, numbered, embedded in the binary, and checksummed.
