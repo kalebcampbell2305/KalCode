@@ -1,113 +1,36 @@
-/* Provider panes (Z7-W4): the pane strip in the Code surface, the pane header and overlays. */
-
-/* ---------- Section (entry point in the Code surface) ---------- */
-
-.section {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  border-bottom: 1px solid var(--color-border);
-}
-
-.section[data-open="true"] {
-  flex: 1.25;
-}
-
-.strip {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: 2.5rem;
-  padding: var(--space-1-5) var(--page-px);
-  overflow-x: auto;
-  scrollbar-width: thin;
-}
-
-.stripLabel {
-  flex: none;
-  margin-right: var(--space-1);
-  color: var(--color-text-muted);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-medium);
-  letter-spacing: var(--tracking-wide);
-  text-transform: uppercase;
-}
-
-.paneTabs {
-  display: flex;
-  flex: 1;
-  gap: var(--space-1);
-  min-width: 0;
-}
-
-.paneTab {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  gap: var(--space-2);
-  max-width: 18rem;
-  height: 1.875rem;
-  padding: 0 var(--space-2-5, var(--space-2)) 0 var(--space-1-5);
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--color-text-secondary);
-  font-size: var(--text-sm);
-  cursor: pointer;
-}
-
-.paneTab:hover {
-  background: var(--color-surface-hover);
-  color: var(--color-text);
-}
-
-.paneTab[aria-selected="true"] {
-  border-color: var(--color-border-strong);
-  background: var(--color-surface-raised);
-  color: var(--color-text);
-}
-
-.paneTab:focus-visible {
-  outline: none;
-  box-shadow: var(--shadow-focus);
-}
-
-.paneTabName {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.stripNote {
-  flex: 1;
-  min-width: 0;
-  color: var(--color-text-muted);
-  font-size: var(--text-xs);
-}
+/* Provider panes (Z7-W4): the pane header and overlays, hosted in a pane of the canvas (Z7-W1). */
 
 /* ---------- Pane ---------- */
 
 .pane {
-  --pane-edge: var(--color-border);
+  /* The canvas frame (Z7-W1) draws the border, radius and focus glow; the pane fills it. */
   position: relative;
   display: flex;
   flex: 1;
   flex-direction: column;
   min-height: 0;
-  margin: 0 var(--page-px) var(--space-3);
   overflow: hidden;
-  border: 1px solid var(--pane-edge);
-  border-radius: var(--radius-lg);
-  background: var(--terminal-bg);
-  box-shadow: var(--shadow-sm);
+  background: var(--terminal-bg, var(--term-bg, var(--color-code-bg)));
+  container-type: inline-size;
+  container-name: provider-pane;
 }
 
-.pane:focus-within {
-  --pane-edge: var(--color-border-strong);
+/* Narrow panes (Z7-W1 canvas): the title keeps its room; details step aside. */
+@container provider-pane (max-width: 34rem) {
+  .model,
+  .note {
+    display: none;
+  }
 }
 
-.pane[data-tone="waiting"] {
-  --pane-edge: var(--color-text-muted);
+@container provider-pane (max-width: 24rem) {
+  .providerName {
+    display: none;
+  }
+}
+
+.pane[data-tone="waiting"] > header {
+  box-shadow: inset 2px 0 0 var(--status-waiting-line);
 }
 
 /* ---------- Header ---------- */
@@ -117,10 +40,10 @@
   flex: none;
   align-items: center;
   gap: var(--space-3);
-  min-height: 2.75rem;
-  padding: var(--space-1-5) var(--space-2) var(--space-1-5) var(--space-3);
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-surface);
+  min-height: 2.5rem;
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-1);
 }
 
 .identity {
@@ -139,7 +62,8 @@
 
 .titleBlock {
   display: flex;
-  flex: 1;
+  flex: 1 1 0;
+  overflow: hidden;
   align-items: baseline;
   gap: var(--space-2);
   min-width: 0;
