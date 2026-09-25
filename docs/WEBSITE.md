@@ -10,6 +10,9 @@ Status: built and tested in Z0 · Canonical origin: **https://kalcoded.com**
   so every response passes through the Worker for redirects and security headers.
 - **D1** database `kalcode-web` for the early-access list (`migrations/`).
 - **Workers Rate Limiting** binding `EARLY_ACCESS_LIMITER` (5 requests / 60 s per IP per action).
+- **Resend** (REST API, no SDK) delivers the double opt-in emails from `KalCode <hello@kalcoded.com>`,
+  replies to `kalcodebuilds@gmail.com` (`EMAIL_FROM` / `EMAIL_REPLY_TO` in `src/lib/site.ts`).
+- **Cron trigger** `17 * * * *` (hourly): deletes expired links and unconfirmed sign-ups.
 - Custom domains `kalcoded.com` and `www.kalcoded.com` (Worker routes with `custom_domain`).
 
 ## Pages and design system (redesign, 2026-09-24)
@@ -54,8 +57,11 @@ Rules the pages follow:
 | --- | --- |
 | `www.kalcoded.com/*` | 301 → `https://kalcoded.com/*` (path and query kept) |
 | Plain HTTP at the edge (`cf-visitor` scheme `http`) | 301 → HTTPS |
-| `POST /api/early-access` `{email, source, website}` | 200 with the same body for new, duplicate and honeypot submissions |
-| `POST /api/early-access/remove` `{email}` | 200 with the same body whether or not the address existed |
+| `POST /api/early-access` `{email, source, website}` | Stores a pending row and emails a confirmation link (a confirmed address gets an "already on the list" email instead). 200 with the same body for new, pending, confirmed, throttled and honeypot submissions; 502 `email_failed` if the email could not be sent (nothing kept); 503 `email_unavailable` when the daily email budget is spent |
+| `POST /api/early-access/remove` `{email}` | Emails a removal link only if the address is on the list; 200 with the same body either way (502/503 as above) |
+| `POST /api/early-access/confirm` `{token}` | 200 confirmed; 410 `invalid_link` for a used, expired or unknown link; 400 for a malformed one. GET → 405 |
+| `POST /api/early-access/remove/confirm` `{token}` | 200 and the row and all its links are deleted permanently; 410/400 as above |
+| `GET /early-access/confirm?token=…`, `GET /early-access/remove?token=…` | Static pages (noindex, `Referrer-Policy: no-referrer` meta) with one button that POSTs the code. Opening the page changes nothing, so link scanners and mail previews cannot confirm or remove |
 | Everything else | Static asset, or the styled 404 page |
 
 HTML responses carry `Cache-Control: … no-transform`, so the Cloudflare proxy never rewrites
@@ -66,21 +72,95 @@ All responses carry: CSP with a SHA-256 hash for the single inline theme script,
 `X-Content-Type-Options: nosniff`, `Referrer-Policy`, `Permissions-Policy`, and
 `frame-ancestors 'none'`. Hashed `/_astro/*` assets are immutable-cached.
 
-Privacy: the site sets no cookies and runs no analytics. D1 stores email, timestamp, source page
-and consent version only. Workers invocation logs are disabled so client IPs and user agents are
-not retained by us; the Worker's own logs never contain emails.
+Privacy: the site sets no cookies and runs no analytics. D1 stores the email, timestamp, source
+page, consent version, confirmation status and time, per-address throttle counters and the
+SHA-256 of each live link (docs/DATA_MODEL.md §3). Workers invocation logs are disabled so client
+IPs and user agents are not retained by us; the Worker's own logs never contain emails or links.
+
+## Early access and email (double opt-in)
+
+Flow (`worker/lib/early-access.ts`, store in `worker/lib/store.ts`, templates in
+`worker/lib/emails.ts`, transports in `worker/lib/mailer.ts`):
+
+1. **Join.** Validate and rate-limit as before; purge expired data; insert a `pending` row (an
+   existing unconfirmed row keeps its status and takes the current `CONSENT_VERSION`); reserve
+   the per-address throttle (1 email per 10 min, 5 per UTC day) and one email from the site-wide
+   daily budget (`EMAIL_DAILY_LIMIT`, default 90, inside Resend's free 100/day); store the hashes
+   of a fresh confirmation code and removal code (72 h); send "Confirm your KalCode early-access
+   email". A confirmed address gets "You're already on the KalCode early-access list" with a
+   removal link instead, so the response and timing do not reveal membership. A throttled request
+   sends nothing and answers the same 200.
+2. **Confirm.** The link opens `/early-access/confirm?token=…`; the button POSTs the code; the
+   store deletes the link (`DELETE … RETURNING`) and, if it had not expired, marks the row
+   `confirmed` and deletes its other confirmation links.
+3. **Remove.** The privacy page form emails "Confirm removal from the KalCode early-access list"
+   only to a listed address (same 200 either way). Its link, and the removal link in every
+   confirmation email, opens `/early-access/remove?token=…`; the POST deletes the row and every
+   link permanently.
+4. **Failure.** If the send fails (provider error, timeout after 8 s, missing key), everything the
+   attempt wrote is undone (links, throttle slot, budget slot, and the row if this request created
+   it), the log records the kind of email, transport, reason and HTTP status only, and the
+   visitor sees "We couldn't send the email right now, so nothing was saved. Try again in a few
+   minutes." Provider error text never reaches the client or the logs.
+5. **Cleanup.** Every form request and the hourly cron delete expired links and `pending` rows
+   older than 72 h with no live confirmation link. `legacy_unconfirmed` rows are never deleted or
+   emailed automatically.
+
+Residual, accepted: when email sending is failing (or the daily budget is spent), a removal
+request for a listed address answers 502/503 while an unlisted one answers 200; an attacker
+cannot cause provider failures, and the per-IP rate limit bounds probing.
+
+### Transports (`EMAIL_TRANSPORT`)
+
+| Value | Where | Behaviour |
+| --- | --- | --- |
+| `resend` | production (`wrangler.jsonc` vars) | `POST https://api.resend.com/emails` with `Authorization: Bearer $RESEND_API_KEY`, JSON `from`, `reply_to`, `to`, `subject`, `text`, `html`, an `Idempotency-Key`, 8 s timeout. Links always use `https://kalcoded.com`. |
+| `capture` | Playwright | POSTs the message to `EMAIL_CAPTURE_URL`, which must be a loopback `http://` URL (the suite's mail sink, `tests/e2e/mail-sink.mjs`). |
+| `log` | local `pnpm preview` | Prints the message, links included, to the wrangler console (recipient redacted). |
+
+`capture` and `log` also need `EMAIL_LINK_ORIGIN`, a loopback origin such as
+`http://127.0.0.1:8787`, and refuse to send without it, so a misconfigured deployment fails
+visibly instead of silently. Unknown values fail the same way. The emails have no images, no
+remote resources and no tracking; open and click tracking must stay off for the kalcoded.com
+domain in Resend (they are off unless a tracking subdomain is configured).
+
+`RESEND_API_KEY` is a Worker secret (sending-only, restricted to kalcoded.com). It is never in
+`wrangler.jsonc`, the repository, client bundles or logs. For local work copy
+`apps/website/.dev.vars.example` to `.dev.vars` (git-ignored): it selects the `log` transport.
+Only put a key in `.dev.vars` to test real delivery, and then only send to your own address or
+`delivered@resend.dev`.
+
+### Addresses that joined before double opt-in
+
+Migration 0002 marks them `legacy_unconfirmed`. They stay on the list, are not emailed and are
+not deleted until the owner decides to ask them once:
+
+```bash
+node tooling/admin/request-legacy-confirmation.mjs --remote              # dry run: counts, redacted, changes nothing (exit 2)
+RESEND_API_KEY=… node tooling/admin/request-legacy-confirmation.mjs --remote --limit 20 --confirm
+```
+
+Each selected address gets "Confirm your KalCode early-access email" (the legacy wording), becomes
+`pending`, and is deleted by the cleanup if not confirmed within 72 h. The tool respects the
+per-address throttle and the daily budget, undoes a failed send and stops, and never prints
+full addresses or the key. `--local [--persist-to <dir>] --transport log` rehearses it on a local
+database.
 
 ## Commands (in `apps/website`)
 
 ```bash
 pnpm dev                 # Astro dev server (UI only; API not available)
-pnpm db:migrate:local    # once, to create the local D1 schema
+pnpm db:migrate:local    # create or update the local D1 schema (after every new migration)
+cp .dev.vars.example .dev.vars   # once: emails go to the wrangler console (log transport)
 pnpm build && pnpm preview   # full site on the real Worker + local D1 at :8787
 pnpm typecheck && pnpm test  # astro check + worker tsc; Vitest unit tests
 pnpm test:e2e            # Playwright against wrangler dev with isolated local D1
 ```
 
-Parallel runs in one checkout: `KALCODE_E2E_PORT`, `KALCODE_E2E_PERSIST` (D1 state folder),
+The E2E suite starts a mail sink on `KALCODE_E2E_MAIL_PORT` (default: E2E port + 1) and runs the
+Worker with `EMAIL_TRANSPORT=capture`, so it never calls Resend.
+
+Parallel runs in one checkout: `KALCODE_E2E_PORT`, `KALCODE_E2E_MAIL_PORT`, `KALCODE_E2E_PERSIST` (D1 state folder),
 `KALCODE_E2E_OUT_DIR` (build folder served with `wrangler dev --assets`),
 `KALCODE_E2E_INSPECTOR_PORT` and `KALCODE_E2E_SKIP_BUILD=1` (serve an existing build). Unit tests
 that inspect built HTML read `KALCODE_DIST` (default `dist`).
@@ -93,9 +173,14 @@ Contact published on the site: `CONTACT_EMAIL` in `src/lib/site.ts`.
 
 ```bash
 wrangler d1 create kalcode-web                      # once; put the id in wrangler.jsonc
-wrangler d1 migrations apply kalcode-web --remote
+wrangler secret put RESEND_API_KEY                  # once; sending-only key for kalcoded.com
+wrangler d1 migrations apply kalcode-web --remote   # before deploying code that needs a migration
 pnpm build && wrangler deploy
 ```
+
+Migrations are expand-only and applied before the deploy: 0002 adds columns with defaults and
+new tables, so the previous Worker keeps working in between (its inserts become
+`legacy_unconfirmed`).
 
 Wrangler authenticates with the owner's Cloudflare login; no credentials are stored in the
 repository.

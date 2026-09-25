@@ -1,8 +1,10 @@
 import { expect, test } from "@playwright/test";
-import { queryEarlyAccess, uniqueEmail, uniqueIp, useClientIp } from "./helpers";
+import { CONSENT_VERSION } from "../../src/lib/site";
+import { mailTo, queryEarlyAccess, uniqueEmail, uniqueIp, useClientIp } from "./helpers";
 
-const SIGNUP_SUCCESS = "You're on the list. We'll email you when there is a build to try.";
-const REMOVE_SUCCESS = "If that address was on the early-access list, it has been removed.";
+const SIGNUP_SUCCESS =
+  "Almost there: check your inbox and open the link we sent to confirm your email. It expires in 72 hours.";
+const REMOVE_SUCCESS = "If that address is on the early-access list, we've emailed it a link to confirm the removal.";
 
 test.describe("early-access form", () => {
   test("joins, then shows the same message for a duplicate", async ({ page }) => {
@@ -26,7 +28,7 @@ test.describe("early-access form", () => {
     await expect(status).toHaveText(SIGNUP_SUCCESS);
 
     const rows = queryEarlyAccess(email);
-    expect(rows).toEqual([{ email, source: "/download", consent_version: "2026-09-24" }]);
+    expect(rows).toEqual([{ email, source: "/download", consent_version: CONSENT_VERSION, status: "pending" }]);
   });
 
   test("shows a specific error for an invalid email and does not submit", async ({ page }) => {
@@ -74,6 +76,7 @@ test.describe("early-access form", () => {
     await form.getByRole("button", { name: "Join early access" }).click();
     await expect(form.getByRole("status")).toHaveText(SIGNUP_SUCCESS);
     expect(queryEarlyAccess(email)).toEqual([]);
+    expect(await mailTo(page.request, email)).toEqual([]);
   });
 
   test("the honeypot is hidden from people and assistive technology", async ({ page }) => {
@@ -135,7 +138,10 @@ test.describe("early-access form", () => {
 });
 
 test.describe("removal form", () => {
-  test("removes an address with the same message whether or not it existed", async ({ page, request }) => {
+  test("emails a removal link to a listed address, with the same message whether or not it is listed", async ({
+    page,
+    request,
+  }) => {
     const email = uniqueEmail("remove");
     const joined = await request.post("/api/early-access", {
       headers: { "cf-connecting-ip": uniqueIp() },
@@ -149,15 +155,19 @@ test.describe("removal form", () => {
     const form = page.locator("form[data-api-form='remove']");
     const input = form.getByLabel("Email address to remove");
     const status = form.getByRole("status");
+    const button = form.getByRole("button", { name: "Email me a removal link" });
 
     await input.fill(email);
-    await form.getByRole("button", { name: "Remove my email" }).click();
+    await button.click();
     await expect(status).toHaveText(REMOVE_SUCCESS);
-    expect(queryEarlyAccess(email)).toEqual([]);
+    // Nothing is deleted until the emailed link is used (tests/e2e/double-opt-in.spec.ts).
+    expect(queryEarlyAccess(email)).toHaveLength(1);
 
-    await input.fill(uniqueEmail("never-joined"));
-    await form.getByRole("button", { name: "Remove my email" }).click();
+    const stranger = uniqueEmail("never-joined");
+    await input.fill(stranger);
+    await button.click();
     await expect(status).toHaveText(REMOVE_SUCCESS);
+    expect(await mailTo(request, stranger)).toEqual([]);
 
     const a = await request.post("/api/early-access/remove", {
       headers: { "cf-connecting-ip": uniqueIp() },

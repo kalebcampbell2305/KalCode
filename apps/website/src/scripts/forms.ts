@@ -3,6 +3,7 @@
  * the same rules as the Worker, JSON submission, and clear inline states announced politely.
  */
 import { isValidEmail, normalizeEmail } from "../lib/email";
+import { EARLY_ACCESS_EMAIL } from "../lib/site";
 
 type Kind = "signup" | "remove";
 
@@ -17,8 +18,10 @@ const MESSAGES = {
   rateLimited: "Too many attempts from your network. Wait a minute and try again.",
   network: "We couldn't reach kalcoded.com. Check your connection and try again.",
   server: "Something went wrong on our side, and nothing was saved. Try again in a few minutes.",
-  signupOk: "You're on the list. We'll email you when there is a build to try.",
-  removeOk: "If that address was on the early-access list, it has been removed.",
+  emailFailed: "We couldn't send the email right now, so nothing was saved. Try again in a few minutes.",
+  emailUnavailable: "We can't send more emails today. Nothing was saved. Try again tomorrow.",
+  signupOk: `Almost there: check your inbox and open the link we sent to confirm your email. It expires in ${EARLY_ACCESS_EMAIL.linkTtlHours} hours.`,
+  removeOk: "If that address is on the early-access list, we've emailed it a link to confirm the removal.",
 } as const;
 
 function setStatus(status: HTMLElement, state: "error" | "success" | "pending", text: string): void {
@@ -67,7 +70,7 @@ function enhance(form: HTMLFormElement): void {
 
     busy = true;
     button.disabled = true;
-    button.textContent = kind === "signup" ? "Joining…" : "Removing…";
+    button.textContent = "Sending…";
     form.setAttribute("aria-busy", "true");
     setStatus(status, "pending", "");
 
@@ -90,6 +93,10 @@ function enhance(form: HTMLFormElement): void {
         markInvalid(true);
         setStatus(status, "error", MESSAGES.invalid);
         input.focus();
+      } else if (response.status === 502) {
+        setStatus(status, "error", MESSAGES.emailFailed);
+      } else if (response.status === 503) {
+        setStatus(status, "error", MESSAGES.emailUnavailable);
       } else {
         setStatus(status, "error", MESSAGES.server);
       }

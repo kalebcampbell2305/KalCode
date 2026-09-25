@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PLANS } from "@kalcode/protocol/plans";
 import { describe, expect, it } from "vitest";
-import { isKnownPagePath, PAGES, PRIMARY_NAV } from "../../src/lib/site";
+import { EMAIL_ACTION_PAGES, isKnownPagePath, PAGES, PRIMARY_NAV } from "../../src/lib/site";
 import { THEME_SCRIPT } from "../../src/lib/theme-script";
 import { buildCsp, cspHash } from "../../worker/lib/security";
 
@@ -38,7 +38,7 @@ describe("site map", () => {
   });
 
   it("lists every page source (no unlisted public pages)", () => {
-    const listed = new Set(PAGES.map((page) => pageFile(page.path)));
+    const listed = new Set([...PAGES, ...Object.values(EMAIL_ACTION_PAGES)].map((page) => pageFile(page.path)));
     const walk = (dir: string): string[] =>
       readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
         entry.isDirectory() ? walk(resolve(dir, entry.name)) : [resolve(dir, entry.name)],
@@ -61,6 +61,25 @@ describe("site map", () => {
     expect(isKnownPagePath("/kalvoice")).toBe(true);
     expect(isKnownPagePath("/download/")).toBe(false);
     expect(isKnownPagePath("/404")).toBe(false);
+    expect(isKnownPagePath("/early-access/confirm")).toBe(false);
+  });
+
+  it("keeps the pages opened from email links out of search and the sitemap", () => {
+    for (const page of Object.values(EMAIL_ACTION_PAGES)) {
+      expect(existsSync(pageFile(page.path)), page.path).toBe(true);
+      expect(PAGES.some((listed) => listed.path === page.path)).toBe(false);
+      const source = readFileSync(pageFile(page.path), "utf8");
+      expect(source).toMatch(/<Base[^>]*\bnoindex\b/);
+      expect(source).toContain('name="referrer" content="no-referrer"');
+      if (existsSync(dist)) {
+        const html = readFileSync(resolve(dist, `${page.path.slice(1)}.html`), "utf8");
+        expect(html).toContain('<meta name="robots" content="noindex">');
+        expect(html).not.toContain('rel="canonical"');
+      }
+    }
+    if (existsSync(resolve(dist, "sitemap-0.xml"))) {
+      expect(readFileSync(resolve(dist, "sitemap-0.xml"), "utf8")).not.toContain("/early-access/");
+    }
   });
 
   it("has the header navigation in the agreed order", () => {
