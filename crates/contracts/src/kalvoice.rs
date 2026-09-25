@@ -15,7 +15,7 @@ use ts_rs::TS;
 use crate::agent::ProviderId;
 use crate::app::SurfaceId;
 use crate::permissions::PermissionMode;
-use crate::workspace_ui::SplitAxis;
+use crate::workspace_ui::{DashboardChip, SplitAxis};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -190,6 +190,12 @@ pub enum KalVoiceIntent {
         mode: RequestableMode,
         thread_query: Option<String>,
     },
+    // ---- Added in Z7-W3 ----
+    /// Filter the Dashboard by chip ("show only agents that are working"). UI-only: it never
+    /// changes a thread.
+    FilterDashboard {
+        chip: DashboardChip,
+    },
 }
 
 impl KalVoiceIntent {
@@ -214,6 +220,7 @@ impl KalVoiceIntent {
             Self::Close { .. } => "close",
             Self::SwitchProvider { .. } => "switch_provider",
             Self::RequestPermissionMode { .. } => "request_permission_mode",
+            Self::FilterDashboard { .. } => "filter_dashboard",
         }
     }
 
@@ -344,6 +351,9 @@ mod tests {
             KalVoiceIntent::RequestPermissionMode {
                 mode: RequestableMode::Auto,
                 thread_query: Some("login".into()),
+            },
+            KalVoiceIntent::FilterDashboard {
+                chip: DashboardChip::WaitingForYou,
             },
         ]
     }

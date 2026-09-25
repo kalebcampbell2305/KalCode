@@ -34,6 +34,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type KalCodeError, toKalCodeError } from "../../ipc/errors.ts";
 import { useEvents, useRuntime } from "../../runtime/RuntimeProvider.tsx";
+import { useUiIntents } from "../../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { badgeLabel, relativeTime } from "../../shell/rail/model.ts";
@@ -316,18 +317,14 @@ function mergeUnique(first: RecentWorkItem[], second: RecentWorkItem[]): RecentW
   });
 }
 
+/** Threads and workspaces open through the shared focus intent (the pane system can claim them). */
 function useOpenItem() {
-  const { navigate } = useNavigation();
-  const threadsIntent = useThreadsIntent();
-  const rail = useOptionalRail();
-  const workspaces = useWorkspaces();
+  const intents = useUiIntents();
   return (item: RecentWorkItem) => {
     if (item.kind === "thread") {
-      navigate("threads");
-      threadsIntent.request("open", item.id);
+      void intents.focus({ kind: "thread", threadId: item.id, workspaceId: item.workspaceId });
     } else if (item.workspaceId) {
-      if (rail) void rail.openWorkspace(item.workspaceId);
-      else void workspaces.activate(item.workspaceId).then((ok) => ok && navigate("code"));
+      void intents.focus({ kind: "workspace", workspaceId: item.workspaceId });
     }
   };
 }
@@ -420,12 +417,9 @@ function ItemLead({ item }: { item: RecentWorkItem }) {
 }
 
 function RecentWorkspaces({ entries }: { entries: WorkspaceRailEntry[] }) {
-  const rail = useOptionalRail();
-  const workspaces = useWorkspaces();
-  const { navigate } = useNavigation();
+  const intents = useUiIntents();
   const continueIn = (entry: WorkspaceRailEntry) => {
-    if (rail) void rail.openWorkspace(entry.workspaceId);
-    else void workspaces.activate(entry.workspaceId).then((ok) => ok && navigate("code"));
+    void intents.focus({ kind: "workspace", workspaceId: entry.workspaceId });
   };
   const now = Date.now();
   return (

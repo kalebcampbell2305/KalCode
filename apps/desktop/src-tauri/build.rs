@@ -95,6 +95,9 @@ const COMMANDS: &[&str] = &[
     "git_status",
     "git_log",
     "git_branches",
+    // Z7-W3: notification center.
+    "notification_list",
+    "notification_mark",
 ];
 
 /// Test hooks. Declared (and so given an `allow-*` permission) only when the target build has

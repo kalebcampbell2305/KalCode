@@ -15,6 +15,8 @@ import type {
   KalVoiceSignal,
   KalVoiceStatus,
   LatencySnapshot,
+  NotificationMark,
+  NotificationPage,
   PermissionMode,
   PermissionProfile,
   PermissionSettings,
@@ -77,6 +79,9 @@ export function clampTerminalSize({ cols, rows }: TerminalSize): TerminalSize {
   const clamp = (n: number) => Math.max(2, Math.min(1000, Math.floor(Number.isFinite(n) ? n : 2)));
   return { cols: clamp(cols), rows: clamp(rows) };
 }
+
+/** Maximum page size accepted by `notification_list`. */
+export const MAX_NOTIFICATION_PAGE = 200;
 
 /** Maximum page size accepted by `thread_messages` / `thread_tool_calls`. */
 export const MAX_THREAD_PAGE = 500;
@@ -565,6 +570,25 @@ export class KalCodeClient {
 
   gitBranches(workspaceId: string): Promise<Branch[]> {
     return this.call("git_branches", { args: { workspaceId } });
+  }
+
+  // ---- Notification center (Z7-W3) ----
+
+  /** A page of notifications, most recently raised first (dismissed ones are never listed). */
+  listNotifications(
+    options: { unreadOnly?: boolean; limit?: number; before?: string | null } = {},
+  ): Promise<NotificationPage> {
+    const limit = Math.max(1, Math.min(MAX_NOTIFICATION_PAGE, Math.floor(options.limit ?? 50)));
+    return this.call("notification_list", {
+      unreadOnly: options.unreadOnly ?? false,
+      limit,
+      before: options.before ?? null,
+    });
+  }
+
+  /** Marks notifications read, unread or dismissed (`null` ids: every listed notification). */
+  markNotifications(ids: readonly string[] | null, mark: NotificationMark): Promise<number> {
+    return this.call("notification_mark", { ids: ids ? [...ids] : null, mark });
   }
 
   async setNativeTheme(theme: NativeTheme): Promise<void> {

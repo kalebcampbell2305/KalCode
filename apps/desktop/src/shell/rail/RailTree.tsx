@@ -116,7 +116,7 @@ export function RailTree({ onDialog }: { onDialog: (dialog: RailDialog) => void 
 
   const activate = (node: RailNode) => {
     if (node.kind === "workspace") void rail.openWorkspace(node.entry.workspaceId);
-    else if (node.kind === "thread") rail.openThread(node.thread.id);
+    else if (node.kind === "thread") rail.openThread(node.thread.id, node.workspaceId);
     else toggle(node);
   };
 

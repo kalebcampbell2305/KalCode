@@ -19,6 +19,7 @@ pub mod events;
 pub mod git;
 pub mod ids;
 pub mod kalvoice;
+pub mod notifications;
 pub mod permissions;
 pub mod refs;
 pub mod resources;

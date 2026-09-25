@@ -94,7 +94,10 @@ export type CommandName =
   | "files_list"
   | "git_status"
   | "git_log"
-  | "git_branches";
+  | "git_branches"
+  // Notification center (Z7-W3)
+  | "notification_list"
+  | "notification_mark";
 
 export type Unsubscribe = () => Promise<void>;
 

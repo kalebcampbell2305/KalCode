@@ -3,42 +3,42 @@ import { useToast } from "@kalcode/ui/components";
 import { useCallback, useRef } from "react";
 import { toKalCodeError } from "../../../ipc/errors.ts";
 import { useRuntime } from "../../../runtime/RuntimeProvider.tsx";
+import { useUiIntents } from "../../../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../../../runtime/WorkspaceProvider.tsx";
-import { useThreadsIntent } from "../../../surfaces/threads/intent.tsx";
-import { useNavigation, viewVisible } from "../../navigation.tsx";
+import { useNavigation } from "../../navigation.tsx";
 
 /**
- * Opens what the locator found: a thread in Threads, a workspace's project page, a terminal in
- * Code, a provider in Providers. Native resolves the entry first (and records that it was
- * opened — never the query), so a stale result fails with a clear message instead of a blank page.
+ * Opens what the locator found. Threads, workspaces and providers go through the shared focus
+ * intent (Z7-W3 `useUiIntents`), so the pane system can show them where they live; terminals open
+ * their tab in Code. Native resolves the entry first (and records that it was opened — never the
+ * query), so a stale result fails with a clear message instead of a blank page.
  */
 export function useOpenLocated() {
-  const { client, info } = useRuntime();
+  const { client } = useRuntime();
   const { navigate } = useNavigation();
   const workspaces = useWorkspaces();
-  const threadsIntent = useThreadsIntent();
+  const intents = useUiIntents();
   const toast = useToast();
-  const live = useRef({ workspaces, threadsIntent });
-  live.current = { workspaces, threadsIntent };
-  const folderVisible = viewVisible("folder", info.flags.features);
+  const live = useRef({ workspaces, intents });
+  live.current = { workspaces, intents };
 
   return useCallback(
     async (kind: LocatorEntityKind, entityId: string, via: LocatorVia): Promise<boolean> => {
       try {
         const target = await client.locatorOpen(kind, entityId, via);
-        const { workspaces, threadsIntent } = live.current;
+        const { workspaces, intents } = live.current;
         if (target.threadId) {
-          navigate("threads");
-          threadsIntent.request("open", target.threadId);
+          await intents.focus({ kind: "thread", threadId: target.threadId, workspaceId: target.workspaceId });
         } else if (target.terminalId && target.workspaceId) {
           const { terminalId, workspaceId } = target;
+          if (workspaces.active?.id !== workspaceId && !(await workspaces.activate(workspaceId))) return false;
           navigate("code");
           await workspaces.refresh();
           workspaces.selectTerminal(terminalId, true, workspaceId);
         } else if (target.workspaceId) {
-          if (await workspaces.activate(target.workspaceId)) navigate(folderVisible ? "folder" : "code");
+          await intents.focus({ kind: "workspace", workspaceId: target.workspaceId });
         } else if (target.providerId) {
-          navigate("providers");
+          await intents.focus({ kind: "provider", providerId: target.providerId });
         }
         return true;
       } catch (cause) {
@@ -47,6 +47,6 @@ export function useOpenLocated() {
         return false;
       }
     },
-    [client, navigate, toast, folderVisible],
+    [client, navigate, toast],
   );
 }

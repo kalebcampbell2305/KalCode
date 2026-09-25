@@ -15,6 +15,7 @@ use std::sync::OnceLock;
 use kalcode_contracts::agent::ProviderId;
 use kalcode_contracts::app::SurfaceId;
 use kalcode_contracts::kalvoice::{KalVoiceIntent, RequestableMode, ThreadScope};
+use kalcode_contracts::workspace_ui::DashboardChip;
 
 /// The most threads one request may open.
 pub const MAX_THREADS_PER_REQUEST: u32 = 16;
@@ -677,6 +678,17 @@ fn build_rules() -> Vec<Rule> {
         add(p.into(), approvals());
     }
 
+    // Dashboard filters (Z7-W3). After approvals, so "show what's waiting for me" still opens
+    // the approvals panel; before navigation, whose bare "<surface>" forms they never overlap.
+    for (chip, patterns) in dashboard_filter_patterns() {
+        for p in patterns {
+            add(
+                p,
+                Box::new(move |_| Understood::intent(KalVoiceIntent::FilterDashboard { chip })),
+            );
+        }
+    }
+
     // Navigation.
     for p in [
         "(go to|go|open|show me|show|switch to|navigate to|take me to|bring up|jump to|view|display) [the|my] <surface> [page|view|screen|tab|section|surface]",
@@ -887,6 +899,82 @@ fn build_rules() -> Vec<Rule> {
     }
 
     rules
+}
+
+/// "Show", as a Dashboard filter verb.
+const SHOW_VERB: &str = "(show|display|list|filter|give) [me] [only|just]";
+/// The things a Dashboard filter shows.
+const AGENTS_WORD: &str = "(agents|agent|threads|thread|work|tasks|sessions)";
+
+/// Phrases for each Dashboard chip. Every pattern names the chip's state explicitly, so none of
+/// them can read as navigation ("show agents") or as the approvals panel ("show what's waiting").
+fn dashboard_filter_patterns() -> Vec<(DashboardChip, Vec<String>)> {
+    let noun = AGENTS_WORD;
+    let show = SHOW_VERB;
+    vec![
+        (
+            DashboardChip::Working,
+            vec![
+                format!("{show} [the|my] (working|running|active|busy) {noun}"),
+                format!(
+                    "{show} [the|my] {noun} (that are|which are|currently|that is|which is) (working|running|busy)"
+                ),
+                format!(
+                    "only (show|display|list) [me] [the|my] (working|running|active|busy) {noun}"
+                ),
+                format!(
+                    "only (show|display|list) [me] [the|my] {noun} (that are|which are) (working|running|busy)"
+                ),
+                format!("(which|what) {noun} (are|is) (working|running|busy) [right now|now]"),
+            ],
+        ),
+        (
+            DashboardChip::WaitingForYou,
+            vec![
+                // "for me" is trailing filler, so "… waiting for me" arrives as "… waiting".
+                format!(
+                    "{show} (everything|all|anything|all the things|whatever is|what) [that is|that are] (waiting [for|on] [me]|(that needs|that need|needing) me)"
+                ),
+                format!(
+                    "{show} [the|my] {noun} (waiting [for|on] [me]|(that need|that needs|which need|which needs|needing) me)"
+                ),
+                format!("{show} [the|my] {noun} (that are|which are) waiting [for|on] [me]"),
+                format!("{show} [the|my] {noun} [that|which] (need|needs) [my] attention"),
+                format!(
+                    "only (show|display|list) [me] (everything|what|the {noun}|{noun}) [that is|that are] waiting [for|on] [me]"
+                ),
+            ],
+        ),
+        (
+            DashboardChip::Done,
+            vec![
+                format!("{show} [the|my|all] [the] (completed|finished|done) {noun}"),
+                format!(
+                    "{show} [the|my] {noun} (that are|which are|that have|which have|that|which) (completed|finished|done)"
+                ),
+                format!("{show} [me] what (is|has) (completed|finished|done)"),
+                format!("only (show|display|list) [me] [the|my] (completed|finished|done) {noun}"),
+            ],
+        ),
+        (
+            DashboardChip::Idle,
+            vec![
+                format!("{show} [the|my|all] [the] idle {noun}"),
+                format!("{show} [the|my] {noun} (that are|which are) idle"),
+                format!("only (show|display|list) [me] [the|my] idle {noun}"),
+            ],
+        ),
+        (
+            DashboardChip::All,
+            vec![
+                format!(
+                    "(show|display|list) [me] (all|every|all the|all of the|all my|all of my) {noun}"
+                ),
+                format!("(show|display|list) [me] everything on the dashboard"),
+                "(clear|reset|remove) [the|my] [dashboard] (filter|filters)".to_owned(),
+            ],
+        ),
+    ]
 }
 
 /// Verbs for asking a thread's permission mode to change.

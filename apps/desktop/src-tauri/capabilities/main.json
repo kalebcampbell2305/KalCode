@@ -93,6 +93,8 @@
     "allow-files-list",
     "allow-git-status",
     "allow-git-log",
-    "allow-git-branches"
+    "allow-git-branches",
+    "allow-notification-list",
+    "allow-notification-mark"
   ]
 }

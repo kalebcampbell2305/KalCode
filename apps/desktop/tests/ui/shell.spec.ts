@@ -32,7 +32,7 @@ test.describe("dashboard", () => {
     const activity = page.getByRole("region", { name: "Activity" });
     await expect(activity.getByText("KalCode started")).toBeVisible();
     await expect(activity.getByText("Local database created")).toBeVisible();
-    const runtime = page.getByRole("complementary", { name: "Runtime health" });
+    const runtime = page.getByRole("region", { name: "Runtime health" });
     await expect(runtime.getByText("Running", { exact: true })).toBeVisible();
     await expect(runtime.getByText("Not checked yet")).toBeVisible();
   });
@@ -41,7 +41,7 @@ test.describe("dashboard", () => {
     await open(page);
     await page.getByRole("button", { name: "Check credential store" }).click();
     await expect(page.getByRole("status").getByText("Credential store verified").first()).toBeVisible();
-    const runtime = page.getByRole("complementary", { name: "Runtime health" });
+    const runtime = page.getByRole("region", { name: "Runtime health" });
     await expect(runtime.getByText("Verified", { exact: true })).toBeVisible();
     await expect(page.getByRole("region", { name: "Activity" }).getByText("Credential store verified")).toBeVisible();
   });
@@ -50,7 +50,7 @@ test.describe("dashboard", () => {
     await open(page, "keychain-failure");
     await page.getByRole("button", { name: "Check credential store" }).click();
     await expect(page.getByText("Your system credential store refused access").first()).toBeVisible();
-    await expect(page.getByRole("complementary", { name: "Runtime health" }).getByText("Check failed")).toBeVisible();
+    await expect(page.getByRole("region", { name: "Runtime health" }).getByText("Check failed")).toBeVisible();
   });
 });
 
@@ -125,7 +125,7 @@ test.describe("navigation and commands", () => {
 
   test("gated surfaces explain that they are not available yet", async ({ page }) => {
     await open(page);
-    await page.getByRole("button", { name: "Agents" }).click();
+    await page.getByRole("button", { name: "Agents", exact: true }).click();
     await expect(page.getByRole("heading", { level: 1, name: "Agents" })).toBeVisible();
     await expect(page.getByText("Not available in this build")).toBeVisible();
     await expect(page.getByText("Nothing on this page runs yet.")).toBeVisible();

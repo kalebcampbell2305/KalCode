@@ -11,6 +11,9 @@
 //! `switch_provider` need the pane system and provider panes, which are gated in this build, so
 //! they're refused before anything is counted; the grammar doesn't produce them yet (such
 //! utterances go to the Request route).
+//!
+//! Z7-W3: `filter_dashboard` only changes what the Dashboard shows; its summary counts the
+//! runtime's non-archived threads by Dashboard chip (`ThreadStatus::chip`).
 
 use std::sync::Arc;
 
@@ -18,6 +21,7 @@ use kalcode_contracts::agent::ProviderId;
 use kalcode_contracts::app::SurfaceId;
 use kalcode_contracts::kalvoice::KalVoiceIntent;
 use kalcode_contracts::permissions::{ApprovalStatus, PermissionMode};
+use kalcode_contracts::workspace_ui::DashboardChip;
 use kalcode_core::workspaces::{TerminalSize, Workspace};
 use kalcode_core::{Core, KalError};
 use kalcode_kalvoice::orchestrator::{
@@ -86,6 +90,46 @@ fn spoken_status(status: &str) -> Option<&'static str> {
 
 fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
+}
+
+/// What KalVoice says after filtering the Dashboard. `count` is the number of non-archived
+/// threads under `chip` (and `total` all of them) when the thread runtime is available.
+fn filter_summary(chip: DashboardChip, counts: Option<(usize, usize)>) -> String {
+    let Some((count, total)) = counts else {
+        return match chip {
+            DashboardChip::All => "Showing every agent on the Dashboard.".into(),
+            DashboardChip::Working => "Showing working agents on the Dashboard.".into(),
+            DashboardChip::WaitingForYou => {
+                "Showing what's waiting for you on the Dashboard.".into()
+            }
+            DashboardChip::Done => "Showing completed work on the Dashboard.".into(),
+            DashboardChip::Idle => "Showing idle agents on the Dashboard.".into(),
+        };
+    };
+    match chip {
+        DashboardChip::All if total == 0 => "There are no agents yet.".into(),
+        DashboardChip::All => format!("Showing all {}.", plural(total, "agent", "agents")),
+        DashboardChip::Working if count == 0 => "No agents are working right now.".into(),
+        DashboardChip::Working => format!(
+            "Showing {count} working {}.",
+            if count == 1 { "agent" } else { "agents" }
+        ),
+        DashboardChip::WaitingForYou if count == 0 => "Nothing is waiting for you.".into(),
+        DashboardChip::WaitingForYou => format!(
+            "{} waiting for you.",
+            plural(count, "agent is", "agents are")
+        ),
+        DashboardChip::Done if count == 0 => "No threads have completed yet.".into(),
+        DashboardChip::Done => format!(
+            "Showing {count} completed {}.",
+            if count == 1 { "thread" } else { "threads" }
+        ),
+        DashboardChip::Idle if count == 0 => "No agents are idle.".into(),
+        DashboardChip::Idle => format!(
+            "Showing {count} idle {}.",
+            if count == 1 { "agent" } else { "agents" }
+        ),
+    }
 }
 
 /// "Paused 3 threads." / "Paused 2 of 3 threads. <first reason>" / "No threads were working…".
@@ -538,6 +582,24 @@ impl Executor for DesktopExecutor {
             }
             KalVoiceIntent::StatusReport => self.status_report(),
             KalVoiceIntent::Search { query } => self.search(query),
+            KalVoiceIntent::FilterDashboard { chip } => {
+                // Counting is best effort: the filter works even without the thread runtime.
+                let counts = self
+                    .threads
+                    .as_ref()
+                    .and_then(|runtime| runtime.list(None, false).ok())
+                    .map(|threads| {
+                        let count = threads
+                            .iter()
+                            .filter(|t| *chip == DashboardChip::All || t.status.chip() == *chip)
+                            .count();
+                        (count, threads.len())
+                    });
+                Ok(Executed {
+                    summary: filter_summary(*chip, counts),
+                    directive: Some(UiDirective::FilterDashboard { chip: *chip }),
+                })
+            }
             KalVoiceIntent::Reasoning { .. } => {
                 Err(ExecError::new("not_a_command", "That isn't a command."))
             }
@@ -717,6 +779,49 @@ mod tests {
                 .check(&KalVoiceIntent::ShowApprovals)
                 .map_err(|e| e.code),
             Err("approvals_unavailable".into())
+        );
+    }
+
+    #[test]
+    fn dashboard_filters_need_no_runtime_and_count_when_it_runs() {
+        let dir = tempfile::tempdir().expect("data");
+        let executor = executor(dir.path());
+        let intent = KalVoiceIntent::FilterDashboard {
+            chip: DashboardChip::Working,
+        };
+        assert!(executor.check(&intent).is_ok());
+        let done = executor.execute(&intent, &ctx()).expect("filter");
+        assert_eq!(
+            done.directive,
+            Some(UiDirective::FilterDashboard {
+                chip: DashboardChip::Working
+            })
+        );
+        assert_eq!(done.summary, "Showing working agents on the Dashboard.");
+
+        assert_eq!(
+            filter_summary(DashboardChip::Working, Some((2, 21))),
+            "Showing 2 working agents."
+        );
+        assert_eq!(
+            filter_summary(DashboardChip::WaitingForYou, Some((0, 21))),
+            "Nothing is waiting for you."
+        );
+        assert_eq!(
+            filter_summary(DashboardChip::WaitingForYou, Some((1, 21))),
+            "1 agent is waiting for you."
+        );
+        assert_eq!(
+            filter_summary(DashboardChip::Done, Some((3, 21))),
+            "Showing 3 completed threads."
+        );
+        assert_eq!(
+            filter_summary(DashboardChip::All, Some((21, 21))),
+            "Showing all 21 agents."
+        );
+        assert_eq!(
+            filter_summary(DashboardChip::Idle, Some((1, 4))),
+            "Showing 1 idle agent."
         );
     }
 

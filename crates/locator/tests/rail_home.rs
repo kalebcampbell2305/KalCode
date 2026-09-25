@@ -313,8 +313,14 @@ fn greeting_uses_only_the_settings_display_name() {
         ..SettingsPatch::default()
     })
     .unwrap();
-    assert_eq!(locator.home_summary(22, true).unwrap().greeting, "Welcome back.");
-    assert_eq!(locator.home_summary(24, true).unwrap_err().code, "invalid_hour");
+    assert_eq!(
+        locator.home_summary(22, true).unwrap().greeting,
+        "Welcome back."
+    );
+    assert_eq!(
+        locator.home_summary(24, true).unwrap_err().code,
+        "invalid_hour"
+    );
     locator.shutdown();
 }
 

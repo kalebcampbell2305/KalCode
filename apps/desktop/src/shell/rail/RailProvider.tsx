@@ -3,8 +3,8 @@ import { useToast } from "@kalcode/ui/components";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { type KalCodeError, toKalCodeError } from "../../ipc/errors.ts";
 import { useEvents, useRuntime } from "../../runtime/RuntimeProvider.tsx";
+import { useUiIntents } from "../../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
-import { useThreadsIntent } from "../../surfaces/threads/intent.tsx";
 import { useNavigation, viewVisible } from "../navigation.tsx";
 
 type LoadState = "loading" | "ready" | "error";
@@ -26,9 +26,12 @@ export interface RailValue {
   setGroupCollapsed: (id: string, collapsed: boolean) => Promise<void>;
   deleteGroup: (group: WorkspaceGroup) => Promise<void>;
   moveGroup: (id: string, delta: -1 | 1) => Promise<void>;
-  /** Makes a workspace active and shows its project page (or Code without the project view). */
+  /**
+   * Makes a workspace active and shows its project page; `code` (and builds without the project
+   * view) goes through the shared focus intent, where the pane system shows it.
+   */
   openWorkspace: (workspaceId: string, where?: "project" | "code") => Promise<void>;
-  openThread: (threadId: string) => void;
+  openThread: (threadId: string, workspaceId?: string) => void;
   reveal: (workspaceId: string) => Promise<void>;
 }
 
@@ -41,7 +44,7 @@ export function RailProvider({ children }: { children: ReactNode }) {
   const { client, info } = useRuntime();
   const { events } = useEvents();
   const workspaces = useWorkspaces();
-  const threadsIntent = useThreadsIntent();
+  const intents = useUiIntents();
   const { navigate } = useNavigation();
   const toast = useToast();
   const enabled = viewVisible("folder", info.flags.features);
@@ -213,24 +216,22 @@ export function RailProvider({ children }: { children: ReactNode }) {
     [client, rail, refresh, fail],
   );
 
-  const live = useRef({ workspaces, threadsIntent });
-  live.current = { workspaces, threadsIntent };
+  const live = useRef({ workspaces, intents });
+  live.current = { workspaces, intents };
   const openWorkspace = useCallback(
     async (workspaceId: string, where: "project" | "code" = "project") => {
-      if (await live.current.workspaces.activate(workspaceId)) {
-        navigate(where === "project" && folderVisible ? "folder" : "code");
+      if (where === "project" && folderVisible) {
+        if (await live.current.workspaces.activate(workspaceId)) navigate("folder");
+        return;
       }
+      await live.current.intents.focus({ kind: "workspace", workspaceId });
     },
     [navigate, folderVisible],
   );
 
-  const openThread = useCallback(
-    (threadId: string) => {
-      navigate("threads");
-      live.current.threadsIntent.request("open", threadId);
-    },
-    [navigate],
-  );
+  const openThread = useCallback((threadId: string, workspaceId?: string) => {
+    void live.current.intents.focus({ kind: "thread", threadId, workspaceId: workspaceId ?? null });
+  }, []);
 
   const reveal = useCallback(
     async (workspaceId: string) => {

@@ -14,6 +14,8 @@
  *   approvals-flood  many approval requests across several threads
  *   errors           every Dashboard read fails until `recover()` (test hook) is called
  *   loading          every Dashboard read stays pending (skeleton review)
+ *   dash-1 | dash-6 | dash-20 | dash-50
+ *                    scale: exactly that many agents across providers, projects and states (Z7-W3)
  */
 import type {
   ActionKind,
@@ -33,7 +35,16 @@ import type {
 import { isRemoteConsequential } from "@kalcode/protocol";
 import type { CommandName } from "../transport.ts";
 
-export type DashboardScenario = "busy" | "empty" | "approvals-flood" | "errors" | "loading";
+export type DashboardScenario =
+  | "busy"
+  | "empty"
+  | "approvals-flood"
+  | "errors"
+  | "loading"
+  | "dash-1"
+  | "dash-6"
+  | "dash-20"
+  | "dash-50";
 
 export const DASHBOARD_SCENARIOS: readonly DashboardScenario[] = [
   "busy",
@@ -41,6 +52,10 @@ export const DASHBOARD_SCENARIOS: readonly DashboardScenario[] = [
   "approvals-flood",
   "errors",
   "loading",
+  "dash-1",
+  "dash-6",
+  "dash-20",
+  "dash-50",
 ];
 
 export function isDashboardScenario(value: string | null): value is DashboardScenario {
@@ -110,6 +125,8 @@ const WORKSPACES = {
   kalcode: { id: fixtureId(1, 1), name: "kalcode" },
   atlas: { id: fixtureId(1, 2), name: "atlas-api" },
   notes: { id: fixtureId(1, 3), name: "field-notes" },
+  web: { id: fixtureId(1, 4), name: "storefront-web" },
+  infra: { id: fixtureId(1, 5), name: "infra-terraform" },
 } as const;
 
 type Workspace = (typeof WORKSPACES)[keyof typeof WORKSPACES];
@@ -342,6 +359,102 @@ const BUSY_THREADS: readonly ThreadSeed[] = [
   },
 ];
 
+/** Extra agents for the scale scenarios (Z7-W3): realistic names, every provider and project. */
+const SCALE_TASKS = [
+  "Split checkout service",
+  "Tighten CSP headers",
+  "Port settings page to tokens",
+  "Add retry to webhook sender",
+  "Audit npm dependencies",
+  "Cache avatar thumbnails",
+  "Fix timezone drift in reports",
+  "Document the release process",
+  "Add e2e test for sign-up",
+  "Reduce bundle size",
+  "Migrate cron jobs to queues",
+  "Rename billing tables",
+  "Harden file upload limits",
+  "Add dark mode screenshots",
+  "Speed up CI cache",
+  "Clean up feature flags",
+  "Add pagination to orders API",
+  "Write runbook for outages",
+  "Refactor search indexer",
+  "Localize onboarding emails",
+  "Profile memory in worker",
+  "Add rate limits to login",
+  "Upgrade TypeScript",
+  "Fix flaky upload test",
+  "Generate OpenAPI docs",
+  "Add health checks to Terraform",
+  "Tidy lint warnings",
+  "Split monolith routes",
+  "Add metrics dashboard",
+  "Review accessibility of forms",
+  "Improve error pages",
+  "Backfill invoice totals",
+  "Rotate staging secrets",
+  "Add CSV export",
+  "Trim log noise",
+  "Draft architecture notes",
+  "Add offline banner",
+] as const;
+
+const SCALE_STATES: readonly { status: ThreadStatus; activity: string | null }[] = [
+  { status: "running_command", activity: "Running pnpm test --filter api" },
+  { status: "idle", activity: null },
+  { status: "editing", activity: "Editing src/routes/orders.ts" },
+  { status: "completed", activity: "Finished: 4 files changed, tests pass" },
+  { status: "thinking", activity: "Reading src/search/indexer.ts" },
+  { status: "idle", activity: null },
+  { status: "running_tool", activity: "Searching the codebase for feature flags" },
+  { status: "waiting_for_user", activity: "Asked which retry limit to use" },
+  { status: "testing", activity: "Running the e2e suite" },
+  { status: "paused", activity: "Paused by you" },
+  { status: "reviewing", activity: "Reviewing the diff before finishing" },
+  { status: "interrupted", activity: "Stopped by you" },
+];
+
+const SCALE_WORKSPACES = [WORKSPACES.kalcode, WORKSPACES.atlas, WORKSPACES.notes, WORKSPACES.web, WORKSPACES.infra];
+const SCALE_PROVIDERS = ["claude", "codex", "gemini"] as const;
+const SCALE_MODELS = { claude: "claude-sonnet-4-5", codex: "gpt-5-codex", gemini: "gemini-2.5-pro" } as const;
+const SCALE_MODES: readonly PermissionMode[] = ["approve", "auto", "plan"];
+
+/** A scale scenario's agents: the busy set first (it covers every state), then generated ones. */
+function scaleSeeds(count: number): ThreadSeed[] {
+  if (count === 1) return BUSY_THREADS.filter((s) => s.n === 2);
+  const seeds: ThreadSeed[] = BUSY_THREADS.slice(0, Math.min(count, BUSY_THREADS.length));
+  for (let i = 0; seeds.length < count; i += 1) {
+    const provider = SCALE_PROVIDERS[i % SCALE_PROVIDERS.length] ?? "claude";
+    const state = SCALE_STATES[i % SCALE_STATES.length] ?? { status: "idle", activity: null };
+    const workspace = SCALE_WORKSPACES[(i * 2) % SCALE_WORKSPACES.length] ?? WORKSPACES.kalcode;
+    const task = SCALE_TASKS[i % SCALE_TASKS.length] ?? `Task ${i + 1}`;
+    seeds.push({
+      n: 100 + i,
+      name: task,
+      provider,
+      model: SCALE_MODELS[provider],
+      account: i % 2 === 0 ? "Personal" : "Work",
+      workspace,
+      mode: SCALE_MODES[i % SCALE_MODES.length] ?? "approve",
+      status: state.status,
+      activity: state.activity,
+      startedMinAgo: 20 + ((i * 17) % 200),
+      lastMinAgo: (i * 7) % 90,
+      files: state.status === "completed" ? 3 + (i % 9) : i % 4 === 0 ? null : i % 6,
+      branch: `task/${task.toLowerCase().replaceAll(" ", "-").slice(0, 28)}`,
+    });
+  }
+  return seeds;
+}
+
+const SCALE_COUNTS: Partial<Record<DashboardScenario, number>> = {
+  "dash-1": 1,
+  "dash-6": 6,
+  "dash-20": 20,
+  "dash-50": 50,
+};
+
 interface ApprovalSeed {
   n: number;
   /** Thread fixture number (see BUSY_THREADS). */
@@ -482,8 +595,9 @@ export function createDashboardFixtures(scenario: DashboardScenario, emit: Emit,
   let failing = scenario === "errors";
   let extraApproval = 100;
 
+  const scale = SCALE_COUNTS[scenario];
   if (withThreads) {
-    for (const seed of BUSY_THREADS) {
+    for (const seed of scale ? scaleSeeds(scale) : BUSY_THREADS) {
       const provider = PROVIDERS[seed.provider];
       const id = fixtureId(2, seed.n);
       threads.set(id, {
@@ -600,7 +714,24 @@ export function createDashboardFixtures(scenario: DashboardScenario, emit: Emit,
     thread.status = to;
     thread.currentActivity = activity;
     thread.lastActivityAt = new Date().toISOString();
-    if (from !== to) statusChanged(thread, from, activity);
+    if (from === to) return;
+    statusChanged(thread, from, activity);
+    // Like the native runtime: an ending records its own event with the status change.
+    if (to === "completed") {
+      emit({ type: "thread.completed", payload: { threadId: thread.id } }, { correlation: correlationFor(thread) });
+    } else if (to === "failed") {
+      thread.error ??= {
+        code: "provider_exited",
+        message: `${thread.providerName} exited unexpectedly. Your files are unchanged since the last completed step.`,
+      };
+      emit(
+        {
+          type: "thread.failed",
+          payload: { threadId: thread.id, code: thread.error.code, message: thread.error.message },
+        },
+        { correlation: correlationFor(thread) },
+      );
+    }
   }
 
   function expireApprovals(thread: ThreadSummary) {
@@ -833,6 +964,41 @@ export function createDashboardFixtures(scenario: DashboardScenario, emit: Emit,
 
   function seedHistory() {
     if (!withThreads) return;
+    if (!BUSY_THREADS.every((seed) => threads.has(fixtureId(2, seed.n)))) {
+      // Scale scenarios: each agent's creation, oldest first, then the pending approvals.
+      const created = [...threads.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      for (const thread of created) {
+        emit(
+          {
+            type: "thread.created",
+            payload: {
+              threadId: thread.id,
+              name: thread.name,
+              providerId: thread.providerId,
+              workspaceId: thread.workspaceId,
+            },
+          },
+          { occurredAt: thread.createdAt, correlation: correlationFor(thread) },
+        );
+      }
+      for (const request of approvals.values()) {
+        const thread = threads.get(request.action.threadId);
+        if (!thread) continue;
+        emit(
+          {
+            type: "approval.requested",
+            payload: {
+              requestId: request.id,
+              threadId: thread.id,
+              scopes: request.decision.scopes,
+              summary: request.action.summary,
+            },
+          },
+          { occurredAt: request.action.requestedAt, correlation: correlationFor(thread, request.id) },
+        );
+      }
+      return;
+    }
     const t = (n: number) => threads.get(fixtureId(2, n)) as ThreadSummary;
     const at = (minutes: number) => ({ occurredAt: ago(minutes) });
     const history: [number, EventPayload, ThreadSummary | null, string | null][] = [

@@ -341,7 +341,10 @@ pub async fn home_summary(
     visit: bool,
 ) -> Result<HomeSummary, IpcError> {
     let locator = Arc::clone(locator.locator()?);
-    blocking("home_summary", move || locator.home_summary(local_hour, visit)).await
+    blocking("home_summary", move || {
+        locator.home_summary(local_hour, visit)
+    })
+    .await
 }
 
 #[tauri::command(async)]

@@ -4,6 +4,7 @@ import { Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toKalCodeError } from "../../../ipc/errors.ts";
 import { useEvents, useRuntime } from "../../../runtime/RuntimeProvider.tsx";
+import { usePaneFocusRequests } from "../../../runtime/uiIntents.tsx";
 import { useResolvedTheme } from "../../../shell/useResolvedTheme.ts";
 import { usePermissions } from "../../permissions/PermissionsProvider.tsx";
 import { PaneChannel, paneStartMode } from "./paneChannel.ts";
@@ -106,6 +107,14 @@ function PanesStrip({ workspace }: { workspace: Workspace }) {
     const timer = setInterval(() => void refresh(), WAITING_POLL_MS);
     return () => clearInterval(timer);
   }, [waiting, refresh]);
+
+  // Z7-W3: a Dashboard card or notification asked to focus one of these panes.
+  usePaneFocusRequests((threadId) => {
+    if (!panes.some((p) => p.thread.id === threadId)) return false;
+    setSelected(threadId);
+    setFocusRequest((n) => n + 1);
+    return true;
+  });
 
   const current = panes.find((p) => p.thread.id === selected) ?? null;
 

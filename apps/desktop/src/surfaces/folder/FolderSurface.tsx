@@ -24,6 +24,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { GitStatusResponse } from "../../ipc/client.ts";
 import { toKalCodeError } from "../../ipc/errors.ts";
 import { useEvents, useRuntime } from "../../runtime/RuntimeProvider.tsx";
+import { useUiIntents } from "../../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { allEntries, relativeTime } from "../../shell/rail/model.ts";
@@ -402,8 +403,7 @@ function RecentFilesPanel({ files, commits }: { files: RecentFile[] | null; comm
 }
 
 function ThreadsPanel({ threads }: { threads: Loaded<ThreadSummary[]> }) {
-  const { navigate } = useNavigation();
-  const threadsIntent = useThreadsIntent();
+  const intents = useUiIntents();
   const open = threads.state === "ready" ? threads.value.filter((t) => t.archivedAt === null) : [];
   const now = Date.now();
   return (
@@ -427,10 +427,7 @@ function ThreadsPanel({ threads }: { threads: Loaded<ThreadSummary[]> }) {
                 <button
                   type="button"
                   className={styles.threadButton}
-                  onClick={() => {
-                    navigate("threads");
-                    threadsIntent.request("open", t.id);
-                  }}
+                  onClick={() => void intents.focus({ kind: "thread", threadId: t.id, workspaceId: t.workspaceId })}
                 >
                   <ProviderMark provider={t.providerId} name={t.providerName} size="xs" hideName />
                   <span className={styles.threadName}>{t.name}</span>
