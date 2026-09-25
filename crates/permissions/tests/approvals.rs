@@ -573,6 +573,50 @@ fn stale_requests_expire_and_cannot_be_approved() {
 }
 
 #[test]
+fn requests_answered_in_the_provider_expire_without_revoking_grants() {
+    let h = Harness::new();
+    let first = open(&h, command("npm test"));
+    let other = open(&h, command("cargo build"));
+    let expired = h
+        .service
+        .expire_answered_in_provider(&h.thread_id, &first.action.id)
+        .expect("expire");
+    assert_eq!(expired, 1);
+    let all = h.service.list_approvals(None).expect("list");
+    let find = |id: &str| all.iter().find(|v| v.id == id).expect("request");
+    assert_eq!(find(&first.id).status, ApprovalStatus::Expired);
+    assert_eq!(
+        find(&first.id).expire_reason.as_deref(),
+        Some("answered_in_provider")
+    );
+    // Only that action's request expires.
+    assert_eq!(find(&other.id).status, ApprovalStatus::Pending);
+    assert!(h.event_types().contains(&"approval.expired".to_owned()));
+    let err = h
+        .service
+        .decide(&first.id, D::ApproveOnce, Actor::User)
+        .expect_err("expired");
+    assert_eq!(err.code, "approval_expired");
+    // Idempotent, and ids are validated.
+    assert_eq!(
+        h.service
+            .expire_answered_in_provider(&h.thread_id, &first.action.id)
+            .expect("again"),
+        0
+    );
+    assert!(
+        h.service
+            .expire_answered_in_provider("nope", &first.action.id)
+            .is_err()
+    );
+    assert!(
+        h.service
+            .expire_answered_in_provider(&h.thread_id, "")
+            .is_err()
+    );
+}
+
+#[test]
 fn superseded_requests_expire() {
     let h = Harness::new();
     let mut action = h.action(command("npm test"));
