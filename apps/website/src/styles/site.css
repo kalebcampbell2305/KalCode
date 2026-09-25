@@ -1018,7 +1018,7 @@ a:hover {
   font-size: clamp(2rem, 1.3rem + 2.2vw, 3.5rem);
 }
 
-.feature-split__copy > p {
+.feature-split__copy > p:not(.chip) {
   max-width: 44ch;
   color: var(--color-text-secondary);
   font-size: var(--site-text-lead);
