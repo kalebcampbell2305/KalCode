@@ -1,0 +1,339 @@
+//! Codex in a pane: read-only first (docs/PROVIDER_PANES.md §3). Approvals stay in Codex's own
+//! prompt; KalCode's status comes from Codex's `notify` program (a structured JSON payload with a
+//! `type`) and from OSC 9 terminal notifications (a structural escape sequence in the PTY
+//! stream), plus process state. Codex hooks need persisted hook trust, and KalCode never passes
+//! `--dangerously-bypass-hook-trust`, so no Codex hook decides anything.
+//!
+//! Verified on 2026-09-24 against the installed `codex --help` (codex-cli 0.155.1): `-C/--cd`,
+//! `-s/--sandbox` (`read-only`, `workspace-write`, `danger-full-access`), `-a/--ask-for-approval`
+//! (`on-request`, `never`), `-m/--model`, `-c key=value` (TOML value), `codex resume <id>`.
+//! `notify` and `tui.notifications*` keys: https://learn.chatgpt.com/docs/config-file/config-advanced
+//! (via PROVIDER_PANES.md [5]; confirm in the owner-approved smoke run).
+
+use std::ffi::OsString;
+use std::path::Path;
+
+use kalcode_contracts::agent::{
+    InteractiveSupport, MappingFidelity, PermissionMapping, StatusChannel,
+};
+use kalcode_contracts::permissions::PermissionMode;
+
+/// Flags and values KalCode never passes to Codex.
+pub const FORBIDDEN: &[&str] = &[
+    "danger-full-access",
+    "--dangerously-bypass-approvals-and-sandbox",
+    "--dangerously-bypass-hook-trust",
+    "--approve-for-me",
+    "--search",
+    "--add-dir",
+    "never",
+];
+
+/// Sandbox and approval policy per KalCode mode. Without trusted hooks KalCode can't stop a
+/// destructive command inside a writable sandbox, so only Bypass writes.
+pub fn permission_args(mode: PermissionMode) -> [&'static str; 4] {
+    match mode {
+        PermissionMode::Bypass => ["-s", "workspace-write", "-a", "on-request"],
+        _ => ["-s", "read-only", "-a", "on-request"],
+    }
+}
+
+/// A TOML array of literal strings (`'...'`: no escapes are interpreted). Refuses values a
+/// literal string can't hold.
+fn toml_literal_array(values: &[&str]) -> Option<String> {
+    let mut items = Vec::with_capacity(values.len());
+    for value in values {
+        if value.contains(['\'', '\n', '\r']) || value.chars().any(char::is_control) {
+            return None;
+        }
+        items.push(format!("'{value}'"));
+    }
+    Some(format!("[{}]", items.join(",")))
+}
+
+#[derive(Debug, Clone)]
+pub struct CodexArgs<'a> {
+    pub mode: PermissionMode,
+    pub workspace: &'a Path,
+    pub model: Option<&'a str>,
+    pub resume_session_id: Option<&'a str>,
+    /// The helper and its `codex-notify` arguments.
+    pub hook_program: &'a Path,
+    pub endpoint: &'a str,
+    pub session: &'a str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CodexArgsError {
+    #[error("a path can't be passed to Codex safely")]
+    UnsafePath,
+    #[error("the model name is not valid")]
+    InvalidModel,
+    #[error("the session id is not valid")]
+    InvalidSessionId,
+}
+
+/// The argv (after the program) for an interactive Codex pane.
+pub fn interactive_args(args: &CodexArgs<'_>) -> Result<Vec<OsString>, CodexArgsError> {
+    let mut out: Vec<OsString> = Vec::new();
+    if let Some(id) = args.resume_session_id {
+        if !kalcode_contracts::ids::is_valid_id(id) {
+            return Err(CodexArgsError::InvalidSessionId);
+        }
+        out.push("resume".into());
+    }
+    out.push("-C".into());
+    out.push(args.workspace.as_os_str().to_owned());
+    out.extend(permission_args(args.mode).into_iter().map(OsString::from));
+    if let Some(model) = args.model {
+        if !crate::claude::argv::valid_model_name(model) {
+            return Err(CodexArgsError::InvalidModel);
+        }
+        out.push("-m".into());
+        out.push(model.into());
+    }
+    let program = args
+        .hook_program
+        .to_str()
+        .ok_or(CodexArgsError::UnsafePath)?;
+    let notify = toml_literal_array(&[program, "codex-notify", args.endpoint, args.session])
+        .ok_or(CodexArgsError::UnsafePath)?;
+    for config in [
+        format!("notify={notify}"),
+        "tui.notifications=['agent-turn-complete','approval-requested']".to_owned(),
+        "tui.notification_method='osc9'".to_owned(),
+        "tui.notification_condition='always'".to_owned(),
+    ] {
+        out.push("-c".into());
+        out.push(config.into());
+    }
+    if let Some(id) = args.resume_session_id {
+        out.push(id.into());
+    }
+    Ok(out)
+}
+
+pub fn interactive_support() -> InteractiveSupport {
+    InteractiveSupport {
+        launch_mappings: [
+            PermissionMode::Plan,
+            PermissionMode::Approve,
+            PermissionMode::Auto,
+            PermissionMode::Bypass,
+            PermissionMode::Custom,
+        ]
+        .into_iter()
+        .map(|mode| PermissionMapping {
+            mode,
+            fidelity: MappingFidelity::ApproximateStricter,
+            provider_setting: permission_args(mode).join(" "),
+            notes: "Approvals are answered in Codex's own prompt; KalCode shows when Codex needs \
+                    you but can't answer for it yet."
+                .into(),
+        })
+        .collect(),
+        status_channels: vec![
+            StatusChannel::Notify,
+            StatusChannel::Osc9,
+            StatusChannel::ProcessOnly,
+        ],
+        kalcode_answers_approvals: false,
+        resume: Some("codex resume <session id>".into()),
+    }
+}
+
+/// Finds OSC 9 notifications (`ESC ] 9 ; text BEL` or `ESC ] 9 ; text ESC \`) in a PTY byte
+/// stream, across chunk boundaries. Structural terminal parsing only: the text is reported as a
+/// count, never interpreted, because it can contain model-generated content.
+#[derive(Debug, Default)]
+pub struct Osc9Scanner {
+    state: ScanState,
+    body_len: usize,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum ScanState {
+    #[default]
+    Ground,
+    Esc,
+    OscStart,
+    Nine,
+    Body,
+    BodyEsc,
+    /// An OSC that isn't 9: skipped to its terminator.
+    OtherOsc,
+    OtherOscEsc,
+}
+
+/// Longest notification body tracked before the sequence is abandoned.
+const MAX_OSC_BODY: usize = 4096;
+
+impl Osc9Scanner {
+    /// Feeds bytes; returns how many complete OSC 9 notifications ended in them.
+    pub fn feed(&mut self, bytes: &[u8]) -> usize {
+        let mut found = 0;
+        for &b in bytes {
+            use ScanState::*;
+            self.state = match (self.state, b) {
+                (Ground, 0x1b) => Esc,
+                (Ground, _) => Ground,
+                (Esc, b']') => OscStart,
+                (Esc, 0x1b) => Esc,
+                (Esc, _) => Ground,
+                (OscStart, b'9') => Nine,
+                (OscStart, 0x07) => Ground,
+                (OscStart, _) => OtherOsc,
+                (Nine, b';') => {
+                    self.body_len = 0;
+                    Body
+                }
+                (Nine, 0x07) => Ground,
+                (Nine, _) => OtherOsc,
+                (Body, 0x07) => {
+                    found += 1;
+                    Ground
+                }
+                (Body, 0x1b) => BodyEsc,
+                (Body, _) => {
+                    self.body_len += 1;
+                    if self.body_len > MAX_OSC_BODY {
+                        Ground
+                    } else {
+                        Body
+                    }
+                }
+                (BodyEsc, b'\\') => {
+                    found += 1;
+                    Ground
+                }
+                (BodyEsc, b']') => OscStart,
+                (BodyEsc, _) => Ground,
+                (OtherOsc, 0x07) => Ground,
+                (OtherOsc, 0x1b) => OtherOscEsc,
+                (OtherOsc, _) => OtherOsc,
+                (OtherOscEsc, b']') => OscStart,
+                (OtherOscEsc, _) => Ground,
+            };
+        }
+        found
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(mode: PermissionMode, resume: Option<&str>) -> Vec<String> {
+        interactive_args(&CodexArgs {
+            mode,
+            workspace: Path::new("C:/work/repo"),
+            model: Some("gpt-5"),
+            resume_session_id: resume,
+            hook_program: Path::new(r"C:\Program Files\KalCode\kalcode-hook.exe"),
+            endpoint: r"\\.\pipe\kalcode-hook-0123",
+            session: "abcd",
+        })
+        .expect("args")
+        .into_iter()
+        .map(|a| a.into_string().expect("utf8"))
+        .collect()
+    }
+
+    #[test]
+    fn codex_interactive_never_uses_forbidden_flags() {
+        for mode in [
+            PermissionMode::Plan,
+            PermissionMode::Approve,
+            PermissionMode::Auto,
+            PermissionMode::Bypass,
+            PermissionMode::Custom,
+        ] {
+            let args = args(mode, None);
+            for forbidden in FORBIDDEN {
+                assert!(
+                    !args.iter().any(|a| a == forbidden),
+                    "{mode:?}: {forbidden}"
+                );
+            }
+            let sandbox = &args[args.iter().position(|a| a == "-s").expect("-s") + 1];
+            let expected = if mode == PermissionMode::Bypass {
+                "workspace-write"
+            } else {
+                "read-only"
+            };
+            assert_eq!(sandbox, expected, "{mode:?}");
+            assert_eq!(
+                args[args.iter().position(|a| a == "-a").expect("-a") + 1],
+                "on-request"
+            );
+        }
+    }
+
+    #[test]
+    fn notify_is_a_toml_literal_array_and_unsafe_paths_are_refused() {
+        let args = args(PermissionMode::Approve, None);
+        let notify = args
+            .iter()
+            .find(|a| a.starts_with("notify="))
+            .expect("notify");
+        assert_eq!(
+            notify,
+            r"notify=['C:\Program Files\KalCode\kalcode-hook.exe','codex-notify','\\.\pipe\kalcode-hook-0123','abcd']"
+        );
+        let bad = interactive_args(&CodexArgs {
+            mode: PermissionMode::Approve,
+            workspace: Path::new("C:/w"),
+            model: None,
+            resume_session_id: None,
+            hook_program: Path::new("C:/it's/kalcode-hook.exe"),
+            endpoint: "e",
+            session: "s",
+        });
+        assert_eq!(bad, Err(CodexArgsError::UnsafePath));
+    }
+
+    #[test]
+    fn resume_uses_the_subcommand() {
+        let id = "0192f3c4-0000-7000-8000-000000000000";
+        let args = args(PermissionMode::Approve, Some(id));
+        assert_eq!(args[0], "resume");
+        assert_eq!(args.last().map(String::as_str), Some(id));
+    }
+
+    #[test]
+    fn osc9_is_found_across_chunks_and_other_sequences_are_ignored() {
+        let mut scanner = Osc9Scanner::default();
+        assert_eq!(
+            scanner.feed(b"plain \x1b]0;title\x07 text"),
+            0,
+            "OSC 0 is a title"
+        );
+        assert_eq!(scanner.feed(b"\x1b]9;Approval requested\x07"), 1);
+        assert_eq!(scanner.feed(b"\x1b]9;Turn com"), 0);
+        assert_eq!(
+            scanner.feed(b"plete\x1b\\"),
+            1,
+            "ST terminator, split across chunks"
+        );
+        assert_eq!(scanner.feed(b"\x1b]99;x\x07"), 0, "OSC 99 is not OSC 9");
+        assert_eq!(
+            scanner.feed(b"PERMISSION REQUIRED Status: done"),
+            0,
+            "prose is ignored"
+        );
+        let long = [
+            b"\x1b]9;".as_slice(),
+            &vec![b'x'; MAX_OSC_BODY + 10],
+            b"\x07",
+        ]
+        .concat();
+        assert_eq!(scanner.feed(&long), 0, "oversized bodies are abandoned");
+    }
+
+    #[test]
+    fn support_is_read_only_first() {
+        let support = interactive_support();
+        assert!(!support.kalcode_answers_approvals);
+        assert!(!support.status_channels.contains(&StatusChannel::Hooks));
+    }
+}

@@ -6,6 +6,11 @@
 //! documented stream-JSON fixtures in `tests/fixtures/claude/` so the whole
 //! spawn → parse → normalize → event pipeline runs without a real provider.
 //!
+//! In interactive mode (started with `--settings`, as a provider pane starts `claude`) it shows
+//! a minimal TUI and fires the hooks from KalCode's settings file with the documented payloads
+//! (see `interactive` below). With `hook` as its first argument it stands in for the
+//! `kalcode-hook` helper, running the same library code.
+//!
 //! It records what it was started with (`last-args.json`, and the *names* of its environment
 //! variables in `last-env.json`) so tests can assert on argv and environment sanitization.
 
@@ -72,6 +77,11 @@ fn record_run(args: &[String]) {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("hook") {
+        // Stand-in for `kalcode-hook` in tests (the helper binary lives in another package):
+        // the same library code, so the real protocol and failure policy run.
+        run_hook_helper(&args[1..]);
+    }
     record_run(&args);
     if args.first().map(String::as_str) == Some("--fake-grandchild") {
         loop {
@@ -105,6 +115,10 @@ fn main() {
         record_invocation(&args);
         session(&config, &args);
         return;
+    }
+    if args.iter().any(|a| a == "--settings") {
+        record_invocation(&args);
+        interactive::run(&config, &args);
     }
     eprintln!("fake provider: unsupported arguments");
     exit(2);
@@ -262,4 +276,277 @@ fn session(config: &Value, args: &[String]) {
     }
     // End of input: exit normally, like `claude -p` with stream-JSON input.
     exit(get_i64(config, "exitCode", 0));
+}
+
+fn run_hook_helper(args: &[String]) -> ! {
+    use kalcode_hook_bridge::helper::{self, HelperEnv};
+    let blocking = helper::is_blocking_invocation(args);
+    std::panic::set_hook(Box::new(move |_| {
+        std::process::exit(if blocking { 2 } else { 0 });
+    }));
+    let rendered = helper::run(
+        args,
+        &mut std::io::stdin().lock(),
+        &HelperEnv::from_process(),
+    );
+    print!("{}", rendered.stdout);
+    eprint!("{}", rendered.stderr);
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    std::process::exit(rendered.exit_code);
+}
+
+/// Interactive mode: a minimal TUI that behaves like Claude Code's for hooks. It runs the hook
+/// commands from the `--settings` file with the documented payload shapes and honours their
+/// exit codes and decisions exactly as the hooks reference describes. Prompts are lines typed
+/// into the pane:
+///
+/// - `run <command>`: a Bash tool call; `edit <path>`: a Write tool call;
+/// - `say <text>`: prints text only (prose that must never change KalCode's status);
+/// - `fail`: a StopFailure (rate limit); `exit`: SessionEnd, then exit.
+///
+/// When a PreToolUse hook gives no decision or asks, the fake shows its own prompt
+/// (`Allow …? (y/n)`) and reads the answer from the pane, as the real TUI would.
+mod interactive {
+    use std::io::{BufRead, Write};
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    use serde_json::{Value, json};
+
+    use super::{exit, get_i64};
+
+    struct Hooks {
+        settings: Value,
+        session_id: String,
+        cwd: String,
+        enabled: bool,
+    }
+
+    struct HookResult {
+        code: i32,
+        stdout: String,
+        stderr: String,
+    }
+
+    impl Hooks {
+        fn fire(&self, event: &str, mut payload: Value) -> HookResult {
+            let none = HookResult {
+                code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+            };
+            if !self.enabled {
+                return none;
+            }
+            let Some(handler) = self.settings["hooks"][event][0]["hooks"][0].as_object() else {
+                return none;
+            };
+            let Some(program) = handler.get("command").and_then(Value::as_str) else {
+                return none;
+            };
+            let args: Vec<String> = handler
+                .get("args")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let timeout = handler
+                .get("timeout")
+                .and_then(Value::as_u64)
+                .unwrap_or(600);
+            if let Some(object) = payload.as_object_mut() {
+                object.insert("session_id".into(), json!(self.session_id));
+                object.insert("hook_event_name".into(), json!(event));
+                object.insert("cwd".into(), json!(self.cwd));
+                object.insert("transcript_path".into(), json!("/fake/transcript.jsonl"));
+            }
+            let Ok(mut child) = Command::new(program)
+                .args(&args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+            else {
+                // A hook that can't start is a non-blocking error.
+                return HookResult { code: 1, ..none };
+            };
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(payload.to_string().as_bytes());
+            }
+            let started = Instant::now();
+            loop {
+                match child.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) if started.elapsed() > Duration::from_secs(timeout) => {
+                        // A timed-out hook renders no decision.
+                        let _ = child.kill();
+                        return none;
+                    }
+                    Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+                    Err(_) => return none,
+                }
+            }
+            match child.wait_with_output() {
+                Ok(output) => HookResult {
+                    code: output.status.code().unwrap_or(1),
+                    stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                    stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                },
+                Err(_) => none,
+            }
+        }
+    }
+
+    fn say(text: &str) {
+        let mut out = std::io::stdout().lock();
+        let _ = write!(out, "{text}\r\n");
+        let _ = out.flush();
+    }
+
+    fn prompt() {
+        let mut out = std::io::stdout().lock();
+        let _ = write!(out, "> ");
+        let _ = out.flush();
+    }
+
+    fn read_line() -> Option<String> {
+        let mut line = String::new();
+        match std::io::stdin().lock().read_line(&mut line) {
+            Ok(0) | Err(_) => None,
+            Ok(_) => Some(line.trim().to_owned()),
+        }
+    }
+
+    fn value_after(args: &[String], flag: &str) -> Option<String> {
+        args.iter()
+            .position(|a| a == flag)
+            .and_then(|i| args.get(i + 1))
+            .cloned()
+    }
+
+    /// Runs one tool call through the hooks; returns whether it ran.
+    fn tool_call(hooks: &Hooks, n: u32, tool: &str, input: Value) -> bool {
+        let tool_use_id = format!("toolu_fake_{n}");
+        let pre = hooks.fire(
+            "PreToolUse",
+            json!({"tool_name": tool, "tool_input": input, "tool_use_id": tool_use_id}),
+        );
+        if pre.code == 2 {
+            say(&format!("BLOCKED BY HOOK: {}", pre.stderr.trim()));
+            return false;
+        }
+        let decision = if pre.code == 0 && pre.stdout.trim_start().starts_with('{') {
+            serde_json::from_str::<Value>(&pre.stdout)
+                .ok()
+                .and_then(|v| {
+                    v["hookSpecificOutput"]["permissionDecision"]
+                        .as_str()
+                        .map(str::to_owned)
+                })
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let allowed = match decision.as_str() {
+            "allow" => true,
+            "deny" => {
+                say("DENIED BY HOOK");
+                false
+            }
+            // No decision or "ask": the provider's own prompt, answered in the pane.
+            _ => {
+                hooks.fire(
+                    "PermissionRequest",
+                    json!({"tool_name": tool, "tool_input": input, "tool_use_id": tool_use_id}),
+                );
+                let mut out = std::io::stdout().lock();
+                let _ = write!(out, "[fake prompt] Allow {tool}? (y/n) ");
+                let _ = out.flush();
+                drop(out);
+                let yes = read_line().is_some_and(|a| a.eq_ignore_ascii_case("y"));
+                if !yes {
+                    say("DENIED IN PROVIDER PROMPT");
+                }
+                yes
+            }
+        };
+        if allowed {
+            say(&format!("RAN {tool}"));
+            hooks.fire(
+                "PostToolUse",
+                json!({"tool_name": tool, "tool_input": input, "tool_use_id": tool_use_id,
+                       "tool_output": {"stdout": "fake output"}}),
+            );
+        }
+        allowed
+    }
+
+    pub fn run(config: &Value, args: &[String]) -> ! {
+        let settings = value_after(args, "--settings")
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or(Value::Null);
+        let resumed = args.iter().any(|a| a == "--resume");
+        let hooks = Hooks {
+            settings,
+            session_id: value_after(args, "--session-id")
+                .or_else(|| value_after(args, "--resume"))
+                .unwrap_or_default(),
+            cwd: std::env::current_dir()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default(),
+            enabled: config.get("hooks").and_then(Value::as_bool).unwrap_or(true),
+        };
+        say("KalCode fake provider (interactive). No AI service is contacted.");
+        hooks.fire(
+            "SessionStart",
+            json!({"source": if resumed { "resume" } else { "startup" }}),
+        );
+        prompt();
+        let mut calls = 0u32;
+        while let Some(line) = read_line() {
+            if line.is_empty() {
+                prompt();
+                continue;
+            }
+            if line == "exit" {
+                hooks.fire("SessionEnd", json!({"reason": "prompt_input_exit"}));
+                exit(get_i64(config, "exitCode", 0));
+            }
+            hooks.fire("UserPromptSubmit", json!({"prompt": line}));
+            if let Some(command) = line.strip_prefix("run ") {
+                calls += 1;
+                tool_call(&hooks, calls, "Bash", json!({"command": command}));
+            } else if let Some(path) = line.strip_prefix("edit ") {
+                calls += 1;
+                tool_call(
+                    &hooks,
+                    calls,
+                    "Write",
+                    json!({"file_path": path, "content": "x"}),
+                );
+            } else if let Some(text) = line.strip_prefix("say ") {
+                say(text);
+            } else if line == "fail" {
+                hooks.fire(
+                    "StopFailure",
+                    json!({"error_type": "rate_limit", "error_message": "slow down"}),
+                );
+                prompt();
+                continue;
+            } else {
+                say("(fake) ok");
+            }
+            hooks.fire(
+                "Stop",
+                json!({"last_assistant_message": "Status: DONE", "tool_use_count": calls}),
+            );
+            prompt();
+        }
+        exit(0)
+    }
 }

@@ -6,6 +6,8 @@
 //!   bounded output, redacted stderr, timeouts, tree kill on drop, failure isolation).
 //! - [`claude`]: the Claude Code adapter, implementing the shared `AgentProvider` /
 //!   `AgentSession` contracts (`kalcode_contracts::agent`) over its headless stream-JSON mode.
+//! - [`interactive`]: provider panes (Z7-W4): the real CLI in a PTY, with status and approvals
+//!   from the `kalcode-hook` bridge (docs/PROVIDER_PANES.md).
 //! - [`registry`]: cached detection for the desktop shell.
 //!
 //! Provider-specific wire types stay private to their adapter; everything that leaves this
@@ -15,6 +17,7 @@ pub mod catalog;
 pub mod claude;
 pub mod detect;
 pub mod env;
+pub mod interactive;
 pub mod launch;
 pub mod model;
 pub mod process;

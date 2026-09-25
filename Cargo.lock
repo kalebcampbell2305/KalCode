@@ -2440,7 +2440,9 @@ name = "kalcode-providers"
 version = "0.1.1"
 dependencies = [
  "kalcode-contracts",
+ "kalcode-hook-bridge",
  "kalcode-native-core",
+ "kalcode-pty",
  "serde",
  "serde_json",
  "tempfile",

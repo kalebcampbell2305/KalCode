@@ -22,6 +22,8 @@ doc = false
 [dependencies]
 kalcode-contracts = { path = "../contracts" }
 kalcode-native-core = { path = "../native-core" }
+kalcode-pty = { path = "../pty" }
+kalcode-hook-bridge = { path = "../hook-bridge" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
