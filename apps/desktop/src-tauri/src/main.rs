@@ -6,10 +6,11 @@ fn main() {
     kalcode_desktop_lib::run(removed);
 }
 
-/// Strips browser-runtime overrides from the environment before anything reads it.
-/// See `environment.rs`. Returns the names removed so they can be logged once logging starts.
+/// Strips browser-runtime overrides (every `WEBVIEW2_*`, `COREWEBVIEW2_*` and
+/// `WEBKIT_INSPECTOR*` variable) from the environment before anything reads it. See
+/// `environment.rs`. Returns the names removed so they can be logged once logging starts.
 #[allow(unsafe_code)]
-fn remove_webview_overrides() -> Vec<&'static str> {
+fn remove_webview_overrides() -> Vec<String> {
     let present = kalcode_desktop_lib::environment::present_webview_overrides();
     for name in &present {
         // SAFETY: this is the first thing `main` does. No other thread exists yet (Tauri,
@@ -18,4 +19,7 @@ fn remove_webview_overrides() -> Vec<&'static str> {
         unsafe { std::env::remove_var(name) };
     }
     present
+        .iter()
+        .map(|name| name.to_string_lossy().into_owned())
+        .collect()
 }

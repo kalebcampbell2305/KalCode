@@ -129,7 +129,7 @@ fn install_panic_hook(log_dir: PathBuf) {
     }));
 }
 
-fn start(app: &tauri::App, removed_overrides: &[&str]) -> AppState {
+fn start(app: &tauri::App, removed_overrides: &[String]) -> AppState {
     let channel = BuildChannel::current();
     let version = app.package_info().version.to_string();
     let info = AppInfo::current(&version, channel);
@@ -178,7 +178,7 @@ fn uses_default_data_dir() -> bool {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run(removed_overrides: Vec<&'static str>) {
+pub fn run(removed_overrides: Vec<String>) {
     let mut builder = tauri::Builder::default();
     // A second launch against the default data folder focuses the running window. (Exclusive
     // use of a data folder is enforced separately by the core's lock file, in every mode.)
