@@ -207,12 +207,14 @@ Unlike headless threads, the edit and web tools are not removed outside Plan: a 
 for them, in KalCode (engine routing) or in Claude Code's own prompt in the pane.
 
 **Who decides a tool call.** Every call reaches KalCode's `PreToolUse` hook first. If KalCode is
-unreachable, the helper exits 2 and the call is blocked. With `DecisionRouting::ProviderPrompt`
-(the shipped default until the classifier fixes on `sec/latent-hardening` merge) KalCode records
-the call and returns no decision: Claude Code's own permission flow and prompt decide, under the
-deny floor. With `DecisionRouting::Engine` the call becomes `ApprovalRequired` for the Z3 runtime
-and the Z4 engine: allow, deny, or a KalCode approval; unanswered for 540 s it goes to Claude
-Code's prompt and the KalCode request expires as `answered_in_provider`. KalCode's "allow" never
+unreachable, the helper exits 2 and the call is blocked. With `DecisionRouting::Engine` (the
+default since the classifier hardening merged) the call becomes `ApprovalRequired` for the Z3
+runtime and the Z4 engine: allow, deny, or a KalCode approval; unanswered for 540 s it goes to
+Claude Code's prompt and the KalCode request expires as `answered_in_provider`. Recursive
+searches, pipelines and multi-level wildcards are sent as opaque (always ask) until the
+classifier judges them (SEC-LATENT §5). With `DecisionRouting::ProviderPrompt` (the switch back)
+KalCode records the call and returns no decision: Claude Code's own permission flow and prompt
+decide, under the deny floor. KalCode's "allow" never
 passes a deny rule (the permissions page: deny rules apply regardless of a hook's answer).
 
 What this still does not cover is listed in `docs/PROVIDER_PANES.md` §4 ("What KalCode cannot

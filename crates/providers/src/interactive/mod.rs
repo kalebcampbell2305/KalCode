@@ -13,8 +13,9 @@
 //! - [`provider`]: the Claude Code interactive provider, the per-thread runtime router and the
 //!   pane registry the IPC layer uses to attach views.
 //!
-//! Decisions are behind [`DecisionRouting`]: until the classifier fixes on
-//! `sec/latent-hardening` merge, hook calls never route approve/deny through the engine.
+//! Decisions go through [`DecisionRouting`]: since the classifier hardening merged
+//! (`docs/campaigns/SEC-LATENT.md`), panes route approve/deny through the engine by default; the
+//! whole feature stays behind the `provider_panes` flag until the Z7-W4 acceptance matrix passes.
 
 pub mod claude;
 pub mod codex;
@@ -40,9 +41,10 @@ pub enum DecisionRouting {
     Engine,
 }
 
-/// The routing shipped builds use. Flip to [`DecisionRouting::Engine`] only after the classifier
-/// fixes (`sec/latent-hardening`, ADVANCED.md §14b) merge and are re-reviewed.
-pub const DEFAULT_DECISION_ROUTING: DecisionRouting = DecisionRouting::ProviderPrompt;
+/// The routing builds use. The engine decides since the classifier hardening merged (main
+/// 65fe095, SEC-LATENT); shapes it still can't judge are sent as opaque (always ask) by the
+/// bridge (`session::known_gap`). `ProviderPrompt` remains as the fallback switch.
+pub const DEFAULT_DECISION_ROUTING: DecisionRouting = DecisionRouting::Engine;
 
 /// Gemini CLI: hooks exist but a per-session way to inject KalCode's without writing user or
 /// project settings is unverified (not installed on the verification machine). Process state

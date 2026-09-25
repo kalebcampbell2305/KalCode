@@ -269,6 +269,14 @@ impl Shared {
                 origin: None,
             },
         };
+        if let Some(reason) = known_gap(tool, record.tool_input.as_ref()) {
+            // A shape the classifier can't judge fully yet (SEC-LATENT §5): opaque, so the
+            // engine asks for an explicit one-time approval in every mode.
+            action.action = ActionKind::Tool {
+                tool: tool.to_owned(),
+                input_summary: reason.to_owned(),
+            };
+        }
         action.provider_id = kalcode_contracts::agent::ProviderId::new(&self.provider_id);
         action.origin = Some(ActionOrigin::Thread {
             thread_id: self.ctx.thread_id.clone(),
@@ -519,6 +527,60 @@ impl Shared {
 
     pub(crate) fn pty(&self) -> Option<&PtySession> {
         self.pty.get()
+    }
+}
+
+/// Tool calls whose shape the permission classifier can't judge fully yet
+/// (`docs/campaigns/SEC-LATENT.md` §5), treated as opaque by the bridge:
+/// - recursive searches (the Grep tool over a folder; `grep -r`, `rg`, `findstr /s`,
+///   `Select-String -Recurse`, `Get-ChildItem -Recurse`) read every file below, `.env` included;
+/// - pipelines, which the classifier judges one command at a time;
+/// - multi-level wildcards (`src/*/config`), checked only statically.
+pub(crate) fn known_gap(tool: &str, input: Option<&Value>) -> Option<&'static str> {
+    let field = |key: &str| input.and_then(|i| i.get(key)).and_then(Value::as_str);
+    match tool {
+        "Grep" => {
+            let path = field("path").map(std::path::Path::new);
+            let single_file = path.is_some_and(|p| p.is_absolute() && p.is_file());
+            (!single_file).then_some("recursive search: may read credential files")
+        }
+        "Bash" | "PowerShell" => {
+            let command = field("command")?;
+            let lower = command.to_ascii_lowercase();
+            let words: Vec<&str> = lower.split_whitespace().collect();
+            let recursive = words.iter().enumerate().any(|(i, w)| {
+                let program = w.rsplit(['/', '\\']).next().unwrap_or(w);
+                let program = program.trim_end_matches(".exe");
+                let rest = &words[i + 1..];
+                match program {
+                    "rg" | "ripgrep" | "ag" => true,
+                    "grep" | "egrep" | "fgrep" => {
+                        rest.iter().take_while(|a| a.starts_with('-')).any(|a| {
+                            *a == "--recursive"
+                                || *a == "--dereference-recursive"
+                                || (!a.starts_with("--") && (a.contains('r') || a.contains('R')))
+                        })
+                    }
+                    "findstr" => rest.contains(&"/s"),
+                    "select-string" | "sls" | "get-childitem" | "gci" | "dir" | "ls" => rest
+                        .iter()
+                        .any(|a| a.starts_with("-r") && "-recurse".starts_with(*a)),
+                    _ => false,
+                }
+            });
+            if recursive {
+                return Some("recursive search: may read credential files");
+            }
+            if command.contains('|') {
+                return Some("pipeline: judged as a whole only after review");
+            }
+            let deep_wildcard = command.split_whitespace().any(|arg| {
+                arg.find('*')
+                    .is_some_and(|star| arg[star..].contains(['/', '\\']))
+            });
+            deep_wildcard.then_some("multi-level wildcard")
+        }
+        _ => None,
     }
 }
 
@@ -919,6 +981,54 @@ mod tests {
         }
         first.join().expect("join");
         second.join().expect("join");
+    }
+
+    #[test]
+    fn classifier_gaps_are_opaque() {
+        let bash = |c: &str| json!({ "command": c });
+        for (tool, input) in [
+            ("Grep", json!({"pattern": "KEY"})),
+            ("Grep", json!({"pattern": "KEY", "path": "/work"})),
+            ("Bash", bash("grep -rn TOKEN .")),
+            ("Bash", bash("grep -Rl KEY src")),
+            ("Bash", bash("rg password")),
+            ("Bash", bash("/usr/bin/rg x")),
+            ("PowerShell", bash("findstr /s secret *.txt")),
+            (
+                "PowerShell",
+                bash("Get-ChildItem -Recurse -Include *.pem | Get-Content"),
+            ),
+            (
+                "PowerShell",
+                bash("Select-String -Path * -Pattern key -Recurse"),
+            ),
+            ("Bash", bash("cat package.json | node -e 'x'")),
+            ("Bash", bash("cat src/*/config")),
+        ] {
+            assert!(known_gap(tool, Some(&input)).is_some(), "{tool}: {input}");
+        }
+        for (tool, input) in [
+            ("Bash", bash("npm test")),
+            ("Bash", bash("grep TODO src/main.rs")),
+            ("Bash", bash("ls src/*.rs")),
+            ("Read", json!({"file_path": "/w/a"})),
+            ("Edit", json!({"file_path": "/w/a"})),
+        ] {
+            assert_eq!(known_gap(tool, Some(&input)), None, "{tool}: {input}");
+        }
+        let (s, _rx) = shared(DecisionRouting::Engine, SessionLimits::default());
+        let (action, summary) = s.action_for(
+            &record(
+                HookEvent::PreToolUse,
+                json!({"tool_name": "Bash", "tool_input": {"command": "rg API_KEY"}}),
+            ),
+            "Bash",
+        );
+        assert!(matches!(action.action, ActionKind::Tool { .. }));
+        assert_eq!(
+            summary, "Run rg API_KEY",
+            "the person still sees the command"
+        );
     }
 
     #[test]

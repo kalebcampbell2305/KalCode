@@ -67,8 +67,7 @@ test("a provider pane runs the CLI in a PTY and routes its tool calls through Ka
 
   const env = {
     KALCODE_E2E_PICK_FOLDER: project,
-    // Decisions through the engine (debug/e2e builds only; shipped builds keep the provider's
-    // own prompt until the classifier fixes merge).
+    // The default routing (engine), stated explicitly so the test doesn't depend on it.
     KALCODE_E2E_HOOK_DECISIONS: "engine",
     PATH: `${bin};${process.env.PATH ?? ""}`,
   };

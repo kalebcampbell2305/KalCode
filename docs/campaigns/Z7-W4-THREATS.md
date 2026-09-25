@@ -87,8 +87,16 @@ thread status shown to the person; the per-session key.
    status, and returns **no decision**, leaving the call to Claude Code's own permission flow
    and its prompt in the pane (answered by the person) under the deny floor. Only
    `DecisionRouting::Engine` turns hook calls into `ApprovalRequired` events for the Z3 runtime
-   and Z4 engine. The default is `ProviderPrompt`; `Engine` is used by tests and, in debug/e2e
-   builds only, by an explicit test variable.
+   and Z4 engine.
+
+   **Update (2026-09-25):** the classifier hardening merged to main (65fe095,
+   `docs/campaigns/SEC-LATENT.md`), so `Engine` is now the default. The whole feature stays behind
+   the `provider_panes` flag until the Z7-W4 acceptance matrix passes. The classifier's still-open
+   gaps (SEC-LATENT §5) are handled at the bridge by sending those calls as opaque (always an
+   explicit, one-time approval): recursive searches (the Grep tool over a folder, `grep -r`, `rg`,
+   `findstr /s`, `Select-String`/`Get-ChildItem -Recurse`), pipelines, and multi-level wildcards
+   (`session::known_gap`). `ProviderPrompt` remains as a switch (and, in debug/e2e builds,
+   `KALCODE_E2E_HOOK_DECISIONS=provider_prompt`).
 
 ## 4. Threats
 

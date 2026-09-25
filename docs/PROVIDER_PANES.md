@@ -1,7 +1,8 @@
 # Provider panes — design note
 
-Status: **BUILT for Claude Code on `z7/provider-panes`, behind the `provider_panes` feature flag;
-approve/deny through the engine behind a second switch** (`DecisionRouting`, §9). Campaign Z7,
+Status: **BUILT for Claude Code on `z7/provider-panes`, behind the `provider_panes` feature flag.**
+Approve/deny goes through the engine (`DecisionRouting::Engine`, §9) since the classifier
+hardening merged. Campaign Z7,
 writer W4 (`docs/campaigns/ADVANCED.md` §16; evidence in `docs/campaigns/Z7-W4.md`, threat model
 in `docs/campaigns/Z7-W4-THREATS.md`). Researched 2026-09-24 from official provider documentation
 and the installed `--help` output of Claude Code 2.1.282 and codex-cli 0.155.1 (Gemini CLI is not
@@ -246,13 +247,14 @@ provider's prompt only, and KalCode shows PERMISSION REQUIRED without an answer 
 | IPC (`provider_pane_*`) and glue (expiry, first-prompt title) | `apps/desktop/src-tauri/src/provider_pane_commands.rs` |
 | Pane UI (header, status chip, approval overlay, info panel, entry point) | `apps/desktop/src/surfaces/code/panes/**` |
 
-**Decision routing.** `DecisionRouting::ProviderPrompt` (shipped default): every `PreToolUse`
+**Decision routing.** `DecisionRouting::Engine` (default since the classifier hardening merged to
+main, 65fe095): every call becomes `ApprovalRequired` for the Z3 runtime and Z4 engine. Calls whose
+shape the classifier still can't judge (SEC-LATENT §5: recursive searches, pipelines, multi-level
+wildcards) are sent as opaque, so they always need an explicit one-time approval
+(`session::known_gap`). `DecisionRouting::ProviderPrompt` (the switch back): every `PreToolUse`
 still needs an authenticated round trip (so an unreachable KalCode blocks) and is recorded for
-status, but KalCode returns no decision, so Claude Code's own permission flow decides under the
-deny floor. `DecisionRouting::Engine`: every call becomes `ApprovalRequired` for the Z3 runtime and
-Z4 engine. Engine routing is switched on (`DEFAULT_DECISION_ROUTING`) only after the classifier
-fixes on `sec/latent-hardening` merge and are re-reviewed (ADVANCED.md §14b). Debug and `e2e`
-builds can opt in with `KALCODE_E2E_HOOK_DECISIONS=engine` for tests.
+status, but KalCode returns no decision and Claude Code's own permission flow decides under the
+deny floor. Debug and `e2e` builds can choose with `KALCODE_E2E_HOOK_DECISIONS=engine|provider_prompt`.
 
 **Runtime kind until v12.** `threads.runtime_kind` doesn't exist yet (lead, L-2), so the Claude
 Code provider registered with the Z3 runtime is a router: threads created through

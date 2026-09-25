@@ -134,13 +134,15 @@ fn hook_program() -> Option<PathBuf> {
     Some(exe.parent()?.join(HOOK_HELPER))
 }
 
-/// The decision routing for this build: the shipped default, or `engine` in debug and `e2e`
-/// builds when `KALCODE_E2E_HOOK_DECISIONS=engine` (tests of the approval round trip).
+/// The decision routing for this build: the default (the engine decides), or, in debug and
+/// `e2e` builds only, `KALCODE_E2E_HOOK_DECISIONS=engine|provider_prompt` (tests of both paths).
 fn routing() -> DecisionRouting {
-    if crate::environment::TEST_HOOKS_ENABLED
-        && std::env::var("KALCODE_E2E_HOOK_DECISIONS").is_ok_and(|v| v == "engine")
-    {
-        return DecisionRouting::Engine;
+    if crate::environment::TEST_HOOKS_ENABLED {
+        match std::env::var("KALCODE_E2E_HOOK_DECISIONS").as_deref() {
+            Ok("engine") => return DecisionRouting::Engine,
+            Ok("provider_prompt") => return DecisionRouting::ProviderPrompt,
+            _ => {}
+        }
     }
     DEFAULT_DECISION_ROUTING
 }
@@ -504,8 +506,8 @@ mod tests {
     }
 
     #[test]
-    fn shipped_routing_never_decides_through_the_engine_by_default() {
-        // Flip only after the classifier fixes merge (docs/campaigns/Z7-W4-THREATS.md §3.7).
-        assert_eq!(DEFAULT_DECISION_ROUTING, DecisionRouting::ProviderPrompt);
+    fn the_engine_decides_by_default_since_the_classifier_hardening() {
+        // SEC-LATENT merged (main 65fe095); the feature itself stays behind provider_panes.
+        assert_eq!(DEFAULT_DECISION_ROUTING, DecisionRouting::Engine);
     }
 }
