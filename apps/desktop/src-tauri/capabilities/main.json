@@ -55,6 +55,13 @@
     "allow-permission-profiles-list",
     "allow-thread-set-permission-mode",
     "allow-permission-settings-get",
-    "allow-permission-settings-update"
+    "allow-permission-settings-update",
+    "allow-provider-pane-create",
+    "allow-provider-pane-attach",
+    "allow-provider-pane-ack",
+    "allow-provider-pane-detach",
+    "allow-provider-pane-write",
+    "allow-provider-pane-resize",
+    "allow-provider-pane-info"
   ]
 }

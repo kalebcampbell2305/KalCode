@@ -7,6 +7,7 @@ pub mod environment;
 pub mod native_confirm;
 pub mod permission_commands;
 mod provider_commands;
+mod provider_pane_commands;
 mod thread_commands;
 
 use std::collections::HashMap;
@@ -204,6 +205,7 @@ pub fn run(removed_overrides: Vec<String>) {
             {
                 state.drop_subscription(webview.label());
                 code_commands::drop_views(webview);
+                provider_pane_commands::drop_views(webview);
                 if let Some(threads) = webview.try_state::<ThreadsState>() {
                     threads.drop_stream(webview.label());
                 }
@@ -215,6 +217,8 @@ pub fn run(removed_overrides: Vec<String>) {
             #[cfg(any(debug_assertions, feature = "e2e"))]
             app.add_capability(include_str!("../test-capabilities/test-hooks.json"))?;
             let state = start(app, &removed_overrides);
+            // Z7-W4: before the thread runtime, so Claude Code is registered with its router.
+            let panes = provider_pane_commands::ProviderPanesState::start(&state);
             let providers = provider_commands::ProviderState::from_process();
             // Z4 over Z1 (workspace roots) and Z3 (thread modes, bound once the runtime starts).
             let modes = Arc::new(thread_commands::ThreadModes::default());
@@ -235,10 +239,12 @@ pub fn run(removed_overrides: Vec<String>) {
                 permissions.service(),
                 &modes,
             );
+            panes.bind(permissions.service().as_ref(), threads.runtime().ok());
             app.manage(state);
             app.manage(providers);
             app.manage(permissions);
             app.manage(threads);
+            app.manage(panes);
 
             // Safety net: the frontend shows the window after its first themed paint
             // (`window_ready`). If that never happens, show it anyway so the user is never
@@ -305,6 +311,13 @@ pub fn run(removed_overrides: Vec<String>) {
             permission_commands::thread_set_permission_mode,
             permission_commands::permission_settings_get,
             permission_commands::permission_settings_update,
+            provider_pane_commands::provider_pane_create,
+            provider_pane_commands::provider_pane_attach,
+            provider_pane_commands::provider_pane_ack,
+            provider_pane_commands::provider_pane_detach,
+            provider_pane_commands::provider_pane_write,
+            provider_pane_commands::provider_pane_resize,
+            provider_pane_commands::provider_pane_info,
             #[cfg(any(debug_assertions, feature = "e2e"))]
             permission_commands::test_permission_probe,
         ])
@@ -326,6 +339,9 @@ pub fn run(removed_overrides: Vec<String>) {
             // shutdown; their threads become `interrupted`, resumable.
             if let Some(threads) = handle.try_state::<ThreadsState>() {
                 threads.shutdown();
+            }
+            if let Some(panes) = handle.try_state::<provider_pane_commands::ProviderPanesState>() {
+                panes.shutdown();
             }
             if let Some(core) = &state.core {
                 core.shutdown();

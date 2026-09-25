@@ -54,6 +54,14 @@ const COMMANDS: &[&str] = &[
     "thread_set_permission_mode",
     "permission_settings_get",
     "permission_settings_update",
+    // Z7-W4: provider panes (behind the provider_panes feature flag).
+    "provider_pane_create",
+    "provider_pane_attach",
+    "provider_pane_ack",
+    "provider_pane_detach",
+    "provider_pane_write",
+    "provider_pane_resize",
+    "provider_pane_info",
 ];
 
 /// Test hooks. Declared (and so given an `allow-*` permission) only when the target build has
