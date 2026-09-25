@@ -1,0 +1,56 @@
+---
+/**
+ * The living KalCode orb: the brand symbol (assets/branding/kalcode-icon, never redrawn) fed by
+ * an energy stream rising from below the hero, lit from inside along its own orbits and nodes.
+ *
+ * Decorative (aria-hidden): the page headline carries the meaning. Renders a finished still
+ * without JavaScript or with reduced motion; upgrades to WebGL (src/scripts/hero) when allowed,
+ * with a CSS fallback when WebGL is unavailable. Use one per page: it is the site's only
+ * continuously moving element.
+ *
+ * Layout: fills its box. The orb sits at the top centre; the stream runs from the box's bottom
+ * edge into the sphere, so put it in a cell that reaches the bottom of the hero. Tune with
+ * `--hero-orb-max` (largest diameter) and `--hero-orb-top` (space above the orb).
+ */
+import "../../styles/hero.css";
+
+interface Props {
+  /** "full": fills its cell (home hero). "compact": a self-sized block, 1 : 1.28. */
+  size?: "full" | "compact";
+}
+
+const { size = "full" } = Astro.props;
+const full = size === "full";
+const base = "/assets/hero/orb";
+const widths = [512, 768, 1024];
+const srcset = (format: "avif" | "webp") => widths.map((w) => `${base}-${w}.${format} ${w}w`).join(", ");
+const sizes = full ? "(max-width: 760px) 92vw, min(46vw, 680px)" : "min(92vw, 360px)";
+---
+<div class={`hero-orb hero-orb--${size}`} data-hero-orb aria-hidden="true">
+  <div class="hero-orb__frame">
+    <div class="hero-orb__beam">
+      <span class="hero-orb__glow"></span>
+      <span class="hero-orb__surge"></span>
+    </div>
+    <div class="hero-orb__stage" data-hero-orb-stage>
+      <picture>
+        <source type="image/avif" srcset={srcset("avif")} sizes={sizes} />
+        <source type="image/webp" srcset={srcset("webp")} sizes={sizes} />
+        <img
+          class="hero-orb__poster"
+          src={`${base}-768.webp`}
+          width="1024"
+          height="1024"
+          alt=""
+          decoding="async"
+          loading={full ? "eager" : "lazy"}
+          fetchpriority={full ? "high" : "auto"}
+        />
+      </picture>
+    </div>
+  </div>
+</div>
+
+<script>
+  import "../../scripts/hero/orb";
+</script>
