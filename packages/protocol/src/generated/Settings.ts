@@ -7,6 +7,7 @@ export type Settings = { theme: ThemePreference, motion: MotionPreference, densi
 /**
  * The name the returning-user home greets (`profile.displayName`, Z7-W2). Set only by the
  * user in Settings; KalCode never reads the operating system's account name. `None` when
- * unset (the home then says "Welcome back.").
+ * unset (the home then says "Welcome back."); omitted from the JSON then, so the field is
+ * optional for every consumer.
  */
-displayName: string | null, };
+displayName?: string, };

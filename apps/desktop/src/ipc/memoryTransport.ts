@@ -17,6 +17,8 @@
  *   busy | empty | approvals-flood | errors | loading
  *                      — Dashboard data scenarios (see ./memory/dashboard.ts)
  *   kalvoice-*         — KalVoice scenarios (see ./memoryKalVoice.ts, a labelled test double)
+ *   rail | home        — many workspaces (pinned, a folder group, archived, a missing folder) with
+ *                        threads across providers; `home` also sets a display name (./memory/rail.ts)
  *
  * Commands that no merged campaign registers natively yet are rejected exactly the way Tauri
  * rejects them (Dashboard scenarios implement those contract commands as fixtures).
@@ -49,6 +51,7 @@ import {
 } from "./memory/dashboard.ts";
 import { createPanesMemory, type PaneControls } from "./memory/panes.ts";
 import { createPermissionMemory, type PermissionMemory } from "./memory/permissions.ts";
+import { createRailMemory } from "./memory/rail.ts";
 import { createThreadsMemory } from "./memory/threads.ts";
 import { createMemoryKalVoice, isKalVoiceScenario, type KalVoiceScenario } from "./memoryKalVoice.ts";
 import { detectFake, type ProviderScenario, providerCatalog } from "./memoryProviders.ts";
@@ -63,6 +66,8 @@ export type MemoryScenario =
   | "threads"
   | "no-providers"
   | "approvals"
+  | "rail"
+  | "home"
   | ProviderScenario
   | DashboardScenario
   | KalVoiceScenario;
@@ -107,14 +112,53 @@ const SETTINGS_KEYS: Record<keyof Settings, string> = {
   motion: "appearance.motion",
   density: "appearance.density",
   sidebarCollapsed: "layout.sidebarCollapsed",
+  displayName: "profile.displayName",
 };
 
-const PATCH_VALUES: Record<keyof Settings, readonly unknown[]> = {
+const PATCH_VALUES: Record<Exclude<keyof Settings, "displayName">, readonly unknown[]> = {
   theme: ["system", "light", "dark"],
   motion: ["system", "reduced", "full"],
   density: ["comfortable", "compact"],
   sidebarCollapsed: [true, false],
 };
+
+/** Mirrors `normalize_display_name` (crates/native-core/src/settings.rs). */
+function normalizeDisplayName(raw: unknown): string | null {
+  if (typeof raw !== "string") {
+    throw {
+      category: "internal",
+      code: "ipc_rejected",
+      message: "KalCode couldn't complete that request.",
+      retryable: false,
+    };
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if ([...trimmed].length > 60) {
+    throw {
+      category: "validation",
+      code: "display_name_too_long",
+      message: "Your display name can be at most 60 characters.",
+      retryable: false,
+    };
+  }
+  const invisible = (c: number) =>
+    c <= 0x1f ||
+    (c >= 0x7f && c <= 0x9f) ||
+    (c >= 0x200b && c <= 0x200f) ||
+    (c >= 0x202a && c <= 0x202e) ||
+    (c >= 0x2066 && c <= 0x2069) ||
+    c === 0xfeff;
+  if ([...trimmed].some((ch) => invisible(ch.codePointAt(0) ?? 0))) {
+    throw {
+      category: "validation",
+      code: "display_name_invalid",
+      message: "Your display name can't contain control or invisible formatting characters.",
+      retryable: false,
+    };
+  }
+  return trimmed;
+}
 
 function fail(error: IpcError): never {
   throw error;
@@ -157,7 +201,12 @@ export function createMemoryTransport(
       features: PRODUCT_FEATURES.map((id) => ({ id, state: "gated", visible: true })),
     },
   };
-  let settings: Settings = { theme: "dark", motion: "system", density: "comfortable", sidebarCollapsed: false };
+  let settings: Settings = {
+    theme: "dark",
+    motion: "system",
+    density: "comfortable",
+    sidebarCollapsed: false,
+  };
   const events: EventEnvelope[] = [];
   const subscribers = new Set<(event: EventEnvelope) => void>();
   let lastCheck: { at: string; ok: boolean; backend: string } | null = null;
@@ -308,6 +357,23 @@ export function createMemoryTransport(
       expireForThread: (threadId) => permissions.expireForThread(threadId),
     },
   );
+  // Session Locator, rail, home and the Z6a read-only commands (Z7-W2).
+  const rail = createRailMemory({
+    scenario,
+    emit,
+    events: () => events,
+    requireCore,
+    settings: () => settings,
+    setDisplayName: (displayName) => {
+      settings = { ...settings, displayName };
+    },
+    workspaceHandlers: code.handlers,
+    queueFolders: code.queueFolders,
+    makeUnavailable: code.makeUnavailable,
+    threadHandlers: threads.handlers,
+    seedThread: (summary) => threads.seedFixture(summary),
+    providers: () => providers,
+  });
   // Provider panes (Z7-W4) hold their tool calls until the person answers, like native.
   const panes = createPanesMemory({ requireCore, threads, permissions, beforeCreate: ensureDetected });
   answer = (view) => {
@@ -320,6 +386,7 @@ export function createMemoryTransport(
     ...threads.handlers,
     ...permissions.handlers,
     ...panes.handlers,
+    ...rail.handlers,
     // Like native: the first thread operation detects providers once, so threads use exactly
     // the providers detection reports usable.
     thread_options: async (args) => {
@@ -342,10 +409,15 @@ export function createMemoryTransport(
     },
     settings_update: (args) => {
       requireCore();
-      const patch = (args.patch ?? {}) as Record<string, unknown>;
+      const patch = { ...((args.patch ?? {}) as Record<string, unknown>) };
+      // The display name is free text: validated like native, "" clears it.
+      const nameGiven = patch.displayName !== undefined;
+      const nextName = nameGiven ? normalizeDisplayName(patch.displayName) : null;
+      delete patch.displayName;
       // Mirrors native serde: unknown fields and invalid values are rejected before anything runs.
       for (const [key, value] of Object.entries(patch)) {
-        const allowed = PATCH_VALUES[key as keyof Settings];
+        if (key === "displayName") continue;
+        const allowed = PATCH_VALUES[key as Exclude<keyof Settings, "displayName">];
         if (!allowed || (value !== undefined && !allowed.includes(value as never))) {
           fail({
             category: "internal",
@@ -359,7 +431,7 @@ export function createMemoryTransport(
         keyof Settings,
         never,
       ][];
-      if (entries.length === 0) {
+      if (entries.length === 0 && !nameGiven) {
         fail({
           category: "validation",
           code: "empty_settings_patch",
@@ -367,10 +439,15 @@ export function createMemoryTransport(
           retryable: false,
         });
       }
-      const changed = entries.filter(([key, value]) => settings[key] !== value);
+      const changed = entries.filter(([key, value]) => settings[key] !== value).map(([key]) => SETTINGS_KEYS[key]);
       settings = { ...settings, ...Object.fromEntries(entries) };
+      if (nameGiven && (settings.displayName ?? null) !== nextName) {
+        changed.push(SETTINGS_KEYS.displayName);
+        const { displayName: _previous, ...rest } = settings;
+        settings = nextName === null ? rest : { ...rest, displayName: nextName };
+      }
       if (changed.length > 0) {
-        emit({ type: "settings.changed", payload: { keys: changed.map(([key]) => SETTINGS_KEYS[key]) } });
+        emit({ type: "settings.changed", payload: { keys: changed } });
       }
       return settings;
     },
@@ -571,6 +648,8 @@ function readScenario(): MemoryScenario {
     value === "threads" ||
     value === "no-providers" ||
     value === "approvals" ||
+    value === "rail" ||
+    value === "home" ||
     isDashboardScenario(value)
   ) {
     return value;

@@ -23,13 +23,13 @@ firstRun: boolean,
  */
 lastSession: Array<RecentWorkItem>, 
 /**
- * What's running now.
+ * What's running now (most recent first, at most 8; `running_count` is the full number).
  */
-running: Array<RecentWorkItem>, 
+running: Array<RecentWorkItem>, runningCount: number, 
 /**
- * What needs me: permission required, waiting for me, failed.
+ * What needs me: permission required, waiting for me, failed (at most 8).
  */
-needsYou: Array<RecentWorkItem>, 
+needsYou: Array<RecentWorkItem>, needsYouCount: number, 
 /**
  * What finished since my last visit (`home.lastSeenSeq`).
  */

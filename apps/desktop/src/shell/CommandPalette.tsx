@@ -11,6 +11,7 @@ import {
   Monitor,
   Moon,
   PanelLeft,
+  PanelsLeftBottom,
   Rows3,
   Search,
   SquareTerminal,
@@ -24,7 +25,13 @@ import { CODE_SHORTCUT_LABELS } from "../surfaces/code/shortcuts.ts";
 import { useDiagnosticsActions } from "../surfaces/settings/useDiagnosticsActions.ts";
 import { useThreadsIntent } from "../surfaces/threads/intent.tsx";
 import styles from "./CommandPalette.module.css";
-import { PRIMARY_ORDER, SURFACES, useNavigation } from "./navigation.tsx";
+import { PRIMARY_ORDER, SURFACES, useNavigation, VIEWS, viewVisible } from "./navigation.tsx";
+import { useOptionalRail } from "./rail/RailProvider.tsx";
+import { RAIL_SHORTCUT } from "./rail/WorkspaceRail.tsx";
+import { LocatorFilterBar, LocatorResultItems } from "./rail/search/LocatorResults.tsx";
+import { useSearch } from "./rail/search/SearchProvider.tsx";
+import { useLocatorSearch } from "./rail/search/useLocatorSearch.ts";
+import { useOpenLocated } from "./rail/search/useOpenLocated.ts";
 import { MOD_LABEL } from "./shortcuts.ts";
 
 interface CommandPaletteProps {
@@ -39,6 +46,13 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const kalvoice = useOptionalKalVoice();
   const workspaces = useWorkspaces();
   const threadsIntent = useThreadsIntent();
+  // Z7-W2: typed text also searches the Session Locator (threads, workspaces, terminals, …).
+  const search = useSearch();
+  const rail = useOptionalRail();
+  const locator = useLocatorSearch(search.query, { kinds: search.kinds, limit: 12, enabled: open });
+  const openLocated = useOpenLocated();
+  const searching = search.query.trim() !== "";
+  const located = locator.response?.results.items.length ?? 0;
 
   const run = (action: () => unknown) => () => {
     onOpenChange(false);
@@ -48,6 +62,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
 
   const visible = new Set(info.flags.surfaces.filter((f) => f.visible).map((f) => f.id));
   const destinations = [...PRIMARY_ORDER, "settings" as const].filter((id): id is SurfaceId => visible.has(id));
+  const views = (["home", "folder"] as const).filter((view) => viewVisible(view, info.flags.features));
 
   return (
     <Command.Dialog
@@ -59,9 +74,22 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       className={styles.command}
       loop
     >
-      <Command.Input className={styles.input} placeholder="Search commands and destinations" />
+      <Command.Input
+        className={styles.input}
+        placeholder="Search threads, workspaces and commands"
+        value={search.query}
+        onValueChange={search.setQuery}
+        maxLength={256}
+      />
+      {searching ? <LocatorFilterBar state={locator} kinds={search.kinds} onKinds={search.setKinds} /> : null}
       <Command.List className={styles.list}>
-        <Command.Empty className={styles.empty}>No matching commands.</Command.Empty>
+        {searching ? (
+          <LocatorResultItems
+            state={locator}
+            onOpen={(item) => run(() => openLocated(item.kind, item.entityId, "palette"))()}
+          />
+        ) : null}
+        {located > 0 ? null : <Command.Empty className={styles.empty}>No matching commands.</Command.Empty>}
 
         {visible.has("threads") ? (
           <Command.Group heading="Threads" className={styles.group}>
@@ -87,6 +115,15 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         ) : null}
 
         <Command.Group heading="Go to" className={styles.group}>
+          {views.map((id) => {
+            const meta = VIEWS[id];
+            const Icon = meta.icon;
+            return (
+              <Item key={id} icon={<Icon />} onSelect={run(() => navigate(id))} keywords={[meta.summary]}>
+                {meta.label}
+              </Item>
+            );
+          })}
           {destinations.map((id) => {
             const meta = SURFACES[id];
             const Icon = meta.icon;
@@ -161,6 +198,16 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
           >
             {settings.sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
           </Item>
+          {rail?.enabled ? (
+            <Item
+              icon={<PanelsLeftBottom />}
+              onSelect={run(rail.toggleHidden)}
+              shortcut={RAIL_SHORTCUT}
+              keywords={["workspaces", "rail", "projects"]}
+            >
+              {rail.hidden ? "Show the workspace rail" : "Hide the workspace rail"}
+            </Item>
+          ) : null}
         </Command.Group>
 
         {kalvoice?.status ? (

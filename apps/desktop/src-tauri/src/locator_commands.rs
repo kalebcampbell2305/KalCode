@@ -338,9 +338,10 @@ pub async fn rail_group_reorder(
 pub async fn home_summary(
     locator: State<'_, LocatorState>,
     local_hour: u8,
+    visit: bool,
 ) -> Result<HomeSummary, IpcError> {
     let locator = Arc::clone(locator.locator()?);
-    blocking("home_summary", move || locator.home_summary(local_hour)).await
+    blocking("home_summary", move || locator.home_summary(local_hour, visit)).await
 }
 
 #[tauri::command(async)]

@@ -276,7 +276,7 @@ fn greeting_uses_only_the_settings_display_name() {
     let locator = Locator::start(core.clone(), sources).expect("start");
 
     // No name set: exactly "Welcome back." (the OS account name is never used).
-    let summary = locator.home_summary(9).unwrap();
+    let summary = locator.home_summary(9, true).unwrap();
     assert_eq!(summary.greeting, "Welcome back.");
     assert_eq!(summary.display_name, None);
     assert!(!summary.first_run);
@@ -292,7 +292,7 @@ fn greeting_uses_only_the_settings_display_name() {
     .unwrap();
     let mut shown: Vec<String> = Vec::new();
     for _ in 0..30 {
-        let greeting = locator.home_summary(10).unwrap().greeting;
+        let greeting = locator.home_summary(10, true).unwrap().greeting;
         assert!(greeting.contains("Kaleb"), "{greeting}");
         let last_five: Vec<&String> = shown.iter().rev().take(5).collect();
         assert!(
@@ -302,14 +302,19 @@ fn greeting_uses_only_the_settings_display_name() {
         shown.push(greeting);
     }
 
+    // A live refresh keeps the greeting on screen; the next visit rotates.
+    let shown_now = locator.home_summary(10, true).unwrap().greeting;
+    assert_eq!(locator.home_summary(10, false).unwrap().greeting, shown_now);
+    assert_ne!(locator.home_summary(10, true).unwrap().greeting, shown_now);
+
     // Cleared: back to "Welcome back.".
     core.update_settings(&SettingsPatch {
         display_name: Some(String::new()),
         ..SettingsPatch::default()
     })
     .unwrap();
-    assert_eq!(locator.home_summary(22).unwrap().greeting, "Welcome back.");
-    assert_eq!(locator.home_summary(24).unwrap_err().code, "invalid_hour");
+    assert_eq!(locator.home_summary(22, true).unwrap().greeting, "Welcome back.");
+    assert_eq!(locator.home_summary(24, true).unwrap_err().code, "invalid_hour");
     locator.shutdown();
 }
 
@@ -320,7 +325,7 @@ fn home_summary_is_real_state_only() {
     {
         let core = core_with_v10(dir.path());
         let locator = Locator::start(core.clone(), FakeSources::new()).expect("start");
-        let summary = locator.home_summary(9).unwrap();
+        let summary = locator.home_summary(9, true).unwrap();
         assert!(summary.first_run);
         assert_eq!(summary.greeting, "Welcome to KalCode.");
         assert!(summary.last_session.is_empty());
@@ -387,7 +392,7 @@ fn home_summary_is_real_state_only() {
         }
         let locator = Locator::start(core.clone(), sources.clone()).expect("start");
         // Visiting home during session 2 sets the watermark before the completion.
-        let _ = locator.home_summary(9).unwrap();
+        let _ = locator.home_summary(9, true).unwrap();
         locator.shutdown();
         core.emit(NewEvent::core(EventPayload::ThreadCompleted {
             thread_id: done.id.clone(),
@@ -399,7 +404,7 @@ fn home_summary_is_real_state_only() {
     // Session 3: the returning visit.
     let core = core_with_v10(dir.path());
     let locator = Locator::start(core.clone(), sources).expect("start");
-    let summary = locator.home_summary(9).unwrap();
+    let summary = locator.home_summary(9, true).unwrap();
     assert!(!summary.first_run);
     assert_eq!(summary.greeting, "Welcome back.");
     let names = |items: &[kalcode_locator::RecentWorkItem]| {
@@ -422,7 +427,7 @@ fn home_summary_is_real_state_only() {
     // The list stays stable within the session (StrictMode double calls, re-renders)...
     assert_eq!(
         locator
-            .home_summary(9)
+            .home_summary(9, true)
             .unwrap()
             .finished_since_last_visit
             .len(),
@@ -437,7 +442,7 @@ fn home_summary_is_real_state_only() {
     let locator = Locator::start(core.clone(), FakeSources::new()).expect("start");
     assert!(
         locator
-            .home_summary(9)
+            .home_summary(9, true)
             .unwrap()
             .finished_since_last_visit
             .is_empty()

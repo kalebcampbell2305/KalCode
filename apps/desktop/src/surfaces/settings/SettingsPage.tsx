@@ -11,6 +11,7 @@ import { useDiagnostics } from "../../runtime/useDiagnostics.ts";
 import { KalCodeTagline, Wordmark } from "../../shell/Brand.tsx";
 import { Page } from "../../shell/Page.tsx";
 import { PermissionsSettings } from "../permissions/index.ts";
+import { ProfileSettings } from "./ProfileSettings.tsx";
 import styles from "./SettingsPage.module.css";
 import { useDiagnosticsActions } from "./useDiagnosticsActions.ts";
 
@@ -26,6 +27,7 @@ export function SettingsPage() {
       {/* One column up to wide windows; then permissions get a column of their own. */}
       <div className={styles.layout}>
         <div className={styles.column}>
+          <ProfileSettings />
           <Appearance />
           <KalVoiceSettings />
           <DiagnosticsSection />

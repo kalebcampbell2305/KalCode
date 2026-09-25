@@ -1,10 +1,11 @@
-import { useState } from "react";
 import { FloatingAssistant } from "../kalvoice/FloatingAssistant.tsx";
 import { KalVoicePage } from "../kalvoice/KalVoicePage.tsx";
 import { KalVoiceProvider } from "../kalvoice/KalVoiceProvider.tsx";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { WorkspaceProvider } from "../runtime/WorkspaceProvider.tsx";
 import { CodePage } from "../surfaces/code/CodePage.tsx";
+import { FolderSurface } from "../surfaces/folder/FolderSurface.tsx";
+import { HomeSurface } from "../surfaces/home/HomeSurface.tsx";
 import { useNewTerminalShortcut } from "../surfaces/code/useNewTerminalShortcut.ts";
 import { Dashboard } from "../surfaces/dashboard/Dashboard.tsx";
 import { GatedSurface } from "../surfaces/gated/GatedSurface.tsx";
@@ -15,7 +16,11 @@ import { ThreadsIntentProvider } from "../surfaces/threads/intent.tsx";
 import { ThreadsSurface } from "../surfaces/threads/ThreadsSurface.tsx";
 import { useAppearance } from "./appearance.ts";
 import { CommandPalette } from "./CommandPalette.tsx";
-import { NavigationProvider, SURFACES, useNavigation } from "./navigation.tsx";
+import { destinationMeta, NavigationProvider, useNavigation } from "./navigation.tsx";
+import { RailProvider, useRail } from "./rail/RailProvider.tsx";
+import { useRailShortcut } from "./rail/useRailShortcut.ts";
+import { WorkspaceRail } from "./rail/WorkspaceRail.tsx";
+import { SearchProvider, useSearch } from "./rail/search/SearchProvider.tsx";
 import styles from "./Shell.module.css";
 import { Sidebar } from "./Sidebar.tsx";
 import { useShortcuts } from "./shortcuts.ts";
@@ -27,17 +32,21 @@ export function Shell() {
   const kalvoiceFlag = info.flags.surfaces.find((s) => s.id === "kalvoice");
   const kalvoiceEnabled = Boolean(kalvoiceFlag?.visible && kalvoiceFlag.state !== "gated");
   return (
-    <NavigationProvider flags={info.flags.surfaces}>
+    <NavigationProvider flags={info.flags.surfaces} features={info.flags.features}>
       <WorkspaceProvider>
         <PermissionsProvider>
           <ThreadsIntentProvider>
-            {kalvoiceEnabled ? (
-              <KalVoiceProvider>
-                <ShellLayout kalvoice />
-              </KalVoiceProvider>
-            ) : (
-              <ShellLayout kalvoice={false} />
-            )}
+            <SearchProvider>
+              <RailProvider>
+                {kalvoiceEnabled ? (
+                  <KalVoiceProvider>
+                    <ShellLayout kalvoice />
+                  </KalVoiceProvider>
+                ) : (
+                  <ShellLayout kalvoice={false} />
+                )}
+              </RailProvider>
+            </SearchProvider>
           </ThreadsIntentProvider>
         </PermissionsProvider>
       </WorkspaceProvider>
@@ -48,22 +57,40 @@ export function Shell() {
 function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
   const { settings, updateSettings } = useRuntime();
   const { current } = useNavigation();
-  const [paletteOpen, setPaletteOpen] = useState(false);
+  // Z7-W2: the palette's open state and query are shared (search can open with a query).
+  const { open: paletteOpen, setOpen: setPaletteOpen } = useSearch();
+  const rail = useRail();
 
   useShortcuts({
     openPalette: () => setPaletteOpen(true),
     toggleSidebar: () => void updateSettings({ sidebarCollapsed: !settings.sidebarCollapsed }),
   });
   useNewTerminalShortcut();
+  useRailShortcut();
 
   return (
-    <div className={styles.shell} data-sidebar={settings.sidebarCollapsed ? "collapsed" : "expanded"}>
+    <div
+      className={styles.shell}
+      data-sidebar={settings.sidebarCollapsed ? "collapsed" : "expanded"}
+      data-rail={rail.enabled ? (rail.hidden ? "strip" : "shown") : "none"}
+    >
       <a className={styles.skipLink} href="#main">
         Skip to content
       </a>
       <Sidebar collapsed={settings.sidebarCollapsed} onOpenPalette={() => setPaletteOpen(true)} />
-      <main id="main" className={styles.main} tabIndex={-1} aria-label={SURFACES[current].label} data-surface={current}>
-        {current === "kalvoice" && kalvoice ? (
+      <WorkspaceRail />
+      <main
+        id="main"
+        className={styles.main}
+        tabIndex={-1}
+        aria-label={destinationMeta(current).label}
+        data-surface={current}
+      >
+        {current === "home" ? (
+          <HomeSurface />
+        ) : current === "folder" ? (
+          <FolderSurface />
+        ) : current === "kalvoice" && kalvoice ? (
           <KalVoicePage />
         ) : current === "dashboard" ? (
           <Dashboard />

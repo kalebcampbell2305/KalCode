@@ -75,7 +75,26 @@ export type CommandName =
   | "provider_pane_detach"
   | "provider_pane_write"
   | "provider_pane_resize"
-  | "provider_pane_info";
+  | "provider_pane_info"
+  // Session Locator, rail, home, recent work, workspace actions (Z7-W2)
+  | "locator_search"
+  | "locator_open"
+  | "rail_state"
+  | "rail_update"
+  | "rail_section_set"
+  | "rail_group_create"
+  | "rail_group_update"
+  | "rail_group_delete"
+  | "rail_group_reorder"
+  | "home_summary"
+  | "recent_work"
+  | "workspace_reveal"
+  | "workspace_create"
+  // Z6a read-only (the folder surface, Z7-W2)
+  | "files_list"
+  | "git_status"
+  | "git_log"
+  | "git_branches";
 
 export type Unsubscribe = () => Promise<void>;
 

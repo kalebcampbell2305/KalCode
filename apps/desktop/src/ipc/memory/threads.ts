@@ -56,6 +56,11 @@ export interface ThreadsMemory {
   createPaneThread(args: Record<string, unknown>, onStop: () => void): ThreadSummary;
   /** A pane's hook or process signal changed the thread's status (the one status machine). */
   setPaneStatus(threadId: string, status: ThreadStatus, activity: string | null, pendingApprovals?: number): void;
+  /**
+   * Fixture history for other surfaces' ui-test scenarios (Z7-W2 rail and home): adds a thread
+   * with no live session, as if it had run earlier. Returns its summary.
+   */
+  seedFixture(summary: ThreadSummary, conversation?: [ThreadMessage["role"], string][]): ThreadSummary;
 }
 
 const PROVIDERS: ProviderOption[] = [
@@ -788,6 +793,29 @@ export function createThreadsMemory(
       for (const t of threads.values()) {
         if (t.pendingRequest === requestId && t.live) continueAfterApproval(t, approved);
       }
+    },
+    seedFixture(fixture, conversation = []) {
+      const id = fixture.id;
+      threads.set(id, {
+        summary: fixture,
+        messages: conversation.map(([role, content], i) => ({
+          id: uuid(),
+          threadId: id,
+          role,
+          content,
+          createdAt: new Date(new Date(fixture.createdAt).getTime() + i * 60_000).toISOString(),
+        })),
+        tools: [],
+        live: false,
+        timers: [],
+        buffers: new Map(),
+        providerSessionId: fixture.resumable ? `session-${id.slice(0, 8)}` : null,
+        readThrough: conversation.length,
+        archived: fixture.archivedAt !== null,
+        resumeStatus: null,
+        pendingRequest: null,
+      });
+      return fixture;
     },
   };
 }

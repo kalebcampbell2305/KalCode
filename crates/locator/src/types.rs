@@ -316,7 +316,7 @@ pub struct RailGroupView {
     pub workspaces: Vec<WorkspaceRailEntry>,
 }
 
-/// The rail's fixed sections, which can be collapsed.
+/// The rail's fixed sections, which can be collapsed — and `rail`, the whole rail column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
@@ -325,6 +325,8 @@ pub enum RailSection {
     Recent,
     Folders,
     Archived,
+    /// The rail column itself (hidden with Ctrl+Shift+B).
+    Rail,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -427,10 +429,12 @@ pub struct HomeSummary {
     pub first_run: bool,
     /// What was I working on: threads and workspaces active in the previous session.
     pub last_session: Vec<RecentWorkItem>,
-    /// What's running now.
+    /// What's running now (most recent first, at most 8; `running_count` is the full number).
     pub running: Vec<RecentWorkItem>,
-    /// What needs me: permission required, waiting for me, failed.
+    pub running_count: u32,
+    /// What needs me: permission required, waiting for me, failed (at most 8).
     pub needs_you: Vec<RecentWorkItem>,
+    pub needs_you_count: u32,
     /// What finished since my last visit (`home.lastSeenSeq`).
     pub finished_since_last_visit: Vec<RecentWorkItem>,
     /// What can I resume: stopped or paused threads the provider can resume.

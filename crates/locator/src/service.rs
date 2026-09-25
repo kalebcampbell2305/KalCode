@@ -83,6 +83,9 @@ struct Inner {
     rebuilding: AtomicBool,
     /// The "finished since your last visit" baseline for this app session.
     home_baseline: Mutex<Option<i64>>,
+    /// The greeting last shown, with the name and first-run state it was chosen for; live
+    /// refreshes of the home reuse it (a new one is chosen per visit).
+    last_greeting: Mutex<Option<(Option<String>, bool, String)>>,
 }
 
 pub struct Locator {
@@ -117,6 +120,7 @@ impl Locator {
             ready: AtomicBool::new(false),
             rebuilding: AtomicBool::new(false),
             home_baseline: Mutex::new(None),
+            last_greeting: Mutex::new(None),
         });
         let (tx, rx) = mpsc::channel();
         let worker_inner = Arc::clone(&inner);
@@ -547,8 +551,10 @@ impl Locator {
     // Home and recent work
     // ---------------------------------------------------------------------------------------
 
-    /// The returning-user home for a person whose local hour is `local_hour`.
-    pub fn home_summary(&self, local_hour: u8) -> Result<HomeSummary> {
+    /// The returning-user home for a person whose local hour is `local_hour`. `visit` is true
+    /// when the person opens Home (a new greeting is chosen); live refreshes pass false and keep
+    /// the greeting on screen.
+    pub fn home_summary(&self, local_hour: u8, visit: bool) -> Result<HomeSummary> {
         if local_hour > 23 {
             return Err(KalError::validation(
                 "invalid_hour",
@@ -562,24 +568,45 @@ impl Locator {
         let first_run = workspaces.is_empty() && threads.is_empty();
 
         // The greeting (history of the last shown ids in `settings`).
-        let mut history: Vec<String> = state_get(&core.reader(), KEY_GREETINGS)?
-            .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or_default();
-        let seed = OffsetDateTime::now_utc()
-            .unix_timestamp_nanos()
-            .unsigned_abs() as u64;
-        let (greeting_id, greeting) = home::choose(
-            local_hour,
-            display_name.as_deref(),
-            first_run,
-            &history,
-            seed ^ (history.len() as u64).wrapping_mul(0x9E37_79B9),
-        );
-        if let Some(id) = greeting_id {
-            home::remember(&mut history, id);
-            let value = serde_json::to_value(&history)?;
-            core.write_with_events(|tx| Ok((state_set(tx, KEY_GREETINGS, &value)?, Vec::new())))?;
-        }
+        let kept = {
+            let last = lock(&self.inner.last_greeting);
+            match last.as_ref() {
+                Some((name, first, text))
+                    if !visit && *name == display_name && *first == first_run =>
+                {
+                    Some(text.clone())
+                }
+                _ => None,
+            }
+        };
+        let greeting = match kept {
+            Some(text) => text,
+            None => {
+                let mut history: Vec<String> = state_get(&core.reader(), KEY_GREETINGS)?
+                    .and_then(|v| serde_json::from_value(v).ok())
+                    .unwrap_or_default();
+                let seed = OffsetDateTime::now_utc()
+                    .unix_timestamp_nanos()
+                    .unsigned_abs() as u64;
+                let (greeting_id, greeting) = home::choose(
+                    local_hour,
+                    display_name.as_deref(),
+                    first_run,
+                    &history,
+                    seed ^ (history.len() as u64).wrapping_mul(0x9E37_79B9),
+                );
+                if let Some(id) = greeting_id {
+                    home::remember(&mut history, id);
+                    let value = serde_json::to_value(&history)?;
+                    core.write_with_events(|tx| {
+                        Ok((state_set(tx, KEY_GREETINGS, &value)?, Vec::new()))
+                    })?;
+                }
+                *lock(&self.inner.last_greeting) =
+                    Some((display_name.clone(), first_run, greeting.clone()));
+                greeting
+            }
+        };
 
         let by_id: HashMap<&str, &ThreadSummary> =
             threads.iter().map(|t| (t.id.as_str(), t)).collect();
@@ -653,7 +680,9 @@ impl Locator {
             first_run,
             last_session,
             running,
+            running_count: count_where(&threads, |t| crate::rail::is_working(t.status)),
             needs_you,
+            needs_you_count: count_where(&threads, |t| crate::rail::needs_you(t.status)),
             finished_since_last_visit: finished,
             resumable,
             recent_workspaces,
@@ -710,6 +739,16 @@ impl Locator {
         page_of(&items, page)
             .map_err(|e| KalError::validation(e.code(), "That page isn't available."))
     }
+}
+
+fn count_where(threads: &[ThreadSummary], pred: impl Fn(&ThreadSummary) -> bool) -> u32 {
+    u32::try_from(
+        threads
+            .iter()
+            .filter(|t| t.archived_at.is_none() && pred(t))
+            .count(),
+    )
+    .unwrap_or(u32::MAX)
 }
 
 impl Drop for Locator {
