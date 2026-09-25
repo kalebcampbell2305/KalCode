@@ -140,7 +140,6 @@ fn real_codex_interactive_smoke() {
             _ => {}
         }
     }
-    use kalcode_contracts::agent::AgentSession as _;
     session.terminate().expect("terminate");
     assert!(
         !work.path().join("smoke.txt").exists(),
