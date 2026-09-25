@@ -5,8 +5,8 @@
 
 use kalcode_contracts::agent::ProviderId;
 use kalcode_contracts::permissions::{
-    ActionKind, NormalizedAction, PermissionMode as M, PermissionScope as S, PolicyDecision,
-    PolicyEffect,
+    ActionKind, NormalizedAction, PermissionMode as M, PermissionProfile, PermissionRule,
+    PermissionScope as S, PolicyDecision, PolicyEffect, RuleEffect,
 };
 use kalcode_permissions::classify::classify;
 use kalcode_permissions::paths::Workspace;
@@ -121,6 +121,40 @@ const WORDS: &[&str] = &[
     "gh",
     "pr",
     "create",
+    // Dialect-specific syntax (SEC-LATENT): every shell's quoting, escaping and separators.
+    "@",
+    "%X%",
+    "!X!",
+    "$'",
+    "\\x72",
+    "${X:-",
+    "\u{2018}",
+    "\u{2019}",
+    "\u{201C}",
+    "\u{201D}",
+    "\u{2013}Recurse",
+    "\u{2014}r",
+    "-Recurse:$true",
+    "Remove-Item",
+    "ri",
+    "rd",
+    "/s/q",
+    "<#",
+    "#>",
+    "--%",
+    "{rm,-rf,src}",
+    "@{e={",
+    "ForEach-Object{",
+    "$env:API_KEY",
+    "--rec",
+    "--forc",
+    "-O",
+    "--upload-pack=x",
+    "--ext-diff",
+    ".en*",
+    "*.pem",
+    ",",
+    "\r\n",
 ];
 
 fn random_command(rng: &mut Rng) -> String {
@@ -185,7 +219,7 @@ fn random_commands_never_break_the_invariants() {
     std::fs::create_dir_all(dir.path().join("src")).expect("mkdir");
     let ws = Workspace::new(Some(dir.path()));
     let mut rng = Rng(0x5eed_cafe_f00d_1234);
-    for _ in 0..3000 {
+    for _ in 0..6000 {
         let text = random_command(&mut rng);
         let kind = ActionKind::Command {
             command: text.clone(),
@@ -321,4 +355,182 @@ fn random_paths_are_inside_only_when_they_really_are() {
             );
         }
     }
+}
+
+/// A Custom profile that denies destructive actions.
+fn deny_destructive() -> PermissionProfile {
+    PermissionProfile {
+        id: "deny-destructive".into(),
+        name: "No destructive actions".into(),
+        mode: M::Custom,
+        rules: vec![PermissionRule {
+            scope: S::Destructive,
+            effect: RuleEffect::Deny,
+            matcher: None,
+        }],
+        builtin: false,
+    }
+}
+
+/// Deny wins: a destructive command joined to anything by a separator that **any** shell honours
+/// (bash, cmd.exe or PowerShell), and dressed in any dialect's quoting or escaping, is denied by a
+/// deny rule — never allowed or merely asked about — because the most authority-requiring reading
+/// of the text is the one judged.
+#[test]
+fn deny_wins_for_destructive_commands_in_any_dialect() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir_all(dir.path().join("src")).expect("mkdir");
+    let ws = Workspace::new(Some(dir.path()));
+    let profile = deny_destructive();
+    // Prefixes every shell parses as one complete command; each shell adds its own below.
+    let prefixes: &[&str] = &["echo hi", "git status", "ls -la", "cat src/a.txt", ""];
+    // Per shell: (separator, suffix that closes whatever the separator opened) and commands that
+    // shell really runs destructively. Git works in every shell.
+    let git: &[&str] = &[
+        "git push --forc origin main",
+        "git reset --har",
+        "git clean --forc -d",
+    ];
+    let posix: (&[(&str, &str)], &[&str]) = (
+        &[
+            (" ; ", ""),
+            (" && ", ""),
+            (" || ", ""),
+            (" | ", ""),
+            (" & ", ""),
+            ("\n", ""),
+            (" ^& ", ""),
+            (" ^; ", ""),
+            (" ^&^& ", ""),
+            (" $'\\'' ; ", " #'"),
+            (" #'\n", "\necho '"),
+        ],
+        &[
+            "rm -rf src",
+            "rm --rec src",
+            "rsync -a --del src/ dst/",
+            "find . -delete",
+            "{rm,-rf,src}",
+        ],
+    );
+    let cmd: (&[(&str, &str)], &[&str]) = (
+        &[
+            (" & ", ""),
+            (" && ", ""),
+            (" || ", ""),
+            (" | ", ""),
+            ("\n", ""),
+            (" 'x & ", " & echo '"),
+            (" 'x | ", " | echo '"),
+        ],
+        &[
+            "rd /s /q src",
+            "@rd /s /q src",
+            "rd/s/q src",
+            "rmdir /s /q src",
+            "del /s /q src",
+            "rd,/s,/q,src",
+        ],
+    );
+    let powershell: (&[(&str, &str)], &[&str]) = (
+        &[
+            (" ; ", ""),
+            (" | ", ""),
+            ("\n", ""),
+            (" && ", ""),
+            (" <# x #> ; ", ""),
+            (" | ForEach-Object{", "}"),
+            (" @{e={", "}}"),
+            (" \u{201C}it's\u{201D} ; ", ""),
+        ],
+        &[
+            "Remove-Item -Recurse src",
+            "Remove-Item \u{2013}Recurse src",
+            "Remove-Item \u{2014}Recurse src",
+            "Remove-Item -Recurse:$true src",
+            "ri -r src",
+            "& \u{2018}Remove-Item\u{2019} -Recurse src",
+        ],
+    );
+    // Text that only the named shell parses as a complete command (a lone `'` is data to
+    // cmd.exe but opens a quote in bash and PowerShell).
+    let own_prefixes: [&[&str]; 3] = [
+        &["type src/a.txt"],
+        &["echo 'x", "type src\\a.txt"],
+        &["echo \u{201C}it's\u{201D}", "Get-ChildItem src"],
+    ];
+    let shells = [posix, cmd, powershell];
+    let mut rng = Rng(0x0dd_ba11_c0ff_ee00);
+    for _ in 0..4000 {
+        let shell = (rng.next() % 3) as usize;
+        let (separators, destructive) = shells[shell];
+        let prefix = if rng.chance(30) {
+            rng.pick(own_prefixes[shell])
+        } else {
+            rng.pick(prefixes)
+        };
+        let (separator, suffix) = rng.pick(separators);
+        let danger = if rng.chance(20) {
+            rng.pick(git)
+        } else {
+            rng.pick(destructive)
+        };
+        let text = if prefix.is_empty() {
+            (*danger).to_owned()
+        } else {
+            format!("{prefix}{separator}{danger}{suffix}")
+        };
+        let kind = ActionKind::Command {
+            command: text.clone(),
+            argv: vec![],
+            cwd: String::new(),
+        };
+        let c = classify(&kind, &ws);
+        assert!(
+            c.scopes.contains(&S::Destructive) || c.opaque,
+            "{text:?} lost Destructive: {:?} {:?}",
+            c.scopes,
+            c.notes
+        );
+        let a = action(kind);
+        let d = evaluate(
+            &c,
+            &PolicyInput {
+                action: &a,
+                mode: M::Custom,
+                profile: Some(&profile),
+                user_rules: &[],
+                grants: &[],
+                now_ms: 0,
+            },
+        );
+        assert_eq!(d.effect, PolicyEffect::Deny, "{text:?}: {}", d.reason);
+    }
+}
+
+/// Random text built from every dialect's metacharacters never panics, is classified the same
+/// way every time, and stays fast with five readings per command.
+#[test]
+fn random_dialect_soup_never_panics_and_is_deterministic() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ws = Workspace::new(Some(dir.path()));
+    let alphabet: Vec<char> =
+        "abcdrmsqxyz -/\\\"'`^&|;()<>{}[]*?$%!@#,=~\n\t\r:.\u{2018}\u{2019}\u{201C}\u{201D}\u{2013}\u{2014}\u{2012}\u{200B}"
+            .chars()
+            .collect();
+    let mut rng = Rng(0xfeed_face_dead_beef);
+    let started = std::time::Instant::now();
+    for _ in 0..5000 {
+        let len = 1 + (rng.next() % 40) as usize;
+        let text: String = (0..len).map(|_| *rng.pick(&alphabet)).collect();
+        let first = kalcode_permissions::command::classify_command(&text, &[], "", &ws);
+        let second = kalcode_permissions::command::classify_command(&text, &[], "", &ws);
+        assert_eq!(first, second, "{text:?} is not deterministic");
+        assert!(!first.scopes.is_empty(), "{text:?}");
+    }
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(60),
+        "{:?}",
+        started.elapsed()
+    );
 }

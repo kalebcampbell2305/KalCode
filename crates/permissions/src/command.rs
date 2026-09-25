@@ -2,8 +2,12 @@
 //!
 //! Providers report commands as display text (`command`) and, when they can, as an argument
 //! vector (`argv`). KalCode does not know which shell will run the text — bash, cmd.exe or
-//! PowerShell — so the tokenizer accepts the union of their syntax and every ambiguity resolves
-//! toward **more** authority:
+//! PowerShell — so the text is read **under every dialect** (`dialects`: POSIX sh, cmd.exe
+//! and PowerShell, each with its own quoting, escaping, separators and expansions) and also
+//! under a union reading that accepts all of their syntax at once. Every reading is classified
+//! and the results are combined: scopes add up, and any reading that can't be interpreted makes
+//! the command opaque, so the most authority-requiring interpretation always wins. The union
+//! reading's rules:
 //!
 //! * `;`, `&&`, `||`, `|`, `&`, newlines, `(`/`)` and `{`/`}` split commands; every part is
 //!   classified and the scopes are combined.
@@ -21,6 +25,10 @@
 //! Scripts run by a command (`npm test`, `make`, `./build.sh`) are classified as executing code;
 //! KalCode does not look inside them.
 
+mod dialects;
+
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use kalcode_contracts::permissions::PermissionScope as S;
@@ -182,10 +190,14 @@ impl Tokenizer {
             }
             Some('{') => {
                 self.word().expansion = true;
-                match chars[j + 2..].iter().position(|c| *c == '}') {
-                    Some(offset) => {
-                        let end = j + 2 + offset;
+                match closing_brace(chars, j + 2) {
+                    Some(end) => {
                         let text: String = chars[j..=end].iter().collect();
+                        let inner: String = chars[j + 2..end].iter().collect();
+                        // `${X:-$(cmd)}` runs `cmd` when X is unset.
+                        if inner.contains("$(") || inner.contains('`') || inner.contains("<(") {
+                            self.substitutions.push(inner);
+                        }
                         self.word().text.push_str(&text);
                         end + 1
                     }
@@ -217,6 +229,35 @@ impl Tokenizer {
             }
         }
     }
+}
+
+/// From `start` (just after `${`), finds the `}` that closes the expansion, honouring nested
+/// `${…}` and quotes.
+fn closing_brace(chars: &[char], start: usize) -> Option<usize> {
+    let mut depth = 1usize;
+    let mut i = start;
+    let mut quote: Option<char> = None;
+    while i < chars.len() {
+        let c = chars[i];
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None => match c {
+                '\'' | '"' => quote = Some(c),
+                '\\' => i += 1,
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(i);
+                    }
+                }
+                _ => {}
+            },
+        }
+        i += 1;
+    }
+    None
 }
 
 fn find_char(chars: &[char], from: usize, target: char) -> Option<usize> {
@@ -529,6 +570,25 @@ struct Cx<'a> {
     workspace: &'a Workspace,
     base: Base,
     facts: CommandFacts,
+    /// Nested scripts already classified from a given folder: every dialect finds the same
+    /// `bash -c …` / `$(…)` text, and classifying it again adds nothing.
+    seen: HashSet<(String, String)>,
+    /// The current program only lists names (`ls`, `dir`); a glob argument is not a read of
+    /// every file it matches.
+    names_only: bool,
+    resolved: RefCell<HashMap<(String, String), PathInfo>>,
+}
+
+/// The readings every command text gets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reading {
+    /// The union of every shell's syntax, with POSIX backslash escapes.
+    Union,
+    /// The union with backslashes taken literally (cmd.exe/PowerShell paths).
+    UnionWindows,
+    Posix,
+    Cmd,
+    PowerShell,
 }
 
 /// Environment variables that change what a command executes or loads.
@@ -590,6 +650,9 @@ impl<'a> Cx<'a> {
             workspace,
             base: Base::Root,
             facts: CommandFacts::default(),
+            seen: HashSet::new(),
+            names_only: false,
+            resolved: RefCell::new(HashMap::new()),
         };
         if !cwd.trim().is_empty() {
             let info = paths::resolve(workspace, None, cwd);
@@ -653,6 +716,17 @@ impl<'a> Cx<'a> {
     }
 
     fn resolve(&self, raw: &str) -> PathInfo {
+        // Every reading of the text resolves the same paths; the file system is asked once.
+        let key = (format!("{:?}", self.base), raw.to_owned());
+        if let Some(info) = self.resolved.borrow().get(&key) {
+            return info.clone();
+        }
+        let info = self.resolve_uncached(raw);
+        self.resolved.borrow_mut().insert(key, info.clone());
+        info
+    }
+
+    fn resolve_uncached(&self, raw: &str) -> PathInfo {
         match &self.base {
             Base::Root => paths::resolve(self.workspace, None, raw),
             Base::Dir(dir) => paths::resolve(self.workspace, Some(dir), raw),
@@ -685,20 +759,36 @@ impl<'a> Cx<'a> {
         {
             self.opaque("contains control or invisible characters");
         }
-        // Backslashes mean different things to bash and to cmd.exe/PowerShell, so text that
-        // contains one is classified under both readings and the results are combined.
-        let mut variants = vec![(false, tokenize(text, false))];
-        if text.contains('\\') {
-            variants.push((true, tokenize(text, true)));
+        if depth > 0
+            && !self
+                .seen
+                .insert((text.to_owned(), format!("{:?}", self.base)))
+        {
+            // Already classified from this folder by another reading.
+            return None;
         }
+        // Every shell reads the text differently (quotes, escapes, separators, expansions), so
+        // it is classified under each reading and the results are combined: the most
+        // authority-requiring interpretation wins.
+        let mut variants = vec![(Reading::Union, tokenize(text, false))];
+        if text.contains('\\') {
+            variants.push((Reading::UnionWindows, tokenize(text, true)));
+        }
+        variants.push((Reading::Posix, dialects::tokenize_posix(text)));
+        variants.push((Reading::Cmd, dialects::tokenize_cmd(text)));
+        variants.push((Reading::PowerShell, dialects::tokenize_powershell(text)));
         let start = self.base.clone();
         let mut simple_words: Option<Option<Vec<String>>> = None;
-        for (windows, parsed) in &variants {
+        let mut end_base: Option<Option<(String, Base)>> = None;
+        let mut substitutions: Vec<String> = Vec::new();
+        for (reading, parsed) in &variants {
             self.base = start.clone();
             for problem in &parsed.problems {
                 // cmd.exe treats an unterminated quote as data to the end of the line; the
                 // commands before it were still parsed and classified.
-                if *windows && *problem == "has an unterminated quote" {
+                if matches!(reading, Reading::UnionWindows | Reading::Cmd)
+                    && *problem == "has an unterminated quote"
+                {
                     continue;
                 }
                 self.opaque(problem);
@@ -708,7 +798,9 @@ impl<'a> Cx<'a> {
                 self.add(S::TerminalExecute);
             }
             for inner in &parsed.substitutions {
-                self.script(inner, depth + 1);
+                if !substitutions.contains(inner) {
+                    substitutions.push(inner.clone());
+                }
             }
             let mut simple = parsed.segments.len() == 1
                 && parsed.substitutions.is_empty()
@@ -731,7 +823,22 @@ impl<'a> Cx<'a> {
                 Some(previous) if previous == words => Some(previous),
                 Some(_) => Some(None),
             };
+            let end = format!("{:?}", self.base);
+            end_base = match end_base {
+                None => Some(Some((end, self.base.clone()))),
+                Some(Some((previous, base))) if previous == end => Some(Some((previous, base))),
+                Some(_) => Some(None),
+            };
         }
+        for inner in &substitutions {
+            self.base = start.clone();
+            self.script(inner, depth + 1);
+        }
+        // Readings that disagree about the folder the text ends in leave it unknown.
+        self.base = match end_base.flatten() {
+            Some((_, base)) => base,
+            None => Base::Unknown,
+        };
         simple_words.flatten().map(|words| words.join(" "))
     }
 
@@ -754,6 +861,13 @@ impl<'a> Cx<'a> {
 
     /// Classifies one simple command. Returns false when it is not eligible for prefix rules.
     fn segment(&mut self, segment: &Segment, depth: u8) -> bool {
+        for word in segment
+            .words
+            .iter()
+            .chain(segment.redirects.iter().map(|(_, w)| w))
+        {
+            self.variable_reads(word);
+        }
         let mut simple = segment.redirects.is_empty();
         for (kind, target) in &segment.redirects {
             self.redirect(*kind, target);
@@ -796,6 +910,32 @@ impl<'a> Cx<'a> {
                     return;
                 }
                 self.path(target, Access::Write);
+            }
+        }
+    }
+
+    /// A word that expands an environment variable whose name suggests a secret
+    /// (`$OPENAI_API_KEY`, `$env:GH_TOKEN`, `%AWS_SECRET_ACCESS_KEY%`) reads that secret: the
+    /// command can print it or send it somewhere.
+    fn variable_reads(&mut self, word: &Word) {
+        let lower = word.lower();
+        if lower.contains("environmentvariable") || lower == "win32_environment" {
+            self.add(S::CredentialsAccess);
+            self.note("The command reads environment variables, which can hold secrets.");
+        }
+        if !word.expansion {
+            return;
+        }
+        let mut names = dialects::dollar_references(&word.text);
+        names.extend(dialects::percent_references(&word.text));
+        names.extend(dialects::delayed_references(&word.text));
+        for name in names {
+            if dialects::secret_like_variable(&name) {
+                self.add(S::CredentialsAccess);
+                self.note(format!(
+                    "The command reads the environment variable {}, which may hold a secret.",
+                    name.to_ascii_uppercase()
+                ));
             }
         }
     }
@@ -866,6 +1006,10 @@ impl<'a> Cx<'a> {
         if info.credentials {
             self.add(S::CredentialsAccess);
             self.note(format!("{} may contain credentials.", info.display));
+        } else if word.glob && !self.names_only && self.glob_reaches_credentials(text) {
+            // `cat .en*`, `type *.pem`: the shell expands the pattern into credential files.
+            self.add(S::CredentialsAccess);
+            self.note(format!("{text} can match files that contain credentials."));
         }
         match access {
             Access::Read => self.add(S::FilesystemRead),
@@ -874,11 +1018,59 @@ impl<'a> Cx<'a> {
                 if info.git_internal {
                     self.add(S::TerminalExecute);
                     self.note("Changing files inside .git can make Git run code.");
+                    let lower_path = info.display.to_ascii_lowercase();
+                    if lower_path.contains("hooks") || lower_path.ends_with("config") {
+                        self.opaque("writes Git hooks or configuration, which Git runs later");
+                    }
                 }
             }
             Access::Execute => {}
         }
         self.facts.paths.push(info);
+    }
+
+    /// Whether a wildcard argument can expand to a credential file: statically under the POSIX
+    /// dot rule, and against the folder's real entries (PowerShell and cmd.exe let `*` match
+    /// dot files).
+    fn glob_reaches_credentials(&self, pattern: &str) -> bool {
+        if paths::glob_may_match_credentials(pattern) {
+            return true;
+        }
+        let split = pattern.rfind(['/', '\\']);
+        let (parent, last) = match split {
+            Some(p) => (&pattern[..p], &pattern[p + 1..]),
+            None => ("", pattern),
+        };
+        if parent.contains(['*', '?', '[']) || last.is_empty() {
+            return false;
+        }
+        let parent = if parent.is_empty() { "." } else { parent };
+        let info = self.resolve(parent);
+        let (Some(relative), Some(root)) = (&info.relative, self.workspace.root()) else {
+            return false;
+        };
+        if info.outside {
+            return false;
+        }
+        let dir = if relative.is_empty() {
+            root.to_path_buf()
+        } else {
+            root.join(relative)
+        };
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            return false;
+        };
+        // Bounded: a huge folder is not listed in full; the static check above still applies.
+        for entry in entries.take(4096).flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if paths::glob_match(last, &name)
+                && (paths::looks_like_credentials(&name)
+                    || paths::looks_like_credentials(&format!("{name}/x")))
+            {
+                return true;
+            }
+        }
+        false
     }
 
     /// Checks path-looking arguments of a command whose argument meaning KalCode doesn't know.
@@ -1140,17 +1332,23 @@ impl<'a> Cx<'a> {
                 let mut i = 0;
                 while i < args.len() {
                     let lower = args[i].lower();
-                    if lower == "-s" || lower.starts_with("--split-string") {
+                    if (args[i].text.starts_with("-S") || args[i].text.starts_with("-s"))
+                        && !lower.starts_with("--")
+                        || long_option(&lower, "--split-string", 2)
+                    {
                         self.opaque("splits a string into a command");
                         self.add(S::TerminalExecute);
                         return true;
                     }
-                    if matches!(lower.as_str(), "-u" | "-c" | "--unset" | "--chdir") {
-                        if lower == "-c" || lower == "--chdir" {
-                            let target = args.get(i + 1).cloned();
+                    let chdir = lower == "-c" || long_option(&lower, "--chdir", 2);
+                    if chdir || lower == "-u" || long_option(&lower, "--unset", 2) {
+                        // `--chdir=DIR` carries its value; `-C DIR` takes the next word.
+                        let inline = args[i].text.split_once('=').map(|(_, v)| Word::plain(v));
+                        if chdir {
+                            let target = inline.clone().or_else(|| args.get(i + 1).cloned());
                             self.cd(target.as_ref());
                         }
-                        i += 2;
+                        i += if inline.is_some() { 1 } else { 2 };
                         continue;
                     }
                     if args[i].is_flag() {
@@ -1666,6 +1864,22 @@ impl<'a> Cx<'a> {
             "export" | "set" | "declare" | "typeset" | "readonly" | "local" | "setx"
             | "set-variable" | "sv" => {
                 let assignments: Vec<&Word> = args.iter().filter(|a| is_assignment(a)).collect();
+                // `declare -p X`, `export -p`, `typeset -x`: print variables. cmd.exe's
+                // `set PREFIX` prints every variable whose name starts with PREFIX.
+                let prints = matches!(n, "declare" | "typeset" | "export" | "readonly" | "local")
+                    && args.iter().any(|a| {
+                        let l = a.lower();
+                        a.is_flag() && !l.starts_with("--") && l.contains('p')
+                    })
+                    || n == "set"
+                        && args
+                            .iter()
+                            .all(|a| !a.is_flag() && !a.text.starts_with(['+', '/']))
+                        && args.iter().any(|a| !is_assignment(a));
+                if prints {
+                    self.add(S::CredentialsAccess);
+                    self.note("Printing shell variables can reveal secrets.");
+                }
                 if assignments.is_empty()
                     && args.iter().all(|a| a.is_flag())
                     && !matches!(n, "setx" | "set-variable" | "sv")
@@ -1842,7 +2056,7 @@ impl<'a> Cx<'a> {
                 let recursive = args.iter().any(|a| {
                     let l = a.lower();
                     l == "-r"
-                        || l == "--recursive"
+                        || long_option(&l, "--recursive", 3)
                         || (windows && matches!(l.as_str(), "/t" | "/s" | "/r"))
                         || (!l.starts_with("--")
                             && l.starts_with('-')
@@ -2123,11 +2337,68 @@ impl<'a> Cx<'a> {
         let sub = sub.lower();
         let rest = &args[i + 1..];
         let has = |flags: &[&str]| rest.iter().any(|a| flags.contains(&a.lower().as_str()));
+        // Options that add authority also match abbreviated (`--forc`, `--har`): Git's option
+        // parser accepts any unambiguous prefix of a long option.
+        let has_long = |flags: &[&str]| {
+            rest.iter().any(|a| {
+                let l = a.lower();
+                flags
+                    .iter()
+                    .any(|f| l == *f || (f.starts_with("--") && long_option(&l, f, 2)))
+            })
+        };
         let positional: Vec<&Word> = rest.iter().filter(|a| !a.is_flag()).collect();
-        for arg in rest {
-            if let Some(value) = arg.text.strip_prefix("--output=") {
-                self.path(&Word::plain(value), Access::Write);
+        for (index, arg) in rest.iter().enumerate() {
+            let lower = arg.lower();
+            if long_option(&lower, "--output", 3) {
+                match arg.text.split_once('=') {
+                    Some((_, value)) => self.path(&Word::plain(value), Access::Write),
+                    None => {
+                        if let Some(target) = rest.get(index + 1) {
+                            self.path(target, Access::Write);
+                        }
+                    }
+                }
             }
+        }
+        // Options that make Git run a program named on the command line or in configuration:
+        // `--upload-pack=cmd`, `grep -O cmd`, `diff --ext-diff`, `rebase -x cmd`, filters…
+        const EXEC_OPTIONS: &[(&str, usize)] = &[
+            ("--upload-pack", 2),
+            ("--receive-pack", 2),
+            ("--exec", 3),
+            ("--open-files-in-pager", 2),
+            ("--ext-diff", 3),
+            ("--extcmd", 3),
+            ("--tool", 3),
+            ("--to-cmd", 4),
+            ("--cc-cmd", 3),
+            ("--sendmail-cmd", 3),
+            ("--header-cmd", 3),
+            ("--index-filter", 3),
+            ("--tree-filter", 3),
+            ("--msg-filter", 3),
+            ("--env-filter", 3),
+            ("--commit-filter", 3),
+            ("--parent-filter", 3),
+            ("--tag-name-filter", 3),
+        ];
+        let exec_option = rest.iter().any(|a| {
+            let l = a.lower();
+            EXEC_OPTIONS
+                .iter()
+                .any(|(option, min)| long_option(&l, option, *min))
+                || (matches!(sub.as_str(), "grep")
+                    && a.text.starts_with('-')
+                    && !a.text.starts_with("--")
+                    && a.text.contains('O'))
+                || (matches!(sub.as_str(), "clone") && a.text.starts_with("-u"))
+                || (matches!(sub.as_str(), "rebase") && a.text.starts_with("-x"))
+                || (matches!(sub.as_str(), "help") && matches!(l.as_str(), "-w" | "--web"))
+        });
+        if exec_option {
+            self.add(S::TerminalExecute);
+            self.opaque("asks Git to run another program");
         }
         let hooks = |cx: &mut Self| {
             cx.add(S::TerminalExecute);
@@ -2158,7 +2429,7 @@ impl<'a> Cx<'a> {
                 }
             }
             "branch" => {
-                if has(&[
+                if has_long(&[
                     "-d",
                     "--delete",
                     "-m",
@@ -2175,9 +2446,11 @@ impl<'a> Cx<'a> {
                     || rest.iter().any(|a| a.text == "-D" || a.text == "-M")
                 {
                     self.add(S::GitCommit);
-                    if rest.iter().any(|a| {
-                        a.text == "-D" || a.text == "-M" || a.text == "-f" || a.text == "--force"
-                    }) {
+                    if rest
+                        .iter()
+                        .any(|a| a.text == "-D" || a.text == "-M" || a.text == "-f")
+                        || has_long(&["--force"])
+                    {
                         self.add(S::Destructive);
                         self.note("Force-deleting a branch can lose commits.");
                     }
@@ -2199,7 +2472,7 @@ impl<'a> Cx<'a> {
             "tag" => {
                 if positional.is_empty()
                     || has(&["-l", "--list", "-n", "--contains", "--points-at"])
-                        && !has(&["-d", "--delete", "-f"])
+                        && !has_long(&["-d", "--delete", "-f", "--force"])
                 {
                     self.add(S::GitRead);
                 } else {
@@ -2260,7 +2533,7 @@ impl<'a> Cx<'a> {
                     self.add(S::GitCommit);
                     self.add(S::TerminalExecute);
                     self.opaque("changes Git configuration, which can make Git run programs");
-                    if has(&["--global", "--system"]) {
+                    if has_long(&["--global", "--system"]) {
                         self.add(S::FilesystemOutsideWorkspace);
                     }
                 }
@@ -2279,7 +2552,7 @@ impl<'a> Cx<'a> {
                 Some("remove" | "prune") => {
                     self.add(S::GitCommit);
                     self.add(S::FilesystemWrite);
-                    if has(&["-f", "--force"]) {
+                    if has_long(&["-f", "--force"]) {
                         self.add(S::Destructive);
                     }
                     self.file_args(&rest[1..], Access::Write, false);
@@ -2333,15 +2606,22 @@ impl<'a> Cx<'a> {
                     hooks(self);
                 }
                 let destructive = match sub.as_str() {
-                    "reset" => has(&["--hard", "--merge", "--keep"]),
+                    "reset" => has_long(&["--hard", "--merge", "--keep"]),
                     "checkout" => {
-                        has(&["-f", "--force", "--", "."])
+                        has_long(&["-f", "--force", "--", "."])
                             || positional.iter().any(|p| p.text == "." || p.glob)
                     }
-                    "switch" => has(&["-f", "--force", "--discard-changes"]),
-                    "restore" => !has(&["--staged", "-s"]) || has(&["--worktree", "-w"]),
+                    "switch" => has_long(&["-f", "--force", "--discard-changes"]),
+                    "restore" => !has(&["--staged", "-s"]) || has_long(&["--worktree", "-w"]),
                     "update-ref" => has(&["-d"]),
-                    "rm" => has(&["-r", "-rf", "-f", "--force"]),
+                    "rm" => {
+                        has_long(&["-r", "-rf", "-f", "--force"])
+                            || rest.iter().any(|a| {
+                                a.is_flag()
+                                    && !a.text.starts_with("--")
+                                    && a.text.contains(['r', 'f'])
+                            })
+                    }
                     "rebase" => false,
                     _ => false,
                 };
@@ -2349,7 +2629,7 @@ impl<'a> Cx<'a> {
                     self.add(S::Destructive);
                     self.note("This Git operation can discard uncommitted work.");
                 }
-                if sub == "rebase" && has(&["-i", "--interactive", "-x", "--exec"]) {
+                if sub == "rebase" && has_long(&["-i", "--interactive", "-x", "--exec"]) {
                     self.opaque("runs an interactive or scripted rebase");
                 }
                 if sub == "rm" || sub == "mv" || sub == "add" {
@@ -2382,7 +2662,7 @@ impl<'a> Cx<'a> {
                     if rest
                         .iter()
                         .any(|a| a.is_flag() && !a.text.starts_with("--") && a.text.contains('f'))
-                        || has(&["--force"])
+                        || has_long(&["--force"])
                     {
                         self.add(S::Destructive);
                         self.note("git clean deletes untracked files.");
@@ -2397,7 +2677,8 @@ impl<'a> Cx<'a> {
                     self.add(S::GitCommit);
                     if matches!(sub.as_str(), "prune" | "filter-branch" | "filter-repo")
                         || rest.iter().any(|a| {
-                            a.lower().starts_with("--prune")
+                            long_option(&a.lower(), "--prune", 3)
+                                || a.lower().starts_with("--prune")
                                 || a.lower() == "expire"
                                 || a.lower() == "delete"
                         })
@@ -2443,15 +2724,20 @@ impl<'a> Cx<'a> {
                 hooks(self);
                 let force = rest.iter().any(|a| {
                     let l = a.lower();
-                    matches!(
-                        l.as_str(),
-                        "-f" | "--force"
-                            | "--mirror"
-                            | "--delete"
-                            | "-d"
-                            | "--prune"
-                            | "--force-if-includes"
-                    ) || l.starts_with("--force-with-lease")
+                    matches!(l.as_str(), "-f" | "-d")
+                        || (a.is_flag()
+                            && !l.starts_with("--")
+                            && (a.text.contains('f') || a.text.contains('d')))
+                        || [
+                            "--force",
+                            "--mirror",
+                            "--delete",
+                            "--prune",
+                            "--force-if-includes",
+                            "--force-with-lease",
+                        ]
+                        .iter()
+                        .any(|o| long_option(&l, o, 2))
                         || (!a.is_flag() && (a.text.starts_with('+') || a.text.starts_with(':')))
                 });
                 if force {
@@ -2987,8 +3273,28 @@ impl<'a> Cx<'a> {
             | "http" | "https" | "xh" | "httpie" | "aria2c" | "start-bitstransfer"
             | "bitsadmin" | "certutil" | "lwp-request" | "fetch" => {
                 let lower: Vec<String> = args.iter().map(Word::lower).collect();
+                // PowerShell cmdlets accept abbreviated parameters (`-Me Post -InF .env`).
+                let ps = matches!(n, "invoke-webrequest" | "iwr" | "invoke-restmethod" | "irm");
+                let ps_method = |i: usize, a: &str| {
+                    ps && ps_param(a, "method", 2)
+                        && match a.split_once(':') {
+                            Some((_, m)) => !matches!(m, "get" | "head" | "options"),
+                            None => lower
+                                .get(i + 1)
+                                .is_some_and(|m| !matches!(m.as_str(), "get" | "head" | "options")),
+                        }
+                };
                 let sends = lower.iter().enumerate().any(|(i, a)| {
-                    a.starts_with("-d") && n == "curl"
+                    ps_method(i, a)
+                        || ps
+                            && (ps_param(a, "body", 2)
+                                || ps_param(a, "infile", 3)
+                                || ps_param(a, "form", 2))
+                        || n == "wget"
+                            && ["--post-data", "--post-file", "--body-data", "--body-file"]
+                                .iter()
+                                .any(|o| long_option(a, o, 3))
+                        || a.starts_with("-d") && n == "curl"
                         || a.starts_with("--data")
                         || matches!(
                             a.as_str(),
@@ -3028,13 +3334,76 @@ impl<'a> Cx<'a> {
                         self.url(&arg.text, sends);
                         continue;
                     }
-                    if matches!(l.as_str(), "-uri")
+                    if (l == "-uri" || ps && ps_param(l, "uri", 2))
                         && let Some(uri) = args.get(i + 1)
                     {
                         saw_url = true;
                         self.url(&uri.text, sends);
                     }
-                    let writes_to = matches!(l.as_str(), "-o" | "--output" | "-outfile" | "--output-document" | "-d" if n != "curl" || l != "-d")
+                    // Files the request uploads: `-d @.env`, `-F f=@key.pem`, `-T x`,
+                    // `--post-file=x`, `-InFile x`.
+                    let uploads = |cx: &mut Self, value: &str| {
+                        let value = value.trim();
+                        let file = value
+                            .strip_prefix('@')
+                            .or_else(|| value.split_once("=@").map(|(_, f)| f))
+                            .or_else(|| value.split_once("=<").map(|(_, f)| f))
+                            .or_else(|| value.strip_prefix('<'));
+                        if let Some(file) = file
+                            && !file.is_empty()
+                            && file != "-"
+                        {
+                            cx.path(
+                                &Word::plain(file.split(';').next().unwrap_or(file)),
+                                Access::Read,
+                            );
+                        }
+                    };
+                    if n == "curl" {
+                        let takes = matches!(l.as_str(), "-d" | "-f" | "--form" | "--json")
+                            || l.starts_with("--data")
+                            || l.starts_with("--form");
+                        if takes && !l.contains('=') {
+                            if let Some(value) = args.get(i + 1) {
+                                uploads(self, &value.text);
+                            }
+                        } else if let Some((_, value)) = arg.text.split_once('=')
+                            && l.starts_with("--")
+                        {
+                            uploads(self, value);
+                        } else if (arg.text.starts_with("-d") || arg.text.starts_with("-F"))
+                            && arg.text.len() > 2
+                        {
+                            uploads(self, &arg.text[2..]);
+                        }
+                        if matches!(arg.text.as_str(), "-T" | "--upload-file")
+                            && let Some(file) = args.get(i + 1)
+                            && file.text != "-"
+                        {
+                            self.path(file, Access::Read);
+                        }
+                    }
+                    let upload_file = (n == "wget"
+                        && ["--post-file", "--body-file"]
+                            .iter()
+                            .any(|o| long_option(l, o, 3)))
+                        || (ps && ps_param(l, "infile", 3));
+                    if upload_file {
+                        match arg
+                            .text
+                            .split_once(['=', ':'])
+                            .filter(|_| !ps || l.contains(':'))
+                        {
+                            Some((_, file)) => self.path(&Word::plain(file), Access::Read),
+                            None => {
+                                if let Some(file) = args.get(i + 1) {
+                                    self.path(file, Access::Read);
+                                }
+                            }
+                        }
+                    }
+                    let writes_to = (ps && ps_param(l, "outfile", 4))
+                        || matches!(l.as_str(), "-o" | "--output" | "-outfile" | "--output-document" | "-d" if n != "curl" || l != "-d")
                         || (n == "wget" && l == "-o")
                         || l == "--dump-header"
                         || (n == "curl" && arg.text == "-D");
@@ -3160,15 +3529,17 @@ impl<'a> Cx<'a> {
                     }
                 }
                 if args.iter().any(|a| {
-                    a.lower().starts_with("--delete") || a.lower() == "--remove-source-files"
+                    let l = a.lower();
+                    // `--del` is rsync's own alias for `--delete-during`.
+                    l.starts_with("--del") || long_option(&l, "--remove-source-files", 3)
                 }) {
                     self.add(S::Destructive);
                     self.note("rsync --delete removes files at the destination.");
                 }
-                if args
-                    .iter()
-                    .any(|a| a.text == "-e" || a.lower().starts_with("--rsh"))
-                {
+                if args.iter().any(|a| {
+                    (a.text.starts_with('-') && !a.text.starts_with("--") && a.text.contains('e'))
+                        || long_option(&a.lower(), "--rsh", 2)
+                }) {
                     self.opaque("chooses the remote shell to run");
                 }
                 true
@@ -3725,6 +4096,17 @@ impl<'a> Cx<'a> {
                 self.note("Printing the environment can reveal secrets.");
                 true
             }
+            "compgen" => {
+                self.add(S::TerminalReadOnly);
+                if args.iter().any(|a| {
+                    let l = a.lower();
+                    matches!(l.as_str(), "-v" | "-e") || l.contains("variable") || l == "export"
+                }) {
+                    self.add(S::CredentialsAccess);
+                    self.note("Listing shell variables can reveal secrets.");
+                }
+                true
+            }
             "security"
             | "cmdkey"
             | "get-credential"
@@ -3761,6 +4143,92 @@ impl<'a> Cx<'a> {
             }
             _ => false,
         }
+    }
+
+    /// Options that make an otherwise read-only program run another program, write a file or
+    /// print secrets. Returns true when the program is fully handled.
+    fn read_only_escapes(&mut self, n: &str, args: &[Word]) -> bool {
+        let lower: Vec<String> = args.iter().map(Word::lower).collect();
+        let runs = |cx: &mut Self, why: &str| {
+            cx.add(S::TerminalExecute);
+            cx.opaque(why);
+        };
+        match n {
+            // In bash and zsh `fc` edits and re-runs commands from history.
+            "fc" => {
+                runs(
+                    self,
+                    "uses `fc`, which re-runs commands from shell history in bash",
+                );
+                self.loose_args(args, Access::Read);
+                return true;
+            }
+            "watchman" if lower.iter().any(|a| a == "trigger" || a == "--") => {
+                runs(self, "registers a watchman trigger that runs a command");
+                return true;
+            }
+            "man"
+                if args.iter().zip(&lower).any(|(w, a)| {
+                    w.text.starts_with("-P")
+                        || w.text.starts_with("-H")
+                        || long_option(a, "--pager", 2)
+                        || long_option(a, "--html", 2)
+                        || long_option(a, "--preprocessor", 3)
+                }) =>
+            {
+                runs(
+                    self,
+                    "tells man to run another program as its pager or browser",
+                );
+            }
+            "bat" | "batcat" if lower.iter().any(|a| long_option(a, "--pager", 2)) => {
+                runs(self, "tells bat to run another program as its pager");
+            }
+            "sort"
+                if lower
+                    .iter()
+                    .any(|a| long_option(a, "--compress-program", 2)) =>
+            {
+                runs(self, "tells sort to run a compression program");
+            }
+            "less" | "more" | "tree" => {
+                for (i, a) in lower.iter().enumerate() {
+                    let log = a == "-o" || (n != "tree" && long_option(a, "--log-file", 3));
+                    if log {
+                        if let Some((_, value)) = args[i].text.split_once('=') {
+                            self.path(&Word::plain(value), Access::Write);
+                        } else if let Some(target) = args.get(i + 1) {
+                            self.path(target, Access::Write);
+                        }
+                    } else if n != "tree" && a.len() > 2 && a.starts_with("-o") {
+                        self.path(&Word::plain(&args[i].text[2..]), Access::Write);
+                    }
+                }
+            }
+            "ps" if args
+                .iter()
+                .any(|a| !a.text.starts_with('-') && a.text.contains('e')) =>
+            {
+                // BSD-style `ps e` / `ps auxe` prints every process's environment.
+                self.add(S::CredentialsAccess);
+                self.note("Printing process environments can reveal secrets.");
+            }
+            "get-variable" | "gv" => {
+                self.add(S::CredentialsAccess);
+                self.note("Listing variables can reveal secrets.");
+            }
+            "hostnamectl" if lower.iter().any(|a| a.starts_with("set-")) => {
+                self.add(S::TerminalExecute);
+                self.add(S::FilesystemOutsideWorkspace);
+                self.note("hostnamectl set-… changes system settings.");
+            }
+            "get-help" | "help" if lower.iter().any(|a| ps_param(a, "online", 2)) => {
+                self.add(S::BrowserNavigate);
+                self.add(S::NetworkOther);
+            }
+            _ => {}
+        }
+        false
     }
 
     fn read_only(&mut self, n: &str, args: &[Word], qualified: bool) -> bool {
@@ -3964,6 +4432,9 @@ impl<'a> Cx<'a> {
             return true;
         }
         self.add(S::TerminalReadOnly);
+        if self.read_only_escapes(n, args) {
+            return true;
+        }
         match n {
             "find" => {
                 let lower: Vec<String> = args.iter().map(Word::lower).collect();
@@ -4228,7 +4699,29 @@ impl<'a> Cx<'a> {
                             || !w.is_flag() && std::path::Path::new(&w.text).extension().is_some()
                     });
                 }
+                // Listing names is not reading contents: `ls *.pem` doesn't reveal a key.
+                self.names_only = matches!(
+                    n,
+                    "ls" | "dir"
+                        | "tree"
+                        | "du"
+                        | "get-childitem"
+                        | "gci"
+                        | "exa"
+                        | "eza"
+                        | "lsd"
+                        | "vdir"
+                        | "test-path"
+                        | "resolve-path"
+                        | "rvpa"
+                        | "stat"
+                        | "basename"
+                        | "dirname"
+                        | "realpath"
+                        | "readlink"
+                );
                 let count = self.file_args(&words, Access::Read, windows);
+                self.names_only = false;
                 if count == 0
                     && matches!(
                         n,
@@ -4305,23 +4798,61 @@ fn is_windows_flag(text: &str) -> bool {
 }
 
 fn is_recursive_flag(text: &str, windows: bool) -> bool {
-    let lower = text.to_ascii_lowercase();
+    let lower = dash_normalize(text).to_ascii_lowercase();
     if windows && matches!(lower.as_str(), "/s") {
         return true;
     }
-    if lower == "--recursive" || lower == "-recurse" || lower == "--no-preserve-root" {
+    // GNU long options may be abbreviated (`--rec`, `--no-pres`).
+    if long_option(&lower, "--recursive", 1) || long_option(&lower, "--no-preserve-root", 4) {
         return true;
     }
     if let Some(flag) = lower.strip_prefix('-')
         && !flag.starts_with('-')
     {
-        // PowerShell `-r`, `-rec`, `-recurse`; POSIX clusters `-rf`, `-fR`.
-        let powershell = !flag.is_empty() && "recurse".starts_with(flag);
+        // PowerShell `-r`, `-rec`, `-Recurse:$true`; POSIX clusters `-rf`, `-fR`.
+        let name = flag.split(':').next().unwrap_or_default();
+        let powershell = !name.is_empty() && "recurse".starts_with(name);
         let posix_cluster =
             flag.len() <= 4 && flag.chars().all(|c| c.is_ascii_alphabetic()) && flag.contains('r');
         return powershell || posix_cluster;
     }
     false
+}
+
+/// Whether `arg` (lower case) is the GNU long option `option` (`--recursive`), possibly
+/// abbreviated to at least `min` characters after the dashes and possibly with `=value`.
+/// getopt_long accepts any unambiguous prefix; an ambiguous one is refused by the program, so
+/// treating every prefix as a match only ever adds authority.
+fn long_option(arg: &str, option: &str, min: usize) -> bool {
+    let (Some(given), Some(full)) = (arg.strip_prefix("--"), option.strip_prefix("--")) else {
+        return false;
+    };
+    let given = given.split('=').next().unwrap_or_default();
+    given.len() >= min.max(1) && full.starts_with(given)
+}
+
+/// Whether `arg` (lower case) is the PowerShell parameter `-name`, abbreviated to at least `min`
+/// characters (PowerShell accepts any unambiguous prefix) and possibly written `-name:value`.
+fn ps_param(arg: &str, name: &str, min: usize) -> bool {
+    let normalized = dash_normalize(arg);
+    let Some(given) = normalized.strip_prefix('-') else {
+        return false;
+    };
+    if given.starts_with('-') {
+        return false;
+    }
+    let given = given.split(':').next().unwrap_or_default();
+    given.len() >= min.max(1) && name.starts_with(given)
+}
+
+/// PowerShell treats en dash, em dash and horizontal bar as `-` (the figure dash too, here).
+fn dash_normalize(text: &str) -> String {
+    text.chars()
+        .map(|c| match c {
+            '\u{2012}' | '\u{2013}' | '\u{2014}' | '\u{2015}' => '-',
+            _ => c,
+        })
+        .collect()
 }
 
 fn looks_like_path(text: &str) -> bool {

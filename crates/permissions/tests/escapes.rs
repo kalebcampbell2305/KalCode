@@ -138,6 +138,10 @@ fn obfuscation_table() -> Vec<(String, Vec<S>, bool)> {
         ("git.exe push --force".into(), vec![S::GitPush, S::Destructive], false),
         ("GIT PUSH --FORCE".into(), vec![S::GitPush, S::Destructive], false),
         ("docker run -v /:/host alpine rm -rf /host".into(), vec![S::FilesystemOutsideWorkspace], false),
+        // cmd.exe does not treat `'` as a quote: the separators inside are live.
+        ("printf '%s' '& git push origin main & echo '".into(), vec![S::GitPush], false),
+        // bash does not treat `^` as an escape.
+        ("echo ^&^& git push --force origin main".into(), vec![S::GitPush, S::Destructive], false),
     ]
 }
 
@@ -300,7 +304,8 @@ fn quoted_data_is_not_mistaken_for_commands() {
     for text in [
         "echo 'rm -rf /'",
         "echo \"a; rm -rf /\"",
-        "printf '%s' '&& git push'",
+        // Double quotes are quotes in every shell (single quotes are not, in cmd.exe).
+        "printf '%s' \"&& git push\"",
         "grep -r 'git push --force' src",
     ] {
         let facts = classify_command(text, &[], "", &ws);
