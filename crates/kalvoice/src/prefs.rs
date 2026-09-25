@@ -96,7 +96,8 @@ impl Default for KalVoicePreferences {
             intelligence: None,
             speech_model: models::DEFAULT_MODEL.to_owned(),
             voice_replies: false,
-            panel_default: PanelAnchor::BottomRight,
+            // Top centre: over the page header, clear of composers and terminal controls.
+            panel_default: PanelAnchor::Top,
             panel_visible: true,
             panel_placements: Vec::new(),
         }
@@ -368,7 +369,7 @@ mod tests {
 
     fn conn() -> Connection {
         let mut conn = db::open_in_memory().expect("open");
-        db::migrate(&mut conn, db::MIGRATIONS, None).expect("migrate");
+        db::migrate(&mut conn, &crate::schema::migrations_with_kalvoice(), None).expect("migrate");
         conn
     }
 

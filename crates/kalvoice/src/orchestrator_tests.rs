@@ -259,11 +259,14 @@ fn harness_with(
 ) -> Harness {
     let dir = tempfile::tempdir().expect("tempdir");
     let core = Arc::new(
-        Core::open(CoreConfig {
-            paths: Paths::new(dir.path()),
-            app_version: "test".into(),
-            channel: BuildChannel::Development,
-        })
+        Core::open_with_migrations(
+            CoreConfig {
+                paths: Paths::new(dir.path()),
+                app_version: "test".into(),
+                channel: BuildChannel::Development,
+            },
+            &crate::schema::migrations_with_kalvoice(),
+        )
         .expect("core"),
     );
     let executor = Arc::new(executor);
@@ -714,7 +717,7 @@ fn consequential_commands_wait_for_approval_then_run() {
     );
     let response = h
         .orchestrator
-        .handle(request("stop all threads"))
+        .handle(request("resume all threads"))
         .expect("handle");
     let KalVoiceOutcome::PermissionRequired {
         approval_request_id,
@@ -736,7 +739,7 @@ fn consequential_commands_wait_for_approval_then_run() {
     assert!(matches!(done.outcome, KalVoiceOutcome::Completed { .. }));
     assert_eq!(
         *h.executor.executed.lock().expect("lock"),
-        vec![KalVoiceIntent::StopThreads {
+        vec![KalVoiceIntent::ResumeThreads {
             scope: ThreadScope::All
         }]
     );
@@ -751,6 +754,38 @@ fn consequential_commands_wait_for_approval_then_run() {
             .is_none(),
         "resolved once"
     );
+}
+
+#[test]
+fn the_confirm_gate_always_asks_and_never_allows() {
+    let gate = ConfirmGate;
+    let action = NormalizedAction {
+        id: "a".into(),
+        thread_id: String::new(),
+        workspace_id: String::new(),
+        provider_id: ProviderId::new("kalvoice"),
+        action: ActionKind::Tool {
+            tool: "kalvoice.create_threads".into(),
+            input_summary: "Open 4 Codex threads".into(),
+        },
+        summary: "Open 4 Codex threads".into(),
+        requested_at: "2026-09-24T00:00:00Z".into(),
+    };
+    for mode in [
+        PermissionMode::Approve,
+        PermissionMode::Auto,
+        PermissionMode::Bypass,
+    ] {
+        let decision = gate.evaluate(&action, mode);
+        assert_eq!(decision.effect, PolicyEffect::Ask);
+        assert!(decision.approvable);
+    }
+    let decision = gate.evaluate(&action, PermissionMode::Approve);
+    let request = gate
+        .open_request(action, PermissionMode::Approve, decision)
+        .expect("open");
+    assert!(is_valid_id(&request.id));
+    assert_eq!(request.status, ApprovalStatus::Pending);
 }
 
 #[test]
@@ -789,20 +824,17 @@ fn policy_denial_is_not_counted_and_kalvoice_only_uses_approve_mode() {
         PolicyEffect::Deny,
         Arc::new(NoProviders),
     );
-    for text in [
-        "stop all threads",
-        "pause every active thread",
-        "open 2 claude threads in kalcode",
-    ] {
+    for text in ["resume all threads", "open 2 claude threads in kalcode"] {
         let response = h.orchestrator.handle(request(text)).expect("handle");
         assert!(
-            matches!(response.outcome, KalVoiceOutcome::Failed { ref code, .. } if code == "permission_denied")
+            matches!(response.outcome, KalVoiceOutcome::Failed { ref code, .. } if code == "permission_denied"),
+            "{text}"
         );
         assert!(!response.counted);
     }
     assert!(h.executor.executed.lock().expect("lock").is_empty());
     let modes = h.gate.modes.lock().expect("lock").clone();
-    assert_eq!(modes.len(), 3);
+    assert_eq!(modes.len(), 2);
     assert!(modes.iter().all(|m| *m == PermissionMode::Approve));
 }
 
@@ -814,11 +846,14 @@ fn non_consequential_commands_skip_the_gate() {
         PolicyEffect::Deny,
         Arc::new(NoProviders),
     );
+    // Making things safer never waits (KV-02): pause and stop run directly.
     for text in [
         "go to settings",
         "what needs permission",
         "what are my threads doing",
         "new terminal",
+        "stop all threads",
+        "pause every active thread",
     ] {
         let response = h.orchestrator.handle(request(text)).expect("handle");
         assert!(

@@ -10,8 +10,9 @@
  * recognizes audio.
  *
  * Scenarios (`?scenario=`): kalvoice-limit (allowance used up), kalvoice-no-model (no speech
- * model installed), kalvoice-mic-denied (microphone blocked), kalvoice-approvals (thread
- * commands wait for approval), kalvoice-slow (stages last long enough to observe).
+ * model installed), kalvoice-mic-denied (microphone blocked), kalvoice-approvals (the same
+ * confirmations as every scenario, named for the tests that answer them), kalvoice-slow
+ * (stages last long enough to observe). Thread commands report fixed test-double results.
  * `?transcript=` sets what the fake recognizer "hears".
  */
 import type {
@@ -209,23 +210,23 @@ function understand(text: string): Parsed | null {
   }
   if (/^(what are my threads doing|what is running)$/.test(t)) return { kind: "status_report", high: true };
   if (t === "status") return { kind: "status_report", high: false };
-  const approvals: KalVoiceOutcome = {
-    kind: "failed",
-    code: "approvals_unavailable",
-    message: "Approvals aren't available in this build yet, so there's nothing KalVoice can show.",
+  const approvals: Omit<Parsed, "high"> = {
+    kind: "show_approvals",
+    outcome: { kind: "completed", summary: "Nothing is waiting for your approval." },
+    directive: { kind: "show_approvals" },
   };
   if (/^(show approvals|what needs permission|show what is waiting( for me)?|what is waiting( for me)?)$/.test(t)) {
-    return { kind: "show_approvals", high: true, outcome: approvals };
+    return { ...approvals, high: true };
   }
-  if (/^(pending )?approvals$/.test(t)) return { kind: "show_approvals", high: false, outcome: approvals };
+  if (/^(pending )?approvals$/.test(t)) return { ...approvals, high: false };
   if (/^(new terminal|open a terminal)$/.test(t)) {
     return {
       kind: "create_terminal",
       high: true,
       outcome: {
         kind: "failed",
-        code: "workspaces_unavailable",
-        message: "Workspaces and terminals aren't available in this build yet, so KalVoice can't open them.",
+        code: "no_workspace",
+        message: "Open a workspace first (Code, Open folder), or name one: “in the website workspace”.",
       },
     };
   }
@@ -247,7 +248,7 @@ function defaults(): KalVoicePreferences {
     intelligence: null,
     speechModel: "tiny.en",
     voiceReplies: false,
-    panelDefault: "bottom_right",
+    panelDefault: "top",
     panelVisible: true,
     panelPlacements: [],
   };
@@ -477,13 +478,6 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
       { correlation: { requestId } },
     );
     if (parsed.consequential) {
-      if (scenario !== "kalvoice-approvals") {
-        return failed(
-          "threads_unavailable",
-          "Threads aren't available in this build yet, so KalVoice can't manage them.",
-          parsed.kind,
-        );
-      }
       used += 1;
       counted.set(requestId, parsed.kind);
       // Making things safer runs directly (pause, stop); anything that adds work waits for approval.
@@ -501,11 +495,7 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
       return respond(requestId, parsed.kind, { kind: "permission_required", approvalRequestId }, true);
     }
     if (parsed.kind === "status_report") {
-      return failed(
-        "threads_unavailable",
-        "Threads aren't available in this build yet, so KalVoice can't manage them.",
-        parsed.kind,
-      );
+      parsed.outcome = { kind: "completed", summary: "No threads are open." };
     }
     if (parsed.outcome?.kind === "failed") return failed(parsed.outcome.code, parsed.outcome.message, parsed.kind);
     used += 1;
@@ -705,40 +695,29 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
     },
   };
 
-  // Approvals for KalVoice's own requests (scenario kalvoice-approvals): the user answers in the
-  // widget through the same command the Approvals view uses.
-  if (scenario === "kalvoice-approvals") {
-    handlers.approval_decide = (args) => {
-      const id = String(args.requestId);
-      const item = pending.get(id);
-      if (!item) fail("approval_not_found", "That approval request no longer exists.");
-      pending.delete(id);
-      const decision = args.decision as ApprovalDecision;
-      signal({ kind: "request_stage", requestId: item.requestId, stage: "executing" });
-      signal({
-        kind: "request_resolved",
-        response:
-          decision === "deny"
-            ? respond(
-                item.requestId,
-                item.kind,
-                {
-                  kind: "failed",
-                  code: "permission_denied",
-                  message: "The request wasn't approved, so KalVoice didn't run it.",
-                },
-                true,
-              )
-            : respond(
-                item.requestId,
-                item.kind,
-                { kind: "completed", summary: DONE_SUMMARY[item.kind] ?? "Done (test double)." },
-                true,
-              ),
-      });
-      return {};
-    };
-  }
+  // KalVoice's own confirmations (scenario kalvoice-approvals): the person answers in the widget.
+  handlers.kalvoice_confirm = (args) => {
+    const id = String(args.approvalRequestId);
+    const decision = args.decision as ApprovalDecision;
+    if (decision !== "approve_once" && decision !== "deny") {
+      fail("invalid_decision", "KalVoice asks once: approve it or deny it.");
+    }
+    const item = pending.get(id);
+    if (!item) fail("confirmation_not_found", "That KalVoice request is no longer waiting.");
+    pending.delete(id);
+    return decision === "deny"
+      ? respond(
+          item.requestId,
+          item.kind,
+          {
+            kind: "failed",
+            code: "permission_denied",
+            message: "The request wasn't approved, so KalVoice didn't run it.",
+          },
+          true,
+        )
+      : respond(item.requestId, item.kind, { kind: "completed", summary: DONE_SUMMARY[item.kind] ?? "Done." }, true);
+  };
 
   return {
     handlers,

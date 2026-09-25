@@ -85,7 +85,7 @@ function fromResponse(state: AssistantState, response: KalVoiceResponse): Assist
       return {
         ...base,
         phase: "waiting_for_permission",
-        message: "This needs your approval before it runs.",
+        message: "KalVoice asks before it adds work for your agents. Nothing runs until you approve.",
         code: null,
         approvalRequestId: outcome.approvalRequestId,
       };

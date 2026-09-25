@@ -423,7 +423,7 @@ function PanelRow() {
         <select
           className={styles.select}
           aria-labelledby="kalvoice-panel-position-label"
-          value={status.preferences.panelDefault === "free" ? "bottom_right" : status.preferences.panelDefault}
+          value={status.preferences.panelDefault === "free" ? "top" : status.preferences.panelDefault}
           onChange={(e) => void updatePreferences({ panelDefault: e.target.value as PanelAnchor })}
         >
           {ANCHORS.map((a) => (

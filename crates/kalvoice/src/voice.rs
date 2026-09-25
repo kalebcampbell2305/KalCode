@@ -470,11 +470,14 @@ mod tests {
         text: Result<String, SttError>,
     ) -> (Arc<Core>, Arc<FakeAudio>, VoiceController) {
         let core = Arc::new(
-            Core::open(CoreConfig {
-                paths: Paths::new(dir),
-                app_version: "test".into(),
-                channel: BuildChannel::Development,
-            })
+            Core::open_with_migrations(
+                CoreConfig {
+                    paths: Paths::new(dir),
+                    app_version: "test".into(),
+                    channel: BuildChannel::Development,
+                },
+                &crate::schema::migrations_with_kalvoice(),
+            )
             .expect("core"),
         );
         let audio = Arc::new(FakeAudio {

@@ -221,7 +221,7 @@ mod tests {
 
     fn conn() -> Connection {
         let mut conn = db::open_in_memory().expect("open");
-        db::migrate(&mut conn, db::MIGRATIONS, None).expect("migrate");
+        db::migrate(&mut conn, &crate::schema::migrations_with_kalvoice(), None).expect("migrate");
         conn
     }
 

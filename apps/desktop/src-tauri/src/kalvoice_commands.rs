@@ -7,34 +7,35 @@
 //! microphone; release finishes recognition. A release that can't arrive (the window lost focus
 //! while the key was held) and the two-minute recording cap both finish the session.
 //!
-//! Seams for other campaigns (each returns an honest "not available in this build" today):
-//! - [`DesktopExecutor`]: workspaces and terminals (Z1), threads and status (Z3), approvals (Z4).
+//! Runtimes KalVoice drives:
+//! - [`DesktopExecutor`](crate::kalvoice_executor::DesktopExecutor): workspaces and terminals
+//!   (Z1), threads and their status (Z3), pending approvals (Z4, read-only).
 //! - Providers: [`DesktopProviders`] over the provider runtime (Z2): KalVoice reasoning runs on
 //!   the user's own signed-in Claude Code, read-only, in an empty KalVoice folder.
-//! - Permissions: [`AskUnlessReadGate`] until the permission engine (Z4) supplies a gate.
+//! - Confirmation: commands that add work (create or resume threads) wait for the person's
+//!   answer in the KalVoice widget ([`ConfirmGate`], `kalvoice_confirm`). Pausing and stopping
+//!   make things safer and run directly. KalVoice never answers the permission engine's
+//!   approvals and never changes permission modes.
 
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use kalcode_contracts::agent::{AgentProvider, ProviderId, SessionConfig};
 use kalcode_contracts::app::SurfaceId;
-use kalcode_contracts::events::EventPayload;
-use kalcode_contracts::kalvoice::{KalVoiceIntent, KalVoiceMode, KalVoiceOutcome};
+use kalcode_contracts::kalvoice::{KalVoiceMode, KalVoiceOutcome};
+use kalcode_contracts::permissions::ApprovalDecision;
 use kalcode_contracts::permissions::PermissionMode;
-use kalcode_contracts::permissions::{ApprovalDecision, AskUnlessReadGate};
 use kalcode_core::{AppInfo, Core, IpcError, KalError};
 use kalcode_kalvoice::audio::MAX_RECORDING;
 use kalcode_kalvoice::audio::MicrophoneSource;
 use kalcode_kalvoice::latency::{LatencyLog, LatencySnapshot};
 use kalcode_kalvoice::models::{self, ModelError, ModelStore, SpeechModelInfo};
 use kalcode_kalvoice::orchestrator::{
-    CommandRequest, ExecContext, ExecError, Executed, Executor, KalVoiceResponse, Orchestrator,
-    ProviderChoice, ProviderDirectory, RequestStage, TalkRequest, TalkResponse, UiDirective,
-    provider_display_name,
+    CommandRequest, ConfirmGate, KalVoiceResponse, Orchestrator, ProviderChoice, ProviderDirectory,
+    RequestStage, TalkRequest, TalkResponse, provider_display_name,
 };
 use kalcode_kalvoice::plan::ProvisionalEntitlement;
 use kalcode_kalvoice::prefs::{KalVoicePreferences, KalVoicePreferencesPatch};
@@ -68,7 +69,6 @@ struct Registered {
 }
 
 pub struct KalVoiceRuntime {
-    core: Arc<Core>,
     providers: Arc<DesktopProviders>,
     orchestrator: Orchestrator,
     voice: VoiceController,
@@ -169,78 +169,6 @@ impl RecognizerSource for DesktopRecognizers {
     }
 }
 
-/// Runs KalVoice commands through the runtime APIs present in this build.
-struct DesktopExecutor {
-    visible: Vec<SurfaceId>,
-}
-
-impl DesktopExecutor {
-    fn unavailable(intent: &KalVoiceIntent) -> Option<ExecError> {
-        match intent {
-            KalVoiceIntent::Navigate { .. } => None,
-            KalVoiceIntent::OpenWorkspace { .. } | KalVoiceIntent::CreateTerminal { .. } => {
-                Some(ExecError::new(
-                    "workspaces_unavailable",
-                    "Workspaces and terminals aren't available in this build yet, so KalVoice can't open them.",
-                ))
-            }
-            KalVoiceIntent::ShowApprovals => Some(ExecError::new(
-                "approvals_unavailable",
-                "Approvals aren't available in this build yet, so there's nothing KalVoice can show.",
-            )),
-            KalVoiceIntent::Reasoning { .. } => {
-                Some(ExecError::new("not_a_command", "That isn't a command."))
-            }
-            _ => Some(ExecError::new(
-                "threads_unavailable",
-                "Threads aren't available in this build yet, so KalVoice can't manage them.",
-            )),
-        }
-    }
-}
-
-impl Executor for DesktopExecutor {
-    fn find_workspace(&self, _name: &str) -> Result<Option<String>, ExecError> {
-        Err(ExecError::new(
-            "workspaces_unavailable",
-            "Workspaces aren't available in this build yet, so KalVoice can't find that workspace.",
-        ))
-    }
-
-    fn find_thread(&self, _name: &str) -> Result<Option<String>, ExecError> {
-        Err(ExecError::new(
-            "threads_unavailable",
-            "Threads aren't available in this build yet, so KalVoice can't find that thread.",
-        ))
-    }
-
-    fn check(&self, intent: &KalVoiceIntent) -> Result<(), ExecError> {
-        if let Some(error) = Self::unavailable(intent) {
-            return Err(error);
-        }
-        if let KalVoiceIntent::Navigate { surface } = intent
-            && !self.visible.contains(surface)
-        {
-            return Err(ExecError::new(
-                "surface_unavailable",
-                "That page isn't available in this build.",
-            ));
-        }
-        Ok(())
-    }
-
-    fn execute(&self, intent: &KalVoiceIntent, _ctx: &ExecContext) -> Result<Executed, ExecError> {
-        match intent {
-            KalVoiceIntent::Navigate { surface } => Ok(Executed {
-                summary: format!("Opened {}.", surface_label(*surface)),
-                directive: Some(UiDirective::Navigate { surface: *surface }),
-            }),
-            other => Err(Self::unavailable(other)
-                .unwrap_or_else(|| ExecError::new("unsupported", "KalVoice can't do that yet."))),
-        }
-    }
-}
-
 /// The user's providers, from the provider runtime's cached detection.
 pub struct DesktopProviders {
     registry: Arc<ProviderRegistry>,
@@ -309,7 +237,7 @@ impl ProviderDirectory for DesktopProviders {
     }
 }
 
-fn surface_label(surface: SurfaceId) -> &'static str {
+pub(crate) fn surface_label(surface: SurfaceId) -> &'static str {
     match surface {
         SurfaceId::Dashboard => "the Dashboard",
         SurfaceId::KalVoice => "KalVoice",
@@ -337,12 +265,15 @@ fn speech_output() -> Arc<dyn SpeechOutput> {
     }
 }
 
-/// Builds the KalVoice runtime, registers the shortcuts, and follows approval decisions.
+/// Builds the KalVoice runtime over the workspace, thread and permission runtimes and registers
+/// the push-to-talk key.
 pub fn init(
     app: &AppHandle,
     core: Option<Arc<Core>>,
     info: &AppInfo,
     registry: Arc<ProviderRegistry>,
+    threads: Option<Arc<kalcode_threads::ThreadRuntime>>,
+    permissions: Option<Arc<kalcode_permissions::PermissionService>>,
 ) -> KalVoiceState {
     let enabled = info.flags.surfaces.iter().any(|s| {
         s.id == SurfaceId::KalVoice
@@ -358,6 +289,16 @@ pub fn init(
             "KalVoice isn't available because KalCode's runtime didn't start.",
         );
     };
+    // KalVoice's ledger is schema v6, registered after the event platform's v5 lands.
+    if !core
+        .read(kalcode_kalvoice::schema::installed)
+        .unwrap_or(false)
+    {
+        return KalVoiceState(
+            None,
+            "KalVoice turns on with KalCode's next database upgrade, which adds its usage ledger.",
+        );
+    }
     let providers = Arc::new(DesktopProviders {
         registry,
         reasoning_dir: core.paths().data_dir.join("kalvoice").join("reasoning"),
@@ -378,8 +319,13 @@ pub fn init(
     let orchestrator = Orchestrator::new(
         core.clone(),
         Arc::new(ProvisionalEntitlement),
-        Arc::new(DesktopExecutor { visible }),
-        Arc::new(AskUnlessReadGate),
+        Arc::new(crate::kalvoice_executor::DesktopExecutor {
+            visible,
+            core: core.clone(),
+            threads,
+            permissions,
+        }),
+        Arc::new(ConfirmGate),
         providers.clone(),
     );
     let voice = VoiceController::new(
@@ -392,7 +338,6 @@ pub fn init(
         .and_then(|w| w.is_focused().ok())
         .unwrap_or(false);
     let runtime = Arc::new(KalVoiceRuntime {
-        core: core.clone(),
         providers,
         orchestrator,
         voice,
@@ -420,43 +365,7 @@ pub fn init(
     refresh_talk_key(app, &runtime);
     follow_focus(app, &runtime);
     keep_warm(&runtime);
-    follow_approvals(&runtime);
     KalVoiceState(Some(runtime), "")
-}
-
-/// Resumes KalVoice commands that waited for approval. The bus delivers events while the
-/// database lock is held, so decisions are handed to a worker thread.
-fn follow_approvals(runtime: &Arc<KalVoiceRuntime>) {
-    let (tx, rx) = mpsc::channel::<(String, Option<ApprovalDecision>)>();
-    runtime.core.subscribe(move |envelope| {
-        let decided = match &envelope.event {
-            EventPayload::ApprovalApproved {
-                request_id,
-                decision,
-                ..
-            } => Some((request_id.clone(), Some(*decision))),
-            EventPayload::ApprovalDenied { request_id, .. }
-            | EventPayload::ApprovalExpired { request_id, .. } => {
-                Some((request_id.clone(), Some(ApprovalDecision::Deny)))
-            }
-            _ => None,
-        };
-        match decided {
-            Some(item) => tx.send(item).is_ok(),
-            None => true,
-        }
-    });
-    let weak = Arc::downgrade(runtime);
-    let _ = std::thread::Builder::new()
-        .name("kalvoice-approvals".into())
-        .spawn(move || {
-            while let Ok((id, decision)) = rx.recv() {
-                let Some(runtime) = weak.upgrade() else { break };
-                if let Some(response) = runtime.orchestrator.resolve_approval(&id, decision) {
-                    runtime.signal(&KalVoiceSignal::RequestResolved { response });
-                }
-            }
-        });
 }
 
 fn parse_shortcut(accelerator: &str) -> Option<Shortcut> {
@@ -814,6 +723,38 @@ pub fn kalvoice_type_instead(
         .map_err(|e| e.to_ipc())
 }
 
+/// The person's answer to a KalVoice confirmation ("Open 4 Codex threads?"): `approve_once`
+/// runs the command, `deny` drops it. Only the widget calls this, from the person's click;
+/// nothing spoken can answer it.
+#[tauri::command(async)]
+pub fn kalvoice_confirm(
+    state: State<'_, KalVoiceState>,
+    approval_request_id: String,
+    decision: ApprovalDecision,
+) -> Result<KalVoiceResponse, IpcError> {
+    if !matches!(
+        decision,
+        ApprovalDecision::ApproveOnce | ApprovalDecision::Deny
+    ) {
+        return Err(KalError::validation(
+            "invalid_decision",
+            "KalVoice asks once: approve it or deny it.",
+        )
+        .to_ipc());
+    }
+    state
+        .runtime()?
+        .orchestrator
+        .resolve_approval(&approval_request_id, Some(decision))
+        .ok_or_else(|| {
+            KalError::validation(
+                "confirmation_not_found",
+                "That KalVoice request is no longer waiting.",
+            )
+            .to_ipc()
+        })
+}
+
 /// Rolling latency percentiles and recent stage waterfalls (developer diagnostics).
 #[tauri::command(async)]
 pub fn kalvoice_latency(state: State<'_, KalVoiceState>) -> Result<LatencySnapshot, IpcError> {
@@ -1076,47 +1017,6 @@ mod tests {
                 reserved.accelerator
             );
         }
-    }
-
-    #[test]
-    fn this_build_reports_unavailable_runtimes_honestly() {
-        let executor = DesktopExecutor {
-            visible: vec![SurfaceId::Dashboard, SurfaceId::Settings],
-        };
-        let settings = KalVoiceIntent::Navigate {
-            surface: SurfaceId::Settings,
-        };
-        assert!(executor.check(&settings).is_ok());
-        assert_eq!(
-            executor
-                .check(&KalVoiceIntent::Navigate {
-                    surface: SurfaceId::Missions
-                })
-                .map_err(|e| e.code),
-            Err("surface_unavailable".into())
-        );
-        assert_eq!(
-            executor
-                .check(&KalVoiceIntent::StatusReport)
-                .map_err(|e| e.code),
-            Err("threads_unavailable".into())
-        );
-        assert_eq!(
-            executor
-                .check(&KalVoiceIntent::ShowApprovals)
-                .map_err(|e| e.code),
-            Err("approvals_unavailable".into())
-        );
-        let done = executor
-            .execute(
-                &settings,
-                &ExecContext {
-                    request_id: String::new(),
-                    workspace_id: None,
-                },
-            )
-            .expect("navigate");
-        assert_eq!(done.summary, "Opened Settings.");
     }
 
     #[test]

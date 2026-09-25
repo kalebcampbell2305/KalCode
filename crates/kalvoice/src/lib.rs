@@ -24,6 +24,7 @@ pub mod models;
 pub mod orchestrator;
 pub mod plan;
 pub mod prefs;
+pub mod schema;
 pub mod shortcuts;
 pub mod signals;
 pub mod speech_output;

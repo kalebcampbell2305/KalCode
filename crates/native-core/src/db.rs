@@ -43,11 +43,6 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "permissions",
         sql: include_str!("../migrations/0004_permissions.sql"),
     },
-    Migration {
-        version: 5,
-        name: "kalvoice",
-        sql: include_str!("../migrations/0005_kalvoice.sql"),
-    },
 ];
 
 /// How many pre-migration backups to keep.

@@ -1,5 +1,4 @@
 import type {
-  ApprovalDecision,
   KalVoiceInput,
   KalVoicePreferencesPatch,
   KalVoiceResponse,
@@ -10,6 +9,7 @@ import type {
   SizeClass,
   SurfaceId,
   TalkTarget,
+  UiDirective,
 } from "@kalcode/protocol";
 import { useToast } from "@kalcode/ui/components";
 import {
@@ -26,7 +26,10 @@ import {
 } from "react";
 import { type KalCodeError, toKalCodeError } from "../ipc/errors.ts";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
+import { useWorkspaces } from "../runtime/WorkspaceProvider.tsx";
 import { useNavigation } from "../shell/navigation.tsx";
+import { usePermissions } from "../surfaces/permissions/index.ts";
+import { useThreadsIntent } from "../surfaces/threads/intent.tsx";
 import { type AssistantState, INITIAL_STATE, reduce } from "./assistantState.ts";
 import {
   type DictationTarget,
@@ -66,7 +69,8 @@ interface KalVoiceValue {
   /** Undo a spoken command: type the words into the box that had focus instead. */
   typeInstead: () => Promise<void>;
   canTypeInstead: boolean;
-  decideApproval: (decision: ApprovalDecision) => Promise<void>;
+  /** Answers KalVoice's own confirmation ("Open 4 Codex threads?"). */
+  decideApproval: (decision: "approve_once" | "deny") => Promise<void>;
   dismiss: () => void;
   updatePreferences: (patch: KalVoicePreferencesPatch) => Promise<KalVoiceStatus>;
   downloads: Record<string, DownloadProgress>;
@@ -115,6 +119,9 @@ function afterPaint(fn: () => void) {
 export function KalVoiceProvider({ children }: { children: ReactNode }) {
   const { client } = useRuntime();
   const { current, navigate } = useNavigation();
+  const workspaces = useWorkspaces();
+  const permissions = usePermissions();
+  const threadsIntent = useThreadsIntent();
   const toast = useToast();
   const [status, setStatus] = useState<KalVoiceStatus | null>(null);
   const [statusError, setStatusError] = useState<KalCodeError | null>(null);
@@ -157,6 +164,40 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
     [client],
   );
 
+  // The UI side of a command's result (the native side already did the work).
+  const surfaces = useRef({ workspaces, permissions, threadsIntent });
+  surfaces.current = { workspaces, permissions, threadsIntent };
+  const runDirective = useCallback(
+    (directive: UiDirective | null) => {
+      const { workspaces, permissions, threadsIntent } = surfaces.current;
+      switch (directive?.kind) {
+        case "navigate":
+          navigate(directive.surface);
+          break;
+        case "open_workspace":
+          void workspaces.activate(directive.workspaceId);
+          navigate("code");
+          break;
+        case "open_terminal": {
+          const { workspaceId, terminalId } = directive;
+          navigate("code");
+          void workspaces.refresh().then(() => workspaces.selectTerminal(terminalId, true, workspaceId));
+          break;
+        }
+        case "open_thread":
+          navigate("threads");
+          threadsIntent.request("open", directive.threadId);
+          break;
+        case "show_approvals":
+          permissions.setPanelOpen(true);
+          break;
+        default:
+          break;
+      }
+    },
+    [navigate],
+  );
+
   const applyResponse = useCallback(
     (response: KalVoiceResponse) => {
       dispatch({ type: "response", response });
@@ -164,9 +205,9 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
         items.map((item) => (item.requestId === response.requestId ? { ...item, response } : item)),
       );
       setStatus((s) => (s ? { ...s, usage: response.usage } : s));
-      if (response.directive?.kind === "navigate") navigate(response.directive.surface);
+      runDirective(response.directive);
     },
-    [navigate],
+    [runDirective],
   );
 
   const submit = useCallback(
@@ -405,16 +446,16 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   }, [client, navigate, refreshStatus]);
 
   const decideApproval = useCallback(
-    async (decision: ApprovalDecision) => {
+    async (decision: "approve_once" | "deny") => {
       const id = stateRef.current.approvalRequestId;
       if (!id) return;
       try {
-        await client.decideApproval(id, decision);
+        applyResponse(await client.kalvoiceConfirm(id, decision));
       } catch (error) {
-        toast.show({ tone: "danger", title: "Approval not recorded", description: toKalCodeError(error).message });
+        toast.show({ tone: "danger", title: "Answer not recorded", description: toKalCodeError(error).message });
       }
     },
-    [client, toast],
+    [client, toast, applyResponse],
   );
 
   const dismiss = useCallback(() => dispatch({ type: "dismiss" }), []);
@@ -455,7 +496,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   );
 
   const prefs = status?.preferences;
-  const saved = placementFor(prefs?.panelPlacements ?? [], sizeClass, prefs?.panelDefault ?? "bottom_right");
+  const saved = placementFor(prefs?.panelPlacements ?? [], sizeClass, prefs?.panelDefault ?? "top");
   const visible = prefs?.panelVisible ?? true;
   const anchor = localPanel?.anchor ?? saved.anchor;
   const x = localPanel?.x ?? saved.x;

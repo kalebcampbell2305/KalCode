@@ -231,6 +231,11 @@ impl ThreadsState {
         Ok(())
     }
 
+    /// The running thread runtime, for KalVoice's thread commands (Z12).
+    pub fn runtime_handle(&self) -> Option<Arc<ThreadRuntime>> {
+        self.runtime.clone()
+    }
+
     fn runtime(&self) -> Result<&Arc<ThreadRuntime>, IpcError> {
         self.runtime.as_ref().ok_or_else(|| {
             KalError::internal(

@@ -174,11 +174,14 @@ fn main() {
 
     let dir = tempfile_dir();
     let core = Arc::new(
-        Core::open(CoreConfig {
-            paths: Paths::new(&dir),
-            app_version: "bench".into(),
-            channel: BuildChannel::Development,
-        })
+        Core::open_with_migrations(
+            CoreConfig {
+                paths: Paths::new(&dir),
+                app_version: "bench".into(),
+                channel: BuildChannel::Development,
+            },
+            &kalcode_kalvoice::schema::migrations_with_kalvoice(),
+        )
         .expect("core"),
     );
     let load = Instant::now();

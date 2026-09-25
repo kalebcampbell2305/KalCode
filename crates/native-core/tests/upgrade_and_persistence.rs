@@ -35,8 +35,7 @@ fn migrations_are_numbered_contiguously() {
             (1, "foundation"),
             (2, "workspaces"),
             (3, "threads"),
-            (4, "permissions"),
-            (5, "kalvoice")
+            (4, "permissions")
         ]
     );
 }
@@ -155,12 +154,12 @@ fn upgrade_from_v1_keeps_data_and_writes_backup() {
         .find_map(|e| match e.event {
             EventPayload::DatabaseMigrated {
                 from_version: 1,
-                to_version: 5,
+                to_version: 4,
                 backup_created,
             } => Some(backup_created),
             _ => None,
         })
-        .expect("database.migrated 1 -> 5");
+        .expect("database.migrated 1 -> 4");
     assert!(migrated);
 
     // Backup file exists and is a valid v1 database with the pre-upgrade data.
@@ -193,32 +192,9 @@ fn upgrade_from_v1_keeps_data_and_writes_backup() {
         Some(workspace.id)
     );
 
-    // The v3 thread tables, the v4 permission tables and the v5 KalVoice tables exist.
+    // The v3 thread tables and the v4 permission tables exist.
     assert_eq!(thread_tables(&core), THREAD_TABLES);
     assert_eq!(permission_tables(&core), PERMISSION_TABLES);
-    assert_eq!(kalvoice_tables(&core), KALVOICE_TABLES);
-}
-
-const KALVOICE_TABLES: [&str; 2] = ["kalvoice_preferences", "kalvoice_requests"];
-
-// Test helper: panics on setup failures by design.
-#[allow(clippy::expect_used)]
-fn kalvoice_tables(core: &Core) -> Vec<String> {
-    core.read(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT name FROM sqlite_master WHERE type = 'table'
-               AND name IN ('kalvoice_preferences', 'kalvoice_requests')
-             ORDER BY name",
-        )?;
-        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
-    })
-    .expect("list tables")
-}
-
-/// Schema v4 (v3 + Z4 permissions).
-fn v4_only() -> &'static [Migration] {
-    &MIGRATIONS[..4]
 }
 
 const THREAD_TABLES: [&str; 4] = ["thread_files", "thread_messages", "threads", "tool_calls"];
@@ -282,11 +258,10 @@ fn backup_versions(dir: &std::path::Path) -> Vec<i64> {
     versions
 }
 
-/// v1 (first release) → v2 (Z1) → v3 (Z3) → v4 (Z4) → v5 (Z12 KalVoice, this build), one step
-/// at a time, with data written at every version. Each upgrade writes a backup of the version it
-/// started from.
+/// v1 (first release) → v2 (Z1) → v3 (Z3) → v4 (Z4, this build), one step at a time, with data
+/// written at every version. Each upgrade writes a backup of the version it started from.
 #[test]
-fn upgrade_v1_to_v5_step_by_step_keeps_data_and_backs_up_each_step() {
+fn upgrade_v1_to_v4_step_by_step_keeps_data_and_backs_up_each_step() {
     let dir = tempfile::tempdir().expect("tempdir");
     let project = tempfile::tempdir().expect("project");
     {
@@ -341,30 +316,14 @@ fn upgrade_v1_to_v5_step_by_step_keeps_data_and_backs_up_each_step() {
     }
     assert_eq!(backup_versions(dir.path()), vec![1, 2]);
 
-    {
-        let core = Core::open_with_migrations(config(dir.path()), v4_only()).expect("v4 open");
-        assert!(
-            kalvoice_tables(&core).is_empty(),
-            "v4 has no KalVoice tables yet"
-        );
-        assert_eq!(permission_tables(&core), PERMISSION_TABLES);
-        core.update_settings(&SettingsPatch {
-            sidebar_collapsed: Some(true),
-            ..Default::default()
-        })
-        .expect("update at v4");
-        core.shutdown();
-    }
+    let core = Core::open(config(dir.path())).expect("v4 open");
     assert_eq!(backup_versions(dir.path()), vec![1, 2, 3]);
-
-    let core = Core::open(config(dir.path())).expect("v5 open");
-    assert_eq!(backup_versions(dir.path()), vec![1, 2, 3, 4]);
     assert_eq!(
         core.diagnostics()
             .expect("diagnostics")
             .database
             .schema_version,
-        5
+        4
     );
 
     // v1 settings, the v2 workspace, the v3 thread and the whole event history survive.
@@ -391,13 +350,7 @@ fn upgrade_v1_to_v5_step_by_step_keeps_data_and_backs_up_each_step() {
         .collect();
     assert_eq!(
         migrations,
-        vec![
-            (0, 1, false),
-            (1, 2, true),
-            (2, 3, true),
-            (3, 4, true),
-            (4, 5, true)
-        ],
+        vec![(0, 1, false), (1, 2, true), (2, 3, true), (3, 4, true)],
         "each step recorded, backups for every existing database"
     );
     let types: Vec<&str> = core
@@ -420,15 +373,6 @@ fn upgrade_v1_to_v5_step_by_step_keeps_data_and_backs_up_each_step() {
         .expect("thread kept");
     assert_eq!(name, "Fix login");
     assert_eq!(permission_tables(&core), PERMISSION_TABLES);
-    // The v4 write survives and the v5 KalVoice tables are empty and usable.
-    assert!(settings.sidebar_collapsed);
-    assert_eq!(kalvoice_tables(&core), KALVOICE_TABLES);
-    let requests: i64 = core
-        .read(
-            |conn| Ok(conn.query_row("SELECT COUNT(*) FROM kalvoice_requests", [], |r| r.get(0))?),
-        )
-        .expect("count");
-    assert_eq!(requests, 0);
 }
 
 #[test]

@@ -5,6 +5,7 @@ mod code_commands;
 mod commands;
 pub mod environment;
 mod kalvoice_commands;
+mod kalvoice_executor;
 pub mod permission_commands;
 mod provider_commands;
 mod thread_commands;
@@ -164,7 +165,7 @@ fn start(app: &tauri::App, removed_overrides: &[&str]) -> AppState {
         app_version: version,
         channel,
     };
-    match Core::open(config) {
+    match open_core(config) {
         Ok(core) => state.core = Some(Arc::new(core)),
         Err(error) => {
             tracing::error!(event = "app.startup_failed", error_code = error.code, error = %error.diagnostic());
@@ -172,6 +173,21 @@ fn start(app: &tauri::App, removed_overrides: &[&str]) -> AppState {
         }
     }
     state
+}
+
+/// Opens the core with this build's migrations. KalVoice's ledger (schema v6) isn't registered
+/// until the event platform's v5 lands; only the end-to-end build, and only against a test's own
+/// `KALCODE_DATA_DIR`, adds it now (behind an empty v5 stand-in). Real data folders never get
+/// either, so the real v5 applies cleanly later.
+fn open_core(config: CoreConfig) -> Result<Core, KalError> {
+    #[cfg(feature = "e2e")]
+    if matches!(environment::data_dir_override(), DataDirOverride::Path(_)) {
+        return Core::open_with_migrations(
+            config,
+            &kalcode_kalvoice::schema::migrations_with_kalvoice(),
+        );
+    }
+    Core::open(config)
 }
 
 fn uses_default_data_dir() -> bool {
@@ -243,6 +259,8 @@ pub fn run(removed_overrides: Vec<&'static str>) {
                 state.core.clone(),
                 &state.info,
                 providers.registry(),
+                threads.runtime_handle(),
+                permissions.service(),
             );
             app.manage(kalvoice);
             app.manage(state);
@@ -288,6 +306,7 @@ pub fn run(removed_overrides: Vec<&'static str>) {
             kalvoice_commands::kalvoice_model_delete,
             kalvoice_commands::kalvoice_talk,
             kalvoice_commands::kalvoice_type_instead,
+            kalvoice_commands::kalvoice_confirm,
             kalvoice_commands::kalvoice_latency,
             kalvoice_commands::kalvoice_latency_record,
             provider_commands::providers_list,

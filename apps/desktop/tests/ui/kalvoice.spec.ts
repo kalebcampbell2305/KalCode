@@ -214,7 +214,9 @@ test.describe("Approvals from the widget", () => {
     await expectState(page, "Needs Approval");
     const w = widget(page);
     await expect(w.getByRole("button", { name: "Deny" })).toBeVisible();
-    await expect(w.getByRole("button", { name: "Allow for thread" })).toBeVisible();
+    // KalVoice's own confirmation: approve once or deny (no standing grants).
+    await expect(w.getByRole("button", { name: "Allow for thread" })).toHaveCount(0);
+    await expect(shown(page).getByText("“open four codex threads”")).toBeVisible();
     await w.getByRole("button", { name: "Approve once" }).click();
     await expect(shown(page).getByText("Opened 4 Codex threads (test double).")).toBeVisible();
     await expectState(page, "Done");
@@ -235,11 +237,30 @@ test.describe("Approvals from the widget", () => {
   });
 });
 
+test.describe("Commands that open other parts of KalCode", () => {
+  test("show approvals opens the approvals panel", async ({ page }) => {
+    await open(page, "?transcript=show%20approvals");
+    await talk(page);
+    await expect(page.getByRole("dialog", { name: "Approvals" })).toBeVisible();
+    await expect(shown(page).getByText("Nothing is waiting for your approval.")).toBeVisible();
+  });
+
+  test("a terminal needs a workspace first, and says how to get one", async ({ page }) => {
+    await open(page, "?transcript=new%20terminal");
+    await talk(page);
+    await expect(shown(page).getByText("Open a workspace first", { exact: false })).toBeVisible();
+  });
+});
+
 test.describe("KalVoice voice widget", () => {
-  test("compact: orb, KALVOICE and the state; no text box or send button", async ({ page }) => {
+  test("compact: orb, KALVOICE and the state on one line at the top; no text box", async ({ page }) => {
     await open(page);
     const w = widget(page);
     await expect(w).toHaveAttribute("data-view", "compact");
+    await expect(w).toHaveAttribute("data-anchor", "top");
+    const box = await widgetBox(page);
+    expect(box.y).toBeLessThan(24);
+    expect(box.height).toBeLessThan(56);
     await expect(w.getByRole("img", { name: "KalVoice" })).toBeVisible();
     await expectState(page, "Ready");
     await expect(w.getByRole("textbox")).toHaveCount(0);
@@ -310,7 +331,7 @@ test.describe("KalVoice voice widget", () => {
     await page.waitForTimeout(400);
 
     await page.setViewportSize({ width: 1024, height: 700 });
-    await expect(widget(page)).toHaveAttribute("data-anchor", "bottom_right");
+    await expect(widget(page)).toHaveAttribute("data-anchor", "top");
     await page.setViewportSize({ width: 1360, height: 860 });
     await expect(widget(page)).toHaveAttribute("data-anchor", "top_left");
   });
@@ -344,10 +365,10 @@ test.describe("KalVoice voice widget", () => {
     const handle = widget(page).getByRole("button", { name: "Move the widget" });
     await handle.focus();
     for (let i = 0; i < 5; i++) await page.keyboard.press("ArrowLeft");
-    await page.keyboard.press("Shift+ArrowUp");
+    await page.keyboard.press("Shift+ArrowDown");
     const after = await widgetBox(page);
     expect(Math.round(before.x - after.x)).toBeGreaterThanOrEqual(78);
-    expect(Math.round(before.y - after.y)).toBeGreaterThanOrEqual(62);
+    expect(Math.round(after.y - before.y)).toBeGreaterThanOrEqual(62);
     await expect(handle).toBeFocused();
   });
 

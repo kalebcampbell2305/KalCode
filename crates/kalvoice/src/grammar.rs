@@ -17,7 +17,7 @@ use kalcode_contracts::app::SurfaceId;
 use kalcode_contracts::kalvoice::{KalVoiceIntent, ThreadScope};
 
 /// The most threads one request may open.
-pub const MAX_THREADS_PER_REQUEST: u32 = 20;
+pub const MAX_THREADS_PER_REQUEST: u32 = 16;
 
 /// Requests longer than this are never parsed as commands (they go to reasoning).
 const MAX_COMMAND_CHARS: usize = 300;

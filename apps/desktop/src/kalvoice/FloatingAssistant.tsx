@@ -160,6 +160,8 @@ export function FloatingAssistant() {
     void kv.stopListening();
   };
 
+  // At the top of the window the widget opens downwards; elsewhere upwards.
+  const growsDown = panel.anchor.startsWith("top");
   const phase = state.phase;
   const listening = phase === "listening" || phase === "transcribing";
   const showsDetail = listening || phase === "done" || phase === "error" || phase === "waiting_for_permission";
@@ -208,31 +210,32 @@ export function FloatingAssistant() {
         </button>
       ) : (
         <div className={styles.body}>
-          <button
-            type="button"
-            className={styles.orbButton}
-            aria-label="Hold to talk"
-            title={`Hold to talk (or hold ${talkKey})`}
-            onPointerDown={(e) => {
-              e.currentTarget.setPointerCapture(e.pointerId);
-              holdStart();
-            }}
-            onPointerUp={holdEnd}
-            onPointerCancel={holdEnd}
-            onKeyDown={(e) => {
-              if ((e.key === " " || e.key === "Enter") && !e.repeat) {
-                e.preventDefault();
-                holdStart();
-              }
-            }}
-            onKeyUp={(e) => {
-              if (e.key === " " || e.key === "Enter") holdEnd();
-            }}
-          >
-            <Orb phase={phase} levelRef={levelRef} size={44} />
-          </button>
           <div className={styles.card}>
             <header className={styles.header} {...dragProps}>
+              <button
+                type="button"
+                className={styles.orbButton}
+                data-no-drag
+                aria-label="Hold to talk"
+                title={`Hold to talk (or hold ${talkKey})`}
+                onPointerDown={(e) => {
+                  e.currentTarget.setPointerCapture(e.pointerId);
+                  holdStart();
+                }}
+                onPointerUp={holdEnd}
+                onPointerCancel={holdEnd}
+                onKeyDown={(e) => {
+                  if ((e.key === " " || e.key === "Enter") && !e.repeat) {
+                    e.preventDefault();
+                    holdStart();
+                  }
+                }}
+                onKeyUp={(e) => {
+                  if (e.key === " " || e.key === "Enter") holdEnd();
+                }}
+              >
+                <Orb phase={phase} levelRef={levelRef} size={30} />
+              </button>
               <button
                 type="button"
                 className={styles.handle}
@@ -243,11 +246,15 @@ export function FloatingAssistant() {
                 <KalVoiceWordmark className={styles.wordmark} />
                 <GripHorizontal className={styles.grip} aria-hidden="true" />
               </button>
+              <p className={styles.state}>
+                <span className={styles.dot} aria-hidden="true" />
+                <span className={styles.stateName}>{STATE_LABELS[phase]}</span>
+              </p>
               <div className={styles.controls} data-no-drag>
                 <IconButton
                   size="sm"
                   label={view === "expanded" ? "Show less" : "Show more"}
-                  icon={view === "expanded" ? <ChevronDown /> : <ChevronUp />}
+                  icon={(view === "expanded") === growsDown ? <ChevronUp /> : <ChevronDown />}
                   onClick={() => setPanel({ view: view === "expanded" ? "compact" : "expanded" })}
                 />
                 <IconButton
@@ -284,10 +291,6 @@ export function FloatingAssistant() {
                 />
               </div>
             </header>
-            <p className={styles.state}>
-              <span className={styles.dot} aria-hidden="true" />
-              <span className={styles.stateName}>{STATE_LABELS[phase]}</span>
-            </p>
 
             {showsDetail ? (
               <div className={styles.detail}>
@@ -311,13 +314,11 @@ export function FloatingAssistant() {
                 ) : null}
                 {phase === "waiting_for_permission" ? (
                   <div className={styles.result}>
+                    {state.lastTalk?.text ? <p className={styles.transcript}>“{state.lastTalk.text}”</p> : null}
                     <p className={styles.message}>{state.message}</p>
                     <div className={styles.actions}>
                       <Button size="sm" variant="ghost" onClick={() => void kv.decideApproval("deny")}>
                         Deny
-                      </Button>
-                      <Button size="sm" onClick={() => void kv.decideApproval("approve_for_thread")}>
-                        Allow for thread
                       </Button>
                       <Button size="sm" variant="primary" onClick={() => void kv.decideApproval("approve_once")}>
                         Approve once

@@ -153,6 +153,11 @@ export class KalCodeClient {
     return this.call("kalvoice_type_instead", { requestId });
   }
 
+  /** The person's answer to a KalVoice confirmation (`approve_once` or `deny`). */
+  kalvoiceConfirm(approvalRequestId: string, decision: "approve_once" | "deny"): Promise<KalVoiceResponse> {
+    return this.call("kalvoice_confirm", { approvalRequestId, decision });
+  }
+
   kalvoiceLatency(): Promise<LatencySnapshot> {
     return this.call("kalvoice_latency");
   }

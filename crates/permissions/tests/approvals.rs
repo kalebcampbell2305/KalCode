@@ -1031,11 +1031,7 @@ fn expire_reasons_and_audit_kinds_are_checked_by_the_schema() {
 
 #[test]
 fn migrations_are_v1_to_v4_in_order_with_permissions_last() {
-    // Later campaigns append after v4 (v5 is KalVoice); v1–v4 never change.
-    let numbering: Vec<(i64, &str)> = db::MIGRATIONS[..4]
-        .iter()
-        .map(|m| (m.version, m.name))
-        .collect();
+    let numbering: Vec<(i64, &str)> = db::MIGRATIONS.iter().map(|m| (m.version, m.name)).collect();
     assert_eq!(
         numbering,
         vec![
@@ -1063,12 +1059,8 @@ fn permissions_migration_upgrades_a_v1_database_and_preserves_data() {
         .expect("seed");
     }
     let mut conn = db::open(&path).expect("reopen");
-    let outcome = db::migrate(
-        &mut conn,
-        &db::MIGRATIONS[..4],
-        Some(&dir.path().join("backups")),
-    )
-    .expect("upgrade");
+    let outcome =
+        db::migrate(&mut conn, db::MIGRATIONS, Some(&dir.path().join("backups"))).expect("upgrade");
     assert_eq!((outcome.from_version, outcome.to_version), (1, 4));
     assert!(outcome.backup.is_some());
     let theme: String = conn
@@ -1101,7 +1093,7 @@ fn permissions_migration_upgrades_a_v1_database_and_preserves_data() {
     }
     // Re-running is a no-op.
     assert!(
-        !db::migrate(&mut conn, &db::MIGRATIONS[..4], None)
+        !db::migrate(&mut conn, db::MIGRATIONS, None)
             .expect("again")
             .applied_any()
     );

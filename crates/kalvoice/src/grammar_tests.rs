@@ -61,7 +61,7 @@ fn creates_threads_with_counts_and_providers() {
         ("spin up two Gemini-CLI sessions", ProviderId::GEMINI_CLI, 2),
         ("new codex thread", ProviderId::CODEX, 1),
         ("open another codex thread", ProviderId::CODEX, 1),
-        ("please open twenty codex threads", ProviderId::CODEX, 20),
+        ("please open sixteen codex threads", ProviderId::CODEX, 16),
         ("open 5 threads with codex", ProviderId::CODEX, 5),
         (
             "start eleven new threads using claude",
@@ -79,7 +79,7 @@ fn creates_threads_with_counts_and_providers() {
             6,
         ),
         ("open a new Claude Code thread", ProviderId::CLAUDE_CODE, 1),
-        ("open seventeen more codex threads", ProviderId::CODEX, 17),
+        ("open fifteen more codex threads", ProviderId::CODEX, 15),
         ("Open 4 codecs threads.", ProviderId::CODEX, 4),
         ("Open for Codex threads", ProviderId::CODEX, 4),
         ("open to claude threads", ProviderId::CLAUDE_CODE, 2),
@@ -116,6 +116,14 @@ fn every_number_word_from_one_to_twenty() {
     ];
     for (i, word) in words.iter().enumerate() {
         let n = u8::try_from(i + 1).expect("small");
+        if u32::from(n) > MAX_THREADS_PER_REQUEST {
+            // Understood as a number, then refused: the thread runtime opens at most 16.
+            assert_eq!(
+                rejected(&format!("open {word} codex threads")),
+                "thread_count_too_large"
+            );
+            continue;
+        }
         assert_eq!(
             intent(&format!("open {word} codex threads")),
             create(ProviderId::CODEX, n)
@@ -130,6 +138,7 @@ fn every_number_word_from_one_to_twenty() {
 #[test]
 fn thread_counts_are_capped_and_validated() {
     for text in [
+        "open 17 codex threads",
         "open 21 codex threads",
         "open twenty one codex threads",
         "open twenty-one codex threads",

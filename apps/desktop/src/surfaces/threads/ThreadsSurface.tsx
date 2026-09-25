@@ -30,12 +30,13 @@ export function ThreadsSurface() {
       );
   }, [list.state, list.entries]);
 
-  // Command palette requests ("New thread", "Search threads").
+  // Command palette requests ("New thread", "Search threads") and KalVoice ("open thread …").
   const handledNonce = useRef(0);
   useEffect(() => {
     if (!intent || intent.nonce === handledNonce.current) return;
     handledNonce.current = intent.nonce;
     if (intent.kind === "new") setPane({ kind: "new" });
+    else if (intent.kind === "open" && intent.threadId) setPane({ kind: "detail", threadId: intent.threadId });
     else requestAnimationFrame(() => searchRef.current?.focus());
   }, [intent]);
 

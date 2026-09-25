@@ -10,8 +10,10 @@
 //!   approval request, or sends it to the user's provider). Requests refused up front — limit
 //!   reached, no provider, a workspace that doesn't exist, a command this build can't run — are
 //!   not counted. Retrying a client request id never counts twice or runs twice.
-//! - Consequential intents (creating, pausing, resuming or stopping threads) go through the
-//!   [`PermissionGate`] under the default Approve mode. KalVoice never changes permission modes.
+//! - Safety asymmetry (docs/ADVANCED.md, KV-02): commands that make things safer (pause, stop)
+//!   run directly; commands that add work (creating or resuming threads) go through the
+//!   [`PermissionGate`] under the default Approve mode and wait for the person's answer.
+//!   KalVoice never answers approvals and never changes permission modes.
 //! - Events carry ids and facts only; request text, transcripts and provider answers never
 //!   appear in them. State and events commit together and are published after commit.
 
@@ -156,10 +158,21 @@ pub struct CommandRequest {
 )]
 #[ts(export)]
 pub enum UiDirective {
-    Navigate { surface: SurfaceId },
-    OpenWorkspace { workspace_id: String },
-    OpenThread { thread_id: String },
-    OpenTerminal { terminal_id: String },
+    Navigate {
+        surface: SurfaceId,
+    },
+    OpenWorkspace {
+        workspace_id: String,
+    },
+    OpenThread {
+        thread_id: String,
+    },
+    OpenTerminal {
+        workspace_id: String,
+        terminal_id: String,
+    },
+    /// Opens the approvals panel.
+    ShowApprovals,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -630,15 +643,58 @@ fn event(payload: EventPayload, correlation: Correlation) -> NewEvent {
     }
 }
 
-/// True for intents that change what agents are doing.
+/// True for intents that add work for agents (they wait for the person's approval). Pausing
+/// and stopping only make things safer, so they run directly (KV-02).
 pub fn is_consequential(intent: &KalVoiceIntent) -> bool {
     matches!(
         intent,
-        KalVoiceIntent::CreateThreads { .. }
-            | KalVoiceIntent::PauseThreads { .. }
-            | KalVoiceIntent::ResumeThreads { .. }
-            | KalVoiceIntent::StopThreads { .. }
+        KalVoiceIntent::CreateThreads { .. } | KalVoiceIntent::ResumeThreads { .. }
     )
+}
+
+/// KalVoice's own confirmation step for commands that add work: every such command waits for
+/// the person to approve it in the KalVoice widget (Approve once or Deny); nothing runs before.
+///
+/// The permission engine (Z4) doesn't accept requests from non-thread origins yet (its
+/// `NormalizedAction` has no origin and requires a thread), so KalVoice can't file these as
+/// `origin_kind = 'kalvoice'` approvals. Contract change requested: `ActionOrigin::KalVoice`
+/// (docs/CONTRACTS_ADVANCED.md §2); until then this gate asks, never allows on its own, and
+/// keeps pending confirmations in memory only.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ConfirmGate;
+
+impl PermissionGate for ConfirmGate {
+    fn evaluate(
+        &self,
+        _action: &NormalizedAction,
+        _mode: PermissionMode,
+    ) -> kalcode_contracts::permissions::PolicyDecision {
+        kalcode_contracts::permissions::PolicyDecision {
+            effect: PolicyEffect::Ask,
+            scopes: Vec::new(),
+            reason: "KalVoice asks before it adds work for your agents.".into(),
+            approvable: true,
+        }
+    }
+
+    fn open_request(
+        &self,
+        action: NormalizedAction,
+        mode: PermissionMode,
+        decision: kalcode_contracts::permissions::PolicyDecision,
+    ) -> std::result::Result<kalcode_contracts::permissions::ApprovalRequest, String> {
+        Ok(kalcode_contracts::permissions::ApprovalRequest {
+            id: new_id(),
+            action,
+            decision,
+            permission_mode: mode,
+            status: kalcode_contracts::permissions::ApprovalStatus::Pending,
+            resolved_decision: None,
+            resolved_at: None,
+        })
+    }
+
+    fn expire_for_thread(&self, _thread_id: &str) {}
 }
 
 /// One-line description for the approval UI and audit log.

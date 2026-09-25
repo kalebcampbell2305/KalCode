@@ -29,6 +29,7 @@
     "allow-kalvoice-model-delete",
     "allow-kalvoice-talk",
     "allow-kalvoice-type-instead",
+    "allow-kalvoice-confirm",
     "allow-kalvoice-latency",
     "allow-kalvoice-latency-record",
     "allow-providers-list",
