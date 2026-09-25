@@ -127,11 +127,11 @@ impl WorkspaceRoot {
     ///
     /// Resolving a path and opening it afterwards is a check-then-use race: a symlink or
     /// junction swapped in between redirects the open outside the workspace. Here the open
-    /// comes first; [`Self::verify_opened`] then asks the operating system where the opened
-    /// handle really is and refuses it unless that is inside the workspace (and not in `.git`).
-    /// A handle obtained through a swap — even one swapped back afterwards — points outside
-    /// and is refused. Hard links are the same file by definition and pass: their content lives
-    /// inside the workspace.
+    /// comes first; [`Self::verify_opened`] then establishes where the opened handle really is
+    /// and refuses it unless that is inside the workspace (and not in `.git`). A handle obtained
+    /// through a swap — even one swapped back afterwards — is a different file from the one the
+    /// path names inside the workspace and is refused. Hard links are the same file by
+    /// definition and pass: their content lives inside the workspace.
     ///
     /// Every read of workspace file content in this crate goes through here; consumers that
     /// read by handle use [`crate::handles::HandleRegistry::open`].
@@ -154,10 +154,11 @@ impl WorkspaceRoot {
         Ok(OpenedFile { file, path })
     }
 
-    /// Verifies an already opened `file` (opened through `rel`): its final path — asked of the
-    /// opened handle itself (`GetFinalPathNameByHandleW` on Windows, `/proc/self/fd` on Linux;
-    /// elsewhere the handle's device + inode must equal those of `rel`'s canonical path now) —
-    /// must be inside the workspace. Returns that path.
+    /// Verifies an already opened `file` (opened through `rel`): where the opened handle really
+    /// is must be inside the workspace. On Linux the kernel names the handle's final path
+    /// (`/proc/self/fd`); elsewhere `rel` is resolved canonically again (it must be inside) and
+    /// the opened handle must be that very file — the same volume + file index on Windows, the
+    /// same device + inode on other Unix systems. Returns that path.
     pub fn verify_opened(&self, rel: &RelPath, file: &std::fs::File) -> Result<PathBuf> {
         let swapped = || outside("That file changed while KalCode was opening it.");
         let path = opened_path(file, || {
@@ -228,17 +229,14 @@ pub struct OpenedFile {
     pub path: PathBuf,
 }
 
-/// The final path of an opened handle, asked of the operating system. `canonical_now` is only
-/// used where no such query exists: the handle is accepted as `canonical_now()` when both name
-/// the same device + inode.
-#[cfg(windows)]
-fn opened_path(
-    file: &std::fs::File,
-    _canonical_now: impl FnOnce() -> Option<PathBuf>,
-) -> Option<PathBuf> {
-    final_path_by_handle(file).ok()
-}
-
+/// Where an opened handle really is. On Linux the kernel reports the handle's final path. Other
+/// systems have no safe query for it, so the handle is accepted as `canonical_now()` (the
+/// path's canonical, containment-checked location now) only when both are the same file: equal
+/// volume serial + file index on Windows (`GetFileInformationByHandle`), device + inode on other
+/// Unix systems. A handle opened through a link that was swapped before or after the open is a
+/// different file and is refused. (Asking Windows for the handle's final path,
+/// `GetFinalPathNameByHandleW`, would need an `unsafe` FFI call; the workspace allows exactly
+/// one audited `unsafe` site, and file identity gives the same guarantee.)
 #[cfg(target_os = "linux")]
 fn opened_path(
     file: &std::fs::File,
@@ -248,7 +246,7 @@ fn opened_path(
     std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())).ok()
 }
 
-#[cfg(all(unix, not(target_os = "linux")))]
+#[cfg(not(target_os = "linux"))]
 fn opened_path(
     file: &std::fs::File,
     canonical_now: impl FnOnce() -> Option<PathBuf>,
@@ -257,45 +255,6 @@ fn opened_path(
     let expected = same_file::Handle::from_path(&path).ok()?;
     let actual = same_file::Handle::from_file(file.try_clone().ok()?).ok()?;
     (expected == actual).then_some(path)
-}
-
-/// `GetFinalPathNameByHandleW` (normalized, DOS volume name — the same form
-/// `std::fs::canonicalize` returns, `\\?\C:\…`).
-#[cfg(windows)]
-#[allow(unsafe_code)]
-fn final_path_by_handle(file: &std::fs::File) -> std::io::Result<PathBuf> {
-    use std::os::windows::ffi::OsStringExt;
-    use std::os::windows::io::AsRawHandle;
-    use windows_sys::Win32::Storage::FileSystem::{
-        FILE_NAME_NORMALIZED, GetFinalPathNameByHandleW, VOLUME_NAME_DOS,
-    };
-    let handle = file.as_raw_handle();
-    let mut buffer = vec![0u16; 512];
-    loop {
-        let capacity = u32::try_from(buffer.len()).unwrap_or(u32::MAX);
-        // SAFETY: `handle` is the live handle owned by `file`, borrowed for the duration of the
-        // call; `buffer` is writable for `capacity` UTF-16 units and the API writes at most that
-        // many (it returns the required size instead when the buffer is too small).
-        let written = unsafe {
-            GetFinalPathNameByHandleW(
-                handle,
-                buffer.as_mut_ptr(),
-                capacity,
-                FILE_NAME_NORMALIZED | VOLUME_NAME_DOS,
-            )
-        } as usize;
-        if written == 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        if written < buffer.len() {
-            buffer.truncate(written);
-            return Ok(PathBuf::from(std::ffi::OsString::from_wide(&buffer)));
-        }
-        if written > 32 * 1024 + 1 {
-            return Err(std::io::Error::other("final path too long"));
-        }
-        buffer.resize(written + 1, 0);
-    }
 }
 
 /// Where `path` is, as far as the filesystem can tell today: the nearest existing ancestor is
