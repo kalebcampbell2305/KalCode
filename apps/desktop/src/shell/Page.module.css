@@ -3,12 +3,13 @@
   flex-direction: column;
   gap: var(--space-8);
   width: 100%;
-  max-width: var(--content-max);
+  min-height: 100%;
   margin: 0;
   padding: calc(var(--page-py) + var(--space-2)) var(--page-px) var(--space-16);
 }
 
-.page[data-width="narrow"] {
+/* Short, single-purpose pages keep their content in a readable column. */
+.page[data-width="narrow"] > * {
   max-width: 48rem;
 }
 
@@ -31,7 +32,7 @@
 
 .description {
   margin-top: var(--space-1-5);
-  max-width: 60ch;
+  max-width: var(--prose-max);
   color: var(--color-text-muted);
   font-size: var(--text-md);
 }

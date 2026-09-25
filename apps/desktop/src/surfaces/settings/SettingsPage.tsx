@@ -21,11 +21,18 @@ function formatOs(family: string): string {
 
 export function SettingsPage() {
   return (
-    <Page title="Settings" description="Changes apply immediately and are saved on this device." width="narrow">
-      <Appearance />
-      <PermissionsSettings />
-      <DiagnosticsSection />
-      <About />
+    <Page title="Settings" description="Changes apply immediately and are saved on this device.">
+      {/* One column up to wide windows; then permissions get a column of their own. */}
+      <div className={styles.layout}>
+        <div className={styles.column}>
+          <Appearance />
+          <DiagnosticsSection />
+          <About />
+        </div>
+        <div className={styles.column}>
+          <PermissionsSettings />
+        </div>
+      </div>
     </Page>
   );
 }

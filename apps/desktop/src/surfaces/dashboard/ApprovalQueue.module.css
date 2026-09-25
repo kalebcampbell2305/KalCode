@@ -56,8 +56,11 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Requests sit side by side when the column is wide, so no prompt stretches into long lines. */
 .list {
   display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 34rem), 1fr));
+  align-items: start;
   gap: var(--space-3);
   margin: 0;
   padding: 0;

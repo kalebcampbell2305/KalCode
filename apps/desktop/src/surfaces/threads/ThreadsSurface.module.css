@@ -33,7 +33,7 @@
 .body {
   display: grid;
   flex: 1;
-  grid-template-columns: minmax(15rem, 21rem) minmax(0, 1fr);
+  grid-template-columns: clamp(15rem, 18vw, 28rem) minmax(0, 1fr);
   min-height: 0;
   border-top: 1px solid var(--color-border);
 }
