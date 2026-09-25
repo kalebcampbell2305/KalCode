@@ -15,6 +15,7 @@ import { cycleTerminal, defaultShell, describeTerminalStatus, tabLabels } from "
 import { useResolvedTheme } from "../../shell/useResolvedTheme.ts";
 import styles from "./Code.module.css";
 import { CodeEmpty } from "./CodeEmpty.tsx";
+import { ProviderPanesSection } from "./panes/ProviderPanesSection.tsx";
 import { codeShortcut } from "./shortcuts.ts";
 import { panelId, TerminalTabs, tabId } from "./TerminalTabs.tsx";
 import { TerminalView } from "./TerminalView.tsx";
@@ -128,6 +129,9 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
           </Button>
         </div>
       </header>
+
+      {/* Z7-W4: provider panes (behind the provider_panes feature flag). */}
+      <ProviderPanesSection workspace={workspace} />
 
       <TerminalTabs
         terminals={terminals}
