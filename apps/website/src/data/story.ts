@@ -1439,7 +1439,7 @@ export const MISSION_GRAPH = {
       role: "Research",
       who: "Gemini CLI",
       provider: "gemini",
-      detail: "Session vs token auth",
+      detail: "Session vs stateless auth",
       x: 382,
       y: 100,
       working: "thinking",

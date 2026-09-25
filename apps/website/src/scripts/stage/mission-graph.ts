@@ -152,10 +152,8 @@ function wire(root: HTMLElement): void {
     },
     { threshold: 0.45 },
   );
-  // Start from the empty graph so the run reads as a build-up.
-  root.dataset.stage = "idle";
-  for (const n of nodes) n.dataset.state = "waiting";
-  for (const e of edges) e.dataset.state = "off";
+  // The finished graph stays on screen until the board is well in view; the run then replays it
+  // (every node and path stays visible throughout, only their light changes).
   io.observe(board);
 }
 
