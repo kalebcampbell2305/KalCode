@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import type { Page } from "@playwright/test";
 
 export const APP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const PERSIST_DIR = ".wrangler/e2e-state";
+const PERSIST_DIR = process.env.KALCODE_E2E_PERSIST ?? ".wrangler/e2e-state";
 
 let ipCounter = 0;
 /**

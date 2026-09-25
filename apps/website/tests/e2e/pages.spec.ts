@@ -1,5 +1,6 @@
+import { PLANS } from "@kalcode/protocol/plans";
 import { expect, test } from "@playwright/test";
-import { NOT_FOUND_PAGE, PAGES, SITE_ORIGIN } from "../../src/lib/site";
+import { NOT_FOUND_PAGE, PAGES, SITE_ORIGIN, SOCIAL } from "../../src/lib/site";
 
 test.describe("every page", () => {
   for (const page of PAGES) {
@@ -20,6 +21,7 @@ test.describe("every page", () => {
       await expect(head.locator('meta[property="og:title"]')).toHaveAttribute("content", page.title);
       await expect(head.locator('meta[property="og:image"]')).toHaveAttribute("content", `${SITE_ORIGIN}/og.png`);
       await expect(head.locator('meta[name="twitter:card"]')).toHaveAttribute("content", "summary_large_image");
+      await expect(head.locator('meta[name="twitter:site"]')).toHaveAttribute("content", SOCIAL.official.handle);
       await expect(head.locator('meta[name="theme-color"]').first()).toHaveAttribute("content", /#/);
       await expect(tab.locator("h1")).toHaveCount(1);
       await expect(tab.locator("main#main")).toBeVisible();
@@ -77,7 +79,41 @@ test.describe("every page", () => {
     }
   });
 
-  test("the hero globe is served as AVIF/WebP with explicit size and high priority", async ({ page }) => {
+  test("the home hero names the product, the providers and an honest call to action", async ({ page }) => {
+    await page.goto("/");
+    const h1 = page.locator("h1");
+    await expect(h1).toContainText("KalCode");
+    await expect(h1).toContainText("One intelligence that operates your entire AI workspace.");
+    const hero = page.locator(".hero");
+    await expect(hero).toContainText("Claude Code, Codex and Gemini CLI");
+    // No public build: the primary action is early access, on this page, and nothing links to a file.
+    const primary = hero.locator(".button--primary");
+    await expect(primary).toHaveText("Join early access");
+    await expect(primary).toHaveAttribute("href", "#early-access");
+    await expect(hero).toContainText("No public build yet");
+    await expect(page.locator('a[href^="/download/"]')).toHaveCount(0);
+    await hero.getByRole("link", { name: "See it in action" }).click();
+    await expect(page).toHaveURL(/#story$/);
+    // Provider bar: honest adapter status.
+    const providers = page.getByRole("list", { name: "Runs the coding agents you already use" });
+    await expect(providers).toContainText("Adapter built");
+    await expect(providers).toContainText("adapter planned");
+  });
+
+  test("home carries Organization and SoftwareApplication JSON-LD built from site data", async ({ page }) => {
+    await page.goto("/");
+    const raw = await page.locator('script[type="application/ld+json"]').textContent();
+    const data = JSON.parse(raw ?? "{}") as { "@graph": Record<string, unknown>[] };
+    const byType = (type: string) => data["@graph"].find((node) => node["@type"] === type);
+    expect(byType("Organization")?.sameAs).toEqual([SOCIAL.official.url]);
+    const app = byType("SoftwareApplication") as { offers: { name: string; price: string }[] };
+    expect(app.offers.map((offer) => [offer.name, Number(offer.price)])).toEqual(
+      PLANS.map((plan) => [plan.name, plan.price.amountUsd]),
+    );
+    expect(raw).not.toMatch(/aggregateRating|review/i);
+  });
+
+  test("the hero orb poster is served as AVIF/WebP with explicit size and high priority", async ({ page }) => {
     await page.goto("/");
     const img = page.locator(".hero img");
     await expect(img).toHaveAttribute("fetchpriority", "high");

@@ -1,0 +1,25 @@
+---
+/**
+ * The home hero's centerpiece. Renders `hero/HeroOrb.astro` (the animated KalCode symbol, owned
+ * by the hero work) when it exists; otherwise the static KalCode globe from the brand assets.
+ */
+import Globe from "./Globe.astro";
+
+type HeroModule = { default: (props: Record<string, unknown>) => unknown };
+const modules = import.meta.glob<HeroModule>("./hero/HeroOrb.astro", { eager: true });
+const HeroOrb = modules["./hero/HeroOrb.astro"]?.default;
+
+interface Props {
+  size?: "full" | "compact";
+}
+const { size = "full" } = Astro.props;
+---
+{
+  HeroOrb ? (
+    <HeroOrb size={size} />
+  ) : (
+    <div class="hero__orb-poster">
+      <Globe variant="kalcode" hero alt="" sizes="(min-width: 60rem) 27rem, 60vw" />
+    </div>
+  )
+}

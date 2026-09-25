@@ -1,7 +1,7 @@
 ---
 /** Decorative line icons (stroke = currentColor). The surrounding control carries the label. */
 interface Props {
-  name: "menu" | "close" | "system" | "light" | "dark" | "check";
+  name: "menu" | "close" | "system" | "light" | "dark" | "check" | "arrow-right" | "arrow-down" | "download" | "prompt";
   class?: string;
 }
 const { name, class: className } = Astro.props;
@@ -33,4 +33,8 @@ const { name, class: className } = Astro.props;
   )}
   {name === "dark" && <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z" />}
   {name === "check" && <path d="m5 12.5 4.5 4.5L19 7.5" />}
+  {name === "arrow-right" && <path d="M5 12h14M13 6l6 6-6 6" />}
+  {name === "arrow-down" && <path d="M12 5v14M6 13l6 6 6-6" />}
+  {name === "download" && <path d="M12 4v11M7 10.5l5 5 5-5M5 20h14" />}
+  {name === "prompt" && <path d="m5 8 4 4-4 4M12 16h7" />}
 </svg>

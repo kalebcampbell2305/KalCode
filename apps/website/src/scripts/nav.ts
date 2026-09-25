@@ -6,7 +6,7 @@ const button = document.querySelector<HTMLButtonElement>("[data-menu-button]");
 const nav = document.querySelector<HTMLElement>("[data-site-nav]");
 
 if (button && nav) {
-  const desktop = window.matchMedia("(min-width: 56rem)");
+  const desktop = window.matchMedia("(min-width: 62rem)");
 
   const isOpen = () => button.getAttribute("aria-expanded") === "true";
 

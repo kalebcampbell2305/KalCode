@@ -1,0 +1,63 @@
+---
+/**
+ * The closing call to action, driven by the release manifest. With a published Windows build it
+ * offers the download; without one it says so and carries the early-access form (home) or links
+ * to it (other pages). Only one early-access form ever appears on a page.
+ */
+import type { PagePath } from "../lib/site";
+import { downloadCta } from "../lib/releases";
+import BrandMark from "./BrandMark.astro";
+import EarlyAccessForm from "./EarlyAccessForm.astro";
+import Icon from "./Icon.astro";
+import XLink from "./XLink.astro";
+
+interface Props {
+  /** When set, the early-access form is rendered here, recording this page as the source. */
+  formSource?: PagePath;
+  title?: string;
+}
+const { formSource, title } = Astro.props;
+const cta = downloadCta(undefined, formSource ? "#early-access-email" : "/download#early-access");
+const heading =
+  title ?? (cta.kind === "download" ? "Run every agent from one window." : "Be first to run KalCode.");
+---
+<section class="section" id="early-access" aria-labelledby="closing-title">
+  <div class="container closing">
+    <BrandMark size={64} />
+    <h2 id="closing-title" class="h2">{heading}</h2>
+    {
+      cta.kind === "download" ? (
+        <>
+          <p>The Windows preview is out. Your providers, your projects, one workspace.</p>
+          <div class="button-row">
+            <a class="button button--primary button--lg" href={cta.href}>
+              <Icon name="download" />
+              {cta.label}
+            </a>
+          </div>
+          <p class="closing__note">{cta.note}</p>
+        </>
+      ) : formSource ? (
+        <>
+          <p>
+            There is no public build yet. Leave your email and we'll write when there is one to try.
+            No account, no payment details.
+          </p>
+          <EarlyAccessForm source={formSource} />
+          <p class="closing__note">
+            Progress in the open: <XLink account="official" withHandle />
+          </p>
+        </>
+      ) : (
+        <>
+          <p>There is no public build yet. Early-access members hear first when there is one to try.</p>
+          <div class="button-row">
+            <a class="button button--primary button--lg" href={cta.href}>
+              {cta.label}
+            </a>
+          </div>
+        </>
+      )
+    }
+  </div>
+</section>

@@ -27,13 +27,10 @@ const page = getPage(path);
       </ul>
     </nav>
     <article class="docs__content">
-      <header class="page-head__inner">
+      <header class="docs__head">
         <h1 class="h1">{heading}</h1>
         <p class="lead">{lead}</p>
-        <p class="dev-note dev-note--boxed">
-          KalCode is in private development. This page describes the product as it is designed;
-          details may change before release.
-        </p>
+        <p class="status-line"><span class="chip chip--dev">Describes the design</span> Details may change before release.</p>
       </header>
       <div class="prose">
         <slot />

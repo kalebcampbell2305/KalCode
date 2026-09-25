@@ -65,7 +65,7 @@ test.describe("early-access form", () => {
   test("a filled honeypot gets the normal success response but is not stored", async ({ page }) => {
     await useClientIp(page);
     const email = uniqueEmail("bot");
-    await page.goto("/pricing");
+    await page.goto("/download");
     const form = page.locator("form[data-api-form='signup']");
     await form.locator("input[name='website']").evaluate((input: HTMLInputElement) => {
       input.value = "https://spam.example";

@@ -1,6 +1,5 @@
 ---
 import { PLANS, formatKalVoiceAllowance } from "@kalcode/protocol/plans";
-import KalVoiceLockup from "../../components/KalVoiceLockup.astro";
 import Shortcut from "../../components/Shortcut.astro";
 import Docs from "../../layouts/Docs.astro";
 import { KALVOICE } from "../../lib/site";
@@ -8,13 +7,11 @@ import { KALVOICE } from "../../lib/site";
 <Docs
   path="/docs/kalvoice"
   heading="KalVoice"
-  lead="KalVoice is the coding assistant and voice layer built into KalCode. Speak your prompts. Control your workspace. Coordinate your coding agents."
+  lead="The reference for KalVoice, the voice layer built into KalCode: shortcuts, counting, providers and privacy."
 >
-  <KalVoiceLockup sizes="(min-width: 56rem) 18rem, min(calc(100vw - 5rem), 18rem)" />
-
   <p>
-    {KALVOICE.summary} KalVoice is in development: this page describes how it is designed, and it
-    is not available in any build yet.
+    {KALVOICE.summary} KalVoice is in development and not available in any build yet. For the
+    overview, see the <a href="/kalvoice">KalVoice page</a>.
   </p>
 
   <h2>Two modes, two shortcuts</h2>

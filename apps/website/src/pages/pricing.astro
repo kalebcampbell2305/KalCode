@@ -7,7 +7,7 @@ import {
   formatKalVoiceAllowance,
   formatPrice,
 } from "@kalcode/protocol/plans";
-import EarlyAccessForm from "../components/EarlyAccessForm.astro";
+import Closing from "../components/Closing.astro";
 import Icon from "../components/Icon.astro";
 import PageHead from "../components/PageHead.astro";
 import Base from "../layouts/Base.astro";
@@ -15,179 +15,207 @@ import { getPage } from "../lib/site";
 
 const page = getPage("/pricing");
 
-const yesNo = (value: boolean) => (value ? "Included" : "—");
-const automations: Record<PlanLimits["automations"], string> = {
-  none: "—",
-  scheduled: "Scheduled",
-  scheduled_and_event: "Scheduled and event-triggered",
-};
+/** The plan most people should pick; drawn with an accent rule, never as a purchase button. */
+const FEATURED = "pro";
+
 const capitalize = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
 const modeNames = ALL_PERMISSION_MODES.map(capitalize).join(", ");
 
-const rows: { label: string; value: (limits: PlanLimits) => string }[] = [
-  { label: "KalVoice Requests / month", value: (l) => formatKalVoiceAllowance(l) },
-  { label: "Local KalVoice dictation", value: (l) => (l.kalvoiceDictation === "unlimited" ? "Unlimited" : "—") },
-  { label: "Provider connections", value: (l) => (l.providerConnections === "unlimited" ? "All" : "—") },
-  {
-    label: `Permission modes (${modeNames})`,
-    value: (l) => (ALL_PERMISSION_MODES.every((mode) => l.permissionModes.includes(mode)) ? "All" : "—"),
-  },
+/** KalVoice Requests on a log scale from 100 to the largest allowance, so tiers read at a glance. */
+const allowances = PLANS.map((plan) => plan.limits.kalvoiceRequestsPerMonth ?? 0);
+const logMax = Math.log10(Math.max(...allowances));
+const meterWidth = (limits: PlanLimits) => {
+  const value = limits.kalvoiceRequestsPerMonth;
+  if (value === null) return 100;
+  return Math.max(6, Math.round(((Math.log10(value) - 2) / (logMax - 2)) * 100));
+};
+
+type Cell = { kind: "tick" } | { kind: "dash" } | { kind: "text"; text: string };
+const tick: Cell = { kind: "tick" };
+const dash: Cell = { kind: "dash" };
+const yes = (value: boolean): Cell => (value ? tick : dash);
+const automations: Record<PlanLimits["automations"], Cell> = {
+  none: dash,
+  scheduled: { kind: "text", text: "Scheduled" },
+  scheduled_and_event: { kind: "text", text: "Scheduled + event" },
+};
+
+const rows: { label: string; value: (limits: PlanLimits) => Cell }[] = [
   {
     label: "Threads running at once",
-    value: (l) => (l.concurrentThreads === null ? "Unlimited" : String(l.concurrentThreads)),
+    value: (l) => ({ kind: "text", text: l.concurrentThreads === null ? "Unlimited" : String(l.concurrentThreads) }),
   },
-  { label: "Persistent agents", value: (l) => yesNo(l.persistentAgents) },
-  { label: "Pair and team workflows", value: (l) => yesNo(l.multiAgentWorkflows) },
+  { label: "Persistent agents", value: (l) => yes(l.persistentAgents) },
+  { label: "Pair and team workflows", value: (l) => yes(l.multiAgentWorkflows) },
   { label: "Automations", value: (l) => automations[l.automations] },
-  { label: "Advanced missions with verification", value: (l) => yesNo(l.advancedMissions) },
+  { label: "Advanced missions with verification", value: (l) => yes(l.advancedMissions) },
+];
+
+// "Every plan includes" is stated once instead of repeated per column, so check it is true.
+for (const plan of PLANS) {
+  const everything =
+    plan.limits.providerConnections === "unlimited" &&
+    plan.limits.kalvoiceDictation === "unlimited" &&
+    ALL_PERMISSION_MODES.every((mode) => plan.limits.permissionModes.includes(mode));
+  if (!everything) throw new Error(`pricing: ${plan.name} no longer includes every provider, mode and dictation`);
+}
+
+const everyPlan = [
+  "All providers",
+  "All permission modes",
+  "Unlimited on-device dictation",
+  "Dashboard and workspaces",
+  "Your own AI account",
+];
+
+const faq = [
+  {
+    q: "What is a KalVoice Request?",
+    a: "One top-level request to KalVoice in command mode, however many steps it takes. “Open four Codex threads” is one request. “Have Claude implement this, Codex review it, then run the tests” is also one request.",
+  },
+  {
+    q: "Does dictation count?",
+    a: "No. KalVoice dictation runs on your device and is unlimited on every plan. It is never counted as a KalVoice Request.",
+  },
+  {
+    q: "Do I pay for AI usage through KalCode?",
+    a: "No. Claude Code, Codex and Gemini CLI run on your own provider accounts, and your usage is billed by each provider, as it is today. KalCode never charges for, resells or meters provider usage.",
+  },
+  {
+    q: "What happens when I reach my limit?",
+    a: "Dictation and everything else in KalCode keep working. KalVoice command requests pause until your monthly allowance resets or you change plans.",
+  },
+  {
+    q: "Are permission modes limited by plan?",
+    a: `No. ${modeNames} are safety controls, and every plan includes all of them.`,
+  },
+  {
+    q: "When can I buy a plan?",
+    a: "At launch. KalCode is in private development and there is no billing yet. Early-access members hear first when plans open.",
+  },
+  {
+    q: "Are these limits final?",
+    a: "No. Prices are set, but the limits in the table are provisional and may change before launch.",
+  },
+  {
+    q: "Do I need an account to join early access?",
+    a: "No. Early access only needs an email address. KalCode accounts arrive with the paid plans at launch.",
+  },
 ];
 ---
 <Base title={page.title} description={page.description} path={page.path}>
   <PageHead
     title="Pricing"
-    lead="Three plans. Your AI providers connect free on every one of them, and your AI usage stays on your own provider account."
-    devNote="Plans become available when KalCode launches. Nothing is for sale today."
+    lead="Every plan runs every provider with every permission mode. Plans differ in KalVoice Requests and workspace features — your AI usage stays on your own account."
+    status="Plans open at launch · nothing is for sale today"
   />
 
   <section class="section" aria-labelledby="plans-title">
     <div class="container">
       <h2 id="plans-title" class="visually-hidden">Plans</h2>
-      <div class="plans">
-        {
-          PLANS.map((plan) => (
-            <section class="plan" aria-labelledby={`plan-${plan.id}`}>
-              <h3 class="plan__name" id={`plan-${plan.id}`}>{plan.name}</h3>
-              <p class="plan__price">
-                <span class="plan__amount">{formatPrice(plan.price)}</span>
-                <span class="plan__interval">{formatInterval(plan.price)}</span>
-              </p>
-              <p class="plan__summary">{plan.summary}</p>
-              <ul class="plan__highlights" role="list">
-                {plan.highlights.map((line) => (
-                  <li>
-                    <Icon name="check" />
-                    <span>{line}</span>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ))
-        }
+      <div class="includes">
+        <p class="includes__label">Every plan includes</p>
+        <ul class="chips" role="list">
+          {everyPlan.map((item) => <li class="chip chip--built">{item}</li>)}
+        </ul>
       </div>
-    </div>
-  </section>
 
-  <section class="section" aria-labelledby="compare-title">
-    <div class="container">
-      <div class="section-head">
-        <h2 id="compare-title" class="h2">Compare plans.</h2>
-        <p>
-          These are the planned limits. They are provisional and may change before launch; the plan
-          catalog on this page is built from the same configuration KalCode itself uses. KalVoice is
-          in development, so its allowances apply once it ships.
-        </p>
-      </div>
-      <div class="table-wrap" role="region" aria-label="Plan comparison" tabindex="0">
-        <table class="table">
-          <caption class="visually-hidden">Planned limits by plan (provisional)</caption>
+      <div class="ladder-wrap" role="region" aria-label="Plan comparison" tabindex="0">
+        <table class="ladder">
+          <caption class="visually-hidden">Plans, prices and planned limits (provisional)</caption>
           <thead>
             <tr>
-              <th scope="col">Feature</th>
-              {PLANS.map((plan) => <th scope="col">{plan.name}</th>)}
+              <td></td>
+              {
+                PLANS.map((plan) => (
+                  <th scope="col" class:list={{ "ladder__col--featured": plan.id === FEATURED }}>
+                    <div class="ladder__plan">
+                      <span class="ladder__name">
+                        {plan.name}
+                        {plan.id === FEATURED && <span class="ladder__tag">Most people</span>}
+                      </span>
+                      <span class="ladder__price">
+                        {formatPrice(plan.price)}
+                        <small>{formatInterval(plan.price)}</small>
+                      </span>
+                      <span class="ladder__summary">{plan.summary}</span>
+                    </div>
+                  </th>
+                ))
+              }
             </tr>
           </thead>
           <tbody>
+            <tr class="ladder__row--key">
+              <th scope="row">KalVoice Requests a month</th>
+              {
+                PLANS.map((plan) => (
+                  <td class:list={{ "ladder__col--featured": plan.id === FEATURED }}>
+                    <div class="ladder__value">
+                      <strong>{formatKalVoiceAllowance(plan.limits)}</strong>
+                      <svg class="meter" viewBox="0 0 100 6" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+                        <rect class="meter__track" width="100" height="6" rx="3" />
+                        <rect class="meter__fill" width={meterWidth(plan.limits)} height="6" rx="3" />
+                      </svg>
+                    </div>
+                  </td>
+                ))
+              }
+            </tr>
             {
               rows.map((row) => (
                 <tr>
                   <th scope="row">{row.label}</th>
-                  {PLANS.map((plan) => (
-                    <td>{row.value(plan.limits)}</td>
-                  ))}
+                  {PLANS.map((plan) => {
+                    const cell = row.value(plan.limits);
+                    return (
+                      <td class:list={{ "ladder__col--featured": plan.id === FEATURED }}>
+                        {cell.kind === "tick" && (
+                          <span class="tick">
+                            <Icon name="check" />
+                            <span class="visually-hidden">Included</span>
+                          </span>
+                        )}
+                        {cell.kind === "dash" && (
+                          <span class="dash">
+                            <span aria-hidden="true">—</span>
+                            <span class="visually-hidden">Not included</span>
+                          </span>
+                        )}
+                        {cell.kind === "text" && cell.text}
+                      </td>
+                    );
+                  })}
                 </tr>
               ))
             }
           </tbody>
         </table>
       </div>
+      <p class="section-foot">
+        <span>Prices are set. Limits are provisional and may change before launch.</span>
+        <a class="text-link" href="/docs/kalvoice">How KalVoice Requests are counted <Icon name="arrow-right" /></a>
+      </p>
     </div>
   </section>
 
   <section class="section" aria-labelledby="faq-title">
-    <div class="container split">
-      <div class="split__aside section-head">
-        <h2 id="faq-title" class="h2">Questions.</h2>
+    <div class="container feature-split feature-split--top">
+      <div class="feature-split__copy">
+        <h2 id="faq-title" class="h2 h2--sm">Questions</h2>
       </div>
-      <dl class="definition-list">
-        <div>
-          <dt class="h3">What is a KalVoice Request?</dt>
-          <dd>
-            One top-level request to KalVoice in command mode, however many steps it takes. “Open
-            four Codex threads” is one request. “Have Claude implement this, Codex review it, then
-            run the tests” is also one request.
-          </dd>
-        </div>
-        <div>
-          <dt class="h3">Does dictation count?</dt>
-          <dd>
-            No. KalVoice dictation runs on your device and is unlimited on every plan. It is never
-            counted as a KalVoice Request.
-          </dd>
-        </div>
-        <div>
-          <dt class="h3">Do I pay for AI usage through KalCode?</dt>
-          <dd>
-            No. Claude Code, Codex and Gemini CLI run on your own provider accounts, and your usage
-            is billed by each provider, as it is today. KalCode never charges for, resells or meters
-            provider usage.
-          </dd>
-        </div>
-        <div>
-          <dt class="h3">What happens when I reach my limit?</dt>
-          <dd>
-            Dictation and everything else in KalCode keep working. KalVoice command requests pause
-            until your monthly allowance resets or you upgrade.
-          </dd>
-        </div>
-        <div>
-          <dt class="h3">Are permission modes limited by plan?</dt>
-          <dd>
-            No. Plan, Approve, Auto, Bypass and Custom are safety controls, and every plan includes
-            all of them.
-          </dd>
-        </div>
-        <div>
-          <dt class="h3">When can I buy a plan?</dt>
-          <dd>
-            At launch. KalCode is in private development and there is no billing yet. Early-access
-            members will hear first when plans open.
-          </dd>
-        </div>
-        <div>
-          <dt class="h3">Are these limits final?</dt>
-          <dd>
-            No. Prices are set, but the limits in the comparison table are provisional and may change
-            before launch.
-          </dd>
-        </div>
-        <div>
-          <dt class="h3">Do I need an account to join early access?</dt>
-          <dd>
-            No. Early access only needs an email address. KalCode accounts arrive with the paid
-            plans at launch.
-          </dd>
-        </div>
-      </dl>
+      <div class="faq">
+        {
+          faq.map((item) => (
+            <details>
+              <summary>{item.q}</summary>
+              <p class="faq__answer">{item.a}</p>
+            </details>
+          ))
+        }
+      </div>
     </div>
   </section>
 
-  <section class="section" id="early-access" aria-labelledby="early-access-title">
-    <div class="container signup">
-      <div class="section-head">
-        <h2 id="early-access-title" class="h2">Hear when plans open.</h2>
-        <p>Join early access and we'll email you when there is a build to try.</p>
-      </div>
-      <EarlyAccessForm source="/pricing" />
-    </div>
-  </section>
+  <Closing title="Hear first when plans open." />
 </Base>

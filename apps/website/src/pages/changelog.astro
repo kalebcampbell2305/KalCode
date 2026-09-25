@@ -2,6 +2,7 @@
 import { PLANS, formatKalVoiceAllowance } from "@kalcode/protocol/plans";
 import PageHead from "../components/PageHead.astro";
 import Base from "../layouts/Base.astro";
+import XLink from "../components/XLink.astro";
 import { getPage } from "../lib/site";
 
 const page = getPage("/changelog");
@@ -14,11 +15,32 @@ const allowances = PLANS.map((plan) => `${plan.name} ${formatKalVoiceAllowance(p
   />
   <section class="section" aria-label="Releases">
     <div class="container">
+      <article class="release" aria-labelledby="release-website-2026-09-24">
+        <div class="release__meta">
+          <h2 class="release__version" id="release-website-2026-09-24">A new kalcoded.com and official X accounts</h2>
+          <p><time datetime="2026-09-24">September 24, 2026</time></p>
+          <p class="chip chip--built">Website · live</p>
+        </div>
+        <div class="prose">
+          <p>
+            The website now shows KalCode instead of describing it. Every preview is labelled as a
+            product preview with sample data, and anything not built yet says so.
+          </p>
+          <ul>
+            <li><strong>Home.</strong> The animated KalCode symbol, the providers you already use with their honest adapter status, and the workspace in product previews: terminals, permissions, KalVoice and the Dashboard.</li>
+            <li><strong>KalVoice page.</strong> Dictation and command mode side by side, KalVoice Requests per plan, and how audio stays on your device.</li>
+            <li><strong>Pricing.</strong> One comparison table, with what every plan includes stated once.</li>
+            <li><strong>Download.</strong> Build status for Windows, macOS and Linux, read from the release manifest. There is no public build yet, and the page says so.</li>
+            <li><strong>Product.</strong> Each part of the workspace, with a table of what is built today and what is planned.</li>
+            <li><strong>Official X accounts.</strong> Follow <XLink account="official" withHandle /> for KalCode news and <XLink account="founder" withHandle /> for the founder.</li>
+          </ul>
+        </div>
+      </article>
       <article class="release" aria-labelledby="release-kalvoice">
         <div class="release__meta">
           <h2 class="release__version" id="release-kalvoice">KalVoice and your own providers</h2>
           <p><time datetime="2026-09-24">September 24, 2026</time></p>
-          <p>Announcement · in development</p>
+          <p class="chip chip--dev">Announcement · in development</p>
         </div>
         <div class="prose">
           <p>
@@ -39,7 +61,7 @@ const allowances = PLANS.map((plan) => `${plan.name} ${formatKalVoiceAllowance(p
         <div class="release__meta">
           <h2 class="release__version" id="release-0-1-0">0.1.0 — Foundation</h2>
           <p><time datetime="2026-09-24">September 24, 2026</time></p>
-          <p>Development build · not publicly released</p>
+          <p class="chip">Development build · not publicly released</p>
         </div>
         <div class="prose">
           <p>

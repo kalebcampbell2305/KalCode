@@ -1,6 +1,6 @@
 ---
 /**
- * Lettering extracted from the owner's brand artwork (white-on-transparent PNGs from
+ * The KalCode wordmark extracted from the owner's brand artwork (a white-on-transparent PNG from
  * tooling/generate-brand-assets.py), drawn as a CSS mask filled with `currentColor` so the
  * real letterforms work in both light and dark themes.
  *
@@ -8,7 +8,8 @@
  * element (for example a labelled link) already names it.
  */
 interface Props {
-  name: "kalcode-wordmark" | "kalcode-tagline";
+  /** Only the wordmark: the tagline raster smudges at small sizes, so it is set as live text. */
+  name: "kalcode-wordmark";
   label?: string;
   class?: string;
 }

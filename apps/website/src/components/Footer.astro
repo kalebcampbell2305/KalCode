@@ -1,7 +1,8 @@
 ---
-import { FOOTER_NAV } from "../lib/site";
+import { FOOTER_NAV, TAGLINE } from "../lib/site";
 import BrandMark from "./BrandMark.astro";
 import Lettering from "./Lettering.astro";
+import ThemeToggle from "./ThemeToggle.astro";
 import XLink from "./XLink.astro";
 
 const columns = [
@@ -18,9 +19,7 @@ const columns = [
           <BrandMark size={36} />
           <Lettering name="kalcode-wordmark" class="wordmark" />
         </a>
-        <p class="site-footer__tagline">
-          <Lettering name="kalcode-tagline" label="One intelligence. A brighter tomorrow." />
-        </p>
+        <p class="tagline">{TAGLINE.split(". ").map((part, index, all) => <span>{index < all.length - 1 ? `${part}.` : part}</span>)}</p>
       </div>
       {
         columns.map((column) => (
@@ -45,8 +44,11 @@ const columns = [
       </nav>
     </div>
     <div class="site-footer__base">
-      <p>© 2026 KalCode</p>
-      <p>KalCode is in private development.</p>
+      <div class="site-footer__legal">
+        <p>© 2026 KalCode</p>
+        <p>KalCode is in private development.</p>
+      </div>
+      <ThemeToggle />
     </div>
   </div>
 </footer>

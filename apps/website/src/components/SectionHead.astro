@@ -1,0 +1,35 @@
+---
+/**
+ * One claim per section: a heavy headline, at most two lines of support, and the truth labels
+ * that apply to what the section shows.
+ */
+interface Chip {
+  label: string;
+  kind?: "dev" | "built" | "live" | "planned" | "plain";
+}
+
+interface Props {
+  /** id of the heading, for aria-labelledby on the section. */
+  id: string;
+  title: string;
+  text?: string;
+  chips?: Chip[];
+  layout?: "split" | "center" | "stack";
+  size?: "lg" | "sm";
+}
+const { id, title, text, chips = [], layout = "split", size = "lg" } = Astro.props;
+---
+<header class:list={["section-head", `section-head--${layout}`]}>
+  {
+    chips.length > 0 && (
+      <p class="section-head__meta">
+        {chips.map((chip) => (
+          <span class:list={["chip", chip.kind && chip.kind !== "planned" ? `chip--${chip.kind}` : undefined]}>{chip.label}</span>
+        ))}
+      </p>
+    )
+  }
+  <h2 id={id} class:list={["h2", { "h2--sm": size === "sm" }]}>{title}</h2>
+  {text && <p>{text}</p>}
+  <slot />
+</header>
