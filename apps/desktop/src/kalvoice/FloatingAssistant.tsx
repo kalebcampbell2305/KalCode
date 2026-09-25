@@ -182,7 +182,7 @@ export function FloatingAssistant() {
       data-phase={phase}
       data-dragging={drag ? "true" : undefined}
       data-anchor={panel.anchor}
-      aria-label="KalVoice"
+      aria-label="KalVoice widget"
       style={{ left: position.left, top: position.top }}
     >
       <p className="visually-hidden" role="status" aria-live="polite">
@@ -192,7 +192,7 @@ export function FloatingAssistant() {
         <button
           type="button"
           className={styles.orbOnly}
-          aria-label={`KalVoice, ${STATE_LABELS[phase]}. Open the widget. Arrow keys move it.`}
+          aria-label={`Open the widget (${STATE_LABELS[phase]}). Arrow keys move it.`}
           title={hint}
           onClick={() => {
             if (suppressClick.current) {
@@ -211,7 +211,7 @@ export function FloatingAssistant() {
           <button
             type="button"
             className={styles.orbButton}
-            aria-label="Hold to talk to KalVoice"
+            aria-label="Hold to talk"
             title={`Hold to talk (or hold ${talkKey})`}
             onPointerDown={(e) => {
               e.currentTarget.setPointerCapture(e.pointerId);
@@ -236,7 +236,7 @@ export function FloatingAssistant() {
               <button
                 type="button"
                 className={styles.handle}
-                aria-label="Move the KalVoice widget"
+                aria-label="Move the widget"
                 title="Drag to move, or use the arrow keys"
                 onKeyDown={onMoveKey}
               >

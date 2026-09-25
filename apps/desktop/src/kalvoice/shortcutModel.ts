@@ -22,6 +22,14 @@ function unsupported(what: string, why: string): KeyCheck {
   return { ok: false, code: "talk_key_unsupported", message: `${what} can't be the push-to-talk key: ${why}` };
 }
 
+/** A modifier pressed on its own (the start of a chord, or someone trying Shift alone). */
+export function isModifierOnly(event: KeyLike): boolean {
+  return (
+    /^(Control|Alt|Shift|Meta|OS)(Left|Right)?$/.test(event.code) ||
+    ["Control", "Alt", "Shift", "Meta"].includes(event.key)
+  );
+}
+
 /**
  * Reads the key a person pressed in the "Press the key you want to use" capture. Only keys that
  * actually arrive are offered: on most Windows keyboards Fn never does.
@@ -33,10 +41,7 @@ export function talkKeyFromEvent(event: KeyLike, allowed: readonly string[]): Ke
   if (["CapsLock", "NumLock"].includes(event.code)) {
     return unsupported("A lock key", "it would switch on and off while you hold it.");
   }
-  if (
-    /^(Control|Alt|Shift|Meta|OS)(Left|Right)?$/.test(event.code) ||
-    ["Control", "Alt", "Shift", "Meta"].includes(event.key)
-  ) {
+  if (isModifierOnly(event)) {
     return unsupported("A modifier key", "the system can't register it on its own.");
   }
   if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) {

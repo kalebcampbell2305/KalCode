@@ -28,7 +28,13 @@ import { type KalCodeError, toKalCodeError } from "../ipc/errors.ts";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { useNavigation } from "../shell/navigation.tsx";
 import { type AssistantState, INITIAL_STATE, reduce } from "./assistantState.ts";
-import { type DictationTarget, insertTranscript, resolveDictationTarget, targetIsAlive } from "./dictation.ts";
+import {
+  type DictationTarget,
+  insertTranscript,
+  reconnectTarget,
+  resolveDictationTarget,
+  targetIsAlive,
+} from "./dictation.ts";
 import { placementFor, sizeClassFor } from "./panelGeometry.ts";
 
 export interface HistoryItem {
@@ -98,6 +104,8 @@ function targetKind(target: DictationTarget | null): TalkTarget {
   if (!target) return "none";
   return target.kind === "sink" ? "terminal" : "field";
 }
+
+const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
 /** Runs `fn` after the browser has painted the current update (for "visible action" timing). */
 function afterPaint(fn: () => void) {
@@ -369,12 +377,19 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
     const last = stateRef.current.lastTalk;
     const saved = undo.current;
     if (!last || !saved || saved.requestId !== last.requestId || !saved.target) return;
-    if (!targetIsAlive(saved.target)) {
-      dispatch({ type: "dictation_blocked", message: "That text box has closed." });
+    if (saved.previous) {
+      // Back to where the words were meant to go; its text box is re-created on the next frames.
+      navigate(saved.previous);
+      await nextFrame();
+      await nextFrame();
+    }
+    const target = reconnectTarget(saved.target);
+    if (!target) {
+      dispatch({ type: "dictation_blocked", message: `That text box has closed. You said: “${last.text}”` });
       return;
     }
-    if (saved.previous) navigate(saved.previous);
-    insertTranscript(saved.target, last.text);
+    if (target.element instanceof HTMLElement) target.element.focus();
+    insertTranscript(target, last.text);
     let refunded = false;
     try {
       refunded = await client.kalvoiceTypeInstead(last.requestId);

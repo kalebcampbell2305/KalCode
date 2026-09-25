@@ -7,7 +7,7 @@ import { formatBytes } from "./assistantState.ts";
 import { useKalVoice, useOptionalKalVoice } from "./KalVoiceProvider.tsx";
 import styles from "./KalVoiceSettings.module.css";
 import { ANCHOR_LABELS } from "./panelGeometry.ts";
-import { checkReserved, displayKey, talkKeyFromEvent } from "./shortcutModel.ts";
+import { checkReserved, displayKey, isModifierOnly, talkKeyFromEvent } from "./shortcutModel.ts";
 
 const ANCHORS: PanelAnchor[] = [
   "bottom_right",
@@ -100,6 +100,8 @@ function TalkKeyRow() {
       setCapturing(false);
       return;
     }
+    // A modifier alone may be the start of a chord: wait for the next key (or its release).
+    if (isModifierOnly(event)) return;
     setCapturing(false);
     // Whatever the keyboard actually delivers: Fn is only ever offered if it arrives.
     const pressed = talkKeyFromEvent(event, status.talkKeys);
@@ -139,6 +141,12 @@ function TalkKeyRow() {
             setCapturing((c) => !c);
           }}
           onKeyDown={(e) => void onKeyDown(e)}
+          onKeyUp={(e) => {
+            if (!capturing || !isModifierOnly(e)) return;
+            const pressed = talkKeyFromEvent(e, status.talkKeys);
+            setCapturing(false);
+            if (!pressed.ok) setError(pressed.message);
+          }}
           onBlur={() => setCapturing(false)}
         >
           {capturing ? "Press the key you want to use…" : "Change"}
@@ -410,7 +418,7 @@ function PanelRow() {
       <Row
         id="kalvoice-panel-position"
         label="Widget position"
-        help="Where the floating KalVoice assistant starts. Changing it moves the assistant there in every window size."
+        help="Where the KalVoice widget starts. Changing it moves the widget there in every window size."
       >
         <select
           className={styles.select}

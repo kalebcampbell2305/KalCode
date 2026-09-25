@@ -1,7 +1,8 @@
 import type { SettingsPatch, SurfaceId } from "@kalcode/protocol";
 import { Command } from "cmdk";
-import { ClipboardCopy, FolderOpen, KeyRound, Monitor, Moon, PanelLeft, Rows3, Sun } from "lucide-react";
+import { AudioLines, ClipboardCopy, FolderOpen, KeyRound, Monitor, Moon, PanelLeft, Rows3, Sun } from "lucide-react";
 import type { ReactNode } from "react";
+import { useOptionalKalVoice } from "../kalvoice/KalVoiceProvider.tsx";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { useDiagnosticsActions } from "../surfaces/settings/useDiagnosticsActions.ts";
 import styles from "./CommandPalette.module.css";
@@ -17,6 +18,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const { info, settings, updateSettings } = useRuntime();
   const { navigate } = useNavigation();
   const diagnostics = useDiagnosticsActions();
+  const kalvoice = useOptionalKalVoice();
 
   const run = (action: () => unknown) => () => {
     onOpenChange(false);
@@ -77,6 +79,18 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             {settings.sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
           </Item>
         </Command.Group>
+
+        {kalvoice?.status ? (
+          <Command.Group heading="KalVoice" className={styles.group}>
+            <Item
+              icon={<AudioLines />}
+              onSelect={run(() => kalvoice.setPanelVisible(!kalvoice.panel.visible))}
+              keywords={["voice", "push to talk", "orb"]}
+            >
+              {kalvoice.panel.visible ? "Hide the KalVoice widget" : "Show the KalVoice widget"}
+            </Item>
+          </Command.Group>
+        ) : null}
 
         <Command.Group heading="Diagnostics" className={styles.group}>
           <Item icon={<ClipboardCopy />} onSelect={run(diagnostics.copyReport)}>

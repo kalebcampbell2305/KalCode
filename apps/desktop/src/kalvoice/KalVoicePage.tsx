@@ -171,7 +171,10 @@ export function KalVoicePage() {
       >
         {history.length === 0 ? (
           <EmptyState art={<MessageSquareText />} title="No requests yet">
-            <p>Ask something above, or press the command shortcut from anywhere in KalCode.</p>
+            <p>
+              Type something above, or hold {status ? displayKey(status.preferences.talkKey) : "the push-to-talk key"}{" "}
+              and speak.
+            </p>
           </EmptyState>
         ) : (
           <ol className={styles.history}>

@@ -57,6 +57,17 @@ export function targetIsAlive(target: DictationTarget): boolean {
 }
 
 /**
+ * The same target after a page change: a page re-creates its fields, so a field with an id is
+ * found again by that id. Null when it's gone for good.
+ */
+export function reconnectTarget(target: DictationTarget): DictationTarget | null {
+  if (targetIsAlive(target)) return target;
+  if (target.kind !== "field" || !target.element.id) return null;
+  const again = document.getElementById(target.element.id);
+  return again && isEditableField(again) ? { kind: "field", element: again } : null;
+}
+
+/**
  * Text to insert at the selection, with a separating space when the transcript would otherwise
  * run into the previous word.
  */

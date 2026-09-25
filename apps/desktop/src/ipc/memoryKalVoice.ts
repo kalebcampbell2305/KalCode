@@ -140,6 +140,13 @@ const SURFACE_LABELS: Record<SurfaceId, string> = {
   settings: "Settings",
 };
 
+const DONE_SUMMARY: Record<string, string> = {
+  create_threads: "Opened 4 Codex threads (test double).",
+  resume_threads: "Resumed all threads (test double).",
+  pause_threads: "Paused all threads (test double).",
+  stop_threads: "Stopped all threads (test double).",
+};
+
 function fail(code: string, message: string, category: IpcError["category"] = "validation"): never {
   throw { category, code, message, retryable: false } satisfies IpcError;
 }
@@ -479,6 +486,16 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
       }
       used += 1;
       counted.set(requestId, parsed.kind);
+      // Making things safer runs directly (pause, stop); anything that adds work waits for approval.
+      if (parsed.kind === "pause_threads" || parsed.kind === "stop_threads") {
+        emit({ type: "kalvoice.request_completed", payload: { requestId } }, { correlation: { requestId } });
+        return respond(
+          requestId,
+          parsed.kind,
+          { kind: "completed", summary: DONE_SUMMARY[parsed.kind] ?? "Done." },
+          true,
+        );
+      }
       const approvalRequestId = crypto.randomUUID();
       pending.set(approvalRequestId, { requestId, kind: parsed.kind });
       return respond(requestId, parsed.kind, { kind: "permission_required", approvalRequestId }, true);
@@ -715,7 +732,7 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
             : respond(
                 item.requestId,
                 item.kind,
-                { kind: "completed", summary: "Stopped all threads (test double)." },
+                { kind: "completed", summary: DONE_SUMMARY[item.kind] ?? "Done (test double)." },
                 true,
               ),
       });
