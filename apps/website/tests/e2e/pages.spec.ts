@@ -165,6 +165,6 @@ test.describe("every page", () => {
     expect(await page.locator('.hero img[fetchpriority="high"]').count()).toBeGreaterThan(0);
     expect(await page.locator('.hero source[type="image/avif"]').count()).toBeGreaterThan(0);
     // The poster (the LCP image) is preloaded with the layout's sizes.
-    await expect(page.locator('head link[rel="preload"][as="image"]')).toHaveCount(2);
+    await expect(page.locator('head link[rel="preload"][as="image"]')).toHaveCount(3);
   });
 });

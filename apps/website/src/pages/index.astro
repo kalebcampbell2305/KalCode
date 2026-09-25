@@ -47,6 +47,15 @@ const policies = [
 ] as const;
 ---
 <Base title={page.title} description={page.description} path={page.path} world jsonLd={structuredData()}>
+  <!-- The wordmark is a CSS mask (fetched in CORS mode), and often the LCP element: fetch it early. -->
+  <link
+    slot="head"
+    rel="preload"
+    as="image"
+    href="/assets/brand/kalcode-wordmark.png"
+    crossorigin="anonymous"
+    fetchpriority="high"
+  />
   {
     HERO_WORLD_PRELOADS.map((preload) => (
       <link

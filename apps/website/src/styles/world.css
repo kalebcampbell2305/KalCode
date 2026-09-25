@@ -258,6 +258,15 @@ body[data-world] {
   border-top: 0;
 }
 
+/* Off-screen sections skip style, layout and paint until they come near the viewport, so the
+   heavy product demos below the fold cost nothing at load. `auto` remembers the rendered size,
+   so the scrollbar does not jump. The pinned scroll story is left out (it needs its own layout). */
+.world-section:not(#story),
+.finale {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 1000px;
+}
+
 .world-section--tall {
   padding-block: calc(var(--site-section-y) * 1.2);
 }
@@ -832,13 +841,15 @@ body[data-world] {
   letter-spacing: 0;
 }
 
+/* Sans, not mono: the band sits just under the first viewport and should not pull in a third
+   font before the hero has painted. */
 .providers__status {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
   color: var(--color-text-muted);
-  font-family: var(--font-mono);
   font-size: var(--site-text-xs);
+  letter-spacing: 0.02em;
 }
 
 @media (min-width: 56rem) {
