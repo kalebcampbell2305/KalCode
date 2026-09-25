@@ -1,0 +1,31 @@
+---
+/**
+ * The site-wide "Download KalCode" button, driven by the release manifest (lib/releases.ts):
+ * the real installer when a build is published (other systems are routed to /download by
+ * scripts/download-route.ts), the honest download page when there is none.
+ */
+import { downloadCta } from "../lib/releases";
+import Icon from "./Icon.astro";
+
+interface Props {
+  size?: "lg" | "md";
+}
+const { size = "lg" } = Astro.props;
+const cta = downloadCta();
+---
+<a
+  class:list={["button", "button--primary", { "button--lg": size === "lg" }]}
+  href={cta.href}
+  data-download-os={cta.os ?? undefined}
+  data-download-state={cta.kind}
+>
+  {cta.label}
+  <Icon name="arrow-right" />
+</a>
+{
+  cta.os && (
+    <script>
+      import "../scripts/download-route";
+    </script>
+  )
+}

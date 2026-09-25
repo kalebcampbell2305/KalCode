@@ -1,0 +1,1200 @@
+/*
+ * The KalCode world: the dark, cinematic environment every marketing page lives in
+ * (approved concepts, round 3: web-audit/approved).
+ *
+ * Layering, back to front: environment (Backdrop: HERO's SpaceBackdrop, or the CSS fallback
+ * below; procedural planets and horizons) -> product visualization (stage, in lit frames) ->
+ * interface (buttons, chips) -> foreground type.
+ *
+ * One continuous space: environments fade into the shared base at their edges and vary per
+ * section (orbital, nebula, deep command field, gravity, horizon). Nothing here moves
+ * continuously; reveals are one-shot and honour reduced motion.
+ */
+
+:root {
+  --world-base: #03050c;
+  --world-deep: #010208;
+  --world-blue: 76 141 255;
+  --world-cyan: 110 196 255;
+  --world-violet: 108 92 231;
+  --world-gold: 255 181 84;
+  --world-line: 150 186 255;
+  --world-frame-radius: 1.25rem;
+}
+
+/* World pages are always dark; keep the canvas dark too (overscroll, scrollbars). */
+html:has(> body[data-world]) {
+  background: var(--world-base);
+  color-scheme: dark;
+}
+
+body[data-world] {
+  background: var(--world-base);
+}
+
+/* ---------- Backdrop (CSS fallback for SpaceBackdrop) ---------- */
+
+.backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 12%, #000 88%, transparent 100%);
+  mask-image: linear-gradient(180deg, transparent 0, #000 12%, #000 88%, transparent 100%);
+}
+
+.backdrop::before,
+.backdrop::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+/* A restrained starfield, tiled. */
+.backdrop::after {
+  background-image:
+    radial-gradient(1px 1px at 7% 12%, rgb(255 255 255 / 0.75), transparent 60%),
+    radial-gradient(1px 1px at 23% 64%, rgb(200 220 255 / 0.55), transparent 60%),
+    radial-gradient(1.5px 1.5px at 38% 28%, rgb(255 255 255 / 0.7), transparent 60%),
+    radial-gradient(1px 1px at 52% 83%, rgb(190 210 255 / 0.5), transparent 60%),
+    radial-gradient(1px 1px at 67% 41%, rgb(255 255 255 / 0.55), transparent 60%),
+    radial-gradient(1.5px 1.5px at 81% 9%, rgb(210 225 255 / 0.7), transparent 60%),
+    radial-gradient(1px 1px at 91% 72%, rgb(255 255 255 / 0.5), transparent 60%),
+    radial-gradient(1px 1px at 14% 91%, rgb(200 220 255 / 0.45), transparent 60%),
+    radial-gradient(1px 1px at 61% 6%, rgb(255 255 255 / 0.45), transparent 60%),
+    radial-gradient(1px 1px at 46% 51%, rgb(200 220 255 / 0.4), transparent 60%),
+    radial-gradient(1px 1px at 3% 47%, rgb(255 255 255 / 0.4), transparent 60%),
+    radial-gradient(1px 1px at 97% 35%, rgb(200 220 255 / 0.45), transparent 60%);
+  background-size: 520px 520px;
+  opacity: 0.6;
+}
+
+.backdrop--deep::before {
+  background: radial-gradient(60% 45% at 50% 0%, rgb(var(--world-blue) / 0.1), transparent 70%);
+}
+
+.backdrop--nebula::before {
+  background:
+    radial-gradient(45% 55% at 16% 32%, rgb(var(--world-blue) / 0.24), transparent 70%),
+    radial-gradient(38% 48% at 84% 62%, rgb(var(--world-violet) / 0.18), transparent 72%),
+    radial-gradient(28% 30% at 58% 18%, rgb(var(--world-cyan) / 0.1), transparent 70%);
+}
+
+.backdrop--gravity::before {
+  background:
+    radial-gradient(22% 28% at 50% 52%, var(--world-deep) 0, rgb(1 2 8 / 0.85) 45%, transparent 100%),
+    repeating-radial-gradient(ellipse 100% 62% at 50% 52%, rgb(var(--world-line) / 0.07) 0 1px, transparent 1px 2.4rem),
+    radial-gradient(55% 55% at 50% 52%, rgb(var(--world-blue) / 0.16), transparent 72%);
+  -webkit-mask-image: radial-gradient(50% 55% at 50% 52%, #000 40%, transparent 100%);
+  mask-image: radial-gradient(50% 55% at 50% 52%, #000 40%, transparent 100%);
+}
+
+.backdrop--orbital::before {
+  background:
+    radial-gradient(70% 34% at 50% 100%, rgb(var(--world-blue) / 0.28), rgb(30 70 180 / 0.08) 45%, transparent 72%),
+    repeating-radial-gradient(
+      ellipse 120% 24% at 50% 100%,
+      rgb(var(--world-line) / 0.09) 0 1px,
+      transparent 1px 3.25rem
+    );
+  -webkit-mask-image: radial-gradient(75% 60% at 50% 100%, #000 30%, transparent 100%);
+  mask-image: radial-gradient(75% 60% at 50% 100%, #000 30%, transparent 100%);
+}
+
+.backdrop--align-top.backdrop--orbital::before {
+  transform: scaleY(-1);
+}
+
+.backdrop--spotlight::after {
+  background: radial-gradient(38% 42% at 50% 30%, rgb(var(--world-blue) / 0.2), transparent 70%);
+  opacity: 1;
+}
+
+.backdrop--grid::after {
+  background-image:
+    linear-gradient(rgb(var(--world-line) / 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(var(--world-line) / 0.06) 1px, transparent 1px);
+  background-size: 4rem 4rem;
+  -webkit-mask-image: radial-gradient(60% 55% at 50% 45%, #000 20%, transparent 80%);
+  mask-image: radial-gradient(60% 55% at 50% 45%, #000 20%, transparent 80%);
+  opacity: 1;
+}
+
+[data-theme="light"] .backdrop,
+[data-theme="light"] .planet {
+  display: none;
+}
+
+/* ---------- Procedural planets at the section edges ---------- */
+
+.planet {
+  position: absolute;
+  z-index: -1;
+  aspect-ratio: 1;
+  border-radius: var(--radius-full);
+  background:
+    radial-gradient(circle at 70% 30%, rgb(40 70 140 / 0.35), transparent 55%),
+    radial-gradient(circle at 60% 40%, #0b1428 0%, #050915 55%, #010207 100%);
+  box-shadow:
+    inset 1.25rem -0.5rem 2.5rem -1rem rgb(var(--world-cyan) / 0.55),
+    inset 0.35rem -0.15rem 0.6rem -0.2rem rgb(210 232 255 / 0.8),
+    0 0 4rem -0.5rem rgb(var(--world-blue) / 0.4),
+    0 0 12rem 1rem rgb(var(--world-blue) / 0.12);
+  pointer-events: none;
+}
+
+.planet--sm {
+  width: clamp(9rem, 6rem + 10vw, 16rem);
+}
+
+.planet--md {
+  width: clamp(16rem, 10rem + 18vw, 30rem);
+}
+
+.planet--lg {
+  width: clamp(22rem, 12rem + 28vw, 44rem);
+}
+
+.planet--left {
+  left: 0;
+  transform: translateX(-62%);
+  box-shadow:
+    inset -1.25rem -0.5rem 2.5rem -1rem rgb(var(--world-cyan) / 0.55),
+    inset -0.35rem -0.15rem 0.6rem -0.2rem rgb(210 232 255 / 0.8),
+    0 0 4rem -0.5rem rgb(var(--world-blue) / 0.4),
+    0 0 12rem 1rem rgb(var(--world-blue) / 0.12);
+}
+
+.planet--right {
+  right: 0;
+  transform: translateX(58%);
+}
+
+.planet--at-top {
+  top: 4%;
+}
+
+.planet--at-middle {
+  top: 30%;
+}
+
+.planet--at-bottom {
+  bottom: 6%;
+}
+
+@media (max-width: 47.99rem) {
+  .planet--lg,
+  .planet--md {
+    width: 16rem;
+  }
+}
+
+/* ---------- Planetary horizon with a rocky ridge (final CTA) ---------- */
+
+.horizon {
+  position: absolute;
+  inset: auto 0 0;
+  z-index: -1;
+  height: 46%;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.horizon__limb {
+  position: absolute;
+  left: 50%;
+  top: 22%;
+  width: max(240%, 150rem);
+  aspect-ratio: 1;
+  transform: translateX(-50%);
+  border-radius: var(--radius-full);
+  background: radial-gradient(circle at 50% 0%, #0a1430 0%, #040817 22%, #010207 60%);
+  box-shadow:
+    0 -0.25rem 0.75rem -0.1rem rgb(200 228 255 / 0.9),
+    0 -1.5rem 3rem -0.5rem rgb(var(--world-cyan) / 0.55),
+    0 -6rem 10rem -2rem rgb(var(--world-blue) / 0.4);
+}
+
+.horizon__ridge {
+  position: absolute;
+  inset: auto 0 0;
+  width: 100%;
+  height: clamp(6rem, 4rem + 8vw, 12rem);
+}
+
+.horizon__far {
+  fill: #06101f;
+  filter: drop-shadow(0 -1px 0 rgb(var(--world-line) / 0.25));
+}
+
+.horizon__near {
+  fill: #010208;
+}
+
+/* ---------- Sections and frames ---------- */
+
+/* Content always stacks above the environment layers (SpaceBackdrop sits at z-index 0). */
+.world-section > .container,
+.finale > .container,
+.world-head > .container,
+.voice-hero > :not(.backdrop, .space-backdrop),
+.lost > .container,
+.providers > .container {
+  position: relative;
+  z-index: 1;
+}
+
+.world-section {
+  position: relative;
+  isolation: isolate;
+  overflow: clip;
+  padding-block: var(--site-section-y);
+}
+
+.world-section + .world-section,
+.world-section + .section,
+.section + .world-section {
+  border-top: 0;
+}
+
+.world-section--tall {
+  padding-block: calc(var(--site-section-y) * 1.2);
+}
+
+.world-section--tight {
+  padding-block: clamp(3rem, 2rem + 3vw, 5rem);
+}
+
+/* A fine, blue-lit frame around a product moment or a fact. */
+.frame {
+  position: relative;
+  border-radius: var(--world-frame-radius);
+  background:
+    radial-gradient(120% 80% at 0% 0%, rgb(var(--world-blue) / 0.07), transparent 60%),
+    linear-gradient(180deg, rgb(12 20 40 / 0.62), rgb(4 7 16 / 0.52));
+  box-shadow:
+    inset 0 0 0 1px rgb(var(--world-line) / 0.16),
+    inset 0 1px 0 rgb(255 255 255 / 0.07),
+    0 40px 80px -48px rgb(0 0 0 / 0.95),
+    0 0 60px -30px rgb(var(--world-blue) / 0.35);
+}
+
+.frame--feature {
+  display: grid;
+  gap: clamp(2rem, 1.25rem + 2vw, 3rem);
+  padding: clamp(1.25rem, 0.75rem + 2.5vw, 3rem);
+}
+
+.frame--feature .statement {
+  margin-bottom: 0;
+}
+
+.frame--split {
+  display: grid;
+  gap: clamp(2rem, 1.25rem + 2.5vw, 3.5rem);
+  align-items: center;
+  padding: clamp(1.5rem, 1rem + 3vw, 3.5rem);
+}
+
+.frame__copy {
+  display: grid;
+  gap: var(--space-5);
+  justify-items: start;
+}
+
+.frame__visual {
+  min-width: 0;
+}
+
+@media (min-width: 64rem) {
+  .frame--split {
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  }
+
+  .frame--flip .frame__copy {
+    order: 2;
+  }
+}
+
+.frame--tile {
+  display: grid;
+  align-content: start;
+  gap: var(--space-4);
+  padding: clamp(1.5rem, 1rem + 1.5vw, 2.25rem);
+  color: var(--color-text-secondary);
+}
+
+.frame--tile > .text-link {
+  margin-top: auto;
+  padding-top: var(--space-2);
+}
+
+.trio {
+  display: grid;
+  gap: var(--space-5);
+}
+
+@media (min-width: 64rem) {
+  .trio {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+.tile-list,
+.tile-checks {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-2) 0;
+}
+
+.tile-list li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: var(--space-3);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  background: rgb(255 255 255 / 0.03);
+  box-shadow: inset 0 0 0 1px rgb(var(--world-line) / 0.1);
+  color: var(--color-text);
+  font-weight: var(--weight-medium);
+}
+
+.tile-list .provider-glyph {
+  grid-row: span 2;
+}
+
+.tile-list__meta {
+  grid-column: 2;
+  color: var(--color-text-muted);
+  font-size: var(--site-text-xs);
+  font-weight: var(--weight-regular);
+}
+
+.tile-checks li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--color-text);
+  font-size: var(--site-text-small);
+}
+
+.tile-checks svg {
+  width: 1.125rem;
+  height: 1.125rem;
+  color: var(--color-accent-text);
+}
+
+/* The permission table in the control tile. */
+.policy {
+  width: 100%;
+  margin: var(--space-2) 0;
+  border-collapse: separate;
+  border-spacing: 0 0.375rem;
+  font-size: var(--site-text-small);
+}
+
+.policy th,
+.policy td {
+  padding: var(--space-2) var(--space-3);
+  background: rgb(255 255 255 / 0.03);
+  text-align: left;
+}
+
+.policy th {
+  border-radius: var(--radius-md) 0 0 var(--radius-md);
+  color: var(--color-text);
+  font-weight: var(--weight-medium);
+}
+
+.policy td {
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  text-align: right;
+}
+
+.policy__value {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--site-text-xs);
+  white-space: nowrap;
+}
+
+.policy__value::before {
+  content: "";
+  width: 0.4375rem;
+  height: 0.4375rem;
+  border-radius: var(--radius-full);
+  background: currentColor;
+}
+
+.policy__value--allow {
+  color: var(--color-success);
+}
+
+.policy__value--ask {
+  color: var(--color-text-secondary);
+}
+
+.policy__value--ask::before {
+  background: var(--color-idle);
+}
+
+.policy__value--block {
+  color: var(--color-waiting);
+}
+
+/* Heads: eyebrow -> two-line headline -> one or two sentences -> link. */
+.statement {
+  display: grid;
+  gap: var(--space-5);
+  margin-bottom: clamp(2.5rem, 1.75rem + 2.5vw, 4.5rem);
+}
+
+.statement--center {
+  justify-items: center;
+  text-align: center;
+}
+
+.statement--center .body-lg {
+  max-width: 52ch;
+}
+
+.statement__side {
+  display: grid;
+  gap: var(--space-5);
+  justify-items: start;
+}
+
+@media (min-width: 64rem) {
+  .statement--wide {
+    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+    align-items: end;
+    column-gap: var(--space-16);
+  }
+
+  .statement--wide > .eyebrow {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+}
+
+/* One-shot reveal (reveal.ts). Without JS, or with reduced motion, everything is simply there. */
+@media (prefers-reduced-motion: no-preference) {
+  html.js [data-reveal]:not([data-revealed]) {
+    opacity: 0;
+    transform: translateY(1.25rem);
+  }
+
+  html.js [data-reveal] {
+    transition:
+      opacity 700ms var(--ease-expo),
+      transform 700ms var(--ease-expo);
+  }
+}
+
+/* ---------- Home hero ----------
+ * Full-bleed first viewport. HeroWorld (sky, orbital platform, energy column, orb) fills the
+ * section; the lockup and copy sit over the lower part of the orb and the column, inside the
+ * text-safe band.
+ */
+
+.hero {
+  /* HeroOrb/HeroWorld hooks (see its header comment). The orb square's top sits just under the
+     header; the sphere centre is 0.5211 of the square, its bottom 0.281 below the centre. */
+  --hero-orb-max: min(44svh, 40vw, 40rem);
+  --hero-orb-center-y: calc(var(--site-header-h) + 1svh + 0.5211 * var(--hero-orb-max));
+  --hero-text-top: calc(var(--hero-orb-center-y) + 0.22 * var(--hero-orb-max));
+  --hero-beam-safe-top: var(--hero-text-top);
+  --hero-beam-safe-inset: 2rem;
+  --hero-beam-safe-level: 0.12;
+  --hero-beam-safe-resume: 0.9;
+  --hero-scrim-y: 74%;
+  --hero-scrim: 0.5;
+
+  position: relative;
+  isolation: isolate;
+  overflow: clip;
+  display: grid;
+  min-height: max(100svh, 44rem);
+  background: var(--world-deep);
+  color: var(--color-text);
+}
+
+@media (max-width: 47.99rem) {
+  .hero {
+    --hero-orb-max: min(94vw, 42svh);
+    --hero-text-top: calc(var(--hero-orb-center-y) + 0.25 * var(--hero-orb-max));
+  }
+}
+
+.hero__world {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.hero__content {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  padding-block: var(--hero-text-top) calc(6svh + clamp(3rem, 2rem + 3vw, 5rem));
+  text-align: center;
+}
+
+.hero__lockup {
+  display: grid;
+  justify-items: center;
+  gap: clamp(0.75rem, 0.5rem + 0.6vw, 1.125rem);
+}
+
+/* The real KalCode wordmark (board lettering, as a mask), lit from below like the reference. */
+.hero__wordmark {
+  display: block;
+  width: min(84vw, 34rem);
+  aspect-ratio: 687 / 69;
+  background:
+    radial-gradient(9% 70% at 20.6% 100%, rgb(var(--world-cyan) / 1), transparent 100%),
+    linear-gradient(180deg, #ffffff 35%, #c9d9ff 100%);
+  -webkit-mask: url("/assets/brand/kalcode-wordmark.png") center / 100% 100% no-repeat;
+  mask: url("/assets/brand/kalcode-wordmark.png") center / 100% 100% no-repeat;
+}
+
+.hero__wordmark-glow {
+  display: block;
+  filter: drop-shadow(0 0 1.25rem rgb(1 2 8 / 0.95)) drop-shadow(0 0 2.5rem rgb(var(--world-blue) / 0.35));
+}
+
+@media (forced-colors: active) {
+  .hero__wordmark {
+    forced-color-adjust: none;
+    background: CanvasText;
+  }
+}
+
+/* CODE THE FUTURE: the sub-brand line, set between two lines of light. */
+.hero__tagline {
+  display: inline-flex;
+  align-items: center;
+  gap: clamp(0.75rem, 0.4rem + 1.2vw, 1.5rem);
+  color: #e9f1ff;
+  font-family: var(--font-wider);
+  font-size: clamp(0.8125rem, 0.65rem + 0.55vw, 1.125rem);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.5em;
+  text-transform: uppercase;
+  text-shadow: 0 0 1rem rgb(var(--world-blue) / 0.9);
+}
+
+.hero__tagline::before,
+.hero__tagline::after {
+  content: "";
+  width: clamp(1.5rem, 0.5rem + 4vw, 4.5rem);
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgb(var(--world-cyan) / 0.9));
+}
+
+.hero__tagline::after {
+  /* The tracking leaves a gap after the last letter; the right line starts there. */
+  margin-left: -0.5em;
+  background: linear-gradient(90deg, rgb(var(--world-cyan) / 0.9), transparent);
+}
+
+.hero__statement {
+  max-width: 28ch;
+  margin-top: clamp(1rem, 0.6rem + 1vw, 1.5rem);
+  font-family: var(--font-display);
+  font-size: clamp(1.875rem, 1.15rem + 1.95vw, 2.875rem);
+  font-weight: 700;
+  line-height: 1.02;
+  letter-spacing: -0.035em;
+  color: var(--color-text);
+  text-wrap: balance;
+}
+
+.hero__line {
+  max-width: 50ch;
+  margin-top: clamp(0.75rem, 0.5rem + 0.6vw, 1rem);
+  color: var(--color-text-secondary);
+  font-size: var(--site-text-lead);
+  line-height: 1.55;
+  text-wrap: balance;
+}
+
+.hero__statement,
+.hero__line,
+.hero__status,
+.hero__meta {
+  text-shadow:
+    0 0 1.25rem var(--world-deep),
+    0 0 0.35rem var(--world-deep);
+}
+
+.hero__actions {
+  justify-content: center;
+  margin-top: clamp(1.5rem, 1rem + 0.8vw, 2rem);
+  gap: var(--space-5);
+}
+
+/* The build status as a small dark pill, legible wherever the platform light falls. */
+.hero__status {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+  margin-top: var(--space-5);
+  padding: 0.4375rem 1rem;
+  border-radius: var(--radius-full);
+  background: rgb(2 4 10 / 0.78);
+  box-shadow: inset 0 0 0 1px rgb(var(--world-line) / 0.16);
+  color: var(--color-text-secondary);
+  font-size: var(--site-text-small);
+}
+
+.hero__status a {
+  color: var(--color-text);
+}
+
+.hero__meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-3) clamp(1.25rem, 0.5rem + 2vw, 2.5rem);
+  margin-top: clamp(1.25rem, 0.75rem + 0.8vw, 1.75rem);
+  color: var(--color-text-secondary);
+  font-size: var(--site-text-xs);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.hero__meta li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.hero__meta svg {
+  width: 1rem;
+  height: 1rem;
+  color: var(--color-accent-text);
+}
+
+/* Side annotations at the hero edges, echoing the brand board. */
+.hero__aside {
+  position: absolute;
+  top: 42%;
+  z-index: 1;
+  display: none;
+  gap: 0.375rem;
+  color: rgb(214 228 255 / 0.62);
+  font-family: var(--font-wider);
+  font-size: 0.625rem;
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.3em;
+  line-height: 1.5;
+  text-transform: uppercase;
+}
+
+.hero__aside::after {
+  content: "";
+  width: 1.5rem;
+  height: 1px;
+  margin-top: var(--space-3);
+  background: currentColor;
+}
+
+.hero__aside--left {
+  left: max(var(--site-gutter), calc((100vw - var(--site-wide)) / 2));
+}
+
+.hero__aside--right {
+  right: max(var(--site-gutter), calc((100vw - var(--site-wide)) / 2));
+  top: 16%;
+  text-align: right;
+  justify-items: end;
+}
+
+.hero__aside span:last-of-type {
+  color: #e9f1ff;
+}
+
+@media (min-width: 80rem) {
+  .hero__aside {
+    display: grid;
+  }
+}
+
+.status-dot {
+  flex: none;
+  width: 0.4375rem;
+  height: 0.4375rem;
+  border-radius: var(--radius-full);
+  background: var(--color-waiting);
+  box-shadow: 0 0 0.5rem rgb(var(--world-gold) / 0.7);
+}
+
+.status-dot--idle {
+  background: var(--color-idle);
+  box-shadow: none;
+}
+
+.status-dot--built {
+  background: var(--color-success);
+  box-shadow: 0 0 0.5rem rgb(53 196 141 / 0.7);
+}
+
+@media (max-width: 30rem) {
+  .hero__actions {
+    display: grid;
+    width: 100%;
+    gap: var(--space-4);
+  }
+}
+
+.hero__orb-poster {
+  position: absolute;
+  left: 50%;
+  top: calc(var(--hero-orb-center-y) - 0.5211 * var(--hero-orb-max));
+  width: var(--hero-orb-max);
+  aspect-ratio: 1;
+  transform: translateX(-50%);
+}
+
+.globe {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  -webkit-mask-image: radial-gradient(closest-side, #000 80%, transparent 100%);
+  mask-image: radial-gradient(closest-side, #000 80%, transparent 100%);
+}
+
+.globe img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* ---------- Providers band ---------- */
+
+.providers {
+  position: relative;
+  padding-block: clamp(2.5rem, 1.5rem + 3vw, 4.5rem);
+  border-block: 1px solid rgb(var(--world-line) / 0.1);
+  background: linear-gradient(180deg, rgb(var(--world-blue) / 0.05), transparent);
+}
+
+.providers__title {
+  margin-bottom: clamp(1.5rem, 1rem + 1.5vw, 2.5rem);
+  color: var(--color-text-muted);
+  font-family: var(--font-wider);
+  font-size: var(--type-label);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.3em;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.providers__list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-8) var(--space-4);
+}
+
+.providers__item {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-2);
+  text-align: center;
+}
+
+.providers__name {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--color-text);
+  font-family: var(--font-display);
+  font-size: clamp(1.25rem, 1rem + 0.9vw, 1.75rem);
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.02em;
+}
+
+.providers__item--more .providers__name {
+  color: var(--color-text-secondary);
+  font-size: var(--site-text-body);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0;
+}
+
+.providers__status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--site-text-xs);
+}
+
+@media (min-width: 56rem) {
+  .providers__list {
+    grid-template-columns: repeat(3, auto) minmax(0, auto);
+    justify-content: center;
+    align-items: center;
+    column-gap: 0;
+  }
+
+  .providers__item {
+    padding-inline: clamp(1.5rem, 0.5rem + 3vw, 3.5rem);
+  }
+
+  .providers__item + .providers__item {
+    border-left: 1px solid rgb(var(--world-line) / 0.14);
+  }
+}
+
+.provider-glyph {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 2rem;
+  height: 2rem;
+  border-radius: var(--radius-md);
+  background: radial-gradient(circle at 50% 30%, rgb(var(--world-blue) / 0.3), rgb(var(--world-blue) / 0.05) 70%);
+  box-shadow: inset 0 0 0 1px rgb(var(--world-line) / 0.26);
+  color: var(--color-text);
+}
+
+.provider-glyph svg {
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
+/* ---------- KalVoice fallback visual ---------- */
+
+.voice-mark {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: min(100%, 22rem);
+  margin-inline: auto;
+  aspect-ratio: 1;
+  filter: drop-shadow(0 0 3rem rgb(var(--world-blue) / 0.45));
+}
+
+.voice-mark kbd {
+  position: absolute;
+  bottom: -0.5rem;
+  height: 2.75rem;
+  min-width: 3.5rem;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  font-size: 1rem;
+}
+
+/* ---------- Pricing band ---------- */
+
+.pricing-band__grid {
+  display: grid;
+  gap: clamp(2rem, 1.25rem + 3vw, 4rem);
+  align-items: center;
+}
+
+.pricing-band__copy {
+  display: grid;
+  gap: var(--space-5);
+  justify-items: start;
+}
+
+.pricing-band__note {
+  color: var(--color-text-muted);
+  font-size: var(--site-text-small);
+}
+
+@media (min-width: 72rem) {
+  .pricing-band__grid {
+    grid-template-columns: minmax(0, 4fr) minmax(0, 8fr);
+  }
+}
+
+.plan-cards {
+  display: grid;
+  gap: var(--space-5);
+}
+
+@media (min-width: 52rem) {
+  .plan-cards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-items: stretch;
+  }
+}
+
+.plan-card {
+  display: grid;
+  grid-template-rows: auto auto auto 1fr auto;
+  gap: var(--space-4);
+  padding: clamp(1.5rem, 1rem + 1vw, 2rem);
+  border-radius: var(--world-frame-radius);
+  background: linear-gradient(180deg, rgb(12 20 40 / 0.66), rgb(4 7 16 / 0.6));
+  box-shadow:
+    inset 0 0 0 1px rgb(var(--world-line) / 0.16),
+    inset 0 1px 0 rgb(255 255 255 / 0.07),
+    0 40px 80px -50px rgb(0 0 0 / 0.95);
+}
+
+.plan-card--featured {
+  background:
+    radial-gradient(120% 70% at 50% 0%, rgb(var(--world-blue) / 0.2), transparent 70%),
+    linear-gradient(180deg, rgb(14 24 50 / 0.8), rgb(4 7 16 / 0.7));
+  box-shadow:
+    inset 0 0 0 1px rgb(var(--world-blue) / 0.55),
+    inset 0 1px 0 rgb(255 255 255 / 0.12),
+    0 0 50px -12px rgb(var(--world-blue) / 0.55),
+    0 40px 80px -50px rgb(0 0 0 / 0.95);
+}
+
+@media (min-width: 52rem) {
+  .plan-card--featured {
+    transform: translateY(-0.75rem);
+  }
+}
+
+.plan-card__name {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  color: var(--color-text);
+  font-family: var(--font-wider);
+  font-size: var(--type-label);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+}
+
+.plan-card__tag {
+  padding: 0.25rem 0.625rem;
+  border-radius: var(--radius-full);
+  background: rgb(var(--world-blue) / 0.18);
+  box-shadow: inset 0 0 0 1px rgb(var(--world-blue) / 0.5);
+  color: var(--color-accent-text);
+  font-size: 0.625rem;
+  letter-spacing: 0.16em;
+}
+
+.plan-card__price {
+  color: var(--color-text);
+  font-family: var(--font-display);
+  font-size: clamp(2.5rem, 2rem + 1.5vw, 3.25rem);
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  line-height: 1;
+}
+
+.plan-card__price small {
+  color: var(--color-text-muted);
+  font-size: var(--site-text-small);
+  font-weight: var(--weight-regular);
+  letter-spacing: 0;
+}
+
+.plan-card__summary {
+  color: var(--color-text-secondary);
+  font-size: var(--site-text-small);
+  line-height: var(--leading-normal);
+}
+
+.plan-card__points {
+  display: grid;
+  align-content: start;
+  gap: var(--space-2);
+  color: var(--color-text);
+  font-size: var(--site-text-small);
+}
+
+.plan-card__points li {
+  display: flex;
+  gap: var(--space-2);
+  align-items: flex-start;
+}
+
+.plan-card__points svg {
+  width: 1rem;
+  height: 1rem;
+  margin-top: 0.2em;
+  flex: none;
+  color: var(--color-accent-text);
+}
+
+.plan-card .button {
+  width: 100%;
+}
+
+/* ---------- Final CTA over the horizon ---------- */
+
+/* The horizon's rim and rocks occupy the lower part; the copy and form stay above them. */
+.finale {
+  position: relative;
+  isolation: isolate;
+  overflow: clip;
+  padding-block: clamp(5rem, 3rem + 6vw, 9rem) clamp(16rem, 10rem + 16vw, 28rem);
+}
+
+.finale .closing {
+  gap: var(--space-6);
+}
+
+.finale__orb {
+  display: grid;
+  place-items: center;
+  width: 6rem;
+  height: 6rem;
+  border-radius: var(--radius-full);
+  background: radial-gradient(circle, rgb(var(--world-blue) / 0.45), transparent 70%);
+}
+
+.finale__orb .brand-mark {
+  width: 4.5rem;
+  height: 4.5rem;
+  filter: drop-shadow(0 0 1.5rem rgb(var(--world-blue) / 0.8));
+}
+
+.finale .form__input {
+  background: rgb(2 4 10 / 0.7);
+}
+
+/* ---------- Page heads on world pages ---------- */
+
+.world-head {
+  position: relative;
+  isolation: isolate;
+  overflow: clip;
+  padding-block: clamp(3.5rem, 2rem + 5vw, 7.5rem) clamp(3rem, 2rem + 3vw, 5rem);
+}
+
+.world-head .page-head__inner {
+  gap: var(--space-6);
+}
+
+.world-head + .world-section {
+  padding-top: clamp(1rem, 0.5rem + 1.5vw, 2.5rem);
+}
+
+/* ---------- Panels on world pages (pricing table, download, KalVoice modes) ---------- */
+
+body[data-world] .ladder-wrap,
+body[data-world] .platforms,
+body[data-world] .mode {
+  border: 0;
+  background:
+    radial-gradient(120% 80% at 0% 0%, rgb(var(--world-blue) / 0.06), transparent 60%),
+    linear-gradient(180deg, rgb(12 20 40 / 0.62), rgb(4 7 16 / 0.52));
+  box-shadow:
+    inset 0 0 0 1px rgb(var(--world-line) / 0.16),
+    inset 0 1px 0 rgb(255 255 255 / 0.07),
+    0 50px 100px -50px rgb(0 0 0 / 0.95);
+}
+
+body[data-world] .ladder__col--featured {
+  background:
+    radial-gradient(120% 60% at 50% 0%, rgb(var(--world-blue) / 0.14), transparent 70%), rgb(255 255 255 / 0.015);
+  box-shadow: inset 0 2px 0 rgb(var(--world-blue) / 0.9);
+}
+
+body[data-world] .ladder th,
+body[data-world] .ladder td,
+body[data-world] .platform + .platform {
+  border-color: rgb(var(--world-line) / 0.1);
+}
+
+/* ---------- /kalvoice: the voice hero ---------- */
+
+.voice-hero {
+  --voice-orb: min(78vw, 30rem, 46svh);
+  position: relative;
+  isolation: isolate;
+  overflow: clip;
+  display: grid;
+  justify-items: center;
+  padding-block: clamp(1.5rem, 1rem + 2vw, 3rem) clamp(4rem, 3rem + 4vw, 7rem);
+  text-align: center;
+}
+
+.voice-hero__orb {
+  position: relative;
+  width: var(--voice-orb);
+  aspect-ratio: 1;
+  filter: drop-shadow(0 0 4rem rgb(var(--world-blue) / 0.4));
+}
+
+.voice-hero__orb::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -14%;
+  z-index: -1;
+  width: 170%;
+  height: 34%;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  background:
+    radial-gradient(closest-side, rgb(var(--world-cyan) / 0.35), transparent 70%),
+    repeating-radial-gradient(closest-side, rgb(var(--world-line) / 0.2) 0 1px, transparent 1px 1.5rem);
+  -webkit-mask-image: radial-gradient(closest-side, #000 50%, transparent 100%);
+  mask-image: radial-gradient(closest-side, #000 50%, transparent 100%);
+}
+
+.voice-hero__content {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  justify-items: center;
+  gap: var(--space-5);
+  margin-top: calc(-0.08 * var(--voice-orb));
+}
+
+.voice-hero__title {
+  display: grid;
+  justify-items: center;
+  gap: clamp(1rem, 0.6rem + 1vw, 1.5rem);
+  margin: 0;
+  font-weight: inherit;
+}
+
+.voice-hero__wordmark {
+  display: block;
+  width: min(80vw, 30rem);
+  aspect-ratio: 901 / 72;
+  background: linear-gradient(180deg, #ffffff 35%, #c9d9ff 100%);
+  -webkit-mask: url("/assets/brand/kalvoice-wordmark.png") center / 100% 100% no-repeat;
+  mask: url("/assets/brand/kalvoice-wordmark.png") center / 100% 100% no-repeat;
+  filter: drop-shadow(0 0 1.5rem rgb(var(--world-blue) / 0.5));
+}
+
+.voice-hero .hero__statement,
+.voice-hero .hero__line {
+  margin-top: 0;
+}
+
+/* ---------- 404: a gravity well ---------- */
+
+.lost {
+  position: relative;
+  isolation: isolate;
+  overflow: clip;
+  display: grid;
+  place-items: center;
+  min-height: max(80svh, 36rem);
+  padding-block: 4rem 6rem;
+  text-align: center;
+}
+
+.lost .not-found {
+  justify-items: center;
+  padding: 0;
+}

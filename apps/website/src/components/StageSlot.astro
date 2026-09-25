@@ -1,48 +1,27 @@
 ---
 /**
  * Composition slot for a product demo from src/components/stage (owned by the stage work).
- * When `stage/<name>.astro` exists it is rendered here with the remaining props; until it does,
- * a quiet window frame holds its place so the page layout is already final. Replacing a slot
- * with a direct import later is a one-line change.
+ * When `stage/<name>.astro` exists it is rendered with the remaining props (id, headingLevel,
+ * width, ...). When it does not, nothing is rendered; pages check `hasStage()` (lib/stage.ts) to
+ * leave out the whole section, so a missing demo never shows an empty frame.
  */
+import type { StageName } from "../lib/stage";
+
 type StageModule = { default: (props: Record<string, unknown>) => unknown };
 const modules = import.meta.glob<StageModule>("./stage/*.astro", { eager: true });
 
-type StageName =
-  | "AppWindow"
-  | "ScrollStory"
-  | "TryKalCode"
-  | "ProviderSwitch"
-  | "BeforeAfter"
-  | "PermissionModes"
-  | "KalVoiceDemo"
-  | "DemoCenter";
-
 interface Props {
   name: StageName;
-  /** Aspect of the placeholder frame while the demo is pending. */
-  shape?: "window" | "compact";
   [prop: string]: unknown;
 }
 
-const { name, shape = "window", ...rest } = Astro.props;
+const { name, ...rest } = Astro.props;
 const Component = modules[`./stage/${name}.astro`]?.default;
 ---
-<div class="stage-slot" data-stage-slot={name}>
-  {
-    Component ? (
+{
+  Component && (
+    <div class="stage-slot" data-stage-slot={name}>
       <Component {...rest} />
-    ) : (
-      <div
-        class:list={["stage-pending", { "stage-pending--compact": shape === "compact" }]}
-        data-slot-pending={name}
-        aria-hidden="true"
-      >
-        <span class="stage-pending__bar" />
-        <span class="stage-pending__rail" />
-        <span />
-        <span class="stage-pending__dock" />
-      </div>
-    )
-  }
-</div>
+    </div>
+  )
+}

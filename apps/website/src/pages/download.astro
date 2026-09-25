@@ -1,4 +1,5 @@
 ---
+import Backdrop from "../components/Backdrop.astro";
 import DownloadPlatforms from "../components/DownloadPlatforms.astro";
 import EarlyAccessForm from "../components/EarlyAccessForm.astro";
 import PageHead from "../components/PageHead.astro";
@@ -10,8 +11,9 @@ const page = getPage("/download");
 const latest = RELEASES.latest;
 const windows = buildFor(RELEASES, "windows");
 ---
-<Base title={page.title} description={page.description} path={page.path}>
+<Base title={page.title} description={page.description} path={page.path} world>
   <PageHead
+    backdrop="orbital"
     title="Download KalCode"
     status={latest ? `Preview ${latest.version} · ${formatReleaseDate(latest.publishedAt)}` : "No public build yet"}
     statusKind={latest ? "built" : "dev"}
@@ -22,7 +24,8 @@ const windows = buildFor(RELEASES, "windows");
     }
   />
 
-  <section class="section" aria-labelledby="platforms-title">
+  <section class="world-section" aria-labelledby="platforms-title">
+    <Backdrop variant="deep" />
     <div class="container">
       <h2 id="platforms-title" class="visually-hidden">Builds by operating system</h2>
       <DownloadPlatforms />
@@ -39,7 +42,8 @@ const windows = buildFor(RELEASES, "windows");
     </div>
   </section>
 
-  <section class="section" id="early-access" aria-labelledby="early-access-title">
+  <section class="world-section" id="early-access" aria-labelledby="early-access-title">
+    <Backdrop variant="nebula" />
     <div class="container signup">
       <div class="section-head">
         <h2 id="early-access-title" class="h2 h2--sm">{latest ? "Hear about new builds." : "Join early access."}</h2>
@@ -52,7 +56,8 @@ const windows = buildFor(RELEASES, "windows");
     </div>
   </section>
 
-  <section class="section section--tight" aria-labelledby="expect-title">
+  <section class="world-section section--tight" aria-labelledby="expect-title">
+    <Backdrop variant="deep" />
     <div class="container">
       <h2 id="expect-title" class="h2 h2--sm">What to expect</h2>
       <ul class="expect" role="list">

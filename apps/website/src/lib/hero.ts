@@ -1,13 +1,23 @@
 /**
- * The hero orb poster as the home page lays it out (site.css): stacked below 1024 px, the split
- * hero's orb column above. Shared by HeroOrbSlot (the <img> sizes) and the head preload, so the
- * browser fetches the one file the layout will use as early as possible (it is the LCP image).
+ * Hero image hints shared by the hero slot and the page head.
+ *
+ * The world plate (hero/world-assets.ts, from the hero work) is the LCP image of the home page:
+ * HERO_WORLD_PRELOADS gives one preload per media query, so the browser fetches exactly the file
+ * the layout uses as early as possible. HERO_POSTER_SIZES sizes the orb poster when only the orb
+ * (no world) is rendered.
  */
-export const HERO_POSTER_SIZES = "(max-width: 1023px) min(88vw, 25rem, 40vh), min(32rem, 58vh)";
+import {
+  WORLD_LANDSCAPE,
+  WORLD_LANDSCAPE_MEDIA,
+  WORLD_PORTRAIT,
+  WORLD_PORTRAIT_MEDIA,
+  WORLD_SIZES,
+  worldSrcset,
+} from "../components/hero/world-assets";
 
-/** Widths published by the hero work in public/assets/hero (orb-<width>.avif). */
-export const HERO_POSTER_WIDTHS = [384, 512, 640, 768, 1024] as const;
+export const HERO_POSTER_SIZES = "(max-width: 767px) min(94vw, 46vh), min(48vh, 42vw, 672px)";
 
-export const HERO_POSTER_SRCSET = HERO_POSTER_WIDTHS.map((width) => `/assets/hero/orb-${width}.avif ${width}w`).join(
-  ", ",
-);
+export const HERO_WORLD_PRELOADS = [
+  { media: WORLD_LANDSCAPE_MEDIA, srcset: worldSrcset(WORLD_LANDSCAPE, "avif"), sizes: WORLD_SIZES },
+  { media: WORLD_PORTRAIT_MEDIA, srcset: worldSrcset(WORLD_PORTRAIT, "avif"), sizes: "220vw" },
+] as const;

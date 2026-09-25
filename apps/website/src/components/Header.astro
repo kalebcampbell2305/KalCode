@@ -7,10 +7,8 @@ import XLink from "./XLink.astro";
 
 interface Props {
   path: string;
-  /** Home: the header joins the hero's night band (dark in both themes). */
-  night?: boolean;
 }
-const { path, night = false } = Astro.props;
+const { path } = Astro.props;
 
 function current(href: string): "page" | "true" | undefined {
   if (path === href) return "page";
@@ -18,7 +16,7 @@ function current(href: string): "page" | "true" | undefined {
   return undefined;
 }
 ---
-<header class:list={["site-header", { "site-header--night": night }]} data-theme={night ? "dark" : undefined}>
+<header class="site-header">
   <div class="container site-header__inner">
     <a class="brand-link" href="/" aria-label="KalCode home">
       <BrandMark size={28} />

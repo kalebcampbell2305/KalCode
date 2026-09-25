@@ -49,16 +49,23 @@ test.describe("download page", () => {
     await context.close();
   });
 
-  test("download buttons appear only when there is a build to download", async ({ page }) => {
+  test("Download KalCode buttons follow the manifest: the installer, or the honest download page", async ({ page }) => {
     for (const path of ["/", "/pricing", "/product", "/kalvoice"]) {
       await page.goto(path);
-      const buttons = page.getByRole("link", { name: /Download for/ });
-      if (WINDOWS_BUILD) {
-        for (const href of await buttons.evaluateAll((links) => links.map((link) => link.getAttribute("href")))) {
-          expect(href).toBe("/download#windows");
+      const buttons = page.locator("a[data-download-state]");
+      for (const [state, href] of await buttons.evaluateAll((links) =>
+        links.map((link) => [link.getAttribute("data-download-state"), link.getAttribute("href")]),
+      )) {
+        if (WINDOWS_BUILD) {
+          expect(state).toBe("download");
+          // Windows visitors get the installer; other systems are routed to the download page.
+          expect([WINDOWS_BUILD.url, "/download", "/download#windows", "/download#macos", "/download#linux"]).toContain(
+            href,
+          );
+        } else {
+          expect(state).toBe("pending");
+          expect(href).toBe("/download");
         }
-      } else {
-        await expect(buttons).toHaveCount(0);
       }
     }
   });

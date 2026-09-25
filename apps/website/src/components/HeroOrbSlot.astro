@@ -1,26 +1,33 @@
 ---
 /**
- * The home hero's centerpiece. Renders `hero/HeroOrb.astro` (the animated KalCode symbol, owned
- * by the hero work) when it exists; otherwise the static KalCode globe from the brand assets.
+ * The home hero's environment. Renders, in order of preference:
+ * 1. `hero/HeroWorld.astro` — the full-bleed world (sky, orbital platform, energy column, orb),
+ *    positioned by the section's --hero-* custom properties (styles/world.css);
+ * 2. `hero/HeroOrb.astro` — the orb and its stream alone, sized by the same properties;
+ * 3. the static KalCode globe from the brand assets.
  */
+import { HERO_POSTER_SIZES } from "../lib/hero";
 import Globe from "./Globe.astro";
 
 type HeroModule = { default: (props: Record<string, unknown>) => unknown };
-const modules = import.meta.glob<HeroModule>("./hero/HeroOrb.astro", { eager: true });
+const modules = import.meta.glob<HeroModule>(["./hero/HeroWorld.astro", "./hero/HeroOrb.astro"], {
+  eager: true,
+});
+const HeroWorld = modules["./hero/HeroWorld.astro"]?.default;
 const HeroOrb = modules["./hero/HeroOrb.astro"]?.default;
-
-interface Props {
-  size?: "full" | "compact";
-}
-const { size = "full" } = Astro.props;
-import { HERO_POSTER_SIZES as POSTER_SIZES } from "../lib/hero";
 ---
 {
-  HeroOrb ? (
-    <HeroOrb size={size} sizes={size === "full" ? POSTER_SIZES : undefined} />
+  HeroWorld ? (
+    <HeroWorld />
+  ) : HeroOrb ? (
+    <div class="hero__world" aria-hidden="true">
+      <HeroOrb size="full" sizes={HERO_POSTER_SIZES} />
+    </div>
   ) : (
-    <div class="hero__orb-poster">
-      <Globe variant="kalcode" hero alt="" sizes="(min-width: 60rem) 27rem, 60vw" />
+    <div class="hero__world" aria-hidden="true">
+      <div class="hero__orb-poster">
+        <Globe variant="kalcode" hero alt="" sizes={HERO_POSTER_SIZES} />
+      </div>
     </div>
   )
 }

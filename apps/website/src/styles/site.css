@@ -31,6 +31,25 @@
   --site-display-weight: var(--weight-semibold);
   --site-display-tracking: -0.04em;
 
+  /* Type roles (see "Typography"): display, headline, body, UI label, mono. Display and headline
+     set in Lexend Deca bold (tight, geometric, as in the approved concepts); UI labels in Lexend
+     Giga caps; product text in JetBrains Mono. */
+  --font-display: var(--font-sans);
+  --type-display: clamp(2.25rem, 1.2rem + 3.3vw, 4.5rem);
+  --type-headline: clamp(1.75rem, 1.2rem + 1.7vw, 2.75rem);
+  --type-title: clamp(1.1875rem, 1.1rem + 0.3vw, 1.375rem);
+  --type-body: 1.0625rem;
+  --type-ui: 0.875rem;
+  --type-label: 0.6875rem;
+
+  /* Button system: a white physical surface with a halo outside it that moves blue -> gold. */
+  --btn-radius: 0.8125rem;
+  --btn-halo-blue: 76 141 255;
+  --btn-halo-gold: 255 181 84;
+  --btn-surface-top: #ffffff;
+  --btn-surface-bottom: #e8eef8;
+  --btn-ink: #060a13;
+
   /* The owner's artwork ground (rgb 0 1 4): the hero band uses it so brand art sits on it with no edge. */
   --site-night: #000104;
 }
@@ -135,32 +154,86 @@ html:not(.js) .needs-js {
 .display,
 .h1,
 .h2 {
-  font-family: var(--font-wide);
+  font-family: var(--font-display);
   font-weight: var(--site-display-weight);
   letter-spacing: var(--site-display-tracking);
   color: var(--color-text);
   text-wrap: balance;
 }
 
-.display {
-  font-size: var(--site-display);
-  line-height: 1.02;
-}
-
-.h1 {
-  font-size: var(--site-h1);
-  line-height: 1;
-}
-
+/*
+ * Type roles. DISPLAY: one architectural statement per section (Lexend Exa 700, tight).
+ * HEADLINE: sub-statements and card titles (Exa 600). BODY: Lexend Deca, one or two sentences,
+ * never a block. UI LABEL: Lexend Giga caps for wayfinding. MONO: JetBrains Mono for anything the
+ * product would print (commands, versions, checksums, status).
+ */
+.display,
+.h1,
 .h2 {
-  font-size: var(--site-display);
-  line-height: 1.02;
+  font-size: var(--type-display);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.04em;
 }
 
-.h2--sm {
-  font-size: var(--site-h2-sm);
-  line-height: 1.12;
+.h2--sm,
+.headline {
+  font-family: var(--font-display);
+  font-size: var(--type-headline);
+  font-weight: var(--weight-semibold);
+  line-height: 1.08;
   letter-spacing: -0.03em;
+  color: var(--color-text);
+  text-wrap: balance;
+}
+
+.title {
+  font-family: var(--font-display);
+  font-size: var(--type-title);
+  font-weight: var(--weight-semibold);
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  color: var(--color-text);
+}
+
+/* UI LABEL: the eyebrow, a small lit pill with a status-like dot, electric blue caps. */
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  justify-self: start;
+  padding: 0.375rem 0.75rem;
+  border-radius: var(--radius-full);
+  background: rgb(76 141 255 / 0.08);
+  box-shadow: inset 0 0 0 1px rgb(120 165 255 / 0.28);
+  color: var(--color-accent-text);
+  font-family: var(--font-wider);
+  font-size: var(--type-label);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.22em;
+  line-height: 1.3;
+  text-transform: uppercase;
+}
+
+.eyebrow::before {
+  content: "";
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  box-shadow: 0 0 0.5rem var(--color-accent);
+}
+
+.statement--center > .eyebrow {
+  justify-self: center;
+}
+
+.body-lg {
+  max-width: 46ch;
+  color: var(--color-text-secondary);
+  font-size: var(--site-text-lead);
+  line-height: 1.55;
+  text-wrap: pretty;
 }
 
 .h3 {
@@ -283,26 +356,36 @@ a:hover {
   font-size: var(--site-text-small);
 }
 
-/* ---------- Buttons ---------- */
+/* ---------- Buttons ----------
+ * Primary: a solid white physical surface with dark ink, and a halo OUTSIDE the surface that
+ * drifts from electric blue to warm gold on hover. Hover lifts the surface, nudges the arrow and
+ * sweeps a light across it; press compresses it and tightens the halo. Focus is a solid outline,
+ * never glow alone. Secondary: a dark surface with a fine light edge.
+ */
 
 .button {
+  position: relative;
+  isolation: isolate;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
   min-height: var(--site-control-h);
   padding: 0 var(--space-5);
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
+  border: 0;
+  border-radius: var(--btn-radius);
   font-family: var(--font-sans);
   font-size: var(--site-text-small);
-  font-weight: var(--weight-medium);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.005em;
   line-height: 1;
   text-decoration: none;
   white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
   transition:
+    transform var(--dur-base) var(--ease-out),
+    box-shadow var(--dur-base) var(--ease-out),
     background-color var(--dur-fast) var(--ease-out),
-    border-color var(--dur-fast) var(--ease-out),
     color var(--dur-fast) var(--ease-out);
 }
 
@@ -310,57 +393,210 @@ a:hover {
   width: 1rem;
   height: 1rem;
   flex: none;
+  transition: transform var(--dur-base) var(--ease-out);
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--color-accent-text);
+  outline-offset: 4px;
 }
 
 .button--lg {
-  min-height: 3.25rem;
-  padding-inline: var(--space-6);
-  font-size: 1rem;
+  min-height: 3.5rem;
+  padding-inline: var(--space-8);
+  font-size: 0.875rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
 }
 
 .button--sm {
-  min-height: 2.25rem;
+  min-height: 2.375rem;
   padding-inline: var(--space-4);
   font-size: var(--site-text-xs);
 }
 
+/*
+ * Layers inside the button's own stacking context (isolation): the halo (::before, z -2), the
+ * white surface with its highlight sweep (::after, z -1), then the label. The element itself
+ * paints nothing, so the halo can sit outside the surface without tinting it.
+ */
 .button--primary {
-  background: var(--color-accent);
-  color: var(--color-accent-fg);
+  background: transparent;
+  color: var(--btn-ink);
+}
+
+.button--primary::before {
+  content: "";
+  position: absolute;
+  inset: -0.3125rem;
+  z-index: -2;
+  border-radius: calc(var(--btn-radius) + 0.3125rem);
+  background: linear-gradient(
+    100deg,
+    rgb(var(--btn-halo-blue) / 0.95) 0%,
+    rgb(var(--btn-halo-blue) / 0.7) 30%,
+    rgb(var(--btn-halo-gold) / 0.9) 55%,
+    rgb(var(--btn-halo-blue) / 0.9) 100%
+  );
+  background-size: 260% 100%;
+  background-position: 0% 50%;
+  filter: blur(0.75rem);
+  opacity: 0.5;
+  transition:
+    opacity 320ms var(--ease-out),
+    inset var(--dur-base) var(--ease-out),
+    background-position 900ms var(--ease-out);
+  pointer-events: none;
+}
+
+.button--primary::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background:
+    linear-gradient(
+      105deg,
+      transparent 40%,
+      rgb(var(--btn-halo-blue) / 0.14) 47%,
+      rgb(255 255 255 / 0) 50%,
+      rgb(var(--btn-halo-gold) / 0.16) 53%,
+      transparent 60%
+    ),
+    linear-gradient(180deg, var(--btn-surface-top) 0%, var(--btn-surface-bottom) 100%);
+  background-size:
+    260% 100%,
+    100% 100%;
+  background-position:
+    120% 0,
+    0 0;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.95),
+    inset 0 -1px 0 rgb(10 24 52 / 0.16),
+    0 1px 1px rgb(0 0 0 / 0.35),
+    0 10px 24px -12px rgb(0 0 0 / 0.8);
+  transition:
+    background-position 760ms var(--ease-out),
+    box-shadow var(--dur-base) var(--ease-out);
+  pointer-events: none;
 }
 
 .button--primary:hover {
-  background: var(--color-accent-hover);
-  color: var(--color-accent-fg);
+  color: var(--btn-ink);
+  transform: translateY(-1px);
+}
+
+.button--primary:hover::before {
+  inset: -0.4375rem;
+  opacity: 0.95;
+  background-position: 100% 50%;
+}
+
+.button--primary:hover::after {
+  background-position:
+    -20% 0,
+    0 0;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 1),
+    inset 0 -1px 0 rgb(10 24 52 / 0.16),
+    inset 0 0 0 1px rgb(var(--btn-halo-blue) / 0.28),
+    0 2px 2px rgb(0 0 0 / 0.3),
+    0 16px 32px -14px rgb(0 0 0 / 0.85);
+}
+
+.button:hover svg {
+  transform: translateX(3px);
+}
+
+.button:hover svg.icon-down {
+  transform: translateY(2px);
 }
 
 .button--primary:active {
-  background: var(--color-accent-pressed);
+  transform: translateY(0) scale(0.985);
+}
+
+.button--primary:active::after {
+  box-shadow:
+    inset 0 1px 2px rgb(10 24 52 / 0.2),
+    0 1px 1px rgb(0 0 0 / 0.3);
+}
+
+.button--primary:active::before {
+  inset: -0.1875rem;
+  opacity: 0.8;
 }
 
 .button--secondary {
-  border-color: var(--color-border-strong);
-  background: transparent;
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.07), rgb(255 255 255 / 0.015)), var(--color-bg);
   color: var(--color-text);
+  box-shadow:
+    inset 0 0 0 1px rgb(214 226 255 / 0.18),
+    inset 0 1px 0 rgb(255 255 255 / 0.1),
+    0 10px 24px -14px rgb(0 0 0 / 0.9);
 }
 
 .button--secondary:hover {
-  background: var(--color-surface-hover);
-  border-color: var(--color-text-faint);
   color: var(--color-text);
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 0 0 1px rgb(214 226 255 / 0.34),
+    inset 0 1px 0 rgb(255 255 255 / 0.16),
+    0 14px 28px -14px rgb(0 0 0 / 0.9),
+    0 0 24px -6px rgb(var(--btn-halo-blue) / 0.35);
+}
+
+.button--secondary:active {
+  transform: translateY(0) scale(0.985);
+}
+
+/* Reading pages in the light theme: the same system, on paper. */
+[data-theme="light"] .button--primary::after {
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.95),
+    inset 0 0 0 1px rgb(16 32 64 / 0.14),
+    0 1px 2px rgb(16 32 64 / 0.12),
+    0 10px 22px -14px rgb(16 32 64 / 0.45);
+}
+
+[data-theme="light"] .button--primary::before {
+  opacity: 0.35;
+}
+
+[data-theme="light"] .button--secondary {
+  background: var(--color-surface);
+  box-shadow:
+    inset 0 0 0 1px var(--color-border-strong),
+    0 8px 18px -14px rgb(16 32 64 / 0.4);
 }
 
 .button:disabled,
 .button[aria-disabled="true"] {
   opacity: 0.6;
   cursor: progress;
+  transform: none;
 }
 
 .button-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-4);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* No highlight sweep: the surface only. */
+  .button--primary::after,
+  .button--primary:hover::after {
+    background: linear-gradient(180deg, var(--btn-surface-top) 0%, var(--btn-surface-bottom) 100%);
+  }
+
+  .button,
+  .button:hover,
+  .button:active {
+    transform: none;
+  }
 }
 
 /* ---------- Brand ---------- */
@@ -421,19 +657,47 @@ a:hover {
   color: var(--color-text-muted);
 }
 
-/* ---------- Header ---------- */
+/* ---------- Header ----------
+ * Transparent over the first viewport; once the page scrolls (nav.ts sets data-scrolled) it
+ * gains a dark surface, a blur and a fine light line. Sticky, so it is always one reach away.
+ */
 
 .site-header {
-  position: relative;
+  position: sticky;
+  top: 0;
   z-index: var(--z-sticky);
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-bg);
+  border-bottom: 1px solid transparent;
+  background: transparent;
   color: var(--color-text);
+  transition:
+    background-color 260ms var(--ease-out),
+    border-color 260ms var(--ease-out),
+    backdrop-filter 260ms var(--ease-out);
 }
 
-/* Home: the header sits on the night band with the hero. */
-.site-header--night {
-  border-bottom-color: transparent;
+.site-header[data-scrolled],
+.site-header[data-menu-open] {
+  border-bottom-color: rgb(170 196 255 / 0.12);
+  background: rgb(4 7 14 / 0.74);
+  -webkit-backdrop-filter: saturate(150%) blur(16px);
+  backdrop-filter: saturate(150%) blur(16px);
+}
+
+[data-theme="light"] .site-header[data-scrolled],
+[data-theme="light"] .site-header[data-menu-open] {
+  border-bottom-color: var(--color-border);
+  background: rgb(245 247 251 / 0.82);
+}
+
+/* The first section of every page slides under the transparent header; a transparent top border
+   of the header's height keeps its content clear of it without touching its own padding. */
+main > :first-child {
+  margin-top: calc(-1 * var(--site-header-h) - 1px);
+  border-top: calc(var(--site-header-h) + 1px) solid transparent;
+}
+
+main > .hero:first-child {
+  border-top: 0;
 }
 
 .site-header__inner {
@@ -458,6 +722,7 @@ a:hover {
 }
 
 .site-nav__link {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
@@ -465,21 +730,48 @@ a:hover {
   padding-inline: var(--space-3);
   border-radius: var(--radius-sm);
   color: var(--color-text-secondary);
-  font-size: var(--site-text-small);
+  font-size: var(--type-ui);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.01em;
   text-decoration: none;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+
+.site-nav__link::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 0.375rem;
+  width: 1.125rem;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--color-accent);
+  box-shadow: 0 0 0.75rem 1px rgb(var(--btn-halo-blue) / 0.8);
+  opacity: 0;
+  transform: translateX(-50%) scaleX(0.4);
+  transition:
+    opacity var(--dur-base) var(--ease-out),
+    transform var(--dur-base) var(--ease-out);
 }
 
 .site-nav__link:hover {
   color: var(--color-text);
 }
 
+.site-nav__link:hover::after {
+  opacity: 0.45;
+  transform: translateX(-50%) scaleX(0.7);
+}
+
 .site-nav__link[aria-current="page"],
 .site-nav__link[aria-current="true"] {
   color: var(--color-text);
-  text-decoration: underline;
-  text-decoration-color: var(--color-accent);
-  text-decoration-thickness: 2px;
-  text-underline-offset: 0.55em;
+}
+
+.site-nav__link[aria-current="page"]::after,
+.site-nav__link[aria-current="true"]::after {
+  opacity: 1;
+  transform: translateX(-50%) scaleX(1);
 }
 
 .site-nav__social .x-link {
@@ -500,13 +792,13 @@ a:hover {
 }
 
 .site-nav__cta {
-  margin-left: var(--space-2);
+  margin-left: var(--space-4);
 }
 
 .header-tools {
   display: none;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-3);
 }
 
 .x-link {
@@ -530,7 +822,7 @@ a:hover {
   height: var(--site-control-h);
   margin-right: calc(-1 * var(--space-2));
   border: 0;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--color-text);
 }
@@ -553,7 +845,7 @@ a:hover {
   display: block;
 }
 
-/* Compact header below 62rem: logo · Download · menu. Everything else lives in the menu. */
+/* Compact header below 62rem: logo · Download · menu. The menu opens as a full-width sheet. */
 @media (max-width: 61.99rem) {
   .site-header__inner {
     gap: var(--space-3);
@@ -570,10 +862,18 @@ a:hover {
     left: 0;
     right: 0;
     margin: 0;
-    padding: var(--space-2) var(--site-gutter) var(--space-6);
-    border-bottom: 1px solid var(--color-border);
-    background: var(--color-bg);
-    box-shadow: 0 24px 40px -24px rgb(0 0 0 / 0.5);
+    padding: var(--space-3) var(--site-gutter) var(--space-8);
+    border-bottom: 1px solid rgb(170 196 255 / 0.12);
+    background: rgb(4 7 14 / 0.94);
+    -webkit-backdrop-filter: blur(16px);
+    backdrop-filter: blur(16px);
+    box-shadow: 0 40px 60px -30px rgb(0 0 0 / 0.8);
+  }
+
+  [data-theme="light"] .site-nav {
+    border-bottom-color: var(--color-border);
+    background: rgb(245 247 251 / 0.97);
+    box-shadow: 0 30px 40px -30px rgb(16 32 64 / 0.3);
   }
 
   html.js .site-nav:not([data-open]) {
@@ -586,6 +886,7 @@ a:hover {
     box-shadow: none;
     border: 0;
     padding-inline: 0;
+    background: transparent;
   }
 
   html:not(.js) .site-header__inner {
@@ -609,14 +910,37 @@ a:hover {
   .site-nav__link,
   .site-nav__social .x-link {
     width: 100%;
-    min-height: 3.25rem;
+    min-height: 3.5rem;
     padding-inline: 0;
-    font-size: var(--site-text-body);
+    font-family: var(--font-display);
+    font-size: 1.25rem;
+    font-weight: var(--weight-semibold);
+    letter-spacing: -0.02em;
     justify-content: flex-start;
+  }
+
+  .site-nav__link::after {
+    left: auto;
+    right: 0;
+    bottom: 50%;
+    width: 0.375rem;
+    height: 0.375rem;
+    border-radius: var(--radius-full);
+    transform: translateY(50%);
+  }
+
+  .site-nav__link:hover::after,
+  .site-nav__link[aria-current="page"]::after,
+  .site-nav__link[aria-current="true"]::after {
+    transform: translateY(50%);
   }
 
   .site-nav__social .x-link {
     color: var(--color-text-secondary);
+    font-family: var(--font-sans);
+    font-size: var(--site-text-body);
+    font-weight: var(--weight-regular);
+    letter-spacing: 0;
   }
 
   .site-nav__social .x-link__handle {
@@ -763,250 +1087,6 @@ a:hover {
 .theme-toggle__option svg {
   width: 1rem;
   height: 1rem;
-}
-
-/* ---------- Home hero: the night band (dark in both themes, by design) ---------- */
-
-/* The orb component fills the whole hero: the symbol sits at the top centre and its energy
-   stream runs down behind the headline to the hero's bottom edge, where the provider bar begins. */
-.hero {
-  --hero-orb-max: min(25rem, 40svh);
-  --hero-orb-top: clamp(0.5rem, 0.25rem + 1vw, 1.5rem);
-  /* Stacked layout: the stream dims to a trace behind the copy and resumes faintly below it,
-     so no line of text sits on the bright core (HeroOrb's text-safe band). */
-  --hero-beam-safe-top: calc(var(--hero-orb-top) + 0.98 * var(--hero-orb-max));
-  --hero-beam-safe-inset: 1.5rem;
-  --hero-beam-safe-level: 0.12;
-  --hero-beam-safe-resume: 0.4;
-  position: relative;
-  isolation: isolate;
-  overflow: hidden;
-  background: var(--color-bg);
-  color: var(--color-text);
-}
-
-.hero__orb {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-}
-
-.hero__orb-poster {
-  width: var(--hero-orb-max);
-  aspect-ratio: 1;
-  margin: var(--hero-orb-top) auto 0;
-}
-
-.hero__inner {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  justify-items: center;
-  text-align: center;
-  /* The copy starts where the text-safe band begins, just under the sphere. */
-  padding-block: calc(var(--hero-orb-top) + 0.98 * var(--hero-orb-max)) clamp(3rem, 2rem + 3vw, 4.5rem);
-}
-
-.hero__title {
-  display: grid;
-  justify-items: center;
-  gap: clamp(0.75rem, 0.4rem + 0.8vw, 1.25rem);
-  margin: 0;
-  font-weight: inherit;
-}
-
-.hero__name {
-  font-family: var(--font-wide);
-  font-size: var(--site-name);
-  font-weight: var(--weight-semibold);
-  letter-spacing: -0.05em;
-  line-height: 0.92;
-  color: var(--color-text);
-  text-shadow: 0 0 2rem var(--color-bg);
-  /* Tracking adds space after the last letter; pull it back so centring stays optical. */
-  margin-right: -0.05em;
-}
-
-.hero__line {
-  max-width: 30ch;
-  font-family: var(--font-wide);
-  font-size: var(--site-hero-line);
-  font-weight: var(--weight-medium);
-  letter-spacing: -0.03em;
-  line-height: 1.15;
-  color: var(--color-text);
-  text-wrap: balance;
-}
-
-/* The stream runs behind the copy; a soft halo in the page colour keeps every line legible. */
-.hero__line,
-.hero__support,
-.hero__note {
-  text-shadow:
-    0 0 0.75rem var(--color-bg),
-    0 0 0.25rem var(--color-bg);
-}
-
-.hero .button--secondary {
-  background: var(--color-bg);
-}
-
-.hero .button--secondary:hover {
-  background: var(--color-surface);
-}
-
-.hero__support {
-  max-width: 54ch;
-  margin-top: clamp(1rem, 0.6rem + 1vw, 1.5rem);
-  font-size: var(--site-text-lead);
-  line-height: 1.55;
-  color: var(--color-text-secondary);
-  text-wrap: balance;
-}
-
-.hero__actions {
-  justify-content: center;
-  margin-top: clamp(1.5rem, 1rem + 1vw, 2rem);
-}
-
-.hero__note {
-  margin-top: var(--space-4);
-  color: var(--color-text-muted);
-  font-size: var(--site-text-small);
-}
-
-/* 1024 px and up: a split hero. The copy sits left, clear of the energy stream; the orb owns the
-   right half, symbol near the top, stream running to the hero's bottom edge and the provider bar. */
-@media (min-width: 64rem) {
-  .hero {
-    --hero-orb-max: min(32rem, 58svh);
-    --hero-orb-top: clamp(1.5rem, 4svh, 3rem);
-    /* Split layout: the stream has its own column, so the text-safe band is off. */
-    --hero-beam-safe-top: 0px;
-    --hero-beam-safe-inset: 0px;
-    --hero-beam-safe-level: 1;
-    --hero-beam-safe-resume: 1;
-  }
-
-  .hero__orb {
-    inset: 0 0 0 auto;
-    width: 50%;
-  }
-
-  .hero__orb-poster {
-    margin-top: var(--hero-orb-top);
-  }
-
-  .hero__inner {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    align-content: center;
-    justify-items: start;
-    min-height: clamp(34rem, calc(100svh - var(--site-header-h) - 7.5rem), 52rem);
-    padding-block: clamp(3rem, 2rem + 3vh, 5rem);
-    text-align: left;
-  }
-
-  .hero__inner > * {
-    grid-column: 1;
-  }
-
-  .hero__title {
-    justify-items: start;
-  }
-
-  .hero__name {
-    font-size: clamp(4.5rem, 1.5rem + 5vw, 7rem);
-    margin-right: 0;
-  }
-
-  .hero__line {
-    max-width: 22ch;
-    text-wrap: pretty;
-  }
-
-  .hero__support {
-    max-width: 44ch;
-    text-wrap: pretty;
-  }
-
-  .hero__actions {
-    justify-content: flex-start;
-  }
-}
-
-/* Provider bar: the concrete names, with honest adapter status. */
-.provider-band {
-  border-block: 1px solid var(--color-border);
-}
-
-.provider-bar {
-  display: grid;
-  gap: var(--space-5);
-  padding-block: var(--space-8);
-}
-
-.provider-bar__label {
-  color: var(--color-text-muted);
-  font-family: var(--font-sans);
-  font-size: var(--site-text-small);
-  font-weight: var(--weight-regular);
-  letter-spacing: 0;
-  line-height: var(--leading-normal);
-}
-
-.provider-bar__list {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 9.5rem), 1fr));
-  gap: var(--space-4) var(--space-8);
-}
-
-.provider-bar__item {
-  display: grid;
-  gap: var(--space-1);
-}
-
-.provider-bar__name {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-3);
-  color: var(--color-text);
-  font-size: 1.125rem;
-  font-weight: var(--weight-medium);
-  letter-spacing: -0.01em;
-}
-
-.provider-bar__status {
-  color: var(--color-text-muted);
-  font-family: var(--font-mono);
-  font-size: var(--site-text-xs);
-}
-
-.provider-bar__item--more .provider-bar__name {
-  color: var(--color-text-secondary);
-}
-
-/* Neutral provider glyph, drawn by KalCode: a terminal prompt in a rounded square. */
-.provider-glyph {
-  display: inline-grid;
-  place-items: center;
-  flex: none;
-  width: 1.75rem;
-  height: 1.75rem;
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-sm);
-  color: var(--color-text-secondary);
-}
-
-.provider-glyph svg {
-  width: 1rem;
-  height: 1rem;
-}
-
-@media (min-width: 64rem) {
-  .provider-bar {
-    grid-template-columns: 13rem minmax(0, 1fr);
-    align-items: center;
-  }
 }
 
 /* ---------- Section heads ---------- */
@@ -1253,7 +1333,7 @@ a:hover {
   grid-row: span 2;
   align-self: center;
   color: var(--color-text);
-  font-family: var(--font-wide);
+  font-family: var(--font-display);
   font-size: clamp(2rem, 1.6rem + 1.2vw, 2.75rem);
   font-weight: var(--weight-semibold);
   letter-spacing: -0.04em;
@@ -1415,7 +1495,7 @@ a:hover {
 
 .ladder__price {
   color: var(--color-text);
-  font-family: var(--font-wide);
+  font-family: var(--font-display);
   font-size: clamp(2.25rem, 1.8rem + 1.6vw, 3.5rem);
   font-weight: var(--weight-semibold);
   letter-spacing: -0.045em;
@@ -1463,7 +1543,7 @@ a:hover {
 }
 
 .ladder__value strong {
-  font-family: var(--font-wide);
+  font-family: var(--font-display);
   font-size: 1.375rem;
   font-weight: var(--weight-semibold);
   letter-spacing: -0.03em;
@@ -1614,7 +1694,7 @@ a:hover {
 
 .platform__name {
   color: var(--color-text);
-  font-family: var(--font-wide);
+  font-family: var(--font-display);
   font-size: 1.5rem;
   font-weight: var(--weight-semibold);
   letter-spacing: -0.03em;
@@ -2174,7 +2254,7 @@ kbd.ptt__key {
 
 .prose h2 {
   margin-top: var(--space-16);
-  font-family: var(--font-wide);
+  font-family: var(--font-display);
   font-weight: var(--weight-semibold);
   font-size: clamp(1.375rem, 1.2rem + 0.8vw, 1.75rem);
   letter-spacing: -0.03em;
@@ -2430,7 +2510,7 @@ kbd.shortcut > kbd {
 }
 
 .release__version {
-  font-family: var(--font-wide);
+  font-family: var(--font-display);
   font-weight: var(--weight-semibold);
   font-size: clamp(1.25rem, 1.15rem + 0.4vw, 1.5rem);
   letter-spacing: -0.03em;
