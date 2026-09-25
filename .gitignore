@@ -41,3 +41,5 @@ apps/desktop/qa/
 
 # Parallel development worktrees (see docs/DEVELOPMENT.md)
 .worktrees/
+# Tool-managed agent worktrees and local assistant state
+.claude/

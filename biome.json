@@ -14,6 +14,8 @@
       "!**/.astro",
       "!**/src-tauri/gen",
       "!**/target",
+      "!**/.claude",
+      "!**/.worktrees",
       "!**/*.astro"
     ]
   },
