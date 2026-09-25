@@ -88,8 +88,12 @@ impl FakeInstall {
 }
 
 fn provider(fake: &FakeInstall) -> ClaudeCodeProvider {
+    provider_with_ack(fake, Duration::from_secs(2))
+}
+
+fn provider_with_ack(fake: &FakeInstall, interrupt_ack: Duration) -> ClaudeCodeProvider {
     ClaudeCodeProvider::new(fake.env()).with_timeouts(SessionTimeouts {
-        interrupt_ack: Duration::from_secs(2),
+        interrupt_ack,
         terminate_grace: Duration::from_millis(500),
     })
 }
@@ -98,8 +102,16 @@ fn start(
     fake: &FakeInstall,
     mode: PermissionMode,
 ) -> (Box<dyn AgentSession>, Receiver<AgentEvent>) {
+    start_with(provider(fake), fake, mode)
+}
+
+fn start_with(
+    provider: ClaudeCodeProvider,
+    fake: &FakeInstall,
+    mode: PermissionMode,
+) -> (Box<dyn AgentSession>, Receiver<AgentEvent>) {
     let (tx, rx) = mpsc::channel();
-    let session = provider(fake)
+    let session = provider
         .start_session(
             fake.config(mode, None),
             Box::new(move |event: AgentEvent| {
@@ -450,7 +462,10 @@ fn malformed_and_oversized_lines_never_break_the_session() {
 #[test]
 fn interrupt_uses_the_control_protocol_when_advertised() {
     let fake = FakeInstall::new("claude", json!({}));
-    let (session, rx) = start(&fake, PermissionMode::Approve);
+    // A generous acknowledgement window: under a loaded test machine the fake can take longer
+    // than the default 2 s to answer, and the stop fallback would then (correctly) take over.
+    let provider = provider_with_ack(&fake, Duration::from_secs(15));
+    let (session, rx) = start_with(provider, &fake, PermissionMode::Approve);
     session.send(text("hello")).expect("send");
     until(&rx, turn_done);
     session.interrupt().expect("interrupt");
