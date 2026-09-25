@@ -95,6 +95,15 @@ fn auth_finds_authentication_refactor_first() {
             &ago(hours),
         ));
     }
+    // A newer synonym match that needs you still ranks below the word as typed.
+    sources.add(thread(
+        "Login page copy",
+        "codex",
+        &ws.id,
+        &ws.name,
+        ThreadStatus::WaitingForPermission,
+        &ago(1),
+    ));
     let locator = Locator::start(core.clone(), sources).expect("start");
     assert!(locator.wait_ready(WAIT));
 

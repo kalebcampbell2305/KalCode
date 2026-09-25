@@ -118,7 +118,8 @@ export function UiIntentsProvider({ children }: { children: ReactNode }) {
                 thread.terminalId !== null ||
                 (await client.transport
                   .invoke("provider_pane_info", { threadId: target.threadId })
-                  .then(() => true)
+                  // `null`: not a provider-pane thread (native answers None for headless threads).
+                  .then((info) => info !== null && info !== undefined)
                   .catch(() => false));
             } catch {
               isPane = false;

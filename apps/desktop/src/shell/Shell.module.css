@@ -11,6 +11,12 @@
   grid-template-columns: var(--sidebar-w-collapsed) auto minmax(0, 1fr);
 }
 
+/* Z7-W2: room under the floating KalVoice bar (top centre) for pages that opt in with
+   `padding-top: calc(… + var(--kalvoice-clearance))`. */
+.shell[data-kalvoice] {
+  --kalvoice-clearance: 3rem;
+}
+
 .main {
   grid-column: 3;
   grid-row: 1;

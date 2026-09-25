@@ -26,7 +26,6 @@ import {
   Pencil,
   Pin,
   PinOff,
-  ShieldAlert,
   Trash2,
 } from "lucide-react";
 import { type HTMLAttributes, type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
@@ -297,7 +296,7 @@ export function RailTree({ onDialog }: { onDialog: (dialog: RailDialog) => void 
               <span className={styles.badges} aria-hidden="true">
                 {entry.needsYou > 0 ? (
                   <span className={styles.needsBadge} title={`${entry.needsYou} need you`}>
-                    <ShieldAlert />
+                    <span className={styles.bang}>!</span>
                     {entry.needsYou}
                   </span>
                 ) : null}

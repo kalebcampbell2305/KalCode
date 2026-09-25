@@ -5,6 +5,8 @@ import { useRuntime } from "../../../runtime/RuntimeProvider.tsx";
 
 export interface LocatorSearchState {
   response: LocatorResponse | null;
+  /** The text `response` answers (results for older text are never shown as current). */
+  forText: string;
   loading: boolean;
   error: KalCodeError | null;
 }
@@ -23,7 +25,7 @@ export function useLocatorSearch(
   }: { kinds?: readonly LocatorEntityKind[]; limit?: number; delayMs?: number; enabled?: boolean } = {},
 ): LocatorSearchState {
   const { client } = useRuntime();
-  const [state, setState] = useState<LocatorSearchState>({ response: null, loading: false, error: null });
+  const [state, setState] = useState<LocatorSearchState>({ response: null, forText: "", loading: false, error: null });
   const latest = useRef(0);
   const kindKey = kinds.join(",");
 
@@ -31,7 +33,7 @@ export function useLocatorSearch(
     const text = query.trim();
     const id = ++latest.current;
     if (!enabled || text === "") {
-      setState({ response: null, loading: false, error: null });
+      setState({ response: null, forText: "", loading: false, error: null });
       return;
     }
     setState((s) => ({ ...s, loading: true }));
@@ -43,10 +45,11 @@ export function useLocatorSearch(
           page: { limit, cursor: null },
         })
         .then((response) => {
-          if (latest.current === id) setState({ response, loading: false, error: null });
+          if (latest.current === id) setState({ response, forText: text, loading: false, error: null });
         })
         .catch((cause) => {
-          if (latest.current === id) setState({ response: null, loading: false, error: toKalCodeError(cause) });
+          if (latest.current === id)
+            setState({ response: null, forText: text, loading: false, error: toKalCodeError(cause) });
         });
     }, delayMs);
     return () => clearTimeout(timer);

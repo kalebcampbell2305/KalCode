@@ -638,6 +638,9 @@ struct Scored {
     body_only: bool,
 }
 
+/// Added to a term's score when the word as typed appears in the title (not only a synonym).
+const TYPED_BONUS: f32 = 0.15;
+
 /// A term group ready for scoring: each alternative as lowercase characters with its weight
 /// (aliases count a little less than the typed word).
 type Prepared = Vec<Vec<(Vec<char>, f32)>>;
@@ -650,7 +653,7 @@ fn prepare(groups: &[TermGroup]) -> Prepared {
                 .alternatives
                 .iter()
                 .map(|alt| {
-                    let weight = if group.is_direct(alt) { 1.0 } else { 0.9 };
+                    let weight = if group.is_direct(alt) { 1.0 } else { 0.85 };
                     (alt.chars().collect(), weight)
                 })
                 .collect()
@@ -681,9 +684,12 @@ fn score_text(candidate: &Candidate, groups: &Prepared) -> Scored {
     for group in groups {
         let mut best = 0.0f32;
         let mut best_range = None;
+        let mut typed_in_title = false;
         for (alt_chars, weight) in group {
             let weight = *weight;
             let (q, pos) = field_quality(&title_chars, alt_chars);
+            // The word as typed (or its stem) in the title beats a synonym match.
+            typed_in_title |= q > 0.0 && weight >= 1.0;
             let q = q * weight;
             if q > best {
                 best = q;
@@ -695,6 +701,9 @@ fn score_text(candidate: &Candidate, groups: &Prepared) -> Scored {
                 best = qs;
                 best_range = None;
             }
+        }
+        if typed_in_title {
+            best = (best + TYPED_BONUS).min(1.0);
         }
         if best > 0.0 {
             any_visible = true;
@@ -770,7 +779,7 @@ pub fn search(
             let status = status_weight(candidate.status.as_deref());
             let kind = kind_weight(candidate.kind);
             let score = if has_text {
-                0.62 * text.score + 0.18 * recency + 0.12 * status + 0.08 * kind
+                0.7 * text.score + 0.14 * recency + 0.1 * status + 0.06 * kind
             } else {
                 0.6 * recency + 0.25 * status + 0.15 * kind
             };

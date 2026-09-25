@@ -280,6 +280,22 @@ function understand(text: string): Parsed | null {
       };
     }
   }
+  // Search (Z7-W2): the Session Locator; native reads back names and statuses.
+  const when = t.match(
+    /^(?:what (?:was|were) (?:i|we) (?:working on|doing)|(?:find|show|show me) what (?:i|we) (?:was|were) (?:working on|doing))(?: (yesterday|today|this week|last week))?$/,
+  );
+  const searchFor =
+    t.match(/^(?:search|look) (?:for|up) (.+)$/) ??
+    t.match(/^find (?:me )?(?:the |my )?(?:thread|session|workspace|project) (?:about |for |called |named )?(.+)$/);
+  if (when || searchFor) {
+    const query = when ? (when[1] ?? "recent") : (searchFor?.[1] ?? "");
+    return {
+      kind: "search",
+      high: true,
+      outcome: { kind: "completed", summary: `Showing matches for “${query}”.` },
+      directive: { kind: "search", query },
+    };
+  }
   if (/^(new terminal|open a terminal)$/.test(t)) {
     return {
       kind: "create_terminal",

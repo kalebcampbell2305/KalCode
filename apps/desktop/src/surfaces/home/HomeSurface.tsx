@@ -76,8 +76,11 @@ export function HomeSurface() {
     [client],
   );
 
+  // One visit per mount: a remount in development StrictMode refreshes without a new greeting.
+  const visited = useRef(false);
   useEffect(() => {
-    void load(true);
+    void load(!visited.current);
+    visited.current = true;
   }, [load]);
 
   const newest = events[0]?.seq ?? 0;
@@ -227,6 +230,30 @@ function FirstRun({ summary }: { summary: HomeSummary }) {
           </Button>
         </li>
       </ol>
+      <p className={styles.previewLabel}>Once you're working</p>
+      <ul className={styles.preview} aria-label="What Home shows once you're working">
+        <li className={styles.previewWell}>
+          <p className={styles.previewTitle}>
+            <ShieldAlert aria-hidden="true" />
+            Needs you
+          </p>
+          <p>Threads waiting for your approval or your reply, and anything that failed.</p>
+        </li>
+        <li className={styles.previewWell}>
+          <p className={styles.previewTitle}>
+            <Sparkles aria-hidden="true" />
+            Running now
+          </p>
+          <p>Every thread at work, in every workspace, with its provider and status.</p>
+        </li>
+        <li className={styles.previewWell}>
+          <p className={styles.previewTitle}>
+            <History aria-hidden="true" />
+            Where you left off
+          </p>
+          <p>What finished since your last visit, what you can resume, and your recent work by day.</p>
+        </li>
+      </ul>
       {summary.displayName ? null : <NameHint />}
     </div>
   );
@@ -241,7 +268,7 @@ function NameHint() {
       <button type="button" className={styles.link} onClick={() => navigate("settings")}>
         Settings
       </button>
-      . It stays on this computer.
+      {". It stays on this computer."}
     </p>
   );
 }

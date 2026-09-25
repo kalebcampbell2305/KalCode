@@ -216,6 +216,9 @@
 }
 
 .tree [role="treeitem"] {
+  /* Offscreen rows skip layout and paint (a long rail stays cheap; the DOM keeps roving focus). */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 1.875rem;
   position: relative;
   display: flex;
   align-items: center;
@@ -418,9 +421,8 @@
   font-weight: var(--weight-semibold);
 }
 
-.needsBadge svg {
-  width: 0.6875rem;
-  height: 0.6875rem;
+.bang {
+  font-weight: 800;
 }
 
 /* ● working */

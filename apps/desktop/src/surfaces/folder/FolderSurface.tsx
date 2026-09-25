@@ -243,7 +243,7 @@ function Project({ workspaceId }: { workspaceId: string }) {
           tone={needs > 0 ? "waiting" : undefined}
           quiet={needs === 0}
         />
-        <Stat label="Terminals running" value={running} icon={<SquareTerminal />} quiet={running === 0} />
+        <Stat label="Terminals" value={running} icon={<SquareTerminal />} quiet={running === 0} />
         <Stat
           label="Changed files"
           value={changed ?? "–"}
@@ -263,12 +263,12 @@ function Project({ workspaceId }: { workspaceId: string }) {
           )}
         </Panel>
 
-        <div className={styles.column}>
+        <div className={`${styles.column} ${styles.gitColumn}`}>
           <GitPanel git={git} />
           <RecentFilesPanel files={files} commits={commits} />
         </div>
 
-        <div className={styles.column}>
+        <div className={`${styles.column} ${styles.contextColumn}`}>
           <ThreadsPanel threads={threads} />
           <TerminalsPanel />
           <BranchesPanel branches={branches} />

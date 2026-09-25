@@ -8,7 +8,7 @@
   flex-direction: column;
   gap: var(--space-5);
   min-height: 100%;
-  padding: var(--space-6) var(--page-px, var(--space-8)) var(--space-10);
+  padding: calc(var(--space-6) + var(--kalvoice-clearance, 0px)) var(--page-px, var(--space-8)) var(--space-10);
 }
 
 .header {
@@ -135,6 +135,10 @@
 .grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "files"
+    "git"
+    "context";
   gap: var(--panel-gap, var(--space-4));
   align-items: start;
 }
@@ -147,24 +151,32 @@
 }
 
 .files {
+  grid-area: files;
   min-width: 0;
 }
 
-@container (min-width: 58rem) {
+.gitColumn {
+  grid-area: git;
+}
+
+.contextColumn {
+  grid-area: context;
+}
+
+/* Two columns: files with the workspace context under it; Git and recent files beside them. */
+@container (min-width: 50rem) {
   .grid {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  }
-  .files {
-    grid-row: span 2;
+    grid-template-areas:
+      "files git"
+      "context git";
   }
 }
 
-@container (min-width: 104rem) {
+@container (min-width: 100rem) {
   .grid {
     grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1fr);
-  }
-  .files {
-    grid-row: auto;
+    grid-template-areas: "files git context";
   }
 }
 

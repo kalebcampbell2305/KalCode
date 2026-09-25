@@ -82,6 +82,7 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
       className={styles.shell}
       data-sidebar={settings.sidebarCollapsed ? "collapsed" : "expanded"}
       data-rail={rail.enabled ? (rail.hidden ? "strip" : "shown") : "none"}
+      data-kalvoice={kalvoice || undefined}
     >
       <a className={styles.skipLink} href="#main">
         Skip to content

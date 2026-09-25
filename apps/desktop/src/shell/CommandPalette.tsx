@@ -17,7 +17,7 @@ import {
   SquareTerminal,
   Sun,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { useOptionalKalVoice } from "../kalvoice/KalVoiceProvider.tsx";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { useWorkspaces } from "../runtime/WorkspaceProvider.tsx";
@@ -52,7 +52,23 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const locator = useLocatorSearch(search.query, { kinds: search.kinds, limit: 12, enabled: open });
   const openLocated = useOpenLocated();
   const searching = search.query.trim() !== "";
-  const located = locator.response?.results.items.length ?? 0;
+  // Results for older text are held back while the new answer is on its way, so they never take
+  // the selection the command list gives the text now.
+  const current = searching && locator.forText === search.query.trim();
+  const located = current ? (locator.response?.results.items.length ?? 0) : 0;
+  // The best locator match is selected when results arrive (Enter opens it) — unless the text
+  // names a command ("Open folder"), which keeps Enter.
+  const [selected, setSelected] = useState("");
+  const first = current ? locator.response?.results.items[0] : undefined;
+  const firstValue = first ? `locator:${first.kind}:${first.entityId}` : "";
+  const typed = search.query.trim().toLowerCase();
+  useEffect(() => {
+    if (!firstValue) return;
+    const commandMatches = [...document.querySelectorAll<HTMLElement>("[cmdk-item]")].some(
+      (el) => !el.dataset.value?.startsWith("locator:") && (el.textContent ?? "").toLowerCase().includes(typed),
+    );
+    if (!commandMatches) setSelected(firstValue);
+  }, [firstValue, typed]);
 
   const run = (action: () => unknown) => () => {
     onOpenChange(false);
@@ -73,6 +89,8 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       contentClassName={styles.content}
       className={styles.command}
       loop
+      value={selected}
+      onValueChange={setSelected}
     >
       <Command.Input
         className={styles.input}
@@ -85,7 +103,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       <Command.List className={styles.list}>
         {searching ? (
           <LocatorResultItems
-            state={locator}
+            state={current ? locator : { ...locator, response: null, loading: true }}
             onOpen={(item) => run(() => openLocated(item.kind, item.entityId, "palette"))()}
           />
         ) : null}

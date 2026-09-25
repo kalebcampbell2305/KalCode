@@ -37,6 +37,9 @@ export interface RailValue {
 
 const RailContext = createContext<RailValue | null>(null);
 
+/** Below this window width the rail starts collapsed to its strip. */
+const NARROW_PX = 1400;
+
 /** Event types after which the rail's counts, badges or workspaces may have changed. */
 const RELEVANT = /^(thread\.|approval\.|workspace\.|shell\.|agent\.message|settings\.changed)/;
 
@@ -132,10 +135,27 @@ export function RailProvider({ children }: { children: ReactNode }) {
     [client, refresh, fail],
   );
 
-  const hidden = rail?.collapsedSections.includes("rail") ?? false;
+  // Narrow windows (under 1400 px, e.g. 1366×768) start with the collapsed strip so the page keeps
+  // its width; expanding it there lasts for the session. Wider windows use the saved choice.
+  const [narrow, setNarrow] = useState(() => typeof window !== "undefined" && window.innerWidth < NARROW_PX);
+  const [openWhileNarrow, setOpenWhileNarrow] = useState(false);
+  useEffect(() => {
+    const onResize = () => setNarrow(window.innerWidth < NARROW_PX);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  const savedHidden = rail?.collapsedSections.includes("rail") ?? false;
+  const hidden = savedHidden || (narrow && !openWhileNarrow);
   const toggleHidden = useCallback(() => {
-    void setSection("rail", !hidden);
-  }, [setSection, hidden]);
+    if (hidden) {
+      if (savedHidden) void setSection("rail", false);
+      if (narrow) setOpenWhileNarrow(true);
+    } else if (narrow) {
+      setOpenWhileNarrow(false);
+    } else {
+      void setSection("rail", true);
+    }
+  }, [setSection, hidden, savedHidden, narrow]);
 
   const createGroup = useCallback(
     async (name: string) => {

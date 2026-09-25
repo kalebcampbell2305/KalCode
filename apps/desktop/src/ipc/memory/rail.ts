@@ -396,9 +396,11 @@ function rank(entries: Entry[], parsed: Parsed, sort: "relevance" | "recency", n
     for (const group of parsed.groups) {
       let best = 0;
       let range: [number, number] | null = null;
+      let typedInTitle = false;
       for (const alt of group.alternatives) {
-        const weight = isDirect(group, alt) ? 1 : 0.9;
+        const weight = isDirect(group, alt) ? 1 : 0.85;
         const [q, pos] = fieldQuality(entry.title, alt);
+        if (q > 0 && weight >= 1) typedInTitle = true;
         if (q * weight > best) {
           best = q * weight;
           range = pos === null ? null : [pos, pos + alt.length];
@@ -413,6 +415,7 @@ function rank(entries: Entry[], parsed: Parsed, sort: "relevance" | "recency", n
         matchedAll = false;
         break;
       }
+      if (typedInTitle) best = Math.min(1, best + 0.15);
       total += best;
       if (range) highlights.push({ start: range[0], end: range[1] });
     }
@@ -425,7 +428,7 @@ function rank(entries: Entry[], parsed: Parsed, sort: "relevance" | "recency", n
     const kind = entry.kind === "thread" ? 1 : entry.kind === "workspace" ? 0.9 : entry.kind === "terminal" ? 0.6 : 0.4;
     const text = hasText ? total / parsed.groups.length : 0;
     const score = hasText
-      ? 0.62 * text + 0.18 * recency + 0.12 * status + 0.08 * kind
+      ? 0.7 * text + 0.14 * recency + 0.1 * status + 0.06 * kind
       : 0.6 * recency + 0.25 * status + 0.15 * kind;
     results.push({
       kind: entry.kind,
@@ -1448,9 +1451,18 @@ export function createRailMemory(options: RailMemoryOptions): RailMemory {
     seedThread("Greeting rotation", "codex", ws("kalcode"), "completed", 35);
     seedThread("Folder surface Git status", "gemini-cli", ws("kalcode"), "waiting_for_user", 12);
     seedThread("Checkout webhooks", "claude-code", ws("billing-service"), "failed", 90, { resumable: true });
-    seedThread("Invoice PDF layout", "codex", ws("billing-service"), "interrupted", 60 * 26);
+    // "Yesterday" in the person's calendar, whatever the time now (recent work by day).
+    const yesterdayAt = (hour: number) => {
+      const at = new Date();
+      at.setDate(at.getDate() - 1);
+      at.setHours(hour, 0, 0, 0);
+      return Math.round((Date.now() - at.getTime()) / 60_000);
+    };
+    const invoiceAt = yesterdayAt(15);
+    const terraformAt = yesterdayAt(11);
+    seedThread("Invoice PDF layout", "codex", ws("billing-service"), "interrupted", invoiceAt);
     seedThread("Landing page hero", "claude-code", ws("orbit-web"), "paused", 60 * 30);
-    seedThread("Terraform state split", "codex", ws("infra-terraform"), "completed", 60 * 28);
+    seedThread("Terraform state split", "codex", ws("infra-terraform"), "completed", terraformAt);
     seedThread("Offline sync spike", "claude-code", ws("mobile-app"), "idle", 60 * 50);
     seedThread("Old onboarding flow", "claude-code", ws("docs-site"), "completed", 60 * 24 * 9, {
       archivedAt: minutesAgo(60 * 24 * 8),
@@ -1481,13 +1493,13 @@ export function createRailMemory(options: RailMemoryOptions): RailMemory {
     const invoice = threads().find((t) => t.name === "Invoice PDF layout") as ThreadSummary;
     const terraform = threads().find((t) => t.name === "Terraform state split") as ThreadSummary;
     const greeting = threads().find((t) => t.name === "Greeting rotation") as ThreadSummary;
-    emit({ type: "thread.started", payload: { threadId: invoice.id } }, threadCorr(invoice, 60 * 26 + 20));
+    emit({ type: "thread.started", payload: { threadId: invoice.id } }, threadCorr(invoice, invoiceAt + 20));
     emit(
       { type: "file.modified", payload: { threadId: invoice.id, path: "src/invoice/pdf.ts" } },
-      threadCorr(invoice, 60 * 26 + 5),
+      threadCorr(invoice, invoiceAt + 5),
     );
-    emit({ type: "thread.started", payload: { threadId: terraform.id } }, threadCorr(terraform, 60 * 28 + 30));
-    emit({ type: "thread.completed", payload: { threadId: terraform.id } }, threadCorr(terraform, 60 * 28));
+    emit({ type: "thread.started", payload: { threadId: terraform.id } }, threadCorr(terraform, terraformAt + 30));
+    emit({ type: "thread.completed", payload: { threadId: terraform.id } }, threadCorr(terraform, terraformAt));
     emit(
       {
         type: "app.started",
