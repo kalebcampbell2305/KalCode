@@ -6,11 +6,43 @@
 export const SITE_ORIGIN = "https://kalcoded.com";
 export const SITE_NAME = "KalCode";
 
-/** Version of the consent text shown under the early-access form (stored with each email). */
-export const CONSENT_VERSION = "2026-09-24";
+/**
+ * Version of the consent text shown under the early-access form (stored with each email).
+ * The date the text last changed, plus `.n` for a second revision on the same day. Bump it
+ * whenever the wording in EarlyAccessForm.astro changes.
+ *   2026-09-24    first text
+ *   2026-09-24.2  adds the confirmation email (double opt-in)
+ */
+export const CONSENT_VERSION = "2026-09-24.2";
 
 /** The published contact for privacy, legal and security matters. */
 export const CONTACT_EMAIL = "kalcodebuilds@gmail.com";
+
+/**
+ * Sender of every email kalcoded.com sends (confirmation and removal links), delivered by Resend
+ * from the verified kalcoded.com domain. Replies go to the published contact address.
+ */
+export const EMAIL_FROM = "KalCode <hello@kalcoded.com>";
+export const EMAIL_REPLY_TO = CONTACT_EMAIL;
+
+/** Early-access double opt-in: link pages, link lifetime and per-address email throttle. */
+export const EARLY_ACCESS_EMAIL = {
+  /** Page a confirmation link opens; it POSTs the link's code only when the person presses the button. */
+  confirmPath: "/early-access/confirm",
+  /** Page a removal link opens; same rule. */
+  removePath: "/early-access/remove",
+  /** Links work once and expire after this long; unconfirmed sign-ups are deleted after it. */
+  linkTtlHours: 72,
+  /** At most one email to an address per this many minutes… */
+  minIntervalMinutes: 10,
+  /** …and at most this many per address per UTC day. */
+  dailyPerAddress: 5,
+  /**
+   * Default cap on all emails the site sends per UTC day (the Worker var EMAIL_DAILY_LIMIT
+   * overrides it). Keeps a flood of sign-ups inside the email provider's free allowance.
+   */
+  dailyTotal: 90,
+} as const;
 
 /**
  * Official social accounts (owner-supplied, 2026-09-24). Every social link on the site reads from
@@ -151,6 +183,23 @@ export const NOT_FOUND_PAGE: PageInfo = {
   title: "Page not found — KalCode",
   description: "The page you were looking for is not on kalcoded.com.",
 };
+
+/**
+ * Pages opened from links in our emails. They are not public pages: not in PAGES, the sitemap
+ * or the navigation, never indexed, and never valid as an early-access `source`.
+ */
+export const EMAIL_ACTION_PAGES = {
+  confirm: {
+    path: EARLY_ACCESS_EMAIL.confirmPath,
+    title: "Confirm your email — KalCode",
+    description: "Confirm your email address for the KalCode early-access list.",
+  },
+  remove: {
+    path: EARLY_ACCESS_EMAIL.removePath,
+    title: "Remove your email — KalCode",
+    description: "Confirm that you want your email address removed from the KalCode early-access list.",
+  },
+} as const satisfies Record<string, PageInfo>;
 
 export function getPage(path: PagePath): PageInfo {
   const page = PAGES.find((candidate) => candidate.path === path);

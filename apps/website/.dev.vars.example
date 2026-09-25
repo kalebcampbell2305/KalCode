@@ -1,0 +1,18 @@
+# Local development settings for `pnpm preview` (wrangler dev). Copy to .dev.vars (git-ignored).
+# Never put a real key in this example file.
+
+# log: confirmation and removal emails are printed to the wrangler console, links included,
+#      so you can open them by hand. Needs EMAIL_LINK_ORIGIN (a loopback address).
+# capture: POSTs each email to EMAIL_CAPTURE_URL (a loopback mail sink; the Playwright suite
+#      starts one). resend: really sends, and needs RESEND_API_KEY.
+EMAIL_TRANSPORT=log
+# Where links in log/capture emails point: your local server (loopback only; ignored by resend,
+# which always links to https://kalcoded.com).
+EMAIL_LINK_ORIGIN=http://127.0.0.1:8787
+
+# Only for EMAIL_TRANSPORT=capture.
+# EMAIL_CAPTURE_URL=http://127.0.0.1:8795/messages
+
+# Only for EMAIL_TRANSPORT=resend. Use a separate, sending-only key restricted to kalcoded.com,
+# and send only to addresses you own or to Resend's test inbox delivered@resend.dev.
+# RESEND_API_KEY=

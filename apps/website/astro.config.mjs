@@ -21,7 +21,8 @@ export default defineConfig({
   },
   integrations: [
     sitemap({
-      filter: (page) => !page.endsWith("/404") && !page.endsWith("/404.html"),
+      // The 404 page and the pages opened from email links (noindex) are not public pages.
+      filter: (page) => !page.endsWith("/404") && !page.endsWith("/404.html") && !page.includes("/early-access/"),
     }),
   ],
   // Astro 7 defaults to JSX whitespace rules, which drop the spaces between text and inline

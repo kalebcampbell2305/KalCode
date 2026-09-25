@@ -2,9 +2,11 @@
 import PageHead from "../components/PageHead.astro";
 import RemovalForm from "../components/RemovalForm.astro";
 import Base from "../layouts/Base.astro";
-import { CONTACT_EMAIL, getPage } from "../lib/site";
+import { CONTACT_EMAIL, EARLY_ACCESS_EMAIL, EMAIL_FROM, getPage } from "../lib/site";
 
 const page = getPage("/privacy");
+const hours = EARLY_ACCESS_EMAIL.linkTtlHours;
+const sender = EMAIL_FROM.replace(/^.*<|>$/g, "");
 ---
 <Base title={page.title} description={page.description} path={page.path}>
   <PageHead
@@ -21,7 +23,16 @@ const page = getPage("/privacy");
         <li>your email address,</li>
         <li>the date and time you joined,</li>
         <li>the page you joined from (for example, <code>/download</code>),</li>
-        <li>the version of the consent text shown next to the form.</li>
+        <li>the version of the consent text shown next to the form,</li>
+        <li>whether you have confirmed your address, and when,</li>
+        <li>
+          when we last emailed you and how many emails we sent that day, so nobody can use the form
+          to flood your inbox,
+        </li>
+        <li>
+          for each confirmation or removal link we email you, a one-way fingerprint of the link (never
+          the link itself) and when it expires.
+        </li>
       </ul>
       <p>
         That is all. We do not store your IP address, your browser's user agent, or any other
@@ -34,12 +45,30 @@ const page = getPage("/privacy");
         not sell it, share it for marketing, or add it to anyone else's list.
       </p>
 
-      <h2>Confirming your address</h2>
+      <h2 id="confirm">Confirming your address</h2>
       <p>
-        We haven't sent any email yet. Before we send anything else, our first message will ask
-        you to confirm that you signed up. Addresses that aren't confirmed are deleted. The form
-        can't check who owns an address, so if you get a confirmation request you didn't expect,
-        ignore it and your address will be removed.
+        When you join, we email you a link to confirm your address, from <code>{sender}</code>.
+        You are on the list only once you open the link and press <strong>Confirm my email</strong>.
+        Opening the link on its own changes nothing, so mail scanners that open links cannot confirm
+        for you.
+      </p>
+      <p>
+        Links work once and expire after {hours} hours. A sign-up that is not confirmed in that time
+        is deleted automatically, together with its links. The form can't check who owns an address,
+        so if you get a confirmation email you didn't expect, ignore it and the address is deleted.
+        The form shows the same message whether or not an address is already on the list, and we
+        send at most one email to an address every {EARLY_ACCESS_EMAIL.minIntervalMinutes} minutes
+        and {EARLY_ACCESS_EMAIL.dailyPerAddress} a day.
+      </p>
+      <p>
+        Addresses that joined before we started confirming (September 2026) are kept as unconfirmed
+        and are not emailed automatically. We will ask each of them once to confirm; an address
+        that doesn't confirm within {hours} hours of that request is deleted.
+      </p>
+      <p>
+        Replies to our emails go to <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>. We
+        use no open or click tracking: the emails contain no images or tracking pixels, and every
+        link goes straight to kalcoded.com.
       </p>
       <h2>Where it is kept</h2>
       <p>
@@ -47,7 +76,8 @@ const page = getPage("/privacy");
         address until you remove it or until we close the early-access list, whichever comes first.
       </p>
       <p>
-        Removing your address deletes it from the list immediately. Cloudflare keeps
+        Removing your address deletes it from the list permanently, together with any links we sent
+        you. Cloudflare keeps
         point-in-time recovery copies of D1 databases for up to 30 days, so a removed address
         can remain in those copies until they expire.
       </p>
@@ -65,14 +95,25 @@ const page = getPage("/privacy");
         the provider directly. It does not pass through KalCode's servers.
       </p>
 
+      <h2 id="email-delivery">Resend delivers our emails</h2>
+      <p>
+        We send confirmation and removal emails through Resend (resend.com), our email-delivery
+        processor. For each email, Resend receives your email address and the message we send you,
+        including its link, and processes them only to deliver that email, under its own privacy
+        policy and data processing terms. Resend keeps a record of each email it sends, including the
+        address and the message, for a limited time under its own retention policy. The links in
+        those messages stop working after {hours} hours or once used. We send no other emails
+        through Resend and share nothing else with it.
+      </p>
+
       <h2>Cloudflare as our infrastructure provider</h2>
       <p>
         kalcoded.com runs on Cloudflare. Like any network provider, Cloudflare processes technical
         request data — such as your IP address — to deliver pages and protect the site from abuse,
-        under its own privacy policy. To stop automated abuse, the early-access form counts
-        requests per IP address using Cloudflare's rate limiting; that short-lived counter is not
-        stored by us. Our own server logs record errors only and never contain email addresses or
-        IP addresses.
+        under its own privacy policy. To stop automated abuse, the early-access forms and email
+        links count requests per IP address using Cloudflare's rate limiting; that short-lived
+        counter is not stored by us. Our own server logs record only events and errors (for example,
+        "confirmation email sent") and never contain email addresses, links or IP addresses.
       </p>
 
       <h2>No analytics, no cookies</h2>
@@ -88,8 +129,11 @@ const page = getPage("/privacy");
 
       <h2 id="remove">Remove your email</h2>
       <p>
-        Enter the address you used and we will delete it from the early-access list. For your
-        privacy, the confirmation is the same whether or not the address was on the list.
+        Enter the address you used. If it is on the early-access list, we email it a link; open the
+        link and press <strong>Remove my email</strong> to delete the address permanently. The link
+        works once and expires after {hours} hours. So that nobody can find out who is on the list,
+        the message on this page is the same whether or not the address was on it. Every
+        confirmation email also contains a removal link.
       </p>
       <RemovalForm />
 

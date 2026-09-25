@@ -1,0 +1,14 @@
+---
+import EmailAction from "../../components/EmailAction.astro";
+import PageHead from "../../components/PageHead.astro";
+import Base from "../../layouts/Base.astro";
+import { EMAIL_ACTION_PAGES } from "../../lib/site";
+
+// Opened from a link in an email: never indexed, and the link's code never leaves in a Referer.
+const page = EMAIL_ACTION_PAGES.confirm;
+---
+<Base title={page.title} description={page.description} path={page.path} noindex>
+  <meta slot="head" name="referrer" content="no-referrer" />
+  <PageHead title="Confirm your email" lead="One step left to join the KalCode early-access list." />
+  <EmailAction action="confirm" />
+</Base>
