@@ -702,7 +702,7 @@ export class StageApp {
     const dash = this.root.querySelector("[data-kc-dash]");
     if (!dash) return;
     const statuses = qsa(dash, ".kc-row:not([hidden]) .kc-status").map((el) => el.dataset.status as ThreadStatus);
-    const pending = 1 + (this.state.approval === "pending" ? 1 : 0);
+    const pending = new Set(qsa(dash, ".kc-approval[data-state='pending']").map((c) => c.dataset.approvalId)).size;
     const s = summarize(statuses, pending);
     for (const el of qsa(this.root, "[data-kc-count]")) {
       const key = el.dataset.kcCount as keyof typeof s;
@@ -779,8 +779,16 @@ export class StageApp {
     this.say(text);
     const reset = card?.querySelector<HTMLElement>("[data-kc-action='approval:reset']");
     if (reset) reset.focus();
-    else card?.focus();
+    else card?.querySelector<HTMLElement>("[data-kc-result]")?.focus();
     this.emit();
+  }
+
+  /** The Push request (always-ask scope): only Deny and Approve once, and it stays independent. */
+  private decidePush(decision: Exclude<ApprovalState, "none" | "pending">, card: HTMLElement): void {
+    card.dataset.state = decision;
+    const text = card.querySelector(`[data-for="${decision}"]`)?.textContent ?? "";
+    this.say(text);
+    card.querySelector<HTMLElement>("[data-kc-result]")?.focus();
   }
 
   setMode(mode: PermissionMode, preview = false): void {
@@ -1121,7 +1129,9 @@ export class StageApp {
       if (!el || !root.contains(el)) return;
       const decide = el.dataset.kcDecide as Exclude<ApprovalState, "none" | "pending"> | undefined;
       if (decide) {
-        this.decide(decide, el.closest<HTMLElement>(".kc-approval"));
+        const card = el.closest<HTMLElement>(".kc-approval");
+        if (card?.dataset.approvalId === "push") this.decidePush(decide, card);
+        else this.decide(decide, card);
         return;
       }
       if (el.dataset.kcTab) {
@@ -1174,20 +1184,7 @@ export class StageApp {
       if (radio && !to) this.previewMode(null);
     });
 
-    // A / T / D on a focused approval card, like the app.
-    root.addEventListener("keydown", (event) => {
-      const card = event.target as HTMLElement;
-      if (!card.classList?.contains("kc-approval") || event.altKey || event.ctrlKey || event.metaKey) return;
-      const map: Record<string, Exclude<ApprovalState, "none" | "pending">> = {
-        a: "approved",
-        t: "allowed",
-        d: "denied",
-      };
-      const decision = map[event.key.toLowerCase()];
-      if (!decision || card.querySelector(".kc-approval__actions")?.checkVisibility?.() === false) return;
-      event.preventDefault();
-      this.decide(decision, card);
-    });
+    // Like the app, approvals bind no single-key shortcuts: answers are buttons only.
 
     for (const list of qsa(root, ".kc-dock__tabs"))
       roving(list, ".kc-dock__tab", { select: (el) => this.setDock(el.dataset.kcTab as DockTab, true) });
@@ -1231,12 +1228,12 @@ export class StageApp {
     }
   }
 
+  /**
+   * Hover previews a mode in the hint and the Allow / Ask / Deny column only. The approval card
+   * follows the selection, not the pointer, so a preview never changes the layout under it.
+   */
   private previewMode(mode: PermissionMode | null): void {
     for (const perms of qsa(this.root, "[data-kc-perms]")) perms.dataset.mode = mode ?? this.state.mode;
-    const saved = this.state.mode;
-    this.state.mode = mode ?? saved;
-    this.paintApprovalCards(false);
-    this.state.mode = saved;
   }
 
   private selectMobileTab(key: string): void {

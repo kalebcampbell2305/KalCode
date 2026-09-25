@@ -4,7 +4,7 @@
  * CLI, each drawn in its own CLI's style inside a KalCode pane. On phones the panes also swipe
  * (scroll snap); the tabs follow.
  */
-import "../../styles/stage.css";
+import StageStyles from "./parts/StageStyles.astro";
 import { AGENT_PROVIDERS, PROVIDERS, threadById } from "../../data/story";
 import Glyph from "./parts/Glyph.astro";
 import Pane from "./parts/Pane.astro";
@@ -17,6 +17,7 @@ interface Props {
 const { id = "providers", class: className } = Astro.props;
 const threadFor = { claude: "claude-checkout", codex: "codex-signup", gemini: "gemini-research" } as const;
 ---
+<StageStyles />
 <div class:list={["kc-ps", className]} data-kc-ps data-testid="provider-switch">
   <StageLabel tag="Claude Code adapter built · Codex and Gemini CLI planned" />
   <div class="kc-ps__tabs" role="tablist" aria-label="Provider">

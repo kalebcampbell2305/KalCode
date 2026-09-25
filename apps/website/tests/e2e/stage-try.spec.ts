@@ -110,12 +110,13 @@ test.describe("TryKalCode", () => {
     await expect(card).toContainText("Codex wants to run: pnpm add zod");
     // App order: Deny · Allow for thread · Approve once (primary).
     const buttons = card.locator(".kc-approval__actions button");
-    await expect(buttons).toHaveText(["Deny", "Allow for thread", "Approve once"]);
-    await expect(buttons.nth(2)).toHaveClass(/kc-btn--primary/);
+    await expect(buttons).toHaveText(["Deny", "Allow for workspace", "Allow for thread", "Approve once"]);
+    await expect(buttons.nth(3)).toHaveClass(/kc-btn--primary/);
     await expect(block.getByTestId("pane-codex-signup").locator(".kc-pane__head")).toContainText("Needs approval");
 
-    await buttons.nth(2).click();
+    await buttons.nth(3).click();
     await expect(card).toHaveAttribute("data-state", "approved");
+    await expect(card.getByTestId("approval-zod-result")).toBeFocused();
     await expect(card.getByTestId("approval-zod-result")).toContainText("Approved once");
     await expect(block.getByTestId("pane-codex-signup").locator(".kc-pane__head")).toContainText("Reviewing");
     await expect(block.getByTestId("pane-codex-signup")).toContainText("Ran pnpm add zod");
@@ -134,16 +135,34 @@ test.describe("TryKalCode", () => {
     await block.getByTestId("try-permissions").click();
     await card.getByRole("button", { name: "Allow for thread" }).click();
     await expect(card).toHaveAttribute("data-state", "allowed");
-    await expect(card).toContainText("won’t ask again");
+    await expect(card).toContainText("until it stops");
+
+    await block.getByTestId("try-reset").click();
+    await block.getByTestId("try-permissions").click();
+    await card.getByRole("button", { name: "Allow for workspace" }).click();
+    await expect(card).toHaveAttribute("data-state", "workspace");
+    await expect(card).toContainText("for 30 days");
+    await expect(block.getByTestId("pane-codex-signup")).toContainText("Ran pnpm add zod");
   });
 
-  test("approval card keyboard shortcut A approves once", async ({ page }) => {
+  test("approvals bind no single-key shortcuts, like the app", async ({ page }) => {
     const block = await open(page);
     await block.getByTestId("try-permissions").click();
     const card = block.getByTestId("permissions-compact").getByTestId("approval-zod");
-    await card.focus();
-    await page.keyboard.press("a");
-    await expect(card).toHaveAttribute("data-state", "approved");
+    await card.getByRole("button", { name: "Allow for thread" }).focus();
+    for (const key of ["a", "t", "d", "w"]) await page.keyboard.press(key);
+    await expect(card).toHaveAttribute("data-state", "pending");
+  });
+
+  test("the Push request offers only Deny and Approve once", async ({ page }) => {
+    const block = await open(page);
+    await block.getByTestId("try-dashboard").click();
+    await block.locator("[data-kc-action='view:dashboard']").click();
+    const push = block.getByTestId("approval-push");
+    await expect(push.locator(".kc-approval__actions button")).toHaveText(["Deny", "Approve once"]);
+    await push.getByRole("button", { name: "Approve once" }).click();
+    await expect(push).toHaveAttribute("data-state", "approved");
+    await expect(push.getByTestId("approval-push-result")).toBeFocused();
   });
 
   test("toolbar uses roving focus with arrow keys", async ({ page }) => {

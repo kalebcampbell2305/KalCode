@@ -5,7 +5,7 @@
  * without a reload. Each tab's copy block has a named slot (`video-<tab id>`) so a recorded
  * video can replace the drawn window later.
  */
-import "../../styles/stage.css";
+import StageStyles from "./parts/StageStyles.astro";
 import { BASE_SCENE, DEMO_TABS } from "../../data/story";
 import AppWindow from "./AppWindow.astro";
 import StageLabel from "./parts/StageLabel.astro";
@@ -20,6 +20,7 @@ const { id = "demo", headingLevel = 3, class: className } = Astro.props;
 const Heading = `h${headingLevel}` as "h2" | "h3" | "h4";
 const first = DEMO_TABS[0];
 ---
+<StageStyles />
 <div class:list={["kc-demo", className]} data-kc-demo data-testid="demo-center">
   <div class="kc-tabs" role="tablist" aria-label="See KalCode in action">
     {DEMO_TABS.map((t, i) => (

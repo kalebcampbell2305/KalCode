@@ -8,7 +8,7 @@
  *   shows "Opened 2 agents" with "Type it instead".
  * No chat box, no typed commands, no chords, no global key capture, no microphone.
  */
-import "../../styles/stage.css";
+import StageStyles from "./parts/StageStyles.astro";
 import { VOICE } from "../../data/story";
 import AppWindow from "./AppWindow.astro";
 import StageLabel from "./parts/StageLabel.astro";
@@ -19,6 +19,7 @@ interface Props {
 }
 const { id = "kalvoice-demo", class: className } = Astro.props;
 ---
+<StageStyles />
 <div class:list={["kc-vd", className]} data-kc-vd data-say="dictation" data-testid="kalvoice-demo">
   <div class="kc-demo-head">
     <StageLabel tag="KalVoice is in development · no microphone is used here" />

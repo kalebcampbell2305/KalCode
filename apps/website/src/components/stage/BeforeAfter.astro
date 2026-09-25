@@ -5,7 +5,7 @@
  * scrolling the section into view makes the change once, unless the visitor has used the switch.
  * Only transform and opacity animate.
  */
-import "../../styles/stage.css";
+import StageStyles from "./parts/StageStyles.astro";
 import { LOOSE_TERMINALS, PROVIDERS, summarize } from "../../data/story";
 import Glyph from "./parts/Glyph.astro";
 import StageLabel from "./parts/StageLabel.astro";
@@ -33,6 +33,7 @@ const describeBefore =
 const describeAfter =
   "After: the same six sessions as panes in one KalCode workspace, with a status strip: 2 working, 2 need approval, 1 failed, 1 terminal.";
 ---
+<StageStyles />
 <div class:list={["kc-ba", className]} id={id} data-kc-ba data-state={initial} data-testid="before-after">
   <div class="kc-demo-head">
     <div class="kc-seg" role="radiogroup" aria-label="Compare">

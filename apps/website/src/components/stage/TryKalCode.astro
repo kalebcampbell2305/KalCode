@@ -7,7 +7,7 @@
  * focused pane). Everything inside the window is keyboard
  * reachable too (rail threads, dock tabs, Dashboard rows, approval buttons, A/T/D on a card).
  */
-import "../../styles/stage.css";
+import StageStyles from "./parts/StageStyles.astro";
 import { BASE_SCENE, type Scene, VOICE } from "../../data/story";
 import AppWindow from "./AppWindow.astro";
 import Glyph from "./parts/Glyph.astro";
@@ -27,6 +27,7 @@ const providers = [
 ] as const;
 const focusProvider = initial.focus.split("-")[0];
 ---
+<StageStyles />
 <div class:list={["kc-try", className]} data-kc-try data-testid="try-kalcode">
   <div class="kc-demo-head">
     <StageLabel tag="Try it: every control works" />

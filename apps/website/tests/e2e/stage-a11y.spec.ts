@@ -86,9 +86,21 @@ test.describe("stage truth labels and console", () => {
     await page.goto(STAGE_URL);
     const cards = page.locator(".kc-approval");
     test.skip((await cards.count()) === 0, "No approval cards");
-    const orders = await cards.evaluateAll((els) =>
-      els.map((el) => Array.from(el.querySelectorAll(".kc-approval__actions > *")).map((b) => b.textContent?.trim())),
+    const cardsInfo = await cards.evaluateAll((els) =>
+      els.map((el) => ({
+        id: (el as HTMLElement).dataset.approvalId,
+        order: Array.from(el.querySelectorAll(".kc-approval__actions > *")).map((b) => b.textContent?.trim()),
+        shortcuts: el.getAttribute("aria-keyshortcuts"),
+      })),
     );
-    for (const order of orders) expect(order).toEqual(["Deny", "Allow for thread", "Approve once"]);
+    for (const card of cardsInfo) {
+      // App 0.1.0: standing answers only where the engine allows them; a push always asks.
+      expect(card.order).toEqual(
+        card.id === "push"
+          ? ["Deny", "Approve once"]
+          : ["Deny", "Allow for workspace", "Allow for thread", "Approve once"],
+      );
+      expect(card.shortcuts).toBeNull();
+    }
   });
 });

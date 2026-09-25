@@ -5,7 +5,7 @@
  * mode previews it. The approval card shows what happens to Codex's `pnpm add zod` in that mode;
  * when the mode asks, Deny · Allow for thread · Approve once decide it, and "Ask again" resets.
  */
-import "../../styles/stage.css";
+import StageStyles from "./parts/StageStyles.astro";
 import type { PermissionMode } from "../../data/story";
 import PermissionsPanel from "./parts/PermissionsPanel.astro";
 import StageLabel from "./parts/StageLabel.astro";
@@ -17,6 +17,7 @@ interface Props {
 }
 const { id = "permission-modes", mode = "approve", class: className } = Astro.props;
 ---
+<StageStyles />
 <div
   class:list={["kc-pm", className]}
   id={id}

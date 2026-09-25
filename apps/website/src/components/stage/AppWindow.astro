@@ -13,7 +13,7 @@
  * - Narrow containers (< 760 px) switch to a phone layout: one pane at a time with tabs and
  *   swipe (scroll snap) between the open panes and the dock.
  */
-import "../../styles/stage.css";
+import StageStyles from "./parts/StageStyles.astro";
 import {
   FINAL_SCENE,
   FRESH_PLACEHOLDER,
@@ -95,6 +95,7 @@ const statusBy = (t: Thread) =>
         .join(" ")
     : undefined;
 ---
+<StageStyles />
 <div
   class:list={["kc-app", `kc-app--${size}`, className]}
   id={id}

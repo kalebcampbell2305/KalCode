@@ -50,7 +50,8 @@ export const AGENT_PROVIDERS = ["claude", "codex", "gemini"] as const satisfies 
 
 /* ------------------------------------------------------------------ status (1:1 with the app) */
 
-export type StatusTone = "live" | "waiting" | "success" | "danger" | "idle";
+/** "waiting" renders neutral grey (waiting for you); "paused" is the only amber tone. */
+export type StatusTone = "live" | "waiting" | "paused" | "success" | "danger" | "idle";
 export type ThreadStatus =
   | "starting"
   | "active"
@@ -90,7 +91,7 @@ export const STATUS: Record<ThreadStatus, StatusMeta> = {
   waiting_for_user: { label: "Needs your reply", tone: "waiting", icon: "reply", group: "attention" },
   waiting_for_dependency: { label: "Blocked", tone: "idle", icon: "hourglass", group: "waiting" },
   idle: { label: "Idle", tone: "idle", icon: "idle", group: "idle" },
-  paused: { label: "Paused", tone: "idle", icon: "paused", group: "idle" },
+  paused: { label: "Paused", tone: "paused", icon: "paused", group: "idle" },
   completed: { label: "Completed", tone: "success", icon: "done", group: "finished" },
   failed: { label: "Failed", tone: "danger", icon: "failed", group: "finished" },
   interrupted: { label: "Stopped", tone: "idle", icon: "stopped", group: "finished" },
@@ -98,7 +99,8 @@ export const STATUS: Record<ThreadStatus, StatusMeta> = {
 
 /* ------------------------------------------------------------------ approval + permission modes */
 
-export type ApprovalState = "none" | "pending" | "approved" | "allowed" | "denied";
+/** `allowed` = Allow for thread, `workspace` = Allow for workspace. */
+export type ApprovalState = "none" | "pending" | "approved" | "allowed" | "workspace" | "denied";
 export type PermissionMode = "plan" | "approve" | "auto" | "bypass" | "custom";
 export type Outcome = "allow" | "ask" | "deny";
 
@@ -184,6 +186,8 @@ export interface Approval {
   asked: string;
   /** What the request resolves to in each mode before anyone is asked. */
   byMode: Record<PermissionMode, Outcome>;
+  /** What a standing answer covers ("Requests like this one"), as the app words it. */
+  coverage: string;
   results: Record<Exclude<ApprovalState, "none" | "pending">, string>;
   modeResults: { allow: string; deny: string };
 }
@@ -200,9 +204,13 @@ export const ZOD_APPROVAL: Approval = {
   reason: "Approve mode asks before installing packages.",
   asked: "just now",
   byMode: { plan: "deny", approve: "ask", auto: "ask", bypass: "allow", custom: "deny" },
+  coverage: "Requests like this one",
   results: {
     approved: "Approved once. Codex ran pnpm add zod and continued.",
-    allowed: "Allowed for this thread. Package installs in “Validate signup input” won’t ask again.",
+    allowed:
+      "Allowed for this thread. Installs like this one won’t ask again in “Validate signup input” until it stops.",
+    workspace:
+      "Allowed for this workspace. Installs like this one won’t ask again in any atlas-api thread for 30 days.",
     denied: "Denied. Codex was told not to install packages and asked how to proceed.",
   },
   modeResults: {
@@ -221,6 +229,11 @@ export const PUSH_APPROVAL = {
   reason: "Pushing leaves this machine, so it always asks, whatever the mode.",
   leavesMachine: true,
   asked: "3 minutes ago",
+  /** Pushing is an always-ask scope: the app offers only Deny and Approve once. */
+  results: {
+    approved: "Approved once. Claude Code pushed chore/test-runner to origin.",
+    denied: "Denied. Claude Code was told not to push, and the branch stays local.",
+  },
 } as const;
 
 /* ------------------------------------------------------------------ transcripts */
@@ -361,6 +374,7 @@ export const THREADS: readonly Thread[] = [
       pending: "waiting_for_permission",
       approved: "reviewing",
       allowed: "reviewing",
+      workspace: "reviewing",
       denied: "waiting_for_user",
     },
     activity: "Reviewing src/routes/signup.ts",
@@ -368,6 +382,7 @@ export const THREADS: readonly Thread[] = [
       pending: "Waiting for approval: Install zod",
       approved: "Reviewing the passing signup suite",
       allowed: "Reviewing the passing signup suite",
+      workspace: "Reviewing the passing signup suite",
       denied: "Asked how to validate without zod",
     },
     workspace: "atlas-api",
@@ -405,7 +420,7 @@ export const THREADS: readonly Thread[] = [
       {
         t: "say",
         text: "zod isn’t a dependency yet, so the import fails. Asking to install it.",
-        when: ["pending", "approved", "allowed", "denied"],
+        when: ["pending", "approved", "allowed", "workspace", "denied"],
       },
       {
         t: "item",
@@ -420,20 +435,20 @@ export const THREADS: readonly Thread[] = [
         verb: "Ran",
         arg: "pnpm add zod",
         out: ["+ zod 4.1.0", "Done in 2.1s"],
-        when: ["approved", "allowed"],
+        when: ["approved", "allowed", "workspace"],
       },
       {
         t: "item",
         verb: "Ran",
         arg: "pnpm test -- signup",
         out: ["PASS  tests/signup.spec.ts (6 tests)"],
-        when: ["approved", "allowed"],
+        when: ["approved", "allowed", "workspace"],
       },
-      { t: "rule", text: "Worked for 1m 08s", when: ["approved", "allowed"] },
+      { t: "rule", text: "Worked for 1m 08s", when: ["approved", "allowed", "workspace"] },
       {
         t: "say",
         text: "Bad input now gets a 422 with a list of fields. All 6 signup tests pass.",
-        when: ["approved", "allowed"],
+        when: ["approved", "allowed", "workspace"],
       },
       {
         t: "say",
@@ -443,7 +458,7 @@ export const THREADS: readonly Thread[] = [
     ],
     working: [
       { verb: "Reviewing", sec: 12, when: ["none"] },
-      { verb: "Reviewing", sec: 4, when: ["approved", "allowed"] },
+      { verb: "Reviewing", sec: 4, when: ["approved", "allowed", "workspace"] },
     ],
   },
   {

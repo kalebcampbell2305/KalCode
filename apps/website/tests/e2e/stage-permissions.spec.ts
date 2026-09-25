@@ -53,8 +53,12 @@ test.describe("PermissionModes", () => {
     const block = await open(page);
     const card = block.getByTestId("approval-zod");
     const buttons = card.locator(".kc-approval__actions button");
-    await expect(buttons).toHaveText(["Deny", "Allow for thread", "Approve once"]);
-    await buttons.nth(2).click();
+    await expect(buttons).toHaveText(["Deny", "Allow for workspace", "Allow for thread", "Approve once"]);
+    await expect(card.locator(".kc-approval__coverage")).toContainText("in every thread of this workspace for 30 days");
+    await expect(card.locator(".kc-approval__coverage")).toContainText(
+      "in this thread until it stops (24 hours at most)",
+    );
+    await buttons.nth(3).click();
     await expect(card).toHaveAttribute("data-state", "approved");
     await expect(block.getByTestId("approval-reset")).toBeFocused();
     await block.getByTestId("approval-reset").click();

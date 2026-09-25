@@ -1,0 +1,14 @@
+---
+/**
+ * The stage stylesheet, linked in the body where the first stage component on a page starts,
+ * not in <head>: the page above it (header, hero) paints without waiting for it, and browsers only
+ * hold rendering of the content after this link until the file arrives. CSP-safe (no inline
+ * styles, no onload handlers). Rendered once per page.
+ */
+import stageCss from "../../../styles/stage.css?url";
+
+const locals = Astro.locals as Record<string, unknown>;
+const first = locals.kcStageCss !== true;
+locals.kcStageCss = true;
+---
+{first && <link rel="stylesheet" href={stageCss} data-kc-stage-css />}

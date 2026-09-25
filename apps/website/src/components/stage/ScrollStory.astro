@@ -9,7 +9,7 @@
  * a caption with a still of the part of the window it is about, all content visible. On phones
  * with motion, a Play button replays a still's micro-animation.
  */
-import "../../styles/stage.css";
+import StageStyles from "./parts/StageStyles.astro";
 import { BASE_SCENE, type Scene, STORY, THREADS, threadById, VOICE, ZOD_APPROVAL } from "../../data/story";
 import AppWindow from "./AppWindow.astro";
 import ApprovalCard from "./parts/ApprovalCard.astro";
@@ -36,6 +36,7 @@ const first = cumulative(0);
 const total = String(STORY.length).padStart(2, "0");
 const replayable = ["shell", "claude", "codex", "approval", "voice", "mission"];
 ---
+<StageStyles />
 <section class:list={["kc-story", className]} data-kc-story data-testid="scroll-story" aria-label="How KalCode works, step by step">
   <ol class="kc-story__steps" role="list">
     {STORY.map((step, i) => (
