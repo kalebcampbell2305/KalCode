@@ -54,8 +54,13 @@
  *   interior is dark and its bloom sits behind the type.
  *
  * LOADING ORDER (performance contract)
- *   1. The world plate and the orb poster paint first, no JS dependency (eager, fetchpriority=high,
- *      sizes matched to the layout). Preload them with the constants in ./world-assets.ts.
+ *   1. The orb poster is the hero's LCP element (the full-bleed plate is background to Chrome's
+ *      LCP heuristics). It alone gets fetchpriority=high, is visible from the first frame (no
+ *      opacity start state, no JS), and should be preloaded with POSTER_PRELOADS from
+ *      ./world-assets.ts, whose sizes match the default `sizes` below. Phones get at most the 768
+ *      file. The plate loads eagerly at normal priority and decodes async (it never holds a
+ *      frame). The planets are CSS backgrounds that load only after first paint and settle in
+ *      (without JS they are simply shown).
  *   2. After `load`, first paint and an idle callback, the renderer starts in a Web Worker on an
  *      OffscreenCanvas (no per-frame main-thread work), in short steps, and fades in.
  *   3. Tier chosen up front: phones/touch/≤4 cores/≤4 GB lite; ≤2 cores/≤2 GB/Save-Data and
@@ -66,7 +71,16 @@
  * THEME: follows the nearest [data-theme] ancestor (a dark hero inside a light page stays dark).
  */
 import "../../styles/hero.css";
-import { WORLD_LANDSCAPE, WORLD_PORTRAIT, WORLD_PORTRAIT_MEDIA, WORLD_SIZES, worldSrcset } from "./world-assets";
+import {
+  POSTER_MOBILE_MEDIA,
+  POSTER_SIZES_CENTERED,
+  posterSrcset,
+  WORLD_LANDSCAPE,
+  WORLD_PORTRAIT,
+  WORLD_PORTRAIT_MEDIA,
+  WORLD_SIZES,
+  worldSrcset,
+} from "./world-assets";
 
 interface Props {
   layout?: "centered" | "split";
@@ -78,12 +92,10 @@ const { layout = "centered", size = "full", sizes: sizesProp } = Astro.props;
 const centered = layout === "centered";
 const full = centered || size === "full";
 const base = "/assets/hero/orb";
-const widths = [384, 512, 640, 768, 1024];
-const srcset = (format: "avif" | "webp") => widths.map((w) => `${base}-${w}.${format} ${w}w`).join(", ");
 const sizes =
   sizesProp ??
   (centered
-    ? "(max-width: 767px) min(94vw, 46vh), min(64vh, 50vw, 820px)"
+    ? POSTER_SIZES_CENTERED
     : full
       ? "(max-width: 1023px) min(88vw, 25rem, 42vh), min(44vw, 64vh, 680px)"
       : "min(92vw, 360px)");
@@ -106,8 +118,7 @@ const classes = centered ? "hero-orb hero-orb--centered" : `hero-orb hero-orb--$
               height="1081"
               alt=""
               loading="eager"
-              fetchpriority="high"
-              decoding="sync"
+              decoding="async"
             />
           </picture>
           <span class="hero-orb__origin" data-hero-orb-origin></span>
@@ -117,20 +128,8 @@ const classes = centered ? "hero-orb hero-orb--centered" : `hero-orb hero-orb--$
     {
       centered && (
         <div class="hero-orb__planets">
-          <picture class="hero-orb__planet">
-            <source type="image/avif" srcset="/assets/hero/world/planet-rim.avif" />
-            <img src="/assets/hero/world/planet-rim.webp" width="1400" height="1400" alt="" loading="eager" fetchpriority="low" decoding="async" />
-          </picture>
-          <img
-            class="hero-orb__moon"
-            src="/assets/hero/world/planet-small.webp"
-            width="520"
-            height="520"
-            alt=""
-            loading="eager"
-            fetchpriority="low"
-            decoding="async"
-          />
+          <span class="hero-orb__planet" />
+          <span class="hero-orb__moon" />
         </div>
       )
     }
@@ -142,8 +141,11 @@ const classes = centered ? "hero-orb hero-orb--centered" : `hero-orb hero-orb--$
     </div>
     <div class="hero-orb__stage" data-hero-orb-stage>
       <picture>
-        <source type="image/avif" srcset={srcset("avif")} sizes={sizes} />
-        <source type="image/webp" srcset={srcset("webp")} sizes={sizes} />
+        {/* Phones never need more than the 768 file (about 2.2x at their orb size). */}
+        <source media={POSTER_MOBILE_MEDIA} type="image/avif" srcset={posterSrcset("avif", true)} sizes={sizes} />
+        <source media={POSTER_MOBILE_MEDIA} type="image/webp" srcset={posterSrcset("webp", true)} sizes={sizes} />
+        <source type="image/avif" srcset={posterSrcset("avif")} sizes={sizes} />
+        <source type="image/webp" srcset={posterSrcset("webp")} sizes={sizes} />
         <img
           class="hero-orb__poster"
           src={`${base}-640.webp`}

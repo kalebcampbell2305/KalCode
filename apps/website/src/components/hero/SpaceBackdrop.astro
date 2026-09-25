@@ -5,9 +5,10 @@
  * images (tooling/generate-space-art.py). No stock imagery, no hand-drawn lookalikes.
  *
  * Fills its positioned parent (position:absolute; inset:0; z-index:0), aria-hidden, no continuous
- * motion: images are lazy, and one shared IntersectionObserver lets the light settle in once when
- * the section first enters the viewport (instant with reduced motion; without JS it is simply
- * shown). Put the section content above it (position:relative; z-index:1). Several backdrops can
+ * motion. Images are CSS backgrounds that load only after the page's first paint, when the section
+ * comes within about one viewport (so they never compete with the hero's LCP image); one shared
+ * IntersectionObserver then lets the light settle in once when the section enters (instant with
+ * reduced motion; without JS everything is simply shown). Put the section content above it (position:relative; z-index:1). Several backdrops can
  * be stacked in one section (e.g. "deep" + "planet").
  *
  * PROPS
@@ -29,8 +30,9 @@
  *   rocks      horizon: include the rocky foreground (default true)
  *   class      extra classes for the root
  *
- * Hooks: every layer has a stable class (space-backdrop__stars / __art / __moon / __light), and
- * the root carries space-backdrop--<variant>, --<intensity>, --side-<side>, --size-<size>.
+ * Hooks: every layer is a <span> with a stable class (space-backdrop__stars / __art / __moon /
+ * __light); the root carries space-backdrop--<variant>, --<intensity>, --side-<side>,
+ * --size-<size>, --rocks / --band, and .is-near (images requested) / .is-in (settled).
  */
 import "./space-backdrop.css";
 
@@ -46,27 +48,7 @@ interface Props {
 }
 
 const { variant, intensity = "medium", side = "right", size = "lg", rocks = true, class: extra } = Astro.props;
-const dir = "/assets/hero/world";
-
-interface Art {
-  stem: string;
-  width: number;
-  height: number;
-  avif: boolean;
-}
-const ART: Record<Variant, Art | null> = {
-  nebula: { stem: "backdrop-nebula", width: 1320, height: 330, avif: true },
-  deep: null,
-  orbital: { stem: "backdrop-orbital", width: 1672, height: 341, avif: true },
-  gravity: { stem: "backdrop-gravity", width: 1000, height: 520, avif: true },
-  horizon: rocks
-    ? { stem: "rocky-horizon", width: 2400, height: 1000, avif: true }
-    : { stem: "backdrop-horizon", width: 1672, height: 180, avif: true },
-  planet: { stem: "planet-rim", width: 1400, height: 1400, avif: true },
-  void: { stem: "void-waves", width: 2000, height: 900, avif: true },
-  vault: null,
-};
-const art = ART[variant];
+const hasArt = variant !== "deep" && variant !== "vault";
 const stars = variant !== "horizon" || !rocks;
 ---
 <div
@@ -75,46 +57,15 @@ const stars = variant !== "horizon" || !rocks;
     `space-backdrop--${variant}`,
     `space-backdrop--${intensity}`,
     variant === "planet" && [`space-backdrop--side-${side}`, `space-backdrop--size-${size}`],
-    variant === "horizon" && !rocks && "space-backdrop--band",
+    variant === "horizon" && (rocks ? "space-backdrop--rocks" : "space-backdrop--band"),
     extra,
   ]}
   data-space-backdrop
   aria-hidden="true"
 >
-  {
-    stars && (
-      <img
-        class="space-backdrop__stars"
-        src={`${dir}/backdrop-stars.webp`}
-        width="1672"
-        height="560"
-        alt=""
-        loading="lazy"
-        decoding="async"
-      />
-    )
-  }
-  {
-    art && (
-      <picture class="space-backdrop__art">
-        {art.avif && <source type="image/avif" srcset={`${dir}/${art.stem}.avif`} />}
-        <img src={`${dir}/${art.stem}.webp`} width={art.width} height={art.height} alt="" loading="lazy" decoding="async" />
-      </picture>
-    )
-  }
-  {
-    variant === "planet" && (
-      <img
-        class="space-backdrop__moon"
-        src={`${dir}/planet-small.webp`}
-        width="520"
-        height="520"
-        alt=""
-        loading="lazy"
-        decoding="async"
-      />
-    )
-  }
+  {stars && <span class="space-backdrop__stars" />}
+  {hasArt && <span class="space-backdrop__art" />}
+  {variant === "planet" && <span class="space-backdrop__moon" />}
   <span class="space-backdrop__light"></span>
 </div>
 

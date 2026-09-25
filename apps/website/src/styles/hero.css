@@ -444,19 +444,36 @@
   transform: scaleX(-1);
 }
 
-.hero-orb__planet img,
-.hero-orb__moon {
-  display: block;
-  max-width: none;
-  width: 100%;
-  height: auto;
-}
-
 .hero-orb__moon {
   position: absolute;
   top: 30cqh;
   left: 7cqw;
   width: min(6cqw, 11cqh);
+  aspect-ratio: 1;
+}
+
+/* Planets are CSS backgrounds: they load only once the first frame has painted (orb.ts adds
+   .is-dressed), so they never compete with the poster, then settle in. Without JS they are
+   simply there. */
+.hero-orb__planet,
+.hero-orb__moon {
+  background: center / contain no-repeat;
+  opacity: 0;
+  transition: opacity 1200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+:root:not(.js) .hero-orb__planet,
+.hero-orb.is-dressed .hero-orb__planet {
+  background-image: image-set(
+    "/assets/hero/world/planet-rim.avif" type("image/avif"),
+    "/assets/hero/world/planet-rim.webp" type("image/webp")
+  );
+  opacity: 1;
+}
+
+:root:not(.js) .hero-orb__moon,
+.hero-orb.is-dressed .hero-orb__moon {
+  background-image: url("/assets/hero/world/planet-small.webp");
   opacity: 0.9;
 }
 
@@ -465,9 +482,9 @@
     top: 1cqh;
     right: -46cqw;
     width: 78cqw;
-    opacity: 0.85;
   }
 
+  /* display:none backgrounds are never fetched. */
   .hero-orb__moon {
     display: none;
   }
@@ -544,5 +561,12 @@
   to {
     transform: translate3d(0, 22%, 0) scale(0.97);
     opacity: 0.55;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-orb__planet,
+  .hero-orb__moon {
+    transition: none;
   }
 }

@@ -13,6 +13,7 @@
  * motion gets one WebGL still (full tier) or the CSS still. Nothing is exposed globally.
  */
 import { SPHERE_X } from "./meta";
+import { afterFirstPaint } from "./paint";
 import type { Layout } from "./renderer";
 import type { FromWorker, ToWorker } from "./worker";
 
@@ -48,20 +49,7 @@ async function whenQuiet(): Promise<void> {
   if (document.readyState !== "complete") {
     await new Promise<void>((resolve) => window.addEventListener("load", () => resolve(), { once: true }));
   }
-  await new Promise<void>((resolve) => {
-    if (performance.getEntriesByName("first-contentful-paint").length > 0) return resolve();
-    try {
-      const observer = new PerformanceObserver(() => {
-        observer.disconnect();
-        resolve();
-      });
-      observer.observe({ type: "paint", buffered: true });
-    } catch {
-      resolve();
-    }
-    setTimeout(resolve, 3000);
-  });
-  await nextFrame();
+  await afterFirstPaint();
   await nextFrame();
   await new Promise<void>((resolve) => {
     if ("requestIdleCallback" in window) window.requestIdleCallback(() => resolve(), { timeout: 2500 });
@@ -74,6 +62,9 @@ function setup(root: HTMLElement): void {
   const frame = stage?.parentElement;
   const poster = root.querySelector<HTMLImageElement>(".hero-orb__poster");
   if (!stage || !frame || !poster) return;
+
+  // Decorative planets (CSS backgrounds) load after the poster has painted.
+  void afterFirstPaint().then(() => root.classList.add("is-dressed"));
 
   const html = document.documentElement;
   const reduceQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
