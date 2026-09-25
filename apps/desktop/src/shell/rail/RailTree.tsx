@@ -77,6 +77,7 @@ export function RailTree({
   const pos = useMemo(() => positions(nodes), [nodes]);
   const [focusKey, setFocusKey] = useState<string | null>(null);
   const [menuFor, setMenuFor] = useState<string | null>(null);
+
   const rows = useRef(new Map<string, HTMLDivElement>());
   const [now, setNow] = useState(() => Date.now());
 
@@ -446,7 +447,7 @@ function WorkspaceMenu({
           <MoreHorizontal />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" side="right" onClick={(e) => e.stopPropagation()}>
+      <DropdownMenuContent align="start" side="right" className={styles.menu} onClick={(e) => e.stopPropagation()}>
         <DropdownMenuLabel>{entry.name}</DropdownMenuLabel>
         <DropdownMenuItem icon={<FolderOpen />} onSelect={() => void rail.openWorkspace(entry.workspaceId, "project")}>
           Open project
@@ -457,12 +458,12 @@ function WorkspaceMenu({
         <DropdownMenuItem
           icon={<PanelRight />}
           disabled={!entry.available}
-          onSelect={() =>
+          onSelect={() => {
             void openInPane(
               { kind: "widget", widgetId: PROJECT_WIDGET },
               { workspaceId: entry.workspaceId, placement: "split" },
-            )
-          }
+            );
+          }}
         >
           Open project in a pane
         </DropdownMenuItem>
@@ -573,7 +574,7 @@ function GroupMenu({
           <MoreHorizontal />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" side="right" onClick={(e) => e.stopPropagation()}>
+      <DropdownMenuContent align="start" side="right" className={styles.menu} onClick={(e) => e.stopPropagation()}>
         <DropdownMenuLabel>{group.name}</DropdownMenuLabel>
         <DropdownMenuItem icon={<Pencil />} onSelect={() => onDialog({ kind: "rename-group", group })}>
           Rename folder…

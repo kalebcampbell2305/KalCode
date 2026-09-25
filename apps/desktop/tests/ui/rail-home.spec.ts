@@ -379,6 +379,8 @@ test.describe("in panes (Z7-W1 pane system)", () => {
     await item(page, /^atlas-api/).click({ button: "right" });
     await page.getByRole("menuitem", { name: "Open project in a pane" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "atlas-api" })).toBeVisible();
+    // The menu is gone although the active workspace changed while it closed.
+    await expect(page.getByRole("menu")).toHaveCount(0);
     await expect(page.getByRole("tab", { name: /^Project/ })).toHaveAttribute("aria-selected", "true");
     const project = page.getByRole("tabpanel", { name: "Project" });
     await expect(project.getByRole("heading", { level: 2, name: "atlas-api" })).toBeVisible();

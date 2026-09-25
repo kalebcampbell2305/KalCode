@@ -4,7 +4,7 @@ import { expect, type Page, test } from "@playwright/test";
 
 /**
  * Z7-W2 visual review: the workspace rail with many workspaces, Home (first run and returning),
- * the project page and search, in both themes at the owner's reference window sizes
+ * the project page, search and the surfaces in panes, in both themes at the owner's reference window sizes
  * (1366 → 3440 ultrawide). Output: apps/desktop/qa/screenshots/w2/.
  * Run: pnpm test:ui --grep @w2-shots
  */
@@ -73,6 +73,24 @@ const SCENES: Scene[] = [
     },
   },
   {
+    name: "panes",
+    scenario: "home",
+    prepare: async (page) => {
+      await item(page, /^atlas-api/).click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Open project in a pane" }).click();
+      await expect(page.getByRole("tab", { name: /^Project/ })).toBeVisible();
+      for (const name of ["Show Home in a pane", "Show Git status in a pane"]) {
+        await page.keyboard.press("Control+k");
+        await page.keyboard.type(name);
+        await page.getByRole("option", { name }).click();
+      }
+      await expect(
+        page.getByRole("tabpanel", { name: "Git" }).getByRole("list", { name: "Local branches" }),
+      ).toBeVisible();
+      await page.mouse.move(0, 0);
+    },
+  },
+  {
     name: "rail-strip",
     scenario: "home",
     prepare: async (page) => {
@@ -107,7 +125,11 @@ test.describe("@w2-shots", () => {
           await setTheme(page, theme);
           // Under 1400 px the rail starts as a strip; rail scenes show it open.
           const strip = page.getByRole("navigation", { name: "Workspaces (collapsed rail)" });
-          if (scene.name.startsWith("rail-") && scene.name !== "rail-strip" && (await strip.count()) > 0) {
+          if (
+            (scene.name.startsWith("rail-") || scene.name === "panes") &&
+            scene.name !== "rail-strip" &&
+            (await strip.count()) > 0
+          ) {
             await strip.getByRole("button", { name: "Show the workspace rail" }).click();
           }
           await scene.prepare(page);

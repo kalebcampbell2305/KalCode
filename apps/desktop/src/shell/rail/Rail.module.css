@@ -933,3 +933,16 @@ button.repoOption:focus-visible {
   color: var(--color-text-muted);
   font-size: var(--type-small);
 }
+
+/* A workspace switch while a rail menu closes could leave Radix's content mounted in its
+   "closed" state, waiting for an exit animation the shared menu doesn't define. A short one ends
+   it, so the menu unmounts (and releases focus) every time. */
+.menu[data-state="closed"] {
+  animation: rail-menu-out 1ms linear forwards;
+}
+
+@keyframes rail-menu-out {
+  to {
+    opacity: 0;
+  }
+}
