@@ -12,6 +12,7 @@ export interface ProviderPaneEntry {
 
 /** Hook-channel changes (waiting → active or limited) carry no thread event; poll while waiting. */
 const WAITING_POLL_MS = 1500;
+const CODEX_WAITING_POLL_MS = 4000;
 const REFRESH_DEBOUNCE_MS = 120;
 
 /** Codex and Gemini CLI panes are offered only when threads can use that provider (PROVIDERS-2). */
@@ -135,14 +136,16 @@ export function useProviderPanes(workspace: Workspace): ProviderPanes {
     [],
   );
 
-  // Only Claude Code's hook channel connects on its own; a Codex pane waits for its first turn,
-  // whose thread events refresh the list anyway.
+  // Claude Code's hook channel connects on its own, soon after start. A Codex pane's channel
+  // becomes active with its first `notify` (a finished turn), which may produce no thread event
+  // (idle → idle), so it is polled too, more slowly (an in-memory read, no provider process).
   const waiting = panes.some((p) => p.info.hookChannel === "waiting" && p.thread.providerId === "claude-code");
+  const codexWaiting = panes.some((p) => p.info.hookChannel === "waiting" && p.thread.providerId === "codex");
   useEffect(() => {
-    if (!waiting) return;
-    const timer = setInterval(() => void refresh(), WAITING_POLL_MS);
+    if (!waiting && !codexWaiting) return;
+    const timer = setInterval(() => void refresh(), waiting ? WAITING_POLL_MS : CODEX_WAITING_POLL_MS);
     return () => clearInterval(timer);
-  }, [waiting, refresh]);
+  }, [waiting, codexWaiting, refresh]);
 
   const create = useCallback(
     async (providerId: PaneProviderId = "claude-code") => {

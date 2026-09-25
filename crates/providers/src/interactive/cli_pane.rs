@@ -230,14 +230,29 @@ impl InteractiveCliProvider {
         })?;
         tracing::info!(event = "pane.started", provider_id = self.cli.id(), thread_id = %config.thread_id, pid = ?pty.pid());
 
-        if self.cli == PaneCli::Codex {
+        let _ = shared.pty.set(pty);
+        if self.cli == PaneCli::Codex
+            && let Some(pty) = shared.pty()
+        {
             // OSC 9 scanner on the output stream: structural, bounded, never reads the text.
+            // Attaching makes this a listener, so the PTY no longer answers cursor-position
+            // requests itself: answer them here while no terminal view is attached (a view
+            // answers them otherwise), or the TUI waits forever.
             let scanner = Mutex::new(Osc9Scanner::default());
             let watcher = Arc::downgrade(&shared);
             pty.attach(move |bytes| {
                 let Some(shared) = watcher.upgrade() else {
                     return false;
                 };
+                let requests = bytes.windows(4).filter(|w| *w == b"[6n").count();
+                if requests > 0
+                    && shared.views.load(std::sync::atomic::Ordering::SeqCst) == 0
+                    && let Some(pty) = shared.pty()
+                {
+                    for _ in 0..requests {
+                        let _ = pty.write(b"[1;1R");
+                    }
+                }
                 let found = scanner
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
@@ -248,7 +263,6 @@ impl InteractiveCliProvider {
                 true
             });
         }
-        let _ = shared.pty.set(pty);
         self.panes.insert(&config.thread_id, shared.clone());
         Ok(InteractiveSession { shared })
     }

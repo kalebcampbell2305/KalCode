@@ -381,3 +381,55 @@ fn the_router_starts_marked_threads_in_a_pane_and_others_headless() {
     assert!(rig.panes.contains(&thread_id));
     session.terminate().expect("stop");
 }
+
+/// Regression (found by the real-app E2E): the Codex pane's OSC 9 watcher is a PTY listener, so
+/// the PTY stops answering ConPTY's startup cursor-position request itself. Without a view
+/// attached, the watcher must answer it, or the CLI never starts.
+#[test]
+fn a_codex_pane_starts_without_a_view_attached() {
+    let rig = Rig::new(PaneCli::Codex);
+    let config = SessionConfig {
+        thread_id: new_id(),
+        workspace_id: new_id(),
+        working_directory: rig.work.path().to_string_lossy().into_owned(),
+        model: None,
+        permission_mode: PermissionMode::Approve,
+        resume_session_id: None,
+        secret_ref: None,
+    };
+    let thread_id = config.thread_id.clone();
+    let (tx, _rx) = mpsc::channel::<AgentEvent>();
+    let session = rig
+        .provider
+        .start_session(
+            config,
+            Box::new(move |e| {
+                let _ = tx.send(e);
+            }),
+        )
+        .expect("start pane");
+    let started = rig.dir.path().join("last-args.json");
+    let deadline = Instant::now() + WAIT;
+    while !started.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "the CLI never started without a view"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // A view attached later gets the banner from the scrollback.
+    let output = Arc::new(Mutex::new(Vec::new()));
+    let sink = output.clone();
+    rig.panes
+        .attach(&thread_id, move |chunk| {
+            sink.lock().unwrap().extend_from_slice(chunk);
+            true
+        })
+        .expect("attach");
+    let deadline = Instant::now() + WAIT;
+    while !String::from_utf8_lossy(&output.lock().unwrap()).contains("KalCode fake provider") {
+        assert!(Instant::now() < deadline, "no banner in the scrollback");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    session.terminate().expect("stop");
+}

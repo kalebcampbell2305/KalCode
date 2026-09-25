@@ -173,3 +173,80 @@ test("Codex and Gemini CLI threads stream to done and Provider Health reports th
     removeDir(root);
   }
 });
+
+test("a Codex pane reports status through notify and OSC 9, and approvals stay in Codex", async () => {
+  test.setTimeout(240_000);
+  const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-providers2-pane-"));
+  const root = mkdtempSync(join(tmpdir(), "kalcode-e2e-providers2-pane-project-"));
+  const project = join(root, "codex-pane-site");
+  mkdirSync(project);
+  writeFileSync(join(project, "README.md"), "# codex pane site\n");
+  const bin = join(root, "bin");
+  mkdirSync(bin);
+  copyFileSync(FAKE, join(bin, "codex.exe"));
+  writeFileSync(join(bin, "fake-provider.json"), "{}");
+  const HELPER = join(dirname(EXE), "kalcode-hook.exe");
+  test.skip(!existsSync(HELPER), "Run build:e2e: it builds kalcode-hook.");
+
+  try {
+    const app = await launch(dataDir, {
+      KALCODE_E2E_PICK_FOLDER: project,
+      PATH: `${bin};${process.env.PATH ?? ""}`,
+    });
+    const page = app.page;
+    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    // Safety gate: Codex is the fake before any pane starts.
+    const statuses = await invoke<StatusLite[]>(page, "providers_detect");
+    expect(statuses.find((s) => s.id === "codex")?.detection?.displayPath ?? "").toContain(basename(root));
+
+    await nav(page, "Code").click();
+    await page.getByRole("button", { name: "Open folder…" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "codex-pane-site" })).toBeVisible();
+    await page.getByRole("button", { name: "New Codex pane" }).click();
+    const pane = page.locator("[data-provider-pane]").first();
+    await expect(pane).toBeVisible({ timeout: 30_000 });
+    const screen = pane.locator("[data-pane-terminal] .xterm-rows");
+    await expect(screen).toContainText("KalCode fake provider (interactive Codex)", { timeout: 30_000 });
+    await expect(pane.getByRole("button", { name: /Approve/ })).toHaveCount(0);
+
+    const typeLine = async (line: string) => {
+      await pane.locator("[data-pane-terminal] .xterm-screen").click();
+      await page.keyboard.type(line);
+      await page.keyboard.press("Enter");
+    };
+    // A finished turn arrives through Codex's notify → the real kalcode-hook → the bridge.
+    await typeLine("hello");
+    await expect(screen).toContainText("(fake) hello");
+    // Natively: the notify reached KalCode through the real kalcode-hook and the bridge.
+    const [thread] = await invoke<{ id: string; providerId: string }[]>(page, "thread_list", {
+      workspaceId: null,
+      includeArchived: false,
+    });
+    expect(thread?.providerId).toBe("codex");
+    await expect
+      .poll(
+        async () =>
+          (await invoke<{ hookChannel: string }>(page, "provider_pane_info", { threadId: thread?.id })).hookChannel,
+        {
+          timeout: 30_000,
+        },
+      )
+      .toBe("active");
+    await expect(pane).toContainText("approvals in Codex", { timeout: 30_000 });
+    // Codex's approval prompt raises OSC 9: KalCode shows it's waiting, and can't answer it.
+    await typeLine("approve");
+    await expect(pane.locator("[data-pane-status]")).toContainText("WAITING FOR YOU", { timeout: 30_000 });
+    await expect(pane.getByRole("button", { name: /Approve/ })).toHaveCount(0);
+    await shot(page, "providers2-codex-pane-waiting");
+    await typeLine("y");
+    await expect(pane.locator("[data-pane-status]")).not.toContainText("WAITING FOR YOU", { timeout: 30_000 });
+
+    await typeLine("exit");
+    await expect(pane.locator("[data-pane-status]")).toContainText("DONE", { timeout: 30_000 });
+    await closeGracefully(app);
+    expect(processesMatching(bin), "no provider process outlives KalCode").toEqual([]);
+  } finally {
+    removeDir(dataDir);
+    removeDir(root);
+  }
+});

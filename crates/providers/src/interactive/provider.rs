@@ -11,6 +11,7 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
@@ -98,13 +99,33 @@ impl PaneRegistry {
         listener: impl Fn(&[u8]) -> bool + Send + Sync + 'static,
     ) -> Option<AttachId> {
         let shared = self.get(thread_id)?;
-        shared.pty().map(|pty| pty.attach(listener))
+        let pty = shared.pty()?;
+        // Counted while attached, so a pane's own output watcher (Codex OSC 9) knows whether a
+        // view is there to answer the PTY's cursor-position requests.
+        shared.views.fetch_add(1, Ordering::SeqCst);
+        let counted = Arc::downgrade(&shared);
+        let live = std::sync::atomic::AtomicBool::new(true);
+        Some(pty.attach(move |bytes| {
+            let alive = listener(bytes);
+            if !alive
+                && live.swap(false, Ordering::SeqCst)
+                && let Some(shared) = counted.upgrade()
+            {
+                shared.views.fetch_sub(1, Ordering::SeqCst);
+            }
+            alive
+        }))
     }
 
     pub fn detach(&self, thread_id: &str, id: AttachId) -> bool {
-        self.get(thread_id)
-            .and_then(|s| s.pty().map(|p| p.detach(id)))
-            .unwrap_or(false)
+        let Some(shared) = self.get(thread_id) else {
+            return false;
+        };
+        let detached = shared.pty().is_some_and(|p| p.detach(id));
+        if detached {
+            shared.views.fetch_sub(1, Ordering::SeqCst);
+        }
+        detached
     }
 
     /// The person's keystrokes (or KalVoice dictation, which is typing too).

@@ -130,6 +130,8 @@ pub(crate) struct Shared {
     profile: OnceLock<PaneProfile>,
     /// A provider prompt is showing (set by [`Shared::provider_prompt`]).
     prompt_showing: AtomicBool,
+    /// Terminal views attached right now (they answer the PTY's cursor-position requests).
+    pub(crate) views: std::sync::atomic::AtomicUsize,
 }
 
 /// Everything a session needs besides its PTY, which is attached after spawning.
@@ -165,6 +167,7 @@ impl Shared {
             titles: parts.titles,
             profile: OnceLock::new(),
             prompt_showing: AtomicBool::new(false),
+            views: std::sync::atomic::AtomicUsize::new(0),
         })
     }
 
