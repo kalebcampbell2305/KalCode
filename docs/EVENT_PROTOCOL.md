@@ -73,6 +73,8 @@ one-to-one (`EventPayload::from(GitEvent)`, `EventPayload::from(ContextEvent)`,
 | `shell.failed` | 1 | I (Z1) | `{ terminalId, exitCode }` — the shell exited on its own with a non-zero code |
 | `provider.detected` | 1 | I (Z2) | `{ providerId, installed, version? }` — on the first detection and whenever the state or version changes; `installed` is true for installed and outdated |
 | `provider.error` | 1 | I (Z2) | `{ providerId, code, message }` — when detection first ends in error (not repeated while it stays in error); `code` e.g. `version_timeout` |
+| `provider.health_changed` | 1 | I (PROVIDERS-2, PH) | `{ providerId, from, to, reason }` — Provider Health moved between `healthy` / `degraded` / `unavailable` / `unknown`; transitions only, never samples; `reason` is a stable code (`signed_out`, `recent_failures`, `rate_limited`, `healthy` …) |
+| `provider.capacity_changed` | 1 | I (PROVIDERS-2, PH) | `{ providerId, state, activeSessions, limit?, retryAt? }` — capacity moved between `available` / `saturated` / `backing_off`; `retryAt` only when the provider reported one (none does today) |
 | `provider.connected` / `.disconnected` | 1 | D (accounts, later campaign) | `{ providerId, accountLabel? }` |
 | `thread.created` | 1 | I (Z3) | `{ threadId, name, providerId, workspaceId }` |
 | `thread.started` | 1 | I (Z3) | `{ threadId }` — a provider session started (create or resume) |

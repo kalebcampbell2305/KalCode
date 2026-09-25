@@ -274,8 +274,8 @@ reused instead.
 | `provider_profile.created` / `.updated` / `.archived` | `{ profileId, providerId, version }` | PP | |
 | `provider_profile.binding_changed` | `{ scopeKind, scopeId?, providerId, profileId? }` | PP | |
 | `provider_profile.applied` | `{ profileId, version, threadId, resolvedFrom, notApplied }` | PP | Per session start, not per message. |
-| `provider.health_changed` | `{ providerId, from, to, reason }` | PH | `provider.error` stays for detection errors. |
-| `provider.capacity_changed` | `{ providerId, state, activeSessions, limit?, retryAt? }` | PH | Transitions between available / saturated / backing_off only. |
+| `provider.health_changed` | `{ providerId, from, to, reason }` | PH | `provider.error` stays for detection errors. **Adopted in PROVIDERS-2.** |
+| `provider.capacity_changed` | `{ providerId, state, activeSessions, limit?, retryAt? }` | PH | Transitions between available / saturated / backing_off only. **Adopted in PROVIDERS-2.** |
 | `provider.handoff_recommended` | `{ fromThreadId, toProviderId, reason }` | HS | Assisted mode. |
 | `provider.handoff_started` / `.handoff_completed` / `.handoff_failed` | `{ capsuleId, fromThreadId, toThreadId?, toProviderId, mode, code? }` | HS | |
 | `context.package_created` | `{ packageId, purpose, items, bytes }` | CTX | |
@@ -754,6 +754,13 @@ pub struct Scratchpad { pub id: String, pub title: String, pub content: String, 
 ## 6. Layer-2 and cross-cutting types
 
 ### 6.1 Provider Health + Capacity — `health.rs` (PH)
+
+> **Adopted in PROVIDERS-2** (`crates/contracts/src/health.rs`), with these differences from the
+> sketch below: `detection` is `Option<DetectionState>` (unknown before the first check);
+> added `display_name`, `minimum_version`, `latency_samples`, `last_failure: Option<HealthFailure>`,
+> `reason_code` (stable code) next to `reason` (copy), and `checked_at`; `HealthRollup` is the
+> trend row (hourly, in memory until the v13 table lands). IPC `provider_health_list`,
+> `provider_health_get`, `provider_health_trend` are implemented.
 
 ```rust
 pub enum HealthState { Healthy, Degraded, Unavailable, Unknown }

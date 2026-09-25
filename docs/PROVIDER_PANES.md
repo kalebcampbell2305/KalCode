@@ -1,6 +1,8 @@
 # Provider panes — design note
 
-Status: **BUILT for Claude Code on `z7/provider-panes`, behind the `provider_panes` feature flag.**
+Status: **BUILT for Claude Code on `z7/provider-panes`, and for Codex (read-only first) and Gemini
+CLI (process state only) in PROVIDERS-2 (`docs/campaigns/PROVIDERS-2.md`), behind the
+`provider_panes` feature flag.**
 Approve/deny goes through the engine (`DecisionRouting::Engine`, §9) since the classifier
 hardening merged. Campaign Z7,
 writer W4 (`docs/campaigns/ADVANCED.md` §16; evidence in `docs/campaigns/Z7-W4.md`, threat model
@@ -128,9 +130,21 @@ codex resume <session id>                                               # contin
 Codex hooks (`PreToolUse`, `PermissionRequest`, …) [4] require *persisted hook trust*.
 `codex --help` offers `--dangerously-bypass-hook-trust`, which KalCode **never** uses. Until the
 supported way to trust KalCode-provided hooks is verified (§7), Codex panes use `notify`, OSC 9
-notifications and process state. Approvals are answered in Codex's own prompt; KalCode shows
-PERMISSION REQUIRED from the `approval-requested` signal but cannot answer it. OSC 9 is a
-terminal escape sequence, so detecting it is structural parsing of the PTY stream, not prose.
+notifications and process state. Approvals are answered in Codex's own prompt; KalCode cannot
+answer them. OSC 9 is a terminal escape sequence, so detecting it is structural parsing of the
+PTY stream, not prose.
+
+As built (PROVIDERS-2, `crates/providers/src/interactive/cli_pane.rs`):
+`tui.notifications=['approval-requested']` only, so **every** OSC 9 in the stream means "Codex
+is asking" and its text is never read; turn completion comes from `notify` instead. Status:
+`notify` `agent-turn-complete` → `TurnCompleted` (and the `thread-id` → `SessionStarted`, used
+by `codex resume <id>`); OSC 9 → `Status(waiting_for_user, "Answer in Codex")` (WAITING FOR YOU;
+the Z3 runtime owns PERMISSION REQUIRED, so provider-side prompts show as waiting, as for Claude
+Code); the person's next keystroke that isn't an escape sequence → `Status(active)`; process exit
+→ `Exited`. The `notify` helper reaches KalCode through the same authenticated bridge (HMAC,
+per-session key in the provider environment, fail-open because it is status only). No hooks
+watchdog: `notify` fires only at the end of a turn. Pane info: hook channel `waiting` until the
+first notify, then `active`; `kalcodeAnswersApprovals` is always false.
 
 ### Gemini CLI
 
@@ -138,7 +152,9 @@ Hooks are configured in `settings.json` (`BeforeTool`, `AfterTool`, `SessionStar
 `SessionEnd`, …; exit code 2 blocks) [7][8]. A per-session way to inject KalCode's hooks
 without writing to the user's or the project's settings is **unverified** (not installed here).
 Until it is verified: process/PTY status only, approvals in the provider's own prompt, and a
-"limited status" badge.
+"limited status" badge. As built (PROVIDERS-2): `gemini --approval-mode <plan|default|auto_edit>
+[--model] [--resume <uuid>]` (never `yolo`, never `--skip-trust`), hook channel `limited` from
+the start, `Exited` on process exit; nothing else is inferred.
 
 ## 4. Permissions for interactive panes
 
@@ -217,9 +233,9 @@ provider's prompt only, and KalCode shows PERMISSION REQUIRED without an answer 
 | Claude Code `--permission-mode` value for "ask normally" (`manual` vs `default`) | Done: panes pass `manual` (listed by the installed help); tested. |
 | Claude Code hook payload shapes per event, and `PermissionRequest` behaviour while a hook is pending | Documented [1][2]; covered by the fake provider's interactive mode. Real run pending owner approval (`tooling/smoke/claude-interactive-smoke.ps1`). |
 | `--settings` hooks load with `--setting-sources user`; exec-form `args`; hooks inherit the provider environment; `prompt` vs `user_prompt` in UserPromptSubmit | Documented [1][3]; the parser accepts either prompt field. Confirmed only by the owner-approved smoke run (written, not run). |
-| Codex: supported way to trust KalCode-provided hooks without the bypass flag; whether `-c` can register hooks | Unverified. `notify` and OSC 9 only until confirmed. |
+| Codex: supported way to trust KalCode-provided hooks without the bypass flag; whether `-c` can register hooks | Unverified. `notify` and OSC 9 only until confirmed (built that way in PROVIDERS-2). |
 | Gemini CLI: per-session hook injection without writing user or project settings | Unverified (not installed). Process-only until confirmed. |
-| OSC 9 sequences in Codex output under ConPTY | Verify with the fake provider and one owner-approved run. |
+| OSC 9 sequences in Codex output under ConPTY | Verified with the fake provider through a real ConPTY (`tests/interactive_cli.rs`). Real Codex: `tooling/smoke/codex-interactive-smoke.ps1`, written, not run. |
 
 ## 8. Sources
 
@@ -242,7 +258,8 @@ provider's prompt only, and KalCode shows PERMISSION REQUIRED without an answer 
 | Claude Code interactive argv, deny floor, settings file | `crates/providers/src/interactive/claude.rs` |
 | Hook → `AgentEvent` mapping, held approvals, `AgentSession` over the PTY | `crates/providers/src/interactive/session.rs` |
 | Interactive provider, per-thread runtime router, pane registry | `crates/providers/src/interactive/provider.rs` |
-| Codex read-only-first argv and OSC 9 scanner (not wired: no Codex thread provider) | `crates/providers/src/interactive/codex.rs` |
+| Codex read-only-first argv and OSC 9 scanner | `crates/providers/src/interactive/codex.rs` |
+| Codex (notify + OSC 9) and Gemini CLI (process state) panes, and their runtime routers | `crates/providers/src/interactive/cli_pane.rs`; `RuntimeRouter::for_provider` |
 | `answered_in_provider` expiry | `PermissionService::expire_answered_in_provider` |
 | IPC (`provider_pane_*`) and glue (expiry, first-prompt title) | `apps/desktop/src-tauri/src/provider_pane_commands.rs` |
 | Pane UI (header, status chip, approval overlay, info panel, entry point) | `apps/desktop/src/surfaces/code/panes/**` |
@@ -262,7 +279,7 @@ Code provider registered with the Z3 runtime is a router: threads created throug
 (and resume) in a pane; every other thread stays headless. `ThreadSummary.runtimeKind` /
 `terminalId` stay `null`; views attach by thread id (`provider_pane_attach`).
 
-**Not built yet.** Codex and Gemini CLI panes; Process Continuity restore labels
+**Not built yet.** Process Continuity restore labels
 (`crates/continuity`); pane `-n <title>` on relaunch (the title isn't in `SessionConfig`);
 Custom `never` rules in the deny floor; provider-reported PERMISSION REQUIRED for the provider's
 own prompts (needs a Z3 runtime change).
