@@ -217,6 +217,49 @@ pub fn remove(tx: &Transaction<'_>, kind: LocatorEntityKind, entity_id: &str) ->
     Ok(true)
 }
 
+/// Rewrites every opted-in thread row for a workspace without its message body.
+///
+/// The rail opt-out calls this in the same transaction that flips `index_messages`, so returning
+/// from the update is the linearization point after which old message matches are gone.
+pub fn purge_workspace_bodies(tx: &Transaction<'_>, workspace_id: &str) -> Result<usize> {
+    let entries: Vec<(i64, String, Option<String>)> = {
+        let mut stmt = tx.prepare(
+            "SELECT id, title, subtitle FROM locator_entries
+             WHERE entity_kind = 'thread' AND workspace_id = ?1 AND has_body = 1",
+        )?;
+        let rows = stmt.query_map([workspace_id], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?;
+        rows.collect::<std::result::Result<_, _>>()?
+    };
+    for (id, title, subtitle) in &entries {
+        tx.execute("DELETE FROM locator_fts WHERE rowid = ?1", [id])?;
+        tx.execute(
+            "INSERT INTO locator_fts (rowid, title, subtitle, body) VALUES (?1, ?2, ?3, '')",
+            params![id, title, subtitle.as_deref().unwrap_or("")],
+        )?;
+        tx.execute(
+            "UPDATE locator_entries SET has_body = 0 WHERE id = ?1",
+            [id],
+        )?;
+    }
+    Ok(entries.len())
+}
+
+/// Removes every derived locator row owned by a workspace, including threads and activity.
+pub fn remove_workspace_entries(tx: &Transaction<'_>, workspace_id: &str) -> Result<usize> {
+    let ids: Vec<i64> = {
+        let mut stmt = tx.prepare("SELECT id FROM locator_entries WHERE workspace_id = ?1")?;
+        let rows = stmt.query_map([workspace_id], |row| row.get(0))?;
+        rows.collect::<std::result::Result<_, _>>()?
+    };
+    for id in &ids {
+        tx.execute("DELETE FROM locator_fts WHERE rowid = ?1", [id])?;
+        tx.execute("DELETE FROM locator_entries WHERE id = ?1", [id])?;
+    }
+    Ok(ids.len())
+}
+
 /// Every indexed `(kind, entity_id)` of `kind`.
 pub fn ids_of_kind(conn: &Connection, kind: LocatorEntityKind) -> Result<HashSet<String>> {
     let mut stmt = conn.prepare("SELECT entity_id FROM locator_entries WHERE entity_kind = ?1")?;

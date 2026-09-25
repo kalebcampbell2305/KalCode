@@ -5,7 +5,8 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
 use kalcode_contracts::agent::ProviderId;
 use kalcode_contracts::ids::new_id;
@@ -64,11 +65,35 @@ pub fn core_without_v11(dir: &Path) -> Arc<Core> {
     )
 }
 
-#[derive(Default)]
 pub struct FakeSources {
     pub threads: Mutex<Vec<ThreadSummary>>,
     pub texts: Mutex<HashMap<String, String>>,
     pub providers: Mutex<Vec<ProviderInfo>>,
+    thread_reads: ThreadReadControl,
+}
+
+#[derive(Default)]
+struct ThreadReadState {
+    block_next: bool,
+    blocked: bool,
+    released: bool,
+}
+
+#[derive(Default)]
+struct ThreadReadControl {
+    state: Mutex<ThreadReadState>,
+    changed: Condvar,
+}
+
+impl Default for FakeSources {
+    fn default() -> Self {
+        Self {
+            threads: Mutex::new(Vec::new()),
+            texts: Mutex::new(HashMap::new()),
+            providers: Mutex::new(Vec::new()),
+            thread_reads: ThreadReadControl::default(),
+        }
+    }
 }
 
 impl FakeSources {
@@ -104,10 +129,52 @@ impl FakeSources {
             }
         }
     }
+
+    /// Deterministically pauses the next `threads` snapshot until `release_thread_read`.
+    pub fn block_next_thread_read(&self) {
+        let mut state = self.thread_reads.state.lock().unwrap();
+        state.block_next = true;
+        state.blocked = false;
+        state.released = false;
+    }
+
+    pub fn wait_until_thread_read_blocked(&self, timeout: Duration) -> bool {
+        let start = Instant::now();
+        let mut state = self.thread_reads.state.lock().unwrap();
+        while !state.blocked {
+            let Some(left) = timeout.checked_sub(start.elapsed()) else {
+                return false;
+            };
+            let (next, result) = self.thread_reads.changed.wait_timeout(state, left).unwrap();
+            state = next;
+            if result.timed_out() && !state.blocked {
+                return false;
+            }
+        }
+        true
+    }
+
+    pub fn release_thread_read(&self) {
+        let mut state = self.thread_reads.state.lock().unwrap();
+        state.released = true;
+        self.thread_reads.changed.notify_all();
+    }
 }
 
 impl LocatorSources for FakeSources {
     fn threads(&self) -> Result<Vec<ThreadSummary>> {
+        let mut state = self.thread_reads.state.lock().unwrap();
+        if state.block_next {
+            state.block_next = false;
+            state.blocked = true;
+            self.thread_reads.changed.notify_all();
+            while !state.released {
+                state = self.thread_reads.changed.wait(state).unwrap();
+            }
+            state.blocked = false;
+            state.released = false;
+        }
+        drop(state);
         Ok(self.threads.lock().unwrap().clone())
     }
 

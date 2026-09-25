@@ -232,6 +232,13 @@ impl Locator {
             None => None,
         };
         let parsed = query::parse(&query.text);
+        let visible_workspaces: HashSet<String> = self
+            .inner
+            .core
+            .workspaces()?
+            .into_iter()
+            .map(|workspace| workspace.id)
+            .collect();
         let filters = |parsed: &ParsedQuery| {
             let mut kinds = query.kinds.clone();
             for kind in &parsed.kinds {
@@ -274,6 +281,15 @@ impl Locator {
             self.inner
                 .store
                 .read(|conn| index::search(conn, parsed, &filters(parsed), query.sort, now))
+                .map(|mut results| {
+                    results.retain(|result| {
+                        result
+                            .workspace_id
+                            .as_ref()
+                            .is_none_or(|id| visible_workspaces.contains(id))
+                    });
+                    results
+                })
         };
         let mut used = parsed.clone();
         let mut results = match run(&parsed) {
@@ -339,6 +355,9 @@ impl Locator {
                     .sources
                     .thread(entity_id)?
                     .ok_or_else(not_found)?;
+                if self.workspace(&thread.workspace_id)?.is_none() {
+                    return Err(not_found());
+                }
                 LocatorOpenTarget {
                     kind,
                     entity_id: thread.id.clone(),
@@ -408,6 +427,11 @@ impl Locator {
                         .optional()?)
                 })?;
                 let (workspace_id, provider_id) = found.ok_or_else(not_found)?;
+                if let Some(workspace_id) = &workspace_id
+                    && self.workspace(workspace_id)?.is_none()
+                {
+                    return Err(not_found());
+                }
                 LocatorOpenTarget {
                     kind,
                     entity_id: entity_id.to_owned(),
@@ -494,10 +518,13 @@ impl Locator {
         let workspace = self.workspace(&update.workspace_id)?.ok_or_else(|| {
             KalError::validation("workspace_unknown", "That workspace no longer exists.")
         })?;
-        let fields = self
-            .inner
-            .store
-            .write(|tx| rail::apply_update(tx, update))?;
+        let fields = self.inner.store.write(|tx| {
+            let fields = rail::apply_update(tx, update)?;
+            if update.index_messages == Some(false) {
+                index::purge_workspace_bodies(tx, &workspace.id)?;
+            }
+            Ok(fields)
+        })?;
         if !fields.is_empty() {
             // `workspace.updated` / `.archived` (CONTRACTS_ADVANCED §3.3) aren't in the event
             // catalog yet; logged meanwhile.
@@ -802,10 +829,14 @@ impl Dirty {
             }
             EventPayload::WorkspaceCreated { workspace_id, .. }
             | EventPayload::WorkspaceOpened { workspace_id, .. } => {
-                self.workspaces.insert(workspace_id.clone());
-                self.terminals_of.insert(workspace_id.clone());
+                if !self.removed_workspaces.contains(workspace_id) {
+                    self.workspaces.insert(workspace_id.clone());
+                    self.terminals_of.insert(workspace_id.clone());
+                }
             }
             EventPayload::WorkspaceRemoved { workspace_id, .. } => {
+                self.workspaces.remove(workspace_id);
+                self.terminals_of.remove(workspace_id);
                 self.removed_workspaces.insert(workspace_id.clone());
             }
             EventPayload::ShellStarted { .. }
@@ -842,7 +873,7 @@ impl Batch {
                 self.dirty.rebuild = Some(self.dirty.rebuild.unwrap_or(false) || clear);
             }
             Work::Workspace(id) => {
-                if is_valid_id(&id) {
+                if is_valid_id(&id) && !self.dirty.removed_workspaces.contains(&id) {
                     self.dirty.workspaces.insert(id);
                 }
             }
@@ -896,25 +927,34 @@ fn apply(inner: &Arc<Inner>, dirty: Dirty) -> Result<()> {
     let mut upserts: Vec<IndexEntry> = Vec::new();
     let mut removals: Vec<(LocatorEntityKind, String)> = Vec::new();
 
-    let need_threads = !dirty.threads.is_empty() || !dirty.activity.is_empty();
+    let need_threads =
+        !dirty.threads.is_empty() || !dirty.workspaces.is_empty() || !dirty.activity.is_empty();
     let threads = if need_threads {
         inner.sources.threads()?
     } else {
         Vec::new()
     };
+    let workspaces = core.workspaces()?;
+    let ws_by_id: HashMap<&str, &Workspace> =
+        workspaces.iter().map(|w| (w.id.as_str(), w)).collect();
+    let known_workspaces: HashSet<&str> = ws_by_id.keys().copied().collect();
     let by_id: HashMap<&str, &ThreadSummary> = threads.iter().map(|t| (t.id.as_str(), t)).collect();
-    for id in &dirty.threads {
+    let mut thread_ids = dirty.threads.clone();
+    for thread in &threads {
+        if dirty.workspaces.contains(&thread.workspace_id) {
+            thread_ids.insert(thread.id.clone());
+        }
+    }
+    for id in &thread_ids {
         match by_id.get(id.as_str()) {
-            Some(thread) => {
+            Some(thread) if known_workspaces.contains(thread.workspace_id.as_str()) => {
                 let body = body_for(inner, thread, &rows);
                 upserts.push(thread_entry(thread, body));
             }
             None => removals.push((LocatorEntityKind::Thread, id.clone())),
+            Some(_) => removals.push((LocatorEntityKind::Thread, id.clone())),
         }
     }
-    let workspaces = core.workspaces()?;
-    let ws_by_id: HashMap<&str, &Workspace> =
-        workspaces.iter().map(|w| (w.id.as_str(), w)).collect();
     for id in &dirty.workspaces {
         if let Some(workspace) = ws_by_id.get(id.as_str()) {
             let row = rows.get(id).cloned().unwrap_or_default();
@@ -936,37 +976,34 @@ fn apply(inner: &Arc<Inner>, dirty: Dirty) -> Result<()> {
     }
     for event in &dirty.activity {
         let thread = activity_thread_id(event).and_then(|id| by_id.get(id).copied());
-        let ws_name = event
+        let workspace = event
             .correlation
             .workspace_id
             .as_deref()
-            .and_then(|id| ws_by_id.get(id))
-            .map(|w| w.name.as_str());
-        if let Some(entry) = activity_entry(event, thread, ws_name) {
+            .or_else(|| thread.map(|thread| thread.workspace_id.as_str()))
+            .and_then(|id| ws_by_id.get(id).copied());
+        if let Some(workspace) = workspace
+            && let Some(entry) = activity_entry(event, thread, Some(&workspace.name))
+        {
             upserts.push(entry);
         }
     }
-    let removed: Vec<String> = dirty.removed_workspaces.into_iter().collect();
+    let mut removed = dirty.removed_workspaces;
+    for id in &dirty.workspaces {
+        if !known_workspaces.contains(id.as_str()) {
+            removed.insert(id.clone());
+        }
+    }
+    let persistent = inner.store.persistent();
     inner.store.write(|tx| {
         for entry in &upserts {
-            index::upsert(tx, entry)?;
+            upsert_governed(tx, entry, persistent, &known_workspaces)?;
         }
         for (kind, id) in &removals {
             index::remove(tx, *kind, id)?;
         }
         for id in &removed {
-            index::remove(tx, LocatorEntityKind::Workspace, id)?;
-            // Its terminals went with it (Z1 cascades); drop their entries.
-            let terminals: Vec<String> = {
-                let mut stmt = tx.prepare(
-                    "SELECT entity_id FROM locator_entries WHERE entity_kind = 'terminal' AND workspace_id = ?1",
-                )?;
-                let rows = stmt.query_map([id], |r| r.get(0))?;
-                rows.collect::<std::result::Result<_, _>>()?
-            };
-            for terminal in terminals {
-                index::remove(tx, LocatorEntityKind::Terminal, &terminal)?;
-            }
+            index::remove_workspace_entries(tx, id)?;
             tx.execute("DELETE FROM workspace_rail WHERE workspace_id = ?1", [id])?;
         }
         if !dirty.activity.is_empty() {
@@ -974,6 +1011,46 @@ fn apply(inner: &Arc<Inner>, dirty: Dirty) -> Result<()> {
         }
         Ok(())
     })
+}
+
+/// Applies the authoritative workspace and message-index policy at the same transaction that
+/// writes an entry. This prevents an in-flight snapshot from restoring data after opt-out or
+/// workspace removal.
+fn upsert_governed(
+    tx: &rusqlite::Transaction<'_>,
+    entry: &IndexEntry,
+    persistent: bool,
+    known_workspaces: &HashSet<&str>,
+) -> Result<()> {
+    let Some(workspace_id) = entry.workspace_id.as_deref() else {
+        return index::upsert(tx, entry);
+    };
+    let exists = known_workspaces.contains(workspace_id)
+        && (!persistent
+            || tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM workspaces WHERE id = ?1)",
+                [workspace_id],
+                |row| row.get::<_, i64>(0),
+            )? != 0);
+    if !exists {
+        index::remove(tx, entry.kind, &entry.entity_id)?;
+        return Ok(());
+    }
+    if entry.body.is_some() {
+        let opted_in = tx.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM workspace_rail WHERE workspace_id = ?1 AND index_messages = 1
+             )",
+            [workspace_id],
+            |row| row.get::<_, i64>(0),
+        )? != 0;
+        if !opted_in {
+            let mut metadata_only = entry.clone();
+            metadata_only.body = None;
+            return index::upsert(tx, &metadata_only);
+        }
+    }
+    index::upsert(tx, entry)
 }
 
 fn body_for(
@@ -1023,8 +1100,14 @@ fn rebuild_inner(inner: &Arc<Inner>, clear: bool) -> Result<()> {
     }
     let empty = inner.store.read(index::count)? == 0;
     let rows = inner.store.read(rail::load_rows)?;
-    let threads = inner.sources.threads()?;
     let workspaces = core.workspaces()?;
+    let known_workspaces: HashSet<&str> = workspaces.iter().map(|w| w.id.as_str()).collect();
+    let threads: Vec<ThreadSummary> = inner
+        .sources
+        .threads()?
+        .into_iter()
+        .filter(|thread| known_workspaces.contains(thread.workspace_id.as_str()))
+        .collect();
     let now = now_rfc3339();
 
     let mut entries: Vec<IndexEntry> = Vec::with_capacity(threads.len() + workspaces.len() * 2);
@@ -1053,13 +1136,15 @@ fn rebuild_inner(inner: &Arc<Inner>, clear: bool) -> Result<()> {
         })?;
         for event in &page.events {
             let thread = activity_thread_id(event).and_then(|id| by_id.get(id).copied());
-            let ws_name = event
+            let workspace = event
                 .correlation
                 .workspace_id
                 .as_deref()
-                .and_then(|id| ws_by_id.get(id))
-                .map(|w| w.name.as_str());
-            if let Some(entry) = activity_entry(event, thread, ws_name) {
+                .or_else(|| thread.map(|thread| thread.workspace_id.as_str()))
+                .and_then(|id| ws_by_id.get(id).copied());
+            if let Some(workspace) = workspace
+                && let Some(entry) = activity_entry(event, thread, Some(&workspace.name))
+            {
                 entries.push(entry);
             }
         }
@@ -1071,10 +1156,11 @@ fn rebuild_inner(inner: &Arc<Inner>, clear: bool) -> Result<()> {
             .or_default()
             .insert(entry.entity_id.clone());
     }
+    let persistent = inner.store.persistent();
     for chunk in entries.chunks(REBUILD_CHUNK) {
         inner.store.write(|tx| {
             for entry in chunk {
-                index::upsert(tx, entry)?;
+                upsert_governed(tx, entry, persistent, &known_workspaces)?;
             }
             Ok(())
         })?;
@@ -1101,9 +1187,20 @@ fn rebuild_inner(inner: &Arc<Inner>, clear: bool) -> Result<()> {
             })?;
         }
     }
-    let known: HashSet<&str> = workspaces.iter().map(|w| w.id.as_str()).collect();
     inner.store.write(|tx| {
-        rail::prune(tx, &known)?;
+        let indexed_workspaces: Vec<String> = {
+            let mut stmt = tx.prepare(
+                "SELECT DISTINCT workspace_id FROM locator_entries WHERE workspace_id IS NOT NULL",
+            )?;
+            let rows = stmt.query_map([], |row| row.get(0))?;
+            rows.collect::<std::result::Result<_, _>>()?
+        };
+        for workspace_id in indexed_workspaces {
+            if !known_workspaces.contains(workspace_id.as_str()) {
+                index::remove_workspace_entries(tx, &workspace_id)?;
+            }
+        }
+        rail::prune(tx, &known_workspaces)?;
         index::prune_activity(tx)?;
         Ok(())
     })?;

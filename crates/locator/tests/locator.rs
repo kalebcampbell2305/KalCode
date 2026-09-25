@@ -439,6 +439,459 @@ fn privacy_names_are_redacted_queries_never_stored_messages_off_by_default() {
 }
 
 #[test]
+fn enabling_message_search_reindexes_existing_workspace_threads() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = core_with_v11(dir.path());
+    let ws = workspace(&core, dir.path(), "message-opt-in");
+    let sources = FakeSources::new();
+    let existing = thread(
+        "Existing conversation",
+        "claude-code",
+        &ws.id,
+        &ws.name,
+        ThreadStatus::Idle,
+        &ago(1),
+    );
+    sources
+        .texts
+        .lock()
+        .unwrap()
+        .insert(existing.id.clone(), "existing-message-search-marker".into());
+    sources.add(existing);
+    let locator = Locator::start(core.clone(), sources).expect("start");
+    assert!(locator.wait_ready(WAIT));
+    assert!(titles(&locator, &q("existing-message-search-marker")).is_empty());
+
+    locator
+        .rail_update(&RailUpdate {
+            workspace_id: ws.id,
+            index_messages: Some(true),
+            ..RailUpdate::default()
+        })
+        .unwrap();
+    assert!(locator.flush(WAIT));
+
+    assert_eq!(
+        titles(&locator, &q("existing-message-search-marker")),
+        vec!["Existing conversation"]
+    );
+    locator.shutdown();
+}
+
+#[test]
+fn disabling_message_search_purges_immediately_and_survives_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = core_with_v11(dir.path());
+    let ws = workspace(&core, dir.path(), "message-opt-out");
+    let sources = FakeSources::new();
+    let existing = thread(
+        "Private conversation",
+        "claude-code",
+        &ws.id,
+        &ws.name,
+        ThreadStatus::Idle,
+        &ago(1),
+    );
+    sources
+        .texts
+        .lock()
+        .unwrap()
+        .insert(existing.id.clone(), "private-message-search-marker".into());
+    sources.add(existing.clone());
+    let locator = Locator::start(core.clone(), sources.clone()).expect("start");
+    assert!(locator.wait_ready(WAIT));
+    locator
+        .rail_update(&RailUpdate {
+            workspace_id: ws.id.clone(),
+            index_messages: Some(true),
+            ..RailUpdate::default()
+        })
+        .unwrap();
+    core.emit(NewEvent::core(EventPayload::ThreadRenamed {
+        thread_id: existing.id,
+        name: existing.name,
+    }))
+    .unwrap();
+    assert!(locator.flush(WAIT));
+    assert_eq!(
+        titles(&locator, &q("private-message-search-marker")),
+        vec!["Private conversation"]
+    );
+
+    locator
+        .rail_update(&RailUpdate {
+            workspace_id: ws.id,
+            index_messages: Some(false),
+            ..RailUpdate::default()
+        })
+        .unwrap();
+    assert!(
+        titles(&locator, &q("private-message-search-marker")).is_empty(),
+        "the opt-out must purge before rail_update returns"
+    );
+    locator.shutdown();
+
+    let restarted = Locator::start(core.clone(), sources).expect("restart");
+    assert!(restarted.wait_ready(WAIT));
+    assert!(
+        titles(&restarted, &q("private-message-search-marker")).is_empty(),
+        "the opt-out must remain effective after a persistent-index rebuild"
+    );
+    restarted.shutdown();
+}
+
+#[test]
+fn message_opt_out_wins_against_an_in_flight_opted_in_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = core_with_v11(dir.path());
+    let ws = workspace(&core, dir.path(), "message-opt-out-race");
+    let sources = FakeSources::new();
+    let existing = thread(
+        "Racing private conversation",
+        "claude-code",
+        &ws.id,
+        &ws.name,
+        ThreadStatus::Idle,
+        &ago(1),
+    );
+    sources
+        .texts
+        .lock()
+        .unwrap()
+        .insert(existing.id.clone(), "racing-private-message-marker".into());
+    sources.add(existing.clone());
+    let locator = Locator::start(core.clone(), sources.clone()).expect("start");
+    assert!(locator.wait_ready(WAIT));
+    locator
+        .rail_update(&RailUpdate {
+            workspace_id: ws.id.clone(),
+            index_messages: Some(true),
+            ..RailUpdate::default()
+        })
+        .unwrap();
+    core.emit(NewEvent::core(EventPayload::ThreadRenamed {
+        thread_id: existing.id.clone(),
+        name: existing.name.clone(),
+    }))
+    .unwrap();
+    assert!(locator.flush(WAIT));
+    assert_eq!(
+        titles(&locator, &q("racing-private-message-marker")),
+        vec!["Racing private conversation"]
+    );
+
+    // Pause an incremental update after it observed the opted-in rail row but before it writes.
+    sources.block_next_thread_read();
+    core.emit(NewEvent::core(EventPayload::ThreadRenamed {
+        thread_id: existing.id,
+        name: existing.name,
+    }))
+    .unwrap();
+    assert!(sources.wait_until_thread_read_blocked(WAIT));
+    locator
+        .rail_update(&RailUpdate {
+            workspace_id: ws.id,
+            index_messages: Some(false),
+            ..RailUpdate::default()
+        })
+        .unwrap();
+    let absent_when_opt_out_returns =
+        titles(&locator, &q("racing-private-message-marker")).is_empty();
+    sources.release_thread_read();
+    assert!(locator.flush(WAIT));
+    let absent_after_stale_update =
+        titles(&locator, &q("racing-private-message-marker")).is_empty();
+
+    assert!(
+        absent_when_opt_out_returns,
+        "the synchronous opt-out must remove the previously indexed body"
+    );
+    assert!(
+        absent_after_stale_update,
+        "the paused opted-in snapshot must not restore the private body"
+    );
+    locator.shutdown();
+}
+
+#[test]
+fn rebuild_cannot_restore_message_body_from_pre_opt_out_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = core_with_v11(dir.path());
+    let ws = workspace(&core, dir.path(), "message-opt-out-rebuild-race");
+    let sources = FakeSources::new();
+    let existing = thread(
+        "Rebuilding private conversation",
+        "claude-code",
+        &ws.id,
+        &ws.name,
+        ThreadStatus::Idle,
+        &ago(1),
+    );
+    sources.texts.lock().unwrap().insert(
+        existing.id.clone(),
+        "rebuilding-private-message-marker".into(),
+    );
+    sources.add(existing);
+    let locator = Locator::start(core.clone(), sources.clone()).expect("start");
+    assert!(locator.wait_ready(WAIT));
+    locator
+        .rail_update(&RailUpdate {
+            workspace_id: ws.id.clone(),
+            index_messages: Some(true),
+            ..RailUpdate::default()
+        })
+        .unwrap();
+    assert!(locator.flush(WAIT));
+    assert_eq!(
+        titles(&locator, &q("rebuilding-private-message-marker")),
+        vec!["Rebuilding private conversation"]
+    );
+    locator.shutdown();
+
+    // Restart blocks after the rebuild captured the opted-in rail row. Opting out must purge the
+    // existing body synchronously, and the stale rebuild snapshot must not restore it.
+    sources.block_next_thread_read();
+    let restarted = Locator::start(core, sources.clone()).expect("restart");
+    assert!(sources.wait_until_thread_read_blocked(WAIT));
+    restarted
+        .rail_update(&RailUpdate {
+            workspace_id: ws.id,
+            index_messages: Some(false),
+            ..RailUpdate::default()
+        })
+        .unwrap();
+    let absent_when_opt_out_returns =
+        titles(&restarted, &q("rebuilding-private-message-marker")).is_empty();
+    sources.release_thread_read();
+    assert!(restarted.wait_ready(WAIT));
+    assert!(restarted.flush(WAIT));
+    let absent_after_rebuild =
+        titles(&restarted, &q("rebuilding-private-message-marker")).is_empty();
+    restarted.shutdown();
+
+    assert!(
+        absent_when_opt_out_returns,
+        "the opt-out must synchronously remove the old body"
+    );
+    assert!(
+        absent_after_rebuild,
+        "the rebuild's stale opted-in snapshot must not restore the body"
+    );
+}
+
+fn observe_removed_workspace_before_index_cleanup(
+    session_only: bool,
+) -> (Vec<String>, Option<String>, Option<String>) {
+    let dir = tempfile::tempdir().unwrap();
+    let core = core_with_v11(dir.path());
+    let ws = workspace(&core, dir.path(), "removed-before-cleanup");
+    let sources = FakeSources::new();
+    let stale_thread = thread(
+        "Deleted private conversation",
+        "claude-code",
+        &ws.id,
+        &ws.name,
+        ThreadStatus::Idle,
+        &ago(1),
+    );
+    sources.texts.lock().unwrap().insert(
+        stale_thread.id.clone(),
+        "deleted-workspace-private-marker".into(),
+    );
+    sources.add(stale_thread.clone());
+    let locator = if session_only {
+        Locator::start_with_store(core.clone(), sources.clone(), Store::memory().unwrap())
+            .expect("start session-only locator")
+    } else {
+        Locator::start(core.clone(), sources.clone()).expect("start persistent locator")
+    };
+    assert!(locator.wait_ready(WAIT));
+    locator
+        .rail_update(&RailUpdate {
+            workspace_id: ws.id.clone(),
+            index_messages: Some(true),
+            ..RailUpdate::default()
+        })
+        .unwrap();
+    assert!(locator.flush(WAIT));
+    assert_eq!(
+        titles(&locator, &q("deleted-workspace-private-marker")),
+        vec!["Deleted private conversation"]
+    );
+    let activity = core
+        .emit(NewEvent {
+            source: kalcode_contracts::events::EventSource::Core,
+            correlation: Correlation {
+                workspace_id: Some(ws.id.clone()),
+                thread_id: Some(stale_thread.id.clone()),
+                ..Correlation::default()
+            },
+            event: EventPayload::ThreadCompleted {
+                thread_id: stale_thread.id.clone(),
+            },
+        })
+        .unwrap();
+    assert!(locator.flush(WAIT));
+
+    // Hold the only indexing worker so WorkspaceRemoved is known to be queued but unapplied.
+    sources.block_next_thread_read();
+    core.emit(NewEvent::core(EventPayload::ThreadRenamed {
+        thread_id: stale_thread.id.clone(),
+        name: stale_thread.name.clone(),
+    }))
+    .unwrap();
+    assert!(sources.wait_until_thread_read_blocked(WAIT));
+    let removed = core.remove_workspace(&ws.id);
+    let visible = titles(&locator, &q("deleted-workspace-private-marker"));
+    let open_error = locator
+        .open(
+            LocatorEntityKind::Thread,
+            &stale_thread.id,
+            LocatorVia::Palette,
+        )
+        .err()
+        .map(|error| error.code.to_owned());
+    let activity_open_error = locator
+        .open(
+            LocatorEntityKind::Activity,
+            &activity.id,
+            LocatorVia::Palette,
+        )
+        .err()
+        .map(|error| error.code.to_owned());
+    sources.release_thread_read();
+    assert!(locator.flush(WAIT));
+    locator.shutdown();
+    removed.unwrap();
+    (visible, open_error, activity_open_error)
+}
+
+#[test]
+fn removed_workspace_is_hidden_before_persistent_index_cleanup() {
+    let (visible, open_error, activity_open_error) =
+        observe_removed_workspace_before_index_cleanup(false);
+    assert!(
+        visible.is_empty(),
+        "search must consult workspace authority instead of exposing queued stale rows"
+    );
+    assert_eq!(open_error.as_deref(), Some("not_found"));
+    assert_eq!(activity_open_error.as_deref(), Some("not_found"));
+}
+
+#[test]
+fn removed_workspace_is_hidden_before_session_index_cleanup() {
+    let (visible, open_error, activity_open_error) =
+        observe_removed_workspace_before_index_cleanup(true);
+    assert!(
+        visible.is_empty(),
+        "the session-only index must have the same privacy boundary"
+    );
+    assert_eq!(open_error.as_deref(), Some("not_found"));
+    assert_eq!(activity_open_error.as_deref(), Some("not_found"));
+}
+
+#[test]
+fn workspace_removal_purges_all_derived_rows_and_stale_events_cannot_restore_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = core_with_v11(dir.path());
+    let ws = workspace(&core, dir.path(), "removed-private-workspace");
+    let sources = FakeSources::new();
+    let stale_thread = thread(
+        "Removed workspace sentinel",
+        "claude-code",
+        &ws.id,
+        &ws.name,
+        ThreadStatus::Idle,
+        &ago(1),
+    );
+    sources.texts.lock().unwrap().insert(
+        stale_thread.id.clone(),
+        "removed-workspace-body-marker".into(),
+    );
+    sources.add(stale_thread.clone());
+    let locator = Locator::start(core.clone(), sources.clone()).expect("start");
+    assert!(locator.wait_ready(WAIT));
+    locator
+        .rail_update(&RailUpdate {
+            workspace_id: ws.id.clone(),
+            index_messages: Some(true),
+            ..RailUpdate::default()
+        })
+        .unwrap();
+    core.emit(NewEvent {
+        source: kalcode_contracts::events::EventSource::Core,
+        correlation: Correlation {
+            workspace_id: Some(ws.id.clone()),
+            thread_id: Some(stale_thread.id.clone()),
+            ..Correlation::default()
+        },
+        event: EventPayload::ThreadCompleted {
+            thread_id: stale_thread.id.clone(),
+        },
+    })
+    .unwrap();
+    assert!(locator.flush(WAIT));
+    assert_eq!(
+        titles(&locator, &q("removed-workspace-body-marker")),
+        vec!["Removed workspace sentinel"]
+    );
+    let mut activity = q("removed workspace sentinel");
+    activity.kinds = vec![LocatorEntityKind::Activity];
+    assert_eq!(
+        titles(&locator, &activity),
+        vec!["Completed · Removed workspace sentinel"]
+    );
+
+    core.remove_workspace(&ws.id).unwrap();
+    core.emit(NewEvent::core(EventPayload::ThreadRenamed {
+        thread_id: stale_thread.id.clone(),
+        name: stale_thread.name.clone(),
+    }))
+    .unwrap();
+    assert!(locator.flush(WAIT));
+    for marker in [
+        "removed workspace sentinel",
+        "removed-workspace-body-marker",
+    ] {
+        assert!(titles(&locator, &q(marker)).is_empty(), "marker: {marker}");
+    }
+    let indexed_for_workspace: i64 = core
+        .reader()
+        .query_row(
+            "SELECT COUNT(*) FROM locator_entries WHERE workspace_id = ?1",
+            [&ws.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        indexed_for_workspace, 0,
+        "thread and activity rows are derived"
+    );
+    assert!(
+        sources
+            .threads
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|thread| thread.id == stale_thread.id),
+        "the locator must not mutate the canonical thread/message source"
+    );
+    locator.shutdown();
+
+    let restarted = Locator::start(core.clone(), sources).expect("restart");
+    assert!(restarted.wait_ready(WAIT));
+    assert!(
+        titles(&restarted, &q("removed-workspace-body-marker")).is_empty(),
+        "a rebuild must not resurrect a thread whose workspace is gone"
+    );
+    assert!(
+        titles(&restarted, &q("removed workspace sentinel")).is_empty(),
+        "a rebuild must not resurrect thread or activity metadata"
+    );
+    restarted.shutdown();
+}
+
+#[test]
 fn a_damaged_index_is_rebuilt_without_touching_anything_else() {
     let dir = tempfile::tempdir().unwrap();
     let core = core_with_v11(dir.path());
