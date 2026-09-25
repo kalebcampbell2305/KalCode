@@ -175,11 +175,102 @@ function normalize(text: string): string {
     .replace(/^(please |hey kalvoice )+/, "");
 }
 
+const PROVIDER_IDS: Record<string, string> = {
+  claude: "claude-code",
+  "claude code": "claude-code",
+  codex: "codex",
+  gemini: "gemini-cli",
+  "gemini cli": "gemini-cli",
+};
+const PROVIDER_NAMES: Record<string, string> = { "claude-code": "Claude", codex: "Codex", "gemini-cli": "Gemini" };
+const PROVIDER = "(claude code|claude|codex|gemini cli|gemini)";
+const PANE = "(?: (?:the|this|my|current))?(?: (?:pane|panes|screen|view|window))?";
+
+/** Pane layout commands (Z7-W1), mirroring the native pane rules. Layout only. */
+function paneCommand(t: string): Parsed | null {
+  const split = (axis: "horizontal" | "vertical"): Parsed => ({
+    kind: "split",
+    high: true,
+    outcome: {
+      kind: "completed",
+      summary: `Split the pane ${axis === "horizontal" ? "side by side" : "top and bottom"}.`,
+    },
+    directive: { kind: "split_pane", axis },
+  });
+  if (new RegExp(`^split${PANE} (vertically|down|stacked|top and bottom)$`).test(t)) return split("vertical");
+  if (new RegExp(`^split${PANE}( side by side| horizontally| right| left and right)?$`).test(t)) {
+    return split("horizontal");
+  }
+  const arrange = t.match(
+    new RegExp(
+      `^(?:split|put|place|show|arrange|open) ${PROVIDER} (?:and|next to) ${PROVIDER}( side by side| next to each other)?$`,
+    ),
+  );
+  if (arrange?.[1] && arrange[2]) {
+    const ids = [PROVIDER_IDS[arrange[1]], PROVIDER_IDS[arrange[2]]].filter((id): id is string => Boolean(id));
+    if (ids.length === 2 && ids[0] !== ids[1]) {
+      return {
+        kind: "split",
+        high: true,
+        outcome: {
+          kind: "completed",
+          summary: `Putting ${ids.map((id) => PROVIDER_NAMES[id] ?? id).join(" and ")} side by side.`,
+        },
+        directive: { kind: "arrange_panes", axis: "horizontal", providerIds: ids },
+      };
+    }
+  }
+  const resize = t.match(
+    new RegExp(`^make${PANE} (?:(a bit|a little|much|a lot) )?(bigger|larger|wider|taller|smaller|narrower|shorter)$`),
+  );
+  if (resize?.[2]) {
+    const word = resize[2];
+    const direction =
+      word === "taller"
+        ? "down"
+        : word === "shorter"
+          ? "up"
+          : word === "smaller" || word === "narrower"
+            ? "left"
+            : "right";
+    const steps = resize[1] === "a bit" || resize[1] === "a little" ? 1 : resize[1] ? 4 : 2;
+    const said =
+      direction === "right" ? "bigger" : direction === "left" ? "smaller" : direction === "down" ? "taller" : "shorter";
+    return {
+      kind: "resize",
+      high: true,
+      outcome: { kind: "completed", summary: `Made the pane ${said}.` },
+      directive: { kind: "resize_pane", direction, steps },
+    };
+  }
+  if (/^close (the |this |my |current )?pane$/.test(t)) {
+    return {
+      kind: "close",
+      high: true,
+      outcome: { kind: "completed", summary: "Closed the pane. What it runs keeps running." },
+      directive: { kind: "close_pane", query: null },
+    };
+  }
+  const named = t.match(/^close (?:the |my )?(.+) pane$/);
+  if (named?.[1]) {
+    return {
+      kind: "close",
+      high: true,
+      outcome: { kind: "completed", summary: `Closed the ${named[1]} pane. What it runs keeps running.` },
+      directive: { kind: "close_pane", query: named[1] },
+    };
+  }
+  return null;
+}
+
 /** A small subset of the native grammar (crates/kalvoice/src/grammar.rs), enough for UI tests. */
 function understand(text: string): Parsed | null {
   const t = normalize(text);
   if (!t) return { kind: "empty", high: false };
-  if (/\b(don't|dont|not|never|and|then)\b/.test(t)) return null;
+  if (/\b(don't|dont|not|never)\b/.test(t)) return null;
+  const pane = paneCommand(t);
+  if (pane) return pane;
+  if (/\b(and|then)\b/.test(t)) return null;
   const navigate = (surface: SurfaceId, high: boolean): Parsed => ({
     kind: "navigate",
     high,

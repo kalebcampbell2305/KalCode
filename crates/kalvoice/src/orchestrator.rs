@@ -32,11 +32,12 @@ use kalcode_contracts::ids::{is_valid_id, new_id};
 pub use kalcode_contracts::kalvoice::TalkRoute;
 use kalcode_contracts::kalvoice::{
     KalVoiceInput, KalVoiceIntelligence, KalVoiceIntent, KalVoiceOutcome, KalVoiceUsage,
-    RequestableMode, ThreadScope,
+    PaneDirection, RequestableMode, ThreadScope,
 };
 use kalcode_contracts::permissions::{
     ActionKind, ActionOrigin, ApprovalDecision, NormalizedAction, PermissionMode, PolicyEffect,
 };
+use kalcode_contracts::workspace_ui::SplitAxis;
 use kalcode_core::time::now_rfc3339;
 use kalcode_core::{Core, KalError, Result};
 use serde::{Deserialize, Serialize};
@@ -164,6 +165,26 @@ pub enum UiDirective {
     },
     /// Opens the approvals panel.
     ShowApprovals,
+    // ---- Pane layout (Z7-W1). Layout only: nothing starts, stops or closes a process. ----
+    /// Split the focused pane (`horizontal` = side by side, `vertical` = stacked).
+    SplitPane {
+        axis: SplitAxis,
+    },
+    /// Put the panes of these providers' threads next to each other.
+    ArrangePanes {
+        axis: SplitAxis,
+        provider_ids: Vec<ProviderId>,
+    },
+    /// Grow the focused pane toward `direction` by `steps` steps.
+    ResizePane {
+        direction: PaneDirection,
+        steps: u8,
+    },
+    /// Close the pane whose title matches `query`, or the focused one. What it runs keeps
+    /// running.
+    ClosePane {
+        query: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -206,6 +227,8 @@ pub struct Executed {
 pub struct ExecContext {
     pub request_id: String,
     pub workspace_id: Option<String>,
+    /// Providers a pane layout command named ("split Claude and Codex side by side"), in order.
+    pub providers: Vec<ProviderId>,
 }
 
 /// The runtime APIs KalVoice drives — the same ones the UI uses. The desktop implements this.
@@ -500,14 +523,16 @@ impl Orchestrator {
                     request_id: req.request_id.clone(),
                     intent: intent.kind_name().to_owned(),
                 })]);
-                let intent = match target {
-                    None => intent,
+                let (intent, providers) = match target {
+                    None => (intent, Vec::new()),
+                    // Named providers aren't looked up; the layout command carries them.
+                    Some(NamedTarget::Providers(providers)) => (intent, providers),
                     Some(target) => match self.resolve(&target) {
-                        Ok(id) => grammar::bind_target(intent, id),
+                        Ok(id) => (grammar::bind_target(intent, id), Vec::new()),
                         Err(e) => return Ok(run.fail(&e.code, e.message)),
                     },
                 };
-                run.command(intent)
+                run.command(intent, providers)
             }
         }
     }
@@ -539,6 +564,10 @@ impl Orchestrator {
                         format!("KalCode has no thread named \u{201c}{name}\u{201d}."),
                     )
                 }),
+            NamedTarget::Providers(_) => Err(ExecError::new(
+                "not_a_target",
+                "KalVoice couldn't tell what that refers to.",
+            )),
         }
     }
 
@@ -915,13 +944,18 @@ impl Run<'_> {
         }
     }
 
-    fn command(&mut self, intent: KalVoiceIntent) -> Result<KalVoiceResponse> {
+    fn command(
+        &mut self,
+        intent: KalVoiceIntent,
+        providers: Vec<ProviderId>,
+    ) -> Result<KalVoiceResponse> {
         if let Err(e) = self.o.executor.check(&intent) {
             return Ok(self.fail(&e.code, e.message));
         }
         let ctx = ExecContext {
             request_id: self.req.request_id.clone(),
             workspace_id: self.req.workspace_id.clone(),
+            providers,
         };
         let mut asked = None;
         if let Some(kind) = consequential_action(&intent, &ctx) {

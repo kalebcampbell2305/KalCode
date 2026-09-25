@@ -28,6 +28,7 @@ import { type KalCodeError, toKalCodeError } from "../ipc/errors.ts";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { useWorkspaces } from "../runtime/WorkspaceProvider.tsx";
 import { useNavigation } from "../shell/navigation.tsx";
+import { dispatchPaneCommand, type PaneCommand, paneCanvasListening } from "../shell/panes/paneCommands.ts";
 import { usePermissions } from "../surfaces/permissions/index.ts";
 import { useThreadsIntent } from "../surfaces/threads/intent.tsx";
 import { type AssistantState, INITIAL_STATE, reduce } from "./assistantState.ts";
@@ -116,6 +117,10 @@ function afterPaint(fn: () => void) {
   requestAnimationFrame(() => setTimeout(fn, 0));
 }
 
+/** How long a pane command waits for the Code canvas to come up (60 × 50 ms). */
+const PANE_WAIT_MS = 50;
+const PANE_WAIT_TRIES = 60;
+
 export function KalVoiceProvider({ children }: { children: ReactNode }) {
   const { client } = useRuntime();
   const { current, navigate } = useNavigation();
@@ -165,11 +170,37 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   );
 
   // The UI side of a command's result (the native side already did the work).
-  const surfaces = useRef({ workspaces, permissions, threadsIntent });
-  surfaces.current = { workspaces, permissions, threadsIntent };
+  const surfaces = useRef({ workspaces, permissions, threadsIntent, toast, client });
+  surfaces.current = { workspaces, permissions, threadsIntent, toast, client };
   const runDirective = useCallback(
     (directive: UiDirective | null) => {
-      const { workspaces, permissions, threadsIntent } = surfaces.current;
+      const { workspaces, permissions, threadsIntent, toast, client } = surfaces.current;
+      // Pane layout commands (Z7-W1) run on the Code canvas; they wait for it when Code isn't on
+      // screen yet. Layout only: nothing starts, stops or closes a process.
+      const pane = (command: PaneCommand) => {
+        navigate("code");
+        const deliver = () => {
+          const result = dispatchPaneCommand(command);
+          if (result.message) {
+            toast.show({ tone: result.handled ? "info" : "danger", title: "Panes", description: result.message });
+          }
+        };
+        if (paneCanvasListening()) {
+          deliver();
+          return;
+        }
+        // Code is opening: run the command once its canvas is up, so its result can be shown.
+        let tries = 0;
+        const timer = setInterval(() => {
+          if (paneCanvasListening()) {
+            clearInterval(timer);
+            deliver();
+          } else if (++tries >= PANE_WAIT_TRIES) {
+            clearInterval(timer);
+            dispatchPaneCommand(command, { queue: true });
+          }
+        }, PANE_WAIT_MS);
+      };
       switch (directive?.kind) {
         case "navigate":
           navigate(directive.surface);
@@ -184,9 +215,34 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           void workspaces.refresh().then(() => workspaces.selectTerminal(terminalId, true, workspaceId));
           break;
         }
-        case "open_thread":
-          navigate("threads");
-          threadsIntent.request("open", directive.threadId);
+        case "open_thread": {
+          // A thread running in a provider pane is shown in its pane; others open in Threads.
+          const { threadId } = directive;
+          void client
+            .getThread(threadId)
+            .then((thread) => thread.runtimeKind === "interactive_pty")
+            .catch(() => false)
+            .then((inPane) => {
+              if (inPane) {
+                pane({ kind: "open", content: { kind: "thread", threadId } });
+              } else {
+                navigate("threads");
+                threadsIntent.request("open", threadId);
+              }
+            });
+          break;
+        }
+        case "split_pane":
+          pane({ kind: "split", axis: directive.axis });
+          break;
+        case "arrange_panes":
+          pane({ kind: "arrange-providers", axis: directive.axis, providerIds: directive.providerIds });
+          break;
+        case "resize_pane":
+          pane({ kind: "resize", direction: directive.direction, steps: directive.steps });
+          break;
+        case "close_pane":
+          pane(directive.query ? { kind: "close", query: directive.query } : { kind: "close" });
           break;
         case "show_approvals":
           permissions.setPanelOpen(true);

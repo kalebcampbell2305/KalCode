@@ -583,3 +583,157 @@ fn focus_and_permission_mode_requests_never_bypass() {
         "don't switch the login fix thread to plan mode"
     ));
 }
+
+// ---- Pane layout (Z7-W1) ----
+
+use kalcode_contracts::kalvoice::PaneDirection;
+use kalcode_contracts::workspace_ui::SplitAxis;
+
+fn is_high(text: &str) -> bool {
+    understand_with_confidence(text).1 == Confidence::High
+}
+
+#[test]
+fn splits_panes_side_by_side_or_stacked() {
+    for text in [
+        "split",
+        "split the pane",
+        "Split this pane side by side.",
+        "split the screen horizontally",
+        "split my view to the right",
+        "please split the pane left and right",
+    ] {
+        assert_eq!(
+            intent(text),
+            KalVoiceIntent::Split {
+                axis: SplitAxis::Horizontal
+            },
+            "{text}"
+        );
+        assert!(is_high(text), "{text}");
+        assert_eq!(target(text), None, "{text}");
+    }
+    for text in [
+        "split the pane vertically",
+        "split this pane down",
+        "split the panes top and bottom",
+        "split the view stacked",
+    ] {
+        assert_eq!(
+            intent(text),
+            KalVoiceIntent::Split {
+                axis: SplitAxis::Vertical
+            },
+            "{text}"
+        );
+        assert!(is_high(text), "{text}");
+    }
+}
+
+#[test]
+fn arranges_named_providers_side_by_side() {
+    let providers = |ids: &[&str]| {
+        Some(NamedTarget::Providers(
+            ids.iter().map(|i| ProviderId::new(*i)).collect(),
+        ))
+    };
+    for text in [
+        "Split Claude and Codex side by side",
+        "split claude code and codex side by side",
+        "put Claude and Codex next to each other",
+        "show claude next to codex",
+        "arrange claude and codex",
+    ] {
+        assert_eq!(
+            intent(text),
+            KalVoiceIntent::Split {
+                axis: SplitAxis::Horizontal
+            },
+            "{text}"
+        );
+        assert_eq!(
+            target(text),
+            providers(&[ProviderId::CLAUDE_CODE, ProviderId::CODEX]),
+            "{text}"
+        );
+        assert!(is_high(text), "{text}");
+    }
+    assert_eq!(
+        intent("put gemini and claude top and bottom"),
+        KalVoiceIntent::Split {
+            axis: SplitAxis::Vertical
+        }
+    );
+    assert_eq!(
+        target("put gemini and claude top and bottom"),
+        providers(&[ProviderId::GEMINI_CLI, ProviderId::CLAUDE_CODE])
+    );
+    // The same provider twice is not an arrangement.
+    assert!(is_reasoning("split claude and claude side by side"));
+    // Other compound requests stay reasoning: "and" is only allowed in pane arrangements.
+    assert!(is_reasoning("split the pane and open codex"));
+    assert!(is_reasoning("stop the threads and then delete the branch"));
+    assert!(is_reasoning("don't split the pane"));
+}
+
+#[test]
+fn resizes_the_focused_pane() {
+    let resize = |direction, steps| KalVoiceIntent::Resize { direction, steps };
+    let cases: &[(&str, PaneDirection, u8)] = &[
+        ("make this pane bigger", PaneDirection::Right, 2),
+        ("Make the pane larger.", PaneDirection::Right, 2),
+        ("make the pane wider", PaneDirection::Right, 2),
+        ("make this pane a bit bigger", PaneDirection::Right, 1),
+        ("make this pane bigger a little", PaneDirection::Right, 1),
+        ("make the pane much bigger", PaneDirection::Right, 4),
+        ("make this pane taller", PaneDirection::Down, 2),
+        ("make the pane smaller", PaneDirection::Left, 2),
+        ("make this pane narrower", PaneDirection::Left, 2),
+        ("make the pane shorter", PaneDirection::Up, 2),
+        ("grow this pane", PaneDirection::Right, 2),
+        ("enlarge the pane a lot", PaneDirection::Right, 4),
+        ("shrink this pane a little", PaneDirection::Left, 1),
+    ];
+    for (text, direction, steps) in cases {
+        assert_eq!(intent(text), resize(*direction, *steps), "{text}");
+        assert!(is_high(text), "{text}");
+    }
+}
+
+#[test]
+fn closes_panes_without_stopping_anything() {
+    for text in ["close this pane", "close the pane", "Close pane."] {
+        assert_eq!(
+            intent(text),
+            KalVoiceIntent::Close { query: None },
+            "{text}"
+        );
+        assert!(is_high(text), "{text}");
+    }
+    assert_eq!(
+        intent("close the claude pane"),
+        KalVoiceIntent::Close {
+            query: Some("claude".into())
+        }
+    );
+    // Stopping stays a thread command, never a pane close.
+    assert!(matches!(
+        intent("stop the login thread"),
+        KalVoiceIntent::StopThreads { .. }
+    ));
+    assert!(!is_consequential_layout("close this pane"));
+}
+
+fn is_consequential_layout(text: &str) -> bool {
+    crate::orchestrator::is_consequential(&intent(text))
+}
+
+#[test]
+fn focuses_a_pane_by_name() {
+    assert_eq!(
+        intent("focus the codex pane"),
+        KalVoiceIntent::Focus {
+            query: "codex".into()
+        }
+    );
+}
