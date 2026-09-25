@@ -1171,9 +1171,9 @@ test shown failing on the unfixed code); they still need the re-review before th
   GNU/PowerShell abbreviations and Unicode dashes; Git and read-only execution options
   (`grep -O`, `--ext-diff`, `--upload-pack`, `--output` into `.git`, `man -P` …); environment
   secrets in every syntax (`credentials.access`); wildcards that can expand to credential files.
-  Evidence: `tests/sec_latent_classifier.rs` (11 tests; 9 failed on `87d9316`, the other two are guards), review probe rows
-  16/88 → 88/88 handled, `properties.rs` deny-wins over 4 000 per-shell compositions and 6 000 +
-  5 000 random dialect commands (no panics, deterministic).
+  Evidence: `tests/sec_latent_classifier.rs` (11 tests; 9 failed on `87d9316`, the other two are
+  guards), review probe rows 16/88 → 88/88 handled, `properties.rs` deny-wins over 4 000
+  per-shell compositions and 6 000 + 5 000 random dialect commands (no panics, deterministic).
 - **Context Firewall** (`crates/context`): file-range scanning leaking PEM bodies, secret-format
   coverage (~25 of 37 common formats undetected), partial redaction, dropped files skipping
   never-share names, hard links, combined diffs, quadratic entropy pass: must be fixed before the
