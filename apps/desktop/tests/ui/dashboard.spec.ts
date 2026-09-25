@@ -1,27 +1,36 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, type Locator, type Page, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 
 /**
- * Dashboard behaviour against the in-memory transport's Dashboard scenarios
- * (src/ipc/memory/dashboard.ts). Without a scenario the transport mirrors today's native build,
- * where threads, approvals and terminals are native but nothing has run yet.
+ * The live Dashboard (Z7-W3) against the in-memory transport's Dashboard scenarios
+ * (src/ipc/memory/dashboard.ts). Without a scenario the transport mirrors a fresh native install.
  */
 
-type Scenario = "default" | "busy" | "empty" | "approvals-flood" | "errors" | "loading";
+type Scenario =
+  | "default"
+  | "busy"
+  | "empty"
+  | "approvals-flood"
+  | "errors"
+  | "loading"
+  | "dash-1"
+  | "dash-6"
+  | "dash-20"
+  | "dash-50";
 
-async function open(page: Page, scenario: Scenario = "default") {
-  await page.goto(scenario === "default" ? "/" : `/?scenario=${scenario}`);
+async function open(page: Page, scenario: Scenario = "default", extra = "") {
+  const query = [scenario === "default" ? "" : `scenario=${scenario}`, extra].filter(Boolean).join("&");
+  await page.goto(query ? `/?${query}` : "/");
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
 }
 
 const main = (page: Page) => page.locator("#main");
-const approvals = (page: Page) => page.getByRole("region", { name: /Needs approval/ });
-/** Each pending request is the shared approval prompt (Z4), one per list item. */
-const approvalItems = (page: Page) => approvals(page).locator("li[data-approval-id]");
-const threads = (page: Page) => page.getByRole("region", { name: "Threads" });
-const recent = (page: Page) => page.getByRole("region", { name: "Recent completions and failures" });
-const summary = (page: Page) => page.getByRole("navigation", { name: "Summary" });
-const row = (scope: Locator, name: string) => scope.getByRole("listitem").filter({ hasText: name });
+const board = (page: Page) => page.getByRole("region", { name: "Agents", exact: true });
+const card = (page: Page, name: string) => board(page).getByRole("article", { name, exact: true });
+const cards = (page: Page) => board(page).getByRole("article");
+const chips = (page: Page) => page.getByRole("group", { name: "Filter agents" });
+const chip = (page: Page, label: string) => chips(page).getByRole("button", { name: new RegExp(`^${label}, \\d+$`) });
+const dock = (page: Page) => page.getByRole("complementary", { name: "Widgets" });
 
 async function expectNoSeriousA11yViolations(page: Page) {
   const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze();
@@ -37,289 +46,392 @@ async function expectNoSeriousA11yViolations(page: Page) {
 }
 
 async function setTheme(page: Page, theme: "light" | "dark") {
-  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page
     .getByRole("radiogroup", { name: "Theme" })
     .getByRole("radio", { name: theme === "light" ? "Light" : "Dark" })
     .click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
-  await page.getByRole("button", { name: "Dashboard" }).click();
+  await page.getByRole("button", { name: "Dashboard", exact: true }).click();
 }
 
-test.describe("dashboard in a fresh session", () => {
+test.describe("a fresh session", () => {
   test("says so honestly and never shows sample data", async ({ page }) => {
     await open(page);
     await expect(main(page).getByText("No threads are open.")).toBeVisible();
-    await expect(approvals(page).getByText("Nothing is waiting for your approval.")).toBeVisible();
+    await expect(chips(page)).toHaveCount(0);
+    await expect(dock(page).getByText("Nothing is waiting for your approval.")).toBeVisible();
     await expect(page.getByRole("region", { name: "Terminals" }).getByText("No terminals are running.")).toBeVisible();
     await expect(main(page).getByText("Refactor auth middleware")).toHaveCount(0);
     await expect(page.getByRole("region", { name: "Activity" }).getByText("KalCode started")).toBeVisible();
   });
 });
 
-test.describe("dashboard with running work", () => {
-  test("answers what is running, who runs it and what needs approval", async ({ page }) => {
+test.describe("counts, filters, search and grouping", () => {
+  test("the summary and chip counts come from real runtime state", async ({ page }) => {
     await open(page, "busy");
+    await expect(main(page).getByText("13 agents · 3 working · 4 waiting for you · 2 done · 4 idle")).toBeVisible();
+    await expect(chip(page, "All")).toHaveAccessibleName("All, 13");
+    await expect(chip(page, "Waiting for you")).toHaveAccessibleName("Waiting for you, 4");
+    await expect(chip(page, "Working")).toHaveAccessibleName("Working, 3");
+    await expect(chip(page, "Done")).toHaveAccessibleName("Done, 2");
+    await expect(chip(page, "Idle")).toHaveAccessibleName("Idle, 4");
+    await expect(cards(page)).toHaveCount(13);
+  });
+
+  test("chips filter instantly and say what they show", async ({ page }) => {
+    await open(page, "busy");
+    await chip(page, "Working").click();
+    await expect(chip(page, "Working")).toHaveAttribute("aria-pressed", "true");
+    await expect(cards(page)).toHaveCount(3);
+    await expect(card(page, "Fix flaky checkout test")).toBeVisible();
+    await chip(page, "Waiting for you").click();
+    await expect(cards(page)).toHaveCount(4);
+    // FAILED needs attention, so it is waiting for you.
+    await expect(card(page, "Deploy preview build")).toBeVisible();
+    await chip(page, "Done").click();
+    await expect(cards(page)).toHaveCount(2);
+    await chip(page, "Idle").click();
+    await expect(cards(page)).toHaveCount(4);
+    await expect(board(page).getByText("Showing 4 idle.")).toBeAttached();
+    await chip(page, "All").click();
+    await expect(cards(page)).toHaveCount(13);
+  });
+
+  test("search narrows by name, workspace, branch and activity; Escape clears it", async ({ page }) => {
+    await open(page, "busy");
+    const search = page.getByRole("searchbox", { name: "Search agents" });
+    await search.fill("atlas");
+    await expect(cards(page)).toHaveCount(5);
+    await search.fill("chore/deps");
+    await expect(cards(page)).toHaveCount(1);
+    await search.fill("nothing like this");
+    await expect(board(page).getByText("No agents match “nothing like this”.")).toBeVisible();
+    await search.press("Escape");
+    await expect(cards(page)).toHaveCount(13);
+  });
+
+  test("groups by status, project and provider — never by agent or mission (not built yet)", async ({ page }) => {
+    await open(page, "busy");
+    const groupBy = page.getByRole("radiogroup", { name: "Group by" });
+    await expect(groupBy.getByRole("radio")).toHaveText(["Status", "Project", "Provider"]);
+    const headings = board(page).getByRole("heading", { level: 2 });
+    await expect(headings).toHaveText([/^Needs you/, /^Working/, /^Done/, /^Idle/]);
+    await groupBy.getByRole("radio", { name: "Project" }).click();
+    await expect(headings).toHaveText([/^kalcode/, /^atlas-api/, /^field-notes/]);
+    await groupBy.getByRole("radio", { name: "Provider" }).click();
+    await expect(headings).toHaveCount(3);
+    await expect(board(page).getByRole("heading", { level: 2, name: /Gemini CLI/ })).toBeVisible();
+    // Collapsing a group keeps its heading and hides its cards.
+    await board(page)
+      .getByRole("button", { name: /^Gemini CLI/ })
+      .click();
+    await expect(board(page).getByRole("button", { name: /^Gemini CLI/ })).toHaveAttribute("aria-expanded", "false");
+    await expect(card(page, "Deploy preview build")).toHaveCount(0);
+    // The grouping is remembered.
+    await page.reload();
     await expect(
-      main(page).getByText("2 approvals need you, 1 thread is waiting for your reply and 1 thread failed."),
-    ).toBeVisible();
-    await expect(summary(page).getByRole("button", { name: "3 Working" })).toBeVisible();
-    await expect(summary(page).getByRole("button", { name: "2 Need approval" })).toBeVisible();
-    await expect(summary(page).getByRole("button", { name: "1 Failed" })).toBeVisible();
-    await expect(summary(page).getByRole("button", { name: "3 Terminals" })).toBeVisible();
+      page.getByRole("radiogroup", { name: "Group by" }).getByRole("radio", { name: "Provider" }),
+    ).toBeChecked();
+  });
+});
 
-    await expect(approvalItems(page)).toHaveCount(2);
-    const push = approvalItems(page).filter({ hasText: "Push chore/deps to origin" });
-    await expect(push.getByRole("list", { name: "Permissions this needs" })).toContainText("Pushing to a Git remote");
-    // Remote-consequential: only Deny and Approve once are offered.
-    await expect(push.getByRole("button")).toHaveText(["Deny", "Approve once"]);
-    await expect(push.getByRole("definition").filter({ hasText: "Bump dependencies" })).toBeVisible();
-    await expect(push.getByRole("definition").filter({ hasText: "Claude Code" })).toBeVisible();
-    await expect(push.getByRole("definition").filter({ hasText: "kalcode" })).toBeVisible();
-    await expect(push.getByRole("definition").filter({ hasText: /^Auto$/ })).toBeVisible();
+test.describe("cards", () => {
+  test("show provider, name, workspace, branch, activity, status, mode and last activity", async ({ page }) => {
+    await open(page, "busy");
+    const fix = card(page, "Fix flaky checkout test");
+    await expect(fix.getByText("Codex", { exact: true })).toBeVisible();
+    await expect(fix.getByText("gpt-5-codex")).toBeVisible();
+    await expect(fix.getByText("atlas-api")).toBeVisible();
+    await expect(fix.getByText("fix/checkout-flake")).toBeVisible();
+    await expect(fix.getByText("Running pnpm test checkout --repeat 20")).toBeVisible();
+    await expect(fix.getByText("Working", { exact: true })).toBeVisible();
+    await expect(fix.getByText("Permission mode Auto")).toBeVisible();
+    await expect(fix.locator("time")).toHaveText(/just now|minute/);
+  });
 
-    const flaky = row(threads(page), "Fix flaky checkout test");
-    await expect(flaky.getByText("Running command")).toBeVisible();
-    await expect(flaky.getByText("Running pnpm test checkout --repeat 20")).toBeVisible();
-    await expect(flaky.getByText("Codex", { exact: true })).toBeVisible();
-    await expect(flaky.getByText("gpt-5-codex")).toBeVisible();
-    await expect(flaky.getByText("fix/checkout-flake")).toBeVisible();
-    await expect(flaky.getByText("2 files changed")).toBeVisible();
-    await expect(flaky.getByText("Auto mode")).toBeVisible();
-    await expect(flaky.getByText("18 min")).toBeVisible();
+  test("DONE is unmistakable, with its follow-ups", async ({ page }) => {
+    await open(page, "busy");
+    const done = card(page, "Add light theme tokens");
+    await expect(done.getByText("Completed", { exact: true })).toBeVisible();
+    await expect(done.getByRole("button", { name: "Open" })).toBeVisible();
+    await done.getByRole("button", { name: "More actions for Add light theme tokens" }).click();
+    await expect(page.getByRole("menuitem")).toHaveText(["Open", "Archive"]);
+  });
 
-    await expect(threads(page).getByRole("heading", { name: /Needs you/ })).toBeVisible();
-    await expect(row(recent(page), "Deploy preview build").getByText("Gemini CLI exited unexpectedly")).toBeVisible();
-    await expect(page.getByRole("region", { name: "Terminals" }).getByText("Git Bash")).toBeVisible();
-    // Thread events in the activity feed name their thread.
+  test("ACTION NEEDED carries the inline approval in the app's order", async ({ page }) => {
+    await open(page, "busy");
+    const refactor = card(page, "Refactor auth middleware");
+    await expect(refactor.getByText("Action needed")).toBeVisible();
+    const approval = refactor.getByRole("group", { name: "Install zod" });
+    await expect(approval.getByText("pnpm add install zod@4.1.0")).toBeVisible();
+    await expect(approval.getByRole("button")).toHaveText([
+      "Deny",
+      "Allow for workspace",
+      "Allow for thread",
+      "Approve once",
+    ]);
+    // Remote-consequential: only Deny and Approve once.
     await expect(
-      page.getByRole("region", { name: "Activity" }).getByRole("listitem").filter({ hasText: "Tool requested" }),
-    ).toContainText("Fix flaky checkout test");
+      card(page, "Bump dependencies")
+        .getByRole("group", { name: /Push chore/ })
+        .getByRole("button"),
+    ).toHaveText(["Deny", "Approve once"]);
+    await approval.getByRole("button", { name: "Approve once" }).click();
+    await expect(refactor.getByText("Installing zod@4.1.0")).toBeVisible();
+    await expect(refactor.getByText("Working", { exact: true })).toBeVisible();
+    await expect(chip(page, "Waiting for you")).toHaveAccessibleName("Waiting for you, 3");
   });
 
-  test("offers only the actions valid for each thread's state", async ({ page }) => {
+  test("an approval that arrives live turns its card into ACTION NEEDED", async ({ page }) => {
     await open(page, "busy");
-    const expectActions = async (scope: Locator, name: string, present: string[], absent: string[]) => {
-      const item = row(scope, name);
-      for (const action of present) await expect(item.getByRole("button", { name: `${action} ${name}` })).toBeVisible();
-      for (const action of absent) await expect(item.getByRole("button", { name: `${action} ${name}` })).toHaveCount(0);
-    };
-    await expectActions(
-      threads(page),
-      "Fix flaky checkout test",
-      ["Open", "Pause", "Stop"],
-      ["Resume", "Retry", "Archive"],
-    );
-    await expectActions(threads(page), "Update onboarding copy", ["Open", "Stop"], ["Pause", "Resume", "Archive"]);
-    await expectActions(threads(page), "Profile cold start", ["Open", "Resume", "Stop"], ["Pause", "Archive"]);
-    await expectActions(threads(page), "Draft release notes", ["Open", "Stop", "Archive"], ["Pause", "Resume"]);
-    await expectActions(
-      recent(page),
-      "Deploy preview build",
-      ["Open", "Retry", "Archive"],
-      ["Stop", "Pause", "Resume"],
-    );
-    await expectActions(recent(page), "Add light theme tokens", ["Open", "Archive"], ["Stop", "Retry", "Resume"]);
-    await expectActions(recent(page), "Migrate logger to structured output", ["Open", "Resume", "Archive"], ["Stop"]);
-  });
-
-  test("approving once removes the request and the thread moves on", async ({ page }) => {
-    await open(page, "busy");
-    const push = approvalItems(page).filter({ hasText: "Push chore/deps to origin" });
-    await push.getByRole("button", { name: "Approve once" }).click();
-    await expect(approvalItems(page)).toHaveCount(1);
-    await expect(summary(page).getByRole("button", { name: "1 Needs approval" })).toBeVisible();
-    const bump = row(threads(page), "Bump dependencies");
-    await expect(bump.getByText("Using a tool")).toBeVisible();
-    await expect(bump.getByText("Running git push")).toBeVisible();
-    await expect(page.getByRole("region", { name: "Activity" }).getByText("Approved", { exact: true })).toBeVisible();
-  });
-
-  test("approvals are answered from the keyboard and focus stays in the queue", async ({ page }) => {
-    await open(page, "busy");
-    const first = approvalItems(page).first();
-    await expect(first).toContainText("Push chore/deps to origin");
-    // Deny comes first and nothing is pre-focused or bound to a single letter.
-    await first.getByRole("button", { name: "Deny" }).focus();
-    await page.keyboard.press("a");
-    await expect(approvalItems(page)).toHaveCount(2);
-    await page.keyboard.press("Enter");
-    await expect(approvalItems(page)).toHaveCount(1);
-    const next = approvalItems(page).first();
-    await expect(next).toContainText("Install zod");
-    await expect(next.getByRole("button", { name: "Deny" })).toBeFocused();
-
-    await page.keyboard.press("Tab");
-    await page.keyboard.press("Tab");
-    await expect(next.getByRole("button", { name: "Allow for thread" })).toBeFocused();
-    await page.keyboard.press("Enter");
-    await expect(approvals(page).getByText("Nothing is waiting for your approval.")).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Needs approval" })).toBeFocused();
-    await expect(row(threads(page), "Refactor auth middleware").getByText("Installing zod@4.1.0")).toBeVisible();
-  });
-
-  test("an approval that arrives live is shown and announced", async ({ page }) => {
-    await open(page, "busy");
-    await expect(approvalItems(page)).toHaveCount(2);
-    await page.evaluate(() => {
+    await page.evaluate(() =>
       (
         window as unknown as { __kalcodeMemory: { dashboard: { requestApproval(): void } } }
-      ).__kalcodeMemory.dashboard.requestApproval();
-    });
-    await expect(approvalItems(page)).toHaveCount(3);
-    await expect(approvalItems(page).filter({ hasText: "Run pnpm prisma migrate dev" })).toBeVisible();
-    await expect(page.getByRole("alert").filter({ hasText: "Approval needed." })).toContainText(
-      "wants to: Run pnpm prisma migrate dev",
+      ).__kalcodeMemory.dashboard.requestApproval(),
     );
-    await expect(row(threads(page), "Write invoices migration").getByText("Needs approval")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Approvals, 3 waiting" })).toBeVisible();
+    const migration = card(page, "Write invoices migration");
+    await expect(migration.getByRole("group", { name: "Run pnpm prisma migrate dev" })).toBeVisible();
   });
 
-  test("stopping asks for confirmation; Escape cancels and returns focus", async ({ page }) => {
+  test("clicking a card focuses its thread", async ({ page }) => {
     await open(page, "busy");
-    const flaky = row(threads(page), "Fix flaky checkout test");
-    await flaky.getByRole("button", { name: "Stop Fix flaky checkout test" }).click();
-    await expect(flaky.getByText("Stop this thread?")).toBeVisible();
-    await expect(flaky.getByRole("button", { name: "Stop thread" })).toBeFocused();
-    await page.keyboard.press("Escape");
-    await expect(flaky.getByText("Stop this thread?")).toHaveCount(0);
-    await expect(flaky.getByRole("button", { name: "Stop Fix flaky checkout test" })).toBeFocused();
-
-    await flaky.getByRole("button", { name: "Stop Fix flaky checkout test" }).click();
-    await flaky.getByRole("button", { name: "Stop thread" }).click();
-    const stopped = row(recent(page), "Fix flaky checkout test");
-    await expect(stopped.getByText("Stopped", { exact: true })).toBeVisible();
-    await expect(stopped.getByRole("button", { name: "Resume Fix flaky checkout test" })).toBeVisible();
-    await expect(row(threads(page), "Fix flaky checkout test")).toHaveCount(0);
+    await card(page, "Fix flaky checkout test")
+      .getByRole("button", { name: "Fix flaky checkout test", exact: true })
+      .click();
+    await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toBeVisible();
   });
 
   test("pause, resume, retry and archive go through the thread commands", async ({ page }) => {
     await open(page, "busy");
-    await row(threads(page), "Review billing pull request")
-      .getByRole("button", { name: "Pause Review billing pull request" })
-      .click();
-    await expect(row(threads(page), "Review billing pull request").getByText("Paused", { exact: true })).toBeVisible();
-
-    await row(threads(page), "Profile cold start").getByRole("button", { name: "Resume Profile cold start" }).click();
-    await expect(row(threads(page), "Profile cold start").getByText("Starting")).toBeVisible();
-
-    await row(recent(page), "Deploy preview build").getByRole("button", { name: "Retry Deploy preview build" }).click();
-    const retried = row(threads(page), "Deploy preview build");
-    await expect(retried.getByText("Starting")).toBeVisible();
-    await expect(retried.getByText("Retrying the failed step")).toBeVisible();
-    await expect(summary(page).getByRole("button", { name: "0 Failed" })).toBeVisible();
-
-    await row(recent(page), "Add light theme tokens")
-      .getByRole("button", { name: "Archive Add light theme tokens" })
-      .click();
-    await expect(row(recent(page), "Add light theme tokens")).toHaveCount(0);
-    await expect(row(threads(page), "Add light theme tokens")).toHaveCount(0);
+    const menu = async (name: string, item: string) => {
+      await card(page, name)
+        .getByRole("button", { name: `More actions for ${name}` })
+        .click();
+      await page.getByRole("menuitem", { name: item }).click();
+    };
+    await menu("Review billing pull request", "Pause");
+    await expect(card(page, "Review billing pull request").getByText("Paused", { exact: true })).toBeVisible();
+    await menu("Profile cold start", "Resume");
+    await expect(card(page, "Profile cold start").getByText("Starting", { exact: true })).toBeVisible();
+    await card(page, "Deploy preview build").getByRole("button", { name: "Retry" }).click();
+    await expect(card(page, "Deploy preview build").getByText("Retrying the failed step")).toBeVisible();
+    await menu("Add light theme tokens", "Archive");
+    await expect(card(page, "Add light theme tokens")).toHaveCount(0);
     await expect(page.getByTestId("announce-polite")).toHaveText("Add light theme tokens archived");
   });
 
-  test("Open goes to the Threads surface", async ({ page }) => {
+  test("stopping asks for confirmation; Escape cancels and returns focus", async ({ page }) => {
     await open(page, "busy");
-    await row(threads(page), "Fix flaky checkout test")
-      .getByRole("button", { name: "Open Fix flaky checkout test" })
-      .click();
-    await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toBeVisible();
-  });
-
-  test("summary counts move focus to the section that explains them", async ({ page }) => {
-    await open(page, "busy");
-    await summary(page).getByRole("button", { name: "2 Need approval" }).click();
-    await expect(page.getByRole("heading", { name: "Needs approval" })).toBeFocused();
-    await summary(page).getByRole("button", { name: "1 Failed" }).click();
-    await expect(page.getByRole("heading", { name: "Recent completions and failures" })).toBeFocused();
-  });
-
-  test("a flood of approvals stays readable", async ({ page }) => {
-    await open(page, "approvals-flood");
-    await expect(approvals(page).getByRole("heading", { name: "Needs approval 9" })).toBeVisible();
-    await expect(approvalItems(page)).toHaveCount(5);
-    await approvals(page).getByRole("button", { name: "Show 4 more" }).click();
-    await expect(approvalItems(page)).toHaveCount(9);
-    await expect(
-      approvalItems(page)
-        .filter({ hasText: "Deploy atlas-api to production" })
-        .getByRole("list", { name: "Permissions this needs" }),
-    ).toContainText("Deploying or publishing");
+    const fix = card(page, "Fix flaky checkout test");
+    const more = fix.getByRole("button", { name: "More actions for Fix flaky checkout test" });
+    await more.click();
+    await page.getByRole("menuitem", { name: "Stop…" }).click();
+    const confirm = fix.getByRole("group", { name: "Stop Fix flaky checkout test?" });
+    await expect(confirm.getByRole("button", { name: "Stop agent" })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(confirm).toHaveCount(0);
+    await expect(more).toBeFocused();
+    await more.click();
+    await page.getByRole("menuitem", { name: "Stop…" }).click();
+    await fix.getByRole("button", { name: "Stop agent" }).click();
+    await expect(fix.getByText("stopped · resumable")).toBeVisible();
   });
 });
 
-test.describe("dashboard states", () => {
-  test("empty: guides the user to start a thread", async ({ page }) => {
-    await open(page, "empty");
-    await expect(main(page).getByText("No threads are open.")).toBeVisible();
-    await expect(approvals(page).getByText("Nothing is waiting for your approval.")).toBeVisible();
-    await expect(page.getByRole("region", { name: "Terminals" }).getByText("No terminals are running.")).toBeVisible();
-    await expect(recent(page)).toHaveCount(0);
-    await main(page).getByRole("button", { name: "Go to Threads" }).click();
-    await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toBeVisible();
+test.describe("scale", () => {
+  for (const [scenario, count] of [
+    ["dash-1", 1],
+    ["dash-6", 6],
+    ["dash-20", 20],
+    ["dash-50", 50],
+  ] as const) {
+    test(`${count} ${count === 1 ? "agent" : "agents"}: exact counts, readable cards`, async ({ page }) => {
+      await open(page, scenario);
+      await expect(
+        main(page).getByText(new RegExp(`^${count} ${count === 1 ? "agent" : "agents"}( ·|$)`)),
+      ).toBeVisible();
+      await expect(chip(page, "All")).toHaveAccessibleName(`All, ${count}`);
+      // Cards never shrink below a readable width, however many there are.
+      const width = await cards(page)
+        .first()
+        .evaluate((el) => el.getBoundingClientRect().width);
+      expect(width).toBeGreaterThanOrEqual(290);
+      if (count <= 20) await expect(cards(page)).toHaveCount(count);
+    });
+  }
+
+  test("50 agents: the board is virtualized, scrolls to the end and search reaches every agent", async ({ page }) => {
+    await open(page, "dash-50");
+    await expect(board(page).locator("[data-virtualized]")).toHaveCount(1);
+    expect(await cards(page).count()).toBeLessThan(50);
+    // Rows are measured as they render, so the end moves once or twice while scrolling to it.
+    const idle = board(page).getByRole("heading", { level: 2, name: /^Idle/ });
+    await expect(async () => {
+      // The end of the board (at this width the widget dock sits below it).
+      await board(page)
+        .locator("[data-virtualized]")
+        .evaluate((rows) => {
+          const scroller = document.getElementById("main");
+          if (scroller) scroller.scrollBy(0, rows.getBoundingClientRect().bottom - scroller.clientHeight);
+        });
+      await expect(idle).toBeVisible({ timeout: 500 });
+    }).toPass({ timeout: 10_000 });
+    await main(page).evaluate((el) => el.scrollTo(0, 0));
+    await page.getByRole("searchbox", { name: "Search agents" }).fill("Add offline banner");
+    await expect(cards(page)).toHaveCount(1);
+  });
+});
+
+test.describe("widgets", () => {
+  test("default widgets show, hide, restore, move and resize — and are remembered", async ({ page }) => {
+    await open(page, "busy");
+    const order = () =>
+      dock(page)
+        .locator("[data-widget-id]")
+        .evaluateAll((els) => els.map((e) => e.getAttribute("data-widget-id")));
+    expect(await order()).toEqual([
+      "approvals",
+      "active-agents",
+      "provider-health",
+      "activity",
+      "terminals",
+      "runtime-health",
+    ]);
+    // At most six widgets show: a hidden one comes back only when there is room.
+    await page.getByRole("button", { name: "Provider health options" }).click();
+    await page.getByRole("menuitem", { name: "Hide widget" }).click();
+    await expect(page.getByRole("region", { name: "Provider health" })).toHaveCount(0);
+    await dock(page).getByRole("button", { name: "Customize" }).click();
+    await page.getByRole("menuitem", { name: /Show Provider health/ }).click();
+    await expect(page.getByRole("region", { name: "Provider health" })).toBeVisible();
+    expect((await order()).at(-1)).toBe("provider-health");
+
+    const handle = page.getByRole("button", { name: "Move Activity" });
+    await handle.focus();
+    await page.keyboard.press("ArrowUp");
+    expect(await order()).toEqual([
+      "approvals",
+      "activity",
+      "active-agents",
+      "terminals",
+      "runtime-health",
+      "provider-health",
+    ]);
+    await expect(handle).toBeFocused();
+
+    const resize = page.getByRole("separator", { name: "Resize Activity" });
+    await resize.focus();
+    await page.keyboard.press("ArrowDown");
+    await expect(resize).toHaveAttribute("aria-valuenow", "384");
+
+    await page.reload();
+    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    expect(await order()).toEqual([
+      "approvals",
+      "activity",
+      "active-agents",
+      "terminals",
+      "runtime-health",
+      "provider-health",
+    ]);
+    await expect(page.getByRole("separator", { name: "Resize Activity" })).toHaveAttribute("aria-valuenow", "384");
   });
 
-  test("errors: each source explains its failure and recovers on retry", async ({ page }) => {
+  test("provider health is read-only: it never starts a detection", async ({ page }) => {
+    await open(page, "busy");
+    const health = page.getByRole("region", { name: "Provider health" });
+    await expect(health.getByText("Not checked yet")).toHaveCount(3);
+    await expect(page.getByRole("region", { name: "Activity" }).getByText("Provider detected")).toHaveCount(0);
+  });
+});
+
+test.describe("KalVoice filters the Dashboard", () => {
+  for (const [said, chipLabel, count] of [
+    ["show only agents that are working", "Working", 3],
+    ["show everything waiting for me", "Waiting for you", 4],
+    ["show completed work", "Done", 2],
+  ] as const) {
+    test(`“${said}”`, async ({ page }) => {
+      await open(page, "busy", `transcript=${encodeURIComponent(said)}`);
+      await expect(page.getByRole("region", { name: "KalVoice widget" })).toBeVisible();
+      await page.keyboard.down("F8");
+      await page.waitForTimeout(300);
+      await page.keyboard.up("F8");
+      await expect(chip(page, chipLabel)).toHaveAttribute("aria-pressed", "true");
+      await expect(cards(page)).toHaveCount(count);
+    });
+  }
+});
+
+test.describe("states", () => {
+  test("errors: the board explains its failure and recovers on retry", async ({ page }) => {
     await open(page, "errors");
-    await expect(threads(page).getByRole("heading", { name: "Threads couldn't load" })).toBeVisible();
-    await expect(threads(page).getByText("Error code: database/database_busy")).toBeVisible();
-    await expect(approvals(page).getByRole("heading", { name: "Approval requests couldn't load" })).toBeVisible();
-    await expect(
-      page.getByRole("region", { name: "Terminals" }).getByText("Your terminals keep running."),
-    ).toBeVisible();
-    await page.evaluate(() => {
+    await expect(board(page).getByRole("heading", { name: "Agents couldn't load" })).toBeVisible();
+    await page.evaluate(() =>
       (
         window as unknown as { __kalcodeMemory: { dashboard: { recover(): void } } }
-      ).__kalcodeMemory.dashboard.recover();
-    });
-    await threads(page).getByRole("button", { name: "Try again" }).click();
-    await expect(row(threads(page), "Fix flaky checkout test")).toBeVisible();
-    await approvals(page).getByRole("button", { name: "Try again" }).click();
-    await expect(approvalItems(page)).toHaveCount(2);
+      ).__kalcodeMemory.dashboard.recover(),
+    );
+    await board(page).getByRole("button", { name: "Try again" }).click();
+    await expect(cards(page)).toHaveCount(13);
   });
 
   test("loading: skeletons are announced as busy", async ({ page }) => {
     await open(page, "loading");
-    await expect(threads(page).getByRole("status").filter({ hasText: "Loading threads" })).toHaveAttribute(
+    await expect(board(page).getByRole("status").filter({ hasText: "Loading agents" })).toHaveAttribute(
       "aria-busy",
       "true",
     );
-    await expect(approvals(page).getByRole("status").filter({ hasText: "Loading approval requests" })).toBeAttached();
-    await expect(main(page).getByRole("status").filter({ hasText: "Loading summary" })).toBeAttached();
+  });
+
+  test("empty: guides the person to start work", async ({ page }) => {
+    await open(page, "empty");
+    await expect(board(page).getByRole("heading", { name: "No agents yet" })).toBeVisible();
+    await board(page).getByRole("button", { name: "New thread" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toBeVisible();
   });
 });
 
-test.describe("dashboard accessibility", () => {
+test.describe("accessibility", () => {
   for (const theme of ["dark", "light"] as const) {
-    for (const scenario of ["default", "busy", "approvals-flood", "empty", "errors", "loading"] as const) {
+    for (const scenario of ["default", "busy", "empty", "errors", "dash-50"] as const) {
       test(`${scenario} passes axe in ${theme} theme`, async ({ page }) => {
         await open(page, scenario);
         await setTheme(page, theme);
-        if (scenario === "busy" || scenario === "approvals-flood")
-          await expect(approvalItems(page).first()).toBeVisible();
-        if (scenario === "errors")
-          await expect(threads(page).getByRole("heading", { name: "Threads couldn't load" })).toBeVisible();
-        await expect(page.getByRole("region", { name: "Activity" }).getByText("KalCode started")).toBeVisible();
+        if (scenario === "busy" || scenario === "dash-50") await expect(cards(page).first()).toBeVisible();
+        await expect(
+          page.getByRole("region", { name: "Activity" }).getByText("KalCode started").first(),
+        ).toBeAttached();
         await expectNoSeriousA11yViolations(page);
         if (scenario === "busy") {
-          // Focused request (shortcut hints visible) and a pending stop confirmation.
-          await approvalItems(page).first().focus();
-          await row(threads(page), "Fix flaky checkout test")
-            .getByRole("button", { name: "Stop Fix flaky checkout test" })
+          // A pending stop confirmation and a filtered, grouped board.
+          await card(page, "Fix flaky checkout test")
+            .getByRole("button", { name: "More actions for Fix flaky checkout test" })
             .click();
+          await page.getByRole("menuitem", { name: "Stop…" }).click();
+          await chip(page, "Waiting for you").click();
+          await page.getByRole("radiogroup", { name: "Group by" }).getByRole("radio", { name: "Project" }).click();
           await expectNoSeriousA11yViolations(page);
         }
       });
     }
   }
 
-  test("keyboard order: summary, then the approval answers, Deny first", async ({ page }) => {
+  test("keyboard order: chips, search, grouping, then the first card", async ({ page }) => {
     await open(page, "busy");
-    await summary(page).getByRole("button", { name: "3 Terminals" }).focus();
+    await chip(page, "All").focus();
+    for (let i = 0; i < 4; i += 1) await page.keyboard.press("Tab");
+    await expect(chip(page, "Idle")).toBeFocused();
     await page.keyboard.press("Tab");
-    await expect(approvalItems(page).first().getByRole("button", { name: "Deny" })).toBeFocused();
+    await expect(page.getByRole("searchbox", { name: "Search agents" })).toBeFocused();
     await page.keyboard.press("Tab");
-    await expect(approvalItems(page).first().getByRole("button", { name: "Approve once" })).toBeFocused();
+    await expect(page.getByRole("radio", { name: "Status" })).toBeFocused();
     await page.keyboard.press("Tab");
-    await expect(approvalItems(page).nth(1).getByRole("button", { name: "Deny" })).toBeFocused();
+    await expect(board(page).getByRole("button", { name: /^Needs you/ })).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(
+      card(page, "Refactor auth middleware").getByRole("button", { name: "Refactor auth middleware", exact: true }),
+    ).toBeFocused();
   });
 });

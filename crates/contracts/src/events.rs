@@ -9,6 +9,7 @@ use crate::app::BuildChannel;
 use crate::context::ContextPurpose;
 use crate::git::WorktreePurpose;
 use crate::kalvoice::{KalVoiceInput, KalVoiceIntelligence, TalkRoute};
+use crate::notifications::{NotificationEntityKind, NotificationKind, Severity};
 use crate::permissions::{ApprovalDecision, PermissionMode, PermissionScope};
 use crate::resources::{
     GovernorMode, PressureLevel, ResourceHoldReason, ResourceKind, ResourceReleaseCause, Signal,
@@ -513,6 +514,18 @@ pub enum EventPayload {
         outcome: TalkRoute,
     },
 
+    // ---- Notification center (Z7-W3) ----
+    /// A notification was created, or re-raised by coalescing a repeat into it. Ids and enums
+    /// only; the title and body live in the `notifications` table.
+    #[serde(rename = "notification.created")]
+    NotificationCreated {
+        notification_id: String,
+        kind: NotificationKind,
+        severity: Severity,
+        entity_kind: Option<NotificationEntityKind>,
+        entity_id: Option<String>,
+    },
+
     /// A stored event this build does not understand (written by a newer build or a removed
     /// type). Kept so history stays complete.
     #[serde(rename = "unrecognized")]
@@ -593,6 +606,7 @@ impl EventPayload {
             Self::KalVoiceVoiceOutputStarted { .. } => "kalvoice.voice_output_started",
             Self::KalVoiceVoiceOutputCompleted { .. } => "kalvoice.voice_output_completed",
             Self::KalVoiceTalkRouted { .. } => "kalvoice.talk_routed",
+            Self::NotificationCreated { .. } => "notification.created",
             Self::Unrecognized { .. } => "unrecognized",
         }
     }
@@ -944,6 +958,13 @@ mod tests {
                 request_id: s(),
                 outcome: TalkRoute::Dictation,
             },
+            EventPayload::NotificationCreated {
+                notification_id: s(),
+                kind: NotificationKind::ThreadCompleted,
+                severity: Severity::Info,
+                entity_kind: Some(NotificationEntityKind::Thread),
+                entity_id: Some(s()),
+            },
             EventPayload::Unrecognized {
                 original_type: s(),
                 original_version: 1,
@@ -968,7 +989,7 @@ mod tests {
         }
         // Keep in step with the enum: the `type_name` match is exhaustive, so a new variant
         // compiles only once named there — and this count must be raised with a new sample.
-        assert_eq!(samples.len(), 68);
+        assert_eq!(samples.len(), 69);
     }
 
     #[test]

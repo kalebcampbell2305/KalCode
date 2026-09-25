@@ -117,7 +117,8 @@ Code canvas, others open in Threads), ask for a thread's permission mode ("switc
 the login fix thread to plan mode": KalVoice opens the thread and the person changes the mode in
 its permission menu; asking for Bypass is refused outright, and the contract can't even represent
 it), pause / resume / stop threads (all, workspace, one), show approvals, status report ("what
-are my threads doing?"), and pane layout (Z7-W1, below). Everything else is `Reasoning`.
+are my threads doing?"), filter the Dashboard (Z7-W3, `filter_dashboard`, UI-only), and pane layout
+(Z7-W1, below). Everything else is `Reasoning`.
 `search` and `switch_provider` aren't in this build: the grammar doesn't produce them and the
 desktop executor refuses them uncounted.
 
@@ -137,6 +138,19 @@ KalVoice opens it first.
 Axis convention (shared with `apps/desktop/src/shell/panes/model.ts`): `horizontal` = side by
 side, `vertical` = stacked. "And" normally makes a request compound (→ `Reasoning`); the only
 patterns tried on a request containing a conjunction are these pane arrangements.
+
+Dashboard filters (`FilterDashboard { chip }` → `UiDirective::FilterDashboard`; no model, no
+thread changes; the summary counts non-archived threads by `ThreadStatus::chip`):
+
+| Chip | Example phrases |
+| --- | --- |
+| `working` | "Show only agents that are working", "show working agents", "which agents are working" |
+| `waiting_for_you` | "Show everything waiting for me", "show the agents waiting for me", "show threads that need my attention" |
+| `done` | "Show completed work", "show finished threads", "show threads that have finished" |
+| `idle` | "Show idle agents", "show the threads that are idle" |
+| `all` | "Show all agents", "clear the dashboard filter" |
+
+"Show what's waiting for me" still opens the Approvals panel, and "show agents" still navigates.
 
 **Safety asymmetry** (docs/ADVANCED.md, KV-02): pausing and stopping threads only make things
 safer and run immediately. Creating or resuming threads adds work, so KalVoice files it with the
@@ -243,9 +257,9 @@ build can't run, or a count out of range. Dictation is never counted.
   terminals (Z1, `kalcode_core`), threads (Z3, `ThreadRuntime`: `create_idle_threads`,
   `pause_threads`, `resume_threads`, `stop_threads`, `find`, `status_summary`) and pending
   approvals (Z4, `PermissionService::list_approvals`, read-only). The UI side of a result
-  (navigate, open a workspace or terminal, open a thread, open the Approvals panel, and the pane
-  directives through `dispatchPaneCommand`, apps/desktop/src/shell/panes/paneCommands.ts) runs
-  in `KalVoiceProvider`.
+  (navigate, open a workspace or terminal, open a thread, open the Approvals panel, filter the
+  Dashboard, and the pane directives through `dispatchPaneCommand`,
+  apps/desktop/src/shell/panes/paneCommands.ts) runs in `KalVoiceProvider`.
 - Reasoning uses the provider runtime (Z2): Claude Code, when installed and signed in, runs
   read-only in `<data>/kalvoice/reasoning`. Other providers join as their adapters land.
 - KalVoice's tables are schema v6, part of every build's migrations; the first start after

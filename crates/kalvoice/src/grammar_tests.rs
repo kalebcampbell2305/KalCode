@@ -737,3 +737,78 @@ fn focuses_a_pane_by_name() {
         }
     );
 }
+
+#[test]
+fn dashboard_filters_by_chip() {
+    use kalcode_contracts::workspace_ui::DashboardChip;
+    let cases: &[(&str, DashboardChip)] = &[
+        ("Show only agents that are working", DashboardChip::Working),
+        ("show only agents that are working.", DashboardChip::Working),
+        ("show working agents", DashboardChip::Working),
+        ("show me just the running threads", DashboardChip::Working),
+        ("only show working agents", DashboardChip::Working),
+        ("which agents are working", DashboardChip::Working),
+        (
+            "Show everything waiting for me",
+            DashboardChip::WaitingForYou,
+        ),
+        (
+            "show everything that's waiting on me",
+            DashboardChip::WaitingForYou,
+        ),
+        (
+            "show me the agents waiting for me",
+            DashboardChip::WaitingForYou,
+        ),
+        (
+            "show threads that need my attention",
+            DashboardChip::WaitingForYou,
+        ),
+        ("Show completed work", DashboardChip::Done),
+        ("show finished threads", DashboardChip::Done),
+        ("show me the done agents", DashboardChip::Done),
+        ("show threads that have finished", DashboardChip::Done),
+        ("show idle agents", DashboardChip::Idle),
+        ("show the threads that are idle", DashboardChip::Idle),
+        ("show all agents", DashboardChip::All),
+        ("show all of my threads", DashboardChip::All),
+        ("clear the dashboard filter", DashboardChip::All),
+        ("please show completed work", DashboardChip::Done),
+    ];
+    for (text, chip) in cases {
+        assert_eq!(
+            intent(text),
+            KalVoiceIntent::FilterDashboard { chip: *chip },
+            "{text}"
+        );
+        assert_eq!(
+            understand_with_confidence(text).1,
+            Confidence::High,
+            "{text}"
+        );
+    }
+    // Existing phrases keep their meaning.
+    assert_eq!(
+        intent("Show what's waiting for me."),
+        KalVoiceIntent::ShowApprovals
+    );
+    assert_eq!(
+        intent("show me what is waiting"),
+        KalVoiceIntent::ShowApprovals
+    );
+    assert_eq!(
+        intent("show agents"),
+        KalVoiceIntent::Navigate {
+            surface: SurfaceId::Agents
+        }
+    );
+    assert_eq!(
+        intent("show threads"),
+        KalVoiceIntent::Navigate {
+            surface: SurfaceId::Threads
+        }
+    );
+    // Negated or compound filters are not commands.
+    assert!(is_reasoning("don't show completed work"));
+    assert!(is_reasoning("show completed work and archive it"));
+}

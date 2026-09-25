@@ -19,6 +19,7 @@
 import type {
   ApprovalDecision,
   CommandRequest,
+  DashboardChip,
   EventPayload,
   IpcError,
   KalVoiceMode,
@@ -263,6 +264,52 @@ function paneCommand(t: string): Parsed | null {
   return null;
 }
 
+const AGENTS = "(?:agents?|threads?|work|tasks|sessions)";
+const SHOW = "(?:show|display|list|filter|give)(?: me)?(?: only| just)?";
+
+/** Dashboard filter phrases (Z7-W3), mirroring `dashboard_filter_patterns` in the native grammar. */
+const DASHBOARD_FILTERS: readonly [DashboardChip, RegExp][] = [
+  [
+    "working",
+    new RegExp(
+      `^(?:${SHOW}(?: the| my)? (?:working|running|active|busy) ${AGENTS}|${SHOW}(?: the| my)? ${AGENTS} (?:that are|which are|currently) (?:working|running|busy)|only (?:show|display|list)(?: me)?(?: the| my)? (?:working|running|active|busy) ${AGENTS}|(?:which|what) ${AGENTS} (?:are|is) (?:working|running|busy))$`,
+    ),
+  ],
+  [
+    "waiting_for_you",
+    new RegExp(
+      `^(?:${SHOW} (?:everything|all|anything|what)(?: that is| that are)? (?:waiting(?: for| on)?(?: me)?|(?:that needs?|needing) me)|${SHOW}(?: the| my)? ${AGENTS} (?:(?:that are |which are )?waiting(?: for| on)?(?: me)?|(?:that needs?|which needs?|needing) me)|${SHOW}(?: the| my)? ${AGENTS}(?: that| which)? needs?(?: my)? attention)$`,
+    ),
+  ],
+  [
+    "done",
+    new RegExp(
+      `^(?:${SHOW}(?: the| my| all)?(?: the)? (?:completed|finished|done) ${AGENTS}|${SHOW}(?: the| my)? ${AGENTS} (?:that are|which are|that have|which have|that|which) (?:completed|finished|done)|only (?:show|display|list)(?: me)?(?: the| my)? (?:completed|finished|done) ${AGENTS})$`,
+    ),
+  ],
+  [
+    "idle",
+    new RegExp(
+      `^(?:${SHOW}(?: the| my| all)?(?: the)? idle ${AGENTS}|${SHOW}(?: the| my)? ${AGENTS} (?:that are|which are) idle)$`,
+    ),
+  ],
+  [
+    "all",
+    new RegExp(
+      `^(?:(?:show|display|list)(?: me)? (?:all|every|all the|all of the|all my|all of my) ${AGENTS}|(?:clear|reset|remove)(?: the| my)?(?: dashboard)? filters?)$`,
+    ),
+  ],
+];
+
+/** Neutral summaries, as native says them when it can't count (the double has no thread runtime). */
+const FILTER_SUMMARY: Record<DashboardChip, string> = {
+  all: "Showing every agent on the Dashboard.",
+  working: "Showing working agents on the Dashboard.",
+  waiting_for_you: "Showing what's waiting for you on the Dashboard.",
+  done: "Showing completed work on the Dashboard.",
+  idle: "Showing idle agents on the Dashboard.",
+};
+
 /** A small subset of the native grammar (crates/kalvoice/src/grammar.rs), enough for UI tests. */
 function understand(text: string): Parsed | null {
   const t = normalize(text);
@@ -312,6 +359,18 @@ function understand(text: string): Parsed | null {
     return { ...approvals, high: true };
   }
   if (/^(pending )?approvals$/.test(t)) return { ...approvals, high: false };
+  // "for me" is trailing filler natively; "that's" expands to "that is".
+  const filterText = t.replace(/\bthat's\b/g, "that is").replace(/ for me$/, "");
+  for (const [chip, pattern] of DASHBOARD_FILTERS) {
+    if (pattern.test(filterText)) {
+      return {
+        kind: "filter_dashboard",
+        high: true,
+        outcome: { kind: "completed", summary: FILTER_SUMMARY[chip] },
+        directive: { kind: "filter_dashboard", chip },
+      };
+    }
+  }
   if (/^(new terminal|open a terminal)$/.test(t)) {
     return {
       kind: "create_terminal",

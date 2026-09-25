@@ -3,6 +3,7 @@ import { FloatingAssistant } from "../kalvoice/FloatingAssistant.tsx";
 import { KalVoicePage } from "../kalvoice/KalVoicePage.tsx";
 import { KalVoiceProvider } from "../kalvoice/KalVoiceProvider.tsx";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
+import { UiIntentsProvider } from "../runtime/uiIntents.tsx";
 import { WorkspaceProvider } from "../runtime/WorkspaceProvider.tsx";
 import { CodePage } from "../surfaces/code/CodePage.tsx";
 import { useNewTerminalShortcut } from "../surfaces/code/useNewTerminalShortcut.ts";
@@ -16,6 +17,8 @@ import { ThreadsSurface } from "../surfaces/threads/ThreadsSurface.tsx";
 import { useAppearance } from "./appearance.ts";
 import { CommandPalette } from "./CommandPalette.tsx";
 import { NavigationProvider, SURFACES, useNavigation } from "./navigation.tsx";
+import { NotificationCenter } from "./notifications/NotificationCenter.tsx";
+import { NotificationsProvider } from "./notifications/NotificationsProvider.tsx";
 import styles from "./Shell.module.css";
 import { ShellSlotsProvider, useShellSlots } from "./ShellSlots.tsx";
 import { Sidebar } from "./Sidebar.tsx";
@@ -32,15 +35,20 @@ export function Shell() {
       <WorkspaceProvider>
         <PermissionsProvider>
           <ThreadsIntentProvider>
-            <ShellSlotsProvider>
-              {kalvoiceEnabled ? (
-                <KalVoiceProvider>
-                  <ShellLayout kalvoice />
-                </KalVoiceProvider>
-              ) : (
-                <ShellLayout kalvoice={false} />
-              )}
-            </ShellSlotsProvider>
+            {/* Z7-W3: cross-surface focus/filter intents and the notification center. */}
+            <UiIntentsProvider>
+              <NotificationsProvider>
+                <ShellSlotsProvider>
+                  {kalvoiceEnabled ? (
+                    <KalVoiceProvider>
+                      <ShellLayout kalvoice />
+                    </KalVoiceProvider>
+                  ) : (
+                    <ShellLayout kalvoice={false} />
+                  )}
+                </ShellSlotsProvider>
+              </NotificationsProvider>
+            </UiIntentsProvider>
           </ThreadsIntentProvider>
         </PermissionsProvider>
       </WorkspaceProvider>
@@ -113,6 +121,7 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
       {kalvoice ? <FloatingAssistant /> : null}
       <ApprovalsPanel />
       <ApprovalAnnouncer />
+      <NotificationCenter />
     </div>
   );
 }

@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useMemo, useRef } from "react";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
+import { usePaneFocusRequests } from "../../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { defaultShell, describeTerminalStatus, tabLabels } from "../../runtime/workspaceState.ts";
 import { useNavigation } from "../../shell/navigation.tsx";
@@ -43,6 +44,7 @@ import { useResolvedTheme } from "../../shell/useResolvedTheme.ts";
 import { useThreadsIntent } from "../threads/intent.tsx";
 import styles from "./Code.module.css";
 import { paneStatus } from "./panes/paneLabels.ts";
+import "./paneContents.tsx";
 import { ProviderPane } from "./panes/ProviderPane.tsx";
 import { type ProviderPanes, useProviderPanes } from "./panes/useProviderPanes.ts";
 import { TerminalView } from "./TerminalView.tsx";
@@ -227,6 +229,13 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       selectTerminal(focusedTerminalId, false);
     }
   }, [focusedTerminalId]);
+
+  // Z7-W3: a Dashboard card, a notification or KalVoice asked to focus a provider pane's thread.
+  usePaneFocusRequests((threadId) => {
+    if (!controller.ready || !paneById.has(threadId)) return false;
+    controller.show(threadContent(threadId), { focus: true });
+    return true;
+  });
 
   const newTerminal = useCallback(
     (shellId: string | null) => {
@@ -418,6 +427,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
         >
           Dashboard
         </DropdownMenuItem>
+        {registeredWidgets().length > 0 ? <DropdownMenuLabel>Widgets</DropdownMenuLabel> : null}
         {registeredWidgets().map((w) => (
           <DropdownMenuItem
             key={w.widgetId}

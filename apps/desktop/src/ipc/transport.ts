@@ -81,7 +81,10 @@ export type CommandName =
   | "layout_save"
   | "layout_presets"
   | "layout_preset_save"
-  | "layout_preset_delete";
+  | "layout_preset_delete"
+  // Notification center (Z7-W3)
+  | "notification_list"
+  | "notification_mark";
 
 export type Unsubscribe = () => Promise<void>;
 

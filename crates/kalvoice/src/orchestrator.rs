@@ -185,6 +185,10 @@ pub enum UiDirective {
     ClosePane {
         query: Option<String>,
     },
+    /// Shows the Dashboard filtered by a chip (Z7-W3).
+    FilterDashboard {
+        chip: kalcode_contracts::workspace_ui::DashboardChip,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

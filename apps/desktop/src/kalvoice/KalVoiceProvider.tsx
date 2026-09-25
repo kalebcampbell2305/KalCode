@@ -26,11 +26,11 @@ import {
 } from "react";
 import { type KalCodeError, toKalCodeError } from "../ipc/errors.ts";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
+import { useUiIntents } from "../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../runtime/WorkspaceProvider.tsx";
 import { useNavigation } from "../shell/navigation.tsx";
 import { dispatchPaneCommand, type PaneCommand, paneCanvasListening } from "../shell/panes/paneCommands.ts";
 import { usePermissions } from "../surfaces/permissions/index.ts";
-import { useThreadsIntent } from "../surfaces/threads/intent.tsx";
 import { type AssistantState, INITIAL_STATE, reduce } from "./assistantState.ts";
 import {
   type DictationTarget,
@@ -126,7 +126,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   const { current, navigate } = useNavigation();
   const workspaces = useWorkspaces();
   const permissions = usePermissions();
-  const threadsIntent = useThreadsIntent();
+  const uiIntents = useUiIntents();
   const toast = useToast();
   const [status, setStatus] = useState<KalVoiceStatus | null>(null);
   const [statusError, setStatusError] = useState<KalCodeError | null>(null);
@@ -170,11 +170,11 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   );
 
   // The UI side of a command's result (the native side already did the work).
-  const surfaces = useRef({ workspaces, permissions, threadsIntent, toast, client });
-  surfaces.current = { workspaces, permissions, threadsIntent, toast, client };
+  const surfaces = useRef({ workspaces, permissions, toast, uiIntents });
+  surfaces.current = { workspaces, permissions, toast, uiIntents };
   const runDirective = useCallback(
     (directive: UiDirective | null) => {
-      const { workspaces, permissions, threadsIntent, toast, client } = surfaces.current;
+      const { workspaces, permissions, toast, uiIntents: intents } = surfaces.current;
       // Pane layout commands (Z7-W1) run on the Code canvas; they wait for it when Code isn't on
       // screen yet. Layout only: nothing starts, stops or closes a process.
       const pane = (command: PaneCommand) => {
@@ -215,23 +215,11 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           void workspaces.refresh().then(() => workspaces.selectTerminal(terminalId, true, workspaceId));
           break;
         }
-        case "open_thread": {
-          // A thread running in a provider pane is shown in its pane; others open in Threads.
-          const { threadId } = directive;
-          void client
-            .getThread(threadId)
-            .then((thread) => thread.runtimeKind === "interactive_pty")
-            .catch(() => false)
-            .then((inPane) => {
-              if (inPane) {
-                pane({ kind: "open", content: { kind: "thread", threadId } });
-              } else {
-                navigate("threads");
-                threadsIntent.request("open", threadId);
-              }
-            });
+        case "open_thread":
+          // Z7-W3 focus intents: a provider pane thread is focused in its pane (Z7-W1 canvas),
+          // anything else opens in Threads.
+          void intents.focus({ kind: "thread", threadId: directive.threadId });
           break;
-        }
         case "split_pane":
           pane({ kind: "split", axis: directive.axis });
           break;
@@ -246,6 +234,10 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           break;
         case "show_approvals":
           permissions.setPanelOpen(true);
+          break;
+        case "filter_dashboard":
+          // Z7-W3: "Show only agents that are working" and friends.
+          intents.filterDashboard(directive.chip);
           break;
         default:
           break;
