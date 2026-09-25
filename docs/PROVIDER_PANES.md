@@ -5,6 +5,13 @@ Status: **PROPOSED — planned, not built.** Campaign Z7, writer W4 (`docs/campa
 output of Claude Code 2.1.282 and codex-cli 0.155.1 (Gemini CLI is not installed on the
 verification machine). No provider session was started and no AI quota was used.
 
+Until this ships, Claude Code threads are headless and KalCode enforces for them through launch
+flags only: a mapped permission mode, `--permission-prompts none`, and KalCode deny rules
+(`--disallowedTools`) for remote actions, credential files and, outside Bypass, the edit and web
+tools. The user's own Claude Code user settings still decide other commands. See
+`docs/PROVIDERS.md` §5 ("What KalCode enforces for Claude Code threads today"). The same deny
+rules should be passed to interactive panes as the floor under the hook.
+
 ## 1. Decision
 
 **New Thread → Claude Code starts the real, unmodified `claude` process in a Z1 PTY pane.** The

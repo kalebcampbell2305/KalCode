@@ -192,6 +192,11 @@ function BypassConfirm({
                 messages, spending money, reading secrets, and files outside the workspace. Commands KalCode can't fully
                 check always ask.
               </p>
+              <p>
+                Claude Code threads can't show KalCode's questions yet. For them, KalCode refuses pushes, publishes,
+                deploys, cloud tools and reading credential files. Other commands follow Claude Code's own rules and
+                your Claude Code settings.
+              </p>
               <p>Agents and KalVoice can never turn Bypass on. You can switch back at any time.</p>
             </div>
           </AlertDialog.Description>
