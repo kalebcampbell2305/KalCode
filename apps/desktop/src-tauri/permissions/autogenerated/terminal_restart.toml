@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-terminal-restart"
+description = "Enables the terminal_restart command without any pre-configured scope."
+commands.allow = ["terminal_restart"]
+
+[[permission]]
+identifier = "deny-terminal-restart"
+description = "Denies the terminal_restart command without any pre-configured scope."
+commands.deny = ["terminal_restart"]

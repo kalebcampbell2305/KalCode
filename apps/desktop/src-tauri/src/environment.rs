@@ -44,6 +44,19 @@ pub enum DataDirOverride {
     Invalid,
 }
 
+/// Test builds only: the folder `workspace_open_dialog` opens instead of showing the native
+/// picker (`KALCODE_E2E_PICK_FOLDER`, absolute path), so end-to-end tests can open a project.
+/// Normal builds ignore it and always show the picker.
+pub fn e2e_pick_folder() -> Option<PathBuf> {
+    if !TEST_HOOKS_ENABLED {
+        return None;
+    }
+    std::env::var_os("KALCODE_E2E_PICK_FOLDER")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+}
+
 pub fn data_dir_override() -> DataDirOverride {
     if !TEST_HOOKS_ENABLED {
         return DataDirOverride::None;

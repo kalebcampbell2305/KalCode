@@ -26,10 +26,20 @@ Source: `packages/ui` (`@kalcode/ui`). Consumed by the desktop app and the websi
 Implemented in Z0: `Button`, `IconButton`, `Badge`, `StatusIndicator`, `SegmentedControl`
 (WAI-ARIA radio group: arrow keys move focus and select), `Tooltip`, `ToastProvider`/`useToast`,
 `EmptyState`, `ErrorState`, `Skeleton`, `Section`, `KeyValueList`, `Kbd`.
+
+Added in Z1: `DropdownMenu` (`DropdownMenuTrigger`, `…Content`, `…Item` with icon, description
+and shortcut, `…RadioGroup`/`…RadioItem`, `…Label`, `…Separator`) — Radix menu behaviour,
+non-modal by default so the rest of the app stays in the accessibility tree.
+
+Terminal palettes (Code surface) live with the surface in `apps/desktop/src/surfaces/code/`
+and are derived from the tokens; see `docs/CODE_MODE.md` §6.
 Accessible behaviour comes from Radix UI; styling is tokens only.
 
-Planned as surfaces need them: `Input`, `Textarea`, `Select`, `Dropdown`, `ContextMenu`,
-`Dialog`, `Sheet`, `Tabs`, `Table`, `PermissionPrompt`.
+Added in Z3: `Field` (label, optional marker, help text wired by `${id}-hint`), `TextInput`,
+`TextArea` and `Select` (native control, token styling, chevron) — used by the New thread flow.
+
+Planned as surfaces need them: `ContextMenu`, `Dialog`, `Sheet`, `Tabs`, `Table`,
+`PermissionPrompt`.
 
 ## Brand
 

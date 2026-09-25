@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-thread-interrupt"
+description = "Enables the thread_interrupt command without any pre-configured scope."
+commands.allow = ["thread_interrupt"]
+
+[[permission]]
+identifier = "deny-thread-interrupt"
+description = "Denies the thread_interrupt command without any pre-configured scope."
+commands.deny = ["thread_interrupt"]

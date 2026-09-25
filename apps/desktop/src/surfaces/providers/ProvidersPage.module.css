@@ -24,7 +24,7 @@
 }
 
 .kv > div {
-  grid-template-columns: minmax(7rem, 32%) 1fr;
+  grid-template-columns: minmax(7rem, min(32%, 14rem)) 1fr;
 }
 
 @media (max-width: 1180px) {

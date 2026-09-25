@@ -1,3 +1,24 @@
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-8) var(--space-12);
+  align-items: start;
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  min-width: 0;
+}
+
+/* Appearance, diagnostics and About in one column, permissions (with its wide tables) in the other. */
+@media (min-width: 1600px) {
+  .layout {
+    grid-template-columns: minmax(28rem, 0.8fr) minmax(36rem, 1.2fr);
+  }
+}
+
 .rows {
   display: flex;
   flex-direction: column;
