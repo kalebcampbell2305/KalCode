@@ -256,12 +256,24 @@ test.describe("provider panes", () => {
     await open(page, "?scenario=providers-signed-out");
     await openWorkspace(page);
     await expect(page.getByRole("button", { name: "New Claude Code pane" })).toBeVisible();
-    // Detection has run (thread options); signed-out Codex and a missing Gemini CLI aren't offered.
-    await expect(page.getByRole("region", { name: "Provider panes" }).getByRole("button")).toHaveText([
-      "New Claude Code pane",
-    ]);
+    // A Claude Code pane starts only after detection ran, so the offer below is settled.
+    await newPane(page);
+    // Signed-out Codex and a missing Gemini CLI aren't offered: not in the toolbar, not in "Add".
     await expect(page.getByRole("button", { name: "New Codex pane" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "New Gemini CLI pane" })).toHaveCount(0);
+    await expect(page.getByRole("menuitem", { name: /^(Codex|Gemini CLI) pane/ })).toHaveCount(0);
+
+    // In the default scenario both are offered, in the toolbar and in a pane's add menu.
+    await open(page);
+    await openWorkspace(page, "pane-offer");
+    await expect(page.getByRole("button", { name: "New Codex pane" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "New Gemini CLI pane" })).toBeVisible();
+    await page.getByRole("button", { name: "Add to pane 1" }).click();
+    await expect(page.getByRole("menuitem", { name: /^Gemini CLI pane/ })).toBeVisible();
+    await page.getByRole("menuitem", { name: /^Codex pane/ }).click();
+    await expect(
+      page.locator("[data-provider-pane]").filter({ has: page.getByText("Codex", { exact: true }) }),
+    ).toHaveCount(1);
   });
 
   for (const theme of ["dark", "light"] as const) {
