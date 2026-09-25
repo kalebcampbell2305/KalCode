@@ -25,7 +25,11 @@ pre,
   display: grid;
   place-items: center;
   height: 100%;
-  background: var(--color-bg);
+  background: radial-gradient(36rem 28rem at 50% 45%, var(--color-accent-soft), transparent 70%), var(--color-bg);
+}
+
+.boot-screen .boot-screen__mark {
+  filter: drop-shadow(0 0 24px var(--color-glow));
 }
 
 /* Starting is usually instant: the mark only fades in if startup takes a noticeable moment. */

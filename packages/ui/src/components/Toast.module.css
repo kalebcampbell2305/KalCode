@@ -22,11 +22,12 @@
   align-items: start;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-2) var(--space-3) var(--space-4);
+  border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-lg);
-  background: var(--color-surface-overlay);
-  box-shadow: var(--shadow-lg);
+  background: var(--panel-sheen), var(--color-surface-3);
+  box-shadow: var(--shadow-xl);
   pointer-events: auto;
-  animation: enter var(--dur-base) var(--ease-expo);
+  animation: enter var(--dur-base) var(--ease-emphasized);
 }
 
 .icon {
@@ -40,11 +41,15 @@
 }
 
 .success .icon {
-  color: var(--color-success);
+  color: var(--status-working);
+}
+
+.danger {
+  border-color: var(--status-failed-line);
 }
 
 .danger .icon {
-  color: var(--color-danger-text);
+  color: var(--status-failed-text);
 }
 
 .info .icon {
@@ -52,8 +57,8 @@
 }
 
 .title {
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
+  font-size: var(--type-ui);
+  font-weight: var(--weight-semibold);
 }
 
 .description {

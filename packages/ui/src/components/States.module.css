@@ -1,26 +1,83 @@
-.empty,
-.error {
+/* ---------------- Empty ---------------- */
+.empty {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.copy {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: var(--space-2);
+  gap: var(--space-1-5);
+  min-width: 0;
   max-width: var(--prose-max);
 }
 
+.empty[data-align="center"] {
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.empty[data-align="center"] .copy {
+  align-items: center;
+}
+
+/* A designed well: sunken surface, hairline, and a faint constellation field in the corner. */
+.framed {
+  position: relative;
+  padding: var(--space-6) var(--space-6);
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-panel);
+  background:
+    radial-gradient(circle at 88% 22%, var(--color-glow) 0 1.5px, transparent 2px),
+    radial-gradient(circle at 76% 58%, var(--color-border-strong) 0 1px, transparent 1.5px),
+    radial-gradient(circle at 94% 74%, var(--color-border-strong) 0 1px, transparent 1.5px),
+    radial-gradient(28rem 12rem at 100% 0%, var(--color-accent-soft), transparent 70%), var(--color-bg-sunken);
+}
+
 .art {
-  margin-bottom: var(--space-3);
+  display: inline-flex;
+  flex: none;
   color: var(--color-accent);
 }
 
+.tile {
+  display: inline-grid;
+  place-items: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  border: 1px solid var(--color-border-lit-soft);
+  border-radius: var(--radius-md);
+  background: linear-gradient(180deg, var(--color-accent-soft), transparent), var(--color-surface-2);
+  box-shadow: 0 0 22px -8px var(--color-glow);
+  color: var(--color-accent-text);
+}
+
+.tile svg {
+  width: 1.25rem;
+  height: 1.25rem;
+  stroke-width: 1.75;
+}
+
 .title {
-  font-size: var(--text-lg);
-  font-weight: var(--weight-medium);
-  letter-spacing: var(--tracking-normal);
+  color: var(--color-text);
+  font-size: var(--type-title);
+  font-weight: var(--type-title-weight);
+  letter-spacing: var(--type-title-tracking);
+  line-height: 1.3;
+}
+
+.framed .title {
+  font-size: 0.9375rem;
 }
 
 .body {
   color: var(--color-text-muted);
-  font-size: var(--text-md);
+  font-size: var(--type-ui);
   line-height: var(--leading-relaxed);
 }
 
@@ -32,7 +89,30 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
-  margin-top: var(--space-3);
+  margin-top: var(--space-2);
+}
+
+/* ---------------- Error ---------------- */
+.error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.errorFramed {
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--status-failed-line);
+  border-radius: var(--radius-panel);
+  background: linear-gradient(90deg, var(--status-failed-soft), transparent 70%), var(--color-surface-1);
+}
+
+.errorIcon {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  margin-top: 0.125rem;
+  color: var(--status-failed);
 }
 
 .error .title {
@@ -40,11 +120,13 @@
 }
 
 .code {
-  margin-top: var(--space-2);
+  margin-top: var(--space-1);
   color: var(--color-text-faint);
-  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  font-size: var(--type-label);
 }
 
+/* ---------------- Skeleton ---------------- */
 .skeleton {
   display: block;
   border-radius: var(--radius-xs);

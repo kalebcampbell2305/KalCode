@@ -1,0 +1,156 @@
+.frame {
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-panel);
+  background: var(--panel-sheen), var(--color-surface-1);
+  box-shadow: var(--shadow-panel);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--type-ui);
+  font-variant-numeric: tabular-nums;
+}
+
+.caption {
+  padding: 0 0 var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
+  text-align: left;
+}
+
+.table th {
+  height: 2rem;
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-family: var(--font-label);
+  font-size: var(--type-label);
+  font-weight: var(--type-label-weight);
+  letter-spacing: var(--tracking-label);
+  text-align: left;
+  text-transform: uppercase;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.table tbody th {
+  height: auto;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--type-ui);
+  font-weight: var(--weight-medium);
+  letter-spacing: normal;
+  text-transform: none;
+  white-space: normal;
+}
+
+.table td,
+.table tbody th {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  color: var(--color-text-secondary);
+  vertical-align: top;
+}
+
+.table tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+.table tbody tr {
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.table tbody tr:hover {
+  background: var(--color-surface-hover);
+}
+
+.table tr[data-selected] {
+  background: var(--color-surface-selected);
+  box-shadow: inset 2px 0 0 var(--color-accent);
+}
+
+.table [data-numeric] {
+  text-align: right;
+}
+
+.table code {
+  font-size: var(--type-mono);
+  overflow-wrap: anywhere;
+}
+
+.dense td,
+.dense tbody th {
+  padding-block: var(--space-1-5);
+}
+
+.sticky thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--color-surface-2);
+}
+
+.frame .table th:first-child,
+.frame .table td:first-child {
+  padding-left: var(--panel-px);
+}
+
+.frame .table th:last-child,
+.frame .table td:last-child {
+  padding-right: var(--panel-px);
+}
+
+/* ---- row list ---- */
+.rows {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--row-h);
+  padding: var(--space-1-5) var(--space-2);
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: var(--type-ui);
+}
+
+.dense .row {
+  min-height: var(--row-h-dense);
+  padding-block: var(--space-1);
+}
+
+.row:last-child {
+  border-bottom: 0;
+}
+
+.interactive {
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.interactive:hover {
+  background: var(--color-surface-hover);
+}
+
+.row[data-selected] {
+  background: var(--color-surface-selected);
+}
+
+.row[data-selected]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: var(--space-1);
+  bottom: var(--space-1);
+  width: 2px;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  box-shadow: 0 0 8px var(--color-glow);
+}

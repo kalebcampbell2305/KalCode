@@ -1,7 +1,7 @@
 .page {
   display: flex;
   flex-direction: column;
-  gap: var(--space-8);
+  gap: var(--space-6);
   width: 100%;
   min-height: 100%;
   margin: 0;
@@ -14,10 +14,23 @@
 }
 
 .header {
+  position: relative;
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
   gap: var(--space-6);
+  padding-bottom: var(--space-4);
+}
+
+/* A hairline under the page header, lit at its start and fading out. */
+.header::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(90deg, var(--color-border-lit-soft), var(--color-border) 30%, transparent);
 }
 
 .heading {
@@ -25,16 +38,17 @@
 }
 
 .title {
-  font-size: var(--text-2xl);
-  font-weight: var(--weight-regular);
-  letter-spacing: var(--tracking-tight);
+  font-family: var(--font-display);
+  font-size: var(--type-headline);
+  font-weight: var(--type-headline-weight);
+  letter-spacing: var(--type-headline-tracking);
 }
 
 .description {
-  margin-top: var(--space-1-5);
+  margin-top: var(--space-1);
   max-width: var(--prose-max);
   color: var(--color-text-muted);
-  font-size: var(--text-md);
+  font-size: var(--type-ui);
 }
 
 .actions {

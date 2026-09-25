@@ -1,6 +1,7 @@
 import "@kalcode/ui/fonts.css";
 import "@kalcode/ui/tokens.css";
 import "@kalcode/ui/base.css";
+import "@kalcode/ui/terminal.css";
 import "./styles/app.css";
 
 import { StrictMode } from "react";

@@ -1,18 +1,50 @@
 .root {
+  --_c: var(--status-muted);
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: var(--text-sm);
+  font-size: var(--type-ui);
   color: var(--color-text-secondary);
+}
+
+.root[data-tone="live"],
+.root[data-tone="recovering"] {
+  --_c: var(--status-recovering);
+}
+
+.root[data-tone="success"],
+.root[data-tone="working"] {
+  --_c: var(--status-working);
+}
+
+.root[data-tone="waiting"] {
+  --_c: var(--status-waiting);
+  color: var(--color-text);
+}
+
+.root[data-tone="danger"],
+.root[data-tone="failed"] {
+  --_c: var(--status-failed);
+  color: var(--color-text);
+}
+
+.root[data-tone="done"] {
+  --_c: var(--status-done);
+  color: var(--color-text);
+}
+
+.root[data-tone="paused"] {
+  --_c: var(--status-paused);
 }
 
 .dot {
   position: relative;
   flex: none;
-  width: 0.5rem;
-  height: 0.5rem;
+  width: 0.4375rem;
+  height: 0.4375rem;
   border-radius: var(--radius-full);
   background: var(--_c);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--_c) 16%, transparent);
 }
 
 .pulse::after {
@@ -21,14 +53,15 @@
   inset: 0;
   border-radius: inherit;
   background: var(--_c);
-  animation: pulse 1.8s var(--ease-out) infinite;
+  animation: pulse var(--dur-pulse) var(--ease-out) infinite;
 }
 
 @keyframes pulse {
   from {
-    opacity: 0.55;
+    opacity: 0.5;
     transform: scale(1);
   }
+  70%,
   to {
     opacity: 0;
     transform: scale(2.6);
@@ -43,20 +76,4 @@
 
 :global([data-motion="reduced"]) .pulse::after {
   animation: none;
-}
-
-.live {
-  --_c: var(--color-live);
-}
-.success {
-  --_c: var(--color-success);
-}
-.waiting {
-  --_c: var(--color-waiting);
-}
-.danger {
-  --_c: var(--color-danger);
-}
-.idle {
-  --_c: var(--color-idle);
 }
