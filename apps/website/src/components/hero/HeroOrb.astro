@@ -3,28 +3,63 @@
  * The living KalCode orb: the brand symbol (assets/branding/kalcode-icon, never redrawn) fed by
  * an energy stream rising from below the hero, lit from inside along its own orbits and nodes.
  *
- * Decorative (aria-hidden): the page headline carries the meaning. Renders a finished still
- * without JavaScript or with reduced motion; upgrades to WebGL (src/scripts/hero) when allowed,
- * with a CSS fallback when WebGL is unavailable. Use one per page: it is the site's only
- * continuously moving element.
+ * Decorative (aria-hidden): the page headline carries the meaning. Use one per page: it is the
+ * site's only continuously moving element.
  *
- * Layout: fills its box. The orb sits at the top centre; the stream runs from the box's bottom
- * edge into the sphere, so put it in a cell that reaches the bottom of the hero. Tune with
- * `--hero-orb-max` (largest diameter) and `--hero-orb-top` (space above the orb).
+ * LOADING ORDER (performance contract)
+ *   1. The poster <img> paints first, with no JS dependency: eager, fetchpriority=high, visible
+ *      from the start, `sizes` matched to the layout (pass `sizes` if the layout differs).
+ *   2. After the `load` event, first contentful paint and an idle callback, the renderer starts
+ *      in a Web Worker on an OffscreenCanvas (no per-frame main-thread work at all), in small
+ *      steps (background shader compile, off-thread image decode, one texture upload per frame),
+ *      and fades in over the poster. Without OffscreenCanvas WebGL, desktop renders on the main
+ *      thread and phones keep the CSS version.
+ *   3. Tier chosen up front, no probing: phones/touch/≤4 cores/≤4 GB get the lite renderer;
+ *      ≤2 cores, ≤2 GB or Save-Data keep the CSS version; software GL falls back to CSS too.
+ *   Reduced motion: a WebGL still on desktop, the CSS still elsewhere. No JS: the CSS still.
+ *
+ * LAYOUT
+ *   Fills its box. The orb sits at the top centre; the stream runs from the box's bottom edge up
+ *   into the sphere, so put the component in a box that reaches the bottom of the hero.
+ *   - Split hero (>= 1024 px): place it in the right column; the stream runs up that column's
+ *     centre line. Leave the band variables unset.
+ *   - Stacked hero (< 1024 px): orb above the text. Set the text-safe band so the stream dims
+ *     behind the text block and resumes faintly below it.
+ *
+ * PROPS
+ *   size   "full" (default): fills its box. "compact": self-sized block, 1 : 1.28.
+ *   sizes  Poster `sizes` attribute. Default matches the orb's own sizing rules:
+ *          "(max-width: 1023px) min(88vw, 25rem, 42vh), min(44vw, 64vh, 680px)" for full.
+ *
+ * CSS CUSTOM PROPERTIES (set on the component or any ancestor; lengths only, no %)
+ *   --hero-orb-max            largest orb diameter              default min(680px, 64svh)
+ *   --hero-orb-top            space above the orb               default 0px
+ *   --hero-beam-safe-top      start of the text-safe band, from the component's top edge
+ *   --hero-beam-safe-inset    end of the band, measured up from the component's bottom edge
+ *   --hero-beam-safe-level    stream intensity inside the band  default 1 (band off); try 0.12
+ *   --hero-beam-safe-resume   stream intensity below the band   default 1; try 0.4
+ *   Example (stacked):  --hero-beam-safe-top: calc(var(--hero-orb-top) + 1.02 * var(--hero-orb-max));
+ *                       --hero-beam-safe-inset: 2.5rem; --hero-beam-safe-level: 0.12;
+ *                       --hero-beam-safe-resume: 0.4;
+ *   Both the WebGL stream and the CSS still honour the band (edges soften over ~20 px).
+ *
+ * THEME: follows the nearest [data-theme] ancestor (a dark hero inside a light page stays dark).
  */
 import "../../styles/hero.css";
 
 interface Props {
-  /** "full": fills its cell (home hero). "compact": a self-sized block, 1 : 1.28. */
   size?: "full" | "compact";
+  sizes?: string;
 }
 
-const { size = "full" } = Astro.props;
+const { size = "full", sizes: sizesProp } = Astro.props;
 const full = size === "full";
 const base = "/assets/hero/orb";
-const widths = [512, 768, 1024];
+const widths = [384, 512, 640, 768, 1024];
 const srcset = (format: "avif" | "webp") => widths.map((w) => `${base}-${w}.${format} ${w}w`).join(", ");
-const sizes = full ? "(max-width: 760px) 92vw, min(46vw, 680px)" : "min(92vw, 360px)";
+const sizes =
+  sizesProp ??
+  (full ? "(max-width: 1023px) min(88vw, 25rem, 42vh), min(44vw, 64vh, 680px)" : "min(92vw, 360px)");
 ---
 <div class={`hero-orb hero-orb--${size}`} data-hero-orb aria-hidden="true">
   <div class="hero-orb__frame">
@@ -38,13 +73,13 @@ const sizes = full ? "(max-width: 760px) 92vw, min(46vw, 680px)" : "min(92vw, 36
         <source type="image/webp" srcset={srcset("webp")} sizes={sizes} />
         <img
           class="hero-orb__poster"
-          src={`${base}-768.webp`}
+          src={`${base}-640.webp`}
           width="1024"
           height="1024"
           alt=""
-          decoding="async"
           loading={full ? "eager" : "lazy"}
           fetchpriority={full ? "high" : "auto"}
+          decoding={full ? "sync" : "async"}
         />
       </picture>
     </div>

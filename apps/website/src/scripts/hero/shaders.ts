@@ -65,6 +65,7 @@ export const BEAM_FS = `${COMMON}
 uniform vec4 uBeam;  // x, contact y, orb size s, intensity
 uniform vec4 uSurge; // position along the beam (0..1), visibility, unused, unused
 uniform vec4 uPh;    // fibre scroll (mod 64), mote scroll (mod 64), unused, unused
+uniform vec4 uBand;  // text-safe band: top y, bottom y (canvas px, y up), level inside, level below
 void main() {
   vec2 fc = gl_FragCoord.xy;
   float s = uBeam.z;
@@ -122,6 +123,11 @@ void main() {
       L += vec3(0.7, 0.85, 1.0) * m * 0.55 * exp(-adx / (wg * 1.2)) * I * (1.0 - up * 0.6);
     }
   }
+  // Text-safe band: the stream dims behind the headline and resumes faintly below it.
+  float e = 20.0 * uPx;
+  float below = 1.0 - smoothstep(uBand.y - e, uBand.y + e, fc.y);
+  float inBand = (1.0 - below) * (1.0 - smoothstep(uBand.x - e, uBand.x + e, fc.y));
+  L *= mix(mix(1.0, uBand.z, inBand), uBand.w, below);
   gl_FragColor = emit(L, vec3(0.0), 0.0);
 }
 `;

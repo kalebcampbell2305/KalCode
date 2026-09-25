@@ -1,6 +1,7 @@
 /**
- * WebGL renderer for the hero orb. Loaded on demand by ./orb.ts (never on reduced-motion-only
- * or no-WebGL paths unless a still frame is wanted). One canvas, two draws per frame.
+ * WebGL renderer for the hero orb, loaded by ./orb.ts after the page has loaded. Initialisation
+ * is split into short steps (background shader compile, off-thread image decode, one texture
+ * upload per frame) so it never produces a long task. One canvas, two draws per frame.
  */
 import { BLOOM_URL, ENTRY_Y, FX_URL, SPHERE_X } from "./meta";
 import { BEAM_FS, BEAM_VS, ORB_FS, ORB_VS } from "./shaders";
@@ -15,7 +16,7 @@ export interface OrbRenderer {
   frame(dt: number): void;
   /** Draw one composed still (reduced motion). */
   still(): void;
-  resize(): void;
+  layout(layout: Layout): void;
   setPointer(x: number, y: number): void;
   setScroll(progress: number): void;
   setInk(ink: number): void;
@@ -30,23 +31,27 @@ const PERIOD = 8.4; // seconds between energy surges
 const RISE = 1.9; // seconds for a surge to climb the stream
 const TAU = Math.PI * 2;
 
-async function loadImage(url: string): Promise<HTMLImageElement> {
-  const img = new Image();
-  img.decoding = "async";
-  img.src = url;
-  await img.decode();
-  return img;
-}
+/** Yield to the browser: next frame, then a macrotask, so each init step is its own short task. */
+const breathe = () => new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
 
-function compile(gl: GL, type: number, source: string): WebGLShader {
-  const shader = gl.createShader(type);
-  if (!shader) throw new Error("shader");
-  gl.shaderSource(shader, source);
-  gl.compileShader(shader);
-  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-    throw new Error(gl.getShaderInfoLog(shader) ?? "compile");
+/**
+ * Decodes an image off the main thread (fetch + createImageBitmap). Data layers are decoded raw
+ * (no colour management, no premultiplication); the symbol is premultiplied for blending.
+ * Falls back to an <img> decode where ImageBitmap options are unsupported.
+ */
+async function bitmap(url: string, data: boolean): Promise<TexImageSource> {
+  try {
+    const blob = await (await fetch(url)).blob();
+    return await createImageBitmap(blob, {
+      premultiplyAlpha: data ? "none" : "premultiply",
+      colorSpaceConversion: data ? "none" : "default",
+    });
+  } catch {
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    return img;
   }
-  return shader;
 }
 
 interface Program {
@@ -54,16 +59,40 @@ interface Program {
   u: Record<string, WebGLUniformLocation | null>;
 }
 
-function link(gl: GL, vs: string, fs: string, names: string[]): Program {
+interface Started {
+  program: WebGLProgram;
+  shaders: WebGLShader[];
+}
+
+/** Starts compiling and linking without querying status (no synchronous wait). */
+function startProgram(gl: GL, vs: string, fs: string): Started {
   const program = gl.createProgram();
   if (!program) throw new Error("program");
-  gl.attachShader(program, compile(gl, gl.VERTEX_SHADER, vs));
-  gl.attachShader(program, compile(gl, gl.FRAGMENT_SHADER, fs));
+  const shaders: WebGLShader[] = [];
+  const sources: Array<[number, string]> = [
+    [gl.VERTEX_SHADER, vs],
+    [gl.FRAGMENT_SHADER, fs],
+  ];
+  for (const [type, source] of sources) {
+    const shader = gl.createShader(type);
+    if (!shader) throw new Error("shader");
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+    gl.attachShader(program, shader);
+    shaders.push(shader);
+  }
   gl.bindAttribLocation(program, 0, "aPos");
   gl.linkProgram(program);
+  return { program, shaders };
+}
+
+function finishProgram(gl: GL, started: Started, names: string[]): Program {
+  const { program, shaders } = started;
   if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-    throw new Error(gl.getProgramInfoLog(program) ?? "link");
+    const log = shaders.map((sh) => gl.getShaderInfoLog(sh)).join(" ");
+    throw new Error(`${gl.getProgramInfoLog(program) ?? "link"} ${log}`);
   }
+  for (const sh of shaders) gl.deleteShader(sh);
   const u: Program["u"] = {};
   for (const name of names) u[name] = gl.getUniformLocation(program, name);
   return { program, u };
@@ -73,6 +102,7 @@ function texture(gl: GL, source: TexImageSource, data: boolean, mips: boolean): 
   const tex = gl.createTexture();
   if (!tex) throw new Error("texture");
   gl.bindTexture(gl.TEXTURE_2D, tex);
+  // These only affect the <img> fallback; ImageBitmaps carry their own decode options.
   gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, !data);
   gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, data ? gl.NONE : gl.BROWSER_DEFAULT_WEBGL);
   gl.texImage2D(gl.TEXTURE_2D, 0, data ? gl.RGB : gl.RGBA, data ? gl.RGB : gl.RGBA, gl.UNSIGNED_BYTE, source);
@@ -120,14 +150,25 @@ const smooth = (e0: number, e1: number, x: number) => {
   return t * t * (3 - 2 * t);
 };
 
-export async function createOrb(
-  root: HTMLElement,
-  stage: HTMLElement,
-  poster: HTMLImageElement,
-  options: OrbOptions,
-): Promise<OrbRenderer> {
-  const canvas = document.createElement("canvas");
-  canvas.className = "hero-orb__canvas";
+/**
+ * Everything the renderer needs to know about the page, measured on the main thread (CSS px,
+ * relative to the canvas's top-left corner, y down). The renderer itself never touches the DOM,
+ * so it runs unchanged in a worker on an OffscreenCanvas.
+ */
+export interface Layout {
+  width: number;
+  height: number;
+  dpr: number;
+  stageX: number;
+  stageY: number;
+  stageSize: number;
+  /** Text-safe band: top, bottom (from the canvas top), level inside, level below; or null. */
+  band: [number, number, number, number] | null;
+}
+
+type Canvas = HTMLCanvasElement | OffscreenCanvas;
+
+export async function createOrb(canvas: Canvas, baseUrl: string, options: OrbOptions): Promise<OrbRenderer> {
   const attrs: WebGLContextAttributes = {
     alpha: true,
     premultipliedAlpha: true,
@@ -140,11 +181,29 @@ export async function createOrb(
   const gl = (canvas.getContext("webgl2", attrs) ?? canvas.getContext("webgl", attrs)) as GL | null;
   if (!gl) throw new Error("webgl");
   const gl2 = typeof WebGL2RenderingContext !== "undefined" && gl instanceof WebGL2RenderingContext;
+  if (gl.isContextLost()) throw new Error("lost");
 
-  const [fxImg, bloomImg] = await Promise.all([loadImage(FX_URL), loadImage(BLOOM_URL), poster.decode()]);
+  // Software rasterisers (blocklisted GPUs, some VMs) burn CPU on every frame: keep the CSS
+  // version there instead.
+  const info = gl.getExtension("WEBGL_debug_renderer_info");
+  const rendererName = info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : "";
+  if (/swiftshader|llvmpipe|softpipe|software|basic render/i.test(rendererName)) throw new Error("software");
 
-  const beam = link(gl, BEAM_VS, BEAM_FS, ["uRect", "uRes", "uPx", "uInk", "uQ", "uBeam", "uSurge", "uPh"]);
-  const orb = link(gl, ORB_VS, ORB_FS, [
+  // Step 1: start both programs compiling (in the background where KHR_parallel_shader_compile
+  // exists) while the images decode off the main thread.
+  const parallel = gl.getExtension("KHR_parallel_shader_compile") as { COMPLETION_STATUS_KHR: number } | null;
+  const beamStart = startProgram(gl, BEAM_VS, BEAM_FS);
+  const orbStart = startProgram(gl, ORB_VS, ORB_FS);
+  const images = Promise.all([bitmap(baseUrl, false), bitmap(FX_URL, true), bitmap(BLOOM_URL, true)]);
+  if (parallel) {
+    const done = (p: WebGLProgram) => gl.getProgramParameter(p, parallel.COMPLETION_STATUS_KHR) === true;
+    while (!(done(beamStart.program) && done(orbStart.program))) await breathe();
+  } else {
+    await breathe();
+  }
+  const beam = finishProgram(gl, beamStart, ["uRect", "uRes", "uPx", "uInk", "uQ", "uBeam", "uSurge", "uPh", "uBand"]);
+  await breathe();
+  const orb = finishProgram(gl, orbStart, [
     "uRes",
     "uOrb",
     "uTilt",
@@ -169,17 +228,21 @@ export async function createOrb(
   gl.enableVertexAttribArray(0);
   gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
 
-  const baseMips = gl2 || (isPot(poster.naturalWidth) && isPot(poster.naturalHeight));
-  const baseTex = texture(gl, poster, false, baseMips);
+  // Step 2: one texture upload per frame.
+  const [baseImg, fxImg, bloomImg] = await images;
+  await breathe();
+  const baseWidth = "width" in baseImg ? Number(baseImg.width) : 0;
+  const baseTex = texture(gl, baseImg, false, gl2 || isPot(baseWidth));
+  await breathe();
   const fxTex = texture(gl, fxImg, true, true);
+  await breathe();
   const bloomTex = texture(gl, bloomImg, true, false);
+  for (const img of [baseImg, fxImg, bloomImg]) if (img instanceof ImageBitmap) img.close();
 
   gl.disable(gl.DEPTH_TEST);
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
   gl.clearColor(0, 0, 0, 0);
-
-  (stage.parentElement ?? root).appendChild(canvas);
 
   // Quality ladder: [device-pixel cap, detail]. Lite starts lower.
   const ladder: Array<[number, number]> = [
@@ -189,11 +252,7 @@ export async function createOrb(
     [1, 0],
     [0.75, 0],
   ];
-  // Software rasterisers (blocklisted GPUs) start near the floor; the watchdog does the rest.
-  const info = gl.getExtension("WEBGL_debug_renderer_info");
-  const name = info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : "";
-  const software = /swiftshader|llvmpipe|software|basic render/i.test(name);
-  let step = software ? 3 : options.lite ? 2 : 0;
+  let step = options.lite ? 2 : 0;
 
   let time = 3.2; // start mid-cycle so the first frame already shows a lit network
   let ink = 0;
@@ -201,27 +260,31 @@ export async function createOrb(
   let scroll = 0;
   let px = 1;
   const geo = { w: 1, h: 1, cx: 0, cy: 0, s: 1, bx: 0, by: 0 };
+  /** Text-safe band: top y, bottom y (canvas px, y up), level inside, level below. */
+  let band: [number, number, number, number] = [0, 0, 1, 1];
 
-  function resize() {
-    const cr = canvas.getBoundingClientRect();
-    const sr = stage.getBoundingClientRect();
+  let lay: Layout = { width: 1, height: 1, dpr: 1, stageX: 0, stageY: 0, stageSize: 1, band: null };
+
+  function apply() {
     const [cap] = ladder[step] ?? [1, 0];
-    px = Math.min(window.devicePixelRatio || 1, cap);
-    const w = Math.max(1, Math.round(cr.width * px));
-    const h = Math.max(1, Math.round(cr.height * px));
+    px = Math.min(lay.dpr || 1, cap);
+    const w = Math.max(1, Math.round(lay.width * px));
+    const h = Math.max(1, Math.round(lay.height * px));
     if (canvas.width !== w || canvas.height !== h) {
       canvas.width = w;
       canvas.height = h;
     }
-    const sx = w / Math.max(1, cr.width);
-    const sy = h / Math.max(1, cr.height);
+    const sx = w / Math.max(1, lay.width);
+    const sy = h / Math.max(1, lay.height);
+    const size = lay.stageSize;
     geo.w = w;
     geo.h = h;
-    geo.s = sr.width * sx;
-    geo.cx = (sr.left + sr.width / 2 - cr.left) * sx;
-    geo.cy = (cr.bottom - (sr.top + sr.height / 2)) * sy;
-    geo.bx = (sr.left + sr.width * SPHERE_X - cr.left) * sx;
-    geo.by = (cr.bottom - (sr.top + sr.height * ENTRY_Y)) * sy;
+    geo.s = size * sx;
+    geo.cx = (lay.stageX + size / 2) * sx;
+    geo.cy = h - (lay.stageY + size / 2) * sy;
+    geo.bx = (lay.stageX + size * SPHERE_X) * sx;
+    geo.by = h - (lay.stageY + size * ENTRY_Y) * sy;
+    band = lay.band ? [h - lay.band[0] * sy, h - lay.band[1] * sy, lay.band[2], lay.band[3]] : [0, 0, 1, 1];
     gl?.viewport(0, 0, w, h);
   }
 
@@ -293,6 +356,7 @@ export async function createOrb(
     gl.uniform4f(beam.u.uBeam ?? null, geo.bx, Math.max(1, geo.by), s, beamI);
     gl.uniform4f(beam.u.uSurge ?? null, surgePos, surgeVis * strength, 0, 0);
     gl.uniform4f(beam.u.uPh ?? null, (t * 0.55) % 64, (t * 2.4) % 64, 0, 0);
+    gl.uniform4f(beam.u.uBand ?? null, ...band);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
     // 2. Orb
@@ -330,8 +394,6 @@ export async function createOrb(
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
-  resize();
-
   return {
     frame(dt) {
       time += dt;
@@ -342,7 +404,10 @@ export async function createOrb(
       pointer.y = pointer.ty = 0;
       draw(RISE + 1.55);
     },
-    resize,
+    layout(next) {
+      lay = next;
+      apply();
+    },
     setPointer(x, y) {
       pointer.tx = x;
       pointer.ty = y;
@@ -356,12 +421,95 @@ export async function createOrb(
     degrade() {
       if (step >= ladder.length - 1) return false;
       step += 1;
-      resize();
+      apply();
       return true;
     },
     destroy() {
       gl.getExtension("WEBGL_lose_context")?.loseContext();
-      canvas.remove();
+    },
+  };
+}
+
+export interface LoopHooks {
+  /** First frame drawn (fade the canvas in over the poster). */
+  live(): void;
+  /** Quality floor reached and still too slow: hand back to the CSS version. */
+  fallback(): void;
+}
+
+export interface Loop {
+  start(): void;
+  stop(): void;
+  still(): void;
+}
+
+const SLOW_FRAME = 1 / 45;
+
+/**
+ * The animation loop plus a frame-time watchdog (1.5 s windows; below ~45 fps it steps the
+ * quality ladder down, and at the floor it gives up). Works in a window or a worker.
+ */
+export function createLoop(orb: OrbRenderer, hooks: LoopHooks): Loop {
+  const g = globalThis as typeof globalThis & {
+    requestAnimationFrame?: (cb: FrameRequestCallback) => number;
+    cancelAnimationFrame?: (id: number) => void;
+  };
+  const raf = (cb: FrameRequestCallback): number =>
+    g.requestAnimationFrame ? g.requestAnimationFrame(cb) : Number(setTimeout(() => cb(performance.now()), 16));
+  const caf = (id: number) => (g.cancelAnimationFrame ? g.cancelAnimationFrame(id) : clearTimeout(id));
+  let id = 0;
+  let last = 0;
+  let windowStart = 0;
+  let windowFrames = 0;
+  let calm = 0;
+  let shown = false;
+
+  const show = () => {
+    if (shown) return;
+    shown = true;
+    hooks.live();
+  };
+
+  function stop() {
+    if (id) caf(id);
+    id = 0;
+  }
+
+  function tick(now: number) {
+    id = raf(tick);
+    const dt = last ? Math.min(0.05, (now - last) / 1000) : 1 / 60;
+    last = now;
+    orb.frame(dt);
+    show();
+    if (calm >= 3) return;
+    if (!windowStart) windowStart = now;
+    windowFrames += 1;
+    if (now - windowStart > 1500) {
+      const slow = (now - windowStart) / 1000 / windowFrames > SLOW_FRAME;
+      windowStart = now;
+      windowFrames = 0;
+      if (!slow) calm += 1;
+      else if (orb.degrade()) calm = 0;
+      else {
+        stop();
+        hooks.fallback();
+      }
+    }
+  }
+
+  return {
+    start() {
+      if (id) return;
+      last = 0;
+      windowStart = 0;
+      windowFrames = 0;
+      id = raf(tick);
+    },
+    stop,
+    still() {
+      stop();
+      orb.still();
+      show();
     },
   };
 }

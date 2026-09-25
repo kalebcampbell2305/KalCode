@@ -5,14 +5,87 @@
  * energy stream runs from the bottom edge of the box up into the bottom of the sphere, so place
  * the component in a cell that reaches the bottom of the hero.
  *
- * Tuning (set on the component or any ancestor):
- *   --hero-orb-max   largest orb diameter        (full min(680px, 64svh), compact 360px)
- *   --hero-orb-top   gap above the orb           (0px)
+ * Tuning (set on the component or any ancestor; documented in HeroOrb.astro):
+ *   --hero-orb-max            largest orb diameter   (full min(680px, 64svh), compact 360px)
+ *   --hero-orb-top            gap above the orb      (0px)
+ *   --hero-beam-safe-top      text-safe band start, from the component's top edge (0px)
+ *   --hero-beam-safe-inset    band end, measured up from the component's bottom edge (0px)
+ *   --hero-beam-safe-level    stream intensity inside the band, 0..1 (1 = band off)
+ *   --hero-beam-safe-resume   stream intensity below the band, 0..1 (1)
  *
  * Without JavaScript, with reduced motion, and until WebGL has drawn its first frame, this file
  * alone composes the finished still: poster symbol, stream, source haze, aura, contact glow.
  * Geometry: sphere centre x 0.493, entry point (bottom of the sphere) y 0.798 of the square.
  */
+
+/* Registered so the WebGL renderer can read resolved pixel values (getComputedStyle). */
+@property --hero-beam-safe-top {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
+@property --hero-beam-safe-inset {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
+@property --hero-beam-safe-level {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 1;
+}
+
+@property --hero-beam-safe-resume {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 1;
+}
+
+/*
+ * Palette per surface. Set on every [data-theme] element so the NEAREST themed ancestor wins
+ * (a dark hero inside a light page stays dark). The renderer reads the same attribute.
+ */
+:root,
+[data-theme="dark"] {
+  --hero-orb-core: linear-gradient(to top, #e6efff, #cfe0ff 60%, #eef4ff);
+  --hero-orb-core-shadow: 0 0 6px 1px rgb(130 180 255 / 0.85), 0 0 22px 4px rgb(76 141 255 / 0.45);
+  --hero-orb-glow:
+    linear-gradient(
+      90deg,
+      transparent,
+      rgb(60 124 255 / 0.22) 30%,
+      rgb(110 165 255 / 0.5) 50%,
+      rgb(60 124 255 / 0.22) 70%,
+      transparent
+    ),
+    linear-gradient(90deg, transparent 20%, rgb(40 96 230 / 0.12) 50%, transparent 80%);
+  --hero-orb-haze:
+    radial-gradient(ellipse 22% 60% at 50% 100%, rgb(120 170 255 / 0.4), rgb(60 124 255 / 0.12) 55%, transparent 100%),
+    radial-gradient(ellipse 50% 30% at 50% 100%, rgb(50 110 240 / 0.22), transparent 100%);
+  --hero-orb-aura: radial-gradient(
+    circle at 49.3% 52%,
+    rgb(76 141 255 / 0.2),
+    rgb(40 96 230 / 0.07) 32%,
+    transparent 52%
+  );
+}
+
+[data-theme="light"] {
+  --hero-orb-core: #1d5be0;
+  --hero-orb-core-shadow: 0 0 10px 2px rgb(29 91 224 / 0.25);
+  --hero-orb-glow: linear-gradient(
+    90deg,
+    transparent,
+    rgb(29 91 224 / 0.16) 30%,
+    rgb(29 91 224 / 0.34) 50%,
+    rgb(29 91 224 / 0.16) 70%,
+    transparent
+  );
+  --hero-orb-haze: radial-gradient(ellipse 30% 60% at 50% 100%, rgb(29 91 224 / 0.2), transparent 100%);
+  --hero-orb-aura: radial-gradient(circle at 49.3% 52%, rgb(29 91 224 / 0.12), transparent 50%);
+}
 
 .hero-orb {
   container-type: inline-size;
@@ -29,6 +102,15 @@
   --top: var(--hero-orb-top, 0px);
   --beam-x: calc(50% - 0.007 * var(--s));
   --entry-y: calc(var(--top) + 0.798 * var(--s));
+  /* Text-safe band, in the stream's own coordinates (it starts at the entry point). */
+  --band-a: calc(var(--hero-beam-safe-top) - var(--entry-y));
+  --band-mask: linear-gradient(
+    to bottom,
+    #000 calc(var(--band-a) - 20px),
+    rgb(0 0 0 / var(--hero-beam-safe-level)) calc(var(--band-a) + 20px),
+    rgb(0 0 0 / var(--hero-beam-safe-level)) calc(100% - var(--hero-beam-safe-inset) - 20px),
+    rgb(0 0 0 / var(--hero-beam-safe-resume)) calc(100% - var(--hero-beam-safe-inset) + 20px)
+  );
   position: relative;
   min-height: calc(var(--top) + 1.18 * var(--s));
 }
@@ -72,7 +154,7 @@
   content: "";
   position: absolute;
   inset: -12%;
-  background: radial-gradient(circle at 49.3% 52%, rgb(76 141 255 / 0.2), rgb(40 96 230 / 0.07) 32%, transparent 52%);
+  background: var(--hero-orb-aura);
   transition: opacity 700ms ease;
 }
 
@@ -110,18 +192,14 @@
 .hero-orb__glow {
   position: absolute;
   inset: 0 30%;
-  background:
-    linear-gradient(
-      90deg,
-      transparent,
-      rgb(60 124 255 / 0.22) 30%,
-      rgb(110 165 255 / 0.5) 50%,
-      rgb(60 124 255 / 0.22) 70%,
-      transparent
-    ),
-    linear-gradient(90deg, transparent 20%, rgb(40 96 230 / 0.12) 50%, transparent 80%);
+  background: var(--hero-orb-glow);
   filter: blur(5px);
-  mask-image: linear-gradient(to top, #000 0%, rgb(0 0 0 / 0.75) 45%, #000 100%);
+}
+
+.hero-orb__glow,
+.hero-orb__surge,
+.hero-orb__beam::after {
+  mask-image: var(--band-mask);
 }
 
 /* Bright core. */
@@ -132,10 +210,8 @@
   bottom: 0;
   left: calc(50% - 1px);
   width: 2px;
-  background: linear-gradient(to top, #e6efff, #cfe0ff 60%, #eef4ff);
-  box-shadow:
-    0 0 6px 1px rgb(130 180 255 / 0.85),
-    0 0 22px 4px rgb(76 141 255 / 0.45);
+  background: var(--hero-orb-core);
+  box-shadow: var(--hero-orb-core-shadow);
 }
 
 /* Source haze at the bottom edge: the stream comes from below the fold. */
@@ -147,9 +223,8 @@
   width: calc(4.6 * 100%);
   height: calc(0.34 * var(--s));
   transform: translateX(-50%);
-  background:
-    radial-gradient(ellipse 22% 60% at 50% 100%, rgb(120 170 255 / 0.4), rgb(60 124 255 / 0.12) 55%, transparent 100%),
-    radial-gradient(ellipse 50% 30% at 50% 100%, rgb(50 110 240 / 0.22), transparent 100%);
+  background: var(--hero-orb-haze);
+  opacity: var(--hero-beam-safe-resume);
 }
 
 /* A surge climbing the stream (CSS fallback animation only). */
@@ -196,32 +271,6 @@
 .hero-orb.is-live .hero-orb__stage::before,
 .hero-orb.is-live .hero-orb__stage::after {
   opacity: 0;
-}
-
-/* ---------- Light surfaces: the stream is drawn as blue ink rather than light ---------- */
-
-:root[data-theme="light"] .hero-orb__glow {
-  background: linear-gradient(
-    90deg,
-    transparent,
-    rgb(29 91 224 / 0.16) 30%,
-    rgb(29 91 224 / 0.34) 50%,
-    rgb(29 91 224 / 0.16) 70%,
-    transparent
-  );
-}
-
-:root[data-theme="light"] .hero-orb__beam::after {
-  background: #1d5be0;
-  box-shadow: 0 0 10px 2px rgb(29 91 224 / 0.25);
-}
-
-:root[data-theme="light"] .hero-orb__beam::before {
-  background: radial-gradient(ellipse 30% 60% at 50% 100%, rgb(29 91 224 / 0.2), transparent 100%);
-}
-
-:root[data-theme="light"] .hero-orb__stage::before {
-  background: radial-gradient(circle at 49.3% 52%, rgb(29 91 224 / 0.12), transparent 50%);
 }
 
 /* ---------- CSS fallback motion (WebGL unavailable) ---------- */

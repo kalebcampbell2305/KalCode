@@ -5,7 +5,7 @@ script never draws anything: it reads `assets/branding/kalcode-icon-1024.png` (t
 symbol, sphere body opaque) and derives the data layers the hero shader needs to light the art
 from inside:
 
-  orb-{1024,768,512}.{avif,webp}   the symbol itself (poster, and the WebGL base texture)
+  orb-{1024,768,640,512,384}.{avif,webp}   the symbol itself (poster, and the WebGL base texture)
   orb-fx-512.webp              lossless RGB data layer:
                                  R  thin bright structures (orbits and network lines; white top-hat)
                                  G  network nodes (bright dots; difference of Gaussians)
@@ -132,7 +132,7 @@ def save_orb(size: int) -> None:
         out = src
     out.save(OUT / f"orb-{size}.webp", "WEBP", quality=90, alpha_quality=100, method=6)
     try:
-        out.save(OUT / f"orb-{size}.avif", "AVIF", quality=72)
+        out.save(OUT / f"orb-{size}.avif", "AVIF", quality=58)
     except (KeyError, OSError, ValueError):
         print("  (AVIF encoder unavailable; WebP only)")
 
@@ -146,7 +146,7 @@ def main() -> int:
     line, node, dist = layers(premul)
     # The data layer only modulates light over the crisp base art, so 512 px is plenty.
     save_rgb([line, node, dist], 512, OUT / "orb-fx-512.webp")
-    for size in (1024, 768, 512):
+    for size in (1024, 768, 640, 512, 384):
         save_orb(size)
 
     # Bloom: the symbol's brightest light, blurred wide, at low resolution.
