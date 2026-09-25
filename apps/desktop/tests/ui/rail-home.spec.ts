@@ -357,6 +357,67 @@ test.describe("search", () => {
   });
 });
 
+test.describe("in panes (Z7-W1 pane system)", () => {
+  async function command(page: Page, name: string) {
+    await page.keyboard.press("Control+k");
+    await page.keyboard.type(name);
+    await page.getByRole("option", { name }).click();
+  }
+
+  test("Home, the project page, Git status and the workspace list open as pane contents", async ({ page }) => {
+    await open(page, "home");
+    // Home in a pane: its greeting steps down to h2; the page keeps a single h1 (Code's).
+    await command(page, "Show Home in a pane");
+    await expect(page.locator("#main")).toHaveAttribute("data-surface", "code");
+    await expect(page.getByRole("tab", { name: /^Home/ })).toHaveAttribute("aria-selected", "true");
+    const home = page.getByRole("tabpanel", { name: "Home" });
+    await expect(home.getByRole("heading", { level: 2 }).first()).toContainText("Kaleb");
+    await expect(home.getByRole("region", { name: "Recent workspaces" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
+
+    // The project page of another workspace, from the rail's menu, in a pane of that workspace.
+    await item(page, /^atlas-api/).click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Open project in a pane" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "atlas-api" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: /^Project/ })).toHaveAttribute("aria-selected", "true");
+    const project = page.getByRole("tabpanel", { name: "Project" });
+    await expect(project.getByRole("heading", { level: 2, name: "atlas-api" })).toBeVisible();
+    await expect(project.getByRole("list", { name: "Changed files" })).toContainText("modified: src/auth/callback.ts");
+    await expect(project.getByRole("button", { name: "Open in Code" })).toHaveCount(0);
+
+    // Its Git status in a pane of its own (read-only), beside it.
+    await project.getByRole("button", { name: "Open Git status in a pane" }).click();
+    await expect(page.getByRole("tab", { name: /^Git/ })).toHaveAttribute("aria-selected", "true");
+    const git = page.getByRole("tabpanel", { name: "Git" });
+    await expect(git.getByRole("list", { name: "Changed files" })).toContainText("untracked: docs/notes-draft.md");
+    await expect(git.getByRole("list", { name: "Recent commits" })).toContainText("Check the OAuth state");
+
+    // The workspace list in a pane works like the rail.
+    await command(page, "Show workspaces in a pane");
+    const list = page.getByRole("tree", { name: "Workspaces in this pane" });
+    await expect(list.getByRole("treeitem", { name: /^Pinned, 2$/ })).toBeVisible();
+    await expect(list.getByRole("treeitem", { name: /^atlas-api, active workspace/ })).toBeVisible();
+  });
+
+  for (const theme of ["dark", "light"] as const) {
+    test(`axe is clean with Home, the project page and Git status in panes (${theme})`, async ({ page }) => {
+      await open(page, "home");
+      await setTheme(page, theme);
+      await item(page, /^atlas-api/).click({ button: "right" });
+      await page.getByRole("menuitem", { name: "Open project in a pane" }).click();
+      await expect(page.getByRole("tab", { name: /^Project/ })).toBeVisible();
+      await command(page, "Show Home in a pane");
+      await expect(page.getByRole("tab", { name: /^Home/ })).toBeVisible();
+      await command(page, "Show Git status in a pane");
+      await expect(page.getByRole("tab", { name: /^Git/ })).toBeVisible();
+      await expect(
+        page.getByRole("tabpanel", { name: "Git" }).getByRole("list", { name: "Local branches" }),
+      ).toBeVisible();
+      await expectNoSeriousA11yViolations(page, "surfaces in panes");
+    });
+  }
+});
+
 test.describe("accessibility", () => {
   for (const theme of ["dark", "light"] as const) {
     test(`axe is clean on the rail, home, project page and search (${theme})`, async ({ page }) => {

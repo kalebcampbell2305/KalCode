@@ -23,12 +23,14 @@ import {
   FolderOpen,
   FolderPlus,
   MoreHorizontal,
+  PanelRight,
   Pencil,
   Pin,
   PinOff,
   Trash2,
 } from "lucide-react";
 import { type HTMLAttributes, type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useOpenInPane } from "../panes/useOpenInPane.ts";
 import {
   badgeLabel,
   initials,
@@ -43,6 +45,7 @@ import {
   threadLabel,
   visibleNodes,
 } from "./model.ts";
+import { PROJECT_WIDGET } from "./paneIds.ts";
 import styles from "./Rail.module.css";
 import { useRail } from "./RailProvider.tsx";
 
@@ -57,7 +60,14 @@ export type RailDialog =
 const REVEAL_LABEL =
   typeof navigator !== "undefined" && /Mac/.test(navigator.platform) ? "Reveal in Finder" : "Show in File Explorer";
 
-export function RailTree({ onDialog }: { onDialog: (dialog: RailDialog) => void }) {
+/** `label` names the tree; the rail column's is "Workspaces" (a pane's copy says where it is). */
+export function RailTree({
+  onDialog,
+  label = "Workspaces",
+}: {
+  onDialog: (dialog: RailDialog) => void;
+  label?: string;
+}) {
   const rail = useRail();
   const [collapsedProviders, setCollapsedProviders] = useState<ReadonlySet<string>>(new Set());
   const nodes = useMemo(
@@ -190,7 +200,7 @@ export function RailTree({ onDialog }: { onDialog: (dialog: RailDialog) => void 
   if (nodes.length === 0) return null;
 
   return (
-    <div className={styles.tree} role="tree" aria-label="Workspaces">
+    <div className={styles.tree} role="tree" aria-label={label}>
       {nodes.map((node, index) => {
         const expandable = isExpandable(node);
         const common = {
@@ -418,6 +428,7 @@ function WorkspaceMenu({
   onDialog: (dialog: RailDialog) => void;
 }) {
   const rail = useRail();
+  const openInPane = useOpenInPane();
   const { entry } = node;
   const groups = rail.rail?.groups.map((g) => g.group) ?? [];
   const canMove = node.siblings === "pinned" || node.siblings === "group";
@@ -442,6 +453,18 @@ function WorkspaceMenu({
         </DropdownMenuItem>
         <DropdownMenuItem icon={<Code2 />} onSelect={() => void rail.openWorkspace(entry.workspaceId, "code")}>
           Open in Code
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          icon={<PanelRight />}
+          disabled={!entry.available}
+          onSelect={() =>
+            void openInPane(
+              { kind: "widget", widgetId: PROJECT_WIDGET },
+              { workspaceId: entry.workspaceId, placement: "split" },
+            )
+          }
+        >
+          Open project in a pane
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         {entry.archived ? null : (

@@ -914,3 +914,22 @@ button.repoOption:focus-visible {
 :global([data-motion="reduced"]) .workingDot {
   animation: none;
 }
+
+/* The workspace list in a pane (`kalcode.workspaces`): the rail's look, filling the pane. */
+.railPane {
+  --rail-indent: 0.875rem;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: linear-gradient(180deg, var(--color-surface-1), var(--color-bg) 70%);
+}
+
+.paneNote {
+  margin: 0;
+  padding: var(--space-5);
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
+}

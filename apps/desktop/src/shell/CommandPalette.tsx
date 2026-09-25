@@ -7,8 +7,12 @@ import {
   ClipboardCopy,
   Columns2,
   Equal,
+  FolderGit2,
   FolderOpen,
   FolderPlus,
+  FolderTree,
+  GitCommitHorizontal,
+  House,
   KeyRound,
   LayoutGrid,
   Maximize2,
@@ -36,12 +40,14 @@ import styles from "./CommandPalette.module.css";
 import { PRIMARY_ORDER, SURFACES, useNavigation, VIEWS, viewVisible } from "./navigation.tsx";
 import { dispatchPaneCommand, type PaneCommand } from "./panes/paneCommands.ts";
 import { PANE_SHORTCUT_LABELS } from "./panes/paneShortcuts.ts";
+import { useOpenInPane } from "./panes/useOpenInPane.ts";
+import { HOME_WIDGET, PROJECT_WIDGET, WORKSPACES_WIDGET } from "./rail/paneIds.ts";
 import { useOptionalRail } from "./rail/RailProvider.tsx";
-import { RAIL_SHORTCUT } from "./rail/WorkspaceRail.tsx";
 import { LocatorFilterBar, LocatorResultItems } from "./rail/search/LocatorResults.tsx";
 import { useSearch } from "./rail/search/SearchProvider.tsx";
 import { useLocatorSearch } from "./rail/search/useLocatorSearch.ts";
 import { useOpenLocated } from "./rail/search/useOpenLocated.ts";
+import { RAIL_SHORTCUT } from "./rail/WorkspaceRail.tsx";
 import { MOD_LABEL } from "./shortcuts.ts";
 
 interface CommandPaletteProps {
@@ -61,6 +67,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const rail = useOptionalRail();
   const locator = useLocatorSearch(search.query, { kinds: search.kinds, limit: 12, enabled: open });
   const openLocated = useOpenLocated();
+  const openInPane = useOpenInPane();
   const searching = search.query.trim() !== "";
   // Results for older text are held back while the new answer is on its way, so they never take
   // the selection the command list gives the text now.
@@ -264,6 +271,53 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                 {label}
               </Item>
             ))}
+          </Command.Group>
+        ) : null}
+
+        {/* Z7-W2 surfaces as pane contents (Z7-W1 pane system), beside the focused pane. */}
+        {visible.has("code") && workspaces.active?.available ? (
+          <Command.Group heading="Show in a pane" className={styles.group}>
+            {viewVisible("home", info.flags.features) ? (
+              <Item
+                icon={<House />}
+                onSelect={run(() => openInPane({ kind: "widget", widgetId: HOME_WIDGET }, { placement: "split" }))}
+                keywords={["pane", "widget", "today"]}
+              >
+                Show Home in a pane
+              </Item>
+            ) : null}
+            {viewVisible("folder", info.flags.features) ? (
+              <Item
+                icon={<FolderGit2 />}
+                onSelect={run(() => openInPane({ kind: "widget", widgetId: PROJECT_WIDGET }, { placement: "split" }))}
+                keywords={["pane", "widget", "files", workspaces.active.name]}
+              >
+                Show the project page in a pane
+              </Item>
+            ) : null}
+            {rail?.enabled ? (
+              <Item
+                icon={<FolderTree />}
+                onSelect={run(() =>
+                  openInPane({ kind: "widget", widgetId: WORKSPACES_WIDGET }, { placement: "split" }),
+                )}
+                keywords={["pane", "widget", "rail"]}
+              >
+                Show workspaces in a pane
+              </Item>
+            ) : null}
+            <Item
+              icon={<GitCommitHorizontal />}
+              onSelect={run(() => {
+                const workspaceId = workspaces.active?.id;
+                return workspaceId
+                  ? openInPane({ kind: "git", workspaceId }, { workspaceId, placement: "split" })
+                  : null;
+              })}
+              keywords={["pane", "changes", "status", workspaces.active.name]}
+            >
+              Show Git status in a pane
+            </Item>
           </Command.Group>
         ) : null}
 

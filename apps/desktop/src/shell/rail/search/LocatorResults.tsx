@@ -25,8 +25,8 @@ import {
   Workflow,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import type { LocatorSearchState } from "./useLocatorSearch.ts";
 import styles from "./LocatorResults.module.css";
+import type { LocatorSearchState } from "./useLocatorSearch.ts";
 
 export const KIND_ICON: Record<LocatorEntityKind, LucideIcon> = {
   thread: MessagesSquare,

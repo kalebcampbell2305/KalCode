@@ -579,3 +579,14 @@
   font-size: var(--type-ui);
   line-height: var(--leading-normal);
 }
+
+/* In a pane (`kalcode.home`): the pane is the frame, so less padding and no full-page height. */
+.home[data-in-pane] {
+  gap: var(--space-5);
+  min-height: auto;
+  padding: var(--space-5) var(--space-5) var(--space-6);
+}
+
+.home[data-in-pane] .greeting {
+  font-size: var(--type-headline);
+}

@@ -1,6 +1,17 @@
 import type { Branch, Commit, ThreadSummary, WorkspaceRailEntry } from "@kalcode/protocol";
 import { displayStatusOf } from "@kalcode/protocol";
-import { Button, EmptyState, Panel, ProviderMark, Skeleton, Stat, StatGroup, StatusChip } from "@kalcode/ui/components";
+import {
+  Button,
+  EmptyState,
+  IconButton,
+  Panel,
+  ProviderMark,
+  Skeleton,
+  Stat,
+  StatGroup,
+  StatusChip,
+  Tooltip,
+} from "@kalcode/ui/components";
 import {
   Activity,
   Bot,
@@ -14,6 +25,7 @@ import {
   History,
   MessageSquarePlus,
   MessagesSquare,
+  PanelRight,
   Pin,
   PinOff,
   ScanSearch,
@@ -27,8 +39,10 @@ import { useEvents, useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useUiIntents } from "../../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
+import { useOpenInPane } from "../../shell/panes/useOpenInPane.ts";
 import { allEntries, relativeTime } from "../../shell/rail/model.ts";
 import { useOptionalRail } from "../../shell/rail/RailProvider.tsx";
+import { ScopedHeading, useSurfaceScope } from "../../shell/rail/surfaceScope.tsx";
 import { useThreadsIntent } from "../threads/intent.tsx";
 import { FileTree } from "./FileTree.tsx";
 import styles from "./Folder.module.css";
@@ -50,16 +64,18 @@ const REVEAL_LABEL =
 /**
  * The folder/project surface (Z7-W2): the active workspace as the whole context — files (Z6a
  * handles), Git status, recent files, threads, terminals, branches — with honest states for
- * what arrives later (worktrees, agents, missions).
+ * what arrives later (worktrees, agents, missions). Also shown in a pane (`kalcode.project`),
+ * and its Git status is the pane system's Git content (`{ kind: "git" }`, read-only).
  */
 export function FolderSurface() {
   const { active, openFolder } = useWorkspaces();
   const rail = useOptionalRail();
+  const scope = useSurfaceScope();
   if (!active) {
     return (
-      <div className={styles.page}>
+      <div className={styles.page} data-in-pane={scope.inPane || undefined}>
         <EmptyState
-          headingLevel={1}
+          headingLevel={scope.level(1)}
           art={<FolderGit2 />}
           title="No workspace is open"
           align="center"
@@ -96,10 +112,9 @@ function Project({ workspaceId }: { workspaceId: string }) {
     ? allEntries(rail.rail).find((e) => e.workspaceId === workspaceId)
     : undefined;
 
+  const scope = useSurfaceScope();
   const [threads, setThreads] = useState<Loaded<ThreadSummary[]>>({ state: "loading" });
-  const [git, setGit] = useState<Loaded<GitStatusResponse>>({ state: "loading" });
-  const [commits, setCommits] = useState<Loaded<Commit[]>>({ state: "loading" });
-  const [branches, setBranches] = useState<Loaded<Branch[]>>({ state: "loading" });
+  const { git, commits, branches, loadGit } = useGit(workspaceId);
   const [files, setFiles] = useState<RecentFile[] | null>(null);
 
   const loadThreads = useCallback(() => {
@@ -107,20 +122,6 @@ function Project({ workspaceId }: { workspaceId: string }) {
       .listThreads({ workspaceId })
       .then((value) => setThreads({ state: "ready", value }))
       .catch((cause) => setThreads(fail(cause)));
-  }, [client, workspaceId]);
-  const loadGit = useCallback(() => {
-    client
-      .gitStatus(workspaceId)
-      .then((value) => setGit({ state: "ready", value }))
-      .catch((cause) => setGit(fail(cause)));
-    client
-      .gitLog(workspaceId, 8)
-      .then((page) => setCommits({ state: "ready", value: page.items }))
-      .catch((cause) => setCommits(fail(cause)));
-    client
-      .gitBranches(workspaceId)
-      .then((value) => setBranches({ state: "ready", value }))
-      .catch((cause) => setBranches(fail(cause)));
   }, [client, workspaceId]);
   const loadFiles = useCallback(() => {
     client
@@ -164,14 +165,16 @@ function Project({ workspaceId }: { workspaceId: string }) {
     git.state === "ready" && git.value.summary ? git.value.summary.changed + git.value.summary.untracked : null;
 
   return (
-    <div className={styles.page}>
+    <div className={styles.page} data-in-pane={scope.inPane || undefined}>
       <header className={styles.header}>
         <div className={styles.titleBlock}>
           <p className={styles.eyebrow}>
             <FolderGit2 aria-hidden="true" />
             Project
           </p>
-          <h1 className={styles.title}>{name}</h1>
+          <ScopedHeading level={1} className={styles.title}>
+            {name}
+          </ScopedHeading>
           <p className={styles.path}>
             <span className={styles.mono}>{workspace.displayPath}</span>
             {branch?.branch ? (
@@ -197,9 +200,11 @@ function Project({ workspaceId }: { workspaceId: string }) {
           >
             New thread
           </Button>
-          <Button variant="secondary" icon={<Code2 />} onClick={() => navigate("code")}>
-            Open in Code
-          </Button>
+          {scope.inPane ? null : (
+            <Button variant="secondary" icon={<Code2 />} onClick={() => navigate("code")}>
+              Open in Code
+            </Button>
+          )}
           {rail && entry ? (
             <Button
               variant="ghost"
@@ -253,7 +258,14 @@ function Project({ workspaceId }: { workspaceId: string }) {
       </StatGroup>
 
       <div className={styles.grid}>
-        <Panel id="project-files" title="Files" icon={<Files />} padding="none" className={styles.files}>
+        <Panel
+          id={scope.id("project-files")}
+          title="Files"
+          headingLevel={scope.level(2)}
+          icon={<Files />}
+          padding="none"
+          className={styles.files}
+        >
           {workspace.available ? (
             <FileTree workspaceId={workspaceId} />
           ) : (
@@ -264,7 +276,7 @@ function Project({ workspaceId }: { workspaceId: string }) {
         </Panel>
 
         <div className={`${styles.column} ${styles.gitColumn}`}>
-          <GitPanel git={git} />
+          <GitPanel git={git} workspaceId={workspaceId} />
           <RecentFilesPanel files={files} commits={commits} />
         </div>
 
@@ -272,7 +284,13 @@ function Project({ workspaceId }: { workspaceId: string }) {
           <ThreadsPanel threads={threads} />
           <TerminalsPanel />
           <BranchesPanel branches={branches} />
-          <Panel id="project-later" title="Also in this workspace" icon={<Bot />} padding="none">
+          <Panel
+            id={scope.id("project-later")}
+            title="Also in this workspace"
+            headingLevel={scope.level(2)}
+            icon={<Bot />}
+            padding="none"
+          >
             <ul className={styles.later}>
               <li>
                 <Bot aria-hidden="true" />
@@ -301,10 +319,114 @@ function Project({ workspaceId }: { workspaceId: string }) {
   );
 }
 
-function GitPanel({ git }: { git: Loaded<GitStatusResponse> }) {
+/** Read-only Git status, log and branches for a workspace (the project page and the Git pane). */
+function useGit(workspaceId: string) {
+  const { client } = useRuntime();
+  const [git, setGit] = useState<Loaded<GitStatusResponse>>({ state: "loading" });
+  const [commits, setCommits] = useState<Loaded<Commit[]>>({ state: "loading" });
+  const [branches, setBranches] = useState<Loaded<Branch[]>>({ state: "loading" });
+  const loadGit = useCallback(() => {
+    client
+      .gitStatus(workspaceId)
+      .then((value) => setGit({ state: "ready", value }))
+      .catch((cause) => setGit(fail(cause)));
+    client
+      .gitLog(workspaceId, 8)
+      .then((page) => setCommits({ state: "ready", value: page.items }))
+      .catch((cause) => setCommits(fail(cause)));
+    client
+      .gitBranches(workspaceId)
+      .then((value) => setBranches({ state: "ready", value }))
+      .catch((cause) => setBranches(fail(cause)));
+  }, [client, workspaceId]);
+  return { git, commits, branches, loadGit };
+}
+
+/**
+ * The pane system's Git content (`{ kind: "git", workspaceId }`): the workspace's status,
+ * recent commits and branches, read-only and refreshed when its files change.
+ */
+export function GitPane({ workspaceId }: { workspaceId: string }) {
+  const { events } = useEvents();
+  const { workspaces } = useWorkspaces();
+  const { git, commits, branches, loadGit } = useGit(workspaceId);
+  useEffect(() => loadGit(), [loadGit]);
+  const newest = events[0]?.seq ?? 0;
+  const seen = useRef(newest);
+  useEffect(() => {
+    const fresh = events.filter((e) => e.seq > seen.current);
+    seen.current = Math.max(seen.current, newest);
+    if (!fresh.some((e) => e.correlation.workspaceId === workspaceId && e.type.startsWith("file."))) return;
+    const timer = setTimeout(loadGit, 300);
+    return () => clearTimeout(timer);
+  }, [events, newest, workspaceId, loadGit]);
+  const workspace = workspaces.find((w) => w.id === workspaceId);
+  if (!workspace) {
+    return (
+      <div className={styles.page} data-in-pane>
+        <p className={styles.note}>This workspace is no longer in KalCode. Close the tab to tidy up.</p>
+      </div>
+    );
+  }
+  const branch = git.state === "ready" ? git.value.branch : null;
+  return (
+    <div className={styles.page} data-in-pane>
+      <p className={styles.path}>
+        <span className={styles.mono}>{workspace.displayPath}</span>
+        {branch?.branch ? (
+          <span className={styles.branch}>
+            <GitBranch aria-hidden="true" />
+            {branch.branch}
+            {branch.ahead ? <span className={styles.ahead}>↑{branch.ahead}</span> : null}
+            {branch.behind ? <span className={styles.behind}>↓{branch.behind}</span> : null}
+          </span>
+        ) : null}
+      </p>
+      <div className={styles.gitPaneGrid}>
+        <GitPanel git={git} workspaceId={workspaceId} inGitPane />
+        <div className={styles.column}>
+          <CommitsPanel commits={commits} />
+          <BranchesPanel branches={branches} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GitPanel({
+  git,
+  workspaceId,
+  inGitPane = false,
+}: {
+  git: Loaded<GitStatusResponse>;
+  workspaceId: string;
+  /** Shown as the Git pane itself (no "open in a pane" action). */
+  inGitPane?: boolean;
+}) {
+  const scope = useSurfaceScope();
+  const openInPane = useOpenInPane();
   const count = git.state === "ready" ? (git.value.files.totalEstimate ?? git.value.files.items.length) : undefined;
   return (
-    <Panel id="project-git" title="Git status" icon={<GitCommitHorizontal />} count={count} padding="none">
+    <Panel
+      id={scope.id("project-git")}
+      title="Git status"
+      headingLevel={scope.level(2)}
+      icon={<GitCommitHorizontal />}
+      count={count}
+      padding="none"
+      actions={
+        inGitPane ? undefined : (
+          <Tooltip content="Open Git status in a pane">
+            <IconButton
+              size="sm"
+              label="Open Git status in a pane"
+              icon={<PanelRight />}
+              onClick={() => void openInPane({ kind: "git", workspaceId }, { workspaceId, placement: "split" })}
+            />
+          </Tooltip>
+        )
+      }
+    >
       {git.state === "loading" ? (
         <div className={styles.loading}>
           <Skeleton width="50%" />
@@ -349,9 +471,16 @@ function GitPanel({ git }: { git: Loaded<GitStatusResponse> }) {
 }
 
 function RecentFilesPanel({ files, commits }: { files: RecentFile[] | null; commits: Loaded<Commit[]> }) {
+  const scope = useSurfaceScope();
   const now = Date.now();
   return (
-    <Panel id="project-recent" title="Recent files" icon={<History />} padding="none">
+    <Panel
+      id={scope.id("project-recent")}
+      title="Recent files"
+      headingLevel={scope.level(2)}
+      icon={<History />}
+      padding="none"
+    >
       <p className={styles.subhead}>Changed by threads</p>
       {files === null ? (
         <div className={styles.loading}>
@@ -379,35 +508,63 @@ function RecentFilesPanel({ files, commits }: { files: RecentFile[] | null; comm
         </ul>
       )}
       <p className={styles.subhead}>Recent commits</p>
-      {commits.state === "loading" ? (
-        <div className={styles.loading}>
-          <Skeleton width="60%" />
-        </div>
-      ) : commits.state === "error" ? (
-        <p className={styles.note}>{commits.code === "not_a_repository" ? "No Git history." : commits.message}</p>
-      ) : commits.value.length === 0 ? (
-        <p className={styles.note}>No commits yet.</p>
-      ) : (
-        <ul className={styles.commits} aria-label="Recent commits">
-          {commits.value.map((commit) => (
-            <li key={commit.oid} className={styles.commit}>
-              <span className={styles.oid}>{commit.oid.slice(0, 7)}</span>
-              <span className={styles.subject}>{commit.subject}</span>
-              <span className={styles.age}>{relativeTime(commit.committedAt, now)}</span>
-            </li>
-          ))}
-        </ul>
-      )}
+      <CommitList commits={commits} />
     </Panel>
+  );
+}
+
+function CommitsPanel({ commits }: { commits: Loaded<Commit[]> }) {
+  const scope = useSurfaceScope();
+  return (
+    <Panel
+      id={scope.id("git-commits")}
+      title="Recent commits"
+      headingLevel={scope.level(2)}
+      icon={<History />}
+      padding="none"
+    >
+      <CommitList commits={commits} />
+    </Panel>
+  );
+}
+
+function CommitList({ commits }: { commits: Loaded<Commit[]> }) {
+  const now = Date.now();
+  return commits.state === "loading" ? (
+    <div className={styles.loading}>
+      <Skeleton width="60%" />
+    </div>
+  ) : commits.state === "error" ? (
+    <p className={styles.note}>{commits.code === "not_a_repository" ? "No Git history." : commits.message}</p>
+  ) : commits.value.length === 0 ? (
+    <p className={styles.note}>No commits yet.</p>
+  ) : (
+    <ul className={styles.commits} aria-label="Recent commits">
+      {commits.value.map((commit) => (
+        <li key={commit.oid} className={styles.commit}>
+          <span className={styles.oid}>{commit.oid.slice(0, 7)}</span>
+          <span className={styles.subject}>{commit.subject}</span>
+          <span className={styles.age}>{relativeTime(commit.committedAt, now)}</span>
+        </li>
+      ))}
+    </ul>
   );
 }
 
 function ThreadsPanel({ threads }: { threads: Loaded<ThreadSummary[]> }) {
   const intents = useUiIntents();
+  const scope = useSurfaceScope();
   const open = threads.state === "ready" ? threads.value.filter((t) => t.archivedAt === null) : [];
   const now = Date.now();
   return (
-    <Panel id="project-threads" title="Threads" icon={<MessagesSquare />} count={open.length} padding="none">
+    <Panel
+      id={scope.id("project-threads")}
+      title="Threads"
+      headingLevel={scope.level(2)}
+      icon={<MessagesSquare />}
+      count={open.length}
+      padding="none"
+    >
       {threads.state === "loading" ? (
         <div className={styles.loading}>
           <Skeleton width="55%" />
@@ -445,10 +602,18 @@ function ThreadsPanel({ threads }: { threads: Loaded<ThreadSummary[]> }) {
 
 function TerminalsPanel() {
   const workspaces = useWorkspaces();
-  const { navigate } = useNavigation();
+  const openInPane = useOpenInPane();
+  const scope = useSurfaceScope();
   const tabs = workspaces.terminals;
   return (
-    <Panel id="project-terminals" title="Terminals" icon={<SquareTerminal />} count={tabs.length} padding="none">
+    <Panel
+      id={scope.id("project-terminals")}
+      title="Terminals"
+      headingLevel={scope.level(2)}
+      icon={<SquareTerminal />}
+      count={tabs.length}
+      padding="none"
+    >
       {tabs.length === 0 ? (
         <p className={styles.note}>No terminal tabs. Open Code to start one.</p>
       ) : (
@@ -458,10 +623,9 @@ function TerminalsPanel() {
               <button
                 type="button"
                 className={styles.threadButton}
-                onClick={() => {
-                  navigate("code");
-                  workspaces.selectTerminal(tab.id, true);
-                }}
+                onClick={() =>
+                  void openInPane({ kind: "terminal", terminalId: tab.id }, { workspaceId: tab.workspaceId })
+                }
               >
                 <SquareTerminal className={styles.terminalIcon} aria-hidden="true" />
                 <span className={styles.threadName}>{tab.title}</span>
@@ -483,11 +647,13 @@ function TerminalsPanel() {
 }
 
 function BranchesPanel({ branches }: { branches: Loaded<Branch[]> }) {
+  const scope = useSurfaceScope();
   const local = branches.state === "ready" ? branches.value.filter((b) => b.kind === "local") : [];
   return (
     <Panel
-      id="project-branches"
+      id={scope.id("project-branches")}
       title="Branches"
+      headingLevel={scope.level(2)}
       icon={<GitBranch />}
       count={branches.state === "ready" ? local.length : undefined}
       padding="none"
@@ -519,9 +685,16 @@ function BranchesPanel({ branches }: { branches: Loaded<Branch[]> }) {
 
 function SearchPrivacyPanel({ entry }: { entry: WorkspaceRailEntry }) {
   const rail = useOptionalRail();
+  const scope = useSurfaceScope();
   const [busy, setBusy] = useState(false);
   return (
-    <Panel id="project-search" title="Search" icon={<ScanSearch />} padding="md">
+    <Panel
+      id={scope.id("project-search")}
+      title="Search"
+      headingLevel={scope.level(2)}
+      icon={<ScanSearch />}
+      padding="md"
+    >
       <label className={styles.toggle}>
         <input
           type="checkbox"

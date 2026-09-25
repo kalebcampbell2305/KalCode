@@ -25,13 +25,13 @@ import {
   SquareTerminal,
   X,
 } from "lucide-react";
-import { type KeyboardEvent, useRef, useState } from "react";
+import { type KeyboardEvent, useId, useRef, useState } from "react";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { allEntries } from "./model.ts";
-import { RailDialogs, type RailDialogHost } from "./RailDialogs.tsx";
 import styles from "./Rail.module.css";
+import { type RailDialogHost, RailDialogs } from "./RailDialogs.tsx";
 import { useRail } from "./RailProvider.tsx";
-import { WorkspaceTile, RailTree } from "./RailTree.tsx";
+import { RailTree, WorkspaceTile } from "./RailTree.tsx";
 import { HighlightedTitle, KIND_ICON } from "./search/LocatorResults.tsx";
 import { useOptionalSearch } from "./search/SearchProvider.tsx";
 import { useLocatorSearch } from "./search/useLocatorSearch.ts";
@@ -42,7 +42,8 @@ export const RAIL_SHORTCUT = "Ctrl Shift B";
 /**
  * The workspace rail (Z7-W2): a column between the sidebar and the page with Pinned, Folders,
  * Recent and Archived workspaces, each a tree of provider rows and threads with live counts.
- * Collapses to a narrow strip of workspace tiles (Ctrl+Shift+B), and remembers that.
+ * Collapses to a narrow strip of workspace tiles (Ctrl+Shift+B), and remembers that. The same
+ * list is also a pane widget (`kalcode.workspaces`, see `WorkspacesPane`).
  */
 export function WorkspaceRail() {
   const rail = useRail();
@@ -56,20 +57,38 @@ export function WorkspaceRail() {
   );
 }
 
-function RailColumn({ onDialog }: { onDialog: (dialog: RailDialogHost) => void }) {
+/** The workspace list as pane content: the rail's search, tree and actions, filling the pane. */
+export function WorkspacesPane() {
+  const rail = useRail();
+  const [dialog, setDialog] = useState<RailDialogHost | null>(null);
+  if (!rail.enabled) {
+    return <p className={styles.paneNote}>The workspace rail isn't part of this build.</p>;
+  }
+  return (
+    <>
+      <RailColumn onDialog={setDialog} inPane />
+      <RailDialogs dialog={dialog} onClose={() => setDialog(null)} />
+    </>
+  );
+}
+
+function RailColumn({ onDialog, inPane = false }: { onDialog: (dialog: RailDialogHost) => void; inPane?: boolean }) {
   const rail = useRail();
   const workspaces = useWorkspaces();
   const [query, setQuery] = useState("");
+  const headingId = useId();
   const count = rail.rail ? allEntries(rail.rail).filter((e) => !e.archived).length : 0;
+  const Frame = inPane ? "div" : "aside";
   return (
-    <aside
-      className={styles.rail}
-      aria-label="Workspace rail"
-      data-workspace-rail
+    <Frame
+      className={inPane ? styles.railPane : styles.rail}
+      aria-label={inPane ? undefined : "Workspace rail"}
+      data-workspace-rail={inPane ? undefined : true}
+      data-rail-surface
       data-persistent={rail.rail?.persistent ?? true}
     >
       <div className={styles.header}>
-        <h2 className={styles.heading} id="rail-heading">
+        <h2 className={styles.heading} id={headingId}>
           Workspaces
           {count > 0 ? <span className={styles.headingCount}>{count}</span> : null}
         </h2>
@@ -104,9 +123,16 @@ function RailColumn({ onDialog }: { onDialog: (dialog: RailDialogHost) => void }
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        <Tooltip content={`Hide the rail (${RAIL_SHORTCUT})`}>
-          <IconButton size="sm" label="Hide the workspace rail" icon={<PanelLeftClose />} onClick={rail.toggleHidden} />
-        </Tooltip>
+        {inPane ? null : (
+          <Tooltip content={`Hide the rail (${RAIL_SHORTCUT})`}>
+            <IconButton
+              size="sm"
+              label="Hide the workspace rail"
+              icon={<PanelLeftClose />}
+              onClick={rail.toggleHidden}
+            />
+          </Tooltip>
+        )}
       </div>
 
       <RailSearch query={query} onQuery={setQuery} />
@@ -130,14 +156,14 @@ function RailColumn({ onDialog }: { onDialog: (dialog: RailDialogHost) => void }
         ) : rail.rail && count + rail.rail.archived.length === 0 ? (
           <RailEmpty onDialog={onDialog} />
         ) : (
-          <RailTree onDialog={onDialog} />
+          <RailTree onDialog={onDialog} label={inPane ? "Workspaces in this pane" : "Workspaces"} />
         )}
       </div>
 
       {rail.rail && !rail.rail.persistent ? (
         <p className={styles.sessionNote}>Rail changes last for this session in this build.</p>
       ) : null}
-    </aside>
+    </Frame>
   );
 }
 
@@ -180,7 +206,7 @@ function RailSearch({ query, onQuery }: { query: string; onQuery: (q: string) =>
     } else if (event.key === "ArrowDown") {
       // Into the results (or the tree).
       const next = input.current
-        ?.closest("aside")
+        ?.closest("[data-rail-surface]")
         ?.querySelector<HTMLElement>('[role="treeitem"][tabindex="0"], [data-rail-result]');
       if (next) {
         event.preventDefault();

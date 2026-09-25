@@ -593,3 +593,27 @@
   font-size: var(--type-small);
   line-height: var(--leading-normal);
 }
+
+/* In a pane (`kalcode.project`, the Git pane): the pane is the frame. */
+.page[data-in-pane] {
+  gap: var(--space-4);
+  min-height: auto;
+  padding: var(--space-4) var(--space-5) var(--space-6);
+}
+
+.page[data-in-pane] .title {
+  font-size: var(--type-headline);
+}
+
+.gitPaneGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--panel-gap, var(--space-4));
+  align-items: start;
+}
+
+@container (min-width: 44rem) {
+  .gitPaneGrid {
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  }
+}

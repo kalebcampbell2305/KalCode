@@ -40,6 +40,7 @@ import { useNavigation } from "../../shell/navigation.tsx";
 import { badgeLabel, relativeTime } from "../../shell/rail/model.ts";
 import { useOptionalRail } from "../../shell/rail/RailProvider.tsx";
 import { useOptionalSearch } from "../../shell/rail/search/SearchProvider.tsx";
+import { ScopedHeading, useSurfaceScope } from "../../shell/rail/surfaceScope.tsx";
 import { MOD_LABEL } from "../../shell/shortcuts.ts";
 import { useThreadsIntent } from "../threads/intent.tsx";
 import styles from "./Home.module.css";
@@ -52,9 +53,11 @@ const RELEVANT = /^(thread\.|approval\.|workspace\.|settings\.changed)/;
  * The returning-user home (Z7-W2): a greeting by the Settings display name, then what needs
  * you, what's running, what finished since your last visit, where to pick up, your recent
  * workspaces and recent work — all from real state. A first run says so and shows next steps.
+ * Also shown in a pane (`kalcode.home`): there it never counts as a visit (no new greeting).
  */
 export function HomeSurface() {
   const { client } = useRuntime();
+  const scope = useSurfaceScope();
   const { events } = useEvents();
   const [summary, setSummary] = useState<HomeSummary | null>(null);
   const [error, setError] = useState<KalCodeError | null>(null);
@@ -77,7 +80,7 @@ export function HomeSurface() {
   );
 
   // One visit per mount: a remount in development StrictMode refreshes without a new greeting.
-  const visited = useRef(false);
+  const visited = useRef(scope.inPane);
   useEffect(() => {
     void load(!visited.current);
     visited.current = true;
@@ -95,9 +98,9 @@ export function HomeSurface() {
 
   if (error && !summary) {
     return (
-      <div className={styles.home}>
+      <div className={styles.home} data-in-pane={scope.inPane || undefined}>
         <ErrorState
-          headingLevel={1}
+          headingLevel={scope.level(1)}
           title="Home couldn't load"
           code={error.code}
           actions={
@@ -113,7 +116,7 @@ export function HomeSurface() {
   }
   if (!summary) {
     return (
-      <div className={styles.home} aria-busy="true">
+      <div className={styles.home} data-in-pane={scope.inPane || undefined} aria-busy="true">
         <header className={styles.hero}>
           <Skeleton width="12rem" />
           <Skeleton width="24rem" height="2rem" />
@@ -134,7 +137,9 @@ function Hero({ summary }: { summary: HomeSummary }) {
   return (
     <header className={styles.hero}>
       <p className={styles.eyebrow}>{dateEyebrow()}</p>
-      <h1 className={styles.greeting}>{summary.greeting}</h1>
+      <ScopedHeading level={1} className={styles.greeting}>
+        {summary.greeting}
+      </ScopedHeading>
       <p className={styles.summary}>{summaryLine(summary)}</p>
       <div className={styles.heroActions}>
         {summary.firstRun ? null : (
@@ -170,13 +175,14 @@ function Hero({ summary }: { summary: HomeSummary }) {
 }
 
 function FirstRun({ summary }: { summary: HomeSummary }) {
+  const scope = useSurfaceScope();
   const { navigate } = useNavigation();
   const threadsIntent = useThreadsIntent();
   const workspaces = useWorkspaces();
   const rail = useOptionalRail();
   const hasWorkspace = summary.workspaceCount > 0;
   return (
-    <div className={styles.home} data-first-run>
+    <div className={styles.home} data-first-run data-in-pane={scope.inPane || undefined}>
       <Hero summary={summary} />
       <ol className={styles.steps} aria-label="Get started">
         <li className={styles.step} data-done={hasWorkspace || undefined}>
@@ -184,7 +190,9 @@ function FirstRun({ summary }: { summary: HomeSummary }) {
             {hasWorkspace ? <CircleCheck /> : <FolderOpen />}
           </span>
           <div className={styles.stepText}>
-            <h2 className={styles.stepTitle}>Open a project folder</h2>
+            <ScopedHeading level={2} className={styles.stepTitle}>
+              Open a project folder
+            </ScopedHeading>
             <p>A workspace is a folder on this computer. Its threads, terminals and files gather in one place.</p>
           </div>
           <Button
@@ -203,7 +211,9 @@ function FirstRun({ summary }: { summary: HomeSummary }) {
             <PlugZap />
           </span>
           <div className={styles.stepText}>
-            <h2 className={styles.stepTitle}>Connect a provider</h2>
+            <ScopedHeading level={2} className={styles.stepTitle}>
+              Connect a provider
+            </ScopedHeading>
             <p>KalCode runs the provider CLIs you already use, with your own sign-in. See which are ready.</p>
           </div>
           <Button variant="secondary" size="sm" onClick={() => navigate("providers")}>
@@ -215,7 +225,9 @@ function FirstRun({ summary }: { summary: HomeSummary }) {
             <Zap />
           </span>
           <div className={styles.stepText}>
-            <h2 className={styles.stepTitle}>Start a thread</h2>
+            <ScopedHeading level={2} className={styles.stepTitle}>
+              Start a thread
+            </ScopedHeading>
             <p>Give an agent a task in your workspace. You approve what it may do.</p>
           </div>
           <Button
@@ -274,13 +286,14 @@ function NameHint() {
 }
 
 function Returning({ summary }: { summary: HomeSummary }) {
+  const scope = useSurfaceScope();
   const pickUp = mergeUnique(
     summary.resumable,
     summary.lastSession.filter((i) => i.kind === "thread"),
   ).slice(0, 6);
   const lastWorkspaces = summary.lastSession.filter((i) => i.kind === "workspace");
   return (
-    <div className={styles.home}>
+    <div className={styles.home} data-in-pane={scope.inPane || undefined}>
       <Hero summary={summary} />
       <div className={styles.grid}>
         <div className={styles.live}>
@@ -342,10 +355,17 @@ function Returning({ summary }: { summary: HomeSummary }) {
 
 /** Nothing running, waiting or newly finished: one calm panel instead of three empty ones. */
 function AllClear() {
+  const scope = useSurfaceScope();
   const { navigate } = useNavigation();
   const threadsIntent = useThreadsIntent();
   return (
-    <Panel id="home-right-now" title="Right now" icon={<CircleCheck />} padding="md">
+    <Panel
+      id={scope.id("home-right-now")}
+      title="Right now"
+      headingLevel={scope.level(2)}
+      icon={<CircleCheck />}
+      padding="md"
+    >
       <div className={styles.allClear}>
         <p className={styles.allClearTitle}>All clear.</p>
         <p className={styles.allClearText}>
@@ -411,11 +431,13 @@ function ItemsPanel({
   showResume?: boolean;
 }) {
   const open = useOpenItem();
+  const scope = useSurfaceScope();
   const now = Date.now();
   return (
     <Panel
-      id={id}
+      id={scope.id(id)}
       title={title}
+      headingLevel={scope.level(2)}
       icon={icon}
       count={count}
       countTone={countTone ?? "neutral"}
@@ -478,12 +500,20 @@ function ItemLead({ item }: { item: RecentWorkItem }) {
 
 function RecentWorkspaces({ entries }: { entries: WorkspaceRailEntry[] }) {
   const intents = useUiIntents();
+  const scope = useSurfaceScope();
   const continueIn = (entry: WorkspaceRailEntry) => {
     void intents.focus({ kind: "workspace", workspaceId: entry.workspaceId });
   };
   const now = Date.now();
   return (
-    <Panel id="home-workspaces" title="Recent workspaces" icon={<FolderClosed />} count={entries.length} padding="none">
+    <Panel
+      id={scope.id("home-workspaces")}
+      title="Recent workspaces"
+      headingLevel={scope.level(2)}
+      icon={<FolderClosed />}
+      count={entries.length}
+      padding="none"
+    >
       {entries.length === 0 ? (
         <p className={styles.panelEmpty}>No workspaces yet. Open a folder to add one.</p>
       ) : (
@@ -536,6 +566,7 @@ function RecentWork() {
   const [items, setItems] = useState<Record<string, RecentWorkItem[] | undefined>>({});
   const [error, setError] = useState<string | null>(null);
   const open = useOpenItem();
+  const scope = useSurfaceScope();
   useEffect(() => {
     let live = true;
     client
@@ -553,7 +584,14 @@ function RecentWork() {
   const list = items[when];
   const now = Date.now();
   return (
-    <Panel id="home-recent-work" title="Recent work" icon={<History />} padding="none" className={styles.recentWork}>
+    <Panel
+      id={scope.id("home-recent-work")}
+      title="Recent work"
+      headingLevel={scope.level(2)}
+      icon={<History />}
+      padding="none"
+      className={styles.recentWork}
+    >
       <Tabs value={when} onValueChange={(v) => setWhen(v as RecentWorkWhen)}>
         <TabsList variant="line" aria-label="When" className={styles.tabs}>
           {WHEN.map((w) => (
