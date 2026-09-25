@@ -1,4 +1,4 @@
-import { Button, ErrorState, KeyValueList, Section, Skeleton, StatusIndicator } from "@kalcode/ui/components";
+import { Button, ErrorState, KeyValueList, Panel, Skeleton, StatusIndicator } from "@kalcode/ui/components";
 import { type ReactNode, useEffect, useState } from "react";
 import { formatDuration, formatRelative } from "../../runtime/describeEvent.ts";
 import { useDiagnostics } from "../../runtime/useDiagnostics.ts";
@@ -24,11 +24,11 @@ function Detail({ status, detail }: { status: ReactNode; detail: string }) {
 
 function providersValue({ summary, failed }: { summary: ProvidersSummary | null; failed: boolean }): ReactNode {
   if (!summary) return failed ? "Unavailable" : <Skeleton width="60%" />;
-  if (!summary.checked) return <StatusIndicator tone="idle">Not checked</StatusIndicator>;
+  if (!summary.checked) return <StatusIndicator tone="muted">Not checked</StatusIndicator>;
   return (
     <Detail
       status={
-        <StatusIndicator tone={summary.installed > 0 ? "success" : "idle"}>
+        <StatusIndicator tone={summary.installed > 0 ? "working" : "muted"}>
           {summary.installed} of {summary.total} installed
         </StatusIndicator>
       }
@@ -50,24 +50,24 @@ export function RuntimeHealth() {
 
   if (error && !data) {
     return (
-      <Section title="Runtime">
+      <Panel title="Runtime" bodyClassName={styles.body}>
         <ErrorState title="Runtime status unavailable" actions={<Button onClick={refresh}>Try again</Button>}>
           <p>{error.message}</p>
         </ErrorState>
-      </Section>
+      </Panel>
     );
   }
 
   if (!data) {
     return (
-      <Section title="Runtime">
+      <Panel title="Runtime" bodyClassName={styles.body}>
         <div role="status" aria-busy="true" className={styles.loading}>
           <span className="visually-hidden">Loading runtime status</span>
           <Skeleton width="70%" />
           <Skeleton width="55%" />
           <Skeleton width="62%" />
         </div>
-      </Section>
+      </Panel>
     );
   }
 
@@ -76,8 +76,9 @@ export function RuntimeHealth() {
   const db = data.database;
 
   return (
-    <Section title="Runtime">
+    <Panel title="Runtime" bodyClassName={styles.body}>
       <KeyValueList
+        className={styles.kv}
         items={[
           {
             key: "core",
@@ -85,7 +86,7 @@ export function RuntimeHealth() {
             value: (
               <Detail
                 status={
-                  <StatusIndicator tone="live" pulse>
+                  <StatusIndicator tone="working" pulse>
                     Running
                   </StatusIndicator>
                 }
@@ -99,7 +100,7 @@ export function RuntimeHealth() {
             value: (
               <Detail
                 status={
-                  <StatusIndicator tone={db.schemaVersion === db.latestSchemaVersion ? "success" : "waiting"}>
+                  <StatusIndicator tone={db.schemaVersion === db.latestSchemaVersion ? "working" : "waiting"}>
                     {db.schemaVersion === db.latestSchemaVersion ? "Healthy" : "Upgrade pending"}
                   </StatusIndicator>
                 }
@@ -112,14 +113,14 @@ export function RuntimeHealth() {
             label: "Credential store",
             value:
               store.lastCheckedAt === null ? (
-                <StatusIndicator tone="idle">Not checked yet</StatusIndicator>
+                <StatusIndicator tone="muted">Not checked yet</StatusIndicator>
               ) : (
                 <Detail
                   status={
                     store.lastCheckOk ? (
-                      <StatusIndicator tone="success">Verified</StatusIndicator>
+                      <StatusIndicator tone="working">Verified</StatusIndicator>
                     ) : (
-                      <StatusIndicator tone="danger">Check failed</StatusIndicator>
+                      <StatusIndicator tone="failed">Check failed</StatusIndicator>
                     )
                   }
                   detail={`${store.backend ?? "System store"}, ${formatRelative(store.lastCheckedAt, now)}`}
@@ -139,6 +140,6 @@ export function RuntimeHealth() {
           {store.lastCheckedAt === null ? "Check credential store" : "Check again"}
         </Button>
       </div>
-    </Section>
+    </Panel>
   );
 }

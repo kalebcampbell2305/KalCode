@@ -1,5 +1,5 @@
 import type { ThreadSummary } from "@kalcode/protocol";
-import { Button, EmptyState, ErrorState, Section, Skeleton } from "@kalcode/ui/components";
+import { Button, EmptyState, ErrorState, Panel, Skeleton } from "@kalcode/ui/components";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { ConstellationArt } from "./ConstellationArt.tsx";
 import { useThreadSummaries } from "./data/DashboardData.tsx";
@@ -41,7 +41,13 @@ export function ThreadList({ now }: { now: number }) {
   let body: React.ReactNode;
   if (state.status === "unavailable") {
     body = (
-      <EmptyState art={<ConstellationArt />} title="Threads arrive with provider support" className={styles.empty}>
+      <EmptyState
+        art={<ConstellationArt />}
+        artStyle="free"
+        framed={false}
+        title="Threads arrive with provider support"
+        className={styles.empty}
+      >
         <p>
           When Claude Code, Codex or Gemini CLI run in your projects, each thread appears here with its provider, model,
           current activity and status, and any approval it's waiting on appears above it.
@@ -67,6 +73,8 @@ export function ThreadList({ now }: { now: number }) {
       open.length === 0 ? (
         <EmptyState
           art={<ConstellationArt />}
+          artStyle="free"
+          framed={false}
           title="No active threads"
           className={styles.empty}
           actions={<Button onClick={() => navigate("threads")}>Go to Threads</Button>}
@@ -106,7 +114,7 @@ export function ThreadList({ now }: { now: number }) {
   }
 
   return (
-    <Section
+    <Panel
       id="threads"
       title="Threads"
       description={state.status === "ready" && state.error ? `Couldn't refresh: ${state.error.message}` : undefined}
@@ -119,6 +127,6 @@ export function ThreadList({ now }: { now: number }) {
       }
     >
       {body}
-    </Section>
+    </Panel>
   );
 }

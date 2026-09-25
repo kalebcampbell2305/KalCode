@@ -1,5 +1,5 @@
 import { Skeleton } from "@kalcode/ui/components";
-import { CircleX, type LucideIcon, MessageCircleQuestion, ShieldAlert, Sparkles, SquareTerminal } from "lucide-react";
+import { Activity, CircleX, type LucideIcon, MessageCircleQuestion, ShieldAlert, SquareTerminal } from "lucide-react";
 import type { RuntimeSummary } from "./data/summary.ts";
 import styles from "./SummaryStrip.module.css";
 import { focusSection } from "./useNow.ts";
@@ -9,7 +9,8 @@ interface Segment {
   count: number | null;
   label: string;
   icon: LucideIcon;
-  tone: "live" | "waiting" | "danger" | "idle";
+  /** Contract tone of what is counted (waiting is neutral; amber is reserved for paused). */
+  tone: "working" | "waiting" | "failed" | "muted";
   target: string;
 }
 
@@ -22,8 +23,9 @@ interface SummaryStripProps {
 }
 
 /**
- * The Dashboard's header counts. A proportional rule shows how open threads divide between
- * working, needing you and idle; each count jumps to the section that explains it.
+ * The Dashboard's KPI row. A lit proportional rule shows how open threads divide between
+ * working, needing you and idle; each tile jumps to the section that explains it. Tile text is
+ * "<count> <label>" in DOM order (the accessible name); CSS shows the label above the count.
  */
 export function SummaryStrip({ summary, approvalsAvailable, terminalsAvailable, loading }: SummaryStripProps) {
   if (loading || !summary) {
@@ -33,7 +35,7 @@ export function SummaryStrip({ summary, approvalsAvailable, terminalsAvailable, 
         <Skeleton height="2px" />
         <div className={styles.segments}>
           {[0, 1, 2].map((i) => (
-            <Skeleton key={i} width="7rem" height="1.75rem" />
+            <Skeleton key={i} width="100%" height="4.25rem" />
           ))}
         </div>
       </div>
@@ -42,7 +44,7 @@ export function SummaryStrip({ summary, approvalsAvailable, terminalsAvailable, 
 
   const { counts } = summary;
   const segments: Segment[] = [
-    { key: "running", count: counts.running, label: "Working", icon: Sparkles, tone: "live", target: "threads" },
+    { key: "running", count: counts.running, label: "Working", icon: Activity, tone: "working", target: "threads" },
     ...(approvalsAvailable
       ? [
           {
@@ -63,7 +65,7 @@ export function SummaryStrip({ summary, approvalsAvailable, terminalsAvailable, 
       tone: "waiting",
       target: "threads",
     },
-    { key: "failed", count: counts.failed, label: "Failed", icon: CircleX, tone: "danger", target: "recent" },
+    { key: "failed", count: counts.failed, label: "Failed", icon: CircleX, tone: "failed", target: "recent" },
     ...(terminalsAvailable
       ? [
           {
@@ -71,7 +73,7 @@ export function SummaryStrip({ summary, approvalsAvailable, terminalsAvailable, 
             count: summary.runningTerminals,
             label: summary.runningTerminals === 1 ? "Terminal" : "Terminals",
             icon: SquareTerminal,
-            tone: "idle" as const,
+            tone: "muted" as const,
             target: "terminals",
           },
         ]
@@ -85,9 +87,9 @@ export function SummaryStrip({ summary, approvalsAvailable, terminalsAvailable, 
     <nav className={styles.strip} aria-label="Summary">
       {total > 0 ? (
         <div className={styles.meter} aria-hidden="true">
-          <span data-tone="live" style={{ flexGrow: working }} />
+          <span data-tone="working" style={{ flexGrow: working }} />
           <span data-tone="waiting" style={{ flexGrow: attention }} />
-          <span data-tone="idle" style={{ flexGrow: resting }} />
+          <span data-tone="muted" style={{ flexGrow: resting }} />
         </div>
       ) : (
         <div className={styles.meter} aria-hidden="true" />

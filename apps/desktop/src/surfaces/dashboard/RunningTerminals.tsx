@@ -1,5 +1,5 @@
 import type { TerminalInfo, ThreadSummary } from "@kalcode/protocol";
-import { Button, ErrorState, Section, Skeleton } from "@kalcode/ui/components";
+import { Button, ErrorState, Panel, Skeleton } from "@kalcode/ui/components";
 import { SquareTerminal } from "lucide-react";
 import { formatAbsolute } from "../../runtime/describeEvent.ts";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
@@ -35,7 +35,11 @@ export function RunningTerminals({ threads, now }: RunningTerminalsProps) {
   };
 
   return (
-    <Section id="terminals" title="Terminals">
+    <Panel
+      id="terminals"
+      title="Terminals"
+      count={state.status === "ready" && state.data.length > 0 ? state.data.length : undefined}
+    >
       {state.status === "loading" ? (
         <div className={styles.list} role="status" aria-busy="true">
           <span className="visually-hidden">Loading terminals</span>
@@ -94,6 +98,6 @@ export function RunningTerminals({ threads, now }: RunningTerminalsProps) {
           })}
         </div>
       )}
-    </Section>
+    </Panel>
   );
 }

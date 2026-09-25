@@ -1,5 +1,5 @@
 import type { ThreadSummary } from "@kalcode/protocol";
-import { Button } from "@kalcode/ui/components";
+import { Button, ProviderMark } from "@kalcode/ui/components";
 import { FileDiff, Folder, GitBranch, MessageCircle, ShieldAlert } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
@@ -87,7 +87,7 @@ export function ThreadRow({ thread, now, pending, onAction, variant = "open" }: 
           <div>
             <dt className="visually-hidden">Provider</dt>
             <dd className={styles.provider}>
-              {thread.providerName}
+              <ProviderMark provider={thread.providerId} name={thread.providerName} size="xs" />
               {thread.model ? <span className={styles.model}>{thread.model}</span> : null}
               {thread.accountLabel ? <span className={styles.model}>{thread.accountLabel} account</span> : null}
             </dd>
