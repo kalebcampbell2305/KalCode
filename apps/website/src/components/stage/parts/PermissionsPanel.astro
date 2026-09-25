@@ -1,0 +1,99 @@
+---
+/**
+ * Permission modes and what they let an agent do: a radio group of modes (Plan, Approve, Auto,
+ * Bypass, Custom), an authority meter, an Allow / Ask / Deny table per action (from
+ * /docs/permissions), and the approval card for Codex's `pnpm add zod`, which changes with the
+ * selected mode. `compact` shows one mode column (dock); `full` shows all and highlights one.
+ */
+import {
+  AUTHORITY,
+  type ApprovalState,
+  MODES,
+  OUTCOME_LABEL,
+  type PermissionMode,
+  ZOD_APPROVAL,
+} from "../../../data/story";
+import ApprovalCard from "./ApprovalCard.astro";
+
+interface Props {
+  uid: string;
+  mode: PermissionMode;
+  approval: ApprovalState;
+  interactive: boolean;
+  variant?: "compact" | "full";
+  resettable?: boolean;
+}
+
+const { uid, mode, approval, interactive, variant = "compact", resettable = false } = Astro.props;
+const outcome = ZOD_APPROVAL.byMode[mode];
+const cardState = outcome === "ask" ? (approval === "none" ? "pending" : approval) : `mode-${outcome}`;
+const outcomeIcon = { allow: "check", ask: "approval", deny: "close" } as const;
+---
+<div class="kc-perms" data-kc-perms data-mode={mode} data-variant={variant} data-testid={`permissions-${variant}`}>
+  <div
+    class="kc-perms__modes"
+    role={interactive ? "radiogroup" : undefined}
+    aria-label={interactive ? "Permission mode" : undefined}
+  >
+    {MODES.map((m) =>
+      interactive ? (
+        <button
+          type="button"
+          role="radio"
+          class="kc-mode"
+          data-kc-mode={m.id}
+          aria-checked={m.id === mode ? "true" : "false"}
+          tabindex={m.id === mode ? 0 : -1}
+          aria-describedby={`${uid}-hint-${m.id}`}
+          data-testid={`mode-${m.id}`}
+        >
+          <span class="kc-mode__label">{m.label}{m.planned && <span class="kc-tag">Planned</span>}</span>
+          <span class="kc-meter" data-level={m.authority} aria-hidden="true"><span></span><span></span><span></span><span></span></span>
+        </button>
+      ) : (
+        <span class="kc-mode" data-kc-mode={m.id} data-checked={m.id === mode ? "true" : undefined}>
+          <span class="kc-mode__label">{m.label}{m.planned && <span class="kc-tag">Planned</span>}</span>
+          <span class="kc-meter" data-level={m.authority} aria-hidden="true"><span></span><span></span><span></span><span></span></span>
+        </span>
+      ),
+    )}
+  </div>
+
+  <div class="kc-perms__hints">
+    {MODES.map((m) => (
+      <p class="kc-perms__hint" data-for={m.id} id={`${uid}-hint-${m.id}`}>
+        <b>{m.label}.</b> {m.hint}.
+        <span class="kc-perms__auth">Agent authority: {m.planned ? "set by your profile" : ["", "read only", "asks first", "routine work", "broad local"][m.authority]}</span>
+      </p>
+    ))}
+  </div>
+
+  <div class="kc-perms__tablewrap">
+    <table class="kc-perms__table">
+      <caption class="visually-hidden">What an agent may do in each permission mode</caption>
+      <thead>
+        <tr>
+          <th scope="col">Action</th>
+          {MODES.map((m) => <th scope="col" data-col={m.id}>{m.label}</th>)}
+        </tr>
+      </thead>
+      <tbody>
+        {AUTHORITY.map((row) => (
+          <tr>
+            <th scope="row">{row.action}<code>{row.scope}</code></th>
+            {MODES.map((m) => {
+              const o = row.outcomes[m.id];
+              return (
+                <td data-col={m.id} data-outcome={o}>
+                  <span class="kc-out"><span class="kc-i" data-i={outcomeIcon[o]} aria-hidden="true"></span>{OUTCOME_LABEL[o]}</span>
+                </td>
+              );
+            })}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+
+  <ApprovalCard uid={`${uid}-perm`} approval={ZOD_APPROVAL} state={cardState} interactive={interactive} mode={mode} resettable={resettable} />
+</div>

@@ -1,0 +1,18 @@
+---
+/**
+ * A control inside the drawn window. When the window is interactive it is a real <button>;
+ * when the window is a picture (scroll story, stills) it is a <span> that looks the same, so
+ * nothing unreachable is ever announced as a control. The span keeps only class and data-*.
+ */
+import type { HTMLAttributes } from "astro/types";
+
+interface Props extends HTMLAttributes<"button"> {
+  interactive: boolean;
+}
+const { interactive, ...rest } = Astro.props;
+const inert: Record<string, unknown> = {};
+for (const [key, value] of Object.entries(rest)) {
+  if (key === "class" || key.startsWith("data-")) inert[key] = value;
+}
+---
+{interactive ? <button type="button" {...rest}><slot /></button> : <span {...inert}><slot /></span>}

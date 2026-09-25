@@ -1,0 +1,41 @@
+---
+/**
+ * PermissionModes: choose Plan, Approve, Auto, Bypass or Custom and see how much an agent may
+ * do on its own (Allow / Ask / Deny per action, from /docs/permissions). Hovering or focusing a
+ * mode previews it. The approval card shows what happens to Codex's `pnpm add zod` in that mode;
+ * when the mode asks, Deny · Allow for thread · Approve once decide it, and "Ask again" resets.
+ */
+import StageStyles from "./parts/StageStyles.astro";
+import type { PermissionMode } from "../../data/story";
+import PermissionsPanel from "./parts/PermissionsPanel.astro";
+import StageLabel from "./parts/StageLabel.astro";
+
+interface Props {
+  id?: string;
+  mode?: PermissionMode;
+  class?: string;
+}
+const { id = "permission-modes", mode = "approve", class: className } = Astro.props;
+---
+<StageStyles />
+<div
+  class:list={["kc-pm", className]}
+  id={id}
+  data-kc-app
+  data-kc-auto="true"
+  data-interactive="true"
+  data-approval="pending"
+  data-mode={mode}
+  data-panes=""
+  data-dock="none"
+  data-testid="permission-modes"
+>
+  <StageLabel tag="Modes as designed · the mode switcher is in development" />
+  <PermissionsPanel uid={id} mode={mode} approval="pending" interactive={true} variant="full" resettable />
+  <p class="visually-hidden" aria-live="polite" data-kc-live data-testid={`live-${id}`}></p>
+</div>
+
+<script>
+  import { initAutoApps } from "../../scripts/stage/app";
+  initAutoApps();
+</script>

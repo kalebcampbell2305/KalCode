@@ -25,13 +25,10 @@ const entries = DOCS_NAV.filter((item) => item.href !== "/docs").map((item) => (
       </ul>
     </nav>
     <div class="docs__content">
-      <header class="page-head__inner">
+      <header class="docs__head">
         <h1 class="h1">Documentation</h1>
         <p class="lead">How KalCode is designed to work, one topic at a time.</p>
-        <p class="dev-note dev-note--boxed">
-          KalCode is in private development. These pages describe the product as it is designed;
-          details may change before release.
-        </p>
+        <p class="status-line"><span class="chip chip--dev">Describes the design</span> These pages describe KalCode as designed; details may change.</p>
       </header>
       <ul class="doc-index" role="list">
         {

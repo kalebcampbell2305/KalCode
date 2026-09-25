@@ -8,6 +8,7 @@ import decaLatin from "@fontsource-variable/lexend-deca/files/lexend-deca-latin-
 import exaLatin from "@fontsource-variable/lexend-exa/files/lexend-exa-latin-wght-normal.woff2?url";
 import Footer from "../components/Footer.astro";
 import Header from "../components/Header.astro";
+import { TWITTER_SITE, jsonLdText } from "../lib/seo";
 import { SITE_NAME, SITE_ORIGIN } from "../lib/site";
 import { THEME_SCRIPT } from "../lib/theme-script";
 
@@ -17,11 +18,17 @@ interface Props {
   /** Canonical path, e.g. "/pricing". */
   path: string;
   noindex?: boolean;
+  /** Home only: the header joins the hero's night band. */
+  nightHeader?: boolean;
+  /** schema.org JSON-LD for this page (a non-executing data block; see lib/seo.ts). */
+  jsonLd?: Record<string, unknown>;
 }
 
-const { title, description, path, noindex = false } = Astro.props;
+const { title, description, path, noindex = false, nightHeader = false, jsonLd } = Astro.props;
 const canonical = new URL(path, SITE_ORIGIN).href;
 const ogImage = new URL("/og.png", SITE_ORIGIN).href;
+const ogImageAlt =
+  "The KalCode globe with a terminal prompt, orbited by connected points of light, above the KalCode name and the line One intelligence. A brighter tomorrow.";
 ---
 <!doctype html>
 <html lang="en" data-theme="dark">
@@ -53,16 +60,19 @@ const ogImage = new URL("/og.png", SITE_ORIGIN).href;
     <meta property="og:image" content={ogImage} />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="The KalCode globe with a terminal prompt, orbited by connected points of light, above the KalCode name and the line One intelligence. A brighter tomorrow." />
+    <meta property="og:image:alt" content={ogImageAlt} />
     <meta property="og:locale" content="en_US" />
     <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:site" content={TWITTER_SITE} />
     <meta name="twitter:title" content={title} />
     <meta name="twitter:description" content={description} />
     <meta name="twitter:image" content={ogImage} />
+    <meta name="twitter:image:alt" content={ogImageAlt} />
+    {jsonLd && <script type="application/ld+json" is:inline set:html={jsonLdText(jsonLd)} />}
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
-    <Header path={path} />
+    <Header path={path} night={nightHeader} />
     <main id="main" tabindex="-1">
       <slot />
     </main>

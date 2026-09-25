@@ -1,0 +1,104 @@
+---
+/**
+ * The approval card, matching the app's approval prompt (0.1.0): title, kind (+ "Leaves this
+ * machine"), the exact command, Thread / Provider / Workspace / Mode, scope tags and reason, then
+ * the answers the engine allows, in the app's order: Deny · Allow for workspace · Allow for
+ * thread · Approve once (primary), with a line explaining each standing answer. Requests in an
+ * always-ask scope (a push leaves this machine) offer only Deny · Approve once. Like the app,
+ * no single-key shortcuts are bound.
+ *
+ * `data-state`: none (not asked yet) · pending · approved · allowed · workspace · denied, plus
+ * mode-allow / mode-deny when the selected permission mode settles it without asking.
+ */
+import { type Approval, MODES, PROVIDERS, PUSH_APPROVAL, type PermissionMode, threadById } from "../../../data/story";
+import Btn from "./Btn.astro";
+
+interface Props {
+  approval: Approval | typeof PUSH_APPROVAL;
+  state: string;
+  interactive: boolean;
+  mode?: PermissionMode;
+  /** Unique id prefix for this instance (ids must be unique on the page). */
+  uid: string;
+  /** Show the Reset control after a decision (standalone demos). */
+  resettable?: boolean;
+  class?: string;
+}
+
+const { approval, state, interactive, mode, uid, resettable = false, class: className } = Astro.props;
+const thread = threadById(approval.threadId);
+const provider = PROVIDERS[thread.provider];
+const modeLabel = MODES.find((m) => m.id === (mode ?? thread.mode))?.label ?? "Approve";
+const full = "coverage" in approval ? approval : undefined;
+const results: Partial<Record<string, string>> = approval.results;
+const standing = !("leavesMachine" in approval && approval.leavesMachine);
+const titleId = `${uid}-appr-${approval.id}`;
+const coverage = full?.coverage ?? "Requests like this one";
+const wsId = `${titleId}-ws`;
+const thId = `${titleId}-th`;
+---
+<article
+  class:list={["kc-approval", className]}
+  data-approval-id={approval.id}
+  data-state={state}
+  data-testid={`approval-${approval.id}`}
+  aria-labelledby={interactive ? titleId : undefined}
+>
+  {full && <p class="kc-approval__notice"><span class="kc-i" data-i="approval" aria-hidden="true"></span>{full.notice}</p>}
+  <div class="kc-approval__what">
+    <p class="kc-approval__title" id={titleId}>{approval.title}</p>
+    <p class="kc-approval__kind">
+      {approval.kind}
+      {!standing && <span class="kc-badge kc-badge--danger">Leaves this machine</span>}
+    </p>
+  </div>
+  <pre class="kc-approval__cmd"><code>{approval.command}</code>{"context" in approval && approval.context && <span> {approval.context}</span>}</pre>
+  <dl class="kc-approval__meta">
+    <div><dt>Thread</dt><dd>{thread.name}</dd></div>
+    <div><dt>Provider</dt><dd>{provider.name}</dd><dd class="kc-sub">{provider.model}</dd></div>
+    <div><dt>Workspace</dt><dd>{thread.workspace}</dd><dd class="kc-sub">{thread.branch}</dd></div>
+    <div><dt>Mode</dt><dd data-kc-mode-label>{modeLabel}</dd></div>
+  </dl>
+  <div class="kc-approval__foot">
+    <p class="kc-approval__reason">
+      {approval.scopes.map((s) => <span class="kc-badge">{s}</span>)}
+      <span data-kc-reason>{approval.reason}</span>
+    </p>
+    <p class="kc-approval__when">Asked {approval.asked}</p>
+  </div>
+  <div class="kc-approval__answer">
+    <div class="kc-approval__actions" role={interactive ? "group" : undefined} aria-label={interactive ? `Answer: ${approval.title}` : undefined}>
+      <Btn interactive={interactive} class="kc-btn kc-btn--danger" data-kc-decide="denied" data-approval={approval.id}>Deny</Btn>
+      {standing && (
+        <>
+          <Btn interactive={interactive} class="kc-btn" data-kc-decide="workspace" data-approval={approval.id} aria-describedby={interactive ? wsId : undefined}>Allow for workspace</Btn>
+          <Btn interactive={interactive} class="kc-btn" data-kc-decide="allowed" data-approval={approval.id} aria-describedby={interactive ? thId : undefined}>Allow for thread</Btn>
+        </>
+      )}
+      <Btn interactive={interactive} class="kc-btn kc-btn--primary" data-kc-decide="approved" data-approval={approval.id}>Approve once</Btn>
+    </div>
+    {standing && (
+      <ul class="kc-approval__coverage" role="list">
+        <li id={interactive ? wsId : undefined}><strong>Allow for workspace:</strong> {coverage.toLowerCase()}, in every thread of this workspace for 30 days.</li>
+        <li id={interactive ? thId : undefined}><strong>Allow for thread:</strong> {coverage.toLowerCase()}, in this thread until it stops (24 hours at most).</li>
+      </ul>
+    )}
+  </div>
+  {(
+    <div class="kc-approval__result" tabindex={interactive ? -1 : undefined} data-kc-result data-testid={`approval-${approval.id}-result`}>
+      {(["approved", "workspace", "allowed", "denied"] as const).map(
+        (k) =>
+          results[k] && (
+            <p data-for={k}><span class="kc-i" data-i={k === "denied" ? "failed" : "done"} aria-hidden="true"></span>{results[k]}</p>
+          ),
+      )}
+      {full && <p data-for="mode-allow"><span class="kc-i" data-i="done" aria-hidden="true"></span>{full.modeResults.allow}</p>}
+      {full && <p data-for="mode-deny"><span class="kc-i" data-i="failed" aria-hidden="true"></span>{full.modeResults.deny}</p>}
+      {resettable && interactive && (
+        <button type="button" class="kc-btn kc-btn--ghost kc-approval__reset" data-kc-action="approval:reset" data-testid="approval-reset">
+          <span class="kc-i" data-i="replay" aria-hidden="true"></span>Ask again
+        </button>
+      )}
+    </div>
+  )}
+</article>

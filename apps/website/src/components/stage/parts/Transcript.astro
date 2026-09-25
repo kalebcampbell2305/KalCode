@@ -1,0 +1,246 @@
+---
+/**
+ * The inside of one agent pane, drawn in the style of the provider's own terminal interface:
+ * Claude Code (●/⎿ tool calls, full-width diff bands, boxed input, mode footer), Codex
+ * (›/•/└ items, teal paths, "Worked for" rule, context-left footer) and Gemini CLI (boxed tool
+ * calls, tips, three-part footer), plus a plain PowerShell terminal. Original drawing at about
+ * 80% fidelity: structure and glyphs, no logos, no copied wording.
+ *
+ * Lines carry `kc-ln` so the stage script can stream them in. Lines that only exist in some
+ * approval states carry `data-when` and start hidden when they do not apply.
+ */
+import {
+  type ApprovalState,
+  GEMINI_TIPS,
+  type Line,
+  PROVIDERS,
+  type Thread,
+  visibleIn,
+  WORKSPACE,
+} from "../../../data/story";
+import Glyph from "./Glyph.astro";
+
+interface Props {
+  thread: Thread;
+  approval: ApprovalState;
+  /** A brand-new thread: banner and an empty composer only. */
+  fresh?: boolean;
+  /** Text already typed into the composer. */
+  typed?: string;
+}
+
+const { thread, approval, fresh = false, typed } = Astro.props;
+const provider = PROVIDERS[thread.provider];
+const p = thread.provider;
+const lines: readonly Line[] = fresh ? [] : thread.transcript;
+const working = fresh ? [] : (thread.working ?? []);
+
+const when = (l: { when?: readonly ApprovalState[] }) => (l.when ? l.when.join(" ") : undefined);
+const hide = (l: { when?: readonly ApprovalState[] }) => !visibleIn(l, approval);
+const elapsed = (s: number) => (s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`);
+
+const claudeFooter =
+  thread.mode === "auto"
+    ? "⏵⏵ edits run without asking · shift+tab to change"
+    : thread.mode === "plan"
+      ? "⏸ plan mode · shift+tab to change"
+      : "? for shortcuts";
+const codexApproval = thread.mode === "plan" ? "read-only" : thread.mode === "approve" ? "on-request" : "on-failure";
+const codexContext = fresh ? "100% context left" : thread.id === "codex-review" ? "99% context left" : "96% context left";
+const geminiBranch = `${WORKSPACE.path} (${thread.branch}${thread.filesChanged ? "*" : ""})`;
+---
+{p === "claude" && (
+  <div class="kc-term kc-cl">
+    <div class="kc-term__log" data-kc-log>
+      <div class="kc-ln kc-cl-banner">
+        <Glyph provider="claude" class="kc-cl-banner__mark" />
+        <div>
+          <p><b>{provider.banner.replace(/ [\d.]+$/, "")}</b> <span class="kc-dim">{provider.banner.match(/[\d.]+$/)?.[0]}</span></p>
+          <p class="kc-dim">{provider.model} · {provider.account}</p>
+          <p class="kc-dim">{thread.cwd}</p>
+        </div>
+      </div>
+      {fresh && <p class="kc-ln kc-dim kc-cl-tip">Ready. Describe a task, or type / for commands.</p>}
+      {lines.map((l) => {
+        switch (l.t) {
+          case "user":
+            return <div class="kc-ln kc-cl-user" data-when={when(l)} hidden={hide(l)}><span class="kc-dim">&gt;</span> {l.text}</div>;
+          case "tool":
+            return (
+              <div class="kc-ln kc-cl-tool" data-state={l.state} data-when={when(l)} hidden={hide(l)}>
+                <p><span class="kc-cl-dot" aria-hidden="true">●</span> <b>{l.name}</b>(<span class="kc-cl-arg">{l.arg}</span>)</p>
+                <p class="kc-cl-res"><span class="kc-dim" aria-hidden="true">⎿</span> <span>{l.result}</span></p>
+              </div>
+            );
+          case "say":
+            return <div class="kc-ln kc-cl-say" data-when={when(l)} hidden={hide(l)}><span class="kc-cl-dot" aria-hidden="true">●</span><p>{l.text}</p></div>;
+          case "diff":
+            return (
+              <div class="kc-ln kc-diff kc-diff--band" data-when={when(l)} hidden={hide(l)}>
+                {l.lines.map((d) => (
+                  <div class="kc-diff__row" data-op={d.op}>
+                    <span class="kc-diff__n">{d.n ?? ""}</span>
+                    <span class="kc-diff__op">{d.op === " " ? "" : d.op}</span>
+                    <span class="kc-diff__code">{d.code}</span>
+                  </div>
+                ))}
+              </div>
+            );
+          default:
+            return null;
+        }
+      })}
+      {working.map((w) => (
+        <p class="kc-ln kc-cl-work" data-when={when(w)} hidden={hide(w)}>
+          <span class="kc-cl-spin" aria-hidden="true">✶</span> <span class="kc-cl-verb">{w.verb}</span>{" "}
+          <span class="kc-dim">(esc to interrupt · <span data-kc-elapsed={w.sec}>{elapsed(w.sec)}</span>)</span>
+        </p>
+      ))}
+    </div>
+    <div class="kc-cl-input">
+      <span class="kc-dim" aria-hidden="true">&gt;</span>
+      <span class="kc-input" data-kc-input data-placeholder={thread.placeholder} data-typed={typed ? "" : undefined}>{typed ?? thread.placeholder}</span>
+    </div>
+    <div class="kc-term__foot">
+      <span class:list={[thread.mode === "auto" && "kc-cl-mode", thread.mode === "plan" && "kc-cl-mode kc-cl-mode--plan"]}>{claudeFooter}</span>
+      <span class="kc-dim">{fresh ? "" : thread.id === "claude-runner" ? "Context left before compacting: 18%" : "? for shortcuts"}</span>
+    </div>
+  </div>
+)}
+
+{p === "codex" && (
+  <div class="kc-term kc-cx">
+    <div class="kc-term__log" data-kc-log>
+      <div class="kc-ln kc-cx-banner">
+        <p><b>{provider.banner.replace(/ [\d.]+$/, "")}</b> <span class="kc-dim">(v{provider.banner.match(/[\d.]+$/)?.[0]})</span></p>
+        <p><span class="kc-dim kc-cx-k">model:</span> {provider.model} high</p>
+        <p><span class="kc-dim kc-cx-k">directory:</span> {thread.cwd}</p>
+        <p><span class="kc-dim kc-cx-k">approval:</span> {codexApproval}</p>
+      </div>
+      {fresh && <p class="kc-ln kc-dim kc-cx-tip">Describe a task, or type / to see commands.</p>}
+      {lines.map((l) => {
+        switch (l.t) {
+          case "user":
+            return <div class="kc-ln kc-cx-user" data-when={when(l)} hidden={hide(l)}><span class="kc-cx-chev" aria-hidden="true">›</span> {l.text}</div>;
+          case "item":
+            return (
+              <div class="kc-ln kc-cx-item" data-tone={l.tone} data-when={when(l)} hidden={hide(l)}>
+                <p>
+                  <span class="kc-cx-bul" aria-hidden="true">•</span> <b>{l.verb}</b>{l.arg && <> <span class="kc-cx-path">{l.arg}</span></>}
+                  {l.add !== undefined && <> (<span class="kc-add">+{l.add}</span> <span class="kc-del">-{l.del}</span>)</>}
+                </p>
+                {l.out?.map((o, i) => <p class="kc-cx-out"><span class="kc-dim" aria-hidden="true">{i === 0 ? "└" : " "}</span> {o}</p>)}
+              </div>
+            );
+          case "say":
+            return <div class="kc-ln kc-cx-say" data-when={when(l)} hidden={hide(l)}><span class="kc-cx-bul" aria-hidden="true">•</span><p>{l.text}</p></div>;
+          case "diff":
+            return (
+              <div class="kc-ln kc-diff kc-diff--text" data-when={when(l)} hidden={hide(l)}>
+                {l.lines.map((d) => (
+                  <div class="kc-diff__row" data-op={d.op}>
+                    <span class="kc-diff__n">{d.n ?? ""}</span>
+                    <span class="kc-diff__op">{d.op === " " ? "" : d.op === "…" ? "⋮" : d.op}</span>
+                    <span class="kc-diff__code">{d.code}</span>
+                  </div>
+                ))}
+              </div>
+            );
+          case "rule":
+            return <p class="kc-ln kc-cx-rule" data-when={when(l)} hidden={hide(l)}><span>─ {l.text} ─</span></p>;
+          default:
+            return null;
+        }
+      })}
+      {working.map((w) => (
+        <p class="kc-ln kc-cx-work" data-when={when(w)} hidden={hide(w)}>
+          <span class="kc-cx-bul" aria-hidden="true">•</span> <span class="kc-cx-shimmer">{w.verb}</span>{" "}
+          <span class="kc-dim">(<span data-kc-elapsed={w.sec}>{elapsed(w.sec)}</span> • esc to interrupt)</span>
+        </p>
+      ))}
+    </div>
+    <div class="kc-cx-input">
+      <span class="kc-cx-chev" aria-hidden="true">›</span>
+      <span class="kc-input kc-input--italic" data-kc-input data-placeholder={thread.placeholder}>{thread.placeholder}</span>
+    </div>
+    <div class="kc-term__foot">
+      <span class="kc-dim">⏎ send · ⇧⏎ newline · ⌃T transcript · ⌃C quit</span>
+      <span class="kc-dim">{codexContext}</span>
+    </div>
+  </div>
+)}
+
+{p === "gemini" && (
+  <div class="kc-term kc-gm">
+    <div class="kc-term__log" data-kc-log>
+      <div class="kc-ln kc-gm-head">
+        <span class="kc-gm-bar" aria-hidden="true"></span>
+        <b>Gemini CLI</b>
+      </div>
+      <div class="kc-ln kc-gm-tips">
+        <p>Tips for getting started:</p>
+        <ol>{GEMINI_TIPS.map((tip) => <li>{tip}</li>)}</ol>
+      </div>
+      {lines.map((l) => {
+        switch (l.t) {
+          case "user":
+            return <div class="kc-ln kc-gm-user" data-when={when(l)} hidden={hide(l)}><span class="kc-gm-gt" aria-hidden="true">&gt;</span> {l.text}</div>;
+          case "box":
+            return (
+              <div class="kc-ln kc-gm-box" data-state={l.state} data-when={when(l)} hidden={hide(l)}>
+                <p>
+                  <span class="kc-gm-st" aria-hidden="true">{l.state === "ok" ? "✓" : l.state === "fail" ? "x" : "⊷"}</span>{" "}
+                  <b>{l.name}</b> <span class="kc-gm-arg">{l.arg}</span>
+                  {l.desc && <span class="kc-dim"> ({l.desc})</span>}
+                </p>
+                {l.out.map((o) => <p class="kc-gm-out">{o}</p>)}
+              </div>
+            );
+          case "say":
+            return <div class="kc-ln kc-gm-say" data-when={when(l)} hidden={hide(l)}><span class="kc-gm-star" aria-hidden="true">✦</span><p>{l.text}</p></div>;
+          default:
+            return null;
+        }
+      })}
+      {working.map((w) => (
+        <p class="kc-ln kc-gm-work" data-when={when(w)} hidden={hide(w)}>
+          <span class="kc-gm-spin" aria-hidden="true">⠋</span> <span class="kc-gm-verb">{w.verb}…</span>{" "}
+          <span class="kc-dim">(esc to cancel, <span data-kc-elapsed={w.sec}>{elapsed(w.sec)}</span>)</span>
+        </p>
+      ))}
+    </div>
+    <div class="kc-gm-ctx">
+      <span class="kc-dim">Using: 1 GEMINI.md file · 2 MCP servers</span>
+      <span class="kc-dim">? for shortcuts</span>
+    </div>
+    <div class="kc-gm-input">
+      <span class="kc-gm-gt" aria-hidden="true">&gt;</span>
+      <span class="kc-input" data-kc-input data-placeholder={thread.placeholder}>{thread.placeholder}</span>
+    </div>
+    <div class="kc-term__foot kc-gm-foot">
+      <span class="kc-gm-cwd">{geminiBranch}</span>
+      <span class="kc-gm-sandbox">no sandbox</span>
+      <span class="kc-dim">{provider.model} ({fresh ? "100" : "94"}% context left)</span>
+    </div>
+  </div>
+)}
+
+{p === "shell" && (
+  <div class="kc-term kc-sh">
+    <div class="kc-term__log" data-kc-log>
+      <p class="kc-ln kc-dim">PowerShell 7.5.2</p>
+      {lines.map((l) => {
+        if (l.t === "prompt")
+          return <p class="kc-ln"><span class="kc-sh-ps">PS {l.cwd}&gt;</span> {l.cmd}</p>;
+        if (l.t === "out")
+          return (
+            <p class="kc-ln kc-sh-out">
+              {l.spans.map((s) => <span class:list={[s.c && `kc-c-${s.c}`]}>{s.text}</span>)}
+            </p>
+          );
+        return null;
+      })}
+      <p class="kc-ln"><span class="kc-sh-ps">PS {thread.cwd}&gt;</span> <span class="kc-cursor" aria-hidden="true"></span></p>
+    </div>
+  </div>
+)}

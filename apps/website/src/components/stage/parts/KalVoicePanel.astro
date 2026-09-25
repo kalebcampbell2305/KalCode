@@ -1,0 +1,64 @@
+---
+/**
+ * The KalVoice widget, as in the app: compact by default (orb, KALVOICE, status "● Ready" and
+ * the push-to-talk hint "Hold F8 to talk to KalVoice"). It expands briefly to show the live
+ * transcript while listening, a short result ("Opened 2 agents" with "Type it instead"), an
+ * approval or an error, then collapses. States: Ready, Listening (orb and waveform react),
+ * Processing, Executing, Needs Approval, Done, Error. No text box, no send or mic button.
+ */
+import { VOICE, type VoiceState } from "../../../data/story";
+import Btn from "./Btn.astro";
+
+interface Props {
+  state: VoiceState;
+  interactive: boolean;
+  /** Where dictated words land, for the Done result. */
+  target?: string;
+  still?: boolean;
+}
+const { state, interactive, target = "Claude Code", still = false } = Astro.props;
+const labels: Record<VoiceState, string> = {
+  off: "Ready",
+  listening: "Listening",
+  processing: "Processing",
+  executing: "Executing",
+  approval: "Needs Approval",
+  done: "Done",
+  spawned: "Done",
+  error: "Error",
+};
+const text = state === "spawned" || state === "executing" ? VOICE.command : state === "off" ? "" : VOICE.dictation;
+const result = state === "spawned" ? VOICE.spawnedResult : `Typed into ${target}`;
+const bars = Array.from({ length: 28 }, (_, i) => VOICE.amplitudes[(i * 2) % VOICE.amplitudes.length] ?? 0.2);
+---
+<div
+  class:list={["kc-voice", still && "kc-voice--still"]}
+  data-kc-voice
+  data-state={state}
+  data-expanded={state === "off" ? "false" : "true"}
+  data-testid="kalvoice-panel"
+  role={interactive ? "group" : undefined}
+  aria-label={interactive ? "KalVoice" : undefined}
+>
+  <div class="kc-voice__bar">
+    <span class="kc-voice__orb" aria-hidden="true">
+      <img src="/assets/brand/kalvoice-mark-128.png" alt="" width="28" height="28" decoding="async" loading="lazy" data-kc-orb />
+    </span>
+    <span class="kc-voice__brand">KALVOICE</span>
+    <span class="kc-voice__status">
+      <span class="kc-voice__dot" aria-hidden="true"></span><span class="kc-i kc-voice__check" data-i="check" aria-hidden="true"></span>
+      <span data-kc-voice-label data-testid="kalvoice-state">{labels[state]}</span>
+    </span>
+    <span class="kc-voice__hint">Hold <kbd>{VOICE.key}</kbd> to talk to KalVoice</span>
+  </div>
+  <div class="kc-voice__detail">
+    <div class="kc-wave" aria-hidden="true" data-kc-wave>
+      {bars.map((a) => <span class="kc-wave__bar" data-l={Math.max(1, Math.round(a * 10))}></span>)}
+    </div>
+    <p class="kc-voice__text" data-kc-voice-text data-testid="kalvoice-transcript">{text}</p>
+    <div class="kc-voice__result" data-testid="kalvoice-result">
+      <span class="kc-voice__cmd"><span class="kc-i" data-i="done" aria-hidden="true"></span><span data-kc-voice-result>{result}</span></span>
+      <Btn interactive={interactive} class="kc-voice__instead" data-kc-action="voice:type-instead" data-testid="kalvoice-type-instead">Type it instead</Btn>
+    </div>
+  </div>
+</div>

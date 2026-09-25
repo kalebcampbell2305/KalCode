@@ -12,6 +12,42 @@ Status: built and tested in Z0 · Canonical origin: **https://kalcoded.com**
 - **Workers Rate Limiting** binding `EARLY_ACCESS_LIMITER` (5 requests / 60 s per IP per action).
 - Custom domains `kalcoded.com` and `www.kalcoded.com` (Worker routes with `custom_domain`).
 
+## Pages and design system (redesign, 2026-09-24)
+
+| Route | What it is |
+| --- | --- |
+| `/` | Hero (animated KalCode symbol, "KalCode", the positioning line, one supporting line, data-driven call to action) → provider bar with honest adapter status → product sections composed from `src/components/stage/*` → local-first facts → plan strip → closing section with the early-access form. |
+| `/product` | Reference: the app window preview, then providers, threads, permissions, KalVoice, local-first, and a "what is built today" table. |
+| `/kalvoice` | Dictation and command mode, the KalVoice demo, KalVoice Requests per plan, privacy. |
+| `/pricing` | One comparison table built from `@kalcode/protocol/plans` (never hardcoded), an "every plan includes" line, FAQ accordion. |
+| `/download` | Build status per OS from the release manifest, the early-access form, what to expect. |
+| `/docs/*`, `/changelog`, `/security`, `/privacy`, `/terms` | Content pages; docs carry a one-line "Describes the design" chip. |
+
+Rules the pages follow:
+
+- **Truth labels are part of the design.** Every product preview carries "Product preview · sample
+  data" (or its TRUTH status) as a chip; planned surfaces are labelled Planned where shown alone.
+- **Downloads are data-driven.** `src/data/releases.json` (written by the release tooling; types in
+  `src/data/releases.d.ts`) is read only through `src/lib/releases.ts`. With `latest: null` no page
+  shows a download link: the primary call to action is "Join early access" and `/download` lists
+  each OS with the manifest's reason. With a published Windows build, the call to action becomes
+  "Download for Windows" and `/download` shows version, size, SHA-256 and the SmartScreen note for
+  unsigned previews. A malformed manifest fails the build.
+- **One early-access form per page**, only on `/` (closing section) and `/download`; other pages
+  link to `/download#early-access`.
+- **Type:** Lexend Exa 600 for display, Lexend Deca for text, JetBrains Mono only for technical
+  labels and truth chips. Content column 80 rem, product stage 105 rem; the root font size steps up
+  at 1800 px and 2200 px so ultrawide screens get larger type rather than empty margins.
+- **Themes:** light and dark are both complete. The home header and hero form a night band in
+  both themes (the hero orb is glow art); everything below follows the theme. The theme toggle
+  lives in the footer.
+- **Structured data:** home carries JSON-LD (Organization, WebSite, SoftwareApplication with offers
+  from the plan catalog, `sameAs` from `SOCIAL`). It is a non-executing data block, so the CSP
+  needs no change; the unit test for inline scripts ignores it.
+- **Composition slots:** `StageSlot` renders `src/components/stage/<Name>.astro` when it exists and
+  a quiet window frame otherwise; `HeroOrbSlot` renders `src/components/hero/HeroOrb.astro` or the
+  static globe.
+
 ## Behaviour
 
 | Request | Response |
@@ -43,6 +79,11 @@ pnpm build && pnpm preview   # full site on the real Worker + local D1 at :8787
 pnpm typecheck && pnpm test  # astro check + worker tsc; Vitest unit tests
 pnpm test:e2e            # Playwright against wrangler dev with isolated local D1
 ```
+
+Parallel runs in one checkout: `KALCODE_E2E_PORT`, `KALCODE_E2E_PERSIST` (D1 state folder),
+`KALCODE_E2E_OUT_DIR` (build folder served with `wrangler dev --assets`),
+`KALCODE_E2E_INSPECTOR_PORT` and `KALCODE_E2E_SKIP_BUILD=1` (serve an existing build). Unit tests
+that inspect built HTML read `KALCODE_DIST` (default `dist`).
 
 ## Deployment
 

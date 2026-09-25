@@ -1,0 +1,13 @@
+---
+/** The truth label every stage carries: "Product preview · sample data" (plus an optional tag). */
+interface Props {
+  tag?: string;
+  class?: string;
+}
+const { tag, class: className } = Astro.props;
+---
+<p class:list={["kc-label", className]} data-testid="stage-label">
+  <span class="kc-label__dot" aria-hidden="true"></span>
+  <span>Product preview · sample data</span>
+  {tag && <span class="kc-label__tag">{tag}</span>}
+</p>

@@ -1,59 +1,55 @@
 ---
 import { PLANS, formatKalVoiceAllowance } from "@kalcode/protocol/plans";
-import KalVoiceLockup from "../../components/KalVoiceLockup.astro";
-import Shortcut from "../../components/Shortcut.astro";
 import Docs from "../../layouts/Docs.astro";
 import { KALVOICE } from "../../lib/site";
 ---
 <Docs
   path="/docs/kalvoice"
   heading="KalVoice"
-  lead="KalVoice is the coding assistant and voice layer built into KalCode. Speak your prompts. Control your workspace. Coordinate your coding agents."
+  lead="The reference for KalVoice, the voice layer built into KalCode: the push-to-talk key, counting, providers and privacy."
 >
-  <KalVoiceLockup sizes="(min-width: 56rem) 18rem, min(calc(100vw - 5rem), 18rem)" />
-
   <p>
-    {KALVOICE.summary} KalVoice is in development: this page describes how it is designed, and it
-    is not available in any build yet.
+    {KALVOICE.summary} KalVoice is in development and not available in any build yet. For the
+    overview, see the <a href="/kalvoice">KalVoice page</a>.
   </p>
 
-  <h2>Two modes, two shortcuts</h2>
-  <div class="table-wrap" role="region" aria-label="KalVoice modes" tabindex="0">
+  <h2>One key</h2>
+  <p>
+    Hold <kbd>{KALVOICE.pushToTalkKey}</kbd> to talk to KalVoice: hold it, speak, release. There is
+    one gesture and no mode to pick. KalVoice decides from context what you meant.
+  </p>
+  <div class="table-wrap" role="region" aria-label="What happens when you release the key" tabindex="0">
     <table class="table">
-      <caption class="visually-hidden">KalVoice modes, their default shortcuts, and how they count</caption>
+      <caption class="visually-hidden">What KalVoice does with what you said, and how it counts</caption>
       <thead>
         <tr>
-          <th scope="col">Mode</th>
-          <th scope="col">Default shortcut</th>
+          <th scope="col">You said</th>
           <th scope="col">Result</th>
           <th scope="col">Counting</th>
         </tr>
       </thead>
       <tbody>
         <tr>
-          <th scope="row">Dictation</th>
-          <td>Hold <Shortcut keys={KALVOICE.dictationKeys} /></td>
-          <td>Your words, transcribed on your device, typed into the focused input.</td>
+          <th scope="row">Words for the focused input</th>
+          <td>Transcribed on your device and typed into that input (dictation).</td>
           <td>Never counted. Unlimited on every plan.</td>
         </tr>
         <tr>
-          <th scope="row">Command</th>
-          <td>Press <Shortcut keys={KALVOICE.commandKeys} />, then speak or type</td>
-          <td>A KalCode action and a short report.</td>
-          <td>One KalVoice Request per top-level request.</td>
+          <th scope="row">A command, such as “Open four Codex threads”</th>
+          <td>KalCode does it and reports back.</td>
+          <td>One KalVoice Request.</td>
         </tr>
       </tbody>
     </table>
   </div>
   <p>
-    On macOS the defaults use <kbd>Cmd</kbd> in place of <kbd>Ctrl</kbd>. Both shortcuts can be
-    changed in Settings, and KalCode checks them for conflicts with its own bindings.
+    {KALVOICE.keyNote} The key can be changed in Settings, and KalCode checks it for conflicts
+    with its own bindings.
   </p>
 
   <h2>Dictation</h2>
   <p>
-    Hold the dictation shortcut, speak, and release. The microphone starts the moment you press the
-    keys. When you let go, a speech-recognition model running on your own computer turns the audio
+    Hold the key, speak, and release. The microphone starts the moment you press the key. When you let go, a speech-recognition model running on your own computer turns the audio
     into text, and KalVoice types it into whatever you were focused on:
   </p>
   <ul>
@@ -62,7 +58,7 @@ import { KALVOICE } from "../../lib/site";
     <li>the command palette, a search box, or another KalCode text input.</li>
   </ul>
   <p>
-    The target is fixed when you press the shortcut, so switching windows mid-sentence cannot send
+    The target is fixed when you press the key, so switching windows mid-sentence cannot send
     your words somewhere else. Press <kbd>Esc</kbd> to cancel.
   </p>
   <p>
@@ -71,7 +67,7 @@ import { KALVOICE } from "../../lib/site";
   </p>
 
   <h2>Command mode</h2>
-  <p>Press the command shortcut and say or type what you want done, for example:</p>
+  <p>Hold the key and say what you want done, for example:</p>
   <ul>
     <li>“Open four Codex threads.”</li>
     <li>“Pause every active thread.”</li>

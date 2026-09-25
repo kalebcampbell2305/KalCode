@@ -13,6 +13,20 @@ export const CONSENT_VERSION = "2026-09-24";
 export const CONTACT_EMAIL = "kalcodebuilds@gmail.com";
 
 /**
+ * Official social accounts (owner-supplied, 2026-09-24). Every social link on the site reads from
+ * here; `official` is the KalCode product account, `founder` the founder's own account.
+ */
+export const SOCIAL = {
+  official: { network: "X", handle: "@KalCodeDev", url: "https://x.com/KalCodeDev", label: "KalCode on X" },
+  founder: {
+    network: "X",
+    handle: "@CampbellKaleb23",
+    url: "https://x.com/CampbellKaleb23",
+    label: "KalCode's founder on X",
+  },
+} as const;
+
+/**
  * KalVoice facts shown across the site (docs/KALVOICE.md). KalVoice is in development
  * (campaign Z12): pages must describe it as designed, never as shipped.
  */
@@ -22,9 +36,15 @@ export const KALVOICE = {
   summary:
     "KalVoice turns your voice into coding prompts and KalCode commands. Dictate directly into Claude Code, Codex, Gemini CLI and your terminals, or ask KalVoice to run your workspace.",
   status: "In development",
-  /** Default shortcuts (Windows and Linux; macOS uses Cmd). Both are configurable. */
-  dictationKeys: ["Ctrl", "Shift", "Space"],
-  commandKeys: ["Ctrl", "Shift", "K"],
+  /**
+   * One push-to-talk key: hold it, speak, release. KalVoice decides from context whether the words
+   * are dictation (typed into the focused input) or a command. Configurable to Caps Lock, another
+   * single key, or Fn on keyboards that expose it to apps.
+   */
+  pushToTalkKey: "F8",
+  /** The one line that says the key can be changed. Never claims Fn works everywhere. */
+  keyNote:
+    "F8 is the default. Choose Caps Lock or another single key instead, or Fn on keyboards that pass it to apps.",
   globeAlt: "KalVoice globe: a sphere of connected points of light",
 } as const;
 
@@ -43,25 +63,31 @@ export const PAGES = [
     path: "/",
     title: "KalCode — One intelligence that operates your entire AI workspace",
     description:
-      "KalCode is a desktop workspace in private development that connects Claude Code, Codex and Gemini CLI on your own accounts, runs them as persistent threads, keeps you in control of every permission, and adds KalVoice for voice prompts and commands.",
+      "KalCode is a desktop workspace in private development. Connect the coding agents you already use — Claude Code, Codex and Gemini CLI — run them side by side, approve every action, and speak your prompts with KalVoice.",
   },
   {
     path: "/product",
     title: "Product — KalCode",
     description:
-      "How KalCode is being built: bring-your-own-provider connections, persistent threads, a live Dashboard, permission modes, KalVoice dictation and commands, and local-first storage.",
+      "The KalCode workspace piece by piece: provider panes, threads, the Dashboard, permission modes, KalVoice and local-first storage, with an honest table of what is built today and what is planned.",
+  },
+  {
+    path: "/kalvoice",
+    title: "KalVoice — KalCode",
+    description:
+      "KalVoice is the voice layer in KalCode: hold F8 and speak. Words land in the focused agent, on your device and unlimited; commands run your workspace. In development.",
   },
   {
     path: "/pricing",
     title: "Pricing — KalCode",
     description:
-      "KalCode plans: Free, Pro and MAX, with KalVoice Request allowances, unlimited local dictation, and every provider connection and permission mode on every plan. AI usage stays on your own provider account.",
+      "KalCode plans: Free, Pro and MAX. Every plan includes all providers, all permission modes and unlimited local dictation; plans differ in KalVoice Requests and workspace features. AI usage stays on your own provider account.",
   },
   {
     path: "/download",
     title: "Download — KalCode",
     description:
-      "KalCode is in private development and has no public build yet. Join early access to hear when there is a build to try.",
+      "Download KalCode for your platform, with the version, size and SHA-256 of every build — or join early access while there is no public build yet.",
   },
   {
     path: "/docs",
@@ -85,7 +111,7 @@ export const PAGES = [
     path: "/docs/kalvoice",
     title: "KalVoice — KalCode Docs",
     description:
-      "KalVoice, in development, is the coding assistant and voice layer in KalCode: local dictation into any input, and commands that run your workspace with your own provider.",
+      "KalVoice reference: the push-to-talk key, dictation and commands, how KalVoice Requests are counted, which provider reasoning uses, and how audio stays on your device.",
   },
   {
     path: "/docs/local-first",
@@ -97,7 +123,7 @@ export const PAGES = [
     path: "/changelog",
     title: "Changelog — KalCode",
     description:
-      "Development milestones for KalCode: 0.1.0 — Foundation, and the KalVoice and bring-your-own-provider announcement.",
+      "Development milestones for KalCode: the website redesign and official X accounts, the KalVoice and bring-your-own-provider announcement, and 0.1.0 — Foundation.",
   },
   {
     path: "/security",
@@ -114,7 +140,7 @@ export const PAGES = [
   {
     path: "/terms",
     title: "Terms — KalCode",
-    description: "Terms of use for kalcoded.com and the KalCode early-access list.",
+    description: "Terms of use for kalcoded.com, the KalCode early-access list and the KalCode preview app.",
   },
 ] as const satisfies readonly PageInfo[];
 
@@ -140,8 +166,10 @@ export function isKnownPagePath(value: string): boolean {
   return PAGE_PATHS.has(value);
 }
 
+/** Header navigation, in order. The Download call to action and the X link sit after these. */
 export const PRIMARY_NAV = [
   { href: "/product", label: "Product" },
+  { href: "/kalvoice", label: "KalVoice" },
   { href: "/pricing", label: "Pricing" },
   { href: "/docs", label: "Docs" },
   { href: "/changelog", label: "Changelog" },
@@ -150,6 +178,7 @@ export const PRIMARY_NAV = [
 export const FOOTER_NAV = {
   product: [
     { href: "/product", label: "Product" },
+    { href: "/kalvoice", label: "KalVoice" },
     { href: "/pricing", label: "Pricing" },
     { href: "/download", label: "Download" },
     { href: "/changelog", label: "Changelog" },
@@ -169,3 +198,28 @@ export const FOOTER_NAV = {
 } as const;
 
 export const DOCS_NAV = FOOTER_NAV.docs;
+
+/** The brand tagline, set as live text (never the raster lettering, which smudges at small sizes). */
+export const TAGLINE = "One intelligence. A brighter tomorrow.";
+
+/**
+ * Honest adapter status per provider (TRUTH.md, 2026-09-24). Shown wherever providers are named
+ * next to each other, so no pane or bar implies more than the runtime can do today.
+ */
+export const PROVIDERS = [
+  { id: "claude", name: "Claude Code", access: "Claude sign-in or API key", status: "Adapter built", state: "built" },
+  {
+    id: "codex",
+    name: "Codex",
+    access: "ChatGPT sign-in or API key",
+    status: "Detected · adapter planned",
+    state: "planned",
+  },
+  {
+    id: "gemini",
+    name: "Gemini CLI",
+    access: "Google sign-in or API key",
+    status: "Detected · adapter planned",
+    state: "planned",
+  },
+] as const;

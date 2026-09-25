@@ -1,14 +1,16 @@
 ---
 import { PRIMARY_NAV } from "../lib/site";
-import Icon from "./Icon.astro";
-import ThemeToggle from "./ThemeToggle.astro";
 import BrandMark from "./BrandMark.astro";
+import Icon from "./Icon.astro";
 import Lettering from "./Lettering.astro";
+import XLink from "./XLink.astro";
 
 interface Props {
   path: string;
+  /** Home: the header joins the hero's night band (dark in both themes). */
+  night?: boolean;
 }
-const { path } = Astro.props;
+const { path, night = false } = Astro.props;
 
 function current(href: string): "page" | "true" | undefined {
   if (path === href) return "page";
@@ -16,7 +18,7 @@ function current(href: string): "page" | "true" | undefined {
   return undefined;
 }
 ---
-<header class="site-header">
+<header class:list={["site-header", { "site-header--night": night }]} data-theme={night ? "dark" : undefined}>
   <div class="container site-header__inner">
     <a class="brand-link" href="/" aria-label="KalCode home">
       <BrandMark size={28} />
@@ -33,13 +35,18 @@ function current(href: string): "page" | "true" | undefined {
             </li>
           ))
         }
+        <li class="site-nav__social">
+          <XLink account="official" withHandle="menu" />
+        </li>
         <li class="site-nav__cta">
-          <a class="button button--primary" href="/download">Join early access</a>
+          <a class="button button--primary button--sm" href="/download" aria-current={current("/download")}>
+            Download
+          </a>
         </li>
       </ul>
     </nav>
     <div class="header-tools">
-      <ThemeToggle />
+      <a class="button button--primary button--sm" href="/download">Download</a>
       <button
         type="button"
         class="menu-button"

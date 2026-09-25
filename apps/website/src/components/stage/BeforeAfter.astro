@@ -1,0 +1,102 @@
+---
+/**
+ * BeforeAfter: six loose terminal windows (two approvals buried, one failure unseen, no central
+ * status) fold into one KalCode workspace with a status strip. A two-option switch drives it;
+ * scrolling the section into view makes the change once, unless the visitor has used the switch.
+ * Only transform and opacity animate.
+ */
+import StageStyles from "./parts/StageStyles.astro";
+import { LOOSE_TERMINALS, PROVIDERS, summarize } from "../../data/story";
+import Glyph from "./parts/Glyph.astro";
+import StageLabel from "./parts/StageLabel.astro";
+import StatusLabel from "./parts/StatusLabel.astro";
+
+interface Props {
+  id?: string;
+  initial?: "before" | "after";
+  class?: string;
+}
+const { id = "before-after", initial = "before", class: className } = Astro.props;
+const summary = summarize(
+  LOOSE_TERMINALS.filter((t) => t.provider !== "shell").map((t) => t.status),
+  LOOSE_TERMINALS.filter((t) => t.status === "waiting_for_permission").length,
+  1,
+);
+const strip = [
+  { n: summary.working, label: "Working", icon: "working", tone: "live" },
+  { n: summary.approvals, label: "Need approval", icon: "approval", tone: "waiting" },
+  { n: LOOSE_TERMINALS.filter((t) => t.status === "failed").length, label: "Failed", icon: "failed", tone: "danger" },
+  { n: summary.terminals, label: "Terminal", icon: "terminal", tone: "idle" },
+] as const;
+const describeBefore =
+  "Before: six separate terminal windows overlap on the desktop. Two are waiting for approval and one has failed, and nothing shows it.";
+const describeAfter =
+  "After: the same six sessions as panes in one KalCode workspace, with a status strip: 2 working, 2 need approval, 1 failed, 1 terminal.";
+---
+<StageStyles />
+<div class:list={["kc-ba", className]} id={id} data-kc-ba data-state={initial} data-testid="before-after">
+  <div class="kc-demo-head">
+    <div class="kc-seg" role="radiogroup" aria-label="Compare">
+      <button type="button" role="radio" class="kc-seg__btn" data-kc-ba-set="before" aria-checked={initial === "before" ? "true" : "false"} tabindex={initial === "before" ? 0 : -1} data-testid="ba-before">Six terminals</button>
+      <button type="button" role="radio" class="kc-seg__btn" data-kc-ba-set="after" aria-checked={initial === "after" ? "true" : "false"} tabindex={initial === "after" ? 0 : -1} data-testid="ba-after">One KalCode workspace</button>
+    </div>
+    <StageLabel />
+  </div>
+
+  <div class="kc-ba__stage" role="img" aria-label={initial === "before" ? describeBefore : describeAfter} data-kc-ba-stage data-before={describeBefore} data-after={describeAfter}>
+    <div class="kc-ba__chrome" aria-hidden="true">
+      <div class="kc-ba__bar">KalCode — atlas-api</div>
+      <div class="kc-ba__rail">
+        <p class="kc-ba__railh">Threads</p>
+        <ul role="list">
+          {LOOSE_TERMINALS.map((t) => (
+            <li>
+              <Glyph provider={t.provider} />
+              <span class="kc-ba__railname">{(t.lines[0]?.text ?? t.title).replace(/^(PS>|>|›)\s*/, "")}</span>
+              <StatusLabel status={t.status} variant="dot" />
+            </li>
+          ))}
+        </ul>
+      </div>
+      <div class="kc-ba__strip">
+        {strip.map((s) => (
+          <span class="kc-sum__item" data-tone={s.tone}>
+            <span class="kc-sum__n">{s.n}</span>
+            <span class="kc-i" data-i={s.icon}></span>
+            {s.label}
+          </span>
+        ))}
+      </div>
+    </div>
+    <div class="kc-ba__grid" aria-hidden="true">
+      {LOOSE_TERMINALS.map((t) => (
+        <div class="kc-ba__term" data-provider={t.provider}>
+          <div class="kc-ba__head">
+            <div class="kc-ba__oshead">
+              <span>{t.title}</span>
+              <span class="kc-app__winctl"><span class="kc-i" data-i="minus"></span><span class="kc-i" data-i="square"></span><span class="kc-i" data-i="close"></span></span>
+            </div>
+            <div class="kc-ba__kchead">
+              <Glyph provider={t.provider} />
+              <b>{PROVIDERS[t.provider].name}</b>
+              <StatusLabel status={t.status} />
+            </div>
+          </div>
+          <div class="kc-ba__body">
+            {t.lines.map((l) => <p class:list={[l.c && `c-${l.c}`]}>{l.text}</p>)}
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+
+  <p class="kc-ba__note">
+    <span data-for="before"><span class="kc-i" data-i="failed" aria-hidden="true"></span>No central status. Approvals wait in windows you are not looking at.</span>
+    <span data-for="after"><span class="kc-i" data-i="done" aria-hidden="true"></span>Every thread's status in one strip; every approval in one queue.</span>
+  </p>
+  <p class="visually-hidden" aria-live="polite" data-kc-ba-live></p>
+</div>
+
+<script>
+  import "../../scripts/stage/before-after";
+</script>

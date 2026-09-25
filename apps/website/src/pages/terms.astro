@@ -8,7 +8,7 @@ const page = getPage("/terms");
 <Base title={page.title} description={page.description} path={page.path}>
   <PageHead
     title="Terms of use"
-    lead="These terms cover your use of kalcoded.com and the KalCode early-access list."
+    lead="These terms cover kalcoded.com, the KalCode early-access list and the KalCode preview app."
   >
     <p class="muted small">Last updated September 24, 2026</p>
   </PageHead>
@@ -16,16 +16,16 @@ const page = getPage("/terms");
     <div class="container prose">
       <h2>1. About these terms</h2>
       <p>
-        By using kalcoded.com (the “site”) or joining the early-access list, you agree to these
-        terms. If you do not agree, please do not use the site. The KalCode desktop application is
-        not yet available; it will be offered under its own terms when it is released.
+        By using kalcoded.com (the “site”), joining the early-access list, or downloading, installing
+        or using the KalCode desktop app (the “app”), you agree to these terms. If you do not agree,
+        please do not use the site or the app.
       </p>
 
       <h2>2. The site</h2>
       <p>
-        The site describes KalCode, a product in private development. Descriptions of features,
-        plans and prices reflect current plans and may change before release. Nothing on the site is
-        an offer to sell, and no purchase can be made through it today.
+        The site describes KalCode, a product in early preview. Descriptions of features, plans and
+        prices reflect current plans and may change. Nothing on the site is an offer to sell, and no
+        purchase can be made through it today.
       </p>
       <p>
         KalCode is designed to work with AI providers through your own accounts. Your use of a
@@ -33,7 +33,45 @@ const page = getPage("/terms");
         not sell, resell or meter provider usage.
       </p>
 
-      <h2>3. The early-access list</h2>
+      <h2 id="preview">3. The KalCode preview app</h2>
+      <p>
+        The app is currently offered as a free preview. These terms apply to every preview version
+        until a version comes with terms of its own.
+      </p>
+      <ul>
+        <li>
+          <strong>Licence.</strong> We give you a personal, non-exclusive, non-transferable,
+          revocable licence to download, install and use the app on computers you control, for your
+          own work, including work for your employer or clients. KalCode and the app remain ours;
+          all rights not granted here are reserved.
+        </li>
+        <li>
+          <strong>Restrictions.</strong> Do not sell, rent, redistribute or publicly host the app or
+          its installer, remove its notices, or reverse engineer it except where the law allows this
+          despite these terms. Share the download link instead.
+        </li>
+        <li>
+          <strong>Your work and your providers.</strong> The app runs on your computer. Your code,
+          projects and data stay yours, and we do not receive them. AI providers you connect run on
+          your own accounts; your use of them is governed by your agreements with those providers.
+        </li>
+        <li>
+          <strong>Your decisions.</strong> The app can run coding agents and commands in your projects
+          within the permission mode you choose. You are responsible for the modes you select, the
+          actions you approve and for reviewing changes before you rely on them.
+        </li>
+        <li>
+          <strong>Preview quality.</strong> Preview versions are incomplete, may contain errors, may
+          change or remove features, and are not code-signed yet. Keep backups of work that matters,
+          including your projects under version control.
+        </li>
+        <li>
+          <strong>Ending use.</strong> You may stop at any time by uninstalling the app. We may end a
+          preview; the licence for that version then ends and you should uninstall it.
+        </li>
+      </ul>
+
+      <h2>4. The early-access list</h2>
       <ul>
         <li>Joining is free and requires only an email address that you are entitled to use.</li>
         <li>
@@ -44,10 +82,9 @@ const page = getPage("/terms");
           We will use your address only as described in the <a href="/privacy">privacy notice</a>.
           You can remove it at any time on that page.
         </li>
-        <li>Pre-release builds, if offered, may come with additional terms that you will see first.</li>
       </ul>
 
-      <h2>4. Acceptable use</h2>
+      <h2>5. Acceptable use</h2>
       <p>You agree not to:</p>
       <ul>
         <li>submit an email address that is not yours, or submit addresses in bulk;</li>
@@ -56,35 +93,38 @@ const page = getPage("/terms");
         <li>use the site to break any law.</li>
       </ul>
 
-      <h2>5. Names and marks</h2>
+      <h2>6. Names and marks</h2>
       <p>
-        KalCode, KalVoice, the KalCode wordmark, the constellation globe artwork and the KalVoice
-        globe artwork are ours. You may not use them in a way that suggests endorsement or affiliation
+        KalCode, KalVoice, the KalCode wordmark, the KalCode symbol and the KalVoice orb are
+        ours. You may not use them in a way that suggests endorsement or affiliation
         without permission. Claude Code, Codex and Gemini CLI are products and trademarks of their
         respective owners; naming them describes compatibility and does not imply endorsement.
       </p>
 
-      <h2>6. No warranty</h2>
+      <h2>7. No warranty</h2>
       <p>
-        The site is provided “as is” and “as available”. To the extent the law allows, we make no
-        warranties about the site, including that it will be uninterrupted or error-free, or that
-        KalCode will be released in any particular form or on any particular date.
+        The site and the app are provided “as is” and “as available”. To the extent the law allows,
+        we make no warranties about them, express or implied, including fitness for a particular
+        purpose, that they will be uninterrupted or error-free, that code or changes produced with
+        the app are correct, or that KalCode will be offered in any particular form or on any
+        particular date.
       </p>
 
-      <h2>7. Limitation of liability</h2>
+      <h2>8. Limitation of liability</h2>
       <p>
         To the extent the law allows, we are not liable for any indirect, incidental or
-        consequential loss arising from your use of the site or the early-access list. Nothing in
+        consequential loss, or for loss of data, code or profits, arising from your use of the site,
+        the early-access list or the app. Nothing in
         these terms limits liability that cannot be limited by law.
       </p>
 
-      <h2>8. Changes</h2>
+      <h2>9. Changes</h2>
       <p>
         We may update these terms. When we do, we will change the date at the top of this page.
         Continuing to use the site after an update means you accept the updated terms.
       </p>
 
-      <h2>9. Contact</h2>
+      <h2>10. Contact</h2>
       <p>
         Questions about these terms, or legal and privacy requests:
         <a href={`mailto:${CONTACT_EMAIL}`}>{CONTACT_EMAIL}</a>. You can also remove

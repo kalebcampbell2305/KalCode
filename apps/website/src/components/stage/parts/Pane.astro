@@ -1,0 +1,81 @@
+---
+/**
+ * One pane of the workspace: KalCode's pane header (2 px provider stripe, glyph + provider +
+ * thread name, status label, mode chip, split/close controls) above the provider's own
+ * interface (Transcript).
+ */
+import { type ApprovalState, MODES, PROVIDERS, statusFor, type Thread } from "../../../data/story";
+import Btn from "./Btn.astro";
+import Glyph from "./Glyph.astro";
+import StatusLabel from "./StatusLabel.astro";
+import Transcript from "./Transcript.astro";
+
+interface Props {
+  thread: Thread;
+  approval: ApprovalState;
+  interactive: boolean;
+  open?: boolean;
+  focus?: boolean;
+  position?: number;
+  fresh?: boolean;
+  /** Stills (mobile / reduced motion) show a pane on its own. */
+  still?: boolean;
+  /** Text already in the composer (a KalVoice dictation still). */
+  typed?: string;
+}
+
+const { thread, approval, interactive, open = true, focus = false, position = 0, fresh = false, still = false, typed } = Astro.props;
+const provider = PROVIDERS[thread.provider];
+const status = statusFor(thread, approval);
+const mode = MODES.find((m) => m.id === thread.mode)?.label ?? "Approve";
+const label = thread.provider === "shell" ? `${provider.name} terminal` : `${provider.name} · ${thread.name}`;
+const statusBy = thread.statusByApproval
+  ? Object.entries(thread.statusByApproval)
+      .map(([k, v]) => `${k}:${v}`)
+      .join(" ")
+  : undefined;
+---
+<section
+  class:list={["kc-pane", still && "kc-pane--still"]}
+  data-provider={thread.provider}
+  data-thread={thread.id}
+  data-open={open ? "true" : "false"}
+  data-focus={focus ? "true" : undefined}
+  data-slot={position}
+  data-spawned={thread.spawned ? "true" : undefined}
+  data-fresh={fresh ? "true" : undefined}
+  data-status-by={statusBy}
+  aria-label={interactive ? label : undefined}
+  data-testid={`pane-${thread.id}`}
+>
+  <header class="kc-pane__head">
+    <Btn
+      interactive={interactive}
+      class="kc-pane__title"
+      data-kc-action="focus"
+      data-thread={thread.id}
+      aria-label={interactive ? `Focus ${label}` : undefined}
+    >
+      <Glyph provider={thread.provider} />
+      <span class="kc-pane__provider">{provider.name}</span>
+      {thread.provider !== "shell" && <span class="kc-pane__name" data-kc-name>· {thread.name}</span>}
+    </Btn>
+    <span class="kc-pane__meta">
+      <StatusLabel status={status} threadId={thread.id} />
+      {thread.provider !== "shell" && <span class="kc-chip" data-kc-mode-chip>{mode}</span>}
+    </span>
+    {interactive && (
+      <span class="kc-pane__ctl">
+        <button type="button" class="kc-iconbtn" data-kc-action="split" aria-label={`Split next to ${provider.name}`}>
+          <span class="kc-i" data-i="splith" aria-hidden="true"></span>
+        </button>
+        <button type="button" class="kc-iconbtn" data-kc-action="close" data-thread={thread.id} aria-label={`Close ${label} pane`}>
+          <span class="kc-i" data-i="close" aria-hidden="true"></span>
+        </button>
+      </span>
+    )}
+  </header>
+  <div class="kc-pane__body">
+    <Transcript thread={thread} approval={approval} fresh={fresh} typed={typed} />
+  </div>
+</section>

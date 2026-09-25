@@ -1,0 +1,62 @@
+---
+/**
+ * TryKalCode: the interactive window. A toolbar drives the drawn app:
+ * [Claude Code] [Codex] [Gemini CLI] open or focus that provider's pane; + New thread;
+ * Split pane; Open browser; Open dashboard; Show permissions (Codex asks to run pnpm add zod);
+ * Use KalVoice (hold the on-screen F8 key, or F8 while the demo has focus: the prompt types into the
+ * focused pane). Everything inside the window is keyboard
+ * reachable too (rail threads, dock tabs, Dashboard rows, approval buttons, A/T/D on a card).
+ */
+import StageStyles from "./parts/StageStyles.astro";
+import { BASE_SCENE, type Scene, VOICE } from "../../data/story";
+import AppWindow from "./AppWindow.astro";
+import Glyph from "./parts/Glyph.astro";
+import StageLabel from "./parts/StageLabel.astro";
+
+interface Props {
+  id?: string;
+  scene?: Partial<Scene>;
+  class?: string;
+}
+const { id = "try", scene = {}, class: className } = Astro.props;
+const initial: Scene = { ...BASE_SCENE, ...scene };
+const providers = [
+  { id: "claude", label: "Claude Code" },
+  { id: "codex", label: "Codex" },
+  { id: "gemini", label: "Gemini CLI" },
+] as const;
+const focusProvider = initial.focus.split("-")[0];
+---
+<StageStyles />
+<div class:list={["kc-try", className]} data-kc-try data-testid="try-kalcode">
+  <div class="kc-demo-head">
+    <StageLabel tag="Try it: every control works" />
+  </div>
+  <div class="kc-toolbar" role="toolbar" aria-label="Try KalCode" aria-controls={id} data-kc-toolbar>
+    {providers.map((p, i) => (
+      <button
+        type="button"
+        class="kc-tbtn"
+        data-kc-do={`provider:${p.id}`}
+        aria-pressed={focusProvider === p.id ? "true" : "false"}
+        tabindex={i === 0 ? 0 : -1}
+        data-testid={`try-provider-${p.id}`}
+      >
+        <Glyph provider={p.id} />{p.label}
+      </button>
+    ))}
+    <span class="kc-toolbar__sep" aria-hidden="true"></span>
+    <button type="button" class="kc-tbtn" data-kc-do="new" tabindex="-1" data-testid="try-new"><span class="kc-i" data-i="plus" aria-hidden="true"></span>New thread</button>
+    <button type="button" class="kc-tbtn" data-kc-do="split" tabindex="-1" data-testid="try-split"><span class="kc-i" data-i="splith" aria-hidden="true"></span>Split pane</button>
+    <button type="button" class="kc-tbtn" data-kc-do="dock:browser" aria-pressed={initial.dock === "browser" ? "true" : "false"} tabindex="-1" data-testid="try-browser"><span class="kc-i" data-i="globe" aria-hidden="true"></span>Open browser</button>
+    <button type="button" class="kc-tbtn" data-kc-do="dock:dashboard" aria-pressed={initial.dock === "dashboard" ? "true" : "false"} tabindex="-1" data-testid="try-dashboard"><span class="kc-i" data-i="dashboard" aria-hidden="true"></span>Open dashboard</button>
+    <button type="button" class="kc-tbtn" data-kc-do="permissions" aria-pressed={initial.dock === "permissions" ? "true" : "false"} tabindex="-1" data-testid="try-permissions"><span class="kc-i" data-i="shield" aria-hidden="true"></span>Show permissions</button>
+    <button type="button" class="kc-tbtn" data-kc-ptt tabindex="-1" aria-keyshortcuts={VOICE.key} aria-label={`Use KalVoice: ${VOICE.hint.toLowerCase()}`} data-testid="try-voice"><span class="kc-i" data-i="voice" aria-hidden="true"></span>Use KalVoice<kbd>{VOICE.key}</kbd></button>
+    <button type="button" class="kc-tbtn kc-toolbar__end" data-kc-do="reset" tabindex="-1" data-testid="try-reset"><span class="kc-i" data-i="replay" aria-hidden="true"></span>Reset</button>
+  </div>
+  <AppWindow id={id} scene={initial} interactive={true} size="section" />
+</div>
+
+<script>
+  import "../../scripts/stage/try";
+</script>

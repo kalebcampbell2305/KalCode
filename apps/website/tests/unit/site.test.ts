@@ -4,17 +4,31 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PLANS } from "@kalcode/protocol/plans";
 import { describe, expect, it } from "vitest";
-import { isKnownPagePath, PAGES } from "../../src/lib/site";
+import { isKnownPagePath, PAGES, PRIMARY_NAV } from "../../src/lib/site";
 import { THEME_SCRIPT } from "../../src/lib/theme-script";
 import { buildCsp, cspHash } from "../../worker/lib/security";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+/** Built site to inspect: `dist` by default, or the folder an isolated build wrote to. */
+const dist = resolve(root, process.env.KALCODE_DIST ?? "dist");
 
 function pageFile(path: string): string {
   if (path === "/") return resolve(root, "src/pages/index.astro");
   const direct = resolve(root, `src/pages${path}.astro`);
   return existsSync(direct) ? direct : resolve(root, `src/pages${path}/index.astro`);
 }
+
+function builtHtml(): { file: string; html: string }[] {
+  return readdirSync(dist, { recursive: true, encoding: "utf8" })
+    .filter((file) => file.endsWith(".html"))
+    .map((file) => ({ file, html: readFileSync(resolve(dist, file), "utf8") }));
+}
+
+const visibleText = (html: string) =>
+  html
+    .replace(/<script[\s\S]*?<\/script>/g, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ");
 
 describe("site map", () => {
   it("has a page source for every listed page", () => {
@@ -44,8 +58,13 @@ describe("site map", () => {
 
   it("recognises only listed paths as sources", () => {
     expect(isKnownPagePath("/download")).toBe(true);
+    expect(isKnownPagePath("/kalvoice")).toBe(true);
     expect(isKnownPagePath("/download/")).toBe(false);
     expect(isKnownPagePath("/404")).toBe(false);
+  });
+
+  it("has the header navigation in the agreed order", () => {
+    expect(PRIMARY_NAV.map((item) => item.label)).toEqual(["Product", "KalVoice", "Pricing", "Docs", "Changelog"]);
   });
 });
 
@@ -58,26 +77,36 @@ describe("pricing source of truth", () => {
     ]);
   });
 
-  it("never hardcodes a price in page sources", () => {
-    const pricing = readFileSync(pageFile("/pricing"), "utf8");
-    const home = readFileSync(pageFile("/"), "utf8");
-    for (const source of [pricing, home]) {
-      expect(source).not.toMatch(/\$\s?(10|25)\b/);
+  it("never hardcodes a price or an allowance in page sources", () => {
+    const sources = ["/", "/pricing", "/kalvoice", "/product"].map((path) => readFileSync(pageFile(path), "utf8"));
+    sources.push(readFileSync(resolve(root, "src/components/PlanStrip.astro"), "utf8"));
+    for (const source of sources) {
+      expect(source).not.toMatch(/\$\s?(0|10|25)\b/);
+      expect(source).not.toMatch(/\b(2,500|10,000)\b/);
     }
+  });
+
+  it.runIf(existsSync(dist))("renders every plan's price and KalVoice Requests on the pricing page", () => {
+    const pricing = visibleText(readFileSync(resolve(dist, "pricing.html"), "utf8"));
+    for (const plan of PLANS) {
+      expect(pricing).toContain(plan.name);
+      expect(pricing).toContain(`$${plan.price.amountUsd}`);
+      expect(pricing).toContain((plan.limits.kalvoiceRequestsPerMonth ?? 0).toLocaleString("en-US"));
+    }
+    expect(pricing).toContain("Every plan includes");
   });
 });
 
 describe("plan wording on the public site", () => {
-  const dist = resolve(root, "dist");
-  it.runIf(existsSync(dist))("never shows the private tier or calls usage tokens", () => {
-    const htmlFiles = readdirSync(dist, { recursive: true, encoding: "utf8" }).filter((file) => file.endsWith(".html"));
-    for (const file of htmlFiles) {
-      const text = readFileSync(resolve(dist, file), "utf8")
-        .replace(/<[^>]+>/g, " ")
-        .replace(/\s+/g, " ");
+  it.runIf(existsSync(dist))("never shows the private tier, the old assistant name, or calls usage tokens", () => {
+    // The old assistant name is assembled here so this file does not trip the branding check.
+    const oldName = new RegExp(`\\b${["J", "A", "R", "V", "I", "S"].join("")}\\b`, "i");
+    for (const { file, html } of builtHtml()) {
+      const text = visibleText(html);
       expect(text, file).not.toMatch(/\bOWNER\b/);
       expect(text, file).not.toMatch(/\btokens?\b/i);
       expect(text, file).not.toMatch(/\bentitlements?\b/i);
+      expect(html, file).not.toMatch(oldName);
     }
   });
 
@@ -102,16 +131,29 @@ describe("content security policy", () => {
     expect(csp).not.toMatch(/unsafe-(inline|eval)/);
   });
 
-  const dist = resolve(root, "dist");
   it.runIf(existsSync(dist))("matches every inline script in the built HTML", () => {
-    const htmlFiles = readdirSync(dist, { recursive: true, encoding: "utf8" }).filter((file) => file.endsWith(".html"));
-    expect(htmlFiles.length).toBeGreaterThan(0);
-    for (const file of htmlFiles) {
-      const html = readFileSync(resolve(dist, file), "utf8");
-      const inline = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)].map((match) => match[1]);
+    const pages = builtHtml();
+    expect(pages.length).toBeGreaterThan(0);
+    for (const { file, html } of pages) {
+      // JSON-LD is a non-executing data block, which CSP script-src does not govern.
+      const inline = [
+        ...html.matchAll(/<script(?![^>]*\bsrc=)(?![^>]*type="application\/ld\+json")[^>]*>([\s\S]*?)<\/script>/g),
+      ].map((match) => match[1]);
       expect(inline, file).toEqual([THEME_SCRIPT]);
       expect(html, file).not.toMatch(/<style[\s>]/);
       expect(html, file).not.toMatch(/\sstyle="/);
+    }
+  });
+
+  it.runIf(existsSync(dist))("puts valid JSON-LD only on the home page", () => {
+    for (const { file, html } of builtHtml()) {
+      const blocks = [...html.matchAll(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/g)];
+      if (file === "index.html") {
+        expect(blocks).toHaveLength(1);
+        expect(() => JSON.parse(blocks[0]?.[1] ?? "")).not.toThrow();
+      } else {
+        expect(blocks, file).toHaveLength(0);
+      }
     }
   });
 });
