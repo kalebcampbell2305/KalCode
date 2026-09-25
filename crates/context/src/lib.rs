@@ -29,6 +29,7 @@
 //!   and schema v8.
 
 pub mod content;
+mod detectors;
 pub mod diff;
 pub mod error;
 pub mod events;

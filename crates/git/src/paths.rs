@@ -123,6 +123,52 @@ impl WorkspaceRoot {
         }
     }
 
+    /// Opens a workspace file for reading **and then** verifies the opened handle.
+    ///
+    /// Resolving a path and opening it afterwards is a check-then-use race: a symlink or
+    /// junction swapped in between redirects the open outside the workspace. Here the open
+    /// comes first; [`Self::verify_opened`] then establishes where the opened handle really is
+    /// and refuses it unless that is inside the workspace (and not in `.git`). A handle obtained
+    /// through a swap — even one swapped back afterwards — is a different file from the one the
+    /// path names inside the workspace and is refused. Hard links are the same file by
+    /// definition and pass: their content lives inside the workspace.
+    ///
+    /// Every read of workspace file content in this crate goes through here; consumers that
+    /// read by handle use [`crate::handles::HandleRegistry::open`].
+    pub fn open_verified(&self, rel: &RelPath) -> Result<OpenedFile> {
+        let file = std::fs::File::open(rel.to_native(&self.root)).map_err(|e| {
+            KalError::new(
+                ErrorCategory::Filesystem,
+                "file_unavailable",
+                "KalCode couldn't read that file.",
+            )
+            .with_source(e)
+        })?;
+        let path = self.verify_opened(rel, &file)?;
+        if !file.metadata().is_ok_and(|m| m.is_file()) {
+            return Err(KalError::validation(
+                "path_not_a_file",
+                "That isn't a file KalCode can read.",
+            ));
+        }
+        Ok(OpenedFile { file, path })
+    }
+
+    /// Verifies an already opened `file` (opened through `rel`): where the opened handle really
+    /// is must be inside the workspace. On Linux the kernel names the handle's final path
+    /// (`/proc/self/fd`); elsewhere `rel` is resolved canonically again (it must be inside) and
+    /// the opened handle must be that very file — the same volume + file index on Windows, the
+    /// same device + inode on other Unix systems. Returns that path.
+    pub fn verify_opened(&self, rel: &RelPath, file: &std::fs::File) -> Result<PathBuf> {
+        let swapped = || outside("That file changed while KalCode was opening it.");
+        let path = opened_path(file, || {
+            self.resolve(rel).ok().filter(|r| r.exists).map(|r| r.path)
+        })
+        .ok_or_else(swapped)?;
+        self.check_inside(&path)?;
+        Ok(path)
+    }
+
     fn check_inside(&self, canonical: &Path) -> Result<()> {
         if self.contains(canonical) {
             Ok(())
@@ -173,6 +219,117 @@ fn is_git_dir_name(name: &std::ffi::OsStr) -> bool {
         let trimmed = n.trim_end_matches(['.', ' ']);
         trimmed.eq_ignore_ascii_case(".git")
     })
+}
+
+/// A workspace file opened by [`WorkspaceRoot::open_verified`].
+#[derive(Debug)]
+pub struct OpenedFile {
+    pub file: std::fs::File,
+    /// The canonical path the opened handle was verified against.
+    pub path: PathBuf,
+}
+
+/// Where an opened handle really is. On Linux the kernel reports the handle's final path. Other
+/// systems have no safe query for it, so the handle is accepted as `canonical_now()` (the
+/// path's canonical, containment-checked location now) only when both are the same file: equal
+/// volume serial + file index on Windows (`GetFileInformationByHandle`), device + inode on other
+/// Unix systems. A handle opened through a link that was swapped before or after the open is a
+/// different file and is refused. (Asking Windows for the handle's final path,
+/// `GetFinalPathNameByHandleW`, would need an `unsafe` FFI call; the workspace allows exactly
+/// one audited `unsafe` site, and file identity gives the same guarantee.)
+#[cfg(target_os = "linux")]
+fn opened_path(
+    file: &std::fs::File,
+    _canonical_now: impl FnOnce() -> Option<PathBuf>,
+) -> Option<PathBuf> {
+    use std::os::fd::AsRawFd;
+    std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())).ok()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn opened_path(
+    file: &std::fs::File,
+    canonical_now: impl FnOnce() -> Option<PathBuf>,
+) -> Option<PathBuf> {
+    let path = canonical_now()?;
+    let expected = same_file::Handle::from_path(&path).ok()?;
+    let actual = same_file::Handle::from_file(file.try_clone().ok()?).ok()?;
+    (expected == actual).then_some(path)
+}
+
+/// Where `path` is, as far as the filesystem can tell today: the nearest existing ancestor is
+/// canonicalized (links, junctions, 8.3 names and letter case resolved) and the missing rest is
+/// appended lexically (`.` dropped, `..` popped). Used for locations that may not exist yet.
+pub fn resolve_nearest(path: &Path) -> PathBuf {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    };
+    let mut rest: Vec<Component<'_>> = Vec::new();
+    let mut current: &Path = &absolute;
+    loop {
+        if let Ok(canonical) = std::fs::canonicalize(current) {
+            let mut out = canonical;
+            for component in rest.iter().rev() {
+                match component {
+                    Component::CurDir => {}
+                    Component::ParentDir => {
+                        out.pop();
+                    }
+                    other => out.push(other.as_os_str()),
+                }
+            }
+            return out;
+        }
+        match (current.parent(), current.components().next_back()) {
+            (Some(parent), Some(last)) => {
+                rest.push(last);
+                current = parent;
+            }
+            _ => return lexical(&absolute),
+        }
+    }
+}
+
+/// `.` dropped and `..` popped without touching the filesystem.
+pub fn lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// Component-wise "`path` is `ancestor` or below it", after removing Windows verbatim
+/// prefixes; letter case is ignored on Windows (NTFS folders are case-insensitive).
+pub fn is_within(path: &Path, ancestor: &Path) -> bool {
+    let path = plain(path);
+    let ancestor = plain(ancestor);
+    let mut inner = path.components();
+    for want in ancestor.components() {
+        let Some(have) = inner.next() else {
+            return false;
+        };
+        let same = if cfg!(windows) {
+            have.as_os_str().to_string_lossy().to_lowercase()
+                == want.as_os_str().to_string_lossy().to_lowercase()
+        } else {
+            have == want
+        };
+        if !same {
+            return false;
+        }
+    }
+    true
 }
 
 /// A location inside a workspace, checked at the time it was resolved.

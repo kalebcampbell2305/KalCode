@@ -394,6 +394,75 @@ fn real_path(path: &Path) -> Option<PathBuf> {
     Some(current)
 }
 
+/// Folders whose contents are credentials (`~/.ssh/config`, `~/.aws/credentials`).
+const CREDENTIAL_DIRS: &[&str] = &[
+    ".ssh",
+    ".aws",
+    ".gnupg",
+    ".azure",
+    ".kube",
+    ".docker",
+    ".password-store",
+    "gcloud",
+    ".oci",
+    ".terraform.d",
+];
+/// File names that hold credentials.
+const CREDENTIAL_FILES: &[&str] = &[
+    ".npmrc",
+    ".pypirc",
+    ".netrc",
+    "_netrc",
+    ".git-credentials",
+    ".pgpass",
+    ".htpasswd",
+    ".vault-token",
+    ".s3cfg",
+    ".boto",
+    ".dockercfg",
+    ".my.cnf",
+    ".terraformrc",
+    "credentials.tfrc.json",
+    "kubeconfig",
+    "credentials",
+    "credentials.json",
+    "credentials.toml",
+    "credentials.yml",
+    "credentials.yaml",
+    "id_rsa",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ecdsa_sk",
+    "id_ed25519",
+    "id_ed25519_sk",
+    "hosts.yml",
+    "auth.json",
+    "secrets.json",
+    "secrets.yml",
+    "secrets.yaml",
+    "secrets.toml",
+    "service-account.json",
+    "keychain-db",
+    "environ",
+];
+/// Extensions of key, certificate-store and password-database files.
+const CREDENTIAL_EXTENSIONS: &[&str] = &[
+    ".pem",
+    ".key",
+    ".p12",
+    ".pfx",
+    ".p8",
+    ".keystore",
+    ".jks",
+    ".kdbx",
+    ".ppk",
+    ".asc",
+    ".gpg",
+    ".keychain-db",
+];
+/// `.env.*` files that are templates, not secrets.
+const ENV_TEMPLATES: &[&str] = &[".env.example", ".env.sample", ".env.template", ".env.dist"];
+
 /// Names that commonly hold credentials or secrets.
 pub fn looks_like_credentials(path: &str) -> bool {
     let components: Vec<String> = split_components(path)
@@ -403,64 +472,244 @@ pub fn looks_like_credentials(path: &str) -> bool {
     let Some(name) = components.last() else {
         return false;
     };
-    const DIRS: &[&str] = &[
-        ".ssh",
-        ".aws",
-        ".gnupg",
-        ".azure",
-        ".kube",
-        ".docker",
-        ".password-store",
-    ];
-    const FILES: &[&str] = &[
-        ".npmrc",
-        ".pypirc",
-        ".netrc",
-        "_netrc",
-        ".git-credentials",
-        ".pgpass",
-        ".htpasswd",
-        "credentials",
-        "credentials.json",
-        "credentials.toml",
-        "credentials.yml",
-        "credentials.yaml",
-        "id_rsa",
-        "id_dsa",
-        "id_ecdsa",
-        "id_ed25519",
-        "hosts.yml",
-        "secrets.json",
-        "secrets.yml",
-        "secrets.yaml",
-        "secrets.toml",
-        "service-account.json",
-        "keychain-db",
-    ];
-    const EXTENSIONS: &[&str] = &[
-        ".pem",
-        ".key",
-        ".p12",
-        ".pfx",
-        ".keystore",
-        ".jks",
-        ".kdbx",
-        ".ppk",
-        ".asc",
-        ".gpg",
-    ];
-    let is_env = name == ".env"
-        || (name.starts_with(".env.")
-            && !matches!(
-                name.as_str(),
-                ".env.example" | ".env.sample" | ".env.template" | ".env.dist"
-            ));
+    let is_env =
+        name == ".env" || (name.starts_with(".env.") && !ENV_TEMPLATES.contains(&name.as_str()));
     is_env
         || components[..components.len() - 1]
             .iter()
-            .any(|c| DIRS.contains(&c.as_str()))
-        || FILES.contains(&name.as_str())
-        || EXTENSIONS.iter().any(|ext| name.ends_with(ext))
+            .any(|c| CREDENTIAL_DIRS.contains(&c.as_str()))
+        || CREDENTIAL_FILES.contains(&name.as_str())
+        || CREDENTIAL_EXTENSIONS.iter().any(|ext| name.ends_with(ext))
+}
+
+/// One element of a shell wildcard pattern.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum GlobElem {
+    Literal(char),
+    /// `?`
+    One,
+    /// `*` (and `**`)
+    Star,
+    /// `[abc]`, `[a-z]`, `[!x]`/`[^x]`
+    Class {
+        ranges: Vec<(char, char)>,
+        negated: bool,
+    },
+}
+
+impl GlobElem {
+    fn matches(&self, c: char) -> bool {
+        match self {
+            Self::Literal(l) => *l == c,
+            Self::One | Self::Star => true,
+            Self::Class { ranges, negated } => {
+                ranges.iter().any(|(lo, hi)| (*lo..=*hi).contains(&c)) != *negated
+            }
+        }
+    }
+
+    /// Whether some character matches both single-character elements.
+    fn overlaps(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Literal(c), e) | (e, Self::Literal(c)) => e.matches(*c),
+            // Two classes, or `?`: assume a common character exists (fail closed).
+            _ => true,
+        }
+    }
+}
+
+/// Parses a wildcard pattern, case-folded to lower case (Windows and macOS file systems compare
+/// names without case).
+fn glob_parse(pattern: &str) -> Vec<GlobElem> {
+    let chars: Vec<char> = pattern.to_lowercase().chars().collect();
+    let mut out = Vec::with_capacity(chars.len());
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '*' => {
+                if out.last() != Some(&GlobElem::Star) {
+                    out.push(GlobElem::Star);
+                }
+            }
+            '?' => out.push(GlobElem::One),
+            '[' => {
+                let mut j = i + 1;
+                let negated = matches!(chars.get(j), Some('!' | '^'));
+                if negated {
+                    j += 1;
+                }
+                let start = j;
+                // A `]` right after `[` or `[!` is a member, not the end.
+                if chars.get(j) == Some(&']') {
+                    j += 1;
+                }
+                while j < chars.len() && chars[j] != ']' {
+                    j += 1;
+                }
+                if j >= chars.len() {
+                    out.push(GlobElem::Literal('['));
+                } else {
+                    let members = &chars[start..j];
+                    let mut ranges = Vec::new();
+                    let mut k = 0;
+                    while k < members.len() {
+                        if k + 2 < members.len() && members[k + 1] == '-' {
+                            ranges.push((members[k], members[k + 2]));
+                            k += 3;
+                        } else {
+                            ranges.push((members[k], members[k]));
+                            k += 1;
+                        }
+                    }
+                    out.push(GlobElem::Class { ranges, negated });
+                    i = j;
+                }
+            }
+            c => out.push(GlobElem::Literal(c)),
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Whether a name matches a wildcard pattern (case-insensitive; `*` matches a leading dot, as
+/// in PowerShell and cmd.exe).
+pub fn glob_match(pattern: &str, name: &str) -> bool {
+    let elems = glob_parse(pattern);
+    let name: Vec<char> = name.to_lowercase().chars().collect();
+    // Linear matcher that backtracks only to the most recent star.
+    let (mut p, mut n) = (0usize, 0usize);
+    let mut star: Option<(usize, usize)> = None;
+    while n < name.len() {
+        match elems.get(p) {
+            Some(GlobElem::Star) => {
+                star = Some((p, n));
+                p += 1;
+            }
+            Some(e) if e.matches(name[n]) => {
+                p += 1;
+                n += 1;
+            }
+            _ => match star {
+                Some((sp, sn)) => {
+                    p = sp + 1;
+                    n = sn + 1;
+                    star = Some((sp, sn + 1));
+                }
+                None => return false,
+            },
+        }
+    }
+    elems[p.min(elems.len())..]
+        .iter()
+        .all(|e| *e == GlobElem::Star)
+}
+
+/// Whether some name matches both patterns. `dotted` applies the POSIX rule that a leading dot
+/// is only matched by a literal dot.
+fn globs_intersect(a: &[GlobElem], b: &[GlobElem], dotted: bool) -> bool {
+    if dotted
+        && matches!(b.first(), Some(GlobElem::Literal('.')))
+        && !matches!(a.first(), Some(GlobElem::Literal('.')))
+    {
+        return false;
+    }
+    let (la, lb) = (a.len(), b.len());
+    let index = |i: usize, j: usize| i * (lb + 1) + j;
+    let mut reached = vec![false; (la + 1) * (lb + 1)];
+    let mut stack = vec![(0usize, 0usize)];
+    reached[0] = true;
+    while let Some((i, j)) = stack.pop() {
+        if i == la && j == lb {
+            return true;
+        }
+        let (ea, eb) = (a.get(i), b.get(j));
+        let mut next: Vec<(usize, usize)> = Vec::with_capacity(4);
+        if ea == Some(&GlobElem::Star) {
+            next.push((i + 1, j)); // the star matches nothing more
+            if eb.is_some() && eb != Some(&GlobElem::Star) {
+                next.push((i, j + 1)); // the star swallows b's next character
+            }
+        }
+        if eb == Some(&GlobElem::Star) {
+            next.push((i, j + 1));
+            if ea.is_some() && ea != Some(&GlobElem::Star) {
+                next.push((i + 1, j));
+            }
+        }
+        if let (Some(x), Some(y)) = (ea, eb)
+            && *x != GlobElem::Star
+            && *y != GlobElem::Star
+            && x.overlaps(y)
+        {
+            next.push((i + 1, j + 1));
+        }
+        for (ni, nj) in next {
+            if !reached[index(ni, nj)] {
+                reached[index(ni, nj)] = true;
+                stack.push((ni, nj));
+            }
+        }
+    }
+    false
+}
+
+/// Whether a wildcard path (`.en*`, `*.pem`, `~/.ss?/*`) can name a credential file or folder
+/// under the POSIX dot rule. Callers also expand the pattern against the real folder, which
+/// covers shells where `*` matches dot files.
+pub fn glob_may_match_credentials(pattern: &str) -> bool {
+    let components: Vec<&str> = split_components(pattern);
+    let Some((last, _)) = components.split_last() else {
+        return false;
+    };
+    let is_glob = |c: &str| c.contains(['*', '?', '[']);
+    // A name made only of wildcards (`*`, `*.*`, `?*`) aims at nothing in particular; whether it
+    // reaches a credential depends on the folder's real contents, which the caller lists.
+    let aims = |c: &str| {
+        c.chars()
+            .any(|ch| !matches!(ch, '*' | '?' | '.' | '[' | ']' | '!' | '^'))
+    };
+    // A wildcard part can name, or walk into, a credential folder; `**` into any of them.
+    for part in &components {
+        if !is_glob(part) {
+            if CREDENTIAL_DIRS.contains(&part.to_ascii_lowercase().as_str()) {
+                return true;
+            }
+            continue;
+        }
+        if *part == "**" {
+            return true;
+        }
+        let elems = glob_parse(part);
+        if aims(part)
+            && CREDENTIAL_DIRS
+                .iter()
+                .any(|d| globs_intersect(&elems, &glob_parse(d), true))
+        {
+            return true;
+        }
+    }
+    if !is_glob(last) {
+        return looks_like_credentials(pattern);
+    }
+    if !aims(last) {
+        return false;
+    }
+    let elems = glob_parse(last);
+    let mut candidates: Vec<Vec<GlobElem>> = CREDENTIAL_FILES
+        .iter()
+        .map(|f| glob_parse(f))
+        .chain(
+            CREDENTIAL_EXTENSIONS
+                .iter()
+                .map(|e| glob_parse(&format!("*{e}"))),
+        )
+        .collect();
+    candidates.push(glob_parse(".env"));
+    candidates.push(glob_parse(".env.*"));
+    candidates
+        .iter()
+        .any(|candidate| globs_intersect(&elems, candidate, true))
 }
 
 #[cfg(test)]
@@ -586,6 +835,43 @@ mod tests {
         assert!(resolve(&workspace, None, ".git/hooks/pre-commit").git_internal);
         assert!(resolve(&workspace, None, "sub/.GIT/config").git_internal);
         assert!(!resolve(&workspace, None, "src/a.txt").git_internal);
+    }
+
+    #[test]
+    fn wildcards_that_can_name_credentials() {
+        for pattern in [
+            ".en*",
+            ".en?",
+            ".e*",
+            ".[e]nv",
+            "*.pem",
+            "*.P?M",
+            "id_*",
+            "src/*.key",
+            "~/.ss*/id_rsa",
+            ".aw?/credentials",
+            "**/x",
+            "cred*",
+            ".git-cred*",
+        ] {
+            assert!(glob_may_match_credentials(pattern), "{pattern}");
+        }
+        for pattern in ["*", "*.*", "*.rs", "src/*.md", "?", "a*z", ".github/*.md"] {
+            assert!(!glob_may_match_credentials(pattern), "{pattern}");
+        }
+    }
+
+    #[test]
+    fn glob_match_follows_shell_rules() {
+        assert!(glob_match("*.pem", "server.PEM"));
+        assert!(glob_match("*", ".env"));
+        assert!(glob_match(".[e]nv", ".env"));
+        assert!(glob_match("[!x]*", "abc"));
+        assert!(!glob_match("[!a]*", "abc"));
+        assert!(glob_match("a*b*c", "aXbYbZc"));
+        assert!(!glob_match("a*b", "aXbY"));
+        assert!(glob_match("???", "abc"));
+        assert!(!glob_match("??", "abc"));
     }
 
     #[cfg(windows)]
