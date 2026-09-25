@@ -21,6 +21,15 @@
       "migrations_dir": "migrations"
     }
   ],
+  "r2_buckets": [
+    {
+      // Desktop release files: releases/<version>/<file> and releases/latest.json, uploaded by
+      // `pnpm release:publish` (tooling/release/publish.mjs). Served by worker/downloads.ts.
+      // Local dev and tests use a local simulation of the bucket.
+      "binding": "RELEASES",
+      "bucket_name": "kalcode-releases"
+    }
+  ],
   "ratelimits": [
     {
       "name": "EARLY_ACCESS_LIMITER",

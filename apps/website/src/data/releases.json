@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "latest": null,
+  "unavailable": [
+    {
+      "os": "windows",
+      "label": "Windows 10 (1809) or later, 64-bit",
+      "reason": "No public build has been published yet."
+    },
+    {
+      "os": "macos",
+      "label": "macOS",
+      "reason": "Not available yet. macOS builds need a macOS build machine and Apple code signing, which are not set up."
+    },
+    {
+      "os": "linux",
+      "label": "Linux",
+      "reason": "Not available yet. Linux builds need a Linux build machine and have not been tested."
+    }
+  ]
+}
