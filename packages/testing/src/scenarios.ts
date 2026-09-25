@@ -80,6 +80,14 @@ export function samplePayloads(fx: Fixtures = createFixtures()): {
       type: "provider.error",
       payload: { providerId: "codex", code: "provider/not_authenticated", message: "Sign in to Codex to continue." },
     },
+    "provider.health_changed": {
+      type: "provider.health_changed",
+      payload: { providerId: "codex", from: "healthy", to: "degraded", reason: "recent_failures" },
+    },
+    "provider.capacity_changed": {
+      type: "provider.capacity_changed",
+      payload: { providerId: "gemini-cli", state: "backing_off", activeSessions: 1, limit: null, retryAt: null },
+    },
     "thread.created": {
       type: "thread.created",
       payload: { threadId, name: "Fix flaky login test", providerId: "claude-code", workspaceId },
