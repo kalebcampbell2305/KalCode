@@ -343,7 +343,8 @@ builds running; cold first snapshot 82–105 s **with and without** the change, 
 | --- | ---: | ---: | ---: |
 | without open-then-verify (same machine, same hour) | 645 ms | 7.69 s (budget FAIL under load) | 886 ms |
 | with open-then-verify | 830–855 ms | 4.89–6.74 s | 1.27–1.86 s |
+| final: open-then-verify by file identity (2026-09-25, lighter load; `cargo test --release -p kalcode-git --test perf -- --ignored --nocapture`) | 731 ms | 3.67 s | 582 ms |
 
-The no-change budget (≤ 2 s at 20k in `perf.rs`, ≤ 1 s at 10k in §10) holds; the 1k-changed
-budget (≤ 5 s) is load-bound on this machine today (it failed without the change too); the
-measured overhead of the fix for 1,000 files is ≈ 0.1 s.
+Both budgets hold in the final run (≤ 2 s no-change and ≤ 5 s for 1,000 changed files at 20k in
+`perf.rs`); the earlier 1k-changed misses were load-bound (the run without the change missed too).
+The measured overhead of the fix for 1,000 files is ≈ 0.1 s.

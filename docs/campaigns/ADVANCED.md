@@ -1158,17 +1158,39 @@ for providers until written permission is recorded.
 ## 14b. Security review gates (2026-09-24 review of 1bce77f)
 
 Release blockers are being fixed in `sec/fixes-0.1.1` (see `docs/campaigns/SEC-0.1.1.md` once
-merged). These latent findings **block wiring** until fixed and re-reviewed:
+merged). These latent findings **block wiring** until fixed and re-reviewed. The first three are
+**fixed** on `sec/latent-hardening` (`docs/campaigns/SEC-LATENT.md`: finding → fix → test, each
+test shown failing on the unfixed code); they still need the re-review before the wiring lands:
 
 - **Permission classifier dialect handling** (`crates/permissions/src/command.rs`, High, latent) and
   the further classifier gaps (git read commands with execution options, PowerShell Unicode
   dashes/smart quotes, abbreviated flags, env-var secret printing, glob arguments): must be fixed
   before any host-approval or hook bridge (Z7-W4) routes provider decisions through the engine.
+  **Fixed** (`fe34d52`, `aba7b10`): every command is read as POSIX sh, cmd.exe and PowerShell
+  (`command/dialects.rs`) plus the union reading, and the most authority-requiring result wins;
+  GNU/PowerShell abbreviations and Unicode dashes; Git and read-only execution options
+  (`grep -O`, `--ext-diff`, `--upload-pack`, `--output` into `.git`, `man -P` …); environment
+  secrets in every syntax (`credentials.access`); wildcards that can expand to credential files.
+  Evidence: `tests/sec_latent_classifier.rs` (11 tests; 9 failed on `87d9316`, the other two are guards), review probe rows
+  16/88 → 88/88 handled, `properties.rs` deny-wins over 4 000 per-shell compositions and 6 000 +
+  5 000 random dialect commands (no panics, deterministic).
 - **Context Firewall** (`crates/context`): file-range scanning leaking PEM bodies, secret-format
   coverage (~25 of 37 common formats undetected), partial redaction, dropped files skipping
   never-share names, hard links, combined diffs, quadratic entropy pass: must be fixed before the
   Context Firewall is wired to any provider path (Context Drop, handoff, missions).
+  **Fixed** (`2601c42`): ranges evaluated against the whole file (M4); detector layer, 25/37 →
+  0/37 leaked (M5); whole-value redaction (M6); never-share names on every item origin (M7);
+  multi-linked files need confirmation; combined/mixed diffs withheld; linear entropy pass
+  (crafted 8 MiB ~18 s → 74 ms); never-share gaps closed (57 names); open-then-verify reads.
+  Evidence: `sec_latent_detection`, `sec_latent_firewall`, `sec_latent_no_panic`; CTX budgets
+  7.9 ms/MiB scan, 17.7 ms/MiB package (≤ 50). Follow-up: move the detectors into the shared
+  log redactor (`kalcode_core::redact`).
 - **Git checkpoint store** "inside workspace" guard skipped on first use: fix before Z6a IPC wiring.
+  **Fixed** (`5aa7af7`, `e6fad86`): `check_location` on every entry point before and after the
+  store folder is created (nearest-existing-ancestor resolution, both overlap directions);
+  `open_verified`/`HandleRegistry::open` open-then-verify by file identity, used by every
+  checkpoint content read. Evidence: `sec_latent_store` (6 of 7 failed before),
+  `sec_latent_open_verified`; Z6a budgets hold (20k files: 731 ms no-change, 3.67 s for 1k changed).
 - **API (D1)** REPLACE bypass of append-only/immutability triggers: fixed in 0.1.1 work; must be in
   place before any Z13 billing or grant write path ships.
 - **Early-access list**: anyone can add or remove any address (no confirmation). Needs a
