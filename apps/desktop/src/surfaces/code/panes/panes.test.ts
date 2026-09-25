@@ -73,7 +73,7 @@ describe("pane channel helpers", () => {
 async function setup(): Promise<{ transport: MemoryTransport; channel: PaneChannel; workspace: Workspace }> {
   const transport = createMemoryTransport("default", { detectDelayMs: 0 });
   const client = new KalCodeClient(transport);
-  transport.workspaces.queueFolders(["C:\\Users\\dev\\pane-site"]);
+  transport.workspaces.queueFolders("pane-site");
   const workspace = (await client.openWorkspaceDialog()) as Workspace;
   return { transport, channel: new PaneChannel(client), workspace };
 }
