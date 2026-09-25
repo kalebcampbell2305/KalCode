@@ -41,17 +41,24 @@ const MAX_SHELL_ID_LEN: usize = 32;
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 const META_ACTIVE_WORKSPACE: &str = "active_workspace_id";
 
-/// Variables never passed to a user's shell, besides every `KALCODE_*` variable: browser-runtime
-/// overrides used by test builds.
-const SHELL_ENV_REMOVE: &[&str] = &[
-    "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-    "WEBVIEW2_BROWSER_EXECUTABLE_FOLDER",
-    "WEBVIEW2_USER_DATA_FOLDER",
-    "WEBVIEW2_RELEASE_CHANNEL_PREFERENCE",
-    "WEBVIEW2_PIPE_FOR_SCRIPT_DEBUGGER",
-    "WEBKIT_INSPECTOR_SERVER",
-    "WEBKIT_INSPECTOR_HTTP_SERVER",
-];
+/// Variable-name prefixes never passed to a user's shell (matched case-insensitively): KalCode's
+/// own settings and every browser-runtime override (`WEBVIEW2_*`, `COREWEBVIEW2_*`,
+/// `WEBKIT_INSPECTOR*`) that test builds may keep in KalCode's own environment.
+const SHELL_ENV_REMOVE_PREFIXES: &[&str] =
+    &["KALCODE_", "WEBVIEW2_", "COREWEBVIEW2_", "WEBKIT_INSPECTOR"];
+
+/// Names from `names` that must not reach a user's shell.
+fn shell_env_removals(names: impl IntoIterator<Item = String>) -> Vec<String> {
+    names
+        .into_iter()
+        .filter(|key| {
+            let upper = key.to_ascii_uppercase();
+            SHELL_ENV_REMOVE_PREFIXES
+                .iter()
+                .any(|prefix| upper.starts_with(prefix))
+        })
+        .collect()
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -750,15 +757,8 @@ impl Core {
         shell: &ShellInfo,
         size: TerminalSize,
     ) -> Result<(PtySession, u64, EventEnvelope)> {
-        let env_remove = SHELL_ENV_REMOVE
-            .iter()
-            .map(|v| (*v).to_owned())
-            .chain(
-                std::env::vars_os()
-                    .filter_map(|(key, _)| key.into_string().ok())
-                    .filter(|key| key.to_ascii_uppercase().starts_with("KALCODE_")),
-            )
-            .collect();
+        let env_remove =
+            shell_env_removals(std::env::vars_os().filter_map(|(key, _)| key.into_string().ok()));
         let spec = SpawnSpec {
             program: shell.program.clone(),
             args: shell.args.clone(),
@@ -1259,6 +1259,24 @@ mod tests {
             strip_verbatim(PathBuf::from("/home/me/site")),
             PathBuf::from("/home/me/site")
         );
+    }
+
+    #[test]
+    fn shells_never_receive_kalcode_or_browser_runtime_variables() {
+        let names = [
+            "KALCODE_DATA_DIR",
+            "kalcode_e2e_pick_folder",
+            "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+            "WEBVIEW2_SOME_FUTURE_OVERRIDE",
+            "webview2_user_data_folder",
+            "COREWEBVIEW2_MAX_INSTANCES",
+            "WEBKIT_INSPECTOR_SERVER",
+            "PATH",
+            "HOME",
+            "MY_WEBVIEW2_NOTES",
+        ];
+        let removed = shell_env_removals(names.iter().map(|n| (*n).to_owned()));
+        assert_eq!(removed, &names[..7]);
     }
 
     #[test]
