@@ -258,7 +258,7 @@ pub fn expire_pending(
     reason: &str,
 ) -> Result<Vec<Expired>> {
     let mut stmt = conn.prepare(
-        "SELECT id, COALESCE(thread_id, ''), workspace_id, provider_id FROM approvals
+        "SELECT id, COALESCE(thread_id, ''), COALESCE(workspace_id, ''), COALESCE(provider_id, '') FROM approvals
          WHERE status = 'pending' AND (?1 IS NULL OR thread_id = ?1) AND (?2 IS NULL OR action_id = ?2)",
     )?;
     let expired: Vec<Expired> = stmt

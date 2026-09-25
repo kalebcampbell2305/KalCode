@@ -890,11 +890,21 @@ fn schema_refuses_approving_unapprovable_requests() {
     assert!(result.is_err());
 }
 
-/// Inserts a pending request row directly (schema tests only).
+/// Inserts a pending request row directly (schema tests only), with workspace `w` and provider `p`.
 fn insert_raw(
     h: &Harness,
     origin_kind: &str,
     thread_id: Option<&str>,
+) -> kalcode_core::Result<String> {
+    insert_row(h, origin_kind, thread_id, Some("w"), Some("p"))
+}
+
+fn insert_row(
+    h: &Harness,
+    origin_kind: &str,
+    thread_id: Option<&str>,
+    workspace_id: Option<&str>,
+    provider_id: Option<&str>,
 ) -> kalcode_core::Result<String> {
     let id = new_id();
     h.core
@@ -903,10 +913,10 @@ fn insert_raw(
                 "INSERT INTO approvals (id, origin_kind, origin_id, thread_id, workspace_id, provider_id,
                    action_id, request, decision, allowed_decisions, fingerprint, grant_coverage,
                    permission_mode, status, created_at)
-                 VALUES (?1, ?2, 'origin-1', ?3, 'w', 'p', ?1, '{}',
+                 VALUES (?1, ?2, 'origin-1', ?3, ?4, ?5, ?1, '{}',
                    '{\"effect\":\"ask\",\"approvable\":true,\"scopes\":[],\"reason\":\"\"}',
                    '[\"deny\",\"approve_once\"]', 'f', 'c', 'approve', 'pending', 'now')",
-                rusqlite::params![id, origin_kind, thread_id],
+                rusqlite::params![id, origin_kind, thread_id, workspace_id, provider_id],
             )?;
             Ok(((), Vec::new()))
         })
@@ -948,6 +958,24 @@ fn approvals_record_their_origin_and_only_thread_origins_need_a_thread() {
         insert_raw(&h, "thread", None).is_err(),
         "a thread origin needs its thread"
     );
+    assert!(
+        insert_row(&h, "thread", Some("t"), None, Some("p")).is_err(),
+        "a thread origin needs its workspace"
+    );
+    assert!(
+        insert_row(&h, "thread", Some("t"), Some("w"), None).is_err(),
+        "a thread origin needs its provider"
+    );
+    // KalVoice (and other non-thread origins) may have no thread, workspace or provider.
+    let voice = insert_row(&h, "kalvoice", None, None, None)
+        .unwrap_or_else(|e| panic!("kalvoice without workspace/provider: {}", e.diagnostic()));
+    // Such a request expires like any other (expiry reads no workspace or provider).
+    h.core
+        .transact(|tx| {
+            store::expire_pending(tx, None, Some(&voice), "superseded")?;
+            Ok(((), Vec::new()))
+        })
+        .expect("expire a non-thread request");
     assert!(
         insert_raw(&h, "someone", Some("t")).is_err(),
         "unknown origins are refused"

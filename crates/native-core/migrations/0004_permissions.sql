@@ -31,8 +31,8 @@ CREATE TABLE approvals (
                       'doctor', 'continuity', 'utility', 'remote')),
   origin_id         TEXT,
   thread_id         TEXT,
-  workspace_id      TEXT NOT NULL,
-  provider_id       TEXT NOT NULL,
+  workspace_id      TEXT,
+  provider_id       TEXT,
   action_id         TEXT NOT NULL,
   request           TEXT NOT NULL CHECK (json_valid(request)),   -- NormalizedAction
   decision          TEXT NOT NULL CHECK (json_valid(decision)),  -- PolicyDecision
@@ -53,7 +53,10 @@ CREATE TABLE approvals (
                       'thread_stopped', 'superseded', 'mode_changed', 'process_restarted',
                       'answered_in_provider')),
   created_at        TEXT NOT NULL,
-  CHECK (origin_kind <> 'thread' OR thread_id IS NOT NULL),
+  -- A provider session in a thread always has its thread, workspace and provider; other origins
+  -- (KalVoice, automations, system, …) may have none of them.
+  CHECK (origin_kind <> 'thread' OR (
+    thread_id IS NOT NULL AND workspace_id IS NOT NULL AND provider_id IS NOT NULL)),
   -- Defense in depth: an approved request must have been an approvable "ask", with an
   -- approving decision the request allowed; a denied one carries "deny".
   CHECK (json_extract(decision, '$.effect') = 'ask'),

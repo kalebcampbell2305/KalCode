@@ -45,7 +45,7 @@ merged (files are checksummed, see `docs/DATA_MODEL.md`).
 | `0001` (v1) | Z0 | `app_meta`, `settings`, `events` | merged |
 | `0002` (v2) | Z1 | `workspaces`, `terminals` | merged (wave 2) |
 | `0003` (v3) | Z3 | `threads`, `thread_messages`, `tool_calls`, `thread_files` | merged (wave 2) |
-| `0004` (v4) | Z4 | `permission_profiles`, `permission_settings`, `approvals` (with `origin_kind` / `origin_id`; `thread_id` nullable for non-thread origins), `permission_grants`, `permission_audit` (kinds include the Trust Kernel's `trust.*` / `grant.ceiling_clamped`) | merged (wave 2) |
+| `0004` (v4) | Z4 | `permission_profiles`, `permission_settings`, `approvals` (with `origin_kind` / `origin_id`; `thread_id`, `workspace_id`, `provider_id` required for thread origins, optional for others), `permission_grants`, `permission_audit` (kinds include the Trust Kernel's `trust.*` / `grant.ceiling_clamped`) | merged (wave 2) |
 | `0005` (v5) | — | reserved: the next campaign that needs storage takes it | free |
 
 Z2 shipped no migration (provider state is detected, never stored). `threads.permission_profile_id`
