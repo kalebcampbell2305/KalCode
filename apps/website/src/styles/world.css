@@ -245,11 +245,13 @@ body[data-world] {
   z-index: 1;
 }
 
+/* Tight rhythm, as in the approved concepts: moments follow each other closely. */
 .world-section {
+  --world-section-y: clamp(2.75rem, 1.75rem + 3vw, 5.5rem);
   position: relative;
   isolation: isolate;
   overflow: clip;
-  padding-block: var(--site-section-y);
+  padding-block: var(--world-section-y);
 }
 
 .world-section + .world-section,
@@ -268,7 +270,7 @@ body[data-world] {
 }
 
 .world-section--tall {
-  padding-block: calc(var(--site-section-y) * 1.2);
+  padding-block: calc(var(--world-section-y) * 1.15);
 }
 
 .world-section--tight {
@@ -459,7 +461,7 @@ body[data-world] {
 .statement {
   display: grid;
   gap: var(--space-5);
-  margin-bottom: clamp(2.5rem, 1.75rem + 2.5vw, 4.5rem);
+  margin-bottom: clamp(2rem, 1.5rem + 1.8vw, 3.5rem);
 }
 
 .statement--center {
@@ -1053,7 +1055,7 @@ body[data-world] {
   position: relative;
   isolation: isolate;
   overflow: clip;
-  padding-block: clamp(5rem, 3rem + 6vw, 9rem) clamp(16rem, 10rem + 16vw, 28rem);
+  padding-block: clamp(3.5rem, 2rem + 4vw, 6rem) clamp(16rem, 10rem + 16vw, 28rem);
 }
 
 .finale .closing {
