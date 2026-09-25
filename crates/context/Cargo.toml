@@ -19,7 +19,6 @@ thiserror.workspace = true
 tracing.workspace = true
 uuid.workspace = true
 rusqlite = { workspace = true, features = ["bundled"] }
-regex = "1"
 sha2 = "0.10"
 ignore = "0.4"
 globset = "0.4"
@@ -27,6 +26,7 @@ globset = "0.4"
 [dev-dependencies]
 tempfile.workspace = true
 proptest = "1"
+regex = "1"
 
 [lints]
 workspace = true

@@ -4,6 +4,7 @@
 mod code_commands;
 mod commands;
 pub mod environment;
+pub mod native_confirm;
 pub mod permission_commands;
 mod provider_commands;
 mod thread_commands;
