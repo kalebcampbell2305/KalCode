@@ -2,8 +2,8 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
 
 /**
- * Threads surface against the in-memory transport: fixture provider detection (Claude Code
- * installed and signed in, Codex installed without an adapter, Gemini CLI missing), workspaces
+ * Threads surface against the in-memory transport: fixture provider detection (Claude Code and
+ * Codex installed and signed in, Gemini CLI installed with sign-in unknown), workspaces
  * opened through Z1's fake folder picker, and a scripted fake provider session (see
  * src/ipc/memory/threads.ts).
  */
@@ -112,19 +112,60 @@ test.describe("threads", () => {
     await expect(activity.getByText("Tool finished").first()).toBeVisible();
   });
 
-  test("only providers that can run threads are offered; the others say why", async ({ page }) => {
+  test("new thread offers Codex and Gemini CLI with their own models and mode notes", async ({ page }) => {
     await openThreads(page);
+    await page.getByRole("button", { name: "New thread" }).first().click();
+    const form = page.getByRole("region", { name: "New thread" });
+    await expect(form.getByLabel("Provider").locator("option")).toHaveText([
+      "Claude Code (Personal)",
+      "Codex",
+      "Gemini CLI",
+    ]);
+    await expect(form.getByRole("list", { name: "Not available for threads" })).toHaveCount(0);
+
+    // Codex lists no models up front: only the provider's default.
+    await form.getByLabel("Provider").selectOption("codex");
+    await expect(form.getByLabel("Model").locator("option")).toHaveText(["Provider default"]);
+    await expect(form.getByText(/With Codex: Runs like Plan/)).toBeVisible();
+
+    await form.getByLabel("Provider").selectOption("gemini-cli");
+    await expect(form.getByLabel("Model").locator("option")).toHaveText([
+      "Provider default",
+      "Auto (default)",
+      "Pro",
+      "Flash",
+      "Flash-Lite",
+    ]);
+    await expect(form.getByText(/With Gemini CLI: Tool calls that need confirmation/)).toBeVisible();
+
+    // A Codex thread runs like any other.
+    await form.getByLabel("Provider").selectOption("codex");
+    await form.getByLabel("Task").fill("summarize the README");
+    await form.getByRole("button", { name: "Start thread" }).click();
+    await expect(detail(page)).toBeVisible();
+    await expect(
+      detail(page)
+        .getByText(/^Codex/)
+        .first(),
+    ).toBeVisible();
+    await expectNoSeriousA11yViolations(page);
+  });
+
+  test("only providers that can run threads are offered; the others say why", async ({ page }) => {
+    await page.goto("/?scenario=providers-signed-out");
+    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await openFolders(page, "kalcode");
+    await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Threads" }).click();
     await page.getByRole("button", { name: "New thread" }).first().click();
     const form = page.getByRole("region", { name: "New thread" });
     await expect(form.getByLabel("Provider").locator("option")).toHaveText(["Claude Code (Personal)"]);
     const others = form.getByRole("list", { name: "Not available for threads" });
     await expect(others.getByRole("listitem")).toHaveCount(2);
     await expect(others.getByRole("listitem").filter({ hasText: "Codex" })).toContainText(
-      "Installed, but KalCode can't run threads with it yet",
+      "Signed out — run codex login",
     );
-    await expect(others.getByRole("listitem").filter({ hasText: "Gemini CLI" })).toContainText(
-      "KalCode can't run threads with it yet",
-    );
+    await expect(others.getByRole("listitem").filter({ hasText: "Gemini CLI" })).toContainText("Not installed");
+    await expect(others.getByText(/can't run threads with it yet/)).toHaveCount(0);
   });
 
   test("an explicit name and permission mode are used", async ({ page }) => {

@@ -6,8 +6,8 @@
 //! and OSC 9) and from process state. Model prose is never parsed.
 //!
 //! - [`claude`]: launch mapping, deny floor and the session settings file (hooks).
-//! - [`codex`]: read-only-first launch mapping and the OSC 9 scanner (not wired to a runtime
-//!   yet: Codex has no registered provider entry).
+//! - [`codex`]: read-only-first launch mapping and the OSC 9 scanner.
+//! - [`cli_pane`]: Codex (notify + OSC 9) and Gemini CLI (process state only) panes.
 //! - [`session`]: [`session::InteractiveSession`], an `AgentSession` over a PTY whose hook calls
 //!   become `AgentEvent`s for the one Z3 status machine.
 //! - [`provider`]: the Claude Code interactive provider, the per-thread runtime router and the
@@ -18,6 +18,7 @@
 //! whole feature stays behind the `provider_panes` flag until the Z7-W4 acceptance matrix passes.
 
 pub mod claude;
+pub mod cli_pane;
 pub mod codex;
 pub mod provider;
 pub mod session;
@@ -50,8 +51,26 @@ pub const DEFAULT_DECISION_ROUTING: DecisionRouting = DecisionRouting::Engine;
 /// project settings is unverified (not installed on the verification machine). Process state
 /// only, approvals in the provider.
 pub fn gemini_interactive_support() -> InteractiveSupport {
+    use kalcode_contracts::agent::{MappingFidelity, PermissionMapping};
+    use kalcode_contracts::permissions::PermissionMode;
     InteractiveSupport {
-        launch_mappings: Vec::new(),
+        launch_mappings: [
+            PermissionMode::Plan,
+            PermissionMode::Approve,
+            PermissionMode::Auto,
+            PermissionMode::Bypass,
+            PermissionMode::Custom,
+        ]
+        .into_iter()
+        .map(|mode| PermissionMapping {
+            mode,
+            fidelity: MappingFidelity::ApproximateStricter,
+            provider_setting: crate::gemini::permission_setting(mode),
+            notes: "Approvals are answered in Gemini CLI's own prompt; KalCode shows process \
+                    state only (limited status)."
+                .into(),
+        })
+        .collect(),
         status_channels: vec![StatusChannel::ProcessOnly],
         kalcode_answers_approvals: false,
         resume: None,

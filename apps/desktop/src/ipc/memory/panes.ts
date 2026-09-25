@@ -10,6 +10,12 @@
  *   exit            the provider exits (thread completed)
  * Status goes through the memory thread runtime (one status machine, as native).
  *
+ * Codex and Gemini CLI panes (PROVIDERS-2) mirror `crates/providers/src/interactive/cli_pane.rs`:
+ * approvals are always answered in the provider's own prompt (never a KalCode approval).
+ * Codex: the hook channel starts `waiting` and becomes `active` with the first `notify` (a
+ * finished turn); status comes only from notify (turn finished), OSC 9 (approval requested:
+ * "Answer in Codex") and the process. Gemini CLI: `limited`, process state only.
+ *
  * `?panes=limited | provider-prompt | off` or `window.__kalcodeMemory.panes.configure(...)`
  * select the hook-channel state, the decision routing, or turn the feature off.
  */
@@ -70,7 +76,17 @@ function invalid(code: string, message: string): never {
   return fail({ category: "validation", code, message, retryable: false });
 }
 
+type PaneKind = "claude-code" | "codex" | "gemini-cli";
+
+const PANE_PROVIDERS: readonly PaneKind[] = ["claude-code", "codex", "gemini-cli"];
+const PROVIDER_NAMES: Record<PaneKind, string> = {
+  "claude-code": "Claude Code",
+  codex: "Codex",
+  "gemini-cli": "Gemini CLI",
+};
+
 interface Pane {
+  kind: PaneKind;
   thread: ThreadSummary;
   output: string;
   listeners: Map<number, (bytes: Uint8Array) => void>;
@@ -138,6 +154,8 @@ export function createPanesMemory(options: {
   const status = (p: Pane, to: ThreadStatus, activity: string | null = null, pendingApprovals?: number) => {
     // Without hook events (limited status) KalCode only sees the process.
     if (p.hookChannel === "limited" && to !== "completed" && to !== "failed") return;
+    // Codex: only notify (turn finished), OSC 9 (approval requested) and the process.
+    if (p.kind === "codex" && !["idle", "waiting_for_user", "completed", "failed"].includes(to)) return;
     threads.setPaneStatus(p.thread.id, to, activity, pendingApprovals);
   };
 
@@ -153,17 +171,23 @@ export function createPanesMemory(options: {
 
   const finishTool = (p: Pane, ran: boolean, blockedReason?: string) => {
     print(p, ran ? "\r\nRAN Bash" : `\r\n${blockedReason ?? "DENIED IN PROVIDER PROMPT"}`);
+    turnFinished(p);
     status(p, "idle", null, 0);
     prompt(p);
+  };
+
+  /** Codex's `notify` reports a finished turn: the first one activates the channel. */
+  const turnFinished = (p: Pane) => {
+    if (p.kind === "codex" && p.hookChannel === "waiting") p.hookChannel = "active";
   };
 
   const runCommand = (p: Pane, command: string) => {
     status(p, "running_command", `Run ${command}`);
     const kind = APPROVAL_KINDS.find(([pattern]) => pattern.test(command))?.[1];
-    if (p.routing === "provider_prompt" || p.hookChannel === "limited") {
+    if (p.kind !== "claude-code" || p.routing === "provider_prompt" || p.hookChannel === "limited") {
       // KalCode records the call but the provider's own prompt decides, in the pane.
       later(p, 60, () => {
-        status(p, "waiting_for_user", "Answer in Claude Code");
+        status(p, "waiting_for_user", `Answer in ${PROVIDER_NAMES[p.kind]}`);
         p.askingInPane = true;
         print(p, "\r\n[fake prompt] Allow Bash? (y/n) ");
       });
@@ -221,12 +245,14 @@ export function createPanesMemory(options: {
     } else if (line.startsWith("say ")) {
       later(p, 40, () => {
         print(p, `\r\n${line.slice(4)}`);
+        turnFinished(p);
         status(p, "idle");
         prompt(p);
       });
     } else {
       later(p, 80, () => {
         print(p, "\r\n(fake) ok");
+        turnFinished(p);
         status(p, "idle");
         prompt(p);
       });
@@ -251,7 +277,7 @@ export function createPanesMemory(options: {
     providerId: p.thread.providerId,
     hookChannel: p.hookChannel,
     decisionRouting: p.routing,
-    kalcodeAnswersApprovals: p.routing === "engine" && p.hookChannel === "active",
+    kalcodeAnswersApprovals: p.kind === "claude-code" && p.routing === "engine" && p.hookChannel === "active",
     running: p.running,
     exitCode: p.exitCode,
   });
@@ -260,8 +286,8 @@ export function createPanesMemory(options: {
     provider_pane_create: async (args) => {
       requireEnabled();
       await options.beforeCreate?.();
-      if (args.providerId !== "claude-code")
-        invalid("provider_pane_unsupported", "Only Claude Code runs in a pane today.");
+      const kind = args.providerId as PaneKind;
+      if (!PANE_PROVIDERS.includes(kind)) invalid("provider_pane_unsupported", "That provider can't run in a pane.");
       const mode = args.permissionMode as PermissionMode;
       if (mode === "bypass" && args.confirmBypass !== true)
         invalid("bypass_not_confirmed", "Bypass needs your explicit confirmation.");
@@ -270,6 +296,7 @@ export function createPanesMemory(options: {
         if (created) end(created, 1, true);
       });
       const p: Pane = {
+        kind,
         thread,
         output: "",
         listeners: new Map(),
@@ -277,7 +304,8 @@ export function createPanesMemory(options: {
         running: true,
         exitCode: null,
         hookChannel: "waiting",
-        routing: config.routing,
+        // Codex and Gemini CLI approvals are always answered in their own prompt.
+        routing: kind === "claude-code" ? config.routing : "provider_prompt",
         pending: null,
         askingInPane: false,
         titled: false,
@@ -285,10 +313,13 @@ export function createPanesMemory(options: {
       };
       created = p;
       panes.set(thread.id, p);
-      const limited = config.hookChannel === "limited";
+      const limited = kind === "gemini-cli" || (kind === "claude-code" && config.hookChannel === "limited");
       later(p, 40, () => {
         print(p, `${MEMORY_PANE_BANNER}\r\n> `);
-        if (limited) {
+        if (kind === "codex") {
+          // No notify until Codex finishes a turn: the channel stays waiting.
+          threads.setPaneStatus(thread.id, "idle", null);
+        } else if (limited) {
           p.hookChannel = "limited";
           threads.setPaneStatus(thread.id, "idle", null);
         } else {

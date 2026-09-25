@@ -1,8 +1,10 @@
 # KalCode Provider Architecture
 
 Status: contract defined in Z0 · Implemented in Z2 (detection for Claude Code, Codex and Gemini
-CLI; Claude Code adapter) · Code: `crates/providers` · Contract: `crates/contracts/src/agent.rs`
-· Facts verified 2026-09-24 against official docs and the installed CLIs (Claude Code 2.1.282,
+CLI; Claude Code adapter) · Codex and Gemini CLI adapters, their panes and Provider Health in
+PROVIDERS-2 (`docs/campaigns/PROVIDERS-2.md`) · Code: `crates/providers` · Contract:
+`crates/contracts/src/agent.rs`, `health.rs` · Facts verified 2026-09-24/25 against official docs,
+the providers' published SDK/source type definitions and the installed CLIs (Claude Code 2.1.282,
 codex-cli 0.155.1; Gemini CLI not installed) · Launch and permission hardening: SEC-0.1.1
 (`docs/campaigns/SEC-0.1.1.md`)
 
@@ -85,24 +87,24 @@ is `true` only when KalCode's adapter implements it.
 
 | Capability | Claude Code | Codex | Gemini CLI |
 | --- | --- | --- | --- |
-| Non-interactive mode | `claude -p` [1] | `codex exec` [5] | `gemini -p` / non-TTY [9] |
-| Streaming output | `--output-format stream-json`, `--include-partial-messages` [1] · **used** | `codex exec --json` (JSONL: `thread.started`, `turn.started`, `item.*`, `turn.completed`) [5] | `--output-format stream-json` (`init`, `message`, `tool_use`, `tool_result`, `error`, `result`) [9] |
-| Stream input | `--input-format stream-json` (SDKUserMessage lines) [1][3] · **used** | `codex app-server` JSON-RPC 2.0 over stdio (`turn/start`) [8] | Not documented |
-| Interrupt | `interrupt` control request, advertised by `interrupt_receipt_v1` [3] · **used** (§8.4) | app-server `turn/interrupt` [8] | Not documented |
-| Resume | `--resume <id>`, `--session-id <uuid>` [2] · **used** | `codex exec resume <id>\|--last` [5]; app-server `thread/resume` [8] | `--resume latest\|<index>` [10] |
-| Host approvals | `--permission-prompt-tool` (MCP) [2] · not used until Z4 | app-server approval requests (accept/decline) [8] · the planned adapter's surface | None documented for headless |
+| Non-interactive mode | `claude -p` [1] | `codex exec` [5] · **used** | non-TTY input / `-p` [9] · **used** (stdin) |
+| Streaming output | `--output-format stream-json`, `--include-partial-messages` [1] · **used** | `codex exec --json` (JSONL: `thread.started`, `turn.started`, `item.*`, `turn.completed`, `turn.failed`, `error`) [5][13] · **used** | `--output-format stream-json` (`init`, `message`, `tool_use`, `tool_result`, `error`, `result`) [9][15] · **used** |
+| Stream input | `--input-format stream-json` (SDKUserMessage lines) [1][3] · **used** | One process per turn, prompt on stdin (`-`), as the official SDK does [14] · **used**; app-server JSON-RPC (`turn/start`) [8] planned | One process per turn, prompt on stdin [9] · **used** |
+| Interrupt | `interrupt` control request, advertised by `interrupt_receipt_v1` [3] · **used** (§8.4) | Kill the turn's process tree (the SDK's documented cancellation) [14] · **used**; app-server `turn/interrupt` [8] planned | Kill the turn's process tree · **used** |
+| Resume | `--resume <id>`, `--session-id <uuid>` [2] · **used** | `codex exec … resume <thread id> -` [5] · **used** | `--resume <session uuid>` [10][16] · **used** (never `latest` or an index) |
+| Host approvals | `--permission-prompt-tool` (MCP) [2] · not used until Z4 | app-server approval requests (accept/decline) [8] · planned (§8.8) | None documented for headless |
 | Auth status check | `claude auth status`: exit 0 signed in, 1 not [2] · exit code only | `codex login status` [11]; exit codes and wording undocumented | None side-effect-free → unknown |
-| Model listing | Documented aliases [4]; KalCode lists `default`, `opus`, `sonnet`, `haiku`, `fable` | app-server `model/list` only → not discoverable in Z2 | `--model` aliases (`auto`, `pro`, `flash`, `flash-lite`) [10]; not listed in Z2 |
-| KalCode adapter | **Implemented** (Z2), minimum version 2.1.259 | Planned (detection only) | Planned (detection only) |
+| Model listing | Documented aliases [4]; KalCode lists `default`, `opus`, `sonnet`, `haiku`, `fable` | app-server `model/list` only → not discoverable; "Provider default" | Documented `--model` aliases (`auto`, `pro`, `flash`, `flash-lite`) [10] · listed |
+| Rate limits | `assistant.error = rate_limit`, `StopFailure rate_limit` (structured) · used by Provider Health | No structured shape in the exec stream → never reported | `result.error.type` `RetryableQuotaError` / `TerminalQuotaError` [17] · used by Provider Health |
+| KalCode adapter | **Implemented** (Z2), minimum version 2.1.259 | **Implemented** (PROVIDERS-2), minimum version 0.155.0 | **Implemented** (PROVIDERS-2), no minimum declared (not installed on the verification machine) |
 
 ## 5. Permission mapping
 
 Every mapping is **approximate (stricter)**: none is exact, and none grants more than the
-KalCode profile implies (`docs/PERMISSIONS.md` §3). The flags shown are the ones the code uses:
-Claude Code's come from `permission_args` / `permission_mappings` in
-`crates/providers/src/claude/argv.rs` (the displayed string is generated from the argv, so it
-cannot drift); Codex's and Gemini CLI's are declared in `crates/providers/src/catalog.rs` for
-their planned adapters.
+KalCode profile implies (`docs/PERMISSIONS.md` §3). The flags shown are the ones the code uses,
+and each displayed string is generated from the argv, so it cannot drift: Claude Code's from
+`crates/providers/src/claude/argv.rs`, Codex's from `crates/providers/src/codex/argv.rs`, Gemini
+CLI's from `crates/providers/src/gemini/mod.rs`.
 
 Why nothing is broader:
 
@@ -220,29 +222,74 @@ passes a deny rule (the permissions page: deny rules apply regardless of a hook'
 What this still does not cover is listed in `docs/PROVIDER_PANES.md` §4 ("What KalCode cannot
 intercept").
 
-### Codex (planned adapter)
+### Codex (headless threads, PROVIDERS-2)
+
+Every turn passes `exec --json -c approval_policy='never' -c web_search='disabled'
+-c shell_environment_policy.inherit='core' --ignore-rules` and then:
 
 | KalCode | Codex flags | Fidelity | Notes |
 | --- | --- | --- | --- |
-| Plan | `--sandbox read-only --ask-for-approval never` | Stricter | Reads and commands inside the read-only sandbox; anything more is refused. |
-| Approve | `--sandbox read-only --ask-for-approval never` | Stricter | Edits are refused instead of asking until KalCode answers Codex approval requests. |
-| Auto | `--sandbox read-only --ask-for-approval never` | Stricter | Runs like Approve. |
-| Bypass | `--sandbox workspace-write --ask-for-approval never` | Stricter | Edits and commands in the workspace; network stays off (the `workspace-write` default) [7]. |
+| Plan | `--sandbox read-only --skip-git-repo-check` | Stricter | Reads and read-only commands in Codex's read-only sandbox (its exec default); edits, network and anything that would ask are refused. |
+| Approve | as Plan | Stricter | Edits would need an approval KalCode can't give Codex yet, so they're refused instead of asking. |
+| Auto | as Plan | Stricter | Runs like Approve. |
+| Bypass | `--sandbox workspace-write -c sandbox_workspace_write.network_access=false` | Stricter | Edits and commands inside the workspace, network off. Codex's own "is this a Git repository" check stays on because it can write. |
 | Custom | as Approve | Stricter | Approve baseline. |
 
-`untrusted` approvals are retired and `granular` exists only in config [7]; neither is used.
+Why each flag (sources [5][7][13][14][18]): `codex exec` has **no** `--ask-for-approval` flag
+(installed `codex exec --help`); `approval_policy` is the documented config key, set with `-c`
+exactly as the official TypeScript SDK does. `never` returns anything that would ask to the model
+as a failure, so nothing waits for a person KalCode can't reach. `web_search='disabled'` because
+KalCode's Claude Code mapping refuses web tools too. `shell_environment_policy.inherit='core'`
+keeps provider keys (`OPENAI_*`, `CODEX_*`) out of the commands Codex runs (Codex keeps variables
+named `*KEY*`/`*TOKEN*` by default). `--ignore-rules` means a repository's execpolicy `.rules`
+never grant anything (K4); it also skips the user's own rules, which is noted as a gap below.
+`--skip-git-repo-check` only where nothing can be written. The message is sent on stdin (`-`),
+never on the command line.
 
-### Gemini CLI (planned adapter)
+Never used, in any mode: `danger-full-access`, `--dangerously-bypass-approvals-and-sandbox`,
+`--dangerously-bypass-hook-trust`, `--approve-for-me`, `--search`, `--add-dir`, `--oss`,
+`--worktree`, `on-request` or `untrusted` approvals, network in the sandbox. A test fails if any
+appears (`codex::argv` unit tests and `turns_pipeline` against the fake).
+
+#### What KalCode enforces for Codex threads today, and the gaps
+
+| Enforced by | Guarantee |
+| --- | --- |
+| KalCode (launch flags) | Sandbox never broader than the mode, approvals never waited on, no web search, network off in the only writable mode, repository execpolicy rules ignored, provider keys not in model-run commands, credential scoping of the process (§3). |
+| Codex | Everything inside the sandbox: which reads and read-only commands run, and — in Bypass — which writes. |
+
+Gaps (honest): Codex has **no deny-rule flag** KalCode can pass per turn, so there is no Codex
+equivalent of Claude Code's deny floor: reads of credential files the sandbox allows (`.env` in
+the workspace, `~/.ssh`) are **not** blocked by KalCode, and remote actions (`git push`, deploy
+CLIs) are stopped by the sandbox's network block rather than by a KalCode rule. Codex permission
+profiles support `deny` read rules [18], but they don't compose with `--sandbox` (a
+`sandbox_mode` anywhere in the loaded config silently wins), so using them safely needs a verified
+precedence and is planned with the app-server adapter (§8.8). `--ignore-rules` also drops the
+user's own `forbidden` rules. KalCode's permission engine does not judge Codex tool calls per
+action (`hostApprovals: false`), exactly as for Claude Code headless threads.
+
+### Gemini CLI (headless threads, PROVIDERS-2)
+
+Every turn passes `--output-format stream-json` and the prompt on stdin, then:
 
 | KalCode | Gemini CLI flags | Fidelity | Notes |
 | --- | --- | --- | --- |
-| Plan | `--approval-mode plan` | Stricter | Read-only plan mode. |
+| Plan | `--approval-mode plan` | Stricter | Gemini CLI's read-only plan mode. |
 | Approve | `--approval-mode default` | Stricter | Tool calls that need confirmation can't be answered headless, so they don't run. |
 | Auto | `--approval-mode default` | Stricter | Runs like Approve. |
-| Bypass | `--approval-mode auto_edit` | Stricter | File edits approved automatically; other tools don't run. |
+| Bypass | `--approval-mode auto_edit` | Stricter | File edits approved automatically; other tools that need confirmation don't run. |
 | Custom | as Approve | Stricter | Approve baseline. |
 
-`--yolo` (deprecated) and `--allowed-tools` (deprecated for the Policy Engine) are not used [10].
+Never used: `yolo` / `--yolo` (deprecated), `--allowed-tools` (deprecated for the Policy
+Engine), `--skip-trust` (would trust the workspace and load its settings),
+`--include-directories`, `--experimental-acp` [10]. Resume takes only a full session UUID (never
+`latest` or an index, which could pick another session).
+
+Gaps (honest): no deny-rule flag KalCode can pass per session, so reads of credential files are
+not blocked by KalCode; settings of a folder the user trusted in Gemini CLI (its
+`.gemini/settings.json`: tools, MCP servers, hooks) still apply; Gemini CLI is not installed on
+the verification machine, so flag acceptance and event shapes are verified against the published
+type definitions and fixtures only (smoke script written, not run).
 
 ## 6. Detection
 
@@ -262,7 +309,8 @@ intercept").
 
 2. **Version:** run only `<exe> --version` (15 s timeout) and compare with the adapter's minimum.
 3. **Sign-in:** run the documented status command, if any (15 s timeout), and read only its
-   documented signal. `claude auth status` stdout is discarded unread (it contains the account
+   documented signal. Verified 2026-09-25 against the real install on the verification machine
+   (`real_codex_detection`: codex-cli 0.155.1 through its npm shim, signed in). `claude auth status` stdout is discarded unread (it contains the account
    email and organization); only the exit code counts (0 / 1; anything else is unknown). For
    `codex login status` only a leading `Logged in` with exit 0, or `Not logged in`, counts;
    anything else is unknown. Gemini CLI is always unknown.
@@ -274,7 +322,7 @@ never a project), 16 KiB output caps and tree kill on timeout.
 | --- | --- |
 | `installed` | Found, version at or above the minimum (or no minimum yet). |
 | `not_installed` | Not found on `PATH` or in the documented folders. |
-| `outdated` | Found below the minimum (Claude Code 2.1.259); sessions refuse to start. |
+| `outdated` | Found below the minimum (Claude Code 2.1.259, Codex 0.155.0); sessions refuse to start. |
 | `error` | Found but the version check failed: `version_timeout`, `version_spawn_failed`, `version_failed`, `version_exit_status`, `version_unrecognized`, or `detection_crashed`. |
 
 Sign-in is `authenticated`, `not_authenticated` or `unknown`.
@@ -385,6 +433,85 @@ the classification drives status and summaries; `actions::normalize` builds the 
 | stdout closes but the process lingers | Wait 10 s, then kill the tree. |
 | Spawn or stdin write failure | `ProviderError::Start` / `Io` with generic copy; details logged. |
 
+### 8.6 Codex adapter (PROVIDERS-2)
+
+`crates/providers/src/codex/`, on the shared turn engine `crates/providers/src/turns.rs`. A
+KalCode session is a sequence of supervised `codex exec` processes sharing Codex's thread id:
+the first turn starts a thread, later turns run `exec … resume <thread id> -`. This is how the
+official Codex TypeScript SDK drives `codex exec` [14]. `start_session` re-runs detection and
+refuses not installed, outdated (< 0.155.0), detection error, signed out, or `secretRef`; the
+argv is validated before anything runs. Launch: Z2's rules (argv only, sanitized and hardened
+environment, the npm `codex.cmd` shim resolved to `<absolute node.exe> …\@openai\codex\bin\codex.js`,
+never `cmd.exe` picking a program from the workspace; `turns_launch_hardening`).
+
+| Codex line [13] | `AgentEvent`s |
+| --- | --- |
+| `thread.started {thread_id}` | `SessionStarted` (kept for resume only if it is a UUID) |
+| `turn.started` | `Status(thinking)` |
+| `item.started` `command_execution` / `mcp_tool_call` / `web_search` | `ToolRequested`, `ToolStarted`, `Status(running_command \| running_tool, summary)` |
+| `item.completed` `agent_message` | `MessageCompleted` |
+| `item.completed` tool items | `ToolCompleted { ok }` (`completed`, and exit code 0 for commands) |
+| `item.completed` `file_change` | `ToolRequested`, `Status(editing)`, `ToolCompleted`, `FileChanged` per path when it succeeded (`add` → created, `delete` → deleted, `update` → modified) |
+| `item.completed` `error` | `Error(codex_item_error, recoverable)` |
+| `turn.completed {usage}` | `Usage` (input/output tokens; Codex reports no cost), `TurnCompleted { ok: true }`, `Status(idle)` |
+| `turn.failed {error}` | `Error(turn_failed, recoverable)`, `TurnCompleted { ok: false }` |
+| `error {message}` | `Error(stream_error, recoverable)` (reconnect notices included) |
+| reasoning, `todo_list`, `item.updated`, unknown types | ignored |
+
+Tool calls become `NormalizedAction`s with the same classification as Claude Code
+(`codex::normalize_item`: commands → `Command`/`Git`/`PackageInstall`, file changes →
+`FileWrite`, web search → `Network`, MCP → `Tool`). Malformed lines: `protocol_error` (first four,
+then one final notice), never echoed; oversized lines dropped. Provider error text is shown
+single-line, redacted, at most 200 characters; status never comes from it.
+
+**Interrupt** kills the running turn's process tree and reports `Status(interrupted)`; the
+session stays open and the next message resumes the thread. A second message while a turn runs
+is refused (`Io`), never queued into Codex. A turn that reported its end may still be exiting:
+the next message waits for it (at most 10 s, then kills it). **Terminate** kills any running
+turn and reports `Exited`. A turn process that exits non-zero without its own end marker becomes
+`Error(process_exited, recoverable)` and a failed turn; the redacted stderr tail is only logged.
+
+### 8.7 Gemini CLI adapter (PROVIDERS-2)
+
+`crates/providers/src/gemini/`, the same turn engine. Turns run
+`gemini --output-format stream-json --approval-mode <mode> [--model] [--resume <uuid>]` with the
+prompt on stdin; the session id comes from `init`. Mapping [15]: `init` → `SessionStarted`
+(with the model), assistant `message` deltas → `MessageDelta` (one message id until the next tool
+call or the result, then `MessageCompleted`), `tool_use` → `ToolRequested`/`ToolStarted`/status by
+tool (`run_shell_command` → running command, `write_file`/`replace` → editing, others → running
+tool), `tool_result` → `ToolCompleted`, plus `FileChanged` after a successful write, `error` →
+`Error(provider_warning | provider_error, recoverable)`, `result` → `Usage`, `TurnCompleted`,
+and on error `rate_limited` (`RetryableQuotaError`), `quota_exhausted` (`TerminalQuotaError`) or
+`turn_error` — from the structured `result.error.type` only [17]. Sign-in is always **unknown**
+(no documented side-effect-free status command), which does not stop threads.
+
+### 8.8 `codex app-server` — the long-term Codex surface (plan)
+
+`codex app-server` speaks JSON-RPC 2.0 over stdio with `thread/start`, `thread/resume`,
+`turn/start`, `turn/interrupt`, `model/list` and **server-initiated approval requests** the host
+accepts or declines [8]. That is the surface that would let KalCode's permission engine judge
+each Codex command and patch (`hostApprovals: true`), list models, and interrupt without killing
+a process. It is **not** implemented yet because the installed CLI labels it `[experimental]`
+in its own `--help` (0.155.1). Plan, when it is marked stable: an `app-server` session per
+thread behind the same `AgentProvider` contract; approvals → `ApprovalRequired` with actions
+from `codex::normalize_item`; a fake app-server in `kalcode-fake-provider` driven by schemas
+generated by `codex app-server generate-json-schema` (a local command, run with the owner's
+agreement); then permission profiles with `deny` read rules as Codex's deny floor once their
+precedence against user config is verified.
+
+### 8.9 Provider Health (PH, PROVIDERS-2)
+
+`crates/providers/src/health/` (`HealthMonitor`, `observe::ObservedProvider`), IPC in
+`apps/desktop/src-tauri/src/provider_health_commands.rs`, contract types in
+`crates/contracts/src/health.rs`. See `docs/PROVIDER_HEALTH.md` for the model and
+`docs/campaigns/PROVIDERS-2.md` for acceptance. In short: detection feeds installed / version vs
+minimum / sign-in as reported; every thread session (all three adapters are wrapped) feeds
+active sessions, time to first output (p50/p95 over 15 minutes), failures (60 minutes), and rate
+limits only from the structured shapes in §4. Transitions emit `provider.health_changed` /
+`provider.capacity_changed`. No polling: a read-only re-detection runs only after a session
+couldn't start or the provider reported a sign-in failure (at most once a minute per provider,
+backing off to 30 minutes). Recording an observation never delays a thread event.
+
 ## 9. Testing
 
 - **Fixtures** (`crates/providers/tests/fixtures/claude/`) are hand-written from the documented
@@ -413,6 +540,21 @@ the classification drives status and summaries; `actions::normalize` builds the 
   (the Z3 runtime and Z4 engine end to end) run it in a real PTY. `tests/interactive_real.rs`
   (`real_claude_interactive_smoke`) starts the real CLI and consumes AI quota; run it only through
   `tooling/smoke/claude-interactive-smoke.ps1` with the owner's approval.
+- **Codex and Gemini CLI (PROVIDERS-2).** The fake provider also answers as `codex` (`exec
+  --json`, `login status`, an interactive mode that runs the `notify` program and emits OSC 9 on
+  `approve`) and as `gemini` (`--output-format stream-json`, an interactive mode), replaying the
+  fixtures in `tests/fixtures/{codex,gemini}/` (hand-written from the official type
+  definitions). `tests/turns_pipeline.rs` (detection, text and tool turns, resume, stdin-only
+  prompts, env scoping, never-broader argv per mode, failures, crashes without stderr leaks,
+  interrupt killing the tree, malformed output, quota errors, health through real sessions),
+  `tests/turns_runtime.rs` (the Z3 runtime and Z4 engine end to end), `tests/interactive_cli.rs`
+  (Codex and Gemini CLI panes in a real PTY, notify through the real bridge, OSC 9, process-only
+  status, the router) and `tests/turns_launch_hardening.rs` (npm shims; planted `node.exe`,
+  `node.cmd`, `codex.cmd`, `gemini.cmd`, `cmd.exe` never run). `tests/turns_real.rs` and
+  `tests/interactive_cli_real.rs` are ignored: detection runs `--version` and `codex login status`
+  only; the session smokes consume AI quota and run only through
+  `tooling/smoke/{codex-headless,gemini-headless,codex-interactive}-smoke.ps1` with the owner's
+  approval.
 
 ## 10. Open verification items
 
@@ -420,12 +562,13 @@ the classification drives status and summaries; `actions::normalize` builds the 
 | --- | --- |
 | Interrupt request field name | The `interrupt` control request is documented by name, but its discriminator field (`subtype`) is inferred. Sent only when `interrupt_receipt_v1` is advertised, with a 5 s wait and termination as fallback. |
 | `codex login status` output | Exit codes and wording are undocumented. Observed: `Logged in using ChatGPT`. Anything unexpected reads as unknown, never as signed in. |
-| Gemini CLI | Not installed on the verification machine; detection is tested only against the fake provider. |
+| Gemini CLI | Not installed on the verification machine; detection, the adapter and panes are tested only against the fake provider and the published type definitions. Smoke script written (`gemini-headless-smoke.ps1`), not run. |
 | Claude Code deny rules and command forms | Bash/PowerShell deny rules match the command text, not the program (§5). A full path, `sh -c` or quoting escapes them; the Claude Code mode then refuses the command unless the user's own allow rules cover it. Closed by the Z7 hook bridge. |
 | Claude Code plan mode and `useAutoModeDuringPlan` | Plan mode may run classifier-approved commands when auto mode is available. Not relied on: Plan also passes `--restricted`, which removes command-running tools. |
-| Codex / Gemini CLI adapters | Mappings are declared, not yet executed; re-verify flags when each adapter is built. |
+| Codex / Gemini CLI adapters | Built (PROVIDERS-2). Codex flags verified against the installed `codex exec --help` 0.155.1 and the official SDK; the real JSONL stream and flag acceptance are confirmed only by the owner-approved smoke (`codex-headless-smoke.ps1`, written, not run). |
+| Codex deny floor | None per turn (§5 gaps). Permission-profile `deny` rules exist but don't compose with `--sandbox`; planned with app-server. |
 | Claude Code panes: `--settings` hooks with `--setting-sources user`, exec-form `args`, hook environment inheritance, UserPromptSubmit field name | Documented (hooks, settings and permissions references); exercised against the fake provider. Confirmed only by the owner-approved smoke run (`tooling/smoke/claude-interactive-smoke.ps1`, not run yet). |
-| Codex panes | Launch argv (`notify`, `tui.notifications`, OSC 9) is built and tested but not wired: Codex has no registered thread provider yet. |
+| Codex panes | Wired (PROVIDERS-2, behind `provider_panes`): notify + OSC 9 (`approval-requested` only), approvals in Codex. Accepted keys and OSC 9 under ConPTY are confirmed only by `codex-interactive-smoke.ps1` (written, not run). |
 
 ## 11. Sources
 
@@ -442,6 +585,25 @@ the classification drives status and summaries; `actions::normalize` builds the 
 11. Codex authentication — https://learn.chatgpt.com/codex/auth
 12. Claude Code permissions (rule syntax, Bash rule limits, settings precedence, hooks) —
     https://code.claude.com/docs/en/permissions
+13. Codex exec event and item types (`ThreadEvent`, `ThreadItem`, "based on
+    codex-rs/exec/src/exec_events.rs") —
+    https://github.com/openai/codex/blob/main/sdk/typescript/src/events.ts,
+    https://github.com/openai/codex/blob/main/sdk/typescript/src/items.ts
+14. Codex TypeScript SDK's `codex exec` driver (argv, `--config approval_policy`, prompt on
+    stdin, `resume <thread id>`, cancellation) —
+    https://github.com/openai/codex/blob/main/sdk/typescript/src/exec.ts,
+    https://github.com/openai/codex/blob/main/sdk/typescript/src/threadOptions.ts
+15. Gemini CLI stream-JSON event types —
+    https://github.com/google-gemini/gemini-cli/blob/main/packages/core/src/output/types.ts
+16. Gemini CLI session management (`--resume <uuid>`) —
+    https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/session-management.md
+17. Gemini CLI quota errors and error types in stream-JSON results —
+    https://github.com/google-gemini/gemini-cli/blob/main/packages/core/src/utils/googleQuotaErrors.ts,
+    https://github.com/google-gemini/gemini-cli/blob/main/packages/cli/src/utils/errors.ts
+18. Codex configuration reference and permission profiles (`approval_policy`, `web_search`,
+    `shell_environment_policy`, `sandbox_workspace_write.network_access`, `notify`,
+    `tui.notifications`, `permissions.<name>.filesystem` `deny`) —
+    https://learn.chatgpt.com/docs/config-file/config-reference, https://learn.chatgpt.com/codex/permissions
 
 Install: Claude Code https://code.claude.com/docs/en/setup (`curl -fsSL
 https://claude.ai/install.sh | bash`, `irm https://claude.ai/install.ps1 | iex`, Homebrew, WinGet,

@@ -24,6 +24,7 @@ import type {
   ToolCallRecord,
   WorkspaceOption,
 } from "@kalcode/protocol";
+import { providerCatalog } from "../memoryProviders.ts";
 import type { CommandName } from "../transport.ts";
 
 export type ThreadsScenario = "default" | "threads" | "no-providers";
@@ -63,6 +64,11 @@ export interface ThreadsMemory {
   seedFixture(summary: ThreadSummary, conversation?: [ThreadMessage["role"], string][]): ThreadSummary;
 }
 
+/** Mapping notes as the native registry reports them (see ../memoryProviders.ts). */
+const mappingsOf = (id: string) =>
+  providerCatalog().find((status) => status.id === id)?.capabilities.permissionMappings ?? [];
+const modelsOf = (id: string) => providerCatalog().find((status) => status.id === id)?.capabilities.models ?? [];
+
 const PROVIDERS: ProviderOption[] = [
   {
     id: "claude-code",
@@ -78,14 +84,26 @@ const PROVIDERS: ProviderOption[] = [
     permissionMappings: [],
   },
   {
+    // Codex lists no models up front: New thread offers "Provider default" only.
     id: "codex",
     displayName: "Codex",
     accountLabel: null,
-    models: [{ id: "codex-default", displayName: "Default", isDefault: true }],
-    supportsResume: false,
+    models: [],
+    supportsResume: true,
     supportsInterrupt: true,
-    hostApprovals: true,
-    permissionMappings: [],
+    hostApprovals: false,
+    permissionMappings: mappingsOf("codex"),
+  },
+  {
+    // Documented `--model` aliases (auto, pro, flash, flash-lite).
+    id: "gemini-cli",
+    displayName: "Gemini CLI",
+    accountLabel: null,
+    models: modelsOf("gemini-cli"),
+    supportsResume: true,
+    supportsInterrupt: true,
+    hostApprovals: false,
+    permissionMappings: mappingsOf("gemini-cli"),
   },
 ];
 
@@ -235,12 +253,12 @@ export function createThreadsMemory(
 ): ThreadsMemory {
   const threads = new Map<string, MemThread>();
   const streams = new Map<string, Set<(event: AgentEvent) => void>>();
-  // Like native `thread_options`: only providers with a thread adapter (Claude Code) that
-  // detection reports usable are offered. Codex fixture threads exist only as history.
+  // Like native `thread_options`: only providers with a thread adapter that detection reports
+  // usable (installed at a supported version, not signed out) are offered.
   const offered = (): ProviderOption[] => {
     if (scenario === "no-providers") return [];
     const usable = usableProviders();
-    return PROVIDERS.filter((p) => p.id === "claude-code" && usable.includes(p.id));
+    return PROVIDERS.filter((p) => usable.includes(p.id));
   };
   const workspaces = (): WorkspaceOption[] =>
     scenario === "threads" ? [...WORKSPACES, ...openWorkspaces()] : openWorkspaces();

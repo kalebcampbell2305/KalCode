@@ -39,13 +39,18 @@ test.describe("providers", () => {
     const codex = section(page, "Codex");
     await expect(codex.getByText("Installed, version 0.155.1")).toBeVisible();
     await expect(codex.getByText("Signed in", { exact: true })).toBeVisible();
-    await expect(codex.getByText("Detection only", { exact: true })).toBeVisible();
+    await expect(codex.getByText("Checked with codex login status.")).toBeVisible();
+    await expect(codex.getByText("Adapter ready", { exact: true })).toBeVisible();
     await expect(codex.getByText("Not listed without starting a session")).toBeVisible();
 
     const gemini = section(page, "Gemini CLI");
-    await expect(gemini.getByText("Not installed", { exact: true })).toBeVisible();
-    await expect(gemini.getByText("npm install -g @google/gemini-cli", { exact: true })).toBeVisible();
-    await expect(gemini.getByRole("button", { name: "Copy install command for Gemini CLI" })).toBeVisible();
+    await expect(gemini.getByText("Installed, version 0.12.0")).toBeVisible();
+    await expect(gemini.getByText("Adapter ready", { exact: true })).toBeVisible();
+    await expect(gemini.getByText("Sign-in status unknown", { exact: true })).toBeVisible();
+    await expect(
+      gemini.getByText("Gemini CLI has no documented way to check sign-in without starting a session."),
+    ).toBeVisible();
+    await expect(gemini.getByText("Auto (default) (default), Pro, Flash, Flash-Lite")).toBeVisible();
     await expect(gemini.getByText("https://geminicli.com/docs/", { exact: true })).toBeVisible();
 
     // Never a fake "connected" state, and no sign-in button: users sign in with their own CLI.
@@ -69,6 +74,25 @@ test.describe("providers", () => {
     await expect(bypass.getByText("Stricter than requested")).toBeVisible();
     await expect(page.getByRole("table")).toHaveCount(3);
     await expect(page.getByText("bypassPermissions mode is never used", { exact: false })).toBeVisible();
+
+    // Codex and Gemini CLI: the flags KalCode passes, never a broader mode.
+    const codex = page.getByRole("table", { name: /Permission modes in Codex/ });
+    await expect(codex.getByRole("row", { name: /Plan/ }).getByRole("cell").first()).toHaveText(
+      /--sandbox read-only\s*--skip-git-repo-check/,
+    );
+    await expect(
+      codex
+        .getByRole("row", { name: /Bypass/ })
+        .getByRole("cell")
+        .first(),
+    ).toHaveText(/--sandbox workspace-write\s*-c sandbox_workspace_write\.network_access=false/);
+    const gemini = page.getByRole("table", { name: /Permission modes in Gemini CLI/ });
+    await expect(
+      gemini
+        .getByRole("row", { name: /Bypass/ })
+        .getByRole("cell")
+        .first(),
+    ).toHaveText("--approval-mode auto_edit");
   });
 
   test("check again shows progress and records detection in the activity feed", async ({ page }) => {
@@ -87,13 +111,14 @@ test.describe("providers", () => {
     const activity = page.getByRole("region", { name: "Activity" });
     await expect(activity.getByText("Claude Code 2.1.282")).toBeVisible();
     await expect(activity.getByText("Provider detected").first()).toBeVisible();
-    await expect(activity.getByText("Provider not installed")).toBeVisible();
+    await expect(activity.getByText("Gemini CLI 0.12.0")).toBeVisible();
+    await expect(activity.getByText("Codex health: unknown → degraded (recent failures)")).toBeVisible();
     // Unchanged results are not recorded again.
     await expect(activity.getByText("Claude Code 2.1.282")).toHaveCount(1);
 
     const runtime = page.getByRole("region", { name: "Runtime health" });
-    await expect(runtime.getByText("2 of 3 installed")).toBeVisible();
-    await expect(runtime.getByText("Claude Code, Codex")).toBeVisible();
+    await expect(runtime.getByText("3 of 3 installed")).toBeVisible();
+    await expect(runtime.getByText("Claude Code, Codex, Gemini CLI")).toBeVisible();
   });
 
   test("the dashboard does not start detection on its own", async ({ page }) => {
@@ -105,7 +130,7 @@ test.describe("providers", () => {
 
   test("copying an install command never runs it", async ({ page, context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-    await openProviders(page);
+    await openProviders(page, "providers-none");
     await section(page, "Gemini CLI").getByRole("button", { name: "Copy install command for Gemini CLI" }).click();
     await expect(page.getByText("Install command copied")).toBeVisible();
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("npm install -g @google/gemini-cli");
@@ -149,6 +174,131 @@ test.describe("providers", () => {
     await expect(claude.getByText("claude auth login", { exact: true })).toBeVisible();
     await expect(claude.getByText(/in a terminal to sign in to Claude Code with your own account/)).toBeVisible();
   });
+
+  test("health tab shows each provider's state, observations and what to do", async ({ page }) => {
+    await openProviders(page);
+    await expect(section(page, "Claude Code").getByText("Installed, version 2.1.282")).toBeVisible();
+    await page.getByRole("tab", { name: "Health" }).click();
+    await expect(page.getByRole("tab", { name: "Health" })).toHaveAttribute("aria-selected", "true");
+    const view = page.getByRole("region", { name: "Provider health" });
+
+    const claude = view.locator("#health-claude-code");
+    await expect(claude).toHaveAttribute("data-health-state", "healthy");
+    await expect(claude.getByRole("heading", { name: "Claude Code" })).toBeVisible();
+    await expect(claude.getByText("Healthy", { exact: true })).toBeVisible();
+    await expect(claude.getByText("Running · 2 active sessions")).toBeVisible();
+    await expect(claude.getByText("Signed in", { exact: true })).toBeVisible();
+    await expect(claude.getByText("Version 2.1.282 · needs 2.1.259 or later")).toBeVisible();
+    await expect(claude.getByText(/^p50 1\.8 s · p95 4\.2 s/)).toBeVisible();
+    await expect(claude.getByText("None in the last hour")).toBeVisible();
+    await expect(claude.getByText("None reported")).toBeVisible();
+    await expect(claude.getByText("Stable", { exact: true })).toBeVisible();
+
+    const codex = view.locator("#health-codex");
+    await expect(codex).toHaveAttribute("data-health-state", "degraded");
+    await expect(codex.getByText("Degraded", { exact: true })).toBeVisible();
+    await expect(codex.getByText("2 recent Codex sessions failed without a successful turn since.")).toBeVisible();
+    await expect(codex.getByText(/^2 failures in the last hour · last: turn_failed, /)).toBeVisible();
+    await expect(codex.getByText("None reported")).toBeVisible();
+    await expect(codex.getByText("Worsening", { exact: true })).toBeVisible();
+    await expect(codex.getByText("Restart the affected thread, or choose Check again.")).toBeVisible();
+
+    const gemini = view.locator("#health-gemini-cli");
+    await expect(gemini).toHaveAttribute("data-health-state", "healthy");
+    await expect(gemini.getByText("Gemini CLI has no documented way to check sign-in", { exact: true })).toBeVisible();
+    await expect(gemini.getByText("Version 0.12.0 · no minimum declared")).toBeVisible();
+    await expect(gemini.getByText("Not enough data yet")).toBeVisible();
+
+    // Last 24 hours: a summary, decorative bars and the same numbers as a table.
+    await expect(claude.getByText(/^\d+ sessions, 1 failure in the last 24 hours$/)).toBeVisible();
+    await claude.getByText("Hourly numbers").click();
+    const table = claude.getByRole("table", { name: "Claude Code: sessions and failures per hour, last 24 hours" });
+    await expect(table.getByRole("columnheader")).toHaveText(["Hour", "Sessions", "Failures", "First output (p50)"]);
+    expect(await table.getByRole("row").count()).toBeGreaterThan(2);
+
+    // KalCode never invents a rate limit or quota.
+    await expect(view.getByText(/rate limit reported|quota/i)).toHaveCount(0);
+  });
+
+  test("health tab: providers that can't run say why and how to recover", async ({ page }) => {
+    await openProviders(page, "providers-none");
+    await page.getByRole("tab", { name: "Health" }).click();
+    const view = page.getByRole("region", { name: "Provider health" });
+    const gemini = view.locator("#health-gemini-cli");
+    await expect(gemini).toHaveAttribute("data-health-state", "unavailable");
+    await expect(gemini.getByText("Gemini CLI isn't installed.")).toBeVisible();
+    await expect(gemini.getByText("npm install -g @google/gemini-cli", { exact: true })).toBeVisible();
+    await expect(gemini.getByText("No sessions in the last 15 minutes")).toBeVisible();
+    await expect(gemini.getByText("No sessions in the last 24 hours")).toBeVisible();
+
+    await openProviders(page, "providers-signed-out");
+    await page.getByRole("tab", { name: "Health" }).click();
+    const codex = page.getByRole("region", { name: "Provider health" }).locator("#health-codex");
+    await expect(codex).toHaveAttribute("data-health-state", "unavailable");
+    await expect(codex.getByText("Signed out", { exact: true })).toBeVisible();
+    await expect(codex.getByText("codex login", { exact: true })).toBeVisible();
+  });
+
+  test("health tab shows a reported rate limit without inventing numbers", async ({ page }) => {
+    await openProviders(page, "providers-backoff");
+    await page.getByRole("tab", { name: "Health" }).click();
+    const codex = page.getByRole("region", { name: "Provider health" }).locator("#health-codex");
+    await expect(codex).toHaveAttribute("data-health-state", "degraded");
+    await expect(codex.getByText("Codex reported a rate limit", { exact: true })).toBeVisible();
+    await expect(codex.getByText("Codex didn't say when to retry. New work waits.")).toBeVisible();
+    await expect(codex.getByText("Expected to recover on its own once Codex's limit clears.")).toBeVisible();
+  });
+
+  test("health tab refreshes on provider events and Check again; a failure never blocks the page", async ({ page }) => {
+    await openProviders(page);
+    await page.getByRole("tab", { name: "Health" }).click();
+    const codex = page.getByRole("region", { name: "Provider health" }).locator("#health-codex");
+    await expect(codex).toHaveAttribute("data-health-state", "degraded");
+    // A session succeeds: the runtime records provider.health_changed and the view follows.
+    await page.evaluate(() => {
+      (
+        window as unknown as {
+          __kalcodeMemory: { health: { observe: (id: string, patch: Record<string, unknown>) => void } };
+        }
+      ).__kalcodeMemory.health.observe("codex", { failuresSinceSuccess: 0, recentFailures: 0, lastFailure: null });
+    });
+    await expect(codex).toHaveAttribute("data-health-state", "healthy");
+
+    await page.getByRole("button", { name: "Check again" }).click();
+    await expect(page.getByRole("button", { name: "Check again" })).not.toHaveAttribute("aria-busy", "true");
+    await expect(codex).toHaveAttribute("data-health-state", "healthy");
+
+    await page.goto("/?health=error");
+    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await page.getByRole("button", { name: "Providers" }).click();
+    await page.getByRole("tab", { name: "Health" }).click();
+    const unknown = page.getByRole("region", { name: "Provider health" }).getByRole("alert");
+    await expect(unknown.getByText("Health unknown")).toBeVisible();
+    await expect(unknown.getByText(/Threads aren't affected/)).toBeVisible();
+    await page.getByRole("tab", { name: "Setup" }).click();
+    await expect(section(page, "Claude Code").getByText("Installed, version 2.1.282")).toBeVisible();
+  });
+
+  for (const theme of ["dark", "light"] as const) {
+    test(`health tab passes axe in ${theme} theme`, async ({ page }) => {
+      for (const scenario of [undefined, "providers-none", "providers-backoff"]) {
+        await page.goto(scenario ? `/?scenario=${scenario}` : "/");
+        await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+        if (theme === "light") {
+          await page.getByRole("button", { name: "Settings" }).click();
+          await page.getByRole("radiogroup", { name: "Theme" }).getByRole("radio", { name: "Light" }).click();
+        }
+        await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+        await page.getByRole("button", { name: "Providers" }).click();
+        await expect(page.getByRole("button", { name: "Check again" })).not.toHaveAttribute("aria-busy", "true");
+        await page.getByRole("tab", { name: "Health" }).click();
+        const claude = page.getByRole("region", { name: "Provider health" }).locator("#health-claude-code");
+        await expect(claude).not.toHaveAttribute("data-health-state", "unknown");
+        if (scenario !== "providers-none") await claude.getByText("Hourly numbers").click();
+        await expectNoSeriousA11yViolations(page);
+      }
+    });
+  }
 
   for (const theme of ["dark", "light"] as const) {
     test(`providers page passes axe in ${theme} theme`, async ({ page }) => {

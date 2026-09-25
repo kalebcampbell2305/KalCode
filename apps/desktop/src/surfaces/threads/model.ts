@@ -177,8 +177,9 @@ export interface UnavailableProvider {
 
 /**
  * Providers KalCode knows that the New thread flow does not offer, with the reason. Threads use
- * a provider only when KalCode has an adapter for it (Claude Code today) and detection found it
- * installed at a supported version and not signed out (`ProviderRegistry::usable`).
+ * a provider only when KalCode has an adapter for it (Claude Code, Codex and Gemini CLI) and
+ * detection found it installed at a supported version and not signed out
+ * (`ProviderRegistry::usable`).
  */
 export function unavailableProviders(
   statuses: readonly ProviderStatus[],
@@ -189,7 +190,7 @@ export function unavailableProviders(
     .map((status) => ({ id: status.id, name: status.displayName, reason: unavailableReason(status) }));
 }
 
-function unavailableReason(status: ProviderStatus): string {
+export function unavailableReason(status: ProviderStatus): string {
   const detection = status.detection;
   const state = detection?.state;
   if (status.adapter !== "implemented") {
@@ -206,6 +207,7 @@ function unavailableReason(status: ProviderStatus): string {
     case "error":
       return "Couldn't be checked";
     default:
-      return detection.auth === "not_authenticated" ? "Signed out" : "Not available";
+      // Plain text: the person runs the provider's own sign-in command in a terminal.
+      return detection.auth === "not_authenticated" ? `Signed out — run ${status.signInCommand}` : "Not available";
   }
 }

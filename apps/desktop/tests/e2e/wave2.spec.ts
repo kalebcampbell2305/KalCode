@@ -42,6 +42,7 @@ function invoke<T>(page: Page, command: string, args: Record<string, unknown> = 
 
 interface ProviderStatusLite {
   id: string;
+  displayName: string;
   adapter: "implemented" | "planned";
   detection: { state: string; auth: string } | null;
 }
@@ -87,36 +88,34 @@ test("a workspace offers the detected Claude Code to threads while a terminal ke
     const statuses = await invoke<ProviderStatusLite[]>(page, "providers_list");
     const claude = statuses.find((s) => s.id === "claude-code");
     expect(claude?.detection, "detection ran before the options were shown").not.toBeNull();
-    const claudeUsable =
-      claude?.adapter === "implemented" &&
-      claude.detection?.state === "installed" &&
-      claude.detection.auth !== "not_authenticated";
+    // PROVIDERS-2: Claude Code, Codex and Gemini CLI all have adapters; detection decides.
+    const isUsable = (s: ProviderStatusLite) =>
+      s.adapter === "implemented" && s.detection?.state === "installed" && s.detection.auth !== "not_authenticated";
+    const usableIds = statuses.filter(isUsable).map((s) => s.id);
+    const anyUsable = usableIds.length > 0;
     const options = await invoke<{ providers: { id: string }[]; workspaces: { name: string }[] }>(
       page,
       "thread_options",
     );
-    // Only providers with an adapter that detection found usable are offered: Claude Code or none.
-    expect(options.providers.map((p) => p.id)).toEqual(claudeUsable ? ["claude-code"] : []);
+    // Only providers with an adapter that detection found usable are offered.
+    expect(options.providers.map((p) => p.id).sort()).toEqual([...usableIds].sort());
 
     const unavailable = form.getByRole("list", { name: "Not available for threads" });
-    if (claudeUsable) {
-      await expect(form.getByLabel("Provider", { exact: true }).locator("option")).toHaveText([/^Claude Code/]);
+    if (anyUsable) {
+      await expect(form.getByLabel("Provider", { exact: true }).locator("option")).toHaveCount(usableIds.length);
       await expect(form.getByLabel("Workspace", { exact: true }).locator("option")).toHaveText(["wave2-project"]);
       expect(options.workspaces.map((w) => w.name)).toEqual(["wave2-project"]);
     } else {
       await expect(form.getByRole("heading", { name: "No provider is ready for threads" })).toBeVisible();
-      await expect(unavailable.getByRole("listitem").filter({ hasText: "Claude Code" })).toBeVisible();
     }
-    // Codex and Gemini CLI have no adapter: listed with the reason, never offered.
-    for (const name of ["Codex", "Gemini CLI"]) {
-      await expect(unavailable.getByRole("listitem").filter({ hasText: name })).toContainText(
-        "KalCode can't run threads with it yet",
-      );
+    // Providers detection found unusable are listed with the reason, never offered.
+    for (const status of statuses.filter((s) => !isUsable(s))) {
+      await expect(unavailable.getByRole("listitem").filter({ hasText: status.displayName })).toBeVisible();
     }
     await shot(page, "e2e-wave2-new-thread");
 
     // Leave without starting a thread: no prompt is ever sent.
-    await form.getByRole("button", { name: claudeUsable ? "Cancel" : "Back to threads" }).click();
+    await form.getByRole("button", { name: anyUsable ? "Cancel" : "Back to threads" }).click();
     await expect(page.getByRole("heading", { name: "No threads yet" })).toBeVisible();
     expect(await invoke<unknown[]>(page, "thread_list", { workspaceId: null, includeArchived: true })).toEqual([]);
 

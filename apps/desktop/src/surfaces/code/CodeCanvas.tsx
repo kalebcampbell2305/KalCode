@@ -43,7 +43,8 @@ import { type PaneController, usePaneController } from "../../shell/panes/usePan
 import { useResolvedTheme } from "../../shell/useResolvedTheme.ts";
 import { useThreadsIntent } from "../threads/intent.tsx";
 import styles from "./Code.module.css";
-import { paneStatus } from "./panes/paneLabels.ts";
+import type { PaneProviderId } from "./panes/paneChannel.ts";
+import { paneStatus, providerIdentity } from "./panes/paneLabels.ts";
 import "./paneContents.tsx";
 import { ProviderPane } from "./panes/ProviderPane.tsx";
 import { type ProviderPanes, useProviderPanes } from "./panes/useProviderPanes.ts";
@@ -88,7 +89,8 @@ export interface CodeCanvasApi {
   providerPanes: ProviderPanes;
   shells: readonly ShellOption[];
   newTerminal: (shellId: string | null) => void;
-  newProviderPane: () => Promise<void>;
+  /** Claude Code by default; Codex / Gemini CLI when `providerPanes.offered` lists them. */
+  newProviderPane: (providerId?: PaneProviderId) => Promise<void>;
   titleOf: (content: PaneContent) => string;
 }
 
@@ -244,16 +246,19 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     [createTerminal],
   );
 
-  const newProviderPane = useCallback(async () => {
-    const thread = await providerPanes.create();
-    if (!thread) return;
-    const current = controllerRef.current;
-    const focused = leaves(current.layout.root).find((l) => l.paneId === current.focusedPaneId);
-    current.show(threadContent(thread.id), {
-      focus: true,
-      placement: focused && focused.tabs.length > 0 ? "split" : "tab",
-    });
-  }, [providerPanes]);
+  const newProviderPane = useCallback(
+    async (providerId?: PaneProviderId) => {
+      const thread = await providerPanes.create(providerId);
+      if (!thread) return;
+      const current = controllerRef.current;
+      const focused = leaves(current.layout.root).find((l) => l.paneId === current.focusedPaneId);
+      current.show(threadContent(thread.id), {
+        focus: true,
+        placement: focused && focused.tabs.length > 0 ? "split" : "tab",
+      });
+    },
+    [providerPanes],
+  );
 
   // ---------- Contents ----------
   const describe = useCallback(
@@ -421,6 +426,21 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
             Claude Code pane
           </DropdownMenuItem>
         ) : null}
+        {providerPanes.enabled
+          ? providerPanes.offered.map((providerId) => (
+              <DropdownMenuItem
+                key={providerId}
+                icon={<ProviderGlyph provider={providerId} size="xs" />}
+                description={`The real ${providerIdentity(providerId).name}; approvals in its own prompt`}
+                onSelect={() => {
+                  controllerRef.current.focusPane(paneId, false);
+                  void newProviderPane(providerId);
+                }}
+              >
+                {`${providerIdentity(providerId).name} pane`}
+              </DropdownMenuItem>
+            ))
+          : null}
         <DropdownMenuItem
           icon={<LayoutDashboard />}
           onSelect={() => controllerRef.current.show({ kind: "dashboard" }, { paneId, focus: true })}
@@ -470,7 +490,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
         </DropdownMenuItem>
       </>
     ),
-    [shells, providerPanes.enabled, background, newTerminal, newProviderPane, paneById],
+    [shells, providerPanes.enabled, providerPanes.offered, background, newTerminal, newProviderPane, paneById],
   );
 
   const onCommand = useCallback(

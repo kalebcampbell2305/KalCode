@@ -17,6 +17,7 @@ pub mod app;
 pub mod context;
 pub mod events;
 pub mod git;
+pub mod health;
 pub mod ids;
 pub mod kalvoice;
 pub mod notifications;

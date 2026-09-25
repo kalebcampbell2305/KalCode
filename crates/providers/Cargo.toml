@@ -28,6 +28,7 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+time.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 ts-rs = { version = "12", features = ["serde-json-impl", "uuid-impl"] }
 

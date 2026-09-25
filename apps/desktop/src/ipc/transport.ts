@@ -16,6 +16,10 @@ export type CommandName =
   | "secure_store_check"
   | "providers_list"
   | "providers_detect"
+  // Provider Health (PROVIDERS-2): in-memory snapshots, never a provider process
+  | "provider_health_list"
+  | "provider_health_get"
+  | "provider_health_trend"
   | "kalvoice_subscribe"
   | "kalvoice_status"
   | "kalvoice_request"

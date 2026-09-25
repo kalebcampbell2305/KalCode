@@ -14,8 +14,9 @@ use kalcode_contracts::permissions::{PermissionGate, PermissionMode};
 use kalcode_contracts::threads::{ThreadMessage, ThreadStatus, ThreadSummary};
 use kalcode_core::{Core, IpcError, KalError};
 use kalcode_permissions::{PermissionService, ThreadModeStore};
+use kalcode_providers::health::observe::ObservedProvider;
 use kalcode_providers::model::AdapterState;
-use kalcode_providers::{ClaudeCodeProvider, DetectEnv};
+use kalcode_providers::{ClaudeCodeProvider, CodexProvider, DetectEnv, GeminiProvider};
 use kalcode_threads::{
     CoreWorkspaces, CreateThread, ProviderRegistry, StreamId, ThreadOptions, ThreadRuntime,
     ToolCallRecord,
@@ -92,16 +93,28 @@ pub struct ThreadsState {
     streams: Mutex<HashMap<String, StreamId>>,
 }
 
-/// The native adapter for a provider, when KalCode has one. Codex and Gemini CLI are detected
-/// but have no adapter yet, so they are never offered to threads.
+/// The native adapter for a provider (Claude Code, Codex, Gemini CLI), observed by Provider
+/// Health (PROVIDERS-2) so its sessions feed the health model.
 fn adapter(id: &ProviderId) -> Option<Arc<dyn AgentProvider>> {
-    match id.as_str() {
+    let adapter: Arc<dyn AgentProvider> = match id.as_str() {
         // Z7-W4: the per-thread runtime router when provider panes are enabled.
-        ProviderId::CLAUDE_CODE => Some(crate::provider_pane_commands::route_claude(Arc::new(
+        ProviderId::CLAUDE_CODE => crate::provider_pane_commands::route_claude(Arc::new(
             ClaudeCodeProvider::new(DetectEnv::from_process()),
-        ))),
-        _ => None,
-    }
+        )),
+        ProviderId::CODEX => crate::provider_pane_commands::route_cli(
+            ProviderId::CODEX,
+            Arc::new(CodexProvider::new(DetectEnv::from_process())),
+        ),
+        ProviderId::GEMINI_CLI => crate::provider_pane_commands::route_cli(
+            ProviderId::GEMINI_CLI,
+            Arc::new(GeminiProvider::new(DetectEnv::from_process())),
+        ),
+        _ => return None,
+    };
+    Some(ObservedProvider::wrap(
+        adapter,
+        crate::provider_health_commands::monitor(),
+    ))
 }
 
 impl ThreadsState {

@@ -49,6 +49,25 @@ pub const MAX_WRITE_BYTES: usize = 64 * 1024;
 
 const ANSWER_IN_PROVIDER: &str = "Answer in Claude Code";
 
+/// What differs between the providers a pane can run (PROVIDERS-2). Claude Code is the default:
+/// hooks, and KalCode answers approvals with engine routing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PaneProfile {
+    /// Detail shown while the provider's own prompt waits for the person.
+    pub answer_in: &'static str,
+    /// Whether KalCode can answer this provider's approvals at all.
+    pub kalcode_answers: bool,
+    /// The person's keystrokes after a provider prompt mean it was answered (providers without
+    /// a structured "prompt answered" signal).
+    pub input_answers_prompt: bool,
+}
+
+pub(crate) const CLAUDE_PROFILE: PaneProfile = PaneProfile {
+    answer_in: ANSWER_IN_PROVIDER,
+    kalcode_answers: true,
+    input_answers_prompt: false,
+};
+
 /// Timing for one session. Defaults per docs/campaigns/Z7-W4-THREATS.md §4.5.
 #[derive(Debug, Clone, Copy)]
 pub struct SessionLimits {
@@ -108,6 +127,11 @@ pub(crate) struct Shared {
     limits: SessionLimits,
     expiry: Option<Arc<dyn ApprovalExpiry>>,
     titles: Option<Arc<dyn TitleSink>>,
+    profile: OnceLock<PaneProfile>,
+    /// A provider prompt is showing (set by [`Shared::provider_prompt`]).
+    prompt_showing: AtomicBool,
+    /// Terminal views attached right now (they answer the PTY's cursor-position requests).
+    pub(crate) views: std::sync::atomic::AtomicUsize,
 }
 
 /// Everything a session needs besides its PTY, which is attached after spawning.
@@ -141,7 +165,54 @@ impl Shared {
             limits: parts.limits,
             expiry: parts.expiry,
             titles: parts.titles,
+            profile: OnceLock::new(),
+            prompt_showing: AtomicBool::new(false),
+            views: std::sync::atomic::AtomicUsize::new(0),
         })
+    }
+
+    pub(crate) fn set_profile(&self, profile: PaneProfile) {
+        let _ = self.profile.set(profile);
+    }
+
+    fn profile(&self) -> PaneProfile {
+        self.profile.get().copied().unwrap_or(CLAUDE_PROFILE)
+    }
+
+    /// The provider session id isn't known yet (a new Codex pane learns it from `notify`).
+    pub(crate) fn forget_session_id(&self) {
+        lock(&self.provider_session_id).take();
+    }
+
+    /// No structured hook channel for this provider: status comes from the process (and, for
+    /// Codex, `notify` and OSC 9). The pane says "limited status".
+    pub(crate) fn mark_limited(&self) {
+        self.channel.store(CHANNEL_LIMITED, Ordering::SeqCst);
+    }
+
+    /// The provider's own approval prompt is showing (Codex OSC 9 `approval-requested`).
+    pub(crate) fn provider_prompt(&self) {
+        if self.ended.load(Ordering::SeqCst) {
+            return;
+        }
+        self.prompt_showing.store(true, Ordering::SeqCst);
+        self.emit(AgentEvent::Status {
+            status: ThreadStatus::WaitingForUser,
+            detail: Some(self.profile().answer_in.to_owned()),
+        });
+    }
+
+    /// The person typed in the pane.
+    pub(crate) fn user_input(&self) {
+        if self.profile().input_answers_prompt
+            && self.prompt_showing.swap(false, Ordering::SeqCst)
+            && !self.ended.load(Ordering::SeqCst)
+        {
+            self.emit(AgentEvent::Status {
+                status: ThreadStatus::Active,
+                detail: None,
+            });
+        }
     }
 
     pub(crate) fn set_registration(&self, registration: Registration) {
@@ -168,7 +239,8 @@ impl Shared {
             provider_id: self.provider_id.clone(),
             hook_channel: channel,
             decision_routing: self.routing,
-            kalcode_answers_approvals: self.routing == DecisionRouting::Engine
+            kalcode_answers_approvals: self.profile().kalcode_answers
+                && self.routing == DecisionRouting::Engine
                 && channel == HookChannelState::Active,
             running: !self.ended.load(Ordering::SeqCst),
             exit_code: *lock(&self.exit_code),
@@ -404,9 +476,9 @@ impl Shared {
                     detail: None,
                 }]
             }
-            HookEvent::PermissionRequest => vec![waiting(ANSWER_IN_PROVIDER)],
+            HookEvent::PermissionRequest => vec![waiting(self.profile().answer_in)],
             HookEvent::Notification => match record.notification_type.as_deref() {
-                Some("permission_prompt") => vec![waiting(ANSWER_IN_PROVIDER)],
+                Some("permission_prompt") => vec![waiting(self.profile().answer_in)],
                 Some("idle_prompt") => vec![waiting("Claude Code is waiting for your input")],
                 Some("elicitation_dialog" | "elicitation_url_dialog" | "agent_needs_input") => {
                     vec![waiting("Claude Code needs your input")]
@@ -484,12 +556,34 @@ impl Shared {
                     AgentEvent::TurnCompleted { ok: false },
                 ]
             }
+            // Codex `notify` (docs/PROVIDER_PANES.md §3): the thread id, and turn completion.
+            HookEvent::CodexNotify => {
+                let mut events = Vec::new();
+                if let Some(id) = record
+                    .provider_session_id
+                    .as_ref()
+                    .filter(|id| kalcode_contracts::ids::is_valid_id(id))
+                {
+                    let mut known = lock(&self.provider_session_id);
+                    if known.as_deref() != Some(id.as_str()) {
+                        *known = Some(id.clone());
+                        events.push(AgentEvent::SessionStarted {
+                            provider_session_id: id.clone(),
+                            model: None,
+                        });
+                    }
+                }
+                if record.codex_type.as_deref() == Some("agent-turn-complete") {
+                    self.prompt_showing.store(false, Ordering::SeqCst);
+                    events.push(AgentEvent::TurnCompleted { ok: true });
+                }
+                events
+            }
             // Activity detail only, and lifecycle the process exit reports better.
             HookEvent::SubagentStart
             | HookEvent::SubagentStop
             | HookEvent::SessionEnd
-            | HookEvent::PreToolUse
-            | HookEvent::CodexNotify => Vec::new(),
+            | HookEvent::PreToolUse => Vec::new(),
         }
     }
 

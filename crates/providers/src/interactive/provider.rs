@@ -11,6 +11,7 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
@@ -67,7 +68,7 @@ impl PaneRegistry {
         Self::default()
     }
 
-    fn insert(&self, thread_id: &str, shared: Arc<Shared>) {
+    pub(crate) fn insert(&self, thread_id: &str, shared: Arc<Shared>) {
         let mut panes = lock(&self.panes);
         panes.insert(thread_id.to_owned(), shared);
         let ended: Vec<String> = panes
@@ -98,13 +99,33 @@ impl PaneRegistry {
         listener: impl Fn(&[u8]) -> bool + Send + Sync + 'static,
     ) -> Option<AttachId> {
         let shared = self.get(thread_id)?;
-        shared.pty().map(|pty| pty.attach(listener))
+        let pty = shared.pty()?;
+        // Counted while attached, so a pane's own output watcher (Codex OSC 9) knows whether a
+        // view is there to answer the PTY's cursor-position requests.
+        shared.views.fetch_add(1, Ordering::SeqCst);
+        let counted = Arc::downgrade(&shared);
+        let live = std::sync::atomic::AtomicBool::new(true);
+        Some(pty.attach(move |bytes| {
+            let alive = listener(bytes);
+            if !alive
+                && live.swap(false, Ordering::SeqCst)
+                && let Some(shared) = counted.upgrade()
+            {
+                shared.views.fetch_sub(1, Ordering::SeqCst);
+            }
+            alive
+        }))
     }
 
     pub fn detach(&self, thread_id: &str, id: AttachId) -> bool {
-        self.get(thread_id)
-            .and_then(|s| s.pty().map(|p| p.detach(id)))
-            .unwrap_or(false)
+        let Some(shared) = self.get(thread_id) else {
+            return false;
+        };
+        let detached = shared.pty().is_some_and(|p| p.detach(id));
+        if detached {
+            shared.views.fetch_sub(1, Ordering::SeqCst);
+        }
+        detached
     }
 
     /// The person's keystrokes (or KalVoice dictation, which is typing too).
@@ -115,7 +136,12 @@ impl PaneRegistry {
         let shared = self.get(thread_id).ok_or(ProviderError::SessionEnded)?;
         let pty = shared.pty().ok_or(ProviderError::SessionEnded)?;
         pty.write(data)
-            .map_err(|e| ProviderError::Io(e.to_string()))
+            .map_err(|e| ProviderError::Io(e.to_string()))?;
+        // Escape sequences are terminal replies (cursor reports) or navigation, not an answer.
+        if data.first() != Some(&0x1b) {
+            shared.user_input();
+        }
+        Ok(())
     }
 
     pub fn resize(&self, thread_id: &str, cols: u16, rows: u16) -> Result<(), ProviderError> {
@@ -393,7 +419,7 @@ impl Drop for Disarm {
 /// interactive (a pane) or headless (stream-JSON).
 pub struct RuntimeRouter {
     headless: Arc<dyn AgentProvider>,
-    interactive: Arc<InteractiveClaudeProvider>,
+    interactive: Arc<dyn AgentProvider>,
     sessions_dir: PathBuf,
 }
 
@@ -403,6 +429,19 @@ impl RuntimeRouter {
         interactive: Arc<InteractiveClaudeProvider>,
     ) -> Self {
         let sessions_dir = interactive.config.sessions_dir.clone();
+        Self {
+            headless,
+            interactive,
+            sessions_dir,
+        }
+    }
+
+    /// The same router for any interactive provider (Codex and Gemini CLI panes).
+    pub fn for_provider(
+        headless: Arc<dyn AgentProvider>,
+        interactive: Arc<dyn AgentProvider>,
+        sessions_dir: PathBuf,
+    ) -> Self {
         Self {
             headless,
             interactive,

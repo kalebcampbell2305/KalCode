@@ -30,6 +30,10 @@ const COMMANDS: &[&str] = &[
     "kalvoice_latency_record",
     "providers_list",
     "providers_detect",
+    // PROVIDERS-2: Provider Health.
+    "provider_health_list",
+    "provider_health_get",
+    "provider_health_trend",
     // Workspaces and terminals (Z1)
     "workspace_list",
     "workspace_active",

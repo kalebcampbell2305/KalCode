@@ -5,7 +5,7 @@
 //! recording (`provider.detected` on a change, `provider.error` on failure) are returned so the
 //! caller can persist them.
 
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::thread;
 
 use kalcode_contracts::agent::{AuthState, DetectionState, ProviderDetection, ProviderId};
@@ -14,6 +14,7 @@ use kalcode_core::time::now_rfc3339;
 
 use crate::catalog;
 use crate::detect::{DetectEnv, Detected, DetectionSpec, detect};
+use crate::health::HealthMonitor;
 use crate::model::ProviderStatus;
 
 pub struct ProviderRegistry {
@@ -22,6 +23,8 @@ pub struct ProviderRegistry {
     statuses: Mutex<Vec<ProviderStatus>>,
     /// Serializes detections so two "Check again" clicks never probe the same CLI in parallel.
     detecting: Mutex<()>,
+    /// Provider Health, told about every detection (PH). Optional: detection works without it.
+    health: OnceLock<Arc<HealthMonitor>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -40,7 +43,37 @@ impl ProviderRegistry {
             specs,
             statuses: Mutex::new(catalog::statuses()),
             detecting: Mutex::new(()),
+            health: OnceLock::new(),
         }
+    }
+
+    /// Sends every later detection to Provider Health (and the cached one now).
+    pub fn set_health(&self, monitor: Arc<HealthMonitor>) {
+        monitor.detected(&self.list());
+        let _ = self.health.set(monitor);
+    }
+
+    /// Detects one provider again (Provider Health's re-check after a failed start). Returns
+    /// the events to record, like [`Self::detect_all`].
+    pub fn detect_one(&self, id: &ProviderId) -> Vec<EventPayload> {
+        let Some(spec) = self.specs.iter().find(|s| s.provider_id == id.as_str()) else {
+            return Vec::new();
+        };
+        let _serialized = lock(&self.detecting);
+        let detected = detect(spec, &self.env);
+        let mut statuses = lock(&self.statuses);
+        let Some(status) = statuses.iter_mut().find(|s| &s.id == id) else {
+            return Vec::new();
+        };
+        let events = changes(status.detection.as_ref(), &detected);
+        status.detection = Some(detected.detection);
+        status.detection_error_code = detected.error_code.map(str::to_owned);
+        let snapshot = statuses.clone();
+        drop(statuses);
+        if let Some(health) = self.health.get() {
+            health.detected(&snapshot);
+        }
+        events
     }
 
     /// The cached statuses (detection is `None` for providers not checked yet).
@@ -96,7 +129,12 @@ impl ProviderRegistry {
             status.detection = Some(detected.detection);
             status.detection_error_code = detected.error_code.map(str::to_owned);
         }
-        (statuses.clone(), events)
+        let snapshot = statuses.clone();
+        drop(statuses);
+        if let Some(health) = self.health.get() {
+            health.detected(&snapshot);
+        }
+        (snapshot, events)
     }
 }
 

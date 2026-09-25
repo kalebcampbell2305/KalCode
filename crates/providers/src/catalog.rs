@@ -2,10 +2,7 @@
 //! Sources are cited in docs/PROVIDERS.md; every fact here was checked against the provider's
 //! current official documentation and the installed CLI's `--help` (September 2026).
 
-use kalcode_contracts::agent::{
-    MappingFidelity, ModelInfo, PermissionMapping, ProviderCapabilities, ProviderId,
-};
-use kalcode_contracts::permissions::PermissionMode;
+use kalcode_contracts::agent::{ModelInfo, ProviderCapabilities, ProviderId};
 
 use crate::claude::argv as claude_argv;
 use crate::detect::{AuthProbe, AuthSignal, DetectionSpec};
@@ -48,8 +45,9 @@ pub fn codex_spec() -> DetectionSpec {
         install_dirs: &[HOMEBREW[0], HOMEBREW[1]],
         appdata_dirs: &["npm"],
         local_appdata_dirs: &[],
-        // Set when the Codex adapter is built.
-        minimum_version: None,
+        // The headless adapter (exec --json, exec resume, --ignore-rules) was verified against
+        // codex-cli 0.155.1.
+        minimum_version: Some(crate::codex::argv::MINIMUM_VERSION),
         // "Run `codex login status` to see the active authentication method." Exit codes aren't
         // documented, so only a leading "Logged in" (with exit 0) or "Not logged in" counts;
         // anything else is unknown.
@@ -75,6 +73,8 @@ pub fn gemini_spec() -> DetectionSpec {
         install_dirs: &[HOMEBREW[0], HOMEBREW[1]],
         appdata_dirs: &["npm"],
         local_appdata_dirs: &[],
+        // Not installed on the verification machine: no minimum is declared rather than a
+        // guessed one. An older CLI that rejects a flag fails the turn visibly (never broader).
         minimum_version: None,
         // Gemini CLI documents no side-effect-free sign-in status command.
         auth: None,
@@ -87,20 +87,6 @@ pub fn gemini_spec() -> DetectionSpec {
 
 pub fn specs() -> Vec<DetectionSpec> {
     vec![claude_spec(), codex_spec(), gemini_spec()]
-}
-
-fn mapping(
-    mode: PermissionMode,
-    fidelity: MappingFidelity,
-    setting: &str,
-    notes: &str,
-) -> PermissionMapping {
-    PermissionMapping {
-        mode,
-        fidelity,
-        provider_setting: setting.to_owned(),
-        notes: notes.to_owned(),
-    }
 }
 
 pub fn claude_capabilities() -> ProviderCapabilities {
@@ -134,87 +120,40 @@ pub fn claude_capabilities() -> ProviderCapabilities {
 }
 
 pub fn codex_capabilities() -> ProviderCapabilities {
-    use MappingFidelity::ApproximateStricter as Stricter;
-    use PermissionMode::*;
-    let read_only = "--sandbox read-only --ask-for-approval never";
     ProviderCapabilities {
-        streaming: false,
-        interrupt: false,
-        resume: false,
+        streaming: true,
+        // Interrupt stops the running turn's process; the next message resumes the thread.
+        interrupt: true,
+        resume: true,
+        // `codex exec` can't hand approvals to a host; app-server can (the planned surface).
         host_approvals: false,
+        // Codex lists models only through app-server (`model/list`): none are shown.
         models: Vec::new(),
-        permission_mappings: vec![
-            mapping(
-                Plan,
-                Stricter,
-                read_only,
-                "Reads and commands run inside Codex's read-only sandbox; anything that needs \
-                 more is refused.",
-            ),
-            mapping(
-                Approve,
-                Stricter,
-                read_only,
-                "Edits are refused instead of asking until KalCode can answer Codex approval \
-                 requests.",
-            ),
-            mapping(
-                Auto,
-                Stricter,
-                read_only,
-                "Runs like Approve until KalCode's policy engine can answer Codex approval \
-                 requests.",
-            ),
-            mapping(
-                Bypass,
-                Stricter,
-                "--sandbox workspace-write --ask-for-approval never",
-                "Edits and commands inside the workspace, with network access off (Codex's \
-                 default). danger-full-access is never used.",
-            ),
-        ],
-        interactive: None,
+        permission_mappings: crate::codex::argv::permission_mappings(),
+        interactive: Some(crate::interactive::codex::interactive_support()),
     }
 }
 
 pub fn gemini_capabilities() -> ProviderCapabilities {
-    use MappingFidelity::ApproximateStricter as Stricter;
-    use PermissionMode::*;
+    let model = |id: &str, name: &str, is_default| ModelInfo {
+        id: id.to_owned(),
+        display_name: name.to_owned(),
+        is_default,
+    };
     ProviderCapabilities {
-        streaming: false,
-        interrupt: false,
-        resume: false,
+        streaming: true,
+        interrupt: true,
+        resume: true,
         host_approvals: false,
-        models: Vec::new(),
-        permission_mappings: vec![
-            mapping(
-                Plan,
-                Stricter,
-                "--approval-mode plan",
-                "Gemini CLI's read-only plan mode.",
-            ),
-            mapping(
-                Approve,
-                Stricter,
-                "--approval-mode default",
-                "Tool calls that need confirmation can't be answered in headless mode, so they \
-                 don't run.",
-            ),
-            mapping(
-                Auto,
-                Stricter,
-                "--approval-mode default",
-                "Runs like Approve until KalCode's policy engine exists.",
-            ),
-            mapping(
-                Bypass,
-                Stricter,
-                "--approval-mode auto_edit",
-                "File edits are approved automatically; other tools don't run. yolo mode is \
-                 never used.",
-            ),
+        // Documented `--model` aliases (CLI reference); Gemini CLI resolves each.
+        models: vec![
+            model("auto", "Auto (default)", true),
+            model("pro", "Pro", false),
+            model("flash", "Flash", false),
+            model("flash-lite", "Flash-Lite", false),
         ],
-        interactive: None,
+        permission_mappings: crate::gemini::permission_mappings(),
+        interactive: Some(crate::interactive::gemini_interactive_support()),
     }
 }
 
@@ -253,10 +192,10 @@ pub fn statuses() -> Vec<ProviderStatus> {
             detection_error_code: None,
             auth_check: codex.auth_check_command(),
             capabilities: codex_capabilities(),
-            adapter: AdapterState::Planned,
+            adapter: AdapterState::Implemented,
             model_source: ModelSource::NotDiscoverable,
-            integration: "codex exec --json (JSON Lines events), or codex app-server (JSON-RPC \
-                          with host approvals)"
+            integration: "Headless mode (codex exec --json) with JSON Lines events, one process \
+                          per turn resumed by thread id"
                 .into(),
             sign_in_command: "codex login".into(),
             install_command: "npm install -g @openai/codex".into(),
@@ -269,9 +208,11 @@ pub fn statuses() -> Vec<ProviderStatus> {
             detection_error_code: None,
             auth_check: gemini.auth_check_command(),
             capabilities: gemini_capabilities(),
-            adapter: AdapterState::Planned,
-            model_source: ModelSource::NotDiscoverable,
-            integration: "Headless mode (gemini -p) with --output-format stream-json".into(),
+            adapter: AdapterState::Implemented,
+            model_source: ModelSource::DocumentedAliases,
+            integration: "Headless mode with --output-format stream-json, one process per turn \
+                          resumed by session id"
+                .into(),
             sign_in_command: "gemini".into(),
             install_command: "npm install -g @google/gemini-cli".into(),
             docs_url: "https://geminicli.com/docs/".into(),
@@ -282,6 +223,8 @@ pub fn statuses() -> Vec<ProviderStatus> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kalcode_contracts::agent::MappingFidelity;
+    use kalcode_contracts::permissions::PermissionMode;
 
     #[test]
     fn every_provider_maps_every_builtin_mode_never_as_exact_without_host_approvals() {
