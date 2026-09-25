@@ -430,3 +430,87 @@ fn relative_or_non_file_programs_are_refused() {
         Err(PtyError::Spawn(_))
     ));
 }
+
+/// The provider launch API passes exactly the given environment: nothing is inherited.
+#[test]
+fn program_launch_clears_the_environment() {
+    let (program, args, mut env): (PathBuf, Vec<std::ffi::OsString>, Vec<_>) = if cfg!(windows) {
+        let cmd =
+            std::env::var("ComSpec").unwrap_or_else(|_| r"C:\Windows\System32\cmd.exe".into());
+        (
+            PathBuf::from(cmd),
+            vec![
+                "/d".into(),
+                "/c".into(),
+                "echo [%KALCODE_PTY_MARK%] [%USERNAME%]".into(),
+            ],
+            vec![(
+                "SystemRoot".into(),
+                std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into()),
+            )],
+        )
+    } else {
+        (
+            PathBuf::from("/bin/sh"),
+            vec![
+                "-c".into(),
+                "echo \"[$KALCODE_PTY_MARK] [${HOME-unset}]\"".into(),
+            ],
+            vec![],
+        )
+    };
+    env.push(("KALCODE_PTY_MARK".into(), "present".into()));
+    let exit = Arc::new(Mutex::new(None));
+    let exit_sink = exit.clone();
+    let session = PtySession::spawn_program(
+        ProgramSpec {
+            program,
+            args,
+            cwd: std::env::temp_dir(),
+            env,
+            size: TerminalSize::new(100, 30).expect("size"),
+        },
+        move |info| *exit_sink.lock().expect("lock") = Some(info),
+    )
+    .expect("spawn");
+    let output = Arc::new(Mutex::new(Vec::new()));
+    let sink = output.clone();
+    let responder = session.clone();
+    session.attach(move |chunk| {
+        sink.lock().expect("lock").extend_from_slice(chunk);
+        for _ in 0..chunk.windows(4).filter(|w| *w == b"\x1b[6n").count() {
+            let _ = responder.write(b"\x1b[1;1R");
+        }
+        true
+    });
+    let text = || String::from_utf8_lossy(&output.lock().expect("lock")).into_owned();
+    assert!(
+        wait_until(Duration::from_secs(15), || text().contains("[present]")),
+        "output: {:?}",
+        text()
+    );
+    let expected_unset = if cfg!(windows) {
+        "[%USERNAME%]"
+    } else {
+        "[unset]"
+    };
+    assert!(text().contains(expected_unset), "inherited: {:?}", text());
+    assert!(wait_until(Duration::from_secs(10), || exit
+        .lock()
+        .expect("lock")
+        .is_some()));
+}
+
+#[test]
+fn program_launch_requires_an_absolute_existing_program() {
+    let spec = |program: &str| ProgramSpec {
+        program: PathBuf::from(program),
+        args: vec![],
+        cwd: std::env::temp_dir(),
+        env: vec![],
+        size: TerminalSize::new(80, 24).expect("size"),
+    };
+    assert!(PtySession::spawn_program(spec("claude"), |_| {}).is_err());
+    let missing = std::env::temp_dir().join("kalcode-no-such-program.exe");
+    assert!(PtySession::spawn_program(spec(&missing.to_string_lossy()), |_| {}).is_err());
+}

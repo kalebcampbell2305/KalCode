@@ -69,6 +69,21 @@ pub struct SpawnSpec {
     pub size: TerminalSize,
 }
 
+/// A program to run in a pseudo-terminal with exactly the given environment (the Z1 launch API
+/// for provider CLIs, docs/campaigns/ADVANCED.md §6). Distinct from shell tabs: nothing is
+/// inherited from KalCode's environment, arguments are passed as an argv (no shell), and the
+/// program must be an absolute path to an existing file. Built natively; never from WebView
+/// input.
+#[derive(Debug, Clone)]
+pub struct ProgramSpec {
+    pub program: PathBuf,
+    pub args: Vec<std::ffi::OsString>,
+    pub cwd: PathBuf,
+    /// The complete environment of the child. Nothing else is inherited.
+    pub env: Vec<(std::ffi::OsString, std::ffi::OsString)>,
+    pub size: TerminalSize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExitInfo {
     /// Process exit code (Windows: the full exit code; Unix: the status, or 1 for signals).
@@ -138,12 +153,29 @@ impl PtySession {
         on_exit: impl FnOnce(ExitInfo) + Send + 'static,
     ) -> Result<Self, PtyError> {
         preflight_program(&spec.program)?;
+        Self::start(build_command(&spec), spec.size, on_exit)
+    }
+
+    /// Starts a program (not a shell tab) with a cleared environment: only `spec.env` reaches
+    /// it. `on_exit` runs once, on a background thread, when the process ends.
+    pub fn spawn_program(
+        spec: ProgramSpec,
+        on_exit: impl FnOnce(ExitInfo) + Send + 'static,
+    ) -> Result<Self, PtyError> {
+        preflight_program(&spec.program)?;
+        Self::start(build_program_command(&spec), spec.size, on_exit)
+    }
+
+    fn start(
+        command: CommandBuilder,
+        size: TerminalSize,
+        on_exit: impl FnOnce(ExitInfo) + Send + 'static,
+    ) -> Result<Self, PtyError> {
         let system = native_pty_system();
         let pair = system
-            .openpty(spec.size.to_pty())
+            .openpty(size.to_pty())
             .map_err(|e| PtyError::Spawn(e.to_string()))?;
 
-        let command = build_command(&spec);
         let mut child = pair
             .slave
             .spawn_command(command)
@@ -334,6 +366,24 @@ fn build_command(spec: &SpawnSpec) -> CommandBuilder {
     // abort in release builds) whenever the program isn't found at its exact path. The program
     // is checked first ([`preflight_program`]), but it can disappear between the check and the
     // spawn, so the child's PATHEXT is always made safe too.
+    #[cfg(windows)]
+    if let Some(pathext) = command.get_env("PATHEXT").map(sanitized_pathext) {
+        command.env("PATHEXT", pathext);
+    }
+    command
+}
+
+/// The portable-pty command for a [`ProgramSpec`]: environment cleared, then exactly
+/// `spec.env`.
+fn build_program_command(spec: &ProgramSpec) -> CommandBuilder {
+    let mut command = CommandBuilder::new(&spec.program);
+    command.args(&spec.args);
+    command.cwd(&spec.cwd);
+    command.env_clear();
+    for (key, value) in &spec.env {
+        command.env(key, value);
+    }
+    // Same reason as in `build_command`.
     #[cfg(windows)]
     if let Some(pathext) = command.get_env("PATHEXT").map(sanitized_pathext) {
         command.env("PATHEXT", pathext);
