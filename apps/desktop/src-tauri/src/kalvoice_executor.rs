@@ -857,11 +857,20 @@ mod tests {
         // Still not in this build.
         assert_eq!(
             executor
+                .check(&KalVoiceIntent::SwitchProvider {
+                    provider_id: ProviderId::new(ProviderId::GEMINI_CLI),
+                })
+                .map_err(|e| e.code),
+            Err("not_in_this_build".into())
+        );
+        // Search is Z7-W2's; this test executor has no locator.
+        assert_eq!(
+            executor
                 .check(&KalVoiceIntent::Search {
                     query: "oauth".into()
                 })
                 .map_err(|e| e.code),
-            Err("not_in_this_build".into())
+            Err("search_unavailable".into())
         );
     }
 
