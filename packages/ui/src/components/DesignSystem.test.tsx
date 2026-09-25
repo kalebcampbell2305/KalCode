@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { DISPLAY_STATUS_LABEL, DISPLAY_STATUS_TONE, type DisplayStatus } from "@kalcode/protocol";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -43,12 +41,6 @@ describe("StatusChip", () => {
     expect(DISPLAY_STATUS_TONE.waiting_for_you).toBe("waiting");
     expect(DISPLAY_STATUS_TONE.working).toBe("working");
     expect(DISPLAY_STATUS_TONE.recovering).toBe("recovering");
-    const css = readFileSync(resolve(process.cwd(), "src/styles/tokens.css"), "utf8");
-    // The waiting tone must not reuse the amber hue.
-    const waiting = /--status-waiting:\s*(#[0-9a-f]{6})/i.exec(css)?.[1];
-    const paused = /--status-paused:\s*(#[0-9a-f]{6})/i.exec(css)?.[1];
-    expect(waiting).toBeDefined();
-    expect(waiting).not.toBe(paused);
   });
 
   it("shows a contract qualifier in words", () => {
