@@ -2,7 +2,11 @@
 // in dist/release/<version>/ with a build record (build.json): version, commit, date, size,
 // SHA-256 and signature status.
 //
-// Usage: pnpm release:build            (Windows only)
+// Usage: pnpm release:build [--features <cargo features>]   (Windows only)
+//
+// --features passes optional desktop cargo features through to the Tauri build (for example
+// `kalvoice-whisper`, KalVoice's on-device speech engine, which needs libclang via
+// LIBCLANG_PATH — see docs/DEVELOPMENT.md). The features are recorded in build.json.
 //
 // The installer is not code-signed: there is no certificate. build.json records that
 // (`signed: false`), and publish refuses to claim otherwise.
@@ -30,6 +34,19 @@ import {
 
 if (process.platform !== "win32") fail("The Windows installer can only be built on Windows.");
 
+const featuresArg = process.argv.indexOf("--features");
+const features =
+  featuresArg === -1
+    ? []
+    : (process.argv[featuresArg + 1] ?? "")
+        .split(",")
+        .map((f) => f.trim())
+        .filter(Boolean);
+for (const feature of features) {
+  if (!/^[a-z0-9-]+$/.test(feature)) fail(`Invalid cargo feature name: ${feature}`);
+  if (feature === "e2e") fail("The e2e feature enables test hooks and must never be in a release build.");
+}
+
 assertCleanTree("A release build");
 const version = appVersion();
 const commit = headCommit();
@@ -47,7 +64,9 @@ const bundled = join(TARGET_DIR, "release", "bundle", "nsis", file);
 const startedAt = Date.now();
 
 console.log(`Building ${product} ${version} for Windows x64 from ${commit.slice(0, 12)}…`);
-run("pnpm", ["--filter", "@kalcode/desktop", "tauri", "build", "--bundles", "nsis"], {
+const tauriArgs = ["--filter", "@kalcode/desktop", "tauri", "build", "--bundles", "nsis"];
+if (features.length > 0) tauriArgs.push("--features", features.join(","));
+run("pnpm", tauriArgs, {
   env: { ...process.env, CARGO_TARGET_DIR: TARGET_DIR },
 });
 
@@ -75,6 +94,7 @@ const record = {
   product,
   version,
   commit,
+  features,
   builtAt: new Date().toISOString(),
   os: "windows",
   arch: "x64",
