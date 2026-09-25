@@ -915,7 +915,7 @@ impl<'a> Cx<'a> {
     }
 
     /// A word that expands an environment variable whose name suggests a secret
-    /// (`$OPENAI_API_KEY`, `$env:GH_TOKEN`, `%AWS_SECRET_ACCESS_KEY%`) reads that secret: the
+    /// (`$DEPLOY_API_KEY`, `$env:GH_TOKEN`, `%AWS_SECRET_ACCESS_KEY%`) reads that secret: the
     /// command can print it or send it somewhere.
     fn variable_reads(&mut self, word: &Word) {
         let lower = word.lower();

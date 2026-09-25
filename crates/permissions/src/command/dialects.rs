@@ -1049,10 +1049,10 @@ mod tests {
     #[test]
     fn variable_references_and_secret_names() {
         assert_eq!(
-            dollar_references("x $env:OPENAI_API_KEY ${GH_TOKEN} $HOME"),
-            vec!["OPENAI_API_KEY", "GH_TOKEN", "HOME"]
+            dollar_references("x $env:DEPLOY_API_KEY ${GH_TOKEN} $HOME"),
+            vec!["DEPLOY_API_KEY", "GH_TOKEN", "HOME"]
         );
-        assert!(secret_like_variable("ANTHROPIC_API_KEY"));
+        assert!(secret_like_variable("SERVICE_API_KEY"));
         assert!(secret_like_variable("github_token"));
         assert!(!secret_like_variable("HOME"));
         assert!(!secret_like_variable("PWD"));
