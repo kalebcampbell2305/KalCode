@@ -2384,6 +2384,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "kalcode-hook-bridge"
+version = "0.1.1"
+dependencies = [
+ "getrandom 0.4.3",
+ "hex",
+ "hmac",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "kalcode-native-core"
 version = "0.1.1"
 dependencies = [

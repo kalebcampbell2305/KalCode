@@ -1,0 +1,466 @@
+//! KalCode's side of the bridge: one listener per KalCode run, many sessions.
+//!
+//! Each accepted connection gets a fresh nonce, must present a request MACed under a registered
+//! session's key within [`ServerConfig::read_timeout`], and is answered by that session's
+//! [`HookHandler`] (on the blocking pool, so a held approval never stalls other connections).
+//! Unauthenticated connections are closed without a reply. Sessions are revoked by dropping their
+//! [`Registration`], after which their hooks are rejected (stale sessions).
+//!
+//! Windows: the first pipe instance is created with `FILE_FLAG_FIRST_PIPE_INSTANCE`, so starting
+//! fails if anything else already owns the name (squatting), and every instance rejects remote
+//! clients. Unix: the socket lives in the private directory made by [`Endpoint::generate`].
+
+use std::collections::HashMap;
+use std::future::Future;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, Weak};
+use std::time::Duration;
+
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+
+use crate::key::{SessionKey, is_hex_of_len, random_bytes, random_id};
+use crate::wire::{self, Hello, MAX_FRAME, PROTOCOL_VERSION, Request, Response};
+use crate::{Endpoint, HookEvent, HookRecord, HookReply};
+
+/// Answers the hook calls of one session. May block (a held approval) up to the ask window.
+pub trait HookHandler: Send + Sync {
+    fn handle(&self, record: HookRecord) -> HookReply;
+}
+
+#[derive(Debug, Clone)]
+pub struct ServerConfig {
+    pub endpoint: Endpoint,
+    /// Connections served at once; more are closed immediately.
+    pub max_connections: usize,
+    /// Time a client has to send its request after connecting.
+    pub read_timeout: Duration,
+    /// Upper bound on a handler call. A handler that overruns gets a fail-safe reply: "ask" for
+    /// PreToolUse (the provider's own prompt), an acknowledgement otherwise.
+    pub max_hold: Duration,
+}
+
+impl ServerConfig {
+    pub fn new(endpoint: Endpoint) -> Self {
+        Self {
+            endpoint,
+            max_connections: 64,
+            read_timeout: Duration::from_secs(5),
+            max_hold: crate::helper::ASK_WINDOW + Duration::from_secs(15),
+        }
+    }
+}
+
+/// Counters for diagnostics and tests.
+#[derive(Debug, Default)]
+struct Stats {
+    accepted: AtomicU64,
+    served: AtomicU64,
+    rejected_auth: AtomicU64,
+    rejected_session: AtomicU64,
+    rejected_malformed: AtomicU64,
+    rejected_busy: AtomicU64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct StatsSnapshot {
+    pub accepted: u64,
+    pub served: u64,
+    pub rejected_auth: u64,
+    pub rejected_session: u64,
+    pub rejected_malformed: u64,
+    pub rejected_busy: u64,
+}
+
+struct Session {
+    key: SessionKey,
+    handler: Arc<dyn HookHandler>,
+}
+
+struct Shared {
+    endpoint: Endpoint,
+    sessions: Mutex<HashMap<String, Session>>,
+    stopping: AtomicBool,
+    wake: tokio::sync::Notify,
+    stats: Stats,
+    config: ServerConfig,
+}
+
+impl Shared {
+    fn sessions(&self) -> std::sync::MutexGuard<'_, HashMap<String, Session>> {
+        self.sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// A registered session. Its id and key go to the provider's hook settings and environment.
+/// Dropping it revokes the session.
+pub struct Registration {
+    session_id: String,
+    key: SessionKey,
+    server: Weak<Shared>,
+}
+
+impl std::fmt::Debug for Registration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Registration")
+            .field("session_id", &self.session_id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Registration {
+    pub fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    /// The key in the hex form the helper reads from [`crate::KEY_ENV`].
+    pub fn key_hex(&self) -> String {
+        self.key.to_hex()
+    }
+
+    pub fn endpoint(&self) -> Option<Endpoint> {
+        self.server.upgrade().map(|s| s.endpoint.clone())
+    }
+}
+
+impl Drop for Registration {
+    fn drop(&mut self) {
+        if let Some(server) = self.server.upgrade() {
+            server.sessions().remove(&self.session_id);
+        }
+    }
+}
+
+/// The running bridge. Dropping it stops the listener.
+pub struct BridgeServer {
+    shared: Arc<Shared>,
+    thread: Mutex<Option<std::thread::JoinHandle<()>>>,
+}
+
+impl BridgeServer {
+    /// Binds the endpoint (failing if it is taken) and starts serving on a background thread.
+    pub fn start(config: ServerConfig) -> std::io::Result<Self> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .thread_name("kalcode-hook-bridge")
+            .build()?;
+        let listener = {
+            let _guard = runtime.enter();
+            Listener::bind(&config.endpoint)?
+        };
+        let shared = Arc::new(Shared {
+            endpoint: config.endpoint.clone(),
+            sessions: Mutex::new(HashMap::new()),
+            stopping: AtomicBool::new(false),
+            wake: tokio::sync::Notify::new(),
+            stats: Stats::default(),
+            config,
+        });
+        let serving = shared.clone();
+        let thread = std::thread::Builder::new()
+            .name("kalcode-hook-bridge".into())
+            .spawn(move || {
+                runtime.block_on(accept_loop(listener, serving));
+                // Don't wait for handlers still holding a request (a pending approval): their
+                // helpers fail closed on their own deadline.
+                runtime.shutdown_timeout(Duration::from_millis(500));
+            })?;
+        tracing::info!(event = "hook_bridge.started");
+        Ok(Self {
+            shared,
+            thread: Mutex::new(Some(thread)),
+        })
+    }
+
+    pub fn endpoint(&self) -> &Endpoint {
+        &self.shared.endpoint
+    }
+
+    /// Registers a session with a fresh id and key.
+    pub fn register(&self, handler: Arc<dyn HookHandler>) -> std::io::Result<Registration> {
+        let session_id = random_id()?;
+        let key = SessionKey::generate()?;
+        self.shared.sessions().insert(
+            session_id.clone(),
+            Session {
+                key: key.clone(),
+                handler,
+            },
+        );
+        Ok(Registration {
+            session_id,
+            key,
+            server: Arc::downgrade(&self.shared),
+        })
+    }
+
+    pub fn session_count(&self) -> usize {
+        self.shared.sessions().len()
+    }
+
+    pub fn stats(&self) -> StatsSnapshot {
+        let s = &self.shared.stats;
+        StatsSnapshot {
+            accepted: s.accepted.load(Ordering::SeqCst),
+            served: s.served.load(Ordering::SeqCst),
+            rejected_auth: s.rejected_auth.load(Ordering::SeqCst),
+            rejected_session: s.rejected_session.load(Ordering::SeqCst),
+            rejected_malformed: s.rejected_malformed.load(Ordering::SeqCst),
+            rejected_busy: s.rejected_busy.load(Ordering::SeqCst),
+        }
+    }
+
+    /// Stops accepting and waits for the listener thread. Idempotent.
+    pub fn shutdown(&self) {
+        if self.shared.stopping.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        // Wakes the accept loop (a stored permit if it isn't waiting yet).
+        self.shared.wake.notify_one();
+        let thread = self
+            .thread
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(thread) = thread {
+            let _ = thread.join();
+        }
+        #[cfg(unix)]
+        {
+            let path = self.shared.endpoint.path();
+            let _ = std::fs::remove_file(&path);
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::remove_dir(dir);
+            }
+        }
+        tracing::info!(event = "hook_bridge.stopped");
+    }
+}
+
+impl Drop for BridgeServer {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+#[cfg(windows)]
+mod platform {
+    use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
+
+    use crate::Endpoint;
+
+    pub struct Listener {
+        name: String,
+        next: NamedPipeServer,
+    }
+
+    pub type Conn = NamedPipeServer;
+
+    impl Listener {
+        pub fn bind(endpoint: &Endpoint) -> std::io::Result<Self> {
+            let next = ServerOptions::new()
+                .first_pipe_instance(true)
+                .reject_remote_clients(true)
+                .create(endpoint.as_str())?;
+            Ok(Self {
+                name: endpoint.as_str().to_owned(),
+                next,
+            })
+        }
+
+        pub async fn accept(&mut self) -> std::io::Result<Conn> {
+            self.next.connect().await?;
+            let fresh = ServerOptions::new()
+                .reject_remote_clients(true)
+                .create(&self.name)?;
+            Ok(std::mem::replace(&mut self.next, fresh))
+        }
+    }
+}
+
+#[cfg(unix)]
+mod platform {
+    use tokio::net::{UnixListener, UnixStream};
+
+    use crate::Endpoint;
+
+    pub struct Listener(UnixListener);
+    pub type Conn = UnixStream;
+
+    impl Listener {
+        pub fn bind(endpoint: &Endpoint) -> std::io::Result<Self> {
+            Ok(Self(UnixListener::bind(endpoint.path())?))
+        }
+
+        pub async fn accept(&mut self) -> std::io::Result<Conn> {
+            Ok(self.0.accept().await?.0)
+        }
+    }
+}
+
+use platform::Listener;
+
+async fn accept_loop(mut listener: Listener, shared: Arc<Shared>) {
+    let permits = Arc::new(tokio::sync::Semaphore::new(shared.config.max_connections));
+    loop {
+        let accepted = {
+            let mut accept = std::pin::pin!(listener.accept());
+            let mut stop = std::pin::pin!(shared.wake.notified());
+            std::future::poll_fn(|cx| {
+                if let std::task::Poll::Ready(result) = accept.as_mut().poll(cx) {
+                    return std::task::Poll::Ready(Some(result));
+                }
+                if stop.as_mut().poll(cx).is_ready() {
+                    return std::task::Poll::Ready(None);
+                }
+                std::task::Poll::Pending
+            })
+            .await
+        };
+        let Some(accepted) = accepted else {
+            break;
+        };
+        let conn = match accepted {
+            Ok(conn) => conn,
+            Err(error) => {
+                if shared.stopping.load(Ordering::SeqCst) {
+                    break;
+                }
+                tracing::warn!(event = "hook_bridge.accept_failed", error = %error);
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                continue;
+            }
+        };
+        if shared.stopping.load(Ordering::SeqCst) {
+            break;
+        }
+        shared.stats.accepted.fetch_add(1, Ordering::SeqCst);
+        let Ok(permit) = permits.clone().try_acquire_owned() else {
+            shared.stats.rejected_busy.fetch_add(1, Ordering::SeqCst);
+            drop(conn);
+            continue;
+        };
+        let shared = shared.clone();
+        tokio::spawn(async move {
+            serve(conn, &shared).await;
+            drop(permit);
+        });
+    }
+}
+
+async fn write_frame<W: AsyncWrite + Unpin, T: serde::Serialize>(
+    writer: &mut W,
+    value: &T,
+) -> std::io::Result<()> {
+    let bytes = serde_json::to_vec(value).map_err(std::io::Error::other)?;
+    if bytes.len() > MAX_FRAME {
+        return Err(std::io::Error::other("frame too large"));
+    }
+    let mut out = Vec::with_capacity(4 + bytes.len());
+    out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+    out.extend_from_slice(&bytes);
+    writer.write_all(&out).await?;
+    writer.flush().await
+}
+
+async fn read_frame<R: AsyncRead + Unpin, T: for<'de> serde::Deserialize<'de>>(
+    reader: &mut R,
+) -> std::io::Result<T> {
+    let mut len = [0u8; 4];
+    reader.read_exact(&mut len).await?;
+    let len = u32::from_be_bytes(len) as usize;
+    if len > MAX_FRAME {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "frame too large",
+        ));
+    }
+    let mut bytes = vec![0u8; len];
+    reader.read_exact(&mut bytes).await?;
+    serde_json::from_slice(&bytes)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+/// The fail-safe reply when a handler can't answer.
+fn fallback(record: &HookRecord) -> HookReply {
+    if record.event.is_some_and(HookEvent::is_blocking) {
+        HookReply::Ask {
+            reason: "KalCode couldn't decide in time; answer in the provider.".into(),
+        }
+    } else {
+        HookReply::Ack
+    }
+}
+
+async fn serve<C: AsyncRead + AsyncWrite + Unpin>(mut conn: C, shared: &Shared) {
+    let stats = &shared.stats;
+    let Ok(nonce) = random_bytes::<32>() else {
+        return;
+    };
+    let server_nonce = hex::encode(nonce);
+    let hello = Hello {
+        v: PROTOCOL_VERSION,
+        nonce: server_nonce.clone(),
+    };
+    if write_frame(&mut conn, &hello).await.is_err() {
+        return;
+    }
+    let request: Request =
+        match tokio::time::timeout(shared.config.read_timeout, read_frame(&mut conn)).await {
+            Ok(Ok(request)) => request,
+            _ => {
+                stats.rejected_malformed.fetch_add(1, Ordering::SeqCst);
+                return;
+            }
+        };
+    if request.v != PROTOCOL_VERSION || !is_hex_of_len(&request.nonce, 64) {
+        stats.rejected_malformed.fetch_add(1, Ordering::SeqCst);
+        return;
+    }
+    let (key, handler) = {
+        let sessions = shared.sessions();
+        match sessions.get(&request.session) {
+            Some(session) => (session.key.clone(), session.handler.clone()),
+            None => {
+                stats.rejected_session.fetch_add(1, Ordering::SeqCst);
+                tracing::warn!(event = "hook_bridge.unknown_session");
+                return;
+            }
+        }
+    };
+    if !wire::verify_request(
+        &key,
+        &server_nonce,
+        &request.nonce,
+        &request.session,
+        &request.body,
+        &request.mac,
+    ) {
+        stats.rejected_auth.fetch_add(1, Ordering::SeqCst);
+        tracing::warn!(event = "hook_bridge.auth_failed");
+        return;
+    }
+    let Ok(record) = serde_json::from_str::<HookRecord>(&request.body) else {
+        stats.rejected_malformed.fetch_add(1, Ordering::SeqCst);
+        return;
+    };
+    let safe = fallback(&record);
+    let work = tokio::task::spawn_blocking(move || handler.handle(record));
+    let reply = match tokio::time::timeout(shared.config.max_hold, work).await {
+        Ok(Ok(reply)) => reply,
+        _ => safe,
+    };
+    let Ok(body) = serde_json::to_string(&reply) else {
+        return;
+    };
+    let mac = wire::response_mac(&key, &server_nonce, &request.nonce, &body);
+    let response = Response {
+        v: PROTOCOL_VERSION,
+        body,
+        mac,
+    };
+    if write_frame(&mut conn, &response).await.is_ok() {
+        stats.served.fetch_add(1, Ordering::SeqCst);
+    }
+}
