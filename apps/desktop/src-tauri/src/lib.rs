@@ -10,6 +10,7 @@ pub mod native_confirm;
 mod notification_commands;
 pub mod permission_commands;
 mod provider_commands;
+mod provider_health_commands;
 mod provider_pane_commands;
 mod thread_commands;
 
@@ -241,6 +242,12 @@ pub fn run(removed_overrides: Vec<String>) {
             // Z7-W4: before the thread runtime, so Claude Code is registered with its router.
             let panes = provider_pane_commands::ProviderPanesState::start(&state);
             let providers = provider_commands::ProviderState::from_process();
+            // PROVIDERS-2: Provider Health, before the thread runtime registers its adapters.
+            let health = provider_health_commands::ProviderHealthState::start(
+                state.core.clone(),
+                &providers.registry(),
+            );
+            health.bind(app.handle());
             // Z4 over Z1 (workspace roots) and Z3 (thread modes, bound once the runtime starts).
             let modes = Arc::new(thread_commands::ThreadModes::default());
             let permissions = permission_commands::PermissionState::new(
@@ -277,6 +284,7 @@ pub fn run(removed_overrides: Vec<String>) {
             app.manage(threads);
             app.manage(panes);
             app.manage(notifications);
+            app.manage(health);
 
             // Safety net: the frontend shows the window after its first themed paint
             // (`window_ready`). If that never happens, show it anyway so the user is never
@@ -321,6 +329,9 @@ pub fn run(removed_overrides: Vec<String>) {
             kalvoice_commands::kalvoice_latency_record,
             provider_commands::providers_list,
             provider_commands::providers_detect,
+            provider_health_commands::provider_health_list,
+            provider_health_commands::provider_health_get,
+            provider_health_commands::provider_health_trend,
             code_commands::workspace_list,
             code_commands::workspace_active,
             code_commands::workspace_open_dialog,
@@ -390,6 +401,11 @@ pub fn run(removed_overrides: Vec<String>) {
             }
             if let Some(panes) = handle.try_state::<provider_pane_commands::ProviderPanesState>() {
                 panes.shutdown();
+            }
+            if let Some(health) =
+                handle.try_state::<provider_health_commands::ProviderHealthState>()
+            {
+                health.shutdown();
             }
             if let Some(notifications) =
                 handle.try_state::<notification_commands::NotificationsState>()

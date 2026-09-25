@@ -589,6 +589,22 @@ impl HealthMonitor {
         }
     }
 
+    /// What callers show when the health subsystem isn't running: every provider "unknown"
+    /// (PH-06). Threads are unaffected.
+    pub fn unavailable() -> Vec<ProviderHealth> {
+        let now = Instant::now();
+        crate::catalog::statuses()
+            .into_iter()
+            .map(|s| {
+                let state = ProviderState::new(s.display_name.clone(), s.capabilities.models);
+                let mut health = Self::snapshot(&s.id, &state, now);
+                health.reason_code = Some("health_unavailable".into());
+                health.reason = Some("Provider health isn't available right now.".into());
+                health
+            })
+            .collect()
+    }
+
     /// Every provider's health, catalog order.
     pub fn list(&self) -> Vec<ProviderHealth> {
         let now = Instant::now();

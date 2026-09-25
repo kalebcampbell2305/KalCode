@@ -26,6 +26,7 @@ use kalcode_hook_bridge::Endpoint;
 use kalcode_hook_bridge::server::{BridgeServer, ServerConfig};
 use kalcode_permissions::PermissionService;
 use kalcode_providers::DetectEnv;
+use kalcode_providers::interactive::cli_pane::{InteractiveCliProvider, PaneCli};
 use kalcode_providers::interactive::provider::{
     InteractiveClaudeProvider, InteractiveConfig, PaneRegistry, RuntimeRouter, marked_interactive,
 };
@@ -61,6 +62,28 @@ static INTERACTIVE: OnceLock<Arc<InteractiveClaudeProvider>> = OnceLock::new();
 pub fn route_claude(headless: Arc<dyn AgentProvider>) -> Arc<dyn AgentProvider> {
     match INTERACTIVE.get() {
         Some(interactive) => Arc::new(RuntimeRouter::new(headless, interactive.clone())),
+        None => headless,
+    }
+}
+
+/// PROVIDERS-2: Codex and Gemini CLI panes (read-only first), registered next to Claude Code's.
+static INTERACTIVE_CODEX: OnceLock<Arc<InteractiveCliProvider>> = OnceLock::new();
+static INTERACTIVE_GEMINI: OnceLock<Arc<InteractiveCliProvider>> = OnceLock::new();
+
+/// Codex or Gemini CLI as the thread runtime should see it: the per-thread router when panes
+/// are enabled, otherwise the headless adapter unchanged.
+pub fn route_cli(id: &str, headless: Arc<dyn AgentProvider>) -> Arc<dyn AgentProvider> {
+    let interactive = match id {
+        ProviderId::CODEX => INTERACTIVE_CODEX.get(),
+        ProviderId::GEMINI_CLI => INTERACTIVE_GEMINI.get(),
+        _ => None,
+    };
+    match interactive {
+        Some(interactive) => Arc::new(RuntimeRouter::for_provider(
+            headless,
+            interactive.clone(),
+            interactive.sessions_dir(),
+        )),
         None => headless,
     }
 }
@@ -186,6 +209,27 @@ impl ProviderPanesState {
             }
         };
         let routing = routing();
+        let cli_config = InteractiveConfig {
+            hook_program: hook_program.clone(),
+            hook_prefix_args: Vec::new(),
+            sessions_dir: app.paths.data_dir.join("sessions"),
+            routing,
+            limits: SessionLimits::default(),
+        };
+        let _ = INTERACTIVE_CODEX.set(Arc::new(InteractiveCliProvider::new(
+            PaneCli::Codex,
+            DetectEnv::from_process(),
+            Some(bridge.clone()),
+            cli_config.clone(),
+            panes.clone(),
+        )));
+        let _ = INTERACTIVE_GEMINI.set(Arc::new(InteractiveCliProvider::new(
+            PaneCli::Gemini,
+            DetectEnv::from_process(),
+            None,
+            cli_config,
+            panes.clone(),
+        )));
         let provider = InteractiveClaudeProvider::new(
             DetectEnv::from_process(),
             bridge.clone(),
@@ -307,10 +351,16 @@ pub fn provider_pane_create(
     name: Option<String>,
 ) -> Result<ThreadSummary, IpcError> {
     panes.require()?;
-    if provider_id != ProviderId::CLAUDE_CODE {
+    if ![
+        ProviderId::CLAUDE_CODE,
+        ProviderId::CODEX,
+        ProviderId::GEMINI_CLI,
+    ]
+    .contains(&provider_id.as_str())
+    {
         return Err(KalError::validation(
             "provider_pane_unsupported",
-            "Only Claude Code runs in a pane today.",
+            "That provider can't run in a pane.",
         )
         .to_ipc());
     }

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-provider-health-trend"
+description = "Enables the provider_health_trend command without any pre-configured scope."
+commands.allow = ["provider_health_trend"]
+
+[[permission]]
+identifier = "deny-provider-health-trend"
+description = "Denies the provider_health_trend command without any pre-configured scope."
+commands.deny = ["provider_health_trend"]

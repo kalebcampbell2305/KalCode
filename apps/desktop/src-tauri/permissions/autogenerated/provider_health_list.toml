@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-provider-health-list"
+description = "Enables the provider_health_list command without any pre-configured scope."
+commands.allow = ["provider_health_list"]
+
+[[permission]]
+identifier = "deny-provider-health-list"
+description = "Denies the provider_health_list command without any pre-configured scope."
+commands.deny = ["provider_health_list"]

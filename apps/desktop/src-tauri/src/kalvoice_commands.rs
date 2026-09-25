@@ -218,6 +218,13 @@ impl ProviderDirectory for DesktopProviders {
             ProviderId::CLAUDE_CODE => {
                 Some(Arc::new(ClaudeCodeProvider::new(DetectEnv::from_process())))
             }
+            // PROVIDERS-2: detection now reports Codex and Gemini CLI usable.
+            ProviderId::CODEX => Some(Arc::new(kalcode_providers::CodexProvider::new(
+                DetectEnv::from_process(),
+            ))),
+            ProviderId::GEMINI_CLI => Some(Arc::new(kalcode_providers::GeminiProvider::new(
+                DetectEnv::from_process(),
+            ))),
             _ => None,
         }
     }
