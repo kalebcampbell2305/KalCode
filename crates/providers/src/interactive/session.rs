@@ -5,8 +5,8 @@
 //!
 //! | Hook | `AgentEvent`s |
 //! | --- | --- |
-//! | SessionStart (startup/resume/clear) | `SessionStarted`, `Status(idle)` |
-//! | SessionStart (compact/fork) | `SessionStarted` |
+//! | First matching SessionStart (startup/resume/clear) | `SessionStarted`, `Status(idle)` |
+//! | Repeated SessionStart (compact/fork) | no duplicate lifecycle transition |
 //! | UserPromptSubmit | `Status(active)`; first prompt → title (never stored) |
 //! | PreToolUse | `ToolRequested`; engine routing: `ApprovalRequired` then, when allowed, `ToolStarted` + `Status(by tool)`; provider-prompt routing: `ToolStarted` + `Status(by tool)` |
 //! | PermissionRequest, Notification(permission_prompt) | `Status(waiting_for_user, "Answer in Claude Code")` |
@@ -19,7 +19,7 @@
 //! The runtime ignores `waiting_for_permission` from providers (it owns approval state), so a
 //! prompt shown by the provider itself is reported as WAITING FOR YOU with a detail.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
@@ -44,6 +44,9 @@ use crate::claude::actions::{self, ActionContext};
 /// Approvals one session may hold at once. More `PreToolUse` calls go to the provider's own
 /// prompt immediately, so a flood can't fill KalCode's approval queue.
 pub const MAX_HELD_APPROVALS: usize = 8;
+/// Tool lifecycles retained between `PreToolUse` and completion/stop. This independently bounds
+/// provider-prompt routing, where no KalCode approval is held.
+pub const MAX_OPEN_TOOLS: usize = 64;
 /// Largest single write from a pane view (as for Z1 terminals).
 pub const MAX_WRITE_BYTES: usize = 64 * 1024;
 
@@ -57,15 +60,11 @@ pub(crate) struct PaneProfile {
     pub answer_in: &'static str,
     /// Whether KalCode can answer this provider's approvals at all.
     pub kalcode_answers: bool,
-    /// The person's keystrokes after a provider prompt mean it was answered (providers without
-    /// a structured "prompt answered" signal).
-    pub input_answers_prompt: bool,
 }
 
 pub(crate) const CLAUDE_PROFILE: PaneProfile = PaneProfile {
     answer_in: ANSWER_IN_PROVIDER,
     kalcode_answers: true,
-    input_answers_prompt: false,
 };
 
 /// Timing for one session. Defaults per docs/campaigns/Z7-W4-THREATS.md §4.5.
@@ -102,6 +101,13 @@ struct HookState {
     /// Tool calls requested and not completed, by tool call id.
     open_tools: BTreeMap<String, OpenTool>,
     first_prompt_seen: bool,
+    last_status: Option<(ThreadStatus, Option<String>)>,
+}
+
+#[derive(Default)]
+struct LifecycleState {
+    events: VecDeque<AgentEvent>,
+    draining: bool,
 }
 
 const CHANNEL_WAITING: u8 = 0;
@@ -116,10 +122,12 @@ pub(crate) struct Shared {
     sink: Box<dyn AgentEventSink>,
     pub(crate) pty: OnceLock<PtySession>,
     registration: Mutex<Option<Registration>>,
+    lifecycle: Mutex<LifecycleState>,
     state: Mutex<HookState>,
     /// Held PreToolUse calls by KalCode request id.
     pending: Mutex<HashMap<String, SyncSender<ApprovalDecision>>>,
     provider_session_id: Mutex<Option<String>>,
+    session_started_emitted: AtomicBool,
     channel: AtomicU8,
     stopping: AtomicBool,
     ended: AtomicBool,
@@ -128,8 +136,6 @@ pub(crate) struct Shared {
     expiry: Option<Arc<dyn ApprovalExpiry>>,
     titles: Option<Arc<dyn TitleSink>>,
     profile: OnceLock<PaneProfile>,
-    /// A provider prompt is showing (set by [`Shared::provider_prompt`]).
-    prompt_showing: AtomicBool,
     /// Terminal views attached right now (they answer the PTY's cursor-position requests).
     pub(crate) views: std::sync::atomic::AtomicUsize,
 }
@@ -155,9 +161,11 @@ impl Shared {
             sink: parts.sink,
             pty: OnceLock::new(),
             registration: Mutex::new(None),
+            lifecycle: Mutex::new(LifecycleState::default()),
             state: Mutex::new(HookState::default()),
             pending: Mutex::new(HashMap::new()),
             provider_session_id: Mutex::new(Some(parts.provider_session_id)),
+            session_started_emitted: AtomicBool::new(false),
             channel: AtomicU8::new(CHANNEL_WAITING),
             stopping: AtomicBool::new(false),
             ended: AtomicBool::new(false),
@@ -166,7 +174,6 @@ impl Shared {
             expiry: parts.expiry,
             titles: parts.titles,
             profile: OnceLock::new(),
-            prompt_showing: AtomicBool::new(false),
             views: std::sync::atomic::AtomicUsize::new(0),
         })
     }
@@ -182,45 +189,75 @@ impl Shared {
     /// The provider session id isn't known yet (a new Codex pane learns it from `notify`).
     pub(crate) fn forget_session_id(&self) {
         lock(&self.provider_session_id).take();
+        self.session_started_emitted.store(false, Ordering::SeqCst);
     }
 
     /// No structured hook channel for this provider: status comes from the process (and, for
-    /// Codex, `notify` and OSC 9). The pane says "limited status".
+    /// Codex, authenticated `notify`). The pane says "limited status".
     pub(crate) fn mark_limited(&self) {
-        self.channel.store(CHANNEL_LIMITED, Ordering::SeqCst);
-    }
-
-    /// The provider's own approval prompt is showing (Codex OSC 9 `approval-requested`).
-    pub(crate) fn provider_prompt(&self) {
-        if self.ended.load(Ordering::SeqCst) {
-            return;
-        }
-        self.prompt_showing.store(true, Ordering::SeqCst);
-        self.emit(AgentEvent::Status {
-            status: ThreadStatus::WaitingForUser,
-            detail: Some(self.profile().answer_in.to_owned()),
-        });
-    }
-
-    /// The person typed in the pane.
-    pub(crate) fn user_input(&self) {
-        if self.profile().input_answers_prompt
-            && self.prompt_showing.swap(false, Ordering::SeqCst)
-            && !self.ended.load(Ordering::SeqCst)
-        {
-            self.emit(AgentEvent::Status {
-                status: ThreadStatus::Active,
-                detail: None,
-            });
+        let _lifecycle = lock(&self.lifecycle);
+        if !self.is_terminal() {
+            self.channel.store(CHANNEL_LIMITED, Ordering::SeqCst);
         }
     }
 
     pub(crate) fn set_registration(&self, registration: Registration) {
-        *lock(&self.registration) = Some(registration);
+        let _lifecycle = lock(&self.lifecycle);
+        if !self.is_terminal() {
+            *lock(&self.registration) = Some(registration);
+        }
     }
 
-    fn emit(&self, event: AgentEvent) {
-        self.sink.emit(event);
+    fn is_terminal(&self) -> bool {
+        self.ended.load(Ordering::SeqCst) || self.stopping.load(Ordering::SeqCst)
+    }
+
+    /// Queues events while the caller holds `lifecycle`, returning whether it became the drainer.
+    /// Provider callbacks run only from [`Self::drain_events`], outside every session mutex, so a
+    /// callback may safely re-enter status, termination, or approval APIs.
+    fn queue_events_locked(
+        &self,
+        lifecycle: &mut LifecycleState,
+        events: impl IntoIterator<Item = AgentEvent>,
+    ) -> bool {
+        let mut added = false;
+        for event in events {
+            if let AgentEvent::Status { status, detail } = &event {
+                let next = (*status, detail.clone());
+                let mut state = lock(&self.state);
+                if state.last_status.as_ref() == Some(&next) {
+                    continue;
+                }
+                state.last_status = Some(next);
+            }
+            lifecycle.events.push_back(event);
+            added = true;
+        }
+        if added && !lifecycle.draining {
+            lifecycle.draining = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn drain_events(&self, should_drain: bool) {
+        if !should_drain {
+            return;
+        }
+        loop {
+            let event = {
+                let mut lifecycle = lock(&self.lifecycle);
+                match lifecycle.events.pop_front() {
+                    Some(event) => event,
+                    None => {
+                        lifecycle.draining = false;
+                        return;
+                    }
+                }
+            };
+            self.sink.emit(event);
+        }
     }
 
     pub(crate) fn channel_state(&self) -> HookChannelState {
@@ -249,45 +286,63 @@ impl Shared {
 
     /// Called by the watchdog: no hook call arrived in time.
     pub(crate) fn hooks_overdue(&self) {
-        if self
-            .channel
-            .compare_exchange(
-                CHANNEL_WAITING,
-                CHANNEL_LIMITED,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            )
-            .is_ok()
-            && !self.ended.load(Ordering::SeqCst)
-        {
+        let should_drain = {
+            let mut lifecycle = lock(&self.lifecycle);
+            if self.is_terminal()
+                || self
+                    .channel
+                    .compare_exchange(
+                        CHANNEL_WAITING,
+                        CHANNEL_LIMITED,
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                    )
+                    .is_err()
+            {
+                return;
+            }
             tracing::warn!(event = "pane.hooks_inactive", thread_id = %self.ctx.thread_id);
-            self.emit(AgentEvent::Error {
-                code: "hooks_inactive".into(),
-                message: "KalCode isn't receiving Claude Code's hook events, so this pane shows \
+            self.queue_events_locked(
+                &mut lifecycle,
+                [AgentEvent::Error {
+                    code: "hooks_inactive".into(),
+                    message:
+                        "KalCode isn't receiving Claude Code's hook events, so this pane shows \
                           limited status and approvals happen in Claude Code. Your Claude Code \
                           settings may disable hooks."
-                    .into(),
-                recoverable: true,
-            });
-        }
+                            .into(),
+                    recoverable: true,
+                }],
+            )
+        };
+        self.drain_events(should_drain);
     }
 
     /// The PTY process ended.
     pub(crate) fn on_exit(&self, code: u32, killed: bool) {
-        if self.ended.swap(true, Ordering::SeqCst) {
-            return;
-        }
-        self.channel.store(CHANNEL_ENDED, Ordering::SeqCst);
-        // Held calls end with a denial (their helpers are gone with the process anyway).
-        lock(&self.pending).clear();
-        // Revoke the session: late or stray hook calls are rejected from now on.
-        lock(&self.registration).take();
-        *lock(&self.exit_code) = Some(i64::from(code));
+        let should_drain = {
+            let mut lifecycle = lock(&self.lifecycle);
+            if self.ended.load(Ordering::SeqCst) {
+                return;
+            }
+            self.ended.store(true, Ordering::SeqCst);
+            self.channel.store(CHANNEL_ENDED, Ordering::SeqCst);
+            // Held calls end with a denial (their helpers are gone with the process anyway).
+            lock(&self.pending).clear();
+            lock(&self.state).open_tools.clear();
+            // Revoke the session: late or stray hook calls are rejected from now on.
+            lock(&self.registration).take();
+            *lock(&self.exit_code) = Some(i64::from(code));
+            // Windows exit codes are 32-bit unsigned (NTSTATUS values included); keep the bits.
+            self.queue_events_locked(
+                &mut lifecycle,
+                [AgentEvent::Exited {
+                    exit_code: Some(code as i32),
+                }],
+            )
+        };
         tracing::info!(event = "pane.exited", thread_id = %self.ctx.thread_id, code, killed);
-        // Windows exit codes are 32-bit unsigned (NTSTATUS values included); keep the bits.
-        self.emit(AgentEvent::Exited {
-            exit_code: Some(code as i32),
-        });
+        self.drain_events(should_drain);
     }
 
     fn tool_status(tool: &str) -> ThreadStatus {
@@ -298,27 +353,38 @@ impl Shared {
         }
     }
 
-    fn start_tool(&self, tool_call_id: &str, tool: &str, summary: &str) {
+    /// Marks an admitted tool as running and returns its events. The caller serializes the state
+    /// transition and publication with process exit by holding `lifecycle`.
+    fn start_tool_events(&self, tool_call_id: &str, tool: &str, summary: &str) -> Vec<AgentEvent> {
         if let Some(open) = lock(&self.state).open_tools.get_mut(tool_call_id) {
             open.started = true;
         }
-        self.emit(AgentEvent::ToolStarted {
-            tool_call_id: tool_call_id.to_owned(),
-        });
-        self.emit(AgentEvent::Status {
-            status: Self::tool_status(tool),
-            detail: Some(summary.to_owned()),
-        });
+        vec![
+            AgentEvent::ToolStarted {
+                tool_call_id: tool_call_id.to_owned(),
+            },
+            AgentEvent::Status {
+                status: Self::tool_status(tool),
+                detail: Some(summary.to_owned()),
+            },
+        ]
     }
 
-    fn close_tool(&self, tool_call_id: &str, ok: bool, summary: Option<&str>) {
-        if lock(&self.state).open_tools.remove(tool_call_id).is_some() {
-            self.emit(AgentEvent::ToolCompleted {
+    /// Closes an admitted tool and returns its event while the caller holds `lifecycle`.
+    fn close_tool_event(
+        &self,
+        tool_call_id: &str,
+        ok: bool,
+        summary: Option<&str>,
+    ) -> Option<AgentEvent> {
+        lock(&self.state)
+            .open_tools
+            .remove(tool_call_id)
+            .map(|_| AgentEvent::ToolCompleted {
                 tool_call_id: tool_call_id.to_owned(),
                 ok,
                 summary: summary.map(str::to_owned),
-            });
-        }
+            })
     }
 
     /// The action for a tool call. Oversized or missing input is classified as an opaque tool,
@@ -361,65 +427,174 @@ impl Shared {
         let tool = record.tool_name.clone().unwrap_or_else(|| "unknown".into());
         let tool_call_id = record.tool_use_id.clone().unwrap_or_else(new_id);
         let (action, summary) = self.action_for(record, &tool);
-        lock(&self.state)
-            .open_tools
-            .insert(tool_call_id.clone(), OpenTool { started: false });
-        self.emit(AgentEvent::ToolRequested {
-            tool_call_id: tool_call_id.clone(),
-            tool: tool.clone(),
-            summary: summary.clone(),
-        });
-        match self.routing {
-            DecisionRouting::ProviderPrompt => {
-                self.start_tool(&tool_call_id, &tool, &summary);
-                HookReply::NoDecision
+        let action_id = action.id.clone();
+        let (approval, should_drain) = {
+            let mut lifecycle = lock(&self.lifecycle);
+            if self.is_terminal() {
+                return HookReply::Deny {
+                    reason: "The KalCode session is ending.".into(),
+                };
             }
-            DecisionRouting::Engine => self.ask_engine(action, &tool_call_id, &tool, &summary),
+            self.channel.store(CHANNEL_ACTIVE, Ordering::SeqCst);
+
+            match self.routing {
+                DecisionRouting::ProviderPrompt => {
+                    {
+                        let mut state = lock(&self.state);
+                        if state.open_tools.len() >= MAX_OPEN_TOOLS
+                            || state.open_tools.contains_key(&tool_call_id)
+                        {
+                            tracing::warn!(
+                                event = "pane.tools_bounded",
+                                thread_id = %self.ctx.thread_id
+                            );
+                            return HookReply::Ask {
+                                reason: "Several tool calls are already active; answer this one in the provider."
+                                    .into(),
+                            };
+                        }
+                        state
+                            .open_tools
+                            .insert(tool_call_id.clone(), OpenTool { started: true });
+                    }
+                    let should_drain = self.queue_events_locked(
+                        &mut lifecycle,
+                        [
+                            AgentEvent::ToolRequested {
+                                tool_call_id: tool_call_id.clone(),
+                                tool: tool.clone(),
+                                summary: summary.clone(),
+                            },
+                            AgentEvent::ToolStarted {
+                                tool_call_id: tool_call_id.clone(),
+                            },
+                            AgentEvent::Status {
+                                status: Self::tool_status(&tool),
+                                detail: Some(summary.clone()),
+                            },
+                        ],
+                    );
+                    (None, should_drain)
+                }
+                DecisionRouting::Engine => {
+                    let request_id = new_id();
+                    let (tx, receiver) = mpsc::sync_channel(1);
+                    {
+                        let mut pending = lock(&self.pending);
+                        if pending.len() >= self.limits.max_held {
+                            tracing::warn!(
+                                event = "pane.approvals_bounded",
+                                thread_id = %self.ctx.thread_id
+                            );
+                            return HookReply::Ask {
+                                reason: "Several requests are already waiting in KalCode; answer this one in Claude Code."
+                                    .into(),
+                            };
+                        }
+                        let mut state = lock(&self.state);
+                        if state.open_tools.len() >= MAX_OPEN_TOOLS
+                            || state.open_tools.contains_key(&tool_call_id)
+                        {
+                            tracing::warn!(
+                                event = "pane.tools_bounded",
+                                thread_id = %self.ctx.thread_id
+                            );
+                            return HookReply::Ask {
+                                reason: "Several tool calls are already active; answer this one in Claude Code."
+                                    .into(),
+                            };
+                        }
+                        pending.insert(request_id.clone(), tx);
+                        state
+                            .open_tools
+                            .insert(tool_call_id.clone(), OpenTool { started: false });
+                    }
+                    let should_drain = self.queue_events_locked(
+                        &mut lifecycle,
+                        [
+                            AgentEvent::ToolRequested {
+                                tool_call_id: tool_call_id.clone(),
+                                tool: tool.clone(),
+                                summary: summary.clone(),
+                            },
+                            AgentEvent::ApprovalRequired {
+                                request_id: request_id.clone(),
+                                action,
+                            },
+                        ],
+                    );
+                    (Some((request_id, receiver)), should_drain)
+                }
+            }
+        };
+        self.drain_events(should_drain);
+
+        match approval {
+            None => HookReply::NoDecision,
+            Some((request_id, receiver)) => self.ask_engine(
+                action_id,
+                &tool_call_id,
+                &tool,
+                &summary,
+                request_id,
+                receiver,
+            ),
         }
     }
 
     fn ask_engine(
         &self,
-        action: NormalizedAction,
+        action_id: String,
         tool_call_id: &str,
         tool: &str,
         summary: &str,
+        request_id: String,
+        receiver: mpsc::Receiver<ApprovalDecision>,
     ) -> HookReply {
-        let request_id = new_id();
-        let receiver = {
-            let mut pending = lock(&self.pending);
-            if pending.len() >= self.limits.max_held {
-                tracing::warn!(event = "pane.approvals_bounded", thread_id = %self.ctx.thread_id);
-                return HookReply::Ask {
-                    reason: "Several requests are already waiting in KalCode; answer this one in \
-                             Claude Code."
-                        .into(),
-                };
-            }
-            let (tx, rx) = mpsc::sync_channel(1);
-            pending.insert(request_id.clone(), tx);
-            rx
-        };
-        let action_id = action.id.clone();
-        self.emit(AgentEvent::ApprovalRequired {
-            request_id: request_id.clone(),
-            action,
-        });
         match receiver.recv_timeout(self.limits.ask_window) {
             Ok(ApprovalDecision::Deny) => {
-                self.close_tool(tool_call_id, false, Some("Denied by KalCode"));
+                let should_drain = {
+                    let mut lifecycle = lock(&self.lifecycle);
+                    if self.is_terminal() {
+                        return HookReply::Deny {
+                            reason: "The KalCode session ended.".into(),
+                        };
+                    }
+                    let event =
+                        self.close_tool_event(tool_call_id, false, Some("Denied by KalCode"));
+                    self.queue_events_locked(&mut lifecycle, event)
+                };
+                self.drain_events(should_drain);
                 HookReply::Deny {
                     reason: "KalCode denied this action (its policy, or your answer).".into(),
                 }
             }
             Ok(_) => {
-                self.start_tool(tool_call_id, tool, summary);
+                let should_drain = {
+                    let mut lifecycle = lock(&self.lifecycle);
+                    if self.is_terminal() {
+                        return HookReply::Deny {
+                            reason: "The KalCode session ended.".into(),
+                        };
+                    }
+                    let events = self.start_tool_events(tool_call_id, tool, summary);
+                    self.queue_events_locked(&mut lifecycle, events)
+                };
+                self.drain_events(should_drain);
                 HookReply::Allow {
                     reason: "Allowed by KalCode.".into(),
                 }
             }
             Err(RecvTimeoutError::Timeout) => {
-                lock(&self.pending).remove(&request_id);
+                {
+                    let _lifecycle = lock(&self.lifecycle);
+                    if self.is_terminal() {
+                        return HookReply::Deny {
+                            reason: "The KalCode session ended.".into(),
+                        };
+                    }
+                    lock(&self.pending).remove(&request_id);
+                }
                 if let Some(expiry) = &self.expiry {
                     expiry.answered_in_provider(&self.ctx.thread_id, &action_id);
                 }
@@ -445,13 +620,14 @@ impl Shared {
         match event {
             HookEvent::SessionStart => {
                 let mut events = Vec::new();
-                if let Some(id) = &record.provider_session_id {
-                    *lock(&self.provider_session_id) = Some(id.clone());
-                    events.push(AgentEvent::SessionStarted {
-                        provider_session_id: id.clone(),
-                        model: None,
-                    });
+                let Some(id) = &record.provider_session_id else {
+                    return events;
+                };
+                let (accepted, started) = self.observe_session_id(id, false);
+                if !accepted {
+                    return events;
                 }
+                events.extend(started);
                 if matches!(
                     record.source.as_deref(),
                     None | Some("startup" | "resume" | "clear")
@@ -464,13 +640,6 @@ impl Shared {
                 events
             }
             HookEvent::UserPromptSubmit => {
-                let first = {
-                    let mut state = lock(&self.state);
-                    !std::mem::replace(&mut state.first_prompt_seen, true)
-                };
-                if first && let (Some(titles), Some(prompt)) = (&self.titles, &record.prompt) {
-                    titles.first_prompt(&self.ctx.thread_id, prompt);
-                }
                 vec![AgentEvent::Status {
                     status: ThreadStatus::Active,
                     detail: None,
@@ -559,22 +728,19 @@ impl Shared {
             // Codex `notify` (docs/PROVIDER_PANES.md §3): the thread id, and turn completion.
             HookEvent::CodexNotify => {
                 let mut events = Vec::new();
-                if let Some(id) = record
+                let Some(id) = record
                     .provider_session_id
                     .as_ref()
                     .filter(|id| kalcode_contracts::ids::is_valid_id(id))
-                {
-                    let mut known = lock(&self.provider_session_id);
-                    if known.as_deref() != Some(id.as_str()) {
-                        *known = Some(id.clone());
-                        events.push(AgentEvent::SessionStarted {
-                            provider_session_id: id.clone(),
-                            model: None,
-                        });
-                    }
+                else {
+                    return events;
+                };
+                let (accepted, started) = self.observe_session_id(id, true);
+                if !accepted {
+                    return events;
                 }
+                events.extend(started);
                 if record.codex_type.as_deref() == Some("agent-turn-complete") {
-                    self.prompt_showing.store(false, Ordering::SeqCst);
                     events.push(AgentEvent::TurnCompleted { ok: true });
                 }
                 events
@@ -587,35 +753,77 @@ impl Shared {
         }
     }
 
+    fn observe_session_id(
+        &self,
+        id: &str,
+        require_contract_id: bool,
+    ) -> (bool, Option<AgentEvent>) {
+        if require_contract_id && !kalcode_contracts::ids::is_valid_id(id) {
+            return (false, None);
+        }
+        let accepted = {
+            let mut known = lock(&self.provider_session_id);
+            match known.as_deref() {
+                None => {
+                    *known = Some(id.to_owned());
+                    true
+                }
+                Some(expected) => expected == id,
+            }
+        };
+        if !accepted {
+            tracing::warn!(event = "pane.session_id_mismatch", thread_id = %self.ctx.thread_id);
+            return (false, None);
+        }
+        let event = (!self.session_started_emitted.swap(true, Ordering::SeqCst)).then(|| {
+            AgentEvent::SessionStarted {
+                provider_session_id: id.to_owned(),
+                model: None,
+            }
+        });
+        (true, event)
+    }
+
     pub(crate) fn handle(&self, record: HookRecord) -> HookReply {
         let blocking = record.event.is_some_and(HookEvent::is_blocking);
-        if self.ended.load(Ordering::SeqCst) || self.stopping.load(Ordering::SeqCst) {
+        if record.validate().is_err() {
             return if blocking {
                 HookReply::Deny {
-                    reason: "The KalCode session is ending.".into(),
+                    reason: "KalCode rejected an invalid hook record.".into(),
                 }
             } else {
                 HookReply::Ack
             };
         }
-        let _ = self.channel.compare_exchange(
-            CHANNEL_WAITING,
-            CHANNEL_ACTIVE,
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-        );
-        let _ = self.channel.compare_exchange(
-            CHANNEL_LIMITED,
-            CHANNEL_ACTIVE,
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-        );
         if blocking {
             return self.pre_tool_use(&record);
         }
-        for event in self.status_events(&record) {
-            self.emit(event);
+
+        let (should_drain, first_prompt) = {
+            let mut lifecycle = lock(&self.lifecycle);
+            if self.is_terminal() {
+                return HookReply::Ack;
+            }
+            self.channel.store(CHANNEL_ACTIVE, Ordering::SeqCst);
+            let first_prompt = if record.event == Some(HookEvent::UserPromptSubmit) {
+                let first = {
+                    let mut state = lock(&self.state);
+                    !std::mem::replace(&mut state.first_prompt_seen, true)
+                };
+                first.then(|| record.prompt.clone()).flatten()
+            } else {
+                None
+            };
+            let events = self.status_events(&record);
+            (
+                self.queue_events_locked(&mut lifecycle, events),
+                first_prompt,
+            )
+        };
+        if let (Some(titles), Some(prompt)) = (&self.titles, first_prompt.as_deref()) {
+            titles.first_prompt(&self.ctx.thread_id, prompt);
         }
+        self.drain_events(should_drain);
         HookReply::Ack
     }
 
@@ -735,8 +943,13 @@ impl AgentSession for InteractiveSession {
     }
 
     fn terminate(&self) -> Result<(), ProviderError> {
-        self.shared.stopping.store(true, Ordering::SeqCst);
-        lock(&self.shared.pending).clear();
+        {
+            let _lifecycle = lock(&self.shared.lifecycle);
+            if !self.shared.ended.load(Ordering::SeqCst) {
+                self.shared.stopping.store(true, Ordering::SeqCst);
+                lock(&self.shared.pending).clear();
+            }
+        }
         if let Some(pty) = self.shared.pty() {
             pty.kill().map_err(|e| ProviderError::Io(e.to_string()))?;
         }
@@ -749,8 +962,14 @@ impl AgentSession for InteractiveSession {
         decision: ApprovalDecision,
     ) -> Result<(), ProviderError> {
         // Unknown ids are answers to calls that already went to the provider's prompt.
-        if let Some(waiter) = lock(&self.shared.pending).remove(request_id) {
-            let _ = waiter.try_send(decision);
+        {
+            let _lifecycle = lock(&self.shared.lifecycle);
+            if self.shared.is_terminal() {
+                return Ok(());
+            }
+            if let Some(waiter) = lock(&self.shared.pending).remove(request_id) {
+                let _ = waiter.try_send(decision);
+            }
         }
         Ok(())
     }
@@ -759,9 +978,18 @@ impl AgentSession for InteractiveSession {
 impl Drop for InteractiveSession {
     fn drop(&mut self) {
         // The runtime dropped the session (stopped or replaced): the process must not outlive it.
-        if !self.shared.ended.load(Ordering::SeqCst)
-            && let Some(pty) = self.shared.pty()
-        {
+        let has_process = self.shared.pty().is_some();
+        let should_kill = {
+            let _lifecycle = lock(&self.shared.lifecycle);
+            if !has_process || self.shared.ended.load(Ordering::SeqCst) {
+                false
+            } else {
+                self.shared.stopping.store(true, Ordering::SeqCst);
+                lock(&self.shared.pending).clear();
+                true
+            }
+        };
+        if should_kill && let Some(pty) = self.shared.pty() {
             let _ = pty.kill();
         }
     }
@@ -771,6 +999,93 @@ impl Drop for InteractiveSession {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::sync::Condvar;
+
+    #[derive(Clone, Copy)]
+    enum GateEvent {
+        ToolRequested,
+        ApprovalRequired,
+    }
+
+    #[derive(Default)]
+    struct GateState {
+        entered: bool,
+        released: bool,
+    }
+
+    struct GatedSink {
+        gate_on: GateEvent,
+        gate: Mutex<GateState>,
+        changed: Condvar,
+        events: Mutex<Vec<AgentEvent>>,
+    }
+
+    impl GatedSink {
+        fn new(gate_on: GateEvent) -> Arc<Self> {
+            Arc::new(Self {
+                gate_on,
+                gate: Mutex::new(GateState::default()),
+                changed: Condvar::new(),
+                events: Mutex::new(Vec::new()),
+            })
+        }
+
+        fn emit(&self, event: AgentEvent) {
+            let gated = matches!(
+                (self.gate_on, &event),
+                (GateEvent::ToolRequested, AgentEvent::ToolRequested { .. })
+                    | (
+                        GateEvent::ApprovalRequired,
+                        AgentEvent::ApprovalRequired { .. }
+                    )
+            );
+            lock(&self.events).push(event);
+            if gated {
+                let mut gate = lock(&self.gate);
+                gate.entered = true;
+                self.changed.notify_all();
+                while !gate.released {
+                    gate = self
+                        .changed
+                        .wait(gate)
+                        .unwrap_or_else(PoisonError::into_inner);
+                }
+            }
+        }
+
+        fn wait_entered(&self) {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let mut gate = lock(&self.gate);
+            while !gate.entered {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                assert!(!remaining.is_zero(), "event sink was not entered");
+                gate = self
+                    .changed
+                    .wait_timeout(gate, remaining)
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .0;
+            }
+        }
+
+        fn release(&self) {
+            lock(&self.gate).released = true;
+            self.changed.notify_all();
+        }
+
+        fn events(&self) -> Vec<AgentEvent> {
+            lock(&self.events).clone()
+        }
+
+        fn request_id(&self) -> String {
+            lock(&self.events)
+                .iter()
+                .find_map(|event| match event {
+                    AgentEvent::ApprovalRequired { request_id, .. } => Some(request_id.clone()),
+                    _ => None,
+                })
+                .expect("approval request")
+        }
+    }
 
     fn shared(
         routing: DecisionRouting,
@@ -797,6 +1112,29 @@ mod tests {
         (shared, rx)
     }
 
+    fn gated_shared(gate_on: GateEvent, routing: DecisionRouting) -> (Arc<Shared>, Arc<GatedSink>) {
+        let sink = GatedSink::new(gate_on);
+        let captured = sink.clone();
+        let shared = Shared::new(SessionParts {
+            ctx: ActionContext {
+                thread_id: new_id(),
+                workspace_id: new_id(),
+                working_directory: "/work".into(),
+            },
+            provider_id: "claude-code".into(),
+            routing,
+            sink: Box::new(move |event| captured.emit(event)),
+            provider_session_id: new_id(),
+            limits: SessionLimits {
+                ask_window: Duration::from_millis(250),
+                ..SessionLimits::default()
+            },
+            expiry: None,
+            titles: None,
+        });
+        (shared, sink)
+    }
+
     fn record(event: HookEvent, value: Value) -> HookRecord {
         kalcode_hook_bridge::record::from_claude_stdin(event, value.to_string().as_bytes())
             .expect("record")
@@ -809,15 +1147,16 @@ mod tests {
     #[test]
     fn status_mapping_follows_the_design_table() {
         let (s, rx) = shared(DecisionRouting::ProviderPrompt, SessionLimits::default());
+        let provider_session_id = lock(&s.provider_session_id).clone().expect("session id");
         s.handle(record(
             HookEvent::SessionStart,
-            json!({"session_id": "sess-1", "source": "startup"}),
+            json!({"session_id": provider_session_id, "source": "startup"}),
         ));
         assert_eq!(
             drain(&rx),
             [
                 AgentEvent::SessionStarted {
-                    provider_session_id: "sess-1".into(),
+                    provider_session_id: provider_session_id.clone(),
                     model: None
                 },
                 AgentEvent::Status {
@@ -830,12 +1169,9 @@ mod tests {
 
         s.handle(record(
             HookEvent::SessionStart,
-            json!({"session_id": "sess-1", "source": "compact"}),
+            json!({"session_id": provider_session_id, "source": "compact"}),
         ));
-        assert!(matches!(
-            drain(&rx).as_slice(),
-            [AgentEvent::SessionStarted { .. }]
-        ));
+        assert!(drain(&rx).is_empty());
 
         s.handle(record(HookEvent::UserPromptSubmit, json!({"prompt": "hi"})));
         assert_eq!(
@@ -872,6 +1208,272 @@ mod tests {
             matches!(&events[0], AgentEvent::Error { code, recoverable: true, .. } if code == "provider_rate_limit")
         );
         assert_eq!(events[1], AgentEvent::TurnCompleted { ok: false });
+    }
+
+    #[test]
+    fn provider_session_id_is_latched_and_session_started_is_emitted_once() {
+        let (s, rx) = shared(DecisionRouting::ProviderPrompt, SessionLimits::default());
+        let expected = lock(&s.provider_session_id).clone().expect("expected id");
+        let session_start = || {
+            record(
+                HookEvent::SessionStart,
+                json!({"session_id": expected, "source": "resume"}),
+            )
+        };
+
+        s.handle(session_start());
+        s.handle(session_start());
+        s.handle(record(
+            HookEvent::SessionStart,
+            json!({"session_id": "different-session", "source": "resume"}),
+        ));
+
+        assert_eq!(
+            lock(&s.provider_session_id).as_deref(),
+            Some(expected.as_str())
+        );
+        assert_eq!(
+            drain(&rx)
+                .iter()
+                .filter(|event| matches!(event, AgentEvent::SessionStarted { .. }))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn codex_new_session_latches_the_first_valid_thread_id() {
+        let (s, rx) = shared(DecisionRouting::ProviderPrompt, SessionLimits::default());
+        s.forget_session_id();
+        let first = new_id();
+        let different = new_id();
+
+        for id in [&first, &first, &different] {
+            s.handle(HookRecord {
+                event: Some(HookEvent::CodexNotify),
+                provider_session_id: Some(id.clone()),
+                codex_type: Some("agent-turn-complete".into()),
+                ..HookRecord::default()
+            });
+        }
+
+        assert_eq!(
+            lock(&s.provider_session_id).as_deref(),
+            Some(first.as_str())
+        );
+        assert_eq!(
+            drain(&rx)
+                .iter()
+                .filter(|event| matches!(event, AgentEvent::SessionStarted { .. }))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn malformed_codex_notify_does_not_activate_the_hook_channel() {
+        let (s, rx) = shared(DecisionRouting::ProviderPrompt, SessionLimits::default());
+        s.forget_session_id();
+        assert_eq!(s.channel_state(), HookChannelState::Waiting);
+
+        assert_eq!(
+            s.handle(HookRecord {
+                event: Some(HookEvent::CodexNotify),
+                ..HookRecord::default()
+            }),
+            HookReply::Ack
+        );
+
+        assert_eq!(s.channel_state(), HookChannelState::Waiting);
+        assert!(drain(&rx).is_empty());
+    }
+
+    #[test]
+    fn duplicate_status_and_tool_transitions_are_suppressed() {
+        let (s, rx) = shared(DecisionRouting::ProviderPrompt, SessionLimits::default());
+        s.handle(record(
+            HookEvent::UserPromptSubmit,
+            json!({"prompt": "first"}),
+        ));
+        s.handle(record(
+            HookEvent::UserPromptSubmit,
+            json!({"prompt": "duplicate status"}),
+        ));
+        assert_eq!(
+            drain(&rx)
+                .iter()
+                .filter(|event| matches!(event, AgentEvent::Status { .. }))
+                .count(),
+            1
+        );
+
+        let tool = || {
+            record(
+                HookEvent::PreToolUse,
+                json!({"tool_name": "Bash", "tool_use_id": "same", "tool_input": {"command": "npm test"}}),
+            )
+        };
+        assert_eq!(s.handle(tool()), HookReply::NoDecision);
+        drain(&rx);
+        assert!(matches!(s.handle(tool()), HookReply::Ask { .. }));
+        assert!(drain(&rx).is_empty());
+    }
+
+    #[test]
+    fn approval_overflow_does_not_create_a_tool_lifecycle() {
+        let (s, rx) = shared(
+            DecisionRouting::Engine,
+            SessionLimits {
+                max_held: 1,
+                ..SessionLimits::default()
+            },
+        );
+        let first = engine_call(&s, "first");
+        let request_id = approval_request(&rx).0;
+        assert!(matches!(
+            s.handle(record(
+                HookEvent::PreToolUse,
+                json!({"tool_name": "Bash", "tool_use_id": "overflow", "tool_input": {"command": "ls"}}),
+            )),
+            HookReply::Ask { .. }
+        ));
+        assert!(drain(&rx).is_empty());
+        session(&s)
+            .respond_to_approval(&request_id, ApprovalDecision::Deny)
+            .expect("respond");
+        first.join().expect("join");
+        drain(&rx);
+
+        s.handle(record(HookEvent::Stop, json!({})));
+        assert_eq!(drain(&rx), [AgentEvent::TurnCompleted { ok: true }]);
+    }
+
+    #[test]
+    fn exit_wins_before_approval_admission_without_emitting_or_retaining_it() {
+        let (s, rx) = shared(
+            DecisionRouting::Engine,
+            SessionLimits {
+                ask_window: Duration::from_millis(150),
+                ..SessionLimits::default()
+            },
+        );
+        let pending = lock(&s.pending);
+        let exiting = {
+            let s = s.clone();
+            std::thread::spawn(move || s.on_exit(0, false))
+        };
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !s.ended.load(Ordering::SeqCst) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "exit did not publish the ended state"
+            );
+            std::thread::yield_now();
+        }
+        // Exit owns the lifecycle boundary but is deliberately blocked while clearing waiters.
+        // A concurrent hook must not admit or publish an approval behind it.
+        let call = engine_call(&s, "racing");
+        drop(pending);
+
+        assert!(matches!(
+            call.join().expect("hook call"),
+            HookReply::Deny { .. }
+        ));
+        exiting.join().expect("exit");
+        assert!(lock(&s.pending).is_empty());
+        assert_eq!(drain(&rx), [AgentEvent::Exited { exit_code: Some(0) }]);
+    }
+
+    #[test]
+    fn exit_is_ordered_after_admitted_approval_events_when_sink_reenters_slowly() {
+        let (s, sink) = gated_shared(GateEvent::ToolRequested, DecisionRouting::Engine);
+        let call = engine_call(&s, "ordered");
+        sink.wait_entered();
+
+        s.on_exit(0, false);
+        sink.release();
+
+        assert!(matches!(
+            call.join().expect("hook call"),
+            HookReply::Deny { .. }
+        ));
+        let events = sink.events();
+        assert!(matches!(
+            events.as_slice(),
+            [
+                AgentEvent::ToolRequested { .. },
+                AgentEvent::ApprovalRequired { .. },
+                AgentEvent::Exited { exit_code: Some(0) }
+            ]
+        ));
+    }
+
+    #[test]
+    fn queued_approval_cannot_allow_or_emit_tool_state_after_exit() {
+        let (s, sink) = gated_shared(GateEvent::ApprovalRequired, DecisionRouting::Engine);
+        let call = engine_call(&s, "queued");
+        sink.wait_entered();
+
+        session(&s)
+            .respond_to_approval(&sink.request_id(), ApprovalDecision::ApproveOnce)
+            .expect("queue approval");
+        s.on_exit(0, false);
+        sink.release();
+
+        assert!(matches!(
+            call.join().expect("hook call"),
+            HookReply::Deny { .. }
+        ));
+        let events = sink.events();
+        assert!(matches!(events.last(), Some(AgentEvent::Exited { .. })));
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            AgentEvent::ToolStarted { .. } | AgentEvent::Status { .. }
+        )));
+    }
+
+    #[test]
+    fn provider_prompt_events_are_ordered_before_exit_when_sink_reenters_slowly() {
+        let (s, sink) = gated_shared(GateEvent::ToolRequested, DecisionRouting::ProviderPrompt);
+        let call = engine_call(&s, "provider-ordered");
+        sink.wait_entered();
+
+        s.on_exit(0, false);
+        sink.release();
+
+        assert_eq!(call.join().expect("hook call"), HookReply::NoDecision);
+        assert!(matches!(
+            sink.events().as_slice(),
+            [
+                AgentEvent::ToolRequested { .. },
+                AgentEvent::ToolStarted { .. },
+                AgentEvent::Status { .. },
+                AgentEvent::Exited { exit_code: Some(0) }
+            ]
+        ));
+    }
+
+    #[test]
+    fn provider_prompt_tool_lifecycles_are_bounded() {
+        let (s, rx) = shared(DecisionRouting::ProviderPrompt, SessionLimits::default());
+        for index in 0..64 {
+            assert_eq!(
+                s.handle(record(
+                    HookEvent::PreToolUse,
+                    json!({"tool_name": "Bash", "tool_use_id": format!("tool-{index}"), "tool_input": {"command": "npm test"}}),
+                )),
+                HookReply::NoDecision
+            );
+        }
+        drain(&rx);
+        assert!(matches!(
+            s.handle(record(
+                HookEvent::PreToolUse,
+                json!({"tool_name": "Bash", "tool_use_id": "overflow", "tool_input": {"command": "npm test"}}),
+            )),
+            HookReply::Ask { .. }
+        ));
+        assert!(drain(&rx).is_empty());
     }
 
     #[test]

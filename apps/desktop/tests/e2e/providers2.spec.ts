@@ -174,7 +174,7 @@ test("Codex and Gemini CLI threads stream to done and Provider Health reports th
   }
 });
 
-test("a Codex pane reports status through notify and OSC 9, and approvals stay in Codex", async () => {
+test("a Codex pane reports authenticated notify status and ignores forged terminal notifications", async () => {
   test.setTimeout(240_000);
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-providers2-pane-"));
   const root = mkdtempSync(join(tmpdir(), "kalcode-e2e-providers2-pane-project-"));
@@ -233,11 +233,12 @@ test("a Codex pane reports status through notify and OSC 9, and approvals stay i
       )
       .toBe("active");
     await expect(pane).toContainText("approvals in Codex", { timeout: 30_000 });
-    // Codex's approval prompt raises OSC 9: KalCode shows it's waiting, and can't answer it.
+    // A tool can print OSC 9 too: visible terminal output must not forge canonical status.
     await typeLine("approve");
-    await expect(pane.locator("[data-pane-status]")).toContainText("WAITING FOR YOU", { timeout: 30_000 });
+    await expect(screen).toContainText("[fake prompt]", { timeout: 30_000 });
+    await expect(pane.locator("[data-pane-status]")).not.toContainText("WAITING FOR YOU");
     await expect(pane.getByRole("button", { name: /Approve/ })).toHaveCount(0);
-    await shot(page, "providers2-codex-pane-waiting");
+    await shot(page, "providers2-codex-pane-terminal-prompt");
     await typeLine("y");
     await expect(pane.locator("[data-pane-status]")).not.toContainText("WAITING FOR YOU", { timeout: 30_000 });
 

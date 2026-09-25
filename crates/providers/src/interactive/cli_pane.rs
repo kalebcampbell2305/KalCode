@@ -6,17 +6,15 @@
 //! - **Codex**: `codex -C <ws> -s <sandbox> -a on-request … -c notify=[kalcode-hook …]
 //!   -c tui.notifications=['approval-requested'] -c tui.notification_method='osc9'`
 //!   ([`super::codex::interactive_args`]). Status: `notify` (`agent-turn-complete`, with the
-//!   thread id for resume) through the authenticated hook bridge, and OSC 9 escape sequences in
-//!   the PTY stream (only approval requests are configured to raise one, so the sequence itself
-//!   means "Codex is asking" and its text is never read). Keystrokes after that prompt mean the
-//!   person answered it.
+//!   thread id for resume) through the authenticated hook bridge. Terminal escape sequences
+//!   never change canonical status; a tool can print the same bytes as a provider prompt.
 //! - **Gemini CLI**: `gemini --approval-mode <mapping> [--model] [--resume]`; process and PTY
 //!   state only ("limited status"), because a per-session way to add KalCode's hooks without
 //!   writing the user's or the project's settings is unverified.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, PoisonError, Weak};
+use std::sync::{Arc, Weak};
 
 use kalcode_contracts::agent::{
     AgentEventSink, AgentProvider, AgentSession, ProviderCapabilities, ProviderDetection,
@@ -26,7 +24,7 @@ use kalcode_hook_bridge::KEY_ENV;
 use kalcode_hook_bridge::server::BridgeServer;
 use kalcode_pty::{ProgramSpec, PtySession, TerminalSize};
 
-use super::codex::{CodexArgs, Osc9Scanner, interactive_args as codex_args};
+use super::codex::{CodexArgs, interactive_args as codex_args};
 use super::provider::{InteractiveConfig, PaneRegistry};
 use super::session::{HandlerRef, InteractiveSession, PaneProfile, SessionParts, Shared};
 use crate::catalog;
@@ -72,12 +70,10 @@ impl PaneCli {
             Self::Codex => PaneProfile {
                 answer_in: "Answer in Codex",
                 kalcode_answers: false,
-                input_answers_prompt: true,
             },
             Self::Gemini => PaneProfile {
                 answer_in: "Answer in Gemini CLI",
                 kalcode_answers: false,
-                input_answers_prompt: false,
             },
         }
     }
@@ -174,7 +170,10 @@ impl InteractiveCliProvider {
                     ));
                 }
                 let registration = bridge
-                    .register(Arc::new(HandlerRef(Arc::downgrade(&shared))))
+                    .register_channel(
+                        Arc::new(HandlerRef(Arc::downgrade(&shared))),
+                        kalcode_hook_bridge::server::HookChannel::Codex,
+                    )
                     .map_err(|e| ProviderError::Start(e.to_string()))?;
                 let args = codex_args(&CodexArgs {
                     mode: config.permission_mode,
@@ -234,11 +233,9 @@ impl InteractiveCliProvider {
         if self.cli == PaneCli::Codex
             && let Some(pty) = shared.pty()
         {
-            // OSC 9 scanner on the output stream: structural, bounded, never reads the text.
             // Attaching makes this a listener, so the PTY no longer answers cursor-position
             // requests itself: answer them here while no terminal view is attached (a view
             // answers them otherwise), or the TUI waits forever.
-            let scanner = Mutex::new(Osc9Scanner::default());
             let watcher = Arc::downgrade(&shared);
             pty.attach(move |bytes| {
                 let Some(shared) = watcher.upgrade() else {
@@ -253,13 +250,8 @@ impl InteractiveCliProvider {
                         let _ = pty.write(b"[1;1R");
                     }
                 }
-                let found = scanner
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .feed(bytes);
-                if found > 0 {
-                    shared.provider_prompt();
-                }
+                // PTY bytes are untrusted: tools can print OSC notifications too.
+                // Only authenticated provider messages may change canonical status.
                 true
             });
         }

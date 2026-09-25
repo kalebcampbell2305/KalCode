@@ -151,7 +151,7 @@ fn codex_detection_uses_version_and_login_status() {
     let result = detect::detect(&catalog::codex_spec(), &fake.env());
     assert_eq!(result.detection.state, DetectionState::Installed);
     assert_eq!(result.detection.version.as_deref(), Some("0.155.1"));
-    assert_eq!(result.detection.minimum_version.as_deref(), Some("0.155.0"));
+    assert_eq!(result.detection.minimum_version.as_deref(), Some("0.155.1"));
     assert_eq!(result.detection.auth, AuthState::Authenticated);
 
     let old = FakeInstall::new("codex", json!({"version": "codex-cli 0.120.0"}));

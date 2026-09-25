@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -27,6 +27,26 @@ pub trait HookHandler: Send + Sync {
     fn handle(&self, record: HookRecord) -> HookReply;
 }
 
+/// Provider protocol bound to one registration.
+///
+/// The session key authenticates possession, not which provider-shaped helper created a record.
+/// Production registrations bind the accepted event family explicitly so an inherited key cannot
+/// use a Codex notify channel to submit Claude approval events, or vice versa.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookChannel {
+    Claude,
+    Codex,
+}
+
+impl HookChannel {
+    fn accepts(self, event: HookEvent) -> bool {
+        match self {
+            Self::Claude => HookEvent::CLAUDE.contains(&event),
+            Self::Codex => event == HookEvent::CodexNotify,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub endpoint: Endpoint,
@@ -37,6 +57,12 @@ pub struct ServerConfig {
     /// Upper bound on a handler call. A handler that overruns gets a fail-safe reply: "ask" for
     /// PreToolUse (the provider's own prompt), an acknowledgement otherwise.
     pub max_hold: Duration,
+    /// Handler calls from one registration that may still be executing at once. The permit stays
+    /// held when a blocking-pool call outlives [`Self::max_hold`].
+    pub max_handlers_per_session: usize,
+    /// Non-blocking status calls admitted per registration in one fixed window.
+    pub status_burst: usize,
+    pub status_window: Duration,
 }
 
 impl ServerConfig {
@@ -46,6 +72,9 @@ impl ServerConfig {
             max_connections: 64,
             read_timeout: Duration::from_secs(5),
             max_hold: crate::helper::ASK_WINDOW + Duration::from_secs(15),
+            max_handlers_per_session: 8,
+            status_burst: 128,
+            status_window: Duration::from_secs(1),
         }
     }
 }
@@ -59,6 +88,7 @@ struct Stats {
     rejected_session: AtomicU64,
     rejected_malformed: AtomicU64,
     rejected_busy: AtomicU64,
+    rejected_rate: AtomicU64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -69,11 +99,42 @@ pub struct StatsSnapshot {
     pub rejected_session: u64,
     pub rejected_malformed: u64,
     pub rejected_busy: u64,
+    pub rejected_rate: u64,
+}
+
+#[derive(Debug)]
+struct StatusRate {
+    window_started: Instant,
+    used: usize,
+}
+
+impl StatusRate {
+    fn new(now: Instant) -> Self {
+        Self {
+            window_started: now,
+            used: 0,
+        }
+    }
+
+    fn admit(&mut self, now: Instant, burst: usize, window: Duration) -> bool {
+        if now.saturating_duration_since(self.window_started) >= window {
+            self.window_started = now;
+            self.used = 0;
+        }
+        if self.used >= burst {
+            return false;
+        }
+        self.used += 1;
+        true
+    }
 }
 
 struct Session {
     key: SessionKey,
     handler: Arc<dyn HookHandler>,
+    channel: HookChannel,
+    handler_permits: Arc<tokio::sync::Semaphore>,
+    status_rate: Arc<Mutex<StatusRate>>,
 }
 
 struct Shared {
@@ -177,8 +238,12 @@ impl BridgeServer {
         &self.shared.endpoint
     }
 
-    /// Registers a session with a fresh id and key.
-    pub fn register(&self, handler: Arc<dyn HookHandler>) -> std::io::Result<Registration> {
+    /// Registers a session restricted to one provider event family.
+    pub fn register_channel(
+        &self,
+        handler: Arc<dyn HookHandler>,
+        channel: HookChannel,
+    ) -> std::io::Result<Registration> {
         let session_id = random_id()?;
         let key = SessionKey::generate()?;
         self.shared.sessions().insert(
@@ -186,6 +251,11 @@ impl BridgeServer {
             Session {
                 key: key.clone(),
                 handler,
+                channel,
+                handler_permits: Arc::new(tokio::sync::Semaphore::new(
+                    self.shared.config.max_handlers_per_session,
+                )),
+                status_rate: Arc::new(Mutex::new(StatusRate::new(Instant::now()))),
             },
         );
         Ok(Registration {
@@ -208,6 +278,7 @@ impl BridgeServer {
             rejected_session: s.rejected_session.load(Ordering::SeqCst),
             rejected_malformed: s.rejected_malformed.load(Ordering::SeqCst),
             rejected_busy: s.rejected_busy.load(Ordering::SeqCst),
+            rejected_rate: s.rejected_rate.load(Ordering::SeqCst),
         }
     }
 
@@ -343,8 +414,7 @@ async fn accept_loop(mut listener: Listener, shared: Arc<Shared>) {
         };
         let shared = shared.clone();
         tokio::spawn(async move {
-            serve(conn, &shared).await;
-            drop(permit);
+            serve(conn, &shared, permit).await;
         });
     }
 }
@@ -393,7 +463,11 @@ fn fallback(record: &HookRecord) -> HookReply {
     }
 }
 
-async fn serve<C: AsyncRead + AsyncWrite + Unpin>(mut conn: C, shared: &Shared) {
+async fn serve<C: AsyncRead + AsyncWrite + Unpin>(
+    mut conn: C,
+    shared: &Shared,
+    connection_permit: tokio::sync::OwnedSemaphorePermit,
+) {
     let stats = &shared.stats;
     let Ok(nonce) = random_bytes::<32>() else {
         return;
@@ -418,10 +492,16 @@ async fn serve<C: AsyncRead + AsyncWrite + Unpin>(mut conn: C, shared: &Shared) 
         stats.rejected_malformed.fetch_add(1, Ordering::SeqCst);
         return;
     }
-    let (key, handler) = {
+    let (key, handler, channel, handler_permits, status_rate) = {
         let sessions = shared.sessions();
         match sessions.get(&request.session) {
-            Some(session) => (session.key.clone(), session.handler.clone()),
+            Some(session) => (
+                session.key.clone(),
+                session.handler.clone(),
+                session.channel,
+                session.handler_permits.clone(),
+                session.status_rate.clone(),
+            ),
             None => {
                 stats.rejected_session.fetch_add(1, Ordering::SeqCst);
                 tracing::warn!(event = "hook_bridge.unknown_session");
@@ -445,11 +525,43 @@ async fn serve<C: AsyncRead + AsyncWrite + Unpin>(mut conn: C, shared: &Shared) 
         stats.rejected_malformed.fetch_add(1, Ordering::SeqCst);
         return;
     };
+    if record.validate().is_err() {
+        stats.rejected_malformed.fetch_add(1, Ordering::SeqCst);
+        return;
+    }
+    if !record.event().is_some_and(|event| channel.accepts(event)) {
+        stats.rejected_malformed.fetch_add(1, Ordering::SeqCst);
+        tracing::warn!(event = "hook_bridge.wrong_channel");
+        return;
+    }
     let safe = fallback(&record);
-    let work = tokio::task::spawn_blocking(move || handler.handle(record));
-    let reply = match tokio::time::timeout(shared.config.max_hold, work).await {
-        Ok(Ok(reply)) => reply,
-        _ => safe,
+    let rate_limited = !record.event().is_some_and(HookEvent::is_blocking)
+        && !status_rate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .admit(
+                Instant::now(),
+                shared.config.status_burst,
+                shared.config.status_window,
+            );
+    let reply = if rate_limited {
+        stats.rejected_rate.fetch_add(1, Ordering::SeqCst);
+        safe
+    } else if let Ok(handler_permit) = handler_permits.try_acquire_owned() {
+        let work = tokio::task::spawn_blocking(move || {
+            // A timed-out spawn_blocking task cannot be cancelled. Keep both admission permits
+            // until the handler really exits so repeated overruns cannot grow the blocking pool
+            // or one registration's in-flight work without bound.
+            let _permits = (connection_permit, handler_permit);
+            handler.handle(record)
+        });
+        match tokio::time::timeout(shared.config.max_hold, work).await {
+            Ok(Ok(reply)) => reply,
+            _ => safe,
+        }
+    } else {
+        stats.rejected_busy.fetch_add(1, Ordering::SeqCst);
+        safe
     };
     let Ok(body) = serde_json::to_string(&reply) else {
         return;

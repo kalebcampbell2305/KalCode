@@ -137,10 +137,6 @@ impl PaneRegistry {
         let pty = shared.pty().ok_or(ProviderError::SessionEnded)?;
         pty.write(data)
             .map_err(|e| ProviderError::Io(e.to_string()))?;
-        // Escape sequences are terminal replies (cursor reports) or navigation, not an answer.
-        if data.first() != Some(&0x1b) {
-            shared.user_input();
-        }
         Ok(())
     }
 
@@ -293,7 +289,10 @@ impl InteractiveClaudeProvider {
         });
         let registration = self
             .bridge
-            .register(Arc::new(HandlerRef(Arc::downgrade(&shared))))
+            .register_channel(
+                Arc::new(HandlerRef(Arc::downgrade(&shared))),
+                kalcode_hook_bridge::server::HookChannel::Claude,
+            )
             .map_err(|e| ProviderError::Start(e.to_string()))?;
         let settings_path = dir.join(SETTINGS_FILE);
         let settings = settings_json(&HookCommand {

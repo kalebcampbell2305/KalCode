@@ -17,6 +17,7 @@ pub const MAX_TOOL_INPUT_BYTES: usize = 64 * 1024;
 pub const MAX_PROMPT_CHARS: usize = 2048;
 const MAX_ID_CHARS: usize = 128;
 const MAX_WORD_CHARS: usize = 64;
+const MAX_PATH_CHARS: usize = 4096;
 
 /// Hook events KalCode configures. `CodexNotify` is Codex's `notify` program call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -131,6 +132,148 @@ impl HookRecord {
     pub fn event(&self) -> Option<HookEvent> {
         self.event
     }
+
+    /// Validates the filtered wire contract at the server trust boundary.
+    ///
+    /// The helper normally constructs records through [`from_claude_stdin`] or
+    /// [`from_codex_notify`], but a process inheriting the per-session key can speak the wire
+    /// protocol directly. Such callers must not bypass the helper's field bounds or attach fields
+    /// to an event that the helper would have discarded.
+    pub fn validate(&self) -> Result<(), RecordError> {
+        let Some(event) = self.event else {
+            return Err(RecordError::Invalid);
+        };
+        if !valid_id(self.provider_session_id.as_deref(), MAX_ID_CHARS)
+            || !valid_id(self.tool_name.as_deref(), MAX_ID_CHARS)
+            || !valid_id(self.tool_use_id.as_deref(), MAX_ID_CHARS)
+            || !valid_id(self.notification_type.as_deref(), MAX_WORD_CHARS)
+            || !valid_id(self.source.as_deref(), MAX_WORD_CHARS)
+            || !valid_id(self.error_type.as_deref(), MAX_WORD_CHARS)
+            || !valid_id(self.end_reason.as_deref(), MAX_WORD_CHARS)
+            || !valid_id(self.codex_type.as_deref(), MAX_WORD_CHARS)
+        {
+            return Err(RecordError::Invalid);
+        }
+        if self.prompt.as_deref().is_some_and(|prompt| {
+            prompt.trim().is_empty()
+                || prompt.chars().count() > MAX_PROMPT_CHARS
+                || clean_text(prompt, MAX_PROMPT_CHARS) != prompt
+        }) {
+            return Err(RecordError::Invalid);
+        }
+        if self.tool_input.as_ref().is_some_and(|input| {
+            serde_json::to_vec(input)
+                .map(|bytes| bytes.len() > MAX_TOOL_INPUT_BYTES)
+                .unwrap_or(true)
+        }) || (self.tool_input_dropped && self.tool_input.is_some())
+        {
+            return Err(RecordError::Invalid);
+        }
+        if event == HookEvent::CodexNotify
+            && (!self
+                .provider_session_id
+                .as_deref()
+                .is_some_and(valid_provider_id)
+                || self.codex_type.as_deref() != Some("agent-turn-complete"))
+        {
+            return Err(RecordError::Invalid);
+        }
+
+        let tool_event = event.has_tool_matcher();
+        if !tool_event
+            && (self.tool_name.is_some()
+                || self.tool_use_id.is_some()
+                || self.tool_input.is_some()
+                || self.tool_input_dropped)
+        {
+            return Err(RecordError::Invalid);
+        }
+        if self.tool_input_dropped
+            && !matches!(event, HookEvent::PreToolUse | HookEvent::PermissionRequest)
+        {
+            return Err(RecordError::Invalid);
+        }
+        if matches!(
+            event,
+            HookEvent::PostToolUse | HookEvent::PostToolUseFailure
+        ) && self
+            .tool_input
+            .as_ref()
+            .is_some_and(|input| !valid_path_fields(input))
+        {
+            return Err(RecordError::Invalid);
+        }
+
+        let unexpected = match event {
+            HookEvent::SessionStart => {
+                self.notification_type.is_some()
+                    || self.error_type.is_some()
+                    || self.end_reason.is_some()
+                    || self.prompt.is_some()
+                    || self.codex_type.is_some()
+            }
+            HookEvent::UserPromptSubmit => {
+                self.notification_type.is_some()
+                    || self.source.is_some()
+                    || self.error_type.is_some()
+                    || self.end_reason.is_some()
+                    || self.codex_type.is_some()
+            }
+            HookEvent::Notification => {
+                self.source.is_some()
+                    || self.error_type.is_some()
+                    || self.end_reason.is_some()
+                    || self.prompt.is_some()
+                    || self.codex_type.is_some()
+            }
+            HookEvent::StopFailure => {
+                self.notification_type.is_some()
+                    || self.source.is_some()
+                    || self.end_reason.is_some()
+                    || self.prompt.is_some()
+                    || self.codex_type.is_some()
+            }
+            HookEvent::SessionEnd => {
+                self.notification_type.is_some()
+                    || self.source.is_some()
+                    || self.error_type.is_some()
+                    || self.prompt.is_some()
+                    || self.codex_type.is_some()
+            }
+            HookEvent::CodexNotify => {
+                self.in_subagent
+                    || self.notification_type.is_some()
+                    || self.source.is_some()
+                    || self.error_type.is_some()
+                    || self.end_reason.is_some()
+                    || self.prompt.is_some()
+            }
+            HookEvent::PreToolUse
+            | HookEvent::PermissionRequest
+            | HookEvent::PostToolUse
+            | HookEvent::PostToolUseFailure => {
+                self.notification_type.is_some()
+                    || self.source.is_some()
+                    || self.error_type.is_some()
+                    || self.end_reason.is_some()
+                    || self.prompt.is_some()
+                    || self.codex_type.is_some()
+            }
+            HookEvent::Stop | HookEvent::SubagentStart | HookEvent::SubagentStop => {
+                self.notification_type.is_some()
+                    || self.source.is_some()
+                    || self.error_type.is_some()
+                    || self.end_reason.is_some()
+                    || self.prompt.is_some()
+                    || self.codex_type.is_some()
+            }
+        };
+        if unexpected {
+            Err(RecordError::Invalid)
+        } else {
+            Ok(())
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -139,6 +282,8 @@ pub enum RecordError {
     TooLarge,
     #[error("the hook payload is not a JSON object")]
     NotAnObject,
+    #[error("the filtered hook record is invalid")]
+    Invalid,
 }
 
 /// Keeps printable characters, drops control and bidi/zero-width characters, and clips.
@@ -167,12 +312,47 @@ fn clean_id(value: Option<&Value>, max: usize) -> Option<String> {
     ok.then(|| text.to_owned())
 }
 
+fn valid_id(value: Option<&str>, max: usize) -> bool {
+    value.is_none_or(|text| {
+        !text.is_empty()
+            && text.chars().count() <= max
+            && text
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"_-.:@/".contains(&b))
+    })
+}
+
+fn valid_provider_id(id: &str) -> bool {
+    if id.len() != 36 {
+        return false;
+    }
+    id.bytes().enumerate().all(|(index, byte)| match index {
+        8 | 13 | 18 | 23 => byte == b'-',
+        _ => byte.is_ascii_hexdigit(),
+    })
+}
+
+fn valid_path_fields(input: &Value) -> bool {
+    let Some(object) = input.as_object() else {
+        return false;
+    };
+    object.iter().all(|(key, value)| {
+        matches!(key.as_str(), "file_path" | "notebook_path" | "path")
+            && value.as_str().is_some_and(|path| {
+                path.chars().count() <= MAX_PATH_CHARS && clean_text(path, MAX_PATH_CHARS) == path
+            })
+    })
+}
+
 fn path_fields_only(input: &Value) -> Option<Value> {
     let object = input.as_object()?;
     let mut kept = Map::new();
     for key in ["file_path", "notebook_path", "path"] {
         if let Some(Value::String(path)) = object.get(key) {
-            kept.insert(key.to_owned(), Value::String(clean_text(path, 4096)));
+            kept.insert(
+                key.to_owned(),
+                Value::String(clean_text(path, MAX_PATH_CHARS)),
+            );
         }
     }
     Some(Value::Object(kept))

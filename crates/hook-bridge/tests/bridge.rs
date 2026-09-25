@@ -6,12 +6,12 @@
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use kalcode_hook_bridge::client::{self, Stream};
 use kalcode_hook_bridge::key::{SessionKey, random_id};
-use kalcode_hook_bridge::server::{BridgeServer, HookHandler, ServerConfig};
+use kalcode_hook_bridge::server::{BridgeServer, HookChannel, HookHandler, ServerConfig};
 use kalcode_hook_bridge::wire::{self, Hello, PROTOCOL_VERSION, Request, Response};
 use kalcode_hook_bridge::{DEADLINE_ENV, Endpoint, HookEvent, HookRecord, HookReply, KEY_ENV};
 
@@ -23,6 +23,52 @@ struct Fixed {
     delay: Duration,
     seen: Mutex<Vec<HookRecord>>,
     calls: AtomicUsize,
+}
+
+#[derive(Default)]
+struct GateState {
+    active: usize,
+    max_active: usize,
+    started: usize,
+    released: bool,
+}
+
+#[derive(Default)]
+struct Gated {
+    state: Mutex<GateState>,
+    changed: Condvar,
+}
+
+impl Gated {
+    fn wait_started(&self, count: usize) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut state = self.state.lock().expect("lock");
+        while state.started < count {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            assert!(!remaining.is_zero(), "handler did not start");
+            state = self.changed.wait_timeout(state, remaining).expect("wait").0;
+        }
+    }
+
+    fn release(&self) {
+        self.state.lock().expect("lock").released = true;
+        self.changed.notify_all();
+    }
+}
+
+impl HookHandler for Gated {
+    fn handle(&self, _record: HookRecord) -> HookReply {
+        let mut state = self.state.lock().expect("lock");
+        state.active += 1;
+        state.started += 1;
+        state.max_active = state.max_active.max(state.active);
+        self.changed.notify_all();
+        while !state.released {
+            state = self.changed.wait(state).expect("wait");
+        }
+        state.active -= 1;
+        HookReply::Ack
+    }
 }
 
 impl Fixed {
@@ -132,7 +178,9 @@ fn authenticated_round_trip_renders_each_decision() {
         (HookReply::NoDecision, 0, None),
     ] {
         let handler = Fixed::new(reply.clone());
-        let reg = server.register(handler.clone()).expect("register");
+        let reg = server
+            .register_channel(handler.clone(), HookChannel::Claude)
+            .expect("register");
         let run = pre_tool_use(&server, reg.session_id(), Some(&reg.key_hex()));
         assert_eq!(run.code, code, "{reply:?}: {}", run.stderr);
         match decision {
@@ -161,7 +209,9 @@ fn forged_request_without_the_key_is_rejected_and_blocks() {
     let handler = Fixed::new(HookReply::Allow {
         reason: "never".into(),
     });
-    let reg = server.register(handler.clone()).expect("register");
+    let reg = server
+        .register_channel(handler.clone(), HookChannel::Claude)
+        .expect("register");
     // No key at all: the helper refuses before connecting.
     let run = pre_tool_use(&server, reg.session_id(), None);
     assert_eq!(run.code, 2);
@@ -184,7 +234,9 @@ fn unknown_and_revoked_sessions_are_rejected() {
     let handler = Fixed::new(HookReply::Allow {
         reason: "never".into(),
     });
-    let reg = server.register(handler.clone()).expect("register");
+    let reg = server
+        .register_channel(handler.clone(), HookChannel::Claude)
+        .expect("register");
     let key = reg.key_hex();
     let unknown = random_id().expect("id");
     assert_eq!(pre_tool_use(&server, &unknown, Some(&key)).code, 2);
@@ -228,13 +280,205 @@ fn record_body() -> String {
     .expect("json")
 }
 
+fn send_raw(server: &BridgeServer, reg: &kalcode_hook_bridge::server::Registration, body: &str) {
+    let key = SessionKey::from_hex(&reg.key_hex()).expect("key");
+    let mut stream = connect(server);
+    let (_, request) = raw_request(stream.as_mut(), reg.session_id(), &key, body);
+    wire::write_frame(stream.as_mut(), &request).expect("send");
+    let mut rest = Vec::new();
+    let _ = stream.read_to_end(&mut rest);
+}
+
+#[test]
+fn authenticated_raw_records_must_match_the_filtered_record_contract() {
+    let (_dir, server) = server();
+    let handler = Fixed::new(HookReply::Ack);
+    let reg = server
+        .register_channel(handler.clone(), HookChannel::Claude)
+        .expect("register");
+    let oversized_id = "x".repeat(129);
+    let oversized_input = "x".repeat(64 * 1024 + 1);
+    let bodies = [
+        serde_json::json!({"event": null}),
+        serde_json::json!({"event": "PreToolUse", "toolName": oversized_id}),
+        serde_json::json!({"event": "Stop", "prompt": "not valid for Stop"}),
+        serde_json::json!({"event": "PreToolUse", "toolInput": {"command": oversized_input}}),
+        serde_json::json!({"event": "CodexNotify", "toolName": "Bash"}),
+    ];
+
+    for body in bodies {
+        send_raw(&server, &reg, &body.to_string());
+    }
+
+    assert_eq!(handler.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(server.stats().rejected_malformed, 5);
+}
+
+#[test]
+fn registrations_reject_records_from_the_other_provider_channel() {
+    let (_dir, server) = server();
+    let handler = Fixed::new(HookReply::Ack);
+    let claude = server
+        .register_channel(handler.clone(), HookChannel::Claude)
+        .expect("claude registration");
+    let codex = server
+        .register_channel(handler.clone(), HookChannel::Codex)
+        .expect("codex registration");
+
+    send_raw(
+        &server,
+        &claude,
+        &serde_json::json!({
+            "event": "CodexNotify",
+            "providerSessionId": "0192f3c4-0000-7000-8000-000000000001",
+            "codexType": "agent-turn-complete"
+        })
+        .to_string(),
+    );
+    send_raw(
+        &server,
+        &codex,
+        &serde_json::json!({"event": "PreToolUse", "toolName": "Bash"}).to_string(),
+    );
+    send_raw(
+        &server,
+        &claude,
+        &serde_json::json!({"event": "Stop"}).to_string(),
+    );
+    send_raw(
+        &server,
+        &codex,
+        &serde_json::json!({
+            "event": "CodexNotify",
+            "providerSessionId": "0192f3c4-0000-7000-8000-000000000001",
+            "codexType": "agent-turn-complete"
+        })
+        .to_string(),
+    );
+
+    assert_eq!(handler.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(server.stats().rejected_malformed, 2);
+}
+
+#[test]
+fn codex_notify_requires_a_canonical_thread_id_and_supported_type() {
+    let (_dir, server) = server();
+    let handler = Fixed::new(HookReply::Ack);
+    let reg = server
+        .register_channel(handler.clone(), HookChannel::Codex)
+        .expect("codex registration");
+    let id = "0192f3c4-0000-7000-8000-000000000001";
+
+    for body in [
+        serde_json::json!({"event": "CodexNotify", "codexType": "agent-turn-complete"}),
+        serde_json::json!({"event": "CodexNotify", "providerSessionId": "not-a-uuid", "codexType": "agent-turn-complete"}),
+        serde_json::json!({"event": "CodexNotify", "providerSessionId": id, "codexType": "unknown"}),
+    ] {
+        send_raw(&server, &reg, &body.to_string());
+    }
+    send_raw(
+        &server,
+        &reg,
+        &serde_json::json!({"event": "CodexNotify", "providerSessionId": id, "codexType": "agent-turn-complete"}).to_string(),
+    );
+
+    assert_eq!(handler.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(server.stats().rejected_malformed, 3);
+}
+
+#[test]
+fn status_rate_limits_are_per_registration() {
+    let dir = tempfile::tempdir().expect("dir");
+    let endpoint = Endpoint::generate(Some(dir.path())).expect("endpoint");
+    let mut config = ServerConfig::new(endpoint);
+    config.status_burst = 2;
+    config.status_window = Duration::from_secs(60);
+    let server = BridgeServer::start(config).expect("server");
+    let first_handler = Fixed::new(HookReply::Ack);
+    let second_handler = Fixed::new(HookReply::Ack);
+    let first = server
+        .register_channel(first_handler.clone(), HookChannel::Claude)
+        .expect("first");
+    let second = server
+        .register_channel(second_handler.clone(), HookChannel::Claude)
+        .expect("second");
+    let body = serde_json::json!({"event": "Stop"}).to_string();
+
+    send_raw(&server, &first, &body);
+    send_raw(&server, &first, &body);
+    send_raw(&server, &first, &body);
+    send_raw(&server, &second, &body);
+
+    assert_eq!(first_handler.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(second_handler.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(server.stats().rejected_rate, 1);
+}
+
+#[test]
+fn handler_lifetime_limit_is_per_registration() {
+    let dir = tempfile::tempdir().expect("dir");
+    let endpoint = Endpoint::generate(Some(dir.path())).expect("endpoint");
+    let mut config = ServerConfig::new(endpoint);
+    config.max_connections = 4;
+    config.max_handlers_per_session = 1;
+    config.max_hold = Duration::from_millis(40);
+    let server = BridgeServer::start(config).expect("server");
+    let handler = Arc::new(Gated::default());
+    let reg = server
+        .register_channel(handler.clone(), HookChannel::Claude)
+        .expect("register");
+    let key = SessionKey::from_hex(&reg.key_hex()).expect("key");
+    let record = HookRecord {
+        event: Some(HookEvent::Stop),
+        ..HookRecord::default()
+    };
+
+    let first_endpoint = server.endpoint().clone();
+    let first_session = reg.session_id().to_owned();
+    let first_key = key.clone();
+    let first_record = record.clone();
+    let first = std::thread::spawn(move || {
+        client::exchange(
+            &first_endpoint,
+            &first_session,
+            &first_key,
+            &first_record,
+            Instant::now() + Duration::from_secs(3),
+        )
+    });
+    handler.wait_started(1);
+    assert!(matches!(
+        first.join().expect("first exchange"),
+        Ok(HookReply::Ack)
+    ));
+
+    assert!(matches!(
+        client::exchange(
+            server.endpoint(),
+            reg.session_id(),
+            &key,
+            &record,
+            Instant::now() + Duration::from_secs(3),
+        ),
+        Ok(HookReply::Ack)
+    ));
+    let state = handler.state.lock().expect("lock");
+    assert_eq!(state.started, 1);
+    assert_eq!(state.max_active, 1);
+    drop(state);
+    assert_eq!(server.stats().rejected_busy, 1);
+    handler.release();
+}
+
 #[test]
 fn replayed_and_tampered_requests_are_rejected() {
     let (_dir, server) = server();
     let handler = Fixed::new(HookReply::Allow {
         reason: "ok".into(),
     });
-    let reg = server.register(handler.clone()).expect("register");
+    let reg = server
+        .register_channel(handler.clone(), HookChannel::Claude)
+        .expect("register");
     let key = SessionKey::from_hex(&reg.key_hex()).expect("key");
 
     // A valid request is served once.
@@ -399,7 +643,9 @@ fn a_stalled_server_blocks_before_the_deadline() {
         },
         Duration::from_secs(5),
     );
-    let reg = server.register(handler).expect("register");
+    let reg = server
+        .register_channel(handler, HookChannel::Claude)
+        .expect("register");
     let run = helper(
         &[
             "claude",
@@ -417,12 +663,68 @@ fn a_stalled_server_blocks_before_the_deadline() {
 }
 
 #[test]
+fn timed_out_handlers_keep_their_concurrency_permit_until_they_exit() {
+    let dir = tempfile::tempdir().expect("dir");
+    let endpoint = Endpoint::generate(Some(dir.path())).expect("endpoint");
+    let mut config = ServerConfig::new(endpoint);
+    config.max_connections = 1;
+    config.max_hold = Duration::from_millis(40);
+    let server = BridgeServer::start(config).expect("server");
+    let handler = Arc::new(Gated::default());
+    let reg = server
+        .register_channel(handler.clone(), HookChannel::Claude)
+        .expect("register");
+    let key = SessionKey::from_hex(&reg.key_hex()).expect("key");
+    let record = HookRecord {
+        event: Some(HookEvent::Stop),
+        ..HookRecord::default()
+    };
+
+    let first_endpoint = server.endpoint().clone();
+    let first_session = reg.session_id().to_owned();
+    let first_key = key.clone();
+    let first_record = record.clone();
+    let first = std::thread::spawn(move || {
+        client::exchange(
+            &first_endpoint,
+            &first_session,
+            &first_key,
+            &first_record,
+            Instant::now() + Duration::from_secs(3),
+        )
+    });
+    handler.wait_started(1);
+    assert!(matches!(
+        first.join().expect("first exchange"),
+        Ok(HookReply::Ack)
+    ));
+
+    let _ = client::exchange(
+        server.endpoint(),
+        reg.session_id(),
+        &key,
+        &record,
+        Instant::now() + Duration::from_secs(3),
+    );
+    let state = handler.state.lock().expect("lock");
+    assert_eq!(
+        state.started, 1,
+        "timed-out work must still occupy capacity"
+    );
+    assert_eq!(state.max_active, 1);
+    drop(state);
+    handler.release();
+}
+
+#[test]
 fn oversized_or_garbled_stdin_blocks_pre_tool_use() {
     let (_dir, server) = server();
     let handler = Fixed::new(HookReply::Allow {
         reason: "ok".into(),
     });
-    let reg = server.register(handler.clone()).expect("register");
+    let reg = server
+        .register_channel(handler.clone(), HookChannel::Claude)
+        .expect("register");
     let args = [
         "claude",
         "PreToolUse",
@@ -442,7 +744,9 @@ fn oversized_or_garbled_stdin_blocks_pre_tool_use() {
 fn status_events_are_forwarded_filtered() {
     let (_dir, server) = server();
     let handler = Fixed::new(HookReply::Ack);
-    let reg = server.register(handler.clone()).expect("register");
+    let reg = server
+        .register_channel(handler.clone(), HookChannel::Claude)
+        .expect("register");
     let run = helper(
         &[
             "claude",

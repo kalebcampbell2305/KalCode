@@ -1,7 +1,7 @@
 //! Codex in a pane: read-only first (docs/PROVIDER_PANES.md §3). Approvals stay in Codex's own
 //! prompt; KalCode's status comes from Codex's `notify` program (a structured JSON payload with a
-//! `type`) and from OSC 9 terminal notifications (a structural escape sequence in the PTY
-//! stream), plus process state. Codex hooks need persisted hook trust, and KalCode never passes
+//! `type`), plus process state. Terminal escape sequences are untrusted output and cannot
+//! change canonical status. Codex hooks need persisted hook trust, and KalCode never passes
 //! `--dangerously-bypass-hook-trust`, so no Codex hook decides anything.
 //!
 //! Verified on 2026-09-24 against the installed `codex --help` (codex-cli 0.155.1): `-C/--cd`,
@@ -26,15 +26,15 @@ pub const FORBIDDEN: &[&str] = &[
     "--approve-for-me",
     "--search",
     "--add-dir",
-    "never",
+    "on-request",
 ];
 
 /// Sandbox and approval policy per KalCode mode. Without trusted hooks KalCode can't stop a
 /// destructive command inside a writable sandbox, so only Bypass writes.
 pub fn permission_args(mode: PermissionMode) -> [&'static str; 4] {
     match mode {
-        PermissionMode::Bypass => ["-s", "workspace-write", "-a", "on-request"],
-        _ => ["-s", "read-only", "-a", "on-request"],
+        PermissionMode::Bypass => ["-s", "workspace-write", "-a", "never"],
+        _ => ["-s", "read-only", "-a", "never"],
     }
 }
 
@@ -87,6 +87,9 @@ pub fn interactive_args(args: &CodexArgs<'_>) -> Result<Vec<OsString>, CodexArgs
     out.push("-C".into());
     out.push(args.workspace.as_os_str().to_owned());
     out.extend(permission_args(args.mode).into_iter().map(OsString::from));
+    for value in crate::codex::argv::POLICY_CONFIG {
+        out.extend([OsString::from("-c"), OsString::from(value)]);
+    }
     if let Some(model) = args.model {
         if !crate::claude::argv::valid_model_name(model) {
             return Err(CodexArgsError::InvalidModel);
@@ -104,8 +107,7 @@ pub fn interactive_args(args: &CodexArgs<'_>) -> Result<Vec<OsString>, CodexArgs
     let notify = toml_literal_array(&notify_argv).ok_or(CodexArgsError::UnsafePath)?;
     for config in [
         format!("notify={notify}"),
-        // Only approval requests become OSC 9 notifications, so every OSC 9 in the PTY stream
-        // means "Codex is asking" without reading its text; turn completion comes from notify.
+        // Notifications remain available to the terminal, but never authorize status changes.
         "tui.notifications=['approval-requested']".to_owned(),
         "tui.notification_method='osc9'".to_owned(),
         "tui.notification_condition='always'".to_owned(),
@@ -133,16 +135,13 @@ pub fn interactive_support() -> InteractiveSupport {
             mode,
             fidelity: MappingFidelity::ApproximateStricter,
             provider_setting: permission_args(mode).join(" "),
-            notes: "Approvals are answered in Codex's own prompt; KalCode shows when Codex needs \
-                    you but can't answer for it yet."
-                .into(),
+            notes:
+                "Approvals are answered in Codex's own prompt. KalCode receives turn completion \
+                    notifications but cannot reliably detect a pending approval prompt."
+                    .into(),
         })
         .collect(),
-        status_channels: vec![
-            StatusChannel::Notify,
-            StatusChannel::Osc9,
-            StatusChannel::ProcessOnly,
-        ],
+        status_channels: vec![StatusChannel::Notify, StatusChannel::ProcessOnly],
         kalcode_answers_approvals: false,
         resume: Some("codex resume <session id>".into()),
     }
@@ -271,7 +270,7 @@ mod tests {
             assert_eq!(sandbox, expected, "{mode:?}");
             assert_eq!(
                 args[args.iter().position(|a| a == "-a").expect("-a") + 1],
-                "on-request"
+                "never"
             );
         }
     }
@@ -343,5 +342,28 @@ mod tests {
         let support = interactive_support();
         assert!(!support.kalcode_answers_approvals);
         assert!(!support.status_channels.contains(&StatusChannel::Hooks));
+    }
+
+    #[test]
+    fn panes_cannot_request_sandbox_escalation_or_inherit_web_and_network_grants() {
+        for mode in [
+            PermissionMode::Plan,
+            PermissionMode::Approve,
+            PermissionMode::Auto,
+            PermissionMode::Custom,
+            PermissionMode::Bypass,
+        ] {
+            let args = args(mode, None);
+            let approval = args.iter().position(|arg| arg == "-a").expect("approval");
+            assert_eq!(args[approval + 1], "never");
+            for required in [
+                "web_search='disabled'",
+                "sandbox_workspace_write.network_access=false",
+                "sandbox_workspace_write.writable_roots=[]",
+                "shell_environment_policy.inherit='core'",
+            ] {
+                assert!(args.iter().any(|arg| arg == required), "missing {required}");
+            }
+        }
     }
 }

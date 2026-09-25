@@ -96,7 +96,7 @@ is `true` only when KalCode's adapter implements it.
 | Auth status check | `claude auth status`: exit 0 signed in, 1 not [2] · exit code only | `codex login status` [11]; exit codes and wording undocumented | None side-effect-free → unknown |
 | Model listing | Documented aliases [4]; KalCode lists `default`, `opus`, `sonnet`, `haiku`, `fable` | app-server `model/list` only → not discoverable; "Provider default" | Documented `--model` aliases (`auto`, `pro`, `flash`, `flash-lite`) [10] · listed |
 | Rate limits | `assistant.error = rate_limit`, `StopFailure rate_limit` (structured) · used by Provider Health | No structured shape in the exec stream → never reported | `result.error.type` `RetryableQuotaError` / `TerminalQuotaError` [17] · used by Provider Health |
-| KalCode adapter | **Implemented** (Z2), minimum version 2.1.259 | **Implemented** (PROVIDERS-2), minimum version 0.155.0 | **Implemented** (PROVIDERS-2), no minimum declared (not installed on the verification machine) |
+| KalCode adapter | **Implemented** (Z2), minimum version 2.1.259 | **Implemented** (PROVIDERS-2), minimum version 0.155.1 | **Implemented** (PROVIDERS-2), no minimum declared (not installed on the verification machine) |
 
 ## 5. Permission mapping
 
@@ -322,7 +322,7 @@ never a project), 16 KiB output caps and tree kill on timeout.
 | --- | --- |
 | `installed` | Found, version at or above the minimum (or no minimum yet). |
 | `not_installed` | Not found on `PATH` or in the documented folders. |
-| `outdated` | Found below the minimum (Claude Code 2.1.259, Codex 0.155.0); sessions refuse to start. |
+| `outdated` | Found below the minimum (Claude Code 2.1.259, Codex 0.155.1); sessions refuse to start. |
 | `error` | Found but the version check failed: `version_timeout`, `version_spawn_failed`, `version_failed`, `version_exit_status`, `version_unrecognized`, or `detection_crashed`. |
 
 Sign-in is `authenticated`, `not_authenticated` or `unknown`.
@@ -439,7 +439,7 @@ the classification drives status and summaries; `actions::normalize` builds the 
 KalCode session is a sequence of supervised `codex exec` processes sharing Codex's thread id:
 the first turn starts a thread, later turns run `exec … resume <thread id> -`. This is how the
 official Codex TypeScript SDK drives `codex exec` [14]. `start_session` re-runs detection and
-refuses not installed, outdated (< 0.155.0), detection error, signed out, or `secretRef`; the
+refuses not installed, outdated (< 0.155.1), detection error, signed out, or `secretRef`; the
 argv is validated before anything runs. Launch: Z2's rules (argv only, sanitized and hardened
 environment, the npm `codex.cmd` shim resolved to `<absolute node.exe> …\@openai\codex\bin\codex.js`,
 never `cmd.exe` picking a program from the workspace; `turns_launch_hardening`).
@@ -568,7 +568,7 @@ backing off to 30 minutes). Recording an observation never delays a thread event
 | Codex / Gemini CLI adapters | Built (PROVIDERS-2). Codex flags verified against the installed `codex exec --help` 0.155.1 and the official SDK; the real JSONL stream and flag acceptance are confirmed only by the owner-approved smoke (`codex-headless-smoke.ps1`, written, not run). |
 | Codex deny floor | None per turn (§5 gaps). Permission-profile `deny` rules exist but don't compose with `--sandbox`; planned with app-server. |
 | Claude Code panes: `--settings` hooks with `--setting-sources user`, exec-form `args`, hook environment inheritance, UserPromptSubmit field name | Documented (hooks, settings and permissions references); exercised against the fake provider. Confirmed only by the owner-approved smoke run (`tooling/smoke/claude-interactive-smoke.ps1`, not run yet). |
-| Codex panes | Wired (PROVIDERS-2, behind `provider_panes`): notify + OSC 9 (`approval-requested` only), approvals in Codex. Accepted keys and OSC 9 under ConPTY are confirmed only by `codex-interactive-smoke.ps1` (written, not run). |
+| Codex panes | Hardened candidate: authenticated notify only; OSC 9 cannot change canonical status. Non-escalating scalar flags are tested, but managed-profile isolation remains a release blocker. |
 
 ## 11. Sources
 

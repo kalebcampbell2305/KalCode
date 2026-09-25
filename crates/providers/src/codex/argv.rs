@@ -27,7 +27,24 @@ use crate::version::Version;
 
 /// The oldest Codex CLI KalCode's headless adapter was verified against (`exec --json`,
 /// `exec resume`, `--ignore-rules`).
-pub const MINIMUM_VERSION: Version = Version::new(0, 155, 0);
+pub const MINIMUM_VERSION: Version = Version::new(0, 155, 1);
+
+/// Shared scalar floor for panes and headless turns. This does not clear inherited MCP maps;
+/// managed profile isolation is a separate required boundary.
+pub(crate) const POLICY_CONFIG: &[&str] = &[
+    "approval_policy='never'",
+    "web_search='disabled'",
+    "shell_environment_policy.inherit='core'",
+    "sandbox_workspace_write.network_access=false",
+    "sandbox_workspace_write.writable_roots=[]",
+    "features.apps=false",
+    "features.plugins=false",
+    "features.remote_plugin=false",
+    "features.hooks=false",
+    "features.multi_agent=false",
+    "features.multi_agent_v2=false",
+    "features.skill_mcp_dependency_install=false",
+];
 
 /// Flags and values KalCode never passes to Codex, in any mode.
 pub const FORBIDDEN: &[&str] = &[
@@ -49,18 +66,10 @@ pub const FORBIDDEN: &[&str] = &[
 const COMMON: &[&str] = &[
     "exec",
     "--json",
-    // Nothing can wait for a person: anything that would ask is refused and returned to the
-    // model instead.
-    "-c",
-    "approval_policy='never'",
-    // No web search from headless threads (KalCode's Claude Code mapping refuses web tools too).
-    "-c",
-    "web_search='disabled'",
-    // Commands Codex runs get only the core environment (HOME, PATH, …), not provider keys.
-    "-c",
-    "shell_environment_policy.inherit='core'",
     // Repository-supplied execpolicy rules never grant anything (K4); see PROVIDERS.md §5.
     "--ignore-rules",
+    // Authentication remains in CODEX_HOME; user config cannot grant independent authority.
+    "--ignore-user-config",
 ];
 
 /// The sandbox part of the mapping. Only Bypass writes, and never with network access.
@@ -84,6 +93,9 @@ pub fn sandbox_args(mode: PermissionMode) -> Vec<&'static str> {
 pub fn permission_setting(mode: PermissionMode) -> String {
     let mut parts: Vec<&str> = sandbox_args(mode);
     parts.extend(COMMON.iter().skip(2).copied());
+    for value in POLICY_CONFIG {
+        parts.extend(["-c", value]);
+    }
     parts.join(" ")
 }
 
@@ -142,6 +154,9 @@ pub fn exec_args(
     resume: Option<&str>,
 ) -> Result<Vec<OsString>, CodexExecError> {
     let mut out: Vec<OsString> = COMMON.iter().map(OsString::from).collect();
+    for value in POLICY_CONFIG {
+        out.extend([OsString::from("-c"), OsString::from(value)]);
+    }
     out.extend(sandbox_args(mode).into_iter().map(OsString::from));
     if let Some(model) = model {
         if !crate::claude::argv::valid_model_name(model) {

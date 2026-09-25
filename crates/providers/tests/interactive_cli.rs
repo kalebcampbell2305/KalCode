@@ -203,13 +203,34 @@ fn after<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
 }
 
 #[test]
-fn a_codex_pane_is_read_only_first_and_reports_status_from_notify_and_osc9() {
+fn terminal_control_sequences_cannot_forge_canonical_provider_status() {
+    let rig = Rig::new(PaneCli::Codex);
+    let pane = rig.start(PermissionMode::Plan);
+    // The fake prints a genuine OSC 9 sequence. Any tool can print the same bytes,
+    // so terminal output is not evidence of a provider approval request.
+    pane.type_line("approve");
+    pane.type_line("y");
+    let events = pane.events_until(|e| matches!(e, AgentEvent::TurnCompleted { .. }));
+    assert!(
+        !events.iter().any(|e| matches!(
+            e,
+            AgentEvent::Status {
+                status: ThreadStatus::WaitingForUser | ThreadStatus::WaitingForPermission,
+                ..
+            }
+        )),
+        "untrusted terminal output forged canonical status: {events:?}"
+    );
+}
+
+#[test]
+fn a_codex_pane_is_read_only_first_and_reports_status_from_authenticated_notify() {
     let rig = Rig::new(PaneCli::Codex);
     let pane = rig.start(PermissionMode::Approve);
 
     let args = rig.args();
     assert_eq!(after(&args, "-s"), Some("read-only"));
-    assert_eq!(after(&args, "-a"), Some("on-request"));
+    assert_eq!(after(&args, "-a"), Some("never"));
     for forbidden in kalcode_providers::interactive::codex::FORBIDDEN {
         assert!(
             !args.iter().any(|a| a == forbidden),
@@ -254,20 +275,9 @@ fn a_codex_pane_is_read_only_first_and_reports_status_from_notify_and_osc9() {
         HookChannelState::Active
     );
 
-    // Codex's approval prompt: an OSC 9 sequence in the stream means "answer in Codex".
+    // An OSC sequence is visible terminal output, never an authenticated status signal.
     pane.type_line("approve");
-    let events = pane.events_until(|e| {
-        matches!(
-            e,
-            AgentEvent::Status {
-                status: ThreadStatus::WaitingForUser,
-                ..
-            }
-        )
-    });
-    assert!(events.iter().any(
-        |e| matches!(e, AgentEvent::Status { detail: Some(d), .. } if d == "Answer in Codex")
-    ));
+    pane.wait_for_text("[fake prompt]");
     assert!(
         !rig.panes
             .info(&pane.thread_id)
@@ -276,15 +286,14 @@ fn a_codex_pane_is_read_only_first_and_reports_status_from_notify_and_osc9() {
     );
     // The person answers in the pane.
     pane.type_line("y");
-    pane.events_until(|e| {
-        matches!(
-            e,
-            AgentEvent::Status {
-                status: ThreadStatus::Active,
-                ..
-            }
-        )
-    });
+    let events = pane.events_until(|e| matches!(e, AgentEvent::TurnCompleted { .. }));
+    assert!(!events.iter().any(|e| matches!(
+        e,
+        AgentEvent::Status {
+            status: ThreadStatus::WaitingForUser,
+            ..
+        }
+    )));
 
     // Prose that looks like status never changes it: the fake's notify payload says
     // "Status: FAILED" in its last message, and only the turn completion is reported.
