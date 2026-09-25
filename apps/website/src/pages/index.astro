@@ -10,7 +10,7 @@ import PageStyles from "../components/PageStyles.astro";
 import ProviderGlyph from "../components/ProviderGlyph.astro";
 import StageSlot from "../components/StageSlot.astro";
 import Base from "../layouts/Base.astro";
-import { HERO_WORLD_PRELOADS } from "../lib/hero";
+import { HERO_POSTER_PRELOADS } from "../lib/hero";
 import { downloadCta } from "../lib/releases";
 import { structuredData } from "../lib/seo";
 import { KALVOICE, PROVIDERS, getPage } from "../lib/site";
@@ -58,7 +58,7 @@ const policies = [
     fetchpriority="high"
   />
   {
-    HERO_WORLD_PRELOADS.map((preload) => (
+    HERO_POSTER_PRELOADS.map((preload) => (
       <link
         slot="head"
         rel="preload"
