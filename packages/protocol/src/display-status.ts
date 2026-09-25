@@ -10,13 +10,7 @@
  * and offline muted; done high-contrast neutral; failed red; paused amber (the only amber);
  * recovering blue.
  */
-import type {
-  DashboardChip,
-  DisplayQualifier,
-  DisplayStatus,
-  StatusTone,
-  ThreadStatus,
-} from "./generated/index.ts";
+import type { DashboardChip, DisplayQualifier, DisplayStatus, StatusTone, ThreadStatus } from "./generated/index.ts";
 
 export interface DisplayInfo {
   status: DisplayStatus;
