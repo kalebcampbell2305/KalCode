@@ -140,7 +140,7 @@ export const PAGES = [
   {
     path: "/terms",
     title: "Terms — KalCode",
-    description: "Terms of use for kalcoded.com and the KalCode early-access list.",
+    description: "Terms of use for kalcoded.com, the KalCode early-access list and the KalCode preview app.",
   },
 ] as const satisfies readonly PageInfo[];
 

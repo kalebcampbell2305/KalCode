@@ -33,7 +33,7 @@ describe("download page platforms", () => {
     if (!windows) throw new Error("fixture has no Windows build");
 
     const links = [...html.matchAll(/<a\s[^>]*href="([^"]+)"/g)].map((match) => match[1]);
-    expect(links).toEqual([windows.url, publishedManifest.latest?.notesUrl]);
+    expect(links).toEqual([windows.url, publishedManifest.latest?.notesUrl, "/terms#preview"]);
     expect(html).toContain(`download="${windows.file}"`);
 
     const body = text(html);
