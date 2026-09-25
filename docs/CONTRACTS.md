@@ -121,6 +121,7 @@ merged (files are checksummed, see `docs/DATA_MODEL.md`).
 | `0005` (v5) | lead (L-1) | `events` + `agent_id`, `task_id`, `automation_id`, `causation_id` and partial indexes (plus `events(request_id)`) | merged |
 | `0006` (v6) | Z12 KalVoice | `kalvoice_requests` (local KalVoice Request ledger), `kalvoice_preferences` | merged (integrate/kalvoice) |
 | v7, v8 | Z6a git (`GIT_MIGRATION`), CTX (`MIGRATION_V8`) | isolated constants, registered by the lead at integration | reserved |
+| v10 | Z7-W2 (`kalcode_locator::RAIL_LOCATOR_MIGRATION`) | `workspace_groups`, `workspace_rail`, `locator_entries`, `locator_fts` (contentless FTS5, trigram); isolated constant, registered by the lead after v9 (see `docs/campaigns/Z7-W2.md` §4) | reserved |
 
 Z2 shipped no migration (provider state is detected, never stored). `threads.permission_profile_id`
 (v3) holds a Custom thread's profile; only the permission engine writes it. Numbers are assigned at

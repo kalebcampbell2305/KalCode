@@ -284,32 +284,38 @@ function Returning({ summary }: { summary: HomeSummary }) {
       <Hero summary={summary} />
       <div className={styles.grid}>
         <div className={styles.live}>
-          <ItemsPanel
-            id="home-needs-you"
-            title="Needs you"
-            icon={<ShieldAlert />}
-            count={summary.needsYouCount}
-            countTone="attention"
-            items={summary.needsYou}
-            empty="Nothing is waiting for you."
-            tone={summary.needsYouCount > 0 ? "lit" : "default"}
-          />
-          <ItemsPanel
-            id="home-running"
-            title="Running now"
-            icon={<Sparkles />}
-            count={summary.runningCount}
-            items={summary.running}
-            empty="Nothing is running right now."
-          />
-          <ItemsPanel
-            id="home-finished"
-            title="Finished since your last visit"
-            icon={<CircleCheck />}
-            count={summary.finishedSinceLastVisit.length}
-            items={summary.finishedSinceLastVisit}
-            empty="Nothing finished since your last visit."
-          />
+          {summary.needsYouCount + summary.runningCount + summary.finishedSinceLastVisit.length === 0 ? (
+            <AllClear />
+          ) : (
+            <>
+              <ItemsPanel
+                id="home-needs-you"
+                title="Needs you"
+                icon={<ShieldAlert />}
+                count={summary.needsYouCount}
+                countTone="attention"
+                items={summary.needsYou}
+                empty="Nothing is waiting for you."
+                tone={summary.needsYouCount > 0 ? "lit" : "default"}
+              />
+              <ItemsPanel
+                id="home-running"
+                title="Running now"
+                icon={<Sparkles />}
+                count={summary.runningCount}
+                items={summary.running}
+                empty="Nothing is running right now."
+              />
+              <ItemsPanel
+                id="home-finished"
+                title="Finished since your last visit"
+                icon={<CircleCheck />}
+                count={summary.finishedSinceLastVisit.length}
+                items={summary.finishedSinceLastVisit}
+                empty="Nothing finished since your last visit."
+              />
+            </>
+          )}
         </div>
         <div className={styles.side}>
           <RecentWorkspaces entries={summary.recentWorkspaces} />
@@ -331,6 +337,33 @@ function Returning({ summary }: { summary: HomeSummary }) {
       </div>
       {summary.displayName ? null : <NameHint />}
     </div>
+  );
+}
+
+/** Nothing running, waiting or newly finished: one calm panel instead of three empty ones. */
+function AllClear() {
+  const { navigate } = useNavigation();
+  const threadsIntent = useThreadsIntent();
+  return (
+    <Panel id="home-right-now" title="Right now" icon={<CircleCheck />} padding="md">
+      <div className={styles.allClear}>
+        <p className={styles.allClearTitle}>All clear.</p>
+        <p className={styles.allClearText}>
+          Nothing is running, nothing needs you, and nothing finished since your last visit.
+        </p>
+        <Button
+          size="sm"
+          variant="secondary"
+          icon={<MessageSquarePlus />}
+          onClick={() => {
+            navigate("threads");
+            threadsIntent.request("new");
+          }}
+        >
+          Start a thread
+        </Button>
+      </div>
+    </Panel>
   );
 }
 

@@ -30,6 +30,14 @@ async function shot(page: Page, name: string) {
   await page.screenshot({ path: join(dir, `${name}.png`) });
 }
 
+/** Narrow windows (under 1400 px) start with the rail as a strip; open it. */
+async function showRail(page: Page) {
+  const strip = page.getByRole("navigation", { name: "Workspaces (collapsed rail)" });
+  await expect(tree(page).or(strip).first()).toBeVisible();
+  if ((await strip.count()) > 0) await strip.getByRole("button", { name: "Show the workspace rail" }).click();
+  await expect(page.getByRole("complementary", { name: "Workspace rail" })).toBeVisible();
+}
+
 async function newWorkspace(page: Page, name: string) {
   await page.getByRole("button", { name: "Add a workspace" }).click();
   await page.getByRole("menuitem", { name: "New workspace…" }).click();
@@ -52,6 +60,7 @@ test("the rail persists across a relaunch and the Session Locator finds a worksp
     let app = await launch(dataDir, env);
     let page = app.page;
     await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await showRail(page);
     await expect(page.getByText("No workspaces yet")).toBeVisible();
 
     await newWorkspace(page, "alpha-app");
@@ -95,6 +104,7 @@ test("the rail persists across a relaunch and the Session Locator finds a worksp
     app = await launch(dataDir, env);
     page = app.page;
     await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await showRail(page);
     await expect(item(page, /^Pinned, 1$/)).toBeVisible();
     const pinnedFirst = tree(page).getByRole("treeitem").nth(1);
     await expect(pinnedFirst).toHaveAccessibleName(/^alpha-app/);
