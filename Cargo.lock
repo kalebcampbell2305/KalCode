@@ -2303,10 +2303,11 @@ dependencies = [
 
 [[package]]
 name = "kalcode-context"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "globset",
  "ignore",
+ "kalcode-contracts",
  "kalcode-native-core",
  "proptest",
  "regex",
@@ -2322,7 +2323,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-contracts"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2333,7 +2334,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-desktop"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "kalcode-contracts",
  "kalcode-native-core",
@@ -2354,10 +2355,11 @@ dependencies = [
 
 [[package]]
 name = "kalcode-entitlements"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
+ "kalcode-contracts",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -2366,7 +2368,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-git"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ignore",
  "kalcode-contracts",
@@ -2383,7 +2385,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-native-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "kalcode-contracts",
  "kalcode-pty",
@@ -2405,7 +2407,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-permissions"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "kalcode-contracts",
  "kalcode-native-core",
@@ -2419,7 +2421,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-providers"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "kalcode-contracts",
  "kalcode-native-core",
@@ -2434,16 +2436,17 @@ dependencies = [
 
 [[package]]
 name = "kalcode-pty"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "portable-pty",
+ "tempfile",
  "thiserror 2.0.21",
  "tracing",
 ]
 
 [[package]]
 name = "kalcode-resources"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "kalcode-contracts",
  "serde",
@@ -2455,7 +2458,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-secure-store"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "keyring",
  "thiserror 2.0.21",
@@ -2465,7 +2468,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-threads"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "kalcode-contracts",
  "kalcode-native-core",

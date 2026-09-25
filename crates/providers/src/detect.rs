@@ -18,7 +18,7 @@ use kalcode_core::time::now_rfc3339;
 
 use kalcode_contracts::agent::{AuthState, DetectionState, ProviderDetection, ProviderId};
 
-use crate::env::{EnvPolicy, lookup, sanitized_env};
+use crate::env::{EnvPolicy, absolute_path_entries, lookup, sanitized_env};
 use crate::process::{ProcessError, ProcessSpec, run_probe};
 use crate::version::Version;
 
@@ -128,11 +128,13 @@ impl DetectEnv {
         out
     }
 
-    /// `PATH` entries followed by the provider's documented install folders.
+    /// Absolute `PATH` entries followed by the provider's documented install folders. Empty and
+    /// relative entries (`.`, `bin`) are skipped: they resolve against a working directory, and
+    /// a provider must never be picked up from whatever folder KalCode or a workspace is in.
     fn search_dirs(&self, spec: &DetectionSpec) -> Vec<PathBuf> {
         let mut dirs: Vec<PathBuf> = self
             .var("PATH")
-            .map(|p| std::env::split_paths(p).collect())
+            .map(absolute_path_entries)
             .unwrap_or_default();
         let home = self.home();
         for dir in spec.install_dirs {
@@ -153,7 +155,7 @@ impl DetectEnv {
                 }
             }
         }
-        dirs.retain(|d| !d.as_os_str().is_empty());
+        dirs.retain(|d| !d.as_os_str().is_empty() && d.is_absolute());
         dirs
     }
 
@@ -163,14 +165,29 @@ impl DetectEnv {
     }
 }
 
-/// Finds the first existing file named `name` + one of `extensions` in `dirs` (in order).
+/// Script launchers (`.cmd`, `.bat`) run through `cmd.exe`. They are used only when no native
+/// executable of the same name exists in any searched folder.
+const SCRIPT_EXTENSIONS: &[&str] = &[".cmd", ".bat"];
+
+/// Finds the executable named `name` + one of `extensions` in `dirs`. Native executables win
+/// over script launchers wherever they are: a native `claude.exe` (the documented installer's
+/// launcher) is preferred to an npm `claude.cmd` shim earlier on `PATH`. Within each kind, the
+/// first folder (then the first extension) wins, as on the command line. Only absolute folders
+/// are searched.
 pub fn resolve_executable(name: &str, dirs: &[PathBuf], extensions: &[String]) -> Option<PathBuf> {
-    dirs.iter().find_map(|dir| {
-        extensions.iter().find_map(|ext| {
-            let candidate = dir.join(format!("{name}{ext}"));
-            candidate.is_file().then_some(candidate)
+    let is_script = |ext: &String| SCRIPT_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str());
+    let find = |script: bool| {
+        dirs.iter().filter(|d| d.is_absolute()).find_map(|dir| {
+            extensions
+                .iter()
+                .filter(|ext| is_script(ext) == script)
+                .find_map(|ext| {
+                    let candidate = dir.join(format!("{name}{ext}"));
+                    candidate.is_file().then_some(candidate)
+                })
         })
-    })
+    };
+    find(false).or_else(|| find(true))
 }
 
 impl DetectionSpec {
@@ -412,15 +429,21 @@ mod tests {
         assert_eq!(env(&[], false).extensions(), [""]);
     }
 
+    /// An absolute folder on this platform (`/a` is drive-relative on Windows).
+    fn abs(name: &str) -> PathBuf {
+        std::env::temp_dir().join(name)
+    }
+
     #[test]
     fn search_dirs_put_path_first_then_documented_locations() {
-        let sep = if cfg!(windows) { ";" } else { ":" };
-        let path = format!("/a{sep}/b");
+        let path = std::env::join_paths([abs("a"), abs("b")]).expect("join");
+        let home = abs("home");
+        let roaming = abs("roaming");
         let e = env(
             &[
-                ("PATH", &path),
-                ("USERPROFILE", "/home/u"),
-                ("APPDATA", "/roaming"),
+                ("PATH", path.to_str().expect("utf8")),
+                ("USERPROFILE", home.to_str().expect("utf8")),
+                ("APPDATA", roaming.to_str().expect("utf8")),
             ],
             true,
         );
@@ -428,30 +451,82 @@ mod tests {
         assert_eq!(
             dirs,
             [
-                PathBuf::from("/a"),
-                PathBuf::from("/b"),
-                Path::new("/home/u").join(".local/bin"),
-                Path::new("/roaming").join("npm"),
+                abs("a"),
+                abs("b"),
+                home.join(".local/bin"),
+                roaming.join("npm"),
             ]
         );
     }
 
     #[test]
-    fn resolves_in_directory_order_then_extension_order() {
+    fn relative_and_empty_path_entries_are_never_searched() {
+        let sep = if cfg!(windows) { ";" } else { ":" };
+        let a = abs("a");
+        let path = format!(
+            ".{sep}{sep}bin{sep}node_modules/.bin{sep}{}{sep}",
+            a.display()
+        );
+        let e = env(&[("PATH", &path), ("USERPROFILE", "relative-home")], true);
+        // A relative home folder can't anchor the documented install folders either.
+        assert_eq!(e.search_dirs(&SPEC), [a]);
+    }
+
+    #[test]
+    fn a_planted_launcher_in_a_relative_path_entry_is_not_found() {
+        // `claude.cmd` in the current directory, reachable only through a relative PATH entry.
+        let here = tempfile::tempdir_in(".").expect("tempdir in cwd");
+        let rel = here
+            .path()
+            .file_name()
+            .map(PathBuf::from)
+            .expect("relative name");
+        std::fs::write(here.path().join("tool.cmd"), b"@echo planted").expect("write");
+        std::fs::write(here.path().join("tool.exe"), b"").expect("write");
+        assert!(
+            rel.join("tool.cmd").is_file(),
+            "relative entry resolves from the cwd"
+        );
+        let e = env(&[("PATH", rel.to_str().expect("utf8"))], true);
+        let dirs = e.search_dirs(&SPEC);
+        assert!(dirs.is_empty(), "{dirs:?}");
+        assert_eq!(
+            resolve_executable("tool", &[rel], &e.extensions()),
+            None,
+            "relative folders are never searched, even when passed directly"
+        );
+    }
+
+    #[test]
+    fn native_executables_win_over_script_launchers_on_any_folder() {
         let first = tempfile::tempdir().expect("tempdir");
         let second = tempfile::tempdir().expect("tempdir");
-        std::fs::write(second.path().join("tool.exe"), b"").expect("write");
-        std::fs::write(second.path().join("tool.cmd"), b"").expect("write");
         let dirs = [first.path().to_path_buf(), second.path().to_path_buf()];
         let exts = [".exe".to_owned(), ".cmd".to_owned()];
+        std::fs::write(second.path().join("tool.exe"), b"").expect("write");
+        std::fs::write(second.path().join("tool.cmd"), b"").expect("write");
         assert_eq!(
             resolve_executable("tool", &dirs, &exts),
             Some(second.path().join("tool.exe"))
         );
+        // An npm shim earlier on PATH does not beat the native launcher later on PATH.
         std::fs::write(first.path().join("tool.cmd"), b"").expect("write");
         assert_eq!(
             resolve_executable("tool", &dirs, &exts),
+            Some(second.path().join("tool.exe"))
+        );
+        // Without any native executable the first script launcher is used.
+        std::fs::remove_file(second.path().join("tool.exe")).expect("rm");
+        assert_eq!(
+            resolve_executable("tool", &dirs, &exts),
             Some(first.path().join("tool.cmd"))
+        );
+        // Among native executables, PATH order wins.
+        std::fs::write(first.path().join("tool.exe"), b"").expect("write");
+        std::fs::write(second.path().join("tool.exe"), b"").expect("write");
+        assert_eq!(
+            resolve_executable("tool", &dirs, &exts),
+            Some(first.path().join("tool.exe"))
         );
         assert_eq!(resolve_executable("other", &dirs, &exts), None);
     }

@@ -1600,3 +1600,70 @@ kbd.shortcut > kbd {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ---------- Email link pages (/early-access/confirm, /early-access/remove) ---------- */
+
+.email-action {
+  display: grid;
+  gap: var(--space-6);
+  justify-items: start;
+}
+
+.email-action > *,
+.email-action__form {
+  max-width: 44rem;
+}
+
+.email-action__form {
+  display: grid;
+  gap: var(--space-6);
+  justify-items: start;
+}
+
+.email-action [hidden] {
+  display: none;
+}
+
+.email-action__intro {
+  color: var(--color-text-secondary);
+  font-size: var(--site-text-lead);
+  line-height: 1.55;
+}
+
+.email-action__status {
+  font-size: var(--site-text-body);
+  line-height: var(--leading-normal);
+}
+
+.email-action__status:empty {
+  display: none;
+}
+
+.email-action__status:focus {
+  outline: none;
+}
+
+.email-action__status[data-state="success"] {
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--color-success);
+  border-radius: var(--radius-md);
+  background: var(--color-success-soft);
+  color: var(--color-text);
+}
+
+.email-action__status[data-state="error"] {
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--color-danger-text);
+  border-radius: var(--radius-md);
+  color: var(--color-danger-text);
+}
+
+.email-action__note {
+  color: var(--color-text-muted);
+  font-size: var(--site-text-small);
+  line-height: var(--leading-normal);
+}
+
+.email-action__note a {
+  color: var(--color-text-secondary);
+}

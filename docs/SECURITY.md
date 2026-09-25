@@ -1,6 +1,7 @@
 # KalCode Security
 
-Status: living document · Z0 baseline · Z2 provider runtime
+Status: living document · Z0 baseline · Z2 provider runtime · SEC-0.1.1 hardening
+(`docs/campaigns/SEC-0.1.1.md`)
 
 KalCode controls powerful tools on a user's machine. Security is architecture, not a feature.
 
@@ -11,7 +12,9 @@ KalCode controls powerful tools on a user's machine. Security is architecture, n
 2. The WebView is treated as **potentially compromised** (e.g. by rendering untrusted provider
    output). It receives only the allow-listed KalCode commands and no generic native plugins.
 3. AI providers and their output are untrusted input. Provider processes are contained by the
-   Z2 supervision controls below; their actions are judged by the permission engine from Z4.
+   Z2 supervision controls below. The permission engine (Z4) judges the actions a provider hands
+   to KalCode; Claude Code threads don't hand theirs over yet, so for them KalCode enforces
+   through launch flags only (see "Provider permissions" below and `docs/PROVIDERS.md` §5).
 4. The website Worker is internet-facing; every request body is untrusted.
 5. KalCode itself sends no user data off-device. The website stores only early-access emails.
    Provider CLIs talk to their own services under the user's own account (`docs/PROVIDERS.md`
@@ -21,23 +24,23 @@ KalCode controls powerful tools on a user's machine. Security is architecture, n
 
 | Area | Control |
 | --- | --- |
-| IPC | Command allow-list via Tauri capabilities generated from `build.rs`; each command validates input natively; no frontend-supplied paths or shell arguments. |
+| IPC | Command allow-list via Tauri capabilities generated from `build.rs`; each command validates input natively; no frontend-supplied paths or shell arguments. Test hooks (`test_permission_probe`) exist only in debug and `e2e` builds: `#[cfg]`-gated, declared in `build.rs` only for those builds, and granted at runtime from `test-capabilities/test-hooks.json`, never from `capabilities/`. `tooling/check-capabilities.mjs` (with its own tests) fails CI if any file under `capabilities/` is not allow-listed and fully checked, or if a test hook could ship. |
 | WebView | Strict CSP (`default-src 'self'`; no remote scripts; no `unsafe-eval`; `style-src 'unsafe-inline'` only, with no external image/font/connect sources to exfiltrate through); no remote content; the Tauri `devtools` feature is off. |
-| Environment | Normal builds remove WebView2 override variables (`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`, `WEBVIEW2_BROWSER_EXECUTABLE_FOLDER`, `WEBVIEW2_USER_DATA_FOLDER`, …) as the first action of `main`, so a persistent user environment cannot open a DevTools port or swap the browser runtime; `KALCODE_DATA_DIR` is ignored. Only debug builds and the `e2e`-feature test binary keep them. Verified against a release binary. |
+| Environment | Normal builds remove every `WEBVIEW2_*`, `COREWEBVIEW2_*` and `WEBKIT_INSPECTOR*` variable (prefix match, case-insensitive) as the first action of `main`, so a persistent user environment cannot open a DevTools port, swap the browser runtime or change its hosting mode; `KALCODE_DATA_DIR` is ignored. Only debug builds and the `e2e`-feature test binary keep them. Terminal shells never receive `KALCODE_*` or any of those prefixes. |
 | Unsafe code | `unsafe_code = "deny"` workspace-wide. The single exception is the audited `std::env::remove_var` call at the start of `main` (no other thread exists yet). |
 | Single writer | Exclusive OS file lock per data folder; a second process gets `already_running`. |
 | Secrets | `SecretStore` trait backed by the OS credential store (Windows Credential Manager, macOS Keychain, Secret Service/keyutils on Linux). `SecretString` redacts `Debug`/`Display` and zeroizes on drop. Secrets never go to SQLite, logs, events, or the UI. |
 | Logs | Structured, local only. Every line passes a redaction pass (provider key formats, JWTs, bearer/basic auth, URL credentials, private keys, and `*key/token/secret/password…=value` pairs including JSON-escaped values), tested against real JSON formatter output. Panics are also written synchronously to `logs/crash.log`. |
 | Database | Parameterized SQL only; migrations checksummed; pre-migration backups; refuse downgrade. |
-| Supply chain | Lockfiles committed; `cargo audit` and `pnpm audit` run in CI; pnpm allows install scripts only for esbuild, workerd, sharp and the Tauri CLI. |
-| Provider processes (Z2) | Spawned from an argv vector, never a shell string; model names and session ids validated before they reach argv. Each process has its own reader threads, so one crash, hang or flood cannot affect another provider or KalCode. Timeouts on every probe (15 s), interrupt acknowledgement (5 s) and termination (3 s grace, then kill). The whole process tree is killed on terminate, timeout or drop (`taskkill /T /F` on Windows, process group on Unix). |
-| Provider environment (Z2) | `env_clear()`, then an OS/locale/temp/proxy allow-list plus only that provider's own variables (`ANTHROPIC_*`/`CLAUDE_*`, `OPENAI_*`/`CODEX_*`, `GEMINI_*`/`GOOGLE_*`). `KALCODE_*`, `WEBVIEW2_*` and unrelated secrets never pass. |
+| Supply chain | Lockfiles committed; `cargo deny check` (advisories, bans, licenses, sources) blocks every PR; `pnpm audit --audit-level high` covers dev dependencies; RustSec audit-check also runs; pnpm allows install scripts only for esbuild, workerd, sharp and the Tauri CLI. |
+| Provider processes (Z2) | Spawned from an argv vector, never a shell string; model names and session ids validated before they reach argv. Only absolute folders are searched for a provider, and a native executable wins over a `.cmd` shim. A Windows `.cmd`/`.bat` shim is never trusted to pick its program: its target is resolved and started directly (native binary, or an absolute `node.exe` with the script), so a `node.cmd`/`node.exe`/`cmd.exe` planted in a workspace can't run when a thread starts (`crates/providers/src/launch.rs`, tests in `tests/launch_hardening.rs`). Each process has its own reader threads, so one crash, hang or flood cannot affect another provider or KalCode. Timeouts on every probe (15 s), interrupt acknowledgement (5 s) and termination (3 s grace, then kill). The whole process tree is killed on terminate, timeout or drop (`taskkill /T /F` on Windows, process group on Unix). |
+| Provider environment (Z2) | `env_clear()`, then an OS/locale/temp/proxy allow-list plus only that provider's own variables (`ANTHROPIC_*`/`CLAUDE_*`, `OPENAI_*`/`CODEX_*`, `GEMINI_*`/`GOOGLE_*`). `KALCODE_*`, `WEBVIEW2_*` and unrelated secrets never pass. Always `NoDefaultCurrentDirectoryInExePath=1` and a `PATH` of absolute entries only, so nothing is looked up in the workspace. |
 | Provider output (Z2) | stdout lines capped at 8 MiB; malformed lines skipped and never echoed. stderr kept as a 16 KiB tail, redacted, and only logged, never sent to events or the UI. An unexpected permission request from a provider fails closed: the session is stopped and nothing is approved. |
 | Provider configuration (Z2) | Claude Code sessions pass `--setting-sources user` (or `--restricted` in Plan) and `--strict-mcp-config`, so a repository's project settings, hooks and `.mcp.json` servers are not loaded. |
-| Provider permissions (Z2) | Every KalCode mode maps to an equal or stricter provider-native mode; the broadest modes (`bypassPermissions`, `auto`, `danger-full-access`, `yolo`) are never used. Until host approvals arrive in Z4, anything that would prompt is denied (`--permission-prompts none` for Claude Code). Enforced by unit tests. |
+| Provider permissions (Z2, SEC-0.1.1) | Every KalCode mode maps to an equal or stricter provider-native mode; the broadest modes (`bypassPermissions`, `auto`, `danger-full-access`, `yolo`) are never used. KalCode can't answer provider prompts yet, so anything that would prompt is denied (`--permission-prompts none` for Claude Code). Claude Code sessions also get KalCode deny rules (`--disallowedTools`) that the user's own Claude Code allow rules and hooks can't override: in every mode `git push`, package publishes, deploy/cloud CLIs, `gh` and `ssh`/`scp` in Bash and PowerShell, and reading common credential files (`.env*`, `.npmrc`, SSH keys, `~/.aws`…); in Plan, Approve, Auto and Custom also the edit and web tools. Enforced by unit tests. **Not enforced yet for Claude Code:** KalCode's per-action engine, Custom rules and approvals. Other commands follow Claude Code's own rules, including the user's own Claude Code user settings (every mode except Plan), and a deny rule matches the command text, so a push written another way (full path, `sh -c`) is decided by those rules. Per-action enforcement arrives with provider panes and the hook bridge (Z7). |
 | Provider credentials (Z2) | KalCode reads no provider credentials and has none of its own; providers use the user's own CLI sign-in. Detection runs only `--version` and documented sign-in status commands; `claude auth status` output (account email, organization) is discarded unread and only its exit code is used. |
-| Website | Security headers (CSP, HSTS, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, frame-ancestors none); JSON-only API with size limits, strict email validation, honeypot field, per-IP rate limiting via Workers Rate Limiting binding; no secrets in client bundles. |
-| Entitlements (built; local only until Z13) | Server-authoritative: only the API (`apps/api`) decides a tier, from D1. OWNER is a database grant that only operator tools with the owner's Cloudflare credentials can write; the database refuses OWNER from billing, OWNER expiry and duplicate active OWNER grants, keeps grants immutable, and writes `audit_log` in the same statement. No email or account id is hardcoded anywhere; no endpoint changes a tier; account routes answer 401 until sign-in exists. Documents and KalVoice usage receipts are Ed25519-signed JWS (private key only in a Worker secret); the desktop (`crates/entitlements`) trusts only compiled-in public keys, binds documents to the signed-in account, and falls back to Free after at most 7 days offline. Details and threat model: `docs/BILLING.md` §10. |
+| Website | Security headers (CSP, HSTS, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, frame-ancestors none); JSON-only API with size limits, strict email validation, honeypot field, per-IP rate limiting via Workers Rate Limiting binding; no secrets in client bundles. Early-access list is double opt-in: joining and removal each need a single-use, 72-hour link (random 32-byte code, only its SHA-256 stored) that acts only on a POST from the page it opens, never on GET; identical responses whether or not an address is listed; per-address email throttle (1 per 10 min, 5 per day) and a site-wide daily email budget; a failed send undoes everything it wrote. Email goes through Resend's REST API with a sending-only, domain-restricted key held as a Worker secret; links always point at https://kalcoded.com (never the request host); logs carry no addresses or links. Details: `docs/WEBSITE.md` "Early access and email". |
+| Entitlements (built; local only until Z13) | Server-authoritative: only the API (`apps/api`) decides a tier, from D1. OWNER is a database grant that only operator tools with the owner's Cloudflare credentials can write; the database refuses OWNER from billing, OWNER expiry and duplicate active OWNER grants, keeps grants immutable, and writes `audit_log` in the same statement. Append-only and immutable tables also refuse `REPLACE` / `INSERT OR REPLACE`: D1 runs with `recursive_triggers` off, so the implicit delete would skip the delete triggers; migration `0003_no_replace.sql` adds BEFORE INSERT guards (an existing grant id, a second active OWNER grant, existing `audit_log` / `kalvoice_requests` ids are refused; a repeated account + client request id is a no-op). No email or account id is hardcoded anywhere; no endpoint changes a tier; account routes answer 401 until sign-in exists. Documents and KalVoice usage receipts are Ed25519-signed JWS (private key only in a Worker secret); the desktop (`crates/entitlements`) trusts only compiled-in public keys, binds documents to the signed-in account, and falls back to Free after at most 7 days offline. Details and threat model: `docs/BILLING.md` §10. |
 
 ## 3. Private-system boundary
 
@@ -48,13 +51,21 @@ code review checks for imported private material.
 
 ## 4. Planned controls (by campaign)
 
-- Z1 (implemented): workspace folders come only from the native picker and are canonicalized;
+- Z1 (implemented): workspace folders come only from the native picker and are canonicalized,
+  and a whole drive, network share root or the home folder itself is refused as a workspace
+  (`folder_too_broad`; folders inside them are fine);
   shells are chosen by detected id (no executable, arguments or working directory from the
   WebView); every id is validated (`is_valid_id`), sizes and input length are bounded; closing a
   tab closes its pseudo-terminal, ending programs started in it; KalCode and test variables are
-  stripped from shell environments; the dialog plugin is used from Rust only. Workspace-root
+  stripped from shell environments; the dialog plugin is used from Rust only. Terminals start
+  only an absolute, existing shell (checked before the pseudo-terminal library sees it, with a
+  cleaned `PATHEXT`), so a deleted shell is a clean error, not a crash; shell detection ignores
+  empty and relative `PATH` entries, so a planted `pwsh.exe` can't become the default shell. Workspace-root
   containment and symlink-escape checks for file access arrive with file tools (Z3/Z4).
 - Z4: permission engine (see `docs/PERMISSIONS.md`) with audit log of consequential decisions.
+- Z7: provider panes and the hook bridge: a KalCode `PreToolUse` hook puts every Claude Code tool
+  call through the Trust Kernel (`docs/PROVIDER_PANES.md`). Until then, see "Provider
+  permissions" above for what KalCode enforces for Claude Code.
 - Z13: signed updates (Tauri updater with minisign keys), code-signed installers, sign-in and
   per-account rate limiting on the API, Stripe webhook signature verification (billing may only
   write Pro/MAX grants; the database already refuses billing OWNER), production signing key and

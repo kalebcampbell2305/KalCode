@@ -43,6 +43,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "permissions",
         sql: include_str!("../migrations/0004_permissions.sql"),
     },
+    Migration {
+        version: 5,
+        name: "event_correlation",
+        sql: include_str!("../migrations/0005_event_correlation.sql"),
+    },
 ];
 
 /// How many pre-migration backups to keep.
@@ -80,6 +85,19 @@ pub fn open(path: &Path) -> Result<Connection> {
             | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )?;
     configure(&conn)?;
+    Ok(conn)
+}
+
+/// Opens an existing database read-only, for background readers next to the single writer.
+/// With WAL, readers never block the writer and see only committed transactions. `query_only`
+/// makes any write attempt fail even if the file permissions would allow it.
+pub fn open_read_only(path: &Path) -> Result<Connection> {
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    conn.busy_timeout(Duration::from_secs(5))?;
+    conn.pragma_update(None, "query_only", "ON")?;
     Ok(conn)
 }
 

@@ -1,0 +1,6 @@
+{
+  "identifier": "test-hooks",
+  "description": "Test hooks for debug and e2e builds only. Added at runtime by lib.rs under cfg(any(debug_assertions, feature = \"e2e\")); release builds neither register these commands nor load this file. Must stay outside capabilities/.",
+  "windows": ["main"],
+  "permissions": ["allow-test-permission-probe"]
+}

@@ -1,8 +1,11 @@
 //! Supervision for provider child processes.
 //!
 //! Rules every provider process follows:
-//! - Spawned from an argv vector, never a shell command string. (On Windows, `.cmd`/`.bat`
-//!   shims are started by the standard library, which quotes each argument for `cmd.exe`.)
+//! - Spawned from an argv vector, never a shell command string. On Windows, a `.cmd`/`.bat`
+//!   shim is replaced by the absolute program it launches (see [`crate::launch`]); only a shim
+//!   KalCode can't read is started through `cmd.exe`, with the hardened environment.
+//! - The environment always has `NoDefaultCurrentDirectoryInExePath=1` and a `PATH` of absolute
+//!   folders only ([`crate::env::harden`]), so nothing is looked up in the working directory.
 //! - A sanitized environment (see [`crate::env`]); `env_clear()` first, then the allow-list.
 //! - stdout is read line by line on a dedicated thread with a hard per-line size cap; stderr is
 //!   captured on its own thread into a bounded tail buffer and redacted before it is exposed.
@@ -65,9 +68,19 @@ pub enum ProcessError {
     InputClosed,
 }
 
+/// Builds the command for a spec. The environment is [`crate::env::harden`]ed again here, and a
+/// `.cmd`/`.bat` shim is replaced by what it launches ([`crate::launch`]), so no caller can
+/// start a provider in a way that lets `cmd.exe` pick a program from the working directory.
 fn command(spec: &ProcessSpec) -> Command {
-    let mut command = Command::new(&spec.program);
-    command.args(&spec.args).env_clear().envs(&spec.env);
+    let mut env = spec.env.clone();
+    crate::env::harden(&mut env);
+    let launch = crate::launch::resolve(&spec.program, &env);
+    let mut command = Command::new(&launch.program);
+    command
+        .args(&launch.prefix_args)
+        .args(&spec.args)
+        .env_clear()
+        .envs(&env);
     if let Some(cwd) = &spec.cwd {
         command.current_dir(cwd);
     }

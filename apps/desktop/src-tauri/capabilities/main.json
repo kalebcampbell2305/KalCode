@@ -11,6 +11,7 @@
     "allow-settings-get",
     "allow-settings-update",
     "allow-events-recent",
+    "allow-events-query",
     "allow-events-subscribe",
     "allow-events-unsubscribe",
     "allow-diagnostics-get",
@@ -54,7 +55,6 @@
     "allow-permission-profiles-list",
     "allow-thread-set-permission-mode",
     "allow-permission-settings-get",
-    "allow-permission-settings-update",
-    "allow-test-permission-probe"
+    "allow-permission-settings-update"
   ]
 }

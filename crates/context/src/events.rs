@@ -1,7 +1,9 @@
-//! `context.*` event facts, in the payload shapes proposed in `docs/CONTRACTS_ADVANCED.md`
-//! §3.3. This crate does not touch `EventPayload`; the lead maps these one-to-one when the
-//! CA-0 contract PR lands (payloads are ids and short facts only — never content).
+//! `context.*` event facts, in the payload shapes of `docs/CONTRACTS_ADVANCED.md` §3.3. CA-1
+//! declared the matching `EventPayload` variants; `EventPayload::from(ContextEvent)` maps them
+//! one-to-one (payloads are ids and short facts only — never content).
 
+use kalcode_contracts::agent::ProviderId;
+use kalcode_contracts::events::EventPayload;
 use serde::{Deserialize, Serialize};
 
 use crate::model::ContextPurpose;
@@ -58,6 +60,122 @@ impl ContextEvent {
             Self::OverrideConfirmed { .. } => "context.override_confirmed",
             Self::Shared { .. } => "context.shared",
             Self::Discarded { .. } => "context.discarded",
+        }
+    }
+}
+
+impl From<ContextEvent> for EventPayload {
+    fn from(event: ContextEvent) -> Self {
+        match event {
+            ContextEvent::PackageCreated {
+                package_id,
+                purpose,
+                items,
+                bytes,
+            } => EventPayload::ContextPackageCreated {
+                package_id,
+                purpose,
+                items,
+                bytes,
+            },
+            ContextEvent::Blocked {
+                package_id,
+                rule,
+                items,
+            } => EventPayload::ContextBlocked {
+                package_id,
+                rule,
+                items,
+            },
+            ContextEvent::Redacted {
+                package_id,
+                items,
+                spans,
+            } => EventPayload::ContextRedacted {
+                package_id,
+                items,
+                spans,
+            },
+            ContextEvent::OverrideConfirmed {
+                package_id,
+                position,
+                rule,
+            } => EventPayload::ContextOverrideConfirmed {
+                package_id,
+                position,
+                rule,
+            },
+            ContextEvent::Shared {
+                package_id,
+                thread_id,
+                provider_id,
+                items,
+                bytes,
+                redactions,
+            } => EventPayload::ContextShared {
+                package_id,
+                thread_id,
+                provider_id: ProviderId::new(provider_id),
+                items,
+                bytes,
+                redactions,
+            },
+            ContextEvent::Discarded { package_id } => EventPayload::ContextDiscarded { package_id },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::ContextPurpose;
+
+    /// The crate's facts carry exactly the contract payload: same type name, same fields.
+    #[test]
+    fn every_context_event_maps_to_the_contract_payload() {
+        let events = [
+            ContextEvent::PackageCreated {
+                package_id: "p".into(),
+                purpose: ContextPurpose::Handoff,
+                items: 2,
+                bytes: 3,
+            },
+            ContextEvent::Blocked {
+                package_id: "p".into(),
+                rule: "secret_detected".into(),
+                items: 1,
+            },
+            ContextEvent::Redacted {
+                package_id: "p".into(),
+                items: 1,
+                spans: 4,
+            },
+            ContextEvent::OverrideConfirmed {
+                package_id: "p".into(),
+                position: 0,
+                rule: "ignored_path.gitignore".into(),
+            },
+            ContextEvent::Shared {
+                package_id: "p".into(),
+                thread_id: Some("t".into()),
+                provider_id: "claude-code".into(),
+                items: 1,
+                bytes: 2,
+                redactions: 0,
+            },
+            ContextEvent::Discarded {
+                package_id: "p".into(),
+            },
+        ];
+        for event in events {
+            let mut ours = serde_json::to_value(&event).expect("json");
+            let object = ours.as_object_mut().expect("object");
+            let kind = object.remove("type").expect("type");
+            let payload = EventPayload::from(event.clone());
+            assert_eq!(kind, payload.type_name());
+            assert_eq!(payload.type_name(), event.event_type());
+            let wire = serde_json::to_value(&payload).expect("json");
+            assert_eq!(wire["payload"], ours);
         }
     }
 }

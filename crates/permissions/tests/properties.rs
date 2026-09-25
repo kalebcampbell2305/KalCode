@@ -142,6 +142,7 @@ fn action(kind: ActionKind) -> NormalizedAction {
         action: kind,
         summary: String::new(),
         requested_at: String::new(),
+        origin: None,
     }
 }
 

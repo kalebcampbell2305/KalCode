@@ -1,0 +1,60 @@
+---
+/**
+ * The page a link in one of our emails opens. Opening it changes nothing: link scanners and mail
+ * previews fetch pages with GET. The confirmation or removal happens only when the person presses
+ * the button, which POSTs the link's code (src/scripts/email-action.ts).
+ */
+import { EARLY_ACCESS_EMAIL } from "../lib/site";
+
+interface Props {
+  action: "confirm" | "remove";
+}
+const { action } = Astro.props;
+const hours = EARLY_ACCESS_EMAIL.linkTtlHours;
+const copy =
+  action === "confirm"
+    ? {
+        intro:
+          "Press the button to confirm this email address for the KalCode early-access list. We'll only email you about early access and launch.",
+        button: "Confirm my email",
+        endpoint: "/api/early-access/confirm",
+        retryHref: "/download#early-access",
+        retryLabel: "Join early access again",
+      }
+    : {
+        intro:
+          "Press the button to remove this email address from the KalCode early-access list. It is deleted permanently.",
+        button: "Remove my email",
+        endpoint: "/api/early-access/remove/confirm",
+        retryHref: "/privacy#remove",
+        retryLabel: "Request a new removal link",
+      };
+---
+<section class="section">
+  <div class="container email-action" data-email-action={action} data-endpoint={copy.endpoint}>
+    <form class="email-action__form needs-js" method="post" novalidate>
+      <p class="email-action__intro">{copy.intro}</p>
+      <button class="button button--primary" type="submit">{copy.button}</button>
+    </form>
+    <p class="email-action__status" role="status" aria-live="polite" tabindex="-1"></p>
+    <div class="button-row" data-next="done" hidden>
+      <a class="button button--secondary" href="/">Go to the home page</a>
+    </div>
+    <div class="button-row" data-next="retry" hidden>
+      <a class="button button--secondary" href={copy.retryHref}>{copy.retryLabel}</a>
+    </div>
+    <p class="email-action__note">
+      Links from our emails work once and expire after {hours} hours. Questions? Read the
+      <a href="/privacy">privacy notice</a>.
+    </p>
+    <noscript>
+      <p class="email-action__intro">
+        This page needs JavaScript, which is turned off in this browser. Turn it on and open the link
+        from the email again.
+      </p>
+    </noscript>
+  </div>
+</section>
+<script>
+  import "../scripts/email-action";
+</script>

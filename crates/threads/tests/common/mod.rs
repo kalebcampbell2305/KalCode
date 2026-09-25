@@ -255,6 +255,7 @@ impl AgentProvider for FakeProvider {
             host_approvals: true,
             models: self.models.clone(),
             permission_mappings: Vec::new(),
+            interactive: None,
         }
     }
 
@@ -352,6 +353,11 @@ impl PermissionGate for TestGate {
             status: ApprovalStatus::Pending,
             resolved_decision: None,
             resolved_at: None,
+            allowed_decisions: Vec::new(),
+            grant_coverage: String::new(),
+            context: None,
+            created_at: String::new(),
+            expire_reason: None,
         };
         self.opened.lock().unwrap().push(request.clone());
         Ok(request)
@@ -539,6 +545,7 @@ pub fn command_action(command: &str) -> NormalizedAction {
         },
         summary: format!("Run {command}"),
         requested_at: String::new(),
+        origin: None,
     }
 }
 

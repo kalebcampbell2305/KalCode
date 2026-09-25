@@ -7,9 +7,12 @@ import { expect, type Page, test } from "@playwright/test";
 import { closeGracefully, EXE, launch, removeDir } from "./harness.ts";
 
 /**
- * Wave 2 data safety and permission enforcement against the real app:
- * - a database as the released app (schema v1) left it is upgraded to v4 with a backup, and its
- *   settings and events survive;
+ * Data safety and permission enforcement against the real app:
+ * - a database as the released app (schema v1) left it is upgraded to the latest schema with a
+ *   backup, and its settings and events survive;
+ * - a database as the installed wave-2 app (schema v4) left it is upgraded to v5 (L-1 event
+ *   correlation) with a backup of the untouched v4 file; every row survives and the new
+ *   `events_query` IPC reads it;
  * - the real permission engine, over a real workspace root, allows a harmless read inside the
  *   workspace and asks before a write outside it (test hook `test_permission_probe`; no
  *   provider, no thread, no prompt, nothing is written).
@@ -64,7 +67,10 @@ interface EventLite {
   payload: Record<string, unknown>;
 }
 
-test("a v1 database from the released app is upgraded to v4 with a backup and nothing lost", async () => {
+/** The schema version this build migrates to. */
+const LATEST = 5;
+
+test("a v1 database from the released app is upgraded to the latest schema with a backup and nothing lost", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-"));
   try {
     createV1Database(dataDir);
@@ -79,8 +85,8 @@ test("a v1 database from the released app is upgraded to v4 with a backup and no
       page,
       "diagnostics_get",
     );
-    expect(diagnostics.database.schemaVersion).toBe(4);
-    expect(diagnostics.database.latestSchemaVersion).toBe(4);
+    expect(diagnostics.database.schemaVersion).toBe(LATEST);
+    expect(diagnostics.database.latestSchemaVersion).toBe(LATEST);
 
     const events = await invoke<EventLite[]>(page, "events_recent", { limit: 100, beforeSeq: null });
     const ids = events.map((e) => e.id);
@@ -92,10 +98,10 @@ test("a v1 database from the released app is upgraded to v4 with a backup and no
       expect(ids, "v1 events are kept").toContain(id);
     }
     const upgrade = events.find((e) => e.type === "database.migrated" && e.payload.fromVersion === 1);
-    expect(upgrade?.payload).toEqual({ fromVersion: 1, toVersion: 4, backupCreated: true });
+    expect(upgrade?.payload).toEqual({ fromVersion: 1, toVersion: LATEST, backupCreated: true });
 
     await page.getByRole("button", { name: "Settings" }).click();
-    await expect(page.getByText("Version 4 of 4, WAL journal")).toBeVisible();
+    await expect(page.getByText(`Version ${LATEST} of ${LATEST}, WAL journal`)).toBeVisible();
     await closeGracefully(app);
 
     // The backup is the untouched v1 database, with the user's data.
@@ -121,6 +127,205 @@ print(",".join(r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE typ
     ).toBe("approvals,permission_audit,terminals,threads,workspaces");
   } finally {
     removeDir(dataDir);
+  }
+});
+
+const V4_WORKSPACE = "0199a000-0000-7000-8000-0000000000a1";
+const V4_THREAD = "0199a000-0000-7000-8000-0000000000b1";
+const V4_EVENTS = [
+  "0199a000-0000-7000-8000-000000000011",
+  "0199a000-0000-7000-8000-000000000012",
+  "0199a000-0000-7000-8000-000000000013",
+  "0199a000-0000-7000-8000-000000000014",
+];
+
+/**
+ * Writes `kalcode.db` exactly as the installed wave-2 app (schema v4) leaves it: migrations
+ * 0001–0004 with their checksums, and user data in the v1–v4 tables — settings, a workspace, a
+ * finished thread, a permission preference and correlated events.
+ */
+function createV4Database(dataDir: string, projectDir: string) {
+  const names = ["0001_foundation", "0002_workspaces", "0003_threads", "0004_permissions"];
+  const files = names.map((name, index) => {
+    const sql = readFileSync(join(MIGRATIONS, `${name}.sql`), "utf8");
+    const file = join(dataDir, `v${index + 1}.sql`);
+    writeFileSync(file, sql);
+    return { file, name: name.slice(5), checksum: createHash("sha256").update(sql, "utf8").digest("hex") };
+  });
+  python(
+    `import json,sqlite3,sys
+c=sqlite3.connect(sys.argv[1])
+c.execute("PRAGMA foreign_keys=ON")
+c.execute("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT")
+for i,m in enumerate(json.loads(sys.argv[2])):
+    c.executescript(open(m["file"],encoding="utf-8").read())
+    c.execute("INSERT INTO schema_migrations VALUES (?,?,?,'2026-09-20T10:00:00Z')",(i+1,m["name"],m["checksum"]))
+ws,th,proj=sys.argv[3],sys.argv[4],sys.argv[5]
+c.execute("INSERT INTO settings VALUES ('appearance.theme','\\"light\\"','2026-09-20T10:01:00Z')")
+c.execute("INSERT INTO workspaces (id,name,root_path,created_at,last_opened_at) VALUES (?,?,?,?,?)",(ws,"legacy-project",proj,"2026-09-20T10:02:00Z","2026-09-20T10:02:00Z"))
+c.execute("""INSERT INTO threads (id,name,provider_id,provider_name,workspace_id,workspace_name,cwd,permission_mode,status,created_at,last_activity_at)
+  VALUES (?,'Keep this thread','claude-code','Claude Code',?,'legacy-project',?,'approve','completed','2026-09-20T10:03:00Z','2026-09-20T10:04:00Z')""",(th,ws,proj))
+c.execute("INSERT INTO permission_settings VALUES ('defaults',?,'2026-09-20T10:05:00Z')",(json.dumps({"defaultMode":"plan","defaultProfileId":None}),))
+ev=json.loads(sys.argv[6])
+c.execute("INSERT INTO events (id,type,version,occurred_at,source,payload) VALUES (?,'settings.changed',1,'2026-09-20T10:01:00Z','ui','{\\"keys\\":[\\"appearance.theme\\"]}')",(ev[0],))
+c.execute("INSERT INTO events (id,type,version,occurred_at,source,workspace_id,payload) VALUES (?,'workspace.created',1,'2026-09-20T10:02:00Z','core',?,json(?))",(ev[1],ws,json.dumps({"workspaceId":ws,"name":"legacy-project"})))
+c.execute("INSERT INTO events (id,type,version,occurred_at,source,workspace_id,thread_id,provider_id,payload) VALUES (?,'thread.completed',1,'2026-09-20T10:04:00Z','core',?,?,'claude-code',json(?))",(ev[2],ws,th,json.dumps({"threadId":th})))
+c.execute("INSERT INTO events (id,type,version,occurred_at,source,payload) VALUES (?,'app.stopped',1,'2026-09-20T10:06:00Z','core','{\\"uptimeMs\\":300000}')",(ev[3],))
+c.commit()`,
+    join(dataDir, "kalcode.db"),
+    JSON.stringify(files),
+    V4_WORKSPACE,
+    V4_THREAD,
+    projectDir,
+    JSON.stringify(V4_EVENTS),
+  );
+}
+
+interface EventPageLite {
+  events: EventLite[];
+  nextCursor: number | null;
+}
+
+test("a v4 database from the installed app is upgraded to v5 with a backup; every row survives and events_query reads it", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-"));
+  const projectDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-legacy-"));
+  try {
+    createV4Database(dataDir, projectDir);
+    const app = await launch(dataDir);
+    const page = app.page;
+    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+
+    const diagnostics = await invoke<{ database: { schemaVersion: number; latestSchemaVersion: number } }>(
+      page,
+      "diagnostics_get",
+    );
+    expect(diagnostics.database.schemaVersion).toBe(5);
+    expect(diagnostics.database.latestSchemaVersion).toBe(5);
+
+    // Every v4 event is kept; the upgrade is recorded with its backup.
+    const recent = await invoke<EventLite[]>(page, "events_recent", { limit: 100, beforeSeq: null });
+    for (const id of V4_EVENTS)
+      expect(
+        recent.map((e) => e.id),
+        "v4 events are kept",
+      ).toContain(id);
+    const upgrade = recent.find((e) => e.type === "database.migrated" && e.payload.fromVersion === 4);
+    expect(upgrade?.payload).toEqual({ fromVersion: 4, toVersion: 5, backupCreated: true });
+
+    // The new query IPC reads the upgraded log: by thread correlation (a v4 row), by prefix, paged.
+    const emptyCorrelation = {
+      workspaceId: null,
+      threadId: null,
+      missionId: null,
+      providerId: null,
+      requestId: null,
+      agentId: null,
+      taskId: null,
+      automationId: null,
+      causationId: null,
+    };
+    const query = (q: Record<string, unknown>) =>
+      invoke<EventPageLite>(page, "events_query", {
+        query: {
+          types: [],
+          correlation: emptyCorrelation,
+          afterSeq: null,
+          beforeSeq: null,
+          from: null,
+          to: null,
+          order: "desc",
+          limit: 100,
+          ...q,
+        },
+      });
+    const byThread = await query({ correlation: { ...emptyCorrelation, threadId: V4_THREAD } });
+    expect(byThread.events.map((e) => e.id)).toEqual([V4_EVENTS[2]]);
+    expect((byThread.events[0] as unknown as { correlation: Record<string, unknown> }).correlation).toMatchObject({
+      threadId: V4_THREAD,
+      workspaceId: V4_WORKSPACE,
+      agentId: null,
+      causationId: null,
+    });
+    const workspaceEvents = await query({ types: ["workspace.*"], order: "asc" });
+    expect(workspaceEvents.events.map((e) => e.id)).toContain(V4_EVENTS[1]);
+    const firstTwo = await query({ order: "asc", limit: 2 });
+    expect(firstTwo.events.map((e) => e.id)).toEqual([V4_EVENTS[0], V4_EVENTS[1]]);
+    expect(firstTwo.nextCursor).not.toBeNull();
+    // A malformed filter is refused natively with a validation error.
+    const refused = await page.evaluate(
+      (q) =>
+        (
+          window as unknown as { __TAURI_INTERNALS__: { invoke: (c: string, a: unknown) => Promise<unknown> } }
+        ).__TAURI_INTERNALS__
+          .invoke("events_query", { query: q })
+          .then(
+            () => "accepted",
+            (error: { code?: string }) => error?.code ?? "unknown",
+          ),
+      {
+        types: ["thread.%"],
+        correlation: emptyCorrelation,
+        afterSeq: null,
+        beforeSeq: null,
+        from: null,
+        to: null,
+        order: "desc",
+        limit: 10,
+      },
+    );
+    expect(refused).toBe("invalid_event_query");
+
+    // The v3 thread row reads back through the CA-1 ThreadSummary shape.
+    const thread = await invoke<Record<string, unknown>>(page, "thread_get", { threadId: V4_THREAD });
+    expect(thread).toMatchObject({
+      id: V4_THREAD,
+      name: "Keep this thread",
+      archivedAt: null,
+      resumable: false,
+      permissionProfileId: null,
+      runtimeKind: null,
+      terminalId: null,
+    });
+    // The v4 permission preference survives.
+    expect(await invoke<{ defaultMode: string }>(page, "permission_settings_get")).toMatchObject({
+      defaultMode: "plan",
+    });
+
+    await page.getByRole("button", { name: "Settings" }).click();
+    await expect(page.getByText("Version 5 of 5, WAL journal")).toBeVisible();
+    await closeGracefully(app);
+
+    // The backup is the untouched v4 database; the live one has the v5 columns and indexes.
+    const backups = readdirSync(join(dataDir, "backups"));
+    expect(backups).toHaveLength(1);
+    const backup = join(dataDir, "backups", backups[0] as string);
+    expect(
+      python(
+        `import sqlite3,sys
+c=sqlite3.connect(sys.argv[1])
+cols=[r[1] for r in c.execute("PRAGMA table_info(events)")]
+print(c.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], c.execute("SELECT COUNT(*) FROM events").fetchone()[0], "causation_id" in cols)`,
+        backup,
+      ),
+    ).toBe("4 4 False");
+    expect(
+      python(
+        `import sqlite3,sys
+c=sqlite3.connect(sys.argv[1])
+cols=",".join(r[1] for r in c.execute("PRAGMA table_info(events)") if r[1] in ("agent_id","task_id","automation_id","causation_id"))
+idx=",".join(r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='index' AND name IN ('events_agent_id_idx','events_task_id_idx','events_automation_id_idx','events_causation_id_idx','events_request_id_idx') ORDER BY name"))
+kept=c.execute("SELECT COUNT(*) FROM threads WHERE id=?",(sys.argv[2],)).fetchone()[0]
+print(cols, idx, kept)`,
+        join(dataDir, "kalcode.db"),
+        V4_THREAD,
+      ),
+    ).toBe(
+      "agent_id,task_id,automation_id,causation_id events_agent_id_idx,events_automation_id_idx,events_causation_id_idx,events_request_id_idx,events_task_id_idx 1",
+    );
+  } finally {
+    removeDir(dataDir);
+    removeDir(projectDir);
   }
 });
 

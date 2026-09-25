@@ -48,6 +48,7 @@ use crate::handles::HandleRegistry;
 use crate::paths::{RelPath, WorkspaceRoot};
 use crate::repo::{Repo, is_object_id, validate_branch_name};
 use crate::runner::{Cmd, Git, git_error};
+pub use crate::types::PlannedChange;
 
 /// Checkpoint store limits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,23 +98,6 @@ pub enum CreateOutcome {
     Unchanged {
         unchanged_since: String,
     },
-}
-
-/// How one file would change in a restore.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PlannedChange {
-    /// The file exists now and gets the checkpoint's content.
-    Overwrite,
-    /// The file is missing now and is recreated.
-    Create,
-    /// The file was added after the checkpoint and is deleted (only when requested).
-    Delete,
-    /// The file was added after the checkpoint and is kept (the default).
-    KeepUntracked,
-    /// The checkpoint has this file, but the current file is ignored or too large to snapshot,
-    /// so it is kept as it is (restores never touch what they cannot protect).
-    KeepExisting,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -6,8 +6,13 @@ use ts_rs::TS;
 
 use crate::agent::ProviderId;
 use crate::app::BuildChannel;
-use crate::kalvoice::{KalVoiceInput, KalVoiceIntelligence};
+use crate::context::ContextPurpose;
+use crate::git::WorktreePurpose;
+use crate::kalvoice::{KalVoiceInput, KalVoiceIntelligence, TalkRoute};
 use crate::permissions::{ApprovalDecision, PermissionMode, PermissionScope};
+use crate::resources::{
+    GovernorMode, PressureLevel, ResourceHoldReason, ResourceKind, ResourceReleaseCause, Signal,
+};
 use crate::threads::ThreadStatus;
 
 /// Where an event originated.
@@ -49,6 +54,9 @@ impl EventSource {
 }
 
 /// Optional identifiers that relate an event to KalCode entities. Indexed in storage.
+///
+/// `agent_id`, `task_id`, `automation_id` and `causation_id` were added in CA-1 / L-1 (protocol
+/// v1-compatible, EVENT_PROTOCOL.md §6; stored by schema v5). They default to `null` when absent.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -58,6 +66,94 @@ pub struct Correlation {
     pub mission_id: Option<String>,
     pub provider_id: Option<String>,
     pub request_id: Option<String>,
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    #[serde(default)]
+    pub task_id: Option<String>,
+    #[serde(default)]
+    pub automation_id: Option<String>,
+    /// Id of the event that directly caused this one (Time Machine causality, automation loop
+    /// detection). Set when a domain operation is a reaction to an event.
+    #[serde(default)]
+    pub causation_id: Option<String>,
+}
+
+/// Seq ordering for [`EventQuery`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum SeqOrder {
+    Asc,
+    #[default]
+    Desc,
+}
+
+/// Correlation filter for [`EventQuery`]: every given field must match.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export)]
+pub struct CorrelationFilter {
+    pub workspace_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub mission_id: Option<String>,
+    pub provider_id: Option<String>,
+    pub request_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub task_id: Option<String>,
+    pub automation_id: Option<String>,
+    pub causation_id: Option<String>,
+}
+
+/// Maximum number of type filters in one [`EventQuery`].
+pub const MAX_QUERY_TYPES: usize = 32;
+/// Maximum page size of [`EventQuery`].
+pub const MAX_QUERY_LIMIT: u32 = 500;
+
+/// A filtered, paged read of the event log (`events_query`). Missing fields take their defaults.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", default)]
+#[ts(export)]
+pub struct EventQuery {
+    /// Exact types (`thread.created`) or `domain.*` prefixes (`thread.*`); at most 32;
+    /// empty = every type.
+    pub types: Vec<String>,
+    pub correlation: CorrelationFilter,
+    /// Only events with `seq > afterSeq`.
+    pub after_seq: Option<i64>,
+    /// Only events with `seq < beforeSeq`.
+    pub before_seq: Option<i64>,
+    /// Only events that occurred at or after this RFC 3339 UTC time.
+    pub from: Option<String>,
+    /// Only events that occurred before this RFC 3339 UTC time.
+    pub to: Option<String>,
+    pub order: SeqOrder,
+    /// 1..=500.
+    pub limit: u32,
+}
+
+impl Default for EventQuery {
+    fn default() -> Self {
+        Self {
+            types: Vec::new(),
+            correlation: CorrelationFilter::default(),
+            after_seq: None,
+            before_seq: None,
+            from: None,
+            to: None,
+            order: SeqOrder::Desc,
+            limit: 100,
+        }
+    }
+}
+
+/// One page of [`EventQuery`] results. `next_cursor` is the `seq` to pass as `beforeSeq`
+/// (descending) or `afterSeq` (ascending) for the next page; `null` when this page is the last.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct EventPage {
+    pub events: Vec<EventEnvelope>,
+    pub next_cursor: Option<i64>,
 }
 
 /// Typed event payloads. The serde tag is the wire `type`; the content is `payload`.
@@ -242,6 +338,138 @@ pub enum EventPayload {
         from: PermissionMode,
         to: PermissionMode,
     },
+    /// The default mode for new threads changed (CA-1; `permission.mode_changed` with
+    /// `threadId: null` is still emitted for compatibility until Z4 switches).
+    #[serde(rename = "permission.default_mode_changed")]
+    PermissionDefaultModeChanged {
+        from: PermissionMode,
+        to: PermissionMode,
+    },
+
+    // ---- Git and checkpoints (Z6a; declared in CA-1) ----
+    /// HEAD moved to another branch (`to = "(detached)"` when detached).
+    #[serde(rename = "git.branch_changed")]
+    GitBranchChanged {
+        workspace_id: String,
+        from: Option<String>,
+        to: String,
+    },
+    /// The set of changed files differs from the last report (debounced ≥ 1 s, transitions only).
+    #[serde(rename = "git.diff_changed")]
+    GitDiffChanged {
+        workspace_id: String,
+        worktree_id: Option<String>,
+        files: u32,
+    },
+    /// A commit created by KalCode (branch from checkpoint) or observed.
+    #[serde(rename = "git.commit_created")]
+    GitCommitCreated {
+        workspace_id: String,
+        worktree_id: Option<String>,
+        oid: String,
+        by_kal_code: bool,
+    },
+    #[serde(rename = "git.worktree_created")]
+    GitWorktreeCreated {
+        workspace_id: String,
+        worktree_id: String,
+        branch: String,
+        purpose: WorktreePurpose,
+    },
+    #[serde(rename = "git.worktree_removed")]
+    GitWorktreeRemoved {
+        workspace_id: String,
+        worktree_id: String,
+        branch: String,
+        purpose: WorktreePurpose,
+    },
+    #[serde(rename = "timeline.checkpoint_created")]
+    TimelineCheckpointCreated {
+        checkpoint_id: String,
+        workspace_id: String,
+        /// The trigger's kind (`user`, `thread_turn`, …).
+        trigger: String,
+        files: u32,
+        bytes_added: u64,
+    },
+    #[serde(rename = "timeline.checkpoint_pruned")]
+    TimelineCheckpointPruned {
+        checkpoint_id: String,
+        reason: String,
+    },
+
+    // ---- Context and firewall (CTX/FW; declared in CA-1; never content) ----
+    #[serde(rename = "context.package_created")]
+    ContextPackageCreated {
+        package_id: String,
+        purpose: ContextPurpose,
+        items: u32,
+        bytes: u64,
+    },
+    #[serde(rename = "context.blocked")]
+    ContextBlocked {
+        package_id: String,
+        /// The most frequent blocking rule code.
+        rule: String,
+        items: u32,
+    },
+    #[serde(rename = "context.redacted")]
+    ContextRedacted {
+        package_id: String,
+        items: u32,
+        spans: u32,
+    },
+    /// The user confirmed an overridable item (FW-03).
+    #[serde(rename = "context.override_confirmed")]
+    ContextOverrideConfirmed {
+        package_id: String,
+        position: u32,
+        rule: String,
+    },
+    #[serde(rename = "context.shared")]
+    ContextShared {
+        package_id: String,
+        thread_id: Option<String>,
+        provider_id: ProviderId,
+        items: u32,
+        bytes: u64,
+        redactions: u32,
+    },
+    #[serde(rename = "context.discarded")]
+    ContextDiscarded { package_id: String },
+
+    // ---- Resource Governor (RG; declared in CA-1; transitions only) ----
+    #[serde(rename = "resource.pressure_changed")]
+    ResourcePressureChanged {
+        resource: ResourceKind,
+        from: PressureLevel,
+        to: PressureLevel,
+        mode: GovernorMode,
+        #[serde(default)]
+        signal: Option<Signal>,
+        #[serde(default)]
+        value: Option<f64>,
+        #[serde(default)]
+        threshold: Option<f64>,
+    },
+    #[serde(rename = "resource.mode_changed")]
+    ResourceModeChanged {
+        from: GovernorMode,
+        to: GovernorMode,
+    },
+    /// A task was held for resource reasons (emitted by the Scheduler, P4).
+    #[serde(rename = "resource.task_held")]
+    ResourceTaskHeld {
+        task_id: String,
+        reasons: Vec<ResourceHoldReason>,
+        mode: GovernorMode,
+    },
+    #[serde(rename = "resource.task_released")]
+    ResourceTaskReleased {
+        task_id: String,
+        held_ms: u64,
+        cause: ResourceReleaseCause,
+    },
 
     // ---- KalVoice (never carries transcripts or audio) ----
     #[serde(rename = "kalvoice.dictation_started")]
@@ -278,6 +506,12 @@ pub enum EventPayload {
     KalVoiceVoiceOutputStarted { request_id: String },
     #[serde(rename = "kalvoice.voice_output_completed")]
     KalVoiceVoiceOutputCompleted { request_id: String },
+    /// Which way a push-to-talk utterance went (CA-1). Ids and the outcome only — never words.
+    #[serde(rename = "kalvoice.talk_routed")]
+    KalVoiceTalkRouted {
+        request_id: String,
+        outcome: TalkRoute,
+    },
 
     /// A stored event this build does not understand (written by a newer build or a removed
     /// type). Kept so history stays complete.
@@ -328,6 +562,24 @@ impl EventPayload {
             Self::ApprovalDenied { .. } => "approval.denied",
             Self::ApprovalExpired { .. } => "approval.expired",
             Self::PermissionModeChanged { .. } => "permission.mode_changed",
+            Self::PermissionDefaultModeChanged { .. } => "permission.default_mode_changed",
+            Self::GitBranchChanged { .. } => "git.branch_changed",
+            Self::GitDiffChanged { .. } => "git.diff_changed",
+            Self::GitCommitCreated { .. } => "git.commit_created",
+            Self::GitWorktreeCreated { .. } => "git.worktree_created",
+            Self::GitWorktreeRemoved { .. } => "git.worktree_removed",
+            Self::TimelineCheckpointCreated { .. } => "timeline.checkpoint_created",
+            Self::TimelineCheckpointPruned { .. } => "timeline.checkpoint_pruned",
+            Self::ContextPackageCreated { .. } => "context.package_created",
+            Self::ContextBlocked { .. } => "context.blocked",
+            Self::ContextRedacted { .. } => "context.redacted",
+            Self::ContextOverrideConfirmed { .. } => "context.override_confirmed",
+            Self::ContextShared { .. } => "context.shared",
+            Self::ContextDiscarded { .. } => "context.discarded",
+            Self::ResourcePressureChanged { .. } => "resource.pressure_changed",
+            Self::ResourceModeChanged { .. } => "resource.mode_changed",
+            Self::ResourceTaskHeld { .. } => "resource.task_held",
+            Self::ResourceTaskReleased { .. } => "resource.task_released",
             Self::KalVoiceDictationStarted { .. } => "kalvoice.dictation_started",
             Self::KalVoiceDictationCompleted { .. } => "kalvoice.dictation_completed",
             Self::KalVoiceDictationFailed { .. } => "kalvoice.dictation_failed",
@@ -340,6 +592,7 @@ impl EventPayload {
             Self::KalVoiceProviderSelected { .. } => "kalvoice.provider_selected",
             Self::KalVoiceVoiceOutputStarted { .. } => "kalvoice.voice_output_started",
             Self::KalVoiceVoiceOutputCompleted { .. } => "kalvoice.voice_output_completed",
+            Self::KalVoiceTalkRouted { .. } => "kalvoice.talk_routed",
             Self::Unrecognized { .. } => "unrecognized",
         }
     }
@@ -550,6 +803,106 @@ mod tests {
                 from: PermissionMode::Approve,
                 to: PermissionMode::Auto,
             },
+            EventPayload::PermissionDefaultModeChanged {
+                from: PermissionMode::Approve,
+                to: PermissionMode::Plan,
+            },
+            EventPayload::GitBranchChanged {
+                workspace_id: s(),
+                from: None,
+                to: s(),
+            },
+            EventPayload::GitDiffChanged {
+                workspace_id: s(),
+                worktree_id: None,
+                files: 2,
+            },
+            EventPayload::GitCommitCreated {
+                workspace_id: s(),
+                worktree_id: None,
+                oid: s(),
+                by_kal_code: true,
+            },
+            EventPayload::GitWorktreeCreated {
+                workspace_id: s(),
+                worktree_id: s(),
+                branch: s(),
+                purpose: WorktreePurpose::User,
+            },
+            EventPayload::GitWorktreeRemoved {
+                workspace_id: s(),
+                worktree_id: s(),
+                branch: s(),
+                purpose: WorktreePurpose::Task,
+            },
+            EventPayload::TimelineCheckpointCreated {
+                checkpoint_id: s(),
+                workspace_id: s(),
+                trigger: "user".into(),
+                files: 3,
+                bytes_added: 10,
+            },
+            EventPayload::TimelineCheckpointPruned {
+                checkpoint_id: s(),
+                reason: "quota".into(),
+            },
+            EventPayload::ContextPackageCreated {
+                package_id: s(),
+                purpose: ContextPurpose::Drop,
+                items: 1,
+                bytes: 2,
+            },
+            EventPayload::ContextBlocked {
+                package_id: s(),
+                rule: "secret_detected".into(),
+                items: 1,
+            },
+            EventPayload::ContextRedacted {
+                package_id: s(),
+                items: 1,
+                spans: 2,
+            },
+            EventPayload::ContextOverrideConfirmed {
+                package_id: s(),
+                position: 0,
+                rule: "ignored_path.gitignore".into(),
+            },
+            EventPayload::ContextShared {
+                package_id: s(),
+                thread_id: None,
+                provider_id: p(),
+                items: 1,
+                bytes: 2,
+                redactions: 0,
+            },
+            EventPayload::ContextDiscarded { package_id: s() },
+            EventPayload::ResourcePressureChanged {
+                resource: ResourceKind::Memory,
+                from: PressureLevel::Normal,
+                to: PressureLevel::High,
+                mode: GovernorMode::Balanced,
+                signal: Some(Signal::MemoryAvailableMb),
+                value: Some(512.0),
+                threshold: Some(1024.0),
+            },
+            EventPayload::ResourceModeChanged {
+                from: GovernorMode::Balanced,
+                to: GovernorMode::Performance,
+            },
+            EventPayload::ResourceTaskHeld {
+                task_id: s(),
+                reasons: vec![ResourceHoldReason::UserLimit {
+                    running: 4,
+                    limit: 4,
+                    mode: GovernorMode::Balanced,
+                }],
+                mode: GovernorMode::Balanced,
+            },
+            EventPayload::ResourceTaskReleased {
+                task_id: s(),
+                held_ms: 1500,
+                cause: ResourceReleaseCause::LimitFreed,
+            },
             EventPayload::KalVoiceDictationStarted { session_id: s() },
             EventPayload::KalVoiceDictationCompleted {
                 session_id: s(),
@@ -587,6 +940,10 @@ mod tests {
             },
             EventPayload::KalVoiceVoiceOutputStarted { request_id: s() },
             EventPayload::KalVoiceVoiceOutputCompleted { request_id: s() },
+            EventPayload::KalVoiceTalkRouted {
+                request_id: s(),
+                outcome: TalkRoute::Dictation,
+            },
             EventPayload::Unrecognized {
                 original_type: s(),
                 original_version: 1,
@@ -611,7 +968,7 @@ mod tests {
         }
         // Keep in step with the enum: the `type_name` match is exhaustive, so a new variant
         // compiles only once named there — and this count must be raised with a new sample.
-        assert_eq!(samples.len(), 49);
+        assert_eq!(samples.len(), 68);
     }
 
     #[test]
@@ -624,5 +981,80 @@ mod tests {
         .expect("serialize");
         assert_eq!(json["payload"]["closedByUser"], true);
         assert_eq!(json["payload"]["terminalId"], "t");
+    }
+
+    #[test]
+    fn ca1_payloads_use_the_documented_field_names() {
+        let json = serde_json::to_value(EventPayload::GitCommitCreated {
+            workspace_id: "w".into(),
+            worktree_id: None,
+            oid: "a".into(),
+            by_kal_code: true,
+        })
+        .expect("json");
+        assert_eq!(json["payload"]["byKalCode"], true);
+        let json = serde_json::to_value(EventPayload::ResourcePressureChanged {
+            resource: ResourceKind::DiskSpace,
+            from: PressureLevel::Normal,
+            to: PressureLevel::Elevated,
+            mode: GovernorMode::Conservative,
+            signal: Some(Signal::DiskFreeMb {
+                mount: "C:\\".into(),
+            }),
+            value: Some(1.0),
+            threshold: None,
+        })
+        .expect("json");
+        assert_eq!(json["payload"]["signal"]["signal"], "disk_free_mb");
+        // The optional facts may be absent in stored payloads.
+        let minimal: EventPayload = serde_json::from_value(serde_json::json!({
+            "type": "resource.pressure_changed",
+            "payload": {"resource": "cpu", "from": "normal", "to": "high", "mode": "balanced"}
+        }))
+        .expect("minimal");
+        assert!(matches!(
+            minimal,
+            EventPayload::ResourcePressureChanged {
+                signal: None,
+                value: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn correlation_is_v1_compatible() {
+        // An envelope's correlation as stored before CA-1 has only five fields.
+        let old: Correlation = serde_json::from_value(serde_json::json!({
+            "workspaceId": "w", "threadId": null, "missionId": null, "providerId": null,
+            "requestId": null
+        }))
+        .expect("old correlation");
+        assert_eq!(old.workspace_id.as_deref(), Some("w"));
+        assert_eq!(old.causation_id, None);
+        let json = serde_json::to_value(Correlation {
+            causation_id: Some("e".into()),
+            ..Correlation::default()
+        })
+        .expect("json");
+        assert_eq!(json["causationId"], "e");
+        assert!(json["agentId"].is_null());
+    }
+
+    #[test]
+    fn event_query_defaults_fill_missing_fields() {
+        let query: EventQuery =
+            serde_json::from_value(serde_json::json!({"types": ["thread.*"], "limit": 20}))
+                .expect("query");
+        assert_eq!(query.order, SeqOrder::Desc);
+        assert_eq!(query.correlation, CorrelationFilter::default());
+        assert_eq!(query.limit, 20);
+        let asc: EventQuery = serde_json::from_value(
+            serde_json::json!({"order": "asc", "correlation": {"agentId": "a"}}),
+        )
+        .expect("asc");
+        assert_eq!(asc.order, SeqOrder::Asc);
+        assert_eq!(asc.correlation.agent_id.as_deref(), Some("a"));
+        assert_eq!(asc.limit, 100);
     }
 }

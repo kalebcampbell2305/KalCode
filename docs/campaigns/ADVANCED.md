@@ -177,7 +177,7 @@ take any item whose dependencies (§4) are on `main` and whose files no other wr
 
 | Id | Item | Owner | When | Contents |
 | --- | --- | --- | --- | --- |
-| **L-1** | Event platform | lead (native-core) | P0 (now) | Optional correlation fields `agentId`, `taskId`, `automationId`, `causationId` (protocol v1-compatible, §6 of `EVENT_PROTOCOL.md`); migration **v6** adds columns + partial indexes; `events_query` (types/prefixes, correlation filter, seq range, cursor, asc/desc, ≤ 500); `Core::reader()` read-only WAL connection for background work; `kalcode_core::redact` extracted from `logging.rs` (one redactor for logs, FW, UD, LOC snippets, MEM); per-feature flags (`FeatureId`) alongside surface flags; `SurfaceId::CommandCenter`; native confirmation dialog helper (Rust-side, for WebView-unforgeable confirmations, §3 D8). |
+| **L-1** | Event platform | lead (native-core) | P0 (now) | Optional correlation fields `agentId`, `taskId`, `automationId`, `causationId` (protocol v1-compatible, §6 of `EVENT_PROTOCOL.md`); migration **v5** (landed with CA-1) adds columns + partial indexes; `events_query` (types/prefixes, correlation filter, seq range, cursor, asc/desc, ≤ 500); `Core::reader()` read-only WAL connection for background work; `kalcode_core::redact` extracted from `logging.rs` (one redactor for logs, FW, UD, LOC snippets, MEM); per-feature flags (`FeatureId`) alongside surface flags; `SurfaceId::CommandCenter`; native confirmation dialog helper (Rust-side, for WebView-unforgeable confirmations, §3 D8). |
 | **CA-1..4** | Contract additions per wave | lead (`crates/contracts`) | start of each wave | See `CONTRACTS_ADVANCED.md`. Writers never edit contracts. |
 | **TK-1** | Trust Kernel phase 1 | Z4 thread continuing (`crates/permissions`) | right after Z4 merges | Action origins beyond threads; new scopes and `ActionKind`s; formal invariants K1–K10; authority ceilings; `trust.action_blocked`; `permission_action_log`; `explain`. Migration **v12** (with L-2). |
 | **L-2** | Thread origins | lead (`crates/threads`, post-merge) | P1 start (with TK-1) | `ThreadOrigin` on create (user, KalVoice, agent/delegation, task, automation run, handoff); runtime kind (`headless` / `interactive_pty`) + terminal id for provider panes; worktree binding; profile application link. Migration **v12**. |
@@ -355,8 +355,8 @@ through that system's Rust API, never with SQL.
 | 2 | Z1 (wave 2) | `workspaces`, `terminals` |
 | 3 | Z3 (wave 2) | `threads`, `thread_messages`, `tool_calls`, `thread_files` |
 | 4 | Z4 | `permission_profiles`, `permission_settings`, `approvals`, `permission_grants`, `permission_audit` |
-| 5 | Z12 (branch file `0006` → renumber at integration) | `kalvoice_requests`, `kalvoice_preferences` |
-| 6 | L-1 lead | `events` + correlation columns and indexes |
+| 5 | L-1 lead (registered in CA-1) | `events` + correlation columns and indexes |
+| 6 | Z12 (branch file `0006`; registered at integration) | `kalvoice_requests`, `kalvoice_preferences` |
 | 7 | Z6a (P0) | `git_worktrees`, `checkpoints` |
 | 8 | CTX/FW (P0) | `context_packages`, `context_items`, `context_firewall_log`, `context_never_share` |
 | 9 | Z7-W1 | `workspace_layouts`, `layout_presets` |
@@ -888,6 +888,18 @@ negated and compound phrasings for every intent, and the safety asymmetry (KV-02
 ---
 
 ## 16. Campaign Z7 — Workspace, Dashboard, Thread Panels & Returning-User UX
+
+> **Owner requirement (2026-09-24) — approved premium visual direction in the app.** The desktop
+> app adopts the owner-approved KalCode visual language (reference concepts in the lead's
+> `web-audit/approved/`): dark, polished, cinematic, technical, high-end — denser and more
+> functional than the marketing site, with brand glow used sparingly. Upgrade pane styling, thread
+> cards, Dashboard, the KalVoice widget, provider identities (neutral glyph + name), status states,
+> spacing, typography, borders, shadows, motion and workspace composition; remove anything bland,
+> generic, empty or unfinished. Website and app share design tokens/components (`packages/ui`
+> tokens, terminal palette, status tones, buttons) so they read as one brand. Z7 starts with
+> **Z7-W0 design system** (tokens, type scale, surfaces/borders/elevation, buttons, status chips,
+> provider identity marks, motion tokens, KalVoice widget skin) landing before the other writers
+> restyle their areas on top of it.
 
 > **Owner requirement (2026-09-24) — full-window workspace.** KalCode fills 100% of the window
 > right of the sidebar; no surface sits in a narrow centred container. Code Mode's right side is

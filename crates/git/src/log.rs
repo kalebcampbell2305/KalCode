@@ -2,25 +2,12 @@
 //!
 //! Destructiveness: **read-only**.
 
-use serde::{Deserialize, Serialize};
-
 use kalcode_core::{KalError, Result};
 
 use crate::repo::{Repo, is_object_id, validate_revision};
 use crate::runner::Git;
+pub use crate::types::{Branch, BranchKind, Commit};
 use crate::types::{MAX_PAGE, Page};
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Commit {
-    pub oid: String,
-    pub parents: Vec<String>,
-    pub author_name: String,
-    pub author_email: String,
-    pub authored_at: String,
-    pub committed_at: String,
-    pub subject: String,
-}
 
 /// A page of history. The cursor pins the starting commit, so pages stay stable while new
 /// commits arrive: `<start-oid>:<offset>`.
@@ -118,29 +105,6 @@ fn parse_log(bytes: &[u8]) -> Vec<Commit> {
             })
         })
         .collect()
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum BranchKind {
-    Local,
-    Remote,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Branch {
-    /// Short name (`main`, `origin/main`).
-    pub name: String,
-    pub kind: BranchKind,
-    pub oid: String,
-    pub upstream: Option<String>,
-    pub ahead: Option<u32>,
-    pub behind: Option<u32>,
-    /// The upstream branch no longer exists.
-    pub upstream_gone: bool,
-    /// HEAD points at this branch.
-    pub current: bool,
 }
 
 /// Local and remote-tracking branches (at most 5,000).

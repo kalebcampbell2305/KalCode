@@ -974,12 +974,16 @@ impl Inner {
     }
 
     fn to_summary(&self, row: ThreadRow, workspace_name: Option<String>) -> ThreadSummary {
-        let provider_name = self
-            .providers
-            .get(&row.provider_id)
-            .map_or(row.provider_name, |entry| {
-                entry.provider.display_name().to_owned()
-            });
+        let entry = self.providers.get(&row.provider_id);
+        // Resume restores the provider's own conversation only when the provider supports it and
+        // a provider session id was stored; otherwise resume starts a fresh session.
+        let resumable = row.provider_session_id.is_some()
+            && entry
+                .as_ref()
+                .is_some_and(|entry| entry.provider.capabilities().resume);
+        let provider_name = entry.map_or(row.provider_name, |entry| {
+            entry.provider.display_name().to_owned()
+        });
         ThreadSummary {
             id: row.id,
             name: row.name,
@@ -1002,6 +1006,11 @@ impl Inner {
                 .error_code
                 .zip(row.error_message)
                 .map(|(code, message)| ThreadError { code, message }),
+            archived_at: row.archived_at,
+            resumable,
+            permission_profile_id: row.permission_profile_id,
+            runtime_kind: None,
+            terminal_id: None,
         }
     }
 

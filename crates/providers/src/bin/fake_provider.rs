@@ -53,8 +53,26 @@ fn exit(code: i64) -> ! {
     std::process::exit(i32::try_from(code).unwrap_or(1))
 }
 
+/// Appends one line per start to `runs.log` beside the executable: its file name and
+/// arguments. Tests use it to prove which copy ran (and that planted copies never did).
+fn record_run(args: &[String]) {
+    let name = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_default();
+    let line = serde_json::json!({ "exe": name, "args": args }).to_string();
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(exe_dir().join("runs.log"))
+    {
+        let _ = writeln!(file, "{line}");
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    record_run(&args);
     if args.first().map(String::as_str) == Some("--fake-grandchild") {
         loop {
             std::thread::sleep(Duration::from_secs(1));

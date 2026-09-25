@@ -39,6 +39,19 @@
       "simple": { "limit": 5, "period": 60 }
     }
   ],
+  // Plain configuration only; secrets never go here. RESEND_API_KEY is a Worker secret
+  // (`wrangler secret put RESEND_API_KEY`); local development reads .dev.vars
+  // (see .dev.vars.example). docs/WEBSITE.md "Email".
+  "vars": {
+    // resend (production) | capture (tests: loopback mail sink) | log (local console)
+    "EMAIL_TRANSPORT": "resend",
+    // Site-wide cap on emails per UTC day, inside Resend's free allowance (100/day).
+    "EMAIL_DAILY_LIMIT": "90"
+  },
+  "triggers": {
+    // Hourly cleanup of expired links and unconfirmed sign-ups (worker/index.ts `scheduled`).
+    "crons": ["17 * * * *"]
+  },
   "routes": [
     { "pattern": "kalcoded.com", "custom_domain": true },
     { "pattern": "www.kalcoded.com", "custom_domain": true }

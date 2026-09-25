@@ -168,6 +168,7 @@ pub fn permission_settings_update(
 }
 
 /// One result of [`test_permission_probe`].
+#[cfg(any(debug_assertions, feature = "e2e"))]
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProbeResult {
@@ -177,11 +178,12 @@ pub struct ProbeResult {
     pub reason: String,
 }
 
-/// **Test hook** (debug and `e2e` builds only; refused in shipped builds). Evaluates two fixed
-/// actions with the real engine and the workspace's real root, in Approve mode, without a
-/// thread or provider: reading `README.md` inside the workspace, and writing `outside.txt` in
+/// **Test hook** (debug and `e2e` builds only; not compiled into, or registered by, shipped
+/// builds). Evaluates two fixed actions with the real engine and the workspace's real root, in
+/// Approve mode, without a thread or provider: reading `README.md` inside the workspace, and writing `outside.txt` in
 /// the folder that contains it. Paths are built natively from the workspace root; the WebView
 /// supplies only the workspace id. Nothing is stored, approved or run.
+#[cfg(any(debug_assertions, feature = "e2e"))]
 #[tauri::command(async)]
 pub fn test_permission_probe(
     app: State<'_, AppState>,
@@ -232,6 +234,7 @@ pub fn test_permission_probe(
                 action: kind,
                 summary: probe.to_owned(),
                 requested_at: kalcode_core::time::now_rfc3339(),
+                origin: None,
             };
             let (_, decision) = service.evaluate_detailed(&action, PermissionMode::Approve);
             ProbeResult {

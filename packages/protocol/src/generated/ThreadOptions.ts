@@ -4,7 +4,7 @@ import type { ProviderOption } from "./ProviderOption.ts";
 import type { WorkspaceOption } from "./WorkspaceOption.ts";
 
 /**
- * Everything the New thread flow needs to offer valid choices.
+ * Everything the New thread flow needs to offer valid choices (`thread_options`).
  */
 export type ThreadOptions = { providers: Array<ProviderOption>, workspaces: Array<WorkspaceOption>, 
 /**

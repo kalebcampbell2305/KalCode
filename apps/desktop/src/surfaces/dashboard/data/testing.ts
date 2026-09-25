@@ -45,6 +45,11 @@ export function thread(overrides: Partial<ThreadSummary> = {}): ThreadSummary {
     filesChanged: null,
     branch: null,
     error: null,
+    archivedAt: null,
+    resumable: false,
+    permissionProfileId: null,
+    runtimeKind: null,
+    terminalId: null,
     ...overrides,
   };
 }

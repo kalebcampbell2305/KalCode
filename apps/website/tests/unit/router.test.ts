@@ -12,13 +12,15 @@ import {
   SIGNUP_PATH,
 } from "../../worker/lib/router";
 import { IMMUTABLE_CACHE } from "../../worker/lib/security";
-import type { EarlyAccessEntry } from "../../worker/lib/store";
+import { type FakeMailer, type FakeRow, type FakeStore, fakeMailer, fakeStore } from "./fakes";
 
 const ORIGIN = "https://kalcoded.com";
 
 interface Harness {
   deps: Deps;
-  rows: Map<string, EarlyAccessEntry>;
+  store: FakeStore;
+  mailer: FakeMailer;
+  rows: Map<string, FakeRow>;
   logs: Record<string, string>[];
   limitKeys: string[];
   assetRequests: string[];
@@ -27,14 +29,17 @@ interface Harness {
 }
 
 function harness(): Harness {
-  const rows = new Map<string, EarlyAccessEntry>();
+  const store = fakeStore();
+  const mailer = fakeMailer();
   const logs: Record<string, string>[] = [];
   const limitKeys: string[] = [];
   const assetRequests: string[] = [];
   let limited = false;
-  let storeFails = false;
+  let counter = 0;
   return {
-    rows,
+    store,
+    mailer,
+    rows: store.rows,
     logs,
     limitKeys,
     assetRequests,
@@ -42,7 +47,7 @@ function harness(): Harness {
       limited = value;
     },
     failStore: (value) => {
-      storeFails = value;
+      store.fail = value;
     },
     deps: {
       assets: {
@@ -54,16 +59,8 @@ function harness(): Harness {
           });
         },
       },
-      store: {
-        async add(entry) {
-          if (storeFails) throw new Error("D1_ERROR: secret internal detail for x@example.com");
-          if (!rows.has(entry.email)) rows.set(entry.email, entry);
-        },
-        async remove(email) {
-          if (storeFails) throw new Error("D1_ERROR: secret internal detail");
-          rows.delete(email);
-        },
-      },
+      store,
+      mailer,
       limiter: {
         async limit({ key }) {
           limitKeys.push(key);
@@ -72,6 +69,12 @@ function harness(): Harness {
       },
       now: () => new Date("2026-09-24T12:00:00.000Z"),
       log: (entry) => logs.push(entry),
+      newToken: () => {
+        counter += 1;
+        return `tok${String(counter).padStart(40, "0")}`;
+      },
+      dailyEmailLimit: 90,
+      localLinkOrigin: null,
     },
   };
 }
@@ -183,7 +186,7 @@ describe("handleRequest routing", () => {
 });
 
 describe("POST /api/early-access", () => {
-  it("stores a new address and returns the shared success body", async () => {
+  it("stores a new address as pending and returns the shared success body", async () => {
     const response = await handleRequest(
       api(SIGNUP_PATH, { email: " New@Example.com ", source: "/download", website: "" }),
       h.deps,
@@ -191,16 +194,19 @@ describe("POST /api/early-access", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(SIGNUP_OK);
     expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(h.rows.get("new@example.com")).toEqual({
+    expect(h.rows.get("new@example.com")).toMatchObject({
       email: "new@example.com",
       source: "/download",
       createdAt: "2026-09-24T12:00:00.000Z",
       consentVersion: CONSENT_VERSION,
+      status: "pending",
     });
+    expect(h.mailer.sent.map((email) => email.to)).toEqual(["new@example.com"]);
   });
 
   it("responds identically for a duplicate, without changing the stored row", async () => {
     const first = await handleRequest(api(SIGNUP_PATH, { email: "a@example.com", source: "/" }), h.deps);
+    // The same address again minutes later: the throttle answers exactly the same way.
     const second = await handleRequest(api(SIGNUP_PATH, { email: "A@EXAMPLE.COM", source: "/pricing" }), h.deps);
     expect(second.status).toBe(first.status);
     expect(await second.text()).toBe(await first.text());
@@ -217,6 +223,7 @@ describe("POST /api/early-access", () => {
     expect(bot.status).toBe(real.status);
     expect(await bot.text()).toBe(await real.text());
     expect([...h.rows.keys()]).toEqual(["r@example.com"]);
+    expect(h.mailer.sent.map((email) => email.to)).toEqual(["r@example.com"]);
   });
 
   it("rejects an invalid email with 400 and a specific message", async () => {
@@ -308,21 +315,25 @@ describe("POST /api/early-access", () => {
     expect(text).not.toContain("D1_ERROR");
     expect(text).not.toContain("x@example.com");
     expect(JSON.parse(text)).toMatchObject({ ok: false, error: "server_error" });
-    expect(h.logs).toEqual([{ level: "error", event: "early_access.store_failed", error: "Error" }]);
+    expect(h.logs).toContainEqual({ level: "error", event: "early_access.store_failed", error: "Error" });
+    expect(JSON.stringify(h.logs)).not.toContain("example.com");
+    expect(h.mailer.sent).toEqual([]);
   });
 });
 
 describe("POST /api/early-access/remove", () => {
-  it("removes an address and answers identically whether or not it existed", async () => {
-    await handleRequest(api(SIGNUP_PATH, { email: "gone@example.com", source: "/" }), h.deps);
-    const existing = await handleRequest(api(REMOVE_PATH, { email: "Gone@Example.com" }), h.deps);
+  it("emails a removal link only to a listed address, answering identically either way", async () => {
+    h.store.seed("listed@example.com", "confirmed");
+    const existing = await handleRequest(api(REMOVE_PATH, { email: "Listed@Example.com" }), h.deps);
     const missing = await handleRequest(api(REMOVE_PATH, { email: "never@example.com" }), h.deps);
     expect(existing.status).toBe(200);
     expect(missing.status).toBe(200);
     const existingBody = await existing.text();
     expect(existingBody).toBe(await missing.text());
     expect(JSON.parse(existingBody)).toEqual(REMOVE_OK);
-    expect(h.rows.size).toBe(0);
+    // Nothing is deleted until the link is used.
+    expect(h.rows.has("listed@example.com")).toBe(true);
+    expect(h.mailer.sent.map((email) => email.to)).toEqual(["listed@example.com"]);
   });
 
   it("is rate-limited under its own key", async () => {

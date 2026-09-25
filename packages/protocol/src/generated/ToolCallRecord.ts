@@ -2,6 +2,6 @@
 import type { ToolCallStatus } from "./ToolCallStatus.ts";
 
 /**
- * One tool call a thread's provider made, from structured tool events.
+ * One tool call a thread's provider made, from structured tool events (`thread_tool_calls`).
  */
 export type ToolCallRecord = { id: string, threadId: string, tool: string, summary: string, status: ToolCallStatus, resultSummary: string | null, requestedAt: string, startedAt: string | null, completedAt: string | null, };

@@ -16,7 +16,7 @@ import { type KalCodeError, toKalCodeError } from "../../ipc/errors.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { MOD_LABEL } from "../../shell/shortcuts.ts";
-import { PERMISSION_MODES, type UnavailableProvider, unavailableProviders } from "./model.ts";
+import { PERMISSION_MODES, providerModeNote, type UnavailableProvider, unavailableProviders } from "./model.ts";
 import styles from "./NewThread.module.css";
 
 interface NewThreadProps {
@@ -259,9 +259,7 @@ function NewThreadForm({
         />
         <p className={styles.hint} aria-live="polite">
           {PERMISSION_MODES[mode].description}
-          {provider && !provider.hostApprovals && mode !== "plan"
-            ? ` ${provider.displayName} can't hand approvals to KalCode, so it runs in its own most restrictive mode.`
-            : ""}
+          {provider ? providerModeNote(provider, mode) : ""}
         </p>
       </div>
 

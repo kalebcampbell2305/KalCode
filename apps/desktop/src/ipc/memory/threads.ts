@@ -613,6 +613,11 @@ export function createThreadsMemory(
           filesChanged: 0,
           branch: null,
           error: null,
+          archivedAt: null,
+          resumable: false,
+          permissionProfileId: null,
+          runtimeKind: null,
+          terminalId: null,
         },
         messages: [],
         tools: [],
@@ -710,6 +715,7 @@ export function createThreadsMemory(
       if (t.archived) return summary(t);
       if (t.live) invalid("thread_running", "Stop the thread before archiving it.");
       t.archived = true;
+      t.summary = { ...t.summary, archivedAt: now() };
       emit({ type: "thread.archived", payload: { threadId: t.summary.id } }, corr(t), "ui");
       return summary(t);
     },
@@ -777,6 +783,11 @@ function seed(threads: Map<string, MemThread>) {
         filesChanged: 0,
         branch: null,
         error: null,
+        archivedAt: archived ? minutesAgo(minutes) : null,
+        resumable: false,
+        permissionProfileId: null,
+        runtimeKind: null,
+        terminalId: null,
         ...partial,
       },
       messages: conversation.map(([role, content], i) => ({

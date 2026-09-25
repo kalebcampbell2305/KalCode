@@ -25,7 +25,11 @@ diagnostics through one pipeline instead of many ad-hoc state channels.
     "threadId": null,
     "missionId": null,
     "providerId": null,
-    "requestId": null
+    "requestId": null,
+    "agentId": null,                // v1-compatible additions (L-1, schema v5)
+    "taskId": null,
+    "automationId": null,
+    "causationId": null             // id of the event that directly caused this one
   },
   "payload": { "keys": ["theme"] }  // type-specific, schema determined by (type, version)
 }
@@ -33,6 +37,9 @@ diagnostics through one pipeline instead of many ad-hoc state channels.
 
 Rules:
 
+0. Correlation fields are optional; readers treat a missing field as `null`. `causationId` is
+   set when a domain operation is a reaction to an event (an automation run, a scheduler start,
+   a delegation, a Doctor fix), for Time Machine causality and automation loop detection.
 1. `seq` is the ordering authority. Consumers must apply events in `seq` order and deduplicate
    by `seq`.
 2. Events are persisted before being published.
@@ -45,7 +52,11 @@ Rules:
 
 ## 3. Catalog
 
-Status legend: **I** implemented and emitted · **D** defined, emitted from its campaign.
+Status legend: **I** implemented and emitted · **D** declared in the contract (`EventPayload`
+variant with a sample and round-trip test), emitted once its campaign wires it. Types marked
+"CA-1" were declared by the CA-1 contracts PR; the owning crate maps its facts to them
+one-to-one (`EventPayload::from(GitEvent)`, `EventPayload::from(ContextEvent)`,
+`EventPayload::from(PressureTransition)`, each tested for identical JSON).
 
 | Type | v | Status | Payload |
 | --- | --- | --- | --- |
@@ -77,12 +88,28 @@ Status legend: **I** implemented and emitted · **D** defined, emitted from its 
 | `approval.approved` | 1 | I (Z4) | `{ requestId, threadId, decision }` — answered by the user only |
 | `approval.denied` / `.expired` | 1 | I (Z4) | `{ requestId, threadId }` — expired: thread stopped or interrupted, superseded, mode changed, restart, answered in the provider |
 | `permission.mode_changed` | 1 | I (Z4) | `{ threadId?, from, to }` — once per change, with its audit row; `threadId: null` for the default mode |
-| `git.branch_changed` / `.diff_changed` / `.commit_created` | 1 | D (Z6) | `{ workspaceId, … }` |
+| `permission.default_mode_changed` | 1 | D (CA-1; Z4 emits) | `{ from, to }` — the default mode for new threads; Z4 keeps emitting `permission.mode_changed { threadId: null }` until it switches |
+| `git.branch_changed` | 1 | D (CA-1; Z6a facts) | `{ workspaceId, from?, to }` — `to = "(detached)"` when HEAD is detached; transitions only |
+| `git.diff_changed` | 1 | D (CA-1; Z6a facts) | `{ workspaceId, worktreeId?, files }` — changed-file count; debounced ≥ 1 s, transitions only |
+| `git.commit_created` | 1 | D (CA-1; Z6a facts) | `{ workspaceId, worktreeId?, oid, byKalCode }` |
+| `git.worktree_created` / `.worktree_removed` | 1 | D (CA-1; Z6a facts) | `{ workspaceId, worktreeId, branch, purpose }` |
+| `timeline.checkpoint_created` | 1 | D (CA-1; Z6a facts) | `{ checkpointId, workspaceId, trigger, files, bytesAdded }` — `trigger` is the trigger's kind |
+| `timeline.checkpoint_pruned` | 1 | D (CA-1; Z6a facts) | `{ checkpointId, reason }` |
+| `context.package_created` | 1 | D (CA-1; CTX facts) | `{ packageId, purpose, items, bytes }` |
+| `context.blocked` | 1 | D (CA-1; FW facts) | `{ packageId, rule, items }` — the most frequent blocking rule code |
+| `context.redacted` | 1 | D (CA-1; FW facts) | `{ packageId, items, spans }` |
+| `context.override_confirmed` | 1 | D (CA-1; FW facts) | `{ packageId, position, rule }` — the user confirmed an overridable item |
+| `context.shared` | 1 | D (CA-1; CTX facts) | `{ packageId, threadId?, providerId, items, bytes, redactions }` |
+| `context.discarded` | 1 | D (CA-1; CTX facts) | `{ packageId }` |
+| `resource.pressure_changed` | 1 | D (CA-1; RG facts) | `{ resource, from, to, mode, signal?, value?, threshold? }` — transitions only; samples stream on a channel |
+| `resource.mode_changed` | 1 | D (CA-1; RG) | `{ from, to }` |
+| `resource.task_held` / `.task_released` | 1 | D (CA-1; emitted by the Scheduler, P4) | `{ taskId, reasons, mode }` / `{ taskId, heldMs, cause }` |
 | `kalvoice.dictation_started` / `.dictation_completed` / `.dictation_failed` | 1 | D (Z12) | `{ sessionId, durationMs?, characters?, code? }` — never the transcript |
 | `kalvoice.request_started` / `.command_recognized` / `.command_executed` / `.request_completed` / `.request_failed` | 1 | D (Z12) | `{ requestId, input?, intent?, code? }` — never the request text |
 | `kalvoice.limit_reached` | 1 | D (Z12) | `{ allowance, resetsAt }` |
 | `kalvoice.provider_selected` | 1 | D (Z12) | `{ intelligence, scope }` |
 | `kalvoice.voice_output_started` / `.voice_output_completed` | 1 | D (Z12) | `{ requestId }` |
+| `kalvoice.talk_routed` | 1 | D (CA-1; Z12 emits) | `{ requestId, outcome }` — `outcome` = `command` \| `dictation` \| `request`; never the words |
 | `mission.*`, `verification.*` | 1 | D (Z9/Z10) | |
 | `automation.*`, `notification.created` | 1 | D (Z11) | |
 
@@ -108,15 +135,25 @@ and their tabs are stored as ended by the app (see `docs/CODE_MODE.md`).
 ## 4. Storage
 
 Table `events` (see `docs/DATA_MODEL.md`). Correlation ids are stored in dedicated indexed
-columns. Payload is stored as JSON text.
+columns (`agent_id`, `task_id`, `automation_id`, `causation_id` since schema v5, with partial
+indexes). Payload is stored as JSON text.
 
 ## 5. Transport
 
 - Native → UI: Tauri `Channel<EventEnvelope>` per subscription (`events_subscribe`).
 - Backfill: `events_recent { limit ≤ 500, beforeSeq? }` returns newest-first pages.
+- Query (L-1): `events_query { query: EventQuery }` → `EventPage { events, nextCursor }`. Filters:
+  exact types or `domain.*` prefixes (≤ 32), any subset of the nine correlation ids (all given
+  must match), `afterSeq` / `beforeSeq`, `from` / `to` (RFC 3339 `occurredAt` window), `order`
+  `asc` | `desc`, `limit` 1..=500. `nextCursor` is the last `seq` of a full page. Invalid filters
+  are refused (`validation/invalid_event_query`, `invalid_page_size`); values are only ever bound
+  parameters. Queries run on the core's read-only WAL connection (`Core::reader()`), so
+  background readers never wait on the writer.
 - Subscribe-then-backfill avoids gaps; the UI store merges by `seq`.
 
 ## 6. Versioning of the protocol itself
 
 The envelope is **protocol v1**. Adding event types or optional correlation fields is
-non-breaking. Changing envelope fields requires protocol v2 and a migration plan.
+non-breaking. Changing envelope fields requires protocol v2 and a migration plan. The four
+correlation fields added in CA-1 / L-1 are such optional additions: envelopes stored or cached
+before them decode unchanged (tested), and nothing about existing fields changed.

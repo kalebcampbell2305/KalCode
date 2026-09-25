@@ -1,5 +1,6 @@
 import { isValidEmail, normalizeEmail } from "../../src/lib/email";
 import { isKnownPagePath } from "../../src/lib/site";
+import { isTokenFormat } from "./tokens";
 
 export interface SignupInput {
   email: string;
@@ -67,4 +68,14 @@ export function validateRemoval(body: unknown): Validation<{ email: string }> {
   }
   const email = readEmail(body);
   return email.ok ? { ok: true, value: { email: email.value } } : email;
+}
+
+/** Body of the confirm and remove-confirm endpoints: `{ token }`, shaped like an issued code. */
+export function validateToken(body: unknown): Validation<{ token: string }> {
+  if (!isRecord(body)) {
+    return { ok: false, error: "invalid_body", message: "The request body must be a JSON object." };
+  }
+  return isTokenFormat(body.token)
+    ? { ok: true, value: { token: body.token } }
+    : { ok: false, error: "invalid_link", message: "This link is not complete. Open it again from the email." };
 }

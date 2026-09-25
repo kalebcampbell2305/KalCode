@@ -35,20 +35,30 @@ fn shell(id: &str, name: &str, program: PathBuf, args: &[&str]) -> ShellInfo {
     }
 }
 
+/// The first `file` in an absolute `PATH` folder. Empty and relative entries (`.`, `bin`, `\x`)
+/// are skipped: they resolve against KalCode's current folder, so a `pwsh.exe` planted there (or
+/// in a project) must never become the default shell.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn find_on_path(path: Option<&std::ffi::OsStr>, file: &str) -> Option<PathBuf> {
+    std::env::split_paths(path?)
+        .filter(|dir| dir.is_absolute())
+        .map(|dir| dir.join(file))
+        .find(|p| p.is_absolute() && p.is_file())
+}
+
 #[cfg(windows)]
 fn platform_shells() -> Vec<ShellInfo> {
     let mut shells = Vec::new();
     // Only a real executable: a `pwsh.cmd` or `.bat` earlier on PATH is not PowerShell.
-    let pwsh = std::env::var_os("PATH").and_then(|path| {
-        std::env::split_paths(&path)
-            .map(|dir| dir.join("pwsh.exe"))
-            .find(|p| p.is_file())
-    });
-    if let Some(pwsh) = pwsh {
+    if let Some(pwsh) = find_on_path(std::env::var_os("PATH").as_deref(), "pwsh.exe") {
         shells.push(shell("pwsh", "PowerShell 7", pwsh, &["-NoLogo"]));
     }
-    let system_root =
-        std::env::var_os("SystemRoot").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
+    // Every location comes from an absolute path: a relative `SystemRoot`, `ComSpec` or
+    // `ProgramFiles` would resolve against KalCode's current folder.
+    let system_root = std::env::var_os("SystemRoot")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
     let powershell = system_root.join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
     if powershell.is_file() {
         shells.push(shell(
@@ -60,7 +70,7 @@ fn platform_shells() -> Vec<ShellInfo> {
     }
     let cmd = std::env::var_os("ComSpec")
         .map(PathBuf::from)
-        .filter(|p| p.is_file());
+        .filter(|p| p.is_absolute() && p.is_file());
     if let Some(cmd) =
         cmd.or_else(|| Some(system_root.join(r"System32\cmd.exe")).filter(|p| p.is_file()))
     {
@@ -70,7 +80,7 @@ fn platform_shells() -> Vec<ShellInfo> {
         .iter()
         .filter_map(std::env::var_os)
         .map(|dir| PathBuf::from(dir).join(r"Git\bin\bash.exe"))
-        .find(|p| p.is_file());
+        .find(|p| p.is_absolute() && p.is_file());
     if let Some(bash) = git_bash {
         shells.push(shell("git-bash", "Git Bash", bash, &["--login", "-i"]));
     }
@@ -110,6 +120,37 @@ fn platform_shells() -> Vec<ShellInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relative_and_empty_path_entries_are_ignored() {
+        // A folder inside the current directory, referenced by a relative PATH entry, with a
+        // planted `pwsh.exe` in it: it resolves (`is_file` is true) but must not be chosen.
+        let cwd = std::env::current_dir().expect("cwd");
+        let planted = tempfile::tempdir_in(&cwd).expect("tempdir");
+        std::fs::write(planted.path().join("pwsh.exe"), b"planted").expect("write");
+        let relative = PathBuf::from(planted.path().file_name().expect("name"));
+        assert!(
+            relative.join("pwsh.exe").is_file(),
+            "the planted file resolves"
+        );
+        let real = tempfile::tempdir().expect("tempdir");
+
+        let path = std::env::join_paths([
+            PathBuf::new(),
+            relative.clone(),
+            PathBuf::from("."),
+            real.path().to_path_buf(),
+        ])
+        .expect("join");
+        assert_eq!(find_on_path(Some(&path), "pwsh.exe"), None);
+
+        std::fs::write(real.path().join("pwsh.exe"), b"real").expect("write");
+        assert_eq!(
+            find_on_path(Some(&path), "pwsh.exe"),
+            Some(real.path().join("pwsh.exe"))
+        );
+        assert_eq!(find_on_path(None, "pwsh.exe"), None);
+    }
 
     #[test]
     fn detects_at_least_one_shell_and_marks_one_default() {

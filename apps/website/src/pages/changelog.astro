@@ -15,6 +15,27 @@ const allowances = PLANS.map((plan) => `${plan.name} ${formatKalVoiceAllowance(p
   />
   <section class="section" aria-label="Releases">
     <div class="container">
+      <article class="release" aria-labelledby="release-0-1-1">
+        <div class="release__meta">
+          <h2 class="release__version" id="release-0-1-1">0.1.1 — First Windows preview</h2>
+          <p><time datetime="2026-09-24">September 24, 2026</time></p>
+          <p class="chip chip--built">Public preview · Windows</p>
+        </div>
+        <div class="prose">
+          <p>
+            The first public build of the KalCode desktop app, for Windows 10 (1809) or later,
+            64-bit. <a href="/download">Download it</a> and check the SHA-256 listed there before you
+            run it. It replaces 0.1.0, which was withdrawn before release after a security review.
+          </p>
+          <ul>
+            <li><strong>Workspaces and terminals.</strong> Open project folders and run real terminals (PowerShell, Command Prompt, Git Bash) with tabs that come back after a restart.</li>
+            <li><strong>Claude Code threads and the Dashboard.</strong> Run Claude Code on your own sign-in with live status, streaming output, pause, stop and resume; the Dashboard shows what is working, what needs you and what failed. Codex and Gemini CLI are detected but cannot run threads yet.</li>
+            <li><strong>Permissions.</strong> Claude Code threads run under KalCode's own deny rules in every mode: pushes, publishes, deploys, cloud CLIs, remote shells and credential files are blocked. The full per-action permission engine applies to Claude Code once provider panes land.</li>
+            <li><strong>Security.</strong> A program planted in a project folder can no longer run when a thread starts; drive roots and your home folder can't be opened as workspaces.</li>
+            <li><strong>Unsigned preview.</strong> Windows SmartScreen may warn you; if the SHA-256 matches, choose More info, then Run anyway. There are no in-app updates yet. KalVoice, Agents, Missions and Automations are still in development and hidden in this build.</li>
+          </ul>
+        </div>
+      </article>
       <article class="release" aria-labelledby="release-website-2026-09-24">
         <div class="release__meta">
           <h2 class="release__version" id="release-website-2026-09-24">A new kalcoded.com and official X accounts</h2>

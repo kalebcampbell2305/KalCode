@@ -1,6 +1,6 @@
 import type { ThreadMessage, ThreadStatus, ThreadSummary, ToolCallRecord } from "@kalcode/protocol";
 import { describe, expect, it } from "vitest";
-import { buildTimeline, isThreadEvent, matchesQuery, presentStatus, threadActions } from "./model.ts";
+import { buildTimeline, isThreadEvent, matchesQuery, presentStatus, providerModeNote, threadActions } from "./model.ts";
 
 const ALL: ThreadStatus[] = [
   "starting",
@@ -43,6 +43,11 @@ function summary(partial: Partial<ThreadSummary>): ThreadSummary {
     filesChanged: 0,
     branch: null,
     error: null,
+    archivedAt: null,
+    resumable: false,
+    permissionProfileId: null,
+    runtimeKind: null,
+    terminalId: null,
     ...partial,
   };
 }
@@ -149,5 +154,39 @@ describe("isThreadEvent", () => {
     for (const type of ["settings.changed", "app.started", "shell.started"]) {
       expect(isThreadEvent(type)).toBe(false);
     }
+  });
+});
+
+describe("providerModeNote", () => {
+  const mapping = (mode: "plan" | "approve" | "auto" | "bypass", notes: string) => ({
+    mode,
+    fidelity: "approximate_stricter" as const,
+    providerSetting: "--flags",
+    notes,
+  });
+  const claude = {
+    displayName: "Claude Code",
+    hostApprovals: false,
+    permissionMappings: [mapping("approve", "Approve note."), mapping("bypass", "Bypass note.")],
+  };
+
+  it("shows the provider's own mapping note for the mode", () => {
+    expect(providerModeNote(claude, "bypass")).toBe(" With Claude Code: Bypass note.");
+    expect(providerModeNote(claude, "approve")).toBe(" With Claude Code: Approve note.");
+  });
+
+  it("says Custom runs as Approve instead of claiming its rules apply", () => {
+    const note = providerModeNote(claude, "custom");
+    expect(note).toContain("Approve note.");
+    expect(note).toContain("Custom rules aren't applied");
+  });
+
+  it("never claims a mode it has no mapping for", () => {
+    expect(providerModeNote(claude, "plan")).toContain("anything that would ask is refused");
+    expect(providerModeNote(claude, "plan")).not.toContain("most restrictive");
+  });
+
+  it("adds nothing when the provider hands approvals to KalCode", () => {
+    expect(providerModeNote({ ...claude, hostApprovals: true }, "approve")).toBe("");
   });
 });

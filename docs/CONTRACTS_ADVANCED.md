@@ -1,8 +1,12 @@
-# Shared contracts — advanced systems (PROPOSED)
+# Shared contracts — advanced systems (partly adopted in CA-1)
 
-> **Status: PROPOSED — for lead approval. Nothing here is implemented.** Owner on approval: the
-> lead / integrator (`crates/contracts`, native-core event storage). Campaign agents consume these
-> types; they never edit `crates/contracts` themselves (`docs/CONTRACTS.md`).
+> **Status: partly adopted.** The parts marked **Adopted in CA-1** below are implemented in
+> `crates/contracts` (with generated TypeScript), as summarized in `docs/CONTRACTS.md` §CA-1;
+> where the implementation differs from the sketch here, the difference is stated next to the
+> section and the code is authoritative. Everything not so marked is still **PROPOSED** — for
+> lead approval, not implemented. Owner: the lead / integrator (`crates/contracts`, native-core
+> event storage). Campaign agents consume these types; they never edit `crates/contracts`
+> themselves (`docs/CONTRACTS.md`).
 >
 > Plan: `docs/campaigns/ADVANCED.md`. System codes (ORG, SCH, … BL) are defined there (§0).
 
@@ -39,6 +43,16 @@ contract or states why a new one is needed.
 ---
 
 ## 2. Trust Kernel: action origins, ceilings, invariants (extends `permissions.rs`)
+
+> **Adopted in CA-1 (types only).** `ActionOrigin` (compatible form: `NormalizedAction.origin:
+> Option<ActionOrigin>`, `thread_id` / `provider_id` stay non-optional), the six scopes plus
+> `tool.unknown` (Z4 request), the new action kinds, `ProcessSignalKind`, `AutomationChangeKind`,
+> `MemoryScope` (from §5.9, needed by `MemoryWrite`), `AuthorityCeiling`, `CeilingSource`,
+> `ActionRequest`, `KernelInvariant`, `KernelDecision`, `DecisionExplanation`, `ExplanationStep`
+> and the `TrustKernel` trait (`crates/contracts/src/trust.rs`). `ActionOrigin::Utility` carries
+> the tool id as a string until the Utility Dock defines `UtilityTool`. `NormalizedAction.host_id`
+> is not added yet (RW). No behaviour change in `crates/permissions` beyond classifying the new
+> action kinds as opaque (always ask) until TK-1.
 
 The Trust Kernel formalises the Z4 engine (`docs/TRUST_KERNEL.md`). It adds **no** second
 evaluator. The Z4 crate implements the trait below; `PermissionGate` remains and is implemented
@@ -186,6 +200,9 @@ pub trait TrustKernel: Send + Sync {
 
 ### 3.1 Envelope: correlation (protocol v1-compatible)
 
+> **Adopted in CA-1 / L-1**, with storage in migration **v5** (not v6: L-1 took the next free
+> version; KalVoice moves to v6). v5 also indexes `request_id`.
+
 Adding optional correlation fields is non-breaking (`EVENT_PROTOCOL.md` §6). Storage: migration
 **v6** adds nullable columns and partial indexes to `events`.
 
@@ -205,6 +222,9 @@ automation run, a scheduler start after `mission.task_status_changed`, a delegat
 action, a Doctor fix after a finding.
 
 ### 3.2 Query (`events_query`, lead)
+
+> **Adopted in L-1.** `CorrelationFilter` also accepts `request_id`; `EventQuery` fields default
+> when absent (all types, newest first, limit 100). IPC: `events_query { query }`.
 
 ```rust
 pub struct EventQuery {
@@ -228,6 +248,14 @@ pub struct EventPage { pub events: Vec<EventEnvelope>, pub next_cursor: Option<i
 ```
 
 ### 3.3 New event types (all `version: 1`, payloads = ids and short facts only)
+
+> **Adopted in CA-1:** `git.branch_changed`, `git.diff_changed`, `git.commit_created`,
+> `git.worktree_created`, `git.worktree_removed`, `timeline.checkpoint_created`,
+> `timeline.checkpoint_pruned`, the five `context.*` types plus `context.override_confirmed`
+> (`{ packageId, position, rule }`; `context.shared.threadId` is optional), and
+> `resource.pressure_changed` (plus optional `signal`, `value`, `threshold`),
+> `resource.mode_changed`, `resource.task_held`, `resource.task_released` (RG), and
+> `permission.default_mode_changed` (Z4). The other rows remain proposed.
 
 "Dup-check" states why a type is *not* a duplicate of an existing one, or which existing type is
 reused instead.
@@ -314,6 +342,10 @@ automations as `automation`.
 ---
 
 ## 4. Shared primitives (`refs.rs`)
+
+> **Adopted in CA-1:** `FileHandle`, `FileRef`, `PageRequest`, `Page<T>` (identical JSON to
+> `kalcode_git`). `Likelihood`, `Confidence`, `ThreadOrigin`, `WorkspaceLocation` and
+> `ThreadRuntimeObserver` remain proposed.
 
 ```rust
 /// Opaque, session-scoped reference to a file native code listed (ADVANCED.md §3 D4).
@@ -405,6 +437,16 @@ Profiles carry **no permission fields** (PP-04). `SessionConfig` gains
 
 ### 5.2 Context Drop and Firewall — `context.rs` (CTX/FW)
 
+> **Adopted in CA-1, amended per `docs/campaigns/CTX.md`:** `FirewallRule` gains
+> `WorkspacePermissionDenied`, `UnsafePath`, `UserExclusion { pattern }`, `UnscannableContent`,
+> `SecretDetected.count`, `IgnoredPath.rule`; the verdict is `AllowRedacted { spans }` (wire
+> `allow_redacted`); new `RuleEffect` (TypeScript `FirewallRuleEffect`), `FirewallReason`,
+> `ItemKind`, `ItemOrigin`, `TranslationPlan`, `RefusalReason`, `Modality`, `LineRange`;
+> `ContextItemPreview` gains `kind`, `sensitivity`, `overridable`, `overrideConfirmed`,
+> `translation`, `note`, `unavailable` and `rules: FirewallReason[]`;
+> `ContextPreview.targetProviderId` is a (non-optional) `ProviderId`. `ContextItemSource` is not
+> adopted yet (IPC, P2).
+
 ```rust
 pub enum ContextPurpose { Drop, Handoff, Memory, Automation, Delegation, Reasoning }
 pub enum ContextItemSource {
@@ -449,6 +491,12 @@ pub struct ContextPreview {
 
 ### 5.3 Git and workspace files core — part of `timeline.rs` / `refs.rs` (Z6a)
 
+> **Adopted in CA-1** (`crates/contracts/src/git.rs`, `timeline.rs`), identical JSON to
+> `kalcode_git`, plus `GitFileChange` (replaces `FileChange` in `DiffFile`, which also gains
+> `path` / `oldPath` and an optional `file`), `Worktree.createdAt` / `removedAt`,
+> `Checkpoint.prunedAt`, `DiffTarget`, `Diff`, `FileDiff`, `Hunk`, `DiffLine`, `LineKind`,
+> `StatusFile`, `ConflictKind`, `BranchState`, `Commit`, `Branch`, `BranchKind`.
+
 ```rust
 pub struct FileEntry { pub file: FileRef, pub is_dir: bool, pub bytes: Option<u64>, pub ignored: bool }
 pub struct GitStatusSummary { pub workspace_id: String, pub branch: Option<String>, pub head: Option<String>, pub changed: u32, pub untracked: u32, pub ahead: Option<u32>, pub behind: Option<u32> }
@@ -465,6 +513,9 @@ pub enum CheckpointTrigger { User, ThreadTurn { thread_id: String }, TaskStart {
 ```
 
 ### 5.4 Time Machine — `timeline.rs` (TM)
+
+> **Adopted in CA-1:** `PlannedChange` only, with the extra `KeepExisting` (the checkpoint has
+> the file but the current one is ignored or oversized, so it is kept). The rest remains proposed.
 
 ```rust
 pub enum TimelineAction { ViewHistory, RestoreFiles, BranchFromCheckpoint, ReplayActions, ResumeSession }
@@ -852,6 +903,15 @@ pub struct ImpactAnalysis { pub id: String, pub workspace_id: String, pub change
 
 ### 6.8 Resource Governor — `resources.rs` (RG)
 
+> **Adopted in CA-1, amended per `docs/campaigns/RG.md`:** `GovernorMode`,
+> `CustomResourceLimits` (replaces `GovernorThresholds`), `GpuLimits`, tagged `Reading<T>`
+> (`value | unavailable | unknown`), `ResourceSnapshot` with the readings the crate measures,
+> `ResourcePressure { resource, level, signal, value, threshold, approaching }`,
+> `PressureSummary`, `CapacityAdvice`, `ResourceHoldReason` (wire kinds `user_limit`,
+> `provider_limit`, `pressure`, `cpu_headroom`, `memory_headroom`, `kalcode_memory_cap`,
+> `gpu_limit`), `ResourceReleaseCause`. `Signal` and `Tiers` are exported to TypeScript as
+> `PressureSignal` and `SamplingTiers`, `Constraint` as `CapacityConstraint`.
+
 ```rust
 pub enum GovernorMode { Conservative, Balanced, Performance, Custom }
 pub enum ResourceKind { Cpu, Memory, Gpu, Vram, DiskIo, DiskSpace, Network, ProcessCount }
@@ -901,6 +961,13 @@ pub struct RemediationProposal { pub id: String, pub autopsy_id: String, pub kin
 Invariant (enforced in code and by a CHECK): `certainty = Confirmed ⇒ evidence_checked = true`.
 
 ### 6.10 Z7 Workspace UX and provider panes — `workspace_ui.rs`, additions to `threads.rs` / `agent.rs`
+
+> **Adopted in CA-1:** `ThreadRuntimeKind` and `ThreadSummary.runtimeKind` / `terminalId`,
+> `DisplayStatus`, `DisplayQualifier`, `DashboardChip`, the mapping (`ThreadStatus::display`,
+> `chip`) plus a `StatusTone` per display status, `StatusChannel`, `InteractiveSupport` and
+> `ProviderCapabilities.interactive`, and the pane-layout schema (`PaneNode`, `SplitAxis`,
+> `PaneContent`, `PaneLayout` with native `validate()`, `LayoutPreset`). `HomeSummary`, recent
+> work, rail and notification types remain proposed.
 
 ```rust
 // threads.rs — additive
@@ -1056,6 +1123,11 @@ list (`limit ≤ 500`), and run off the main thread. Consequential commands call
 ---
 
 ## 8. KalVoice intents (additive to `KalVoiceIntent`)
+
+> **Adopted in CA-1 (the Z12 request, a different set from the sketch below):** `Split { axis }`,
+> `Resize { direction: PaneDirection, steps }`, `Focus { query }`, `Search { query }`,
+> `Close { query? }`, `SwitchProvider { providerId }`, `RequestPermissionMode { mode:
+> RequestableMode, threadQuery? }` (no Bypass value exists). The intents below remain proposed.
 
 All are deterministic (no model). Safety asymmetry (KV-02): intents marked **P** open a
 preview or confirmation in the UI instead of executing directly.
@@ -1479,6 +1551,11 @@ CREATE TABLE remediation_proposals (id TEXT PRIMARY KEY, autopsy_id TEXT NOT NUL
 
 ## 10. Provider contract additions (`agent.rs`) and flags
 
+> **Adopted in CA-1:** `FeatureId` (plus `ContextFirewall`, `HostKeyVerification`,
+> `SafeRestore`, `AutomationKillSwitch`, so every safety system has an explicit placement),
+> `FeatureFlag`, `FeatureFlags.features`, `FeaturePlacement` (plan placement, ADVANCED.md §14a
+> decision 1). `settingDescriptors`, `contextLimits` and `AgentEvent::Backoff` remain proposed.
+
 ```rust
 pub struct ProviderCapabilities {
     // existing …
@@ -1508,15 +1585,15 @@ pub struct FeatureFlag { pub id: FeatureId, pub state: SurfaceState, pub visible
 
 ## 11. Approval checklist for the lead
 
-- [ ] `NormalizedAction` origin: compatible form (`origin: Option<ActionOrigin>`, empty strings)
-      or breaking `Option` fields (§2).
+- [x] `NormalizedAction` origin: compatible form (`origin: Option<ActionOrigin>`, empty strings)
+      — adopted in CA-1.
 - [ ] Z4 pre-merge amendments (`ADVANCED.md` §6).
-- [ ] Correlation fields and `events_query` (§3.1–3.2), migration v6.
+- [x] Correlation fields and `events_query` (§3.1–3.2) — adopted in L-1, migration **v5**.
 - [ ] Event catalog additions and the "not added" list (§3.3).
 - [ ] File handles instead of paths (§4, ADVANCED D4).
-- [ ] New scopes and action kinds (§2).
+- [x] New scopes and action kinds (§2) — adopted in CA-1 (types; TK-1 classifies them).
 - [ ] Migration reservations v5–v40 (`ADVANCED.md` §5.2).
-- [ ] `SurfaceId::CommandCenter`, `FeatureId` (§10).
+- [x] `SurfaceId::CommandCenter`, `FeatureId` (§10) — adopted in CA-1.
 - [ ] KalVoice intent additions and the safety asymmetry (§8).
 - [ ] Z7: `ThreadRuntimeKind`, `DisplayStatus` mapping, `InteractiveSupport`, pane layout schema,
       `profile.displayName` setting, rail and notification tables (§6.10, §9 v9–v12).

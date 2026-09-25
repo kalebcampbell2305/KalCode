@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test \"../apps/desktop/tests/perf/**/*.test.ts\""
+    "test": "node --test \"../apps/desktop/tests/perf/**/*.test.ts\" check-capabilities.test.mjs"
   },
   "devDependencies": {
     "@resvg/resvg-js": "2.6.2",

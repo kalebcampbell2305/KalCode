@@ -10,6 +10,7 @@ import {
   LayoutDashboard,
   type LucideIcon,
   MessagesSquare,
+  PanelsTopLeft,
   PlugZap,
   Settings as SettingsIcon,
   Workflow,
@@ -101,6 +102,14 @@ export const SURFACES: Record<SurfaceId, SurfaceMeta> = {
     icon: PlugZap,
     summary: "See which provider CLIs are installed and signed in, and how KalCode's permission modes map to each.",
   },
+  command_center: {
+    id: "command_center",
+    label: "Command Center",
+    icon: PanelsTopLeft,
+    summary:
+      "The deep operations view above the Dashboard: agents, tasks, providers, resources and recovery in one place.",
+    dependsOn: "Agents, missions and the systems whose panels it shows",
+  },
   settings: {
     id: "settings",
     label: "Settings",
@@ -121,6 +130,7 @@ export const PRIMARY_ORDER: readonly SurfaceId[] = [
   "skills",
   "plugins",
   "memory",
+  "command_center",
   "providers",
 ];
 

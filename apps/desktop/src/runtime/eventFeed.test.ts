@@ -9,7 +9,17 @@ function event(seq: number): EventEnvelope {
     version: 1,
     occurredAt: "2026-09-24T00:00:00.000Z",
     source: "core",
-    correlation: { workspaceId: null, threadId: null, missionId: null, providerId: null, requestId: null },
+    correlation: {
+      workspaceId: null,
+      threadId: null,
+      missionId: null,
+      providerId: null,
+      requestId: null,
+      agentId: null,
+      taskId: null,
+      automationId: null,
+      causationId: null,
+    },
     type: "settings.changed",
     payload: { keys: [] },
   };

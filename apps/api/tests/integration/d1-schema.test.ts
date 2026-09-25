@@ -110,7 +110,9 @@ describe("OWNER invariants (database constraints)", () => {
   it("allows at most one active OWNER grant per account", async () => {
     const id = await account();
     await insertGrant(id, { tier: "owner", source: "grant" });
-    await expect(insertGrant(id, { tier: "owner", source: "grant" })).rejects.toThrow(/UNIQUE constraint failed/);
+    await expect(insertGrant(id, { tier: "owner", source: "grant" })).rejects.toThrow(
+      /UNIQUE constraint failed|at most one active OWNER grant/,
+    );
     await revoke(id, "owner");
     await insertGrant(id, { tier: "owner", source: "grant", grantedAt: "2026-09-26T00:00:00.000Z" });
   });

@@ -1,0 +1,7 @@
+{
+  // Minimal config for tests/unit/store-d1.test.ts: only the DB binding, simulated locally by
+  // workerd in memory (never the production database). The test applies migrations/ itself.
+  "name": "kalcode-website-d1-test",
+  "compatibility_date": "2026-09-21",
+  "d1_databases": [{ "binding": "DB", "database_name": "kalcode-web", "database_id": "local-test" }]
+}

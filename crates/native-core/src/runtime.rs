@@ -17,6 +17,7 @@ use crate::flags::{BuildChannel, FeatureFlags};
 use crate::settings::{self, Settings, SettingsPatch};
 use crate::time::now_rfc3339;
 use crate::workspaces::{TerminalRegistry, mark_running_terminals_ended};
+use kalcode_contracts::events::{EventPage, EventQuery};
 
 pub const PRODUCT_NAME: &str = "KalCode";
 
@@ -155,6 +156,9 @@ pub struct Core {
     /// one KalCode process can use a data folder at a time.
     _data_lock: std::fs::File,
     conn: Mutex<Connection>,
+    /// A read-only connection to the same database for background reads (event queries, later
+    /// search and timelines), so they never wait on the writer (WAL). See [`Core::reader`].
+    reader: Mutex<Connection>,
     bus: EventBus,
     config: CoreConfig,
     latest_schema: i64,
@@ -179,6 +183,7 @@ impl Core {
         let mut conn = db::open(&config.paths.database)?;
         let outcome = db::migrate(&mut conn, migrations, Some(&config.paths.backups))?;
         db::enable_wal(&conn)?;
+        let reader = db::open_read_only(&config.paths.database)?;
         let interrupted = previous_session_interrupted(&conn)?;
         let first_run = db::meta_get(&conn, "first_run_at")?.is_none();
         if first_run {
@@ -199,6 +204,7 @@ impl Core {
         let core = Self {
             _data_lock: data_lock,
             conn: Mutex::new(conn),
+            reader: Mutex::new(reader),
             bus: EventBus::new(),
             latest_schema: migrations.last().map_or(0, |m| m.version),
             started: Instant::now(),
@@ -289,6 +295,20 @@ impl Core {
         }
         drop(conn);
         Ok((value, envelopes))
+    }
+
+    /// The read-only WAL connection for background work. It sees committed data only, cannot
+    /// write (`query_only`), and does not contend with [`Core::write_with_events`] / [`Core::emit`],
+    /// which share the writer connection. Hold it briefly: background readers take turns on it.
+    pub fn reader(&self) -> MutexGuard<'_, Connection> {
+        self.reader
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// A filtered page of the event log (`events_query`), read on the background reader.
+    pub fn query_events(&self, query: &EventQuery) -> Result<EventPage> {
+        EventStore::query(&self.reader(), query)
     }
 
     /// Runs a read-only query against the database.
@@ -591,5 +611,74 @@ mod path_tests {
     fn non_ascii_does_not_panic() {
         assert_eq!(strip_home("/home/é", "/home/éé", false), None);
         assert_eq!(strip_home("/hé", "/h", false), None);
+    }
+}
+
+#[cfg(test)]
+mod reader_tests {
+    use super::*;
+    use kalcode_contracts::events::{CorrelationFilter, SeqOrder};
+
+    fn core(dir: &Path) -> Core {
+        Core::open(CoreConfig {
+            paths: Paths::new(dir),
+            app_version: "0.0.0-test".into(),
+            channel: BuildChannel::Development,
+        })
+        .expect("open core")
+    }
+
+    #[test]
+    fn reader_sees_committed_events_and_cannot_write() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = core(dir.path());
+        let emitted = core
+            .emit(NewEvent::core(EventPayload::SettingsChanged {
+                keys: vec!["k".into()],
+            }))
+            .expect("emit");
+        let page = core
+            .query_events(&EventQuery {
+                types: vec!["settings.*".into()],
+                order: SeqOrder::Asc,
+                ..EventQuery::default()
+            })
+            .expect("query");
+        assert_eq!(page.events.last(), Some(&emitted));
+        let write = core.reader().execute(
+            "INSERT INTO app_meta (key, value, updated_at) VALUES ('x', 'y', 'z')",
+            [],
+        );
+        assert!(write.is_err(), "the reader must be read-only");
+        let journal: String = core
+            .reader()
+            .pragma_query_value(None, "journal_mode", |row| row.get(0))
+            .expect("journal mode");
+        assert_eq!(journal.to_lowercase(), "wal");
+        core.shutdown();
+    }
+
+    #[test]
+    fn reader_does_not_wait_for_the_writer() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = std::sync::Arc::new(core(dir.path()));
+        // Hold the writer connection (as a long transaction would) while reading.
+        let writer = core.conn();
+        let reader_core = core.clone();
+        let reading = std::thread::spawn(move || {
+            reader_core
+                .query_events(&EventQuery {
+                    correlation: CorrelationFilter::default(),
+                    limit: 10,
+                    ..EventQuery::default()
+                })
+                .map(|page| page.events.len())
+        });
+        let started = std::time::Instant::now();
+        let count = reading.join().expect("join").expect("query");
+        assert!(count >= 1, "app.started is visible");
+        assert!(started.elapsed() < std::time::Duration::from_secs(4));
+        drop(writer);
+        core.shutdown();
     }
 }

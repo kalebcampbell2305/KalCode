@@ -14,6 +14,7 @@
 //!    firewall. If the hash differs from the previewed hash, the refreshed package is returned
 //!    for a new preview instead of anything being sent (CTX-04).
 
+pub use kalcode_contracts::context::{ContextItemPreview, ContextPreview, LineRange};
 use std::collections::BTreeMap;
 use std::io::Read;
 
@@ -28,8 +29,7 @@ use crate::firewall::{Candidate, Content, Firewall, FirewallDecision};
 use crate::folder::FolderPreview;
 use crate::log::{FirewallLogEntry, LogAction};
 use crate::model::{
-    ContextPurpose, FirewallReason, FirewallRule, FirewallVerdict, ItemKind, ItemOrigin,
-    RuleEffect, Sensitivity,
+    ContextPurpose, FirewallReason, FirewallRule, FirewallVerdict, ItemKind, ItemOrigin, RuleEffect,
 };
 use crate::paths::{PathCheck, resolve};
 use crate::provider::{DEFAULT_PACKAGE_CAP_BYTES, Modality, ProviderContextCapabilities};
@@ -39,14 +39,6 @@ use crate::translate::{PlanInput, TranslationPlan, apply_trim, human_bytes, plan
 pub const MAX_EXCERPT_BYTES: usize = 4 * 1024;
 /// Longest label kept (labels are sanitized: no control characters or brackets).
 pub const MAX_LABEL_CHARS: usize = 200;
-
-/// 1-based, inclusive line range.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LineRange {
-    pub start: u32,
-    pub end: u32,
-}
 
 /// Where an item's content comes from. Paths are native-resolved (from file handles); the
 /// WebView never supplies them.
@@ -344,46 +336,6 @@ impl PackageItem {
     }
 }
 
-/// What the UI shows for one item (the proposed contract's `ContextItemPreview`, extended).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ContextItemPreview {
-    pub position: u32,
-    pub label: String,
-    pub kind: ItemKind,
-    pub source_kind: String,
-    pub bytes: u64,
-    pub sensitivity: Sensitivity,
-    pub verdict: FirewallVerdict,
-    pub rules: Vec<FirewallReason>,
-    /// Redacted and bounded (≤ 4 KiB). Empty for finally blocked items.
-    pub excerpt: String,
-    pub included: bool,
-    pub overridable: bool,
-    pub override_confirmed: bool,
-    pub translation: TranslationPlan,
-    pub note: Option<String>,
-    pub unavailable: Option<String>,
-}
-
-/// The whole preview (the proposed contract's `ContextPreview`, extended).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ContextPreview {
-    pub package_id: String,
-    pub purpose: ContextPurpose,
-    pub target_provider_id: String,
-    pub target_thread_id: Option<String>,
-    pub items: Vec<ContextItemPreview>,
-    /// Bytes that would be sent.
-    pub total_bytes: u64,
-    /// The budget: min(provider max input, package cap).
-    pub max_bytes: u64,
-    pub translation_notes: Vec<String>,
-    /// Must match at send time (CTX-04).
-    pub content_sha256: String,
-}
-
 /// A rendered part of the provider input.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RenderedPart {
@@ -615,7 +567,9 @@ impl ContextPackage {
         ContextPreview {
             package_id: self.id.clone(),
             purpose: self.options.purpose,
-            target_provider_id: self.capabilities.provider_id.clone(),
+            target_provider_id: kalcode_contracts::agent::ProviderId::new(
+                self.capabilities.provider_id.clone(),
+            ),
             target_thread_id: self.options.target_thread_id.clone(),
             items,
             total_bytes: rendered.bytes_sent,
