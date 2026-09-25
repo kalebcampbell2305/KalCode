@@ -27,11 +27,12 @@ use kalcode_hook_bridge::server::{BridgeServer, ServerConfig};
 use kalcode_permissions::PermissionService;
 use kalcode_providers::DetectEnv;
 use kalcode_providers::interactive::provider::{
-    InteractiveClaudeProvider, InteractiveConfig, PaneRegistry, RuntimeRouter,
+    InteractiveClaudeProvider, InteractiveConfig, PaneRegistry, RuntimeRouter, marked_interactive,
 };
 use kalcode_providers::interactive::session::SessionLimits;
 use kalcode_providers::interactive::{
-    ApprovalExpiry, DEFAULT_DECISION_ROUTING, DecisionRouting, PaneInfo, TitleSink,
+    ApprovalExpiry, DEFAULT_DECISION_ROUTING, DecisionRouting, HookChannelState, PaneInfo,
+    TitleSink,
 };
 use kalcode_threads::{CreateIdleThread, ThreadRuntime, naming};
 use tauri::ipc::{Channel, InvokeResponseBody};
@@ -115,6 +116,9 @@ pub struct ProviderPanesState {
     next_view: AtomicU64,
     /// Why panes are unavailable (for the error shown when one is requested).
     unavailable: Option<&'static str>,
+    /// `<data>/sessions`: pane markers survive restarts.
+    sessions_dir: PathBuf,
+    routing: DecisionRouting,
 }
 
 /// `kalcode-hook` next to the KalCode executable. Debug and `e2e` builds may point at another
@@ -155,6 +159,8 @@ impl ProviderPanesState {
             views: Mutex::new(HashMap::new()),
             next_view: AtomicU64::new(1),
             unavailable: Some(reason),
+            sessions_dir: app.paths.data_dir.join("sessions"),
+            routing: DEFAULT_DECISION_ROUTING,
         };
         let visible = app
             .info
@@ -202,6 +208,8 @@ impl ProviderPanesState {
             views: Mutex::new(HashMap::new()),
             next_view: AtomicU64::new(1),
             unavailable: None,
+            sessions_dir: app.paths.data_dir.join("sessions"),
+            routing,
         }
     }
 
@@ -270,7 +278,16 @@ fn validate_thread_id(thread_id: &str) -> Result<(), IpcError> {
 }
 
 fn provider_error(error: kalcode_contracts::agent::ProviderError) -> IpcError {
-    KalError::validation("provider_pane_failed", error.to_string()).to_ipc()
+    use kalcode_contracts::agent::ProviderError;
+    match error {
+        // The view can tell an ended pane from other failures (like `terminal_not_running`).
+        ProviderError::SessionEnded => KalError::validation(
+            "pane_not_running",
+            "This pane's provider has ended. Resume the thread to start it again.",
+        )
+        .to_ipc(),
+        other => KalError::validation("provider_pane_failed", other.to_string()).to_ipc(),
+    }
 }
 
 /// Creates a thread whose provider runs interactively in a pane. Plan, Approve and Auto only at
@@ -446,7 +463,21 @@ pub fn provider_pane_info(
 ) -> Result<Option<PaneInfo>, IpcError> {
     panes.require()?;
     validate_thread_id(&thread_id)?;
-    Ok(panes.panes.info(&thread_id))
+    if let Some(info) = panes.panes.info(&thread_id) {
+        return Ok(Some(info));
+    }
+    // A pane thread from an earlier run (its process ended with that run): it resumes in a pane.
+    Ok(
+        marked_interactive(&panes.sessions_dir, &thread_id).then(|| PaneInfo {
+            thread_id: thread_id.clone(),
+            provider_id: ProviderId::CLAUDE_CODE.into(),
+            hook_channel: HookChannelState::Ended,
+            decision_routing: panes.routing,
+            kalcode_answers_approvals: false,
+            running: false,
+            exit_code: None,
+        }),
+    )
 }
 
 /// Drops a reloaded page's pane views (called from the page-load hook).

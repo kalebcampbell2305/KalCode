@@ -331,6 +331,16 @@ impl InteractiveClaudeProvider {
     }
 }
 
+fn marker_path(sessions_dir: &Path, thread_id: &str) -> Option<PathBuf> {
+    is_valid_id(thread_id).then(|| sessions_dir.join(thread_id).join(MARKER))
+}
+
+/// Whether `thread_id` was created as a pane (it starts and resumes in one), also after a
+/// restart, when its process is gone. `sessions_dir` is KalCode's `<data>/sessions`.
+pub fn marked_interactive(sessions_dir: &Path, thread_id: &str) -> bool {
+    marker_path(sessions_dir, thread_id).is_some_and(|m| m.is_file())
+}
+
 fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let temp = path.with_extension("json.tmp");
     std::fs::write(&temp, bytes)?;
@@ -409,12 +419,12 @@ impl RuntimeRouter {
     }
 
     fn marker(&self, thread_id: &str) -> Option<PathBuf> {
-        is_valid_id(thread_id).then(|| self.sessions_dir.join(thread_id).join(MARKER))
+        marker_path(&self.sessions_dir, thread_id)
     }
 
     /// Whether a thread runs in a pane.
     pub fn is_interactive(&self, thread_id: &str) -> bool {
-        self.marker(thread_id).is_some_and(|m| m.is_file())
+        marked_interactive(&self.sessions_dir, thread_id)
     }
 
     fn mark(&self, thread_id: &str) -> Result<(), ProviderError> {
