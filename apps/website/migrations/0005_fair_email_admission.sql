@@ -69,40 +69,30 @@ DROP TRIGGER IF EXISTS account_email_dispatch_budget_refund;
 CREATE TRIGGER account_email_dispatch_budget_guard
 BEFORE INSERT ON account_email_dispatches
 BEGIN
-  SELECT CASE
-    WHEN NEW.network_hash IS NULL OR NEW.recipient_hash IS NULL
+  SELECT RAISE(ABORT, 'invalid account email admission')
+    WHERE NEW.network_hash IS NULL OR NEW.recipient_hash IS NULL
       OR length(NEW.network_hash) != 43 OR length(NEW.recipient_hash) != 43
-      OR NEW.budget_limit > 90
-    THEN RAISE(ABORT, 'invalid account email admission')
-  END;
-  SELECT CASE
-    WHEN COALESCE((SELECT sent FROM email_send_budget WHERE day = NEW.claimed_day), 0) >= NEW.budget_limit
-    THEN RAISE(ABORT, 'email daily budget exhausted')
-  END;
-  SELECT CASE
-    WHEN NEW.purpose = 'signin' AND (
+      OR NEW.budget_limit > 90;
+  SELECT RAISE(ABORT, 'email daily budget exhausted')
+    WHERE COALESCE((SELECT sent FROM email_send_budget WHERE day = NEW.claimed_day), 0) >= NEW.budget_limit;
+  SELECT RAISE(ABORT, 'non-deletion email reserve exhausted')
+    WHERE NEW.purpose = 'signin' AND (
       (SELECT COUNT(*) FROM marketing_email_dispatches
        WHERE claimed_day = NEW.claimed_day AND state != 'rejected')
       +
       (SELECT COUNT(*) FROM account_email_dispatches
        WHERE claimed_day = NEW.claimed_day AND purpose = 'signin' AND state != 'rejected')
-    ) >= NEW.non_deletion_limit
-    THEN RAISE(ABORT, 'non-deletion email reserve exhausted')
-  END;
-  SELECT CASE
-    WHEN (SELECT COUNT(*) FROM account_email_dispatches
+    ) >= NEW.non_deletion_limit;
+  SELECT RAISE(ABORT, 'account email network limit exhausted')
+    WHERE (SELECT COUNT(*) FROM account_email_dispatches
           WHERE claimed_day = NEW.claimed_day AND purpose = NEW.purpose
             AND network_hash = NEW.network_hash AND state != 'rejected')
-         >= NEW.network_limit
-    THEN RAISE(ABORT, 'account email network limit exhausted')
-  END;
-  SELECT CASE
-    WHEN (SELECT COUNT(*) FROM account_email_dispatches
+         >= NEW.network_limit;
+  SELECT RAISE(ABORT, 'account email recipient limit exhausted')
+    WHERE (SELECT COUNT(*) FROM account_email_dispatches
           WHERE claimed_day = NEW.claimed_day AND purpose = NEW.purpose
             AND recipient_hash = NEW.recipient_hash AND state != 'rejected')
-         >= NEW.recipient_limit
-    THEN RAISE(ABORT, 'account email recipient limit exhausted')
-  END;
+         >= NEW.recipient_limit;
 END;
 
 CREATE TRIGGER account_email_dispatch_budget_claim
@@ -122,25 +112,19 @@ END;
 CREATE TRIGGER marketing_email_dispatch_budget_guard
 BEFORE INSERT ON marketing_email_dispatches
 BEGIN
-  SELECT CASE
-    WHEN COALESCE((SELECT sent FROM email_send_budget WHERE day = NEW.claimed_day), 0) >= NEW.budget_limit
-    THEN RAISE(ABORT, 'email daily budget exhausted')
-  END;
-  SELECT CASE
-    WHEN (SELECT COUNT(*) FROM marketing_email_dispatches
-          WHERE claimed_day = NEW.claimed_day AND state != 'rejected') >= NEW.marketing_limit
-    THEN RAISE(ABORT, 'marketing email reserve exhausted')
-  END;
-  SELECT CASE
-    WHEN (
+  SELECT RAISE(ABORT, 'email daily budget exhausted')
+    WHERE COALESCE((SELECT sent FROM email_send_budget WHERE day = NEW.claimed_day), 0) >= NEW.budget_limit;
+  SELECT RAISE(ABORT, 'marketing email reserve exhausted')
+    WHERE (SELECT COUNT(*) FROM marketing_email_dispatches
+          WHERE claimed_day = NEW.claimed_day AND state != 'rejected') >= NEW.marketing_limit;
+  SELECT RAISE(ABORT, 'non-deletion email reserve exhausted')
+    WHERE (
       (SELECT COUNT(*) FROM marketing_email_dispatches
        WHERE claimed_day = NEW.claimed_day AND state != 'rejected')
       +
       (SELECT COUNT(*) FROM account_email_dispatches
        WHERE claimed_day = NEW.claimed_day AND purpose = 'signin' AND state != 'rejected')
-    ) >= NEW.non_deletion_limit
-    THEN RAISE(ABORT, 'non-deletion email reserve exhausted')
-  END;
+    ) >= NEW.non_deletion_limit;
 END;
 
 CREATE TRIGGER marketing_email_dispatch_budget_claim

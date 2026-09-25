@@ -51,6 +51,7 @@ Released migration `apps/api/migrations/0001_entitlements.sql` is byte-identical
 - Post-format focused reproof: API mail/environment 18/18; website mail/D1 65/65; both app typechecks exit 0.
 - Adversarial D1 immutability regression: RED proved a conflicting `INSERT OR REPLACE` silently replaced an existing `(channel, version)` descriptor. Pending migration `0003` now has a `BEFORE INSERT` mismatch guard that permits an exact idempotent claim and aborts any changed field before conflict handling. Focused workerd/D1: 7/7; post-repair website full: 19 files, 300/300; website typecheck remains clean.
 - Release-authority continuity regression: RED proved the candidate selected an empty D1 catalog and returned 404 for the deployed preview. The strict gate now proves four disabled spellings use the legacy manifest and exact `true` selects empty D1 and fails closed. Focused download unit: 42/42; final website full: 19 files, 301/301; production build: 18 pages; real local Worker/browser download E2E: 4/4.
+- Remote migration parser regression: the first production migration attempt applied website `0003` and `0004`, then atomically rolled back `0005` with `incomplete input: SQLITE_ERROR [7500]`; the old Worker remained active. The file is LF-only, Wrangler's exported splitter returns 19 complete statements, and local D1 accepts them. Wrangler's remote apply path instead posts the whole migration plus its ledger insert to D1 `/query`, matching the current upstream [LF multi-statement trigger parser defect](https://github.com/cloudflare/workers-sdk/issues/15690). The two new guard triggers were uniquely parser-hostile because they nested eight `CASE ... END;` expressions inside trigger `BEGIN ... END`. The correction uses equivalent ordered `SELECT RAISE(...) WHERE ...` guards, leaving one outer `END` per trigger. A deterministic parser-shape regression failed before the correction; focused workerd D1 passed 7/7, the full website suite passed 302/302, and a fresh Wrangler 4.138 local `d1 migrations apply` applied all five migrations with corrected `0005` executing 20 commands including its ledger insert.
 - `git diff --check`: exit 0.
 - Forbidden-file scan: 0 environment, credential, private-key, database, WAL/SHM, dependency, build, Wrangler-state, or browser-result files in the candidate path list.
 
@@ -71,6 +72,8 @@ Apply only forward migrations and capture D1 backups before each database:
 2. API D1: preserve released `0001`–`0003`, then `0004_max_2x.sql`, `0005_accounts_billing.sql`, and `0006_owner_billing_exclusion.sql`.
 
 The migrations are additive. Rollback restores Worker versions and leaves the expanded schema in place. Do not attempt destructive down-migrations. The website RPC must deploy before the API because the API's `ACCOUNT_MAILER` binding targets `kalcode-website` and `AccountMailEntrypoint`.
+
+Current production resume point: `0003` and `0004` are recorded; `0005` is absent and none of its columns or tables exist. Independently reprove the corrected `0005`, apply it once, and verify its migration record and schema before deploying the website Worker. Do not re-edit or replay the already applied migrations.
 
 ## Reviewed production deployment order
 

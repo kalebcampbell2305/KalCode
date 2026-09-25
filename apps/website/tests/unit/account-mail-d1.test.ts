@@ -87,6 +87,19 @@ beforeEach(async () => {
 });
 
 describe("account mail D1 dispatch claims", () => {
+  it("keeps trigger bodies compatible with the remote D1 multi-statement parser", () => {
+    const triggers = migrationStatements("0005_fair_email_admission.sql").filter((statement) =>
+      /CREATE\s+TRIGGER/i.test(statement),
+    );
+    expect(triggers).toHaveLength(6);
+    for (const trigger of triggers) {
+      // The remote /query splitter can mistake a nested CASE END for the trigger's outer END and
+      // submit incomplete SQL. Express guards as SELECT RAISE(...) WHERE ... instead.
+      expect(trigger).not.toMatch(/SELECT\s+CASE/i);
+      expect(trigger.match(/\bEND\b/gi)).toHaveLength(1);
+    }
+  });
+
   it("migration 0005 preserves prior dispatch evidence with safe defaults", () => {
     expect(legacyAfterMigration).toEqual({
       purpose: "signin",
