@@ -58,6 +58,7 @@ pub const MIGRATIONS: &[Migration] = &[
     GIT_MIGRATION,
     CONTEXT_MIGRATION,
     WORKSPACE_UI_MIGRATION,
+    NOTIFICATIONS_MIGRATION,
 ];
 
 /// Migration v7 (campaign Z6a): `git_worktrees` and `checkpoints`. Owned by `crates/git`, which
@@ -83,6 +84,14 @@ pub const WORKSPACE_UI_MIGRATION: Migration = Migration {
     version: 9,
     name: "workspace_ui",
     sql: include_str!("../migrations/0009_workspace_ui.sql"),
+};
+
+/// Migration v10 (Z7-W3): `notifications`, the notification center's store. Owned by
+/// `crates/notifications`, which re-exports it as `kalcode_notifications::NOTIFICATIONS_MIGRATION`.
+pub const NOTIFICATIONS_MIGRATION: Migration = Migration {
+    version: 10,
+    name: "notifications",
+    sql: include_str!("../migrations/0010_notifications.sql"),
 };
 
 /// How many pre-migration backups to keep.

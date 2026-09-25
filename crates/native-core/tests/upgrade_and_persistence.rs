@@ -40,7 +40,8 @@ fn migrations_are_numbered_contiguously() {
             (6, "kalvoice"),
             (7, "git"),
             (8, "context"),
-            (9, "workspace_ui")
+            (9, "workspace_ui"),
+            (10, "notifications")
         ]
     );
 }
