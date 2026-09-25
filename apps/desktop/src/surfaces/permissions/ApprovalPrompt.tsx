@@ -63,9 +63,14 @@ export function ApprovalPrompt({ request, onDecide, headingLevel = 3, className 
       detail={actionDetail(request.action.action)}
       reason={request.decision.reason}
       context={{
-        provider: context?.providerName ?? request.action.providerId,
-        thread: context?.threadName ?? shortId("Thread", request.action.threadId),
-        workspace: context?.workspaceName ?? shortId("Workspace", request.action.workspaceId),
+        // Requests from KalVoice (CA-1 non-thread origin) have no thread or provider of their own.
+        provider:
+          context?.providerName ??
+          (request.action.providerId || (request.action.origin?.kind === "kalvoice" ? "KalVoice" : "None")),
+        thread: context?.threadName ?? (request.action.threadId ? shortId("Thread", request.action.threadId) : "None"),
+        workspace:
+          context?.workspaceName ??
+          (request.action.workspaceId ? shortId("Workspace", request.action.workspaceId) : "None"),
         mode: MODE_LABELS[request.permissionMode],
         modeTone: request.permissionMode === "bypass" ? "danger" : "neutral",
       }}

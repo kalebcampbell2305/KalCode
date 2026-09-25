@@ -12,9 +12,9 @@ import { type Browser, chromium, expect, type Page, test } from "@playwright/tes
  * released. Set KALVOICE_E2E_MODEL to an installed `ggml-tiny.en.bin` to exercise the "model
  * installed" path without downloading it again.
  *
- * Provider quota is never used unless KALVOICE_E2E_REASONING=1: otherwise the app runs with a
- * scrubbed PATH and home folders, so no signed-in provider can be found and a request that needs
- * reasoning must ask to connect one.
+ * Provider quota is never used unless KALVOICE_E2E_REASONING=1: otherwise the suite first sets
+ * KalVoice's reasoning to "on-device" (not available yet), so a request that needs reasoning is
+ * refused before any provider session could start, whatever providers this machine has.
  */
 const EXE = process.env.KALCODE_E2E_EXE ?? resolve(import.meta.dirname, "../../../../target/e2e/release/kalcode.exe");
 const PORT = Number(process.env.KALCODE_E2E_CDP_PORT ?? 9438);
@@ -31,26 +31,10 @@ interface Running {
 
 const REASONING = process.env.KALVOICE_E2E_REASONING === "1";
 
-/** Hides the owner's provider installs from the app (no PATH entries, empty home folders). */
-function withoutProviders(dataDir: string): Record<string, string> {
-  if (REASONING) return {};
-  const home = join(dataDir, "no-providers");
-  for (const dir of ["home", "roaming", "local"]) mkdirSync(join(home, dir), { recursive: true });
-  const windows = process.env.SystemRoot ?? "C:\\Windows";
-  return {
-    PATH: `${windows}\\System32;${windows}`,
-    USERPROFILE: join(home, "home"),
-    HOME: join(home, "home"),
-    APPDATA: join(home, "roaming"),
-    LOCALAPPDATA: join(home, "local"),
-  };
-}
-
 async function launch(dataDir: string): Promise<Running> {
   const child = spawn(EXE, [], {
     env: {
       ...process.env,
-      ...withoutProviders(dataDir),
       KALCODE_DATA_DIR: dataDir,
       WEBVIEW2_USER_DATA_FOLDER: join(dataDir, "webview"),
       WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${PORT}`,
@@ -150,6 +134,10 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
     await expect(page.getByRole("heading", { level: 1, name: "Settings" })).toBeVisible();
     await expect(shown(page).getByText("Opened Settings.")).toBeVisible();
 
+    if (!REASONING) {
+      await invoke(page, "kalvoice_preferences_update", { patch: { intelligence: { kind: "local" } } });
+    }
+
     // Push-to-talk routing in the native core: a confident command runs and counts; words
     // spoken into a text box are dictation and never count; anything else is a request.
     const command = await talk(page, "Open the dashboard", "field");
@@ -161,7 +149,7 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
     expect(request.route).toBe("request");
 
     // Needs reasoning: runs on the user's own signed-in provider (their quota), so only when
-    // explicitly allowed; otherwise no provider is visible and KalVoice asks to connect one.
+    // explicitly allowed; otherwise reasoning is set to on-device, which isn't available yet.
     if (REASONING) {
       await page.getByRole("button", { name: "KalVoice", exact: true }).click();
       await input.fill("Summarize what KalVoice can do in one sentence");
@@ -229,7 +217,32 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
       },
     });
     await invoke(page, "approval_decide", { requestId: approvalId, decision: "deny" });
-    await expect(shown(page).getByText("The request wasn't approved, so KalVoice didn't run it.")).toBeVisible();
+    // KalVoice drops the command when the engine reports the denial (ids and codes only).
+    const byRequest = () =>
+      invoke<{ events: { type: string; payload: { code?: string } }[] }>(page, "events_query", {
+        query: {
+          types: ["kalvoice.*"],
+          correlation: {
+            workspaceId: null,
+            threadId: null,
+            missionId: null,
+            providerId: null,
+            requestId: create.response?.requestId,
+            agentId: null,
+            taskId: null,
+            automationId: null,
+            causationId: null,
+          },
+          afterSeq: null,
+          beforeSeq: null,
+          from: null,
+          to: null,
+          order: "asc",
+          limit: 20,
+        },
+      }).then((p) => p.events.map((e) => `${e.type}${e.payload.code ? `:${e.payload.code}` : ""}`));
+    await expect.poll(byRequest).toContain("kalvoice.request_failed:permission_denied");
+    expect(await byRequest()).not.toContain("kalvoice.command_executed");
     expect(await invoke<unknown[]>(page, "thread_list", {})).toEqual([]);
 
     await page.getByRole("button", { name: "Settings", exact: true }).click();

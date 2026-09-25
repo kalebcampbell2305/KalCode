@@ -52,6 +52,35 @@ describe("ApprovalPrompt", () => {
     expect(prompt).toHaveAccessibleDescription("Installing packages needs your approval in Approve mode.");
   });
 
+  it("names KalVoice for a request that came from it (no thread or provider of its own)", () => {
+    const base = request();
+    render(
+      <ApprovalPrompt
+        request={request({
+          action: {
+            ...base.action,
+            threadId: "",
+            providerId: "",
+            action: { kind: "create_threads", providerId: "codex", count: 2, workspaceId: null },
+            summary: "Open 2 Codex threads",
+            origin: { kind: "kalvoice", requestId: "0192f3c4-0000-7000-8000-000000000009" },
+          },
+          allowedDecisions: ["deny", "approve_once"],
+          context: { threadName: null, workspaceName: null, providerName: null },
+        })}
+        onDecide={vi.fn()}
+      />,
+    );
+    const prompt = screen.getByRole("region", { name: "Open 2 Codex threads" });
+    expect(within(prompt).getByText("KalVoice")).toBeInTheDocument();
+    expect(within(prompt).getByText("None")).toBeInTheDocument();
+    expect(
+      within(prompt)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["Deny", "Approve once"]);
+  });
+
   it("offers only what the engine allows", () => {
     render(<ApprovalPrompt request={request({ allowedDecisions: ["deny", "approve_once"] })} onDecide={vi.fn()} />);
     expect(screen.queryByRole("button", { name: "Allow for thread" })).toBeNull();
