@@ -1,14 +1,14 @@
 //! Persistence for migration v7: `git_worktrees` and `checkpoints`.
 //!
-//! [`GIT_MIGRATION`] is deliberately **not** registered in `kalcode_core::db::MIGRATIONS` on this
-//! branch (wave 2 is renumbering v2–v4); the lead appends it at integration. Every function takes
+//! [`GIT_MIGRATION`] is registered in `kalcode_core::db::MIGRATIONS` as v7; its SQL lives in
+//! `crates/native-core/migrations/0007_git.sql` (native-core cannot depend on this crate), and
+//! this crate re-exports the core constant. Every function takes
 //! a connection or transaction supplied by `Core` (`Core::read` / `Core::write_with_events`), so
 //! callers decide atomicity. Parameterized SQL only. Git never runs while a connection is held.
 
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
 use kalcode_contracts::ids::is_valid_id;
-use kalcode_core::db::Migration;
 use kalcode_core::time::now_rfc3339;
 use kalcode_core::{KalError, Result};
 
@@ -18,13 +18,9 @@ use crate::types::{
 };
 use crate::worktree::NewWorktree;
 
-/// Migration v7 (campaign Z6a). Append to `kalcode_core::db::MIGRATIONS` at integration; it
-/// has no foreign key to another campaign's tables.
-pub const GIT_MIGRATION: Migration = Migration {
-    version: 7,
-    name: "git",
-    sql: include_str!("../migrations/0007_git.sql"),
-};
+/// Migration v7 (campaign Z6a), registered in `kalcode_core::db::MIGRATIONS`. It has no foreign
+/// key to another campaign's tables.
+pub use kalcode_core::db::GIT_MIGRATION;
 
 fn check_id(id: &str) -> Result<()> {
     if is_valid_id(id) {
@@ -315,17 +311,7 @@ mod tests {
 
     fn db() -> Connection {
         let mut conn = kalcode_core::db::open_in_memory().expect("db");
-        let mut all = kalcode_core::db::MIGRATIONS.to_vec();
-        // Fill the reserved gap so the gap-free runner on this branch accepts v7.
-        for version in (all.len() as i64 + 1)..7 {
-            all.push(Migration {
-                version,
-                name: "reserved",
-                sql: "SELECT 1;",
-            });
-        }
-        all.push(GIT_MIGRATION);
-        kalcode_core::db::migrate(&mut conn, &all, None).expect("migrate");
+        kalcode_core::db::migrate(&mut conn, kalcode_core::db::MIGRATIONS, None).expect("migrate");
         conn
     }
 
@@ -342,12 +328,16 @@ mod tests {
     }
 
     #[test]
-    fn migration_is_isolated_and_numbered_seven() {
-        assert_eq!(GIT_MIGRATION.version, 7);
-        assert!(
-            kalcode_core::db::MIGRATIONS.iter().all(|m| m.version != 7),
-            "v7 is registered by the lead at integration, not on this branch"
-        );
+    fn migration_is_registered_as_v7() {
+        assert_eq!((GIT_MIGRATION.version, GIT_MIGRATION.name), (7, "git"));
+        let registered = kalcode_core::db::MIGRATIONS
+            .iter()
+            .find(|m| m.version == 7)
+            .expect("v7 is registered");
+        assert_eq!(registered.name, "git");
+        assert_eq!(registered.sql, GIT_MIGRATION.sql);
+        assert!(GIT_MIGRATION.sql.contains("CREATE TABLE git_worktrees"));
+        assert!(GIT_MIGRATION.sql.contains("CREATE TABLE checkpoints"));
     }
 
     #[test]

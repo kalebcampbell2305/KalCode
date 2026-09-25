@@ -77,6 +77,11 @@
     "allow-provider-pane-write",
     "allow-provider-pane-resize",
     "allow-provider-pane-info",
+    "allow-layout-get",
+    "allow-layout-save",
+    "allow-layout-presets",
+    "allow-layout-preset-save",
+    "allow-layout-preset-delete",
     "allow-notification-list",
     "allow-notification-mark"
   ]

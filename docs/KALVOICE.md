@@ -111,15 +111,33 @@ request (push-to-talk transcript, or typed)
 ```
 
 Deterministic intents (`KalVoiceIntent`): navigate, open workspace, create terminal, create N
-threads with a provider (1–16), open thread, focus a thread ("focus the login fix thread";
-panes aren't in this build, so it opens the thread), ask for a thread's permission mode ("switch
+threads with a provider (1–16), open thread, focus a thread or pane ("focus the login fix
+thread", "focus the Codex pane": a thread running in a provider pane is shown in its pane on the
+Code canvas, others open in Threads), ask for a thread's permission mode ("switch
 the login fix thread to plan mode": KalVoice opens the thread and the person changes the mode in
 its permission menu; asking for Bypass is refused outright, and the contract can't even represent
 it), pause / resume / stop threads (all, workspace, one), show approvals, status report ("what
-are my threads doing?"), and filter the Dashboard (Z7-W3, `filter_dashboard`, UI-only). Everything else is `Reasoning`. The CA-1 layout intents `split`,
-`resize`, `close`, `search` and `switch_provider` need the pane system and provider panes, which
-are gated in this build: the grammar doesn't produce them (such utterances take the Request
-route) and the desktop executor refuses them uncounted.
+are my threads doing?"), filter the Dashboard (Z7-W3, `filter_dashboard`, UI-only), and pane layout
+(Z7-W1, below). Everything else is `Reasoning`.
+`search` and `switch_provider` aren't in this build: the grammar doesn't produce them and the
+desktop executor refuses them uncounted.
+
+**Pane layout intents** (Z7-W1). Deterministic, verb-led (high confidence), layout only: they
+never start, stop or close a process and never ask for approval (they count like navigation).
+The result is a UI directive the Code pane canvas carries out; when Code isn't on screen,
+KalVoice opens it first.
+
+| Say | Intent | UI directive | What happens |
+| --- | --- | --- | --- |
+| "split the pane", "split this pane side by side / horizontally / left and right" | `split { axis: horizontal }` | `split_pane` | The focused pane splits; the new pane (right) offers what can be opened there. |
+| "split the pane vertically / down / stacked / top and bottom" | `split { axis: vertical }` | `split_pane` | The new pane opens below. |
+| "split Claude and Codex side by side", "put Claude next to Codex", "arrange Gemini and Claude top and bottom" | `split` + the named providers (carried inside `crates/kalvoice` as `NamedTarget::Providers` → `ExecContext.providers`; the contract intent can't hold them) | `arrange_panes { axis, providerIds }` | The newest pane of each named provider in the workspace is put next to the first; a provider without a pane is reported honestly ("No pane yet for …"), nothing is started. |
+| "make this pane bigger / larger / wider / taller / smaller / narrower / shorter", "grow / enlarge / expand / widen / shrink the pane" (+ "a bit" = 1 step, "much / a lot" = 4, default 2) | `resize { direction, steps }` (bigger → right, taller → down, smaller → left, shorter → up) | `resize_pane` | The focused pane grows (or shrinks) by 32 px per step; with no neighbour that way it grows toward the other side, so "bigger" always does something. |
+| "close this pane", "close the Codex pane" | `close { query }` | `close_pane` | The pane leaves the layout; what it runs keeps running ("in background") and Ctrl Alt R reopens it. |
+
+Axis convention (shared with `apps/desktop/src/shell/panes/model.ts`): `horizontal` = side by
+side, `vertical` = stacked. "And" normally makes a request compound (→ `Reasoning`); the only
+patterns tried on a request containing a conjunction are these pane arrangements.
 
 Dashboard filters (`FilterDashboard { chip }` → `UiDirective::FilterDashboard`; no model, no
 thread changes; the summary counts non-archived threads by `ThreadStatus::chip`):
@@ -239,8 +257,9 @@ build can't run, or a count out of range. Dictation is never counted.
   terminals (Z1, `kalcode_core`), threads (Z3, `ThreadRuntime`: `create_idle_threads`,
   `pause_threads`, `resume_threads`, `stop_threads`, `find`, `status_summary`) and pending
   approvals (Z4, `PermissionService::list_approvals`, read-only). The UI side of a result
-  (navigate, open a workspace or terminal, open a thread, open the Approvals panel, filter the Dashboard) runs in
-  `KalVoiceProvider`.
+  (navigate, open a workspace or terminal, open a thread, open the Approvals panel, filter the
+  Dashboard, and the pane directives through `dispatchPaneCommand`,
+  apps/desktop/src/shell/panes/paneCommands.ts) runs in `KalVoiceProvider`.
 - Reasoning uses the provider runtime (Z2): Claude Code, when installed and signed in, runs
   read-only in `<data>/kalvoice/reasoning`. Other providers join as their adapters land.
 - KalVoice's tables are schema v6, part of every build's migrations; the first start after

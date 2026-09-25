@@ -14,8 +14,8 @@ use std::sync::OnceLock;
 
 use kalcode_contracts::agent::ProviderId;
 use kalcode_contracts::app::SurfaceId;
-use kalcode_contracts::kalvoice::{KalVoiceIntent, RequestableMode, ThreadScope};
-use kalcode_contracts::workspace_ui::DashboardChip;
+use kalcode_contracts::kalvoice::{KalVoiceIntent, PaneDirection, RequestableMode, ThreadScope};
+use kalcode_contracts::workspace_ui::{DashboardChip, SplitAxis};
 
 /// The most threads one request may open.
 pub const MAX_THREADS_PER_REQUEST: u32 = 16;
@@ -30,6 +30,9 @@ const MAX_COMMAND_TOKENS: usize = 40;
 pub enum NamedTarget {
     Workspace(String),
     Thread(String),
+    /// Providers whose panes a layout command arranges ("split Claude and Codex side by side").
+    /// Not resolved to an id: the orchestrator hands them to the executor as they are.
+    Providers(Vec<ProviderId>),
 }
 
 /// What the grammar understood.
@@ -98,15 +101,19 @@ fn understand_inner(text: &str, confidence: &mut Confidence) -> Understood {
     if tokens.is_empty() || tokens.len() > MAX_COMMAND_TOKENS {
         return Understood::reasoning(trimmed);
     }
-    // Negations and compound requests are never deterministic commands.
-    if tokens.iter().any(|t| is_negation(t) || is_conjunction(t)) {
+    // Negations and compound requests are never deterministic commands. The one exception is
+    // pane arrangement, whose own words include "and" ("split Claude and Codex side by side",
+    // "top and bottom"): only those patterns are tried when a conjunction is present.
+    if tokens.iter().any(|t| is_negation(t)) {
         return Understood::reasoning(trimmed);
     }
+    let compound = tokens.iter().any(|t| is_conjunction(t));
     let core = strip_filler(&tokens);
     if core.is_empty() {
         return Understood::reasoning(trimmed);
     }
-    for rule in rules() {
+    let candidates = if compound { and_rules() } else { rules() };
+    for rule in candidates {
         if let Some(caps) = match_nodes(&rule.nodes, core, &Caps::default()) {
             let understood = (rule.build)(&caps);
             let deterministic = !matches!(
@@ -353,6 +360,8 @@ enum Slot {
 struct Caps {
     count: Option<u32>,
     provider: Option<&'static str>,
+    /// Every provider named, in order (pane arrangement names two).
+    providers: Vec<&'static str>,
     surface: Option<SurfaceId>,
     names: Vec<String>,
 }
@@ -472,7 +481,13 @@ fn slot_candidates(slot: Slot, tokens: &[String]) -> Vec<(usize, Fill)> {
                 if tokens.len() >= len
                     && let Some(id) = provider_words(&tokens[..len])
                 {
-                    out.push((len, Box::new(move |c: &mut Caps| c.provider = Some(id))));
+                    out.push((
+                        len,
+                        Box::new(move |c: &mut Caps| {
+                            c.provider = Some(id);
+                            c.providers.push(id);
+                        }),
+                    ));
                 }
             }
         }
@@ -640,6 +655,148 @@ fn rules() -> &'static [Rule] {
     RULES.get_or_init(build_rules)
 }
 
+/// The only patterns tried on a request containing a conjunction: pane arrangements whose own
+/// wording has "and". Layout only; nothing starts or stops.
+fn and_rules() -> &'static [Rule] {
+    static RULES: OnceLock<Vec<Rule>> = OnceLock::new();
+    RULES.get_or_init(build_and_rules)
+}
+
+fn rule(pattern: String, build: Build) -> Rule {
+    Rule {
+        high: !LOW_CONFIDENCE.contains(&pattern.as_str()),
+        nodes: compile(&pattern),
+        build,
+    }
+}
+
+const PANE_WORD: &str = "[the|this|my|current|this current] [pane|panes|screen|view|window]";
+const ARRANGE_VERB: &str = "(split|put|place|show|arrange|open|lay out)";
+const SIDE_BY_SIDE: &str =
+    "[side by side|next to each other|beside each other|together|left and right|horizontally]";
+
+fn split(axis: SplitAxis) -> Build {
+    Box::new(move |_| Understood::intent(KalVoiceIntent::Split { axis }))
+}
+
+/// "Split Claude and Codex side by side": a side-by-side split carrying the named providers.
+fn arrange(axis: SplitAxis) -> Build {
+    Box::new(move |c: &Caps| {
+        let mut providers: Vec<ProviderId> = Vec::new();
+        for id in &c.providers {
+            let id = ProviderId::new(*id);
+            if !providers.contains(&id) {
+                providers.push(id);
+            }
+        }
+        if providers.len() < 2 {
+            return Understood::reasoning("");
+        }
+        Understood::Intent {
+            intent: KalVoiceIntent::Split { axis },
+            target: Some(NamedTarget::Providers(providers)),
+        }
+    })
+}
+
+fn build_and_rules() -> Vec<Rule> {
+    vec![
+        rule(
+            format!("split {PANE_WORD} left and right"),
+            split(SplitAxis::Horizontal),
+        ),
+        rule(
+            format!("split {PANE_WORD} top and bottom"),
+            split(SplitAxis::Vertical),
+        ),
+        rule(
+            format!("{ARRANGE_VERB} <provider> and <provider> {SIDE_BY_SIDE} [panes]"),
+            arrange(SplitAxis::Horizontal),
+        ),
+        rule(
+            format!(
+                "{ARRANGE_VERB} <provider> and <provider> [panes] (top and bottom|stacked|vertically|one above the other)"
+            ),
+            arrange(SplitAxis::Vertical),
+        ),
+    ]
+}
+
+/// Pane layout commands without conjunctions (split, resize, close, arrange with "next to").
+fn pane_rules(add: &mut impl FnMut(String, Build)) {
+    // Stacked first, so its qualifiers never read as a plain split.
+    add(
+        format!("split {PANE_WORD} (vertically|down|stacked|below|top to bottom|in rows)"),
+        split(SplitAxis::Vertical),
+    );
+    add(
+        format!(
+            "split {PANE_WORD} [side by side|horizontally|right|to the right|sideways|in columns]"
+        ),
+        split(SplitAxis::Horizontal),
+    );
+    add(
+        format!("{ARRANGE_VERB} <provider> (next to|beside|alongside) <provider>"),
+        arrange(SplitAxis::Horizontal),
+    );
+    add(
+        format!("{ARRANGE_VERB} <provider> (above|over) <provider>"),
+        arrange(SplitAxis::Vertical),
+    );
+
+    // Resize: bigger / wider grow to the right, taller downward (the UI grows the other way
+    // when there's no pane on that side, so "bigger" always does something).
+    const SMALL: &str = "(a bit|a little|a little bit|a tad|slightly)";
+    const LARGE: &str = "(a lot|much|way|a lot more|much more)";
+    let resize = |direction: PaneDirection, steps: u8| -> Build {
+        Box::new(move |_| Understood::intent(KalVoiceIntent::Resize { direction, steps }))
+    };
+    for (words, direction) in [
+        ("(bigger|larger|wider)", PaneDirection::Right),
+        ("taller", PaneDirection::Down),
+        ("(smaller|narrower)", PaneDirection::Left),
+        ("shorter", PaneDirection::Up),
+    ] {
+        for (before, after, steps) in [
+            ("", "", 2u8),
+            ("", SMALL, 1),
+            (SMALL, "", 1),
+            ("", LARGE, 4),
+            (LARGE, "", 4),
+        ] {
+            add(
+                format!("make {PANE_WORD} {before} {words} {after}"),
+                resize(direction, steps),
+            );
+        }
+    }
+    for (verb, direction) in [
+        ("(grow|enlarge|expand|widen)", PaneDirection::Right),
+        ("shrink", PaneDirection::Left),
+    ] {
+        for (after, steps) in [("", 2u8), (SMALL, 1), (LARGE, 4)] {
+            add(
+                format!("{verb} {PANE_WORD} {after}"),
+                resize(direction, steps),
+            );
+        }
+    }
+
+    // Close a pane: the focused one, or one by name. Closing never stops what runs in it.
+    add(
+        "close [the|this|my|current|this current] pane".into(),
+        Box::new(|_| Understood::intent(KalVoiceIntent::Close { query: None })),
+    );
+    add(
+        "close [the|my] <name> pane".into(),
+        Box::new(|c: &Caps| {
+            Understood::intent(KalVoiceIntent::Close {
+                query: c.names.first().cloned(),
+            })
+        }),
+    );
+}
+
 fn build_rules() -> Vec<Rule> {
     let mut rules = Vec::new();
     let mut add = |pattern: String, build: Build| {
@@ -787,7 +944,10 @@ fn build_rules() -> Vec<Rule> {
         );
     }
 
-    // Focus a thread by name. Panes aren't in this build, so focusing a thread opens it.
+    // Pane layout (Z7-W1): split, arrange providers, resize, close.
+    pane_rules(&mut add);
+
+    // Focus a thread by name: its pane when it has one, else the thread in Threads.
     for p in [
         "focus [on] [the|my] thread <name>",
         "focus [on] [the|my] <name> (thread|pane)",

@@ -37,7 +37,10 @@ fn migrations_are_numbered_contiguously() {
             (3, "threads"),
             (4, "permissions"),
             (5, "event_correlation"),
-            (6, "kalvoice")
+            (6, "kalvoice"),
+            (7, "git"),
+            (8, "context"),
+            (9, "workspace_ui")
         ]
     );
 }
@@ -151,17 +154,18 @@ fn upgrade_from_v1_keeps_data_and_writes_backup() {
     );
 
     // Migration recorded as an event with a backup.
+    let latest = MIGRATIONS.last().expect("migrations").version;
     let migrated = events
         .iter()
         .find_map(|e| match e.event {
             EventPayload::DatabaseMigrated {
                 from_version: 1,
-                to_version: 6,
+                to_version,
                 backup_created,
-            } => Some(backup_created),
+            } if to_version == latest => Some(backup_created),
             _ => None,
         })
-        .expect("database.migrated 1 -> 6");
+        .expect("database.migrated 1 -> latest");
     assert!(migrated);
 
     // Backup file exists and is a valid v1 database with the pre-upgrade data.
@@ -618,6 +622,140 @@ fn upgrade_v4_to_v5_backs_up_and_preserves_everything() {
         .expect("caused");
     assert_eq!(caused.events, vec![reaction]);
     core.shutdown();
+}
+
+/// Tables each migration after v6 adds (v7 Z6a git core, v8 CTX/FW context, v9 Z7-W1 layouts).
+const POST_V6_TABLES: [&str; 8] = [
+    "checkpoints",
+    "context_firewall_log",
+    "context_items",
+    "context_never_share",
+    "context_packages",
+    "git_worktrees",
+    "layout_presets",
+    "workspace_layouts",
+];
+
+// Test helper: panics on setup failures by design.
+#[allow(clippy::expect_used)]
+fn tables_named(conn: &rusqlite::Connection, names: &[&str]) -> Vec<String> {
+    let mut stmt = conn
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        .expect("prepare");
+    let rows = stmt
+        .query_map([], |r| r.get::<_, String>(0))
+        .expect("tables");
+    rows.filter_map(|r| r.ok())
+        .filter(|name| names.contains(&name.as_str()))
+        .collect()
+}
+
+/// A database at v6 (the schema the owner's installed app has) upgrades to this build's latest
+/// schema in one start: exactly one backup (the untouched v6 file), every row kept (settings,
+/// workspace, events, KalVoice's v6 rows), and the git and context tables added.
+#[test]
+fn upgrade_v6_to_latest_backs_up_once_and_keeps_everything() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = tempfile::tempdir().expect("project");
+    let latest = MIGRATIONS.last().expect("migrations").version;
+    let (workspace_id, v6_events) = {
+        let core = Core::open_with_migrations(config(dir.path()), &MIGRATIONS[..6]).expect("v6");
+        assert_eq!(core.read(db::schema_version).expect("version"), 6);
+        core.update_settings(&SettingsPatch {
+            theme: Some(ThemePreference::Light),
+            density: Some(Density::Compact),
+            ..Default::default()
+        })
+        .expect("settings");
+        let workspace = core.open_workspace(project.path()).expect("workspace");
+        core.transact(|tx| {
+            tx.execute(
+                "INSERT INTO kalvoice_preferences (key, value, updated_at)
+                 VALUES ('voice.speakReplies', 'true', '2026-09-24T10:00:00Z')",
+                [],
+            )?;
+            Ok(((), Vec::new()))
+        })
+        .expect("kalvoice row");
+        let events = core.recent_events(500, None).expect("v6 events");
+        core.shutdown();
+        (workspace.id, events)
+    };
+    assert!(
+        !dir.path().join("backups").exists() || backup_versions(dir.path()).is_empty(),
+        "a fresh v6 install has no backup yet"
+    );
+
+    let core = Core::open(config(dir.path())).expect("upgrade");
+    assert_eq!(core.read(db::schema_version).expect("version"), latest);
+    assert!(latest >= 8, "v7 and v8 are registered");
+    // One backup: the untouched v6 database.
+    assert_eq!(backup_versions(dir.path()), vec![6]);
+    let backup_path = std::fs::read_dir(dir.path().join("backups"))
+        .expect("backups")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .next()
+        .expect("backup");
+    assert!(
+        backup_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with("kalcode-pre-v7-")),
+        "{backup_path:?}"
+    );
+    let backup = rusqlite::Connection::open(&backup_path).expect("open backup");
+    assert!(tables_named(&backup, &POST_V6_TABLES).is_empty());
+    let backup_prefs: i64 = backup
+        .query_row("SELECT COUNT(*) FROM kalvoice_preferences", [], |r| {
+            r.get(0)
+        })
+        .expect("backup prefs");
+    assert_eq!(backup_prefs, 1);
+
+    // Every v6 row survives.
+    let settings = core.settings().expect("settings");
+    assert_eq!(settings.theme, ThemePreference::Light);
+    assert_eq!(settings.density, Density::Compact);
+    assert_eq!(
+        core.active_workspace().expect("active").map(|w| w.id),
+        Some(workspace_id)
+    );
+    let after = core.recent_events(500, None).expect("events");
+    for event in &v6_events {
+        assert!(
+            after.iter().any(|e| e == event),
+            "v6 event {} kept",
+            event.id
+        );
+    }
+    let pref: String = core
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT value FROM kalvoice_preferences WHERE key = 'voice.speakReplies'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .expect("pref");
+    assert_eq!(pref, "true");
+    // The new tables exist, and the upgrade is recorded once, from v6, with its backup.
+    let tables = core
+        .read(|c| Ok(tables_named(c, &POST_V6_TABLES)))
+        .expect("tables");
+    assert_eq!(tables, POST_V6_TABLES);
+    let upgrades: Vec<(i64, i64, bool)> = after
+        .iter()
+        .filter_map(|e| match e.event {
+            EventPayload::DatabaseMigrated {
+                from_version,
+                to_version,
+                backup_created,
+            } if from_version > 0 => Some((from_version, to_version, backup_created)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(upgrades, vec![(6, latest, true)]);
 }
 
 #[test]

@@ -5,12 +5,12 @@
 //! executor only after the person approved their KalVoice-origin approval request (the
 //! orchestrator files it with `PermissionService::request_for_origin`).
 //!
-//! CA-1 intents: `focus` opens the thread (panes aren't in this build), and
+//! CA-1 intents: `focus` opens the thread (the UI shows it in its pane when it has one), and
 //! `request_permission_mode` opens the thread so the person can change its mode themselves
-//! (never Bypass: the contract can't represent it). `split`, `resize`, `close`, `search` and
-//! `switch_provider` need the pane system and provider panes, which are gated in this build, so
-//! they're refused before anything is counted; the grammar doesn't produce them yet (such
-//! utterances go to the Request route).
+//! (never Bypass: the contract can't represent it). `split`, `resize` and `close` are pane
+//! layout commands (Z7-W1): they return a directive the pane canvas carries out; nothing starts,
+//! stops or closes a process. `search` and `switch_provider` aren't in this build, so they're
+//! refused before anything is counted.
 //!
 //! Z7-W3: `filter_dashboard` only changes what the Dashboard shows; its summary counts the
 //! runtime's non-archived threads by Dashboard chip (`ThreadStatus::chip`).
@@ -19,9 +19,9 @@ use std::sync::Arc;
 
 use kalcode_contracts::agent::ProviderId;
 use kalcode_contracts::app::SurfaceId;
-use kalcode_contracts::kalvoice::KalVoiceIntent;
+use kalcode_contracts::kalvoice::{KalVoiceIntent, PaneDirection};
 use kalcode_contracts::permissions::{ApprovalStatus, PermissionMode};
-use kalcode_contracts::workspace_ui::DashboardChip;
+use kalcode_contracts::workspace_ui::{DashboardChip, SplitAxis};
 use kalcode_core::workspaces::{TerminalSize, Workspace};
 use kalcode_core::{Core, KalError};
 use kalcode_kalvoice::orchestrator::{
@@ -327,14 +327,12 @@ impl Executor for DesktopExecutor {
                 }
                 Ok(())
             }
-            KalVoiceIntent::Split { .. }
-            | KalVoiceIntent::Resize { .. }
-            | KalVoiceIntent::Close { .. }
-            | KalVoiceIntent::Search { .. }
-            | KalVoiceIntent::SwitchProvider { .. } => Err(ExecError::new(
-                "not_in_this_build",
-                "Panes and provider switching aren't in this build yet, so KalVoice can't do that.",
-            )),
+            KalVoiceIntent::Search { .. } | KalVoiceIntent::SwitchProvider { .. } => {
+                Err(ExecError::new(
+                    "not_in_this_build",
+                    "Search and provider switching aren't in this build yet, so KalVoice can't do that.",
+                ))
+            }
             KalVoiceIntent::ShowApprovals if self.permissions.is_none() => Err(ExecError::new(
                 "approvals_unavailable",
                 "KalCode's permission engine isn't running, so there's nothing KalVoice can show.",
@@ -346,7 +344,7 @@ impl Executor for DesktopExecutor {
         }
     }
 
-    fn execute(&self, intent: &KalVoiceIntent, _ctx: &ExecContext) -> Result<Executed, ExecError> {
+    fn execute(&self, intent: &KalVoiceIntent, ctx: &ExecContext) -> Result<Executed, ExecError> {
         match intent {
             KalVoiceIntent::Navigate { surface } => Ok(Executed {
                 summary: format!(
@@ -498,15 +496,74 @@ impl Executor for DesktopExecutor {
             KalVoiceIntent::Reasoning { .. } => {
                 Err(ExecError::new("not_a_command", "That isn't a command."))
             }
-            KalVoiceIntent::Split { .. }
-            | KalVoiceIntent::Resize { .. }
-            | KalVoiceIntent::Close { .. }
-            | KalVoiceIntent::Search { .. }
-            | KalVoiceIntent::SwitchProvider { .. } => Err(ExecError::new(
-                "not_in_this_build",
-                "Panes and provider switching aren't in this build yet, so KalVoice can't do that.",
-            )),
+            KalVoiceIntent::Split { axis } => Ok(pane_split(*axis, &ctx.providers)),
+            KalVoiceIntent::Resize { direction, steps } => Ok(Executed {
+                summary: format!("Made the pane {}.", resize_word(*direction)),
+                directive: Some(UiDirective::ResizePane {
+                    direction: *direction,
+                    steps: (*steps).clamp(1, 10),
+                }),
+            }),
+            KalVoiceIntent::Close { query } => {
+                let query = query
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|q| !q.is_empty())
+                    .map(str::to_owned);
+                Ok(Executed {
+                    summary: match &query {
+                        Some(name) => {
+                            format!("Closed the {name} pane. What it runs keeps running.")
+                        }
+                        None => "Closed the pane. What it runs keeps running.".into(),
+                    },
+                    directive: Some(UiDirective::ClosePane { query }),
+                })
+            }
+            KalVoiceIntent::Search { .. } | KalVoiceIntent::SwitchProvider { .. } => {
+                Err(ExecError::new(
+                    "not_in_this_build",
+                    "Search and provider switching aren't in this build yet, so KalVoice can't do that.",
+                ))
+            }
         }
+    }
+}
+
+/// "Made the pane bigger." — how a resize direction reads.
+fn resize_word(direction: PaneDirection) -> &'static str {
+    match direction {
+        PaneDirection::Right => "bigger",
+        PaneDirection::Left => "smaller",
+        PaneDirection::Down => "taller",
+        PaneDirection::Up => "shorter",
+    }
+}
+
+/// A split of the focused pane, or (with named providers) their panes put next to each other.
+fn pane_split(axis: SplitAxis, providers: &[ProviderId]) -> Executed {
+    let how = match axis {
+        SplitAxis::Horizontal => "side by side",
+        SplitAxis::Vertical => "top and bottom",
+    };
+    if providers.len() >= 2 {
+        let names: Vec<String> = providers.iter().map(provider_display_name).collect();
+        let listed = match names.as_slice() {
+            [a, b] => format!("{a} and {b}"),
+            [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+            [] => String::new(),
+        };
+        return Executed {
+            summary: format!("Putting {listed} {how}."),
+            directive: Some(UiDirective::ArrangePanes {
+                axis,
+                provider_ids: providers.to_vec(),
+            }),
+        };
+    }
+    Executed {
+        summary: format!("Split the pane {how}."),
+        directive: Some(UiDirective::SplitPane { axis }),
     }
 }
 
@@ -541,7 +598,103 @@ mod tests {
         ExecContext {
             request_id: String::new(),
             workspace_id: None,
+            providers: Vec::new(),
         }
+    }
+
+    #[test]
+    fn pane_commands_are_layout_directives() {
+        let dir = tempfile::tempdir().expect("data");
+        let executor = executor(dir.path());
+        let split = KalVoiceIntent::Split {
+            axis: SplitAxis::Horizontal,
+        };
+        assert!(executor.check(&split).is_ok());
+        let done = executor.execute(&split, &ctx()).expect("split");
+        assert_eq!(done.summary, "Split the pane side by side.");
+        assert_eq!(
+            done.directive,
+            Some(UiDirective::SplitPane {
+                axis: SplitAxis::Horizontal
+            })
+        );
+        let stacked = executor
+            .execute(
+                &KalVoiceIntent::Split {
+                    axis: SplitAxis::Vertical,
+                },
+                &ctx(),
+            )
+            .expect("split");
+        assert_eq!(stacked.summary, "Split the pane top and bottom.");
+
+        let providers = ExecContext {
+            providers: vec![
+                ProviderId::new(ProviderId::CLAUDE_CODE),
+                ProviderId::new(ProviderId::CODEX),
+            ],
+            ..ctx()
+        };
+        let arranged = executor.execute(&split, &providers).expect("arrange");
+        assert_eq!(arranged.summary, "Putting Claude and Codex side by side.");
+        assert_eq!(
+            arranged.directive,
+            Some(UiDirective::ArrangePanes {
+                axis: SplitAxis::Horizontal,
+                provider_ids: providers.providers.clone(),
+            })
+        );
+
+        let bigger = KalVoiceIntent::Resize {
+            direction: PaneDirection::Right,
+            steps: 2,
+        };
+        assert!(executor.check(&bigger).is_ok());
+        let resized = executor.execute(&bigger, &ctx()).expect("resize");
+        assert_eq!(resized.summary, "Made the pane bigger.");
+        assert_eq!(
+            resized.directive,
+            Some(UiDirective::ResizePane {
+                direction: PaneDirection::Right,
+                steps: 2
+            })
+        );
+
+        let close = KalVoiceIntent::Close { query: None };
+        assert!(executor.check(&close).is_ok());
+        let closed = executor.execute(&close, &ctx()).expect("close");
+        assert_eq!(
+            closed.summary,
+            "Closed the pane. What it runs keeps running."
+        );
+        assert_eq!(
+            closed.directive,
+            Some(UiDirective::ClosePane { query: None })
+        );
+        let named = executor
+            .execute(
+                &KalVoiceIntent::Close {
+                    query: Some("codex".into()),
+                },
+                &ctx(),
+            )
+            .expect("close");
+        assert_eq!(
+            named.directive,
+            Some(UiDirective::ClosePane {
+                query: Some("codex".into())
+            })
+        );
+
+        // Still not in this build.
+        assert_eq!(
+            executor
+                .check(&KalVoiceIntent::Search {
+                    query: "oauth".into()
+                })
+                .map_err(|e| e.code),
+            Err("not_in_this_build".into())
+        );
     }
 
     #[test]

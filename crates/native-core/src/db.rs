@@ -55,7 +55,35 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "kalvoice",
         sql: include_str!("../migrations/0006_kalvoice.sql"),
     },
+    GIT_MIGRATION,
+    CONTEXT_MIGRATION,
+    WORKSPACE_UI_MIGRATION,
 ];
+
+/// Migration v7 (campaign Z6a): `git_worktrees` and `checkpoints`. Owned by `crates/git`, which
+/// re-exports it as `kalcode_git::store::GIT_MIGRATION`; the SQL lives here because native-core
+/// cannot depend on the owning crate.
+pub const GIT_MIGRATION: Migration = Migration {
+    version: 7,
+    name: "git",
+    sql: include_str!("../migrations/0007_git.sql"),
+};
+
+/// Migration v8 (CTX/FW): context packages, items, the firewall decision log and never-share
+/// patterns. Owned by `crates/context`, which re-exports it as `kalcode_context::MIGRATION_V8`.
+pub const CONTEXT_MIGRATION: Migration = Migration {
+    version: 8,
+    name: "context",
+    sql: include_str!("../migrations/0008_context.sql"),
+};
+
+/// Migration v9 (Z7-W1): `workspace_layouts` and `layout_presets`, the pane layout store. Owned
+/// by `crates/workspace-ui`, which re-exports it as `kalcode_workspace_ui::WORKSPACE_UI_MIGRATION`.
+pub const WORKSPACE_UI_MIGRATION: Migration = Migration {
+    version: 9,
+    name: "workspace_ui",
+    sql: include_str!("../migrations/0009_workspace_ui.sql"),
+};
 
 /// How many pre-migration backups to keep.
 const BACKUPS_RETAINED: usize = 5;

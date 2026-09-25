@@ -299,7 +299,8 @@ test.describe("KalVoice voice widget", () => {
     expect(box.x).toBeGreaterThan(300);
     expect(box.x + box.width).toBeLessThan(1200);
 
-    // Past the top-left corner: clamped inside the margin and docked there.
+    // Past the top-left corner: clamped right of the sidebar and docked there, inside the band
+    // the shell reserves for it (Z7-W1), so it never covers the page header.
     const h = await handle.boundingBox();
     if (!h) throw new Error("no handle");
     await page.mouse.move(h.x + 10, h.y + 10);
@@ -307,9 +308,12 @@ test.describe("KalVoice voice widget", () => {
     await page.mouse.move(1, 1, { steps: 8 });
     await page.mouse.up();
     box = await widgetBox(page);
-    expect(box.x).toBeGreaterThanOrEqual(16);
-    expect(box.x).toBeLessThan(40);
-    expect(box.y).toBeGreaterThanOrEqual(16);
+    const main = await page.locator("main").boundingBox();
+    if (!main) throw new Error("no main");
+    expect(box.x).toBeGreaterThanOrEqual(main.x + 16);
+    expect(box.x).toBeLessThan(main.x + 40);
+    expect(box.y).toBeGreaterThanOrEqual(0);
+    expect(box.y + box.height).toBeLessThanOrEqual(main.y + 1);
     await expect(widget(page)).toHaveAttribute("data-anchor", "top_left");
 
     // The placement survives hiding and the key bringing it back.

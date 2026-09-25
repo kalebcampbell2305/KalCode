@@ -48,6 +48,7 @@ import {
   type EmitOptions,
   isDashboardScenario,
 } from "./memory/dashboard.ts";
+import { createLayoutsMemory, type LayoutControls } from "./memory/layouts.ts";
 import { createNotificationsMemory, type NotificationsMemory } from "./memory/notifications.ts";
 import { createPanesMemory, type PaneControls } from "./memory/panes.ts";
 import { createPermissionMemory, type PermissionMemory } from "./memory/permissions.ts";
@@ -135,6 +136,8 @@ export interface MemoryTransport extends Transport {
   attachProviderPane(threadId: string, onOutput: (bytes: Uint8Array) => void): Promise<number | null>;
   /** Test hooks for provider panes (hook-channel state, routing, feature off). */
   panes: PaneControls;
+  /** Test hooks for pane layouts (Z7-W1): what is stored, save counts, failures. */
+  layouts: LayoutControls;
 }
 
 export function createMemoryTransport(
@@ -155,8 +158,12 @@ export function createMemoryTransport(
         visible: true,
       })),
       // Every product feature is gated until its campaign merges (crates/native-core/src/flags.rs);
-      // development builds show gated features.
-      features: PRODUCT_FEATURES.map((id) => ({ id, state: "gated", visible: true })),
+      // development builds show gated features. The pane system (Z7-W1) is available.
+      features: PRODUCT_FEATURES.map((id) => ({
+        id,
+        state: id === "pane_system" ? "available" : "gated",
+        visible: true,
+      })),
     },
   };
   let settings: Settings = { theme: "dark", motion: "system", density: "comfortable", sidebarCollapsed: false };
@@ -291,6 +298,12 @@ export function createMemoryTransport(
     preload: scenario === "code",
   });
 
+  // Pane layouts (Z7-W1), stored per workspace like native.
+  const layouts = createLayoutsMemory({
+    requireCore,
+    workspaceIds: () => ((code.handlers.workspace_list?.({}) ?? []) as Workspace[]).map((w) => w.id),
+  });
+
   const ensureDetected = async () => {
     if (providers.some((p) => p.detection !== null)) return;
     detecting ??= detectProviders().finally(() => {
@@ -348,6 +361,7 @@ export function createMemoryTransport(
     ...threads.handlers,
     ...permissions.handlers,
     ...panes.handlers,
+    ...layouts.handlers,
     ...notificationsMemory.handlers,
     // Like native: the first thread operation detects providers once, so threads use exactly
     // the providers detection reports usable.
@@ -567,6 +581,7 @@ export function createMemoryTransport(
     },
     permissions,
     panes: panes.controls,
+    layouts: layouts.controls,
   };
   // UI tests drive the fake folder picker and filesystem, live Dashboard changes and agents
   // asking for approval through this hook (ui-test builds only).
@@ -576,6 +591,7 @@ export function createMemoryTransport(
       dashboard: transport.dashboard,
       permissions: transport.permissions,
       panes: transport.panes,
+      layouts: transport.layouts,
       // Z7-W3: records an event as the runtime would (e.g. `provider.disconnected`), so tests can
       // drive notifications from any event the native runtime emits.
       simulate: (event: EventPayload, options: EmitOptions = {}) => emit(event, options),

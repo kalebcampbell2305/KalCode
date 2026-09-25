@@ -2628,6 +2628,7 @@ dependencies = [
  "kalcode-providers",
  "kalcode-secure-store",
  "kalcode-threads",
+ "kalcode-workspace-ui",
  "serde",
  "serde_json",
  "tauri",
@@ -2811,6 +2812,20 @@ dependencies = [
 
 [[package]]
 name = "kalcode-threads"
+version = "0.1.4"
+dependencies = [
+ "kalcode-contracts",
+ "kalcode-native-core",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "ts-rs",
+]
+
+[[package]]
+name = "kalcode-workspace-ui"
 version = "0.1.4"
 dependencies = [
  "kalcode-contracts",

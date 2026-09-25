@@ -6,6 +6,8 @@ import { useEffect, useRef } from "react";
 import { toKalCodeError } from "../../ipc/errors.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
+import { afterLiveResize, isLiveResizing } from "../../shell/panes/liveResize.ts";
+import { OutputScheduler } from "../../shell/panes/outputScheduler.ts";
 import styles from "./Code.module.css";
 import { isTerminalShortcut } from "./shortcuts.ts";
 import { MINIMUM_CONTRAST, TERMINAL_THEMES } from "./terminalTheme.ts";
@@ -24,6 +26,8 @@ interface TerminalViewProps {
   /** Changes when this terminal should take keyboard focus. */
   focusRequest: number;
   theme: "light" | "dark";
+  /** The pane isn't focused: output renders in batches (≤ 4 a second). */
+  throttled?: boolean;
 }
 
 function monoFontFamily(): string {
@@ -66,7 +70,7 @@ function inputQueue(write: (data: string) => Promise<void>) {
  * xterm.js generates while replaying are not sent back, because the shell already had them
  * answered when the output was first shown.
  */
-export function TerminalView({ terminal, label, visible, focusRequest, theme }: TerminalViewProps) {
+export function TerminalView({ terminal, label, visible, focusRequest, theme, throttled = false }: TerminalViewProps) {
   const { client } = useRuntime();
   const { lastSize } = useWorkspaces();
   const hostRef = useRef<HTMLDivElement>(null);
@@ -76,6 +80,9 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme }: 
   runningRef.current = running;
   const initialTheme = useRef(theme);
   const terminalId = terminal.id;
+  const throttledRef = useRef(throttled);
+  throttledRef.current = throttled;
+  const writerRef = useRef<OutputScheduler | null>(null);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -142,8 +149,17 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme }: 
     });
 
     let frame = 0;
+    let waitingForResize: (() => void) | null = null;
     const fitNow = () => {
       if (disposed || host.clientWidth === 0 || host.clientHeight === 0) return; // hidden tab
+      // While a pane divider is dragged, fit once at the end instead of every frame.
+      if (isLiveResizing()) {
+        waitingForResize ??= afterLiveResize(() => {
+          waitingForResize = null;
+          fitNow();
+        });
+        return;
+      }
       try {
         fit.fit();
       } catch {
@@ -169,6 +185,10 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme }: 
     let attachment: number | null = null;
     let generation = 0;
     let unacked = 0;
+    // Output of an unfocused pane renders in batches; bytes are acknowledged once rendered.
+    const writer = new OutputScheduler(term, (bytes) => acknowledge(bytes));
+    writer.setThrottled(throttledRef.current);
+    writerRef.current = writer;
     const acknowledge = (bytes: number) => {
       unacked += bytes;
       if (attachment === null || unacked < ACK_EVERY_BYTES) return;
@@ -187,7 +207,10 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme }: 
       attachment = null;
       unacked = 0;
       let first = true;
-      if (resync) term.reset();
+      if (resync) {
+        writer.clear();
+        term.reset();
+      }
       client
         .attachTerminal(terminalId, (bytes) => {
           if (disposed || current !== generation) return;
@@ -203,7 +226,7 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme }: 
             });
             return;
           }
-          term.write(bytes, () => acknowledge(bytes.length));
+          writer.push(bytes);
         })
         .then((id) => {
           if (disposed || current !== generation) {
@@ -227,6 +250,9 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme }: 
       disposed = true;
       observer.disconnect();
       cancelAnimationFrame(frame);
+      waitingForResize?.();
+      writer.dispose();
+      writerRef.current = null;
       if (resizeTimer) clearTimeout(resizeTimer);
       // An attach still in flight detaches itself when it resolves (see `connect`).
       if (attachment !== null) client.detachTerminal(attachment).catch(() => undefined);
@@ -244,6 +270,10 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme }: 
     const term = termRef.current;
     if (term) term.options.theme = TERMINAL_THEMES[theme];
   }, [theme]);
+
+  useEffect(() => {
+    writerRef.current?.setThrottled(throttled);
+  }, [throttled]);
 
   useEffect(() => {
     const term = termRef.current;

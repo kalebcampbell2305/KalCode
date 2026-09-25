@@ -1069,7 +1069,10 @@ fn migrations_keep_permissions_at_v4() {
             (3, "threads"),
             (4, "permissions"),
             (5, "event_correlation"),
-            (6, "kalvoice")
+            (6, "kalvoice"),
+            (7, "git"),
+            (8, "context"),
+            (9, "workspace_ui")
         ]
     );
 }

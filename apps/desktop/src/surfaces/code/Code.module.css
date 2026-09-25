@@ -1,7 +1,7 @@
 /*
- * Code surface: a compact workspace header, then one framed terminal window that fills the rest
- * of the window — a surface-2 tab strip on top of a terminal well in the shared terminal palette
- * (--term-bg from @kalcode/ui/terminal.css, identical to the xterm theme).
+ * Code surface: a compact workspace header, then one pane canvas (Z7-W1) that fills the whole
+ * window right of the sidebar, and a thin status bar. Terminal wells use the shared terminal
+ * palette (--term-bg from @kalcode/ui/terminal.css, identical to the xterm theme).
  */
 
 .code {
@@ -10,7 +10,6 @@
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  padding-bottom: var(--space-4);
 }
 
 .loading {
@@ -26,8 +25,9 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-6);
-  padding: calc(var(--page-py) + var(--space-1)) var(--page-px) var(--space-3);
+  gap: var(--space-4);
+  min-width: 0;
+  padding: var(--space-3) var(--space-3) var(--space-2) var(--space-4);
 }
 
 .heading {
@@ -81,189 +81,63 @@
   outline-offset: 4px;
 }
 
-/* ---------- Tab strip: the top of the terminal window ---------- */
+/* ---------- Toolbar ---------- */
 
-.tabBar {
-  display: flex;
-  align-items: flex-end;
-  gap: var(--space-2);
-  margin: 0 var(--page-px);
-  padding: var(--space-1) var(--space-1-5) 0;
-  border: 1px solid var(--color-border);
-  border-bottom-color: var(--color-border-subtle);
-  border-radius: var(--radius-panel) var(--radius-panel) 0 0;
-  background: var(--panel-sheen), var(--color-surface-2);
-}
-
-.tablist {
-  display: flex;
-  flex: 0 1 auto;
-  align-items: flex-end;
-  gap: 2px;
-  min-width: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.tab {
-  position: relative;
+.toolGroup {
   display: inline-flex;
-  flex: none;
+  align-items: center;
+  gap: 1px;
+}
+
+.toolError,
+.saveError {
+  max-width: 18rem;
+  overflow: hidden;
+  color: var(--status-failed-text);
+  font-size: var(--type-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.saveForm {
+  display: flex;
   align-items: center;
   gap: var(--space-2);
-  max-width: 15rem;
-  height: 2.125rem;
-  padding: 0 var(--space-1-5) 0 var(--space-2-5);
-  border: 1px solid transparent;
-  border-bottom: 0;
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
-  color: var(--color-text-muted);
-  font-size: var(--type-ui);
-  white-space: nowrap;
-  cursor: pointer;
-  transition:
-    background-color var(--dur-fast) var(--ease-out),
-    color var(--dur-fast) var(--ease-out);
 }
 
-.tab:hover {
-  background: var(--color-surface-hover);
-  color: var(--color-text);
+.saveForm input {
+  width: 14rem;
+  height: 1.875rem;
 }
 
-/* The active tab opens into the terminal well, lit along its top edge. */
-.tab[aria-selected="true"] {
-  border-color: var(--color-border);
-  background: var(--terminal-bg);
-  color: var(--color-text);
-}
-
-.tab[aria-selected="true"]::before {
-  content: "";
-  position: absolute;
-  top: -1px;
-  right: var(--space-1-5);
-  left: var(--space-1-5);
-  height: 2px;
-  border-radius: 0 0 2px 2px;
-  background: var(--color-accent);
-  box-shadow: 0 0 10px var(--color-glow);
-}
-
-/* Covers the strip's bottom hairline so the tab and the well read as one surface. */
-.tab[aria-selected="true"]::after {
-  content: "";
-  position: absolute;
-  right: 0;
-  bottom: -1px;
-  left: 0;
-  height: 1px;
-  background: var(--terminal-bg);
-}
-
-.tab:focus-visible {
-  outline-offset: -2px;
-}
-
-.tabGlyph {
-  display: inline-flex;
-  flex: none;
-}
-
-.tabDot {
-  flex: none;
+.backgroundDot {
   width: 0.4375rem;
   height: 0.4375rem;
   border-radius: var(--radius-full);
-  background: var(--status-muted);
-}
-
-.tabDot[data-tone="working"] {
   background: var(--status-working);
   box-shadow: 0 0 6px color-mix(in srgb, var(--status-working) 60%, transparent);
 }
 
-.tabDot[data-tone="failed"] {
-  background: var(--status-failed);
-}
+/* ---------- Canvas area: everything right of the sidebar ---------- */
 
-.tabLabel {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.tabState {
-  color: var(--color-text-muted);
-  font-family: var(--font-label);
-  font-size: var(--type-label);
-  font-weight: var(--type-label-weight);
-  letter-spacing: var(--tracking-label);
-  text-transform: uppercase;
-}
-
-.tabClose {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  width: 1.25rem;
-  height: 1.25rem;
-  border-radius: var(--radius-xs);
-  color: var(--color-text-faint);
-  opacity: 0;
-  transition: opacity var(--dur-fast) var(--ease-out);
-}
-
-.tab:hover .tabClose,
-.tab[aria-selected="true"] .tabClose {
-  opacity: 1;
-}
-
-.tabClose:hover {
-  background: var(--color-surface-active);
-  color: var(--color-text);
-}
-
-.tabClose svg {
-  width: 0.8125rem;
-  height: 0.8125rem;
-  stroke-width: 2;
-}
-
-.tabActions {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 1px;
-  height: 2.125rem;
-}
-
-/* ---------- Panels: the terminal well ---------- */
-
-.panels {
+.canvasArea {
   position: relative;
-  flex: 1;
-  min-height: 0;
-  margin: 0 var(--page-px);
-  overflow: hidden;
-  border: 1px solid var(--color-border);
-  border-top: 0;
-  border-radius: 0 0 var(--radius-panel) var(--radius-panel);
-  background: var(--terminal-bg);
-  box-shadow:
-    var(--shadow-panel),
-    inset 0 1px 0 var(--color-border-subtle);
-}
-
-.panel {
-  position: absolute;
-  inset: 0;
   display: flex;
-  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding: 0 var(--space-2) var(--space-2);
 }
 
-.panel[hidden] {
-  display: none;
+.canvasLoading {
+  flex: 1;
+}
+
+.missing {
+  display: flex;
+  flex: 1;
+  align-items: flex-start;
+  padding: var(--space-8);
 }
 
 .panelMessage {
@@ -271,6 +145,17 @@
   flex: 1;
   align-items: flex-start;
   padding: var(--space-8) var(--space-8);
+  overflow: auto;
+}
+
+/* A terminal inside a pane: the xterm view and, once the shell exits, its ended bar. */
+.paneTerminal {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--terminal-bg);
 }
 
 .xtermHost {
@@ -295,11 +180,6 @@
   outline: none;
 }
 
-/* Keyboard focus inside the terminal lights the well. */
-.panels:has(:global(.xterm:focus-within)) {
-  border-color: var(--color-border-lit-soft);
-}
-
 .endedBar {
   display: flex;
   flex: none;
@@ -316,11 +196,7 @@
   color: var(--color-text-secondary);
 }
 
-/* ---------- Status bar: the foot of the terminal window ---------- */
-
-.code:has(.statusBar) .panels {
-  border-radius: 0;
-}
+/* ---------- Status bar: the foot of the canvas ---------- */
 
 .statusBar {
   display: flex;
@@ -329,13 +205,10 @@
   gap: var(--space-4);
   min-width: 0;
   height: 1.75rem;
-  margin: 0 var(--page-px);
-  padding: 0 var(--space-3);
+  padding: 0 var(--space-4);
   overflow: hidden;
-  border: 1px solid var(--color-border);
-  border-top-color: var(--color-border-subtle);
-  border-radius: 0 0 var(--radius-panel) var(--radius-panel);
-  background: var(--color-surface-2);
+  border-top: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-1);
   color: var(--color-text-muted);
   font-size: var(--type-small);
   white-space: nowrap;
@@ -368,10 +241,137 @@
   gap: var(--space-1);
 }
 
-@media (max-width: 1100px) {
+@media (max-width: 1280px) {
   .statusKeys > span:not(:first-child) {
     display: none;
   }
+}
+
+/* ---------- Empty pane ---------- */
+
+.emptyPane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  width: 100%;
+  max-width: 34rem;
+  margin: auto;
+  padding: var(--space-6) var(--space-5);
+  overflow: auto;
+}
+
+.emptyHead {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+}
+
+.emptyPaneArt {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border: 1px solid var(--color-border-lit-soft);
+  border-radius: var(--radius-md);
+  background: var(--color-accent-soft);
+  color: var(--color-accent-icy);
+}
+
+.emptyPaneArt svg {
+  width: 1.125rem;
+  height: 1.125rem;
+  stroke-width: 1.6;
+}
+
+.emptyTitle {
+  color: var(--color-text);
+  font-size: var(--type-title);
+  font-weight: var(--type-title-weight);
+}
+
+.emptyText {
+  margin-top: var(--space-0-5);
+  color: var(--color-text-secondary);
+  font-size: var(--type-ui);
+}
+
+.emptyActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.emptyGroup {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+}
+
+.emptyLabel {
+  color: var(--color-text-muted);
+  font-family: var(--font-label);
+  font-size: var(--type-label);
+  font-weight: var(--type-label-weight);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.emptyList {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.emptyItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--row-h-dense);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  font-size: var(--type-ui);
+  text-align: left;
+}
+
+.emptyItem:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.emptyDot {
+  width: 0.4375rem;
+  height: 0.4375rem;
+  border-radius: var(--radius-full);
+  background: var(--status-working);
+}
+
+.emptyItemTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.emptyItemAction {
+  color: var(--color-accent-text);
+  font-size: var(--type-small);
+}
+
+.emptyComing {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.emptyComing svg {
+  width: 0.75rem;
+  height: 0.75rem;
 }
 
 /* ---------- Empty state and recents ---------- */

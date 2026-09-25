@@ -29,8 +29,8 @@ import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { useUiIntents } from "../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../runtime/WorkspaceProvider.tsx";
 import { useNavigation } from "../shell/navigation.tsx";
+import { dispatchPaneCommand, type PaneCommand, paneCanvasListening } from "../shell/panes/paneCommands.ts";
 import { usePermissions } from "../surfaces/permissions/index.ts";
-import { useThreadsIntent } from "../surfaces/threads/intent.tsx";
 import { type AssistantState, INITIAL_STATE, reduce } from "./assistantState.ts";
 import {
   type DictationTarget,
@@ -117,12 +117,15 @@ function afterPaint(fn: () => void) {
   requestAnimationFrame(() => setTimeout(fn, 0));
 }
 
+/** How long a pane command waits for the Code canvas to come up (60 × 50 ms). */
+const PANE_WAIT_MS = 50;
+const PANE_WAIT_TRIES = 60;
+
 export function KalVoiceProvider({ children }: { children: ReactNode }) {
   const { client } = useRuntime();
   const { current, navigate } = useNavigation();
   const workspaces = useWorkspaces();
   const permissions = usePermissions();
-  const threadsIntent = useThreadsIntent();
   const uiIntents = useUiIntents();
   const toast = useToast();
   const [status, setStatus] = useState<KalVoiceStatus | null>(null);
@@ -167,11 +170,37 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   );
 
   // The UI side of a command's result (the native side already did the work).
-  const surfaces = useRef({ workspaces, permissions, threadsIntent, uiIntents });
-  surfaces.current = { workspaces, permissions, threadsIntent, uiIntents };
+  const surfaces = useRef({ workspaces, permissions, toast, uiIntents });
+  surfaces.current = { workspaces, permissions, toast, uiIntents };
   const runDirective = useCallback(
     (directive: UiDirective | null) => {
-      const { workspaces, permissions, threadsIntent, uiIntents: intents } = surfaces.current;
+      const { workspaces, permissions, toast, uiIntents: intents } = surfaces.current;
+      // Pane layout commands (Z7-W1) run on the Code canvas; they wait for it when Code isn't on
+      // screen yet. Layout only: nothing starts, stops or closes a process.
+      const pane = (command: PaneCommand) => {
+        navigate("code");
+        const deliver = () => {
+          const result = dispatchPaneCommand(command);
+          if (result.message) {
+            toast.show({ tone: result.handled ? "info" : "danger", title: "Panes", description: result.message });
+          }
+        };
+        if (paneCanvasListening()) {
+          deliver();
+          return;
+        }
+        // Code is opening: run the command once its canvas is up, so its result can be shown.
+        let tries = 0;
+        const timer = setInterval(() => {
+          if (paneCanvasListening()) {
+            clearInterval(timer);
+            deliver();
+          } else if (++tries >= PANE_WAIT_TRIES) {
+            clearInterval(timer);
+            dispatchPaneCommand(command, { queue: true });
+          }
+        }, PANE_WAIT_MS);
+      };
       switch (directive?.kind) {
         case "navigate":
           navigate(directive.surface);
@@ -187,8 +216,21 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           break;
         }
         case "open_thread":
-          navigate("threads");
-          threadsIntent.request("open", directive.threadId);
+          // Z7-W3 focus intents: a provider pane thread is focused in its pane (Z7-W1 canvas),
+          // anything else opens in Threads.
+          void intents.focus({ kind: "thread", threadId: directive.threadId });
+          break;
+        case "split_pane":
+          pane({ kind: "split", axis: directive.axis });
+          break;
+        case "arrange_panes":
+          pane({ kind: "arrange-providers", axis: directive.axis, providerIds: directive.providerIds });
+          break;
+        case "resize_pane":
+          pane({ kind: "resize", direction: directive.direction, steps: directive.steps });
+          break;
+        case "close_pane":
+          pane(directive.query ? { kind: "close", query: directive.query } : { kind: "close" });
           break;
         case "show_approvals":
           permissions.setPanelOpen(true);

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-layout-preset-save"
+description = "Enables the layout_preset_save command without any pre-configured scope."
+commands.allow = ["layout_preset_save"]
+
+[[permission]]
+identifier = "deny-layout-preset-save"
+description = "Denies the layout_preset_save command without any pre-configured scope."
+commands.deny = ["layout_preset_save"]
