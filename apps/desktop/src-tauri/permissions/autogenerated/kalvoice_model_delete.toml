@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-kalvoice-model-delete"
+description = "Enables the kalvoice_model_delete command without any pre-configured scope."
+commands.allow = ["kalvoice_model_delete"]
+
+[[permission]]
+identifier = "deny-kalvoice-model-delete"
+description = "Denies the kalvoice_model_delete command without any pre-configured scope."
+commands.deny = ["kalvoice_model_delete"]

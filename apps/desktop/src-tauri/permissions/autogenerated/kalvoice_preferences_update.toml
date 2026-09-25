@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-kalvoice-preferences-update"
+description = "Enables the kalvoice_preferences_update command without any pre-configured scope."
+commands.allow = ["kalvoice_preferences_update"]
+
+[[permission]]
+identifier = "deny-kalvoice-preferences-update"
+description = "Denies the kalvoice_preferences_update command without any pre-configured scope."
+commands.deny = ["kalvoice_preferences_update"]

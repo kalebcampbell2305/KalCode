@@ -13,6 +13,14 @@ const SETTING_LABELS: Record<string, string> = {
   "appearance.motion": "Motion",
   "appearance.density": "Density",
   "layout.sidebarCollapsed": "Sidebar",
+  "kalvoice.talkKey": "KalVoice push-to-talk key",
+  "kalvoice.talkEnabled": "KalVoice push to talk",
+  "kalvoice.intelligence": "KalVoice intelligence",
+  "kalvoice.speechModel": "KalVoice speech model",
+  "kalvoice.voiceReplies": "KalVoice spoken replies",
+  "kalvoice.panelDefault": "KalVoice widget position",
+  "kalvoice.panelVisible": "KalVoice widget visibility",
+  "kalvoice.panelPlacements": "KalVoice widget layout",
 };
 
 const PROVIDER_NAMES: Record<string, string> = {
@@ -36,10 +44,12 @@ export function formatDuration(ms: number): string {
   return rest === 0 ? `${hours} h` : `${hours} h ${rest} min`;
 }
 
+// Recorded when push to talk decides the route, before anything runs (what ran, or didn't,
+// follows as its own event).
 const TALK_ROUTE_TITLES: Record<TalkRoute, string> = {
-  command: "KalVoice ran a command",
-  dictation: "KalVoice typed into the focused box",
-  request: "KalVoice sent a request",
+  command: "KalVoice heard a command",
+  dictation: "KalVoice heard dictation for the focused box",
+  request: "KalVoice heard a request",
 };
 
 const RESOURCE_LABELS: Record<ResourceKind, string> = {

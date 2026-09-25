@@ -30,7 +30,7 @@ Open KalCode → connect Claude / Codex / Gemini → open a project → run seve
 | Name | What it is |
 | --- | --- |
 | **KalCode** | The product: desktop app, website, subscription, orchestration environment. |
-| **KalVoice** | The coding assistant and voice interface inside KalCode: dictation and command mode. |
+| **KalVoice** | The coding assistant and voice interface inside KalCode: hold one key to command KalCode, dictate, or ask. |
 
 KalVoice line: **"Speak your prompts. Control your workspace. Coordinate your coding agents."**
 KalCode tagline (brand board): **"One intelligence. A brighter tomorrow."**
@@ -62,7 +62,7 @@ backend.
 | Surface | Purpose | Campaign |
 | --- | --- | --- |
 | Dashboard | Runtime truth: what is running, who is doing it, what needs approval. | Z0 shell → Z5 |
-| KalVoice | Dictation into any input; command mode that operates KalCode. | Z12 (in progress) |
+| KalVoice | One push-to-talk key: commands that operate KalCode, dictation into any input, requests for your provider. | Z12 (in progress) |
 | Code | Pane-based project workspace (threads, terminal, files, Git, diff, browser). | Z1 → Z6 |
 | Threads | Persistent units of AI work. | Z3 |
 | Agents | Persistent AI teammates with roles, providers and permissions. | Z8 |
@@ -71,7 +71,7 @@ backend.
 | Skills / Plugins | Reusable procedures; capability-scoped integrations. | Z11 |
 | Memory | Scoped, inspectable memory. | Z11+ |
 | Providers | Detection, connection, capabilities, accounts. | Z2 |
-| Settings | Appearance, diagnostics, defaults, KalVoice shortcuts. | Z0 → |
+| Settings | Appearance, diagnostics, defaults, the KalVoice push-to-talk key. | Z0 → |
 | Account / Billing | KalCode account, plan, entitlement, KalVoice usage. | Z13 |
 
 Surfaces that have not shipped are gated by feature flags and, in development builds, render an
@@ -79,17 +79,19 @@ honest "not available in this build" page — never a fake UI.
 
 ## 5. KalVoice
 
-See `docs/KALVOICE.md`. Two modes, two independently configurable shortcuts:
+See `docs/KALVOICE.md`. One push-to-talk key (F8 by default, configurable): **hold it, speak,
+let go.** What happens next depends on what was said and where:
 
-- **Dictation** — hold the shortcut, speak, release: the transcript is inserted into the focused
-  KalCode input (thread composers for Claude/Codex/Gemini, terminal input, prompts, search,
-  command inputs). Local speech recognition. **Unlimited on every plan; never counted.**
-- **Command** — activate the command shortcut and speak or type a request ("Open four Codex
-  threads", "Pause every active thread", "Show me anything waiting for permission"). KalVoice
-  understands structured commands deterministically without any model; requests that need
-  reasoning use the **user-selected connected provider** (Claude, Codex, Gemini; local model
-  later). If none is connected: "Connect a supported AI provider to use KalVoice reasoning for
-  this request." Each top-level request counts as **one KalVoice Request**.
+- **A command** KalVoice recognizes with confidence ("Open four Codex threads", "Pause every
+  active thread", "Show me anything waiting for permission") runs at once, with a "Type it
+  instead" undo. Commands are understood deterministically without any model. Each counts as
+  **one KalVoice Request**; commands that add work ask for approval first.
+- **Dictation**: otherwise, if a text box or terminal is focused, the words are typed there
+  (thread composers for Claude/Codex/Gemini, terminal input, prompts, search). Local speech
+  recognition. **Unlimited on every plan; never counted.**
+- **A request**: anything else goes to the **user-selected connected provider** (Claude,
+  Codex, Gemini; local model later). If none is connected: "Connect a supported AI provider to
+  use KalVoice reasoning for this request." Counts as one KalVoice Request.
 
 KalVoice uses the same runtime as the rest of KalCode and is never above the permission model.
 

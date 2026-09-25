@@ -52,6 +52,13 @@ allow = [
 # Listing a license we do not currently use is fine; the list is the policy, not an inventory.
 unused-allowed-license = "allow"
 
+# The Mozilla root certificate list (data, not code) that rustls uses through `ureq` for
+# KalVoice's consented speech-model downloads. CDLA-Permissive-2.0 is a permissive data licence
+# (attribution-free, no copyleft); allowed for this crate only.
+[[licenses.exceptions]]
+crate = "webpki-roots"
+allow = ["CDLA-Permissive-2.0"]
+
 [licenses.private]
 # KalCode's own crates are `publish = false` and proprietary (LicenseRef-KalCode-Proprietary).
 ignore = true

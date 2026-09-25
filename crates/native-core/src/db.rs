@@ -48,6 +48,13 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "event_correlation",
         sql: include_str!("../migrations/0005_event_correlation.sql"),
     },
+    // KalVoice (campaign Z12): the local KalVoice Request ledger and KalVoice preferences.
+    // Owned by `crates/kalvoice`; registered after L-1's v5 at integration.
+    Migration {
+        version: 6,
+        name: "kalvoice",
+        sql: include_str!("../migrations/0006_kalvoice.sql"),
+    },
 ];
 
 /// How many pre-migration backups to keep.

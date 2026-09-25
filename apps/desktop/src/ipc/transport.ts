@@ -1,4 +1,4 @@
-import type { AgentEvent, EventEnvelope } from "@kalcode/protocol";
+import type { AgentEvent, EventEnvelope, KalVoiceSignal } from "@kalcode/protocol";
 
 /** Every command the native runtime exposes (mirrors src-tauri/build.rs). */
 export type CommandName =
@@ -16,6 +16,20 @@ export type CommandName =
   | "secure_store_check"
   | "providers_list"
   | "providers_detect"
+  | "kalvoice_subscribe"
+  | "kalvoice_status"
+  | "kalvoice_request"
+  | "kalvoice_preferences_update"
+  | "kalvoice_listen_start"
+  | "kalvoice_listen_stop"
+  | "kalvoice_listen_cancel"
+  | "kalvoice_model_download"
+  | "kalvoice_model_cancel"
+  | "kalvoice_model_delete"
+  | "kalvoice_talk"
+  | "kalvoice_type_instead"
+  | "kalvoice_latency"
+  | "kalvoice_latency_record"
   // Threads (Z3)
   | "thread_list"
   | "thread_get"
@@ -65,6 +79,8 @@ export interface Transport {
   readonly kind: "tauri" | "memory";
   invoke<T>(command: CommandName, args?: Record<string, unknown>): Promise<T>;
   subscribe(onEvent: (event: EventEnvelope) => void): Promise<Unsubscribe>;
+  /** Live KalVoice signals for this window (listening, level, transcripts, downloads). */
+  subscribeKalVoice(onSignal: (signal: KalVoiceSignal) => void): Promise<void>;
   /**
    * Streams a terminal's output bytes to `onOutput`: the first call is the scrollback replay
    * (possibly empty), then live output. Resolves to false when the terminal has no session
@@ -96,6 +112,11 @@ export async function createTauriTransport(): Promise<Transport> {
       return async () => {
         await invoke<boolean>("events_unsubscribe", { id });
       };
+    },
+    async subscribeKalVoice(onSignal) {
+      const channel = new Channel<KalVoiceSignal>();
+      channel.onmessage = onSignal;
+      await invoke("kalvoice_subscribe", { onSignal: channel });
     },
     async attachTerminal(terminalId, onOutput) {
       // Raw channel messages arrive as ArrayBuffers (InvokeResponseBody::Raw).

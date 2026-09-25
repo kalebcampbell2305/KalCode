@@ -27,7 +27,8 @@ additive within v1 and go through the lead (open a note in your hand-off; do not
 | Plans and prices | — | `packages/protocol/src/plans.ts` |
 
 TypeScript is generated with ts-rs into `packages/protocol/src/generated` (`pnpm gen:protocol`,
-which runs the ts-rs exports of contracts, native-core, providers, threads and permissions).
+which runs the ts-rs exports of contracts, native-core, providers, threads, permissions and
+kalvoice).
 `native-core` re-exports the event types (`kalcode_core::events::*`) and stores/delivers them.
 
 ### CA-1 (advanced systems, phase P0/P1 contracts)
@@ -117,8 +118,9 @@ merged (files are checksummed, see `docs/DATA_MODEL.md`).
 | `0002` (v2) | Z1 | `workspaces`, `terminals` | merged (wave 2) |
 | `0003` (v3) | Z3 | `threads`, `thread_messages`, `tool_calls`, `thread_files` | merged (wave 2) |
 | `0004` (v4) | Z4 | `permission_profiles`, `permission_settings`, `approvals` (with `origin_kind` / `origin_id`; `thread_id`, `workspace_id`, `provider_id` required for thread origins, optional for others), `permission_grants`, `permission_audit` (kinds include the Trust Kernel's `trust.*` / `grant.ceiling_clamped`) | merged (wave 2) |
-| `0005` (v5) | lead (L-1) | `events` + `agent_id`, `task_id`, `automation_id`, `causation_id` and partial indexes (plus `events(request_id)`) | this PR |
-| v6, v7, v8 | Z12 KalVoice, Z6a git (`GIT_MIGRATION`), CTX (`MIGRATION_V8`) | isolated constants, registered by the lead at integration | reserved |
+| `0005` (v5) | lead (L-1) | `events` + `agent_id`, `task_id`, `automation_id`, `causation_id` and partial indexes (plus `events(request_id)`) | merged |
+| `0006` (v6) | Z12 KalVoice | `kalvoice_requests` (local KalVoice Request ledger), `kalvoice_preferences` | merged (integrate/kalvoice) |
+| v7, v8 | Z6a git (`GIT_MIGRATION`), CTX (`MIGRATION_V8`) | isolated constants, registered by the lead at integration | reserved |
 
 Z2 shipped no migration (provider state is detected, never stored). `threads.permission_profile_id`
 (v3) holds a Custom thread's profile; only the permission engine writes it. Numbers are assigned at
