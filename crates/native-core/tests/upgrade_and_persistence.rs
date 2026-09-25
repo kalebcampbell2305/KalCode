@@ -39,7 +39,8 @@ fn migrations_are_numbered_contiguously() {
             (5, "event_correlation"),
             (6, "kalvoice"),
             (7, "git"),
-            (8, "context")
+            (8, "context"),
+            (9, "workspace_ui")
         ]
     );
 }
@@ -623,14 +624,16 @@ fn upgrade_v4_to_v5_backs_up_and_preserves_everything() {
     core.shutdown();
 }
 
-/// Tables each migration after v6 adds (v7 Z6a git core, v8 CTX/FW context).
-const POST_V6_TABLES: [&str; 6] = [
+/// Tables each migration after v6 adds (v7 Z6a git core, v8 CTX/FW context, v9 Z7-W1 layouts).
+const POST_V6_TABLES: [&str; 8] = [
     "checkpoints",
     "context_firewall_log",
     "context_items",
     "context_never_share",
     "context_packages",
     "git_worktrees",
+    "layout_presets",
+    "workspace_layouts",
 ];
 
 // Test helper: panics on setup failures by design.

@@ -75,7 +75,13 @@ export type CommandName =
   | "provider_pane_detach"
   | "provider_pane_write"
   | "provider_pane_resize"
-  | "provider_pane_info";
+  | "provider_pane_info"
+  // Pane layouts (Z7-W1)
+  | "layout_get"
+  | "layout_save"
+  | "layout_presets"
+  | "layout_preset_save"
+  | "layout_preset_delete";
 
 export type Unsubscribe = () => Promise<void>;
 

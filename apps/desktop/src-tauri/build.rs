@@ -76,6 +76,12 @@ const COMMANDS: &[&str] = &[
     "provider_pane_write",
     "provider_pane_resize",
     "provider_pane_info",
+    // Z7-W1: pane layouts.
+    "layout_get",
+    "layout_save",
+    "layout_presets",
+    "layout_preset_save",
+    "layout_preset_delete",
 ];
 
 /// Test hooks. Declared (and so given an `allow-*` permission) only when the target build has

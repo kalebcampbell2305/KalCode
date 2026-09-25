@@ -73,8 +73,8 @@ interface EventLite {
   payload: Record<string, unknown>;
 }
 
-/** The schema version this build migrates to (v7 git core, v8 context). */
-const LATEST = 8;
+/** The schema version this build migrates to (v7 git core, v8 context, v9 workspace layouts). */
+const LATEST = 9;
 
 test("a v1 database from the released app is upgraded to the latest schema with a backup and nothing lost", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-"));
@@ -443,7 +443,7 @@ print(m[0], m[1], n, e[0], e[1])`,
   }
 });
 
-/** Tables the migrations after v6 add (v7 git core, v8 context), sorted by name. */
+/** Tables the migrations after v6 add (v7 git core, v8 context, v9 workspace layouts), sorted by name. */
 const POST_V6_TABLES = [
   "checkpoints",
   "context_firewall_log",
@@ -451,6 +451,8 @@ const POST_V6_TABLES = [
   "context_never_share",
   "context_packages",
   "git_worktrees",
+  "layout_presets",
+  "workspace_layouts",
 ];
 
 test("a v6 database (the owner's installed app) reaches the latest schema in one start with one backup; every row survives", async () => {

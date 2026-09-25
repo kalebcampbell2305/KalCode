@@ -6,6 +6,7 @@ mod commands;
 pub mod environment;
 mod kalvoice_commands;
 mod kalvoice_executor;
+mod layout_commands;
 pub mod native_confirm;
 pub mod permission_commands;
 mod provider_commands;
@@ -358,6 +359,11 @@ pub fn run(removed_overrides: Vec<String>) {
             provider_pane_commands::provider_pane_write,
             provider_pane_commands::provider_pane_resize,
             provider_pane_commands::provider_pane_info,
+            layout_commands::layout_get,
+            layout_commands::layout_save,
+            layout_commands::layout_presets,
+            layout_commands::layout_preset_save,
+            layout_commands::layout_preset_delete,
             #[cfg(any(debug_assertions, feature = "e2e"))]
             permission_commands::test_permission_probe,
         ])

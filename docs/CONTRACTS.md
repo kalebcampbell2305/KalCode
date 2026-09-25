@@ -122,6 +122,7 @@ merged (files are checksummed, see `docs/DATA_MODEL.md`).
 | `0006` (v6) | Z12 KalVoice | `kalvoice_requests` (local KalVoice Request ledger), `kalvoice_preferences` | merged (integrate/kalvoice) |
 | `0007` (v7) | Z6a git core | `git_worktrees`, `checkpoints` (`kalcode_core::db::GIT_MIGRATION`, re-exported as `kalcode_git::store::GIT_MIGRATION`) | registered (z7/panes Step 0) |
 | `0008` (v8) | CTX/FW | `context_packages`, `context_items`, `context_firewall_log`, `context_never_share` (`kalcode_core::db::CONTEXT_MIGRATION`, re-exported as `kalcode_context::MIGRATION_V8`) | registered (z7/panes Step 0) |
+| `0009` (v9) | Z7-W1 pane system | `workspace_layouts` (one validated `PaneLayout` per workspace), `layout_presets` (saved layout shapes, no content ids) (`kalcode_core::db::WORKSPACE_UI_MIGRATION`, re-exported by `kalcode_workspace_ui`) | branch z7/panes |
 
 Z2 shipped no migration (provider state is detected, never stored). `threads.permission_profile_id`
 (v3) holds a Custom thread's profile; only the permission engine writes it. Numbers are assigned at

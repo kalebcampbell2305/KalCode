@@ -139,6 +139,16 @@ with exactly one backup of the untouched v6 file
 (`crates/native-core/tests/upgrade_and_persistence.rs::upgrade_v6_to_latest_backs_up_once_and_keeps_everything`,
 and end to end in `apps/desktop/tests/e2e/integrity.spec.ts`).
 
+### Implemented — schema version 9 (`0009_workspace_ui.sql`, Z7-W1 pane system)
+
+`workspace_layouts` holds one pane layout per workspace: the versioned `PaneLayout` split tree
+from `crates/contracts/src/workspace_ui.rs` as JSON (≤ 64 KiB), validated natively
+(`PaneLayout::validate` plus content-id checks) before every write. `layout_presets` holds the
+user's saved layout *shapes* (content ids stripped). Owned by `crates/workspace-ui`; workspace
+ids are resolved through Z1's Rust API, so there is no foreign key. Layouts are rebuildable UI
+state: a stored row that no longer validates is ignored (logged) and the UI builds a default.
+Saves emit no events.
+
 ### Migration rules
 
 1. Migrations are append-only, numbered, embedded in the binary, and checksummed.
