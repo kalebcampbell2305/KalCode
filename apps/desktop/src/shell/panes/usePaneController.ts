@@ -102,6 +102,8 @@ export interface PaneController {
   evenDivider(path: number[], index: number): void;
   dock(paneId: string): void;
   undock(index: number): void;
+  /** Takes an item out of the dock (it keeps running, in the background). */
+  removeFromDock(index: number): void;
 }
 
 const DIRECTION_WORD: Record<PaneDirection, string> = { left: "left", right: "right", up: "up", down: "down" };
@@ -442,6 +444,14 @@ export function usePaneController({ scope, store, initial, titleOf }: PaneContro
       apply(next, `Moved ${title} to the dock. It keeps running.`);
       const first = leaves(next.root)[0];
       if (first) focusPane(first.paneId);
+    },
+    removeFromDock: (index) => {
+      const content = latest.current.dock[index];
+      if (!content) return;
+      apply(
+        { ...latest.current, dock: latest.current.dock.filter((_, i) => i !== index) },
+        `Removed ${titleRef.current(content)} from the dock. It keeps running.`,
+      );
     },
     undock: (index) => {
       const content = latest.current.dock[index];

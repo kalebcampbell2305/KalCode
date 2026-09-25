@@ -314,6 +314,11 @@ export function PaneFrame(props: PaneFrameProps) {
           </DropdownMenu>
         </div>
         <div className={styles.headerActions} data-no-drag>
+          {maximized ? (
+            <span className={styles.maxBadge}>
+              Maximized · {count - 1} more {count - 1 === 1 ? "pane" : "panes"}
+            </span>
+          ) : null}
           {canSplit ? (
             <Tooltip content={`Split right (${PANE_SHORTCUT_LABELS.splitRight})`}>
               <IconButton

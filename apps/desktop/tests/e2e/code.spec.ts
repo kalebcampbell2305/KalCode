@@ -123,14 +123,24 @@ test("open a folder, run commands in real shells, restart KalCode, restore and r
     await typeInTerminal(page, "echo after-reload-%OS%");
     await expect(visibleTerminal(page)).toContainText("after-reload-Windows_NT", { timeout: 20_000 });
 
-    // Closing a tab ends programs started in it (the whole console, not just the shell).
+    // Closing a tab only hides it (Z7-14); ending a terminal ends programs started in it (the
+    // whole console, not just the shell).
     await newTerminal(page, "Command Prompt");
     await expect(visibleTerminal(page)).toContainText("Microsoft Windows", { timeout: 30_000 });
     await typeInTerminal(page, "ping -n 117 127.0.0.1");
     await expect.poll(() => processesMatching("-n 117 127.0.0.1").length, { timeout: 20_000 }).toBeGreaterThan(0);
     await page.keyboard.press("Control+Shift+W");
     await expect(page.getByRole("tab")).toHaveCount(2);
+    await page.waitForTimeout(1000);
+    expect(processesMatching("-n 117 127.0.0.1").length).toBeGreaterThan(0);
+    await page.getByRole("button", { name: "1 in background" }).click();
+    await page.getByRole("menuitem", { name: /^Show Command Prompt/ }).click();
+    await expect(page.getByRole("tab")).toHaveCount(3);
+    await page.getByRole("button", { name: "Actions for pane 1" }).click();
+    await page.getByRole("menuitem", { name: "End terminal" }).click();
     await expect.poll(() => processesMatching("-n 117 127.0.0.1").length, { timeout: 20_000 }).toBe(0);
+    await page.keyboard.press("Control+Shift+W"); // the ended tab tidies away
+    await expect(page.getByRole("tab")).toHaveCount(2);
 
     // The Dashboard lists the running terminals of this workspace.
     await page.getByRole("button", { name: "Dashboard" }).click();

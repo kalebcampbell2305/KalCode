@@ -259,6 +259,30 @@ test.describe("tabs and drag and drop", () => {
   });
 });
 
+test.describe("the side dock", () => {
+  test("a pane moved to the dock keeps running and opens back into a pane", async ({ page }) => {
+    await openCode(page);
+    await page.keyboard.press("Control+Alt+d");
+    await page.getByRole("button", { name: "New terminal" }).click();
+    await expect(pane(page, 1).getByRole("tab", { name: /PowerShell 7 \(2\)/ })).toBeVisible();
+    const running = await memory(page, (m) => m.runningProcessCount());
+    await pane(page, 1).getByRole("button", { name: "Actions for pane 2" }).click();
+    await page.getByRole("menuitem", { name: "Move to the dock" }).click();
+    const dock = page.getByRole("complementary", { name: "Dock" });
+    await expect(dock).toBeVisible();
+    await expect(panes(page)).toHaveCount(1);
+    expect(await memory(page, (m) => m.runningProcessCount())).toBe(running);
+    // The canvas makes room for the dock.
+    expect((await box(pane(page, 0))).x + (await box(pane(page, 0))).width).toBeLessThan((await box(dock)).x);
+    await dock.getByRole("button", { name: "Open PowerShell 7 (2)" }).click();
+    await expect(dock).toHaveCount(0);
+    await expect(pane(page, 0).getByRole("tab", { name: /PowerShell 7 \(2\)/ })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+});
+
 test.describe("presets and saved layouts", () => {
   test("presets 2, 3, 4 and 6 rearrange the panes without closing anything", async ({ page }) => {
     await openCode(page);

@@ -499,3 +499,103 @@
   gap: var(--space-2);
   margin-top: var(--space-1);
 }
+
+/* ---------- Side dock ---------- */
+
+.dock {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--panel-sheen), var(--color-surface-1);
+  box-shadow: var(--shadow-panel);
+}
+
+.dockTitle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-1) 0;
+  color: var(--color-text-muted);
+  font-family: var(--font-label);
+  font-size: var(--type-label);
+  font-weight: var(--type-label-weight);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.dockCount {
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.dockList {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.dockItem {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.dockOpen {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+  min-height: var(--row-h-dense);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  font-size: var(--type-ui);
+  text-align: left;
+}
+
+.dockOpen:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.dockLabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dockNote {
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
+}
+
+.maxBadge {
+  margin-right: var(--space-2);
+  color: var(--color-text-muted);
+  font-family: var(--font-label);
+  font-size: var(--type-label);
+  font-weight: var(--type-label-weight);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+@container pane (max-width: 36rem) {
+  .maxBadge {
+    display: none;
+  }
+}

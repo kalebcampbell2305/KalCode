@@ -26,6 +26,7 @@ import {
 import styles from "./PaneCanvas.module.css";
 import { type PaneCommand, type PaneCommandResult, listenForPaneCommands } from "./paneCommands.ts";
 import { PaneDivider } from "./PaneDivider.tsx";
+import { PaneDock } from "./PaneDock.tsx";
 import { PaneFrame, paneDomId } from "./PaneFrame.tsx";
 import { type PaneShortcut, paneShortcut } from "./paneShortcuts.ts";
 import type { PaneController } from "./usePaneController.ts";
@@ -138,7 +139,13 @@ export interface PaneCanvasProps {
   host: PaneHost;
   /** Accessible name of the canvas. */
   label: string;
+  /** What the canvas arranges (the workspace id): scoped commands wait for this canvas. */
+  scope?: string;
 }
+
+/** Width of the side dock, when something is docked. */
+const DOCK_PX = 184;
+const DOCK_GAP = DEFAULT_GEOMETRY.gutter;
 
 /**
  * The pane canvas: a split tree of panes filling its container (Z7-W1). Panes are positioned
@@ -146,7 +153,7 @@ export interface PaneCanvasProps {
  * Dividers resize with the pointer or the keyboard; tabs and pane headers drag onto another
  * pane's centre (as a tab) or edge (a split); every action also has a keyboard path.
  */
-export function PaneCanvas({ controller, host, label }: PaneCanvasProps) {
+export function PaneCanvas({ controller, host, label, scope }: PaneCanvasProps) {
   const { layout } = controller;
   const ref = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
@@ -172,9 +179,11 @@ export function PaneCanvas({ controller, host, label }: PaneCanvasProps) {
     return () => observer.disconnect();
   }, [controller.size]);
 
+  const docked = layout.dock.length > 0;
+  const paneWidth = Math.max(0, (size.width || 1200) - (docked ? DOCK_PX + DOCK_GAP : 0));
   const geometry = useMemo(
-    () => computeGeometry(layout, size.width || 1200, size.height || 800),
-    [layout, size.width, size.height],
+    () => computeGeometry(layout, paneWidth, size.height || 800),
+    [layout, paneWidth, size.height],
   );
   const panes = useMemo(() => leaves(layout.root), [layout]);
   const items = useMemo(() => orderedItems(layout.root, geometry.dividers), [layout.root, geometry.dividers]);
@@ -208,8 +217,8 @@ export function PaneCanvas({ controller, host, label }: PaneCanvasProps) {
         const handled = latestHost.current.onCommand?.(command);
         if (handled) return handled;
         return runCommand(latestController.current, command);
-      }),
-    [],
+      }, scope ?? null),
+    [scope],
   );
 
   // ---------- Keyboard shortcuts ----------
@@ -366,7 +375,7 @@ export function PaneCanvas({ controller, host, label }: PaneCanvasProps) {
         const index = panes.indexOf(leaf);
         const rect =
           maximized === leaf.paneId
-            ? { x: 0, y: 0, width: size.width, height: size.height }
+            ? { x: 0, y: 0, width: paneWidth, height: size.height }
             : geometry.panes.get(leaf.paneId);
         if (!rect) return null;
         const hidden = maximized !== null && maximized !== leaf.paneId;
@@ -422,6 +431,14 @@ export function PaneCanvas({ controller, host, label }: PaneCanvasProps) {
         );
       })}
       {overlay}
+      {docked ? (
+        <PaneDock
+          items={layout.dock.map((content) => ({ content, info: describe(content) }))}
+          style={{ left: paneWidth + DOCK_GAP, top: 0, width: DOCK_PX, height: size.height }}
+          onOpen={(i) => controller.undock(i)}
+          onRemove={(i) => controller.removeFromDock(i)}
+        />
+      ) : null}
     </div>
   );
 }

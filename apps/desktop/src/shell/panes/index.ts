@@ -27,4 +27,5 @@ export {
   paneCanvasListening,
 } from "./paneCommands.ts";
 export { isPaneShortcut, PANE_SHORTCUT_LABELS, paneShortcut } from "./paneShortcuts.ts";
+export { type OpenInPaneOptions, useOpenInPane } from "./useOpenInPane.ts";
 export { type PaneController, type PaneStore, usePaneController } from "./usePaneController.ts";

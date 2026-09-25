@@ -500,7 +500,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   );
 
   const canvas = controller.ready ? (
-    <PaneCanvas controller={controller} host={host} label={`Panes in ${workspace.name}`} />
+    <PaneCanvas controller={controller} host={host} label={`Panes in ${workspace.name}`} scope={workspace.id} />
   ) : (
     <div className={styles.canvasLoading} role="status" aria-busy="true">
       <span className="visually-hidden">Loading the layout</span>
