@@ -59,16 +59,20 @@ Every applicable rule fires and the strongest wins (**deny wins**):
 | --- | --- |
 | Sharing from this workspace not permitted | Blocked |
 | Outside the workspace, or an unsafe path (alternate data stream, device name, trailing dot or space, invisible characters) | Blocked |
-| Built-in never-share names: `.env*` (not `.env.example`), private keys (`id_*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, …), credential directories (`.ssh`, `.aws`, `.gnupg`, `.azure`, `.kube`, …), credential and token files (`.npmrc`, `.pypirc`, `.netrc`, `.git-credentials`, `terraform.tfstate`, service-account JSON, …) | Blocked (secret; never overridable) |
+| Built-in never-share names: `.env*` (not `.env.example`), private keys (`id_*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.keytab`, …), credential directories (`.ssh`, `.aws`, `.gnupg`, `.azure`, `.kube`, …), credential and token files (`.npmrc`, `.yarnrc`, `.pypirc`, `.netrc`, `.git-credentials`, `.pgpass`, `.my.cnf`, `auth.json`, `terraform.tfstate`, Terraform/Maven/hub/rclone/Databricks/sops credentials, kubeconfigs, Docker `config.json`, Azure and gcloud token caches, service-account and Firebase admin JSON, console `accessKeys.csv`), browser and password-manager stores and exports (`Login Data`, `logins.json`, `key4.db`, keychains, KeePass/1Password/Bitwarden/LastPass exports, `*password*.csv`). Backup and copy names match too (`.env~`, `.env - Copy`, `#.env#`, `id_rsa.bak`, `server.key.orig`). The rule applies to every item — a dropped or pasted file is checked by its name like a workspace file | Blocked (secret; never overridable) |
 | Data exports and dumps that may hold customer data; Git's internal folder | Needs confirmation (confidential) |
 | Your never-share patterns (all workspaces or one workspace) | Blocked (secret) or needs confirmation (confidential) |
 | Your exclusions; outside the mission's scope | Blocked |
 | Ignored by `.gitignore` / `.ignore` / `.kalcodeignore` | Needs confirmation |
 | Binary files, or larger than the per-item limit | Blocked |
 | Images, PDFs and office documents (can't be checked for secrets) | Needs confirmation |
-| Secrets in content (known key and token formats, credentials in links and connection strings, private keys, sensitive assignments, high-entropy values) | Sent with the values replaced (or blocked, if the workspace chooses) |
-| A never-share file inside a diff | That file's changes withheld |
+| Secrets in content (known key and token formats, credentials in links, connection strings, command lines and headers, private keys including SSH2, age and base64-encoded PEM keys, webhook URLs, sensitive assignments in env/INI/YAML/JSON/XML/Dockerfiles, name/value pairs, high-entropy values) | Sent with the whole value replaced (or blocked, if the workspace chooses) |
+| A never-share file inside a diff — Git, combined (`diff --cc`), plain or renamed — in any item (a diff pasted as log output or a selection too) | That file's changes withheld |
+| A file with more than one name (hard link) | Needs confirmation: its other names may be never-share files or lie outside the workspace |
 | Provider output | Labelled as untrusted, not blocked |
+
+A **file range** is checked in the context of the whole file: a range that starts inside a private
+key, a YAML block or any other multi-line secret is redacted exactly like the whole file.
 
 Names are matched after case folding and look-alike folding (full-width letters and dots, for
 example), on the canonical path after links, junctions and short names are resolved. Redaction
@@ -80,6 +84,13 @@ rule codes, counts, paths and hashes — never content. Stored packages hold ref
 never content.
 
 ## Honest limit
+
+Files are read **open-then-verify**: KalCode opens the checked canonical path, reads through that
+handle, then re-resolves the name and requires both the same canonical path and the same file
+identity (volume and file index on Windows, device and inode on Unix). Swapping the file or a
+parent folder between the check and the read is detected and nothing is read. A change after
+that point is caught by the send-time hash check. KalCode cannot list a hard-linked file's other
+names portably, so such files always need a confirmation.
 
 The firewall governs what KalCode sends. A provider reading files with its own tools is
 governed by the Trust Kernel and the provider mapping; "never share" patterns are also offered as

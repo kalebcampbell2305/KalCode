@@ -43,6 +43,7 @@ const SECRET_DIRS: &[&str] = &[
     ".password-store",
     ".gcloud",
     ".vault",
+    "private-keys-v1.d",
 ];
 
 /// Exact file names that hold credentials or tokens.
@@ -79,6 +80,41 @@ const SECRET_FILES: &[&str] = &[
     "keychain-db",
     "known_hosts",
     "authorized_keys",
+    // SEC-LATENT additions: CLI and cloud credential stores.
+    ".yarnrc",
+    ".flaskenv",
+    ".my.cnf",
+    ".mylogin.cnf",
+    "pgpass.conf",
+    "auth.json",
+    ".dockerconfigjson",
+    "credentials.tfrc.json",
+    "credentials.csv",
+    "credentials.db",
+    "access_tokens.db",
+    "legacy_credentials",
+    "accesstokens.json",
+    "azureprofile.json",
+    "msal_token_cache.json",
+    "msal_token_cache.bin",
+    "service_principal_entries.json",
+    ".databrickscfg",
+    "rclone.conf",
+    "kubeconfig",
+    "secring.gpg",
+    "secring.kbx",
+    "shadow",
+    // Browser and password-manager stores and exports.
+    "login data",
+    "login data for account",
+    "web data",
+    "cookies",
+    "cookies.sqlite",
+    "logins.json",
+    "signons.sqlite",
+    "key3.db",
+    "key4.db",
+    "passwords.csv",
 ];
 
 /// File extensions for key material and credential containers.
@@ -94,6 +130,15 @@ const SECRET_EXTENSIONS: &[&str] = &[
     ".kdbx",
     ".tfvars",
     ".ovpn",
+    ".keytab",
+    ".kdb",
+    ".keychain",
+    ".keychain-db",
+    ".agilekeychain",
+    ".opvault",
+    ".1pux",
+    ".1pif",
+    ".kubeconfig",
 ];
 
 /// `.env` variants that are conventionally committed templates without values. Their content
@@ -129,13 +174,84 @@ const DATA_EXTENSIONS: &[&str] = &[
     ".csv", ".tsv", ".xlsx", ".xls", ".json", ".jsonl", ".ndjson", ".sql", ".parquet", ".xml",
 ];
 
+/// Backup, copy and editor decorations stripped before matching, so `.env~`, `.env - Copy`,
+/// `#.env#`, `id_rsa.bak` and `server.key.orig` match like the original name.
+const BACKUP_SUFFIXES: &[&str] = &[
+    "~",
+    " - copy",
+    " copy",
+    "-copy",
+    "_copy",
+    ".copy",
+    ".bak",
+    ".backup",
+    ".old",
+    ".orig",
+    ".save",
+    ".saved",
+    ".swp",
+    ".swo",
+    ".tmp",
+    ".prev",
+    ".previous",
+    ".1",
+    ".2",
+];
+
+/// The name and every undecorated form of it (`.env - Copy (2).bak` → `.env - Copy (2)` →
+/// `.env - Copy` → `.env`).
+fn name_variants(name: &str) -> Vec<String> {
+    let mut out = vec![name.to_owned()];
+    let mut current = name.to_owned();
+    for _ in 0..8 {
+        let mut next = current.trim().to_owned();
+        if let Some(rest) = next.strip_prefix("copy of ") {
+            next = rest.to_owned();
+        }
+        if next.len() > 2 && next.starts_with('#') && next.ends_with('#') {
+            next = next[1..next.len() - 1].to_owned();
+        }
+        if let Some(rest) = next.strip_prefix(".#") {
+            next = rest.to_owned();
+        }
+        // ` (2)` numbered copies.
+        if next.ends_with(')')
+            && let Some(open) = next.rfind(" (")
+            && next[open + 2..next.len() - 1]
+                .chars()
+                .all(|c| c.is_ascii_digit())
+        {
+            next.truncate(open);
+        }
+        if let Some(suffix) = BACKUP_SUFFIXES
+            .iter()
+            .find(|suffix| next.len() > suffix.len() && next.ends_with(*suffix))
+        {
+            next.truncate(next.len() - suffix.len());
+        }
+        if next == current || next.is_empty() {
+            break;
+        }
+        out.push(next.clone());
+        current = next;
+    }
+    out
+}
+
 /// Matches `normalized` (already folded) against the built-in catalogue. The strongest match
-/// wins: secret rules are checked first.
+/// wins: secret rules are checked first. Backup and copy decorations are ignored.
 pub fn builtin_match(normalized: &str) -> Option<BuiltinHit> {
     let components: Vec<&str> = normalized.split('/').filter(|c| !c.is_empty()).collect();
     let name = *components.last()?;
     let parents = &components[..components.len() - 1];
+    let variants = name_variants(name);
+    variants
+        .iter()
+        .filter_map(|variant| builtin_match_name(parents, variant))
+        .max_by_key(|hit| hit.sensitivity)
+}
 
+fn builtin_match_name(parents: &[&str], name: &str) -> Option<BuiltinHit> {
     if parents.iter().any(|dir| SECRET_DIRS.contains(dir)) || SECRET_DIRS.contains(&name) {
         return Some(hit(
             "credential_directory",
@@ -146,6 +262,14 @@ pub fn builtin_match(normalized: &str) -> Option<BuiltinHit> {
     if parents.windows(2).any(|w| w == [".config", "gcloud"])
         || (parents.last() == Some(&"gh") && name == "hosts.yml")
         || (parents.last() == Some(&".docker") && name == "config.json")
+        || (parents.last() == Some(&".config") && name == "hub")
+        || (parents.last() == Some(&".m2")
+            && name.starts_with("settings")
+            && name.ends_with(".xml"))
+        || (parents.last() == Some(&".gradle") && name == "gradle.properties")
+        || (parents.windows(2).any(|w| w == ["sops", "age"]) && name == "keys.txt")
+        || is_kube_config(name)
+        || is_credential_export(name)
     {
         return Some(hit(
             "cloud_credentials",
@@ -215,11 +339,50 @@ fn is_env_file(name: &str) -> bool {
     if ENV_TEMPLATES.contains(&name) {
         return false;
     }
+    const DEPLOY: &[&str] = &[
+        "production",
+        "prod",
+        "local",
+        "development",
+        "dev",
+        "staging",
+        "stage",
+        "test",
+        "secret",
+        "secrets",
+    ];
     name == ".env"
         || name.starts_with(".env.")
         || name.starts_with(".env-")
         || name.starts_with(".env_")
         || (name.ends_with(".env") && name.len() > 4)
+        || name
+            .strip_prefix("env.")
+            .is_some_and(|rest| DEPLOY.contains(&rest))
+}
+
+/// `kubeconfig`, `kubeconfig.yaml`, `kubeconfig-prod`, `admin.kubeconfig`, `prod-kubeconfig`.
+fn is_kube_config(name: &str) -> bool {
+    name.starts_with("kubeconfig")
+        || name.ends_with(".kubeconfig")
+        || name.ends_with("-kubeconfig")
+        || name.ends_with("_kubeconfig")
+}
+
+/// Console and password-manager exports and service-account keys identified by name.
+fn is_credential_export(name: &str) -> bool {
+    (name.ends_with(".json") && name.contains("firebase-adminsdk"))
+        || name.ends_with("accesskeys.csv")
+        || name.ends_with("_credentials.csv")
+        || name.ends_with("-credentials.csv")
+        || (name.ends_with(".csv") && name.contains("password"))
+        || ((name.ends_with(".csv") || name.ends_with(".json"))
+            && (name.starts_with("bitwarden_export")
+                || name.starts_with("lastpass")
+                || name.starts_with("dashlane")
+                || name.starts_with("keepass")))
+        || ((name.ends_with(".asc") || name.ends_with(".gpg") || name.ends_with(".pgp"))
+            && (name.contains("private") || name.contains("secret")))
 }
 
 /// `id_rsa`, `id_ed25519`, `id_ecdsa_sk`, … and any other `id_*` name without an extension.

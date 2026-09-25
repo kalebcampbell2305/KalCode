@@ -11,27 +11,34 @@ pub struct DiffSection {
     pub paths: Vec<String>,
 }
 
-/// Splits a diff into file sections. Git diffs split at `diff --git`; plain unified diffs split
-/// at a `--- ` line followed by a `+++ ` line. Text before the first section (for example a
-/// commit message) is not a section.
+/// Splits a diff into file sections. A section starts at any diff header — `diff --git`,
+/// combined diffs (`diff --cc`, `diff --combined`), other `diff <options> <old> <new>` headers
+/// and `Index:` lines — or at a `--- ` line followed by a `+++ ` line that does not belong to
+/// the header just before it. Git and plain sections may be mixed in one text (a commit log, a
+/// pasted terminal excerpt), so both kinds are always recognised. Text before the first
+/// section (for example a commit message) is not a section.
 pub fn split_sections(diff: &str) -> Vec<DiffSection> {
     let lines = line_starts(diff);
-    let git_style = lines
-        .iter()
-        .any(|(start, _)| diff[*start..].starts_with("diff --git "));
     let mut starts: Vec<usize> = Vec::new();
+    // Inside a header that already started a section (before its first hunk), a `---`/`+++`
+    // pair names the same file and does not start another section.
+    let mut in_header = false;
     for (index, (start, _)) in lines.iter().enumerate() {
         let line = &diff[*start..];
-        if git_style {
-            if line.starts_with("diff --git ") {
-                starts.push(*start);
-            }
+        if is_diff_header(line) {
+            starts.push(*start);
+            in_header = true;
+        } else if line.starts_with("@@") || line.starts_with("Binary files ") {
+            in_header = false;
         } else if line.starts_with("--- ")
             && lines
                 .get(index + 1)
                 .is_some_and(|(next, _)| diff[*next..].starts_with("+++ "))
         {
-            starts.push(*start);
+            if !in_header {
+                starts.push(*start);
+            }
+            in_header = false;
         }
     }
     let mut sections = Vec::with_capacity(starts.len());
@@ -45,6 +52,14 @@ pub fn split_sections(diff: &str) -> Vec<DiffSection> {
         });
     }
     sections
+}
+
+fn is_diff_header(line: &str) -> bool {
+    line.starts_with("diff --git ")
+        || line.starts_with("diff --cc ")
+        || line.starts_with("diff --combined ")
+        || line.starts_with("Index: ")
+        || (line.starts_with("diff -") && !line.starts_with("diff --stat"))
 }
 
 /// `(start, end)` byte offsets of every line (end excludes the line break).
@@ -65,10 +80,31 @@ fn line_starts(text: &str) -> Vec<(usize, usize)> {
 
 fn section_paths(section: &str) -> Vec<String> {
     let mut paths = Vec::new();
-    for line in section.lines().take(12) {
+    for line in section.lines().take(24) {
         let line = line.trim_end_matches('\r');
         if let Some(rest) = line.strip_prefix("diff --git ") {
             paths.extend(parse_git_header(rest));
+        } else if let Some(rest) = line
+            .strip_prefix("diff --cc ")
+            .or_else(|| line.strip_prefix("diff --combined "))
+            .or_else(|| line.strip_prefix("Index: "))
+        {
+            paths.push(strip_side(&unquote(rest)));
+        } else if let Some(rest) = line.strip_prefix("diff ") {
+            // `diff -ruN old/x new/x`: every non-option word is a path.
+            paths.extend(
+                rest.split_whitespace()
+                    .filter(|w| !w.starts_with('-'))
+                    .map(|w| strip_side(&unquote(w))),
+            );
+        } else if let Some(rest) = line.strip_prefix("Binary files ") {
+            // `Binary files a/x and b/y differ`
+            let rest = rest.trim_end_matches(" differ");
+            paths.extend(
+                rest.split(" and ")
+                    .map(|p| strip_side(&unquote(p)))
+                    .filter(|p| p != "/dev/null"),
+            );
         } else if let Some(rest) = line
             .strip_prefix("--- ")
             .or_else(|| line.strip_prefix("+++ "))
@@ -82,6 +118,8 @@ fn section_paths(section: &str) -> Vec<String> {
             .or_else(|| line.strip_prefix("rename to "))
             .or_else(|| line.strip_prefix("copy from "))
             .or_else(|| line.strip_prefix("copy to "))
+            .or_else(|| line.strip_prefix("rename old "))
+            .or_else(|| line.strip_prefix("rename new "))
         {
             paths.push(unquote(rest));
         } else if line.starts_with("@@") {
@@ -164,6 +202,15 @@ mod tests {
         assert!(out.contains("diff --git a/.env b/.env\n[withheld]\n"));
         assert!(!out.contains("+K=V"));
         assert!(out.contains("+y"));
+    }
+
+    #[test]
+    fn splits_combined_and_mixed_diffs() {
+        let diff = "diff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1 +1 @@\n-x\n+y\ncommit 2\n\ndiff --cc .env\nindex 1,2..3\n--- a/.env\n+++ b/.env\n@@@ -1,1 -1,1 +1,1 @@@\n++K=V\n--- a/keys/id_rsa\n+++ b/keys/id_rsa\n@@ -1 +1 @@\n+x\n";
+        let sections = split_sections(diff);
+        assert_eq!(sections.len(), 3, "{sections:?}");
+        assert_eq!(sections[1].paths, vec![".env".to_owned()]);
+        assert_eq!(sections[2].paths, vec!["keys/id_rsa".to_owned()]);
     }
 
     #[test]

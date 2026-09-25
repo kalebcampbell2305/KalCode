@@ -942,25 +942,52 @@ fn evaluate_item(firewall: &Firewall, position: u32, item: ContextItem) -> Packa
                 pre
             } else {
                 match read_checked_file(firewall, path, &check) {
-                    Ok(raw) => {
+                    Ok(ReadFile { bytes: raw, links }) => {
                         bytes = raw.len() as u64;
                         source_sha256 = sha256_hex(&raw);
                         let file_name = check.relative().map(str::to_owned);
-                        let excerpt = lines.and_then(|range| {
-                            decode_text(&raw).map(|text| slice_lines(&text, range))
+                        let full_text = lines.and_then(|_| decode_text(&raw));
+                        let excerpt = lines.zip(full_text.as_deref()).map(|(range, text)| {
+                            let (start, end) = line_span(text, range);
+                            (text, start, end)
                         });
-                        let content = match &excerpt {
-                            Some(text) => Content::Text(text),
-                            None => Content::Bytes(&raw),
+                        let mut decision = match excerpt {
+                            Some((full, start, end)) => firewall.evaluate_excerpt(
+                                &Candidate {
+                                    content: Content::Text(&full[start..end]),
+                                    file_name: file_name.as_deref(),
+                                    ..candidate
+                                },
+                                Some((check, path_reasons)),
+                                full,
+                                start,
+                            ),
+                            None => firewall.evaluate_checked(
+                                &Candidate {
+                                    content: Content::Bytes(&raw),
+                                    file_name: file_name.as_deref(),
+                                    ..candidate
+                                },
+                                Some((check, path_reasons)),
+                            ),
                         };
-                        firewall.evaluate_checked(
-                            &Candidate {
-                                content,
-                                file_name: file_name.as_deref(),
-                                ..candidate
-                            },
-                            Some((check, path_reasons)),
-                        )
+                        if links > 1 {
+                            // A hard link gives the same content other names (possibly a
+                            // never-share name, or a path outside the workspace) that KalCode
+                            // can't enumerate portably: never shared silently.
+                            decision.reasons.push(FirewallReason {
+                                rule: FirewallRule::UnsafePath,
+                                effect: RuleEffect::BlockOverridable,
+                                message: format!(
+                                    "This file has {links} names (hard links); another name may be a never-share file or lie outside the workspace. Confirm this item to share it."
+                                ),
+                            });
+                            decision.verdict = crate::firewall::verdict_of(&decision.reasons);
+                            if decision.verdict == (FirewallVerdict::Block { overridable: false }) {
+                                decision.text = None;
+                            }
+                        }
+                        decision
                     }
                     Err(e) => {
                         unavailable = Some(e.to_string());
@@ -1072,27 +1099,76 @@ fn evaluate_item(firewall: &Firewall, position: u32, item: ContextItem) -> Packa
     }
 }
 
-/// Reads a workspace file already resolved by [`Firewall::check_path`], then re-resolves the
-/// name and requires the same canonical file (time-of-check/time-of-use).
-fn read_checked_file(firewall: &Firewall, raw_path: &str, check: &PathCheck) -> Result<Vec<u8>> {
+/// A file read for an item, with its hard-link count.
+struct ReadFile {
+    bytes: Vec<u8>,
+    links: u64,
+}
+
+/// Reads a workspace file already resolved by [`Firewall::check_path`] with
+/// **open-then-verify**:
+///
+/// 1. open the canonical path and keep the handle;
+/// 2. read through that handle (bounded by the item cap);
+/// 3. re-resolve the requested name, require the same canonical path, and require that the
+///    file now at that path is the **same file** as the opened handle (volume serial + file
+///    index on Windows, device + inode on Unix).
+///
+/// A swap of the file or of a parent directory (for example into a junction pointing outside
+/// the workspace) between the check and the read is detected as `ChangedDuringRead`. What
+/// remains is a change after step 3 to content KalCode already holds; the send-time check
+/// (`check_before_send`) re-reads and compares hashes. The file's hard-link count is reported
+/// so the caller can refuse to share multi-named files silently.
+fn read_checked_file(firewall: &Firewall, raw_path: &str, check: &PathCheck) -> Result<ReadFile> {
     let max = firewall.policy().max_item_bytes;
     let PathCheck::Inside { real, .. } = check else {
         return Err(ContextError::PathRejected {
             reason: "the path is outside the workspace".to_owned(),
         });
     };
-    let metadata = std::fs::metadata(real).map_err(io_error)?;
+    let file = std::fs::File::open(real).map_err(io_error)?;
+    let metadata = file.metadata().map_err(io_error)?;
     if !metadata.is_file() {
         return Err(ContextError::PathRejected {
             reason: "the path is not a regular file".to_owned(),
         });
     }
-    let file = std::fs::File::open(real).map_err(io_error)?;
+    let links = link_count(&file, &metadata);
+    let opened = same_file::Handle::from_file(file).map_err(io_error)?;
     let mut buf = Vec::with_capacity(metadata.len().min(max + 1) as usize);
-    file.take(max + 1).read_to_end(&mut buf).map_err(io_error)?;
+    opened
+        .as_file()
+        .take(max + 1)
+        .read_to_end(&mut buf)
+        .map_err(io_error)?;
     match resolve(firewall.workspace(), raw_path) {
-        PathCheck::Inside { real: again, .. } if &again == real => Ok(buf),
+        PathCheck::Inside { real: again, .. } if &again == real => {
+            match same_file::Handle::from_path(&again) {
+                Ok(current) if current == opened => Ok(ReadFile { bytes: buf, links }),
+                _ => Err(ContextError::ChangedDuringRead),
+            }
+        }
         _ => Err(ContextError::ChangedDuringRead),
+    }
+}
+
+/// Number of names (hard links) of an open file.
+fn link_count(file: &std::fs::File, metadata: &std::fs::Metadata) -> u64 {
+    #[cfg(unix)]
+    {
+        let _ = file;
+        std::os::unix::fs::MetadataExt::nlink(metadata)
+    }
+    #[cfg(windows)]
+    {
+        let _ = metadata;
+        // Fail closed: if the count can't be read, treat the file as multi-named.
+        winapi_util::file::information(file).map_or(2, |info| info.number_of_links())
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (file, metadata);
+        1
     }
 }
 
@@ -1104,13 +1180,31 @@ fn io_error(error: std::io::Error) -> ContextError {
     }
 }
 
+/// Byte span of lines `range.start..=range.end` (1-based, inclusive, line breaks included).
+fn line_span(text: &str, range: LineRange) -> (usize, usize) {
+    let first = range.start.max(1) as usize;
+    let last = range.end.max(range.start).max(1) as usize;
+    let mut start = text.len();
+    let mut end = text.len();
+    let mut offset = 0;
+    for (index, line) in text.split_inclusive('\n').enumerate() {
+        let number = index + 1;
+        if number == first {
+            start = offset;
+        }
+        offset += line.len();
+        if number == last {
+            end = offset;
+            break;
+        }
+    }
+    (start.min(end), end)
+}
+
+#[cfg(test)]
 fn slice_lines(text: &str, range: LineRange) -> String {
-    let start = range.start.max(1) as usize;
-    let end = range.end.max(range.start) as usize;
-    text.split_inclusive('\n')
-        .skip(start - 1)
-        .take(end - start + 1)
-        .collect()
+    let (start, end) = line_span(text, range);
+    text[start..end].to_owned()
 }
 
 /// Only web links are shared; KalCode never fetches them.

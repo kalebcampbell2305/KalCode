@@ -42,7 +42,7 @@ belongs to the lead (contracts, IPC, event mapping) or to the P2 UI campaign.
 
 ## Test evidence
 
-`cargo test -p kalcode-context` — 73 tests (1 release-only performance test ignored in debug):
+`cargo test -p kalcode-context` — 73 tests at P0 (1 release-only performance test ignored in debug); 86 after SEC-LATENT (19 unit + the suites below + `sec_latent_detection` 3, `sec_latent_firewall` 8, `sec_latent_no_panic` 2):
 
 | Suite | Tests | What it proves |
 | --- | --- | --- |
@@ -73,14 +73,46 @@ folder_budgets -- --ignored --nocapture`:
 
 | Measurement | Result | Budget |
 | --- | --- | --- |
-| Secret scan + redaction, 4 MiB of code-like text (≈ 2,500 secrets) | 16–23 ms → **4.1–5.9 ms/MiB** | ≤ 50 ms/MiB |
-| Package build (32 files, 1.94 MiB sent: resolve, read, firewall, translate, render, hash), warm | 32 ms → **16.7 ms/MiB** (cold first run 34 ms) | ≤ 50 ms/MiB |
-| Folder analysis, 10,000 files + 3,000 ignored + never-share/binary/link fixtures | median **67–108 ms** | — (bounded by `max_entries_scanned`) |
+| Secret scan + redaction, 4 MiB of code-like text (≈ 2,500 secrets) | 16–23 ms → **4.1–5.9 ms/MiB**; after SEC-LATENT **34 ms → 8.6 ms/MiB** | ≤ 50 ms/MiB |
+| Package build (32 files, 1.94 MiB sent: resolve, read, firewall, translate, render, hash), warm | 32 ms → **16.7 ms/MiB** (cold first run 34 ms); after SEC-LATENT **39 ms → 20.2 ms/MiB** (open-then-verify adds one identity check per file) | ≤ 50 ms/MiB |
+| Folder analysis, 10,000 files + 3,000 ignored + never-share/binary/link fixtures | median **67–108 ms**; after SEC-LATENT **63–65 ms** | — (bounded by `max_entries_scanned`) |
+| Crafted 8 MiB entropy/data-URI input (review DoS case) | before **~18 s**; after SEC-LATENT **78 ms** release, 3.6 s debug | "well under a second" |
 | Debug build, 2 MiB scan | 580 ms (informational) | — |
+
+The SEC-LATENT detector patterns carry their sensitive-word alternation in the regex itself
+(one linear pass, matches only near candidate names); a first version that captured every
+`name:`/`name=` in the text measured 61 ms/MiB and was reworked before merge.
 
 An early version resolved paths from the filesystem root four times per item (≈ 97 ms/MiB). It now
 walks only below the canonical root, canonicalizes once per path and resolves each item once plus
 one time-of-use re-check.
+
+## SEC-LATENT hardening (2026-09-24 review of 1bce77f)
+
+Findings from the independent review (`docs/campaigns/ADVANCED.md` §14b), fixed before the
+firewall is wired to any provider path. Every PoC from the review snapshot was ported to a real
+regression test; each test was run against the unfixed code first and failed.
+
+| Finding | Fix | Evidence (fail before → pass after) |
+| --- | --- | --- |
+| **M4** file-range items scanned only within the slice; a range that skips the `BEGIN` line leaked the whole PEM body | `Firewall::evaluate_excerpt`: the range is cut from the whole decoded file, secrets are detected in the whole text and clipped to the range (a key, YAML block or other multi-line secret intersecting the range is redacted inside it) | `sec_latent_firewall::m4_range_without_pem_header_does_not_leak_key_body` (8/8 body lines leaked → 0 across five ranges), `m4_range_of_assignment_value_on_later_line_is_redacted` |
+| **M5** 25 of the review's 37 common formats undetected | A firewall detector layer over the shared catalogue (`src/detectors.rs`, 18 patterns + procedural value readers): AWS console key pairs, Slack/Discord/Teams webhook URLs, RFC 4716 (SSH2) and age private keys, base64-encoded PEM private keys (kubeconfig `client-key-data`, Kubernetes secrets), short names (`DB_PASS`, `SMTP_PW`), carrier suffixes (`SECRET_KEY_BASE`, `client-key-data`), XML elements and `key`/`value` attributes, `name`/`value` pairs (Kubernetes env, JSON), quoted call arguments (`define('DB_PASSWORD', …)`), `curl -u`, `mysql -p…`, `--password <value>`, Dockerfile `ENV NAME value`, `Authorization: Token/Digest/…`, YAML block scalars, URL credentials with an empty user or `/` in the password | `sec_latent_detection::every_review_format_is_fully_redacted` (25/37 leaked → 0/37), `name_value_pairs_are_redacted` (2/3 → 0/3), `new_detectors_keep_common_text_clean` (16 false-positive fixtures); the 33 existing false-positive fixtures in `secrets_table` stay clean |
+| **M6** partial redaction (`Tr0ub4dor[…]&3xyzQ`, first word of a quoted password, suffix after a fixed-length match) | Quoted values are redacted to the closing quote (spaces included), unquoted values to the end of the token (`&`, `(`, `$` kept inside); fixed-length format matches are extended over the rest of the token (and alphanumeric prefixes); multi-line values (YAML blocks, SSH2 bodies) are one span; `$…` in single quotes and dotted values in config files count as literals | same matrix (each case asserts no fragment survives and the line count is kept) |
+| **M7** dropped files skipped never-share name rules (`document(".env")` was sent redacted) | `Firewall::evaluate*` applies never-share (built-in and user) and exclusion rules to the candidate's `file_name` whenever it is not the checked workspace path — drops, pastes, images, documents; Windows and POSIX paths both | `sec_latent_firewall::m7_dropped_documents_apply_never_share_names` |
+| Hard links bypassed never-share names (a workspace name linked to `~/.env` or an in-workspace `.env`) | The opened handle's link count is read (Unix `nlink`, Windows `GetFileInformationByHandle` via `winapi-util`, fail-closed); a file with more than one name is an overridable block with an explanation | `sec_latent_firewall::hard_links_are_not_shared_silently` |
+| Combined diffs (`diff --cc`) and plain sections after Git sections bypassed withholding; diffs pasted as log output were never withheld | `split_sections` recognises every header (`diff --git/--cc/--combined/-…`, `Index:`, `Binary files`, rename/copy lines) and plain `---`/`+++` pairs in mixed text; withholding runs for every text item | `sec_latent_firewall::combined_and_mixed_diffs_withhold_never_share_sections` (4 diff shapes × 5 item kinds), `diff::tests::splits_combined_and_mixed_diffs` |
+| Quadratic entropy pass (every candidate × every `data:` URI) | Linear pass in the firewall layer: sorted URI ranges walked with a cursor; value-position look-back bounded by the previous token | `sec_latent_firewall::entropy_pass_is_linear_on_crafted_input`: crafted 8 MiB **~18 s → 78 ms** (release), 3.6 s debug |
+| Never-share list gaps | Backup/copy decorations stripped before matching; kubeconfigs, `.yarnrc`, `.my.cnf`, `auth.json`, Maven, Terraform, hub, rclone, Databricks, sops age keys, Azure/gcloud token caches, Firebase admin JSON, `accessKeys.csv`, keytabs, keyrings, browser and password-manager stores/exports, `.gradle/gradle.properties`, `env.production` | `sec_latent_firewall::never_share_name_gaps_are_closed` (57 names blocked, 10 ordinary names still allowed) |
+| Read-time TOCTOU | Open-then-verify: the item is read through the handle opened on the checked canonical path; afterwards the name must resolve to the same canonical path **and** the same file identity (`same_file::Handle`: volume serial + file index / device + inode). The canonical path of the handle itself (`GetFinalPathNameByHandleW`, `F_GETPATH`) needs `unsafe` FFI, which the workspace denies; identity comparison gives the same guarantee for the read | `read_checked_file` in `package.rs`; covered by every package test; documented in `docs/CONTEXT.md` |
+
+Panics: `sec_latent_no_panic` (ported `secrev_panics`, extended with the new header and detector
+atoms, 40,000 inputs in release / 15,000 in debug, plus 300 random file ranges).
+
+**Shared redactor not changed.** The detection extensions live in this crate
+(`secrets::scan_with` = shared catalogue + firewall layer); `kalcode_core::redact` and
+`redact_log_line` are untouched (outside this campaign's scope). Recommended follow-up: move
+`detectors.rs` into `kalcode_core::redact` so log lines get the same coverage; the shared entropy
+pass is still quadratic but only reachable when entropy is enabled, which log redaction never does.
 
 ## Decisions
 
@@ -173,10 +205,13 @@ crate produces these as `events::ContextEvent` (serde tag = event type) for one-
   (`package_flow::links_are_checked_and_credentials_redacted`). Tokens glued to a preceding word
   (`aghp_…`) escaped `\b`-anchored patterns (found by `firewall_props::secrets_never_reach_output`);
   distinctive prefixes no longer require a word boundary.
-- **TOCTOU:** containment is checked before opening and re-checked after reading (same canonical
-  path required). A local process that can rewrite the workspace can still race between the
-  re-check and use; the OS account is trusted in the threat model (`SECURITY.md` §1). Handle-identity
-  comparison (volume serial + file index) is a follow-up once stable in `std`.
+- **TOCTOU:** containment is checked before opening; the file is read through the opened handle
+  and afterwards the name must resolve to the same canonical path and the same file identity
+  (volume serial + file index / device + inode, SEC-LATENT). A local process that can rewrite the
+  workspace can still change content after that check; the send-time hash check catches it
+  before anything is sent, and the OS account is trusted in the threat model (`SECURITY.md` §1).
+- **Hard links:** other names of a multi-linked file cannot be listed portably without `unsafe`
+  FFI (`FindFirstFileNameW`), so every such file needs a per-item confirmation.
 - **Detection is heuristic.** Unknown credential formats without a sensitive key name and below the
   entropy threshold (or pure hex) are not detected. Pure-hex secrets are only caught in assignments
   with a sensitive name. The preview is the user's final check.

@@ -370,6 +370,30 @@ impl Firewall {
         candidate: &Candidate<'_>,
         checked: Option<(PathCheck, Vec<FirewallReason>)>,
     ) -> FirewallDecision {
+        self.evaluate_inner(candidate, checked, None)
+    }
+
+    /// Evaluates an excerpt (a file range) of `full_text`: the candidate's content must be the
+    /// `Content::Text` slice of `full_text` starting at byte `offset`. Secrets are detected in
+    /// the **whole** text, so a range that starts inside a private key block, a YAML block
+    /// scalar or any other multi-line secret is redacted exactly like the whole file would be
+    /// (M4); findings are clipped to the excerpt.
+    pub fn evaluate_excerpt(
+        &self,
+        candidate: &Candidate<'_>,
+        checked: Option<(PathCheck, Vec<FirewallReason>)>,
+        full_text: &str,
+        offset: usize,
+    ) -> FirewallDecision {
+        self.evaluate_inner(candidate, checked, Some((full_text, offset)))
+    }
+
+    fn evaluate_inner(
+        &self,
+        candidate: &Candidate<'_>,
+        checked: Option<(PathCheck, Vec<FirewallReason>)>,
+        excerpt: Option<(&str, usize)>,
+    ) -> FirewallDecision {
         let mut reasons: Vec<FirewallReason> = Vec::new();
         let mut relative_path = None;
 
@@ -384,6 +408,16 @@ impl Firewall {
         if let Some((check, path_reasons)) = checked {
             relative_path = check.relative().map(str::to_owned);
             reasons.extend(path_reasons);
+        }
+
+        // M7: content without a workspace path (a dropped file, a pasted document, an image)
+        // is checked by its name too — `.env`, `id_rsa` or `~/.aws/credentials` dropped from
+        // anywhere is blocked exactly like the workspace file would be.
+        if let Some(name) = candidate.file_name
+            && relative_path.as_deref() != Some(name)
+            && candidate.path != Some(name)
+        {
+            reasons.extend(self.name_rules(name));
         }
 
         if candidate.kind == ItemKind::MissionArtifact
@@ -417,7 +451,7 @@ impl Firewall {
             if verdict_of(&reasons) == (FirewallVerdict::Block { overridable: false }) {
                 (None, None)
             } else {
-                self.evaluate_content(candidate, file_name, &mut reasons)
+                self.evaluate_content(candidate, file_name, excerpt, &mut reasons)
             };
 
         let verdict = verdict_of(&reasons);
@@ -436,10 +470,21 @@ impl Firewall {
         }
     }
 
+    /// Never-share and exclusion rules for a bare file name or foreign path (no containment
+    /// check: the content is already in hand).
+    fn name_rules(&self, name: &str) -> Vec<FirewallReason> {
+        let unified = name.replace('\\', "/");
+        let trimmed = unified.trim_start_matches('/');
+        let mut reasons = self.path_rules(trimmed, false, false);
+        reasons.retain(|r| !matches!(r.rule, FirewallRule::OutsideMissionScope { .. }));
+        reasons
+    }
+
     fn evaluate_content(
         &self,
         candidate: &Candidate<'_>,
         file_name: Option<&str>,
+        excerpt: Option<(&str, usize)>,
         reasons: &mut Vec<FirewallReason>,
     ) -> (Option<ContentClass>, Option<Redacted>) {
         let decoded: String;
@@ -482,21 +527,32 @@ impl Firewall {
             return (Some(ContentClass::Text), None);
         }
 
-        // Diffs: withhold whole sections for files that must never be shared.
-        let withheld_text;
-        let text = if matches!(candidate.kind, ItemKind::Diff | ItemKind::GitCommit) {
-            withheld_text = self.withhold_diff_sections(text, reasons);
-            withheld_text.as_deref().unwrap_or(text)
-        } else {
-            text
-        };
-
         let context = ScanContext {
             file_name,
             no_entropy: false,
         };
-        let findings = scan_with(text, context);
-        let redacted = apply(text, &findings, PlaceholderStyle::Labelled);
+        // Diffs (in any item kind — a diff pasted as log output or a selection is still a
+        // diff): withhold whole sections for files that must never be shared.
+        let excerpt = excerpt.filter(|(full, offset)| {
+            full.get(*offset..offset.saturating_add(text.len())) == Some(text)
+        });
+        let (findings, redacted) = match excerpt {
+            None => {
+                let withheld_text = self.withhold_diff_sections(text, reasons);
+                let text = withheld_text.as_deref().unwrap_or(text);
+                let findings = scan_with(text, context);
+                let redacted = apply(text, &findings, PlaceholderStyle::Labelled);
+                (findings, redacted)
+            }
+            Some((full, offset)) => {
+                let findings = clip_findings(scan_with(full, context), offset, text.len());
+                let mut redacted = apply(text, &findings, PlaceholderStyle::Labelled);
+                if let Some(withheld) = self.withhold_diff_sections(&redacted.text, reasons) {
+                    redacted.text = withheld;
+                }
+                (findings, redacted)
+            }
+        };
         let high = findings.iter().any(|f| f.confidence == Confidence::High);
         let mut per_detector: BTreeMap<&str, (u32, Confidence)> = BTreeMap::new();
         for f in &findings {
@@ -618,6 +674,22 @@ impl Firewall {
             findings,
         }
     }
+}
+
+/// Findings of a whole text that intersect `offset..offset + len`, clipped to that range and
+/// re-based to it. Clipping lands on UTF-8 boundaries because the excerpt does.
+fn clip_findings(findings: Vec<Finding>, offset: usize, len: usize) -> Vec<Finding> {
+    let end = offset + len;
+    findings
+        .into_iter()
+        .filter(|f| f.start < end && f.end > offset)
+        .map(|f| Finding {
+            start: f.start.max(offset) - offset,
+            end: f.end.min(end) - offset,
+            ..f
+        })
+        .filter(|f| f.start < f.end)
+        .collect()
 }
 
 /// Deny wins: the strongest effect decides.
