@@ -81,6 +81,57 @@ describe("describeEvent", () => {
     });
   });
 
+  it("describes provider health and capacity transitions in plain words", () => {
+    const degraded = envelope({
+      type: "provider.health_changed",
+      payload: { providerId: "codex", from: "healthy", to: "degraded", reason: "recent_failures" },
+    });
+    expect(describeEvent(degraded)).toEqual({
+      title: "Codex health: healthy → degraded (recent failures)",
+      detail: null,
+      tone: "waiting",
+    });
+    const healthy = envelope({
+      type: "provider.health_changed",
+      payload: { providerId: "claude-code", from: "unknown", to: "healthy", reason: "healthy" },
+    });
+    expect(describeEvent(healthy).title).toBe("Claude Code health: unknown → healthy");
+    const signedOut = envelope({
+      type: "provider.health_changed",
+      payload: { providerId: "gemini-cli", from: "healthy", to: "unavailable", reason: "signed_out" },
+    });
+    expect(describeEvent(signedOut)).toMatchObject({
+      title: "Gemini CLI health: healthy → unavailable (signed out)",
+      tone: "danger",
+    });
+    const backingOff = envelope({
+      type: "provider.capacity_changed",
+      payload: { providerId: "codex", state: "backing_off", activeSessions: 1, limit: null, retryAt: null },
+    });
+    expect(describeEvent(backingOff)).toEqual({
+      title: "Codex is backing off",
+      detail: "Codex reported a rate limit or quota error.",
+      tone: "waiting",
+    });
+    const available = envelope({
+      type: "provider.capacity_changed",
+      payload: { providerId: "claude-code", state: "available", activeSessions: 2, limit: null, retryAt: null },
+    });
+    expect(describeEvent(available)).toEqual({
+      title: "Claude Code can take new work",
+      detail: "2 active sessions",
+      tone: "idle",
+    });
+    expect(
+      describeEvent(
+        envelope({
+          type: "provider.capacity_changed",
+          payload: { providerId: "codex", state: "saturated", activeSessions: 4, limit: null, retryAt: null },
+        }),
+      ).detail,
+    ).toBeNull();
+  });
+
   it("handles events from newer builds", () => {
     const d = describeEvent(
       envelope({ type: "unrecognized", payload: { originalType: "thread.created", originalVersion: 2 } }),

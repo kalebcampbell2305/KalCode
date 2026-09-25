@@ -10,13 +10,18 @@ import {
   ProviderMark,
   Skeleton,
   StatusIndicator,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
   useToast,
 } from "@kalcode/ui/components";
 import { Check, Copy, Minus, RefreshCw } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toKalCodeError } from "../../ipc/errors.ts";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
 import { Page } from "../../shell/Page.tsx";
+import { ProviderHealthView } from "./ProviderHealthView.tsx";
 import styles from "./ProvidersPage.module.css";
 import {
   adapterLabel,
@@ -31,6 +36,8 @@ import {
   needsSignIn,
   settingGroups,
 } from "./providerLabels.ts";
+import { consumeProvidersTab, type ProvidersTab, useProvidersTabRequest } from "./providersTab.ts";
+import { useProviderHealth } from "./useProviderHealth.ts";
 import { useProviders } from "./useProviders.ts";
 
 function useNow(intervalMs = 30_000): number {
@@ -46,6 +53,24 @@ export function ProvidersPage() {
   const { statuses, listError, retryList, detect, detecting, detectError } = useProviders();
   const now = useNow();
   const lastChecked = latestCheck(statuses);
+  const request = useProvidersTabRequest();
+  const [tab, setTab] = useState<ProvidersTab>(request?.tab ?? "setup");
+  const health = useProviderHealth(tab === "health");
+  const { refresh: refreshHealth } = health;
+
+  // "Health details" on the Dashboard (or any other place) asked for a tab.
+  useEffect(() => {
+    if (!request) return;
+    setTab(request.tab);
+    consumeProvidersTab(request.nonce);
+  }, [request]);
+
+  // A finished check (first visit or Check again) also refreshes health.
+  const wasDetecting = useRef(detecting);
+  useEffect(() => {
+    if (wasDetecting.current && !detecting) refreshHealth();
+    wasDetecting.current = detecting;
+  }, [detecting, refreshHealth]);
 
   return (
     <Page
@@ -62,42 +87,55 @@ export function ProvidersPage() {
         </div>
       }
     >
-      {listError && !statuses ? (
-        <ErrorState
-          title="Providers couldn't load"
-          code={`${listError.category}/${listError.code}`}
-          actions={<Button onClick={retryList}>Try again</Button>}
-        >
-          <p>{listError.message}</p>
-        </ErrorState>
-      ) : !statuses ? (
-        <Panel as="div" className={styles.loading} role="status" aria-busy="true">
-          <span className="visually-hidden">Loading providers</span>
-          <Skeleton width="30%" height="1rem" />
-          <Skeleton width="65%" />
-          <Skeleton width="55%" />
-          <Skeleton width="60%" />
-        </Panel>
-      ) : (
-        <>
-          {detectError ? (
+      <Tabs value={tab} onValueChange={(value) => setTab(value as ProvidersTab)} className={styles.tabs}>
+        <TabsList aria-label="Provider views">
+          <TabsTrigger value="setup">Setup</TabsTrigger>
+          <TabsTrigger value="health">Health</TabsTrigger>
+        </TabsList>
+        <TabsContent value="setup" className={styles.tabPanel}>
+          {listError && !statuses ? (
             <ErrorState
-              title="Couldn't check providers"
-              code={`${detectError.category}/${detectError.code}`}
-              actions={
-                <Button onClick={() => void detect()} busy={detecting}>
-                  Try again
-                </Button>
-              }
+              title="Providers couldn't load"
+              code={`${listError.category}/${listError.code}`}
+              actions={<Button onClick={retryList}>Try again</Button>}
             >
-              <p>{detectError.message} Nothing on your system was changed.</p>
+              <p>{listError.message}</p>
             </ErrorState>
-          ) : null}
-          {statuses.map((status) => (
-            <ProviderSection key={status.id} status={status} checking={detecting} now={now} />
-          ))}
-        </>
-      )}
+          ) : !statuses ? (
+            <Panel as="div" className={styles.loading} role="status" aria-busy="true">
+              <span className="visually-hidden">Loading providers</span>
+              <Skeleton width="30%" height="1rem" />
+              <Skeleton width="65%" />
+              <Skeleton width="55%" />
+              <Skeleton width="60%" />
+            </Panel>
+          ) : (
+            <>
+              {detectError ? (
+                <ErrorState
+                  title="Couldn't check providers"
+                  code={`${detectError.category}/${detectError.code}`}
+                  actions={
+                    <Button onClick={() => void detect()} busy={detecting}>
+                      Try again
+                    </Button>
+                  }
+                >
+                  <p>{detectError.message} Nothing on your system was changed.</p>
+                </ErrorState>
+              ) : null}
+              {statuses.map((status) => (
+                <ProviderSection key={status.id} status={status} checking={detecting} now={now} />
+              ))}
+            </>
+          )}
+        </TabsContent>
+        <TabsContent value="health" className={styles.tabPanel}>
+          <section aria-label="Provider health" className={styles.tabPanel}>
+            <ProviderHealthView data={health} statuses={statuses} now={now} />
+          </section>
+        </TabsContent>
+      </Tabs>
     </Page>
   );
 }

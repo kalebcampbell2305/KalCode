@@ -429,7 +429,7 @@ mod turns {
             hang();
         }
         if prompt.contains("crash") {
-            eprintln!("fatal: GEMINI_API_KEY=AIzaSyA-abcdefghijklmnopqrstuvwxyz012345 rejected");
+            eprintln!("fatal: api_key=AIzaSyA-abcdefghijklmnopqrstuvwxyz012345 rejected");
             exit(1);
         }
         if prompt.contains("quota") {

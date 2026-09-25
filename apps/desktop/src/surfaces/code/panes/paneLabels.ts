@@ -58,14 +58,77 @@ export function channelNote(info: PaneInfo | null): { text: string; tone: "neutr
   if (info.hookChannel === "ended" || !info.running) {
     return { text: info.exitCode === null ? "Ended" : `Ended (exit ${info.exitCode})`, tone: "ended" };
   }
-  if (info.hookChannel === "limited") return { text: "Limited status — approvals in Claude Code", tone: "limited" };
-  if (info.hookChannel === "waiting") return { text: "Connecting to Claude Code…", tone: "neutral" };
-  if (!info.kalcodeAnswersApprovals) return { text: "Approvals in Claude Code", tone: "neutral" };
+  const name = providerIdentity(info.providerId).name;
+  // Codex: notifications and process state; approvals always in Codex's own prompt.
+  if (info.providerId === "codex") {
+    return info.hookChannel === "waiting"
+      ? { text: "Limited status — no Codex notification yet", tone: "limited" }
+      : { text: "Limited status — approvals in Codex", tone: "limited" };
+  }
+  // Gemini CLI: process state only.
+  if (info.providerId === "gemini-cli") {
+    return { text: "Process state only — approvals in Gemini CLI", tone: "limited" };
+  }
+  if (info.hookChannel === "limited") return { text: `Limited status — approvals in ${name}`, tone: "limited" };
+  if (info.hookChannel === "waiting") return { text: `Connecting to ${name}…`, tone: "neutral" };
+  if (!info.kalcodeAnswersApprovals) return { text: `Approvals in ${name}`, tone: "neutral" };
   return null;
 }
 
+/** What the pane info panel says KalCode sees in this pane (PROVIDER_PANES.md §4). */
+export interface PaneInfoCopy {
+  summary: string;
+  /** Heading for the list of things KalCode doesn't see or stop. */
+  limitsTitle: string;
+  limits: string[];
+  footer: string;
+}
+
+export function paneInfoCopy(providerId: string, info: PaneInfo | null, providerName?: string): PaneInfoCopy {
+  const name = providerIdentity(providerId, providerName).name;
+  if (providerId === "codex" || providerId === "gemini-cli") {
+    const codex = providerId === "codex";
+    return {
+      summary: codex
+        ? "Limited status: KalCode reads Codex's notifications (turn finished, approval requested) and process state. Approvals are answered in Codex's own prompt."
+        : "Process state only: KalCode can't see Gemini CLI's tool calls yet. Approvals are answered in Gemini CLI's own prompt.",
+      limitsTitle: "KalCode doesn't check in this pane:",
+      limits: [
+        `The tool calls ${name} makes. ${name}'s own prompt and settings decide them.`,
+        `Commands you type into ${name} yourself. They carry your authority, like a terminal.`,
+        `${name}'s own network traffic to its service.`,
+      ],
+      footer: codex
+        ? "KalCode starts Codex with a sandbox no broader than this thread's permission mode (read-only unless Bypass, never full access), but it can't block a single command here."
+        : "KalCode starts Gemini CLI in an approval mode no broader than this thread's permission mode (never yolo), but it can't block a single tool call here.",
+    };
+  }
+  const answers = info?.kalcodeAnswersApprovals ?? false;
+  return {
+    summary:
+      info?.hookChannel === "limited"
+        ? `${name} isn't sending hook events, so KalCode shows limited status from the process only and approvals happen in ${name}. Your ${name} settings may turn hooks off.`
+        : answers
+          ? `Every tool call ${name} makes is checked by KalCode first. When KalCode asks, you answer here or in the approval queue.`
+          : `Every tool call ${name} makes reaches KalCode first, and is blocked if KalCode can't be reached. Approvals are answered in ${name}'s own prompt in the pane.`,
+    limitsTitle: "KalCode can't intercept:",
+    limits: [
+      `Commands you type into ${name} yourself. They carry your authority, like a terminal.`,
+      "What a script run by an allowed command does inside itself.",
+      `${name}'s own network traffic to its service.`,
+      `Slash commands and mode changes in the pane. They change ${name}'s prompting only.`,
+    ],
+    footer: `KalCode always blocks pushes, publishes, deploy and cloud CLIs, and reading credential files, whatever ${name}'s settings allow.`,
+  };
+}
+
+/** The activity a pane's provider sets while its own prompt waits for the person. */
+export function isAnswerInProvider(activity: string | null): boolean {
+  return activity?.startsWith("Answer in ") ?? false;
+}
+
 export function modelLabel(thread: ThreadSummary): string {
-  return thread.model ?? "Account default";
+  return thread.model ?? (thread.providerId === "claude-code" ? "Account default" : "Provider default");
 }
 
 /** The region's accessible name. */

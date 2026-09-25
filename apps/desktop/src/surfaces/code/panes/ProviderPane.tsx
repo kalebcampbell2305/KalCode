@@ -16,7 +16,15 @@ import { ApprovalPrompt } from "../../permissions/ApprovalPrompt.tsx";
 import { MODE_LABELS } from "../../permissions/labels.ts";
 import { usePermissions } from "../../permissions/PermissionsProvider.tsx";
 import type { PaneChannel } from "./paneChannel.ts";
-import { channelNote, modelLabel, paneLabel, paneStatus, providerIdentity } from "./paneLabels.ts";
+import {
+  channelNote,
+  isAnswerInProvider,
+  modelLabel,
+  paneInfoCopy,
+  paneLabel,
+  paneStatus,
+  providerIdentity,
+} from "./paneLabels.ts";
 import { PaneStatusChip, ProviderGlyph } from "./PaneParts.tsx";
 import { PaneTerminal } from "./PaneTerminal.tsx";
 import styles from "./Panes.module.css";
@@ -62,12 +70,15 @@ export function ProviderPane({
   const status = paneStatus(thread.status);
   const note = channelNote(info);
   const running = info?.running ?? false;
+  // Only Claude Code panes route tool calls to KalCode; Codex and Gemini CLI are always answered
+  // in their own prompt, so they never show a KalCode approval (or an Approve button) here.
+  const kalcodeDecides = thread.providerId === "claude-code";
   const request = [...pending]
-    .filter((r) => r.action.threadId === thread.id && r.status === "pending")
+    .filter((r) => kalcodeDecides && r.action.threadId === thread.id && r.status === "pending")
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
   const showOverlay = request !== undefined && overlayDismissed !== request.id;
   const providerAsking =
-    !request && (thread.status === "waiting_for_permission" || thread.currentActivity === "Answer in Claude Code");
+    !request && (thread.status === "waiting_for_permission" || isAnswerInProvider(thread.currentActivity));
 
   const stop = async () => {
     setStopping(true);
@@ -161,7 +172,12 @@ export function ProviderPane({
           </section>
         ) : null}
         {showInfo ? (
-          <PaneInfoPanel info={info} providerName={identity.name} onClose={() => setShowInfo(false)} />
+          <PaneInfoPanel
+            info={info}
+            providerId={thread.providerId}
+            providerName={identity.name}
+            onClose={() => setShowInfo(false)}
+          />
         ) : null}
       </div>
       {providerAsking ? (
@@ -332,35 +348,27 @@ function PaneHeader({
 /** What KalCode sees in a pane and what it can't intercept (PROVIDER_PANES.md §4). */
 function PaneInfoPanel({
   info,
+  providerId,
   providerName,
   onClose,
 }: {
   info: PaneInfo | null;
+  providerId: string;
   providerName: string;
   onClose: () => void;
 }) {
-  const answers = info?.kalcodeAnswersApprovals ?? false;
+  const copy = paneInfoCopy(providerId, info, providerName);
   return (
     <div className={styles.infoPanel} role="dialog" aria-label="Pane info" aria-modal="false">
       <h3>What KalCode sees in this pane</h3>
-      <p>
-        {info?.hookChannel === "limited"
-          ? `${providerName} isn't sending hook events, so KalCode shows limited status from the process only and approvals happen in ${providerName}. Your ${providerName} settings may turn hooks off.`
-          : answers
-            ? `Every tool call ${providerName} makes is checked by KalCode first. When KalCode asks, you answer here or in the approval queue.`
-            : `Every tool call ${providerName} makes reaches KalCode first, and is blocked if KalCode can't be reached. Approvals are answered in ${providerName}'s own prompt in the pane.`}
-      </p>
-      <p>KalCode can't intercept:</p>
+      <p>{copy.summary}</p>
+      <p>{copy.limitsTitle}</p>
       <ul>
-        <li>Commands you type into {providerName} yourself. They carry your authority, like a terminal.</li>
-        <li>What a script run by an allowed command does inside itself.</li>
-        <li>{providerName}'s own network traffic to its service.</li>
-        <li>Slash commands and mode changes in the pane. They change {providerName}'s prompting only.</li>
+        {copy.limits.map((item) => (
+          <li key={item}>{item}</li>
+        ))}
       </ul>
-      <p>
-        KalCode always blocks pushes, publishes, deploy and cloud CLIs, and reading credential files, whatever{" "}
-        {providerName}'s settings allow.
-      </p>
+      <p>{copy.footer}</p>
       <div className={styles.infoActions}>
         <Button size="sm" onClick={onClose} autoFocus>
           Close

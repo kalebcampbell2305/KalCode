@@ -114,32 +114,44 @@ test("Codex and Gemini CLI threads stream to done and Provider Health reports th
     await startThread(page, "Codex", "hello from the KalCode e2e");
     const conversation = page.getByRole("list", { name: "Conversation" });
     await expect(conversation).toContainText("Hello from the fake Codex.", { timeout: 60_000 });
-    await expect.poll(async () => {
-      const threads = await invoke<{ providerId: string; status: string }[]>(page, "thread_list", {
-        workspaceId: null,
-        includeArchived: false,
-      });
-      return threads.find((t) => t.providerId === "codex")?.status;
-    }, { timeout: 30_000 }).toBe("idle");
+    await expect
+      .poll(
+        async () => {
+          const threads = await invoke<{ providerId: string; status: string }[]>(page, "thread_list", {
+            workspaceId: null,
+            includeArchived: false,
+          });
+          return threads.find((t) => t.providerId === "codex")?.status;
+        },
+        { timeout: 30_000 },
+      )
+      .toBe("idle");
     await shot(page, "providers2-codex-thread");
 
     // Gemini CLI: thread create → stream → done.
     await startThread(page, "Gemini CLI", "hello gemini from the KalCode e2e");
-    await expect(page.getByRole("list", { name: "Conversation" })).toContainText(
-      "Hello from the fake Gemini CLI.",
-      { timeout: 60_000 },
-    );
+    await expect(page.getByRole("list", { name: "Conversation" })).toContainText("Hello from the fake Gemini CLI.", {
+      timeout: 60_000,
+    });
     await shot(page, "providers2-gemini-thread");
 
     // Provider Health saw both sessions (native snapshot, then the Health view).
-    await expect.poll(async () => {
-      const health = await invoke<HealthLite[]>(page, "provider_health_list");
-      const codex = health.find((h) => h.providerId === "codex");
-      const gemini = health.find((h) => h.providerId === "gemini-cli");
-      return [codex?.state, codex?.activeSessions, (codex?.latencySamples ?? 0) > 0, gemini?.state, gemini?.auth];
-    }, { timeout: 30_000 }).toEqual(["healthy", 1, true, "healthy", "unknown"]);
+    await expect
+      .poll(
+        async () => {
+          const health = await invoke<HealthLite[]>(page, "provider_health_list");
+          const codex = health.find((h) => h.providerId === "codex");
+          const gemini = health.find((h) => h.providerId === "gemini-cli");
+          return [codex?.state, codex?.activeSessions, (codex?.latencySamples ?? 0) > 0, gemini?.state, gemini?.auth];
+        },
+        { timeout: 30_000 },
+      )
+      .toEqual(["healthy", 1, true, "healthy", "unknown"]);
     const health = await invoke<HealthLite[]>(page, "provider_health_list");
-    expect(health.every((h) => h.capacity !== "backing_off"), "no invented rate limits").toBe(true);
+    expect(
+      health.every((h) => h.capacity !== "backing_off"),
+      "no invented rate limits",
+    ).toBe(true);
 
     await nav(page, "Providers").click();
     await page.getByRole("tab", { name: "Health" }).click();

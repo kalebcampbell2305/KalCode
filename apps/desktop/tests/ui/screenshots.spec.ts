@@ -77,6 +77,14 @@ for (const theme of ["dark", "light"] as const) {
       await shot(page, `providers-table-${theme}-${size.name}`);
       await page.locator("#provider-gemini-cli").scrollIntoViewIfNeeded();
       await shot(page, `providers-gemini-${theme}-${size.name}`);
+      // Provider Health (PROVIDERS-2): the Health tab, top and the last provider.
+      await page.getByRole("tab", { name: "Health" }).click();
+      await expect(page.locator("#health-codex")).toHaveAttribute("data-health-state", "degraded");
+      await page.locator("#health-claude-code").getByText("Hourly numbers").click();
+      await shot(page, `providers-health-${theme}-${size.name}`);
+      await page.locator("#health-gemini-cli").scrollIntoViewIfNeeded();
+      await shot(page, `providers-health-gemini-${theme}-${size.name}`);
+      await page.getByRole("tab", { name: "Setup" }).click();
     }
   });
 }

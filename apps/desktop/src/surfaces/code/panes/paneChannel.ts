@@ -9,7 +9,17 @@ const WRITE_CHUNK = 8 * 1024;
 /** Permission modes a pane can start in (Bypass and Custom are set on the thread afterwards). */
 export const PANE_CREATE_MODES: readonly PermissionMode[] = ["plan", "approve", "auto"];
 
+/** Providers that can run in a pane (mirrors `provider_pane_create`). */
+export const PANE_PROVIDERS = ["claude-code", "codex", "gemini-cli"] as const;
+export type PaneProviderId = (typeof PANE_PROVIDERS)[number];
+
+export function isPaneProvider(providerId: string): providerId is PaneProviderId {
+  return (PANE_PROVIDERS as readonly string[]).includes(providerId);
+}
+
 export interface CreatePaneInput {
+  /** Defaults to Claude Code. */
+  providerId?: PaneProviderId;
   workspaceId: string;
   permissionMode: PermissionMode;
   model?: string | null;
@@ -60,7 +70,7 @@ export class PaneChannel {
 
   create(input: CreatePaneInput): Promise<ThreadSummary> {
     return this.call("provider_pane_create", {
-      providerId: "claude-code",
+      providerId: input.providerId ?? "claude-code",
       workspaceId: input.workspaceId,
       model: input.model ?? null,
       permissionMode: input.permissionMode,

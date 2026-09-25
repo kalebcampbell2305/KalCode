@@ -3,7 +3,15 @@ import { describe, expect, it } from "vitest";
 import { KalCodeClient } from "../../../ipc/client.ts";
 import { createMemoryTransport, type MemoryTransport } from "../../../ipc/memoryTransport.ts";
 import { PaneChannel, paneStartMode, splitInput } from "./paneChannel.ts";
-import { channelNote, modelLabel, paneLabel, paneStatus, providerIdentity } from "./paneLabels.ts";
+import {
+  channelNote,
+  isAnswerInProvider,
+  modelLabel,
+  paneInfoCopy,
+  paneLabel,
+  paneStatus,
+  providerIdentity,
+} from "./paneLabels.ts";
 
 function info(partial: Partial<PaneInfo>): PaneInfo {
   return {
@@ -47,10 +55,44 @@ describe("pane labels", () => {
     expect(channelNote(null)).toBeNull();
   });
 
+  it("says Codex and Gemini CLI panes have limited status and answer approvals in their own prompt", () => {
+    const codex = info({ providerId: "codex", decisionRouting: "provider_prompt", kalcodeAnswersApprovals: false });
+    expect(channelNote({ ...codex, hookChannel: "waiting" })).toEqual({
+      text: "Limited status — no Codex notification yet",
+      tone: "limited",
+    });
+    expect(channelNote(codex)?.text).toBe("Limited status — approvals in Codex");
+    expect(
+      channelNote(info({ providerId: "gemini-cli", hookChannel: "limited", kalcodeAnswersApprovals: false })),
+    ).toEqual({
+      text: "Process state only — approvals in Gemini CLI",
+      tone: "limited",
+    });
+    expect(channelNote({ ...codex, running: false, hookChannel: "ended", exitCode: 1 })?.text).toBe("Ended (exit 1)");
+  });
+
+  it("describes what KalCode sees in each provider's pane, never claiming checks it can't do", () => {
+    expect(paneInfoCopy("codex", null).summary).toBe(
+      "Limited status: KalCode reads Codex's notifications (turn finished, approval requested) and process state. Approvals are answered in Codex's own prompt.",
+    );
+    expect(paneInfoCopy("gemini-cli", null).summary).toBe(
+      "Process state only: KalCode can't see Gemini CLI's tool calls yet. Approvals are answered in Gemini CLI's own prompt.",
+    );
+    for (const id of ["codex", "gemini-cli"]) {
+      const copy = paneInfoCopy(id, null);
+      expect(copy.footer).not.toContain("always blocks");
+      expect(copy.summary).not.toContain("checked by KalCode");
+    }
+    expect(paneInfoCopy("claude-code", info({})).footer).toContain("KalCode always blocks pushes");
+    expect(isAnswerInProvider("Answer in Codex")).toBe(true);
+    expect(isAnswerInProvider(null)).toBe(false);
+  });
+
   it("labels the pane region and the model", () => {
     const thread = { name: "Fix login", providerId: "claude-code", providerName: "Claude Code", model: null };
     expect(paneLabel(thread as ThreadSummary)).toBe("Fix login, Claude Code pane");
     expect(modelLabel(thread as ThreadSummary)).toBe("Account default");
+    expect(modelLabel({ ...thread, providerId: "codex" } as ThreadSummary)).toBe("Provider default");
   });
 });
 
@@ -139,7 +181,7 @@ describe("in-memory provider panes", () => {
     await expect(channel.info("not-an-id")).rejects.toMatchObject({ code: "invalid_thread" });
     await expect(
       transport.invoke("provider_pane_create", {
-        providerId: "codex",
+        providerId: "other-cli",
         workspaceId: workspace.id,
         permissionMode: "approve",
       }),
@@ -148,5 +190,49 @@ describe("in-memory provider panes", () => {
     await expect(channel.create({ workspaceId: workspace.id, permissionMode: "approve" })).rejects.toMatchObject({
       code: "provider_panes_unavailable",
     });
+  });
+
+  it("runs Codex with approvals in its own prompt and status from notify only", async () => {
+    const { transport, channel, workspace } = await setup();
+    const client = new KalCodeClient(transport);
+    const thread = await channel.create({ providerId: "codex", workspaceId: workspace.id, permissionMode: "approve" });
+    expect(thread).toMatchObject({ providerId: "codex", runtimeKind: "interactive_pty" });
+    const chunks: string[] = [];
+    await channel.attach(thread.id, (bytes) => chunks.push(new TextDecoder().decode(bytes)));
+    await settle();
+    expect(await channel.info(thread.id)).toMatchObject({ hookChannel: "waiting", kalcodeAnswersApprovals: false });
+
+    await channel.write(thread.id, "run git push origin main\r");
+    await settle();
+    const asking = await client.getThread(thread.id);
+    expect(asking).toMatchObject({ status: "waiting_for_user", currentActivity: "Answer in Codex" });
+    // Never a KalCode approval for a Codex pane.
+    expect((await client.listApprovals("pending")).filter((r) => r.action.threadId === thread.id)).toEqual([]);
+    await channel.write(thread.id, "n\r");
+    await settle();
+    expect((await client.getThread(thread.id)).status).toBe("idle");
+    expect(await channel.info(thread.id)).toMatchObject({ hookChannel: "active", kalcodeAnswersApprovals: false });
+  });
+
+  it("runs Gemini CLI with process state only", async () => {
+    const { transport, channel, workspace } = await setup();
+    const client = new KalCodeClient(transport);
+    const thread = await channel.create({
+      providerId: "gemini-cli",
+      workspaceId: workspace.id,
+      permissionMode: "plan",
+    });
+    await settle();
+    expect(await channel.info(thread.id)).toMatchObject({ hookChannel: "limited", kalcodeAnswersApprovals: false });
+    await channel.write(thread.id, "run npm install lodash\r");
+    await settle();
+    expect((await client.getThread(thread.id)).status).toBe("idle");
+    expect((await client.listApprovals("pending")).filter((r) => r.action.threadId === thread.id)).toEqual([]);
+    // Gemini CLI's own prompt takes the answer; KalCode only sees the process end.
+    await channel.write(thread.id, "n\r");
+    await settle();
+    await channel.write(thread.id, "exit\r");
+    await settle();
+    expect((await client.getThread(thread.id)).status).toBe("completed");
   });
 });

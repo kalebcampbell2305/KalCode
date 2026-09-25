@@ -106,7 +106,7 @@ describe("memory thread runtime", () => {
     expect(await code(create(client, "  "))).toBe("invalid_prompt");
     expect(await code(create(client, "x", { permissionMode: "bypass" }))).toBe("bypass_not_allowed_at_create");
     expect(await code(create(client, "x", { providerId: "Bad Id" }))).toBe("invalid_provider");
-    expect(await code(create(client, "x", { providerId: "gemini-cli" }))).toBe("provider_unavailable");
+    expect(await code(create(client, "x", { providerId: "other-cli" }))).toBe("provider_unavailable");
     expect(await code(create(client, "x", { workspaceId: "0192f3c4-0000-7000-8000-0000000000ff" }))).toBe(
       "workspace_not_found",
     );
@@ -157,6 +157,23 @@ describe("memory thread runtime", () => {
     expect(unread).toBeDefined();
     await client.threadMessages(unread?.id ?? "", 50);
     expect((await client.getThread(unread?.id ?? "")).unreadMessages).toBe(0);
+  });
+
+  it("offers Codex and Gemini CLI when detection reports them usable", async () => {
+    const { client } = await setup();
+    const options = await client.threadOptions();
+    expect(options.providers.map((p) => [p.id, p.displayName, p.hostApprovals])).toEqual([
+      ["claude-code", "Claude Code", true],
+      ["codex", "Codex", false],
+      ["gemini-cli", "Gemini CLI", false],
+    ]);
+    const [, codex, gemini] = options.providers;
+    expect(codex?.models).toEqual([]);
+    expect(gemini?.models.map((m) => m.id)).toEqual(["auto", "pro", "flash", "flash-lite"]);
+    expect(codex?.permissionMappings.map((m) => m.mode)).toEqual(["plan", "approve", "auto", "bypass"]);
+    const thread = await create(client, "summarize the README", { providerId: "codex" });
+    expect(thread).toMatchObject({ providerId: "codex", providerName: "Codex", model: null });
+    expect(await code(create(client, "x", { providerId: "codex", model: "gpt-9" }))).toBe("invalid_model");
   });
 
   it("offers no providers in the no-providers scenario", async () => {

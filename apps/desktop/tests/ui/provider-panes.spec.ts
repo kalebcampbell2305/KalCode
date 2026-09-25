@@ -197,6 +197,73 @@ test.describe("provider panes", () => {
     await expect(pane(page)).toHaveCount(0);
   });
 
+  test("a Codex pane: limited status, approvals in Codex's own prompt, never an Approve button", async ({ page }) => {
+    await open(page);
+    await openWorkspace(page);
+    const create = page.getByRole("button", { name: "New Codex pane" });
+    await expect(create).toBeVisible();
+    await expect(page.getByRole("button", { name: "New Gemini CLI pane" })).toBeVisible();
+    await create.click();
+    const region = pane(page);
+    await expect(region).toHaveAttribute("aria-label", /Codex pane$/);
+    await expect(paneText(page)).toContainText("KalCode fake provider");
+    await expect(region.getByText("Codex", { exact: true })).toBeVisible();
+    await expect(region.getByText("Provider default")).toBeVisible();
+    await expect(region.getByText("Limited status — no Codex notification yet")).toBeVisible();
+
+    await typeInPane(page, "run git push origin main");
+    await expect(status(page)).toHaveText("WAITING FOR YOU");
+    await expect(region.getByText("Codex is asking in the pane. Answer there.")).toBeVisible();
+    await expect(region.getByRole("region", { name: "KalCode approval for this pane" })).toHaveCount(0);
+    await expect(region.getByRole("button", { name: /Approve|Allow for/ })).toHaveCount(0);
+    await page.keyboard.type("n");
+    await page.keyboard.press("Enter");
+    await expect(paneText(page)).toContainText("DENIED IN PROVIDER PROMPT");
+    await expect(status(page)).toHaveText("IDLE");
+    // Codex's first notification connects the status channel.
+    await expect(region.getByText("Limited status — approvals in Codex")).toBeVisible();
+
+    await region.getByRole("button", { name: /More actions/ }).click();
+    await page.getByRole("menuitem", { name: "Pane info" }).click();
+    const panel = page.getByRole("dialog", { name: "Pane info" });
+    await expect(panel).toContainText(
+      "Limited status: KalCode reads Codex's notifications (turn finished, approval requested) and process state. Approvals are answered in Codex's own prompt.",
+    );
+    await expect(panel).not.toContainText("KalCode always blocks");
+    await expectNoSeriousA11yViolations(page);
+    await panel.getByRole("button", { name: "Close" }).click();
+  });
+
+  test("a Gemini CLI pane shows process state only", async ({ page }) => {
+    await open(page);
+    await openWorkspace(page);
+    await page.getByRole("button", { name: "New Gemini CLI pane" }).click();
+    const region = pane(page);
+    await expect(region).toHaveAttribute("aria-label", /Gemini CLI pane$/);
+    await expect(paneText(page)).toContainText("KalCode fake provider");
+    await expect(region.getByText("Process state only — approvals in Gemini CLI")).toBeVisible();
+    await typeInPane(page, "run npm install lodash");
+    await expect(paneText(page)).toContainText("[fake prompt] Allow Bash?");
+    await expect(region.getByRole("button", { name: /Approve|Allow for/ })).toHaveCount(0);
+    await region.getByRole("button", { name: /More actions/ }).click();
+    await page.getByRole("menuitem", { name: "Pane info" }).click();
+    await expect(page.getByRole("dialog", { name: "Pane info" })).toContainText(
+      "Process state only: KalCode can't see Gemini CLI's tool calls yet. Approvals are answered in Gemini CLI's own prompt.",
+    );
+  });
+
+  test("Codex and Gemini CLI panes are offered only when threads can use them", async ({ page }) => {
+    await open(page, "?scenario=providers-signed-out");
+    await openWorkspace(page);
+    await expect(page.getByRole("button", { name: "New Claude Code pane" })).toBeVisible();
+    // Detection has run (thread options); signed-out Codex and a missing Gemini CLI aren't offered.
+    await expect(page.getByRole("region", { name: "Provider panes" }).getByRole("button")).toHaveText([
+      "New Claude Code pane",
+    ]);
+    await expect(page.getByRole("button", { name: "New Codex pane" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "New Gemini CLI pane" })).toHaveCount(0);
+  });
+
   for (const theme of ["dark", "light"] as const) {
     test(`panes pass axe in ${theme} theme, with an approval showing`, async ({ page }) => {
       await open(page);

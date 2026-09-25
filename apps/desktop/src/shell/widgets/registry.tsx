@@ -54,7 +54,7 @@ export const WIDGETS: readonly WidgetDefinition[] = [
     id: "provider-health",
     title: "Provider health",
     icon: PlugZap,
-    description: "What KalCode last detected for each provider CLI. Read-only.",
+    description: "Each provider's health: sign-in, sessions, recent failures and reported rate limits. Read-only.",
     anchor: "widget-provider-health",
     Body: ProviderHealthWidget,
     defaultHeight: 200,

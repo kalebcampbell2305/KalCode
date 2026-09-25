@@ -1,0 +1,116 @@
+/* Provider Health tab (PH). Panels reuse the Setup tab's overview/key-value styles. */
+
+.stale {
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
+}
+
+/* Last-24-hours strip under the key/value columns, split by a hairline like the mapping table. */
+.history {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--panel-px);
+  border-top: 1px solid var(--color-border);
+  background: linear-gradient(180deg, var(--color-surface-2), transparent 5rem);
+}
+
+.historyHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-3);
+}
+
+.historyTitle {
+  color: var(--color-text-muted);
+  font-family: var(--font-label);
+  font-size: var(--type-label);
+  font-weight: var(--type-label-weight);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.historySummary {
+  color: var(--color-text-secondary);
+  font-size: var(--type-ui);
+  font-variant-numeric: tabular-nums;
+}
+
+.chart {
+  display: grid;
+  gap: var(--space-1-5);
+  max-width: 44rem;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 5rem minmax(0, 1fr);
+  align-items: end;
+  gap: var(--space-3);
+}
+
+.rowLabel {
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
+  line-height: 1;
+}
+
+/* One thin bar per hour, anchored to a hairline baseline; 2px surface gaps between bars. */
+.bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 1.75rem;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.bar {
+  flex: 1 1 0;
+  min-width: 0;
+  border-radius: 2px 2px 0 0;
+  background: var(--color-accent);
+}
+
+.bars[data-kind="failures"] .bar {
+  background: var(--status-failed);
+}
+
+.bar[data-empty] {
+  height: 0;
+}
+
+.axis {
+  display: flex;
+  justify-content: space-between;
+  margin-left: calc(5rem + var(--space-3));
+  color: var(--color-text-muted);
+  font-size: var(--type-label);
+  font-variant-numeric: tabular-nums;
+}
+
+.details {
+  max-width: 44rem;
+}
+
+.details > summary {
+  width: fit-content;
+  padding: var(--space-0-5) 0;
+  border-radius: var(--radius-xs);
+  color: var(--color-text-secondary);
+  font-size: var(--type-small);
+  cursor: pointer;
+}
+
+.details > summary:hover {
+  color: var(--color-text);
+}
+
+.details > summary:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 2px;
+}
+
+.details[open] > summary {
+  margin-bottom: var(--space-2);
+}

@@ -11,6 +11,19 @@
   white-space: nowrap;
 }
 
+/* Setup / Health: the tab strip, then one column of provider panels. */
+.tabs,
+.tabPanel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  min-width: 0;
+}
+
+.tabs {
+  gap: var(--space-5);
+}
+
 .loading {
   display: grid;
   gap: var(--space-3);

@@ -9,6 +9,7 @@ import type {
   EventEnvelope,
   EventPage,
   EventQuery,
+  HealthRollup,
   KalVoiceMode,
   KalVoicePreferencesPatch,
   KalVoiceResponse,
@@ -20,6 +21,7 @@ import type {
   PermissionMode,
   PermissionProfile,
   PermissionSettings,
+  ProviderHealth,
   ProviderStatus,
   SecureStoreCheck,
   Settings,
@@ -56,6 +58,9 @@ export function clampTerminalSize({ cols, rows }: TerminalSize): TerminalSize {
   const clamp = (n: number) => Math.max(2, Math.min(1000, Math.floor(Number.isFinite(n) ? n : 2)));
   return { cols: clamp(cols), rows: clamp(rows) };
 }
+
+/** Longest Provider Health trend window, in hours (30 days of hourly rollups). */
+export const MAX_HEALTH_TREND_HOURS = 720;
 
 /** Maximum page size accepted by `notification_list`. */
 export const MAX_NOTIFICATION_PAGE = 200;
@@ -238,6 +243,24 @@ export class KalCodeClient {
   /** Runs read-only detection (version and sign-in status) for every provider. */
   detectProviders(): Promise<ProviderStatus[]> {
     return this.call("providers_detect");
+  }
+
+  // ---- Provider Health (PROVIDERS-2) ----
+  // Cheap in-memory snapshots: reading health never starts a provider process or a detection.
+
+  /** Every provider's health, catalog order. */
+  listProviderHealth(): Promise<ProviderHealth[]> {
+    return this.call("provider_health_list");
+  }
+
+  getProviderHealth(providerId: string): Promise<ProviderHealth> {
+    return this.call("provider_health_get", { providerId });
+  }
+
+  /** Hourly rollups for the last `hours` hours (clamped to 1..=720), oldest first. */
+  providerHealthTrend(providerId: string, hours: number): Promise<HealthRollup[]> {
+    const safeHours = Math.max(1, Math.min(MAX_HEALTH_TREND_HOURS, Math.floor(Number.isFinite(hours) ? hours : 1)));
+    return this.call("provider_health_trend", { providerId, hours: safeHours });
   }
 
   // Threads (Z3). `thread_list`, `thread_interrupt`, `thread_resume`, `thread_stop` and

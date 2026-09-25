@@ -1,4 +1,11 @@
-import type { EventEnvelope, NotificationKind, ResourceKind, TalkRoute } from "@kalcode/protocol";
+import type {
+  CapacityState,
+  EventEnvelope,
+  HealthState,
+  NotificationKind,
+  ResourceKind,
+  TalkRoute,
+} from "@kalcode/protocol";
 
 export type EventTone = "live" | "success" | "waiting" | "danger" | "idle";
 
@@ -70,6 +77,91 @@ function plural(count: number, noun: string): string {
 function joinList(items: string[]): string {
   if (items.length <= 1) return items.join("");
   return `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
+}
+
+/** Provider Health state words, lower case for sentences ("healthy → degraded"). */
+export const HEALTH_STATE_WORDS: Record<HealthState, string> = {
+  healthy: "healthy",
+  degraded: "degraded",
+  unavailable: "unavailable",
+  unknown: "unknown",
+};
+
+const HEALTH_TONES: Record<HealthState, EventTone> = {
+  healthy: "success",
+  degraded: "waiting",
+  unavailable: "danger",
+  unknown: "idle",
+};
+
+/** Plain words for Provider Health reason codes (`crates/providers/src/health/mod.rs`). */
+const HEALTH_REASONS: Record<string, string> = {
+  not_checked: "not checked yet",
+  not_installed: "not installed",
+  outdated: "needs an update",
+  detection_failed: "check failed",
+  signed_out: "signed out",
+  rate_limited: "rate limit reported",
+  quota_exhausted: "quota used up",
+  recent_failures: "recent failures",
+  auth_unknown: "sign-in can't be checked",
+  health_unavailable: "health unavailable",
+};
+
+/** A reason code in plain words; null for "healthy" (nothing to explain) and unknown codes. */
+export function healthReasonLabel(code: string | null | undefined): string | null {
+  if (!code) return null;
+  return HEALTH_REASONS[code] ?? null;
+}
+
+/** "Codex health: healthy → degraded (recent failures)". */
+export function describeHealthChange(payload: {
+  providerId: string;
+  from: HealthState;
+  to: HealthState;
+  reason: string;
+}): EventDescription {
+  const why = healthReasonLabel(payload.reason);
+  return {
+    title: `${providerName(payload.providerId)} health: ${HEALTH_STATE_WORDS[payload.from]} → ${HEALTH_STATE_WORDS[payload.to]}${why ? ` (${why})` : ""}`,
+    detail: null,
+    tone: HEALTH_TONES[payload.to],
+  };
+}
+
+/** Capacity transitions. Numbers appear only when the runtime reported them. */
+export function describeCapacityChange(payload: {
+  providerId: string;
+  state: CapacityState;
+  activeSessions: number;
+  limit: number | null;
+  retryAt: string | null;
+}): EventDescription {
+  const name = providerName(payload.providerId);
+  switch (payload.state) {
+    case "available":
+      return {
+        title: `${name} can take new work`,
+        detail: payload.activeSessions > 0 ? plural(payload.activeSessions, "active session") : null,
+        tone: "idle",
+      };
+    case "saturated":
+      return {
+        title: `${name} is at its session limit`,
+        detail: payload.limit !== null ? `Limit: ${plural(payload.limit, "session")}` : null,
+        tone: "waiting",
+      };
+    case "backing_off":
+      return {
+        title: `${name} is backing off`,
+        detail: payload.retryAt
+          ? `${name} reported a rate limit or quota error. Retry after ${formatAbsolute(payload.retryAt)}.`
+          : `${name} reported a rate limit or quota error.`,
+        tone: "waiting",
+      };
+    case "unknown":
+      return { title: `${name} capacity unknown`, detail: null, tone: "idle" };
+  }
 }
 
 /** Human-readable description of an event for the activity feed. */
@@ -145,6 +237,10 @@ export function describeEvent(event: EventEnvelope): EventDescription {
         detail: event.payload.message,
         tone: "danger",
       };
+    case "provider.health_changed":
+      return describeHealthChange(event.payload);
+    case "provider.capacity_changed":
+      return describeCapacityChange(event.payload);
     case "thread.created":
       return { title: "Thread created", detail: event.payload.name, tone: "success" };
     case "thread.started":

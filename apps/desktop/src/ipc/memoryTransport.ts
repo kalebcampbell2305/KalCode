@@ -14,6 +14,8 @@
  *   providers-error    — provider detection fails
  *   providers-none     — no provider CLI is installed
  *   providers-outdated — Claude Code is installed but too old, and signed out
+ *   providers-signed-out — Codex is signed out and Gemini CLI isn't installed
+ *   providers-backoff  — the default machine; Provider Health shows a reported rate limit
  *   busy | empty | approvals-flood | errors | loading
  *                      — Dashboard data scenarios (see ./memory/dashboard.ts)
  *   kalvoice-*         — KalVoice scenarios (see ./memoryKalVoice.ts, a labelled test double)
@@ -48,6 +50,7 @@ import {
   type EmitOptions,
   isDashboardScenario,
 } from "./memory/dashboard.ts";
+import { createHealthMemory, type HealthControls } from "./memory/health.ts";
 import { createNotificationsMemory, type NotificationsMemory } from "./memory/notifications.ts";
 import { createPanesMemory, type PaneControls } from "./memory/panes.ts";
 import { createPermissionMemory, type PermissionMemory } from "./memory/permissions.ts";
@@ -69,7 +72,13 @@ export type MemoryScenario =
   | DashboardScenario
   | KalVoiceScenario;
 
-const PROVIDER_SCENARIOS: readonly string[] = ["providers-error", "providers-none", "providers-outdated"];
+const PROVIDER_SCENARIOS: readonly string[] = [
+  "providers-error",
+  "providers-none",
+  "providers-outdated",
+  "providers-signed-out",
+  "providers-backoff",
+];
 
 /** Surfaces that work in this build (mirrors crates/native-core/src/flags.rs). */
 const AVAILABLE_SURFACES: ReadonlySet<SurfaceFlag["id"]> = new Set([
@@ -135,6 +144,8 @@ export interface MemoryTransport extends Transport {
   attachProviderPane(threadId: string, onOutput: (bytes: Uint8Array) => void): Promise<number | null>;
   /** Test hooks for provider panes (hook-channel state, routing, feature off). */
   panes: PaneControls;
+  /** Test hooks for Provider Health (observations, failing commands). */
+  health: HealthControls;
 }
 
 export function createMemoryTransport(
@@ -254,6 +265,13 @@ export function createMemoryTransport(
 
   const kalvoice = createMemoryKalVoice(emit, scenario);
 
+  // Provider Health (PH): derived from detection and mock observations, like the native monitor.
+  const health = createHealthMemory({
+    scenario,
+    providers: () => providers,
+    emit: (event, providerId) => emit(event, { correlation: { providerId } }),
+  });
+
   /** Mirrors the native registry: serialized, cached, events only for changes. */
   const detectProviders = async (): Promise<ProviderStatus[]> => {
     await new Promise((resolve) => setTimeout(resolve, detectDelayMs));
@@ -282,6 +300,8 @@ export function createMemoryTransport(
         { correlation: { providerId: status.id } },
       );
     }
+    // The health monitor re-assesses after detection and records transitions.
+    health.evaluate();
     return providers;
   };
 
@@ -349,6 +369,7 @@ export function createMemoryTransport(
     ...permissions.handlers,
     ...panes.handlers,
     ...notificationsMemory.handlers,
+    ...health.handlers,
     // Like native: the first thread operation detects providers once, so threads use exactly
     // the providers detection reports usable.
     thread_options: async (args) => {
@@ -567,6 +588,7 @@ export function createMemoryTransport(
     },
     permissions,
     panes: panes.controls,
+    health: health.controls,
   };
   // UI tests drive the fake folder picker and filesystem, live Dashboard changes and agents
   // asking for approval through this hook (ui-test builds only).
@@ -576,6 +598,7 @@ export function createMemoryTransport(
       dashboard: transport.dashboard,
       permissions: transport.permissions,
       panes: transport.panes,
+      health: transport.health,
       // Z7-W3: records an event as the runtime would (e.g. `provider.disconnected`), so tests can
       // drive notifications from any event the native runtime emits.
       simulate: (event: EventPayload, options: EmitOptions = {}) => emit(event, options),

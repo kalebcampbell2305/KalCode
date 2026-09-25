@@ -344,6 +344,61 @@ test.describe("widgets", () => {
     await expect(health.getByText("Not checked yet")).toHaveCount(3);
     await expect(page.getByRole("region", { name: "Activity" }).getByText("Provider detected")).toHaveCount(0);
   });
+
+  test("provider health shows each provider's health and links to the Health tab", async ({ page }) => {
+    await open(page);
+    // Detection runs on the Providers page; the widget only reads the health snapshot.
+    await page.getByRole("button", { name: "Providers" }).click();
+    await expect(page.getByRole("button", { name: "Check again" })).not.toHaveAttribute("aria-busy", "true");
+    await expect(page.getByRole("tab", { name: "Setup" })).toHaveAttribute("aria-selected", "true");
+    await page.getByRole("button", { name: "Dashboard" }).click();
+
+    const health = page.getByRole("region", { name: "Provider health" });
+    const row = (id: string) => health.locator(`[data-provider-health="${id}"]`);
+    await expect(row("claude-code")).toContainText("Claude Code");
+    await expect(row("claude-code")).toContainText("Healthy · 2 sessions");
+    await expect(row("claude-code")).toHaveAttribute("data-health-state", "healthy");
+    await expect(row("codex")).toContainText("Degraded · 2 failures in the last hour");
+    await expect(row("gemini-cli")).toContainText("Healthy · 1 session");
+    await expect(health.getByText(/rate limit|quota/i)).toHaveCount(0);
+
+    await health.getByRole("button", { name: "Health details" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Providers" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Health" })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("region", { name: "Provider health" }).locator("#health-codex")).toHaveAttribute(
+      "data-health-state",
+      "degraded",
+    );
+    // A later plain visit opens the default tab again.
+    await page.getByRole("button", { name: "Dashboard" }).click();
+    await page.getByRole("button", { name: "Providers" }).click();
+    await expect(page.getByRole("tab", { name: "Setup" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("provider health shows sign-in, install and reported rate-limit states in words", async ({ page }) => {
+    const visit = async (scenario: string) => {
+      await page.goto(`/?scenario=${scenario}`);
+      await page.getByRole("button", { name: "Providers" }).click();
+      await expect(page.getByRole("button", { name: "Check again" })).not.toHaveAttribute("aria-busy", "true");
+      await page.getByRole("button", { name: "Dashboard" }).click();
+      return page.getByRole("region", { name: "Provider health" });
+    };
+    let health = await visit("providers-signed-out");
+    await expect(health.locator('[data-provider-health="codex"]')).toContainText("Signed out");
+    await expect(health.locator('[data-provider-health="gemini-cli"]')).toContainText("Not installed");
+    health = await visit("providers-backoff");
+    await expect(health.locator('[data-provider-health="codex"]')).toContainText("Backing off · rate limit reported");
+    // The widget follows provider events without a reload.
+    await page.evaluate(() => {
+      (
+        window as unknown as {
+          __kalcodeMemory: { health: { observe: (id: string, patch: Record<string, unknown>) => void } };
+        }
+      ).__kalcodeMemory.health.observe("codex", { backoff: null, failuresSinceSuccess: 0, recentFailures: 0 });
+    });
+    await expect(health.locator('[data-provider-health="codex"]')).toContainText("Healthy");
+    await expectNoSeriousA11yViolations(page);
+  });
 });
 
 test.describe("KalVoice filters the Dashboard", () => {

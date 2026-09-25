@@ -1,11 +1,24 @@
 /**
  * Provider catalog and fake detection for the in-memory transport (unit tests and the `ui-test`
  * build only). Static values mirror `crates/providers/src/catalog.rs` and
- * `crates/providers/src/claude/argv.rs` (Windows build) so the UI is tested against real copy.
+ * `crates/providers/src/claude/argv.rs`, `codex/argv.rs` and `gemini/mod.rs` (Windows build) so the
+ * UI is tested against real copy.
+ *
+ * Fake machines: by default Claude Code and Codex are installed and signed in, and Gemini CLI is
+ * installed (its sign-in can't be checked). `providers-none`: nothing installed.
+ * `providers-outdated`: Claude Code too old and signed out. `providers-signed-out`: Codex signed
+ * out, Gemini CLI not installed. `providers-backoff`: the default machine (Provider Health shows a
+ * reported rate limit, see ./memory/health.ts).
  */
 import type { PermissionMapping, ProviderDetection, ProviderStatus } from "@kalcode/protocol";
 
-export type ProviderScenario = "default" | "providers-error" | "providers-none" | "providers-outdated";
+export type ProviderScenario =
+  | "default"
+  | "providers-error"
+  | "providers-none"
+  | "providers-outdated"
+  | "providers-signed-out"
+  | "providers-backoff";
 
 const stricter = (mode: PermissionMapping["mode"], providerSetting: string, notes: string): PermissionMapping => ({
   mode,
@@ -21,8 +34,21 @@ const claudeEnforced =
 const claudeNotYet =
   "Other commands follow Claude Code's own rules, including your Claude Code user settings (allow rules and hooks), and a push written in an unusual form is decided by them. KalCode approvals and Custom rules for each action arrive with provider panes.";
 
+/** Mirrors `crates/providers/src/codex/argv.rs` `permission_setting` (generated from the argv). */
+function codexSetting(mode: PermissionMapping["mode"]): string {
+  const sandbox =
+    mode === "bypass"
+      ? "--sandbox workspace-write -c sandbox_workspace_write.network_access=false"
+      : "--sandbox read-only --skip-git-repo-check";
+  return `${sandbox} -c approval_policy='never' -c web_search='disabled' -c shell_environment_policy.inherit='core' --ignore-rules`;
+}
+
+const codexNotEnforced =
+  "Codex has no deny-rule flag: KalCode can't stop reads of credential files inside the workspace, and remote actions are stopped by the sandbox's network block, not by KalCode rules.";
+const geminiNotEnforced =
+  "Gemini CLI has no deny-rule flag KalCode can pass per session: reads of credential files aren't blocked by KalCode, and settings of a folder you trusted in Gemini CLI still apply.";
+
 export function providerCatalog(): ProviderStatus[] {
-  const codexReadOnly = "--sandbox read-only --ask-for-approval never";
   return [
     {
       id: "claude-code",
@@ -80,38 +106,35 @@ export function providerCatalog(): ProviderStatus[] {
       detectionErrorCode: null,
       authCheck: "codex login status",
       capabilities: {
-        streaming: false,
-        interrupt: false,
-        resume: false,
+        streaming: true,
+        interrupt: true,
+        resume: true,
         hostApprovals: false,
         interactive: null,
         models: [],
         permissionMappings: [
           stricter(
             "plan",
-            codexReadOnly,
-            "Reads and commands run inside Codex's read-only sandbox; anything that needs more is refused.",
+            codexSetting("plan"),
+            `Reads and read-only commands inside Codex's read-only sandbox; edits, network and anything that would ask are refused. ${codexNotEnforced}`,
           ),
           stricter(
             "approve",
-            codexReadOnly,
-            "Edits are refused instead of asking until KalCode can answer Codex approval requests.",
+            codexSetting("approve"),
+            `Runs like Plan: edits would need an approval KalCode can't give Codex yet, so they're refused instead of asking. ${codexNotEnforced}`,
           ),
-          stricter(
-            "auto",
-            codexReadOnly,
-            "Runs like Approve until KalCode's policy engine can answer Codex approval requests.",
-          ),
+          stricter("auto", codexSetting("auto"), `Runs like Approve. ${codexNotEnforced}`),
           stricter(
             "bypass",
-            "--sandbox workspace-write --ask-for-approval never",
-            "Edits and commands inside the workspace, with network access off (Codex's default). danger-full-access is never used.",
+            codexSetting("bypass"),
+            `Edits and commands inside the workspace, with network access off. danger-full-access is never used. ${codexNotEnforced}`,
           ),
         ],
       },
-      adapter: "planned",
+      adapter: "implemented",
       modelSource: "not_discoverable",
-      integration: "codex exec --json (JSON Lines events), or codex app-server (JSON-RPC with host approvals)",
+      integration:
+        "Headless mode (codex exec --json) with JSON Lines events, one process per turn resumed by thread id",
       signInCommand: "codex login",
       installCommand: "npm install -g @openai/codex",
       docsUrl: "https://github.com/openai/codex",
@@ -123,30 +146,35 @@ export function providerCatalog(): ProviderStatus[] {
       detectionErrorCode: null,
       authCheck: null,
       capabilities: {
-        streaming: false,
-        interrupt: false,
-        resume: false,
+        streaming: true,
+        interrupt: true,
+        resume: true,
         hostApprovals: false,
         interactive: null,
-        models: [],
+        models: [
+          { id: "auto", displayName: "Auto (default)", isDefault: true },
+          { id: "pro", displayName: "Pro", isDefault: false },
+          { id: "flash", displayName: "Flash", isDefault: false },
+          { id: "flash-lite", displayName: "Flash-Lite", isDefault: false },
+        ],
         permissionMappings: [
-          stricter("plan", "--approval-mode plan", "Gemini CLI's read-only plan mode."),
+          stricter("plan", "--approval-mode plan", `Gemini CLI's read-only plan mode. ${geminiNotEnforced}`),
           stricter(
             "approve",
             "--approval-mode default",
-            "Tool calls that need confirmation can't be answered in headless mode, so they don't run.",
+            `Tool calls that need confirmation can't be answered in headless mode, so they don't run. ${geminiNotEnforced}`,
           ),
-          stricter("auto", "--approval-mode default", "Runs like Approve until KalCode's policy engine exists."),
+          stricter("auto", "--approval-mode default", `Runs like Approve. ${geminiNotEnforced}`),
           stricter(
             "bypass",
             "--approval-mode auto_edit",
-            "File edits are approved automatically; other tools don't run. yolo mode is never used.",
+            `File edits are approved automatically; other tools that need confirmation don't run. yolo mode is never used. ${geminiNotEnforced}`,
           ),
         ],
       },
-      adapter: "planned",
-      modelSource: "not_discoverable",
-      integration: "Headless mode (gemini -p) with --output-format stream-json",
+      adapter: "implemented",
+      modelSource: "documented_aliases",
+      integration: "Headless mode with --output-format stream-json, one process per turn resumed by session id",
       signInCommand: "gemini",
       installCommand: "npm install -g @google/gemini-cli",
       docsUrl: "https://geminicli.com/docs/",
@@ -185,20 +213,34 @@ function fakeMachine(scenario: ProviderScenario): Record<string, Fake> {
           auth: "authenticated",
           message: null,
         };
+  const signedOut = scenario === "providers-signed-out";
   return {
     "claude-code": claude,
     codex: {
       state: "installed",
       displayPath: "~\\AppData\\Roaming\\npm\\codex.cmd",
       version: "0.155.1",
-      auth: "authenticated",
+      auth: signedOut ? "not_authenticated" : "authenticated",
       message: null,
     },
-    "gemini-cli": NOT_INSTALLED,
+    "gemini-cli": signedOut
+      ? NOT_INSTALLED
+      : {
+          state: "installed",
+          displayPath: "~\\AppData\\Roaming\\npm\\gemini.cmd",
+          version: "0.12.0",
+          // Gemini CLI documents no side-effect-free sign-in check.
+          auth: "unknown",
+          message: null,
+        },
   };
 }
 
-const MINIMUM_VERSIONS: Record<string, string | null> = { "claude-code": "2.1.259", codex: null, "gemini-cli": null };
+const MINIMUM_VERSIONS: Record<string, string | null> = {
+  "claude-code": "2.1.259",
+  codex: "0.155.0",
+  "gemini-cli": null,
+};
 
 /** Applies one fake detection to the cached statuses; returns whether each provider changed. */
 export function detectFake(

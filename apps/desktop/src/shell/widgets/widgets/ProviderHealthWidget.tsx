@@ -1,58 +1,39 @@
-import type { ProviderStatus } from "@kalcode/protocol";
+import type { ProviderHealth } from "@kalcode/protocol";
 import { Button, ProviderMark, Skeleton } from "@kalcode/ui/components";
 import { useEffect, useMemo, useState } from "react";
-import { toKalCodeError } from "../../../ipc/errors.ts";
 import { formatAbsolute, formatRelative } from "../../../runtime/describeEvent.ts";
 import { useEvents, useRuntime } from "../../../runtime/RuntimeProvider.tsx";
+import { healthSummary } from "../../../surfaces/providers/healthLabels.ts";
+import { requestProvidersTab } from "../../../surfaces/providers/providersTab.ts";
 import { useNavigation } from "../../navigation.tsx";
 import styles from "./Widgets.module.css";
 
-type Tone = "ok" | "warn" | "bad" | "muted";
-
-/** The read-only detection state of one provider, in words. Never starts a detection. */
-export function describeProvider(status: ProviderStatus): { text: string; tone: Tone } {
-  const detection = status.detection;
-  if (!detection) return { text: "Not checked yet", tone: "muted" };
-  switch (detection.state) {
-    case "not_installed":
-      return { text: "Not installed", tone: "muted" };
-    case "error":
-      return { text: "Check failed", tone: "bad" };
-    case "outdated":
-      return { text: `Update needed${detection.version ? ` (${detection.version})` : ""}`, tone: "warn" };
-    case "installed":
-      if (detection.auth === "not_authenticated") return { text: "Signed out", tone: "warn" };
-      return {
-        text: `${detection.version ?? "Installed"}${detection.auth === "authenticated" ? " · signed in" : ""}`,
-        tone: "ok",
-      };
-  }
-}
-
 /**
- * Provider health: what KalCode last detected for each provider CLI (installed, version, sign-in).
- * Read-only: it shows the cached detection (`providers_list`) and never runs a check itself.
+ * Provider health: each provider's health as KalCode's health monitor last saw it (detection plus
+ * what real sessions showed). Read-only: it reads the in-memory snapshot (`provider_health_list`)
+ * and never runs a check itself.
  */
 export function ProviderHealthWidget() {
   const { client } = useRuntime();
   const { events } = useEvents();
   const { navigate } = useNavigation();
-  const [providers, setProviders] = useState<ProviderStatus[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [providers, setProviders] = useState<ProviderHealth[] | null>(null);
+  const [failed, setFailed] = useState(false);
 
-  // Re-read when detection records something (provider.detected / connected / disconnected).
+  // Re-read when a provider event is recorded (detected, health or capacity changed, ...).
   const providerSeq = useMemo(() => events.find((e) => e.type.startsWith("provider."))?.seq ?? 0, [events]);
   useEffect(() => {
     void providerSeq;
     let cancelled = false;
-    client.listProviders().then(
+    client.listProviderHealth().then(
       (list) => {
         if (cancelled) return;
         setProviders(list);
-        setError(null);
+        setFailed(false);
       },
-      (raw: unknown) => {
-        if (!cancelled) setError(toKalCodeError(raw).message);
+      () => {
+        // Health is supplementary and never blocks anything (PH-06).
+        if (!cancelled) setFailed(true);
       },
     );
     return () => {
@@ -60,24 +41,51 @@ export function ProviderHealthWidget() {
     };
   }, [client, providerSeq]);
 
-  if (error && !providers) return <p className={styles.none}>{error}</p>;
+  const details = (
+    <div className={styles.footer}>
+      <Button
+        size="sm"
+        variant="ghost"
+        onClick={() => {
+          requestProvidersTab("health");
+          navigate("providers");
+        }}
+      >
+        Health details
+      </Button>
+    </div>
+  );
+
+  if (failed && !providers) {
+    return (
+      <>
+        <p className={styles.none}>Health unknown. KalCode couldn't read provider health; threads aren't affected.</p>
+        {details}
+      </>
+    );
+  }
   if (!providers) {
     return (
       <div role="status" aria-busy="true">
-        <span className="visually-hidden">Loading providers</span>
+        <span className="visually-hidden">Loading provider health</span>
         <Skeleton width="65%" />
       </div>
     );
   }
   return (
     <>
-      <ul className={styles.list} aria-label="Provider detection">
+      <ul className={styles.list} aria-label="Providers">
         {providers.map((provider) => {
-          const state = describeProvider(provider);
-          const checked = provider.detection?.checkedAt;
+          const state = healthSummary(provider);
+          const checked = provider.checkedAt;
           return (
-            <li key={provider.id} className={styles.item}>
-              <ProviderMark provider={provider.id} name={provider.displayName} size="sm" tile />
+            <li
+              key={provider.providerId}
+              className={styles.item}
+              data-provider-health={provider.providerId}
+              data-health-state={provider.state}
+            >
+              <ProviderMark provider={provider.providerId} name={provider.displayName} size="sm" tile />
               <span className={styles.secondary}>
                 {checked ? (
                   <time dateTime={checked} title={formatAbsolute(checked)}>
@@ -93,11 +101,7 @@ export function ProviderHealthWidget() {
           );
         })}
       </ul>
-      <div className={styles.footer}>
-        <Button size="sm" variant="ghost" onClick={() => navigate("providers")}>
-          Detection details
-        </Button>
-      </div>
+      {details}
     </>
   );
 }

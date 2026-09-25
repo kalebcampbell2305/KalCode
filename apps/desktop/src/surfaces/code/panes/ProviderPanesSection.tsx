@@ -7,8 +7,8 @@ import { useEvents, useRuntime } from "../../../runtime/RuntimeProvider.tsx";
 import { usePaneFocusRequests } from "../../../runtime/uiIntents.tsx";
 import { useResolvedTheme } from "../../../shell/useResolvedTheme.ts";
 import { usePermissions } from "../../permissions/PermissionsProvider.tsx";
-import { PaneChannel, paneStartMode } from "./paneChannel.ts";
-import { paneStatus } from "./paneLabels.ts";
+import { isPaneProvider, PaneChannel, type PaneProviderId, paneStartMode } from "./paneChannel.ts";
+import { paneStatus, providerIdentity } from "./paneLabels.ts";
 import { ProviderGlyph } from "./PaneParts.tsx";
 import styles from "./Panes.module.css";
 import { ProviderPane } from "./ProviderPane.tsx";
@@ -28,9 +28,13 @@ export function useProviderPanesEnabled(): boolean {
   return info.flags.features?.some((f) => f.id === "provider_panes" && f.visible) ?? false;
 }
 
+/** Codex and Gemini CLI panes are offered only when threads can use that provider. */
+const OPTIONAL_PANE_PROVIDERS: readonly PaneProviderId[] = ["codex", "gemini-cli"];
+
 /**
  * The entry point for provider panes in the Code surface (Z7-W4): a strip with this workspace's
- * pane threads and "New Claude Code pane", and the selected pane. The pane system (Z7-W1) will
+ * pane threads, "New Claude Code pane" (plus Codex and Gemini CLI when they're usable), and the
+ * selected pane. The pane system (Z7-W1) will
  * host `ProviderPane` directly; until then this section is the only place panes appear.
  */
 export function ProviderPanesSection({ workspace }: { workspace: Workspace }) {
@@ -47,7 +51,8 @@ function PanesStrip({ workspace }: { workspace: Workspace }) {
   const channel = useMemo(() => new PaneChannel(client), [client]);
   const [panes, setPanes] = useState<PaneEntry[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState<PaneProviderId | null>(null);
+  const [offered, setOffered] = useState<readonly PaneProviderId[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [focusRequest, setFocusRequest] = useState(0);
   const generation = useRef(0);
@@ -56,7 +61,7 @@ function PanesStrip({ workspace }: { workspace: Workspace }) {
     const current = ++generation.current;
     try {
       const threads = await client.listThreads({ workspaceId: workspace.id });
-      const candidates = threads.filter((t) => t.providerId === "claude-code");
+      const candidates = threads.filter((t) => isPaneProvider(t.providerId));
       const infos = await Promise.all(candidates.map((t) => channel.info(t.id).catch(() => null)));
       if (current !== generation.current) return;
       const next: PaneEntry[] = [];
@@ -74,6 +79,26 @@ function PanesStrip({ workspace }: { workspace: Workspace }) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // Which optional providers are usable (`thread_options`, re-read when a provider event lands).
+  const providerSeq = events.find((e) => e.type.startsWith("provider."))?.seq ?? 0;
+  useEffect(() => {
+    void providerSeq;
+    let cancelled = false;
+    client.threadOptions().then(
+      (options) => {
+        if (cancelled) return;
+        const usable = new Set(options.providers.map((p) => p.id));
+        setOffered(OPTIONAL_PANE_PROVIDERS.filter((id) => usable.has(id)));
+      },
+      () => {
+        if (!cancelled) setOffered([]);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [client, providerSeq]);
 
   // Thread and approval events for this workspace (or its panes) refresh the strip: status,
   // names, approvals. Each event is looked at once; refreshes are coalesced.
@@ -101,7 +126,9 @@ function PanesStrip({ workspace }: { workspace: Workspace }) {
     [],
   );
 
-  const waiting = panes.some((p) => p.info.hookChannel === "waiting");
+  // Only Claude Code's hook channel connects on its own; a Codex pane waits for its first turn,
+  // whose thread events refresh the strip anyway.
+  const waiting = panes.some((p) => p.info.hookChannel === "waiting" && p.thread.providerId === "claude-code");
   useEffect(() => {
     if (!waiting) return;
     const timer = setInterval(() => void refresh(), WAITING_POLL_MS);
@@ -118,11 +145,12 @@ function PanesStrip({ workspace }: { workspace: Workspace }) {
 
   const current = panes.find((p) => p.thread.id === selected) ?? null;
 
-  const create = async () => {
-    setCreating(true);
+  const create = async (providerId: PaneProviderId) => {
+    setCreating(providerId);
     setError(null);
     try {
       const thread = await channel.create({
+        providerId,
         workspaceId: workspace.id,
         permissionMode: paneStartMode(settings?.defaultMode),
       });
@@ -132,7 +160,7 @@ function PanesStrip({ workspace }: { workspace: Workspace }) {
     } catch (cause) {
       setError(toKalCodeError(cause).message);
     } finally {
-      setCreating(false);
+      setCreating(null);
     }
   };
 
@@ -169,16 +197,29 @@ function PanesStrip({ workspace }: { workspace: Workspace }) {
             })}
           </div>
         ) : (
-          <span className={styles.stripNote}>Run Claude Code in a pane: its own terminal, checked by KalCode.</span>
+          <span className={styles.stripNote}>
+            {offered.length === 0
+              ? "Run Claude Code in a pane: its own terminal, checked by KalCode."
+              : "Run a provider CLI in a pane: its own terminal, in this workspace."}
+          </span>
         )}
         {error ? (
           <span className={styles.stripNote} role="alert">
             {error}
           </span>
         ) : null}
-        <Button size="sm" icon={<Plus />} busy={creating} onClick={() => void create()}>
-          New Claude Code pane
-        </Button>
+        {(["claude-code", ...offered] as const).map((providerId) => (
+          <Button
+            key={providerId}
+            size="sm"
+            icon={<Plus />}
+            busy={creating === providerId}
+            disabled={creating !== null && creating !== providerId}
+            onClick={() => void create(providerId)}
+          >
+            New {providerIdentity(providerId).name} pane
+          </Button>
+        ))}
       </div>
       {current ? (
         <ProviderPane

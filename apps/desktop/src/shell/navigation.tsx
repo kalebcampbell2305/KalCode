@@ -52,7 +52,7 @@ export const SURFACES: Record<SurfaceId, SurfaceMeta> = {
     id: "threads",
     label: "Threads",
     icon: MessagesSquare,
-    summary: "Persistent units of AI work that run Claude Code in your projects.",
+    summary: "Persistent units of AI work that run Claude Code, Codex or Gemini CLI in your projects.",
   },
   agents: {
     id: "agents",
@@ -100,7 +100,8 @@ export const SURFACES: Record<SurfaceId, SurfaceMeta> = {
     id: "providers",
     label: "Providers",
     icon: PlugZap,
-    summary: "See which provider CLIs are installed and signed in, and how KalCode's permission modes map to each.",
+    summary:
+      "See which provider CLIs are installed, signed in and healthy, and how KalCode's permission modes map to each.",
   },
   command_center: {
     id: "command_center",

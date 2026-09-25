@@ -1,6 +1,16 @@
 import type { ThreadMessage, ThreadStatus, ThreadSummary, ToolCallRecord } from "@kalcode/protocol";
 import { describe, expect, it } from "vitest";
-import { buildTimeline, isThreadEvent, matchesQuery, presentStatus, providerModeNote, threadActions } from "./model.ts";
+import type { ProviderDetection, ProviderStatus } from "@kalcode/protocol";
+import { providerCatalog } from "../../ipc/memoryProviders.ts";
+import {
+  buildTimeline,
+  isThreadEvent,
+  matchesQuery,
+  presentStatus,
+  providerModeNote,
+  threadActions,
+  unavailableReason,
+} from "./model.ts";
 
 const ALL: ThreadStatus[] = [
   "starting",
@@ -194,5 +204,62 @@ describe("providerModeNote", () => {
 
   it("adds nothing when the provider hands approvals to KalCode", () => {
     expect(providerModeNote({ ...claude, hostApprovals: true }, "approve")).toBe("");
+  });
+});
+
+describe("providerModeNote with the Codex and Gemini CLI mappings", () => {
+  const option = (status: ProviderStatus) => ({
+    displayName: status.displayName,
+    hostApprovals: status.capabilities.hostApprovals,
+    permissionMappings: status.capabilities.permissionMappings,
+  });
+  const [, codex, gemini] = providerCatalog() as [ProviderStatus, ProviderStatus, ProviderStatus];
+
+  it("reads as one sentence per mode, from the provider's own mapping note", () => {
+    expect(providerModeNote(option(codex), "plan")).toMatch(/^ With Codex: Reads and read-only commands inside/);
+    expect(providerModeNote(option(codex), "bypass")).toContain("danger-full-access is never used.");
+    expect(providerModeNote(option(gemini), "plan")).toMatch(/^ With Gemini CLI: Gemini CLI's read-only plan mode\./);
+    expect(providerModeNote(option(gemini), "custom")).toContain("it runs as Approve");
+  });
+});
+
+describe("unavailableReason", () => {
+  const [claude, codex, gemini] = providerCatalog() as [ProviderStatus, ProviderStatus, ProviderStatus];
+  const detected = (status: ProviderStatus, partial: Partial<ProviderDetection>): ProviderStatus => ({
+    ...status,
+    detection: {
+      providerId: status.id,
+      displayName: status.displayName,
+      state: "installed",
+      displayPath: null,
+      version: "1.0.0",
+      minimumVersion: null,
+      auth: "authenticated",
+      checkedAt: "2026-09-25T00:00:00Z",
+      message: null,
+      ...partial,
+    },
+  });
+
+  it("tells a signed-out provider how to sign in, as plain text", () => {
+    expect(unavailableReason(detected(codex, { auth: "not_authenticated" }))).toBe("Signed out — run codex login");
+    expect(unavailableReason(detected(claude, { auth: "not_authenticated" }))).toBe(
+      "Signed out — run claude auth login",
+    );
+  });
+
+  it("says why an implemented adapter isn't offered", () => {
+    expect(unavailableReason(detected(gemini, { state: "not_installed" }))).toBe("Not installed");
+    expect(unavailableReason(detected(codex, { state: "outdated", minimumVersion: "0.155.0" }))).toBe(
+      "Needs version 0.155.0 or later",
+    );
+    expect(unavailableReason(codex)).toBe("Not checked yet");
+  });
+
+  it("keeps the no-adapter copy for planned adapters only", () => {
+    const planned = { ...detected(codex, {}), adapter: "planned" as const };
+    expect(unavailableReason(planned)).toBe("Installed, but KalCode can't run threads with it yet");
+    expect(unavailableReason({ ...codex, adapter: "planned" })).toBe("KalCode can't run threads with it yet");
+    expect(unavailableReason(detected(codex, { auth: "not_authenticated" }))).not.toContain("can't run threads");
   });
 });
