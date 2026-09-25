@@ -1,6 +1,11 @@
+/*
+ * The Dashboard fills the window: the work (approvals, threads, outcomes) in the main column,
+ * runtime health and terminals in a side rail, and from 1900px the activity feed in a column
+ * of its own instead of ever-wider rows.
+ */
 .layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 17.5rem;
+  grid-template-columns: minmax(0, 1fr) clamp(17.5rem, 18vw, 24rem);
   grid-template-rows: auto auto auto 1fr;
   grid-template-areas:
     "approvals aside"
@@ -46,6 +51,17 @@
   flex-direction: column;
   gap: var(--space-8);
   min-width: 0;
+}
+
+@media (min-width: 1900px) {
+  .layout {
+    grid-template-columns: minmax(0, 1.5fr) minmax(24rem, 1fr) clamp(18rem, 15vw, 26rem);
+    grid-template-rows: auto auto 1fr;
+    grid-template-areas:
+      "approvals activity aside"
+      "threads activity aside"
+      "recent activity aside";
+  }
 }
 
 @media (max-width: 1180px) {

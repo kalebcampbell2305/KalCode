@@ -9,6 +9,7 @@ import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useDiagnostics } from "../../runtime/useDiagnostics.ts";
 import { KalCodeTagline, Wordmark } from "../../shell/Brand.tsx";
 import { Page } from "../../shell/Page.tsx";
+import { PermissionsSettings } from "../permissions/index.ts";
 import styles from "./SettingsPage.module.css";
 import { useDiagnosticsActions } from "./useDiagnosticsActions.ts";
 
@@ -20,10 +21,18 @@ function formatOs(family: string): string {
 
 export function SettingsPage() {
   return (
-    <Page title="Settings" description="Changes apply immediately and are saved on this device." width="narrow">
-      <Appearance />
-      <DiagnosticsSection />
-      <About />
+    <Page title="Settings" description="Changes apply immediately and are saved on this device.">
+      {/* One column up to wide windows; then permissions get a column of their own. */}
+      <div className={styles.layout}>
+        <div className={styles.column}>
+          <Appearance />
+          <DiagnosticsSection />
+          <About />
+        </div>
+        <div className={styles.column}>
+          <PermissionsSettings />
+        </div>
+      </div>
     </Page>
   );
 }

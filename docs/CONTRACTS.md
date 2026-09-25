@@ -37,13 +37,20 @@ Z5 Dashboard reads ThreadSummary / ApprovalRequest / events (fixtures until Z3/Z
 
 ## Persistence boundaries (SQLite migrations)
 
-| Migration | Owner | Tables |
-| --- | --- | --- |
-| `0001` | Z0 | `app_meta`, `settings`, `events` |
-| `0002` | Z1 | `workspaces`, `terminals` |
-| `0003` | Z2 | provider/account metadata (if needed; never secrets) |
-| `0004` | Z3 | `threads`, `thread_messages`, `tool_calls` |
-| `0005` | Z4 | `permission_profiles`, `approvals`, `permission_grants`, `permission_audit` |
+Schema versions are contiguous; a migration's number is its schema version and is fixed once
+merged (files are checksummed, see `docs/DATA_MODEL.md`).
+
+| Migration (schema version) | Owner | Tables | Status |
+| --- | --- | --- | --- |
+| `0001` (v1) | Z0 | `app_meta`, `settings`, `events` | merged |
+| `0002` (v2) | Z1 | `workspaces`, `terminals` | merged (wave 2) |
+| `0003` (v3) | Z3 | `threads`, `thread_messages`, `tool_calls`, `thread_files` | merged (wave 2) |
+| `0004` (v4) | Z4 | `permission_profiles`, `permission_settings`, `approvals` (with `origin_kind` / `origin_id`; `thread_id`, `workspace_id`, `provider_id` required for thread origins, optional for others), `permission_grants`, `permission_audit` (kinds include the Trust Kernel's `trust.*` / `grant.ceiling_clamped`) | merged (wave 2) |
+| `0005` (v5) | — | reserved: the next campaign that needs storage takes it | free |
+
+Z2 shipped no migration (provider state is detected, never stored). `threads.permission_profile_id`
+(v3) holds a Custom thread's profile; only the permission engine writes it. Numbers are assigned at
+integration in merge order; a campaign branch registers its migration after the last merged one.
 
 A table has exactly one owning campaign. Others read it through that campaign's Rust API, not
 with their own SQL.
@@ -54,18 +61,28 @@ with their own SQL.
 | --- | --- | --- | --- |
 | `workspace_list` / `workspace_active` / `workspace_open_dialog` / `workspace_activate` / `workspace_remove` | Z1 | — / id | `Workspace` |
 | `terminal_*`, `shells_list`, `terminals_running` | Z1 | see `docs/CODE_MODE.md` | `TerminalInfo` |
-| `providers_list` / `providers_detect` | Z2 | — | `ProviderDetection[]` (+ capabilities) |
+| `terminal_attach` | Z1 | `{ terminalId }` + `Channel<ArrayBuffer>` | attachment id (`number \| null`); replay first, then live bytes |
+| `terminal_ack` | Z1 | `{ attachmentId, bytes }` | `bool` — flow control; `false`: the view fell > 4 MB behind and must re-attach |
+| `terminal_detach` | Z1 | `{ attachmentId }` (id-based; only the calling webview's own attachments) | `bool` |
+| `providers_list` / `providers_detect` | Z2 | — | `ProviderStatus[]` (detection + capabilities + adapter state) |
 | `thread_list` | Z3 | `{ workspaceId?, includeArchived? }` | `ThreadSummary[]` |
 | `thread_get` | Z3 | `{ threadId }` | `ThreadSummary` |
 | `thread_messages` | Z3 | `{ threadId, limit, before? }` | `ThreadMessage[]` |
+| `thread_tool_calls` | Z3 | `{ threadId, limit }` | `ToolCallRecord[]` (type in `kalcode_threads::types`) |
+| `thread_options` | Z3 | — | `ThreadOptions { providers: ProviderOption[], workspaces: WorkspaceOption[], permissionModes, defaultPermissionMode }` — only providers with an adapter that detection reports usable; only workspaces whose folder exists. Runs provider detection first if it hasn't run this session |
 | `thread_create` | Z3 | `{ providerId, workspaceId, model?, permissionMode, prompt, name? }` | `ThreadSummary` |
-| `thread_send` / `thread_interrupt` / `thread_resume` / `thread_stop` | Z3 | `{ threadId, text? }` | `ThreadSummary` |
-| `thread_rename` / `thread_archive` | Z3 | `{ threadId, name? }` | `ThreadSummary` |
+| `thread_send` | Z3 | `{ threadId, text }` | `ThreadSummary` |
+| `thread_resume` | Z3 | `{ threadId, text? }` (also retries a failed thread) | `ThreadSummary` |
+| `thread_interrupt` / `thread_stop` | Z3 | `{ threadId }` | `ThreadSummary` |
+| `thread_rename` | Z3 | `{ threadId, name }` | `ThreadSummary` |
+| `thread_archive` | Z3 | `{ threadId }` | `ThreadSummary` |
 | `thread_stream` | Z3 | `{ threadId }` + channel | `AgentEvent` stream (message deltas; live only) |
-| `approval_list` | Z4 | `{ status?: "pending" }` | `ApprovalRequest[]` |
-| `approval_decide` | Z4 | `{ requestId, decision: ApprovalDecision }` | `ApprovalRequest` |
+| `approval_list` | Z4 | `{ status?: "pending" \| "approved" \| "denied" \| "expired" }` | `ApprovalView[]` (`ApprovalRequest` + `allowedDecisions`, `grantCoverage`, `context`, `createdAt`, `expireReason`; contract change requested) |
+| `approval_decide` | Z4 | `{ requestId, decision: ApprovalDecision }` | `ApprovalView` |
 | `permission_profiles_list` | Z4 | — | `PermissionProfile[]` |
-| `thread_set_permission_mode` | Z4 | `{ threadId, mode, confirmBypass? }` | `ThreadSummary` |
+| `thread_set_permission_mode` | Z4 | `{ threadId, mode, confirmBypass?, profileId? }` | `ThreadSummary` — through the permission engine, which stores the mode via the thread runtime (`ThreadModeStore`) and records `permission.mode_changed` + audit once |
+| `permission_settings_get` / `permission_settings_update` | Z4 | — / `{ defaultMode, profileId?, confirmBypass? }` | `PermissionSettings` (additive; contract change requested) |
+| `test_permission_probe` | Z4 (test hook) | `{ workspaceId }` | evaluations of two fixed actions; refused unless test hooks are compiled in (debug and `e2e` builds) |
 
 Rules that bind every command: ids validated with `is_valid_id`; the WebView never supplies paths,
 executables or shell strings; Bypass can only be set by a user action with `confirmBypass: true`

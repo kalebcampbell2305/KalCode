@@ -1,7 +1,10 @@
-import type { ThreadSummary } from "@kalcode/protocol";
+import type { TerminalInfo, ThreadSummary } from "@kalcode/protocol";
 import { Button, ErrorState, Section, Skeleton } from "@kalcode/ui/components";
 import { SquareTerminal } from "lucide-react";
 import { formatAbsolute } from "../../runtime/describeEvent.ts";
+import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
+import { groupRunning, tabLabels } from "../../runtime/workspaceState.ts";
+import { useNavigation } from "../../shell/navigation.tsx";
 import { useRunningTerminals } from "./data/DashboardData.tsx";
 import { formatElapsed } from "./data/format.ts";
 import styles from "./RunningTerminals.module.css";
@@ -11,12 +14,25 @@ interface RunningTerminalsProps {
   now: number;
 }
 
-/** Terminals running now (Z1 `terminals_running`). Hidden when this build has no terminals. */
+/**
+ * Terminals running now (`terminals_running`), grouped by workspace. Show opens the terminal's
+ * tab in Code, switching to its workspace first. Hidden when this build has no terminals.
+ */
 export function RunningTerminals({ threads, now }: RunningTerminalsProps) {
   const { state, reload } = useRunningTerminals();
+  const { workspaces, active, activate, selectTerminal } = useWorkspaces();
+  const { navigate } = useNavigation();
   if (state.status === "unavailable") return null;
 
-  const workspaceNames = new Map(threads.map((t) => [t.workspaceId, t.workspaceName]));
+  const threadWorkspaceNames = new Map(threads.map((t) => [t.workspaceId, t.workspaceName]));
+  const workspaceName = (id: string, fallback: string | undefined) =>
+    fallback ?? threadWorkspaceNames.get(id) ?? "Workspace";
+
+  const show = async (terminal: TerminalInfo) => {
+    if (active?.id !== terminal.workspaceId && !(await activate(terminal.workspaceId))) return;
+    navigate("code");
+    selectTerminal(terminal.id, true, terminal.workspaceId);
+  };
 
   return (
     <Section id="terminals" title="Terminals">
@@ -33,25 +49,50 @@ export function RunningTerminals({ threads, now }: RunningTerminalsProps) {
       ) : state.data.length === 0 ? (
         <p className={styles.none}>No terminals are running.</p>
       ) : (
-        <ul className={styles.list}>
-          {state.data.map((terminal) => (
-            <li key={terminal.id} className={styles.item}>
-              <SquareTerminal className={styles.icon} aria-hidden="true" />
-              <span className={styles.text}>
-                <span className={styles.title}>{terminal.title}</span>
-                {workspaceNames.has(terminal.workspaceId) ? (
-                  <span className={styles.where}>{workspaceNames.get(terminal.workspaceId)}</span>
-                ) : null}
-              </span>
-              {terminal.startedAt ? (
-                <time className={styles.time} dateTime={terminal.startedAt} title={formatAbsolute(terminal.startedAt)}>
-                  <span className="visually-hidden">Running for </span>
-                  {formatElapsed(now - Date.parse(terminal.startedAt))}
-                </time>
-              ) : null}
-            </li>
-          ))}
-        </ul>
+        <div className={styles.groups}>
+          {groupRunning(state.data, workspaces).map((group) => {
+            const name = workspaceName(group.workspaceId, group.workspace?.name);
+            const labels = tabLabels(group.terminals);
+            return (
+              <div key={group.workspaceId} className={styles.group}>
+                <h3 className={styles.workspace} title={group.workspace?.displayPath}>
+                  {name}
+                </h3>
+                <ul className={styles.list}>
+                  {group.terminals.map((terminal) => {
+                    const label = labels.get(terminal.id) ?? terminal.title;
+                    return (
+                      <li key={terminal.id} className={styles.item}>
+                        <SquareTerminal className={styles.icon} aria-hidden="true" />
+                        <span className={styles.title}>{label}</span>
+                        {terminal.startedAt ? (
+                          <time
+                            className={styles.time}
+                            dateTime={terminal.startedAt}
+                            title={formatAbsolute(terminal.startedAt)}
+                          >
+                            <span className="visually-hidden">Running for </span>
+                            {formatElapsed(now - Date.parse(terminal.startedAt))}
+                          </time>
+                        ) : (
+                          <span />
+                        )}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => void show(terminal)}
+                          aria-label={`Show ${label} in ${name}`}
+                        >
+                          Show
+                        </Button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            );
+          })}
+        </div>
       )}
     </Section>
   );

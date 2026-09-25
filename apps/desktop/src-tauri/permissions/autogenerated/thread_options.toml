@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-thread-options"
+description = "Enables the thread_options command without any pre-configured scope."
+commands.allow = ["thread_options"]
+
+[[permission]]
+identifier = "deny-thread-options"
+description = "Denies the thread_options command without any pre-configured scope."
+commands.deny = ["thread_options"]

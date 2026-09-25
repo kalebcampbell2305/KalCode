@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 4fb96a2aa8b92bfc1e4445645d2d2513fe5c5d66ad02d782f26ef8834260336e # shrinks to t = Toggles { deny: false, exclude_docs: false, scope_src: false, block_secrets: false, ignore_files: false }, secret = "ghp_A0a0Aa0AAaaaaaaAAAA0aa0aAA00A0AAA00A", prefix = "a"

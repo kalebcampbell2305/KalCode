@@ -8,7 +8,42 @@ export {
   type IconButtonProps,
 } from "./Button.tsx";
 export { cx } from "./cx.ts";
+export {
+  buildRows,
+  type DiffChange,
+  type DiffFileData,
+  type DiffHunk,
+  type DiffLine,
+  type DiffLineKind,
+  type DiffMode,
+  pairLines,
+} from "./DiffView.model.ts";
+export { DiffView, type DiffViewProps } from "./DiffView.tsx";
+export {
+  DropdownMenu,
+  DropdownMenuContent,
+  type DropdownMenuContentProps,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  type DropdownMenuItemProps,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  type DropdownMenuRadioItemProps,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "./DropdownMenu.tsx";
+export { Field, type FieldProps, Select, TextArea, TextInput } from "./Field.tsx";
 export { Kbd, type KeyValueItem, KeyValueList, Section, type SectionProps } from "./Layout.tsx";
+export {
+  PermissionPrompt,
+  type PermissionPromptContext,
+  type PermissionPromptOption,
+  type PermissionPromptProps,
+  type PermissionPromptScope,
+  type PermissionPromptStatus,
+  type PermissionScopeTone,
+} from "./PermissionPrompt.tsx";
 export { SegmentedControl, type SegmentedControlProps, type SegmentedOption } from "./SegmentedControl.tsx";
 export { EmptyState, ErrorState, Skeleton } from "./States.tsx";
 export { StatusIndicator, type StatusTone } from "./StatusIndicator.tsx";

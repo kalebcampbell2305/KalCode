@@ -1,0 +1,8 @@
+{
+  // Minimal config for tests/unit/downloads-r2.test.ts: only the RELEASES bucket, simulated
+  // locally by workerd (never the real bucket), so the download handler runs against real R2
+  // semantics (head, ranged get, httpEtag) without the rest of the site.
+  "name": "kalcode-website-downloads-test",
+  "compatibility_date": "2026-09-21",
+  "r2_buckets": [{ "binding": "RELEASES", "bucket_name": "kalcode-releases" }]
+}

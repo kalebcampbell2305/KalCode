@@ -28,7 +28,7 @@ test.describe("dashboard", () => {
   test("shows runtime health and live activity from the event log", async ({ page }) => {
     await open(page);
     await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Threads arrive with provider support" })).toBeVisible();
+    await expect(page.locator("#main").getByText("No threads are open.")).toBeVisible();
     const activity = page.getByRole("region", { name: "Activity" });
     await expect(activity.getByText("KalCode started")).toBeVisible();
     await expect(activity.getByText("Local database created")).toBeVisible();
@@ -125,8 +125,8 @@ test.describe("navigation and commands", () => {
 
   test("gated surfaces explain that they are not available yet", async ({ page }) => {
     await open(page);
-    await page.getByRole("button", { name: "Threads" }).click();
-    await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toBeVisible();
+    await page.getByRole("button", { name: "Agents" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Agents" })).toBeVisible();
     await expect(page.getByText("Not available in this build")).toBeVisible();
     await expect(page.getByText("Nothing on this page runs yet.")).toBeVisible();
   });

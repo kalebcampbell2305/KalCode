@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kalcoded.com/schemas/releases-v1.json",
+  "title": "KalCode desktop release manifest",
+  "description": "apps/website/src/data/releases.json and R2 releases/latest.json. Written by tooling/release/publish.mjs. TypeScript: apps/website/src/data/releases.d.ts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "latest", "unavailable"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "latest": {
+      "description": "The published release, or null when there is no public build.",
+      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/release" }]
+    },
+    "unavailable": {
+      "description": "Platforms with no downloadable build. Every OS appears here or in latest.platforms, never both.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/unavailablePlatform" }
+    }
+  },
+  "$defs": {
+    "os": { "enum": ["windows", "macos", "linux"] },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "channel", "publishedAt", "commit", "notesUrl", "platforms"],
+      "properties": {
+        "version": { "$ref": "#/$defs/version" },
+        "channel": { "enum": ["preview", "stable"] },
+        "publishedAt": { "type": "string", "format": "date-time" },
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "notesUrl": { "type": "string", "pattern": "^/" },
+        "platforms": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/platform" } }
+      }
+    },
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "arch", "label", "kind", "file", "url", "pinnedUrl", "size", "sha256", "signed"],
+      "properties": {
+        "os": { "$ref": "#/$defs/os" },
+        "arch": { "enum": ["x64", "arm64", "universal"] },
+        "label": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["nsis", "msi", "dmg", "appimage", "deb", "rpm"] },
+        "file": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$" },
+        "url": { "type": "string", "pattern": "^/download/" },
+        "pinnedUrl": { "type": "string", "pattern": "^/download/[^/]+/[^/]+$" },
+        "size": { "type": "integer", "minimum": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "signed": { "type": "boolean" }
+      }
+    },
+    "unavailablePlatform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "label", "reason"],
+      "properties": {
+        "os": { "$ref": "#/$defs/os" },
+        "label": { "type": "string", "minLength": 1 },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

@@ -1,0 +1,115 @@
+.content {
+  z-index: var(--z-dropdown);
+  min-width: var(--radix-dropdown-menu-trigger-width);
+  max-width: min(26rem, calc(100vw - 2 * var(--space-4)));
+  max-height: min(28rem, var(--radix-dropdown-menu-content-available-height));
+  padding: var(--space-1);
+  overflow-y: auto;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-overlay);
+  box-shadow: var(--shadow-md);
+  transform-origin: var(--radix-dropdown-menu-content-transform-origin);
+  animation: appear var(--dur-fast) var(--ease-out);
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 2.125rem;
+  padding: var(--space-1-5) var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  line-height: var(--leading-snug);
+  cursor: pointer;
+  outline: none;
+  user-select: none;
+}
+
+.item[data-highlighted] {
+  background: var(--color-surface-selected);
+  color: var(--color-text);
+}
+
+.item[data-disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.danger {
+  color: var(--color-danger-text);
+}
+
+.danger[data-highlighted] {
+  background: var(--color-danger-soft);
+  color: var(--color-danger-text);
+}
+
+.icon,
+.indicator {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1rem;
+}
+
+.icon svg,
+.indicator svg {
+  width: 1rem;
+  height: 1rem;
+  stroke-width: 1.75;
+}
+
+.indicator {
+  color: var(--color-accent-text);
+}
+
+.text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.description {
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.item[data-highlighted] .description {
+  color: var(--color-text-secondary);
+}
+
+.shortcut {
+  margin-left: auto;
+}
+
+.menuLabel {
+  padding: var(--space-2) var(--space-2) var(--space-1);
+  color: var(--color-text-faint);
+  font-size: var(--text-xs);
+}
+
+.separator {
+  height: 1px;
+  margin: var(--space-1) calc(-1 * var(--space-1));
+  background: var(--color-border);
+}
+
+@keyframes appear {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}

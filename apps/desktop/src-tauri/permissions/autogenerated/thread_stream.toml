@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-thread-stream"
+description = "Enables the thread_stream command without any pre-configured scope."
+commands.allow = ["thread_stream"]
+
+[[permission]]
+identifier = "deny-thread-stream"
+description = "Denies the thread_stream command without any pre-configured scope."
+commands.deny = ["thread_stream"]

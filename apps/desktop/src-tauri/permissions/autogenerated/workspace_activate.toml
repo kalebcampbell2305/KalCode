@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-workspace-activate"
+description = "Enables the workspace_activate command without any pre-configured scope."
+commands.allow = ["workspace_activate"]
+
+[[permission]]
+identifier = "deny-workspace-activate"
+description = "Denies the workspace_activate command without any pre-configured scope."
+commands.deny = ["workspace_activate"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-thread-set-permission-mode"
+description = "Enables the thread_set_permission_mode command without any pre-configured scope."
+commands.allow = ["thread_set_permission_mode"]
+
+[[permission]]
+identifier = "deny-thread-set-permission-mode"
+description = "Denies the thread_set_permission_mode command without any pre-configured scope."
+commands.deny = ["thread_set_permission_mode"]
