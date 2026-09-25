@@ -1,76 +1,151 @@
 ---
 /**
- * The living KalCode orb: the brand symbol (assets/branding/kalcode-icon, never redrawn) fed by
- * an energy stream rising from below the hero, lit from inside along its own orbits and nodes.
+ * The living KalCode orb, and (layout "centered") the world it lives in.
  *
- * Decorative (aria-hidden): the page headline carries the meaning. Use one per page: it is the
- * site's only continuously moving element.
+ * The orb is the brand symbol (assets/branding/kalcode-icon, never redrawn), fed by an energy
+ * stream and lit from inside along its own orbits and nodes. The world is derived from the owner's
+ * KalCode banner by tooling/generate-hero-world.py: deep-space nebula sky, and the orbital platform
+ * with its concentric rings, from whose centre the stream rises into the orb; plus a large rim-lit
+ * planet partly off the right edge and a small moon on the left (tooling/generate-space-art.py).
+ * Hooks: .hero-orb__world (plate), .hero-orb__planets / __planet / __moon, .hero-orb__stage,
+ * .hero-orb__beam, .hero-orb__canvas (all under .hero-orb--centered). The component is
+ * decorative (aria-hidden) and renders environment and orb layers only: the page stacks its type
+ * in a sibling element above it. Use one per page: it is the site's only continuous motion.
  *
- * LOADING ORDER (performance contract)
- *   1. The poster <img> paints first, with no JS dependency: eager, fetchpriority=high, visible
- *      from the start, `sizes` matched to the layout (pass `sizes` if the layout differs).
- *   2. After the `load` event, first contentful paint and an idle callback, the renderer starts
- *      in a Web Worker on an OffscreenCanvas (no per-frame main-thread work at all), in small
- *      steps (background shader compile, off-thread image decode, one texture upload per frame),
- *      and fades in over the poster. Without OffscreenCanvas WebGL, desktop renders on the main
- *      thread and phones keep the CSS version.
- *   3. Tier chosen up front, no probing: phones/touch/≤4 cores/≤4 GB get the lite renderer;
- *      ≤2 cores, ≤2 GB or Save-Data keep the CSS version; software GL falls back to CSS too.
- *   Reduced motion: a WebGL still on desktop, the CSS still elsewhere. No JS: the CSS still.
- *
- * LAYOUT
- *   Fills its box. The orb sits at the top centre; the stream runs from the box's bottom edge up
- *   into the sphere, so put the component in a box that reaches the bottom of the hero.
- *   - Split hero (>= 1024 px): place it in the right column; the stream runs up that column's
- *     centre line. Leave the band variables unset.
- *   - Stacked hero (< 1024 px): orb above the text. Set the text-safe band so the stream dims
- *     behind the text block and resumes faintly below it.
+ * LAYOUTS
+ *   centered (default)  position:absolute; inset:0 inside its positioned parent (the hero
+ *                       section). Full-bleed world; orb large and centred; the stream runs from
+ *                       the platform's ring centre up into the sphere.
+ *   split               the round-1 behaviour: fills its box, orb at the top centre, the stream
+ *                       rising from the box's bottom edge; no world layers.
  *
  * PROPS
- *   size   "full" (default): fills its box. "compact": self-sized block, 1 : 1.28.
- *   sizes  Poster `sizes` attribute. Default matches the orb's own sizing rules:
- *          "(max-width: 1023px) min(88vw, 25rem, 42vh), min(44vw, 64vh, 680px)" for full.
+ *   layout  "centered" | "split"                        default "centered"
+ *   size    "full" | "compact" (split only)             default "full"
+ *   sizes   poster `sizes` override (orb image)
  *
- * CSS CUSTOM PROPERTIES (set on the component or any ancestor; lengths only, no %)
- *   --hero-orb-max            largest orb diameter              default min(680px, 64svh)
- *   --hero-orb-top            space above the orb               default 0px
+ * CSS CUSTOM PROPERTIES (set on the component or any ancestor; any length, calc, %, svh...)
+ *   --hero-orb-max        orb square diameter            centered: min(64cqh, 50cqw, 820px);
+ *                                                        < 768 px: min(94cqw, 46cqh). split: min(680px, 64svh)
+ *   --hero-orb-center-y   the SPHERE's vertical centre, from the component's top
+ *                         (centered default: calc(max(64px, 7cqh) + 0.5211 * size)). PAGES can set the
+ *                         same value on the section and use it to align the type.
+ *   --hero-orb-top        split only: space above the orb square
+ *   --hero-platform-y     centered: where the platform ring centre (stream origin) sits, from the
+ *                         component top (default 96cqh; < 768 px 100cqh). Lengths or %; % is of the height
+ *   --hero-world-dim      0..1 extra darkening of the whole world plate (default 0.15)
+ *   --hero-scrim-y        vertical centre of a soft dark ellipse behind the body copy, over the
+ *                         world but under the orb light (default 70%); --hero-scrim 0..1 (0.45)
+ *   Horizon: the platform's bright planet rim sits at --hero-platform-y minus ~0.116 × the plate
+ *   height (about 13% of the hero height on desktop). Keep small body copy above it.
  *   --hero-beam-safe-top      start of the text-safe band, from the component's top edge
- *   --hero-beam-safe-inset    end of the band, measured up from the component's bottom edge
- *   --hero-beam-safe-level    stream intensity inside the band  default 1 (band off); try 0.12
- *   --hero-beam-safe-resume   stream intensity below the band   default 1; try 0.4
- *   Example (stacked):  --hero-beam-safe-top: calc(var(--hero-orb-top) + 1.02 * var(--hero-orb-max));
- *                       --hero-beam-safe-inset: 2.5rem; --hero-beam-safe-level: 0.12;
- *                       --hero-beam-safe-resume: 0.4;
- *   Both the WebGL stream and the CSS still honour the band (edges soften over ~20 px).
+ *   --hero-beam-safe-inset    end of the band, measured UP from the stream's origin
+ *   --hero-beam-safe-level    stream intensity inside the band (default 1 = off; try 0.12)
+ *   --hero-beam-safe-resume   stream intensity between the band and the origin (default 1)
+ *   Geometry of the symbol square: sphere centre (0.493, 0.521), radius 0.281, stream entry at
+ *   y 0.798 (the sphere's bottom). So the sphere spans centre-y ± 0.281 × size.
+ *
+ * TYPE-SAFE ZONE (centered)
+ *   The bright core runs vertically at x = 50% from the sphere's bottom (centre-y + 0.2765 × size)
+ *   down to --hero-platform-y. Body text must not sit on it at full intensity: either keep text
+ *   blocks out of that column, or set the band variables over the text block (the stream then
+ *   dims to the band level there, in the WebGL and in the CSS still). Display type (the wordmark,
+ *   the headline) may sit over the lower third of the sphere and the dimmed column: the sphere's
+ *   interior is dark and its bloom sits behind the type.
+ *
+ * LOADING ORDER (performance contract)
+ *   1. The orb poster is the hero's LCP element (the full-bleed plate is background to Chrome's
+ *      LCP heuristics). It alone gets fetchpriority=high, is visible from the first frame (no
+ *      opacity start state, no JS), and should be preloaded with POSTER_PRELOADS from
+ *      ./world-assets.ts, whose sizes match the default `sizes` below. Phones get at most the 768
+ *      file. The plate loads eagerly at normal priority and decodes async (it never holds a
+ *      frame). The planets are CSS backgrounds that load only after first paint and settle in
+ *      (without JS they are simply shown).
+ *   2. After `load`, first paint and an idle callback, the renderer starts in a Web Worker on an
+ *      OffscreenCanvas (no per-frame main-thread work), in short steps, and fades in.
+ *   3. Tier chosen up front: phones/touch/≤4 cores/≤4 GB lite; ≤2 cores/≤2 GB/Save-Data and
+ *      software GL keep the CSS version. Reduced motion: WebGL still (desktop) or CSS still.
+ *   Scroll: the whole world recedes slightly as the hero scrolls away (CSS scroll-driven
+ *   animation, compositor only; off with reduced motion).
  *
  * THEME: follows the nearest [data-theme] ancestor (a dark hero inside a light page stays dark).
  */
 import "../../styles/hero.css";
+import {
+  POSTER_MOBILE_MEDIA,
+  POSTER_SIZES_CENTERED,
+  posterSrcset,
+  WORLD_LANDSCAPE,
+  WORLD_PORTRAIT,
+  WORLD_PORTRAIT_MEDIA,
+  WORLD_SIZES,
+  worldSrcset,
+} from "./world-assets";
 
 interface Props {
+  layout?: "centered" | "split";
   size?: "full" | "compact";
   sizes?: string;
 }
 
-const { size = "full", sizes: sizesProp } = Astro.props;
-const full = size === "full";
+const { layout = "centered", size = "full", sizes: sizesProp } = Astro.props;
+const centered = layout === "centered";
+const full = centered || size === "full";
 const base = "/assets/hero/orb";
-const widths = [384, 512, 640, 768, 1024];
-const srcset = (format: "avif" | "webp") => widths.map((w) => `${base}-${w}.${format} ${w}w`).join(", ");
 const sizes =
   sizesProp ??
-  (full ? "(max-width: 1023px) min(88vw, 25rem, 42vh), min(44vw, 64vh, 680px)" : "min(92vw, 360px)");
+  (centered
+    ? POSTER_SIZES_CENTERED
+    : full
+      ? "(max-width: 1023px) min(88vw, 25rem, 42vh), min(44vw, 64vh, 680px)"
+      : "min(92vw, 360px)");
+const classes = centered ? "hero-orb hero-orb--centered" : `hero-orb hero-orb--${size}`;
 ---
-<div class={`hero-orb hero-orb--${size}`} data-hero-orb aria-hidden="true">
+<div class={classes} data-hero-orb aria-hidden="true">
   <div class="hero-orb__frame">
+    {
+      centered && (
+        <div class="hero-orb__world" data-hero-orb-world>
+          <picture>
+            <source media={WORLD_PORTRAIT_MEDIA} type="image/avif" srcset={worldSrcset(WORLD_PORTRAIT, "avif")} sizes="220vw" />
+            <source media={WORLD_PORTRAIT_MEDIA} type="image/webp" srcset={worldSrcset(WORLD_PORTRAIT, "webp")} sizes="220vw" />
+            <source type="image/avif" srcset={worldSrcset(WORLD_LANDSCAPE, "avif")} sizes={WORLD_SIZES} />
+            <source type="image/webp" srcset={worldSrcset(WORLD_LANDSCAPE, "webp")} sizes={WORLD_SIZES} />
+            <img
+              class="hero-orb__plate"
+              src="/assets/hero/world/world-1920.webp"
+              width="1920"
+              height="1081"
+              alt=""
+              loading="eager"
+              decoding="async"
+            />
+          </picture>
+          <span class="hero-orb__origin" data-hero-orb-origin></span>
+        </div>
+      )
+    }
+    {
+      centered && (
+        <div class="hero-orb__planets">
+          <span class="hero-orb__planet" />
+          <span class="hero-orb__moon" />
+        </div>
+      )
+    }
+    {centered && <span class="hero-orb__scrim" />}
+    {centered && <span class="hero-orb__up" />}
     <div class="hero-orb__beam">
       <span class="hero-orb__glow"></span>
       <span class="hero-orb__surge"></span>
     </div>
     <div class="hero-orb__stage" data-hero-orb-stage>
       <picture>
-        <source type="image/avif" srcset={srcset("avif")} sizes={sizes} />
-        <source type="image/webp" srcset={srcset("webp")} sizes={sizes} />
+        {/* Phones never need more than the 768 file (about 2.2x at their orb size). */}
+        <source media={POSTER_MOBILE_MEDIA} type="image/avif" srcset={posterSrcset("avif", true)} sizes={sizes} />
+        <source media={POSTER_MOBILE_MEDIA} type="image/webp" srcset={posterSrcset("webp", true)} sizes={sizes} />
+        <source type="image/avif" srcset={posterSrcset("avif")} sizes={sizes} />
+        <source type="image/webp" srcset={posterSrcset("webp")} sizes={sizes} />
         <img
           class="hero-orb__poster"
           src={`${base}-640.webp`}

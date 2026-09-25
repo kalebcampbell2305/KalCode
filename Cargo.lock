@@ -2312,6 +2312,7 @@ dependencies = [
  "proptest",
  "regex",
  "rusqlite",
+ "same-file",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -2319,6 +2320,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tracing",
  "uuid",
+ "winapi-util",
 ]
 
 [[package]]
@@ -2376,6 +2378,7 @@ dependencies = [
  "kalcode-native-core",
  "notify",
  "rusqlite",
+ "same-file",
  "serde",
  "serde_json",
  "sha2 0.10.9",

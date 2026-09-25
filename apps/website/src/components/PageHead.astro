@@ -1,21 +1,29 @@
 ---
 /**
- * Header for every page except home: an optional status chip, a heavy display title, a lead,
- * and an optional slot for actions.
+ * Header for every page except home: an optional status chip, an eyebrow, a display title, a
+ * lead, and an optional slot for actions. On world pages it opens onto an environment (`backdrop`),
+ * sliding under the transparent header; reading pages keep a quiet paper head.
  */
+import Backdrop from "./Backdrop.astro";
+
 interface Props {
   title: string;
   lead?: string;
+  eyebrow?: string;
   /** One-line truth label shown as a chip above the title, e.g. "In private development". */
   status?: string;
   /** Chip dot: in development (amber), built (green), plain (no dot). */
   statusKind?: "dev" | "built" | "plain";
+  /** The environment behind the head (world pages). */
+  backdrop?: "nebula" | "deep" | "gravity" | "orbital" | "horizon" | "planet" | "void" | "vault";
 }
-const { title, lead, status, statusKind = "dev" } = Astro.props;
+const { title, lead, eyebrow, status, statusKind = "dev", backdrop } = Astro.props;
 ---
-<header class="page-head">
+<header class:list={["page-head", { "world-head": backdrop }]}>
+  {backdrop && <Backdrop variant={backdrop} />}
   <div class="container page-head__inner">
     {status && <p class:list={["chip", `chip--${statusKind}`]}>{status}</p>}
+    {eyebrow && <p class="eyebrow">{eyebrow}</p>}
     <h1 class="h1">{title}</h1>
     {lead && <p class="lead">{lead}</p>}
     <slot />

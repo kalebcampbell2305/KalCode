@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 54235318332f129a4aa47a908d700479cfe2d7d8a9a66a6f49d2feb6cd0e512d # shrinks to parts = ["\"api_key\": \"", "token: ", "token: ", "\"api_key\": \"", "\"api_key\": \""]

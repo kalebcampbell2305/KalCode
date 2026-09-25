@@ -1,0 +1,74 @@
+---
+/**
+ * SpaceBackdrop: a static piece of the KalCode world behind a section. Imagery is derived from the
+ * owner's KalCode banner (tooling/generate-hero-world.py) or rendered procedurally once into static
+ * images (tooling/generate-space-art.py). No stock imagery, no hand-drawn lookalikes.
+ *
+ * Fills its positioned parent (position:absolute; inset:0; z-index:0), aria-hidden, no continuous
+ * motion. Images are CSS backgrounds that load only after the page's first paint, when the section
+ * comes within about one viewport (so they never compete with the hero's LCP image); one shared
+ * IntersectionObserver then lets the light settle in once when the section enters (instant with
+ * reduced motion; without JS everything is simply shown). Put the section content above it (position:relative; z-index:1). Several backdrops can
+ * be stacked in one section (e.g. "deep" + "planet").
+ *
+ * PROPS
+ *   variant    "nebula"   nebula crown and soft light falling from above (calm, atmospheric)
+ *              "deep"     starfield and faint navy depth (the quietest)
+ *              "orbital"  the banner's ring platform along the bottom edge (energy; product base)
+ *              "gravity"  the sky pulled into a gravitational lens around the centre (depth funnel)
+ *              "horizon"  a planet's luminous blue rim across the lower sky behind dark rocky
+ *                         terrain (pricing, final CTA, footer); rocks={false} gives the banner's
+ *                         planet-horizon light band alone
+ *              "planet"   a large dark planet partly off-canvas at a page edge, rim-lit in blue,
+ *                         with a small moon (see side / size)
+ *              "void"     dark void with faint horizontal wave-energy lines (KalVoice)
+ *              "vault"    security-toned darkness: a faint perspective grid under a cold vignette
+ *                         (permissions, local-first)
+ *   intensity  "low" | "medium" (default) | "high"
+ *   side       planet: "left" | "right" (default "right")
+ *   size       planet: "md" | "lg" (default) | "xl"
+ *   rocks      horizon: include the rocky foreground (default true)
+ *   class      extra classes for the root
+ *
+ * Hooks: every layer is a <span> with a stable class (space-backdrop__stars / __art / __moon /
+ * __light); the root carries space-backdrop--<variant>, --<intensity>, --side-<side>,
+ * --size-<size>, --rocks / --band, and .is-near (images requested) / .is-in (settled).
+ */
+import "./space-backdrop.css";
+
+type Variant = "nebula" | "deep" | "orbital" | "gravity" | "horizon" | "planet" | "void" | "vault";
+
+interface Props {
+  variant: Variant;
+  intensity?: "low" | "medium" | "high";
+  side?: "left" | "right";
+  size?: "md" | "lg" | "xl";
+  rocks?: boolean;
+  class?: string;
+}
+
+const { variant, intensity = "medium", side = "right", size = "lg", rocks = true, class: extra } = Astro.props;
+const hasArt = variant !== "deep" && variant !== "vault";
+const stars = variant !== "horizon" || !rocks;
+---
+<div
+  class:list={[
+    "space-backdrop",
+    `space-backdrop--${variant}`,
+    `space-backdrop--${intensity}`,
+    variant === "planet" && [`space-backdrop--side-${side}`, `space-backdrop--size-${size}`],
+    variant === "horizon" && (rocks ? "space-backdrop--rocks" : "space-backdrop--band"),
+    extra,
+  ]}
+  data-space-backdrop
+  aria-hidden="true"
+>
+  {stars && <span class="space-backdrop__stars" />}
+  {hasArt && <span class="space-backdrop__art" />}
+  {variant === "planet" && <span class="space-backdrop__moon" />}
+  <span class="space-backdrop__light"></span>
+</div>
+
+<script>
+  import "../../scripts/hero/backdrop";
+</script>

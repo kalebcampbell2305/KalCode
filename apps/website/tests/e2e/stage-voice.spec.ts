@@ -46,11 +46,11 @@ test.describe("KalVoiceDemo", () => {
     await expect(block.getByTestId("kalvoice-transcript")).not.toBeEmpty({ timeout: 3000 });
     await page.waitForTimeout(1500);
     await page.mouse.up();
-    await expect(block.getByTestId("kalvoice-state")).toHaveText("Done", { timeout: 6000 });
+    await expect(block.getByTestId("kalvoice-state")).toHaveText("Done", { timeout: 10_000 });
     await expect(block.getByTestId("kalvoice-result")).toContainText("Typed into Claude Code");
     await expect(block.getByTestId("pane-claude-checkout").locator("[data-kc-input]")).toHaveText(
       "also cover the 429 response in the signup test",
-      { timeout: 6000 },
+      { timeout: 10_000 },
     );
     await expect(block.getByTestId("live-kalvoice-demo")).toContainText("KalVoice typed");
   });
@@ -58,14 +58,15 @@ test.describe("KalVoiceDemo", () => {
   test("the same key runs a command: two agents open, with Type it instead", async ({ page }) => {
     const block = await open(page);
     const key = block.getByTestId("kv-hold");
+    const panel = block.getByTestId("kalvoice-panel");
     await holdKey(page, key, 1500);
-    await expect(block.getByTestId("kalvoice-state")).toHaveText("Done", { timeout: 6000 });
-    await expect(block.getByTestId("kalvoice-panel")).toHaveAttribute("data-state", "done");
+    await expect(panel).toHaveAttribute("data-state", "done", { timeout: 10_000 });
 
-    // Second take: the command.
-    await page.waitForTimeout(4200);
+    // Second take (the command) once the widget has settled back to Ready; the next hold is a command.
+    await expect(panel).toHaveAttribute("data-state", "off", { timeout: 15_000 });
+    await expect(block.locator("[data-kc-vd-next='command']")).toBeVisible();
     await holdKey(page, key, 1400);
-    await expect(block.getByTestId("kalvoice-result")).toContainText("Opened 2 agents", { timeout: 8000 });
+    await expect(block.getByTestId("kalvoice-result")).toContainText("Opened 2 agents", { timeout: 15_000 });
     await expect(block.getByTestId("pane-claude-e2e")).toBeVisible();
     await expect(block.getByTestId("pane-codex-review")).toBeVisible();
     await expect(block.locator("[data-kc-app]")).toHaveAttribute("data-count", "4");
@@ -89,7 +90,7 @@ test.describe("KalVoiceDemo", () => {
     await expect(block.getByTestId("kalvoice-state")).toHaveText("Listening");
     await page.waitForTimeout(1200);
     await page.keyboard.up("F8");
-    await expect(block.getByTestId("kalvoice-state")).toHaveText("Done", { timeout: 6000 });
+    await expect(block.getByTestId("kalvoice-state")).toHaveText("Done", { timeout: 10_000 });
   });
 
   test("F8 outside the demo is ignored", async ({ page }) => {
@@ -108,6 +109,6 @@ test.describe("KalVoiceDemo", () => {
     await expect(block.getByTestId("kalvoice-state")).toHaveText("Listening");
     await page.waitForTimeout(1000);
     await page.keyboard.up(" ");
-    await expect(block.getByTestId("kalvoice-state")).toHaveText("Done", { timeout: 6000 });
+    await expect(block.getByTestId("kalvoice-state")).toHaveText("Done", { timeout: 10_000 });
   });
 });

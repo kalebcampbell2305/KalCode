@@ -164,17 +164,47 @@ secure store.
 
 ## 3. Cloud data (website, Cloudflare D1 `kalcode-web`)
 
+Migrations: `apps/website/migrations/` (0001 the list, 0002 double opt-in). Timestamps are UTC
+ISO-8601 with milliseconds.
+
 ```sql
 early_access(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   email TEXT NOT NULL UNIQUE COLLATE NOCASE,
   created_at TEXT NOT NULL,
-  source TEXT,          -- page the form was submitted from
-  consent_version TEXT NOT NULL
+  source TEXT,              -- page the form was submitted from
+  consent_version TEXT NOT NULL,       -- CONSENT_VERSION of the text the person last submitted under
+  status TEXT NOT NULL DEFAULT 'legacy_unconfirmed'
+    CHECK (status IN ('pending','confirmed','legacy_unconfirmed')),
+  confirmed_at TEXT,
+  last_email_at TEXT,       -- per-address throttle: last email sent to this address
+  email_day TEXT,           -- UTC day of email_day_count
+  email_day_count INTEGER NOT NULL DEFAULT 0
+)
+early_access_tokens(        -- single-use confirmation and removal links
+  token_hash TEXT PRIMARY KEY,  -- hex SHA-256 of a random 32-byte code; the code is only in the email
+  early_access_id INTEGER NOT NULL REFERENCES early_access(id) ON DELETE CASCADE,
+  purpose TEXT NOT NULL CHECK (purpose IN ('confirm','remove')),
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL      -- created_at + 72 h
+)
+email_send_budget(          -- site-wide emails per UTC day (only today's row is kept)
+  day TEXT PRIMARY KEY,
+  sent INTEGER NOT NULL
 )
 ```
 
-No IP addresses or user agents are stored.
+- **pending**: joined, confirmation email sent. Deleted (with its links) once no confirmation
+  link is live and it is older than 72 h — by the hourly cron and on every form request.
+- **confirmed**: the owner pressed Confirm on the page a confirmation link opens (a POST; GET
+  never confirms).
+- **legacy_unconfirmed**: joined before double opt-in (the migration's column default, so rows the
+  previous Worker writes during a rollout get it too). Never emailed automatically and never
+  deleted by the cleanup; `tooling/admin/request-legacy-confirmation.mjs` sends each one a
+  one-time request and makes it `pending`.
+- Links are consumed by a `DELETE … RETURNING`, so a code works at most once even under
+  concurrency. A removal link deletes the row and every link.
+- No IP addresses, user agents, link codes or email contents are stored.
 
 ## 4. Cloud data (API, Cloudflare D1 `kalcode-api`)
 

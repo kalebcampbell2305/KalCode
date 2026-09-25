@@ -66,12 +66,15 @@ uniform vec4 uBeam;  // x, contact y, orb size s, intensity
 uniform vec4 uSurge; // position along the beam (0..1), visibility, unused, unused
 uniform vec4 uPh;    // fibre scroll (mod 64), mote scroll (mod 64), unused, unused
 uniform vec4 uBand;  // text-safe band: top y, bottom y (canvas px, y up), level inside, level below
+uniform vec4 uOrigin; // stream origin x, y (canvas px, y up), platform ring radius (0 = none), ripple 0..1
+uniform vec4 uUp;     // upward continuation: start y (behind the sphere top), end y, strength (0 = off), pulse 0..1 (-1 = none)
 void main() {
   vec2 fc = gl_FragCoord.xy;
   float s = uBeam.z;
   float dx = fc.x - uBeam.x;
   float adx = abs(dx);
-  float v = fc.y / uBeam.y;
+  float yb = fc.y - uOrigin.y;
+  float v = yb / max(1.0, uBeam.y - uOrigin.y);
   float up = smoothstep(0.55, 1.0, v);
   float low = pow(max(1.0 - v, 0.0), 3.0);
   // Everything fades to zero before the quad's edge (no visible rectangle).
@@ -97,16 +100,26 @@ void main() {
   }
 
   float I = uBeam.w * (0.85 + 0.35 * up);
+
+  // Text-safe band: behind the headline the sharp core almost disappears while a soft volume of
+  // light stays, so the column still reads as continuous; below the band it resumes.
+  float e = 20.0 * uPx;
+  float below = 1.0 - smoothstep(uBand.y - e, uBand.y + e, fc.y);
+  float inBand = (1.0 - below) * (1.0 - smoothstep(uBand.x - e, uBand.x + e, fc.y));
+  float kCore = mix(mix(1.0, uBand.z, inBand), uBand.w, below);
+  float kGlow = mix(mix(1.0, min(1.0, uBand.z * 2.6), inBand), uBand.w, below);
   float cut = 1.0 - smoothstep(0.985, 1.03, v);
 
   // Source haze at the bottom edge: the stream arrives from a larger system below the fold.
-  float hz = exp(-pow(dx / (s * 0.26), 2.0)) * exp(-fc.y / (s * 0.085));
-  float floorGlow = exp(-pow(dx / (s * 0.4), 2.0)) * exp(-fc.y / (s * 0.03));
-  float rays = 0.6 + 0.8 * vnoise(vec2(atan(dx, fc.y + s * 0.35) * 26.0, uPh.x * 0.25));
+  float ay = max(yb, -yb * 4.0);
+  float hz = exp(-pow(dx / (s * 0.26), 2.0)) * exp(-ay / (s * 0.085));
+  float floorGlow = exp(-pow(dx / (s * 0.4), 2.0)) * exp(-ay / (s * 0.03));
+  float rays = 0.6 + 0.8 * vnoise(vec2(atan(dx, yb + s * 0.35) * 26.0, uPh.x * 0.25));
+  cut *= smoothstep(-0.012 * s, 0.0, yb);
 
-  vec3 L = vec3(0.86, 0.93, 1.0) * core * (0.95 + 2.2 * sp) * I
-         + vec3(0.26, 0.52, 1.0) * glow * fib * 0.7 * (1.0 + 1.6 * sp) * I
-         + vec3(0.09, 0.22, 0.78) * halo * 0.2 * I * (1.0 - 0.6 * uInk);
+  vec3 L = vec3(0.86, 0.93, 1.0) * core * (0.95 + 2.2 * sp) * I * kCore
+         + (vec3(0.26, 0.52, 1.0) * glow * fib * 0.7 * (1.0 + 1.6 * sp) * I
+         + vec3(0.09, 0.22, 0.78) * halo * 0.2 * I * (1.0 - 0.6 * uInk)) * kGlow;
   L *= cut;
   L += (vec3(0.18, 0.42, 1.0) * hz * rays * 0.42 + vec3(0.10, 0.26, 0.85) * floorGlow * 0.2) * uBeam.w;
   L *= win;
@@ -120,14 +133,32 @@ void main() {
       vec2 c = vec2(0.5 + (hash(id.yx + 1.3) - 0.5) * 0.5, 0.5);
       vec2 o = (fract(cell) - c) * vec2(6.0, 30.0);
       float m = exp(-(o.x * o.x + o.y * o.y * 0.08) / 0.9);
-      L += vec3(0.7, 0.85, 1.0) * m * 0.55 * exp(-adx / (wg * 1.2)) * I * (1.0 - up * 0.6);
+      L += vec3(0.7, 0.85, 1.0) * m * 0.55 * exp(-adx / (wg * 1.2)) * I * (1.0 - up * 0.6) * kCore;
     }
   }
-  // Text-safe band: the stream dims behind the headline and resumes faintly below it.
-  float e = 20.0 * uPx;
-  float below = 1.0 - smoothstep(uBand.y - e, uBand.y + e, fc.y);
-  float inBand = (1.0 - below) * (1.0 - smoothstep(uBand.x - e, uBand.x + e, fc.y));
-  L *= mix(mix(1.0, uBand.z, inBand), uBand.w, below);
+
+  // Orbital platform: a light pool where the stream leaves the ring centre, and a ripple that
+  // runs out across the rings each time a surge launches. Rings are ~10:1 in perspective.
+  if (uOrigin.z > 0.0) {
+    vec2 dp = vec2(fc.x - uOrigin.x, yb * 10.0);
+    float rn = length(dp) / uOrigin.z;
+    float pool = exp(-rn * 7.0) * 0.4 + exp(-rn * 2.2) * 0.06;
+    float rip = exp(-pow((rn - uOrigin.w) / 0.03, 2.0)) * (1.0 - uOrigin.w) * smoothstep(0.0, 0.08, uOrigin.w);
+    L += vec3(0.28, 0.55, 1.0) * (pool + rip * 0.35) * uBeam.w * (1.0 - smoothstep(0.9, 1.1, rn));
+  }
+  // Upward continuation: a faint thread of the same energy leaving the top of the orb, fading
+  // to nothing well below the page's navigation; each surge sends a soft echo up it.
+  if (uUp.z > 0.0 && fc.y > uUp.x) {
+    float tu = (fc.y - uUp.x) / max(1.0, uUp.y - uUp.x);
+    float fade = pow(1.0 - clamp(tu, 0.0, 1.0), 1.5) * smoothstep(0.0, 0.08, tu);
+    float wcu = uPx * (0.9 + 0.6 * tu);
+    float wgu = s * (0.014 + 0.035 * tu);
+    float coreU = exp(-dx * dx / (wcu * wcu));
+    float glowU = exp(-adx / wgu);
+    float echo = uUp.w < 0.0 ? 0.0 : exp(-pow((tu - uUp.w) / 0.09, 2.0)) * (1.0 - uUp.w);
+    L += (vec3(0.8, 0.9, 1.0) * coreU * (0.4 + 1.1 * echo) + vec3(0.24, 0.5, 1.0) * glowU * fib * (0.22 + 0.5 * echo))
+       * fade * uUp.z * uBeam.w;
+  }
   gl_FragColor = emit(L, vec3(0.0), 0.0);
 }
 `;

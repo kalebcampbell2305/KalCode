@@ -81,36 +81,39 @@ export function platformRows(manifest: ReleaseManifest): PlatformRow[] {
 }
 
 export interface DownloadCta {
-  /** "download" when a Windows build is published; otherwise "early-access". */
-  kind: "download" | "early-access";
+  /** "download" when a Windows build is published; otherwise "pending" (no public build). */
+  kind: "download" | "pending";
+  /** Always "Download KalCode": the state is carried by the link and the note, never a bait label. */
   label: string;
+  /** The installer itself when published; the honest download page otherwise. */
   href: string;
-  /** Short status shown beside or under the button. */
+  /** The OS the direct link serves, so scripts can route other systems to the download page. */
+  os: ReleaseOs | null;
+  /** Short status shown under the button. */
   note: string;
 }
 
 /**
- * The site-wide primary call to action. With a published Windows build it offers that build on
- * the download page (where version, size and checksum are shown); without one it says so and
- * points at early access. `earlyAccessHref` lets a page that carries the form link to it in place.
+ * The site-wide primary call to action. With a published Windows build it is the real download
+ * (the installer URL the Worker serves), with version and size in the note; without one it goes
+ * to the download page, which says there is no public build yet, and the note says so too.
  */
-export function downloadCta(
-  manifest: ReleaseManifest = RELEASES,
-  earlyAccessHref = "/download#early-access",
-): DownloadCta {
+export function downloadCta(manifest: ReleaseManifest = RELEASES): DownloadCta {
   const windows = buildFor(manifest, "windows");
   if (manifest.latest && windows) {
     return {
       kind: "download",
-      label: "Download for Windows",
-      href: "/download#windows",
-      note: `Preview ${manifest.latest.version} · ${formatBytes(windows.size)} · ${windows.label}`,
+      label: "Download KalCode",
+      href: windows.url,
+      os: "windows",
+      note: `Windows · Preview ${manifest.latest.version} · ${formatBytes(windows.size)}`,
     };
   }
   return {
-    kind: "early-access",
-    label: "Join early access",
-    href: earlyAccessHref,
+    kind: "pending",
+    label: "Download KalCode",
+    href: "/download",
+    os: null,
     note: "No public build yet",
   };
 }

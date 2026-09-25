@@ -18,6 +18,24 @@ function wire(story: HTMLElement): void {
   const steps = qsa(story, "[data-kc-step]");
   const root = story.querySelector<HTMLElement>(".kc-story__stage [data-kc-app]");
   let current = 0;
+
+  // The window enters once, when the pinned stage first comes into view.
+  const sticky = story.querySelector<HTMLElement>(".kc-story__sticky");
+  if (sticky && !reducedMotion() && "IntersectionObserver" in window) {
+    story.dataset.enter = "waiting";
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((e) => e.isIntersecting)) return;
+        io.disconnect();
+        story.dataset.enter = "playing";
+        window.setTimeout(() => {
+          story.dataset.enter = "done";
+        }, 1100);
+      },
+      { threshold: 0.25 },
+    );
+    io.observe(sticky);
+  }
   watchLogs(story);
 
   const go = (index: number) => {

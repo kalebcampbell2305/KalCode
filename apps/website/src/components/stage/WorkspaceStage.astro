@@ -1,0 +1,120 @@
+---
+/**
+ * WorkspaceStage: the flagship workspace picture. One blue-lit KalCode window with the explorer
+ * (planned), three provider terminals side by side (Claude Code, Codex, Gemini CLI, each in its own
+ * CLI's style), the Threads panel with what every agent has done and is doing, and a status bar.
+ * Hover or focus a thread in the panel and its terminal lights up. On entry the window opens and
+ * the panes assemble; without JS or with reduced motion it is a finished still.
+ */
+import {
+  FILE_TREE,
+  PROVIDERS,
+  STATUS,
+  statusFor,
+  threadById,
+  WORKSPACE,
+  WORKSPACE_THREADS,
+} from "../../data/story";
+import Explorer from "./parts/Explorer.astro";
+import Glyph from "./parts/Glyph.astro";
+import Pane from "./parts/Pane.astro";
+import StageLabel from "./parts/StageLabel.astro";
+import StageStyles from "./parts/StageStyles.astro";
+import StatusLabel from "./parts/StatusLabel.astro";
+
+interface Props {
+  id?: string;
+  headingLevel?: 2 | 3 | 4;
+  width?: "contained" | "wide" | "full";
+  class?: string;
+}
+const { id = "workspace", width = "wide", class: className } = Astro.props;
+const threads = WORKSPACE_THREADS.map((w) => ({ ...w, thread: threadById(w.id) }));
+const working = threads.filter((t) => STATUS[statusFor(t.thread, "approved")].group === "working").length;
+---
+<StageStyles />
+<div class:list={["kc-ws", `kc-w--${width}`, className]} id={id} data-kc-ws data-phase="still" data-testid="workspace-stage">
+  <div class="kc-ws__head">
+    <StageLabel tag="Terminals are built · the explorer and side-by-side panes are planned" />
+  </div>
+  <div class="kc-ws__stage kc-floor">
+    <div class="kc-ws__frame kc-lit" data-kc-app data-interactive="false" data-panes={threads.map((t) => t.id).join(" ")} data-focus="claude-checkout" data-approval="approved" role="img" aria-label="Preview: the KalCode workspace for atlas-api. An explorer on the left, Claude Code, Codex and Gemini CLI terminals side by side, the Threads panel on the right showing each agent's steps, and a status bar.">
+      <div class="kc-ws__bar" aria-hidden="true">
+        <span class="kc-ws__brand"><img src="/assets/brand/kalcode-mark-64.png" alt="" width="18" height="18" loading="lazy" decoding="async" /><span class="kc-rail__word"></span></span>
+        <span class="kc-ws__crumb"><span class="kc-i" data-i="folder"></span>{WORKSPACE.name}<span class="kc-ws__sep">/</span><span class="kc-i" data-i="branch"></span>feat/rate-limit</span>
+        <span class="kc-ws__search"><span class="kc-i" data-i="search"></span>Search or run a command<kbd>Ctrl K</kbd></span>
+        <span class="kc-app__winctl kc-ws__winctl"><span class="kc-i" data-i="minus"></span><span class="kc-i" data-i="square"></span><span class="kc-i" data-i="close"></span></span>
+      </div>
+
+      <div class="kc-ws__body" aria-hidden="true">
+        <aside class="kc-ws__side">
+          <ul class="kc-ws__nav" role="list">
+            <li><span class="kc-i" data-i="dashboard"></span>Dashboard</li>
+            <li data-current><span class="kc-i" data-i="code"></span>Code</li>
+            <li><span class="kc-i" data-i="threads"></span>Threads</li>
+            <li><span class="kc-i" data-i="voice"></span>KalVoice</li>
+          </ul>
+          <Explorer />
+        </aside>
+
+        <div class="kc-ws__panes">
+          {threads.map((t, i) => (
+            <Pane thread={t.thread} approval="approved" interactive={false} open={true} focus={i === 0} still />
+          ))}
+        </div>
+
+        <aside class="kc-ws__agents">
+          <p class="kc-ws__tabs"><span data-current>Threads</span><span>Agents</span><span>Files</span></p>
+          <ul class="kc-ws__threads" role="list">
+            {threads.map((t) => (
+              <li class="kc-ws__thread" data-thread={t.id} data-provider={t.thread.provider}>
+                <p class="kc-ws__ttop">
+                  <Glyph provider={t.thread.provider} />
+                  <b>{PROVIDERS[t.thread.provider].name}</b>
+                  <StatusLabel status={statusFor(t.thread, "approved")} />
+                </p>
+                <p class="kc-ws__tname2">{t.thread.name}</p>
+                <ol class="kc-ws__steps" role="list">
+                  {t.steps.map((s) => (
+                    <li data-state={s.state}>
+                      <span class="kc-ws__stepmark"></span>
+                      {s.label}
+                    </li>
+                  ))}
+                </ol>
+              </li>
+            ))}
+          </ul>
+          <div class="kc-ws__composer">
+            <span>Message Claude Code</span>
+            <span class="kc-ws__send">Ctrl Enter</span>
+          </div>
+        </aside>
+      </div>
+
+      <div class="kc-ws__status" aria-hidden="true">
+        <span><span class="kc-dot" data-tone="live"></span>Core running</span>
+        <span><span class="kc-i" data-i="branch"></span>feat/rate-limit</span>
+        <span>{working} working · 1 needs approval</span>
+        <span class="kc-ws__statusgap"></span>
+        <span><span class="kc-i" data-i="voice"></span>KalVoice ready · F8</span>
+        <span>Approve mode</span>
+        <span>UTF-8 · LF</span>
+      </div>
+    </div>
+  </div>
+  <div class="kc-ws__legend" role="group" aria-label="Light up an agent's terminal">
+    {threads.map((t) => (
+      <button type="button" class="kc-maw__chip" data-kc-ws-thread={t.id} data-provider={t.thread.provider} aria-pressed="false" data-testid={`ws-chip-${t.id}`}>
+        <Glyph provider={t.thread.provider} />
+        <span>{PROVIDERS[t.thread.provider].name}</span>
+        <span class="kc-ws__chipname">{t.thread.name}</span>
+      </button>
+    ))}
+  </div>
+  <p class="visually-hidden" aria-live="polite" data-kc-ws-live></p>
+</div>
+
+<script>
+  import "../../scripts/stage/workspace";
+</script>

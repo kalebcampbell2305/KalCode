@@ -5,8 +5,12 @@ const STAGE_URL = process.env.STAGE_URL ?? "/";
 
 async function open(page: Page): Promise<Locator> {
   await page.goto(STAGE_URL);
-  const block = page.getByTestId("permission-modes");
-  test.skip((await block.count()) === 0, `PermissionModes is not on ${STAGE_URL}`);
+  // The full variant (the compact table is covered in stage-moments.spec.ts).
+  const block = page
+    .getByTestId("permission-modes")
+    .filter({ has: page.getByTestId("permissions-full") })
+    .first();
+  test.skip((await block.count()) === 0, `The full PermissionModes is not on ${STAGE_URL}`);
   await block.scrollIntoViewIfNeeded();
   await expect(block).toHaveAttribute("data-kc-bound", "true");
   return block;

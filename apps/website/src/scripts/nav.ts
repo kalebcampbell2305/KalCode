@@ -1,9 +1,31 @@
 /**
- * Mobile navigation disclosure: the menu button toggles the nav panel, focus moves into the
- * panel on open, Escape or an outside click closes it, and focus returns to the button.
+ * Header behaviour.
+ * - Scroll state: the header is transparent over the first viewport and gains a dark surface
+ *   (data-scrolled) once the page moves. One passive listener, coalesced to one frame.
+ * - Mobile navigation disclosure: the menu button toggles the nav sheet, focus moves into it on
+ *   open, Escape or an outside click closes it, and focus returns to the button.
  */
+const header = document.querySelector<HTMLElement>(".site-header");
 const button = document.querySelector<HTMLButtonElement>("[data-menu-button]");
 const nav = document.querySelector<HTMLElement>("[data-site-nav]");
+
+if (header) {
+  let queued = false;
+  const update = () => {
+    queued = false;
+    header.toggleAttribute("data-scrolled", window.scrollY > 8);
+  };
+  window.addEventListener(
+    "scroll",
+    () => {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(update);
+    },
+    { passive: true },
+  );
+  update();
+}
 
 if (button && nav) {
   const desktop = window.matchMedia("(min-width: 62rem)");
@@ -14,6 +36,7 @@ if (button && nav) {
     button.setAttribute("aria-expanded", "true");
     button.setAttribute("aria-label", "Close menu");
     nav.setAttribute("data-open", "");
+    header?.setAttribute("data-menu-open", "");
     nav.querySelector<HTMLElement>("a")?.focus();
   };
 
@@ -21,6 +44,7 @@ if (button && nav) {
     button.setAttribute("aria-expanded", "false");
     button.setAttribute("aria-label", "Menu");
     nav.removeAttribute("data-open");
+    header?.removeAttribute("data-menu-open");
     if (returnFocus) button.focus();
   };
 

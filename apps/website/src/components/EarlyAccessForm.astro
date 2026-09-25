@@ -12,6 +12,8 @@ const emailId = `${id}-email`;
 const statusId = `${id}-status`;
 const consentId = `${id}-consent`;
 const trapId = `${id}-website`;
+// The consent text below is versioned: changing its wording means bumping CONSENT_VERSION in
+// src/lib/site.ts (stored with every sign-up).
 ---
 <form method="post" class="form needs-js" data-api-form="signup" data-source={source} novalidate>
   <label class="form__label" for={emailId}>Email address</label>
@@ -38,8 +40,9 @@ const trapId = `${id}-website`;
   </div>
   <p id={statusId} class="form__status" role="status" aria-live="polite"></p>
   <p id={consentId} class="form__consent">
-    We use your address only to email you about KalCode early access and launch. Read the
-    <a href="/privacy">privacy notice</a>; you can remove your email at any time.
+    We'll email you a link to confirm your address, then use it only to contact you about
+    KalCode early access and launch. Read the <a href="/privacy">privacy notice</a>; you can
+    remove your email at any time.
   </p>
 </form>
 <noscript>

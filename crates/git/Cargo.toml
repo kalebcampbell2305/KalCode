@@ -22,6 +22,12 @@ sha2 = "0.10"
 ignore = "0.4"
 notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
 
+# Open-then-verify reads (`paths::opened_path`): the identity of an opened handle (volume +
+# file index on Windows, device + inode elsewhere) where the OS has no safe final-path query.
+# Already in the tree through `ignore` → `walkdir`.
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+same-file = "1"
+
 [dev-dependencies]
 tempfile.workspace = true
 

@@ -1,0 +1,177 @@
+---
+/**
+ * CommandCenterStage: the Dashboard as a full-width live command center. KPI row (sample data)
+ * with an activity chart, the thread roster moving through the app's own statuses on a
+ * deterministic loop (Running command, Testing, Needs approval, Needs your reply, Paused,
+ * Completed), recent activity, a real approval card (Deny · Allow for workspace · Allow for
+ * thread · Approve once) the visitor can answer, and a strip of live terminals. Hover or focus an
+ * agent and its terminal glows, and the other way round. Waiting for you is neutral grey; amber is
+ * only Paused. Without JS or with reduced motion a mid-run snapshot is shown.
+ */
+import {
+  COMMAND_CENTER,
+  PROVIDERS,
+  STATUS,
+  summarize,
+  summaryLead,
+  type Thread,
+  type ThreadStatus,
+  threadById,
+  ZOD_APPROVAL,
+} from "../../data/story";
+import ApprovalCard from "./parts/ApprovalCard.astro";
+import Glyph from "./parts/Glyph.astro";
+import StageLabel from "./parts/StageLabel.astro";
+import StageStyles from "./parts/StageStyles.astro";
+import StatusLabel from "./parts/StatusLabel.astro";
+
+interface Props {
+  id?: string;
+  headingLevel?: 2 | 3 | 4;
+  width?: "contained" | "wide" | "full";
+  class?: string;
+}
+const { id = "command-center", width = "wide", class: className } = Astro.props;
+
+// Static render: a mid-run snapshot (the reduced-motion and no-JS picture).
+const snapshot: Record<string, { status: ThreadStatus; activity: string; tail: string }> = { ...COMMAND_CENTER.start };
+for (const beat of COMMAND_CENTER.beats.slice(0, 5)) {
+  snapshot[beat.agent] = { status: beat.status, activity: beat.activity, tail: beat.tail ?? snapshot[beat.agent]?.tail ?? "" };
+}
+const agents: Thread[] = COMMAND_CENTER.agents.map((a) => threadById(a));
+const statuses = agents.map((t) => snapshot[t.id]?.status ?? t.status);
+const summary = summarize(statuses, 1);
+const completed = COMMAND_CENTER.completedToday + statuses.filter((s) => s === "completed").length;
+const firstUser = (t: Thread) => {
+  const u = t.transcript.find((l) => l.t === "user");
+  return u && u.t === "user" ? u.text : t.name;
+};
+const kpis = [
+  { key: "working", label: "Working now", value: summary.working, icon: "working", tone: "live" },
+  { key: "waiting", label: "Waiting for you", value: summary.approvals + summary.reply, icon: "approval", tone: "waiting" },
+  { key: "completed", label: "Completed today", value: completed, icon: "done", tone: "success" },
+  { key: "terminals", label: "Terminals", value: summary.terminals, icon: "terminal", tone: "idle" },
+] as const;
+const peak = Math.max(...COMMAND_CENTER.activity);
+const barW = 100 / COMMAND_CENTER.activity.length;
+const totalActions = COMMAND_CENTER.activity.reduce((a, b) => a + b, 0);
+---
+<StageStyles />
+<div class:list={["kc-cc", `kc-w--${width}`, className]} id={id} data-kc-cc data-testid="command-center">
+  <div class="kc-cc__head">
+    <StageLabel tag="Development build · KPIs are sample data" />
+    <p class="kc-cc__live"><span class="kc-cc__livedot" aria-hidden="true"></span>Live · atlas-api · 6 agents</p>
+  </div>
+
+  <div class="kc-floor">
+    <div class="kc-cc__frame kc-lit">
+      <div class="kc-cc__top">
+        <div class="kc-cc__title">
+          <p class="kc-cc__h">Dashboard</p>
+          <p class="kc-cc__lead" data-kc-dash-lead>{summaryLead(summary)}</p>
+        </div>
+        <p class="kc-cc__range"><span class="kc-i" data-i="hourglass" aria-hidden="true"></span>Last 24 hours · sample data</p>
+      </div>
+
+      <div class="kc-cc__kpis">
+        {kpis.map((k) => (
+          <div class="kc-cc__kpi" data-tone={k.tone}>
+            <p class="kc-cc__kpil"><span class="kc-i" data-i={k.icon} aria-hidden="true"></span>{k.label}</p>
+            <p class="kc-cc__kpin" data-kc-count={k.key}>{k.value}</p>
+          </div>
+        ))}
+        <div class="kc-cc__kpi kc-cc__chart">
+          <p class="kc-cc__kpil"><span class="kc-i" data-i="tool" aria-hidden="true"></span>Agent actions · 24 h <span class="kc-cc__total">{totalActions.toLocaleString("en-US")}</span></p>
+          <svg viewBox="0 0 100 34" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+            {COMMAND_CENTER.activity.map((v, i) => (
+              <rect
+                class:list={["kc-cc__bar", i === COMMAND_CENTER.activity.length - 1 && "kc-cc__bar--now"]}
+                x={(i * barW + 0.4).toFixed(2)}
+                width={(barW - 0.8).toFixed(2)}
+                y={(34 - (v / peak) * 32).toFixed(2)}
+                height={((v / peak) * 32).toFixed(2)}
+                rx="0.6"
+              />
+            ))}
+          </svg>
+        </div>
+      </div>
+
+      <div class="kc-cc__grid">
+        <div class="kc-cc__roster">
+          <p class="kc-dash__h">Threads <span class="kc-count kc-count--plain">{agents.length}</span></p>
+          <ul class="kc-cc__rows" role="list">
+            {agents.map((t) => {
+              const s = snapshot[t.id];
+              return (
+                <li class="kc-cc__row" data-agent={t.id} data-provider={t.provider}>
+                  <button type="button" class="kc-cc__rowbtn" data-kc-cc-agent={t.id} aria-pressed="false" data-testid={`cc-row-${t.id}`}>
+                    <span class="kc-cc__rstatus"><StatusLabel status={s?.status ?? t.status} threadId={t.id} /></span>
+                    <span class="kc-cc__rmain">
+                      <span class="kc-cc__rname">{t.name}</span>
+                      <span class="kc-cc__ract" data-kc-cc-activity={t.id}>{s?.activity ?? t.activity}</span>
+                    </span>
+                    <span class="kc-cc__rprov"><Glyph provider={t.provider} />{PROVIDERS[t.provider].name}</span>
+                    <span class="kc-cc__rbranch"><span class="kc-i" data-i="branch" aria-hidden="true"></span>{t.branch}</span>
+                    <span class="kc-cc__rdur">{t.duration}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+
+        <div class="kc-cc__side">
+          <div class="kc-cc__queue" data-kc-cc-queue>
+            <p class="kc-dash__h"><span class="kc-i" data-i="approval" aria-hidden="true"></span>Needs approval</p>
+            <ApprovalCard uid={id} approval={ZOD_APPROVAL} state="pending" interactive={true} />
+            <p class="kc-cc__empty" data-kc-cc-empty>Nothing needs you right now. New requests appear here the moment an agent asks.</p>
+          </div>
+          <div class="kc-cc__feed">
+            <p class="kc-dash__h">Recent activity</p>
+            <ol class="kc-cc__events" role="list" data-kc-cc-feed>
+              {COMMAND_CENTER.feed.map((f) => {
+                const t = threadById(f.agent);
+                return (
+                  <li class="kc-cc__event" data-agent={f.agent} data-provider={t.provider}>
+                    <Glyph provider={t.provider} />
+                    <span class="kc-cc__etext"><b>{PROVIDERS[t.provider].name}</b> {f.text}</span>
+                    <span class="kc-cc__eago">{f.ago}</span>
+                  </li>
+                );
+              })}
+            </ol>
+          </div>
+        </div>
+      </div>
+
+      <div class="kc-cc__terms">
+        <p class="kc-dash__h">Live terminals</p>
+        <ul class="kc-cc__thumbs" role="list">
+          {agents.map((t) => {
+            const s = snapshot[t.id];
+            return (
+              <li class="kc-cc__thumb" data-agent={t.id} data-provider={t.provider} data-testid={`cc-thumb-${t.id}`}>
+                <p class="kc-cc__thead">
+                  <Glyph provider={t.provider} />
+                  <b>{PROVIDERS[t.provider].name}</b>
+                  <StatusLabel status={s?.status ?? t.status} threadId={t.id} variant="dot" />
+                </p>
+                <div class="kc-cc__tbody" aria-hidden="true">
+                  <p class="kc-cc__tl kc-cc__tl--prompt">{t.provider === "codex" ? "›" : ">"} {firstUser(t)}</p>
+                  <p class="kc-cc__tl" data-kc-cc-line="1">{STATUS[s?.status ?? t.status].label}</p>
+                  <p class="kc-cc__tl kc-cc__tl--last" data-kc-cc-line="2">{s?.tail}</p>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    </div>
+  </div>
+  <p class="visually-hidden" aria-live="polite" data-kc-cc-live data-testid={`live-${id}`}></p>
+</div>
+
+<script>
+  import "../../scripts/stage/command-center";
+</script>

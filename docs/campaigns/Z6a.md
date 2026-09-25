@@ -278,12 +278,14 @@ Ranges are two runs; the machine was shared with other builds. Process start of 
 
 | Suite | Result |
 | --- | --- |
-| `kalcode_git` unit tests | 37 passed |
+| `kalcode_git` unit tests | 38 passed |
 | `tests/checkpoints.rs` | 10 passed |
 | `tests/files_and_handles.rs` | 8 passed |
 | `tests/hostile_config.rs` | 3 passed |
 | `tests/repo_ops.rs` | 8 passed |
 | `tests/worktrees.rs` | 3 passed |
+| `tests/sec_latent_store.rs` (SEC-LATENT, §11) | 7 passed |
+| `tests/sec_latent_open_verified.rs` (SEC-LATENT, §11) | 5 passed |
 | `tests/perf.rs` | 1 passed + 1 ignored by default (run above) |
 | `packages/ui` Vitest (`DiffView.test.tsx`) | 11 passed |
 | `packages/ui` Playwright (`tests/diffview`, port 1443) | 6 passed |
@@ -294,9 +296,55 @@ Ranges are two runs; the machine was shared with other builds. Process start of 
 
 | File | Change |
 | --- | --- |
-| `Cargo.lock` | `ignore`, `notify` (+ transitive) for `crates/git` |
+| `Cargo.lock` | `ignore`, `notify` (+ transitive) for `crates/git`; SEC-LATENT: `same-file` (every OS except Linux) as a direct dependency — already in the tree through `ignore` → `walkdir`, no new crate |
 | `packages/ui/package.json`, `pnpm-lock.yaml` | `test` / `test:ui` scripts; dev dependencies for Vitest and the Playwright component test (same versions as `apps/desktop`) |
 | `packages/ui/src/components/index.ts` | exports `DiffView`, its model helpers and types |
 
 Nothing in `crates/contracts`, `EventPayload`, native-core, `lib.rs`, `build.rs`,
 `capabilities/main.json`, `generated/index.ts` or shell files was changed.
+
+## 11. Security hardening (SEC-LATENT, review of 1bce77f)
+
+Gate from `docs/campaigns/ADVANCED.md` §14b ("checkpoint store inside-workspace guard skipped on
+first use: fix before Z6a IPC wiring"). Full write-up: `docs/campaigns/SEC-LATENT.md`.
+
+| Finding | Fix | Evidence |
+| --- | --- | --- |
+| **Store guard skipped on first use.** `prepare` compared `canonicalize(base_dir)` with the workspace, and `canonicalize` fails while the store folder doesn't exist yet, so the first checkpoint (and `create_dir_all`) happened inside the workspace (review PoC `zz_review_store_inside.rs`). | `CheckpointStore::check_location` runs on every workspace entry point (`create`, `plan_restore`, `execute_restore`, `diff`, `export_branch` — all go through `prepare`) **before** anything is created and again right after the folder is created. The location is `paths::resolve_nearest`: nearest existing ancestor canonicalized (links, junctions, 8.3 names, letter case) plus the missing rest appended lexically; the purely lexical form (`..` popped) is checked too. Overlap is refused in **both** directions (store inside workspace, workspace inside store), component-wise, case-insensitively on Windows (`paths::is_within`). | `tests/sec_latent_store.rs`: 6 of 7 failed before the fix (`store_inside_workspace_is_refused_on_first_use`, `every_workspace_entry_point_is_guarded_on_first_use`, `dot_dot_and_missing_components_do_not_hide_the_workspace`, `other_letter_case_is_the_same_folder_on_windows`, `a_link_into_the_workspace_is_followed_on_first_use` (junction), `workspace_inside_the_store_is_refused`); all 7 pass after, including the control `store_outside_the_workspace_still_works_on_first_use`. |
+| **Check-then-open race on workspace reads.** Snapshots resolved paths during the walk and opened them later; a file or folder swapped for a link/junction in between made `File::open` read outside content into a checkpoint (and a restore could write it back). Consumers reading by handle had only `resolve` (a path) and opened it themselves. | Open-then-verify: `WorkspaceRoot::open_verified(rel)` opens first, then `verify_opened` establishes where the **opened handle** is — on Linux the kernel's final path (`/proc/self/fd/N`); on Windows and other systems the path is resolved canonically again (containment-checked) and the handle must be that very file (`same_file`: volume serial + file index via `GetFileInformationByHandle` on Windows, device + inode on Unix) — and refuses it unless it is inside the workspace and not under `.git`. A handle obtained through a swap is a different file and is refused even if the link is swapped back. No `unsafe` code: `GetFinalPathNameByHandleW` would need an FFI call, and the workspace allows exactly one audited `unsafe` site. `HandleRegistry::open(ws, handle)` returns the verified `File` for consumers that read by handle. | `tests/sec_latent_open_verified.rs` (5): did not compile before (API missing); after: foreign handle refused (`path_outside_workspace`), directory link to outside refused, a handle whose folder was swapped for a junction after issue refused on `open`, directories refused, normal reads work. |
+
+**Read sites now on the helper:** `snapshot::read_capped` (every file content read for
+checkpoints; a refused file is skipped like any unreadable file and never enters the pack).
+`read_link` of POSIX symlinks stores the link text and never follows it; the other `fs::read*`
+calls in the crate read KalCode's own store files (`info/attributes`, manifest, marks), not
+workspace content; `index.rs` lists directory names only. The desktop shell's future
+file-content IPC must use `HandleRegistry::open`, not `resolve` + its own open.
+
+**Store-only entry points** (`delete_ref`, `collect_garbage`, `usage_bytes`, `prune_to_quota`,
+`remove_store`) take a workspace id, not a root, and never touch workspace files; they are not
+guarded (nothing to compare against) — deferred, documented.
+
+**Submodule-filter PoC** (`zz_review_submodule_filter.rs`, a filter defined only in a
+submodule's own config running during `worktree::dirty_state`): **not reproduced** on this
+machine (Git 2.54.0.windows.1) — the marker did not appear even for the PoC's own control
+(plain `git status` inside the submodule), so it proves nothing either way. Not changed; kept on
+the watch list in SEC-LATENT.md (a real fix would enumerate submodule configs and extend the
+`-c filter.<name>.*=` overrides, which propagate to submodule children through
+`GIT_CONFIG_PARAMETERS`).
+
+**Performance.** Open-then-verify costs one extra canonical resolve + two identity queries
+(the first measurement below used a final-path query of similar cost) + handle `metadata` per
+file read: 2,000 files open+read took 165–199 ms plain vs 271–416 ms verified
+(≈ 0.05–0.12 ms per file, release build, same process, interleaved rounds). No-change
+checkpoints read no files. Full perf runs on 2026-09-24 were dominated by machine load (other
+builds running; cold first snapshot 82–105 s **with and without** the change, vs 4.2 s in §8):
+
+| Run (release, 20,000 files) | no content changes | 1,000 changed | restore plan |
+| --- | ---: | ---: | ---: |
+| without open-then-verify (same machine, same hour) | 645 ms | 7.69 s (budget FAIL under load) | 886 ms |
+| with open-then-verify | 830–855 ms | 4.89–6.74 s | 1.27–1.86 s |
+| final: open-then-verify by file identity (2026-09-25, lighter load; `cargo test --release -p kalcode-git --test perf -- --ignored --nocapture`) | 731 ms | 3.67 s | 582 ms |
+
+Both budgets hold in the final run (≤ 2 s no-change and ≤ 5 s for 1,000 changed files at 20k in
+`perf.rs`); the earlier 1k-changed misses were load-bound (the run without the change missed too).
+The measured overhead of the fix for 1,000 files is ≈ 0.1 s.

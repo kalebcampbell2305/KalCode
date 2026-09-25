@@ -12,6 +12,8 @@
  * tier keeps the CSS version. Runs only while intersecting and the tab is visible; reduced
  * motion gets one WebGL still (full tier) or the CSS still. Nothing is exposed globally.
  */
+import { SPHERE_X } from "./meta";
+import { afterFirstPaint } from "./paint";
 import type { Layout } from "./renderer";
 import type { FromWorker, ToWorker } from "./worker";
 
@@ -47,20 +49,7 @@ async function whenQuiet(): Promise<void> {
   if (document.readyState !== "complete") {
     await new Promise<void>((resolve) => window.addEventListener("load", () => resolve(), { once: true }));
   }
-  await new Promise<void>((resolve) => {
-    if (performance.getEntriesByName("first-contentful-paint").length > 0) return resolve();
-    try {
-      const observer = new PerformanceObserver(() => {
-        observer.disconnect();
-        resolve();
-      });
-      observer.observe({ type: "paint", buffered: true });
-    } catch {
-      resolve();
-    }
-    setTimeout(resolve, 3000);
-  });
-  await nextFrame();
+  await afterFirstPaint();
   await nextFrame();
   await new Promise<void>((resolve) => {
     if ("requestIdleCallback" in window) window.requestIdleCallback(() => resolve(), { timeout: 2500 });
@@ -71,8 +60,11 @@ async function whenQuiet(): Promise<void> {
 function setup(root: HTMLElement): void {
   const stage = root.querySelector<HTMLElement>("[data-hero-orb-stage]");
   const frame = stage?.parentElement;
-  const poster = root.querySelector<HTMLImageElement>("img");
+  const poster = root.querySelector<HTMLImageElement>(".hero-orb__poster");
   if (!stage || !frame || !poster) return;
+
+  // Decorative planets (CSS backgrounds) load after the poster has painted.
+  void afterFirstPaint().then(() => root.classList.add("is-dressed"));
 
   const html = document.documentElement;
   const reduceQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -98,11 +90,21 @@ function setup(root: HTMLElement): void {
 
   const ink = () => ((root.closest<HTMLElement>("[data-theme]")?.dataset.theme ?? "dark") === "light" ? 1 : 0);
 
+  const originEl = root.querySelector<HTMLElement>("[data-hero-orb-origin]");
+  const worldEl = root.querySelector<HTMLElement>("[data-hero-orb-world]");
+
   function measure(): Layout | null {
     if (!canvas || !stage || !frame) return null;
     const cr = canvas.getBoundingClientRect();
     const sr = stage.getBoundingClientRect();
     if (cr.width < 1 || cr.height < 1) return null;
+    // The stream starts at the platform's ring centre (centered layout) or the frame's bottom.
+    const fr = frame.getBoundingClientRect();
+    const or = originEl?.getBoundingClientRect();
+    const originX = or ? or.left - cr.left : sr.left + sr.width * SPHERE_X - cr.left;
+    const originY = or ? or.top - cr.top : fr.bottom - cr.top;
+    // Outer ring radius: 645 of the plate's 941 source rows (same scale in both crops).
+    const platformRadius = worldEl ? worldEl.getBoundingClientRect().height * (645 / 941) : 0;
     const cs = getComputedStyle(frame);
     const num = (name: string, fallback: number) => {
       const v = Number.parseFloat(cs.getPropertyValue(name));
@@ -112,10 +114,9 @@ function setup(root: HTMLElement): void {
     const resume = num("--hero-beam-safe-resume", 1);
     let band: Layout["band"] = null;
     if (level < 1 || resume < 1) {
-      const fr = frame.getBoundingClientRect();
       band = [
         fr.top + num("--hero-beam-safe-top", 0) - cr.top,
-        fr.bottom - num("--hero-beam-safe-inset", 0) - cr.top,
+        originY - num("--hero-beam-safe-inset", 0),
         level,
         resume,
       ];
@@ -128,6 +129,9 @@ function setup(root: HTMLElement): void {
       stageY: sr.top - cr.top,
       stageSize: sr.width,
       band,
+      originX,
+      originY,
+      platformRadius,
     };
   }
 

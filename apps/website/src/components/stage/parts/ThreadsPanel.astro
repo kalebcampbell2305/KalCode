@@ -1,0 +1,51 @@
+---
+/**
+ * The Threads panel (the app's Threads view, condensed for the dock): each agent thread with its
+ * provider, status and steps. In an interactive window a thread opens and focuses its terminal.
+ */
+import { type ApprovalState, PROVIDERS, statusFor, threadById, WORKSPACE_THREADS } from "../../../data/story";
+import Btn from "./Btn.astro";
+import Glyph from "./Glyph.astro";
+import StatusLabel from "./StatusLabel.astro";
+
+interface Props {
+  approval: ApprovalState;
+  interactive: boolean;
+}
+const { approval, interactive } = Astro.props;
+const threads = WORKSPACE_THREADS.map((w) => ({ ...w, thread: threadById(w.id) }));
+---
+<div class="kc-threadsdock" data-testid="threads-panel">
+  <ul class="kc-ws__threads" role="list">
+    {threads.map((t) => (
+      <li class="kc-ws__thread" data-thread={t.id} data-provider={t.thread.provider}>
+        <Btn
+          interactive={interactive}
+          class="kc-ws__threadbtn"
+          data-kc-action="focus"
+          data-thread={t.id}
+          aria-label={interactive ? `${PROVIDERS[t.thread.provider].name}, ${t.thread.name}. Focus its terminal` : undefined}
+        >
+          <span class="kc-ws__ttop">
+            <Glyph provider={t.thread.provider} />
+            <b>{PROVIDERS[t.thread.provider].name}</b>
+            <StatusLabel status={statusFor(t.thread, approval)} threadId={t.id} />
+          </span>
+          <span class="kc-ws__tname2">{t.thread.name}</span>
+          <span class="kc-ws__steps">
+            {t.steps.map((s) => (
+              <span class="kc-ws__step" data-state={s.state}>
+                <span class="kc-ws__stepmark" aria-hidden="true"></span>
+                {s.label}
+              </span>
+            ))}
+          </span>
+        </Btn>
+      </li>
+    ))}
+  </ul>
+  <div class="kc-ws__composer" aria-hidden="true">
+    <span>Message Claude Code</span>
+    <span class="kc-ws__send">Ctrl Enter</span>
+  </div>
+</div>

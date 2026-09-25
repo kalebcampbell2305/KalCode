@@ -1,0 +1,16 @@
+---
+/**
+ * The full-bleed hero world: `HeroOrb` with layout "centered" (sky and orbital platform derived
+ * from the owner's banner, the energy column rising from the ring centre into a large centred
+ * orb). Fills its positioned parent; decorative. All props and custom properties are documented
+ * in ./HeroOrb.astro.
+ */
+import HeroOrb from "./HeroOrb.astro";
+
+interface Props {
+  sizes?: string;
+}
+
+const { sizes } = Astro.props;
+---
+<HeroOrb layout="centered" sizes={sizes} />

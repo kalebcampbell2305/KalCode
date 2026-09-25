@@ -131,7 +131,13 @@ export const MODES: readonly ModeInfo[] = [
 export interface AuthorityRow {
   action: string;
   scope: string;
+  /** Icon id (stage/icons.css). */
+  icon: string;
   outcomes: Record<PermissionMode, Outcome>;
+  /** Always asks, whatever the mode (it leaves this machine): "Ask" reads "Approval required". */
+  always?: boolean;
+  /** Shown in the compact permissions table. */
+  compact?: boolean;
 }
 
 /** Default outcomes per mode, as described in /docs/permissions. */
@@ -139,31 +145,50 @@ export const AUTHORITY: readonly AuthorityRow[] = [
   {
     action: "Read files",
     scope: "filesystem.read",
+    icon: "file",
+    compact: true,
     outcomes: { plan: "allow", approve: "allow", auto: "allow", bypass: "allow", custom: "allow" },
   },
   {
     action: "Edit files",
     scope: "filesystem.write",
+    icon: "editing",
+    compact: true,
     outcomes: { plan: "deny", approve: "ask", auto: "allow", bypass: "allow", custom: "deny" },
   },
   {
     action: "Run commands",
     scope: "terminal.execute",
+    icon: "terminal",
+    compact: true,
     outcomes: { plan: "ask", approve: "ask", auto: "allow", bypass: "allow", custom: "ask" },
   },
   {
     action: "Install packages",
     scope: "package.install",
+    icon: "plus",
     outcomes: { plan: "deny", approve: "ask", auto: "ask", bypass: "allow", custom: "deny" },
   },
   {
     action: "Network access",
     scope: "network.other",
+    icon: "globe",
+    compact: true,
     outcomes: { plan: "ask", approve: "ask", auto: "ask", bypass: "allow", custom: "ask" },
   },
   {
     action: "Push to a remote",
     scope: "git.push",
+    icon: "branch",
+    always: true,
+    outcomes: { plan: "deny", approve: "ask", auto: "ask", bypass: "ask", custom: "deny" },
+  },
+  {
+    action: "Deploy to production",
+    scope: "deploy.production",
+    icon: "play",
+    always: true,
+    compact: true,
     outcomes: { plan: "deny", approve: "ask", auto: "ask", bypass: "ask", custom: "deny" },
   },
 ];
@@ -747,7 +772,7 @@ export const MISSION = {
 
 /* ------------------------------------------------------------------ scenes */
 
-export type DockTab = "none" | "browser" | "dashboard" | "permissions";
+export type DockTab = "none" | "threads" | "browser" | "dashboard" | "permissions";
 /**
  * The KalVoice widget's states, as in the app: compact "Ready"; Listening (orb and waveform react);
  * Processing; Executing; Needs Approval; Done (dictation typed, or a command's result); Error.
@@ -1200,3 +1225,430 @@ export function summaryLead(s: Summary): string {
     : "Nothing is working right now.";
   return first + second;
 }
+
+/* ------------------------------------------------------------------ round 2: large moments */
+
+/** Panes on the multi-agent wall, in grid order (3 × 2). */
+export const WALL_PANES = [
+  "claude-checkout",
+  "codex-signup",
+  "gemini-research",
+  "claude-e2e",
+  "codex-review",
+  "claude-runner",
+] as const;
+
+/** Command Center: six agents whose status moves on a deterministic loop. */
+export interface AgentBeat {
+  /** Milliseconds from the start of the loop. */
+  at: number;
+  agent: string;
+  status: ThreadStatus;
+  activity: string;
+  /** New last line for the agent's live terminal thumbnail. */
+  tail?: string;
+  /** "ask" raises the Codex approval; "resolve" clears it. */
+  approval?: "ask" | "resolve";
+}
+
+export const COMMAND_CENTER = {
+  agents: ["claude-checkout", "codex-signup", "gemini-research", "claude-e2e", "codex-review", "claude-runner"],
+  loopMs: 20000,
+  /** Start of the loop (and the reduced-motion snapshot, together with `snapshot`). */
+  start: {
+    "claude-checkout": {
+      status: "running_command",
+      activity: "Running pnpm test checkout --repeat 20",
+      tail: "● Bash(pnpm test checkout --repeat 20)",
+    },
+    "codex-signup": {
+      status: "editing",
+      activity: "Editing src/routes/signup.ts",
+      tail: "• Edited src/routes/signup.ts (+12 -3)",
+    },
+    "gemini-research": {
+      status: "thinking",
+      activity: "Researching sliding-window limits",
+      tail: "⠋ Weighing sliding windows…",
+    },
+    "claude-e2e": {
+      status: "editing",
+      activity: "Editing tests/e2e/signup.e2e.ts",
+      tail: "● Update(tests/e2e/signup.e2e.ts)",
+    },
+    "codex-review": {
+      status: "reviewing",
+      activity: "Reviewing src/middleware/rate-limit.ts",
+      tail: "• Explored src/middleware",
+    },
+    "claude-runner": { status: "paused", activity: "Paused after upgrading vitest", tail: "⏸ Paused by you" },
+  } as Record<string, { status: ThreadStatus; activity: string; tail: string }>,
+  beats: [
+    {
+      at: 1800,
+      agent: "claude-checkout",
+      status: "testing",
+      activity: "13 of 20 runs passed",
+      tail: "  ⎿ Running… 13 of 20 passed",
+    },
+    {
+      at: 3200,
+      agent: "codex-signup",
+      status: "waiting_for_permission",
+      activity: "Waiting for approval: Install zod",
+      tail: "• Waiting for approval: pnpm add zod",
+      approval: "ask",
+    },
+    {
+      at: 4200,
+      agent: "gemini-research",
+      status: "completed",
+      activity: "Recommended a sliding-window counter",
+      tail: "✦ A sliding window in Redis fits best.",
+    },
+    {
+      at: 5400,
+      agent: "claude-e2e",
+      status: "testing",
+      activity: "Running the signup e2e suite",
+      tail: "● Bash(pnpm test:e2e -- signup)",
+    },
+    {
+      at: 6600,
+      agent: "codex-review",
+      status: "waiting_for_user",
+      activity: "Asked whether /login shares the budget",
+      tail: "• Should /login share the signup budget?",
+    },
+    {
+      at: 8200,
+      agent: "claude-checkout",
+      status: "completed",
+      activity: "20 of 20 runs passed",
+      tail: "  ⎿ 20 of 20 passed",
+    },
+    {
+      at: 9800,
+      agent: "claude-runner",
+      status: "running_command",
+      activity: "Resumed: running pnpm test",
+      tail: "● Bash(pnpm test)",
+    },
+    {
+      at: 11400,
+      agent: "codex-review",
+      status: "reviewing",
+      activity: "Separate budgets per route",
+      tail: "• Keying the window by route and IP",
+    },
+    {
+      at: 13000,
+      agent: "claude-e2e",
+      status: "completed",
+      activity: "6th signup in a minute gets 429",
+      tail: "  ⎿ 18 passed",
+    },
+    {
+      at: 14600,
+      agent: "claude-runner",
+      status: "completed",
+      activity: "214 passed (38 files)",
+      tail: "  ⎿ 214 passed (38 files)",
+    },
+    {
+      at: 16200,
+      agent: "codex-review",
+      status: "completed",
+      activity: "Review posted: 2 suggestions",
+      tail: "─ Worked for 2m 14s ─",
+    },
+  ] as readonly AgentBeat[],
+  /** After an approval: what Codex does next, relative to the decision. */
+  afterApproval: [
+    {
+      at: 400,
+      agent: "codex-signup",
+      status: "running_command",
+      activity: "Running pnpm add zod",
+      tail: "• Ran pnpm add zod",
+    },
+    {
+      at: 2200,
+      agent: "codex-signup",
+      status: "testing",
+      activity: "Running pnpm test -- signup",
+      tail: "  └ PASS tests/signup.spec.ts",
+    },
+    {
+      at: 4400,
+      agent: "codex-signup",
+      status: "completed",
+      activity: "Bad input now gets a 422",
+      tail: "─ Worked for 1m 08s ─",
+    },
+  ] as readonly Omit<AgentBeat, "approval">[],
+  /** Seconds to wait for a visitor's decision before the preview answers Approve once itself. */
+  autoApproveMs: 6000,
+  /** Sample KPI baselines (labelled sample data on the page). */
+  completedToday: 11,
+  /** Agent actions per hour over the last 24 hours (tool calls and commands). */
+  activity: [14, 9, 6, 4, 3, 5, 12, 26, 41, 58, 63, 55, 61, 70, 66, 74, 88, 92, 79, 64, 52, 47, 58, 71] as const,
+  /** Recent activity at the start of the loop, newest first. */
+  feed: [
+    { agent: "gemini-research", text: "compared three limiter designs", ago: "1 min" },
+    { agent: "claude-checkout", text: "awaited the stock write in reserve.ts", ago: "3 min" },
+    { agent: "codex-signup", text: "edited src/routes/signup.ts (+12 -3)", ago: "4 min" },
+    { agent: "claude-runner", text: "was paused by you", ago: "9 min" },
+    { agent: "codex-review", text: "started reviewing the rate-limit middleware", ago: "12 min" },
+  ],
+} as const;
+
+/** Mission graph (planned surface): a planner fans work out to agents, the results converge through review and tests, and the deploy waits for you. */
+export interface MissionNode {
+  id: string;
+  kind: "objective" | "agent" | "verify";
+  role: string;
+  who: string;
+  provider?: ProviderId;
+  detail: string;
+  /** Position in the 1200 × 560 graph box. */
+  x: number;
+  y: number;
+  /** Status while working (the app's labels). */
+  working: ThreadStatus;
+  /** How the node ends: completed, or held for your approval (production deploys always ask). */
+  end?: "approval";
+}
+
+export const MISSION_GRAPH = {
+  objective: "Build a user authentication system with tests",
+  nodes: [
+    {
+      id: "planner",
+      kind: "objective",
+      role: "Planner",
+      who: "KalCode",
+      detail: "Breaks the goal into steps",
+      x: 112,
+      y: 280,
+      working: "thinking",
+    },
+    {
+      id: "research",
+      kind: "agent",
+      role: "Research",
+      who: "Gemini CLI",
+      provider: "gemini",
+      detail: "Session vs stateless auth",
+      x: 382,
+      y: 100,
+      working: "thinking",
+    },
+    {
+      id: "coder",
+      kind: "agent",
+      role: "Coder",
+      who: "Claude Code",
+      provider: "claude",
+      detail: "Sign-up, sign-in, sessions",
+      x: 382,
+      y: 280,
+      working: "editing",
+    },
+    {
+      id: "frontend",
+      kind: "agent",
+      role: "Frontend",
+      who: "Codex",
+      provider: "codex",
+      detail: "Login and reset forms",
+      x: 382,
+      y: 460,
+      working: "editing",
+    },
+    {
+      id: "reviewer",
+      kind: "agent",
+      role: "Reviewer",
+      who: "Codex",
+      provider: "codex",
+      detail: "Security and edge cases",
+      x: 646,
+      y: 280,
+      working: "reviewing",
+    },
+    {
+      id: "tester",
+      kind: "agent",
+      role: "Tester",
+      who: "PowerShell 7",
+      provider: "shell",
+      detail: "pnpm test && pnpm test:e2e",
+      x: 866,
+      y: 280,
+      working: "testing",
+    },
+    {
+      id: "deployer",
+      kind: "verify",
+      role: "Deployer",
+      who: "KalCode",
+      detail: "Deploy to production",
+      x: 1086,
+      y: 280,
+      working: "running_command",
+      end: "approval",
+    },
+  ] as readonly MissionNode[],
+  edges: [
+    ["planner", "research"],
+    ["planner", "coder"],
+    ["planner", "frontend"],
+    ["research", "coder"],
+    ["coder", "reviewer"],
+    ["frontend", "reviewer"],
+    ["reviewer", "tester"],
+    ["tester", "deployer"],
+  ] as readonly (readonly [string, string])[],
+  /** When each node starts and completes (ms from the start of the run). */
+  schedule: {
+    planner: [0, 600],
+    research: [700, 1900],
+    coder: [700, 3100],
+    frontend: [700, 2700],
+    reviewer: [3200, 4400],
+    tester: [4500, 5600],
+    deployer: [5700, 6300],
+  } as Record<string, readonly [number, number]>,
+  checks: ["Typecheck clean", "Unit 64 of 64", "E2E 12 of 12"],
+} as const;
+
+/** Time machine (planned): a thread's run as a scrollable timeline of checkpoints. */
+export const TIMELINE = {
+  thread: "Validate signup input",
+  provider: "codex" as ProviderId,
+  events: [
+    { t: "0:00", kind: "prompt", label: "Prompt", detail: "validate the signup payload and return 422 on bad input" },
+    { t: "0:06", kind: "read", label: "Explored", detail: "src/routes/signup.ts, src/lib/errors.ts" },
+    { t: "0:21", kind: "edit", label: "Edited", detail: "src/routes/signup.ts (+12 -3)" },
+    { t: "0:34", kind: "approval", label: "Approval", detail: "pnpm add zod · Approve once" },
+    { t: "0:41", kind: "run", label: "Ran", detail: "pnpm add zod · + zod 4.1.0" },
+    { t: "0:58", kind: "run", label: "Ran", detail: "pnpm test -- signup · 6 passed" },
+    { t: "1:08", kind: "done", label: "Completed", detail: "Bad input now gets a 422 with a list of fields" },
+  ],
+} as const;
+
+/* ------------------------------------------------------------------ round 3: workspace composition */
+
+export interface TreeNode {
+  name: string;
+  depth: number;
+  kind: "dir" | "file";
+  /** Git status letter shown beside the file. */
+  git?: "M" | "A";
+  /** The file a pane is working in. */
+  active?: boolean;
+}
+
+/** Explorer for the workspace composition (the file tree is a planned surface). */
+export const FILE_TREE: readonly TreeNode[] = [
+  { name: "atlas-api", depth: 0, kind: "dir" },
+  { name: "src", depth: 1, kind: "dir" },
+  { name: "checkout", depth: 2, kind: "dir" },
+  { name: "reserve.ts", depth: 3, kind: "file", git: "M", active: true },
+  { name: "middleware", depth: 2, kind: "dir" },
+  { name: "rate-limit.ts", depth: 3, kind: "file", git: "A" },
+  { name: "routes", depth: 2, kind: "dir" },
+  { name: "signup.ts", depth: 3, kind: "file", git: "M" },
+  { name: "lib", depth: 2, kind: "dir" },
+  { name: "errors.ts", depth: 3, kind: "file" },
+  { name: "redis.ts", depth: 3, kind: "file" },
+  { name: "tests", depth: 1, kind: "dir" },
+  { name: "checkout.spec.ts", depth: 2, kind: "file" },
+  { name: "signup.spec.ts", depth: 2, kind: "file", git: "A" },
+  { name: "e2e", depth: 2, kind: "dir" },
+  { name: "package.json", depth: 1, kind: "file", git: "M" },
+  { name: "vitest.config.ts", depth: 1, kind: "file" },
+  { name: "README.md", depth: 1, kind: "file" },
+];
+
+export interface ThreadStep {
+  label: string;
+  state: "done" | "active" | "queued";
+}
+
+/** The Threads panel in the workspace composition: what each agent has done and is doing. */
+export const WORKSPACE_THREADS: readonly { id: string; steps: readonly ThreadStep[] }[] = [
+  {
+    id: "claude-checkout",
+    steps: [
+      { label: "Read the flaky test", state: "done" },
+      { label: "Awaited the stock write", state: "done" },
+      { label: "Running the suite 20 times", state: "active" },
+    ],
+  },
+  {
+    id: "codex-signup",
+    steps: [
+      { label: "Validated the signup payload", state: "done" },
+      { label: "Installed zod (approved once)", state: "done" },
+      { label: "Reviewing the passing suite", state: "active" },
+    ],
+  },
+  {
+    id: "gemini-research",
+    steps: [
+      { label: "Read the signup route", state: "done" },
+      { label: "Compared limiter designs", state: "active" },
+      { label: "Write up a recommendation", state: "queued" },
+    ],
+  },
+];
+
+/* ------------------------------------------------------------------ round 3: KalVoice flow */
+
+export interface VoiceFlowStep {
+  id: string;
+  label: string;
+  detail: string;
+  provider?: ProviderId;
+  /** The app status shown while the step runs; completed steps show Completed. */
+  status: ThreadStatus;
+  /** How long the step runs (ms) before the next begins. */
+  ms: number;
+}
+
+/** One spoken command becoming coordinated work: the KalVoice stage's script. */
+export const VOICE_FLOW = {
+  phrase: "Build a user authentication system with tests.",
+  steps: [
+    { id: "planning", label: "Planning", detail: "Three steps across two agents", status: "thinking", ms: 1100 },
+    {
+      id: "implementing",
+      label: "Claude Code implementing",
+      detail: "src/auth/session.ts, src/auth/routes.ts",
+      provider: "claude",
+      status: "editing",
+      ms: 1700,
+    },
+    {
+      id: "reviewing",
+      label: "Codex reviewing",
+      detail: "Password hashing, session expiry, rate limits",
+      provider: "codex",
+      status: "reviewing",
+      ms: 1400,
+    },
+    {
+      id: "testing",
+      label: "Tests passing",
+      detail: "Unit 64 of 64 · E2E 12 of 12",
+      provider: "shell",
+      status: "testing",
+      ms: 1400,
+    },
+  ] as readonly VoiceFlowStep[],
+  done: "Done · ready for your review",
+  /** Minimum listening time for a scripted take (ms). */
+  listenMs: 2200,
+} as const;

@@ -82,6 +82,8 @@ function readScene(root: HTMLElement): Scene {
 export class StageApp {
   readonly root: HTMLElement;
   readonly interactive: boolean;
+  /** Four in the demos; the multi-agent wall shows six. */
+  readonly maxPanes: number;
   state: Scene;
   private readonly initial: Scene;
   private readonly sched = new Scheduler();
@@ -98,6 +100,7 @@ export class StageApp {
   constructor(root: HTMLElement) {
     this.root = root;
     this.interactive = root.dataset.interactive === "true";
+    this.maxPanes = Number(root.dataset.maxPanes ?? MAX_PANES) || MAX_PANES;
     this.state = readScene(root);
     this.initial = { ...this.state, panes: [...this.state.panes] };
     this.live = root.querySelector("[data-kc-live]");
@@ -156,6 +159,7 @@ export class StageApp {
     }
     this.setMode(this.state.mode);
     this.paintApprovalCards(false);
+    this.refreshStatuses(false);
   }
 
   /** Every thread this window knows: open panes and templated ones (without creating them). */
@@ -323,7 +327,7 @@ export class StageApp {
 
   private setPanes(ids: string[], animate: boolean): void {
     const before = new Set(this.state.panes);
-    const list = ids.slice(0, MAX_PANES);
+    const list = ids.slice(0, this.maxPanes);
     for (const id of list) this.pane(id);
     for (const el of this.panes()) {
       const id = el.dataset.thread ?? "";
@@ -332,7 +336,7 @@ export class StageApp {
       el.dataset.slot = String(Math.max(0, index));
       if (index >= 0 && !before.has(id) && animate) {
         el.setAttribute("data-enter", "");
-        window.setTimeout(() => el.removeAttribute("data-enter"), 400);
+        window.setTimeout(() => el.removeAttribute("data-enter"), 760);
       }
     }
     for (const tab of qsa(this.root, "[data-kc-mtab]")) {
@@ -359,7 +363,7 @@ export class StageApp {
     if (this.state.view === "dashboard") this.setView("code");
     if (!this.state.panes.includes(id)) {
       let next = [...this.state.panes, id];
-      while (next.length > MAX_PANES) {
+      while (next.length > this.maxPanes) {
         const victim =
           this.recent
             .slice()
@@ -476,6 +480,8 @@ export class StageApp {
 
   /** "+ New thread": a fresh pane for the focused pane's provider. */
   newThread(provider?: Exclude<ProviderId, "shell">): string | null {
+    // The Dashboard row is cloned from an existing one, so build the panel if it is still a template.
+    this.materializePanel(this.root.querySelector("[data-kc-dash-home]"));
     const focused = this.providerOf(this.state.focus);
     const p = provider ?? (focused === "shell" ? "claude" : focused);
     const template = this.root.querySelector<HTMLTemplateElement>(`template[data-kc-fresh="${p}"]`);
@@ -630,6 +636,7 @@ export class StageApp {
   }
 
   setView(view: Scene["view"]): void {
+    if (view === "dashboard") this.materializePanel(this.root.querySelector("[data-kc-dash-home]"));
     this.state.view = view;
     this.root.dataset.view = view;
     const dash = this.root.querySelector("[data-kc-dash]");
@@ -662,18 +669,7 @@ export class StageApp {
   /* ------------------------------------------------------------ status + summary */
 
   private paintStatus(el: HTMLElement, status: ThreadStatus, animate: boolean): void {
-    if (el.dataset.status === status) return;
-    const meta = STATUS[status];
-    el.dataset.status = status;
-    el.dataset.tone = meta.tone;
-    const icon = el.querySelector<HTMLElement>(".kc-status__icon");
-    if (icon) icon.dataset.i = meta.icon;
-    const text = el.querySelector(".kc-status__text");
-    if (text) text.textContent = meta.label;
-    if (animate && !reducedMotion()) {
-      el.setAttribute("data-changed", "");
-      window.setTimeout(() => el.removeAttribute("data-changed"), 1400);
-    }
+    paintStatus(el, status, animate);
   }
 
   private refreshStatuses(animate: boolean): void {
@@ -1258,6 +1254,24 @@ export class StageApp {
     if (moveFocus) this.pane(id)?.querySelector<HTMLElement>(".kc-pane__title")?.focus();
     const name = this.pane(id)?.querySelector("[data-kc-name]")?.textContent?.replace(/^·\s*/, "") ?? "";
     this.say(`${PROVIDER_NAME[this.providerOf(id)]}${name ? `, ${name}` : ""}: terminal focused.`);
+  }
+}
+
+/* ------------------------------------------------------------ shared helpers */
+
+/** Repaints a StatusLabel (glyph, tone, words) for a new status, with the app's change highlight. */
+export function paintStatus(el: HTMLElement, status: ThreadStatus, animate: boolean): void {
+  if (el.dataset.status === status) return;
+  const meta = STATUS[status];
+  el.dataset.status = status;
+  el.dataset.tone = meta.tone;
+  const icon = el.querySelector<HTMLElement>(".kc-status__icon");
+  if (icon) icon.dataset.i = meta.icon;
+  const dotText = el.querySelector(".kc-status__text");
+  if (dotText) dotText.textContent = meta.label;
+  if (animate && !reducedMotion()) {
+    el.setAttribute("data-changed", "");
+    window.setTimeout(() => el.removeAttribute("data-changed"), 1400);
   }
 }
 

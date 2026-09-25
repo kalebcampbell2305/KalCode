@@ -39,7 +39,7 @@ test.describe("ProviderSwitch", () => {
 
   test("tabs show each provider's own interface", async ({ page }) => {
     test.skip(!(await has(page, "provider-switch")), "ProviderSwitch is not on this page");
-    const block = page.getByTestId("provider-switch");
+    const block = page.getByTestId("provider-switch").first();
     await block.scrollIntoViewIfNeeded();
     await expect(block).toHaveAttribute("data-kc-wired", "true");
     await block.getByTestId("provider-tab-codex").click();
@@ -57,7 +57,7 @@ test.describe("ProviderSwitch on a phone", () => {
 
   test("swiping the strip updates the tabs", async ({ page }) => {
     test.skip(!(await has(page, "provider-switch")), "ProviderSwitch is not on this page");
-    const block = page.getByTestId("provider-switch");
+    const block = page.getByTestId("provider-switch").first();
     await block.scrollIntoViewIfNeeded();
     await expect(block).toHaveAttribute("data-kc-wired", "true");
     await block.locator("[data-kc-ps-strip]").evaluate((strip) => strip.scrollTo({ left: strip.clientWidth }));

@@ -19,7 +19,13 @@ interface Props {
   class?: string;
 }
 const { id = "try", scene = {}, class: className } = Astro.props;
-const initial: Scene = { ...BASE_SCENE, ...scene };
+const initial: Scene = {
+  ...BASE_SCENE,
+  panes: ["claude-checkout", "codex-signup", "gemini-research"],
+  layout: "cols",
+  dock: "threads",
+  ...scene,
+};
 const providers = [
   { id: "claude", label: "Claude Code" },
   { id: "codex", label: "Codex" },
@@ -54,7 +60,7 @@ const focusProvider = initial.focus.split("-")[0];
     <button type="button" class="kc-tbtn" data-kc-ptt tabindex="-1" aria-keyshortcuts={VOICE.key} aria-label={`Use KalVoice: ${VOICE.hint.toLowerCase()}`} data-testid="try-voice"><span class="kc-i" data-i="voice" aria-hidden="true"></span>Use KalVoice<kbd>{VOICE.key}</kbd></button>
     <button type="button" class="kc-tbtn kc-toolbar__end" data-kc-do="reset" tabindex="-1" data-testid="try-reset"><span class="kc-i" data-i="replay" aria-hidden="true"></span>Reset</button>
   </div>
-  <AppWindow id={id} scene={initial} interactive={true} size="section" />
+  <AppWindow id={id} scene={initial} interactive={true} size="hero" chrome="workspace" />
 </div>
 
 <script>

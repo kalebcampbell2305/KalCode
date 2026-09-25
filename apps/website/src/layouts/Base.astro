@@ -2,12 +2,16 @@
 import "@kalcode/ui/fonts.css";
 import "@kalcode/ui/tokens.css";
 import "@kalcode/ui/base.css";
-import "../styles/site.css";
+import "../styles/critical.css";
+// The hero world's own stylesheets, imported here as well so they ship in the same
+// render-blocking file as critical.css: one request in <head> instead of three.
+import "../styles/hero.css";
+import "../components/hero/space-backdrop.css";
 
 import decaLatin from "@fontsource-variable/lexend-deca/files/lexend-deca-latin-wght-normal.woff2?url";
-import exaLatin from "@fontsource-variable/lexend-exa/files/lexend-exa-latin-wght-normal.woff2?url";
 import Footer from "../components/Footer.astro";
 import Header from "../components/Header.astro";
+import PageStyles from "../components/PageStyles.astro";
 import { TWITTER_SITE, jsonLdText } from "../lib/seo";
 import { SITE_NAME, SITE_ORIGIN } from "../lib/site";
 import { THEME_SCRIPT } from "../lib/theme-script";
@@ -18,13 +22,18 @@ interface Props {
   /** Canonical path, e.g. "/pricing". */
   path: string;
   noindex?: boolean;
-  /** Home only: the header joins the hero's night band. */
-  nightHeader?: boolean;
+  /**
+   * A page of the KalCode world (home, product, KalVoice, pricing, download, 404): always the dark
+   * cinematic theme. Reading pages (docs, changelog, legal) follow the visitor's theme.
+   */
+  world?: boolean;
+  /** The page places <PageStyles /> itself, after its first viewport (home). */
+  lateStyles?: boolean;
   /** schema.org JSON-LD for this page (a non-executing data block; see lib/seo.ts). */
   jsonLd?: Record<string, unknown>;
 }
 
-const { title, description, path, noindex = false, nightHeader = false, jsonLd } = Astro.props;
+const { title, description, path, noindex = false, world = false, lateStyles = false, jsonLd } = Astro.props;
 const canonical = new URL(path, SITE_ORIGIN).href;
 const ogImage = new URL("/og.png", SITE_ORIGIN).href;
 const ogImageAlt =
@@ -44,7 +53,6 @@ const ogImageAlt =
     <meta name="theme-color" content="#F5F7FB" media="(prefers-color-scheme: light)" />
 
     <link rel="preload" href={decaLatin} as="font" type="font/woff2" crossorigin />
-    <link rel="preload" href={exaLatin} as="font" type="font/woff2" crossorigin />
     <slot name="head" />
 
     <link rel="icon" href="/favicon.ico" sizes="any" />
@@ -70,13 +78,14 @@ const ogImageAlt =
     <meta name="twitter:image:alt" content={ogImageAlt} />
     {jsonLd && <script type="application/ld+json" is:inline set:html={jsonLdText(jsonLd)} />}
   </head>
-  <body>
+  <body data-theme={world ? "dark" : undefined} data-world={world ? "" : undefined}>
     <a class="skip-link" href="#main">Skip to content</a>
-    <Header path={path} night={nightHeader} />
+    <Header path={path} />
     <main id="main" tabindex="-1">
+      {!lateStyles && <PageStyles />}
       <slot />
     </main>
-    <Footer />
+    <Footer themeToggle={!world} />
     <script>
       import "../scripts/theme";
       import "../scripts/nav";

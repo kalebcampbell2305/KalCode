@@ -1,8 +1,10 @@
 ---
+import Backdrop from "../components/Backdrop.astro";
 import Closing from "../components/Closing.astro";
 import Icon from "../components/Icon.astro";
 import PageHead from "../components/PageHead.astro";
 import StageSlot from "../components/StageSlot.astro";
+import { hasStage } from "../lib/stage";
 import Base from "../layouts/Base.astro";
 import { buildStatus } from "../lib/releases";
 import { KALVOICE, PROVIDERS, getPage } from "../lib/site";
@@ -49,8 +51,9 @@ const roadmap: { capability: string; state: State; note: string }[] = [
   { capability: "Agents, Missions, Automations", state: "planned", note: "Listed in plans as available at launch" },
 ];
 ---
-<Base title={page.title} description={page.description} path={page.path}>
+<Base title={page.title} description={page.description} path={page.path} world>
   <PageHead
+    backdrop="orbital"
     title="The workspace, piece by piece."
     lead="What each part of KalCode does, and how far along it is. Previews use sample data; the table at the end says what is built today."
     status={buildStatus()}
@@ -60,13 +63,68 @@ const roadmap: { capability: string; state: State; note: string }[] = [
     </div>
   </PageHead>
 
-  <section class="section section--tight" aria-label="The KalCode window (product preview, sample data)">
-    <div class="container container--wide">
-      <StageSlot name="AppWindow" />
-    </div>
-  </section>
+  {
+    hasStage("BeforeAfter") && (
+      <section class="world-section" id="terminals" aria-labelledby="terminals-title">
+        <Backdrop variant="gravity" />
+        <div class="container">
+          <header class="statement statement--wide">
+            <p class="eyebrow">The problem</p>
+            <h2 id="terminals-title" class="h2">Stop juggling agent terminals.</h2>
+            <p class="body-lg">
+              Six loose windows and no idea which one is waiting on you — or one workspace where every
+              agent has a place and a status.
+            </p>
+          </header>
+        </div>
+        <div class="container container--wide">
+          <StageSlot name="BeforeAfter" />
+        </div>
+      </section>
+    )
+  }
 
-  <section class="section" aria-label="What KalCode does">
+  {
+    hasStage("ScrollStory") && (
+      <section class="world-section world-section--tall" id="story" aria-labelledby="story-title">
+        <Backdrop variant="orbital" />
+        <div class="container">
+          <header class="statement statement--center">
+            <p class="eyebrow">The workspace</p>
+            <h2 id="story-title" class="h2">Watch it come together.</h2>
+            <p class="body-lg">
+              A real terminal, Claude Code, Codex beside it, the Dashboard, and an approval that waits
+              for you.
+            </p>
+          </header>
+        </div>
+        <div class="container container--wide">
+          <StageSlot name="ScrollStory" />
+        </div>
+      </section>
+    )
+  }
+
+  {
+    hasStage("DemoCenter") && (
+      <section class="world-section" id="in-action" aria-labelledby="in-action-title">
+        <Backdrop variant="nebula" />
+        <div class="container">
+          <header class="statement statement--center">
+            <p class="eyebrow">See it in action</p>
+            <h2 id="in-action-title" class="h2">One scene at a time.</h2>
+            <p class="body-lg">Multi-agent work, KalVoice, permissions, the Dashboard and Code Mode.</p>
+          </header>
+        </div>
+        <div class="container container--wide">
+          <StageSlot name="DemoCenter" />
+        </div>
+      </section>
+    )
+  }
+
+  <section class="world-section" aria-label="What KalCode does">
+    <Backdrop variant="deep" />
     <div class="container chapters">
       <article class="chapter" id="workspace" aria-labelledby="workspace-title">
         <div class="chapter__head">
@@ -212,7 +270,8 @@ const roadmap: { capability: string; state: State; note: string }[] = [
     </div>
   </section>
 
-  <section class="section section--sunken" id="status" aria-labelledby="status-title">
+  <section class="world-section" id="status" aria-labelledby="status-title">
+    <Backdrop variant="orbital" />
     <div class="container">
       <header class="section-head section-head--split">
         <h2 id="status-title" class="h2">What is built today.</h2>

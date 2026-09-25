@@ -69,28 +69,90 @@ drive-relative paths (`C:foo`), driveless rooted paths on Windows, unverifiable 
 root is unknown. Verbatim roots (`\\?\C:\…`) are joined in their plain form because Rust's
 `PathBuf::push` resolves `..` textually on verbatim paths.
 
-**Commands.** The tokenizer accepts the union of bash, cmd.exe and PowerShell syntax and resolves
-every ambiguity toward more authority: `;`, `&&`, `||`, `|`, `&`, newlines, `()` and `{}` split
-commands; quotes, `\` and `^` escapes are removed before the program is identified (`r"m"`,
-`r^m`, `\rm` are `rm`); text with backslashes is classified under both POSIX and Windows escaping;
-`#` is not a comment. Wrappers are unwrapped (`sudo`, `env`, `nice`, `timeout`, `xargs`, `start`,
+**Commands.** KalCode does not know which shell will run the text, so every command text is
+read **five ways** and every reading is classified; the scopes of all readings are added together
+and any reading that can't be interpreted makes the command opaque, so the most
+authority-requiring interpretation always wins (fail closed; `command/dialects.rs`):
+
+* **POSIX sh/bash** — `'…'` is literal; `"…"` honours `\"`, `$…` and backticks; `\` escapes any
+  character; `$'…'` ANSI-C strings are decoded (`$'\x72\x6d'` is `rm`); `#` at a word start is a
+  comment; `^` and `%` are ordinary characters; brace expansion (`{rm,-rf,x}`) marks the word as
+  an expansion; `${X:-$(cmd)}` classifies `cmd`.
+* **cmd.exe** — `^` escapes outside double quotes (literal inside them); `'`, `` ` ``, `$` and
+  `\` are ordinary characters, so `echo 'a & rd /s /q x'` runs `rd`; `&`, `&&`, `||`, `|`,
+  newlines and parentheses separate; `,` and `;` separate arguments; `@` before a command is
+  dropped and a command name ends at `/` (`@rd/s/q x` is `rd /s /q x`, `/s/q` is two switches);
+  `%VAR%` is expanded **before** the line is parsed (its value can add separators), so any
+  `%VAR%` makes the command opaque; `!VAR!` (delayed expansion) as the program is opaque.
+* **PowerShell** — smart quotes (`‘ ’ ‚ ‛ “ ” „`) are quotes and en dash, em dash, horizontal bar
+  (and figure dash) are dashes (`–Recurse` is `-Recurse`); `` ` `` escapes; `''`/`""` are
+  escaped quotes; `;`, `|`, `&&`, `||`, newlines separate; `&` at a command start is the call
+  operator (`& 'Remove-Item' …`); `{…}` script blocks and `(…)` groups are classified as commands
+  even when glued to a cmdlet (`ForEach-Object{Remove-Item $_}`, `@{e={…}}`); `#` and
+  `<# … #>` are comments; `--%` (stop parsing) and `` `u{…} `` escapes make it opaque.
+* The **union** reading (all three syntaxes at once: `;`, `&&`, `||`, `|`, `&`, newlines, `()`
+  and `{}` split; quotes, `\` and `^` are removed before the program is identified, so `r"m"`,
+  `r^m` and `\rm` are `rm`; `#` is not a comment), with POSIX backslash escapes and — when the
+  text contains a backslash — again with literal backslashes.
+
+A command is eligible for prefix rules only when every reading agrees it is the same single
+simple command. Paths are resolved once per classification and reused by every reading.
+Wrappers are unwrapped (`sudo`, `env` incl. `--chdir=DIR`, `nice`, `timeout`, `xargs`, `start`,
 `Start-Process`, `wsl`, `busybox`), shells are recursed into (`bash -c`, `cmd /c`, `powershell
 -Command`, positional PowerShell scripts, `-EncodedCommand` in any abbreviation, decoded from
 UTF-16LE base64), to a depth of 4. Programs are classified by name: read-only tools
 (`terminal.read_only`), file writers, destructive tools (`rm -r`, `del /s`, `rd /s`,
 `Remove-Item -Recurse`, `format`, `mkfs`, `dd of=`, `diskpart`, `shred`, recursive `chmod`,
-`robocopy /MIR`, `rsync --delete`, `git reset --hard`, `git clean -f`, `git push --force` …),
-package managers, git (every subcommand), network clients (with data-sending detection and
-messaging/billing hosts), SSH-like tools (`cloud.modify`), cloud/deploy CLIs (vercel, wrangler,
-aws, gcloud, az, kubectl, terraform, gh, docker, stripe …), credential tools and `printenv`.
-Unknown programs are `terminal.execute`; their path-looking arguments are containment-checked.
+`robocopy /MIR`, `rsync --delete`/`--del`, `git reset --hard`, `git clean -f`,
+`git push --force` …), package managers, git (every subcommand), network clients (with
+data-sending detection, uploaded files — `-d @f`, `-F x=@f`, `-T f`, `--post-file`, `-InFile` —
+containment- and credential-checked, and messaging/billing hosts), SSH-like tools
+(`cloud.modify`), cloud/deploy CLIs (vercel, wrangler, aws, gcloud, az, kubectl, terraform, gh,
+docker, stripe …), and credential tools. Unknown programs are `terminal.execute`; their
+path-looking arguments are containment-checked.
+
+**Abbreviations.** GNU long options may be abbreviated (`rm --rec`, `git push --forc`,
+`git reset --har`, `wget --post-f`), and PowerShell accepts any parameter prefix and `:value`
+(`-rec`, `-Recurse:$true`, `-Me Post`, `-InF`, `-Ur`): every check that *adds* authority
+accepts any prefix (an ambiguous prefix is refused by the program, so this only ever adds
+authority); checks that would *remove* authority (`--dry-run`, `--staged`) stay exact.
+
+**Execution options on read-only programs.** `git grep -O`/`--open-files-in-pager`,
+`--ext-diff`, `--upload-pack`/`--receive-pack`/`--exec` (fetch, pull, ls-remote, clone `-u`,
+archive, push), `rebase -x`, `difftool -x`/`--extcmd`, `--tool`, `send-email --*-cmd`,
+`filter-branch` filters and `git help -w` make Git run a program: `terminal.execute` and opaque.
+`--output[=]FILE` on a diff/log command is a file write; a write into `.git/hooks` or
+`.git/config` (by any command) is opaque. Likewise `man -P/-H/--pager/--html`, `bat --pager`,
+`sort --compress-program`, `fc` (re-runs history in bash), `watchman … trigger` (opaque) and
+`less -o`/`tree -o` (file writes).
+
+**Secrets in the environment.** Printing the environment or shell variables is a sensitive read
+(`credentials.access`, which asks in every mode): `env`, `printenv`, `set` (and cmd.exe's
+`set PREFIX`), `export -p`, `declare -p`, `compgen -v`, BSD `ps e`, `Get-ChildItem env:` (and
+`gci`/`dir`/`ls`), `Get-Item env:X`, `Get-Variable`, `[Environment]::GetEnvironmentVariable`,
+`Win32_Environment`, `/proc/*/environ`, and any expansion of a variable whose name suggests a
+secret (`KEY`, `TOKEN`, `SECRET`, `PASS`, `PWD`, `CRED`, `AUTH`, `SESSION`, `COOKIE`, `PRIVATE`,
+`API`, …) in any syntax: `$X`, `${X}`, `$env:X`, `${env:X}`, `%X%`, `!X!`.
+
+**Wildcards.** A wildcard argument that can expand to a credential file is `credentials.access`:
+statically, when the pattern (case-insensitive, POSIX dot rule) can match a credential name
+(`cat .en*`, `.en?`, `.[e]nv`, `type *.pem`, `cat id_*`, `~/.ss*/id_rsa`, `**/…`); and by listing
+the folder (bounded to 4 096 entries), because PowerShell's and cmd.exe's `*` also match dot
+files (`type *.md` next to a `.env.md`). Patterns made only of wildcards (`*`, `*.*`) are judged
+by the folder listing alone. Programs that only list names (`ls`, `dir`, `Get-ChildItem`, `tree`,
+`stat` …) are exempt. The credential name list also covers `.vault-token`, `.s3cfg`, `.boto`,
+`.dockercfg`, `.my.cnf`, `.terraformrc`, `credentials.tfrc.json`, `kubeconfig`, `auth.json`,
+`*_sk` SSH keys, `*.p8`, `*.keychain-db`, `environ`, and the `gcloud`, `.oci` and `.terraform.d`
+folders.
 
 **Opaque** means KalCode could not see everything the command will do: command/process
 substitution, backticks, `eval`/`iex`/`source`, aliases and functions, `find -exec`, `xargs`,
 inline interpreter code (`python -c`, `node -e`), encoded PowerShell, piping into a shell,
 dangerous environment variables (`PATH`, `LD_PRELOAD`, `GIT_*`, `NODE_OPTIONS`…), `git -c`,
-`git config` writes, unknown git subcommands (possible aliases), LOLBins (`mshta`, `rundll32`,
-`certutil -urlcache`), unterminated quotes, heredocs, control/invisible characters, text longer
+`git config` writes, unknown git subcommands (possible aliases), Git execution options (above),
+writes into `.git/hooks`/`.git/config`, LOLBins (`mshta`, `rundll32`, `certutil -urlcache`),
+cmd.exe `%VAR%` expansion and delayed-expansion programs, brace-expanded programs, PowerShell's
+stop-parsing token, unterminated quotes, heredocs, control/invisible characters, text longer
 than 16 KiB, or nesting deeper than 4. Opaque actions are **never allowed without an explicit
 approval in any mode, including Bypass**, never match allow rules or grants, can only be approved
 once, and in a Custom profile every `deny`/`never` rule applies to them (they can't be ruled out).
@@ -239,3 +301,11 @@ Untrusted: provider output and tool calls (prompt injection), the WebView (treat
 compromised), anything in the workspace (hooks, configs, links). Trusted: native code and the
 user's OS account. See `docs/campaigns/Z4.md` for the escape-test matrix and known limits
 (time-of-check/time-of-use, hard links on Windows, scripts' internals, WebView approvals).
+
+Classifier hardening from the 2026-09-24 review (per-dialect readings, abbreviations and Unicode
+dashes, Git execution options, environment secrets, wildcards) and its regression suites
+(`crates/permissions/tests/sec_latent_classifier.rs`, the dialect and deny-wins properties in
+`tests/properties.rs`): `docs/campaigns/SEC-LATENT.md`. Known residuals there: recursive search
+(`grep -r`, `rg`) reads every file under its folder including `.env`; a pipeline that feeds names
+into a reader (`gci -Include *.pem | gc`) is judged per command; multi-level wildcards
+(`src/*/config`) are only checked statically.
