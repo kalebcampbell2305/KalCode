@@ -1452,6 +1452,10 @@ a:hover {
     display: none;
   }
 
+  .ladder__tag {
+    display: none;
+  }
+
   .ladder__value strong {
     font-size: 1.0625rem;
   }
@@ -1688,6 +1692,32 @@ html[data-os="linux"] .platform[data-os="linux"] {
   .kv-head {
     grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
   }
+}
+
+/* The push-to-talk key, drawn as one large key cap. */
+.ptt {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4) var(--space-6);
+  margin-bottom: var(--space-10);
+}
+
+kbd.ptt__key {
+  height: 4rem;
+  min-width: 5rem;
+  padding: 0 var(--space-5);
+  justify-content: center;
+  border-width: 1px 1px 3px;
+  border-radius: var(--radius-lg);
+  color: var(--color-text);
+  font-size: 1.5rem;
+  font-weight: var(--weight-medium);
+}
+
+.ptt__note {
+  max-width: 52ch;
+  color: var(--color-text-secondary);
 }
 
 .modes {
@@ -2337,7 +2367,7 @@ kbd.shortcut > kbd {
 .release__version {
   font-family: var(--font-wide);
   font-weight: var(--weight-semibold);
-  font-size: clamp(1.375rem, 1.2rem + 0.6vw, 1.75rem);
+  font-size: clamp(1.25rem, 1.15rem + 0.4vw, 1.5rem);
   letter-spacing: -0.03em;
   line-height: 1.2;
   color: var(--color-text);

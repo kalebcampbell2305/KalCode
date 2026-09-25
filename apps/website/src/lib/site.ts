@@ -36,9 +36,15 @@ export const KALVOICE = {
   summary:
     "KalVoice turns your voice into coding prompts and KalCode commands. Dictate directly into Claude Code, Codex, Gemini CLI and your terminals, or ask KalVoice to run your workspace.",
   status: "In development",
-  /** Default shortcuts (Windows and Linux; macOS uses Cmd). Both are configurable. */
-  dictationKeys: ["Ctrl", "Shift", "Space"],
-  commandKeys: ["Ctrl", "Shift", "K"],
+  /**
+   * One push-to-talk key: hold it, speak, release. KalVoice decides from context whether the words
+   * are dictation (typed into the focused input) or a command. Configurable to Caps Lock, another
+   * single key, or Fn on keyboards that expose it to apps.
+   */
+  pushToTalkKey: "F8",
+  /** The one line that says the key can be changed. Never claims Fn works everywhere. */
+  keyNote:
+    "F8 is the default. Choose Caps Lock or another single key instead, or Fn on keyboards that pass it to apps.",
   globeAlt: "KalVoice globe: a sphere of connected points of light",
 } as const;
 
@@ -69,7 +75,7 @@ export const PAGES = [
     path: "/kalvoice",
     title: "KalVoice — KalCode",
     description:
-      "KalVoice is the voice layer in KalCode: hold a key to dictate into any coding agent, on your device and unlimited, or speak a command to run your workspace. In development.",
+      "KalVoice is the voice layer in KalCode: hold F8 and speak. Words land in the focused agent, on your device and unlimited; commands run your workspace. In development.",
   },
   {
     path: "/pricing",
@@ -105,7 +111,7 @@ export const PAGES = [
     path: "/docs/kalvoice",
     title: "KalVoice — KalCode Docs",
     description:
-      "KalVoice reference: the dictation and command shortcuts, how KalVoice Requests are counted, which provider reasoning uses, and how audio stays on your device.",
+      "KalVoice reference: the push-to-talk key, dictation and commands, how KalVoice Requests are counted, which provider reasoning uses, and how audio stays on your device.",
   },
   {
     path: "/docs/local-first",

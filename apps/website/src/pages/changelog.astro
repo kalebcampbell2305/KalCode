@@ -28,7 +28,7 @@ const allowances = PLANS.map((plan) => `${plan.name} ${formatKalVoiceAllowance(p
           </p>
           <ul>
             <li><strong>Home.</strong> The animated KalCode symbol, the providers you already use with their honest adapter status, and the workspace in product previews: terminals, permissions, KalVoice and the Dashboard.</li>
-            <li><strong>KalVoice page.</strong> Dictation and command mode side by side, KalVoice Requests per plan, and how audio stays on your device.</li>
+            <li><strong>KalVoice page.</strong> One push-to-talk key (hold F8, speak, release), what happens to your words, KalVoice Requests per plan, and how audio stays on your device.</li>
             <li><strong>Pricing.</strong> One comparison table, with what every plan includes stated once.</li>
             <li><strong>Download.</strong> Build status for Windows, macOS and Linux, read from the release manifest. There is no public build yet, and the page says so.</li>
             <li><strong>Product.</strong> Each part of the workspace, with a table of what is built today and what is planned.</li>
@@ -49,8 +49,8 @@ const allowances = PLANS.map((plan) => `${plan.name} ${formatKalVoiceAllowance(p
             part of any build yet.
           </p>
           <ul>
-            <li><strong>Dictation.</strong> Hold a shortcut, speak, and the text is typed into the focused input: a Claude Code, Codex or Gemini CLI thread, a terminal, or a search box. Speech recognition runs on your device; audio is not stored or uploaded. Unlimited on every plan.</li>
-            <li><strong>Command mode.</strong> Press a second shortcut and speak or type a request such as “Open four Codex threads”. Structured commands run without any model; reasoning uses the provider you connected.</li>
+            <li><strong>Dictation.</strong> Hold the push-to-talk key (F8 by default), speak, and the text is typed into the focused input: a Claude Code, Codex or Gemini CLI thread, a terminal, or a search box. Speech recognition runs on your device; audio is not stored or uploaded. Unlimited on every plan.</li>
+            <li><strong>Commands.</strong> With the same key, say a request such as “Open four Codex threads”. KalVoice decides from context whether you are dictating or giving a command. Structured commands run without any model; reasoning uses the provider you connected.</li>
             <li><strong>Bring your own provider.</strong> Claude Code, Codex and Gemini CLI run on your own accounts. KalCode does not charge for, resell or meter provider usage, and there is no KalCode-paid fallback.</li>
             <li><strong>Plan allowances.</strong> Plans now include KalVoice Requests each month ({allowances}). Every plan includes all provider connections, all permission modes and unlimited local dictation.</li>
           </ul>

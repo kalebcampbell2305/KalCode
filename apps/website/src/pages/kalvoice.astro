@@ -40,12 +40,12 @@ const privacy = [
       <p class="kv-head__name">KalVoice</p>
       <h1 class="h1">Speak your prompts with KalVoice.</h1>
       <p class="lead">
-        Hold a key, talk, release: the words land in the focused agent. Or speak a command, and
-        KalVoice runs your workspace for you.
+        Hold {KALVOICE.pushToTalkKey} to talk to KalVoice. Release, and your words land in the
+        focused agent — or, if you said a command, KalCode does it.
       </p>
       <div class="button-row">
         <a class="button button--secondary button--lg" href="#modes">
-          Dictation and commands
+          How it works
           <Icon name="arrow-down" />
         </a>
       </div>
@@ -59,35 +59,33 @@ const privacy = [
     <div class="container">
       <SectionHead
         id="modes-title"
-        title="Two keys. Two modes."
-        text="Both shortcuts are configurable. On macOS the defaults use Cmd in place of Ctrl."
+        title={`Hold ${KALVOICE.pushToTalkKey}. Speak. Release.`}
+        text="One key, one gesture. KalVoice decides from context what you meant."
       />
+      <p class="ptt">
+        <kbd class="ptt__key">{KALVOICE.pushToTalkKey}</kbd>
+        <span class="ptt__note">{KALVOICE.keyNote}</span>
+      </p>
       <div class="modes">
         <article class="mode" aria-labelledby="dictation-title">
-          <p class="mode__keys">
-            <span>Hold</span>
-            {KALVOICE.dictationKeys.map((key) => <kbd>{key}</kbd>)}
-          </p>
-          <h3 id="dictation-title" class="h2 h2--sm">Dictation</h3>
+          <p class="mode__keys">Into a focused input</p>
+          <h3 id="dictation-title" class="h2 h2--sm">Your words are typed there.</h3>
           <ul>
-            <li>Speak into any input: a Claude Code, Codex or Gemini CLI thread, a terminal, a search box.</li>
-            <li>The target is fixed when you press the keys, so switching windows cannot misdirect your words.</li>
-            <li>Unlimited on every plan, and never counted.</li>
+            <li>A Claude Code, Codex or Gemini CLI thread, a terminal, a search box.</li>
+            <li>The target is fixed when you press the key, so switching windows cannot misdirect your words.</li>
+            <li>Dictation is unlimited on every plan, and never counted.</li>
           </ul>
           <p class="mode__example">“also cover the 429 response in the test”</p>
         </article>
         <article class="mode" aria-labelledby="command-title">
-          <p class="mode__keys">
-            <span>Press</span>
-            {KALVOICE.commandKeys.map((key) => <kbd>{key}</kbd>)}
-          </p>
-          <h3 id="command-title" class="h2 h2--sm">Command</h3>
+          <p class="mode__keys">A command</p>
+          <h3 id="command-title" class="h2 h2--sm">KalCode does it.</h3>
           <ul>
-            <li>Say or type what you want done, and KalVoice does it in your workspace.</li>
             <li>Structured commands run without any model; reasoning uses your own provider.</li>
-            <li>Each top-level request is one KalVoice Request.</li>
+            <li>Every action stays inside your permission mode.</li>
+            <li>Each command is one KalVoice Request.</li>
           </ul>
-          <p class="mode__example">“Show me anything waiting for permission.”</p>
+          <p class="mode__example">“Open four Codex threads.”</p>
         </article>
       </div>
     </div>

@@ -10,7 +10,7 @@ import StageSlot from "../components/StageSlot.astro";
 import Base from "../layouts/Base.astro";
 import { downloadCta } from "../lib/releases";
 import { structuredData } from "../lib/seo";
-import { PROVIDERS, getPage } from "../lib/site";
+import { KALVOICE, PROVIDERS, getPage } from "../lib/site";
 
 const page = getPage("/");
 // On home the early-access form is in the closing section, so the hero links to it in place.
@@ -151,8 +151,8 @@ const facts = [
         <p class="chip chip--dev">KalVoice · in development</p>
         <h2 id="kalvoice-title" class="h2">Speak your prompts with KalVoice.</h2>
         <p>
-          Hold a key, talk, release. The words land in the focused agent — transcribed on your
-          device, unlimited on every plan.
+          Hold {KALVOICE.pushToTalkKey} to talk to KalVoice. Your words land in the focused agent —
+          transcribed on your device, unlimited on every plan. Say a command, and KalCode does it.
         </p>
         <a class="text-link" href="/kalvoice">Meet KalVoice <Icon name="arrow-right" /></a>
       </div>

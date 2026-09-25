@@ -4,7 +4,7 @@ import Icon from "../components/Icon.astro";
 import PageHead from "../components/PageHead.astro";
 import StageSlot from "../components/StageSlot.astro";
 import Base from "../layouts/Base.astro";
-import { PROVIDERS, getPage } from "../lib/site";
+import { KALVOICE, PROVIDERS, getPage } from "../lib/site";
 
 const page = getPage("/product");
 
@@ -187,8 +187,8 @@ const roadmap: { capability: string; state: State; note: string }[] = [
         </div>
         <div class="chapter__body">
           <p>
-            Hold a key to dictate into any agent, transcribed on your device and unlimited on every
-            plan. Press another to give KalCode a command.
+            Hold {KALVOICE.pushToTalkKey} and speak. Into a focused input, your words are typed there —
+            transcribed on your device and unlimited on every plan. Say a command, and KalCode does it.
           </p>
           <a class="text-link" href="/kalvoice">Meet KalVoice <Icon name="arrow-right" /></a>
         </div>
