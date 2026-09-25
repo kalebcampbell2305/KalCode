@@ -1,4 +1,4 @@
-import type { EventEnvelope, ResourceKind, TalkRoute } from "@kalcode/protocol";
+import type { EventEnvelope, NotificationKind, ResourceKind, TalkRoute } from "@kalcode/protocol";
 
 export type EventTone = "live" | "success" | "waiting" | "danger" | "idle";
 
@@ -308,6 +308,8 @@ export function describeEvent(event: EventEnvelope): EventDescription {
       return { title: "KalVoice finished speaking", detail: null, tone: "idle" };
     case "kalvoice.talk_routed":
       return { title: TALK_ROUTE_TITLES[event.payload.outcome], detail: null, tone: "idle" };
+    case "notification.created":
+      return { title: NOTIFICATION_TITLES[event.payload.kind], detail: null, tone: "idle" };
     case "unrecognized":
       return {
         title: "Event from a newer KalCode",
@@ -316,6 +318,20 @@ export function describeEvent(event: EventEnvelope): EventDescription {
       };
   }
 }
+
+// Z7-W3: the notification center raised (or re-raised) a notification. The notification itself
+// says what happened; the Activity feed only records that it was raised.
+const NOTIFICATION_TITLES: Record<NotificationKind, string> = {
+  thread_completed: "Notified: thread completed",
+  thread_failed: "Notified: thread failed",
+  permission_required: "Notified: permission required",
+  mission_done: "Notified: mission done",
+  provider_disconnected: "Notified: provider signed out",
+  recovery_available: "Notified: work can be resumed",
+  automation_finished: "Notified: automation finished",
+  doctor_finding: "Notified: environment finding",
+  health_changed: "Notified: provider health changed",
+};
 
 const RELATIVE = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
 const ABSOLUTE = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "medium" });

@@ -91,14 +91,14 @@ test.describe("providers", () => {
     // Unchanged results are not recorded again.
     await expect(activity.getByText("Claude Code 2.1.282")).toHaveCount(1);
 
-    const runtime = page.getByRole("complementary", { name: "Runtime health" });
+    const runtime = page.getByRole("region", { name: "Runtime health" });
     await expect(runtime.getByText("2 of 3 installed")).toBeVisible();
     await expect(runtime.getByText("Claude Code, Codex")).toBeVisible();
   });
 
   test("the dashboard does not start detection on its own", async ({ page }) => {
     await page.goto("/");
-    const runtime = page.getByRole("complementary", { name: "Runtime health" });
+    const runtime = page.getByRole("region", { name: "Runtime health" });
     await expect(runtime.getByText("Not checked", { exact: true })).toBeVisible();
     await expect(page.getByRole("region", { name: "Activity" }).getByText("Provider detected")).toHaveCount(0);
   });
@@ -137,9 +137,7 @@ test.describe("providers", () => {
       await expect(region.getByText("Sign-in", { exact: true })).toHaveCount(0);
     }
     await page.getByRole("button", { name: "Dashboard" }).click();
-    await expect(
-      page.getByRole("complementary", { name: "Runtime health" }).getByText("0 of 3 installed"),
-    ).toBeVisible();
+    await expect(page.getByRole("region", { name: "Runtime health" }).getByText("0 of 3 installed")).toBeVisible();
   });
 
   test("an outdated, signed-out CLI explains what to do", async ({ page }) => {

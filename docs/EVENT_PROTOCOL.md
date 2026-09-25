@@ -111,7 +111,8 @@ one-to-one (`EventPayload::from(GitEvent)`, `EventPayload::from(ContextEvent)`,
 | `kalvoice.voice_output_started` / `.voice_output_completed` | 1 | D (Z12) | `{ requestId }` |
 | `kalvoice.talk_routed` | 1 | D (CA-1; Z12 emits) | `{ requestId, outcome }` — `outcome` = `command` \| `dictation` \| `request`; never the words |
 | `mission.*`, `verification.*` | 1 | D (Z9/Z10) | |
-| `automation.*`, `notification.created` | 1 | D (Z11) | |
+| `automation.*` | 1 | D (AUT) | |
+| `notification.created` | 1 | I (Z7-W3) | `{ notificationId, kind, severity, entityKind?, entityId? }` — emitted when a notification is created and when a repeat is coalesced into it (re-raised); ids and enums only, the title and body live in the `notifications` table (v11). Correlation carries `threadId` / `providerId` / `workspaceId` of the entity. |
 
 Streaming high-volume data (terminal bytes, token deltas) is **not** sent as persisted events;
 it uses dedicated channels, and only lifecycle transitions are events.

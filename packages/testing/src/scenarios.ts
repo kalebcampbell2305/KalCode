@@ -212,6 +212,16 @@ export function samplePayloads(fx: Fixtures = createFixtures()): {
     "kalvoice.voice_output_started": { type: "kalvoice.voice_output_started", payload: { requestId } },
     "kalvoice.voice_output_completed": { type: "kalvoice.voice_output_completed", payload: { requestId } },
     "kalvoice.talk_routed": { type: "kalvoice.talk_routed", payload: { requestId, outcome: "command" } },
+    "notification.created": {
+      type: "notification.created",
+      payload: {
+        notificationId: "0192f3c4-5b6a-7c8d-9e0f-1a2b3c4d5e6f",
+        kind: "thread_completed",
+        severity: "info",
+        entityKind: "thread",
+        entityId: threadId,
+      },
+    },
     unrecognized: { type: "unrecognized", payload: { originalType: "future.event", originalVersion: 2 } },
   };
 }

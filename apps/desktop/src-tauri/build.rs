@@ -76,6 +76,9 @@ const COMMANDS: &[&str] = &[
     "provider_pane_write",
     "provider_pane_resize",
     "provider_pane_info",
+    // Z7-W3: notification center.
+    "notification_list",
+    "notification_mark",
 ];
 
 /// Test hooks. Declared (and so given an `allow-*` permission) only when the target build has

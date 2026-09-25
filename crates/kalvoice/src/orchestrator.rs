@@ -164,6 +164,10 @@ pub enum UiDirective {
     },
     /// Opens the approvals panel.
     ShowApprovals,
+    /// Shows the Dashboard filtered by a chip (Z7-W3).
+    FilterDashboard {
+        chip: kalcode_contracts::workspace_ui::DashboardChip,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

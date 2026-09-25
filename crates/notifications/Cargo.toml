@@ -1,0 +1,25 @@
+[package]
+name = "kalcode-notifications"
+description = "KalCode notification center (Z7-W3): derives actionable notifications from runtime events, coalesces and rate-limits them, and stores them with read and dismissed state (migration v11)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "kalcode_notifications"
+
+[dependencies]
+kalcode-contracts = { path = "../contracts" }
+kalcode-native-core = { path = "../native-core" }
+rusqlite.workspace = true
+time.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

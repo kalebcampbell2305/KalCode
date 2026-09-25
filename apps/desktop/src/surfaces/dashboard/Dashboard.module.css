@@ -1,85 +1,96 @@
 /*
- * The Dashboard fills the window: the work (approvals, threads, outcomes) in the main column,
- * runtime health and terminals in a side rail, and from 1900px the activity feed in a column
- * of its own instead of ever-wider rows.
+ * The Dashboard fills the window: the board of agents takes the width, and the widget dock sits
+ * beside it (sticky, scrolling on its own) once there is room. Wide and ultrawide windows gain
+ * card columns and a two-column dock rather than stretched cards; narrow ones put the dock below.
  */
+.surface {
+  container: dashboard / inline-size;
+  min-width: 0;
+}
+
 .layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) clamp(18.5rem, 20vw, 26rem);
-  grid-template-rows: auto auto auto 1fr;
-  grid-template-areas:
-    "approvals aside"
-    "threads aside"
-    "recent aside"
-    "activity aside";
-  column-gap: var(--space-4);
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-6);
   align-items: start;
 }
 
-.approvals {
-  grid-area: approvals;
+.board {
   min-width: 0;
 }
 
-.threads {
-  grid-area: threads;
+.dock {
   min-width: 0;
+  --dock-columns: 1;
 }
 
-.recent {
-  grid-area: recent;
-  min-width: 0;
+@container dashboard (min-width: 46rem) {
+  .dock {
+    --dock-columns: 2;
+  }
 }
 
-.activity {
-  grid-area: activity;
-  min-width: 0;
-}
-
-/* Sections collapse to nothing when their source is absent; spacing lives on the non-empty ones. */
-.approvals:not(:empty),
-.threads:not(:empty),
-.recent:not(:empty) {
-  margin-bottom: var(--space-4);
-}
-
-.aside {
-  grid-area: aside;
-  position: sticky;
-  top: var(--space-4);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-  min-width: 0;
-}
-
-@media (min-width: 1900px) {
+@container dashboard (min-width: 68rem) {
   .layout {
-    grid-template-columns: minmax(0, 1.5fr) minmax(24rem, 1fr) clamp(18rem, 15vw, 26rem);
-    grid-template-rows: auto auto 1fr;
-    grid-template-areas:
-      "approvals activity aside"
-      "threads activity aside"
-      "recent activity aside";
+    grid-template-columns: minmax(0, 1fr) clamp(20rem, 24cqi, 26rem);
+    gap: var(--space-5);
+  }
+
+  .dock {
+    --dock-columns: 1;
+    position: sticky;
+    top: var(--space-4);
+    max-height: calc(100dvh - var(--space-8));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-right: var(--space-1);
+    scrollbar-width: thin;
   }
 }
 
-@media (max-width: 1180px) {
+@container dashboard (min-width: 150rem) {
   .layout {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: none;
-    grid-template-areas:
-      "approvals"
-      "threads"
-      "recent"
-      "aside"
-      "activity";
+    grid-template-columns: minmax(0, 1fr) clamp(40rem, 30cqi, 54rem);
   }
 
-  .aside {
-    position: static;
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
-    gap: var(--space-4);
+  .dock {
+    --dock-columns: 2;
   }
+}
+
+/* Header trend: events in the last hour. */
+.trend {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2-5);
+  margin: 0;
+  padding: var(--space-1-5) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface-1);
+  color: var(--color-accent-text);
+}
+
+.trendLabel {
+  color: var(--color-text-muted);
+  font-family: var(--font-label);
+  font-size: var(--type-label);
+  font-weight: var(--type-label-weight);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.trendValue {
+  color: var(--color-text);
+  font-size: var(--type-ui);
+  font-variant-numeric: tabular-nums;
+}
+
+/* As pane content: the pane scrolls, and columns follow the pane's width. */
+.pane {
+  height: 100%;
+  min-height: 0;
+  padding: var(--space-3) var(--space-4) var(--space-6);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }

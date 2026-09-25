@@ -1,0 +1,401 @@
+/* One agent on the Dashboard (Z7-W3). A framed navy panel; its top hairline carries the status
+   tone (never colour alone: the chip always says the status in words, with a glyph). */
+
+.card {
+  --card-px: var(--space-4);
+  --tone-line: var(--color-border-strong);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-3-5) var(--card-px) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-panel);
+  background: var(--panel-sheen), var(--color-surface-1);
+  box-shadow: var(--shadow-panel);
+  overflow: hidden;
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.card:hover {
+  border-color: var(--color-border-lit-soft);
+}
+
+.card:focus-within {
+  border-color: var(--color-border-lit);
+  box-shadow: var(--shadow-lit);
+}
+
+/* Status hairline along the top edge. */
+.card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--tone-line);
+  pointer-events: none;
+}
+
+.card[data-tone="working"] {
+  --tone-line: var(--status-working);
+}
+.card[data-tone="waiting"] {
+  --tone-line: var(--status-waiting);
+}
+.card[data-tone="done"] {
+  --tone-line: var(--status-done);
+}
+.card[data-tone="failed"] {
+  --tone-line: var(--status-failed);
+}
+.card[data-tone="paused"] {
+  --tone-line: var(--status-paused-line);
+}
+.card[data-tone="recovering"] {
+  --tone-line: var(--status-recovering);
+}
+.card[data-tone="muted"] {
+  --tone-line: var(--status-muted-line);
+}
+
+/* WORKING breathes softly; waiting stays static; done and failed transition once. */
+.card[data-tone="working"]::before,
+.card[data-tone="recovering"]::before {
+  animation: breathe var(--dur-pulse) var(--ease-in-out) infinite;
+}
+
+.card[data-changed][data-status="done"] .band,
+.card[data-changed][data-status="failed"]::before {
+  animation: arrive var(--dur-status) var(--ease-out) 1;
+}
+
+.card[data-status="permission_required"] {
+  border-color: var(--status-waiting-line);
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes arrive {
+  from {
+    filter: brightness(1.6);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion="full"]) .card::before,
+  :root:not([data-motion="full"]) .band {
+    animation: none;
+  }
+}
+
+:global([data-motion="reduced"]) .card::before,
+:global([data-motion="reduced"]) .band {
+  animation: none;
+}
+
+/* DONE / ACTION NEEDED band: a full-width label strip at the top of the card. */
+.band {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin: calc(-1 * var(--space-3-5)) calc(-1 * var(--card-px)) var(--space-0-5);
+  padding: var(--space-1-5) var(--card-px);
+  font-family: var(--font-label);
+  font-size: var(--type-label);
+  font-weight: var(--type-label-weight);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.band[data-kind="done"] {
+  border-bottom: 1px solid var(--status-done-line);
+  background: var(--status-done-soft);
+  color: var(--status-done-text);
+}
+
+.band[data-kind="action"] {
+  border-bottom: 1px solid var(--status-waiting-line);
+  background: var(--status-waiting-soft);
+  color: var(--status-waiting-text);
+}
+
+.bandDetail {
+  margin-left: auto;
+  font-family: var(--font-sans, inherit);
+  font-size: var(--type-small);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  opacity: 0.85;
+}
+
+.bandGlyph {
+  width: 0.875rem;
+  height: 0.875rem;
+  flex: none;
+}
+
+.head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1-5) var(--space-2);
+  min-width: 0;
+}
+
+.provider {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.status {
+  flex: none;
+}
+
+.name {
+  min-width: 0;
+  margin: 0;
+  font-size: var(--type-title);
+  font-weight: var(--type-title-weight, 600);
+  line-height: 1.3;
+}
+
+.nameButton {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: none;
+  color: var(--color-text);
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.nameButton:hover {
+  text-decoration: underline;
+  text-decoration-color: var(--color-border-lit);
+  text-underline-offset: 3px;
+}
+
+.nameButton:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 2px;
+}
+
+.where {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
+}
+
+.workspace {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: var(--type-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branchGlyph {
+  width: 0.8125rem;
+  height: 0.8125rem;
+  flex: none;
+}
+
+.activity {
+  display: -webkit-box;
+  min-height: calc(2 * 1.45em);
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--type-ui);
+  line-height: 1.45;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.activity[data-failed] {
+  color: var(--status-failed-text);
+}
+
+.followUps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+/* Inline approval (ACTION NEEDED): a sunken well with the exact action and the answers. */
+.approval {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2-5) var(--space-3);
+  border: 1px solid var(--status-waiting-line);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-sunken);
+  box-shadow: var(--shadow-well);
+  cursor: default;
+}
+
+.approvalTitle {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-1-5);
+  margin: 0;
+  color: var(--status-waiting-text);
+  font-size: var(--type-ui);
+  font-weight: 600;
+}
+
+.approvalGlyph {
+  width: 1rem;
+  height: 1rem;
+  margin-top: 0.1em;
+  flex: none;
+}
+
+.approvalDetail {
+  display: block;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--type-small);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scopes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.scope {
+  padding: 0.0625rem var(--space-1-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xs);
+  color: var(--color-text-secondary);
+  font-size: var(--type-small);
+}
+
+.scope[data-tone="danger"] {
+  border-color: var(--status-failed-line);
+  color: var(--status-failed-text);
+}
+
+.decisions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1-5);
+}
+
+.linkButton {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-accent-text, var(--color-accent));
+  font: inherit;
+  font-size: var(--type-small);
+  cursor: pointer;
+}
+
+.linkButton:hover {
+  text-decoration: underline;
+}
+
+.linkButton:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+.confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2-5) var(--space-3);
+  border: 1px solid var(--status-failed-line);
+  border-radius: var(--radius-md);
+  background: var(--status-failed-soft);
+  cursor: default;
+}
+
+.confirmText {
+  margin: 0;
+  color: var(--color-text);
+  font-size: var(--type-ui);
+}
+
+.confirmActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2-5);
+  margin-top: auto;
+  padding-top: var(--space-2-5);
+  border-top: 1px solid var(--color-border-subtle);
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
+}
+
+.mode {
+  flex: none;
+}
+
+.meta {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.more {
+  margin-left: auto;
+}

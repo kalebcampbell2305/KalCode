@@ -28,6 +28,7 @@ kalcode-permissions = { path = "../../../crates/permissions" }
 kalcode-kalvoice = { path = "../../../crates/kalvoice" }
 tauri-plugin-global-shortcut = "2.3"
 kalcode-hook-bridge = { path = "../../../crates/hook-bridge" }
+kalcode-notifications = { path = "../../../crates/notifications" }
 tauri = { version = "2.11", features = [] }
 tauri-plugin-opener = "2.5"
 tauri-plugin-single-instance = "2.4"

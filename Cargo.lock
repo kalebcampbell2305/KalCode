@@ -2623,6 +2623,7 @@ dependencies = [
  "kalcode-hook-bridge",
  "kalcode-kalvoice",
  "kalcode-native-core",
+ "kalcode-notifications",
  "kalcode-permissions",
  "kalcode-providers",
  "kalcode-secure-store",
@@ -2728,6 +2729,19 @@ dependencies = [
  "tracing-subscriber",
  "ts-rs",
  "uuid",
+]
+
+[[package]]
+name = "kalcode-notifications"
+version = "0.1.3"
+dependencies = [
+ "kalcode-contracts",
+ "kalcode-native-core",
+ "rusqlite",
+ "serde_json",
+ "tempfile",
+ "time",
+ "tracing",
 ]
 
 [[package]]

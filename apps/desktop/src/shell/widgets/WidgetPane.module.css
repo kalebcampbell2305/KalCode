@@ -1,0 +1,7 @@
+.pane {
+  height: 100%;
+  min-height: 0;
+  padding: var(--space-3) var(--space-4);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}

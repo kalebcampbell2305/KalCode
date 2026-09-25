@@ -1,25 +1,16 @@
-import type { ApprovalView, TerminalInfo, ThreadSummary } from "@kalcode/protocol";
+import { Sparkline } from "@kalcode/ui/components";
 import { useMemo } from "react";
+import { useEvents } from "../../runtime/RuntimeProvider.tsx";
 import { Page } from "../../shell/Page.tsx";
-import { usePermissions } from "../permissions/index.ts";
-import { ActivityFeed } from "./ActivityFeed.tsx";
+import { WidgetDock } from "../../shell/widgets/WidgetDock.tsx";
 import { Announcer } from "./Announcer.tsx";
-import { ApprovalQueue } from "./ApprovalQueue.tsx";
 import styles from "./Dashboard.module.css";
-import { DashboardDataProvider, useRunningTerminals, useThreadSummaries } from "./data/DashboardData.tsx";
-import { readyData } from "./data/resource.ts";
-import { describeRuntime, summarizeRuntime } from "./data/summary.ts";
-import { RecentOutcomes } from "./RecentOutcomes.tsx";
-import { RunningTerminals } from "./RunningTerminals.tsx";
-import { RuntimeHealth } from "./RuntimeHealth.tsx";
-import { SummaryStrip } from "./SummaryStrip.tsx";
-import { ThreadList } from "./ThreadList.tsx";
+import { DashboardBoard } from "./DashboardBoard.tsx";
+import { activityBuckets, chipCounts, summaryLine } from "./data/board.ts";
+import { DashboardDataProvider, useThreadSummaries } from "./data/DashboardData.tsx";
 import { useNow } from "./useNow.ts";
 
-const NO_THREADS: readonly ThreadSummary[] = [];
-const NO_APPROVALS: readonly ApprovalView[] = [];
-const NO_TERMINALS: readonly TerminalInfo[] = [];
-
+/** The Dashboard surface (Z7-W3): the live board of agents beside the widget dock. */
 export function Dashboard() {
   return (
     <DashboardDataProvider>
@@ -29,53 +20,64 @@ export function Dashboard() {
 }
 
 function DashboardPage() {
-  const threads = useThreadSummaries();
-  const approvals = usePermissions();
-  const terminals = useRunningTerminals();
-  const now = useNow(30_000);
-
-  const threadList = readyData(threads.state) ?? NO_THREADS;
-  const approvalList = approvals.pendingState === "loading" ? NO_APPROVALS : approvals.pending;
-  const terminalList = readyData(terminals.state) ?? NO_TERMINALS;
-
-  const threadNames = useMemo(() => new Map(threadList.map((t) => [t.id, t.name])), [threadList]);
+  const { state } = useThreadSummaries();
   const summary = useMemo(
-    () => (threads.state.status === "ready" ? summarizeRuntime(threadList, approvalList, terminalList) : null),
-    [threads.state.status, threadList, approvalList, terminalList],
+    () => (state.status === "ready" && state.data.length > 0 ? summaryLine(chipCounts(state.data)) : null),
+    [state],
   );
-
-  const threadsAvailable = threads.state.status !== "unavailable";
-  const description = summary ? describeRuntime(summary) : "Everything running in KalCode, as it happens.";
-
   return (
-    <Page title="Dashboard" description={description}>
-      {threadsAvailable && threads.state.status !== "error" ? (
-        <SummaryStrip
-          summary={summary}
-          loading={threads.state.status === "loading"}
-          approvalsAvailable
-          terminalsAvailable={terminals.state.status !== "unavailable"}
-        />
-      ) : null}
-      <div className={styles.layout}>
-        <div className={styles.approvals}>
-          <ApprovalQueue />
-        </div>
-        <div className={styles.threads}>
-          <ThreadList now={now} />
-        </div>
-        <aside className={styles.aside} aria-label="Runtime health">
-          <RuntimeHealth />
-          <RunningTerminals threads={threadList} now={now} />
-        </aside>
-        <div className={styles.recent}>
-          <RecentOutcomes now={now} />
-        </div>
-        <div className={styles.activity}>
-          <ActivityFeed threadNames={threadNames} />
+    <Page
+      title="Dashboard"
+      description={summary ?? "Every agent KalCode runs, live: what it is doing, and what needs you."}
+      actions={<ActivityTrend />}
+    >
+      <div className={styles.surface}>
+        <div className={styles.layout}>
+          <div className={styles.board}>
+            <DashboardBoard />
+          </div>
+          <div className={styles.dock}>
+            <WidgetDock />
+          </div>
         </div>
       </div>
       <Announcer />
     </Page>
+  );
+}
+
+/**
+ * The Dashboard's activity trend: events recorded in the last hour, in five-minute bars. Real data
+ * only (KalCode's event log); nothing is drawn when nothing happened.
+ */
+function ActivityTrend() {
+  const { events } = useEvents();
+  const now = useNow(60_000);
+  const buckets = useMemo(() => activityBuckets(events, now), [events, now]);
+  if (!buckets) return null;
+  const total = buckets.reduce((sum, n) => sum + n, 0);
+  return (
+    <p className={styles.trend}>
+      <span className={styles.trendLabel}>Last hour</span>
+      <Sparkline values={buckets} variant="bars" width={96} height={24} />
+      <span className={styles.trendValue}>
+        {total} {total === 1 ? "event" : "events"}
+      </span>
+    </p>
+  );
+}
+
+/**
+ * The Dashboard as pane content (`PaneContent::Dashboard`, Z7-W1): the same live board, sized by
+ * its pane (columns follow the pane's width), with its own one-line summary. The pane scrolls.
+ */
+export function DashboardPane() {
+  return (
+    <DashboardDataProvider>
+      <div className={styles.pane} data-dashboard-pane>
+        <DashboardBoard inPane />
+      </div>
+      <Announcer />
+    </DashboardDataProvider>
   );
 }

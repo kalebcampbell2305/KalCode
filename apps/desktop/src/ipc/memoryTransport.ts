@@ -36,6 +36,7 @@ import type {
   Settings,
   SettingsPatch,
   SurfaceFlag,
+  ThreadSummary,
   Workspace,
 } from "@kalcode/protocol";
 import { PRODUCT_FEATURES } from "@kalcode/protocol";
@@ -47,6 +48,7 @@ import {
   type EmitOptions,
   isDashboardScenario,
 } from "./memory/dashboard.ts";
+import { createNotificationsMemory, type NotificationsMemory } from "./memory/notifications.ts";
 import { createPanesMemory, type PaneControls } from "./memory/panes.ts";
 import { createPermissionMemory, type PermissionMemory } from "./memory/permissions.ts";
 import { createThreadsMemory } from "./memory/threads.ts";
@@ -163,6 +165,8 @@ export function createMemoryTransport(
   let lastCheck: { at: string; ok: boolean; backend: string } | null = null;
   let providers: ProviderStatus[] = providerCatalog();
   let detecting: Promise<ProviderStatus[]> | null = null;
+  // Z7-W3: notifications are derived from recorded events, like the native worker.
+  let notifications: NotificationsMemory | null = null;
 
   const emit = (event: EventPayload, options: EmitOptions = {}) => {
     const envelope = {
@@ -182,6 +186,7 @@ export function createMemoryTransport(
       ...event,
     } as EventEnvelope;
     events.push(envelope);
+    notifications?.observe(envelope);
     // Like native: published to the subscribers present now, delivered asynchronously.
     const targets = [...subscribers];
     setTimeout(() => {
@@ -202,6 +207,28 @@ export function createMemoryTransport(
       : null;
 
   const dashboard = isDashboardScenario(scenario) ? createDashboardFixtures(scenario, emit, startedAt) : null;
+  // Declared below; the notification lookup runs only once events flow.
+  let threadsMemory: ReturnType<typeof createThreadsMemory> | null = null;
+  const notificationsMemory = createNotificationsMemory({
+    emit,
+    lookupThread: (threadId) => {
+      try {
+        const listed = dashboard?.handlers.thread_list?.({});
+        if (Array.isArray(listed)) {
+          const found = (listed as ThreadSummary[]).find((t) => t.id === threadId);
+          if (found) return found;
+        }
+      } catch {
+        // The `errors` scenario fails reads; fall through.
+      }
+      try {
+        return (threadsMemory?.handlers.thread_get({ threadId }) as ThreadSummary | undefined) ?? null;
+      } catch {
+        return null;
+      }
+    },
+  });
+  notifications = notificationsMemory;
   // Dashboard scenarios simulate a session that has been running for a while.
   const sessionStartMs = startedAt - (dashboard?.sessionAgeMs ?? 0);
   const sessionStart = dashboard ? { occurredAt: new Date(sessionStartMs).toISOString() } : {};
@@ -308,6 +335,7 @@ export function createMemoryTransport(
       expireForThread: (threadId) => permissions.expireForThread(threadId),
     },
   );
+  threadsMemory = threads;
   // Provider panes (Z7-W4) hold their tool calls until the person answers, like native.
   const panes = createPanesMemory({ requireCore, threads, permissions, beforeCreate: ensureDetected });
   answer = (view) => {
@@ -320,6 +348,7 @@ export function createMemoryTransport(
     ...threads.handlers,
     ...permissions.handlers,
     ...panes.handlers,
+    ...notificationsMemory.handlers,
     // Like native: the first thread operation detects providers once, so threads use exactly
     // the providers detection reports usable.
     thread_options: async (args) => {
@@ -547,6 +576,9 @@ export function createMemoryTransport(
       dashboard: transport.dashboard,
       permissions: transport.permissions,
       panes: transport.panes,
+      // Z7-W3: records an event as the runtime would (e.g. `provider.disconnected`), so tests can
+      // drive notifications from any event the native runtime emits.
+      simulate: (event: EventPayload, options: EmitOptions = {}) => emit(event, options),
     };
   }
   return transport;

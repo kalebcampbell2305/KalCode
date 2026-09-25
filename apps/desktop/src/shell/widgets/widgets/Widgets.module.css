@@ -1,0 +1,124 @@
+/* Shared list styles for the default widgets (Z7-W3). Dense rows, hairline separators. */
+
+.list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-1) var(--space-2-5);
+  padding: var(--space-2) 0;
+}
+
+.item + .item {
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.primary {
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: var(--type-ui);
+  font-weight: var(--weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.linkish {
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.linkish:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.linkish:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 2px;
+}
+
+.secondary {
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.time {
+  color: var(--color-text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--type-label);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1-5);
+  grid-column: 2 / -1;
+}
+
+.glyph {
+  width: 1rem;
+  height: 1rem;
+  color: var(--status-waiting-text);
+}
+
+.none {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--type-ui);
+}
+
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: var(--space-2);
+}
+
+.state {
+  justify-self: end;
+  font-size: var(--type-small);
+  white-space: nowrap;
+}
+
+.state[data-tone="ok"] {
+  color: var(--status-working-text);
+}
+/* Needs the person (outdated, signed out): neutral and emphasized; amber is reserved for PAUSED. */
+.state[data-tone="warn"] {
+  color: var(--status-waiting-text);
+  font-weight: 600;
+}
+.state[data-tone="bad"] {
+  color: var(--status-failed-text);
+}
+.state[data-tone="muted"] {
+  color: var(--color-text-muted);
+}
