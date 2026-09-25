@@ -322,7 +322,7 @@ async function serveFile(request: Request, url: URL, deps: DownloadDeps, bucket:
 
   const ifRange = request.headers.get("if-range");
   const range =
-    ifRange === null || etagMatches(ifRange, meta.httpEtag)
+    ifRange === null || (!ifRange.startsWith("W/") && ifRange === meta.httpEtag)
       ? parseRange(request.headers.get("range"), meta.size)
       : null;
   if (range === "unsatisfiable") {
@@ -341,6 +341,10 @@ async function serveFile(request: Request, url: URL, deps: DownloadDeps, bucket:
 
   const object = range ? await bucket.get(target.key, { range }) : await bucket.get(target.key);
   if (!object) return notFound(request, url, deps);
+  if (object.httpEtag !== meta.httpEtag || object.size !== meta.size) {
+    await object.body.cancel().catch(() => undefined);
+    return unavailable(request);
+  }
   return new Response(object.body, { status, headers });
 }
 

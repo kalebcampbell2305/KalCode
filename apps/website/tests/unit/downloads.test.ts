@@ -136,6 +136,30 @@ beforeEach(() => {
   h = harness();
 });
 
+describe("download representation integrity", () => {
+  it("uses strong comparison for If-Range", async () => {
+    publish(h);
+    const first = await download(h, "/download/windows-x64", { method: "HEAD" });
+    const response = await download(h, "/download/windows-x64", {
+      headers: { range: "bytes=0-3", "if-range": `W/${first.headers.get("etag")}` },
+    });
+    expect(response.status).toBe(200);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(INSTALLER);
+  });
+
+  it("rejects a changed representation between metadata and stream acquisition", async () => {
+    publish(h);
+    const bucket = h.deps.bucket;
+    if (!bucket) throw new Error("fixture bucket missing");
+    const original = bucket.get.bind(bucket);
+    bucket.get = async (key, options) => {
+      const object = await original(key, options);
+      return object && key === KEY ? { ...object, httpEtag: '"replacement"' } : object;
+    };
+    expect((await download(h, "/download/windows-x64")).status).toBe(503);
+  });
+});
+
 describe("route matching", () => {
   it("claims only the download routes and leaves site pages alone", () => {
     expect(matchDownloadRoute("/download/windows-x64")).toEqual({
