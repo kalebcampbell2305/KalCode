@@ -73,7 +73,10 @@ Status legend: **I** implemented and emitted · **D** defined, emitted from its 
 | `tool.started` / `.completed` | 1 | I (Z3) | `{ threadId, toolCallId }` |
 | `tool.failed` | 1 | I (Z3) | `{ threadId, toolCallId, summary? }` |
 | `file.created` / `.modified` / `.deleted` | 1 | I (Z3) | `{ threadId?, path }` — workspace-relative where possible |
-| `approval.requested` / `.approved` / `.denied` | 1 | D (Z4) | `{ requestId, scope, decision? }` |
+| `approval.requested` | 1 | I (Z4) | `{ requestId, threadId, scopes, summary }` — the engine asked; the thread waits |
+| `approval.approved` | 1 | I (Z4) | `{ requestId, threadId, decision }` — answered by the user only |
+| `approval.denied` / `.expired` | 1 | I (Z4) | `{ requestId, threadId }` — expired: thread stopped or interrupted, superseded, mode changed, restart, answered in the provider |
+| `permission.mode_changed` | 1 | I (Z4) | `{ threadId?, from, to }` — once per change, with its audit row; `threadId: null` for the default mode |
 | `git.branch_changed` / `.diff_changed` / `.commit_created` | 1 | D (Z6) | `{ workspaceId, … }` |
 | `kalvoice.dictation_started` / `.dictation_completed` / `.dictation_failed` | 1 | D (Z12) | `{ sessionId, durationMs?, characters?, code? }` — never the transcript |
 | `kalvoice.request_started` / `.command_recognized` / `.command_executed` / `.request_completed` / `.request_failed` | 1 | D (Z12) | `{ requestId, input?, intent?, code? }` — never the request text |
