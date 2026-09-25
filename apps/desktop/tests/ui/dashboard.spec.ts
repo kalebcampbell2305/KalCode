@@ -81,7 +81,7 @@ test.describe("dashboard with running work", () => {
     const flaky = row(threads(page), "Fix flaky checkout test");
     await expect(flaky.getByText("Running command")).toBeVisible();
     await expect(flaky.getByText("Running pnpm test checkout --repeat 20")).toBeVisible();
-    await expect(flaky.getByText("Codex")).toBeVisible();
+    await expect(flaky.getByText("Codex", { exact: true })).toBeVisible();
     await expect(flaky.getByText("gpt-5-codex")).toBeVisible();
     await expect(flaky.getByText("fix/checkout-flake")).toBeVisible();
     await expect(flaky.getByText("2 files changed")).toBeVisible();
