@@ -889,6 +889,16 @@ negated and compound phrasings for every intent, and the safety asymmetry (KV-02
 
 ## 16. Campaign Z7 — Workspace, Dashboard, Thread Panels & Returning-User UX
 
+> **Owner requirement (2026-09-24) — full-window workspace.** KalCode fills 100% of the window
+> right of the sidebar; no surface sits in a narrow centred container. Code Mode's right side is
+> one flexible pane canvas (Claude / Codex / browser / dashboard / files / Git / …) with horizontal
+> and vertical splits, free resizing, drag-rearrange, maximize, collapse/reopen, and per-workspace
+> persistence. Wide and ultrawide windows gain more panes, larger terminals, browser preview,
+> Command Center, mission graphs, provider health and resource usage — composition, not
+> stretching; prose keeps a readable measure. Required visual verification in the real app at
+> 1366×768, 1440×900, 1920×1080, 2560×1440 and ultrawide (3440×1440). The surface-level
+> max-width removal ships in wave 2; the pane canvas is Z7-W1.
+
 Status: **PROPOSED**. Starts **after wave 2 (Z1 + Z3) and Z4 merge**: it rewrites the same shell,
 sidebar, Dashboard and thread code, so no Z7 work starts before then. The owner's layout reference
 is used for interaction model and density only. KalCode's own design system (`docs/DESIGN_SYSTEM.md`)
