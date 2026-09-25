@@ -37,14 +37,14 @@ describe("with no public build (empty manifest)", () => {
     }
   });
 
-  it("makes every call to action point at early access", () => {
+  it("keeps the Download KalCode label but goes to the honest download page", () => {
     expect(downloadCta(EMPTY)).toEqual({
-      kind: "early-access",
-      label: "Join early access",
-      href: "/download#early-access",
+      kind: "pending",
+      label: "Download KalCode",
+      href: "/download",
+      os: null,
       note: "No public build yet",
     });
-    expect(downloadCta(EMPTY, "#early-access").href).toBe("#early-access");
     expect(buildStatus(EMPTY)).toBe("In private development");
   });
 });
@@ -61,12 +61,13 @@ describe("with a published Windows preview (fixture)", () => {
     expect(windows.build.signed).toBe(false);
   });
 
-  it("turns the call to action into a download on the download page", () => {
+  it("turns the call to action into the real download", () => {
     expect(downloadCta(manifest)).toEqual({
       kind: "download",
-      label: "Download for Windows",
-      href: "/download#windows",
-      note: "Preview 0.1.0 · 3.8 MB · Windows 10 (1809) or later, 64-bit",
+      label: "Download KalCode",
+      href: "/download/windows-x64",
+      os: "windows",
+      note: "Windows · Preview 0.1.0 · 3.8 MB",
     });
     expect(buildStatus(manifest)).toBe("Preview 0.1.0 for Windows");
   });

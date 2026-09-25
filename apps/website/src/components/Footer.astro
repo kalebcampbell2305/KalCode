@@ -6,6 +6,12 @@ import Lettering from "./Lettering.astro";
 import ThemeToggle from "./ThemeToggle.astro";
 import XLink from "./XLink.astro";
 
+interface Props {
+  /** Reading pages offer the theme choice; world pages are always dark (docs/WEBSITE.md). */
+  themeToggle?: boolean;
+}
+const { themeToggle = true } = Astro.props;
+
 const columns = [
   { heading: "Product", links: FOOTER_NAV.product },
   { heading: "Docs", links: FOOTER_NAV.docs },
@@ -49,7 +55,7 @@ const columns = [
         <p>© 2026 KalCode</p>
         <p>{RELEASES.latest ? `${buildStatus()}. More in development.` : "KalCode is in private development."}</p>
       </div>
-      <ThemeToggle />
+      {themeToggle && <ThemeToggle />}
     </div>
   </div>
 </footer>

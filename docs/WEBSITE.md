@@ -51,6 +51,35 @@ Rules the pages follow:
   a quiet window frame otherwise; `HeroOrbSlot` renders `src/components/hero/HeroOrb.astro` or the
   static globe.
 
+## Round 3: the cinematic world (2026-09-24)
+
+- **World pages** (`/`, `/product`, `/kalvoice`, `/pricing`, `/download`, 404) are always dark:
+  `Base world` sets `data-theme="dark"` on `<body>`. Reading pages (docs, changelog, legal) follow
+  the visitor's theme, and only they show the theme toggle. Space imagery is never drawn on light
+  surfaces (backdrops and planets are hidden in the light theme).
+- **Environments:** `Backdrop.astro` renders the hero work's `SpaceBackdrop` (nebula, deep,
+  orbital, gravity, horizon, planet, void, vault; derived from the owner's artwork or procedural)
+  with a CSS fallback in `styles/world.css`. The home hero is `HeroWorld` (via `HeroOrbSlot`);
+  the page sets `--hero-orb-max`, `--hero-orb-center-y` and the text-safe band variables.
+- **Composition:** eyebrow pill → two-line headline → one or two sentences → link; product demos
+  in fine blue-lit frames (`.frame`), alternating sides, with a full-width dashboard moment.
+  Home sections render only when their demo exists (`lib/stage.ts`). "CODE THE FUTURE" sits
+  under the KALCODE wordmark in the hero.
+- **Buttons** (`site.css`): `.button--primary` is a white physical surface with a blue-to-gold
+  halo outside it (halo `::before` z -2, surface and sweep `::after` z -1), lift/sweep on hover,
+  compression on press, a solid focus outline, and no sweep with reduced motion.
+  `.button--secondary` is a dark surface with a fine light edge. Sizes `--lg` (caps), `--sm`.
+- **Nav:** sticky, transparent over the first viewport; a dark surface, blur and a light line
+  once scrolled (`nav.ts` sets `data-scrolled`); lit active state; full-width mobile sheet.
+- **Type roles:** display and headline in Lexend Deca 700 (`--font-display`); UI labels in Lexend
+  Giga caps; product text in JetBrains Mono.
+- **Download CTA:** always "Download KalCode": the installer URL when the manifest has a Windows
+  build (other systems are routed to `/download` by `download-route.ts`), the honest download
+  page and a "No public build yet" status otherwise.
+- **Performance:** below-the-fold world sections use `content-visibility: auto`; the world plate
+  and the wordmark are preloaded. Full-page screenshots must force `content-visibility: visible`
+  (with CSP bypassed in the capture browser), or off-screen sections appear empty.
+
 ## Behaviour
 
 | Request | Response |

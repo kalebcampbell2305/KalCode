@@ -1,225 +1,392 @@
 ---
-import { PLANS, formatPrice } from "@kalcode/protocol/plans";
+import { PLANS, formatInterval, formatKalVoiceAllowance, formatPrice } from "@kalcode/protocol/plans";
+import Backdrop from "../components/Backdrop.astro";
 import Closing from "../components/Closing.astro";
+import DownloadButton from "../components/DownloadButton.astro";
+import Globe from "../components/Globe.astro";
 import HeroOrbSlot from "../components/HeroOrbSlot.astro";
 import Icon from "../components/Icon.astro";
-import PlanStrip from "../components/PlanStrip.astro";
+import PageStyles from "../components/PageStyles.astro";
 import ProviderGlyph from "../components/ProviderGlyph.astro";
-import SectionHead from "../components/SectionHead.astro";
 import StageSlot from "../components/StageSlot.astro";
 import Base from "../layouts/Base.astro";
+import { HERO_POSTER_PRELOADS } from "../lib/hero";
 import { downloadCta } from "../lib/releases";
-import { HERO_POSTER_SIZES, HERO_POSTER_SRCSET } from "../lib/hero";
 import { structuredData } from "../lib/seo";
 import { KALVOICE, PROVIDERS, getPage } from "../lib/site";
+import { firstStage, hasStage } from "../lib/stage";
 
 const page = getPage("/");
-// On home the early-access form is in the closing section, so the hero links to it in place.
-const cta = downloadCta(undefined, "#early-access");
-const prices = PLANS.map((plan) => formatPrice(plan.price));
-const priceLine = `${prices.slice(0, -1).join(", ")} or ${prices.at(-1)} a month.`;
+const cta = downloadCta();
 
-const facts = [
-  {
-    label: "local-first",
-    title: "Your project files stay local.",
-    body: "Projects, threads and settings live on your device. Secrets go to your operating system's keychain.",
-  },
-  {
-    label: "your own access",
-    title: "Providers run on your own sign-in.",
-    body: "Claude Code, Codex and Gemini CLI use the sign-in or API key you already have, billed by the provider as it is today.",
-  },
-  {
-    label: "no markup",
-    title: "KalCode never pays for, resells or meters your AI usage.",
-    body: "There is no KalCode-paid fallback and nothing is proxied. Plans pay for KalCode, never for models.",
-  },
+// Compose the story from the demos that exist (lib/stage.ts): a section never renders empty.
+const workspaceStage = firstStage("TryKalCode", "AppWindow");
+const voiceStage = firstStage("KalVoiceStage", "KalVoiceDemo");
+const commandStage = firstStage("CommandCenterStage", "DemoCenter");
+
+/** Plan cards: three honest highlights each, straight from the catalog. */
+const FEATURED = "pro";
+const planPoints = (plan: (typeof PLANS)[number]) => [
+  `${formatKalVoiceAllowance(plan.limits)} KalVoice Requests a month`,
+  plan.limits.concurrentThreads === null
+    ? "Unlimited threads at once"
+    : `${plan.limits.concurrentThreads} threads running at once`,
+  plan.limits.advancedMissions
+    ? "Advanced missions with verification"
+    : plan.limits.persistentAgents
+      ? "Persistent agents and team workflows"
+      : "Every provider and permission mode",
 ];
+
+/** Permission policy as it reads in Approve mode (the default). */
+const policies = [
+  { action: "Read files", policy: "Allow", tone: "allow" },
+  { action: "Edit files", policy: "Ask", tone: "ask" },
+  { action: "Run commands", policy: "Ask", tone: "ask" },
+  { action: "Network access", policy: "Ask", tone: "ask" },
+  { action: "Deploy to production", policy: "Approval required", tone: "block" },
+] as const;
 ---
-<Base title={page.title} description={page.description} path={page.path} nightHeader jsonLd={structuredData()}>
+<Base title={page.title} description={page.description} path={page.path} world lateStyles jsonLd={structuredData()}>
+  <!-- The wordmark is a CSS mask (fetched in CORS mode), and often the LCP element: fetch it early. -->
   <link
     slot="head"
     rel="preload"
     as="image"
-    type="image/avif"
-    imagesrcset={HERO_POSTER_SRCSET}
-    imagesizes={HERO_POSTER_SIZES}
+    href="/assets/brand/kalcode-wordmark.png"
+    crossorigin="anonymous"
     fetchpriority="high"
   />
+  {
+    HERO_POSTER_PRELOADS.map((preload) => (
+      <link
+        slot="head"
+        rel="preload"
+        as="image"
+        type="image/avif"
+        fetchpriority="high"
+        media={preload.media}
+        imagesrcset={preload.srcset}
+        imagesizes={preload.sizes}
+      />
+    ))
+  }
+
+  <!-- The orb: the page's core. The lockup sits over its light, inside the text-safe band. -->
   <section class="hero" data-theme="dark" aria-labelledby="hero-title">
-    <div class="hero__orb">
-      <HeroOrbSlot size="full" />
-    </div>
-    <div class="container hero__inner">
-      <h1 id="hero-title" class="hero__title">
-        <span class="hero__name">KalCode</span>
-        <span class="hero__line">One intelligence that operates your entire AI workspace.</span>
+    <HeroOrbSlot />
+    <p class="hero__aside hero__aside--left" aria-hidden="true">
+      <span>Code</span><span>Reason</span><span>Automate</span><span>Create</span><span>Together.</span>
+    </p>
+    <p class="hero__aside hero__aside--right" aria-hidden="true">
+      <span>Built for a</span><span>brighter</span><span>tomorrow.</span>
+    </p>
+    <div class="container hero__content">
+      <div class="hero__lockup">
+        <span class="hero__wordmark-glow" aria-hidden="true"><span class="hero__wordmark"></span></span>
+        <p class="hero__tagline">Code the Future</p>
+      </div>
+      <h1 id="hero-title" class="hero__statement">
+        <span class="visually-hidden">KalCode: </span>One intelligence that operates your entire AI workspace.
       </h1>
-      <p class="hero__support">
-        Connect the coding providers you already use — Claude Code, Codex and Gemini CLI — and run
-        them from one environment, on your own accounts.
+      <p class="hero__line">
+        Connect Claude Code, Codex, Gemini and the coding tools you already use — then operate them
+        from one workspace.
       </p>
       <div class="button-row hero__actions">
-        <a class="button button--primary button--lg" href={cta.href}>
-          {cta.kind === "download" && <Icon name="download" />}
-          {cta.label}
-        </a>
-        <a class="button button--secondary button--lg" href="#story">
+        <DownloadButton />
+        <a class="button button--secondary button--lg" href="#workspace">
           See it in action
-          <Icon name="arrow-down" />
+          <Icon name="arrow-down" class="icon-down" />
         </a>
       </div>
-      <p class="hero__note">{cta.kind === "download" ? cta.note : `${cta.note} · in private development`}</p>
+      {
+        cta.kind === "download" ? (
+          <p class="hero__status">
+            <span class="status-dot status-dot--built" aria-hidden="true" />
+            <span>{cta.note}</span>
+            <a href="/download">All platforms and checksums</a>
+          </p>
+        ) : (
+          <p class="hero__status">
+            <span class="status-dot" aria-hidden="true" />
+            <span>No public build yet.</span>
+            <a href="#early-access">Get notified when it ships</a>
+          </p>
+        )
+      }
     </div>
   </section>
 
-  <section class="provider-band" aria-labelledby="providers-label">
-    <div class="container provider-bar">
-      <h2 class="provider-bar__label" id="providers-label">Runs the coding agents you already use</h2>
-      <ul class="provider-bar__list" role="list" aria-labelledby="providers-label">
+  <!-- Everything below the first viewport: its styles load here, not in <head>. -->
+  <PageStyles />
+
+  <!-- Providers: the names you already use, with honest adapter status. -->
+  <section class="providers" aria-labelledby="providers-title">
+    <div class="container">
+      <h2 id="providers-title" class="providers__title">Works with the coding agents you already use</h2>
+      <ul class="providers__list" role="list" aria-labelledby="providers-title">
         {
           PROVIDERS.map((provider) => (
-            <li class="provider-bar__item">
-              <span class="provider-bar__name">
+            <li class="providers__item">
+              <span class="providers__name">
                 <ProviderGlyph />
                 {provider.name}
               </span>
-              <span class="provider-bar__status">{provider.status}</span>
+              <span class="providers__status">
+                <span
+                  class:list={["status-dot", provider.state === "built" ? "status-dot--built" : "status-dot--idle"]}
+                  aria-hidden="true"
+                />
+                {provider.status}
+              </span>
             </li>
           ))
         }
-        <li class="provider-bar__item provider-bar__item--more">
-          <span class="provider-bar__name">More providers</span>
-          <span class="provider-bar__status">Through the same runtime</span>
+        <li class="providers__item providers__item--more">
+          <span class="providers__name">And more providers</span>
+          <span class="providers__status">Through the same runtime</span>
         </li>
       </ul>
     </div>
   </section>
 
-  <section class="section" id="story" aria-labelledby="story-title">
-    <div class="container">
-      <SectionHead
-        id="story-title"
-        title="One workspace. Every coding agent."
-        text="Watch the window come together: a real terminal, Claude Code, Codex beside it, the Dashboard, and an approval that waits for you."
-      />
-    </div>
+  <!-- The workspace: the product, large, in a lit frame. -->
+  {
+    workspaceStage && (
+      <section class="world-section" id="workspace" aria-labelledby="workspace-title">
+        <Backdrop variant="deep" />
+        <Backdrop variant="orbital" intensity="low" />
+        <Backdrop variant="planet" side="right" size="lg" intensity="high" />
+        <div class="container container--wide">
+          <div class="frame frame--feature">
+            <header class="statement statement--wide" data-reveal>
+              <p class="eyebrow">The workspace</p>
+              <h2 id="workspace-title" class="h2">A real workspace. Not a chatbot.</h2>
+              <div class="statement__side">
+                <p class="body-lg">
+                  Open a project, connect your providers, and get to work. Real terminals, provider panes
+                  and your agents, side by side.
+                </p>
+                <a class="button button--secondary" href="/product">
+                  Explore the product <Icon name="arrow-right" />
+                </a>
+              </div>
+            </header>
+            <StageSlot name={workspaceStage} />
+          </div>
+        </div>
+      </section>
+    )
+  }
+
+  <!-- KalVoice: a wide feature panel, the orb and the one key. -->
+  <section class="world-section" id="kalvoice" aria-labelledby="kalvoice-title">
+    <Backdrop variant="nebula" />
+    <Backdrop variant="void" intensity="high" />
     <div class="container container--wide">
-      <StageSlot name="ScrollStory" />
-    </div>
-  </section>
-
-  <section class="section" id="terminals" aria-labelledby="terminals-title">
-    <div class="container">
-      <SectionHead
-        id="terminals-title"
-        title="Stop juggling agent terminals."
-        text="Six loose windows and no idea which one is waiting on you — or one workspace where every agent has a place and a status."
-      />
-    </div>
-    <div class="container container--wide">
-      <StageSlot name="BeforeAfter" />
-    </div>
-  </section>
-
-  <section class="section section--sunken" id="try" aria-labelledby="try-title">
-    <div class="container">
-      <SectionHead
-        id="try-title"
-        title="Drive it yourself."
-        text="Pick a provider, open a thread, split a pane, bring up the Dashboard. It all runs in this page, on sample data."
-      />
-    </div>
-    <div class="container container--wide">
-      <StageSlot name="TryKalCode" />
-    </div>
-  </section>
-
-  <section class="section" id="control" aria-labelledby="control-title">
-    <div class="container feature-split">
-      <div class="feature-split__copy">
-        <p class="chip chip--dev">Development build · sample data</p>
-        <h2 id="control-title" class="h2">See every thread. Approve every action.</h2>
-        <p>
-          Status comes from runtime events, not from what a model says. Anything outside your rules
-          waits for you. Every permission mode is on every plan.
-        </p>
-        <a class="text-link" href="/docs/permissions">How permissions work <Icon name="arrow-right" /></a>
-      </div>
-      <div class="feature-split__visual">
-        <StageSlot name="PermissionModes" shape="compact" />
-      </div>
-    </div>
-  </section>
-
-  <section class="section" id="kalvoice" aria-labelledby="kalvoice-title">
-    <div class="container feature-split feature-split--reverse">
-      <div class="feature-split__copy">
-        <p class="chip chip--dev">KalVoice · in development</p>
-        <h2 id="kalvoice-title" class="h2">Speak your prompts with KalVoice.</h2>
-        <p>
-          Hold {KALVOICE.pushToTalkKey} to talk to KalVoice. Your words land in the focused agent —
-          transcribed on your device, unlimited on every plan. Say a command, and KalCode does it.
-        </p>
-        <a class="text-link" href="/kalvoice">Meet KalVoice <Icon name="arrow-right" /></a>
-      </div>
-      <div class="feature-split__visual">
-        <StageSlot name="KalVoiceDemo" shape="compact" />
+      <div class="frame frame--split">
+        <div class="frame__copy" data-reveal>
+          <p class="eyebrow">KalVoice · in development</p>
+          <h2 id="kalvoice-title" class="h2">Speak it. See it done.</h2>
+          <p class="body-lg">
+            Hold {KALVOICE.pushToTalkKey} to talk to KalVoice. Your words land in the focused agent; say a
+            command and KalCode does it. On your device, unlimited.
+          </p>
+          <a class="button button--secondary" href="/kalvoice">
+            Meet KalVoice <Icon name="arrow-right" />
+          </a>
+        </div>
+        <div class="frame__visual">
+          {
+            voiceStage ? (
+              <StageSlot name={voiceStage} width="compact" />
+            ) : (
+              <div class="voice-mark" aria-hidden="true">
+                <Globe variant="kalvoice" alt="" sizes="(min-width: 64rem) 20rem, 60vw" />
+                <kbd>{KALVOICE.pushToTalkKey}</kbd>
+              </div>
+            )
+          }
+        </div>
       </div>
     </div>
   </section>
 
-  <section class="section section--sunken" id="in-action" aria-labelledby="in-action-title">
-    <div class="container">
-      <SectionHead
-        id="in-action-title"
-        title="See KalCode in action."
-        text="Multi-agent work, KalVoice, permissions, the Dashboard and Code Mode — one scene at a time."
-      />
-    </div>
-    <div class="container container--wide">
-      <StageSlot name="DemoCenter" />
-    </div>
-  </section>
+  <!-- Command center: the full-width dashboard moment. -->
+  {
+    commandStage && (
+      <section class="world-section world-section--tall" id="command" aria-labelledby="command-title">
+        <Backdrop variant="deep" accent="grid" />
+        <Backdrop variant="planet" side="left" size="xl" intensity="high" />
+        <div class="container">
+          <header class="statement statement--center" data-reveal>
+            <p class="eyebrow">Command center</p>
+            <h2 id="command-title" class="h2">Every thread. One dashboard.</h2>
+            <p class="body-lg">
+              What is running, what needs you, what is done — from runtime events, not from what a model
+              says about itself.
+            </p>
+          </header>
+        </div>
+        <div class="container container--wide">
+          <StageSlot name={commandStage} width="wide" />
+        </div>
+      </section>
+    )
+  }
 
-  <section class="section" id="local" aria-labelledby="local-title">
-    <div class="container">
-      <div class="feature-split">
-        <div class="feature-split__copy">
-          <h2 id="local-title" class="h2">Your providers. Your projects. One workspace.</h2>
-          <p>KalCode runs the tools you already pay for, on the machine you already trust.</p>
+  <!-- Missions: parallel agents toward one objective (labelled planned by the demo). -->
+  {
+    hasStage("MissionGraph") && (
+      <section class="world-section" id="agents" aria-labelledby="agents-title">
+        <Backdrop variant="deep" />
+        <Backdrop variant="gravity" />
+        <div class="container container--wide">
+          <div class="frame frame--feature">
+            <header class="statement statement--wide" data-reveal>
+              <p class="eyebrow">Parallel agents · planned</p>
+              <h2 id="agents-title" class="h2">Complex goals. Coordinated agents.</h2>
+              <p class="body-lg">
+                A planner breaks the objective down, agents build and review in parallel, and KalCode
+                verifies the result before anything is called done.
+              </p>
+            </header>
+            <StageSlot name="MissionGraph" width="wide" />
+          </div>
+        </div>
+      </section>
+    )
+  }
+
+  <!-- Providers, control, local-first: three framed facts, each with its own proof. -->
+  <section class="world-section" id="control" aria-labelledby="control-title">
+    <Backdrop variant="nebula" intensity="low" />
+    <Backdrop variant="vault" intensity="high" />
+    <div class="container container--wide">
+      <h2 id="control-title" class="visually-hidden">Your keys, your rules, your machine</h2>
+      <div class="trio">
+        <article class="frame frame--tile" aria-labelledby="keys-title">
+          <p class="eyebrow">Your providers</p>
+          <h3 id="keys-title" class="headline">Bring your own keys. Use your own accounts.</h3>
+          <p>Claude Code, Codex and Gemini CLI run on the sign-in or API key you already have.</p>
+          {
+            hasStage("ProviderSwitch") ? (
+              <StageSlot name="ProviderSwitch" width="compact" />
+            ) : (
+              <ul class="tile-list" role="list">
+                {PROVIDERS.map((provider) => (
+                  <li>
+                    <ProviderGlyph />
+                    <span>{provider.name}</span>
+                    <span class="tile-list__meta">{provider.access}</span>
+                  </li>
+                ))}
+              </ul>
+            )
+          }
+          <a class="text-link" href="/docs/providers">Provider setup <Icon name="arrow-right" /></a>
+        </article>
+
+        <article class="frame frame--tile" aria-labelledby="rules-title">
+          <p class="eyebrow">Built for control</p>
+          <h3 id="rules-title" class="headline">You set the rules. Agents follow them.</h3>
+          <p>Every mode on every plan. Anything outside your rules waits for you.</p>
+          {hasStage("PermissionModes") ? (
+            <StageSlot name="PermissionModes" width="compact" />
+          ) : (
+          <table class="policy">
+            <caption class="visually-hidden">What agents may do in Approve mode</caption>
+            <tbody>
+              {
+                policies.map((row) => (
+                  <tr>
+                    <th scope="row">{row.action}</th>
+                    <td>
+                      <span class:list={["policy__value", `policy__value--${row.tone}`]}>{row.policy}</span>
+                    </td>
+                  </tr>
+                ))
+              }
+            </tbody>
+          </table>
+          )}
+          <a class="text-link" href="/docs/permissions">How permissions work <Icon name="arrow-right" /></a>
+        </article>
+
+        <article class="frame frame--tile" aria-labelledby="local-title">
+          <p class="eyebrow">Local-first</p>
+          <h3 id="local-title" class="headline">Your code. Your machine.</h3>
+          <p>
+            Projects, threads and settings stay on your device. KalCode never pays for, resells or meters
+            your AI usage.
+          </p>
+          <ul class="tile-checks" role="list">
+            <li><Icon name="check" /> Local database, on your device</li>
+            <li><Icon name="check" /> Secrets in your OS keychain</li>
+            <li><Icon name="check" /> Nothing proxied through KalCode</li>
+            <li><Icon name="check" /> No telemetry in current builds</li>
+          </ul>
           <a class="text-link" href="/docs/local-first">What stays on your device <Icon name="arrow-right" /></a>
-        </div>
-        <div class="feature-split__visual">
-          <StageSlot name="ProviderSwitch" shape="compact" />
-        </div>
+        </article>
       </div>
-      <ul class="facts" role="list">
-        {
-          facts.map((fact) => (
-            <li class="fact">
-              <span class="fact__label">{fact.label}</span>
-              <p class="fact__title">{fact.title}</p>
-              <p>{fact.body}</p>
-            </li>
-          ))
-        }
-      </ul>
     </div>
   </section>
 
-  <section class="section" id="plans" aria-labelledby="plans-title">
-    <div class="container">
-      <SectionHead
-        id="plans-title"
-        title={priceLine}
-        text="Plans differ in KalVoice Requests and workspace features, never in safety. Your AI usage stays on your own account."
-      />
-      <PlanStrip />
-      <p class="section-foot">Plans open at launch. Nothing is for sale today.</p>
+  <!-- Pricing: three plans over a lit horizon. -->
+  <section class="world-section pricing-band" id="plans" aria-labelledby="plans-title">
+    <Backdrop variant="deep" />
+    <Backdrop variant="horizon" rocks={false} />
+    
+    <div class="container container--wide">
+      <div class="pricing-band__grid">
+        <header class="pricing-band__copy" data-reveal>
+          <p class="eyebrow">Simple pricing</p>
+          <h2 id="plans-title" class="h2">Power for every builder.</h2>
+          <p class="body-lg">
+            Every plan includes every provider, every permission mode and unlimited on-device dictation.
+            Your AI usage stays on your own account.
+          </p>
+          <a class="button button--secondary" href="/pricing">Compare plans <Icon name="arrow-right" /></a>
+          <p class="pricing-band__note">Plans open at launch. Nothing is for sale today.</p>
+        </header>
+        <ul class="plan-cards" role="list">
+          {
+            PLANS.map((plan) => (
+              <li class:list={["plan-card", { "plan-card--featured": plan.id === FEATURED }]}>
+                <p class="plan-card__name">
+                  {plan.name}
+                  {plan.id === FEATURED && <span class="plan-card__tag">Recommended</span>}
+                </p>
+                <p class="plan-card__price">
+                  {formatPrice(plan.price)}
+                  <small>{formatInterval(plan.price)}</small>
+                </p>
+                <p class="plan-card__summary">{plan.summary}</p>
+                <ul class="plan-card__points" role="list">
+                  {planPoints(plan).map((point) => (
+                    <li>
+                      <Icon name="check" /> {point}
+                    </li>
+                  ))}
+                </ul>
+                <a
+                  class:list={["button", plan.id === FEATURED ? "button--primary" : "button--secondary"]}
+                  href={cta.kind === "download" ? "/download" : "#early-access"}
+                >
+                  {cta.kind === "download" ? "Download KalCode" : "Join early access"}
+                </a>
+              </li>
+            ))
+          }
+        </ul>
+      </div>
     </div>
   </section>
 
   <Closing formSource="/" />
+
+  <script>
+    import "../scripts/reveal";
+  </script>
 </Base>

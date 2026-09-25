@@ -1,4 +1,5 @@
 ---
+import Backdrop from "../components/Backdrop.astro";
 import { PLANS, formatKalVoiceAllowance } from "@kalcode/protocol/plans";
 import Closing from "../components/Closing.astro";
 import Globe from "../components/Globe.astro";
@@ -33,29 +34,34 @@ const privacy = [
   },
 ];
 ---
-<Base title={page.title} description={page.description} path={page.path}>
-  <header class="container kv-head">
-    <div class="kv-head__copy">
+<Base title={page.title} description={page.description} path={page.path} world>
+  <section class="voice-hero" aria-labelledby="kv-title">
+    <Backdrop variant="nebula" />
+    <div class="voice-hero__orb" aria-hidden="true">
+      <Globe variant="kalvoice" hero alt="" sizes="(min-width: 60rem) 30rem, 78vw" />
+    </div>
+    <div class="container voice-hero__content">
       <p class="chip chip--dev">{KALVOICE.status}</p>
-      <p class="kv-head__name">KalVoice</p>
-      <h1 class="h1">Speak your prompts with KalVoice.</h1>
-      <p class="lead">
-        Hold {KALVOICE.pushToTalkKey} to talk to KalVoice. Release, and your words land in the
-        focused agent — or, if you said a command, KalCode does it.
+      <h1 id="kv-title" class="voice-hero__title">
+        <span class="visually-hidden">KalVoice: </span>
+        <span class="voice-hero__wordmark" aria-hidden="true"></span>
+        <span class="hero__statement">Speak your prompts with KalVoice.</span>
+      </h1>
+      <p class="hero__line">
+        Hold {KALVOICE.pushToTalkKey} to talk to KalVoice. Release, and your words land in the focused
+        agent — or, if you said a command, KalCode does it.
       </p>
-      <div class="button-row">
+      <div class="button-row hero__actions">
         <a class="button button--secondary button--lg" href="#modes">
           How it works
-          <Icon name="arrow-down" />
+          <Icon name="arrow-down" class="icon-down" />
         </a>
       </div>
     </div>
-    <div class="orb-disc">
-      <Globe variant="kalvoice" hero alt={KALVOICE.globeAlt} sizes="(min-width: 60rem) 28rem, 80vw" />
-    </div>
-  </header>
+  </section>
 
-  <section class="section" id="modes" aria-labelledby="modes-title">
+  <section class="world-section" id="modes" aria-labelledby="modes-title">
+    <Backdrop variant="deep" />
     <div class="container">
       <SectionHead
         id="modes-title"
@@ -91,7 +97,8 @@ const privacy = [
     </div>
   </section>
 
-  <section class="section section--sunken" id="demo" aria-labelledby="demo-title">
+  <section class="world-section" id="demo" aria-labelledby="demo-title">
+    <Backdrop variant="nebula" />
     <div class="container">
       <SectionHead
         id="demo-title"
@@ -104,7 +111,8 @@ const privacy = [
     </div>
   </section>
 
-  <section class="section" id="requests" aria-labelledby="requests-title">
+  <section class="world-section" id="requests" aria-labelledby="requests-title">
+    <Backdrop variant="orbital" />
     <div class="container feature-split feature-split--top">
       <div class="feature-split__copy">
         <h2 id="requests-title" class="h2">Unlimited dictation. Counted commands.</h2>
@@ -140,7 +148,8 @@ const privacy = [
     </div>
   </section>
 
-  <section class="section" id="privacy" aria-labelledby="privacy-title">
+  <section class="world-section" id="privacy" aria-labelledby="privacy-title">
+    <Backdrop variant="gravity" />
     <div class="container">
       <SectionHead
         id="privacy-title"

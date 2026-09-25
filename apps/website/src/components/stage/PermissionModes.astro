@@ -13,13 +13,17 @@ import StageLabel from "./parts/StageLabel.astro";
 interface Props {
   id?: string;
   mode?: PermissionMode;
+  headingLevel?: 2 | 3 | 4;
+  /** compact: the small permissions table (about 380 × 260, no outer frame) for a card the page draws. */
+  width?: "compact" | "contained" | "wide" | "full";
   class?: string;
 }
-const { id = "permission-modes", mode = "approve", class: className } = Astro.props;
+const { id = "permission-modes", mode = "approve", width = "contained", class: className } = Astro.props;
+const compact = width === "compact";
 ---
 <StageStyles />
 <div
-  class:list={["kc-pm", className]}
+  class:list={["kc-pm", compact ? "kc-pm--compact" : `kc-w--${width}`, className]}
   id={id}
   data-kc-app
   data-kc-auto="true"
@@ -30,8 +34,9 @@ const { id = "permission-modes", mode = "approve", class: className } = Astro.pr
   data-dock="none"
   data-testid="permission-modes"
 >
-  <StageLabel tag="Modes as designed · the mode switcher is in development" />
-  <PermissionsPanel uid={id} mode={mode} approval="pending" interactive={true} variant="full" resettable />
+  {!compact && <StageLabel tag="Modes as designed · the mode switcher is in development" />}
+  <PermissionsPanel uid={id} mode={mode} approval="pending" interactive={true} variant={compact ? "table" : "full"} resettable={!compact} />
+  {compact && <StageLabel class="kc-pm__label" tag="Modes as designed" />}
   <p class="visually-hidden" aria-live="polite" data-kc-live data-testid={`live-${id}`}></p>
 </div>
 

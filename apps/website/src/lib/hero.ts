@@ -1,13 +1,14 @@
 /**
- * The hero orb poster as the home page lays it out (site.css): stacked below 1024 px, the split
- * hero's orb column above. Shared by HeroOrbSlot (the <img> sizes) and the head preload, so the
- * browser fetches the one file the layout will use as early as possible (it is the LCP image).
+ * Hero image hints shared by the hero slot and the page head.
+ *
+ * The orb poster is the home page's LCP image (hero/world-assets.ts): HERO_POSTER_PRELOADS gives one
+ * preload per media query, matching the poster's <source> elements exactly, so the browser fetches
+ * the file the layout uses as early as possible. The world plate is a full-viewport background and
+ * never the LCP, so it is not preloaded. HERO_POSTER_SIZES sizes the poster when only the orb (no
+ * world) is rendered.
  */
-export const HERO_POSTER_SIZES = "(max-width: 1023px) min(88vw, 25rem, 40vh), min(32rem, 58vh)";
+import { POSTER_PRELOADS, POSTER_SIZES_CENTERED } from "../components/hero/world-assets";
 
-/** Widths published by the hero work in public/assets/hero (orb-<width>.avif). */
-export const HERO_POSTER_WIDTHS = [384, 512, 640, 768, 1024] as const;
+export const HERO_POSTER_SIZES = POSTER_SIZES_CENTERED;
 
-export const HERO_POSTER_SRCSET = HERO_POSTER_WIDTHS.map((width) => `/assets/hero/orb-${width}.avif ${width}w`).join(
-  ", ",
-);
+export const HERO_POSTER_PRELOADS = POSTER_PRELOADS;

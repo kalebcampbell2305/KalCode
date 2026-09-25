@@ -1,0 +1,16 @@
+---
+/** The workspace explorer (a planned surface): the atlas-api file tree with Git status letters. */
+import { FILE_TREE } from "../../../data/story";
+---
+<div class="kc-explorer">
+  <p class="kc-ws__sidelabel">Explorer <span class="kc-tag">Planned</span></p>
+  <ul class="kc-ws__tree" role="list">
+    {FILE_TREE.map((n) => (
+      <li class:list={["kc-ws__tnode", `kc-ws__tnode--d${n.depth}`]} data-kind={n.kind} data-active={n.active ? "true" : undefined}>
+        <span class="kc-i" data-i={n.kind === "dir" ? "folder" : "file"} aria-hidden="true"></span>
+        <span class="kc-ws__tname">{n.name}</span>
+        {n.git && <span class="kc-ws__git" data-git={n.git}>{n.git}</span>}
+      </li>
+    ))}
+  </ul>
+</div>

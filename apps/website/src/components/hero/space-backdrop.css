@@ -1,0 +1,357 @@
+/*
+ * SpaceBackdrop (src/components/hero/SpaceBackdrop.astro): static environment layers for dark
+ * sections. Images are derived from the owner's banner (tooling/generate-hero-world.py).
+ */
+
+.space-backdrop {
+  --sb-o: 0.8;
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  user-select: none;
+  background: radial-gradient(ellipse 90% 60% at 50% 50%, rgb(8 16 38 / 0.55), transparent 75%);
+  /* Every layer feathers into the page at the section's top and bottom edges: no rectangle edge
+     at any width, whatever the neighbouring section is. */
+  mask-image: linear-gradient(to bottom, transparent, #000 7%, #000 93%, transparent);
+}
+
+.space-backdrop--low {
+  --sb-o: 0.5;
+}
+
+.space-backdrop--high {
+  --sb-o: 1;
+}
+
+.space-backdrop__stars,
+.space-backdrop__art,
+.space-backdrop__moon {
+  display: block;
+  background: center / cover no-repeat;
+}
+
+.space-backdrop__stars,
+.space-backdrop__art,
+.space-backdrop__light {
+  position: absolute;
+  transition:
+    opacity 1400ms cubic-bezier(0.16, 1, 0.3, 1),
+    transform 1800ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.space-backdrop__stars {
+  inset: 0;
+  opacity: calc(var(--sb-o) * 0.55);
+  mask-image: radial-gradient(ellipse 80% 75% at 50% 45%, #000 40%, transparent 100%);
+}
+
+.space-backdrop__art {
+  opacity: var(--sb-o);
+}
+
+.space-backdrop__light {
+  inset: 0;
+  opacity: var(--sb-o);
+}
+
+/* nebula: the crown hangs from the top edge, light falls from above */
+.space-backdrop--nebula .space-backdrop__art {
+  top: 0;
+  left: 50%;
+  width: max(100%, 1320px);
+  aspect-ratio: 1320 / 330;
+  transform: translateX(-50%);
+  mask-image: linear-gradient(to bottom, transparent, #000 14%, #000 42%, transparent);
+}
+
+.space-backdrop--nebula .space-backdrop__light {
+  background: radial-gradient(ellipse 45% 40% at 50% 30%, rgb(60 120 255 / 0.18), transparent 70%);
+}
+
+/* deep: stars and depth only */
+.space-backdrop--deep .space-backdrop__stars {
+  opacity: calc(var(--sb-o) * 0.7);
+}
+
+.space-backdrop--deep .space-backdrop__light {
+  background: radial-gradient(ellipse 60% 50% at 50% 55%, rgb(20 50 140 / 0.14), transparent 70%);
+}
+
+/* orbital: the ring platform along the bottom edge */
+.space-backdrop--orbital .space-backdrop__art {
+  bottom: 0;
+  left: 50%;
+  width: max(100%, 1500px);
+  aspect-ratio: 1672 / 341;
+  transform: translateX(-50%);
+  mask-image:
+    linear-gradient(to bottom, transparent, #000 42%, #000 80%, transparent),
+    linear-gradient(to right, transparent, #000 18%, #000 82%, transparent);
+  mask-composite: intersect;
+}
+
+.space-backdrop--orbital .space-backdrop__light {
+  background: radial-gradient(ellipse 50% 30% at 50% 75%, rgb(50 120 255 / 0.2), transparent 70%);
+}
+
+/* gravity: a lensing funnel around the centre */
+.space-backdrop--gravity .space-backdrop__art {
+  top: 50%;
+  left: 50%;
+  width: max(100%, 1100px);
+  aspect-ratio: 1000 / 520;
+  transform: translate(-50%, -50%);
+  mask-image: radial-gradient(ellipse 50% 50% at 50% 50%, #000 55%, transparent 100%);
+}
+
+.space-backdrop--gravity .space-backdrop__stars {
+  opacity: calc(var(--sb-o) * 0.35);
+}
+
+/* horizon: a planet's luminous rim behind dark rocky terrain, anchored to the bottom edge */
+.space-backdrop--horizon .space-backdrop__art {
+  bottom: 0;
+  left: 50%;
+  width: max(100%, 1200px, calc(100cqh * 2.4));
+  aspect-ratio: 2400 / 1000;
+  transform: translateX(-50%);
+  mask-image: linear-gradient(to bottom, transparent, #000 28%, #000 90%, transparent);
+}
+
+.space-backdrop--horizon {
+  container-type: size;
+  background: #000104;
+}
+
+/* horizon without rocks: the banner's planet-horizon band only */
+.space-backdrop--band {
+  background: radial-gradient(ellipse 90% 60% at 50% 50%, rgb(8 16 38 / 0.55), transparent 75%);
+}
+
+.space-backdrop--band .space-backdrop__art {
+  width: max(100%, 1400px);
+  aspect-ratio: 1672 / 180;
+  mask-image:
+    linear-gradient(to bottom, transparent, #000 38%, #000 70%, transparent),
+    linear-gradient(to right, transparent 20%, #000 36%, #000 64%, transparent 80%);
+  mask-composite: intersect;
+}
+
+.space-backdrop--band .space-backdrop__light {
+  background: radial-gradient(ellipse 55% 30% at 50% 75%, rgb(70 140 255 / 0.22), transparent 70%);
+}
+
+/* planet: a large rim-lit planet partly off-canvas; the lit limb always faces the page centre */
+.space-backdrop--planet {
+  --sb-planet: min(62vw, 900px);
+}
+
+.space-backdrop--size-md {
+  --sb-planet: min(44vw, 620px);
+}
+
+.space-backdrop--size-xl {
+  --sb-planet: min(88vw, 1300px);
+}
+
+.space-backdrop--planet .space-backdrop__art {
+  top: 50%;
+  width: var(--sb-planet);
+  aspect-ratio: 1;
+  background-size: contain;
+}
+
+.space-backdrop--side-left .space-backdrop__art {
+  left: calc(var(--sb-planet) * -0.52);
+  transform: translateY(-50%);
+}
+
+.space-backdrop--side-right .space-backdrop__art {
+  right: calc(var(--sb-planet) * -0.52);
+  transform: translateY(-50%) scaleX(-1);
+}
+
+.space-backdrop__moon {
+  position: absolute;
+  width: calc(var(--sb-planet) * 0.12);
+  aspect-ratio: 1;
+  background-size: contain;
+  top: 18%;
+  opacity: calc(var(--sb-o) * 0.9);
+  transition: opacity 1400ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.space-backdrop--side-right .space-backdrop__moon {
+  right: calc(var(--sb-planet) * 0.55);
+  transform: scaleX(-1);
+}
+
+.space-backdrop--side-left .space-backdrop__moon {
+  left: calc(var(--sb-planet) * 0.55);
+}
+
+@media (max-width: 767px) {
+  .space-backdrop--planet {
+    --sb-planet: 110vw;
+  }
+
+  .space-backdrop__moon {
+    display: none;
+  }
+}
+
+/* void: wave energy in darkness */
+.space-backdrop--void {
+  background: #000104;
+}
+
+.space-backdrop--void .space-backdrop__art {
+  top: 50%;
+  left: 50%;
+  width: max(100%, 1100px);
+  aspect-ratio: 2000 / 900;
+  transform: translate(-50%, -50%);
+  mask-image: radial-gradient(ellipse 50% 50% at 50% 50%, #000 50%, transparent 100%);
+}
+
+.space-backdrop--void .space-backdrop__stars {
+  opacity: calc(var(--sb-o) * 0.25);
+}
+
+/* vault: security-toned darkness, a cold perspective grid fading into the dark */
+.space-backdrop--vault {
+  background: radial-gradient(ellipse 70% 60% at 50% 45%, rgb(10 26 60 / 0.5), transparent 70%), #000205;
+}
+
+.space-backdrop--vault .space-backdrop__stars {
+  opacity: calc(var(--sb-o) * 0.2);
+}
+
+.space-backdrop--vault .space-backdrop__light {
+  inset: 45% -20% -10%;
+  background:
+    repeating-linear-gradient(90deg, rgb(90 150 255 / 0.2) 0 1px, transparent 1px 64px),
+    repeating-linear-gradient(0deg, rgb(90 150 255 / 0.16) 0 1px, transparent 1px 64px);
+  transform: perspective(600px) rotateX(62deg);
+  transform-origin: 50% 0;
+  mask-image: radial-gradient(ellipse 60% 70% at 50% 0%, #000 20%, transparent 75%);
+}
+
+/* Settle-in, once, when the section first enters (JS only; without JS everything is shown). */
+:root.js .space-backdrop:not(.is-in) .space-backdrop__stars,
+:root.js .space-backdrop:not(.is-in) .space-backdrop__light,
+:root.js .space-backdrop:not(.is-in) .space-backdrop__moon {
+  opacity: 0;
+}
+
+:root.js .space-backdrop:not(.is-in) .space-backdrop__art {
+  opacity: calc(var(--sb-o) * 0.35);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .space-backdrop__stars,
+  .space-backdrop__art,
+  .space-backdrop__moon,
+  .space-backdrop__light {
+    transition: none;
+  }
+
+  :root.js .space-backdrop:not(.is-in) .space-backdrop__stars,
+  :root.js .space-backdrop:not(.is-in) .space-backdrop__light,
+  :root.js .space-backdrop:not(.is-in) .space-backdrop__moon,
+  :root.js .space-backdrop:not(.is-in) .space-backdrop__art {
+    opacity: var(--sb-o);
+  }
+}
+
+@media (forced-colors: active) {
+  .space-backdrop {
+    display: none;
+  }
+}
+
+/* The same banner-derived starfield, turned differently per variant so sections never repeat it. */
+.space-backdrop--nebula .space-backdrop__stars,
+.space-backdrop--vault .space-backdrop__stars {
+  transform: scaleX(-1);
+}
+
+.space-backdrop--orbital .space-backdrop__stars,
+.space-backdrop--side-left .space-backdrop__stars {
+  transform: scaleY(-1);
+}
+
+.space-backdrop--void .space-backdrop__stars,
+.space-backdrop--side-right .space-backdrop__stars {
+  transform: scale(-1, -1);
+}
+
+/* ---------- Images: requested only once the section is near (.is-near), or always without JS ---------- */
+
+:root:not(.js) .space-backdrop__stars,
+.space-backdrop.is-near .space-backdrop__stars {
+  background-image: url("/assets/hero/world/backdrop-stars.webp");
+}
+
+:root:not(.js) .space-backdrop__moon,
+.space-backdrop.is-near .space-backdrop__moon {
+  background-image: url("/assets/hero/world/planet-small.webp");
+}
+
+:root:not(.js) .space-backdrop--nebula .space-backdrop__art,
+.space-backdrop--nebula.is-near .space-backdrop__art {
+  background-image: image-set(
+    "/assets/hero/world/backdrop-nebula.avif" type("image/avif"),
+    "/assets/hero/world/backdrop-nebula.webp" type("image/webp")
+  );
+}
+
+:root:not(.js) .space-backdrop--orbital .space-backdrop__art,
+.space-backdrop--orbital.is-near .space-backdrop__art {
+  background-image: image-set(
+    "/assets/hero/world/backdrop-orbital.avif" type("image/avif"),
+    "/assets/hero/world/backdrop-orbital.webp" type("image/webp")
+  );
+}
+
+:root:not(.js) .space-backdrop--gravity .space-backdrop__art,
+.space-backdrop--gravity.is-near .space-backdrop__art {
+  background-image: image-set(
+    "/assets/hero/world/backdrop-gravity.avif" type("image/avif"),
+    "/assets/hero/world/backdrop-gravity.webp" type("image/webp")
+  );
+}
+
+:root:not(.js) .space-backdrop--rocks .space-backdrop__art,
+.space-backdrop--rocks.is-near .space-backdrop__art {
+  background-image: image-set(
+    "/assets/hero/world/rocky-horizon.avif" type("image/avif"),
+    "/assets/hero/world/rocky-horizon.webp" type("image/webp")
+  );
+}
+
+:root:not(.js) .space-backdrop--band .space-backdrop__art,
+.space-backdrop--band.is-near .space-backdrop__art {
+  background-image: image-set(
+    "/assets/hero/world/backdrop-horizon.avif" type("image/avif"),
+    "/assets/hero/world/backdrop-horizon.webp" type("image/webp")
+  );
+}
+
+:root:not(.js) .space-backdrop--planet .space-backdrop__art,
+.space-backdrop--planet.is-near .space-backdrop__art {
+  background-image: image-set(
+    "/assets/hero/world/planet-rim.avif" type("image/avif"),
+    "/assets/hero/world/planet-rim.webp" type("image/webp")
+  );
+}
+
+:root:not(.js) .space-backdrop--void .space-backdrop__art,
+.space-backdrop--void.is-near .space-backdrop__art {
+  background-image: image-set(
+    "/assets/hero/world/void-waves.avif" type("image/avif"),
+    "/assets/hero/world/void-waves.webp" type("image/webp")
+  );
+}

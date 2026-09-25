@@ -6,6 +6,7 @@
  */
 import { type ApprovalState, PROVIDERS, statusFor, type Thread, WORKSPACE } from "../../../data/story";
 import Btn from "./Btn.astro";
+import Explorer from "./Explorer.astro";
 import Glyph from "./Glyph.astro";
 import StatusLabel from "./StatusLabel.astro";
 
@@ -17,9 +18,11 @@ interface Props {
   view: "code" | "dashboard";
   /** Spawned threads already present in this scene. */
   present: readonly string[];
+  /** Workspace chrome: the explorer takes the place of the In development group. */
+  explorer?: boolean;
 }
 
-const { threads, approval, interactive, focus, view, present } = Astro.props;
+const { threads, approval, interactive, focus, view, present, explorer = false } = Astro.props;
 const agents = threads.filter((t) => t.provider !== "shell");
 const inDevelopment = [
   { icon: "agents", label: "Agents" },
@@ -85,12 +88,18 @@ const inDevelopment = [
     </li>
   </ul>
 
-  <p class="kc-rail__group">In development</p>
-  <ul class="kc-rail__nav kc-rail__nav--dim" role="list">
-    {inDevelopment.map((item) => (
-      <li><span class="kc-rail__item kc-rail__item--static"><span class="kc-i" data-i={item.icon} aria-hidden="true"></span>{item.label}</span></li>
-    ))}
-  </ul>
+  {explorer ? (
+    <Explorer />
+  ) : (
+    <>
+      <p class="kc-rail__group">In development</p>
+      <ul class="kc-rail__nav kc-rail__nav--dim" role="list">
+        {inDevelopment.map((item) => (
+          <li><span class="kc-rail__item kc-rail__item--static"><span class="kc-i" data-i={item.icon} aria-hidden="true"></span>{item.label}</span></li>
+        ))}
+      </ul>
+    </>
+  )}
 
   <div class="kc-rail__foot">
     <span class="kc-i" data-i="settings" aria-hidden="true"></span>

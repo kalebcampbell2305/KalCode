@@ -86,24 +86,25 @@ test.describe("every page", () => {
     await expect(h1).toContainText("KalCode");
     await expect(h1).toContainText("One intelligence that operates your entire AI workspace.");
     const hero = page.locator(".hero");
-    await expect(hero).toContainText("Claude Code, Codex and Gemini CLI");
+    await expect(hero).toContainText("Claude Code, Codex, Gemini");
     const primary = hero.locator(".button--primary");
+    await expect(primary).toHaveText("Download KalCode");
     if (WINDOWS_BUILD && MANIFEST.latest) {
-      // A published Windows build: the primary action offers it, on the download page.
-      await expect(primary).toHaveText("Download for Windows");
-      await expect(primary).toHaveAttribute("href", "/download#windows");
+      // A published Windows build: the primary action is the real download (Windows visitors).
+      await expect(primary).toHaveAttribute("data-download-state", "download");
       await expect(hero).toContainText(`Preview ${MANIFEST.latest.version}`);
     } else {
-      // No public build: the primary action is early access, on this page, and nothing links to a file.
-      await expect(primary).toHaveText("Join early access");
-      await expect(primary).toHaveAttribute("href", "#early-access");
+      // No public build: the button goes to the honest download page, the status line says so,
+      // and nothing links to a file.
+      await expect(primary).toHaveAttribute("href", "/download");
+      await expect(primary).toHaveAttribute("data-download-state", "pending");
       await expect(hero).toContainText("No public build yet");
       await expect(page.locator('a[href^="/download/"]')).toHaveCount(0);
     }
     await hero.getByRole("link", { name: "See it in action" }).click();
-    await expect(page).toHaveURL(/#story$/);
-    // Provider bar: honest adapter status.
-    const providers = page.getByRole("list", { name: "Runs the coding agents you already use" });
+    await expect(page).toHaveURL(/#workspace$/);
+    // Provider constellation: honest adapter status.
+    const providers = page.getByRole("list", { name: "Works with the coding agents you already use" });
     await expect(providers).toContainText("Adapter built");
     await expect(providers).toContainText("adapter planned");
   });
@@ -120,18 +121,23 @@ test.describe("every page", () => {
     await expect(compact).toHaveAttribute("href", "/download");
   });
 
-  test("from 1024 px the hero copy sits left, clear of the orb and its stream", async ({ page }) => {
-    for (const width of [1024, 1440, 2560]) {
-      await page.setViewportSize({ width, height: width > 2000 ? 1440 : 900 });
+  test("the hero is a full-bleed first viewport with centred type and both calls to action", async ({ page }) => {
+    for (const [width, height] of [
+      [390, 844],
+      [1440, 900],
+      [2560, 1440],
+    ] as const) {
+      await page.setViewportSize({ width, height });
       await page.goto("/");
-      const orb = await page.locator(".hero__orb").boundingBox();
-      for (const selector of [".hero__title", ".hero__support", ".hero__actions", ".hero__note"]) {
-        const box = await page.locator(selector).boundingBox();
-        expect(box && orb && box.x + box.width <= orb.x + 1, `${selector} at ${width}px`).toBe(true);
-      }
-      // The stream lands on the provider bar: the orb cell ends where the hero ends.
       const hero = await page.locator(".hero").boundingBox();
-      expect(orb && hero && Math.abs(orb.y + orb.height - (hero.y + hero.height)) < 1).toBe(true);
+      expect(hero && hero.width >= width - 1 && hero.height >= height - 1, `hero fills ${width}x${height}`).toBe(true);
+      const title = await page.locator(".hero__statement").boundingBox();
+      // Centred: the title's centre is within 2 px of the viewport's centre line.
+      expect(title && Math.abs(title.x + title.width / 2 - width / 2) < 2, `title centred at ${width}`).toBe(true);
+      for (const name of ["Download KalCode", "See it in action"]) {
+        const box = await page.locator(".hero").getByRole("link", { name }).boundingBox();
+        expect(box && box.y + box.height <= Math.max(height, hero?.height ?? 0), `${name} inside the hero`).toBe(true);
+      }
     }
   });
 
@@ -148,13 +154,17 @@ test.describe("every page", () => {
     expect(raw).not.toMatch(/aggregateRating|review/i);
   });
 
-  test("the hero orb poster is served as AVIF/WebP with explicit size and high priority", async ({ page }) => {
+  test("the hero's first images are explicit-size and the orb poster is high priority", async ({ page }) => {
     await page.goto("/");
-    const img = page.locator(".hero img");
-    await expect(img).toHaveAttribute("fetchpriority", "high");
-    await expect(img).toHaveAttribute("width", /\d+/);
-    await expect(img).toHaveAttribute("height", /\d+/);
-    await expect(page.locator('.hero source[type="image/avif"]')).toHaveCount(1);
-    await expect(page.locator('.hero source[type="image/webp"]')).toHaveCount(1);
+    const images = page.locator(".hero img");
+    expect(await images.count()).toBeGreaterThan(0);
+    for (const img of await images.all()) {
+      await expect(img).toHaveAttribute("width", /\d+/);
+      await expect(img).toHaveAttribute("height", /\d+/);
+    }
+    expect(await page.locator('.hero img[fetchpriority="high"]').count()).toBeGreaterThan(0);
+    expect(await page.locator('.hero source[type="image/avif"]').count()).toBeGreaterThan(0);
+    // The poster (the LCP image) is preloaded with the layout's sizes.
+    await expect(page.locator('head link[rel="preload"][as="image"]')).toHaveCount(3);
   });
 });

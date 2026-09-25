@@ -1,4 +1,5 @@
 ---
+import Backdrop from "../components/Backdrop.astro";
 import {
   ALL_PERMISSION_MODES,
   PLANS,
@@ -103,14 +104,16 @@ const faq = [
   },
 ];
 ---
-<Base title={page.title} description={page.description} path={page.path}>
+<Base title={page.title} description={page.description} path={page.path} world>
   <PageHead
+    backdrop="nebula"
     title="Pricing"
     lead="Every plan runs every provider with every permission mode. Plans differ in KalVoice Requests and workspace features — your AI usage stays on your own account."
     status="Plans open at launch · nothing is for sale today"
   />
 
-  <section class="section" aria-labelledby="plans-title">
+  <section class="world-section" aria-labelledby="plans-title">
+    <Backdrop variant="deep" />
     <div class="container">
       <h2 id="plans-title" class="visually-hidden">Plans</h2>
       <div class="includes">
@@ -132,7 +135,7 @@ const faq = [
                     <div class="ladder__plan">
                       <span class="ladder__name">
                         {plan.name}
-                        {plan.id === FEATURED && <span class="ladder__tag">Most people</span>}
+                        {plan.id === FEATURED && <span class="ladder__tag">Recommended</span>}
                       </span>
                       <span class="ladder__price">
                         {formatPrice(plan.price)}
@@ -199,7 +202,8 @@ const faq = [
     </div>
   </section>
 
-  <section class="section" aria-labelledby="faq-title">
+  <section class="world-section" aria-labelledby="faq-title">
+    <Backdrop variant="deep" />
     <div class="container feature-split feature-split--top">
       <div class="feature-split__copy">
         <h2 id="faq-title" class="h2 h2--sm">Questions</h2>

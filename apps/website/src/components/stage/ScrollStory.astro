@@ -10,7 +10,7 @@
  * with motion, a Play button replays a still's micro-animation.
  */
 import StageStyles from "./parts/StageStyles.astro";
-import { BASE_SCENE, type Scene, STORY, THREADS, threadById, VOICE, ZOD_APPROVAL } from "../../data/story";
+import { BASE_SCENE, type DockTab, type Scene, STORY, THREADS, threadById, VOICE, ZOD_APPROVAL } from "../../data/story";
 import AppWindow from "./AppWindow.astro";
 import ApprovalCard from "./parts/ApprovalCard.astro";
 import BrowserPreview from "./parts/BrowserPreview.astro";
@@ -96,7 +96,16 @@ const replayable = ["shell", "claude", "codex", "approval", "voice", "mission"];
   <div class="kc-story__stage">
     <div class="kc-story__sticky">
       <StageLabel class="kc-story__label" />
-      <AppWindow id={`${id}-app`} scene={first} interactive={false} auto={false} size="hero" label={`Preview: ${STORY[0]?.describe ?? ""}`} />
+      <AppWindow
+        id={`${id}-app`}
+        scene={first}
+        interactive={false}
+        auto={false}
+        size="hero"
+        label={`Preview: ${STORY[0]?.describe ?? ""}`}
+        panesUsed={[...new Set(STORY.flatMap((s) => s.scene.panes ?? []))]}
+        docksUsed={[...new Set(STORY.map((s) => s.scene.dock).filter((d): d is DockTab => Boolean(d)))]}
+      />
     </div>
   </div>
 </section>

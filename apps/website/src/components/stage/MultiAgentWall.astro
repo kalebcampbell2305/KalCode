@@ -1,0 +1,55 @@
+---
+/**
+ * MultiAgentWall: the KalCode window filled with six coordinated agent panes (Claude Code, Codex,
+ * Gemini CLI), each in its own CLI's style. When it comes into view the window opens behind a mask,
+ * the panes assemble one by one from depth, their transcripts stream in, and light runs along the
+ * provider stripes. Hover or focus a provider to light its panes (and hover a pane to light its
+ * provider). Without JS or with reduced motion the full wall is shown as a still.
+ */
+import { AGENT_PROVIDERS, BASE_SCENE, PROVIDERS, THREADS, WALL_PANES } from "../../data/story";
+import AppWindow from "./AppWindow.astro";
+import Glyph from "./parts/Glyph.astro";
+import StageLabel from "./parts/StageLabel.astro";
+import StageStyles from "./parts/StageStyles.astro";
+
+interface Props {
+  id?: string;
+  headingLevel?: 2 | 3 | 4;
+  width?: "contained" | "wide" | "full";
+  class?: string;
+}
+const { id = "agents-wall", width = "wide", class: className } = Astro.props;
+const wall: readonly string[] = WALL_PANES;
+const counts = Object.fromEntries(
+  AGENT_PROVIDERS.map((p) => [p, THREADS.filter((t) => t.provider === p && wall.includes(t.id)).length]),
+);
+---
+<StageStyles />
+<div class:list={["kc-maw", `kc-w--${width}`, className]} data-kc-maw data-phase="still" data-testid="multi-agent-wall">
+  <div class="kc-maw__head">
+    <StageLabel tag="Preview · several providers at once is in development" />
+    <div class="kc-maw__legend" role="group" aria-label="Light up a provider's panes">
+      {AGENT_PROVIDERS.map((p) => (
+        <button type="button" class="kc-maw__chip" data-kc-lit={p} data-provider={p} aria-pressed="false" data-testid={`wall-chip-${p}`}>
+          <Glyph provider={p} />
+          <span>{PROVIDERS[p].name}</span>
+          <span class="kc-maw__n">{counts[p]}</span>
+        </button>
+      ))}
+    </div>
+  </div>
+  <div class="kc-maw__stage kc-floor">
+    <AppWindow
+      id={id}
+      size="hero"
+      maxPanes={6}
+      label="Preview: a KalCode window with six agent panes at work: three Claude Code, two Codex and one Gemini CLI."
+      scene={{ ...BASE_SCENE, panes: wall, focus: "claude-checkout", layout: "rows", dock: "none", approval: "approved", voice: "off", mission: 0 }}
+    />
+  </div>
+  <p class="visually-hidden" aria-live="polite" data-kc-maw-live></p>
+</div>
+
+<script>
+  import "../../scripts/stage/wall";
+</script>

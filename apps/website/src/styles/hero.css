@@ -357,3 +357,216 @@
     display: none;
   }
 }
+
+/* ======================================================================================
+ * Centered layout: the full-bleed world (owner's banner, derived) with the orb large and
+ * centred, the stream rising from the platform's ring centre. Fills its positioned parent.
+ * ====================================================================================== */
+
+.hero-orb--centered {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: auto;
+  height: auto;
+  container-type: size;
+  overflow: clip;
+  background: #000104;
+}
+
+.hero-orb--centered .hero-orb__frame {
+  --s: min(100cqw, var(--hero-orb-max, min(64cqh, 50cqw, 820px)));
+  --cy: var(--hero-orb-center-y, calc(max(64px, 7cqh) + 0.5211 * var(--s)));
+  --top: calc(var(--cy) - 0.5211 * var(--s));
+  --py: var(--hero-platform-y, 96cqh);
+  --entry-y: calc(var(--cy) + 0.2765 * var(--s));
+  --beam-x: 50%;
+  /* The plate is sized like `cover`, but anchored so its ring centre (0.5, 0.776) lands on --py. */
+  --plate-aspect: 1.7768;
+  --plate-h: max(calc(100cqw / var(--plate-aspect)), calc(var(--py) / 0.776), calc((100cqh - var(--py)) / 0.224));
+  position: absolute;
+  inset: 0;
+  min-height: 0;
+}
+
+@media (max-width: 767px) {
+  .hero-orb--centered .hero-orb__frame {
+    --s: min(100cqw, var(--hero-orb-max, min(94cqw, 46cqh)));
+    --cy: var(--hero-orb-center-y, calc(max(56px, 6cqh) + 0.5211 * var(--s)));
+    --py: var(--hero-platform-y, 100cqh);
+    --plate-aspect: 1.24;
+  }
+}
+
+/* Height-driven (aspect-ratio gives the width), so a % in --hero-platform-y always resolves
+   against the hero's height. */
+.hero-orb__world {
+  position: absolute;
+  left: 50%;
+  top: calc(var(--py) - 0.776 * var(--plate-h));
+  height: var(--plate-h);
+  aspect-ratio: var(--plate-aspect);
+  transform: translateX(-50%);
+}
+
+.hero-orb__world picture,
+.hero-orb__plate {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+}
+
+/* Radial falloff and a quiet top for the navigation; --hero-world-dim darkens behind the type. */
+.hero-orb__world::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 70% 62% at 50% 46%, transparent 45%, rgb(0 1 4 / 0.55) 100%),
+    linear-gradient(to bottom, rgb(0 1 4 / 0.45), transparent 22%), rgb(0 1 4 / var(--hero-world-dim, 0.15));
+}
+
+/* Planets at the edges: a large rim-lit planet partly off the right edge (lit limb facing the
+   centre), a small moon on the left. Between the sky and the orb. */
+.hero-orb__planets {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.hero-orb__planet {
+  position: absolute;
+  top: 4cqh;
+  right: calc(min(74cqh, 50cqw) * -0.55);
+  width: min(74cqh, 50cqw);
+  aspect-ratio: 1;
+  transform: scaleX(-1);
+}
+
+.hero-orb__moon {
+  position: absolute;
+  top: 30cqh;
+  left: 7cqw;
+  width: min(6cqw, 11cqh);
+  aspect-ratio: 1;
+}
+
+/* Planets are CSS backgrounds: they load only once the first frame has painted (orb.ts adds
+   .is-dressed), so they never compete with the poster, then settle in. Without JS they are
+   simply there. */
+.hero-orb__planet,
+.hero-orb__moon {
+  background: center / contain no-repeat;
+  opacity: 0;
+  transition: opacity 1200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+:root:not(.js) .hero-orb__planet,
+.hero-orb.is-dressed .hero-orb__planet {
+  background-image: image-set(
+    "/assets/hero/world/planet-rim.avif" type("image/avif"),
+    "/assets/hero/world/planet-rim.webp" type("image/webp")
+  );
+  opacity: 1;
+}
+
+:root:not(.js) .hero-orb__moon,
+.hero-orb.is-dressed .hero-orb__moon {
+  background-image: url("/assets/hero/world/planet-small.webp");
+  opacity: 0.9;
+}
+
+@media (max-width: 767px) {
+  .hero-orb__planet {
+    top: 1cqh;
+    right: -46cqw;
+    width: 78cqw;
+  }
+
+  /* display:none backgrounds are never fetched. */
+  .hero-orb__moon {
+    display: none;
+  }
+}
+
+/* A soft dark ellipse behind the body copy: over the world, under the orb and its stream. */
+.hero-orb__scrim {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    ellipse min(40cqw, 640px) 17cqh at 50% var(--hero-scrim-y, 70%),
+    rgb(0 1 4 / var(--hero-scrim, 0.45)),
+    transparent 100%
+  );
+}
+
+/* CSS still of the upward continuation (WebGL draws the live one): a faint thread leaving the
+   top of the sphere, gone 72 px below the top edge (under the navigation). */
+.hero-orb__up {
+  position: absolute;
+  left: 50%;
+  top: 72px;
+  bottom: calc(100% - var(--cy) + 0.26 * var(--s));
+  width: calc(0.08 * var(--s));
+  transform: translateX(-50%);
+  background:
+    linear-gradient(to top, rgb(170 205 255 / 0.5), transparent) center / 2px 100% no-repeat,
+    linear-gradient(to top, rgb(60 124 255 / 0.18), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 44%, #000 56%, transparent);
+  transition: opacity 700ms ease;
+}
+
+.hero-orb.is-live .hero-orb__up {
+  opacity: 0;
+}
+
+.hero-orb__origin {
+  position: absolute;
+  left: 50%;
+  top: 77.6%;
+  width: 0;
+  height: 0;
+}
+
+.hero-orb--centered .hero-orb__stage {
+  left: calc(50% - 0.493 * var(--s));
+}
+
+.hero-orb--centered .hero-orb__beam {
+  left: 50%;
+  bottom: calc(100% - var(--py));
+}
+
+.hero-orb--centered .hero-orb__canvas {
+  inset: 0;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* The world recedes a little as the hero scrolls away (compositor-only, no JS). */
+@supports (animation-timeline: view()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .hero-orb--centered .hero-orb__frame {
+      animation: hero-orb-recede linear both;
+      animation-timeline: view();
+      animation-range: exit 0% exit 100%;
+    }
+  }
+}
+
+@keyframes hero-orb-recede {
+  to {
+    transform: translate3d(0, 22%, 0) scale(0.97);
+    opacity: 0.55;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hero-orb__planet,
+  .hero-orb__moon {
+    transition: none;
+  }
+}

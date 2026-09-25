@@ -1,0 +1,48 @@
+---
+/**
+ * A section environment. Renders the hero work's `hero/SpaceBackdrop.astro` (imagery derived from
+ * the owner's artwork, procedural planets and horizons) and falls back to the CSS layers in
+ * styles/world.css when it is absent, so pages never depend on it to render.
+ * Place inside a positioned, isolated section; it fills it behind the content (aria-hidden).
+ * Several can be stacked (e.g. "deep" + "planet").
+ */
+type BackdropModule = { default: (props: Record<string, unknown>) => unknown };
+const modules = import.meta.glob<BackdropModule>("./hero/SpaceBackdrop.astro", { eager: true });
+const SpaceBackdrop = modules["./hero/SpaceBackdrop.astro"]?.default;
+
+type Variant = "nebula" | "deep" | "orbital" | "gravity" | "horizon" | "planet" | "void" | "vault";
+
+interface Props {
+  variant: Variant;
+  intensity?: "low" | "medium" | "high";
+  /** planet */
+  side?: "left" | "right";
+  /** planet */
+  size?: "md" | "lg" | "xl";
+  /** horizon: include the rocky foreground */
+  rocks?: boolean;
+  /** CSS accent over either implementation. */
+  accent?: "spotlight" | "grid";
+}
+const { variant, intensity = "medium", side, size, rocks, accent } = Astro.props;
+
+/** The CSS fallback has four environments; the others map to the closest one. */
+const FALLBACK: Record<Variant, string> = {
+  nebula: "nebula",
+  deep: "deep",
+  orbital: "orbital",
+  gravity: "gravity",
+  horizon: "orbital",
+  planet: "deep",
+  void: "nebula",
+  vault: "deep",
+};
+---
+{
+  SpaceBackdrop ? (
+    <SpaceBackdrop variant={variant} intensity={intensity} side={side} size={size} rocks={rocks} />
+  ) : (
+    <div class:list={["backdrop", `backdrop--${FALLBACK[variant]}`]} aria-hidden="true" />
+  )
+}
+{accent && <div class:list={["backdrop", "backdrop--accent", `backdrop--${accent}`]} aria-hidden="true" />}

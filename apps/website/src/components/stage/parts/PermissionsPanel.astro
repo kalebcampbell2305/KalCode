@@ -20,7 +20,8 @@ interface Props {
   mode: PermissionMode;
   approval: ApprovalState;
   interactive: boolean;
-  variant?: "compact" | "full";
+  /** compact: dock (one column); full: all columns + card; table: the small permissions table. */
+  variant?: "compact" | "full" | "table";
   resettable?: boolean;
 }
 
@@ -28,6 +29,8 @@ const { uid, mode, approval, interactive, variant = "compact", resettable = fals
 const outcome = ZOD_APPROVAL.byMode[mode];
 const cardState = outcome === "ask" ? (approval === "none" ? "pending" : approval) : `mode-${outcome}`;
 const outcomeIcon = { allow: "check", ask: "approval", deny: "close" } as const;
+const rows = variant === "table" ? AUTHORITY.filter((r) => r.compact) : AUTHORITY;
+const outcomeLabel = (o: "allow" | "ask" | "deny", always?: boolean) => (o === "ask" && always ? "Approval required" : OUTCOME_LABEL[o]);
 ---
 <div class="kc-perms" data-kc-perms data-mode={mode} data-variant={variant} data-testid={`permissions-${variant}`}>
   <div
@@ -78,14 +81,14 @@ const outcomeIcon = { allow: "check", ask: "approval", deny: "close" } as const;
         </tr>
       </thead>
       <tbody>
-        {AUTHORITY.map((row) => (
+        {rows.map((row) => (
           <tr>
-            <th scope="row">{row.action}<code>{row.scope}</code></th>
+            <th scope="row"><span class="kc-i kc-perms__ai" data-i={row.icon} aria-hidden="true"></span>{row.action}<code>{row.scope}</code></th>
             {MODES.map((m) => {
               const o = row.outcomes[m.id];
               return (
                 <td data-col={m.id} data-outcome={o}>
-                  <span class="kc-out"><span class="kc-i" data-i={outcomeIcon[o]} aria-hidden="true"></span>{OUTCOME_LABEL[o]}</span>
+                  <span class="kc-out"><span class="kc-i" data-i={outcomeIcon[o]} aria-hidden="true"></span>{outcomeLabel(o, row.always)}</span>
                 </td>
               );
             })}
@@ -95,5 +98,7 @@ const outcomeIcon = { allow: "check", ask: "approval", deny: "close" } as const;
     </table>
   </div>
 
-  <ApprovalCard uid={`${uid}-perm`} approval={ZOD_APPROVAL} state={cardState} interactive={interactive} mode={mode} resettable={resettable} />
+  {variant !== "table" && (
+    <ApprovalCard uid={`${uid}-perm`} approval={ZOD_APPROVAL} state={cardState} interactive={interactive} mode={mode} resettable={resettable} />
+  )}
 </div>

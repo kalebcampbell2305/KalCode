@@ -1,0 +1,23 @@
+---
+/**
+ * The deferred page styles (site.css, world.css), linked in the body rather than <head>: the
+ * header and the first viewport paint from critical.css without waiting for them, and browsers
+ * only hold rendering of the content after this point until they arrive. CSP-safe (no inline
+ * styles, no onload handlers). Rendered once per page: Base places it at the top of <main>
+ * unless the page places it itself (home: right after the hero).
+ */
+import siteCss from "../styles/site.css?url";
+import worldCss from "../styles/world.css?url";
+
+const locals = Astro.locals as Record<string, unknown>;
+const first = locals.kcPageCss !== true;
+locals.kcPageCss = true;
+---
+{
+  first && (
+    <>
+      <link rel="stylesheet" href={siteCss} />
+      <link rel="stylesheet" href={worldCss} />
+    </>
+  )
+}
