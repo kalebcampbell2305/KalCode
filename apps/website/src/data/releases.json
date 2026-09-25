@@ -1,12 +1,27 @@
 {
   "schemaVersion": 1,
-  "latest": null,
+  "latest": {
+    "version": "0.1.1",
+    "channel": "preview",
+    "publishedAt": "2026-09-25T03:00:22.598Z",
+    "commit": "7b0222a99f8bec375002f1dc1a56eb9a0f75ece3",
+    "notesUrl": "/changelog#release-0-1-1",
+    "platforms": [
+      {
+        "os": "windows",
+        "arch": "x64",
+        "label": "Windows 10 (1809) or later, 64-bit",
+        "kind": "nsis",
+        "file": "KalCode_0.1.1_x64-setup.exe",
+        "url": "/download/windows-x64",
+        "pinnedUrl": "/download/0.1.1/KalCode_0.1.1_x64-setup.exe",
+        "size": 4383539,
+        "sha256": "02ac76802244b4701ac1973a93898469e60cf38829367ab3781c9072eee4d573",
+        "signed": false
+      }
+    ]
+  },
   "unavailable": [
-    {
-      "os": "windows",
-      "label": "Windows 10 (1809) or later, 64-bit",
-      "reason": "No public build has been published yet."
-    },
     {
       "os": "macos",
       "label": "macOS",
