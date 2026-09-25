@@ -3,6 +3,8 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { useEffect, useRef } from "react";
 import { toKalCodeError } from "../../../ipc/errors.ts";
+import { afterLiveResize, isLiveResizing } from "../../../shell/panes/liveResize.ts";
+import { OutputScheduler } from "../../../shell/panes/outputScheduler.ts";
 import codeStyles from "../Code.module.css";
 import { isTerminalShortcut } from "../shortcuts.ts";
 import { MINIMUM_CONTRAST, TERMINAL_THEMES } from "../terminalTheme.ts";
@@ -22,6 +24,8 @@ interface PaneTerminalProps {
   running: boolean;
   focusRequest: number;
   theme: "light" | "dark";
+  /** The pane isn't focused: output renders in batches (≤ 4 a second). */
+  throttled?: boolean;
 }
 
 function monoFontFamily(): string {
@@ -34,12 +38,23 @@ function monoFontFamily(): string {
  * as Z1 tabs: DOM renderer, flow-controlled attachment, replay first). KalCode never reads this
  * text for status; status comes from native only.
  */
-export function PaneTerminal({ channel, threadId, label, running, focusRequest, theme }: PaneTerminalProps) {
+export function PaneTerminal({
+  channel,
+  threadId,
+  label,
+  running,
+  focusRequest,
+  theme,
+  throttled = false,
+}: PaneTerminalProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const runningRef = useRef(running);
   runningRef.current = running;
   const initialTheme = useRef(theme);
+  const throttledRef = useRef(throttled);
+  throttledRef.current = throttled;
+  const writerRef = useRef<OutputScheduler | null>(null);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -112,8 +127,17 @@ export function PaneTerminal({ channel, threadId, label, running, focusRequest, 
     });
 
     let frame = 0;
+    let waitingForResize: (() => void) | null = null;
     const fitNow = () => {
       if (disposed || host.clientWidth === 0 || host.clientHeight === 0) return;
+      // While a pane divider is dragged, fit once at the end instead of every frame.
+      if (isLiveResizing()) {
+        waitingForResize ??= afterLiveResize(() => {
+          waitingForResize = null;
+          fitNow();
+        });
+        return;
+      }
       try {
         fit.fit();
       } catch {
@@ -129,6 +153,10 @@ export function PaneTerminal({ channel, threadId, label, running, focusRequest, 
     let attachment: number | null = null;
     let generation = 0;
     let unacked = 0;
+    // Output of an unfocused pane renders in batches; bytes are acknowledged once rendered.
+    const writer = new OutputScheduler(term, (bytes) => acknowledge(bytes));
+    writer.setThrottled(throttledRef.current);
+    writerRef.current = writer;
     const acknowledge = (bytes: number) => {
       unacked += bytes;
       if (attachment === null || unacked < ACK_EVERY_BYTES) return;
@@ -147,7 +175,10 @@ export function PaneTerminal({ channel, threadId, label, running, focusRequest, 
       attachment = null;
       unacked = 0;
       let first = true;
-      if (resync) term.reset();
+      if (resync) {
+        writer.clear();
+        term.reset();
+      }
       channel
         .attach(threadId, (bytes) => {
           if (disposed || current !== generation) return;
@@ -161,7 +192,7 @@ export function PaneTerminal({ channel, threadId, label, running, focusRequest, 
             });
             return;
           }
-          term.write(bytes, () => acknowledge(bytes.length));
+          writer.push(bytes);
         })
         .then((id) => {
           if (disposed || current !== generation) {
@@ -186,6 +217,9 @@ export function PaneTerminal({ channel, threadId, label, running, focusRequest, 
       disposed = true;
       observer.disconnect();
       cancelAnimationFrame(frame);
+      waitingForResize?.();
+      writer.dispose();
+      writerRef.current = null;
       if (resizeTimer) clearTimeout(resizeTimer);
       if (attachment !== null) channel.detach(attachment).catch(() => undefined);
       termRef.current = null;
@@ -201,6 +235,10 @@ export function PaneTerminal({ channel, threadId, label, running, focusRequest, 
     const term = termRef.current;
     if (term) term.options.theme = TERMINAL_THEMES[theme];
   }, [theme]);
+
+  useEffect(() => {
+    writerRef.current?.setThrottled(throttled);
+  }, [throttled]);
 
   useEffect(() => {
     const term = termRef.current;

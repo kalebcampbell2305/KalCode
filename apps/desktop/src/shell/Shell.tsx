@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { type CSSProperties, useLayoutEffect, useRef, useState } from "react";
 import { FloatingAssistant } from "../kalvoice/FloatingAssistant.tsx";
 import { KalVoicePage } from "../kalvoice/KalVoicePage.tsx";
 import { KalVoiceProvider } from "../kalvoice/KalVoiceProvider.tsx";
@@ -20,6 +20,7 @@ import { NavigationProvider, SURFACES, useNavigation } from "./navigation.tsx";
 import { NotificationCenter } from "./notifications/NotificationCenter.tsx";
 import { NotificationsProvider } from "./notifications/NotificationsProvider.tsx";
 import styles from "./Shell.module.css";
+import { ShellSlotsProvider, useShellSlots } from "./ShellSlots.tsx";
 import { Sidebar } from "./Sidebar.tsx";
 import { useShortcuts } from "./shortcuts.ts";
 
@@ -37,13 +38,15 @@ export function Shell() {
             {/* Z7-W3: cross-surface focus/filter intents and the notification center. */}
             <UiIntentsProvider>
               <NotificationsProvider>
-                {kalvoiceEnabled ? (
-                  <KalVoiceProvider>
-                    <ShellLayout kalvoice />
-                  </KalVoiceProvider>
-                ) : (
-                  <ShellLayout kalvoice={false} />
-                )}
+                <ShellSlotsProvider>
+                  {kalvoiceEnabled ? (
+                    <KalVoiceProvider>
+                      <ShellLayout kalvoice />
+                    </KalVoiceProvider>
+                  ) : (
+                    <ShellLayout kalvoice={false} />
+                  )}
+                </ShellSlotsProvider>
               </NotificationsProvider>
             </UiIntentsProvider>
           </ThreadsIntentProvider>
@@ -57,6 +60,20 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
   const { settings, updateSettings } = useRuntime();
   const { current } = useNavigation();
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const slots = useShellSlots();
+  const voice = slots?.voice ?? null;
+  const setMainLeft = slots?.setMainLeft;
+  const mainRef = useRef<HTMLElement>(null);
+  // The KalVoice widget stays right of the sidebar (Z7-W1 shell slot).
+  useLayoutEffect(() => {
+    const main = mainRef.current;
+    if (!main || !setMainLeft) return;
+    const measure = () => setMainLeft(main.getBoundingClientRect().left);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(main);
+    return () => observer.disconnect();
+  }, [setMainLeft]);
 
   useShortcuts({
     openPalette: () => setPaletteOpen(true),
@@ -65,12 +82,25 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
   useNewTerminalShortcut();
 
   return (
-    <div className={styles.shell} data-sidebar={settings.sidebarCollapsed ? "collapsed" : "expanded"}>
+    <div
+      className={styles.shell}
+      data-sidebar={settings.sidebarCollapsed ? "collapsed" : "expanded"}
+      data-voice-slot={voice?.edge}
+      style={voice ? ({ "--voice-slot-h": `${voice.height}px` } as CSSProperties) : undefined}
+    >
       <a className={styles.skipLink} href="#main">
         Skip to content
       </a>
       <Sidebar collapsed={settings.sidebarCollapsed} onOpenPalette={() => setPaletteOpen(true)} />
-      <main id="main" className={styles.main} tabIndex={-1} aria-label={SURFACES[current].label} data-surface={current}>
+      {voice ? <div className={styles.voiceSlot} data-edge={voice.edge} aria-hidden="true" /> : null}
+      <main
+        ref={mainRef}
+        id="main"
+        className={styles.main}
+        tabIndex={-1}
+        aria-label={SURFACES[current].label}
+        data-surface={current}
+      >
         {current === "kalvoice" && kalvoice ? (
           <KalVoicePage />
         ) : current === "dashboard" ? (

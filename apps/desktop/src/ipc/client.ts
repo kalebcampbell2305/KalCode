@@ -16,6 +16,7 @@ import type {
   KalVoiceSignal,
   KalVoiceStatus,
   LatencySnapshot,
+  PaneLayout,
   NotificationMark,
   NotificationPage,
   PermissionMode,
@@ -23,6 +24,7 @@ import type {
   PermissionSettings,
   ProviderHealth,
   ProviderStatus,
+  SavedLayoutPreset,
   SecureStoreCheck,
   Settings,
   SettingsPatch,
@@ -36,6 +38,7 @@ import type {
   ThreadSummary,
   ToolCallRecord,
   Workspace,
+  WorkspaceLayout,
 } from "@kalcode/protocol";
 import { toKalCodeError } from "./errors.ts";
 import type { CommandName, NativeTheme, Transport, Unsubscribe } from "./transport.ts";
@@ -453,6 +456,32 @@ export class KalCodeClient {
 
   setActiveTerminal(workspaceId: string, terminalId: string): Promise<void> {
     return this.call("terminal_set_active", { workspaceId, terminalId });
+  }
+
+  // ---------- Pane layouts (Z7-W1) ----------
+
+  /** The layout saved for a workspace, or null (none yet, or it no longer validates). */
+  layoutGet(workspaceId: string): Promise<WorkspaceLayout | null> {
+    return this.call("layout_get", { workspaceId });
+  }
+
+  /** Validates (natively) and saves a workspace's layout. Emits no events. */
+  layoutSave(workspaceId: string, layout: PaneLayout): Promise<WorkspaceLayout> {
+    return this.call("layout_save", { workspaceId, layout });
+  }
+
+  /** The user's saved layout presets (shapes only). */
+  layoutPresets(): Promise<SavedLayoutPreset[]> {
+    return this.call("layout_presets");
+  }
+
+  /** Saves a layout's shape (contents stripped natively) under a name. */
+  layoutPresetSave(name: string, layout: PaneLayout): Promise<SavedLayoutPreset> {
+    return this.call("layout_preset_save", { name, layout });
+  }
+
+  layoutPresetDelete(presetId: string): Promise<void> {
+    return this.call("layout_preset_delete", { presetId });
   }
 
   // ---- Notification center (Z7-W3) ----

@@ -91,7 +91,6 @@ fn feature_state(feature: FeatureId) -> SurfaceState {
         | FeatureId::FailureAutopsy
         | FeatureId::WorkspaceHome
         | FeatureId::WorkspaceRail
-        | FeatureId::PaneSystem
         | FeatureId::ProviderPanes
         | FeatureId::NotificationCenter
         | FeatureId::AccountSignIn
@@ -99,6 +98,8 @@ fn feature_state(feature: FeatureId) -> SurfaceState {
         | FeatureId::HostKeyVerification
         | FeatureId::SafeRestore
         | FeatureId::AutomationKillSwitch => SurfaceState::Gated,
+        // Z7-W1: the pane canvas is the Code surface.
+        FeatureId::PaneSystem => SurfaceState::Available,
     }
 }
 
@@ -228,6 +229,12 @@ mod tests {
             assert_eq!(flags.features.len(), FeatureId::ALL.len());
             for feature in FeatureId::ALL {
                 let flag = flags.feature(feature).expect("flag");
+                if feature == FeatureId::PaneSystem {
+                    // Z7-W1: available in every channel.
+                    assert_eq!(flag.state, SurfaceState::Available);
+                    assert!(flag.visible);
+                    continue;
+                }
                 assert_eq!(flag.state, SurfaceState::Gated, "{feature:?}");
                 assert_eq!(flag.visible, channel == BuildChannel::Development);
             }

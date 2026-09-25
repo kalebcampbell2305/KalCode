@@ -69,7 +69,8 @@ test.describe("opening a workspace", () => {
     await page.getByRole("button", { name: "Open folder…" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "kalcode-site" })).toBeVisible();
     await expect(page.getByText("~\\Projects\\kalcode-site", { exact: true })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "No terminals open" })).toBeVisible();
+    // The workspace opens as one empty pane of the canvas (Z7-W1).
+    await expect(page.getByRole("heading", { name: "Empty pane" })).toBeVisible();
     // The sidebar switcher follows the active workspace.
     await expect(page.getByRole("button", { name: /Workspace\s*kalcode-site/ })).toBeVisible();
   });
@@ -109,7 +110,9 @@ test.describe("terminals", () => {
     await expect(visibleTerminal(page)).toContainText("hello-from-ui");
   });
 
-  test("multiple tabs: shell picker, switching with Ctrl+Tab, closing ends the process", async ({ page }) => {
+  test("multiple tabs: shell picker, switching with Ctrl+Tab; closing a tab keeps its shell running, ending is explicit", async ({
+    page,
+  }) => {
     await open(page);
     await openFolderAndTerminal(page);
     await page.getByRole("button", { name: "Choose a shell" }).click();
@@ -134,20 +137,32 @@ test.describe("terminals", () => {
     await expect(cmd).toHaveAttribute("aria-selected", "true");
     await expect(visibleTerminal(page)).toContainText("in-cmd");
 
-    // Ctrl+Shift+W closes the tab in front and ends its process; the neighbour comes forward.
+    // Ctrl+Shift+W closes the tab in front; its shell keeps running in the background (Z7-14).
     await page.keyboard.press("Control+Shift+W");
     await expect(cmd).toHaveCount(0);
     await expect(page.getByRole("tab", { name: /PowerShell 7 \(2\)/ })).toHaveAttribute("aria-selected", "true");
-    expect(await runningProcesses(page)).toBe(2);
+    expect(await runningProcesses(page)).toBe(3);
+    await expect(page.getByRole("button", { name: "1 in background" })).toBeVisible();
 
-    // The close control on a tab.
+    // The close control on a tab: also only closes the tab.
     await page.getByRole("tab", { name: /^PowerShell 7$/ }).hover();
     await page
       .getByRole("tab", { name: /^PowerShell 7$/ })
       .locator('[class*="tabClose"]')
       .click();
     await expect(page.getByRole("tab")).toHaveCount(1);
-    expect(await runningProcesses(page)).toBe(1);
+    expect(await runningProcesses(page)).toBe(3);
+
+    // A background shell comes back with its output.
+    await page.getByRole("button", { name: "2 in background" }).click();
+    await page.getByRole("menuitem", { name: "Show Command Prompt" }).click();
+    await expect(cmd).toHaveAttribute("aria-selected", "true");
+    await expect(visibleTerminal(page)).toContainText("in-cmd");
+
+    // Ending a shell is explicit: the pane menu's "End terminal".
+    await page.getByRole("button", { name: "Actions for pane 1" }).click();
+    await page.getByRole("menuitem", { name: "End terminal" }).click();
+    await expect.poll(() => runningProcesses(page)).toBe(2);
   });
 
   test("an exited shell shows its exit code and restarts in the same tab", async ({ page }) => {

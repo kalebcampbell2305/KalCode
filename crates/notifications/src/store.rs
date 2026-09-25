@@ -1,9 +1,9 @@
-//! Storage for migration v11 (`notifications`) and the policy that decides whether an event
+//! Storage for migration v10 (`notifications`) and the policy that decides whether an event
 //! creates a row, re-raises one, or is dropped.
 //!
-//! [`NOTIFICATIONS_MIGRATION`] is deliberately **not** registered in `kalcode_core::db::MIGRATIONS`
-//! on this branch; the lead appends it at integration (ADVANCED.md §5.2). Until then the center
-//! runs on the in-memory table (see `center.rs`).
+//! [`NOTIFICATIONS_MIGRATION`] is registered in `kalcode_core::db::MIGRATIONS` (v10); the SQL lives
+//! in native-core because native-core cannot depend on this crate. A database without the table
+//! (an older build's) falls back to the in-memory table (see `center.rs`).
 //!
 //! Both backends implement [`Table`], and the policy ([`raise`], [`settle`], [`mark`], [`list`])
 //! is written once over it, so they behave identically. Parameterized SQL only.
@@ -15,7 +15,6 @@ use kalcode_contracts::notifications::{
     Notification, NotificationEntityKind, NotificationKind, NotificationMark, NotificationPage,
     Severity,
 };
-use kalcode_core::db::Migration;
 use kalcode_core::time::format_rfc3339;
 use kalcode_core::{KalError, Result};
 use rusqlite::{Connection, OptionalExtension, Row, params};
@@ -24,13 +23,8 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::derive::{Draft, recovery_title};
 
-/// Migration v11 (campaign Z7-W3). Append to `kalcode_core::db::MIGRATIONS` at integration; it
-/// has no foreign key to another campaign's tables.
-pub const NOTIFICATIONS_MIGRATION: Migration = Migration {
-    version: 11,
-    name: "notifications",
-    sql: include_str!("../migrations/0011_notifications.sql"),
-};
+/// Migration v10 (campaign Z7-W3), registered in `kalcode_core::db::MIGRATIONS`.
+pub use kalcode_core::db::NOTIFICATIONS_MIGRATION;
 
 /// Rows kept; older ones are deleted when a new row is created.
 pub const RETENTION: usize = 500;
@@ -267,7 +261,7 @@ pub fn mark(
 
 // ---------- SQLite ----------
 
-/// Whether the `notifications` table exists (v11 applied).
+/// Whether the `notifications` table exists (v10 applied).
 pub fn table_exists(conn: &Connection) -> Result<bool> {
     Ok(conn
         .query_row(
@@ -309,7 +303,7 @@ fn row_to_notification(row: &Row<'_>) -> rusqlite::Result<Option<Notification>> 
     }))
 }
 
-/// The v11 table over a connection or transaction supplied by `Core`.
+/// The v10 table over a connection or transaction supplied by `Core`.
 pub struct SqlTable<'c>(pub &'c Connection);
 
 impl Table for SqlTable<'_> {
@@ -469,7 +463,7 @@ impl Table for SqlTable<'_> {
     }
 }
 
-// ---------- In memory (until v11 is registered) ----------
+// ---------- In memory (a database without the v10 table) ----------
 
 /// The same table, bounded to [`RETENTION`] rows, kept in memory.
 #[derive(Debug, Default)]
@@ -614,23 +608,13 @@ mod tests {
 
     pub(crate) fn migrated() -> Connection {
         let mut conn = kalcode_core::db::open_in_memory().expect("db");
-        kalcode_core::db::migrate(&mut conn, &with_v11(), None).expect("migrate");
+        kalcode_core::db::migrate(&mut conn, &with_notifications(), None).expect("migrate");
         conn
     }
 
-    /// Every registered migration, reserved placeholders for the gap, then v11.
-    pub(crate) fn with_v11() -> Vec<Migration> {
-        let mut all = kalcode_core::db::MIGRATIONS.to_vec();
-        let next = all.last().map_or(1, |m| m.version + 1);
-        for version in next..11 {
-            all.push(Migration {
-                version,
-                name: "reserved",
-                sql: "SELECT 1;",
-            });
-        }
-        all.push(NOTIFICATIONS_MIGRATION);
-        all
+    /// Every registered migration (v10 `notifications` included).
+    pub(crate) fn with_notifications() -> Vec<kalcode_core::db::Migration> {
+        kalcode_core::db::MIGRATIONS.to_vec()
     }
 
     fn t0() -> OffsetDateTime {
@@ -839,11 +823,13 @@ mod tests {
     }
 
     #[test]
-    fn migration_is_isolated_and_numbered_eleven() {
-        assert_eq!(NOTIFICATIONS_MIGRATION.version, 11);
+    fn migration_is_registered_as_v10() {
+        assert_eq!(NOTIFICATIONS_MIGRATION.version, 10);
         assert!(
-            kalcode_core::db::MIGRATIONS.iter().all(|m| m.version != 11),
-            "v11 is registered by the lead at integration, not on this branch"
+            kalcode_core::db::MIGRATIONS
+                .iter()
+                .any(|m| m.version == 10 && m.name == "notifications"),
+            "v10 is registered in MIGRATIONS"
         );
         let conn = migrated();
         assert!(table_exists(&conn).expect("exists"));

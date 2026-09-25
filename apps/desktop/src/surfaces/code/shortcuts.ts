@@ -1,3 +1,5 @@
+import { isPaneShortcut } from "../../shell/panes/paneShortcuts.ts";
+
 /** Keyboard shortcuts of the Code surface. They work while a terminal has focus. */
 export type CodeShortcut = "new-terminal" | "next-tab" | "previous-tab" | "close-tab" | "leave-terminal";
 
@@ -25,7 +27,7 @@ export function codeShortcut(event: KeyboardEvent): CodeShortcut | null {
   return null;
 }
 
-/** True for shortcuts xterm.js must not send to the shell. */
+/** True for shortcuts xterm.js must not send to the shell (Code and pane shortcuts). */
 export function isTerminalShortcut(event: KeyboardEvent): boolean {
-  return codeShortcut(event) !== null;
+  return codeShortcut(event) !== null || isPaneShortcut(event);
 }

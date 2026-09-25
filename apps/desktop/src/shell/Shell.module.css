@@ -10,6 +10,51 @@
   grid-template-columns: var(--sidebar-w-collapsed) minmax(0, 1fr);
 }
 
+/*
+ * The sidebar spans the full height; the main column can give a slim band to the KalVoice
+ * widget (Z7-W1 shell slot) so it never floats over a page header or a pane's tabs.
+ */
+.shell {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.shell > nav {
+  grid-row: 1 / -1;
+}
+
+.shell[data-voice-slot="top"] {
+  grid-template-rows: var(--voice-slot-h) minmax(0, 1fr);
+}
+
+.shell[data-voice-slot="bottom"] {
+  grid-template-rows: minmax(0, 1fr) var(--voice-slot-h);
+}
+
+.voiceSlot {
+  grid-column: 2;
+  min-width: 0;
+}
+
+.voiceSlot[data-edge="top"] {
+  grid-row: 1;
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: linear-gradient(180deg, var(--color-surface-1), transparent);
+}
+
+.voiceSlot[data-edge="bottom"] {
+  grid-row: 2;
+  border-top: 1px solid var(--color-border-subtle);
+  background: linear-gradient(0deg, var(--color-surface-1), transparent);
+}
+
+.shell[data-voice-slot="top"] .main {
+  grid-row: 2;
+}
+
+.shell[data-voice-slot="bottom"] .main {
+  grid-row: 1;
+}
+
 .main {
   min-width: 0;
   height: 100%;
