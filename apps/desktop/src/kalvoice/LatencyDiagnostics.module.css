@@ -1,16 +1,31 @@
+/* Dense measurement table in a framed panel. */
 .table {
   width: 100%;
   max-width: 48rem;
-  border-collapse: collapse;
-  font-size: var(--text-sm);
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-collapse: separate;
+  border-spacing: 0;
+  border-radius: var(--radius-panel);
+  background: var(--panel-sheen), var(--color-surface-1);
+  box-shadow: var(--shadow-panel);
+  font-size: var(--type-ui);
   font-variant-numeric: tabular-nums;
 }
 
 .table th,
 .table td {
-  padding: var(--space-1-5) var(--space-2);
-  border-bottom: 1px solid var(--color-border);
+  padding: var(--space-1-5) var(--space-3);
+  border-bottom: 1px solid var(--color-border-subtle);
   text-align: right;
+}
+
+.table tbody tr:last-child > * {
+  border-bottom: 0;
+}
+
+.table tbody tr:hover {
+  background: var(--color-surface-hover);
 }
 
 .table th[scope="row"],
@@ -21,9 +36,14 @@
 }
 
 .table thead th {
+  height: 2rem;
+  border-bottom-color: var(--color-border);
   color: var(--color-text-muted);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-regular);
+  font-family: var(--font-label);
+  font-size: var(--type-label);
+  font-weight: var(--type-label-weight);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
 }
 
 .table td {
@@ -31,13 +51,14 @@
 }
 
 .table td[data-over] {
-  color: var(--color-danger-text, var(--color-danger));
+  color: var(--status-failed-text);
+  font-weight: var(--weight-medium);
 }
 
 .empty {
   margin-top: var(--space-3);
   color: var(--color-text-muted);
-  font-size: var(--text-sm);
+  font-size: var(--type-ui);
 }
 
 .waterfall {
@@ -59,10 +80,10 @@
 
 .bars {
   display: flex;
-  height: 0.625rem;
+  height: 0.5rem;
   overflow: hidden;
-  border-radius: var(--radius-xs);
-  background: var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-border-subtle);
 }
 
 .bar {
@@ -81,16 +102,17 @@
   background: var(--color-accent);
 }
 
+/* A data series, not a status: amber stays reserved for paused. */
 .bar[data-stage="final_to_recognized"] {
-  background: var(--color-waiting);
+  background: var(--term-magenta, var(--color-accent-icy));
 }
 
 .bar[data-stage="recognized_to_action"] {
-  background: var(--color-success);
+  background: var(--status-working);
 }
 
 .total {
   color: var(--color-text-muted);
-  font-size: var(--text-xs);
+  font-size: var(--type-small);
   font-variant-numeric: tabular-nums;
 }

@@ -25,16 +25,27 @@
   flex: none;
 }
 
+/* Tones follow the contract palette: listening is the icy accent, processing and executing
+   are working green, needs approval is neutral (amber is reserved for paused), done is
+   high-contrast neutral, error is red. */
+.orb[data-phase="listening"] {
+  --orb-tone: var(--color-accent-icy);
+}
+
+.orb:is([data-phase="transcribing"], [data-phase="thinking"], [data-phase="executing"]) {
+  --orb-tone: var(--status-working);
+}
+
 .orb[data-phase="waiting_for_permission"] {
-  --orb-tone: var(--color-waiting);
+  --orb-tone: var(--status-waiting);
 }
 
 .orb[data-phase="done"] {
-  --orb-tone: var(--color-success);
+  --orb-tone: var(--status-done);
 }
 
 .orb[data-phase="error"] {
-  --orb-tone: var(--color-danger);
+  --orb-tone: var(--status-failed);
 }
 
 .mark {
@@ -63,8 +74,17 @@
 
 .orb[data-phase="listening"] .halo {
   animation: none;
-  opacity: calc(0.3 + var(--level) * 0.65);
-  transform: scale(calc(0.92 + var(--level) * 0.28));
+  opacity: calc(0.3 + var(--level) * 0.55);
+  transform: scale(calc(0.94 + var(--level) * 0.2));
+  transition:
+    opacity 120ms linear,
+    transform 120ms linear;
+}
+
+/* Listening: a thin icy ring breathes slowly around the orb. */
+.orb[data-phase="listening"] .ring {
+  border-color: color-mix(in srgb, var(--orb-tone) 55%, transparent);
+  animation: listen 2.4s var(--ease-in-out) infinite;
 }
 
 .orb[data-phase="thinking"] .halo,
@@ -110,7 +130,7 @@
   animation: turn 6s linear infinite;
 }
 
-/* A clear, calm alert: a steady amber ring that fades in once. No flashing. */
+/* A clear, calm alert: a steady neutral ring that fades in once. No flashing. */
 .orb[data-phase="waiting_for_permission"] .ring {
   border-color: var(--orb-tone);
   animation: appear 600ms var(--ease-out) both;
@@ -131,25 +151,33 @@
   --wave-tone: var(--color-accent);
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 2px;
   height: 1.75rem;
 }
 
+.wave[data-phase="listening"] {
+  --wave-tone: var(--color-accent-icy);
+}
+
+.wave:is([data-phase="transcribing"], [data-phase="thinking"], [data-phase="executing"]) {
+  --wave-tone: var(--status-working);
+}
+
 .wave[data-phase="waiting_for_permission"] {
-  --wave-tone: var(--color-waiting);
+  --wave-tone: var(--status-waiting);
 }
 
 .wave[data-phase="done"] {
-  --wave-tone: var(--color-success);
+  --wave-tone: var(--status-done);
 }
 
 .wave[data-phase="error"] {
-  --wave-tone: var(--color-danger);
+  --wave-tone: var(--status-failed);
 }
 
 .bar {
-  flex: 1;
-  min-width: 2px;
+  flex: 0 0 3px;
   height: 100%;
   border-radius: var(--radius-full);
   background: var(--wave-tone);
@@ -258,6 +286,18 @@
 @keyframes appear {
   from {
     opacity: 0;
+  }
+}
+
+@keyframes listen {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(0.99);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.03);
   }
 }
 

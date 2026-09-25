@@ -1,5 +1,6 @@
 import type { PanelAnchor, SpeechModelInfo } from "@kalcode/protocol";
-import { Badge, Button, Section, Skeleton } from "@kalcode/ui/components";
+import { Badge, Button, Panel, Skeleton } from "@kalcode/ui/components";
+import { AudioLines } from "lucide-react";
 import { AlertDialog } from "radix-ui";
 import { type KeyboardEvent, useId, useState } from "react";
 import { toKalCodeError } from "../ipc/errors.ts";
@@ -44,10 +45,12 @@ export function KalVoiceSettings() {
 function KalVoiceSettingsSection() {
   const { status, statusError, refreshStatus } = useKalVoice();
   return (
-    <Section
+    <Panel
       id="kalvoice"
       title="KalVoice"
+      icon={<AudioLines />}
       description="Speech is recognized on this computer and discarded right after. Reasoning uses a provider you connected; KalCode never pays for or sees it."
+      padding="none"
     >
       {!status ? (
         statusError ? (
@@ -79,7 +82,7 @@ function KalVoiceSettingsSection() {
           <PanelRow />
         </div>
       )}
-    </Section>
+    </Panel>
   );
 }
 
@@ -268,7 +271,7 @@ function ModelsRow() {
           const active = status.activeModel === model.id;
           const percent = progress && progress.total > 0 ? Math.floor((progress.received / progress.total) * 100) : 0;
           return (
-            <li key={model.id} className={styles.model} data-state={state}>
+            <li key={model.id} className={styles.model} data-state={state} data-active={active || undefined}>
               <div className={styles.modelText}>
                 <p className={styles.modelName}>
                   {model.displayName}

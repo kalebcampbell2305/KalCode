@@ -1,10 +1,12 @@
+/* Rows inside the Settings panel (a @kalcode/ui Panel), separated by hairlines. */
 .rows {
   display: flex;
   flex-direction: column;
+  padding: 0 var(--panel-px);
 }
 
 .rows > * + * {
-  border-top: 1px solid var(--color-border);
+  border-top: 1px solid var(--color-border-subtle);
 }
 
 .row {
@@ -21,14 +23,16 @@
 
 .rowLabel {
   color: var(--color-text);
-  font-size: var(--text-md);
+  font-size: var(--type-ui);
+  font-weight: var(--weight-medium);
 }
 
 .rowHelp {
   margin-top: var(--space-0-5);
-  max-width: 46ch;
+  max-width: 52ch;
   color: var(--color-text-muted);
-  font-size: var(--text-sm);
+  font-size: var(--type-small);
+  line-height: var(--leading-normal);
 }
 
 .rowControl {
@@ -50,8 +54,8 @@
 .fieldError,
 .issue {
   margin: 0 0 var(--space-2);
-  color: var(--color-danger-text, var(--color-danger));
-  font-size: var(--text-sm);
+  color: var(--status-failed-text);
+  font-size: var(--type-ui);
 }
 
 .issue {
@@ -62,27 +66,41 @@
   border-top: 0;
 }
 
+/* Needs you: neutral emphasized (amber is reserved for paused). */
 .note {
   margin-top: var(--space-2);
   max-width: 50ch;
-  color: var(--color-waiting);
-  font-size: var(--text-sm);
+  padding: var(--space-1-5) var(--space-2-5);
+  border: 1px solid var(--status-waiting-line);
+  border-radius: var(--radius-sm);
+  background: var(--status-waiting-soft);
+  color: var(--status-waiting-text);
+  font-size: var(--type-small);
 }
 
 .select {
   height: var(--control-h-md);
-  max-width: 17rem;
+  max-width: 21rem;
   padding: 0 var(--space-2);
   border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface-raised);
+  border-radius: var(--radius-control);
+  background: var(--color-surface-2);
+  box-shadow: var(--shadow-well);
   color: var(--color-text);
-  font-size: var(--text-sm);
+  font-size: var(--type-ui);
+  transition: border-color var(--dur-fast) var(--ease-out);
+}
+
+.select:hover {
+  border-color: var(--color-border-lit-soft);
 }
 
 .select:focus-visible {
-  outline: 2px solid var(--color-border-focus);
-  outline-offset: 1px;
+  outline: none;
+  border-color: var(--color-border-focus);
+  box-shadow:
+    0 0 0 1px var(--color-border-focus),
+    0 0 16px -6px var(--color-glow);
 }
 
 .models {
@@ -97,21 +115,45 @@
   flex-direction: column;
   margin: 0;
   padding: 0;
+  overflow: hidden;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
+  background: var(--color-surface-2);
   list-style: none;
 }
 
 .model {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-2-5) var(--space-3-5);
 }
 
 .model + .model {
-  border-top: 1px solid var(--color-border);
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+/* The model in use carries the lit rail. */
+.model[data-active] {
+  background: var(--color-surface-selected);
+}
+
+.model[data-active]::before {
+  content: "";
+  position: absolute;
+  top: var(--space-2);
+  bottom: var(--space-2);
+  left: 0;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: var(--color-accent);
+  box-shadow: 0 0 8px var(--color-glow);
+}
+
+.model[data-state="paused"] .modelMeta + .modelMeta {
+  color: var(--status-paused-text);
 }
 
 .modelText {
@@ -126,13 +168,13 @@
   align-items: center;
   gap: var(--space-2);
   color: var(--color-text);
-  font-size: var(--text-sm);
+  font-size: var(--type-ui);
   font-weight: var(--weight-medium);
 }
 
 .modelMeta {
   color: var(--color-text-muted);
-  font-size: var(--text-xs);
+  font-size: var(--type-small);
 }
 
 .modelActions {
@@ -153,7 +195,8 @@
 .progress span {
   display: block;
   height: 100%;
-  background: var(--color-accent);
+  background: linear-gradient(90deg, var(--color-accent), var(--color-accent-icy));
+  box-shadow: 0 0 8px var(--color-glow);
   transform-origin: left;
   transition: transform var(--dur-fast) linear;
 }
@@ -170,8 +213,11 @@
 }
 
 .switch[aria-checked="true"] {
-  border-color: transparent;
-  background: var(--color-accent);
+  border-color: var(--btn-primary-bottom);
+  background: linear-gradient(180deg, var(--btn-primary-top), var(--btn-primary-bottom));
+  box-shadow:
+    inset 0 1px 0 var(--btn-primary-edge),
+    0 0 12px -4px var(--btn-primary-glow);
 }
 
 .switch:disabled {
@@ -196,21 +242,23 @@
 }
 
 .switch[aria-checked="true"] .switchThumb {
-  background: var(--color-accent-fg);
+  background: var(--btn-primary-fg);
   transform: translateX(1rem);
 }
 
 .loading {
+  padding: var(--panel-py) var(--panel-px);
   display: grid;
   gap: var(--space-3);
 }
 
 .inlineError {
+  padding: var(--panel-py) var(--panel-px);
   display: flex;
   align-items: center;
   gap: var(--space-3);
   color: var(--color-text-secondary);
-  font-size: var(--text-sm);
+  font-size: var(--type-ui);
 }
 
 .overlay {
@@ -230,21 +278,23 @@
   gap: var(--space-3);
   width: min(30rem, calc(100vw - 2 * var(--space-6)));
   padding: var(--space-6);
+  border: 1px solid var(--color-border-lit-soft);
   border-radius: var(--radius-xl);
-  background: var(--color-surface-overlay);
-  box-shadow: var(--shadow-lg);
+  background: var(--panel-sheen), var(--color-surface-3);
+  box-shadow: var(--shadow-xl);
   transform: translate(-50%, -50%);
 }
 
 .dialogTitle {
   color: var(--color-text);
-  font-size: var(--text-lg);
-  font-weight: var(--weight-medium);
+  font-size: var(--type-headline);
+  font-weight: var(--type-headline-weight);
+  letter-spacing: var(--type-headline-tracking);
 }
 
 .dialogBody {
   color: var(--color-text-secondary);
-  font-size: var(--text-sm);
+  font-size: var(--type-ui);
   line-height: var(--leading-relaxed);
 }
 
@@ -259,5 +309,5 @@
   margin: 0 0 var(--space-2);
   max-width: 60ch;
   color: var(--color-text-muted);
-  font-size: var(--text-xs);
+  font-size: var(--type-small);
 }
