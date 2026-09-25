@@ -15,6 +15,7 @@ pub mod catalog;
 pub mod claude;
 pub mod detect;
 pub mod env;
+pub mod launch;
 pub mod model;
 pub mod process;
 pub mod registry;
