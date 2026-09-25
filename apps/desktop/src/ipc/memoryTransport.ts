@@ -16,6 +16,7 @@
  *   providers-outdated — Claude Code is installed but too old, and signed out
  *   busy | empty | approvals-flood | errors | loading
  *                      — Dashboard data scenarios (see ./memory/dashboard.ts)
+ *   kalvoice-*         — KalVoice scenarios (see ./memoryKalVoice.ts, a labelled test double)
  *
  * Commands that no merged campaign registers natively yet are rejected exactly the way Tauri
  * rejects them (Dashboard scenarios implement those contract commands as fixtures).
@@ -46,9 +47,10 @@ import {
   type EmitOptions,
   isDashboardScenario,
 } from "./memory/dashboard.ts";
-import { detectFake, type ProviderScenario, providerCatalog } from "./memoryProviders.ts";
 import { createPermissionMemory, type PermissionMemory } from "./memory/permissions.ts";
 import { createThreadsMemory } from "./memory/threads.ts";
+import { createMemoryKalVoice, isKalVoiceScenario, type KalVoiceScenario } from "./memoryKalVoice.ts";
+import { detectFake, type ProviderScenario, providerCatalog } from "./memoryProviders.ts";
 import { createMemoryWorkspaces, type MemoryWorkspaces } from "./memoryWorkspaces.ts";
 import type { CommandName, Transport } from "./transport.ts";
 
@@ -61,7 +63,8 @@ export type MemoryScenario =
   | "no-providers"
   | "approvals"
   | ProviderScenario
-  | DashboardScenario;
+  | DashboardScenario
+  | KalVoiceScenario;
 
 const PROVIDER_SCENARIOS: readonly string[] = ["providers-error", "providers-none", "providers-outdated"];
 
@@ -141,7 +144,7 @@ export function createMemoryTransport(
     flags: {
       surfaces: SURFACES.map((id) => ({
         id,
-        state: AVAILABLE_SURFACES.has(id) ? "available" : "gated",
+        state: AVAILABLE_SURFACES.has(id) ? "available" : id === "kalvoice" ? "preview" : "gated",
         visible: true,
       })),
       // Every product feature is gated until its campaign merges (crates/native-core/src/flags.rs);
@@ -216,6 +219,8 @@ export function createMemoryTransport(
   const requireCore = () => {
     if (startupError) fail(startupError);
   };
+
+  const kalvoice = createMemoryKalVoice(emit, scenario);
 
   /** Mirrors the native registry: serialized, cached, events only for changes. */
   const detectProviders = async (): Promise<ProviderStatus[]> => {
@@ -467,6 +472,7 @@ export function createMemoryTransport(
       return detecting;
     },
     ...dashboard?.handlers,
+    ...(kalvoice.handlers as DashboardHandlers),
   };
 
   const transport: MemoryTransport = {
@@ -484,6 +490,10 @@ export function createMemoryTransport(
       return async () => {
         subscribers.delete(onEvent);
       };
+    },
+    async subscribeKalVoice(onSignal) {
+      requireCore();
+      kalvoice.subscribe(onSignal);
     },
     attachTerminal: (terminalId, onOutput) => code.attachTerminal(terminalId, onOutput),
     async streamThread(threadId, onEvent) {
@@ -536,6 +546,7 @@ function readScenario(): MemoryScenario {
   ) {
     return value;
   }
+  if (isKalVoiceScenario(value)) return value;
   if (value !== null && PROVIDER_SCENARIOS.includes(value)) return value as ProviderScenario;
   return "default";
 }

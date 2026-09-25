@@ -108,7 +108,9 @@ impl FeatureFlags {
         use SurfaceState::*;
         let table = [
             (Dashboard, Available),
-            (KalVoice, Gated),
+            // Z12: push to talk, commands and the voice widget work; parts that depend on
+            // campaigns not in this build say so honestly.
+            (KalVoice, Preview),
             (Code, Available),
             (Threads, Available),
             (Agents, Gated),

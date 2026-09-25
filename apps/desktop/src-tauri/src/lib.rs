@@ -4,6 +4,8 @@
 mod code_commands;
 mod commands;
 pub mod environment;
+mod kalvoice_commands;
+mod kalvoice_executor;
 pub mod native_confirm;
 pub mod permission_commands;
 mod provider_commands;
@@ -164,7 +166,7 @@ fn start(app: &tauri::App, removed_overrides: &[String]) -> AppState {
         app_version: version,
         channel,
     };
-    match Core::open(config) {
+    match open_core(config) {
         Ok(core) => state.core = Some(Arc::new(core)),
         Err(error) => {
             tracing::error!(event = "app.startup_failed", error_code = error.code, error = %error.diagnostic());
@@ -172,6 +174,24 @@ fn start(app: &tauri::App, removed_overrides: &[String]) -> AppState {
         }
     }
     state
+}
+
+/// Opens the core with this build's migrations. KalVoice's ledger (schema v6) isn't registered
+/// until the event platform's v5 lands; only the end-to-end build, only against a test's own
+/// `KALCODE_DATA_DIR`, and only when the KalVoice suite asks (`KALCODE_E2E_KALVOICE_SCHEMA=1`)
+/// adds it now, behind an empty v5 stand-in. Real data folders never get either, so the real v5
+/// applies cleanly later.
+fn open_core(config: CoreConfig) -> Result<Core, KalError> {
+    #[cfg(feature = "e2e")]
+    if matches!(environment::data_dir_override(), DataDirOverride::Path(_))
+        && std::env::var_os("KALCODE_E2E_KALVOICE_SCHEMA").is_some_and(|v| v == "1")
+    {
+        return Core::open_with_migrations(
+            config,
+            &kalcode_kalvoice::schema::migrations_with_kalvoice(),
+        );
+    }
+    Core::open(config)
 }
 
 fn uses_default_data_dir() -> bool {
@@ -196,6 +216,13 @@ pub fn run(removed_overrides: Vec<String>) {
         .plugin(tauri_plugin_opener::init())
         // Used from Rust only (the native folder picker); the WebView gets no dialog permissions.
         .plugin(tauri_plugin_dialog::init())
+        // KalVoice's push-to-talk key is registered from Rust only; the WebView has no
+        // permission to call this plugin's commands.
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(kalvoice_commands::on_shortcut)
+                .build(),
+        )
         .manage(code_commands::TerminalViews::default())
         .on_page_load(|webview, payload| {
             // A (re)load starts a fresh page whose JS callbacks no longer exist.
@@ -235,6 +262,15 @@ pub fn run(removed_overrides: Vec<String>) {
                 permissions.service(),
                 &modes,
             );
+            let kalvoice = kalvoice_commands::init(
+                app.handle(),
+                state.core.clone(),
+                &state.info,
+                providers.registry(),
+                threads.runtime_handle(),
+                permissions.service(),
+            );
+            app.manage(kalvoice);
             app.manage(state);
             app.manage(providers);
             app.manage(permissions);
@@ -267,6 +303,21 @@ pub fn run(removed_overrides: Vec<String>) {
             commands::diagnostics_open_log_dir,
             commands::diagnostics_open_data_dir,
             commands::secure_store_check,
+            kalvoice_commands::kalvoice_subscribe,
+            kalvoice_commands::kalvoice_status,
+            kalvoice_commands::kalvoice_request,
+            kalvoice_commands::kalvoice_preferences_update,
+            kalvoice_commands::kalvoice_listen_start,
+            kalvoice_commands::kalvoice_listen_stop,
+            kalvoice_commands::kalvoice_listen_cancel,
+            kalvoice_commands::kalvoice_model_download,
+            kalvoice_commands::kalvoice_model_cancel,
+            kalvoice_commands::kalvoice_model_delete,
+            kalvoice_commands::kalvoice_talk,
+            kalvoice_commands::kalvoice_type_instead,
+            kalvoice_commands::kalvoice_confirm,
+            kalvoice_commands::kalvoice_latency,
+            kalvoice_commands::kalvoice_latency_record,
             provider_commands::providers_list,
             provider_commands::providers_detect,
             code_commands::workspace_list,

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-kalvoice-status"
+description = "Enables the kalvoice_status command without any pre-configured scope."
+commands.allow = ["kalvoice_status"]
+
+[[permission]]
+identifier = "deny-kalvoice-status"
+description = "Denies the kalvoice_status command without any pre-configured scope."
+commands.deny = ["kalvoice_status"]

@@ -3,11 +3,18 @@ import type {
   ApprovalDecision,
   ApprovalView,
   BootState,
+  CommandRequest,
   CorrelationFilter,
   Diagnostics,
   EventEnvelope,
   EventPage,
   EventQuery,
+  KalVoiceMode,
+  KalVoicePreferencesPatch,
+  KalVoiceResponse,
+  KalVoiceSignal,
+  KalVoiceStatus,
+  LatencySnapshot,
   PermissionMode,
   PermissionProfile,
   PermissionSettings,
@@ -16,6 +23,9 @@ import type {
   Settings,
   SettingsPatch,
   ShellOption,
+  SpeechModelInfo,
+  TalkRequest,
+  TalkResponse,
   TerminalInfo,
   ThreadMessage,
   ThreadOptions,
@@ -148,6 +158,76 @@ export class KalCodeClient {
 
   checkSecureStore(): Promise<SecureStoreCheck> {
     return this.call("secure_store_check");
+  }
+
+  // ---- KalVoice ----
+
+  async subscribeKalVoice(onSignal: (signal: KalVoiceSignal) => void): Promise<void> {
+    try {
+      await this.transport.subscribeKalVoice(onSignal);
+    } catch (error) {
+      throw toKalCodeError(error);
+    }
+  }
+
+  kalvoiceStatus(): Promise<KalVoiceStatus> {
+    return this.call("kalvoice_status");
+  }
+
+  kalvoiceRequest(request: CommandRequest): Promise<KalVoiceResponse> {
+    return this.call("kalvoice_request", { request });
+  }
+
+  /** One push-to-talk utterance: routed natively to a command, dictation or a request. */
+  kalvoiceTalk(request: TalkRequest): Promise<TalkResponse> {
+    return this.call("kalvoice_talk", { request });
+  }
+
+  /** "Type it instead": un-counts a spoken command the UI undid. */
+  kalvoiceTypeInstead(requestId: string): Promise<boolean> {
+    return this.call("kalvoice_type_instead", { requestId });
+  }
+
+  /** The person's answer to a KalVoice confirmation (`approve_once` or `deny`). */
+  kalvoiceConfirm(approvalRequestId: string, decision: "approve_once" | "deny"): Promise<KalVoiceResponse> {
+    return this.call("kalvoice_confirm", { approvalRequestId, decision });
+  }
+
+  kalvoiceLatency(): Promise<LatencySnapshot> {
+    return this.call("kalvoice_latency");
+  }
+
+  kalvoiceLatencyRecord(actionMs: number): Promise<void> {
+    return this.call("kalvoice_latency_record", { actionMs });
+  }
+
+  kalvoiceUpdatePreferences(patch: KalVoicePreferencesPatch): Promise<KalVoiceStatus> {
+    return this.call("kalvoice_preferences_update", { patch });
+  }
+
+  kalvoiceListenStart(mode: KalVoiceMode): Promise<string> {
+    return this.call("kalvoice_listen_start", { mode });
+  }
+
+  kalvoiceListenStop(sessionId: string): Promise<void> {
+    return this.call("kalvoice_listen_stop", { sessionId });
+  }
+
+  kalvoiceListenCancel(): Promise<boolean> {
+    return this.call("kalvoice_listen_cancel");
+  }
+
+  /** `consent` must come from the user confirming the download dialog. */
+  kalvoiceModelDownload(modelId: string, consent: boolean): Promise<void> {
+    return this.call("kalvoice_model_download", { modelId, consent });
+  }
+
+  kalvoiceModelCancel(modelId: string): Promise<boolean> {
+    return this.call("kalvoice_model_cancel", { modelId });
+  }
+
+  kalvoiceModelDelete(modelId: string): Promise<SpeechModelInfo[]> {
+    return this.call("kalvoice_model_delete", { modelId });
   }
 
   /** Cached provider status; `detection` is null for providers not checked yet. */

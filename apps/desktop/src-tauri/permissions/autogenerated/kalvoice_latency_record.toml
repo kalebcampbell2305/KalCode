@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-kalvoice-latency-record"
+description = "Enables the kalvoice_latency_record command without any pre-configured scope."
+commands.allow = ["kalvoice_latency_record"]
+
+[[permission]]
+identifier = "deny-kalvoice-latency-record"
+description = "Denies the kalvoice_latency_record command without any pre-configured scope."
+commands.deny = ["kalvoice_latency_record"]

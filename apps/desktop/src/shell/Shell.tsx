@@ -1,12 +1,15 @@
 import { useState } from "react";
+import { FloatingAssistant } from "../kalvoice/FloatingAssistant.tsx";
+import { KalVoicePage } from "../kalvoice/KalVoicePage.tsx";
+import { KalVoiceProvider } from "../kalvoice/KalVoiceProvider.tsx";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { WorkspaceProvider } from "../runtime/WorkspaceProvider.tsx";
 import { CodePage } from "../surfaces/code/CodePage.tsx";
 import { useNewTerminalShortcut } from "../surfaces/code/useNewTerminalShortcut.ts";
 import { Dashboard } from "../surfaces/dashboard/Dashboard.tsx";
 import { GatedSurface } from "../surfaces/gated/GatedSurface.tsx";
-import { ProvidersPage } from "../surfaces/providers/ProvidersPage.tsx";
 import { ApprovalAnnouncer, ApprovalsPanel, PermissionsProvider } from "../surfaces/permissions/index.ts";
+import { ProvidersPage } from "../surfaces/providers/ProvidersPage.tsx";
 import { SettingsPage } from "../surfaces/settings/SettingsPage.tsx";
 import { ThreadsIntentProvider } from "../surfaces/threads/intent.tsx";
 import { ThreadsSurface } from "../surfaces/threads/ThreadsSurface.tsx";
@@ -20,12 +23,21 @@ import { useShortcuts } from "./shortcuts.ts";
 export function Shell() {
   const { info, settings, client } = useRuntime();
   useAppearance(settings, client);
+  // KalVoice (Z12) runs when its surface is enabled for this build channel.
+  const kalvoiceFlag = info.flags.surfaces.find((s) => s.id === "kalvoice");
+  const kalvoiceEnabled = Boolean(kalvoiceFlag?.visible && kalvoiceFlag.state !== "gated");
   return (
     <NavigationProvider flags={info.flags.surfaces}>
       <WorkspaceProvider>
         <PermissionsProvider>
           <ThreadsIntentProvider>
-            <ShellLayout />
+            {kalvoiceEnabled ? (
+              <KalVoiceProvider>
+                <ShellLayout kalvoice />
+              </KalVoiceProvider>
+            ) : (
+              <ShellLayout kalvoice={false} />
+            )}
           </ThreadsIntentProvider>
         </PermissionsProvider>
       </WorkspaceProvider>
@@ -33,7 +45,7 @@ export function Shell() {
   );
 }
 
-function ShellLayout() {
+function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
   const { settings, updateSettings } = useRuntime();
   const { current } = useNavigation();
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -51,7 +63,9 @@ function ShellLayout() {
       </a>
       <Sidebar collapsed={settings.sidebarCollapsed} onOpenPalette={() => setPaletteOpen(true)} />
       <main id="main" className={styles.main} tabIndex={-1} aria-label={SURFACES[current].label} data-surface={current}>
-        {current === "dashboard" ? (
+        {current === "kalvoice" && kalvoice ? (
+          <KalVoicePage />
+        ) : current === "dashboard" ? (
           <Dashboard />
         ) : current === "code" ? (
           <CodePage />
@@ -66,6 +80,7 @@ function ShellLayout() {
         )}
       </main>
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+      {kalvoice ? <FloatingAssistant /> : null}
       <ApprovalsPanel />
       <ApprovalAnnouncer />
     </div>
