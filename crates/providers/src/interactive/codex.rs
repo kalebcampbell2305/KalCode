@@ -59,6 +59,8 @@ pub struct CodexArgs<'a> {
     pub resume_session_id: Option<&'a str>,
     /// The helper and its `codex-notify` arguments.
     pub hook_program: &'a Path,
+    /// Arguments before `codex-notify` (empty for `kalcode-hook`; tests use a stand-in).
+    pub hook_prefix_args: &'a [String],
     pub endpoint: &'a str,
     pub session: &'a str,
 }
@@ -96,11 +98,15 @@ pub fn interactive_args(args: &CodexArgs<'_>) -> Result<Vec<OsString>, CodexArgs
         .hook_program
         .to_str()
         .ok_or(CodexArgsError::UnsafePath)?;
-    let notify = toml_literal_array(&[program, "codex-notify", args.endpoint, args.session])
-        .ok_or(CodexArgsError::UnsafePath)?;
+    let mut notify_argv: Vec<&str> = vec![program];
+    notify_argv.extend(args.hook_prefix_args.iter().map(String::as_str));
+    notify_argv.extend(["codex-notify", args.endpoint, args.session]);
+    let notify = toml_literal_array(&notify_argv).ok_or(CodexArgsError::UnsafePath)?;
     for config in [
         format!("notify={notify}"),
-        "tui.notifications=['agent-turn-complete','approval-requested']".to_owned(),
+        // Only approval requests become OSC 9 notifications, so every OSC 9 in the PTY stream
+        // means "Codex is asking" without reading its text; turn completion comes from notify.
+        "tui.notifications=['approval-requested']".to_owned(),
         "tui.notification_method='osc9'".to_owned(),
         "tui.notification_condition='always'".to_owned(),
     ] {
@@ -230,6 +236,7 @@ mod tests {
             model: Some("gpt-5"),
             resume_session_id: resume,
             hook_program: Path::new(r"C:\Program Files\KalCode\kalcode-hook.exe"),
+            hook_prefix_args: &[],
             endpoint: r"\\.\pipe\kalcode-hook-0123",
             session: "abcd",
         })
@@ -286,6 +293,7 @@ mod tests {
             model: None,
             resume_session_id: None,
             hook_program: Path::new("C:/it's/kalcode-hook.exe"),
+            hook_prefix_args: &[],
             endpoint: "e",
             session: "s",
         });

@@ -1,0 +1,5 @@
+{"type":"thread.started","thread_id":"{SESSION_ID}"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"reasoning","text":"**Answering the greeting**"}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"Hello from the fake Codex."}}
+{"type":"turn.completed","usage":{"input_tokens":2400,"cached_input_tokens":1200,"cache_write_input_tokens":0,"output_tokens":24,"reasoning_output_tokens":8}}

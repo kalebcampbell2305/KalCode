@@ -8,6 +8,9 @@
 //!   `AgentSession` contracts (`kalcode_contracts::agent`) over its headless stream-JSON mode.
 //! - [`interactive`]: provider panes (Z7-W4): the real CLI in a PTY, with status and approvals
 //!   from the `kalcode-hook` bridge (docs/PROVIDER_PANES.md).
+//! - [`codex`] / [`gemini`]: the Codex and Gemini CLI adapters over their headless JSON-lines
+//!   modes, one supervised process per turn ([`turns`]).
+//! - [`health`]: Provider Health + Capacity (PH), fed by detection and real sessions.
 //! - [`registry`]: cached detection for the desktop shell.
 //!
 //! Provider-specific wire types stay private to their adapter; everything that leaves this
@@ -15,16 +18,23 @@
 
 pub mod catalog;
 pub mod claude;
+pub mod codex;
 pub mod detect;
 pub mod env;
+pub mod gemini;
+pub mod health;
 pub mod interactive;
 pub mod launch;
 pub mod model;
 pub mod process;
 pub mod registry;
+pub(crate) mod turns;
 pub mod version;
 
 pub use claude::ClaudeCodeProvider;
+pub use codex::CodexProvider;
 pub use detect::DetectEnv;
+pub use gemini::GeminiProvider;
+pub use health::HealthMonitor;
 pub use model::{AdapterState, ModelSource, ProviderStatus};
 pub use registry::ProviderRegistry;

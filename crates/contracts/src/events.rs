@@ -8,6 +8,7 @@ use crate::agent::ProviderId;
 use crate::app::BuildChannel;
 use crate::context::ContextPurpose;
 use crate::git::WorktreePurpose;
+use crate::health::{CapacityState, HealthState};
 use crate::kalvoice::{KalVoiceInput, KalVoiceIntelligence, TalkRoute};
 use crate::notifications::{NotificationEntityKind, NotificationKind, Severity};
 use crate::permissions::{ApprovalDecision, PermissionMode, PermissionScope};
@@ -232,6 +233,25 @@ pub enum EventPayload {
         provider_id: ProviderId,
         code: String,
         message: String,
+    },
+    /// PH: a provider's health changed state (transitions only, never samples).
+    #[serde(rename = "provider.health_changed")]
+    ProviderHealthChanged {
+        provider_id: ProviderId,
+        from: HealthState,
+        to: HealthState,
+        /// Stable reason code, e.g. `signed_out`, `recent_failures`, `rate_limited`.
+        reason: String,
+    },
+    /// PH: capacity moved between available / saturated / backing_off (transitions only).
+    #[serde(rename = "provider.capacity_changed")]
+    ProviderCapacityChanged {
+        provider_id: ProviderId,
+        state: CapacityState,
+        active_sessions: u32,
+        limit: Option<u32>,
+        /// Only when the provider reported when to retry.
+        retry_at: Option<String>,
     },
 
     // ---- Threads (Z3) ----
@@ -555,6 +575,8 @@ impl EventPayload {
             Self::ProviderConnected { .. } => "provider.connected",
             Self::ProviderDisconnected { .. } => "provider.disconnected",
             Self::ProviderError { .. } => "provider.error",
+            Self::ProviderHealthChanged { .. } => "provider.health_changed",
+            Self::ProviderCapacityChanged { .. } => "provider.capacity_changed",
             Self::ThreadCreated { .. } => "thread.created",
             Self::ThreadStarted { .. } => "thread.started",
             Self::ThreadStatusChanged { .. } => "thread.status_changed",
@@ -732,6 +754,19 @@ mod tests {
                 provider_id: p(),
                 code: s(),
                 message: s(),
+            },
+            EventPayload::ProviderHealthChanged {
+                provider_id: p(),
+                from: HealthState::Unknown,
+                to: HealthState::Healthy,
+                reason: s(),
+            },
+            EventPayload::ProviderCapacityChanged {
+                provider_id: p(),
+                state: CapacityState::BackingOff,
+                active_sessions: 1,
+                limit: None,
+                retry_at: None,
             },
             EventPayload::ThreadCreated {
                 thread_id: s(),
@@ -989,7 +1024,7 @@ mod tests {
         }
         // Keep in step with the enum: the `type_name` match is exhaustive, so a new variant
         // compiles only once named there — and this count must be raised with a new sample.
-        assert_eq!(samples.len(), 69);
+        assert_eq!(samples.len(), 71);
     }
 
     #[test]

@@ -2733,7 +2733,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-notifications"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "kalcode-contracts",
  "kalcode-native-core",
@@ -2772,6 +2772,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+ "time",
  "tracing",
  "ts-rs",
  "uuid",

@@ -25,6 +25,12 @@ const TURN_TEXT: &str = include_str!("../../tests/fixtures/claude/turn_text.json
 const TURN_TOOLS: &str = include_str!("../../tests/fixtures/claude/turn_tools.jsonl");
 const TURN_MALFORMED: &str = include_str!("../../tests/fixtures/claude/turn_malformed.jsonl");
 const INTERRUPTED: &str = include_str!("../../tests/fixtures/claude/interrupted.jsonl");
+const CODEX_TEXT: &str = include_str!("../../tests/fixtures/codex/turn_text.jsonl");
+const CODEX_TOOLS: &str = include_str!("../../tests/fixtures/codex/turn_tools.jsonl");
+const CODEX_FAILED: &str = include_str!("../../tests/fixtures/codex/turn_failed.jsonl");
+const GEMINI_TEXT: &str = include_str!("../../tests/fixtures/gemini/turn_text.jsonl");
+const GEMINI_TOOLS: &str = include_str!("../../tests/fixtures/gemini/turn_tools.jsonl");
+const GEMINI_QUOTA: &str = include_str!("../../tests/fixtures/gemini/quota.jsonl");
 
 fn exe_dir() -> PathBuf {
     std::env::current_exe()
@@ -89,11 +95,58 @@ fn main() {
         }
     }
     let config = config();
+    let stem = std::env::current_exe()
+        .ok()
+        .and_then(|p| {
+            p.file_stem()
+                .map(|n| n.to_string_lossy().to_ascii_lowercase())
+        })
+        .unwrap_or_default();
+    // Started as `node.exe <package script> …` (an npm shim KalCode resolved): behave as the
+    // CLI the script belongs to.
+    let script = (stem == "node")
+        .then(|| args.first().filter(|a| a.ends_with(".js")).cloned())
+        .flatten()
+        .map(|s| s.to_ascii_lowercase());
+    let args: Vec<String> = if script
+        .as_deref()
+        .is_some_and(|s| s.contains("codex") || s.contains("gemini"))
+    {
+        args[1..].to_vec()
+    } else {
+        args
+    };
+    let named =
+        |cli: &str| stem.starts_with(cli) || script.as_deref().is_some_and(|s| s.contains(cli));
+    let kind = if named("codex") {
+        "codex"
+    } else if named("gemini") {
+        "gemini"
+    } else {
+        "claude"
+    };
 
     if args.iter().any(|a| a == "--version") {
         sleep_ms(get_i64(&config, "versionDelayMs", 0));
-        println!("{}", get_str(&config, "version", "2.1.300 (Claude Code)"));
+        let default = match kind {
+            "codex" => "codex-cli 0.155.1",
+            "gemini" => "0.21.0",
+            _ => "2.1.300 (Claude Code)",
+        };
+        println!("{}", get_str(&config, "version", default));
         exit(get_i64(&config, "versionExit", 0));
+    }
+    if kind == "codex" && args.first().map(String::as_str) == Some("exec") {
+        record_invocation(&args);
+        turns::codex_exec(&config, &args);
+    }
+    if kind == "gemini" && args.iter().any(|a| a == "--output-format") {
+        record_invocation(&args);
+        turns::gemini_headless(&config, &args);
+    }
+    if kind != "claude" && !args.starts_with(&["login".into(), "status".into()]) {
+        record_invocation(&args);
+        turns::interactive(kind, &config, &args);
     }
     if args.starts_with(&["auth".into(), "status".into()]) {
         // Mirrors `claude auth status`: JSON on stdout, exit 0 signed in / 1 signed out.
@@ -276,6 +329,208 @@ fn session(config: &Value, args: &[String]) {
     }
     // End of input: exit normally, like `claude -p` with stream-JSON input.
     exit(get_i64(config, "exitCode", 0));
+}
+
+/// Codex `exec --json` and Gemini CLI `stream-json` stand-ins: one process per turn, the prompt
+/// read from stdin (recorded in `last-stdin.txt`), fixtures chosen by words in the prompt.
+/// Interactive Codex / Gemini CLI panes: a minimal TUI with the documented status channels
+/// (Codex `notify` program and OSC 9; Gemini CLI process state only).
+mod turns {
+    use std::io::{Read, Write};
+
+    use serde_json::Value;
+
+    use super::{Out, exe_dir, exit, get_i64, sleep_ms};
+
+    const CODEX_FIRST: &str = r#"{"type":"thread.started","thread_id":"{SESSION_ID}"}"#;
+
+    fn read_prompt() -> String {
+        let mut text = String::new();
+        let _ = std::io::stdin().read_to_string(&mut text);
+        let _ = std::fs::write(exe_dir().join("last-stdin.txt"), &text);
+        text
+    }
+
+    fn value_after(args: &[String], flag: &str) -> Option<String> {
+        args.iter()
+            .position(|a| a == flag)
+            .and_then(|i| args.get(i + 1))
+            .cloned()
+    }
+
+    fn out(session_id: String) -> Out {
+        let cwd = std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        let escaped = serde_json::to_string(&cwd).unwrap_or_default();
+        Out {
+            session_id,
+            cwd: escaped.trim_matches('"').to_owned(),
+        }
+    }
+
+    fn hang() -> ! {
+        if let Ok(exe) = std::env::current_exe()
+            && let Ok(child) = std::process::Command::new(exe)
+                .arg("--fake-grandchild")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+        {
+            let _ = std::fs::write(exe_dir().join("grandchild.pid"), child.id().to_string());
+        }
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+    }
+
+    pub fn codex_exec(config: &Value, args: &[String]) -> ! {
+        let prompt = read_prompt();
+        let session =
+            value_after(args, "resume").unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let out = out(session);
+        sleep_ms(get_i64(config, "turnDelayMs", 0));
+        if prompt.contains("hang") {
+            hang();
+        }
+        if prompt.contains("crash") {
+            out.emit(CODEX_FIRST);
+            eprintln!(
+                "fatal: upstream rejected api_key=sk-proj-abcdefghijklmnopqrstuvwxyz0123456789"
+            );
+            exit(3);
+        }
+        let fixture = if prompt.contains("tools") {
+            super::CODEX_TOOLS
+        } else if prompt.contains("fail") {
+            super::CODEX_FAILED
+        } else {
+            super::CODEX_TEXT
+        };
+        out.emit(fixture);
+        if prompt.contains("malformed") {
+            out.raw("not json at all");
+        }
+        exit(if prompt.contains("fail") {
+            1
+        } else {
+            get_i64(config, "exitCode", 0)
+        })
+    }
+
+    pub fn gemini_headless(config: &Value, args: &[String]) -> ! {
+        let prompt = read_prompt();
+        let session =
+            value_after(args, "--resume").unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let out = out(session);
+        sleep_ms(get_i64(config, "turnDelayMs", 0));
+        if prompt.contains("hang") {
+            hang();
+        }
+        if prompt.contains("crash") {
+            eprintln!("fatal: GEMINI_API_KEY=AIzaSyA-abcdefghijklmnopqrstuvwxyz012345 rejected");
+            exit(1);
+        }
+        if prompt.contains("quota") {
+            out.emit(super::GEMINI_QUOTA);
+            exit(1);
+        }
+        out.emit(if prompt.contains("tools") {
+            super::GEMINI_TOOLS
+        } else {
+            super::GEMINI_TEXT
+        });
+        exit(get_i64(config, "exitCode", 0))
+    }
+
+    fn say(text: &str) {
+        let mut out = std::io::stdout().lock();
+        let _ = write!(out, "{text}\r\n");
+        let _ = out.flush();
+    }
+
+    /// Parses a TOML literal-string array (`['a','b']`) as KalCode writes `notify`.
+    fn literal_array(value: &str) -> Vec<String> {
+        value
+            .trim()
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .split(',')
+            .map(|item| item.trim().trim_matches('\'').to_owned())
+            .filter(|item| !item.is_empty())
+            .collect()
+    }
+
+    fn notify_command(args: &[String]) -> Option<Vec<String>> {
+        args.iter()
+            .enumerate()
+            .filter(|(_, a)| *a == "-c")
+            .filter_map(|(i, _)| args.get(i + 1))
+            .find_map(|c| c.strip_prefix("notify=").map(literal_array))
+    }
+
+    pub fn interactive(kind: &str, config: &Value, args: &[String]) -> ! {
+        let name = if kind == "codex" {
+            "Codex"
+        } else {
+            "Gemini CLI"
+        };
+        say(&format!(
+            "KalCode fake provider (interactive {name}). No AI service is contacted."
+        ));
+        let thread = uuid::Uuid::new_v4().to_string();
+        let notify = notify_command(args);
+        let mut line = String::new();
+        loop {
+            {
+                let mut out = std::io::stdout().lock();
+                let _ = write!(out, "> ");
+                let _ = out.flush();
+            }
+            line.clear();
+            match std::io::stdin().read_line(&mut line) {
+                Ok(0) | Err(_) => exit(0),
+                Ok(_) => {}
+            }
+            let text = line.trim();
+            if text == "exit" {
+                exit(get_i64(config, "exitCode", 0));
+            }
+            if kind == "codex" && text == "approve" {
+                // `tui.notifications=['approval-requested']` with `osc9`: an OSC 9 sequence.
+                let mut out = std::io::stdout().lock();
+                let _ = write!(out, "\x1b]9;Approval requested: cargo build\x07");
+                let _ = write!(out, "[fake prompt] Allow cargo build? (y/n) ");
+                let _ = out.flush();
+                continue;
+            }
+            say(&format!("(fake) {text}"));
+            if kind == "codex"
+                && let Some(command) = &notify
+                && let Some((program, rest)) = command.split_first()
+            {
+                // `notify`: Codex runs the program with the JSON payload as its last argument.
+                let payload = serde_json::json!({
+                    "type": "agent-turn-complete",
+                    "thread-id": thread,
+                    "turn-id": "turn-1",
+                    "cwd": std::env::current_dir()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default(),
+                    "input-messages": [text],
+                    "last-assistant-message": "Status: FAILED (prose, never status)",
+                });
+                let _ = std::process::Command::new(program)
+                    .args(rest)
+                    .arg(payload.to_string())
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status();
+            }
+        }
+    }
 }
 
 fn run_hook_helper(args: &[String]) -> ! {

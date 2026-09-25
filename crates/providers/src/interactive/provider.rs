@@ -67,7 +67,7 @@ impl PaneRegistry {
         Self::default()
     }
 
-    fn insert(&self, thread_id: &str, shared: Arc<Shared>) {
+    pub(crate) fn insert(&self, thread_id: &str, shared: Arc<Shared>) {
         let mut panes = lock(&self.panes);
         panes.insert(thread_id.to_owned(), shared);
         let ended: Vec<String> = panes
@@ -115,7 +115,12 @@ impl PaneRegistry {
         let shared = self.get(thread_id).ok_or(ProviderError::SessionEnded)?;
         let pty = shared.pty().ok_or(ProviderError::SessionEnded)?;
         pty.write(data)
-            .map_err(|e| ProviderError::Io(e.to_string()))
+            .map_err(|e| ProviderError::Io(e.to_string()))?;
+        // Escape sequences are terminal replies (cursor reports) or navigation, not an answer.
+        if data.first() != Some(&0x1b) {
+            shared.user_input();
+        }
+        Ok(())
     }
 
     pub fn resize(&self, thread_id: &str, cols: u16, rows: u16) -> Result<(), ProviderError> {
@@ -393,7 +398,7 @@ impl Drop for Disarm {
 /// interactive (a pane) or headless (stream-JSON).
 pub struct RuntimeRouter {
     headless: Arc<dyn AgentProvider>,
-    interactive: Arc<InteractiveClaudeProvider>,
+    interactive: Arc<dyn AgentProvider>,
     sessions_dir: PathBuf,
 }
 
@@ -403,6 +408,19 @@ impl RuntimeRouter {
         interactive: Arc<InteractiveClaudeProvider>,
     ) -> Self {
         let sessions_dir = interactive.config.sessions_dir.clone();
+        Self {
+            headless,
+            interactive,
+            sessions_dir,
+        }
+    }
+
+    /// The same router for any interactive provider (Codex and Gemini CLI panes).
+    pub fn for_provider(
+        headless: Arc<dyn AgentProvider>,
+        interactive: Arc<dyn AgentProvider>,
+        sessions_dir: PathBuf,
+    ) -> Self {
         Self {
             headless,
             interactive,

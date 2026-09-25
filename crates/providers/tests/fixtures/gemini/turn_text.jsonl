@@ -1,0 +1,5 @@
+{"type":"init","timestamp":"2026-09-25T10:00:00.000Z","session_id":"{SESSION_ID}","model":"gemini-2.5-flash"}
+{"type":"message","timestamp":"2026-09-25T10:00:00.010Z","role":"user","content":"hello"}
+{"type":"message","timestamp":"2026-09-25T10:00:00.500Z","role":"assistant","content":"Hello from the fake ","delta":true}
+{"type":"message","timestamp":"2026-09-25T10:00:00.600Z","role":"assistant","content":"Gemini CLI.","delta":true}
+{"type":"result","timestamp":"2026-09-25T10:00:00.700Z","status":"success","stats":{"total_tokens":30,"input_tokens":20,"output_tokens":10,"cached":0,"input":20,"duration_ms":700,"tool_calls":0,"models":{}}}
