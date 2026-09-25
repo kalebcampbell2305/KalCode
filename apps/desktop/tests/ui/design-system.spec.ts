@@ -1,6 +1,6 @@
-import { mkdirSync } from "node:fs";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
+import { mkdirSync } from "node:fs";
 
 /**
  * Z7-W0 design system: every restyled surface passes axe (WCAG 2.2 AA, incl. colour contrast) in
