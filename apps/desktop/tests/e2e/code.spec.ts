@@ -139,8 +139,7 @@ test("open a folder, run commands in real shells, restart KalCode, restore and r
     await page.getByRole("button", { name: "Actions for pane 1" }).click();
     await page.getByRole("menuitem", { name: "End terminal" }).click();
     await expect.poll(() => processesMatching("-n 117 127.0.0.1").length, { timeout: 20_000 }).toBe(0);
-    await page.keyboard.press("Control+Shift+W"); // the ended tab tidies away
-    await expect(page.getByRole("tab")).toHaveCount(2);
+    await expect(page.getByRole("tab")).toHaveCount(2); // an ended terminal is forgotten
 
     // The Dashboard lists the running terminals of this workspace.
     await page.getByRole("button", { name: "Dashboard" }).click();

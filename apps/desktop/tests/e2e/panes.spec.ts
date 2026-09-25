@@ -156,7 +156,14 @@ test("a pane layout is saved per workspace and restored after a graceful quit an
       "ended in an earlier run",
       { timeout: 20_000 },
     );
-    await expect(pane(page, 0).getByRole("heading", { name: "This terminal ended when KalCode closed" })).toBeVisible();
+    // Pane 1's shell was ended explicitly, so pane 1 is empty; the collapsed pane's shell ended
+    // with KalCode and offers Restart.
+    await expect(pane(page, 0).getByRole("heading", { name: "Empty pane" })).toBeVisible();
+    await page
+      .locator("[data-pane-id][data-collapsed]")
+      .getByRole("button", { name: /^Expand / })
+      .click();
+    await expect(pane(page, 2).getByRole("heading", { name: "This terminal ended when KalCode closed" })).toBeVisible();
     await shot(page, "w1-e2e-restored");
 
     // A change, then a forced kill: the layout saved after the change is what comes back.

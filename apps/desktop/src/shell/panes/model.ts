@@ -36,6 +36,9 @@ export interface ClosedPane {
   /** The pane it sat next to, and on which side, when it was closed. */
   anchorPaneId: string | null;
   zone: Exclude<DropZone, "center">;
+  /** The panes of the neighbouring subtree it shared a split with, and its share of the two. */
+  siblingPaneIds?: string[];
+  share?: number;
 }
 
 /** Why a layout is refused (mirrors native `LayoutError`). */
@@ -324,7 +327,10 @@ export function splitPane(
 }
 
 /** The side of its neighbour a pane sits on, for reopening it in place. */
-function anchorFor(layout: PaneLayout, paneId: string): Pick<ClosedPane, "anchorPaneId" | "zone"> {
+function anchorFor(
+  layout: PaneLayout,
+  paneId: string,
+): Pick<ClosedPane, "anchorPaneId" | "zone" | "siblingPaneIds" | "share"> {
   const path = pathOf(layout.root, paneId);
   if (!path || path.length === 0) return { anchorPaneId: null, zone: "right" };
   const parent = nodeAt(layout.root, path.slice(0, -1));
@@ -335,7 +341,26 @@ function anchorFor(layout: PaneLayout, paneId: string): Pick<ClosedPane, "anchor
   const anchor = sibling ? (before ? leaves(sibling).at(-1) : leaves(sibling)[0]) : undefined;
   const zone: ClosedPane["zone"] =
     parent.axis === "horizontal" ? (before ? "right" : "left") : before ? "bottom" : "top";
-  return { anchorPaneId: anchor?.paneId ?? null, zone };
+  const own = parent.ratios[index] ?? 1;
+  const theirs = parent.ratios[before ? index - 1 : index + 1] ?? 1;
+  return {
+    anchorPaneId: anchor?.paneId ?? null,
+    zone,
+    siblingPaneIds: sibling ? leaves(sibling).map((l) => l.paneId) : undefined,
+    share: own / (own + theirs),
+  };
+}
+
+/** Path of the node whose panes are exactly `ids` (the subtree a closed pane sat beside). */
+function pathOfSubtree(node: PaneNode, ids: ReadonlySet<string>, path: number[] = []): number[] | null {
+  const own = leaves(node).map((l) => l.paneId);
+  if (own.length === ids.size && own.every((id) => ids.has(id))) return path;
+  if (node.kind === "leaf") return null;
+  for (let i = 0; i < node.children.length; i++) {
+    const found = pathOfSubtree(node.children[i] as PaneNode, ids, [...path, i]);
+    if (found) return found;
+  }
+  return null;
 }
 
 /**
@@ -365,6 +390,21 @@ export function reopenPane(layout: PaneLayout, closed: ClosedPane): PaneLayout {
   // An empty lone pane is simply replaced.
   if (paneCount(layout) === 1 && first && first.tabs.length === 0) {
     return withRoot(layout, pane);
+  }
+  // Back beside the same neighbouring subtree, with the share of the space it had.
+  if (closed.siblingPaneIds && closed.siblingPaneIds.length > 0 && paneCount(layout) < MAX_PANES) {
+    const path = pathOfSubtree(layout.root, new Set(closed.siblingPaneIds));
+    const node = path ? nodeAt(layout.root, path) : null;
+    if (path && node) {
+      const axis: SplitAxis = closed.zone === "left" || closed.zone === "right" ? "horizontal" : "vertical";
+      const first = closed.zone === "left" || closed.zone === "top";
+      const share = Math.min(0.9, Math.max(0.1, closed.share ?? 0.5));
+      const ratios = toRatios(first ? [share, 1 - share] : [1 - share, share]);
+      const split: SplitNode = { kind: "split", axis, ratios, children: first ? [pane, node] : [node, pane] };
+      const root = replaceAt(layout.root, path, split) ?? layout.root;
+      const next = withRoot({ ...layout, maximizedPaneId: null }, root);
+      if (validateLayout(next) === null) return next;
+    }
   }
   const anchor = closed.anchorPaneId && findLeaf(layout, closed.anchorPaneId) ? closed.anchorPaneId : first?.paneId;
   if (!anchor) return layout;

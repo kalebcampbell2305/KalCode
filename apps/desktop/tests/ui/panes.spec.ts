@@ -283,6 +283,36 @@ test.describe("the side dock", () => {
   });
 });
 
+test.describe("content from other surfaces", () => {
+  test("the live Dashboard and a widget open as panes; a Dashboard card focuses a provider pane", async ({ page }) => {
+    await openCode(page);
+    await page.keyboard.press("Control+Alt+d");
+    await pane(page, 1).getByRole("button", { name: "Add to pane 2" }).click();
+    await page.getByRole("menuitem", { name: "Dashboard" }).click();
+    await expect(pane(page, 1).locator("[data-dashboard-pane]")).toBeVisible();
+    await expect(pane(page, 1).getByRole("tab", { name: "Dashboard" })).toHaveAttribute("aria-selected", "true");
+    await pane(page, 1).getByRole("button", { name: "Add to pane 2" }).click();
+    await page.getByRole("menuitem", { name: "Provider health" }).click();
+    await expect(pane(page, 1).locator("[data-widget-pane]")).toBeVisible();
+    await expectNoSeriousA11yViolations(page);
+
+    // A provider pane, hidden in the background, is brought back and focused by its focus request.
+    await page.getByRole("button", { name: "New Claude Code pane" }).click();
+    const provider = page.locator("[data-provider-pane]");
+    await expect(provider).toBeVisible();
+    const threadId = await provider.getAttribute("data-provider-pane");
+    await page.keyboard.press("Control+Alt+w");
+    await expect(provider).toHaveCount(0);
+    await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Dashboard" }).click();
+    const card = page.locator(`article[data-thread-id="${threadId}"]`);
+    await expect(card).toBeVisible();
+    await card.click({ position: { x: 6, y: 6 } });
+    await expect(page.getByRole("heading", { level: 1, name: "kalcode-site" })).toBeVisible();
+    await expect(page.locator("[data-provider-pane]")).toBeVisible();
+    await expect(page.locator("[data-pane-id][data-focused] [data-provider-pane]")).toHaveCount(1);
+  });
+});
+
 test.describe("presets and saved layouts", () => {
   test("presets 2, 3, 4 and 6 rearrange the panes without closing anything", async ({ page }) => {
     await openCode(page);

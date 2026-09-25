@@ -150,6 +150,22 @@ describe("splitting and closing", () => {
     expect(lone.closed?.pane.tabs).toEqual([term("t1"), term("t2")]);
   });
 
+  it("reopening restores the pane's place in the tree and its share of the space", () => {
+    // a (70%) | [b over c]
+    const layout = layoutOf({
+      kind: "split",
+      axis: "horizontal",
+      ratios: [700, 300],
+      children: [
+        makeLeaf([term("t1")], "a"),
+        { kind: "split", axis: "vertical", ratios: [500, 500], children: [makeLeaf([], "b"), makeLeaf([], "c")] },
+      ],
+    });
+    const { layout: without, closed } = closePane(layout, "a");
+    const back = reopenPane(without, closed as NonNullable<typeof closed>);
+    expect(back.root).toEqual(layout.root);
+  });
+
   it("reopening skips contents that are shown elsewhere meanwhile", () => {
     const { layout, closed } = closePane(twoPanes(), "b");
     const moved = addTab(layout, "a", term("t3"));

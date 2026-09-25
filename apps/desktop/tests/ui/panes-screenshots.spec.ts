@@ -100,6 +100,12 @@ for (const theme of ["dark", "light"] as const) {
         .click();
       await expect(pane(page, 4).locator('[role="tabpanel"] .xterm-rows')).toContainText("kalcode-site");
       await shot(page, `panes-6-${tag}`);
+
+      // The live Dashboard (Z7-W3) docked into the last pane beside the work.
+      await pane(page, 5).getByRole("button", { name: "Add to pane 6" }).click();
+      await page.getByRole("menuitem", { name: "Dashboard" }).click();
+      await expect(pane(page, 5).locator("[data-dashboard-pane]")).toBeVisible();
+      await shot(page, `panes-dashboard-${tag}`);
     });
   }
 }
