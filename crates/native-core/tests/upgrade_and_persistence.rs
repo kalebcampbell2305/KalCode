@@ -41,7 +41,8 @@ fn migrations_are_numbered_contiguously() {
             (7, "git"),
             (8, "context"),
             (9, "workspace_ui"),
-            (10, "notifications")
+            (10, "notifications"),
+            (11, "rail_locator")
         ]
     );
 }

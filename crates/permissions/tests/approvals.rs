@@ -1073,7 +1073,8 @@ fn migrations_keep_permissions_at_v4() {
             (7, "git"),
             (8, "context"),
             (9, "workspace_ui"),
-            (10, "notifications")
+            (10, "notifications"),
+            (11, "rail_locator")
         ]
     );
 }

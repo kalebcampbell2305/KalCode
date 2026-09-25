@@ -59,6 +59,7 @@ pub const MIGRATIONS: &[Migration] = &[
     CONTEXT_MIGRATION,
     WORKSPACE_UI_MIGRATION,
     NOTIFICATIONS_MIGRATION,
+    RAIL_LOCATOR_MIGRATION,
 ];
 
 /// Migration v7 (campaign Z6a): `git_worktrees` and `checkpoints`. Owned by `crates/git`, which
@@ -92,6 +93,15 @@ pub const NOTIFICATIONS_MIGRATION: Migration = Migration {
     version: 10,
     name: "notifications",
     sql: include_str!("../migrations/0010_notifications.sql"),
+};
+
+/// Migration v11 (Z7-W2): `workspace_groups`, `workspace_rail`, `locator_entries`, `locator_fts`
+/// (the workspace rail and the Session Locator's index). Owned by `crates/locator`, which
+/// re-exports it as `kalcode_locator::RAIL_LOCATOR_MIGRATION`.
+pub const RAIL_LOCATOR_MIGRATION: Migration = Migration {
+    version: 11,
+    name: "rail_locator",
+    sql: include_str!("../migrations/0011_rail_locator.sql"),
 };
 
 /// How many pre-migration backups to keep.

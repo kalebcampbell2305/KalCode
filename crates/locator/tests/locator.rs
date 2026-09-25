@@ -45,12 +45,14 @@ fn titles(locator: &Locator, query: &LocatorQuery) -> Vec<String> {
 }
 
 #[test]
-fn migration_is_isolated_and_well_formed() {
+fn migration_is_registered_as_v11_and_well_formed() {
     assert_eq!(RAIL_LOCATOR_MIGRATION.version, 11);
     assert_eq!(RAIL_LOCATOR_MIGRATION.name, "rail_locator");
     assert!(
-        MIGRATIONS.iter().all(|m| m.version != 11),
-        "v11 is registered by the lead at merge, not on this branch"
+        MIGRATIONS
+            .iter()
+            .any(|m| m.version == 11 && m.name == "rail_locator"),
+        "v11 is registered in kalcode_core::db::MIGRATIONS"
     );
     let dir = tempfile::tempdir().unwrap();
     let core = core_with_v11(dir.path());

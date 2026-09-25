@@ -14,8 +14,6 @@ use std::sync::Arc;
 use kalcode_contracts::agent::{AuthState, DetectionState};
 use kalcode_contracts::refs::{Page, PageRequest};
 use kalcode_contracts::threads::ThreadSummary;
-#[cfg(any(feature = "e2e", test))]
-use kalcode_core::db::Migration;
 use kalcode_core::workspaces::Workspace;
 use kalcode_core::{Core, CoreConfig, ErrorCategory, IpcError, KalError};
 use kalcode_locator::{
@@ -33,52 +31,12 @@ use tauri_plugin_opener::OpenerExt;
 use crate::AppState;
 
 // ---------------------------------------------------------------------------------------------
-// Opening the core (provisional schema v11 for the E2E suite only)
+// Opening the core
 // ---------------------------------------------------------------------------------------------
 
-/// Opens the core. Schema v11 is registered by the lead at merge (after v10). Until then,
-/// `e2e` builds started with an explicit data folder and `KALCODE_E2E_PROVISIONAL_SCHEMA=v11`
-/// apply it after the registered migrations (stand-ins fill any gap) so the real-app suite can
-/// prove the rail persists across a relaunch. Nothing else ever does; once v11 is in
-/// `MIGRATIONS` this is a plain [`Core::open`].
+/// Opens the core with the registered migrations (schema v11 includes the rail and locator).
 pub fn open_core(config: CoreConfig) -> Result<Core, KalError> {
-    #[cfg(feature = "e2e")]
-    if provisional_schema_requested() {
-        return Core::open_with_migrations(config, provisional_migrations());
-    }
     Core::open(config)
-}
-
-#[cfg(feature = "e2e")]
-fn provisional_schema_requested() -> bool {
-    std::env::var("KALCODE_E2E_PROVISIONAL_SCHEMA").as_deref() == Ok("v11")
-        && matches!(
-            crate::environment::data_dir_override(),
-            crate::environment::DataDirOverride::Path(_)
-        )
-        && kalcode_core::db::MIGRATIONS
-            .iter()
-            .all(|m| m.version != kalcode_locator::RAIL_LOCATOR_MIGRATION.version)
-}
-
-/// The registered migrations, stand-ins for any gap, then v11.
-#[cfg(any(feature = "e2e", test))]
-pub fn provisional_migrations() -> &'static [Migration] {
-    static LIST: std::sync::OnceLock<Vec<Migration>> = std::sync::OnceLock::new();
-    LIST.get_or_init(|| {
-        let mut all = kalcode_core::db::MIGRATIONS.to_vec();
-        let rail = kalcode_locator::RAIL_LOCATOR_MIGRATION;
-        let registered = all.last().map_or(0, |m| m.version);
-        for version in (registered + 1)..rail.version {
-            all.push(Migration {
-                version,
-                name: "provisional_reserved",
-                sql: "SELECT 1;",
-            });
-        }
-        all.push(rail);
-        all
-    })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -567,14 +525,5 @@ mod tests {
         let err = create_in(&core, &projects.join("missing"), "x").expect_err("parent");
         assert_eq!(err.code, "folder_not_found");
         core.shutdown();
-    }
-
-    #[test]
-    fn provisional_schema_ends_with_v11_and_is_contiguous() {
-        let list = provisional_migrations();
-        assert_eq!(list.last().map(|m| m.version), Some(11));
-        for (index, migration) in list.iter().enumerate() {
-            assert_eq!(migration.version, index as i64 + 1);
-        }
     }
 }

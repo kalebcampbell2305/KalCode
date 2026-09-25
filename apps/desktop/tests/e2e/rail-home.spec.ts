@@ -11,8 +11,7 @@ import { closeGracefully, EXE, launch, removeDir } from "./harness.ts";
  * relaunch; the Session Locator finds a workspace by what you type, in the real index; removing a
  * workspace from KalCode leaves its folder on disk.
  *
- * Schema v11 is registered by the lead at merge; until then the e2e binary applies it only
- * with KALCODE_E2E_PROVISIONAL_SCHEMA=v11 and an explicit data folder (locator_commands.rs).
+ * Schema v11 (rail + locator) is a registered migration, so the real database persists it.
  * Build first: pnpm --filter @kalcode/desktop build:e2e; run with KALCODE_E2E_CDP_PORT=9452.
  */
 test.skip(process.platform !== "win32", "Real-app E2E drives WebView2 and runs on Windows.");
@@ -53,7 +52,7 @@ test("the rail persists across a relaunch and the Session Locator finds a worksp
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-w2-"));
   const root = mkdtempSync(join(tmpdir(), "kalcode-e2e-w2-projects-"));
   // New workspaces are created inside the folder the (test-build) picker returns.
-  const env = { KALCODE_E2E_PICK_FOLDER: root, KALCODE_E2E_PROVISIONAL_SCHEMA: "v11" };
+  const env = { KALCODE_E2E_PICK_FOLDER: root };
 
   try {
     // ---- First session: build up the rail.

@@ -1,5 +1,5 @@
-//! Shared fixtures: a real core in a temp folder (with schema v11 applied the way the lead will
-//! register it) and fake Z3/Z2 sources.
+//! Shared fixtures: a real core in a temp folder (with or without schema v11) and fake Z3/Z2
+//! sources.
 
 #![allow(dead_code, clippy::expect_used, clippy::unwrap_used)]
 
@@ -16,20 +16,22 @@ use kalcode_core::flags::BuildChannel;
 use kalcode_core::{Core, CoreConfig, Paths, Result};
 use kalcode_locator::{LocatorSources, ProviderInfo, RAIL_LOCATOR_MIGRATION};
 
-/// The registered migrations, stand-ins for any version not registered yet below v11, then v11 —
-/// the order the gap-free runner will see after integration.
+/// The registered migrations up to and including v11.
 pub fn migrations_with_v11() -> Vec<Migration> {
-    let mut all = MIGRATIONS.to_vec();
-    let registered = all.len() as i64;
-    for version in (registered + 1)..RAIL_LOCATOR_MIGRATION.version {
-        all.push(Migration {
-            version,
-            name: "reserved",
-            sql: "SELECT 1;",
-        });
-    }
-    all.push(RAIL_LOCATOR_MIGRATION);
-    all
+    MIGRATIONS
+        .iter()
+        .copied()
+        .filter(|m| m.version <= RAIL_LOCATOR_MIGRATION.version)
+        .collect()
+}
+
+/// The registered migrations before v11 (a database from an earlier KalCode).
+pub fn migrations_before_v11() -> Vec<Migration> {
+    MIGRATIONS
+        .iter()
+        .copied()
+        .filter(|m| m.version < RAIL_LOCATOR_MIGRATION.version)
+        .collect()
 }
 
 pub fn core_with_v11(dir: &Path) -> Arc<Core> {
@@ -48,12 +50,16 @@ pub fn core_with_v11(dir: &Path) -> Arc<Core> {
 }
 
 pub fn core_without_v11(dir: &Path) -> Arc<Core> {
+    let before: &'static [Migration] = Box::leak(migrations_before_v11().into_boxed_slice());
     Arc::new(
-        Core::open(CoreConfig {
-            paths: Paths::new(dir),
-            app_version: "0.0.0-test".into(),
-            channel: BuildChannel::Development,
-        })
+        Core::open_with_migrations(
+            CoreConfig {
+                paths: Paths::new(dir),
+                app_version: "0.0.0-test".into(),
+                channel: BuildChannel::Development,
+            },
+            before,
+        )
         .expect("open core"),
     )
 }
