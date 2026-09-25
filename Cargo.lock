@@ -2620,6 +2620,7 @@ name = "kalcode-desktop"
 version = "0.1.2"
 dependencies = [
  "kalcode-contracts",
+ "kalcode-hook-bridge",
  "kalcode-kalvoice",
  "kalcode-native-core",
  "kalcode-permissions",
@@ -2667,6 +2668,22 @@ dependencies = [
  "tempfile",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "kalcode-hook-bridge"
+version = "0.1.2"
+dependencies = [
+ "getrandom 0.4.3",
+ "hex",
+ "hmac",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -2732,7 +2749,11 @@ name = "kalcode-providers"
 version = "0.1.2"
 dependencies = [
  "kalcode-contracts",
+ "kalcode-hook-bridge",
  "kalcode-native-core",
+ "kalcode-permissions",
+ "kalcode-pty",
+ "kalcode-threads",
  "serde",
  "serde_json",
  "tempfile",

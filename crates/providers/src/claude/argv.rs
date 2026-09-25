@@ -328,6 +328,11 @@ fn valid_model(model: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b"._:[]-".contains(&b))
 }
 
+/// Whether `model` is a model name KalCode passes to a provider (shared with interactive panes).
+pub fn valid_model_name(model: &str) -> bool {
+    valid_model(model)
+}
+
 /// Session ids KalCode passes are canonical UUIDs (its own, or ones Claude Code reported).
 fn valid_session_id(id: &str) -> bool {
     kalcode_contracts::ids::is_valid_id(id)

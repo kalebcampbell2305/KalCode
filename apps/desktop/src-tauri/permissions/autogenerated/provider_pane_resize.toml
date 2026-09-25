@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-provider-pane-resize"
+description = "Enables the provider_pane_resize command without any pre-configured scope."
+commands.allow = ["provider_pane_resize"]
+
+[[permission]]
+identifier = "deny-provider-pane-resize"
+description = "Denies the provider_pane_resize command without any pre-configured scope."
+commands.deny = ["provider_pane_resize"]

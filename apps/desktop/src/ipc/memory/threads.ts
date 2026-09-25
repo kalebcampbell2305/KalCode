@@ -48,6 +48,14 @@ export interface ThreadsMemory {
   stream(threadId: string, onEvent: (event: AgentEvent) => void): () => void;
   /** Test hook: live stream subscribers for a thread. */
   streamCount(threadId: string): number;
+  /**
+   * Provider panes (Z7-W4, ./panes.ts): creates an idle interactive thread like native
+   * `create_idle`, validated like `thread_create` without a prompt. `onStop` runs when the
+   * thread is stopped (`thread_stop`), so the pane's process ends with it.
+   */
+  createPaneThread(args: Record<string, unknown>, onStop: () => void): ThreadSummary;
+  /** A pane's hook or process signal changed the thread's status (the one status machine). */
+  setPaneStatus(threadId: string, status: ThreadStatus, activity: string | null, pendingApprovals?: number): void;
 }
 
 const PROVIDERS: ProviderOption[] = [
@@ -113,6 +121,8 @@ interface MemThread {
   resumeStatus: ThreadStatus | null;
   /** The approval request the session is waiting on, if any. */
   pendingRequest: string | null;
+  /** Set for interactive provider-pane threads (./panes.ts): ends the pane's process. */
+  paneStop?: () => void;
 }
 
 function error(category: IpcError["category"], code: string, message: string): never {
@@ -505,6 +515,7 @@ export function createThreadsMemory(
   };
 
   const endSession = (t: MemThread, activity: string) => {
+    t.paneStop?.();
     if (t.pendingRequest) gate?.expireForThread(t.summary.id);
     t.pendingRequest = null;
     cancelTimers(t);
@@ -513,6 +524,101 @@ export function createThreadsMemory(
     cancelTools(t);
     t.summary = { ...t.summary, pendingApprovals: 0 };
     setStatus(t, "interrupted", activity);
+  };
+
+  /**
+   * Validates a create request exactly like native `thread_create` (and, without a prompt,
+   * `create_idle` for provider panes), then records the thread and emits `thread.created`.
+   */
+  const insertThread = (
+    args: Record<string, unknown>,
+    readPrompt: ((args: Record<string, unknown>) => string) | null,
+    runtimeKind: ThreadSummary["runtimeKind"] = null,
+  ): { thread: MemThread; prompt: string | null } => {
+    requireCore();
+    const providerId = args.providerId;
+    if (typeof providerId !== "string" || !/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(providerId))
+      invalid("invalid_provider", "That provider reference isn't valid.");
+    if (typeof args.workspaceId !== "string" || !UUID.test(args.workspaceId))
+      invalid("invalid_workspace_id", "That workspace reference isn't valid.");
+    const mode = args.permissionMode as PermissionMode;
+    if (mode === "bypass")
+      invalid(
+        "bypass_not_allowed_at_create",
+        "Bypass can't be chosen when creating a thread. Create it in Approve or Auto, then change the mode on the thread.",
+      );
+    if (!CREATE_MODES.includes(mode)) error("internal", "ipc_rejected", "KalCode couldn't complete that request.");
+    const prompt = readPrompt ? readPrompt(args) : null;
+    const name =
+      args.name == null || String(args.name).trim() === ""
+        ? prompt === null
+          ? "New thread"
+          : nameFromPrompt(prompt)
+        : validName(args.name);
+    const provider = offered().find((p) => p.id === providerId);
+    if (!provider)
+      return error(
+        "provider",
+        "provider_unavailable",
+        `${providerId} isn't connected to KalCode. Connect it in Providers, then try again.`,
+      );
+    const model = args.model == null || args.model === "" ? null : String(args.model);
+    if (model && !provider.models.some((m) => m.id === model))
+      invalid("invalid_model", `That model isn't available for ${provider.displayName}.`);
+    const workspace = workspaces().find((w) => w.id === args.workspaceId);
+    if (!workspace)
+      return error(
+        "filesystem",
+        "workspace_not_found",
+        "That workspace isn't available. It may have been removed from KalCode.",
+      );
+    const created = now();
+    const t: MemThread = {
+      summary: {
+        id: uuid(),
+        name,
+        providerId: provider.id,
+        providerName: provider.displayName,
+        model,
+        accountLabel: provider.accountLabel,
+        workspaceId: workspace.id,
+        workspaceName: workspace.name,
+        permissionMode: mode,
+        status: "starting",
+        currentActivity: null,
+        createdAt: created,
+        lastActivityAt: created,
+        pendingApprovals: 0,
+        unreadMessages: 0,
+        filesChanged: 0,
+        branch: null,
+        error: null,
+        archivedAt: null,
+        resumable: false,
+        permissionProfileId: null,
+        runtimeKind,
+        terminalId: null,
+      },
+      messages: [],
+      tools: [],
+      live: false,
+      timers: [],
+      buffers: new Map(),
+      providerSessionId: null,
+      readThrough: 0,
+      archived: false,
+      resumeStatus: null,
+      pendingRequest: null,
+    };
+    threads.set(t.summary.id, t);
+    emit(
+      {
+        type: "thread.created",
+        payload: { threadId: t.summary.id, name, providerId: provider.id, workspaceId: workspace.id },
+      },
+      corr(t),
+    );
+    return { thread: t, prompt };
   };
 
   const handlers: Record<ThreadCommand, Handler> = {
@@ -560,84 +666,7 @@ export function createThreadsMemory(
       return t.tools.slice(-limit);
     },
     thread_create: (args) => {
-      requireCore();
-      const providerId = args.providerId;
-      if (typeof providerId !== "string" || !/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(providerId))
-        invalid("invalid_provider", "That provider reference isn't valid.");
-      if (typeof args.workspaceId !== "string" || !UUID.test(args.workspaceId))
-        invalid("invalid_workspace_id", "That workspace reference isn't valid.");
-      const mode = args.permissionMode as PermissionMode;
-      if (mode === "bypass")
-        invalid(
-          "bypass_not_allowed_at_create",
-          "Bypass can't be chosen when creating a thread. Create it in Approve or Auto, then change the mode on the thread.",
-        );
-      if (!CREATE_MODES.includes(mode)) error("internal", "ipc_rejected", "KalCode couldn't complete that request.");
-      const prompt = validPrompt(args.prompt);
-      const name = args.name == null || String(args.name).trim() === "" ? nameFromPrompt(prompt) : validName(args.name);
-      const provider = offered().find((p) => p.id === providerId);
-      if (!provider)
-        return error(
-          "provider",
-          "provider_unavailable",
-          `${providerId} isn't connected to KalCode. Connect it in Providers, then try again.`,
-        );
-      const model = args.model == null || args.model === "" ? null : String(args.model);
-      if (model && !provider.models.some((m) => m.id === model))
-        invalid("invalid_model", `That model isn't available for ${provider.displayName}.`);
-      const workspace = workspaces().find((w) => w.id === args.workspaceId);
-      if (!workspace)
-        return error(
-          "filesystem",
-          "workspace_not_found",
-          "That workspace isn't available. It may have been removed from KalCode.",
-        );
-      const created = now();
-      const t: MemThread = {
-        summary: {
-          id: uuid(),
-          name,
-          providerId: provider.id,
-          providerName: provider.displayName,
-          model,
-          accountLabel: provider.accountLabel,
-          workspaceId: workspace.id,
-          workspaceName: workspace.name,
-          permissionMode: mode,
-          status: "starting",
-          currentActivity: null,
-          createdAt: created,
-          lastActivityAt: created,
-          pendingApprovals: 0,
-          unreadMessages: 0,
-          filesChanged: 0,
-          branch: null,
-          error: null,
-          archivedAt: null,
-          resumable: false,
-          permissionProfileId: null,
-          runtimeKind: null,
-          terminalId: null,
-        },
-        messages: [],
-        tools: [],
-        live: false,
-        timers: [],
-        buffers: new Map(),
-        providerSessionId: null,
-        readThrough: 0,
-        archived: false,
-        resumeStatus: null,
-        pendingRequest: null,
-      };
-      threads.set(t.summary.id, t);
-      emit(
-        {
-          type: "thread.created",
-          payload: { threadId: t.summary.id, name, providerId: provider.id, workspaceId: workspace.id },
-        },
-        corr(t),
-      );
+      const { thread: t, prompt } = insertThread(args, (a) => validPrompt(a.prompt));
       startSession(t, null, prompt);
       return summary(t);
     },
@@ -646,6 +675,7 @@ export function createThreadsMemory(
       const text = validPrompt(args.text);
       if (t.archived) invalid("thread_archived", "This thread is archived.");
       if (!t.live) invalid("thread_not_running", "This thread isn't running. Resume it to continue.");
+      if (t.paneStop) invalid("thread_in_pane", "This thread runs in a pane. Type in the pane instead.");
       if (t.summary.pendingApprovals > 0)
         invalid(
           "thread_waiting_for_permission",
@@ -739,6 +769,21 @@ export function createThreadsMemory(
       };
     },
     streamCount: (threadId) => streams.get(threadId)?.size ?? 0,
+    createPaneThread(args, onStop) {
+      const { thread: t } = insertThread(args, null, "interactive_pty");
+      t.paneStop = onStop;
+      t.live = true;
+      t.providerSessionId = `session-${t.summary.id.slice(0, 8)}`;
+      emit({ type: "thread.started", payload: { threadId: t.summary.id } }, corr(t));
+      return summary(t);
+    },
+    setPaneStatus(threadId, status, activity, pendingApprovals) {
+      const t = threads.get(threadId);
+      if (!t) return;
+      if (pendingApprovals !== undefined) t.summary = { ...t.summary, pendingApprovals };
+      if (TERMINAL.has(status)) t.live = false;
+      setStatus(t, status, activity, "provider");
+    },
     resolveApproval(requestId, approved) {
       for (const t of threads.values()) {
         if (t.pendingRequest === requestId && t.live) continueAfterApproval(t, approved);

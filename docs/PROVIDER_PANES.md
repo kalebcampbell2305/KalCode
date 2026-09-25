@@ -1,9 +1,13 @@
 # Provider panes — design note
 
-Status: **PROPOSED — planned, not built.** Campaign Z7, writer W4 (`docs/campaigns/ADVANCED.md`
-§16). Researched 2026-09-24 from official provider documentation and the installed `--help`
-output of Claude Code 2.1.282 and codex-cli 0.155.1 (Gemini CLI is not installed on the
-verification machine). No provider session was started and no AI quota was used.
+Status: **BUILT for Claude Code on `z7/provider-panes`, behind the `provider_panes` feature flag.**
+Approve/deny goes through the engine (`DecisionRouting::Engine`, §9) since the classifier
+hardening merged. Campaign Z7,
+writer W4 (`docs/campaigns/ADVANCED.md` §16; evidence in `docs/campaigns/Z7-W4.md`, threat model
+in `docs/campaigns/Z7-W4-THREATS.md`). Researched 2026-09-24 from official provider documentation
+and the installed `--help` output of Claude Code 2.1.282 and codex-cli 0.155.1 (Gemini CLI is not
+installed on the verification machine). No provider session was started and no AI quota was
+used; the owner-approved smoke run is written but not run (§7).
 
 Until this ships, Claude Code threads are headless and KalCode enforces for them through launch
 flags only: a mapped permission mode, `--permission-prompts none`, and KalCode deny rules
@@ -44,18 +48,25 @@ an interactive thread headlessly (or the reverse) through a Hot-Swap handoff (HS
 ## 2. The hook bridge
 
 - `kalcode-hook` is a small helper binary shipped with KalCode (`crates/hook-bridge`). Hooks are
-  configured as `type: "command"` entries that run it with the session id.
+  configured as `type: "command"` entries in **exec form** (`"command": <absolute helper path>,
+  "args": ["claude", <event>, <endpoint>, <session>]`: spawned directly, no shell), with explicit
+  timeouts (PreToolUse 600 s, status events 10 s).
 - It reads the hook's JSON from stdin, validates it against the documented schema for that event,
   **drops fields KalCode does not need** (for example tool output bodies), and forwards a bounded
   record to KalCode. The first prompt's text is forwarded only so the deterministic Z3 namer can
   title the thread. It is never stored or put in an event.
-- Transport: a per-user named pipe (Windows) or Unix socket (macOS/Linux) with OS ACLs, plus a
-  per-session secret written into the session's settings file in KalCode's data folder. There is
-  no TCP listener. (Claude Code also supports `type: "http"` hooks; a loopback HTTP endpoint is
-  the fallback if pipes prove unreliable, protected by the same secret.)
-- For `PreToolUse` / `PermissionRequest` the helper waits for KalCode's decision and prints the
-  documented decision JSON. If KalCode is unreachable, `PreToolUse` exits **2** (block), so the
-  bridge fails closed.
+- Transport: a per-run, randomly named pipe (Windows; created with
+  `FILE_FLAG_FIRST_PIPE_INSTANCE` and remote clients rejected) or a Unix socket in a fresh `0700`
+  directory. There is no TCP listener. Each session has a 256-bit key passed only in the
+  provider's environment (`KALCODE_HOOK_KEY`, inherited by its hooks); the settings file holds no
+  secret. Both sides prove the key with an HMAC-SHA256 challenge over a fresh server nonce, so the
+  key never crosses the wire and a recorded call can't be replayed. Ended sessions are revoked.
+- For `PreToolUse` the helper waits for KalCode's decision and prints the documented decision
+  JSON (allow / ask) or exits 2 (deny). If KalCode is unreachable, doesn't answer before the
+  helper's own deadline (590 s, inside the 600 s hook timeout, because a timed-out hook does not
+  block), sends a reply that doesn't verify, or the helper panics, `PreToolUse` exits **2**
+  (block): the bridge fails closed. `PermissionRequest` and every other event are status only and
+  fail open.
 - The bridge converts hook events into existing `AgentEvent`s and hands them to the Z3
   `ThreadRuntime`. There is **no second status machine**.
 
@@ -66,14 +77,22 @@ an interactive thread headlessly (or the reverse) through a Hot-Swap handoff (HS
 | `SessionStart` (`source`: startup / resume) | `SessionStarted { providerSessionId = session_id }` | `idle` until the first prompt |
 | `UserPromptSubmit` | `Status(active)` | `active` |
 | `PreToolUse` (+ Trust Kernel decision) | `ToolRequested` + `Status(running_command \| editing \| running_tool)` | by tool |
-| `PermissionRequest` | `ApprovalRequired { NormalizedAction }` | `waiting_for_permission` |
-| `Notification` (permission prompt / idle prompt) | `Status(waiting_for_permission \| waiting_for_user)` | as named |
+| `PermissionRequest` (the provider's own prompt is showing) | `Status(waiting_for_user, "Answer in Claude Code")` | `waiting_for_user`* |
+| `Notification` (permission prompt / idle prompt / elicitation / agent needs input) | `Status(waiting_for_user)` with a detail | `waiting_for_user`* |
 | `PostToolUse` / `PostToolUseFailure` | `ToolCompleted { ok }`; `FileChanged` for edit/write tools | `active` |
 | `Stop` | `TurnCompleted { ok: true }` | `idle` |
 | `StopFailure` | `Error { recoverable }` (`Backoff` when the payload is structured) | unchanged / `recovering` |
 | `SubagentStart` / `SubagentStop` | activity detail only | — |
 | `SessionEnd`, then process exit | `Exited { exitCode }` | `completed` (clean) / `failed` |
-| No hook events after spawn (hooks disabled or broken) | — | status from process state only, with a "limited status" badge |
+| No hook events after spawn (hooks disabled or broken) | `Error { code: hooks_inactive, recoverable }` after 20 s | status from process only, with a "limited status" badge |
+
+\* As built: `PreToolUse` with engine routing emits `ToolRequested` then `ApprovalRequired` (the
+Z3 runtime evaluates it with the Z4 engine and sets `waiting_for_permission` only when KalCode
+asks). A prompt shown by the provider itself is reported as `waiting_for_user` (WAITING FOR YOU,
+detail "Answer in Claude Code"), because the Z3 runtime ignores `waiting_for_permission` from
+providers (it owns approval state). Showing PERMISSION REQUIRED for provider-side prompts needs a
+runtime change (lead decision). `SessionStart` with `source` compact/fork records the session id
+only (no status change). `Stop` also closes tool calls that never completed as "Not run".
 
 ## 3. Launch, per provider
 
@@ -84,11 +103,11 @@ process-tree kill on stop. The launch goes through the new Z1 PTY launch API.
 ### Claude Code
 
 ```text
-claude --settings <data>/sessions/<thread>/claude-settings.json   # KalCode hooks (+ deny rules for `never`)
-       --setting-sources user --strict-mcp-config                  # no project/local settings or repo MCP servers (K4)
-       --permission-mode <mapped>  [--restricted in Plan]
-       --session-id <uuid> | --resume <provider session id>
-       [--model <alias>] [-n <title>]
+claude [--restricted] --permission-mode <plan|manual|acceptEdits>   # Plan: --restricted instead of
+       [--setting-sources user] --strict-mcp-config                 #   --setting-sources user (K4)
+       --settings <data>/sessions/<thread>/claude-settings.json     # KalCode hooks only
+       --disallowedTools <KalCode deny floor…>                      # Z2 rules, as headless
+       [--model <alias>] --session-id <uuid> | --resume <provider session id>
 ```
 
 `--setting-sources user` means a repository's `.claude/settings.json` hooks and allow rules are not
@@ -130,14 +149,15 @@ it can see.
 | KalCode mode | Claude Code launch | KalCode `PreToolUse` hook returns | Codex launch (until hooks are trusted) |
 | --- | --- | --- | --- |
 | Plan | `--permission-mode plan --restricted` | TK decision (deny modifying actions) | `-s read-only -a on-request` |
-| Approve | `--permission-mode manual`* | TK: allow reads; **ask** for writes/commands (KalCode approval) | `-s read-only -a on-request` (writes need escalation → Codex prompt) |
-| Auto | `--permission-mode manual`* | TK Auto policy: allow what it covers, ask otherwise | `-s read-only -a on-request` (runs like Approve: without hooks KalCode cannot stop destructive commands inside a writable sandbox) |
+| Approve | `--permission-mode manual` | TK: allow reads; **ask** for writes/commands (KalCode approval) | `-s read-only -a on-request` (writes need escalation → Codex prompt) |
+| Auto | `--permission-mode manual` | TK Auto policy: allow what it covers, ask otherwise | `-s read-only -a on-request` (runs like Approve: without hooks KalCode cannot stop destructive commands inside a writable sandbox) |
 | Bypass | `--permission-mode acceptEdits` | TK Bypass: allow local actions; ask for remote-consequential, opaque, outside-workspace and credentials | `-s workspace-write -a on-request` (network off) |
-| Custom | `--permission-mode manual`* + `permissions.deny` for `never` rules | TK profile decision | as Approve |
+| Custom | `--permission-mode manual` (Custom `never` rules in the deny floor: not yet) | TK profile decision | as Approve |
 
-\* `claude --help` 2.1.282 lists `acceptEdits, auto, bypassPermissions, manual, dontAsk, plan`.
-Z2's headless argv uses `default`. Reconcile against the installed version before Z7-W4 lands;
-the mapping tests must fail if an unknown mode is emitted.
+Reconciled: `claude --help` 2.1.282 lists `acceptEdits, auto, bypassPermissions, manual, dontAsk,
+plan`; panes pass `manual` (the hooks reference reports that mode as `default` in payloads, and
+Z2's headless argv still passes `default`). `interactive_modes_are_verified_and_never_broader`
+fails if a mode outside the list is emitted.
 
 Never used, in any mode: Claude Code `bypassPermissions`, `auto` (the provider's classifier is not
 KalCode policy) and the dangerous-skip flags; Codex `danger-full-access`,
@@ -194,8 +214,9 @@ provider's prompt only, and KalCode shows PERMISSION REQUIRED without an answer 
 
 | Item | Status |
 | --- | --- |
-| Claude Code `--permission-mode` value for "ask normally" (`manual` vs `default`) | Installed help lists `manual`; Z2 uses `default`. Reconcile. |
-| Claude Code hook payload shapes per event, and `PermissionRequest` behaviour while a hook is pending | Documented [1][2]; confirm with a fake-provider contract test, then one owner-approved smoke run. |
+| Claude Code `--permission-mode` value for "ask normally" (`manual` vs `default`) | Done: panes pass `manual` (listed by the installed help); tested. |
+| Claude Code hook payload shapes per event, and `PermissionRequest` behaviour while a hook is pending | Documented [1][2]; covered by the fake provider's interactive mode. Real run pending owner approval (`tooling/smoke/claude-interactive-smoke.ps1`). |
+| `--settings` hooks load with `--setting-sources user`; exec-form `args`; hooks inherit the provider environment; `prompt` vs `user_prompt` in UserPromptSubmit | Documented [1][3]; the parser accepts either prompt field. Confirmed only by the owner-approved smoke run (written, not run). |
 | Codex: supported way to trust KalCode-provided hooks without the bypass flag; whether `-c` can register hooks | Unverified. `notify` and OSC 9 only until confirmed. |
 | Gemini CLI: per-session hook injection without writing user or project settings | Unverified (not installed). Process-only until confirmed. |
 | OSC 9 sequences in Codex output under ConPTY | Verify with the fake provider and one owner-approved run. |
@@ -211,3 +232,37 @@ provider's prompt only, and KalCode shows PERMISSION REQUIRED without an answer 
 7. Gemini CLI hooks — https://geminicli.com/docs/hooks
 8. Gemini CLI hooks reference — https://geminicli.com/docs/hooks/reference
 9. Running Claude Code inside another product (unmodified binary, user's own authentication, name and logo use) — https://code.claude.com/docs/en/legal-and-compliance
+
+## 9. Implementation (Z7-W4)
+
+| Piece | Where |
+| --- | --- |
+| Hook helper + bridge server (endpoint, HMAC challenge, filtered records, fail-closed policy) | `crates/hook-bridge` (`kalcode-hook` binary) |
+| PTY launch for provider CLIs (argv, cleared environment) | `crates/pty` `PtySession::spawn_program` |
+| Claude Code interactive argv, deny floor, settings file | `crates/providers/src/interactive/claude.rs` |
+| Hook → `AgentEvent` mapping, held approvals, `AgentSession` over the PTY | `crates/providers/src/interactive/session.rs` |
+| Interactive provider, per-thread runtime router, pane registry | `crates/providers/src/interactive/provider.rs` |
+| Codex read-only-first argv and OSC 9 scanner (not wired: no Codex thread provider) | `crates/providers/src/interactive/codex.rs` |
+| `answered_in_provider` expiry | `PermissionService::expire_answered_in_provider` |
+| IPC (`provider_pane_*`) and glue (expiry, first-prompt title) | `apps/desktop/src-tauri/src/provider_pane_commands.rs` |
+| Pane UI (header, status chip, approval overlay, info panel, entry point) | `apps/desktop/src/surfaces/code/panes/**` |
+
+**Decision routing.** `DecisionRouting::Engine` (default since the classifier hardening merged to
+main, 65fe095): every call becomes `ApprovalRequired` for the Z3 runtime and Z4 engine. Calls whose
+shape the classifier still can't judge (SEC-LATENT §5: recursive searches, pipelines, multi-level
+wildcards) are sent as opaque, so they always need an explicit one-time approval
+(`session::known_gap`). `DecisionRouting::ProviderPrompt` (the switch back): every `PreToolUse`
+still needs an authenticated round trip (so an unreachable KalCode blocks) and is recorded for
+status, but KalCode returns no decision and Claude Code's own permission flow decides under the
+deny floor. Debug and `e2e` builds can choose with `KALCODE_E2E_HOOK_DECISIONS=engine|provider_prompt`.
+
+**Runtime kind until v12.** `threads.runtime_kind` doesn't exist yet (lead, L-2), so the Claude
+Code provider registered with the Z3 runtime is a router: threads created through
+`provider_pane_create` are marked interactive (a marker in `<data>/sessions/<thread>/`) and start
+(and resume) in a pane; every other thread stays headless. `ThreadSummary.runtimeKind` /
+`terminalId` stay `null`; views attach by thread id (`provider_pane_attach`).
+
+**Not built yet.** Codex and Gemini CLI panes; Process Continuity restore labels
+(`crates/continuity`); pane `-n <title>` on relaunch (the title isn't in `SessionConfig`);
+Custom `never` rules in the deny floor; provider-reported PERMISSION REQUIRED for the provider's
+own prompts (needs a Z3 runtime change).

@@ -68,7 +68,14 @@ export type CommandName =
   | "terminal_detach"
   | "terminal_ack"
   | "terminal_set_active"
-  | "terminals_running";
+  | "terminals_running"
+  // Provider panes (Z7-W4; attach goes through surfaces/code/panes/paneChannel.ts)
+  | "provider_pane_create"
+  | "provider_pane_ack"
+  | "provider_pane_detach"
+  | "provider_pane_write"
+  | "provider_pane_resize"
+  | "provider_pane_info";
 
 export type Unsubscribe = () => Promise<void>;
 

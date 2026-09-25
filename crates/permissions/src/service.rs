@@ -668,6 +668,29 @@ impl PermissionService {
         Ok(count)
     }
 
+    /// Interactive panes (Z7-W4): nobody answered a request within the hook's ask window, so the
+    /// tool call went to the provider's own prompt in the pane, where the person answers it. The
+    /// request for that action expires with reason `answered_in_provider`. Thread grants are
+    /// untouched (unlike `expire_for_thread`). Returns how many requests expired (0 or 1).
+    pub fn expire_answered_in_provider(&self, thread_id: &str, action_id: &str) -> Result<usize> {
+        if !is_valid_id(thread_id) {
+            return Err(invalid_id("thread"));
+        }
+        if action_id.is_empty() || action_id.len() > 128 {
+            return Err(invalid_id("action"));
+        }
+        const REASON: &str = "answered_in_provider";
+        let (count, _) = self.core.transact(|tx| {
+            let expired = store::expire_pending(tx, Some(thread_id), Some(action_id), REASON)?;
+            let mut events = Vec::with_capacity(expired.len());
+            for item in &expired {
+                events.push(self.expired_event(tx, item, REASON)?);
+            }
+            Ok((expired.len(), events))
+        })?;
+        Ok(count)
+    }
+
     /// Pending (or all recent) requests, newest first.
     pub fn list_approvals(&self, status: Option<ApprovalStatus>) -> Result<Vec<ApprovalView>> {
         self.core

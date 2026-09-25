@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-provider-pane-detach"
+description = "Enables the provider_pane_detach command without any pre-configured scope."
+commands.allow = ["provider_pane_detach"]
+
+[[permission]]
+identifier = "deny-provider-pane-detach"
+description = "Denies the provider_pane_detach command without any pre-configured scope."
+commands.deny = ["provider_pane_detach"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-provider-pane-create"
+description = "Enables the provider_pane_create command without any pre-configured scope."
+commands.allow = ["provider_pane_create"]
+
+[[permission]]
+identifier = "deny-provider-pane-create"
+description = "Denies the provider_pane_create command without any pre-configured scope."
+commands.deny = ["provider_pane_create"]

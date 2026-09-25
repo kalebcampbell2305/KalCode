@@ -125,7 +125,11 @@ pub fn claude_capabilities() -> ProviderCapabilities {
             model("fable", "Fable", false),
         ],
         permission_mappings: claude_argv::permission_mappings(),
-        interactive: None,
+        // Provider panes (Z7-W4): how Claude Code runs interactively with the routing shipped
+        // builds use. Codex and Gemini CLI declare theirs when their panes are wired.
+        interactive: Some(crate::interactive::claude::interactive_support(
+            crate::interactive::DEFAULT_DECISION_ROUTING,
+        )),
     }
 }
 

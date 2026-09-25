@@ -47,6 +47,7 @@ import {
   type EmitOptions,
   isDashboardScenario,
 } from "./memory/dashboard.ts";
+import { createPanesMemory, type PaneControls } from "./memory/panes.ts";
 import { createPermissionMemory, type PermissionMemory } from "./memory/permissions.ts";
 import { createThreadsMemory } from "./memory/threads.ts";
 import { createMemoryKalVoice, isKalVoiceScenario, type KalVoiceScenario } from "./memoryKalVoice.ts";
@@ -128,6 +129,10 @@ export interface MemoryTransport extends Transport {
   workspaces: Omit<MemoryWorkspaces, "handlers" | "attachTerminal">;
   /** Test hook: permission state (Z4), e.g. an agent asking for approval. */
   permissions: PermissionMemory;
+  /** Provider panes (Z7-W4): pane output, like `attachTerminal`. */
+  attachProviderPane(threadId: string, onOutput: (bytes: Uint8Array) => void): Promise<number | null>;
+  /** Test hooks for provider panes (hook-channel state, routing, feature off). */
+  panes: PaneControls;
 }
 
 export function createMemoryTransport(
@@ -303,12 +308,18 @@ export function createMemoryTransport(
       expireForThread: (threadId) => permissions.expireForThread(threadId),
     },
   );
-  answer = (view) => threads.resolveApproval(view.id, view.status === "approved");
+  // Provider panes (Z7-W4) hold their tool calls until the person answers, like native.
+  const panes = createPanesMemory({ requireCore, threads, permissions, beforeCreate: ensureDetected });
+  answer = (view) => {
+    threads.resolveApproval(view.id, view.status === "approved");
+    panes.resolveApproval(view);
+  };
 
   const handlers: DashboardHandlers = {
     ...code.handlers,
     ...threads.handlers,
     ...permissions.handlers,
+    ...panes.handlers,
     // Like native: the first thread operation detects providers once, so threads use exactly
     // the providers detection reports usable.
     thread_options: async (args) => {
@@ -511,6 +522,7 @@ export function createMemoryTransport(
       kalvoice.subscribe(onSignal);
     },
     attachTerminal: (terminalId, onOutput) => code.attachTerminal(terminalId, onOutput),
+    attachProviderPane: (threadId, onOutput) => panes.attach(threadId, onOutput),
     async streamThread(threadId, onEvent) {
       await Promise.resolve();
       const stop = threads.stream(threadId, onEvent);
@@ -525,6 +537,7 @@ export function createMemoryTransport(
       runningProcessCount: code.runningProcessCount,
     },
     permissions,
+    panes: panes.controls,
   };
   // UI tests drive the fake folder picker and filesystem, live Dashboard changes and agents
   // asking for approval through this hook (ui-test builds only).
@@ -533,6 +546,7 @@ export function createMemoryTransport(
       ...transport.workspaces,
       dashboard: transport.dashboard,
       permissions: transport.permissions,
+      panes: transport.panes,
     };
   }
   return transport;

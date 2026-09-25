@@ -1,0 +1,42 @@
+[package]
+name = "kalcode-hook-bridge"
+description = "KalCode hook bridge: the kalcode-hook helper that provider hooks run, and the authenticated local endpoint KalCode answers them on."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "kalcode_hook_bridge"
+
+# The helper a provider's hooks run (exec form, no shell). Shipped next to the KalCode
+# executable. See docs/campaigns/Z7-W4-THREATS.md.
+[[bin]]
+name = "kalcode-hook"
+path = "src/bin/kalcode_hook.rs"
+test = false
+doc = false
+
+[features]
+default = ["server"]
+# The bridge server (KalCode side). The helper binary needs only the client half, but the
+# workspace builds features unified, so the server is on by default and tokio is optional.
+server = ["dep:tokio"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+hmac = "0.13"
+sha2 = "0.11"
+hex = "0.4"
+getrandom = "0.4"
+tokio = { version = "1", optional = true, default-features = false, features = ["rt", "net", "io-util", "time", "sync"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

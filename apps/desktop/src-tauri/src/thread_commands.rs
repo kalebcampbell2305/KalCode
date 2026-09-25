@@ -96,9 +96,10 @@ pub struct ThreadsState {
 /// but have no adapter yet, so they are never offered to threads.
 fn adapter(id: &ProviderId) -> Option<Arc<dyn AgentProvider>> {
     match id.as_str() {
-        ProviderId::CLAUDE_CODE => {
-            Some(Arc::new(ClaudeCodeProvider::new(DetectEnv::from_process())))
-        }
+        // Z7-W4: the per-thread runtime router when provider panes are enabled.
+        ProviderId::CLAUDE_CODE => Some(crate::provider_pane_commands::route_claude(Arc::new(
+            ClaudeCodeProvider::new(DetectEnv::from_process()),
+        ))),
         _ => None,
     }
 }
@@ -191,7 +192,7 @@ impl ThreadsState {
     /// Before the first thread operation of a session, detects providers once (read-only:
     /// `--version` and the documented sign-in status command, never a prompt) so the runtime
     /// offers the real set. Later changes arrive through `providers_detect`.
-    fn ensure_providers(&self, core: Option<&Arc<Core>>) {
+    pub(crate) fn ensure_providers(&self, core: Option<&Arc<Core>>) {
         let never_detected = self
             .detection
             .list()
@@ -236,7 +237,7 @@ impl ThreadsState {
         self.runtime.clone()
     }
 
-    fn runtime(&self) -> Result<&Arc<ThreadRuntime>, IpcError> {
+    pub(crate) fn runtime(&self) -> Result<&Arc<ThreadRuntime>, IpcError> {
         self.runtime.as_ref().ok_or_else(|| {
             KalError::internal(
                 "threads_unavailable",

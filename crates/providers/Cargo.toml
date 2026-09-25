@@ -22,6 +22,8 @@ doc = false
 [dependencies]
 kalcode-contracts = { path = "../contracts" }
 kalcode-native-core = { path = "../native-core" }
+kalcode-pty = { path = "../pty" }
+kalcode-hook-bridge = { path = "../hook-bridge" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -31,6 +33,10 @@ ts-rs = { version = "12", features = ["serde-json-impl", "uuid-impl"] }
 
 [dev-dependencies]
 tempfile.workspace = true
+# Provider panes through the whole stack (tests/interactive_runtime.rs). Neither depends on
+# this crate, so there is no cycle.
+kalcode-threads = { path = "../threads" }
+kalcode-permissions = { path = "../permissions" }
 
 [lints]
 workspace = true
