@@ -170,6 +170,12 @@ exits (`expire_for_thread`, which also revokes the thread's grants), when a new 
 for the same provider action (superseded), when the thread's permission mode changes, and when
 KalCode restarts (the provider sessions that asked are gone). Each expiry emits `approval.expired`.
 
+Provider panes (Z7-W4) add one more: a request a pane's `PreToolUse` hook is holding that nobody
+answers within the ask window (540 s, inside the hook's 600 s timeout) is handed to the
+provider's own prompt in the pane, where the person answers it, and the KalCode request expires
+with reason `answered_in_provider` (`PermissionService::expire_answered_in_provider`, audited,
+`approval.expired` emitted). Unlike `expire_for_thread`, this does not revoke the thread's grants.
+
 ## 6. Audit and persistence (schema v4, `0004_permissions.sql`)
 
 | Table | Contents | Integrity |
@@ -219,6 +225,7 @@ uses and whether the mapping is **exact**, **approximate (stricter)** or **unsup
 | Provider | Plan | Approve | Auto | Bypass | Custom | Who decides each tool call today |
 | --- | --- | --- | --- | --- | --- | --- |
 | Claude Code (headless) | `--restricted --permission-mode plan` | `--permission-mode default` | as Approve | `--permission-mode acceptEdits` | as Approve (rules not applied) | Claude Code, within KalCode's launch flags: prompts denied, KalCode deny rules (remote actions and credential files in every mode; edit and web tools outside Bypass). **Not** this engine. |
+| Claude Code (provider pane, Z7-W4) | `--restricted --permission-mode plan` | `--setting-sources user --permission-mode manual` | as Approve | `--setting-sources user --permission-mode acceptEdits` | as Approve | Every call reaches KalCode's `PreToolUse` hook first (unreachable KalCode ⇒ blocked). Shipped routing (`ProviderPrompt`): Claude Code's own prompt in the pane decides, under the deny floor (remote actions and credential files; edit and web tools in Plan). `Engine` routing (behind a flag until the classifier fixes merge): **this engine** decides each call (`ActionOrigin::Thread`), asks through the one approval queue, and returns allow/deny to the provider. |
 | Codex | declared, adapter planned | declared | declared | declared | as Approve | — |
 | Gemini CLI | declared, adapter planned | declared | declared | declared | as Approve | — |
 

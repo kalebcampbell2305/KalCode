@@ -174,10 +174,49 @@ Claude Code allow rules cover that form (for example a broad `Bash(git *)` allow
 Per-action KalCode decisions for Claude Code — every tool call through the Trust Kernel, KalCode
 approval prompts, Custom rules — arrive with provider panes and the hook bridge (Z7,
 `docs/PROVIDER_PANES.md` §2 and §4), where a KalCode `PreToolUse` hook is the enforcement point.
+The bridge is built (see "Claude Code in a provider pane" below); decisions through the engine
+stay behind a flag until the classifier fixes merge. Headless threads are unchanged.
 
 `--setting-sources user` and `--strict-mcp-config` exist because `-p` skips the workspace trust
 dialog and would otherwise run a repository's project hooks, allow rules and `.mcp.json` servers
 without approval [1]. Managed settings always apply.
+
+### Claude Code in a provider pane (Z7-W4, behind the `provider_panes` flag)
+
+A thread created with `provider_pane_create` runs the real, unmodified `claude` TUI in a PTY
+(`crates/providers/src/interactive`, `docs/PROVIDER_PANES.md`). Launch flags
+(`interactive::claude::interactive_args`, verified against `claude --help` 2.1.282):
+
+| KalCode | Claude Code flags | KalCode deny rules (`--disallowedTools`) |
+| --- | --- | --- |
+| Plan | `--restricted --permission-mode plan` | edit and web tools + credential files + remote actions |
+| Approve | `--setting-sources user --permission-mode manual` | credential files + remote actions |
+| Auto | `--setting-sources user --permission-mode manual` | credential files + remote actions |
+| Bypass | `--setting-sources user --permission-mode acceptEdits` | credential files + remote actions |
+| Custom | as Approve | as Approve |
+
+Every pane also passes `--strict-mcp-config`, `--settings <data>/sessions/<thread>/claude-settings.json`
+(KalCode's hooks, exec form, explicit timeouts; nothing that relaxes permissions and no secret)
+and `--session-id <uuid>` or `--resume <id>`. Never: `bypassPermissions`, `auto`, `dontAsk`,
+`--dangerously-skip-permissions`, `--allow-dangerously-skip-permissions`, `--allowedTools`,
+`--add-dir`, `--bare`, `--safe-mode`, `-p`. A test fails if a mode outside the installed help's
+list is emitted. `manual` is the listed name of Claude Code's ask-normally mode (hook payloads
+report it as `default`; the headless Z2 argv still passes `default`).
+
+Unlike headless threads, the edit and web tools are not removed outside Plan: a person answers
+for them, in KalCode (engine routing) or in Claude Code's own prompt in the pane.
+
+**Who decides a tool call.** Every call reaches KalCode's `PreToolUse` hook first. If KalCode is
+unreachable, the helper exits 2 and the call is blocked. With `DecisionRouting::ProviderPrompt`
+(the shipped default until the classifier fixes on `sec/latent-hardening` merge) KalCode records
+the call and returns no decision: Claude Code's own permission flow and prompt decide, under the
+deny floor. With `DecisionRouting::Engine` the call becomes `ApprovalRequired` for the Z3 runtime
+and the Z4 engine: allow, deny, or a KalCode approval; unanswered for 540 s it goes to Claude
+Code's prompt and the KalCode request expires as `answered_in_provider`. KalCode's "allow" never
+passes a deny rule (the permissions page: deny rules apply regardless of a hook's answer).
+
+What this still does not cover is listed in `docs/PROVIDER_PANES.md` §4 ("What KalCode cannot
+intercept").
 
 ### Codex (planned adapter)
 
@@ -363,6 +402,15 @@ the classification drives status and summaries; `actions::normalize` builds the 
 - **Real-provider tests are `#[ignore]`d.** `real_claude_detection` runs only `--version` and
   `auth status`. `real_claude_session_smoke` consumes AI quota: it additionally needs
   `KALCODE_REAL_PROVIDER_SMOKE=1` and the owner's explicit approval.
+- **Provider panes (Z7-W4).** The fake provider has an interactive mode (started with
+  `--settings`): a minimal TUI that fires the hooks in KalCode's settings file with the documented
+  payload shapes and honours their exit codes and decisions; with `hook` as its first argument it
+  stands in for `kalcode-hook`. `tests/interactive.rs` (status mapping, prose ignored, engine
+  round trip, hand-over to the provider prompt, KalCode unreachable, argv/env/settings, hooks
+  disabled, stop and revoke, headless/interactive routing) and `tests/interactive_runtime.rs`
+  (the Z3 runtime and Z4 engine end to end) run it in a real PTY. `tests/interactive_real.rs`
+  (`real_claude_interactive_smoke`) starts the real CLI and consumes AI quota; run it only through
+  `tooling/smoke/claude-interactive-smoke.ps1` with the owner's approval.
 
 ## 10. Open verification items
 
@@ -374,6 +422,8 @@ the classification drives status and summaries; `actions::normalize` builds the 
 | Claude Code deny rules and command forms | Bash/PowerShell deny rules match the command text, not the program (§5). A full path, `sh -c` or quoting escapes them; the Claude Code mode then refuses the command unless the user's own allow rules cover it. Closed by the Z7 hook bridge. |
 | Claude Code plan mode and `useAutoModeDuringPlan` | Plan mode may run classifier-approved commands when auto mode is available. Not relied on: Plan also passes `--restricted`, which removes command-running tools. |
 | Codex / Gemini CLI adapters | Mappings are declared, not yet executed; re-verify flags when each adapter is built. |
+| Claude Code panes: `--settings` hooks with `--setting-sources user`, exec-form `args`, hook environment inheritance, UserPromptSubmit field name | Documented (hooks, settings and permissions references); exercised against the fake provider. Confirmed only by the owner-approved smoke run (`tooling/smoke/claude-interactive-smoke.ps1`, not run yet). |
+| Codex panes | Launch argv (`notify`, `tui.notifications`, OSC 9) is built and tested but not wired: Codex has no registered thread provider yet. |
 
 ## 11. Sources
 
