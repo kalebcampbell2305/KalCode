@@ -214,7 +214,7 @@ test.describe("Approvals from the widget", () => {
     await expectState(page, "Needs Approval");
     const w = widget(page);
     await expect(w.getByRole("button", { name: "Deny" })).toBeVisible();
-    // KalVoice's own confirmation: approve once or deny (no standing grants).
+    // A KalVoice approval request: approve once or deny (no standing grants).
     await expect(w.getByRole("button", { name: "Allow for thread" })).toHaveCount(0);
     await expect(shown(page).getByText("“open four codex threads”")).toBeVisible();
     await w.getByRole("button", { name: "Approve once" }).click();

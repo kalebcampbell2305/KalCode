@@ -135,7 +135,15 @@ fn install_panic_hook(log_dir: PathBuf) {
 fn start(app: &tauri::App, removed_overrides: &[String]) -> AppState {
     let channel = BuildChannel::current();
     let version = app.package_info().version.to_string();
-    let info = AppInfo::current(&version, channel);
+    let mut info = AppInfo::current(&version, channel);
+    // KalVoice is Preview. Outside development builds it shows only when this build includes
+    // its on-device speech engine (`kalvoice-whisper`, which needs LLVM/libclang to build):
+    // without it push to talk can't hear anything (docs/KALVOICE.md, "Building").
+    info.flags.require_component(
+        kalcode_core::flags::SurfaceId::KalVoice,
+        kalcode_kalvoice::stt::ENGINE_AVAILABLE,
+        channel,
+    );
 
     let data_dir = match resolve_data_dir(app) {
         Ok(dir) => dir,
@@ -166,7 +174,7 @@ fn start(app: &tauri::App, removed_overrides: &[String]) -> AppState {
         app_version: version,
         channel,
     };
-    match open_core(config) {
+    match Core::open(config) {
         Ok(core) => state.core = Some(Arc::new(core)),
         Err(error) => {
             tracing::error!(event = "app.startup_failed", error_code = error.code, error = %error.diagnostic());
@@ -174,24 +182,6 @@ fn start(app: &tauri::App, removed_overrides: &[String]) -> AppState {
         }
     }
     state
-}
-
-/// Opens the core with this build's migrations. KalVoice's ledger (schema v6) isn't registered
-/// until the event platform's v5 lands; only the end-to-end build, only against a test's own
-/// `KALCODE_DATA_DIR`, and only when the KalVoice suite asks (`KALCODE_E2E_KALVOICE_SCHEMA=1`)
-/// adds it now, behind an empty v5 stand-in. Real data folders never get either, so the real v5
-/// applies cleanly later.
-fn open_core(config: CoreConfig) -> Result<Core, KalError> {
-    #[cfg(feature = "e2e")]
-    if matches!(environment::data_dir_override(), DataDirOverride::Path(_))
-        && std::env::var_os("KALCODE_E2E_KALVOICE_SCHEMA").is_some_and(|v| v == "1")
-    {
-        return Core::open_with_migrations(
-            config,
-            &kalcode_kalvoice::schema::migrations_with_kalvoice(),
-        );
-    }
-    Core::open(config)
 }
 
 fn uses_default_data_dir() -> bool {
@@ -315,7 +305,6 @@ pub fn run(removed_overrides: Vec<String>) {
             kalvoice_commands::kalvoice_model_delete,
             kalvoice_commands::kalvoice_talk,
             kalvoice_commands::kalvoice_type_instead,
-            kalvoice_commands::kalvoice_confirm,
             kalvoice_commands::kalvoice_latency,
             kalvoice_commands::kalvoice_latency_record,
             provider_commands::providers_list,

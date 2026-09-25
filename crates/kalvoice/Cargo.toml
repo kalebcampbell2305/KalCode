@@ -19,6 +19,7 @@ whisper = ["dep:whisper-rs"]
 [dependencies]
 kalcode-contracts = { path = "../contracts" }
 kalcode-native-core = { path = "../native-core" }
+kalcode-permissions = { path = "../permissions" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

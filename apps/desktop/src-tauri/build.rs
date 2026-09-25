@@ -26,7 +26,6 @@ const COMMANDS: &[&str] = &[
     "kalvoice_model_delete",
     "kalvoice_talk",
     "kalvoice_type_instead",
-    "kalvoice_confirm",
     "kalvoice_latency",
     "kalvoice_latency_record",
     "providers_list",

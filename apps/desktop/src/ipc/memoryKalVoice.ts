@@ -11,7 +11,8 @@
  *
  * Scenarios (`?scenario=`): kalvoice-limit (allowance used up), kalvoice-no-model (no speech
  * model installed), kalvoice-mic-denied (microphone blocked), kalvoice-approvals (the same
- * confirmations as every scenario, named for the tests that answer them), kalvoice-slow
+ * KalVoice approval requests as every scenario, named for the tests that answer them; answered
+ * through `approval_decide` like the native permission engine), kalvoice-slow
  * (stages last long enough to observe). Thread commands report fixed test-double results.
  * `?transcript=` sets what the fake recognizer "hears".
  */
@@ -139,6 +140,7 @@ const SURFACE_LABELS: Record<SurfaceId, string> = {
   memory: "Memory",
   providers: "Providers",
   settings: "Settings",
+  command_center: "the Command Center",
 };
 
 const DONE_SUMMARY: Record<string, string> = {
@@ -257,6 +259,11 @@ function defaults(): KalVoicePreferences {
 export interface MemoryKalVoice {
   handlers: Record<string, (args: Record<string, unknown>) => unknown>;
   subscribe(onSignal: (signal: KalVoiceSignal) => void): void;
+  /**
+   * `approval_decide` for KalVoice's own approval requests (the person's answer, as in the
+   * native permission engine); `undefined` when the id isn't one of KalVoice's.
+   */
+  decideApproval(args: Record<string, unknown>): unknown;
 }
 
 export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOverride?: string | null): MemoryKalVoice {
@@ -407,7 +414,7 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
         if (event.repeat || !prefs.talkEnabled || !isTalkKey(event, prefs.talkKey)) return;
         event.preventDefault();
         if (listening) return;
-        if (begin("command")) signal({ kind: "reveal" });
+        if (begin("talk")) signal({ kind: "reveal" });
       },
       true,
     );
@@ -522,6 +529,10 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
     const recognizedMs = performance.now() - started;
     const latest = latency[0];
     if (latest && latest.finalToRecognized === null) latest.finalToRecognized = recognizedMs;
+    emit(
+      { type: "kalvoice.talk_routed", payload: { requestId: request.requestId, outcome: which } },
+      { correlation: { requestId: request.requestId } },
+    );
     if (which === "dictation") {
       emit({
         type: "kalvoice.dictation_completed",
@@ -661,7 +672,7 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
     },
     kalvoice_preferences_update: (args) => updatePreferences(args.patch as KalVoicePreferencesPatch),
     kalvoice_listen_start: () => {
-      const id = begin("command");
+      const id = begin("talk");
       if (!id) fail("listening_failed", "KalVoice couldn't start listening.");
       return id;
     },
@@ -695,32 +706,54 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
     },
   };
 
-  // KalVoice's own confirmations (scenario kalvoice-approvals): the person answers in the widget.
-  handlers.kalvoice_confirm = (args) => {
-    const id = String(args.approvalRequestId);
+  // KalVoice's approval requests (scenario kalvoice-approvals): the person answers them with
+  // `approval_decide`, from the widget or the Approvals panel; the result arrives as a signal.
+  const decideApproval = (args: Record<string, unknown>): unknown => {
+    const id = String(args.requestId);
+    const item = pending.get(id);
+    if (!item) return undefined;
     const decision = args.decision as ApprovalDecision;
     if (decision !== "approve_once" && decision !== "deny") {
-      fail("invalid_decision", "KalVoice asks once: approve it or deny it.");
+      fail(
+        "decision_not_allowed",
+        "That choice isn't available for this request. You can approve it once or deny it.",
+        "permission",
+      );
     }
-    const item = pending.get(id);
-    if (!item) fail("confirmation_not_found", "That KalVoice request is no longer waiting.");
     pending.delete(id);
-    return decision === "deny"
-      ? respond(
-          item.requestId,
-          item.kind,
-          {
-            kind: "failed",
-            code: "permission_denied",
-            message: "The request wasn't approved, so KalVoice didn't run it.",
-          },
-          true,
-        )
-      : respond(item.requestId, item.kind, { kind: "completed", summary: DONE_SUMMARY[item.kind] ?? "Done." }, true);
+    emit(
+      decision === "deny"
+        ? { type: "approval.denied", payload: { requestId: id, threadId: "" } }
+        : { type: "approval.approved", payload: { requestId: id, threadId: "", decision } },
+      { correlation: { requestId: id } },
+    );
+    signal({
+      kind: "request_resolved",
+      response:
+        decision === "deny"
+          ? respond(
+              item.requestId,
+              item.kind,
+              {
+                kind: "failed",
+                code: "permission_denied",
+                message: "The request wasn't approved, so KalVoice didn't run it.",
+              },
+              true,
+            )
+          : respond(
+              item.requestId,
+              item.kind,
+              { kind: "completed", summary: DONE_SUMMARY[item.kind] ?? "Done." },
+              true,
+            ),
+    });
+    return { id, status: decision === "deny" ? "denied" : "approved", resolvedDecision: decision };
   };
 
   return {
     handlers,
+    decideApproval,
     subscribe(onSignal) {
       subscribers.add(onSignal);
       installKeys();

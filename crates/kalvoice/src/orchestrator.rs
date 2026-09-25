@@ -12,8 +12,11 @@
 //!   not counted. Retrying a client request id never counts twice or runs twice.
 //! - Safety asymmetry (docs/ADVANCED.md, KV-02): commands that make things safer (pause, stop)
 //!   run directly; commands that add work (creating or resuming threads) go through the
-//!   [`PermissionGate`] under the default Approve mode and wait for the person's answer.
-//!   KalVoice never answers approvals and never changes permission modes.
+//!   permission engine as a KalVoice-origin action ([`OriginGate`], Z4's
+//!   `PermissionService::request_for_origin`): evaluated under Approve, filed as an approval
+//!   with `origin_kind = 'kalvoice'` that only the person answers (Approve once or Deny), and
+//!   run only after the approval. KalVoice never answers approvals and never changes permission
+//!   modes (a permission-mode request only opens the thread for the person to decide).
 //! - Events carry ids and facts only; request text, transcripts and provider answers never
 //!   appear in them. State and events commit together and are published after commit.
 
@@ -26,12 +29,13 @@ use kalcode_contracts::agent::{AgentEvent, AgentInput, AgentProvider, ProviderId
 use kalcode_contracts::app::SurfaceId;
 use kalcode_contracts::events::{Correlation, EventPayload, EventSource, NewEvent};
 use kalcode_contracts::ids::{is_valid_id, new_id};
+pub use kalcode_contracts::kalvoice::TalkRoute;
 use kalcode_contracts::kalvoice::{
     KalVoiceInput, KalVoiceIntelligence, KalVoiceIntent, KalVoiceOutcome, KalVoiceUsage,
-    ThreadScope,
+    RequestableMode, ThreadScope,
 };
 use kalcode_contracts::permissions::{
-    ActionKind, ApprovalDecision, NormalizedAction, PermissionGate, PermissionMode, PolicyEffect,
+    ActionKind, ActionOrigin, ApprovalDecision, NormalizedAction, PermissionMode, PolicyEffect,
 };
 use kalcode_core::time::now_rfc3339;
 use kalcode_core::{Core, KalError, Result};
@@ -80,19 +84,6 @@ pub enum TalkTarget {
     Terminal,
     /// Nothing that accepts text.
     None,
-}
-
-/// Which way a push-to-talk utterance went.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "snake_case")]
-#[ts(export)]
-pub enum TalkRoute {
-    /// Ran as a KalCode command.
-    Command,
-    /// Typed into the focused input (never counted).
-    Dictation,
-    /// Sent to the user's provider for reasoning, or refused asking to connect one.
-    Request,
 }
 
 /// One push-to-talk utterance after recognition.
@@ -289,13 +280,52 @@ struct Pending {
     ctx: ExecContext,
 }
 
+/// What the permission engine decided about a consequential KalVoice action.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GateOutcome {
+    /// The policy allows it without asking.
+    Allowed,
+    /// The policy refuses it.
+    Denied { reason: String },
+    /// An approval request was filed; the person answers it in KalCode.
+    Asked { approval_request_id: String },
+}
+
+/// The permission engine's entry point for actions that come from KalVoice (Z4's
+/// `PermissionService::request_for_origin`): the action is evaluated under Approve (KalVoice
+/// never selects or changes a mode), standing grants and rules never apply, and an approval is
+/// filed with `origin_kind = 'kalvoice'` that only the person can answer, once.
+pub trait OriginGate: Send + Sync {
+    fn request(&self, action: NormalizedAction) -> std::result::Result<GateOutcome, String>;
+}
+
+impl OriginGate for kalcode_permissions::PermissionService {
+    fn request(&self, action: NormalizedAction) -> std::result::Result<GateOutcome, String> {
+        let outcome = self
+            .request_for_origin(action)
+            .map_err(|e| e.message.clone())?;
+        Ok(match (outcome.decision.effect, outcome.approval) {
+            (PolicyEffect::Ask, Some(approval)) => GateOutcome::Asked {
+                approval_request_id: approval.id,
+            },
+            (PolicyEffect::Ask, None) => {
+                return Err("KalCode couldn't file the approval request.".into());
+            }
+            (PolicyEffect::Allow, _) => GateOutcome::Allowed,
+            (PolicyEffect::Deny, _) => GateOutcome::Denied {
+                reason: outcome.decision.reason,
+            },
+        })
+    }
+}
+
 type Clock = Arc<dyn Fn() -> OffsetDateTime + Send + Sync>;
 
 pub struct Orchestrator {
     core: Arc<Core>,
     entitlement: Arc<dyn EntitlementSource>,
     executor: Arc<dyn Executor>,
-    gate: Arc<dyn PermissionGate>,
+    gate: Arc<dyn OriginGate>,
     providers: Arc<dyn ProviderDirectory>,
     clock: Clock,
     reasoning_timeout: Duration,
@@ -307,7 +337,7 @@ impl Orchestrator {
         core: Arc<Core>,
         entitlement: Arc<dyn EntitlementSource>,
         executor: Arc<dyn Executor>,
-        gate: Arc<dyn PermissionGate>,
+        gate: Arc<dyn OriginGate>,
         providers: Arc<dyn ProviderDirectory>,
     ) -> Self {
         Self {
@@ -518,6 +548,20 @@ impl Orchestrator {
         let started = Instant::now();
         let route = talk_route(&req.text, req.target);
         let recognized_ms = started.elapsed().as_secs_f64() * 1000.0;
+        if is_valid_id(&req.request_id) {
+            // The route only (never the words).
+            self.emit(vec![event(
+                EventPayload::KalVoiceTalkRouted {
+                    request_id: req.request_id.clone(),
+                    outcome: route,
+                },
+                Correlation {
+                    request_id: Some(req.request_id.clone()),
+                    workspace_id: req.workspace_id.clone().filter(|w| is_valid_id(w)),
+                    ..Correlation::default()
+                },
+            )]);
+        }
         let response = match route {
             TalkRoute::Dictation => {
                 self.emit(vec![event(
@@ -580,8 +624,18 @@ impl Orchestrator {
         Ok(refunded)
     }
 
-    /// Continues a command that waited for approval. Returns the final response, or `None`
-    /// when `approval_request_id` isn't one of KalVoice's.
+    /// Whether `approval_request_id` is a KalVoice command waiting for the person's answer.
+    pub fn is_waiting_for(&self, approval_request_id: &str) -> bool {
+        self.pending
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains_key(approval_request_id)
+    }
+
+    /// Continues a command that waited for approval, once the person answered it in KalCode
+    /// (`approval.approved` / `approval.denied`) or it expired (`None`). Returns the final
+    /// response, or `None` when `approval_request_id` isn't one of KalVoice's. KalVoice never
+    /// answers the approval itself; it only reacts to the answer.
     pub fn resolve_approval(
         &self,
         approval_request_id: &str,
@@ -608,11 +662,20 @@ impl Orchestrator {
             on_stage: &|_| {},
         };
         Some(match decision {
-            Some(ApprovalDecision::Deny) | None => run.fail(
+            Some(ApprovalDecision::Deny) => run.fail(
                 "permission_denied",
                 "The request wasn't approved, so KalVoice didn't run it.".into(),
             ),
-            Some(_) => run.execute(&pending.intent, &pending.ctx),
+            None => run.fail(
+                "approval_expired",
+                "The approval request expired, so KalVoice didn't run it.".into(),
+            ),
+            Some(ApprovalDecision::ApproveOnce) => run.execute(&pending.intent, &pending.ctx),
+            // KalVoice requests only offer Approve once or Deny; anything else runs nothing.
+            Some(_) => run.fail(
+                "permission_denied",
+                "KalVoice runs a request only when it's approved once.".into(),
+            ),
         })
     }
 
@@ -643,8 +706,28 @@ fn event(payload: EventPayload, correlation: Correlation) -> NewEvent {
     }
 }
 
-/// True for intents that add work for agents (they wait for the person's approval). Pausing
-/// and stopping only make things safer, so they run directly (KV-02).
+/// The permission-engine action for intents that add work for agents (they wait for the
+/// person's approval). Pausing and stopping only make things safer, so they run directly
+/// (KV-02); everything else is navigation or a read.
+fn consequential_action(intent: &KalVoiceIntent, ctx: &ExecContext) -> Option<ActionKind> {
+    match intent {
+        KalVoiceIntent::CreateThreads {
+            provider_id,
+            count,
+            workspace_id,
+        } => Some(ActionKind::CreateThreads {
+            provider_id: provider_id.clone(),
+            count: u32::from(*count),
+            workspace_id: workspace_id.clone().or_else(|| ctx.workspace_id.clone()),
+        }),
+        KalVoiceIntent::ResumeThreads { scope } => Some(ActionKind::ResumeThreads {
+            scope: scope.clone(),
+        }),
+        _ => None,
+    }
+}
+
+/// True for intents that add work for agents (they wait for the person's approval).
 pub fn is_consequential(intent: &KalVoiceIntent) -> bool {
     matches!(
         intent,
@@ -652,49 +735,14 @@ pub fn is_consequential(intent: &KalVoiceIntent) -> bool {
     )
 }
 
-/// KalVoice's own confirmation step for commands that add work: every such command waits for
-/// the person to approve it in the KalVoice widget (Approve once or Deny); nothing runs before.
-///
-/// The permission engine (Z4) doesn't accept requests from non-thread origins yet (its
-/// `NormalizedAction` has no origin and requires a thread), so KalVoice can't file these as
-/// `origin_kind = 'kalvoice'` approvals. Contract change requested: `ActionOrigin::KalVoice`
-/// (docs/CONTRACTS_ADVANCED.md §2); until then this gate asks, never allows on its own, and
-/// keeps pending confirmations in memory only.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct ConfirmGate;
-
-impl PermissionGate for ConfirmGate {
-    fn evaluate(
-        &self,
-        _action: &NormalizedAction,
-        _mode: PermissionMode,
-    ) -> kalcode_contracts::permissions::PolicyDecision {
-        kalcode_contracts::permissions::PolicyDecision {
-            effect: PolicyEffect::Ask,
-            scopes: Vec::new(),
-            reason: "KalVoice asks before it adds work for your agents.".into(),
-            approvable: true,
-        }
+/// The person-facing name of a mode KalVoice may ask for (never Bypass: not representable).
+pub fn requestable_mode_label(mode: RequestableMode) -> &'static str {
+    match mode {
+        RequestableMode::Plan => "Plan",
+        RequestableMode::Approve => "Approve",
+        RequestableMode::Auto => "Auto",
+        RequestableMode::Custom => "Custom",
     }
-
-    fn open_request(
-        &self,
-        action: NormalizedAction,
-        mode: PermissionMode,
-        decision: kalcode_contracts::permissions::PolicyDecision,
-    ) -> std::result::Result<kalcode_contracts::permissions::ApprovalRequest, String> {
-        Ok(kalcode_contracts::permissions::ApprovalRequest {
-            id: new_id(),
-            action,
-            decision,
-            permission_mode: mode,
-            status: kalcode_contracts::permissions::ApprovalStatus::Pending,
-            resolved_decision: None,
-            resolved_at: None,
-        })
-    }
-
-    fn expire_for_thread(&self, _thread_id: &str) {}
 }
 
 /// One-line description for the approval UI and audit log.
@@ -716,43 +764,39 @@ pub fn describe(intent: &KalVoiceIntent) -> String {
         KalVoiceIntent::ResumeThreads { scope } => format!("Resume {}", scope_text(scope)),
         KalVoiceIntent::StopThreads { scope } => format!("Stop {}", scope_text(scope)),
         KalVoiceIntent::CreateTerminal { .. } => "Open a terminal".into(),
+        KalVoiceIntent::RequestPermissionMode { mode, .. } => format!(
+            "Ask to switch a thread to {} mode",
+            requestable_mode_label(*mode)
+        ),
         other => other.kind_name().replace('_', " "),
     }
 }
 
-/// The action KalVoice asks the permission engine about. KalVoice acts on the user's behalf
-/// under the default Approve mode; it never selects or changes a mode.
-fn normalized_action(intent: &KalVoiceIntent, ctx: &ExecContext) -> NormalizedAction {
-    let (thread_id, workspace_id) = match intent {
-        KalVoiceIntent::PauseThreads { scope }
-        | KalVoiceIntent::ResumeThreads { scope }
-        | KalVoiceIntent::StopThreads { scope } => match scope {
-            ThreadScope::Thread { thread_id } => (thread_id.clone(), ctx.workspace_id.clone()),
-            ThreadScope::Workspace { workspace_id } => (String::new(), Some(workspace_id.clone())),
-            ThreadScope::All => (String::new(), None),
-        },
-        KalVoiceIntent::CreateThreads { workspace_id, .. } => (
-            String::new(),
-            workspace_id.clone().or_else(|| ctx.workspace_id.clone()),
-        ),
-        _ => (String::new(), ctx.workspace_id.clone()),
+/// The action KalVoice asks the permission engine about, from the KalVoice origin. It has no
+/// thread or provider of its own (`""`, as the contract says for non-thread origins).
+fn normalized_action(
+    kind: ActionKind,
+    intent: &KalVoiceIntent,
+    ctx: &ExecContext,
+) -> NormalizedAction {
+    let workspace_id = match &kind {
+        ActionKind::CreateThreads { workspace_id, .. } => workspace_id.clone(),
+        ActionKind::ResumeThreads {
+            scope: ThreadScope::Workspace { workspace_id },
+        } => Some(workspace_id.clone()),
+        _ => ctx.workspace_id.clone(),
     };
-    let provider_id = match intent {
-        KalVoiceIntent::CreateThreads { provider_id, .. } => provider_id.clone(),
-        _ => ProviderId::new("kalvoice"),
-    };
-    let summary = describe(intent);
     NormalizedAction {
         id: new_id(),
-        thread_id,
+        thread_id: String::new(),
         workspace_id: workspace_id.unwrap_or_default(),
-        provider_id,
-        action: ActionKind::Tool {
-            tool: format!("kalvoice.{}", intent.kind_name()),
-            input_summary: summary.clone(),
-        },
-        summary,
+        provider_id: ProviderId::new(""),
+        action: kind,
+        summary: describe(intent),
         requested_at: now_rfc3339(),
+        origin: Some(ActionOrigin::KalVoice {
+            request_id: ctx.request_id.clone(),
+        }),
     }
 }
 
@@ -879,57 +923,46 @@ impl Run<'_> {
             request_id: self.req.request_id.clone(),
             workspace_id: self.req.workspace_id.clone(),
         };
-        let consequential = is_consequential(&intent);
-        let mut ask = None;
-        if consequential {
-            let action = normalized_action(&intent, &ctx);
-            let decision = self.o.gate.evaluate(&action, PermissionMode::Approve);
-            match decision.effect {
-                PolicyEffect::Deny => {
+        let mut asked = None;
+        if let Some(kind) = consequential_action(&intent, &ctx) {
+            match self.o.gate.request(normalized_action(kind, &intent, &ctx)) {
+                Err(message) => return Ok(self.fail("approval_unavailable", message)),
+                Ok(GateOutcome::Denied { reason }) => {
                     return Ok(self.fail(
                         "permission_denied",
-                        format!(
-                            "Your permission settings don't allow this. {}",
-                            decision.reason
-                        ),
+                        format!("Your permission settings don't allow this. {reason}"),
                     ));
                 }
-                PolicyEffect::Ask => ask = Some((action, decision)),
-                PolicyEffect::Allow => {}
+                Ok(GateOutcome::Asked {
+                    approval_request_id,
+                }) => asked = Some(approval_request_id),
+                Ok(GateOutcome::Allowed) => {}
             }
         }
+        // Counted once KalVoice acts on it: an approval request filed, or the command run. (The
+        // allowance was checked before any work; only a concurrent request can use it up in
+        // between, and then the filed request stays unanswered here and nothing runs.)
         if !self.count()? {
             return Ok(self.respond(KalVoiceOutcome::LimitReached {
                 resets_at: self.usage.resets_at.clone(),
             }));
         }
-        if let Some((action, decision)) = ask {
-            return Ok(
-                match self
-                    .o
-                    .gate
-                    .open_request(action, PermissionMode::Approve, decision)
-                {
-                    Ok(request) => {
-                        self.o
-                            .pending
-                            .lock()
-                            .unwrap_or_else(PoisonError::into_inner)
-                            .insert(
-                                request.id.clone(),
-                                Pending {
-                                    request_id: self.req.request_id.clone(),
-                                    intent,
-                                    ctx,
-                                },
-                            );
-                        self.respond(KalVoiceOutcome::PermissionRequired {
-                            approval_request_id: request.id,
-                        })
-                    }
-                    Err(message) => self.fail("approval_unavailable", message),
-                },
-            );
+        if let Some(approval_request_id) = asked {
+            self.o
+                .pending
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(
+                    approval_request_id.clone(),
+                    Pending {
+                        request_id: self.req.request_id.clone(),
+                        intent,
+                        ctx,
+                    },
+                );
+            return Ok(self.respond(KalVoiceOutcome::PermissionRequired {
+                approval_request_id,
+            }));
         }
         Ok(self.execute(&intent, &ctx))
     }

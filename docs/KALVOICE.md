@@ -5,8 +5,12 @@ coding prompts and KalCode commands: dictate directly into Claude Code, Codex, G
 your terminals, or ask KalVoice to run your workspace. Hold one key, speak, let go.
 
 Status: implemented in campaign Z12 (`crates/kalvoice`, the desktop shell's
-`kalvoice_commands.rs`, `apps/desktop/src/kalvoice/`); **Preview** in development and beta
-builds. See "Implementation" below and `docs/campaigns/Z12.md`.
+`kalvoice_commands.rs`, `apps/desktop/src/kalvoice/`) and integrated on `main`; **Preview**.
+Development builds always show it. Beta builds show it only when the build includes the
+on-device speech engine (`kalvoice-whisper`); the release installer is built without it today
+(it needs LLVM/libclang, see "Building"), so KalVoice is hidden in the beta installer until the
+release build adds the engine (`FeatureFlags::require_component`). Stable hides every Preview
+surface. See "Implementation" below and `docs/campaigns/Z12.md`.
 
 ## Principles
 
@@ -107,15 +111,27 @@ request (push-to-talk transcript, or typed)
 ```
 
 Deterministic intents (`KalVoiceIntent`): navigate, open workspace, create terminal, create N
-threads with a provider (1–16), open thread, pause / resume / stop threads (all, workspace,
-one), show approvals, status report ("what are my threads doing?"). Everything else is
-`Reasoning`.
+threads with a provider (1–16), open thread, focus a thread ("focus the login fix thread";
+panes aren't in this build, so it opens the thread), ask for a thread's permission mode ("switch
+the login fix thread to plan mode": KalVoice opens the thread and the person changes the mode in
+its permission menu; asking for Bypass is refused outright, and the contract can't even represent
+it), pause / resume / stop threads (all, workspace, one), show approvals, status report ("what
+are my threads doing?"). Everything else is `Reasoning`. The CA-1 layout intents `split`,
+`resize`, `close`, `search` and `switch_provider` need the pane system and provider panes, which
+are gated in this build: the grammar doesn't produce them (such utterances take the Request
+route) and the desktop executor refuses them uncounted.
 
 **Safety asymmetry** (docs/ADVANCED.md, KV-02): pausing and stopping threads only make things
-safer and run immediately. Creating or resuming threads adds work, so KalVoice shows the words
-it heard and waits for **Approve once** or **Deny** in the widget; nothing runs before. KalVoice
-never answers the permission engine's approvals, never changes a permission mode, and can never
-enable Bypass.
+safer and run immediately. Creating or resuming threads adds work, so KalVoice files it with the
+permission engine as a KalVoice-origin action (`PermissionService::request_for_origin`): it is
+evaluated under Approve, standing grants and rules never apply, and the approval request is
+stored with `origin_kind = 'kalvoice'` (no thread, `origin_id` = the KalVoice request). The widget
+shows the words it heard with **Approve once** / **Deny**, and the request is also in the
+Approvals panel; either way the person's answer goes through `approval_decide` (only the user
+can answer). KalVoice runs the command when the engine reports `approval.approved`, and drops it
+on `approval.denied` or `approval.expired` (pending requests expire when KalCode restarts);
+nothing runs before. KalVoice never answers approvals, never changes a permission mode, and can
+never enable Bypass.
 
 **KalVoice intelligence** (which provider powers reasoning) is chosen by the user: a global
 default and optional per-workspace defaults, from the providers they have connected. If the
@@ -180,9 +196,9 @@ not a launch requirement.
 | --- | --- |
 | `grammar` | Compiled deterministic text → `KalVoiceIntent` with a confidence (high / low). Whole-utterance patterns after politeness words; negations ("don't…") and compound requests ("… and then …") are never commands (→ `Reasoning`). Counts: digits or one–twenty, at most 16 threads (`thread_count_too_large`), 0 refused, anything else never guessed. Hears "codecs"/"code x" as Codex and "for"/"to" as counts where speech recognition does. |
 | `ledger` | Provisional monthly count (table `kalvoice_requests`): one row per client request id (idempotent), atomic allowance check, period from the cycle anchor day (1st, UTC) to the same day next month, refund for "Type it instead" on reversible commands within two minutes. Rows hold ids, input kind and intent name only. |
-| `schema` | Migration **v6** (`migrations/0006_kalvoice.sql`) as an isolated const, `KALVOICE_MIGRATION`. It is not in `kalcode_core::db::MIGRATIONS` until the event platform's v5 lands; the lead appends it then. |
+| `schema` | Migration **v6** (`crates/native-core/migrations/0006_kalvoice.sql`), registered in `kalcode_core::db::MIGRATIONS` after the event platform's v5 (embedded, checksummed, backed up before it runs). Upgrades v4 → v6 and v5 → v6 are tested in `crates/kalvoice/tests/schema.rs` and end to end in `apps/desktop/tests/e2e/integrity.spec.ts`. |
 | `plan` | Allowance per tier (Free 250, Pro 2,500, MAX 10,000, OWNER unlimited); a test reads `packages/protocol/src/plans.ts` so the numbers can't drift. Before accounts exist every install is provisionally Free. |
-| `orchestrator` | Routing (`talk`: command / dictation / request), allowance check → grammar → name resolution → runtime check → `PermissionGate` for commands that add work (always Approve mode; KalVoice never changes modes) → count → execute (via the `Executor` trait) or reason (via `AgentProvider`, read-only Plan mode, provider approvals denied, 120 s timeout, session terminated). `ConfirmGate` is KalVoice's own confirmation step. Events commit with state and are published after commit. |
+| `orchestrator` | Routing (`talk`: command / dictation / request, recorded as `kalvoice.talk_routed` with the contract's `TalkRoute`; the words never), allowance check → grammar → name resolution → runtime check → `OriginGate` for commands that add work (`PermissionService::request_for_origin`: KalVoice origin, Approve mode, Approve once or Deny; KalVoice never changes modes) → count → execute (via the `Executor` trait) or reason (via `AgentProvider`, read-only Plan mode, provider approvals denied, 120 s timeout, session terminated). Waiting commands continue from the person's answer (`resolve_approval`). Events commit with state and are published after commit. |
 | `voice`, `streaming`, `audio`, `stt` | One take at a time. Engine and model are checked **before** the microphone opens; capture of the default input (cpal) into memory (mono, 120 s cap), windowed-sinc resampling to 16 kHz, streaming partials, tail reuse, whisper.cpp (`whisper` feature) with a persistent decoder state, then the audio is zeroed and dropped. Only a 0–1 input level leaves the capture. |
 | `latency` | Five stage timings per take, rolling p50/p95/p99. |
 | `models` | Catalog pinned to one Hugging Face revision with sizes and SHA-256; consented, resumable, verified, atomic downloads into `<data>/models/whisper/`; cancel keeps the partial file; delete removes both. |
@@ -190,8 +206,8 @@ not a launch requirement.
 | `shortcuts` | The single-key rules: allowed keys, keys KalCode reserves, and why Fn, lock keys and modifiers are refused. |
 | `speech_output` | Optional OS voice (`tts` crate; Windows speech / macOS) on its own thread. Off by default. |
 
-What counts as a KalVoice Request: a request KalVoice acts on: it runs a command, asks for
-confirmation of one, or sends it to your provider. Refused-up-front requests are not counted:
+What counts as a KalVoice Request: a request KalVoice acts on: it runs a command, files an
+approval request for one, or sends it to your provider. Refused-up-front requests are not counted:
 limit reached, no provider connected, a workspace or thread that doesn't exist, a command this
 build can't run, or a count out of range. Dictation is never counted.
 
@@ -200,9 +216,12 @@ build can't run, or a count out of range. Dictation is never counted.
 - Commands (allow-listed in `build.rs` and the capability): `kalvoice_subscribe` (a per-window
   signal channel: listening, level, partials, results with timings, stages, downloads),
   `kalvoice_status`, `kalvoice_request`, `kalvoice_talk`, `kalvoice_type_instead`,
-  `kalvoice_confirm`, `kalvoice_latency`, `kalvoice_latency_record`,
+  `kalvoice_latency`, `kalvoice_latency_record`,
   `kalvoice_preferences_update`, `kalvoice_listen_start|stop|cancel`,
-  `kalvoice_model_download|cancel|delete`.
+  `kalvoice_model_download|cancel|delete`. There is no KalVoice-specific approval command:
+  approvals are answered with Z4's `approval_decide`, and a worker (`watch_approvals`) continues
+  the waiting command from the approval events and sends `request_resolved` to the widget.
+  Push to talk records its takes in `talk` mode (`KalVoiceMode::Talk`).
 - `kalvoice_executor.rs` runs commands through the same runtimes as the UI: workspaces and
   terminals (Z1, `kalcode_core`), threads (Z3, `ThreadRuntime`: `create_idle_threads`,
   `pause_threads`, `resume_threads`, `stop_threads`, `find`, `status_summary`) and pending
@@ -211,9 +230,8 @@ build can't run, or a count out of range. Dictation is never counted.
   `KalVoiceProvider`.
 - Reasoning uses the provider runtime (Z2): Claude Code, when installed and signed in, runs
   read-only in `<data>/kalvoice/reasoning`. Other providers join as their adapters land.
-- KalVoice runs only when its tables exist (schema v6). Until the lead registers v6, the app
-  says "KalVoice turns on with KalCode's next database upgrade"; the end-to-end build adds v6
-  behind an empty v5 stand-in, and only for a test's own `KALCODE_DATA_DIR`.
+- KalVoice's tables are schema v6, part of every build's migrations; the first start after
+  the update backs up the database and adds them.
 - The voice widget: one line, `[orb] KALVOICE ● Ready`, docked top centre by default (clear of
   composers and terminal controls). States Ready · Listening · Processing · Executing · Needs
   Approval · Done · Error, each as text beside a dot and announced in a polite live region; the
@@ -231,14 +249,16 @@ build can't run, or a count out of range. Dictation is never counted.
 ### Building
 
 The whisper.cpp engine is behind the cargo feature `kalvoice-whisper` (desktop) / `whisper`
-(crate) because its bindings are generated with bindgen, which needs **libclang**. With LLVM
-installed (`winget install LLVM.LLVM`) and `LIBCLANG_PATH` pointing at its `bin` folder:
+(crate) because its bindings are generated with bindgen, which needs **libclang**
+(`docs/DEVELOPMENT.md`, "Building KalVoice's speech engine"). With LLVM installed
+(`winget install LLVM.LLVM`) and `LIBCLANG_PATH` pointing at its `bin` folder:
 
 ```bash
 pnpm --filter @kalcode/desktop tauri build --no-bundle --features kalvoice-whisper
 ```
 
 Without the feature everything else works and push to talk says the speech engine isn't included
-in this build. CMake and the MSVC build tools are also required (already needed by Tauri on
+in this build; outside development builds the KalVoice surface is then hidden. The release
+installer (`pnpm release:build`) doesn't pass the feature today. CMake and the MSVC build tools are also required (already needed by Tauri on
 Windows). Microphone capture and the OS voice are built on Windows and macOS; on Linux they
 report unavailable until CI installs the ALSA and speech-dispatcher development packages.

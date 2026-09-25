@@ -542,3 +542,44 @@ fn confidence_separates_commands_from_text_you_might_dictate() {
         );
     }
 }
+
+#[test]
+fn focus_and_permission_mode_requests_never_bypass() {
+    assert_eq!(
+        intent("focus the login fix thread"),
+        KalVoiceIntent::Focus {
+            query: "login fix".into()
+        }
+    );
+    assert_eq!(
+        intent("focus on thread login fix"),
+        KalVoiceIntent::Focus {
+            query: "login fix".into()
+        }
+    );
+    assert_eq!(
+        intent("switch the login fix thread to plan mode"),
+        KalVoiceIntent::RequestPermissionMode {
+            mode: RequestableMode::Plan,
+            thread_query: Some("login fix".into()),
+        }
+    );
+    assert_eq!(
+        intent("Put thread parser into auto mode."),
+        KalVoiceIntent::RequestPermissionMode {
+            mode: RequestableMode::Auto,
+            thread_query: Some("parser".into()),
+        }
+    );
+    // Bypass is refused outright, never routed anywhere.
+    assert_eq!(
+        rejected("switch the login fix thread to bypass mode"),
+        "bypass_not_allowed"
+    );
+    assert_eq!(rejected("turn on bypass"), "bypass_not_allowed");
+    assert_eq!(rejected("enable bypass mode"), "bypass_not_allowed");
+    // Negated requests stay reasoning.
+    assert!(is_reasoning(
+        "don't switch the login fix thread to plan mode"
+    ));
+}

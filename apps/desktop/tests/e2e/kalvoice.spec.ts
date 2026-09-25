@@ -11,6 +11,10 @@ import { type Browser, chromium, expect, type Page, test } from "@playwright/tes
  * `kalvoice_talk` command with a transcript, exactly what the app sends after the key is
  * released. Set KALVOICE_E2E_MODEL to an installed `ggml-tiny.en.bin` to exercise the "model
  * installed" path without downloading it again.
+ *
+ * Provider quota is never used unless KALVOICE_E2E_REASONING=1: otherwise the app runs with a
+ * scrubbed PATH and home folders, so no signed-in provider can be found and a request that needs
+ * reasoning must ask to connect one.
  */
 const EXE = process.env.KALCODE_E2E_EXE ?? resolve(import.meta.dirname, "../../../../target/e2e/release/kalcode.exe");
 const PORT = Number(process.env.KALCODE_E2E_CDP_PORT ?? 9438);
@@ -25,14 +29,29 @@ interface Running {
   page: Page;
 }
 
+const REASONING = process.env.KALVOICE_E2E_REASONING === "1";
+
+/** Hides the owner's provider installs from the app (no PATH entries, empty home folders). */
+function withoutProviders(dataDir: string): Record<string, string> {
+  if (REASONING) return {};
+  const home = join(dataDir, "no-providers");
+  for (const dir of ["home", "roaming", "local"]) mkdirSync(join(home, dir), { recursive: true });
+  const windows = process.env.SystemRoot ?? "C:\\Windows";
+  return {
+    PATH: `${windows}\\System32;${windows}`,
+    USERPROFILE: join(home, "home"),
+    HOME: join(home, "home"),
+    APPDATA: join(home, "roaming"),
+    LOCALAPPDATA: join(home, "local"),
+  };
+}
+
 async function launch(dataDir: string): Promise<Running> {
   const child = spawn(EXE, [], {
     env: {
       ...process.env,
+      ...withoutProviders(dataDir),
       KALCODE_DATA_DIR: dataDir,
-      // KalVoice's ledger (schema v6) is added only for this suite's own data folder until v5
-      // lands on main (see open_core in src-tauri/src/lib.rs).
-      KALCODE_E2E_KALVOICE_SCHEMA: "1",
       WEBVIEW2_USER_DATA_FOLDER: join(dataDir, "webview"),
       WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${PORT}`,
     },
@@ -75,7 +94,17 @@ const shown = (page: Page) => widget(page).locator(':scope > :not([role="status"
 
 interface TalkResult {
   route: "command" | "dictation" | "request";
-  response: { counted: boolean; outcome: { kind: string } } | null;
+  response: { requestId: string; counted: boolean; outcome: { kind: string; approvalRequestId?: string } } | null;
+}
+
+function invoke<T>(page: Page, command: string, args: Record<string, unknown> = {}): Promise<T> {
+  return page.evaluate(
+    ([cmd, a]) =>
+      (
+        window as unknown as { __TAURI_INTERNALS__: { invoke: (c: string, a: unknown) => Promise<unknown> } }
+      ).__TAURI_INTERNALS__.invoke(cmd, a),
+    [command, args] as const,
+  ) as Promise<T>;
 }
 
 /** What the app sends when the push-to-talk key is released (native routing, no audio). */
@@ -132,15 +161,76 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
     expect(request.route).toBe("request");
 
     // Needs reasoning: runs on the user's own signed-in provider (their quota), so only when
-    // explicitly allowed; otherwise KalVoice must either answer or ask to connect a provider.
-    if (process.env.KALVOICE_E2E_REASONING === "1") {
+    // explicitly allowed; otherwise no provider is visible and KalVoice asks to connect one.
+    if (REASONING) {
       await page.getByRole("button", { name: "KalVoice", exact: true }).click();
       await input.fill("Summarize what KalVoice can do in one sentence");
       await input.press("Enter");
       await expect(shown(page).getByText(/^(Done|Error)$/)).toBeVisible({ timeout: 150_000 });
     } else {
-      expect(request.response?.outcome.kind).toMatch(/^(needs_provider|completed|failed)$/);
+      expect(request.response?.outcome.kind).toBe("needs_provider");
+      expect(request.response?.counted).toBe(false);
     }
+
+    // Each utterance's route is recorded (ids and the route only, never the words).
+    const routed = await invoke<{ events: { payload: { requestId: string; outcome: string } }[] }>(
+      page,
+      "events_query",
+      {
+        query: {
+          types: ["kalvoice.talk_routed"],
+          correlation: {
+            workspaceId: null,
+            threadId: null,
+            missionId: null,
+            providerId: null,
+            requestId: null,
+            agentId: null,
+            taskId: null,
+            automationId: null,
+            causationId: null,
+          },
+          afterSeq: null,
+          beforeSeq: null,
+          from: null,
+          to: null,
+          order: "asc",
+          limit: 10,
+        },
+      },
+    );
+    expect(routed.events.map((e) => e.payload.outcome)).toEqual(["command", "dictation", "request"]);
+    expect(JSON.stringify(routed.events)).not.toContain("parser");
+
+    // A command that adds work is filed with the real permission engine as a KalVoice approval
+    // (origin kalvoice, no thread, Approve once or Deny) and waits; the person's Deny, given
+    // through the same approval_decide as the Approvals panel, reaches the widget.
+    const create = await talk(page, "open two codex threads", "none");
+    expect(create.route).toBe("command");
+    expect(create.response?.outcome.kind).toBe("permission_required");
+    expect(create.response?.counted).toBe(true);
+    const approvalId = create.response?.outcome.approvalRequestId as string;
+    const pending = await invoke<
+      {
+        id: string;
+        permissionMode: string;
+        allowedDecisions: string[];
+        action: { threadId: string; origin: { kind: string; requestId: string } | null; summary: string };
+      }[]
+    >(page, "approval_list", { status: "pending" });
+    const filed = pending.find((a) => a.id === approvalId);
+    expect(filed).toMatchObject({
+      permissionMode: "approve",
+      allowedDecisions: ["deny", "approve_once"],
+      action: {
+        threadId: "",
+        origin: { kind: "kalvoice", requestId: create.response?.requestId },
+        summary: "Open 2 Codex threads",
+      },
+    });
+    await invoke(page, "approval_decide", { requestId: approvalId, decision: "deny" });
+    await expect(shown(page).getByText("The request wasn't approved, so KalVoice didn't run it.")).toBeVisible();
+    expect(await invoke<unknown[]>(page, "thread_list", {})).toEqual([]);
 
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     const section = page.getByRole("region", { name: "KalVoice", exact: true });
@@ -164,11 +254,15 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
     await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible({ timeout: 20_000 });
     await expect(widget(page)).toHaveAttribute("data-anchor", "top_left");
     await page.getByRole("button", { name: "KalVoice", exact: true }).click();
-    // The typed command and the spoken one counted; dictation didn't.
-    await expect(page.locator("#kalvoice-status").getByText(/^Used [23] of 250 · resets/)).toBeVisible();
+    // The typed command, the spoken one and the approval request counted; dictation and the
+    // request without a provider didn't.
+    await expect(
+      page.locator("#kalvoice-status").getByText(REASONING ? /^Used [34] of 250 · resets/ : /^Used 3 of 250 · resets/),
+    ).toBeVisible();
     await page.getByRole("button", { name: "Dashboard" }).click();
     const activity = page.getByRole("region", { name: "Activity" });
     await expect(activity.getByText("KalVoice ran a command").first()).toBeVisible();
+    await expect(activity.getByText("KalVoice heard a command").first()).toBeVisible();
     // Activity never shows what was said.
     await expect(activity.getByText(/unit test for the parser/i)).toHaveCount(0);
     await close(app);

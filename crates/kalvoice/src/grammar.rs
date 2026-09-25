@@ -14,7 +14,7 @@ use std::sync::OnceLock;
 
 use kalcode_contracts::agent::ProviderId;
 use kalcode_contracts::app::SurfaceId;
-use kalcode_contracts::kalvoice::{KalVoiceIntent, ThreadScope};
+use kalcode_contracts::kalvoice::{KalVoiceIntent, RequestableMode, ThreadScope};
 
 /// The most threads one request may open.
 pub const MAX_THREADS_PER_REQUEST: u32 = 16;
@@ -775,8 +775,64 @@ fn build_rules() -> Vec<Rule> {
         );
     }
 
+    // Focus a thread by name. Panes aren't in this build, so focusing a thread opens it.
+    for p in [
+        "focus [on] [the|my] thread <name>",
+        "focus [on] [the|my] <name> (thread|pane)",
+    ] {
+        add(
+            p.into(),
+            Box::new(|c| {
+                Understood::intent(KalVoiceIntent::Focus {
+                    query: c.names.first().cloned().unwrap_or_default(),
+                })
+            }),
+        );
+    }
+
+    // Ask for a thread's permission mode to change. KalVoice only asks: the person confirms the
+    // change in KalCode. Bypass can't be requested at all (the contract can't represent it).
+    for (word, mode) in [
+        ("plan", RequestableMode::Plan),
+        ("approve", RequestableMode::Approve),
+        ("auto", RequestableMode::Auto),
+    ] {
+        for p in [
+            format!("{MODE_VERB} [the|my] thread <name> (to|into|in) {word} mode"),
+            format!("{MODE_VERB} [the|my] <name> thread (to|into|in) {word} mode"),
+        ] {
+            add(
+                p,
+                Box::new(move |c| {
+                    Understood::intent(KalVoiceIntent::RequestPermissionMode {
+                        mode,
+                        thread_query: c.names.first().cloned(),
+                    })
+                }),
+            );
+        }
+    }
+    for p in [
+        format!("{MODE_VERB} [the|my] thread <name> (to|into|in) bypass [mode]"),
+        format!("{MODE_VERB} [the|my] <name> thread (to|into|in) bypass [mode]"),
+        "(turn on|enable|use|allow|switch to|go to) bypass [mode]".to_owned(),
+    ] {
+        add(
+            p,
+            Box::new(|_| Understood::Rejected {
+                code: "bypass_not_allowed",
+                message:
+                    "KalVoice can't turn on Bypass. Only you can, in the thread's permission menu."
+                        .into(),
+            }),
+        );
+    }
+
     rules
 }
+
+/// Verbs for asking a thread's permission mode to change.
+const MODE_VERB: &str = "(switch|change|put|set|move)";
 
 fn thread_control(
     add: &mut impl FnMut(String, Build),

@@ -10,9 +10,12 @@ import { closeGracefully, EXE, launch, removeDir } from "./harness.ts";
  * Data safety and permission enforcement against the real app:
  * - a database as the released app (schema v1) left it is upgraded to the latest schema with a
  *   backup, and its settings and events survive;
- * - a database as the installed wave-2 app (schema v4) left it is upgraded to v5 (L-1 event
- *   correlation) with a backup of the untouched v4 file; every row survives and the new
- *   `events_query` IPC reads it;
+ * - a database as the installed 0.1.x app (schema v4) left it is upgraded to v6 (L-1 event
+ *   correlation, then KalVoice's ledger) with a backup of the untouched v4 file; every row
+ *   survives and the new `events_query` IPC reads it;
+ * - a database at schema v5 (what the owner's app has after the update that ships L-1) is
+ *   upgraded to v6 (KalVoice) with a backup of the untouched v5 file; its v5 correlation ids and
+ *   every row survive, and KalVoice's ledger works;
  * - the real permission engine, over a real workspace root, allows a harmless read inside the
  *   workspace and asks before a write outside it (test hook `test_permission_probe`; no
  *   provider, no thread, no prompt, nothing is written).
@@ -68,7 +71,7 @@ interface EventLite {
 }
 
 /** The schema version this build migrates to. */
-const LATEST = 5;
+const LATEST = 6;
 
 test("a v1 database from the released app is upgraded to the latest schema with a backup and nothing lost", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-"));
@@ -116,15 +119,15 @@ print(c.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], c.e
         backup,
       ),
     ).toBe('1 "light" 3');
-    // The upgraded database has every table of v2–v4.
+    // The upgraded database has every table of v2–v4 and v6.
     expect(
       python(
         `import sqlite3,sys
 c=sqlite3.connect(sys.argv[1])
-print(",".join(r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('workspaces','terminals','threads','approvals','permission_audit') ORDER BY name")))`,
+print(",".join(r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('workspaces','terminals','threads','approvals','permission_audit','kalvoice_requests','kalvoice_preferences') ORDER BY name")))`,
         join(dataDir, "kalcode.db"),
       ),
-    ).toBe("approvals,permission_audit,terminals,threads,workspaces");
+    ).toBe("approvals,kalvoice_preferences,kalvoice_requests,permission_audit,terminals,threads,workspaces");
   } finally {
     removeDir(dataDir);
   }
@@ -139,13 +142,24 @@ const V4_EVENTS = [
   "0199a000-0000-7000-8000-000000000014",
 ];
 
+const V5_EVENT = "0199a000-0000-7000-8000-000000000015";
+const V5_AGENT = "0199a000-0000-7000-8000-0000000000c1";
+const V5_CAUSE = "0199a000-0000-7000-8000-0000000000c2";
+
 /**
- * Writes `kalcode.db` exactly as the installed wave-2 app (schema v4) leaves it: migrations
- * 0001–0004 with their checksums, and user data in the v1–v4 tables — settings, a workspace, a
- * finished thread, a permission preference and correlated events.
+ * Writes `kalcode.db` exactly as an installed app at schema v4 (0.1.x) or v5 (the update with
+ * L-1) leaves it: migrations 0001–0004 (and 0005) with their checksums, and user data in the
+ * v1–v4 tables — settings, a workspace, a finished thread, a permission preference and
+ * correlated events. At v5 one more event carries the v5 correlation ids.
  */
-function createV4Database(dataDir: string, projectDir: string) {
-  const names = ["0001_foundation", "0002_workspaces", "0003_threads", "0004_permissions"];
+function createDatabase(dataDir: string, projectDir: string, version: 4 | 5) {
+  const names = [
+    "0001_foundation",
+    "0002_workspaces",
+    "0003_threads",
+    "0004_permissions",
+    "0005_event_correlation",
+  ].slice(0, version);
   const files = names.map((name, index) => {
     const sql = readFileSync(join(MIGRATIONS, `${name}.sql`), "utf8");
     const file = join(dataDir, `v${index + 1}.sql`);
@@ -171,6 +185,8 @@ c.execute("INSERT INTO events (id,type,version,occurred_at,source,payload) VALUE
 c.execute("INSERT INTO events (id,type,version,occurred_at,source,workspace_id,payload) VALUES (?,'workspace.created',1,'2026-09-20T10:02:00Z','core',?,json(?))",(ev[1],ws,json.dumps({"workspaceId":ws,"name":"legacy-project"})))
 c.execute("INSERT INTO events (id,type,version,occurred_at,source,workspace_id,thread_id,provider_id,payload) VALUES (?,'thread.completed',1,'2026-09-20T10:04:00Z','core',?,?,'claude-code',json(?))",(ev[2],ws,th,json.dumps({"threadId":th})))
 c.execute("INSERT INTO events (id,type,version,occurred_at,source,payload) VALUES (?,'app.stopped',1,'2026-09-20T10:06:00Z','core','{\\"uptimeMs\\":300000}')",(ev[3],))
+if len(sys.argv) > 7:
+    c.execute("INSERT INTO events (id,type,version,occurred_at,source,agent_id,causation_id,payload) VALUES (?,'settings.changed',1,'2026-09-21T09:00:00Z','ui',?,?,'{\\"keys\\":[\\"appearance.theme\\"]}')",(sys.argv[7],sys.argv[8],sys.argv[9]))
 c.commit()`,
     join(dataDir, "kalcode.db"),
     JSON.stringify(files),
@@ -178,6 +194,7 @@ c.commit()`,
     V4_THREAD,
     projectDir,
     JSON.stringify(V4_EVENTS),
+    ...(version === 5 ? [V5_EVENT, V5_AGENT, V5_CAUSE] : []),
   );
 }
 
@@ -186,11 +203,11 @@ interface EventPageLite {
   nextCursor: number | null;
 }
 
-test("a v4 database from the installed app is upgraded to v5 with a backup; every row survives and events_query reads it", async () => {
+test("a v4 database from the installed app is upgraded to v6 with a backup; every row survives and events_query reads it", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-"));
   const projectDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-legacy-"));
   try {
-    createV4Database(dataDir, projectDir);
+    createDatabase(dataDir, projectDir, 4);
     const app = await launch(dataDir);
     const page = app.page;
     await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
@@ -200,8 +217,8 @@ test("a v4 database from the installed app is upgraded to v5 with a backup; ever
       page,
       "diagnostics_get",
     );
-    expect(diagnostics.database.schemaVersion).toBe(5);
-    expect(diagnostics.database.latestSchemaVersion).toBe(5);
+    expect(diagnostics.database.schemaVersion).toBe(LATEST);
+    expect(diagnostics.database.latestSchemaVersion).toBe(LATEST);
 
     // Every v4 event is kept; the upgrade is recorded with its backup.
     const recent = await invoke<EventLite[]>(page, "events_recent", { limit: 100, beforeSeq: null });
@@ -211,7 +228,7 @@ test("a v4 database from the installed app is upgraded to v5 with a backup; ever
         "v4 events are kept",
       ).toContain(id);
     const upgrade = recent.find((e) => e.type === "database.migrated" && e.payload.fromVersion === 4);
-    expect(upgrade?.payload).toEqual({ fromVersion: 4, toVersion: 5, backupCreated: true });
+    expect(upgrade?.payload).toEqual({ fromVersion: 4, toVersion: LATEST, backupCreated: true });
 
     // The new query IPC reads the upgraded log: by thread correlation (a v4 row), by prefix, paged.
     const emptyCorrelation = {
@@ -293,7 +310,7 @@ test("a v4 database from the installed app is upgraded to v5 with a backup; ever
     });
 
     await page.getByRole("button", { name: "Settings" }).click();
-    await expect(page.getByText("Version 5 of 5, WAL journal")).toBeVisible();
+    await expect(page.getByText(`Version ${LATEST} of ${LATEST}, WAL journal`)).toBeVisible();
     await closeGracefully(app);
 
     // The backup is the untouched v4 database; the live one has the v5 columns and indexes.
@@ -323,6 +340,96 @@ print(cols, idx, kept)`,
     ).toBe(
       "agent_id,task_id,automation_id,causation_id events_agent_id_idx,events_automation_id_idx,events_causation_id_idx,events_request_id_idx,events_task_id_idx 1",
     );
+  } finally {
+    removeDir(dataDir);
+    removeDir(projectDir);
+  }
+});
+
+test("a v5 database (the owner's app after the L-1 update) is upgraded to v6 with a backup; its rows and correlation ids survive and KalVoice's ledger works", async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-"));
+  const projectDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-legacy-"));
+  try {
+    createDatabase(dataDir, projectDir, 5);
+    const app = await launch(dataDir);
+    const page = app.page;
+    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+
+    const diagnostics = await invoke<{ database: { schemaVersion: number; latestSchemaVersion: number } }>(
+      page,
+      "diagnostics_get",
+    );
+    expect(diagnostics.database.schemaVersion).toBe(6);
+    expect(diagnostics.database.latestSchemaVersion).toBe(6);
+
+    const recent = await invoke<(EventLite & { correlation: Record<string, unknown> })[]>(page, "events_recent", {
+      limit: 100,
+      beforeSeq: null,
+    });
+    for (const id of [...V4_EVENTS, V5_EVENT])
+      expect(
+        recent.map((e) => e.id),
+        "v5 events are kept",
+      ).toContain(id);
+    // The v5 correlation ids read back unchanged.
+    expect(recent.find((e) => e.id === V5_EVENT)?.correlation).toMatchObject({
+      agentId: V5_AGENT,
+      causationId: V5_CAUSE,
+    });
+    const upgrade = recent.find((e) => e.type === "database.migrated" && e.payload.fromVersion === 5);
+    expect(upgrade?.payload).toEqual({ fromVersion: 5, toVersion: 6, backupCreated: true });
+    // No earlier step ran again.
+    expect(recent.filter((e) => e.type === "database.migrated")).toHaveLength(1);
+
+    // The v3/v4 rows survive.
+    expect(await invoke<Record<string, unknown>>(page, "thread_get", { threadId: V4_THREAD })).toMatchObject({
+      id: V4_THREAD,
+      name: "Keep this thread",
+    });
+    expect(await invoke<{ defaultMode: string }>(page, "permission_settings_get")).toMatchObject({
+      defaultMode: "plan",
+    });
+
+    // KalVoice's v6 ledger and preferences work on the upgraded database.
+    const status = await invoke<{ usage: { used: number; allowance: number | null } }>(page, "kalvoice_status");
+    expect(status.usage.used).toBe(0);
+    const typed = await invoke<{ counted: boolean; outcome: { kind: string } }>(page, "kalvoice_request", {
+      request: { requestId: crypto.randomUUID(), text: "Go to settings", input: "text", workspaceId: null },
+    });
+    expect(typed).toMatchObject({ counted: true, outcome: { kind: "completed" } });
+    await page.getByRole("button", { name: "Settings" }).click();
+    await expect(page.getByText("Version 6 of 6, WAL journal")).toBeVisible();
+    await closeGracefully(app);
+
+    // The backup is the untouched v5 database (v5 columns, no KalVoice tables); the live one
+    // has KalVoice's tables and the counted request.
+    const backups = readdirSync(join(dataDir, "backups"));
+    expect(backups).toHaveLength(1);
+    expect(backups[0]).toMatch(/^kalcode-pre-v6-/);
+    const backup = join(dataDir, "backups", backups[0] as string);
+    expect(
+      python(
+        `import sqlite3,sys
+c=sqlite3.connect(sys.argv[1])
+cols=[r[1] for r in c.execute("PRAGMA table_info(events)")]
+kv=c.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name LIKE 'kalvoice_%'").fetchone()[0]
+print(c.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], c.execute("SELECT COUNT(*) FROM events").fetchone()[0], "causation_id" in cols, kv)`,
+        backup,
+      ),
+    ).toBe("5 5 True 0");
+    expect(
+      python(
+        `import sqlite3,sys
+c=sqlite3.connect(sys.argv[1])
+m=c.execute("SELECT version, name FROM schema_migrations WHERE version=6").fetchone()
+n=c.execute("SELECT COUNT(*) FROM kalvoice_requests").fetchone()[0]
+e=c.execute("SELECT agent_id, causation_id FROM events WHERE id=?",(sys.argv[2],)).fetchone()
+print(m[0], m[1], n, e[0], e[1])`,
+        join(dataDir, "kalcode.db"),
+        V5_EVENT,
+      ),
+    ).toBe(`6 kalvoice 1 ${V5_AGENT} ${V5_CAUSE}`);
   } finally {
     removeDir(dataDir);
     removeDir(projectDir);

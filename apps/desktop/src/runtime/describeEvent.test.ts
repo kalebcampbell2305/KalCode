@@ -135,9 +135,9 @@ describe("describeEvent", () => {
   it("says where a push-to-talk utterance went, never what was said", () => {
     const routed = (outcome: "command" | "dictation" | "request") =>
       describeEvent(envelope({ type: "kalvoice.talk_routed", payload: { requestId: "r", outcome } }));
-    expect(routed("command")).toEqual({ title: "KalVoice ran a command", detail: null, tone: "idle" });
-    expect(routed("dictation").title).toBe("KalVoice typed into the focused box");
-    expect(routed("request").title).toBe("KalVoice sent a request");
+    expect(routed("command")).toEqual({ title: "KalVoice heard a command", detail: null, tone: "idle" });
+    expect(routed("dictation").title).toBe("KalVoice heard dictation for the focused box");
+    expect(routed("request").title).toBe("KalVoice heard a request");
   });
 });
 

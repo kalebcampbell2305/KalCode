@@ -7,7 +7,7 @@ use kalcode_contracts::agent::{
     AgentEventSink, AgentSession, AuthState, DetectionState, ProviderCapabilities,
     ProviderDetection, ProviderError,
 };
-use kalcode_contracts::permissions::{ApprovalRequest, ApprovalStatus, PolicyDecision};
+use kalcode_contracts::permissions::ApprovalStatus;
 use kalcode_core::flags::BuildChannel;
 use kalcode_core::{CoreConfig, Paths};
 use time::macros::datetime;
@@ -58,9 +58,11 @@ impl Executor for FakeExecutor {
     }
 }
 
+/// Test double for the permission engine's KalVoice entry point: records every action it was
+/// asked about and answers with a fixed effect.
 struct FakeGate {
     effect: PolicyEffect,
-    modes: Mutex<Vec<PermissionMode>>,
+    actions: Mutex<Vec<NormalizedAction>>,
     opened: AtomicUsize,
 }
 
@@ -68,40 +70,28 @@ impl FakeGate {
     fn new(effect: PolicyEffect) -> Self {
         Self {
             effect,
-            modes: Mutex::new(Vec::new()),
+            actions: Mutex::new(Vec::new()),
             opened: AtomicUsize::new(0),
         }
     }
 }
 
-impl PermissionGate for FakeGate {
-    fn evaluate(&self, _action: &NormalizedAction, mode: PermissionMode) -> PolicyDecision {
-        self.modes.lock().expect("lock").push(mode);
-        PolicyDecision {
-            effect: self.effect,
-            scopes: vec![],
-            reason: "Test policy.".into(),
-            approvable: true,
-        }
-    }
-    fn open_request(
-        &self,
-        action: NormalizedAction,
-        mode: PermissionMode,
-        decision: PolicyDecision,
-    ) -> std::result::Result<ApprovalRequest, String> {
-        self.opened.fetch_add(1, Ordering::SeqCst);
-        Ok(ApprovalRequest {
-            id: new_id(),
-            action,
-            decision,
-            permission_mode: mode,
-            status: ApprovalStatus::Pending,
-            resolved_decision: None,
-            resolved_at: None,
+impl OriginGate for FakeGate {
+    fn request(&self, action: NormalizedAction) -> std::result::Result<GateOutcome, String> {
+        self.actions.lock().expect("lock").push(action);
+        Ok(match self.effect {
+            PolicyEffect::Allow => GateOutcome::Allowed,
+            PolicyEffect::Deny => GateOutcome::Denied {
+                reason: "Test policy.".into(),
+            },
+            PolicyEffect::Ask => {
+                self.opened.fetch_add(1, Ordering::SeqCst);
+                GateOutcome::Asked {
+                    approval_request_id: new_id(),
+                }
+            }
         })
     }
-    fn expire_for_thread(&self, _thread_id: &str) {}
 }
 
 /// Test double provider: answers with a fixed message, or never answers.
@@ -128,6 +118,7 @@ impl AgentSession for FakeSession {
             self.sink.emit(AgentEvent::ApprovalRequired {
                 request_id: "approval-1".into(),
                 action: NormalizedAction {
+                    origin: None,
                     id: "a".into(),
                     thread_id: String::new(),
                     workspace_id: String::new(),
@@ -198,6 +189,7 @@ impl AgentProvider for FakeProvider {
             host_approvals: true,
             models: vec![],
             permission_mappings: vec![],
+            interactive: None,
         }
     }
     fn start_session(
@@ -265,7 +257,7 @@ fn harness_with(
                 app_version: "test".into(),
                 channel: BuildChannel::Development,
             },
-            &crate::schema::migrations_with_kalvoice(),
+            kalcode_core::db::MIGRATIONS,
         )
         .expect("core"),
     );
@@ -417,8 +409,12 @@ fn talk_dictation_is_never_counted_and_records_only_facts() {
     assert!(r.recognized_ms < 50.0);
     assert_eq!(h.orchestrator.usage().expect("usage").used, 0);
     let events = kalvoice_events(&h.core);
-    assert_eq!(types(&events), ["kalvoice.dictation_completed"]);
-    assert_eq!(events[0]["payload"]["characters"], secret.len());
+    assert_eq!(
+        types(&events),
+        ["kalvoice.talk_routed", "kalvoice.dictation_completed"]
+    );
+    assert_eq!(events[0]["payload"]["outcome"], "dictation");
+    assert_eq!(events[1]["payload"]["characters"], secret.len());
     assert!(
         !serde_json::to_string(&events)
             .expect("json")
@@ -535,7 +531,7 @@ fn limit_reached_is_returned_before_any_work() {
     assert_eq!(response.usage.used, 250);
     assert!(h.executor.executed.lock().expect("lock").is_empty());
     assert!(
-        h.gate.modes.lock().expect("lock").is_empty(),
+        h.gate.actions.lock().expect("lock").is_empty(),
         "not even evaluated"
     );
     assert_eq!(types(&kalvoice_events(&h.core)), ["kalvoice.limit_reached"]);
@@ -756,36 +752,135 @@ fn consequential_commands_wait_for_approval_then_run() {
     );
 }
 
+/// The real permission engine (Z4) over the same database: a consequential KalVoice command is
+/// filed as a `kalvoice`-origin approval with no thread, only the person can answer it (Approve
+/// once or Deny), and the command runs only after the answer.
 #[test]
-fn the_confirm_gate_always_asks_and_never_allows() {
-    let gate = ConfirmGate;
-    let action = NormalizedAction {
-        id: "a".into(),
-        thread_id: String::new(),
-        workspace_id: String::new(),
-        provider_id: ProviderId::new("kalvoice"),
-        action: ActionKind::Tool {
-            tool: "kalvoice.create_threads".into(),
-            input_summary: "Open 4 Codex threads".into(),
-        },
-        summary: "Open 4 Codex threads".into(),
-        requested_at: "2026-09-24T00:00:00Z".into(),
+fn consequential_commands_are_filed_with_the_permission_engine_as_kalvoice() {
+    use kalcode_permissions::{Actor, NoThreads, NoWorkspaces, PermissionService};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let core = Arc::new(
+        Core::open(CoreConfig {
+            paths: Paths::new(dir.path()),
+            app_version: "test".into(),
+            channel: BuildChannel::Development,
+        })
+        .expect("core"),
+    );
+    let service = Arc::new(
+        PermissionService::new(core.clone(), Arc::new(NoWorkspaces), Arc::new(NoThreads))
+            .expect("permissions"),
+    );
+    let executor = Arc::new(FakeExecutor::default());
+    let orchestrator = Orchestrator::new(
+        core.clone(),
+        Arc::new(FixedEntitlement(Tier::Free)),
+        executor.clone(),
+        service.clone(),
+        Arc::new(NoProviders),
+    )
+    .with_clock(|| NOW);
+
+    let req = request("open four codex threads");
+    let response = orchestrator.handle(req.clone()).expect("handle");
+    let KalVoiceOutcome::PermissionRequired {
+        approval_request_id,
+    } = response.outcome
+    else {
+        panic!("{:?}", response.outcome);
     };
-    for mode in [
-        PermissionMode::Approve,
-        PermissionMode::Auto,
-        PermissionMode::Bypass,
-    ] {
-        let decision = gate.evaluate(&action, mode);
-        assert_eq!(decision.effect, PolicyEffect::Ask);
-        assert!(decision.approvable);
-    }
-    let decision = gate.evaluate(&action, PermissionMode::Approve);
-    let request = gate
-        .open_request(action, PermissionMode::Approve, decision)
-        .expect("open");
-    assert!(is_valid_id(&request.id));
-    assert_eq!(request.status, ApprovalStatus::Pending);
+    assert!(response.counted);
+    assert!(orchestrator.is_waiting_for(&approval_request_id));
+    assert!(executor.executed.lock().expect("lock").is_empty());
+
+    // Stored as a KalVoice request: origin id = the KalVoice request, no thread or provider.
+    let row: (
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        String,
+    ) = core
+        .read(|conn| {
+            Ok(conn.query_row(
+                "SELECT origin_kind, origin_id, thread_id, provider_id, permission_mode
+                   FROM approvals WHERE id = ?1",
+                [&approval_request_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )?)
+        })
+        .expect("approval row");
+    assert_eq!(row.0, "kalvoice");
+    assert_eq!(row.1.as_deref(), Some(req.request_id.as_str()));
+    assert_eq!(row.2, None);
+    assert_eq!(row.3, None);
+    assert_eq!(row.4, "approve", "evaluated under Approve");
+    let pending = service
+        .list_approvals(Some(ApprovalStatus::Pending))
+        .expect("list");
+    let view = pending
+        .iter()
+        .find(|v| v.id == approval_request_id)
+        .expect("listed with the other approvals");
+    assert_eq!(
+        view.allowed_decisions,
+        vec![ApprovalDecision::Deny, ApprovalDecision::ApproveOnce]
+    );
+    assert_eq!(view.action.summary, "Open 4 Codex threads");
+
+    // KalVoice can't answer it; only the person can.
+    assert!(
+        service
+            .decide(
+                &approval_request_id,
+                ApprovalDecision::ApproveOnce,
+                Actor::KalVoice
+            )
+            .is_err()
+    );
+    service
+        .decide(
+            &approval_request_id,
+            ApprovalDecision::ApproveOnce,
+            Actor::User,
+        )
+        .expect("the person approves once");
+    let done = orchestrator
+        .resolve_approval(&approval_request_id, Some(ApprovalDecision::ApproveOnce))
+        .expect("waiting");
+    assert!(matches!(done.outcome, KalVoiceOutcome::Completed { .. }));
+    assert_eq!(executor.executed.lock().expect("lock").len(), 1);
+    assert!(!orchestrator.is_waiting_for(&approval_request_id));
+    assert_eq!(orchestrator.usage().expect("usage").used, 1);
+}
+
+#[test]
+fn an_expired_approval_runs_nothing() {
+    let h = harness_with(
+        Tier::Free,
+        FakeExecutor::default(),
+        PolicyEffect::Ask,
+        Arc::new(NoProviders),
+    );
+    let response = h
+        .orchestrator
+        .handle(request("resume all threads"))
+        .expect("handle");
+    let KalVoiceOutcome::PermissionRequired {
+        approval_request_id,
+    } = response.outcome
+    else {
+        panic!("{:?}", response.outcome);
+    };
+    let done = h
+        .orchestrator
+        .resolve_approval(&approval_request_id, None)
+        .expect("waiting");
+    assert!(
+        matches!(done.outcome, KalVoiceOutcome::Failed { ref code, .. } if code == "approval_expired")
+    );
+    assert!(h.executor.executed.lock().expect("lock").is_empty());
 }
 
 #[test]
@@ -833,9 +928,28 @@ fn policy_denial_is_not_counted_and_kalvoice_only_uses_approve_mode() {
         assert!(!response.counted);
     }
     assert!(h.executor.executed.lock().expect("lock").is_empty());
-    let modes = h.gate.modes.lock().expect("lock").clone();
-    assert_eq!(modes.len(), 2);
-    assert!(modes.iter().all(|m| *m == PermissionMode::Approve));
+    // Both were asked about as KalVoice-origin actions, with no thread or provider of their own.
+    let actions = h.gate.actions.lock().expect("lock").clone();
+    assert_eq!(actions.len(), 2);
+    for action in &actions {
+        assert!(matches!(
+            action.origin,
+            Some(ActionOrigin::KalVoice { ref request_id }) if is_valid_id(request_id)
+        ));
+        assert!(action.thread_id.is_empty());
+        assert!(action.provider_id.as_str().is_empty());
+    }
+    assert!(matches!(
+        actions[0].action,
+        ActionKind::ResumeThreads {
+            scope: ThreadScope::All
+        }
+    ));
+    assert!(matches!(
+        actions[1].action,
+        ActionKind::CreateThreads { count: 2, ref workspace_id, .. }
+            if workspace_id.as_deref() == Some("0192f3c4-0000-7000-8000-00000000000a")
+    ));
 }
 
 #[test]
@@ -861,7 +975,90 @@ fn non_consequential_commands_skip_the_gate() {
             "{text}"
         );
     }
-    assert!(h.gate.modes.lock().expect("lock").is_empty());
+    assert!(h.gate.actions.lock().expect("lock").is_empty());
+}
+
+#[test]
+fn talk_records_its_route_without_the_words() {
+    let h = harness();
+    let mut ids = Vec::new();
+    for (text, target) in [
+        ("go to settings", TalkTarget::None),
+        ("Add a unit test for the parser", TalkTarget::Field),
+        ("plan the release for friday", TalkTarget::None),
+    ] {
+        let req = talk(text, target);
+        ids.push(req.request_id.clone());
+        h.orchestrator.talk(req, &|_| {}).expect("talk");
+    }
+    let routed: Vec<serde_json::Value> = kalvoice_events(&h.core)
+        .into_iter()
+        .filter(|e| e["type"] == "kalvoice.talk_routed")
+        .collect();
+    let outcomes: Vec<(String, String)> = routed
+        .iter()
+        .map(|e| {
+            (
+                e["payload"]["requestId"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+                e["payload"]["outcome"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        outcomes,
+        vec![
+            (ids[0].clone(), "command".to_owned()),
+            (ids[1].clone(), "dictation".to_owned()),
+            (ids[2].clone(), "request".to_owned()),
+        ]
+    );
+    let all = serde_json::to_string(&routed).expect("json");
+    assert!(!all.contains("parser") && !all.contains("release"));
+}
+
+#[test]
+fn focus_and_mode_requests_run_without_the_gate_and_bypass_is_refused_uncounted() {
+    let h = harness_with(
+        Tier::Free,
+        FakeExecutor::default(),
+        PolicyEffect::Deny,
+        Arc::new(NoProviders),
+    );
+    for text in [
+        "focus the login fix thread",
+        "switch the login fix thread to plan mode",
+    ] {
+        let response = h.orchestrator.handle(request(text)).expect("handle");
+        assert!(
+            matches!(response.outcome, KalVoiceOutcome::Completed { .. }),
+            "{text}: {:?}",
+            response.outcome
+        );
+    }
+    assert!(h.gate.actions.lock().expect("lock").is_empty());
+    assert!(matches!(
+        h.executor.executed.lock().expect("lock").last(),
+        Some(KalVoiceIntent::RequestPermissionMode {
+            mode: RequestableMode::Plan,
+            ..
+        })
+    ));
+    let before = h.orchestrator.usage().expect("usage").used;
+    let bypass = h
+        .orchestrator
+        .handle(request("switch the login fix thread to bypass mode"))
+        .expect("handle");
+    assert!(
+        matches!(bypass.outcome, KalVoiceOutcome::Failed { ref code, .. } if code == "bypass_not_allowed")
+    );
+    assert!(!bypass.counted);
+    assert_eq!(h.orchestrator.usage().expect("usage").used, before);
 }
 
 #[test]

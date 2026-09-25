@@ -19,7 +19,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use kalcode_contracts::kalvoice::{KalVoiceIntent, KalVoiceMode};
-use kalcode_contracts::permissions::AskUnlessReadGate;
 use kalcode_core::flags::BuildChannel;
 use kalcode_core::{Core, CoreConfig, Paths};
 use kalcode_kalvoice::audio::{ActiveCapture, AudioSource, CaptureError};
@@ -180,7 +179,7 @@ fn main() {
                 app_version: "bench".into(),
                 channel: BuildChannel::Development,
             },
-            &kalcode_kalvoice::schema::migrations_with_kalvoice(),
+            kalcode_core::db::MIGRATIONS,
         )
         .expect("core"),
     );
@@ -199,11 +198,21 @@ fn main() {
         .map(|i| (kalcode_contracts::ids::new_id(), format!("project {i}")))
         .collect();
     workspaces.push((kalcode_contracts::ids::new_id(), "authentication".into()));
+    // The real permission engine over the same database, as in the app (KalVoice-origin
+    // approvals for commands that add work).
+    let permissions = Arc::new(
+        kalcode_permissions::PermissionService::new(
+            core.clone(),
+            Arc::new(kalcode_permissions::NoWorkspaces),
+            Arc::new(kalcode_permissions::NoThreads),
+        )
+        .expect("permissions"),
+    );
     let orchestrator = Orchestrator::new(
         core,
         Arc::new(FixedEntitlement(Tier::Owner)),
         Arc::new(FixtureExecutor { workspaces }),
-        Arc::new(AskUnlessReadGate),
+        permissions,
         Arc::new(NoProviders),
     );
 
@@ -225,9 +234,7 @@ fn main() {
             let secs = audio.len() as f64 / 16_000.0;
             *source.next.lock().unwrap() = audio;
             let pressed = Instant::now();
-            let id = voice
-                .begin_at(KalVoiceMode::Command, pressed)
-                .expect("begin");
+            let id = voice.begin_at(KalVoiceMode::Talk, pressed).expect("begin");
             std::thread::sleep(Duration::from_secs_f64(secs) + Duration::from_millis(30));
             let finished = voice.end_timed(&id).expect("end");
             let text = match &finished.result {

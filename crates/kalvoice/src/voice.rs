@@ -476,7 +476,7 @@ mod tests {
                     app_version: "test".into(),
                     channel: BuildChannel::Development,
                 },
-                &crate::schema::migrations_with_kalvoice(),
+                kalcode_core::db::MIGRATIONS,
             )
             .expect("core"),
         );

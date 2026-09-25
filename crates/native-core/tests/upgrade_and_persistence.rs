@@ -36,7 +36,8 @@ fn migrations_are_numbered_contiguously() {
             (2, "workspaces"),
             (3, "threads"),
             (4, "permissions"),
-            (5, "event_correlation")
+            (5, "event_correlation"),
+            (6, "kalvoice")
         ]
     );
 }
@@ -155,12 +156,12 @@ fn upgrade_from_v1_keeps_data_and_writes_backup() {
         .find_map(|e| match e.event {
             EventPayload::DatabaseMigrated {
                 from_version: 1,
-                to_version: 5,
+                to_version: 6,
                 backup_created,
             } => Some(backup_created),
             _ => None,
         })
-        .expect("database.migrated 1 -> 5");
+        .expect("database.migrated 1 -> 6");
     assert!(migrated);
 
     // Backup file exists and is a valid v1 database with the pre-upgrade data.
@@ -340,7 +341,8 @@ fn upgrade_v1_to_v5_step_by_step_keeps_data_and_backs_up_each_step() {
     }
     assert_eq!(backup_versions(dir.path()), vec![1, 2, 3]);
 
-    let core = Core::open(config(dir.path())).expect("v5 open");
+    // Exactly v4 -> v5 here; v4 -> v6 and v5 -> v6 (KalVoice) are in crates/kalvoice/tests.
+    let core = Core::open_with_migrations(config(dir.path()), &MIGRATIONS[..5]).expect("v5 open");
     assert_eq!(backup_versions(dir.path()), vec![1, 2, 3, 4]);
     assert_eq!(
         core.diagnostics()
@@ -476,7 +478,8 @@ fn upgrade_v4_to_v5_backs_up_and_preserves_everything() {
     };
     let v4_count = v4_events.len() + 1; // + app.stopped
 
-    let core = Core::open(config(dir.path())).expect("v5 open");
+    // Exactly v4 -> v5 here; v4 -> v6 and v5 -> v6 (KalVoice) are in crates/kalvoice/tests.
+    let core = Core::open_with_migrations(config(dir.path()), &MIGRATIONS[..5]).expect("v5 open");
 
     // The backup is the untouched v4 database.
     assert_eq!(backup_versions(dir.path()), vec![4]);

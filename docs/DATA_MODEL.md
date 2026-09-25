@@ -1,7 +1,7 @@
 # KalCode Data Model
 
-Status: schema v3 implemented (Z0 v1 + Z1 workspaces and terminals + Z3 threads); later entities
-defined for planning.
+Status: schema v6 implemented (Z0 v1, Z1 workspaces and terminals, Z3 threads, Z4 permissions,
+L-1 event correlation, Z12 KalVoice); later entities defined for planning.
 
 ## 1. Local database (SQLite, `<app-data>/kalcode.db`)
 
@@ -118,9 +118,19 @@ upgrade is tested with a backup of the untouched v4 file and every row preserved
 `crates/native-core/tests/upgrade_and_persistence.rs`) and end to end against the real app
 (`apps/desktop/tests/e2e/integrity.spec.ts`).
 
-Schema versions 6 (KalVoice), 7 (`crates/git`, `GIT_MIGRATION`) and 8 (`crates/context`,
-`MIGRATION_V8`) stay isolated constants in their crates until the lead registers them; their
-tests fill the versions between the registered migrations and theirs with stand-ins.
+### Implemented — schema version 6 (`0006_kalvoice.sql`, Z12 KalVoice)
+
+`kalvoice_requests` (the provisional local count of KalVoice Requests: one row per client
+request id, ids and facts only, never words or audio) and `kalvoice_preferences` (JSON values
+validated by `crates/kalvoice`). Owned by `crates/kalvoice`; no foreign keys to other
+campaigns' tables. The v4 → v6 and v5 → v6 upgrades are tested with a backup of the untouched
+file and every row preserved (`crates/kalvoice/tests/schema.rs`) and end to end against the
+real app (`apps/desktop/tests/e2e/integrity.spec.ts`, which opens a v5 database as the owner's
+app will have it after the update that ships v5).
+
+Schema versions 7 (`crates/git`, `GIT_MIGRATION`) and 8 (`crates/context`, `MIGRATION_V8`) stay
+isolated constants in their crates until the lead registers them; their tests fill the versions
+between the registered migrations and theirs with stand-ins.
 
 ### Migration rules
 

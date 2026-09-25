@@ -377,7 +377,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
     if (now.phase === "transcribing" && now.sessionId) {
       dispatch({
         type: "signal",
-        signal: { kind: "cancelled", sessionId: now.sessionId, mode: now.mode ?? "command" },
+        signal: { kind: "cancelled", sessionId: now.sessionId, mode: now.mode ?? "talk" },
       });
     }
   }, [client]);
@@ -398,7 +398,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
 
   const startListening = useCallback(async () => {
     try {
-      await client.kalvoiceListenStart("command");
+      await client.kalvoiceListenStart("talk");
     } catch {
       // The native side reports why as a `listening_failed` signal.
     }
@@ -450,12 +450,14 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       const id = stateRef.current.approvalRequestId;
       if (!id) return;
       try {
-        applyResponse(await client.kalvoiceConfirm(id, decision));
+        // The person's answer goes to the permission engine like any approval (actor: user);
+        // KalVoice continues when the engine reports it (the `request_resolved` signal).
+        await client.decideApproval(id, decision);
       } catch (error) {
         toast.show({ tone: "danger", title: "Answer not recorded", description: toKalCodeError(error).message });
       }
     },
-    [client, toast, applyResponse],
+    [client, toast],
   );
 
   const dismiss = useCallback(() => dispatch({ type: "dismiss" }), []);

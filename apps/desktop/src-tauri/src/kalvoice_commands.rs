@@ -12,30 +12,34 @@
 //!   (Z1), threads and their status (Z3), pending approvals (Z4, read-only).
 //! - Providers: [`DesktopProviders`] over the provider runtime (Z2): KalVoice reasoning runs on
 //!   the user's own signed-in Claude Code, read-only, in an empty KalVoice folder.
-//! - Confirmation: commands that add work (create or resume threads) wait for the person's
-//!   answer in the KalVoice widget ([`ConfirmGate`], `kalvoice_confirm`). Pausing and stopping
-//!   make things safer and run directly. KalVoice never answers the permission engine's
-//!   approvals and never changes permission modes.
+//! - Permissions (Z4): commands that add work (create or resume threads) are filed with the
+//!   permission engine as KalVoice-origin approval requests
+//!   (`PermissionService::request_for_origin`: evaluated under Approve, `origin_kind =
+//!   'kalvoice'`, Approve once or Deny). The person answers them like any approval — in the
+//!   KalVoice widget or the Approvals panel, both through `approval_decide` — and KalVoice runs
+//!   the command when it sees `approval.approved` ([`watch_approvals`]). Pausing and stopping
+//!   make things safer and run directly. KalVoice never answers approvals and never changes
+//!   permission modes.
 
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, Weak, mpsc};
 use std::time::{Duration, Instant};
 
 use kalcode_contracts::agent::{AgentProvider, ProviderId, SessionConfig};
 use kalcode_contracts::app::SurfaceId;
+use kalcode_contracts::events::EventPayload;
 use kalcode_contracts::kalvoice::{KalVoiceMode, KalVoiceOutcome};
-use kalcode_contracts::permissions::ApprovalDecision;
-use kalcode_contracts::permissions::PermissionMode;
+use kalcode_contracts::permissions::{ApprovalDecision, NormalizedAction, PermissionMode};
 use kalcode_core::{AppInfo, Core, IpcError, KalError};
 use kalcode_kalvoice::audio::MAX_RECORDING;
 use kalcode_kalvoice::audio::MicrophoneSource;
 use kalcode_kalvoice::latency::{LatencyLog, LatencySnapshot};
 use kalcode_kalvoice::models::{self, ModelError, ModelStore, SpeechModelInfo};
 use kalcode_kalvoice::orchestrator::{
-    CommandRequest, ConfirmGate, KalVoiceResponse, Orchestrator, ProviderChoice, ProviderDirectory,
-    RequestStage, TalkRequest, TalkResponse, provider_display_name,
+    CommandRequest, GateOutcome, KalVoiceResponse, Orchestrator, OriginGate, ProviderChoice,
+    ProviderDirectory, RequestStage, TalkRequest, TalkResponse, provider_display_name,
 };
 use kalcode_kalvoice::plan::ProvisionalEntitlement;
 use kalcode_kalvoice::prefs::{KalVoicePreferences, KalVoicePreferencesPatch};
@@ -251,6 +255,17 @@ pub(crate) fn surface_label(surface: SurfaceId) -> &'static str {
         SurfaceId::Memory => "Memory",
         SurfaceId::Providers => "Providers",
         SurfaceId::Settings => "Settings",
+        SurfaceId::CommandCenter => "the Command Center",
+    }
+}
+
+/// Used when the permission engine didn't start: commands that add work can't be approved, so
+/// they're refused (uncounted) instead of running unasked.
+struct NoPermissionEngine;
+
+impl OriginGate for NoPermissionEngine {
+    fn request(&self, _action: NormalizedAction) -> Result<GateOutcome, String> {
+        Err("KalCode's permission engine isn't running, so KalVoice can't ask for your approval. Restart KalCode; if this keeps happening, export diagnostics.".into())
     }
 }
 
@@ -289,16 +304,6 @@ pub fn init(
             "KalVoice isn't available because KalCode's runtime didn't start.",
         );
     };
-    // KalVoice's ledger is schema v6, registered after the event platform's v5 lands.
-    if !core
-        .read(kalcode_kalvoice::schema::installed)
-        .unwrap_or(false)
-    {
-        return KalVoiceState(
-            None,
-            "KalVoice turns on with KalCode's next database upgrade, which adds its usage ledger.",
-        );
-    }
     let providers = Arc::new(DesktopProviders {
         registry,
         reasoning_dir: core.paths().data_dir.join("kalvoice").join("reasoning"),
@@ -316,6 +321,10 @@ pub fn init(
         .filter(|s| s.visible)
         .map(|s| s.id)
         .collect();
+    let gate: Arc<dyn OriginGate> = match &permissions {
+        Some(service) => service.clone(),
+        None => Arc::new(NoPermissionEngine),
+    };
     let orchestrator = Orchestrator::new(
         core.clone(),
         Arc::new(ProvisionalEntitlement),
@@ -325,7 +334,7 @@ pub fn init(
             threads,
             permissions,
         }),
-        Arc::new(ConfirmGate),
+        gate,
         providers.clone(),
     );
     let voice = VoiceController::new(
@@ -362,10 +371,55 @@ pub fn init(
                 });
             }
         }));
+    watch_approvals(&core, Arc::downgrade(&runtime));
     refresh_talk_key(app, &runtime);
     follow_focus(app, &runtime);
     keep_warm(&runtime);
     KalVoiceState(Some(runtime), "")
+}
+
+/// The person's answers to KalVoice's approval requests arrive as ordinary approval events
+/// (from the widget or the Approvals panel, both `approval_decide`, actor = user). A worker
+/// thread continues the waiting command — runs it after `approval.approved`, drops it after
+/// `approval.denied` or `approval.expired` — and sends the result to the widget. Work never runs
+/// on the event bus's thread (publishing holds the bus lock).
+fn watch_approvals(core: &Arc<Core>, runtime: Weak<KalVoiceRuntime>) {
+    let (tx, rx) = mpsc::channel::<(String, Option<ApprovalDecision>)>();
+    core.subscribe(move |envelope| {
+        let answer = match &envelope.event {
+            EventPayload::ApprovalApproved {
+                request_id,
+                decision,
+                ..
+            } => (request_id.clone(), Some(*decision)),
+            EventPayload::ApprovalDenied { request_id, .. } => {
+                (request_id.clone(), Some(ApprovalDecision::Deny))
+            }
+            EventPayload::ApprovalExpired { request_id, .. } => (request_id.clone(), None),
+            _ => return true,
+        };
+        // Unsubscribes once the worker is gone.
+        tx.send(answer).is_ok()
+    });
+    let _ = std::thread::Builder::new()
+        .name("kalvoice-approvals".into())
+        .spawn(move || {
+            for (approval_id, decision) in rx {
+                let Some(runtime) = runtime.upgrade() else {
+                    break;
+                };
+                if !runtime.orchestrator.is_waiting_for(&approval_id) {
+                    continue;
+                }
+                if let Some(response) = runtime
+                    .orchestrator
+                    .resolve_approval(&approval_id, decision)
+                {
+                    speak_reply(&runtime, &response);
+                    runtime.signal(&KalVoiceSignal::RequestResolved { response });
+                }
+            }
+        });
 }
 
 fn parse_shortcut(accelerator: &str) -> Option<Shortcut> {
@@ -450,7 +504,7 @@ fn refresh_talk_key(app: &AppHandle, runtime: &KalVoiceRuntime) {
         Err(message) => {
             tracing::warn!(event = "kalvoice.talk_key_unavailable");
             registered.issues.push(ShortcutIssue {
-                mode: KalVoiceMode::Command,
+                mode: KalVoiceMode::Talk,
                 accelerator: prefs.talk_key.clone(),
                 message,
             });
@@ -483,7 +537,7 @@ pub fn on_shortcut(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {
             if runtime.voice.listening().is_some() {
                 return;
             }
-            if let Ok(id) = start_listening_at(&runtime, KalVoiceMode::Command, false, pressed) {
+            if let Ok(id) = start_listening_at(&runtime, KalVoiceMode::Talk, false, pressed) {
                 // Bring the widget back if it was hidden; the key works either way.
                 runtime.signal(&KalVoiceSignal::Reveal);
                 watchdog(runtime.clone(), id);
@@ -721,38 +775,6 @@ pub fn kalvoice_type_instead(
         .orchestrator
         .type_instead(&request_id)
         .map_err(|e| e.to_ipc())
-}
-
-/// The person's answer to a KalVoice confirmation ("Open 4 Codex threads?"): `approve_once`
-/// runs the command, `deny` drops it. Only the widget calls this, from the person's click;
-/// nothing spoken can answer it.
-#[tauri::command(async)]
-pub fn kalvoice_confirm(
-    state: State<'_, KalVoiceState>,
-    approval_request_id: String,
-    decision: ApprovalDecision,
-) -> Result<KalVoiceResponse, IpcError> {
-    if !matches!(
-        decision,
-        ApprovalDecision::ApproveOnce | ApprovalDecision::Deny
-    ) {
-        return Err(KalError::validation(
-            "invalid_decision",
-            "KalVoice asks once: approve it or deny it.",
-        )
-        .to_ipc());
-    }
-    state
-        .runtime()?
-        .orchestrator
-        .resolve_approval(&approval_request_id, Some(decision))
-        .ok_or_else(|| {
-            KalError::validation(
-                "confirmation_not_found",
-                "That KalVoice request is no longer waiting.",
-            )
-            .to_ipc()
-        })
 }
 
 /// Rolling latency percentiles and recent stage waterfalls (developer diagnostics).

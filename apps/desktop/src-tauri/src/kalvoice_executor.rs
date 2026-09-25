@@ -1,8 +1,16 @@
 //! What KalVoice commands do in the desktop app: they call the same runtimes the rest of
 //! KalCode uses — workspaces and terminals (Z1, `kalcode_core`), threads (Z3,
 //! [`ThreadRuntime`]) and pending approvals (Z4, [`PermissionService`], read-only). KalVoice
-//! never answers approvals and never changes permission modes; commands that add work wait for
-//! the person's confirmation before they reach this executor (see `ConfirmGate`).
+//! never answers approvals and never changes permission modes; commands that add work reach this
+//! executor only after the person approved their KalVoice-origin approval request (the
+//! orchestrator files it with `PermissionService::request_for_origin`).
+//!
+//! CA-1 intents: `focus` opens the thread (panes aren't in this build), and
+//! `request_permission_mode` opens the thread so the person can change its mode themselves
+//! (never Bypass: the contract can't represent it). `split`, `resize`, `close`, `search` and
+//! `switch_provider` need the pane system and provider panes, which are gated in this build, so
+//! they're refused before anything is counted; the grammar doesn't produce them yet (such
+//! utterances go to the Request route).
 
 use std::sync::Arc;
 
@@ -14,6 +22,7 @@ use kalcode_core::workspaces::{TerminalSize, Workspace};
 use kalcode_core::{Core, KalError};
 use kalcode_kalvoice::orchestrator::{
     ExecContext, ExecError, Executed, Executor, UiDirective, provider_display_name,
+    requestable_mode_label,
 };
 use kalcode_permissions::PermissionService;
 use kalcode_threads::{BulkOutcome, CreateIdleThread, ThreadRuntime};
@@ -205,6 +214,26 @@ impl DesktopExecutor {
     }
 }
 
+impl DesktopExecutor {
+    /// The first open thread matching a spoken name, or a user-safe "not found".
+    fn named_thread(
+        &self,
+        query: &str,
+    ) -> Result<kalcode_contracts::threads::ThreadSummary, ExecError> {
+        self.threads()?
+            .find(query)
+            .map_err(|e| from_core(&e))?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                ExecError::new(
+                    "thread_not_found",
+                    format!("KalCode has no open thread named \u{201c}{query}\u{201d}."),
+                )
+            })
+    }
+}
+
 impl Executor for DesktopExecutor {
     fn find_workspace(&self, name: &str) -> Result<Option<String>, ExecError> {
         let wanted = name.trim().to_lowercase();
@@ -239,10 +268,29 @@ impl Executor for DesktopExecutor {
             }
             KalVoiceIntent::CreateThreads { .. }
             | KalVoiceIntent::OpenThread { .. }
+            | KalVoiceIntent::Focus { .. }
             | KalVoiceIntent::PauseThreads { .. }
             | KalVoiceIntent::ResumeThreads { .. }
             | KalVoiceIntent::StopThreads { .. }
             | KalVoiceIntent::StatusReport => self.threads().map(|_| ()),
+            KalVoiceIntent::RequestPermissionMode { thread_query, .. } => {
+                self.threads()?;
+                if thread_query.as_deref().is_none_or(|q| q.trim().is_empty()) {
+                    return Err(ExecError::new(
+                        "thread_not_specified",
+                        "Say which thread, for example \u{201c}switch the login fix thread to plan mode\u{201d}.",
+                    ));
+                }
+                Ok(())
+            }
+            KalVoiceIntent::Split { .. }
+            | KalVoiceIntent::Resize { .. }
+            | KalVoiceIntent::Close { .. }
+            | KalVoiceIntent::Search { .. }
+            | KalVoiceIntent::SwitchProvider { .. } => Err(ExecError::new(
+                "not_in_this_build",
+                "Panes and provider switching aren't in this build yet, so KalVoice can't do that.",
+            )),
             KalVoiceIntent::ShowApprovals if self.permissions.is_none() => Err(ExecError::new(
                 "approvals_unavailable",
                 "KalCode's permission engine isn't running, so there's nothing KalVoice can show.",
@@ -304,21 +352,25 @@ impl Executor for DesktopExecutor {
                 count,
                 workspace_id,
             } => self.create_threads(provider_id, *count, workspace_id.as_deref()),
-            KalVoiceIntent::OpenThread { query } => {
-                let thread = self
-                    .threads()?
-                    .find(query)
-                    .map_err(|e| from_core(&e))?
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| {
-                        ExecError::new(
-                            "thread_not_found",
-                            format!("KalCode has no open thread named \u{201c}{query}\u{201d}."),
-                        )
-                    })?;
+            KalVoiceIntent::OpenThread { query } | KalVoiceIntent::Focus { query } => {
+                let thread = self.named_thread(query)?;
                 Ok(Executed {
                     summary: format!("Opened \u{201c}{}\u{201d}.", thread.name),
+                    directive: Some(UiDirective::OpenThread {
+                        thread_id: thread.id,
+                    }),
+                })
+            }
+            KalVoiceIntent::RequestPermissionMode { mode, thread_query } => {
+                // Only asks: opens the thread; the person changes the mode in its permission
+                // menu. KalVoice never calls `thread_set_permission_mode`.
+                let thread = self.named_thread(thread_query.as_deref().unwrap_or_default())?;
+                Ok(Executed {
+                    summary: format!(
+                        "Opened \u{201c}{}\u{201d}. To switch it to {}, choose it in the thread's permission menu; KalVoice doesn't change permission modes.",
+                        thread.name,
+                        requestable_mode_label(*mode)
+                    ),
                     directive: Some(UiDirective::OpenThread {
                         thread_id: thread.id,
                     }),
@@ -384,6 +436,14 @@ impl Executor for DesktopExecutor {
             KalVoiceIntent::Reasoning { .. } => {
                 Err(ExecError::new("not_a_command", "That isn't a command."))
             }
+            KalVoiceIntent::Split { .. }
+            | KalVoiceIntent::Resize { .. }
+            | KalVoiceIntent::Close { .. }
+            | KalVoiceIntent::Search { .. }
+            | KalVoiceIntent::SwitchProvider { .. } => Err(ExecError::new(
+                "not_in_this_build",
+                "Panes and provider switching aren't in this build yet, so KalVoice can't do that.",
+            )),
         }
     }
 }

@@ -474,6 +474,21 @@ export function createMemoryTransport(
     ...dashboard?.handlers,
     ...(kalvoice.handlers as DashboardHandlers),
   };
+  // KalVoice's approval requests are answered like any other: `approval_decide` (actor: user).
+  const decideOther = handlers.approval_decide;
+  handlers.approval_decide = (args) => {
+    const answered = kalvoice.decideApproval(args);
+    if (answered !== undefined) return answered;
+    if (!decideOther) {
+      fail({
+        category: "validation",
+        code: "approval_not_found",
+        message: "That approval request doesn't exist.",
+        retryable: false,
+      });
+    }
+    return decideOther(args);
+  };
 
   const transport: MemoryTransport = {
     kind: "memory",

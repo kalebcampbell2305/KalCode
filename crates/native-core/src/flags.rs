@@ -145,6 +145,19 @@ impl FeatureFlags {
         Self { surfaces, features }
     }
 
+    /// Hides a surface outside development builds when a native component it needs is not
+    /// compiled into this build (KalVoice without its on-device speech engine: push to talk
+    /// couldn't hear anything). Development builds keep showing it, with the component's honest
+    /// "not in this build" state. Stable already hides every non-available surface.
+    pub fn require_component(&mut self, surface: SurfaceId, compiled: bool, channel: BuildChannel) {
+        if compiled || channel == BuildChannel::Development {
+            return;
+        }
+        for flag in self.surfaces.iter_mut().filter(|s| s.id == surface) {
+            flag.visible = false;
+        }
+    }
+
     /// The flag of `feature` (every feature has one).
     pub fn feature(&self, feature: FeatureId) -> Option<&FeatureFlag> {
         self.features.iter().find(|flag| flag.id == feature)
@@ -218,6 +231,35 @@ mod tests {
                 assert_eq!(flag.state, SurfaceState::Gated, "{feature:?}");
                 assert_eq!(flag.visible, channel == BuildChannel::Development);
             }
+        }
+    }
+
+    #[test]
+    fn kalvoice_is_preview_and_needs_its_speech_engine_outside_development() {
+        let kalvoice = |flags: &FeatureFlags| {
+            flags
+                .surfaces
+                .iter()
+                .find(|s| s.id == SurfaceId::KalVoice)
+                .cloned()
+                .expect("kalvoice")
+        };
+        for (channel, compiled, visible) in [
+            (BuildChannel::Beta, true, true),
+            (BuildChannel::Beta, false, false),
+            (BuildChannel::Development, false, true),
+            (BuildChannel::Development, true, true),
+            (BuildChannel::Stable, true, false),
+            (BuildChannel::Stable, false, false),
+        ] {
+            let mut flags = FeatureFlags::for_channel(channel);
+            flags.require_component(SurfaceId::KalVoice, compiled, channel);
+            let flag = kalvoice(&flags);
+            assert_eq!(flag.state, SurfaceState::Preview);
+            assert_eq!(
+                flag.visible, visible,
+                "{channel:?}, engine compiled: {compiled}"
+            );
         }
     }
 
