@@ -1,0 +1,31 @@
+[package]
+name = "kalcode-context"
+description = "KalCode context packages and the Context Firewall: typed context items, folder analysis, secret detection and structure-preserving redaction, provider-safe translation and the append-only firewall decision log."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "kalcode_context"
+
+[dependencies]
+kalcode-native-core = { path = "../native-core" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+rusqlite = { workspace = true, features = ["bundled"] }
+regex = "1"
+sha2 = "0.10"
+ignore = "0.4"
+globset = "0.4"
+
+[dev-dependencies]
+tempfile.workspace = true
+proptest = "1"
+
+[lints]
+workspace = true
