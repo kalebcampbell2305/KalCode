@@ -24,11 +24,11 @@ import type {
   AppInfo,
   ApprovalView,
   BootState,
-  Correlation,
   Diagnostics,
   EventEnvelope,
+  EventPage,
   EventPayload,
-  EventSource,
+  EventQuery,
   IpcError,
   ProviderStatus,
   SecureStoreCheck,
@@ -37,6 +37,7 @@ import type {
   SurfaceFlag,
   Workspace,
 } from "@kalcode/protocol";
+import { PRODUCT_FEATURES } from "@kalcode/protocol";
 import {
   createDashboardFixtures,
   type DashboardControls,
@@ -94,6 +95,7 @@ const SURFACES: SurfaceFlag["id"][] = [
   "memory",
   "providers",
   "settings",
+  "command_center",
 ];
 
 const SETTINGS_KEYS: Record<keyof Settings, string> = {
@@ -142,6 +144,9 @@ export function createMemoryTransport(
         state: AVAILABLE_SURFACES.has(id) ? "available" : "gated",
         visible: true,
       })),
+      // Every product feature is gated until its campaign merges (crates/native-core/src/flags.rs);
+      // development builds show gated features.
+      features: PRODUCT_FEATURES.map((id) => ({ id, state: "gated", visible: true })),
     },
   };
   let settings: Settings = { theme: "dark", motion: "system", density: "comfortable", sidebarCollapsed: false };
@@ -369,6 +374,42 @@ export function createMemoryTransport(
         .filter((e) => e.seq < before)
         .slice(-limit)
         .reverse();
+    },
+    events_query: (args): EventPage => {
+      requireCore();
+      const query = args.query as EventQuery;
+      if (!Number.isInteger(query.limit) || query.limit < 1 || query.limit > 500) {
+        fail({
+          category: "validation",
+          code: "invalid_page_size",
+          message: "Page size must be between 1 and 500.",
+          retryable: false,
+        });
+      }
+      const typeOk = (type: string) =>
+        query.types.length === 0 ||
+        query.types.some((filter) =>
+          filter.endsWith(".*") ? type.startsWith(`${filter.slice(0, -2)}.`) : type === filter,
+        );
+      const correlation = Object.entries(query.correlation).filter(([, value]) => value !== null) as [
+        keyof EventEnvelope["correlation"],
+        string,
+      ][];
+      const matching = events.filter(
+        (e) =>
+          typeOk(e.type) &&
+          correlation.every(([key, value]) => e.correlation[key] === value) &&
+          (query.afterSeq === null || e.seq > query.afterSeq) &&
+          (query.beforeSeq === null || e.seq < query.beforeSeq) &&
+          (query.from === null || e.occurredAt >= query.from) &&
+          (query.to === null || e.occurredAt < query.to),
+      );
+      const ordered = query.order === "asc" ? matching : [...matching].reverse();
+      const page = ordered.slice(0, query.limit);
+      return {
+        events: page,
+        nextCursor: page.length === query.limit ? (page[page.length - 1]?.seq ?? null) : null,
+      };
     },
     events_subscribe: () =>
       fail({ category: "internal", code: "use_subscribe", message: "Use subscribe().", retryable: false }),

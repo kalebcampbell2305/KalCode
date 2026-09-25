@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::agent::ProviderId;
+use crate::kalvoice::ThreadScope;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -60,9 +61,67 @@ pub enum PermissionScope {
     BillingSpend,
     #[serde(rename = "destructive")]
     Destructive,
+    // ---- Trust Kernel phase 1 (adopted in CA-1; classified by crates/permissions in TK-1) ----
+    /// Terminate or signal a process.
+    #[serde(rename = "process.control")]
+    ProcessControl,
+    /// Open an SSH connection to a remote host.
+    #[serde(rename = "remote.connect")]
+    RemoteConnect,
+    /// Send a context package to a provider (non-user origins).
+    #[serde(rename = "context.share")]
+    ContextShare,
+    /// Agents and automations writing memory.
+    #[serde(rename = "memory.write")]
+    MemoryWrite,
+    /// Create or enable automations (non-user origins).
+    #[serde(rename = "automation.manage")]
+    AutomationManage,
+    /// Start a delegation to another agent.
+    #[serde(rename = "agent.delegate")]
+    AgentDelegate,
+    /// Start or resume agent threads on the user's behalf (KalVoice and other non-thread origins).
+    /// Added in CA-1 with the KalVoice request.
+    #[serde(rename = "thread.start")]
+    ThreadStart,
+    /// A provider tool KalCode cannot classify (Z4 request). Today unrecognized tools are still
+    /// reported as `terminal.execute` (opaque); TK-1 switches the classifier to this scope.
+    #[serde(rename = "tool.unknown")]
+    ToolUnknown,
 }
 
 impl PermissionScope {
+    /// Every scope, in declaration order (the 19 Z4 scopes, then the CA-1 additions).
+    pub const ALL: [PermissionScope; 27] = [
+        Self::FilesystemRead,
+        Self::FilesystemWrite,
+        Self::FilesystemOutsideWorkspace,
+        Self::TerminalReadOnly,
+        Self::TerminalExecute,
+        Self::PackageInstall,
+        Self::GitRead,
+        Self::GitCommit,
+        Self::GitPush,
+        Self::NetworkDocs,
+        Self::NetworkOther,
+        Self::BrowserNavigate,
+        Self::BrowserInteract,
+        Self::CredentialsAccess,
+        Self::MessagingSend,
+        Self::DeployProduction,
+        Self::CloudModify,
+        Self::BillingSpend,
+        Self::Destructive,
+        Self::ProcessControl,
+        Self::RemoteConnect,
+        Self::ContextShare,
+        Self::MemoryWrite,
+        Self::AutomationManage,
+        Self::AgentDelegate,
+        Self::ThreadStart,
+        Self::ToolUnknown,
+    ];
+
     /// Scopes whose consequences leave the machine. Never implied by Bypass.
     pub fn is_remote_consequential(self) -> bool {
         matches!(
@@ -157,6 +216,201 @@ pub enum ActionKind {
         tool: String,
         input_summary: String,
     },
+    // ---- Trust Kernel phase 1 (adopted in CA-1). Until TK-1 classifies them precisely, the
+    // engine treats these as opaque: always an explicit, one-time approval. ----
+    /// Terminate or signal a process (Utility Dock, Doctor).
+    ProcessSignal {
+        pid: u32,
+        process_name: String,
+        signal: ProcessSignalKind,
+    },
+    /// Open an SSH connection (Distributed Workspaces).
+    RemoteConnect {
+        host_id: String,
+        address: String,
+    },
+    /// Send a context package to a provider.
+    ContextShare {
+        package_id: String,
+        items: u32,
+        bytes: u64,
+    },
+    /// Write a memory record.
+    MemoryWrite {
+        memory_id: Option<String>,
+        scope: MemoryScope,
+    },
+    /// Start a delegation under a delegation contract.
+    Delegate {
+        contract_id: String,
+        delegate_agent_id: String,
+    },
+    /// Restore files from a checkpoint (Time Machine).
+    Restore {
+        checkpoint_id: String,
+        files: u32,
+        reset_branch: bool,
+    },
+    /// Create, enable, disable, edit or delete an automation.
+    AutomationChange {
+        automation_id: String,
+        change: AutomationChangeKind,
+    },
+    /// A typed Environment Doctor fix from the fixed catalog (never free-form commands).
+    DoctorFix {
+        fix_code: String,
+        target: String,
+    },
+    /// Open new agent threads (KalVoice "create three Codex threads"). Added in CA-1.
+    CreateThreads {
+        provider_id: ProviderId,
+        count: u32,
+        workspace_id: Option<String>,
+    },
+    /// Resume stopped threads (KalVoice "resume my threads"). Added in CA-1.
+    ResumeThreads {
+        scope: ThreadScope,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ProcessSignalKind {
+    Terminate,
+    Kill,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum AutomationChangeKind {
+    Create,
+    Enable,
+    Disable,
+    Edit,
+    Delete,
+}
+
+/// Where a memory record lives (`docs/CONTRACTS_ADVANCED.md` §5.9; the memory system lands in
+/// P4, the scope is needed now by `ActionKind::MemoryWrite`).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+#[ts(export)]
+pub enum MemoryScope {
+    Global,
+    Workspace { workspace_id: String },
+    Agent { agent_id: String },
+    Mission { mission_id: String },
+}
+
+/// Who is acting (Trust Kernel, `docs/TRUST_KERNEL.md`). The `kind` values are exactly the v4
+/// `approvals.origin_kind` CHECK values. Replaces the crate-local `Actor` of crates/permissions in
+/// TK-1 (same values, plus ids).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+#[ts(export)]
+pub enum ActionOrigin {
+    /// A person acting through KalCode's own UI.
+    User,
+    /// KalCode itself (expiry, recovery).
+    System,
+    /// A provider session in a thread (the only origin before TK-1).
+    Thread {
+        thread_id: String,
+    },
+    #[serde(rename = "kalvoice")]
+    KalVoice {
+        request_id: String,
+    },
+    Agent {
+        agent_id: String,
+        thread_id: String,
+    },
+    Delegation {
+        delegation_id: String,
+        thread_id: String,
+    },
+    Automation {
+        automation_id: String,
+        run_id: String,
+    },
+    Doctor {
+        run_id: String,
+        fix_code: String,
+    },
+    Continuity {
+        item_id: String,
+    },
+    /// A Utility Dock tool (`tool` is the tool's snake_case id).
+    Utility {
+        tool: String,
+    },
+    Remote {
+        host_id: String,
+    },
+}
+
+impl ActionOrigin {
+    /// Every `kind` value, in the order of the v4 `approvals.origin_kind` CHECK.
+    pub const KINDS: [&'static str; 11] = [
+        "user",
+        "system",
+        "thread",
+        "kalvoice",
+        "agent",
+        "delegation",
+        "automation",
+        "doctor",
+        "continuity",
+        "utility",
+        "remote",
+    ];
+
+    /// The `kind` tag, as stored in `approvals.origin_kind`.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::System => "system",
+            Self::Thread { .. } => "thread",
+            Self::KalVoice { .. } => "kalvoice",
+            Self::Agent { .. } => "agent",
+            Self::Delegation { .. } => "delegation",
+            Self::Automation { .. } => "automation",
+            Self::Doctor { .. } => "doctor",
+            Self::Continuity { .. } => "continuity",
+            Self::Utility { .. } => "utility",
+            Self::Remote { .. } => "remote",
+        }
+    }
+
+    /// The id stored in `approvals.origin_id` (the most specific id the origin carries).
+    pub fn id(&self) -> Option<&str> {
+        match self {
+            Self::User | Self::System => None,
+            Self::Thread { thread_id } => Some(thread_id),
+            Self::KalVoice { request_id } => Some(request_id),
+            Self::Agent { agent_id, .. } => Some(agent_id),
+            Self::Delegation { delegation_id, .. } => Some(delegation_id),
+            Self::Automation { run_id, .. } | Self::Doctor { run_id, .. } => Some(run_id),
+            Self::Continuity { item_id } => Some(item_id),
+            Self::Utility { tool } => Some(tool),
+            Self::Remote { host_id } => Some(host_id),
+        }
+    }
+
+    /// Only the user may relax policy (Trust Kernel K5/K6).
+    pub fn is_user(&self) -> bool {
+        matches!(self, Self::User)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -187,6 +441,20 @@ pub struct NormalizedAction {
     /// One-line, user-readable description ("Run npm install lodash").
     pub summary: String,
     pub requested_at: String,
+    /// Who is acting. Absent in requests stored before CA-1 and from today's adapters, meaning
+    /// `Thread { thread_id }` (see [`NormalizedAction::effective_origin`]). For non-thread
+    /// origins `thread_id` / `provider_id` hold `""` and `origin` is authoritative.
+    #[serde(default)]
+    pub origin: Option<ActionOrigin>,
+}
+
+impl NormalizedAction {
+    /// `origin`, or the thread origin every pre-CA-1 action implicitly had.
+    pub fn effective_origin(&self) -> ActionOrigin {
+        self.origin.clone().unwrap_or_else(|| ActionOrigin::Thread {
+            thread_id: self.thread_id.clone(),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -233,6 +501,19 @@ pub enum ApprovalStatus {
     Expired,
 }
 
+/// Names shown in the approval prompt, captured when the request opens.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ApprovalContext {
+    pub thread_name: Option<String>,
+    pub workspace_name: Option<String>,
+    pub provider_name: Option<String>,
+}
+
+/// An approval request as every surface shows it. The fields after `resolved_at` were adopted in
+/// CA-1 from Z4's `ApprovalView` (now an alias of this type); they default when absent so older
+/// stored or cached JSON still deserializes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -244,6 +525,20 @@ pub struct ApprovalRequest {
     pub status: ApprovalStatus,
     pub resolved_decision: Option<ApprovalDecision>,
     pub resolved_at: Option<String>,
+    /// The answers the user may give (only `deny` for requests that cannot be approved).
+    #[serde(default)]
+    pub allowed_decisions: Vec<ApprovalDecision>,
+    /// What "Allow for thread / workspace" would cover ("changing any file in this workspace").
+    #[serde(default)]
+    pub grant_coverage: String,
+    #[serde(default)]
+    pub context: Option<ApprovalContext>,
+    #[serde(default)]
+    pub created_at: String,
+    /// Why an expired request expired: `thread_stopped`, `superseded`, `mode_changed`,
+    /// `process_restarted` or `answered_in_provider` (the v4 `expire_reason` CHECK values).
+    #[serde(default)]
+    pub expire_reason: Option<String>,
 }
 
 /// The permission engine as the thread runtime sees it. Implemented by Z4; consumed by Z3.
@@ -293,6 +588,11 @@ impl PermissionGate for AskUnlessReadGate {
         mode: PermissionMode,
         decision: PolicyDecision,
     ) -> Result<ApprovalRequest, String> {
+        let allowed_decisions = if decision.approvable {
+            vec![ApprovalDecision::Deny, ApprovalDecision::ApproveOnce]
+        } else {
+            vec![ApprovalDecision::Deny]
+        };
         Ok(ApprovalRequest {
             id: crate::ids::new_id(),
             action,
@@ -301,6 +601,11 @@ impl PermissionGate for AskUnlessReadGate {
             status: ApprovalStatus::Pending,
             resolved_decision: None,
             resolved_at: None,
+            allowed_decisions,
+            grant_coverage: "only this request".into(),
+            context: None,
+            created_at: String::new(),
+            expire_reason: None,
         })
     }
 
@@ -331,6 +636,7 @@ mod tests {
             action: kind,
             summary: String::new(),
             requested_at: String::new(),
+            origin: None,
         };
         let gate = AskUnlessReadGate;
         let read = gate.evaluate(
@@ -359,5 +665,130 @@ mod tests {
         let json = serde_json::to_value(&action).expect("json");
         assert_eq!(json["kind"], "command");
         assert_eq!(json["argv"][1], "test");
+    }
+
+    /// The origin kinds are exactly the values the v4 schema accepts in `approvals.origin_kind`.
+    #[test]
+    fn origin_kinds_match_the_v4_check_exactly() {
+        let sql = include_str!("../../native-core/migrations/0004_permissions.sql");
+        let start =
+            sql.find("origin_kind IN (").expect("origin_kind CHECK") + "origin_kind IN (".len();
+        let end = start + sql[start..].find(')').expect("end of CHECK");
+        let allowed: Vec<&str> = sql[start..end]
+            .split(',')
+            .map(|v| v.trim().trim_matches('\''))
+            .collect();
+        assert_eq!(allowed, ActionOrigin::KINDS);
+        let samples = [
+            ActionOrigin::User,
+            ActionOrigin::System,
+            ActionOrigin::Thread {
+                thread_id: "t".into(),
+            },
+            ActionOrigin::KalVoice {
+                request_id: "r".into(),
+            },
+            ActionOrigin::Agent {
+                agent_id: "a".into(),
+                thread_id: "t".into(),
+            },
+            ActionOrigin::Delegation {
+                delegation_id: "d".into(),
+                thread_id: "t".into(),
+            },
+            ActionOrigin::Automation {
+                automation_id: "a".into(),
+                run_id: "r".into(),
+            },
+            ActionOrigin::Doctor {
+                run_id: "r".into(),
+                fix_code: "f".into(),
+            },
+            ActionOrigin::Continuity {
+                item_id: "i".into(),
+            },
+            ActionOrigin::Utility {
+                tool: "http".into(),
+            },
+            ActionOrigin::Remote {
+                host_id: "h".into(),
+            },
+        ];
+        let kinds: Vec<&str> = samples.iter().map(ActionOrigin::kind).collect();
+        assert_eq!(kinds, ActionOrigin::KINDS);
+        for origin in samples {
+            let json = serde_json::to_value(&origin).expect("json");
+            assert_eq!(json["kind"], origin.kind());
+            let back: ActionOrigin = serde_json::from_value(json).expect("back");
+            assert_eq!(back, origin);
+        }
+    }
+
+    /// Requests and actions stored by Z4 before CA-1 (no origin, no view fields) still decode.
+    #[test]
+    fn pre_ca1_json_still_decodes() {
+        let action = serde_json::json!({
+            "id": "a", "threadId": "t", "workspaceId": "w", "providerId": "claude-code",
+            "action": {"kind": "file_read", "path": "a"}, "summary": "", "requestedAt": ""
+        });
+        let decoded: NormalizedAction = serde_json::from_value(action.clone()).expect("action");
+        assert_eq!(decoded.origin, None);
+        assert_eq!(
+            decoded.effective_origin(),
+            ActionOrigin::Thread {
+                thread_id: "t".into()
+            }
+        );
+        let request = serde_json::json!({
+            "id": "r", "action": action,
+            "decision": {"effect": "ask", "scopes": [], "reason": "", "approvable": true},
+            "permissionMode": "approve", "status": "pending",
+            "resolvedDecision": null, "resolvedAt": null
+        });
+        let decoded: ApprovalRequest = serde_json::from_value(request).expect("request");
+        assert!(decoded.allowed_decisions.is_empty());
+        assert_eq!(decoded.expire_reason, None);
+        let json = serde_json::to_value(&decoded).expect("json");
+        assert_eq!(json["grantCoverage"], "");
+        assert!(json["context"].is_null());
+    }
+
+    #[test]
+    fn every_scope_is_listed_once_with_a_dotted_name() {
+        let mut names = std::collections::HashSet::new();
+        for scope in PermissionScope::ALL {
+            let json = serde_json::to_value(scope).expect("json");
+            let name = json.as_str().expect("string").to_owned();
+            assert!(name.contains('.') || name == "destructive", "{name}");
+            assert!(names.insert(name));
+        }
+        assert_eq!(
+            serde_json::to_value(PermissionScope::ToolUnknown).expect("json"),
+            "tool.unknown"
+        );
+        assert!(!PermissionScope::ProcessControl.is_remote_consequential());
+    }
+
+    #[test]
+    fn trust_kernel_action_kinds_are_tagged() {
+        let json = serde_json::to_value(ActionKind::ProcessSignal {
+            pid: 7,
+            process_name: "node".into(),
+            signal: ProcessSignalKind::Terminate,
+        })
+        .expect("json");
+        assert_eq!(
+            json,
+            serde_json::json!({"kind": "process_signal", "pid": 7, "processName": "node", "signal": "terminate"})
+        );
+        let memory = serde_json::to_value(ActionKind::MemoryWrite {
+            memory_id: None,
+            scope: MemoryScope::Workspace {
+                workspace_id: "w".into(),
+            },
+        })
+        .expect("json");
+        assert_eq!(memory["scope"]["kind"], "workspace");
+        assert_eq!(memory["scope"]["workspaceId"], "w");
     }
 }

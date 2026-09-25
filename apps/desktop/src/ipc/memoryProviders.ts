@@ -35,6 +35,7 @@ export function providerCatalog(): ProviderStatus[] {
         interrupt: true,
         resume: true,
         hostApprovals: false,
+        interactive: null,
         models: [
           { id: "default", displayName: "Account default", isDefault: true },
           { id: "opus", displayName: "Opus", isDefault: false },
@@ -83,6 +84,7 @@ export function providerCatalog(): ProviderStatus[] {
         interrupt: false,
         resume: false,
         hostApprovals: false,
+        interactive: null,
         models: [],
         permissionMappings: [
           stricter(
@@ -125,6 +127,7 @@ export function providerCatalog(): ProviderStatus[] {
         interrupt: false,
         resume: false,
         hostApprovals: false,
+        interactive: null,
         models: [],
         permissionMappings: [
           stricter("plan", "--approval-mode plan", "Gemini CLI's read-only plan mode."),

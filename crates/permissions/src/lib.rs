@@ -26,7 +26,7 @@ pub mod service;
 pub mod store;
 
 pub use service::{
-    Actor, Clock, CoreWorkspaceRoots, NoThreads, NoWorkspaces, PermissionService, SystemClock,
-    ThreadModeStore, WorkspaceRoots,
+    Actor, Clock, CoreWorkspaceRoots, NoThreads, NoWorkspaces, OriginDecision, PermissionService,
+    SystemClock, ThreadModeStore, WorkspaceRoots,
 };
 pub use store::{ApprovalContext, ApprovalView, PermissionSettings};

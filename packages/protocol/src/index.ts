@@ -1,4 +1,6 @@
+export * from "./display-status.ts";
 export * from "./entitlements.ts";
+export * from "./features.ts";
 export * from "./generated/index.ts";
 export * from "./permissions.ts";
 export * from "./plans.ts";

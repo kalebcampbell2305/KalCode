@@ -125,6 +125,7 @@ pub fn claude_capabilities() -> ProviderCapabilities {
             model("fable", "Fable", false),
         ],
         permission_mappings: claude_argv::permission_mappings(),
+        interactive: None,
     }
 }
 
@@ -168,6 +169,7 @@ pub fn codex_capabilities() -> ProviderCapabilities {
                  default). danger-full-access is never used.",
             ),
         ],
+        interactive: None,
     }
 }
 
@@ -208,6 +210,7 @@ pub fn gemini_capabilities() -> ProviderCapabilities {
                  never used.",
             ),
         ],
+        interactive: None,
     }
 }
 

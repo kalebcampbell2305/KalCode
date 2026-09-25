@@ -10,7 +10,17 @@ function envelope(payload: EventPayload): EventEnvelope {
     version: 1,
     occurredAt: "2026-09-24T00:00:00.000Z",
     source: "core",
-    correlation: { workspaceId: null, threadId: null, missionId: null, providerId: null, requestId: null },
+    correlation: {
+      workspaceId: null,
+      threadId: null,
+      missionId: null,
+      providerId: null,
+      requestId: null,
+      agentId: null,
+      taskId: null,
+      automationId: null,
+      causationId: null,
+    },
     ...payload,
   } as EventEnvelope;
 }
@@ -76,6 +86,58 @@ describe("describeEvent", () => {
       envelope({ type: "unrecognized", payload: { originalType: "thread.created", originalVersion: 2 } }),
     );
     expect(d.title).toBe("Event from a newer KalCode");
+  });
+
+  it("describes Git, context and resource events without content", () => {
+    expect(
+      describeEvent(
+        envelope({
+          type: "git.commit_created",
+          payload: {
+            workspaceId: "w",
+            worktreeId: null,
+            oid: "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+            byKalCode: true,
+          },
+        }),
+      ),
+    ).toEqual({ title: "Commit created by KalCode", detail: "4b825dc", tone: "success" });
+    expect(
+      describeEvent(
+        envelope({
+          type: "context.shared",
+          payload: { packageId: "p", threadId: null, providerId: "codex", items: 1, bytes: 10, redactions: 0 },
+        }),
+      ).detail,
+    ).toBe("1 item with Codex");
+    const pressure = describeEvent(
+      envelope({
+        type: "resource.pressure_changed",
+        payload: {
+          resource: "memory",
+          from: "high",
+          to: "critical",
+          mode: "balanced",
+          signal: { signal: "memory_used_percent" },
+          value: 97,
+          threshold: 95,
+        },
+      }),
+    );
+    expect(pressure).toEqual({ title: "Memory pressure critical", detail: "Was high", tone: "danger" });
+    expect(
+      describeEvent(
+        envelope({ type: "resource.task_released", payload: { taskId: "t", heldMs: 90_000, cause: "override" } }),
+      ).detail,
+    ).toBe("Waited 2 min");
+  });
+
+  it("says where a push-to-talk utterance went, never what was said", () => {
+    const routed = (outcome: "command" | "dictation" | "request") =>
+      describeEvent(envelope({ type: "kalvoice.talk_routed", payload: { requestId: "r", outcome } }));
+    expect(routed("command")).toEqual({ title: "KalVoice ran a command", detail: null, tone: "idle" });
+    expect(routed("dictation").title).toBe("KalVoice typed into the focused box");
+    expect(routed("request").title).toBe("KalVoice sent a request");
   });
 });
 

@@ -23,7 +23,10 @@ export type { EntitlementTier };
 
 export const ENTITLEMENT_TIERS: readonly EntitlementTier[] = ["free", "pro", "max", "owner"];
 
-/** Features gated by plan today. Adding one here never needs an owner change. */
+/**
+ * Entitlement features the signed document lists by name (gated by plan today). Adding one here
+ * never needs an owner change. Product features and their plan placement are in `features.ts`.
+ */
 export const FEATURES = [
   "persistentAgents",
   "multiAgentWorkflows",
@@ -31,7 +34,7 @@ export const FEATURES = [
   "eventAutomations",
   "advancedMissions",
 ] as const;
-export type FeatureId = (typeof FEATURES)[number];
+export type EntitlementFeatureId = (typeof FEATURES)[number];
 
 /**
  * Numeric limits gated by plan today. `kalvoiceRequestsPerMonth` counts top-level KalVoice
@@ -94,7 +97,7 @@ export function tierGrants(tier: EntitlementTier): TierGrants {
     return { unrestricted: true, features: [], limits: {} };
   }
   const plan = getPlan(tier).limits;
-  const flags: Record<FeatureId, boolean> = {
+  const flags: Record<EntitlementFeatureId, boolean> = {
     persistentAgents: plan.persistentAgents,
     multiAgentWorkflows: plan.multiAgentWorkflows,
     scheduledAutomations: plan.automations !== "none",
@@ -109,7 +112,7 @@ export function tierGrants(tier: EntitlementTier): TierGrants {
 }
 
 /** True if the entitlement grants `feature`. Unrestricted (owner) grants every feature. */
-export function hasFeature(entitlement: TierGrants, feature: FeatureId | (string & {})): boolean {
+export function hasFeature(entitlement: TierGrants, feature: EntitlementFeatureId | (string & {})): boolean {
   if (entitlement.unrestricted) {
     return true;
   }

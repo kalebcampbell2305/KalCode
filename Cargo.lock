@@ -2307,6 +2307,7 @@ version = "0.1.1"
 dependencies = [
  "globset",
  "ignore",
+ "kalcode-contracts",
  "kalcode-native-core",
  "proptest",
  "regex",
@@ -2358,6 +2359,7 @@ version = "0.1.1"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
+ "kalcode-contracts",
  "serde",
  "serde_json",
  "thiserror 2.0.21",

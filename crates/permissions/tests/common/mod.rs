@@ -100,6 +100,11 @@ pub fn thread_summary(id: &str, workspace_id: &str, mode: PermissionMode) -> Thr
         files_changed: None,
         branch: None,
         error: None,
+        archived_at: None,
+        resumable: false,
+        permission_profile_id: None,
+        runtime_kind: None,
+        terminal_id: None,
     }
 }
 
@@ -196,6 +201,7 @@ impl Harness {
             action: kind,
             summary: "test action".into(),
             requested_at: "2026-09-24T00:00:00.000Z".into(),
+            origin: None,
         }
     }
 

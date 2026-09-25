@@ -3,7 +3,7 @@
 //! The package budget is `min(provider max input, package cap)`. Items are planned in the
 //! user's order. Every non-inline outcome carries a note the preview shows verbatim.
 
-use serde::{Deserialize, Serialize};
+pub use kalcode_contracts::context::{RefusalReason, TranslationPlan};
 
 use crate::content::{ContentClass, trim_head_tail};
 use crate::model::{FirewallVerdict, ItemKind};
@@ -13,63 +13,6 @@ use crate::provider::{Modality, ProviderContextCapabilities};
 pub const FRAME_OVERHEAD_BYTES: u64 = 192;
 /// Smallest useful remainder for a trimmed item.
 pub const MIN_TRIMMED_BYTES: u64 = 1024;
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(
-    tag = "kind",
-    rename_all = "snake_case",
-    rename_all_fields = "camelCase"
-)]
-pub enum TranslationPlan {
-    /// Sent as text, complete (after redaction).
-    Inline { bytes: u64 },
-    /// Sent as text with the middle omitted to fit the budget (output-like items only).
-    Trimmed { bytes: u64, omitted_bytes: u64 },
-    /// Sent as a workspace path the provider opens with its own tools (opt-in; fully allowed
-    /// items only).
-    Reference { path: String },
-    /// Sent as an attachment the provider declared it accepts.
-    Attachment { mime: String, bytes: u64 },
-    /// Sent as a short description instead of the content.
-    Summary { bytes: u64 },
-    /// Not sent.
-    Refused { reason: RefusalReason },
-    /// Removed by the user.
-    Omitted,
-}
-
-impl TranslationPlan {
-    pub fn is_sent(&self) -> bool {
-        !matches!(self, Self::Refused { .. } | Self::Omitted)
-    }
-
-    pub fn kind(&self) -> &'static str {
-        match self {
-            Self::Inline { .. } => "inline",
-            Self::Trimmed { .. } => "trimmed",
-            Self::Reference { .. } => "reference",
-            Self::Attachment { .. } => "attachment",
-            Self::Summary { .. } => "summary",
-            Self::Refused { .. } => "refused",
-            Self::Omitted => "omitted",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RefusalReason {
-    /// The firewall blocked the item.
-    Blocked,
-    /// Overridable block, not yet confirmed by the user.
-    NeedsConfirmation,
-    /// The item could not be read.
-    Unavailable,
-    /// It does not fit the remaining budget.
-    OverBudget,
-    /// The provider does not accept this kind of input.
-    UnsupportedByProvider,
-}
 
 /// What the planner needs to know about one item.
 #[derive(Debug, Clone, Copy)]

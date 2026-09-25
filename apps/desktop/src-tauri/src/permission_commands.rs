@@ -234,6 +234,7 @@ pub fn test_permission_probe(
                 action: kind,
                 summary: probe.to_owned(),
                 requested_at: kalcode_core::time::now_rfc3339(),
+                origin: None,
             };
             let (_, decision) = service.evaluate_detailed(&action, PermissionMode::Approve);
             ProbeResult {

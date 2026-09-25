@@ -69,6 +69,21 @@ describe("KalCodeClient with the memory transport", () => {
     expect((await c.getSettings()).theme).toBe("dark");
   });
 
+  it("queries events by type prefix, order and page like the native runtime", async () => {
+    const c = client();
+    await c.boot();
+    const newest = await c.queryEvents({ types: ["app.*"] });
+    expect(newest.events.map((e) => e.type)).toEqual(["app.started"]);
+    expect(newest.nextCursor).toBeNull();
+    const oldestFirst = await c.queryEvents({ order: "asc", limit: 1 });
+    expect(oldestFirst.events.map((e) => e.type)).toEqual(["database.migrated"]);
+    expect(oldestFirst.nextCursor).toBe(oldestFirst.events[0]?.seq);
+    const next = await c.queryEvents({ order: "asc", limit: 1, afterSeq: oldestFirst.nextCursor });
+    expect(next.events.map((e) => e.type)).toEqual(["app.started"]);
+    const none = await c.queryEvents({ correlation: { threadId: "0192f3c4-0000-7000-8000-000000000000" } });
+    expect(none.events).toEqual([]);
+  });
+
   it("clamps page sizes before calling the runtime", async () => {
     const c = client();
     await expect(c.recentEvents(10_000)).resolves.toHaveLength(2);

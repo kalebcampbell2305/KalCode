@@ -7,6 +7,7 @@ export type CommandName =
   | "settings_get"
   | "settings_update"
   | "events_recent"
+  | "events_query"
   | "events_subscribe"
   | "events_unsubscribe"
   | "diagnostics_get"

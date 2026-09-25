@@ -197,6 +197,7 @@ pub fn normalize(
         action,
         summary,
         requested_at,
+        origin: None,
     }
 }
 

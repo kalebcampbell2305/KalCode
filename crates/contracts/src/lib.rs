@@ -7,11 +7,22 @@
 //!
 //! Ownership: the lead / integrator. Changes are additive within v1; breaking changes need a new
 //! event `version` or a new contract version and a migration plan. See `docs/CONTRACTS.md`.
+//!
+//! CA-1 (advanced systems, `docs/CONTRACTS_ADVANCED.md`) added: `refs` (file handles, paging),
+//! `git` and `timeline` (Z6a), `context` (CTX/FW), `resources` (RG), `trust` (Trust Kernel
+//! phase 1) and `workspace_ui` (Z7 display statuses and pane layouts).
 
 pub mod agent;
 pub mod app;
+pub mod context;
 pub mod events;
+pub mod git;
 pub mod ids;
 pub mod kalvoice;
 pub mod permissions;
+pub mod refs;
+pub mod resources;
 pub mod threads;
+pub mod timeline;
+pub mod trust;
+pub mod workspace_ui;

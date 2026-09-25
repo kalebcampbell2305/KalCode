@@ -94,6 +94,24 @@ pub fn data_dir_override() -> DataDirOverride {
     }
 }
 
+/// Test builds only: how native confirmation dialogs are answered without a person
+/// (`KALCODE_E2E_NATIVE_CONFIRM` = `accept` | `decline`), so end-to-end tests can exercise flows
+/// that need one. Normal builds ignore it and always show the dialog.
+pub fn e2e_native_confirm() -> Option<bool> {
+    if !TEST_HOOKS_ENABLED {
+        return None;
+    }
+    parse_native_confirm(std::env::var("KALCODE_E2E_NATIVE_CONFIRM").ok().as_deref())
+}
+
+fn parse_native_confirm(value: Option<&str>) -> Option<bool> {
+    match value? {
+        "accept" => Some(true),
+        "decline" => Some(false),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,5 +159,14 @@ mod tests {
             "COREWEBVIEW",
         ]));
         assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn native_confirm_hook_accepts_only_exact_values() {
+        assert_eq!(parse_native_confirm(Some("accept")), Some(true));
+        assert_eq!(parse_native_confirm(Some("decline")), Some(false));
+        assert_eq!(parse_native_confirm(Some("ACCEPT")), None);
+        assert_eq!(parse_native_confirm(Some("")), None);
+        assert_eq!(parse_native_confirm(None), None);
     }
 }

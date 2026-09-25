@@ -10,15 +10,15 @@ use std::time::Duration;
 use kalcode_contracts::agent::ProviderId;
 use serde::{Deserialize, Serialize};
 
-/// The mode without its custom limits (for events, snapshots and hold reasons).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ModeKind {
-    Conservative,
-    Balanced,
-    Performance,
-    Custom,
-}
+/// User-set limits for `Custom` mode: the contract's `CustomResourceLimits` (validated by it).
+pub use kalcode_contracts::resources::CustomResourceLimits as CustomLimits;
+/// The mode without its custom limits (for events, snapshots and hold reasons): the contract's
+/// `GovernorMode`.
+pub use kalcode_contracts::resources::GovernorMode as ModeKind;
+/// GPU limits (the contract's `GpuLimits`).
+pub use kalcode_contracts::resources::GpuLimits;
+/// An out-of-range custom limit (the contract's `ResourceLimitError`).
+pub use kalcode_contracts::resources::ResourceLimitError as ModeError;
 
 /// The user's selected resource mode. `Balanced` is the default.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -59,109 +59,6 @@ impl ResourceMode {
             ResourceMode::Custom(custom) => ModeLimits::custom(custom),
         })
     }
-}
-
-/// User-set limits for `Custom` mode.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CustomLimits {
-    /// Machine CPU use (percent) above which new agent work is held. 20–100.
-    pub max_cpu_percent: u8,
-    /// Most memory the KalCode process tree (agents included) should use, MiB. `None` = no cap.
-    pub max_kalcode_memory_mb: Option<u64>,
-    /// Physical memory to keep available for everything else, MiB. 256–262,144.
-    pub min_available_memory_mb: u64,
-    /// Free space to keep on workspace volumes, MiB. 256–1,048,576.
-    pub min_disk_free_mb: u64,
-    /// Most simultaneous agent tasks. 1–64.
-    pub max_agents: u32,
-    /// Most simultaneous tasks per provider (0 = do not start tasks for that provider). ≤ 64.
-    pub per_provider: BTreeMap<ProviderId, u32>,
-    pub gpu: GpuLimits,
-}
-
-impl Default for CustomLimits {
-    /// Balanced's values, as a starting point for the settings UI.
-    fn default() -> Self {
-        Self {
-            max_cpu_percent: 75,
-            max_kalcode_memory_mb: None,
-            min_available_memory_mb: 2048,
-            min_disk_free_mb: 5120,
-            max_agents: 4,
-            per_provider: BTreeMap::new(),
-            gpu: GpuLimits::default(),
-        }
-    }
-}
-
-impl CustomLimits {
-    pub fn validate(&self) -> Result<(), ModeError> {
-        range("maxCpuPercent", u64::from(self.max_cpu_percent), 20, 100)?;
-        range("maxAgents", u64::from(self.max_agents), 1, 64)?;
-        range(
-            "minAvailableMemoryMb",
-            self.min_available_memory_mb,
-            256,
-            262_144,
-        )?;
-        range("minDiskFreeMb", self.min_disk_free_mb, 256, 1_048_576)?;
-        if let Some(cap) = self.max_kalcode_memory_mb {
-            range("maxKalcodeMemoryMb", cap, 512, 4_194_304)?;
-        }
-        for limit in self.per_provider.values() {
-            range("perProvider", u64::from(*limit), 0, 64)?;
-        }
-        if self
-            .per_provider
-            .keys()
-            .any(|provider| provider.as_str().is_empty())
-        {
-            return Err(ModeError::Invalid {
-                field: "perProvider",
-                reason: "provider ids must not be empty".into(),
-            });
-        }
-        if let Some(percent) = self.gpu.max_utilization_percent {
-            range("gpu.maxUtilizationPercent", u64::from(percent), 1, 100)?;
-        }
-        if let Some(vram) = self.gpu.max_vram_mb {
-            range("gpu.maxVramMb", vram, 256, 1_048_576)?;
-        }
-        Ok(())
-    }
-}
-
-fn range(field: &'static str, value: u64, min: u64, max: u64) -> Result<(), ModeError> {
-    if (min..=max).contains(&value) {
-        Ok(())
-    } else {
-        Err(ModeError::Invalid {
-            field,
-            reason: format!("{value} is outside {min}–{max}"),
-        })
-    }
-}
-
-/// GPU limits. Applied only where GPU metrics are measured; otherwise capacity says so in a note
-/// instead of pretending to enforce them.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GpuLimits {
-    pub max_utilization_percent: Option<u8>,
-    pub max_vram_mb: Option<u64>,
-}
-
-impl GpuLimits {
-    pub fn is_set(&self) -> bool {
-        self.max_utilization_percent.is_some() || self.max_vram_mb.is_some()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum ModeError {
-    #[error("invalid custom resource limit {field}: {reason}")]
-    Invalid { field: &'static str, reason: String },
 }
 
 /// Which way a signal gets worse.

@@ -1,14 +1,14 @@
 //! `git.*` and `timeline.checkpoint_*` event facts.
 //!
-//! `EventPayload` (crates/contracts) has no Git variants yet; the lead adds them at CA-0
-//! (`docs/CONTRACTS_ADVANCED.md` §3.3). Until then this crate describes each event with
-//! [`GitEvent`], whose JSON is exactly the proposed wire form (`{"type": …, "payload": {…}}`), so
-//! mapping is one `match` arm per variant. Payloads carry ids and short facts only — never file
-//! contents, paths of files, or commit messages.
+//! This crate describes each event with [`GitEvent`], whose JSON is exactly the contract wire
+//! form. CA-1 declared the matching `EventPayload` variants; `EventPayload::from(GitEvent)` maps
+//! one-to-one (tested). Payloads carry ids and short facts only — never file contents, paths of
+//! files, or commit messages.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+use kalcode_contracts::events::EventPayload;
 use serde::{Deserialize, Serialize};
 
 use crate::types::{CheckpointTrigger, WorktreePurpose};
@@ -94,16 +94,87 @@ impl GitEvent {
     }
 }
 
+impl From<GitEvent> for EventPayload {
+    fn from(event: GitEvent) -> Self {
+        match event {
+            GitEvent::BranchChanged {
+                workspace_id,
+                from,
+                to,
+            } => EventPayload::GitBranchChanged {
+                workspace_id,
+                from,
+                to,
+            },
+            GitEvent::DiffChanged {
+                workspace_id,
+                worktree_id,
+                files,
+            } => EventPayload::GitDiffChanged {
+                workspace_id,
+                worktree_id,
+                files,
+            },
+            GitEvent::CommitCreated {
+                workspace_id,
+                worktree_id,
+                oid,
+                by_kal_code,
+            } => EventPayload::GitCommitCreated {
+                workspace_id,
+                worktree_id,
+                oid,
+                by_kal_code,
+            },
+            GitEvent::WorktreeCreated {
+                workspace_id,
+                worktree_id,
+                branch,
+                purpose,
+            } => EventPayload::GitWorktreeCreated {
+                workspace_id,
+                worktree_id,
+                branch,
+                purpose,
+            },
+            GitEvent::WorktreeRemoved {
+                workspace_id,
+                worktree_id,
+                branch,
+                purpose,
+            } => EventPayload::GitWorktreeRemoved {
+                workspace_id,
+                worktree_id,
+                branch,
+                purpose,
+            },
+            GitEvent::CheckpointCreated {
+                checkpoint_id,
+                workspace_id,
+                trigger,
+                files,
+                bytes_added,
+            } => EventPayload::TimelineCheckpointCreated {
+                checkpoint_id,
+                workspace_id,
+                trigger,
+                files,
+                bytes_added,
+            },
+            GitEvent::CheckpointPruned {
+                checkpoint_id,
+                reason,
+            } => EventPayload::TimelineCheckpointPruned {
+                checkpoint_id,
+                reason,
+            },
+        }
+    }
+}
+
 /// The `kind` tag of a trigger, for the event payload.
 pub fn trigger_kind(trigger: &CheckpointTrigger) -> &'static str {
-    match trigger {
-        CheckpointTrigger::User => "user",
-        CheckpointTrigger::ThreadTurn { .. } => "thread_turn",
-        CheckpointTrigger::TaskStart { .. } => "task_start",
-        CheckpointTrigger::BeforeRestore { .. } => "before_restore",
-        CheckpointTrigger::AutomationRun { .. } => "automation_run",
-        CheckpointTrigger::BeforeDoctorFix { .. } => "before_doctor_fix",
-    }
+    trigger.kind()
 }
 
 /// Turns observed Git state into transition events: `git.branch_changed` when the branch
@@ -226,5 +297,56 @@ mod tests {
             t.observe_changed_files("w", 2, start + Duration::from_secs(5)),
             None
         );
+    }
+
+    #[test]
+    fn every_git_event_maps_to_the_identical_contract_payload() {
+        let events = [
+            GitEvent::BranchChanged {
+                workspace_id: "w".into(),
+                from: Some("main".into()),
+                to: "dev".into(),
+            },
+            GitEvent::DiffChanged {
+                workspace_id: "w".into(),
+                worktree_id: Some("t".into()),
+                files: 3,
+            },
+            GitEvent::CommitCreated {
+                workspace_id: "w".into(),
+                worktree_id: None,
+                oid: "o".into(),
+                by_kal_code: true,
+            },
+            GitEvent::WorktreeCreated {
+                workspace_id: "w".into(),
+                worktree_id: "t".into(),
+                branch: "b".into(),
+                purpose: WorktreePurpose::User,
+            },
+            GitEvent::WorktreeRemoved {
+                workspace_id: "w".into(),
+                worktree_id: "t".into(),
+                branch: "b".into(),
+                purpose: WorktreePurpose::Task,
+            },
+            GitEvent::CheckpointCreated {
+                checkpoint_id: "c".into(),
+                workspace_id: "w".into(),
+                trigger: "user".into(),
+                files: 1,
+                bytes_added: 2,
+            },
+            GitEvent::CheckpointPruned {
+                checkpoint_id: "c".into(),
+                reason: "quota".into(),
+            },
+        ];
+        for event in events {
+            let ours = serde_json::to_value(&event).expect("json");
+            let payload = EventPayload::from(event.clone());
+            assert_eq!(payload.type_name(), event.event_type());
+            assert_eq!(serde_json::to_value(&payload).expect("json"), ours);
+        }
     }
 }

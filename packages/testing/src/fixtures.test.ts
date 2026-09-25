@@ -151,6 +151,10 @@ describe("builders", () => {
       missionId: null,
       providerId: null,
       requestId: "r1",
+      agentId: null,
+      taskId: null,
+      automationId: null,
+      causationId: null,
     });
     expect(first).toMatchObject({ type: "approval.requested", version: 1, source: "core" });
     expect(second.source).toBe("ui");

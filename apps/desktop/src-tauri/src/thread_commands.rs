@@ -348,7 +348,29 @@ pub fn thread_create(
     permission_mode: PermissionMode,
     prompt: String,
     name: Option<String>,
+    // CA-1 contract additions. Accepted and validated; the runtime still refuses Bypass and
+    // Custom at creation (they are set afterwards through `thread_set_permission_mode`, with
+    // `confirmBypass` / `profileId`), so neither changes behaviour yet.
+    confirm_bypass: Option<bool>,
+    profile_id: Option<String>,
 ) -> Result<ThreadSummary, IpcError> {
+    if profile_id
+        .as_deref()
+        .is_some_and(|id| !kalcode_contracts::ids::is_valid_id(id))
+    {
+        return Err(KalError::validation(
+            "invalid_profile",
+            "That permission profile isn't valid.",
+        )
+        .to_ipc());
+    }
+    if permission_mode == PermissionMode::Bypass && confirm_bypass != Some(true) {
+        return Err(KalError::validation(
+            "bypass_not_confirmed",
+            "Bypass needs your explicit confirmation.",
+        )
+        .to_ipc());
+    }
     state.ensure_providers(app.core.as_ref());
     state
         .runtime()?

@@ -16,6 +16,7 @@ function request(overrides: Partial<ApprovalView> = {}): ApprovalView {
       action: { kind: "command", command: "npm install zod@4", argv: [], cwd: "" },
       summary: "Install zod@4 with npm",
       requestedAt: new Date().toISOString(),
+      origin: null,
     },
     decision: {
       effect: "ask",

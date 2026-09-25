@@ -11,6 +11,7 @@
     "allow-settings-get",
     "allow-settings-update",
     "allow-events-recent",
+    "allow-events-query",
     "allow-events-subscribe",
     "allow-events-unsubscribe",
     "allow-diagnostics-get",

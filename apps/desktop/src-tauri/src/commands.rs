@@ -7,6 +7,8 @@
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use kalcode_contracts::events::{EventPage, EventQuery};
+use kalcode_contracts::ids::is_valid_id;
 use kalcode_core::events::{EventEnvelope, SubscriptionId};
 use kalcode_core::settings::{Settings, SettingsPatch};
 use kalcode_core::time::now_rfc3339;
@@ -82,6 +84,33 @@ pub fn events_recent(
         .core()?
         .recent_events(limit, before_seq)
         .map_err(|e| e.log_and_convert("events_recent"))
+}
+
+/// A filtered page of the event log: exact types or `domain.*` prefixes, correlation ids, a seq
+/// window, a time window, ascending or descending, at most 500 per page. Runs on the core's
+/// read-only connection, off the main thread. Entity ids must be KalCode ids; the provider id and
+/// the request id are free-form but bounded (validated again in the store).
+#[tauri::command(async)]
+pub fn events_query(state: State<'_, AppState>, query: EventQuery) -> Result<EventPage, IpcError> {
+    let c = &query.correlation;
+    let ids = [
+        &c.workspace_id,
+        &c.thread_id,
+        &c.mission_id,
+        &c.agent_id,
+        &c.task_id,
+        &c.automation_id,
+        &c.causation_id,
+    ];
+    if ids.into_iter().flatten().any(|id| !is_valid_id(id)) {
+        return Err(
+            KalError::validation("invalid_event_query", "A correlation id isn't valid.").to_ipc(),
+        );
+    }
+    state
+        .core()?
+        .query_events(&query)
+        .map_err(|e| e.log_and_convert("events_query"))
 }
 
 /// Streams events to the calling webview. Each webview holds at most one subscription: a new

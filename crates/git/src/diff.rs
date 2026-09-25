@@ -4,14 +4,13 @@
 //! disabled (`--no-ext-diff --no-textconv`); prefixes, rename detection and relative mode are
 //! fixed on the command line so user configuration cannot change the output shape.
 
-use serde::{Deserialize, Serialize};
-
 use kalcode_core::{KalError, Result};
 
 use crate::handles::HandleRegistry;
 use crate::paths::RelPath;
 use crate::repo::{Repo, validate_revision};
 use crate::runner::{Cmd, Git};
+pub use crate::types::{Diff, DiffLine, DiffTarget, FileDiff, Hunk, LineKind};
 use crate::types::{DiffFile, GitFileChange};
 
 /// Default cap on patch text per request.
@@ -21,47 +20,29 @@ pub const MAX_LINES_PER_FILE: usize = 50_000;
 /// Longest single line kept (longer lines are cut and marked).
 pub const MAX_LINE_CHARS: usize = 16 * 1024;
 
-/// What to compare.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(
-    tag = "kind",
-    rename_all = "snake_case",
-    rename_all_fields = "camelCase"
-)]
-pub enum DiffTarget {
-    /// Index → working tree (unstaged changes).
-    WorkingTree,
-    /// HEAD → index (staged changes).
-    Staged,
-    /// HEAD → working tree (everything not committed).
-    Head,
-    /// A commit → working tree.
-    Base { base: String },
-    /// Commit → commit.
-    Commits { from: String, to: String },
+/// `git diff` arguments selecting what `target` compares (revisions validated first).
+fn target_args(target: &DiffTarget) -> Result<Vec<String>> {
+    Ok(match target {
+        DiffTarget::WorkingTree => vec![],
+        DiffTarget::Staged => vec!["--cached".into()],
+        DiffTarget::Head => vec!["HEAD".into()],
+        DiffTarget::Base { base } => {
+            validate_revision(base)?;
+            vec![base.clone()]
+        }
+        DiffTarget::Commits { from, to } => {
+            validate_revision(from)?;
+            validate_revision(to)?;
+            vec![from.clone(), to.clone()]
+        }
+    })
 }
 
-impl DiffTarget {
-    fn args(&self) -> Result<Vec<String>> {
-        Ok(match self {
-            Self::WorkingTree => vec![],
-            Self::Staged => vec!["--cached".into()],
-            Self::Head => vec!["HEAD".into()],
-            Self::Base { base } => {
-                validate_revision(base)?;
-                vec![base.clone()]
-            }
-            Self::Commits { from, to } => {
-                validate_revision(from)?;
-                validate_revision(to)?;
-                vec![from.clone(), to.clone()]
-            }
-        })
-    }
-
-    fn has_revisions(&self) -> bool {
-        matches!(self, Self::Head | Self::Base { .. } | Self::Commits { .. })
-    }
+fn has_revisions(target: &DiffTarget) -> bool {
+    matches!(
+        target,
+        DiffTarget::Head | DiffTarget::Base { .. } | DiffTarget::Commits { .. }
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,56 +61,6 @@ impl Default for DiffOptions {
             patch: true,
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LineKind {
-    Context,
-    Add,
-    Delete,
-    /// `\ No newline at end of file`.
-    NoNewline,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DiffLine {
-    pub kind: LineKind,
-    pub old_line: Option<u32>,
-    pub new_line: Option<u32>,
-    pub text: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Hunk {
-    /// The `@@ -a,b +c,d @@ section` line.
-    pub header: String,
-    pub old_start: u32,
-    pub old_lines: u32,
-    pub new_start: u32,
-    pub new_lines: u32,
-    pub lines: Vec<DiffLine>,
-}
-
-/// A file with its hunks.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FileDiff {
-    #[serde(flatten)]
-    pub meta: DiffFile,
-    pub hunks: Vec<Hunk>,
-    /// Some hunks or lines of this file were left out (size caps).
-    pub hunks_truncated: bool,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Diff {
-    pub files: Vec<FileDiff>,
-    /// The patch exceeded the byte cap; files after the cut have no hunks.
-    pub truncated: bool,
 }
 
 /// One raw + numstat record, paths relative to the repository top level.
@@ -218,7 +149,7 @@ pub(crate) fn run_diff<'g>(
     pathspecs: &[String],
     options: &DiffOptions,
 ) -> Result<RawDiff> {
-    let target_args = target.args()?;
+    let target_args = target_args(target)?;
     let fixed = [
         "--no-ext-diff",
         "--no-textconv",
@@ -228,7 +159,7 @@ pub(crate) fn run_diff<'g>(
         "--no-color",
     ];
     let with_target = |cmd: Cmd<'g>| {
-        let cmd = if target.has_revisions() {
+        let cmd = if has_revisions(target) {
             cmd.arg("--end-of-options")
         } else {
             cmd
@@ -548,11 +479,11 @@ mod tests {
         let bad = DiffTarget::Base {
             base: "--output=/tmp/x".into(),
         };
-        assert!(bad.args().is_err());
+        assert!(target_args(&bad).is_err());
         let range = DiffTarget::Commits {
             from: "a..b".into(),
             to: "HEAD".into(),
         };
-        assert!(range.args().is_err());
+        assert!(target_args(&range).is_err());
     }
 }

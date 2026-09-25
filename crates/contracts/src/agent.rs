@@ -114,6 +114,42 @@ pub struct ProviderCapabilities {
     pub host_approvals: bool,
     pub models: Vec<ModelInfo>,
     pub permission_mappings: Vec<PermissionMapping>,
+    /// How the provider runs in an interactive PTY pane (`docs/PROVIDER_PANES.md` §3–4).
+    /// `None` until the adapter declares it. Adopted in CA-1.
+    #[serde(default)]
+    pub interactive: Option<InteractiveSupport>,
+}
+
+/// A structured channel an interactive provider reports status through. Model prose is never
+/// parsed for state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum StatusChannel {
+    /// The provider's hook system, configured by KalCode at launch.
+    Hooks,
+    /// A provider notify command.
+    Notify,
+    /// OSC 9 terminal notifications.
+    Osc9,
+    /// Process and PTY state only (spawned, exited, exit code).
+    ProcessOnly,
+}
+
+/// How a provider runs in a pane: the real CLI in a PTY, launched with a KalCode-chosen
+/// permission mapping that is never broader than the thread's mode.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct InteractiveSupport {
+    /// The interactive launch mapping per KalCode mode; never broader than the mode.
+    pub launch_mappings: Vec<PermissionMapping>,
+    pub status_channels: Vec<StatusChannel>,
+    /// `false`: approvals are answered in the provider's own prompt and KalCode mirrors
+    /// PERMISSION REQUIRED.
+    pub kalcode_answers_approvals: bool,
+    /// Display form of the resume command, e.g. `<cli> --resume <id>`.
+    pub resume: Option<String>,
 }
 
 /// Everything an adapter needs to start a session. Paths are native-resolved, never from the UI.
@@ -154,6 +190,10 @@ pub struct Usage {
 
 /// Normalized events every adapter emits. Drives thread state (Z3), approvals (Z4), and the
 /// Dashboard (Z5). Streaming text arrives as deltas; lifecycle changes become persisted events.
+// `ApprovalRequired` carries a whole `NormalizedAction` (larger since CA-1 added `origin` and the
+// Trust Kernel action kinds). Events are moved one at a time through a channel, so boxing would
+// only complicate every adapter without a measurable gain.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(
     tag = "kind",

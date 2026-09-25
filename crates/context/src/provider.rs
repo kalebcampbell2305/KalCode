@@ -6,30 +6,13 @@
 //! input, no file references and no link fetching. Nothing in this crate assumes that a
 //! provider accepts images or attachments without a capability flag.
 
+pub use kalcode_contracts::context::Modality;
 use serde::{Deserialize, Serialize};
 
 use crate::content::ImageFormat;
 
 /// Default cap for one package (ADVANCED.md §10: "default package cap 2 MiB").
 pub const DEFAULT_PACKAGE_CAP_BYTES: u64 = 2 * 1024 * 1024;
-
-/// A kind of input a provider may accept besides plain text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Modality {
-    /// Plain text in the prompt. Every provider accepts text.
-    Text,
-    /// Image attachments.
-    Image,
-    /// Document attachments (PDF and similar).
-    Document,
-    /// A workspace path the provider opens with its own tools. The file then reaches the
-    /// provider under the Trust Kernel's read rules, not through this firewall, so references
-    /// are only used for items the firewall fully allows.
-    FileReference,
-    /// A link the provider can fetch itself.
-    UrlFetch,
-}
 
 /// Per-provider context capabilities. Implemented by the provider runtime; this crate ships
 /// [`TextOnlyDefaults`], [`ContextLimitsDescriptor`] and a test double.

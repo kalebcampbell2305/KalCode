@@ -31,8 +31,8 @@ fn open(h: &Harness, kind: ActionKind) -> kalcode_permissions::ApprovalView {
 fn open_request_persists_and_emits_approval_requested() {
     let h = Harness::new();
     let view = open(&h, command("npm test"));
-    assert_eq!(view.request.status, ApprovalStatus::Pending);
-    assert_eq!(view.request.permission_mode, M::Approve);
+    assert_eq!(view.status, ApprovalStatus::Pending);
+    assert_eq!(view.permission_mode, M::Approve);
     assert!(view.allowed_decisions.contains(&D::ApproveForThread));
     let context = view.context.expect("context");
     assert_eq!(context.thread_name.as_deref(), Some("Fix the login bug"));
@@ -85,16 +85,13 @@ fn approve_once_and_deny_emit_events_and_audit() {
     let a = open(&h, command("npm test"));
     let approved = h
         .service
-        .decide(&a.request.id, D::ApproveOnce, Actor::User)
+        .decide(&a.id, D::ApproveOnce, Actor::User)
         .expect("approve");
-    assert_eq!(approved.request.status, ApprovalStatus::Approved);
-    assert_eq!(approved.request.resolved_decision, Some(D::ApproveOnce));
+    assert_eq!(approved.status, ApprovalStatus::Approved);
+    assert_eq!(approved.resolved_decision, Some(D::ApproveOnce));
     let b = open(&h, command("npm run build"));
-    let denied = h
-        .service
-        .decide(&b.request.id, D::Deny, Actor::User)
-        .expect("deny");
-    assert_eq!(denied.request.status, ApprovalStatus::Denied);
+    let denied = h.service.decide(&b.id, D::Deny, Actor::User).expect("deny");
+    assert_eq!(denied.status, ApprovalStatus::Denied);
     let types = h.event_types();
     assert!(types.contains(&"approval.approved".to_owned()));
     assert!(types.contains(&"approval.denied".to_owned()));
@@ -121,11 +118,11 @@ fn double_decide_and_races_resolve_exactly_once() {
     let h = Harness::new();
     let a = open(&h, command("npm test"));
     h.service
-        .decide(&a.request.id, D::ApproveOnce, Actor::User)
+        .decide(&a.id, D::ApproveOnce, Actor::User)
         .expect("first");
     let err = h
         .service
-        .decide(&a.request.id, D::Deny, Actor::User)
+        .decide(&a.id, D::Deny, Actor::User)
         .expect_err("second");
     assert_eq!(err.code, "approval_already_decided");
 
@@ -134,7 +131,7 @@ fn double_decide_and_races_resolve_exactly_once() {
     let handles: Vec<_> = (0..8)
         .map(|i| {
             let service = service.clone();
-            let id = b.request.id.clone();
+            let id = b.id.clone();
             std::thread::spawn(move || {
                 service.decide(
                     &id,
@@ -159,8 +156,7 @@ fn double_decide_and_races_resolve_exactly_once() {
         .expect("audit")
         .into_iter()
         .filter(|row| {
-            row.request_id.as_deref() == Some(b.request.id.as_str())
-                && row.kind != "approval.requested"
+            row.request_id.as_deref() == Some(b.id.as_str()) && row.kind != "approval.requested"
         })
         .map(|row| row.kind)
         .collect();
@@ -205,7 +201,7 @@ fn only_the_user_can_answer_requests() {
     ] {
         let err = h
             .service
-            .decide(&a.request.id, D::ApproveOnce, actor)
+            .decide(&a.id, D::ApproveOnce, actor)
             .expect_err("forbidden");
         assert_eq!(err.code, "forbidden");
     }
@@ -230,7 +226,7 @@ fn decisions_outside_the_allowed_set_are_refused() {
     for decision in [D::ApproveForThread, D::ApproveForWorkspace, D::AllowViaRule] {
         assert_eq!(
             h.service
-                .decide(&push.request.id, decision, Actor::User)
+                .decide(&push.id, decision, Actor::User)
                 .expect_err("refused")
                 .code,
             "decision_not_allowed"
@@ -386,7 +382,7 @@ fn thread_grants_are_scoped_and_expire_with_the_thread() {
         a.grant_coverage
     );
     h.service
-        .decide(&a.request.id, D::ApproveForThread, Actor::User)
+        .decide(&a.id, D::ApproveForThread, Actor::User)
         .expect("thread");
     // Same thread, another file in the workspace: covered.
     let other_file = h.action(ActionKind::FileWrite {
@@ -458,7 +454,7 @@ fn thread_grants_time_out() {
     let h = Harness::new();
     let a = open(&h, command("npm test"));
     h.service
-        .decide(&a.request.id, D::ApproveForThread, Actor::User)
+        .decide(&a.id, D::ApproveForThread, Actor::User)
         .expect("thread");
     assert_eq!(
         h.service
@@ -487,7 +483,7 @@ fn workspace_grants_cover_other_threads_but_not_other_workspaces() {
     let h = Harness::new();
     let a = open(&h, command("npm test"));
     h.service
-        .decide(&a.request.id, D::ApproveForWorkspace, Actor::User)
+        .decide(&a.id, D::ApproveForWorkspace, Actor::User)
         .expect("workspace");
     let sibling = h.add_thread(M::Approve);
     assert_eq!(
@@ -533,7 +529,7 @@ fn allow_via_rule_creates_a_standing_rule() {
     let a = open(&h, command("npm test"));
     assert!(a.allowed_decisions.contains(&D::AllowViaRule));
     h.service
-        .decide(&a.request.id, D::AllowViaRule, Actor::User)
+        .decide(&a.id, D::AllowViaRule, Actor::User)
         .expect("rule");
     let other_ws = h.add_workspace();
     let t = h.add_thread_in(&other_ws, M::Approve);
@@ -567,11 +563,11 @@ fn stale_requests_expire_and_cannot_be_approved() {
     h.service.expire_for_thread(&h.thread_id);
     let err = h
         .service
-        .decide(&a.request.id, D::ApproveOnce, Actor::User)
+        .decide(&a.id, D::ApproveOnce, Actor::User)
         .expect_err("expired");
     assert_eq!(err.code, "approval_expired");
     let all = h.service.list_approvals(None).expect("list");
-    assert_eq!(all[0].request.status, ApprovalStatus::Expired);
+    assert_eq!(all[0].status, ApprovalStatus::Expired);
     assert_eq!(all[0].expire_reason.as_deref(), Some("thread_stopped"));
     assert!(h.event_types().contains(&"approval.expired".to_owned()));
 }
@@ -591,13 +587,9 @@ fn superseded_requests_expire() {
         .open_request_view(action, M::Approve, &decision)
         .expect("second");
     let all = h.service.list_approvals(None).expect("list");
-    let status = |id: &str| {
-        all.iter()
-            .find(|v| v.request.id == id)
-            .map(|v| v.request.status)
-    };
-    assert_eq!(status(&first.request.id), Some(ApprovalStatus::Expired));
-    assert_eq!(status(&second.request.id), Some(ApprovalStatus::Pending));
+    let status = |id: &str| all.iter().find(|v| v.id == id).map(|v| v.status);
+    assert_eq!(status(&first.id), Some(ApprovalStatus::Expired));
+    assert_eq!(status(&second.id), Some(ApprovalStatus::Pending));
 }
 
 #[test]
@@ -630,13 +622,14 @@ fn pending_requests_expire_when_the_process_restarts() {
             action: command("npm test"),
             summary: "Run tests".into(),
             requested_at: String::new(),
+            origin: None,
         };
         let decision = service.evaluate(&action, M::Approve);
         let view = service
             .open_request_view(action, M::Approve, &decision)
             .expect("open");
         core.shutdown();
-        view.request.id
+        view.id
     };
     let core = Arc::new(open_core(&data));
     let service = PermissionService::new(
@@ -646,11 +639,8 @@ fn pending_requests_expire_when_the_process_restarts() {
     )
     .expect("service");
     let all = service.list_approvals(None).expect("list");
-    let view = all
-        .iter()
-        .find(|v| v.request.id == request_id)
-        .expect("request");
-    assert_eq!(view.request.status, ApprovalStatus::Expired);
+    let view = all.iter().find(|v| v.id == request_id).expect("request");
+    assert_eq!(view.status, ApprovalStatus::Expired);
     assert_eq!(view.expire_reason.as_deref(), Some("process_restarted"));
     assert_eq!(
         service
@@ -711,11 +701,8 @@ fn bypass_requires_the_user_and_explicit_confirmation() {
     );
     // Requests asked under the old mode expire.
     let all = h.service.list_approvals(None).expect("list");
-    let old = all
-        .iter()
-        .find(|v| v.request.id == pending.request.id)
-        .expect("old");
-    assert_eq!(old.request.status, ApprovalStatus::Expired);
+    let old = all.iter().find(|v| v.id == pending.id).expect("old");
+    assert_eq!(old.status, ApprovalStatus::Expired);
     assert_eq!(old.expire_reason.as_deref(), Some("mode_changed"));
 }
 
@@ -832,9 +819,7 @@ fn default_mode_settings() {
 fn audit_and_resolved_approvals_are_immutable() {
     let h = Harness::new();
     let a = open(&h, command("npm test"));
-    h.service
-        .decide(&a.request.id, D::Deny, Actor::User)
-        .expect("deny");
+    h.service.decide(&a.id, D::Deny, Actor::User).expect("deny");
     for sql in [
         "UPDATE permission_audit SET actor = 'user'",
         "DELETE FROM permission_audit",
@@ -942,13 +927,13 @@ fn approvals_record_their_origin_and_only_thread_origins_need_a_thread() {
         .read(|conn| {
             Ok(conn.query_row(
                 "SELECT origin_kind, origin_id FROM approvals WHERE id = ?1",
-                [&a.request.id],
+                [&a.id],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )?)
         })
         .expect("row");
     assert_eq!(kind, "thread");
-    assert_eq!(origin.as_deref(), Some(a.request.action.thread_id.as_str()));
+    assert_eq!(origin.as_deref(), Some(a.action.thread_id.as_str()));
 
     // Non-thread origins (KalVoice, automations, Environment Doctor, …) may have no thread.
     for kind in ["kalvoice", "automation", "system", "doctor"] {
@@ -1030,7 +1015,7 @@ fn expire_reasons_and_audit_kinds_are_checked_by_the_schema() {
 }
 
 #[test]
-fn migrations_are_v1_to_v4_in_order_with_permissions_last() {
+fn migrations_keep_permissions_at_v4() {
     let numbering: Vec<(i64, &str)> = db::MIGRATIONS.iter().map(|m| (m.version, m.name)).collect();
     assert_eq!(
         numbering,
@@ -1038,7 +1023,8 @@ fn migrations_are_v1_to_v4_in_order_with_permissions_last() {
             (1, "foundation"),
             (2, "workspaces"),
             (3, "threads"),
-            (4, "permissions")
+            (4, "permissions"),
+            (5, "event_correlation")
         ]
     );
 }
@@ -1061,7 +1047,10 @@ fn permissions_migration_upgrades_a_v1_database_and_preserves_data() {
     let mut conn = db::open(&path).expect("reopen");
     let outcome =
         db::migrate(&mut conn, db::MIGRATIONS, Some(&dir.path().join("backups"))).expect("upgrade");
-    assert_eq!((outcome.from_version, outcome.to_version), (1, 4));
+    assert_eq!(
+        (outcome.from_version, outcome.to_version),
+        (1, db::MIGRATIONS.len() as i64)
+    );
     assert!(outcome.backup.is_some());
     let theme: String = conn
         .query_row(
@@ -1097,4 +1086,180 @@ fn permissions_migration_upgrades_a_v1_database_and_preserves_data() {
             .expect("again")
             .applied_any()
     );
+}
+
+// ---- Non-thread origins (CA-1, KalVoice) ----
+
+fn kalvoice_action(
+    h: &Harness,
+    kind: ActionKind,
+) -> kalcode_contracts::permissions::NormalizedAction {
+    kalcode_contracts::permissions::NormalizedAction {
+        id: new_id(),
+        thread_id: String::new(),
+        workspace_id: h.workspace_id.clone(),
+        provider_id: kalcode_contracts::agent::ProviderId::new("kalvoice"),
+        action: kind,
+        summary: "Open 3 Codex threads".into(),
+        requested_at: "2026-09-24T00:00:00.000Z".into(),
+        origin: Some(kalcode_contracts::permissions::ActionOrigin::KalVoice {
+            request_id: new_id(),
+        }),
+    }
+}
+
+fn create_threads() -> ActionKind {
+    ActionKind::CreateThreads {
+        provider_id: kalcode_contracts::agent::ProviderId::new("codex"),
+        count: 3,
+        workspace_id: None,
+    }
+}
+
+#[test]
+fn kalvoice_actions_file_approvals_with_their_origin_and_no_thread() {
+    let h = Harness::new();
+    let action = kalvoice_action(&h, create_threads());
+    let request_id = match &action.origin {
+        Some(kalcode_contracts::permissions::ActionOrigin::KalVoice { request_id }) => {
+            request_id.clone()
+        }
+        _ => unreachable!(),
+    };
+    let outcome = h.service.request_for_origin(action).expect("evaluate");
+    assert_eq!(outcome.decision.effect, PolicyEffect::Ask);
+    assert_eq!(outcome.decision.scopes, vec![S::ThreadStart]);
+    let view = outcome.approval.expect("approval filed");
+    // Only a one-time approval: no standing grant can cover a KalVoice request.
+    assert_eq!(view.allowed_decisions, vec![D::Deny, D::ApproveOnce]);
+    assert_eq!(view.permission_mode, M::Approve);
+    assert_eq!(view.grant_coverage, "only this request");
+    let row: (String, Option<String>, Option<String>, Option<String>) = h
+        .core
+        .read(|conn| {
+            Ok(conn.query_row(
+                "SELECT origin_kind, origin_id, thread_id, workspace_id FROM approvals WHERE id = ?1",
+                [&view.id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )?)
+        })
+        .expect("row");
+    assert_eq!(row.0, "kalvoice");
+    assert_eq!(row.1.as_deref(), Some(request_id.as_str()));
+    assert_eq!(row.2, None, "no thread");
+    assert_eq!(row.3.as_deref(), Some(h.workspace_id.as_str()));
+    let requested = h
+        .events
+        .lock()
+        .expect("lock")
+        .iter()
+        .find(|e| e.event.type_name() == "approval.requested")
+        .cloned()
+        .expect("approval.requested");
+    assert_eq!(requested.correlation.thread_id, None);
+    assert_eq!(
+        requested.correlation.request_id.as_deref(),
+        Some(view.id.as_str())
+    );
+    // The request is listed with the others and keeps its origin.
+    let listed = h
+        .service
+        .list_approvals(Some(ApprovalStatus::Pending))
+        .expect("list");
+    let same = listed.iter().find(|v| v.id == view.id).expect("listed");
+    assert_eq!(
+        same.action.origin.as_ref().map(|o| o.kind()),
+        Some("kalvoice")
+    );
+}
+
+#[test]
+fn only_the_user_answers_a_kalvoice_request() {
+    let h = Harness::new();
+    let view = h
+        .service
+        .request_for_origin(kalvoice_action(&h, create_threads()))
+        .expect("evaluate")
+        .approval
+        .expect("approval");
+    // KalVoice (and every other non-user actor) can never answer.
+    for actor in [
+        Actor::KalVoice,
+        Actor::Agent,
+        Actor::Automation,
+        Actor::System,
+    ] {
+        let err = h
+            .service
+            .decide(&view.id, D::ApproveOnce, actor)
+            .expect_err("only the user answers");
+        assert_eq!(err.code, "forbidden", "{actor:?}");
+    }
+    // Standing approvals are refused even for the user.
+    assert_eq!(
+        h.service
+            .decide(&view.id, D::ApproveForWorkspace, Actor::User)
+            .expect_err("not offered")
+            .code,
+        "decision_not_allowed"
+    );
+    let approved = h
+        .service
+        .decide(&view.id, D::ApproveOnce, Actor::User)
+        .expect("user approves");
+    assert_eq!(approved.status, ApprovalStatus::Approved);
+    // No grant was created, so the next identical request asks again.
+    let again = h
+        .service
+        .request_for_origin(kalvoice_action(&h, create_threads()))
+        .expect("evaluate");
+    assert_eq!(again.decision.effect, PolicyEffect::Ask);
+}
+
+#[test]
+fn request_for_origin_refuses_thread_and_unsupported_origins() {
+    let h = Harness::new();
+    let thread_action = h.action(create_threads());
+    assert_eq!(
+        h.service
+            .request_for_origin(thread_action)
+            .expect_err("thread")
+            .code,
+        "origin_is_a_thread"
+    );
+    let mut automation = kalvoice_action(&h, create_threads());
+    automation.origin = Some(kalcode_contracts::permissions::ActionOrigin::Automation {
+        automation_id: new_id(),
+        run_id: new_id(),
+    });
+    assert_eq!(
+        h.service
+            .request_for_origin(automation)
+            .expect_err("not yet")
+            .code,
+        "origin_not_supported"
+    );
+    let mut bad_request = kalvoice_action(&h, create_threads());
+    bad_request.origin = Some(kalcode_contracts::permissions::ActionOrigin::KalVoice {
+        request_id: "nope".into(),
+    });
+    assert_eq!(
+        h.service
+            .request_for_origin(bad_request)
+            .expect_err("invalid id")
+            .code,
+        "invalid_id"
+    );
+    // A resume request is the same kind of approval.
+    let resume = h
+        .service
+        .request_for_origin(kalvoice_action(
+            &h,
+            ActionKind::ResumeThreads {
+                scope: kalcode_contracts::kalvoice::ThreadScope::All,
+            },
+        ))
+        .expect("resume");
+    assert_eq!(resume.decision.scopes, vec![S::ThreadStart]);
+    assert!(resume.approval.is_some());
 }

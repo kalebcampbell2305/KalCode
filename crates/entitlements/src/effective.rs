@@ -61,6 +61,12 @@ impl EffectiveEntitlement {
     pub fn limit(&self, limit: &str) -> crate::Limit {
         self.grants.limit(limit)
     }
+
+    /// Plan placement of a product feature on the verified tier (Free without a valid document).
+    /// Unrestricted grants include every feature, current and future.
+    pub fn includes_feature(&self, feature: kalcode_contracts::app::FeatureId) -> bool {
+        self.grants.unrestricted || self.tier.includes(feature)
+    }
 }
 
 impl Verifier {
@@ -131,6 +137,35 @@ mod tests {
         assert_eq!(effective.tier, Tier::Free);
         assert_eq!(effective.status, EntitlementStatus::NoDocument);
         assert_eq!(effective.grants, Grants::free());
+    }
+
+    #[test]
+    fn owner_is_unrestricted_and_safety_features_are_on_free() {
+        use kalcode_contracts::app::{FeatureId, FeaturePlacement};
+        for feature in FeatureId::ALL {
+            assert!(Tier::Owner.includes(feature), "{feature:?}");
+            if feature.placement() == FeaturePlacement::Safety {
+                for tier in [Tier::Free, Tier::Pro, Tier::Max] {
+                    assert!(tier.includes(feature), "{tier:?} {feature:?}");
+                }
+            }
+            // Plans nest: anything Free has, Pro has; anything Pro has, MAX has.
+            if Tier::Free.includes(feature) {
+                assert!(Tier::Pro.includes(feature));
+            }
+            if Tier::Pro.includes(feature) {
+                assert!(Tier::Max.includes(feature));
+            }
+        }
+        assert!(!Tier::Free.includes(FeatureId::TimeMachine));
+        assert!(Tier::Pro.includes(FeatureId::TimeMachine));
+        assert!(!Tier::Pro.includes(FeatureId::BenchmarkLab));
+        assert!(Tier::Max.includes(FeatureId::BenchmarkLab));
+        // No document: Free, which still has every safety feature.
+        let effective = effective_entitlement(None, OffsetDateTime::now_utc());
+        assert!(effective.includes_feature(FeatureId::EnvironmentDoctor));
+        assert!(effective.includes_feature(FeatureId::ContextFirewall));
+        assert!(!effective.includes_feature(FeatureId::CommandCenter));
     }
 
     #[test]

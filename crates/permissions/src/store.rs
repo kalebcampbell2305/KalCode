@@ -1,6 +1,7 @@
 //! SQL for the tables migration 0004 (schema v4) creates. Parameterized statements only. Every function
 //! takes a connection or transaction supplied by `Core`, so callers decide atomicity.
 
+pub use kalcode_contracts::permissions::ApprovalContext;
 use kalcode_contracts::permissions::{
     ApprovalDecision, ApprovalRequest, ApprovalStatus, NormalizedAction, PermissionMode,
     PermissionProfile, PermissionScope, PolicyDecision,
@@ -13,32 +14,11 @@ use ts_rs::TS;
 
 use crate::grants::{Grant, GrantKind};
 
-/// Names shown in the approval prompt, captured when the request opens.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export)]
-pub struct ApprovalContext {
-    pub thread_name: Option<String>,
-    pub workspace_name: Option<String>,
-    pub provider_name: Option<String>,
-}
-
-/// An approval request as the UI shows it: the contract's `ApprovalRequest` plus the answers
-/// the user may give, what a standing approval would cover, and display names.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-#[ts(export)]
-pub struct ApprovalView {
-    #[serde(flatten)]
-    pub request: ApprovalRequest,
-    pub allowed_decisions: Vec<ApprovalDecision>,
-    /// What "Allow for thread / workspace" would cover ("changing any file in this workspace").
-    pub grant_coverage: String,
-    pub context: Option<ApprovalContext>,
-    pub created_at: String,
-    /// Why an expired request expired ("thread_stopped", "superseded", …).
-    pub expire_reason: Option<String>,
-}
+/// An approval request as the UI shows it. Z4 introduced this as a superset of the contract's
+/// `ApprovalRequest`; CA-1 adopted its extra fields (answers the user may give, what a standing
+/// approval would cover, display names, creation time, expiry reason) into `ApprovalRequest`,
+/// so the view is now the same type with the same JSON.
+pub type ApprovalView = ApprovalRequest;
 
 /// Permission preferences.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -101,16 +81,20 @@ fn parse_enum<T: for<'de> Deserialize<'de>>(text: &str) -> Result<T> {
 }
 
 pub fn insert_approval(conn: &Connection, new: &NewApproval<'_>) -> Result<()> {
+    // Who asked (`ActionOrigin`, CA-1). Thread origins always carry their thread, workspace and
+    // provider (the v4 CHECK enforces it); other origins store NULL for the ones they lack.
+    let origin = new.action.effective_origin();
+    let present = |value: &str| (!value.is_empty()).then(|| value.to_owned());
     conn.execute(
         "INSERT INTO approvals (id, origin_kind, origin_id, thread_id, workspace_id, provider_id, action_id,
            request, decision, allowed_decisions, context, fingerprint, grant_matcher, grant_coverage,
            permission_mode, status, created_at)
-         VALUES (?1, 'thread', ?2, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 'pending', ?14)",
+         VALUES (?1, ?15, ?16, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 'pending', ?14)",
         params![
             new.id,
-            new.action.thread_id,
-            new.action.workspace_id,
-            new.action.provider_id.as_str(),
+            present(&new.action.thread_id),
+            present(&new.action.workspace_id),
+            present(new.action.provider_id.as_str()),
             new.action.id,
             json(new.action)?,
             json(new.decision)?,
@@ -121,6 +105,8 @@ pub fn insert_approval(conn: &Connection, new: &NewApproval<'_>) -> Result<()> {
             new.grant_coverage,
             enum_str(&new.mode)?,
             now_rfc3339(),
+            origin.kind(),
+            origin.id(),
         ],
     )?;
     Ok(())
@@ -167,20 +153,18 @@ fn row_to_approval(row: &Row<'_>) -> rusqlite::Result<RawApproval> {
 
 fn build(raw: RawApproval) -> Result<StoredApproval> {
     Ok(StoredApproval {
-        view: ApprovalView {
-            request: ApprovalRequest {
-                id: raw.id,
-                action: serde_json::from_str(&raw.request)?,
-                decision: serde_json::from_str(&raw.decision)?,
-                permission_mode: parse_enum(&raw.mode)?,
-                status: parse_enum(&raw.status)?,
-                resolved_decision: raw
-                    .resolved_decision
-                    .as_deref()
-                    .map(parse_enum)
-                    .transpose()?,
-                resolved_at: raw.resolved_at,
-            },
+        view: ApprovalRequest {
+            id: raw.id,
+            action: serde_json::from_str(&raw.request)?,
+            decision: serde_json::from_str(&raw.decision)?,
+            permission_mode: parse_enum(&raw.mode)?,
+            status: parse_enum(&raw.status)?,
+            resolved_decision: raw
+                .resolved_decision
+                .as_deref()
+                .map(parse_enum)
+                .transpose()?,
+            resolved_at: raw.resolved_at,
             allowed_decisions: serde_json::from_str(&raw.allowed)?,
             grant_coverage: raw.coverage,
             context: raw

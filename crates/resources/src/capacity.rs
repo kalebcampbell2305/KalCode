@@ -15,9 +15,14 @@ use std::collections::BTreeMap;
 use kalcode_contracts::agent::ProviderId;
 use serde::{Deserialize, Serialize};
 
+pub use kalcode_contracts::resources::{
+    CapacityAdvice, CapacityNote, Constraint, DataQuality, GpuMetric, ProviderCapacity,
+    ResourceHoldReason as HoldReason,
+};
+
 use crate::MIB;
-use crate::mode::{ModeKind, ModeLimits};
-use crate::model::{PressureLevel, ResourceKind, ResourceSnapshot, Signal};
+use crate::mode::ModeLimits;
+use crate::model::{PressureLevel, ResourceKind, ResourceSnapshot};
 
 /// What is running now, as the host (thread runtime, later the Scheduler) counts it.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -34,139 +39,6 @@ pub struct RunningWork {
 #[serde(rename_all = "camelCase")]
 pub struct CapacityRequest {
     pub provider: Option<ProviderId>,
-}
-
-/// Why a task would be held. Every variant carries the metric, the limit and the mode, so a held
-/// task can show exactly what holds it (SCH-08).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(
-    tag = "kind",
-    rename_all = "snake_case",
-    rename_all_fields = "camelCase"
-)]
-pub enum HoldReason {
-    /// The mode's maximum simultaneous agents.
-    UserLimit {
-        running: u32,
-        limit: u32,
-        mode: ModeKind,
-    },
-    /// The per-provider limit (Custom mode).
-    ProviderLimit {
-        provider: ProviderId,
-        running: u32,
-        limit: u32,
-    },
-    /// A governed resource is under pressure. `High` and `Critical` hold all new work;
-    /// `Elevated` allows the mode's elevated allowance.
-    Pressure {
-        resource: ResourceKind,
-        level: PressureLevel,
-        mode: ModeKind,
-        signal: Signal,
-        value: f64,
-        threshold: Option<f64>,
-    },
-    /// Starting more would push projected machine CPU past the mode's target.
-    CpuHeadroom {
-        cpu_percent: f64,
-        target_percent: f64,
-        per_agent_percent: f64,
-        mode: ModeKind,
-    },
-    /// Starting more would eat into the memory the mode keeps free.
-    MemoryHeadroom {
-        available_mb: u64,
-        reserve_mb: u64,
-        per_agent_mb: u64,
-        mode: ModeKind,
-    },
-    /// Starting more would take KalCode's process tree past its memory cap.
-    KalCodeMemoryCap {
-        used_mb: u64,
-        cap_mb: u64,
-        per_agent_mb: u64,
-        mode: ModeKind,
-    },
-    /// A configured GPU limit is reached (only where GPU metrics are measured).
-    GpuLimit {
-        metric: GpuMetric,
-        value: f64,
-        limit: f64,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum GpuMetric {
-    UtilizationPercent,
-    VramMb,
-}
-
-/// One evaluated constraint and how many more tasks it allows.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Constraint {
-    pub reason: HoldReason,
-    pub allows: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProviderCapacity {
-    pub provider: ProviderId,
-    pub running: u32,
-    pub limit: u32,
-    /// `limit − running`, before other constraints.
-    pub remaining: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum DataQuality {
-    /// CPU, memory and disk space are all measured.
-    Complete,
-    /// Some governed resources are unknown; their constraints were skipped.
-    Partial { unknown: Vec<ResourceKind> },
-    /// Nothing is measured (sampler not running, failing, or not started yet): only count
-    /// limits apply.
-    NoData,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(
-    tag = "kind",
-    rename_all = "snake_case",
-    rename_all_fields = "camelCase"
-)]
-pub enum CapacityNote {
-    /// The resource's metric is unknown right now; no hold was derived from it.
-    MetricUnknown { resource: ResourceKind },
-    /// GPU limits are configured but GPU metrics are not measured here: they are not applied.
-    GpuLimitsNotApplied { reason: String },
-    /// The per-agent memory estimate came from live provider sessions instead of the default.
-    ObservedAgentMemory { per_agent_mb: u64, sessions: u32 },
-    /// The snapshot's pressure levels were computed under another mode (a mode change is
-    /// re-evaluated at the next sample, which the governor takes immediately).
-    PressureFromOtherMode { snapshot_mode: ModeKind },
-}
-
-/// The answer. Advisory only.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CapacityAdvice {
-    pub mode: ModeKind,
-    /// How many more agent tasks could start now (for `request.provider`, when given).
-    pub additional: u32,
-    /// The constraints that bind: they allow exactly `additional`, so they are what would hold
-    /// task number `additional + 1`. Never empty (the mode's agent limit always applies).
-    pub holds: Vec<HoldReason>,
-    /// Every constraint evaluated, in a fixed order.
-    pub constraints: Vec<Constraint>,
-    /// Remaining room under each configured per-provider limit.
-    pub per_provider: Vec<ProviderCapacity>,
-    pub data: DataQuality,
-    pub notes: Vec<CapacityNote>,
 }
 
 /// The per-agent memory estimate: the larger of the mode's default and the observed average of

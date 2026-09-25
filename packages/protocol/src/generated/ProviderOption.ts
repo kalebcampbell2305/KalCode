@@ -4,7 +4,8 @@ import type { PermissionMapping } from "./PermissionMapping.ts";
 import type { ProviderId } from "./ProviderId.ts";
 
 /**
- * A provider the user can start a thread with (from the provider registry).
+ * A provider the user can start a thread with (from the provider registry). Moved from
+ * `kalcode_threads::types` in CA-1 with identical JSON.
  */
 export type ProviderOption = { id: ProviderId, displayName: string, 
 /**

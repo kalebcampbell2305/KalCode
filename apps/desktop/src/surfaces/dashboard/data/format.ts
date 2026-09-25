@@ -75,6 +75,14 @@ export const SCOPE_LABELS: Record<PermissionScope, string> = {
   "cloud.modify": "Change cloud resources",
   "billing.spend": "Spend money",
   destructive: "Destructive",
+  "process.control": "Stop processes",
+  "remote.connect": "Remote connection",
+  "context.share": "Share context",
+  "memory.write": "Save to memory",
+  "automation.manage": "Manage automations",
+  "agent.delegate": "Delegate to an agent",
+  "tool.unknown": "Unrecognized tool",
+  "thread.start": "Start threads",
 };
 
 const PROVIDER_NAMES: Record<string, string> = {
@@ -136,5 +144,50 @@ export function describeAction(action: ActionKind): ActionDetail {
       return { kind: "Deploy", target: action.target, context: null };
     case "tool":
       return { kind: `Use ${action.tool}`, target: action.inputSummary || null, context: null };
+    case "process_signal":
+      return {
+        kind: action.signal === "kill" ? "Force-stop a process" : "Stop a process",
+        target: action.processName,
+        context: `PID ${action.pid}`,
+      };
+    case "remote_connect":
+      return { kind: "Connect to a remote machine", target: action.address, context: null };
+    case "context_share":
+      return {
+        kind: "Share context with a provider",
+        target: `${action.items} ${action.items === 1 ? "item" : "items"}`,
+        context: null,
+      };
+    case "memory_write":
+      return { kind: "Save to memory", target: action.scope.kind, context: null };
+    case "delegate":
+      return { kind: "Delegate to another agent", target: action.delegateAgentId, context: null };
+    case "restore":
+      return {
+        kind: "Restore a checkpoint",
+        target: `${action.files} ${action.files === 1 ? "file" : "files"}`,
+        context: action.resetBranch ? "Resets the branch" : null,
+      };
+    case "automation_change":
+      return { kind: `Automation: ${action.change}`, target: action.automationId, context: null };
+    case "doctor_fix":
+      return { kind: "Apply an environment fix", target: action.target, context: action.fixCode };
+    case "create_threads":
+      return {
+        kind: `Open ${action.count === 1 ? "a thread" : `${action.count} threads`}`,
+        target: providerName(action.providerId),
+        context: null,
+      };
+    case "resume_threads":
+      return {
+        kind: "Resume threads",
+        target:
+          action.scope.kind === "all"
+            ? "All threads"
+            : action.scope.kind === "workspace"
+              ? "One workspace"
+              : "One thread",
+        context: null,
+      };
   }
 }

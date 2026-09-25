@@ -30,6 +30,14 @@ export const SCOPE_LABELS: Record<PermissionScope, string> = {
   "cloud.modify": "Changing remote or cloud resources",
   "billing.spend": "Spending money",
   destructive: "Destructive operations",
+  "process.control": "Stopping or signalling processes",
+  "remote.connect": "Connecting to a remote machine",
+  "context.share": "Sharing context with an AI provider",
+  "memory.write": "Saving to memory",
+  "automation.manage": "Creating or enabling automations",
+  "agent.delegate": "Delegating work to another agent",
+  "tool.unknown": "Using a tool KalCode doesn't recognize",
+  "thread.start": "Starting or resuming agent threads",
 };
 
 export function scopeTone(scope: PermissionScope): PermissionScopeTone {
@@ -94,6 +102,7 @@ const EXPIRE_REASONS: Record<string, string> = {
   process_restarted: "KalCode restarted",
   superseded: "a newer request replaced it",
   mode_changed: "the thread's permission mode changed",
+  answered_in_provider: "it was answered in the provider",
 };
 
 export function statusText(view: ApprovalView): string {
@@ -129,6 +138,32 @@ export function actionDetail(action: ActionKind): string | undefined {
       return action.target;
     case "tool":
       return `${action.tool}: ${action.inputSummary}`;
+    case "process_signal":
+      return `${action.signal} ${action.processName} (pid ${action.pid})`;
+    case "remote_connect":
+      return action.address;
+    case "context_share":
+      return `${action.items} context ${action.items === 1 ? "item" : "items"}, ${action.bytes} bytes`;
+    case "memory_write":
+      return `${action.scope.kind} memory`;
+    case "delegate":
+      return `agent ${action.delegateAgentId}`;
+    case "restore":
+      return `checkpoint ${action.checkpointId}: ${action.files} ${action.files === 1 ? "file" : "files"}${
+        action.resetBranch ? ", resets the branch" : ""
+      }`;
+    case "automation_change":
+      return `${action.change} automation ${action.automationId}`;
+    case "doctor_fix":
+      return `${action.fixCode}: ${action.target}`;
+    case "create_threads":
+      return `${action.count} ${action.providerId} ${action.count === 1 ? "thread" : "threads"}`;
+    case "resume_threads":
+      return action.scope.kind === "all"
+        ? "all threads"
+        : action.scope.kind === "workspace"
+          ? `threads in workspace ${action.scope.workspaceId}`
+          : `thread ${action.scope.threadId}`;
   }
 }
 
