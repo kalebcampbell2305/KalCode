@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-notification-mark"
+description = "Enables the notification_mark command without any pre-configured scope."
+commands.allow = ["notification_mark"]
+
+[[permission]]
+identifier = "deny-notification-mark"
+description = "Denies the notification_mark command without any pre-configured scope."
+commands.deny = ["notification_mark"]

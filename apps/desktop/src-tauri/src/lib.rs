@@ -7,6 +7,7 @@ pub mod environment;
 mod kalvoice_commands;
 mod kalvoice_executor;
 pub mod native_confirm;
+mod notification_commands;
 pub mod permission_commands;
 mod provider_commands;
 mod provider_pane_commands;
@@ -234,6 +235,9 @@ pub fn run(removed_overrides: Vec<String>) {
             #[cfg(any(debug_assertions, feature = "e2e"))]
             app.add_capability(include_str!("../test-capabilities/test-hooks.json"))?;
             let state = start(app, &removed_overrides);
+            // Z7-W3: listen before the thread runtime starts, so its crash recovery is notified.
+            let notifications =
+                notification_commands::NotificationsState::start(state.core.as_ref());
             // Z7-W4: before the thread runtime, so Claude Code is registered with its router.
             let panes = provider_pane_commands::ProviderPanesState::start(&state);
             let providers = provider_commands::ProviderState::from_process();
@@ -266,11 +270,13 @@ pub fn run(removed_overrides: Vec<String>) {
             );
             app.manage(kalvoice);
             panes.bind(permissions.service().as_ref(), threads.runtime().ok());
+            notifications.bind(threads.runtime_handle());
             app.manage(state);
             app.manage(providers);
             app.manage(permissions);
             app.manage(threads);
             app.manage(panes);
+            app.manage(notifications);
 
             // Safety net: the frontend shows the window after its first themed paint
             // (`window_ready`). If that never happens, show it anyway so the user is never
@@ -358,6 +364,8 @@ pub fn run(removed_overrides: Vec<String>) {
             provider_pane_commands::provider_pane_write,
             provider_pane_commands::provider_pane_resize,
             provider_pane_commands::provider_pane_info,
+            notification_commands::notification_list,
+            notification_commands::notification_mark,
             #[cfg(any(debug_assertions, feature = "e2e"))]
             permission_commands::test_permission_probe,
         ])
@@ -382,6 +390,11 @@ pub fn run(removed_overrides: Vec<String>) {
             }
             if let Some(panes) = handle.try_state::<provider_pane_commands::ProviderPanesState>() {
                 panes.shutdown();
+            }
+            if let Some(notifications) =
+                handle.try_state::<notification_commands::NotificationsState>()
+            {
+                notifications.shutdown();
             }
             if let Some(core) = &state.core {
                 core.shutdown();

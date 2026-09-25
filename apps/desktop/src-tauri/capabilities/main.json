@@ -76,6 +76,8 @@
     "allow-provider-pane-detach",
     "allow-provider-pane-write",
     "allow-provider-pane-resize",
-    "allow-provider-pane-info"
+    "allow-provider-pane-info",
+    "allow-notification-list",
+    "allow-notification-mark"
   ]
 }
