@@ -889,6 +889,18 @@ negated and compound phrasings for every intent, and the safety asymmetry (KV-02
 
 ## 16. Campaign Z7 — Workspace, Dashboard, Thread Panels & Returning-User UX
 
+> **Owner requirement (2026-09-24) — approved premium visual direction in the app.** The desktop
+> app adopts the owner-approved KalCode visual language (reference concepts in the lead's
+> `web-audit/approved/`): dark, polished, cinematic, technical, high-end — denser and more
+> functional than the marketing site, with brand glow used sparingly. Upgrade pane styling, thread
+> cards, Dashboard, the KalVoice widget, provider identities (neutral glyph + name), status states,
+> spacing, typography, borders, shadows, motion and workspace composition; remove anything bland,
+> generic, empty or unfinished. Website and app share design tokens/components (`packages/ui`
+> tokens, terminal palette, status tones, buttons) so they read as one brand. Z7 starts with
+> **Z7-W0 design system** (tokens, type scale, surfaces/borders/elevation, buttons, status chips,
+> provider identity marks, motion tokens, KalVoice widget skin) landing before the other writers
+> restyle their areas on top of it.
+
 > **Owner requirement (2026-09-24) — full-window workspace.** KalCode fills 100% of the window
 > right of the sidebar; no surface sits in a narrow centred container. Code Mode's right side is
 > one flexible pane canvas (Claude / Codex / browser / dashboard / files / Git / …) with horizontal
