@@ -67,6 +67,7 @@ uniform vec4 uSurge; // position along the beam (0..1), visibility, unused, unus
 uniform vec4 uPh;    // fibre scroll (mod 64), mote scroll (mod 64), unused, unused
 uniform vec4 uBand;  // text-safe band: top y, bottom y (canvas px, y up), level inside, level below
 uniform vec4 uOrigin; // stream origin x, y (canvas px, y up), platform ring radius (0 = none), ripple 0..1
+uniform vec4 uUp;     // upward continuation: start y (behind the sphere top), end y, strength (0 = off), pulse 0..1 (-1 = none)
 void main() {
   vec2 fc = gl_FragCoord.xy;
   float s = uBeam.z;
@@ -144,6 +145,19 @@ void main() {
     float pool = exp(-rn * 7.0) * 0.4 + exp(-rn * 2.2) * 0.06;
     float rip = exp(-pow((rn - uOrigin.w) / 0.03, 2.0)) * (1.0 - uOrigin.w) * smoothstep(0.0, 0.08, uOrigin.w);
     L += vec3(0.28, 0.55, 1.0) * (pool + rip * 0.35) * uBeam.w * (1.0 - smoothstep(0.9, 1.1, rn));
+  }
+  // Upward continuation: a faint thread of the same energy leaving the top of the orb, fading
+  // to nothing well below the page's navigation; each surge sends a soft echo up it.
+  if (uUp.z > 0.0 && fc.y > uUp.x) {
+    float tu = (fc.y - uUp.x) / max(1.0, uUp.y - uUp.x);
+    float fade = pow(1.0 - clamp(tu, 0.0, 1.0), 1.5) * smoothstep(0.0, 0.08, tu);
+    float wcu = uPx * (0.9 + 0.6 * tu);
+    float wgu = s * (0.014 + 0.035 * tu);
+    float coreU = exp(-dx * dx / (wcu * wcu));
+    float glowU = exp(-adx / wgu);
+    float echo = uUp.w < 0.0 ? 0.0 : exp(-pow((tu - uUp.w) / 0.09, 2.0)) * (1.0 - uUp.w);
+    L += (vec3(0.8, 0.9, 1.0) * coreU * (0.4 + 1.1 * echo) + vec3(0.24, 0.5, 1.0) * glowU * fib * (0.22 + 0.5 * echo))
+       * fade * uUp.z * uBeam.w;
   }
   gl_FragColor = emit(L, vec3(0.0), 0.0);
 }

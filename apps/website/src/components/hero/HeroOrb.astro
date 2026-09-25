@@ -32,7 +32,7 @@
  *                         same value on the section and use it to align the type.
  *   --hero-orb-top        split only: space above the orb square
  *   --hero-platform-y     centered: where the platform ring centre (stream origin) sits, from the
- *                         component top (default 96cqh; < 768 px 95cqh). Lengths or %; % is of the height
+ *                         component top (default 96cqh; < 768 px 100cqh). Lengths or %; % is of the height
  *   --hero-world-dim      0..1 extra darkening of the whole world plate (default 0.15)
  *   --hero-scrim-y        vertical centre of a soft dark ellipse behind the body copy, over the
  *                         world but under the orb light (default 70%); --hero-scrim 0..1 (0.45)
@@ -135,6 +135,7 @@ const classes = centered ? "hero-orb hero-orb--centered" : `hero-orb hero-orb--$
       )
     }
     {centered && <span class="hero-orb__scrim" />}
+    {centered && <span class="hero-orb__up" />}
     <div class="hero-orb__beam">
       <span class="hero-orb__glow"></span>
       <span class="hero-orb__surge"></span>

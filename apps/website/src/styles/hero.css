@@ -393,7 +393,7 @@
   .hero-orb--centered .hero-orb__frame {
     --s: min(100cqw, var(--hero-orb-max, min(94cqw, 46cqh)));
     --cy: var(--hero-orb-center-y, calc(max(56px, 6cqh) + 0.5211 * var(--s)));
-    --py: var(--hero-platform-y, 95cqh);
+    --py: var(--hero-platform-y, 100cqh);
     --plate-aspect: 1.24;
   }
 }
@@ -482,6 +482,26 @@
     rgb(0 1 4 / var(--hero-scrim, 0.45)),
     transparent 100%
   );
+}
+
+/* CSS still of the upward continuation (WebGL draws the live one): a faint thread leaving the
+   top of the sphere, gone 72 px below the top edge (under the navigation). */
+.hero-orb__up {
+  position: absolute;
+  left: 50%;
+  top: 72px;
+  bottom: calc(100% - var(--cy) + 0.26 * var(--s));
+  width: calc(0.08 * var(--s));
+  transform: translateX(-50%);
+  background:
+    linear-gradient(to top, rgb(170 205 255 / 0.5), transparent) center / 2px 100% no-repeat,
+    linear-gradient(to top, rgb(60 124 255 / 0.18), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 44%, #000 56%, transparent);
+  transition: opacity 700ms ease;
+}
+
+.hero-orb.is-live .hero-orb__up {
+  opacity: 0;
 }
 
 .hero-orb__origin {

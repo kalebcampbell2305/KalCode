@@ -149,12 +149,14 @@ def save(img: np.ndarray, name: str, widths: tuple[int, ...] | None = None, qual
 
 
 def lens(img: np.ndarray, strength: float = 0.2) -> np.ndarray:
-    """Gravitational lens: pull the sky around a dark core, with a thin photon ring."""
+    """Gravitational lens: the sky pulled around a dark core, a photon ring brighter on the
+    approaching side, a thin lensed arc over the top, and a tilted accretion band."""
     h, w = img.shape[:2]
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
     cx, cy = w / 2, h / 2
     dx, dy = xx - cx, yy - cy
     r = np.sqrt(dx * dx + dy * dy) + 1e-3
+    theta = np.arctan2(dy, dx)
     rs = min(w, h) * strength
     # Inverse map: sample further out near the core (Einstein-ring style deflection).
     src_r = r + rs * rs / r
@@ -162,10 +164,31 @@ def lens(img: np.ndarray, strength: float = 0.2) -> np.ndarray:
     my = (cy + dy / r * src_r).astype(np.float32)
     warped = cv2.remap(img, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
     core = np.clip((r - rs * 0.62) / (rs * 0.45), 0, 1) ** 1.6
-    ring = np.exp(-(((r - rs * 0.7) / (rs * 0.05)) ** 2))
-    glow = np.exp(-np.maximum(r - rs * 0.7, 0) / (rs * 0.9))
     out = warped * core[..., None]
-    out += np.array([80, 150, 255], np.float32) * (ring * 0.55 + glow * 0.08)[..., None]
+
+    blue = np.array([80, 150, 255], np.float32)
+    ice = np.array([200, 225, 255], np.float32)
+    # Doppler-like asymmetry: the left side (approaching) is brighter.
+    side = (0.5 + 0.5 * np.cos(theta - np.pi)) ** 2
+    ring = np.exp(-(((r - rs * 0.7) / (rs * 0.045)) ** 2)) * (0.3 + 1.1 * side)
+    glow = np.exp(-np.maximum(r - rs * 0.7, 0) / (rs * 0.9)) * (0.05 + 0.08 * side)
+    # Lensed image of the disc behind the hole: a thin arc over the top.
+    top = np.angle(np.exp(1j * (theta + np.pi / 2)))
+    arc = np.exp(-(((r - rs * 0.9) / (rs * 0.022)) ** 2)) * np.exp(-((top / 0.95) ** 2)) * (0.35 + 0.65 * side)
+    # Accretion band: a thin, slightly tilted ellipse crossing in front of the shadow.
+    tilt = np.deg2rad(-7)
+    xr = dx * np.cos(tilt) + dy * np.sin(tilt)
+    yr = -dx * np.sin(tilt) + dy * np.cos(tilt)
+    band_r = np.abs(xr) / rs
+    thick = rs * (0.022 + 0.05 * np.exp(-np.maximum(band_r - 0.7, 0) * 2.2))
+    band = np.exp(-((yr / thick) ** 2)) * np.exp(-np.maximum(band_r - 0.75, 0) / 0.55)
+    # Across the shadow only the near edge of the disc shows: a thin line just below centre.
+    front = np.exp(-(((yr - rs * 0.03) / (rs * 0.016)) ** 2)) * 0.55
+    inner = np.clip((0.7 - band_r) / 0.06, 0, 1)
+    band = band * (1 - inner) + front * inner
+    doppler = 0.85 - 0.4 * np.tanh(xr / (rs * 0.35))
+    out += blue * (ring * 0.6 + glow + band * doppler * 0.5)[..., None]
+    out += ice * (ring * side * 0.25 + arc * 0.45 + band * doppler * 0.18)[..., None]
     return out
 
 
@@ -192,8 +215,23 @@ def main() -> int:
     # Portrait: the centre column (ring centre and the nebula crown above it).
     half = round(h * 0.62)
     cx = round(w * BEAM_ORIGIN[0])
-    portrait = plate[:, cx - half : cx + half]
-    portrait = cv2.resize(portrait, (1080, round(h * 1080 / (2 * half))), interpolation=cv2.INTER_LANCZOS4)
+    portrait = plate[:, cx - half : cx + half].copy()
+    # Phones magnify this crop ~3.5x per source pixel. Below the horizon the platform's fine lines
+    # cannot hold up at that scale, so the platform is softened on purpose and given bloom and a
+    # low haze: the softness reads as light and atmosphere, not as a blurry photo.
+    ph = portrait.shape[0]
+    horizon = int(ph * 0.63)
+    ramp = np.clip((np.arange(ph, dtype=np.float32) - horizon) / (ph * 0.06), 0, 1)[:, None, None]
+    lum = luminance(portrait)
+    highlights = portrait * np.clip((lum - 120) / 120, 0, 1)[..., None]
+    bloom = cv2.GaussianBlur(highlights, (0, 0), 6) * 0.28 + cv2.GaussianBlur(highlights, (0, 0), 20) * 0.22
+    soft = cv2.GaussianBlur(portrait, (0, 0), 0.9)
+    haze = np.array([4, 12, 34], np.float32) * np.clip((np.arange(ph, dtype=np.float32) / ph - 0.75) / 0.25, 0, 1)[:, None, None]
+    mixed = soft + bloom + haze
+    # Soft roll-off so the added light never clips to a flat grey-white wash.
+    mixed = 255 * (1 - np.exp(-mixed / 190)) * 1.05
+    portrait = portrait * (1 - ramp) + np.minimum(mixed, np.maximum(portrait, mixed * 0.92)) * ramp
+    portrait = cv2.resize(np.clip(portrait, 0, 255), (1080, round(h * 1080 / (2 * half))), interpolation=cv2.INTER_LANCZOS4)
     save(portrait, "world-portrait", (1080, 720), quality=58)
 
     # Section backdrops.
