@@ -82,7 +82,7 @@ with their own SQL.
 | `permission_profiles_list` | Z4 | — | `PermissionProfile[]` |
 | `thread_set_permission_mode` | Z4 | `{ threadId, mode, confirmBypass?, profileId? }` | `ThreadSummary` — through the permission engine, which stores the mode via the thread runtime (`ThreadModeStore`) and records `permission.mode_changed` + audit once |
 | `permission_settings_get` / `permission_settings_update` | Z4 | — / `{ defaultMode, profileId?, confirmBypass? }` | `PermissionSettings` (additive; contract change requested) |
-| `test_permission_probe` | Z4 (test hook) | `{ workspaceId }` | evaluations of two fixed actions; refused unless test hooks are compiled in (debug and `e2e` builds) |
+| `test_permission_probe` | Z4 (test hook) | `{ workspaceId }` | evaluations of two fixed actions; exists only in debug and `e2e` builds (`#[cfg]`-gated command, declared in build.rs `TEST_HOOK_COMMANDS`, granted at runtime by `test-capabilities/test-hooks.json`); release builds neither register nor grant it |
 
 Rules that bind every command: ids validated with `is_valid_id`; the WebView never supplies paths,
 executables or shell strings; Bypass can only be set by a user action with `confirmBypass: true`
