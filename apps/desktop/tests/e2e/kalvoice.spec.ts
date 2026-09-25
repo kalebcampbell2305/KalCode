@@ -30,6 +30,9 @@ async function launch(dataDir: string): Promise<Running> {
     env: {
       ...process.env,
       KALCODE_DATA_DIR: dataDir,
+      // KalVoice's ledger (schema v6) is added only for this suite's own data folder until v5
+      // lands on main (see open_core in src-tauri/src/lib.rs).
+      KALCODE_E2E_KALVOICE_SCHEMA: "1",
       WEBVIEW2_USER_DATA_FOLDER: join(dataDir, "webview"),
       WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${PORT}`,
     },

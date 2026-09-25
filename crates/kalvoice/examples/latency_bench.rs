@@ -306,6 +306,8 @@ fn main() {
                 failures.push(format!("{name} p95 {p95:.1} ms > regression budget {b} ms"));
                 "REGRESSION"
             }
+            // Within the regression baseline but not yet at the product target.
+            _ if target.is_some_and(|t| p95 > t) => "over target",
             _ => "ok",
         };
         println!(

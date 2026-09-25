@@ -145,16 +145,19 @@ fn collapse_repeats(text: &str) -> String {
         }
         kept.push(sentence);
     }
-    // A trailing fragment that starts a sentence we already have is the loop being cut off.
+    // A trailing fragment that starts a sentence we already have, or keeps cycling through its
+    // first words ("Open 4 Codex threads. Open 4 Open 4 Open"), is the loop being cut off.
     if kept.len() > 1
         && let Some(last) = kept.last()
         && !last.trim_end().ends_with(['.', '!', '?'])
     {
         let fragment = key(last);
-        if kept[..kept.len() - 1]
-            .iter()
-            .any(|s| key(s).starts_with(&fragment))
-        {
+        let fragment_words: Vec<&str> = fragment.split_whitespace().collect();
+        if kept[..kept.len() - 1].iter().any(|s| {
+            let sentence = key(s);
+            let words: Vec<&str> = sentence.split_whitespace().collect();
+            sentence.starts_with(&fragment) || cycles_through_prefix(&fragment_words, &words)
+        }) {
             kept.pop();
         }
     }
@@ -170,6 +173,20 @@ fn collapse_repeats(text: &str) -> String {
         }
     }
     words.join(" ")
+}
+
+/// True when `fragment` is the first `k` words of `sentence` repeated (possibly cut short),
+/// for some `k`.
+fn cycles_through_prefix(fragment: &[&str], sentence: &[&str]) -> bool {
+    if fragment.is_empty() {
+        return false;
+    }
+    (1..=sentence.len().min(fragment.len())).any(|k| {
+        fragment
+            .iter()
+            .enumerate()
+            .all(|(i, word)| sentence.get(i % k) == Some(word))
+    })
 }
 
 /// Decoder sizing for an utterance of `samples` (16 kHz): whisper's encoder context in frames
@@ -379,6 +396,20 @@ mod tests {
             "Open open the thread"
         );
         assert_eq!(clean_transcript("Open dashboard. Open"), "Open dashboard.");
+        // Decoder loops cycling through a sentence's first words (seen on real fixtures).
+        assert_eq!(
+            clean_transcript("Open 4 Codex threads. Open 4 Open 4 Open 4 Open 4 Open"),
+            "Open 4 Codex threads."
+        );
+        assert_eq!(
+            clean_transcript("Split Claude and Codex side by side. Split Split"),
+            "Split Claude and Codex side by side."
+        );
+        // A real second thought is kept.
+        assert_eq!(
+            clean_transcript("Open dashboard. Then open settings"),
+            "Open dashboard. Then open settings"
+        );
         assert_eq!(
             clean_transcript("Open 4 Codex threads. Open 4 Code X threads."),
             "Open 4 Codex threads."

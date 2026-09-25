@@ -176,12 +176,15 @@ fn start(app: &tauri::App, removed_overrides: &[&str]) -> AppState {
 }
 
 /// Opens the core with this build's migrations. KalVoice's ledger (schema v6) isn't registered
-/// until the event platform's v5 lands; only the end-to-end build, and only against a test's own
-/// `KALCODE_DATA_DIR`, adds it now (behind an empty v5 stand-in). Real data folders never get
-/// either, so the real v5 applies cleanly later.
+/// until the event platform's v5 lands; only the end-to-end build, only against a test's own
+/// `KALCODE_DATA_DIR`, and only when the KalVoice suite asks (`KALCODE_E2E_KALVOICE_SCHEMA=1`)
+/// adds it now, behind an empty v5 stand-in. Real data folders never get either, so the real v5
+/// applies cleanly later.
 fn open_core(config: CoreConfig) -> Result<Core, KalError> {
     #[cfg(feature = "e2e")]
-    if matches!(environment::data_dir_override(), DataDirOverride::Path(_)) {
+    if matches!(environment::data_dir_override(), DataDirOverride::Path(_))
+        && std::env::var_os("KALCODE_E2E_KALVOICE_SCHEMA").is_some_and(|v| v == "1")
+    {
         return Core::open_with_migrations(
             config,
             &kalcode_kalvoice::schema::migrations_with_kalvoice(),
