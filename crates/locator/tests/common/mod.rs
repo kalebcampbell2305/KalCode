@@ -1,0 +1,178 @@
+//! Shared fixtures: a real core in a temp folder (with schema v10 applied the way the lead will
+//! register it) and fake Z3/Z2 sources.
+
+#![allow(dead_code, clippy::expect_used, clippy::unwrap_used)]
+
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+
+use kalcode_contracts::agent::ProviderId;
+use kalcode_contracts::ids::new_id;
+use kalcode_contracts::permissions::PermissionMode;
+use kalcode_contracts::threads::{ThreadStatus, ThreadSummary};
+use kalcode_core::db::{MIGRATIONS, Migration};
+use kalcode_core::flags::BuildChannel;
+use kalcode_core::{Core, CoreConfig, Paths, Result};
+use kalcode_locator::{LocatorSources, ProviderInfo, RAIL_LOCATOR_MIGRATION};
+
+/// The registered migrations, stand-ins for v7–v9 (owned by other branches until they are
+/// integrated), then v10 — the order the gap-free runner will see after integration.
+pub fn migrations_with_v10() -> Vec<Migration> {
+    let mut all = MIGRATIONS.to_vec();
+    let registered = all.len() as i64;
+    for version in (registered + 1)..10 {
+        all.push(Migration {
+            version,
+            name: "reserved",
+            sql: "SELECT 1;",
+        });
+    }
+    all.push(RAIL_LOCATOR_MIGRATION);
+    all
+}
+
+pub fn core_with_v10(dir: &Path) -> Arc<Core> {
+    let all: &'static [Migration] = Box::leak(migrations_with_v10().into_boxed_slice());
+    Arc::new(
+        Core::open_with_migrations(
+            CoreConfig {
+                paths: Paths::new(dir),
+                app_version: "0.0.0-test".into(),
+                channel: BuildChannel::Development,
+            },
+            all,
+        )
+        .expect("open core"),
+    )
+}
+
+pub fn core_without_v10(dir: &Path) -> Arc<Core> {
+    Arc::new(
+        Core::open(CoreConfig {
+            paths: Paths::new(dir),
+            app_version: "0.0.0-test".into(),
+            channel: BuildChannel::Development,
+        })
+        .expect("open core"),
+    )
+}
+
+#[derive(Default)]
+pub struct FakeSources {
+    pub threads: Mutex<Vec<ThreadSummary>>,
+    pub texts: Mutex<HashMap<String, String>>,
+    pub providers: Mutex<Vec<ProviderInfo>>,
+}
+
+impl FakeSources {
+    pub fn new() -> Arc<Self> {
+        let sources = Self::default();
+        *sources.providers.lock().unwrap() = vec![
+            ProviderInfo {
+                id: "claude-code".into(),
+                name: "Claude Code".into(),
+                status: "ready".into(),
+                detail: "Installed · signed in".into(),
+            },
+            ProviderInfo {
+                id: "codex".into(),
+                name: "Codex".into(),
+                status: "not_installed".into(),
+                detail: "Not installed".into(),
+            },
+        ];
+        Arc::new(sources)
+    }
+
+    pub fn add(&self, thread: ThreadSummary) {
+        let mut threads = self.threads.lock().unwrap();
+        threads.retain(|t| t.id != thread.id);
+        threads.push(thread);
+    }
+
+    pub fn set_status(&self, id: &str, status: ThreadStatus) {
+        for thread in self.threads.lock().unwrap().iter_mut() {
+            if thread.id == id {
+                thread.status = status;
+            }
+        }
+    }
+}
+
+impl LocatorSources for FakeSources {
+    fn threads(&self) -> Result<Vec<ThreadSummary>> {
+        Ok(self.threads.lock().unwrap().clone())
+    }
+
+    fn thread(&self, id: &str) -> Result<Option<ThreadSummary>> {
+        Ok(self
+            .threads
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|t| t.id == id)
+            .cloned())
+    }
+
+    fn thread_text(&self, id: &str, max_bytes: usize) -> Result<String> {
+        let text = self
+            .texts
+            .lock()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .unwrap_or_default();
+        Ok(text.chars().take(max_bytes).collect())
+    }
+
+    fn providers(&self) -> Vec<ProviderInfo> {
+        self.providers.lock().unwrap().clone()
+    }
+}
+
+pub fn thread(
+    name: &str,
+    provider: &str,
+    workspace_id: &str,
+    workspace_name: &str,
+    status: ThreadStatus,
+    last_activity_at: &str,
+) -> ThreadSummary {
+    ThreadSummary {
+        id: new_id(),
+        name: name.to_owned(),
+        provider_id: ProviderId::new(provider),
+        provider_name: match provider {
+            "claude-code" => "Claude Code".to_owned(),
+            "codex" => "Codex".to_owned(),
+            other => other.to_owned(),
+        },
+        model: None,
+        account_label: None,
+        workspace_id: workspace_id.to_owned(),
+        workspace_name: workspace_name.to_owned(),
+        permission_mode: PermissionMode::Approve,
+        status,
+        current_activity: None,
+        created_at: last_activity_at.to_owned(),
+        last_activity_at: last_activity_at.to_owned(),
+        pending_approvals: 0,
+        unread_messages: 0,
+        files_changed: None,
+        branch: None,
+        error: None,
+        archived_at: None,
+        resumable: false,
+        permission_profile_id: None,
+        runtime_kind: None,
+        terminal_id: None,
+    }
+}
+
+/// Makes a real folder and opens it as a workspace.
+pub fn workspace(core: &Core, root: &Path, name: &str) -> kalcode_core::workspaces::Workspace {
+    let folder = root.join(name);
+    std::fs::create_dir_all(&folder).expect("folder");
+    core.open_workspace(&folder).expect("open workspace")
+}

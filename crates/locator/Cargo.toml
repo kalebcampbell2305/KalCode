@@ -1,0 +1,28 @@
+[package]
+name = "kalcode-locator"
+description = "KalCode Universal Session Locator (LOC) and the workspace rail, returning-user home and recent work (Z7-W2): the local FTS5 index, its query language and ranking, rail persistence, greetings and summaries derived from real state."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "kalcode_locator"
+
+[dependencies]
+kalcode-contracts = { path = "../contracts" }
+kalcode-native-core = { path = "../native-core" }
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+# `hooks`: a progress handler bounds the optional alias-widened query (LOC-06).
+rusqlite = { workspace = true, features = ["hooks"] }
+time.workspace = true
+ts-rs = { version = "12", features = ["serde-json-impl", "uuid-impl"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
