@@ -18,7 +18,7 @@
 import type {
   ActionKind,
   ApprovalDecision,
-  ApprovalRequest,
+  ApprovalView,
   Correlation,
   EventEnvelope,
   EventPayload,
@@ -30,6 +30,7 @@ import type {
   ThreadStatus,
   ThreadSummary,
 } from "@kalcode/protocol";
+import { isRemoteConsequential } from "@kalcode/protocol";
 import type { CommandName } from "../transport.ts";
 
 export type DashboardScenario = "busy" | "empty" | "approvals-flood" | "errors" | "loading";
@@ -476,7 +477,7 @@ export function createDashboardFixtures(scenario: DashboardScenario, emit: Emit,
   const withThreads = scenario !== "empty";
 
   const threads = new Map<string, ThreadSummary & { archived: boolean }>();
-  const approvals = new Map<string, ApprovalRequest>();
+  const approvals = new Map<string, ApprovalView>();
   const terminals: TerminalInfo[] = [];
   let failing = scenario === "errors";
   let extraApproval = 100;
@@ -529,10 +530,12 @@ export function createDashboardFixtures(scenario: DashboardScenario, emit: Emit,
     threadId: string,
     requestedAt: string,
     live: boolean,
-  ): ApprovalRequest | null {
+  ): ApprovalView | null {
     const thread = threads.get(threadId);
     if (!thread) return null;
-    const request: ApprovalRequest = {
+    // Remote-consequential actions can only be approved once (docs/PERMISSIONS.md).
+    const standing = !seed.scopes.some(isRemoteConsequential) && !seed.scopes.includes("destructive");
+    const request: ApprovalView = {
       id: fixtureId(4, seed.n),
       action: {
         id: fixtureId(5, seed.n),
@@ -548,6 +551,13 @@ export function createDashboardFixtures(scenario: DashboardScenario, emit: Emit,
       status: "pending",
       resolvedDecision: null,
       resolvedAt: null,
+      allowedDecisions: standing
+        ? ["deny", "approve_once", "approve_for_thread", "approve_for_workspace"]
+        : ["deny", "approve_once"],
+      grantCoverage: standing ? "requests like this one" : "only this exact request",
+      context: { threadName: thread.name, workspaceName: thread.workspaceName, providerName: thread.providerName },
+      createdAt: requestedAt,
+      expireReason: null,
     };
     approvals.set(request.id, request);
     const from = thread.status;

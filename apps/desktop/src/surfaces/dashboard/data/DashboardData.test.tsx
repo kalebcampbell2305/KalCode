@@ -6,10 +6,10 @@ import { describe, expect, it } from "vitest";
 import { KalCodeClient } from "../../../ipc/client.ts";
 import { createMemoryTransport, type MemoryScenario, type MemoryTransport } from "../../../ipc/memoryTransport.ts";
 import { RuntimeProvider } from "../../../runtime/RuntimeProvider.tsx";
+import { PermissionsProvider, usePermissions } from "../../permissions/index.ts";
 import {
   DashboardDataProvider,
   useDashboardAnnouncements,
-  usePendingApprovals,
   useRunningTerminals,
   useThreadSummaries,
 } from "./DashboardData.tsx";
@@ -18,10 +18,11 @@ const SETTINGS: Settings = { theme: "dark", motion: "reduced", density: "comfort
 
 function Probe() {
   const threads = useThreadSummaries();
-  const approvals = usePendingApprovals();
+  // Pending approvals come from the permission engine's shared state (Z4), as on the Dashboard.
+  const approvals = usePermissions();
   const terminals = useRunningTerminals();
   const { urgent, polite } = useDashboardAnnouncements();
-  const first = approvals.state.status === "ready" ? approvals.state.data[0] : undefined;
+  const first = approvals.pendingState === "ready" ? approvals.pending.at(-1) : undefined;
   const target =
     threads.state.status === "ready" ? threads.state.data.find((t) => t.name === "Fix flaky checkout test") : undefined;
   return (
@@ -30,13 +31,13 @@ function Probe() {
         {threads.state.status === "ready" ? `ready:${threads.state.data.length}` : threads.state.status}
       </output>
       <output data-testid="approvals">
-        {approvals.state.status === "ready" ? `ready:${approvals.state.data.length}` : approvals.state.status}
+        {approvals.pendingState === "ready" ? `ready:${approvals.pending.length}` : approvals.pendingState}
       </output>
       <output data-testid="terminals">{terminals.state.status}</output>
       <output data-testid="target">{target?.status ?? "none"}</output>
       <output data-testid="urgent">{urgent?.text ?? ""}</output>
       <output data-testid="polite">{polite?.text ?? ""}</output>
-      <button type="button" onClick={() => first && void approvals.decide(first, "approve_once")}>
+      <button type="button" onClick={() => first && void approvals.decide(first.id, "approve_once")}>
         approve
       </button>
       <button type="button" onClick={() => threads.reload()}>
@@ -53,9 +54,11 @@ async function mount(scenario: MemoryScenario): Promise<MemoryTransport> {
   render(
     <ToastProvider>
       <RuntimeProvider client={client} info={boot.info} initialSettings={SETTINGS}>
-        <DashboardDataProvider>
-          <Probe />
-        </DashboardDataProvider>
+        <PermissionsProvider>
+          <DashboardDataProvider>
+            <Probe />
+          </DashboardDataProvider>
+        </PermissionsProvider>
       </RuntimeProvider>
     </ToastProvider>,
   );
@@ -65,9 +68,9 @@ async function mount(scenario: MemoryScenario): Promise<MemoryTransport> {
 const text = (id: string) => screen.getByTestId(id).textContent;
 
 describe("Dashboard data layer", () => {
-  it("reports the sources this build lacks as unavailable", async () => {
+  it("reads every source natively in a fresh session", async () => {
     await mount("default");
-    await waitFor(() => expect(text("approvals")).toBe("unavailable"));
+    await waitFor(() => expect(text("approvals")).toBe("ready:0"));
     await waitFor(() => expect(text("threads")).toBe("ready:0"));
     await waitFor(() => expect(text("terminals")).toBe("ready"));
   });
@@ -86,24 +89,21 @@ describe("Dashboard data layer", () => {
     await waitFor(() => expect(text("target")).toBe("testing"));
   });
 
-  it("announces approvals that arrive after the first read, assertively", async () => {
+  it("lists approvals that arrive after the first read", async () => {
     const transport = await mount("busy");
     await waitFor(() => expect(text("approvals")).toBe("ready:2"));
-    expect(text("urgent")).toBe("");
     act(() => {
       transport.dashboard?.requestApproval();
     });
     await waitFor(() => expect(text("approvals")).toBe("ready:3"));
-    await waitFor(() => expect(text("urgent")).toBe("New approval request: Run pnpm prisma migrate dev"));
   });
 
-  it("decides through approval_decide, removes the request and announces the result politely", async () => {
+  it("decides through approval_decide and removes the request", async () => {
     await mount("busy");
     await waitFor(() => expect(text("approvals")).toBe("ready:2"));
     await userEvent.click(screen.getByRole("button", { name: "approve" }));
     await waitFor(() => expect(text("approvals")).toBe("ready:1"));
-    await waitFor(() => expect(text("polite")).toBe("Approved once: Push chore/deps to origin"));
-    // A decision the user made is never announced as a new arrival.
+    // Approvals are announced app-wide (ApprovalAnnouncer), never by the Dashboard's data layer.
     expect(text("urgent")).toBe("");
   });
 

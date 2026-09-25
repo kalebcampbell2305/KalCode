@@ -46,6 +46,15 @@ const COMMANDS: &[&str] = &[
     "thread_rename",
     "thread_archive",
     "thread_stream",
+    // Z4: permissions.
+    "approval_list",
+    "approval_decide",
+    "permission_profiles_list",
+    "thread_set_permission_mode",
+    "permission_settings_get",
+    "permission_settings_update",
+    // Test hook: refused unless test hooks are compiled in (debug and `e2e` builds).
+    "test_permission_probe",
 ];
 
 fn main() {

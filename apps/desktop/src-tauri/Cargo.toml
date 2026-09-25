@@ -24,6 +24,7 @@ kalcode-providers = { path = "../../../crates/providers" }
 kalcode-secure-store = { path = "../../../crates/secure-store" }
 kalcode-contracts = { path = "../../../crates/contracts" }
 kalcode-threads = { path = "../../../crates/threads" }
+kalcode-permissions = { path = "../../../crates/permissions" }
 tauri = { version = "2.11", features = [] }
 tauri-plugin-opener = "2.5"
 tauri-plugin-single-instance = "2.4"
@@ -31,6 +32,9 @@ serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 tauri-plugin-dialog = "2"
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true

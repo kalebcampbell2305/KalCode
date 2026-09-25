@@ -4,7 +4,7 @@ import { expect, type Locator, type Page, test } from "@playwright/test";
 /**
  * Dashboard behaviour against the in-memory transport's Dashboard scenarios
  * (src/ipc/memory/dashboard.ts). Without a scenario the transport mirrors today's native build,
- * where the approval commands (Z4) do not exist yet.
+ * where threads, approvals and terminals are native but nothing has run yet.
  */
 
 type Scenario = "default" | "busy" | "empty" | "approvals-flood" | "errors" | "loading";
@@ -16,7 +16,8 @@ async function open(page: Page, scenario: Scenario = "default") {
 
 const main = (page: Page) => page.locator("#main");
 const approvals = (page: Page) => page.getByRole("region", { name: /Needs approval/ });
-const approvalItems = (page: Page) => approvals(page).getByRole("article");
+/** Each pending request is the shared approval prompt (Z4), one per list item. */
+const approvalItems = (page: Page) => approvals(page).locator("li[data-approval-id]");
 const threads = (page: Page) => page.getByRole("region", { name: "Threads" });
 const recent = (page: Page) => page.getByRole("region", { name: "Recent completions and failures" });
 const summary = (page: Page) => page.getByRole("navigation", { name: "Summary" });
@@ -45,11 +46,11 @@ async function setTheme(page: Page, theme: "light" | "dark") {
   await page.getByRole("button", { name: "Dashboard" }).click();
 }
 
-test.describe("dashboard in a build without approvals", () => {
+test.describe("dashboard in a fresh session", () => {
   test("says so honestly and never shows sample data", async ({ page }) => {
     await open(page);
     await expect(main(page).getByText("No threads are open.")).toBeVisible();
-    await expect(approvals(page)).toHaveCount(0);
+    await expect(approvals(page).getByText("Nothing is waiting for your approval.")).toBeVisible();
     await expect(page.getByRole("region", { name: "Terminals" }).getByText("No terminals are running.")).toBeVisible();
     await expect(main(page).getByText("Refactor auth middleware")).toHaveCount(0);
     await expect(page.getByRole("region", { name: "Activity" }).getByText("KalCode started")).toBeVisible();
@@ -69,7 +70,9 @@ test.describe("dashboard with running work", () => {
 
     await expect(approvalItems(page)).toHaveCount(2);
     const push = approvalItems(page).filter({ hasText: "Push chore/deps to origin" });
-    await expect(push.getByText("Leaves this machine", { exact: true })).toBeVisible();
+    await expect(push.getByRole("list", { name: "Permissions this needs" })).toContainText("Pushing to a Git remote");
+    // Remote-consequential: only Deny and Approve once are offered.
+    await expect(push.getByRole("button")).toHaveText(["Deny", "Approve once"]);
     await expect(push.getByRole("definition").filter({ hasText: "Bump dependencies" })).toBeVisible();
     await expect(push.getByRole("definition").filter({ hasText: "Claude Code" })).toBeVisible();
     await expect(push.getByRole("definition").filter({ hasText: "kalcode" })).toBeVisible();
@@ -129,35 +132,30 @@ test.describe("dashboard with running work", () => {
     const bump = row(threads(page), "Bump dependencies");
     await expect(bump.getByText("Using a tool")).toBeVisible();
     await expect(bump.getByText("Running git push")).toBeVisible();
-    await expect(page.getByTestId("announce-polite")).toHaveText("Approved once: Push chore/deps to origin");
     await expect(page.getByRole("region", { name: "Activity" }).getByText("Approved", { exact: true })).toBeVisible();
   });
 
-  test("approvals are decided from the keyboard and focus stays in the queue", async ({ page }) => {
+  test("approvals are answered from the keyboard and focus stays in the queue", async ({ page }) => {
     await open(page, "busy");
     const first = approvalItems(page).first();
     await expect(first).toContainText("Push chore/deps to origin");
-    await first.focus();
-    await expect(first.locator("[id$='-keys']")).toBeVisible();
-    await page.keyboard.press("d");
-    await expect(approvalItems(page)).toHaveCount(1);
-    const next = approvalItems(page).first();
-    await expect(next).toContainText("Install zod");
-    await expect(next).toBeFocused();
-    await expect(page.getByTestId("announce-polite")).toHaveText("Denied: Push chore/deps to origin");
-
-    await page.keyboard.press("t");
-    await expect(approvals(page).getByText("Nothing is waiting for your approval.")).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Needs approval" })).toBeFocused();
-    await expect(row(threads(page), "Refactor auth middleware").getByText("Installing zod@4.1.0")).toBeVisible();
-  });
-
-  test("letters typed on a focused button never decide", async ({ page }) => {
-    await open(page, "busy");
-    const first = approvalItems(page).first();
+    // Deny comes first and nothing is pre-focused or bound to a single letter.
     await first.getByRole("button", { name: "Deny" }).focus();
     await page.keyboard.press("a");
     await expect(approvalItems(page)).toHaveCount(2);
+    await page.keyboard.press("Enter");
+    await expect(approvalItems(page)).toHaveCount(1);
+    const next = approvalItems(page).first();
+    await expect(next).toContainText("Install zod");
+    await expect(next.getByRole("button", { name: "Deny" })).toBeFocused();
+
+    await page.keyboard.press("Tab");
+    await page.keyboard.press("Tab");
+    await expect(next.getByRole("button", { name: "Allow for thread" })).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(approvals(page).getByText("Nothing is waiting for your approval.")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Needs approval" })).toBeFocused();
+    await expect(row(threads(page), "Refactor auth middleware").getByText("Installing zod@4.1.0")).toBeVisible();
   });
 
   test("an approval that arrives live is shown and announced", async ({ page }) => {
@@ -169,10 +167,12 @@ test.describe("dashboard with running work", () => {
       ).__kalcodeMemory.dashboard.requestApproval();
     });
     await expect(approvalItems(page)).toHaveCount(3);
-    const arrived = approvalItems(page).filter({ hasText: "Run pnpm prisma migrate dev" });
-    await expect(arrived).toHaveAttribute("data-arrived", "true");
-    await expect(page.getByTestId("announce-urgent")).toHaveText("New approval request: Run pnpm prisma migrate dev");
+    await expect(approvalItems(page).filter({ hasText: "Run pnpm prisma migrate dev" })).toBeVisible();
+    await expect(page.getByRole("alert").filter({ hasText: "Approval needed." })).toContainText(
+      "wants to: Run pnpm prisma migrate dev",
+    );
     await expect(row(threads(page), "Write invoices migration").getByText("Needs approval")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Approvals, 3 waiting" })).toBeVisible();
   });
 
   test("stopping asks for confirmation; Escape cancels and returns focus", async ({ page }) => {
@@ -242,8 +242,8 @@ test.describe("dashboard with running work", () => {
     await expect(
       approvalItems(page)
         .filter({ hasText: "Deploy atlas-api to production" })
-        .getByText("Leaves this machine", { exact: true }),
-    ).toBeVisible();
+        .getByRole("list", { name: "Permissions this needs" }),
+    ).toContainText("Deploying or publishing");
   });
 });
 
@@ -312,17 +312,14 @@ test.describe("dashboard accessibility", () => {
     }
   }
 
-  test("keyboard order: summary, approvals, then threads", async ({ page }) => {
+  test("keyboard order: summary, then the approval answers, Deny first", async ({ page }) => {
     await open(page, "busy");
     await summary(page).getByRole("button", { name: "3 Terminals" }).focus();
     await page.keyboard.press("Tab");
-    await expect(approvalItems(page).first()).toBeFocused();
-    await page.keyboard.press("Tab");
     await expect(approvalItems(page).first().getByRole("button", { name: "Deny" })).toBeFocused();
-    await page.keyboard.press("Tab");
     await page.keyboard.press("Tab");
     await expect(approvalItems(page).first().getByRole("button", { name: "Approve once" })).toBeFocused();
     await page.keyboard.press("Tab");
-    await expect(approvalItems(page).nth(1)).toBeFocused();
+    await expect(approvalItems(page).nth(1).getByRole("button", { name: "Deny" })).toBeFocused();
   });
 });

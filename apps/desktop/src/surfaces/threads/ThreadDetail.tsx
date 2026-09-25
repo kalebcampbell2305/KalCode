@@ -17,6 +17,7 @@ import { toKalCodeError } from "../../ipc/errors.ts";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { MOD_LABEL } from "../../shell/shortcuts.ts";
+import { ApprovalPrompt, usePermissions } from "../permissions/index.ts";
 import { buildTimeline, PERMISSION_MODES, presentStatus, TOOL_STATUS, threadActions } from "./model.ts";
 import styles from "./ThreadDetail.module.css";
 import { type LiveMessage, useThreadDetail } from "./useThreads.ts";
@@ -43,6 +44,7 @@ const FAILURE_TITLES: Record<Action, string> = {
 
 export function ThreadDetail({ threadId, archived, onArchived }: ThreadDetailProps) {
   const { client } = useRuntime();
+  const { pending, decide } = usePermissions();
   const toast = useToast();
   const detail = useThreadDetail(threadId);
   const [busy, setBusy] = useState<Action | null>(null);
@@ -88,6 +90,7 @@ export function ThreadDetail({ threadId, archived, onArchived }: ThreadDetailPro
 
   const thread = detail.thread;
   const actions = threadActions(thread, archived);
+  const requests = pending.filter((request) => request.action.threadId === thread.id);
   const status = presentStatus(thread.status);
 
   return (
@@ -208,11 +211,20 @@ export function ThreadDetail({ threadId, archived, onArchived }: ThreadDetailPro
               ? "Waiting for 1 permission decision"
               : `Waiting for ${thread.pendingApprovals} permission decisions`}
           </p>
-          {thread.currentActivity?.startsWith(APPROVAL_PREFIX) ? (
+          {requests.length === 0 && thread.currentActivity?.startsWith(APPROVAL_PREFIX) ? (
             <p>Requested: {thread.currentActivity.slice(APPROVAL_PREFIX.length)}</p>
           ) : null}
-          <p>Interrupt the turn to deny it and keep the thread, or stop the thread.</p>
+          <p>Answer below, or interrupt the turn to deny it and keep the thread.</p>
         </div>
+      ) : null}
+      {requests.length > 0 ? (
+        <ol className={styles.approvals} aria-label="Waiting for your approval">
+          {requests.map((request) => (
+            <li key={request.id}>
+              <ApprovalPrompt request={request} onDecide={decide} headingLevel={3} />
+            </li>
+          ))}
+        </ol>
       ) : null}
 
       <Timeline detail={detail} providerName={thread.providerName} />

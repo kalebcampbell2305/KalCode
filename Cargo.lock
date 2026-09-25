@@ -2231,6 +2231,7 @@ version = "0.1.0"
 dependencies = [
  "kalcode-contracts",
  "kalcode-native-core",
+ "kalcode-permissions",
  "kalcode-providers",
  "kalcode-secure-store",
  "kalcode-threads",
@@ -2241,6 +2242,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
+ "tempfile",
  "tracing",
 ]
 
@@ -2276,6 +2278,20 @@ dependencies = [
  "tracing-subscriber",
  "ts-rs",
  "uuid",
+]
+
+[[package]]
+name = "kalcode-permissions"
+version = "0.1.0"
+dependencies = [
+ "kalcode-contracts",
+ "kalcode-native-core",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "ts-rs",
 ]
 
 [[package]]

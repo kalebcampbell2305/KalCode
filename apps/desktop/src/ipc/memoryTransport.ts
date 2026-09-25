@@ -10,6 +10,7 @@
  *   code               — workspaces with terminal tabs already open (Code, Dashboard)
  *   threads            — threads in every state (Threads surface fixtures)
  *   no-providers       — no provider is connected (New thread flow empty state)
+ *   approvals          — agents are waiting on approvals (Z4)
  *   providers-error    — provider detection fails
  *   providers-none     — no provider CLI is installed
  *   providers-outdated — Claude Code is installed but too old, and signed out
@@ -21,6 +22,7 @@
  */
 import type {
   AppInfo,
+  ApprovalView,
   BootState,
   Correlation,
   Diagnostics,
@@ -44,6 +46,7 @@ import {
   isDashboardScenario,
 } from "./memory/dashboard.ts";
 import { detectFake, type ProviderScenario, providerCatalog } from "./memoryProviders.ts";
+import { createPermissionMemory, type PermissionMemory } from "./memory/permissions.ts";
 import { createThreadsMemory } from "./memory/threads.ts";
 import { createMemoryWorkspaces, type MemoryWorkspaces } from "./memoryWorkspaces.ts";
 import type { CommandName, Transport } from "./transport.ts";
@@ -55,6 +58,7 @@ export type MemoryScenario =
   | "code"
   | "threads"
   | "no-providers"
+  | "approvals"
   | ProviderScenario
   | DashboardScenario;
 
@@ -70,7 +74,7 @@ const AVAILABLE_SURFACES: ReadonlySet<SurfaceFlag["id"]> = new Set([
 ]);
 
 /** Latest schema version (mirrors crates/native-core/src/db.rs). */
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 export interface MemoryTransportOptions {
   /** How long fake provider detection takes (the UI shows its busy state meanwhile). */
@@ -117,6 +121,8 @@ export interface MemoryTransport extends Transport {
   readonly dashboard: DashboardControls | null;
   /** Test hooks for workspaces and terminals (folder picker results, moved folders). */
   workspaces: Omit<MemoryWorkspaces, "handlers" | "attachTerminal">;
+  /** Test hook: permission state (Z4), e.g. an agent asking for approval. */
+  permissions: PermissionMemory;
 }
 
 export function createMemoryTransport(
@@ -251,6 +257,16 @@ export function createMemoryTransport(
     await detecting.catch(() => undefined);
   };
 
+  // The permission engine is the thread runtime's gate (Z4), as in native: requests a thread
+  // opens are answered in the Approvals panel or on the Dashboard, and answers reach the thread.
+  let answer: (view: ApprovalView) => void = () => undefined;
+  const permissions = createPermissionMemory({
+    emit,
+    requireCore,
+    seed: scenario === "approvals" && !startupError,
+    onDecided: (view) => answer(view),
+  });
+
   const threads = createThreadsMemory(
     (event, correlation = {}, source = "core") => emit(event, { correlation, source }),
     requireCore,
@@ -260,11 +276,29 @@ export function createMemoryTransport(
         .filter((w) => w.available)
         .map((w) => ({ id: w.id, name: w.name })),
     () => usableProviders(providers),
+    {
+      open: (summary) =>
+        permissions.openRequest(
+          {
+            threadId: summary.id,
+            threadName: summary.name,
+            workspaceId: summary.workspaceId,
+            workspaceName: summary.workspaceName,
+            providerId: summary.providerId,
+            providerName: summary.providerName,
+            mode: summary.permissionMode,
+          },
+          "install",
+        ).id,
+      expireForThread: (threadId) => permissions.expireForThread(threadId),
+    },
   );
+  answer = (view) => threads.resolveApproval(view.id, view.status === "approved");
 
   const handlers: DashboardHandlers = {
     ...code.handlers,
     ...threads.handlers,
+    ...permissions.handlers,
     // Like native: the first thread operation detects providers once, so threads use exactly
     // the providers detection reports usable.
     thread_options: async (args) => {
@@ -424,13 +458,15 @@ export function createMemoryTransport(
       makeUnavailable: code.makeUnavailable,
       runningProcessCount: code.runningProcessCount,
     },
+    permissions,
   };
-  // UI tests drive the fake folder picker and filesystem, and live Dashboard changes (e.g. an
-  // approval arriving), through this hook (ui-test builds only).
+  // UI tests drive the fake folder picker and filesystem, live Dashboard changes and agents
+  // asking for approval through this hook (ui-test builds only).
   if (typeof window !== "undefined") {
     (window as unknown as { __kalcodeMemory?: unknown }).__kalcodeMemory = {
       ...transport.workspaces,
       dashboard: transport.dashboard,
+      permissions: transport.permissions,
     };
   }
   return transport;
@@ -454,6 +490,7 @@ function readScenario(): MemoryScenario {
     value === "code" ||
     value === "threads" ||
     value === "no-providers" ||
+    value === "approvals" ||
     isDashboardScenario(value)
   ) {
     return value;

@@ -4,6 +4,7 @@
 mod code_commands;
 mod commands;
 pub mod environment;
+pub mod permission_commands;
 mod provider_commands;
 mod thread_commands;
 
@@ -210,9 +211,28 @@ pub fn run(removed_overrides: Vec<&'static str>) {
         .setup(move |app| {
             let state = start(app, &removed_overrides);
             let providers = provider_commands::ProviderState::from_process();
-            let threads = ThreadsState::start(state.core.as_ref(), providers.registry());
+            // Z4 over Z1 (workspace roots) and Z3 (thread modes, bound once the runtime starts).
+            let modes = Arc::new(thread_commands::ThreadModes::default());
+            let permissions = permission_commands::PermissionState::new(
+                state.core.clone(),
+                state.core.clone().map_or_else(
+                    || {
+                        Arc::new(kalcode_permissions::NoWorkspaces)
+                            as Arc<dyn kalcode_permissions::WorkspaceRoots>
+                    },
+                    |core| Arc::new(kalcode_permissions::CoreWorkspaceRoots::new(core)),
+                ),
+                modes.clone(),
+            );
+            let threads = ThreadsState::start(
+                state.core.as_ref(),
+                providers.registry(),
+                permissions.service(),
+                &modes,
+            );
             app.manage(state);
             app.manage(providers);
+            app.manage(permissions);
             app.manage(threads);
 
             // Safety net: the frontend shows the window after its first themed paint
@@ -273,6 +293,13 @@ pub fn run(removed_overrides: Vec<&'static str>) {
             thread_commands::thread_rename,
             thread_commands::thread_archive,
             thread_commands::thread_stream,
+            permission_commands::approval_list,
+            permission_commands::approval_decide,
+            permission_commands::permission_profiles_list,
+            permission_commands::thread_set_permission_mode,
+            permission_commands::permission_settings_get,
+            permission_commands::permission_settings_update,
+            permission_commands::test_permission_probe,
         ])
         .build(tauri::generate_context!());
 

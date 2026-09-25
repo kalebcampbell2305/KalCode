@@ -45,10 +45,11 @@ merged (files are checksummed, see `docs/DATA_MODEL.md`).
 | `0001` (v1) | Z0 | `app_meta`, `settings`, `events` | merged |
 | `0002` (v2) | Z1 | `workspaces`, `terminals` | merged (wave 2) |
 | `0003` (v3) | Z3 | `threads`, `thread_messages`, `tool_calls`, `thread_files` | merged (wave 2) |
-| `0004` (v4) | Z4 | `permission_profiles`, `approvals`, `permission_grants`, `permission_audit` | reserved: next free number |
-| `0005` (v5) | — | reserved for the next campaign that needs storage | free |
+| `0004` (v4) | Z4 | `permission_profiles`, `permission_settings`, `approvals` (with `origin_kind` / `origin_id`; `thread_id` nullable for non-thread origins), `permission_grants`, `permission_audit` (kinds include the Trust Kernel's `trust.*` / `grant.ceiling_clamped`) | merged (wave 2) |
+| `0005` (v5) | — | reserved: the next campaign that needs storage takes it | free |
 
-Z2 shipped no migration (provider state is detected, never stored). Numbers are assigned at
+Z2 shipped no migration (provider state is detected, never stored). `threads.permission_profile_id`
+(v3) holds a Custom thread's profile; only the permission engine writes it. Numbers are assigned at
 integration in merge order; a campaign branch registers its migration after the last merged one.
 
 A table has exactly one owning campaign. Others read it through that campaign's Rust API, not
@@ -76,10 +77,12 @@ with their own SQL.
 | `thread_rename` | Z3 | `{ threadId, name }` | `ThreadSummary` |
 | `thread_archive` | Z3 | `{ threadId }` | `ThreadSummary` |
 | `thread_stream` | Z3 | `{ threadId }` + channel | `AgentEvent` stream (message deltas; live only) |
-| `approval_list` | Z4 | `{ status?: "pending" }` | `ApprovalRequest[]` |
-| `approval_decide` | Z4 | `{ requestId, decision: ApprovalDecision }` | `ApprovalRequest` |
+| `approval_list` | Z4 | `{ status?: "pending" \| "approved" \| "denied" \| "expired" }` | `ApprovalView[]` (`ApprovalRequest` + `allowedDecisions`, `grantCoverage`, `context`, `createdAt`, `expireReason`; contract change requested) |
+| `approval_decide` | Z4 | `{ requestId, decision: ApprovalDecision }` | `ApprovalView` |
 | `permission_profiles_list` | Z4 | — | `PermissionProfile[]` |
-| `thread_set_permission_mode` | Z4 | `{ threadId, mode, confirmBypass? }` | `ThreadSummary` |
+| `thread_set_permission_mode` | Z4 | `{ threadId, mode, confirmBypass?, profileId? }` | `ThreadSummary` — through the permission engine, which stores the mode via the thread runtime (`ThreadModeStore`) and records `permission.mode_changed` + audit once |
+| `permission_settings_get` / `permission_settings_update` | Z4 | — / `{ defaultMode, profileId?, confirmBypass? }` | `PermissionSettings` (additive; contract change requested) |
+| `test_permission_probe` | Z4 (test hook) | `{ workspaceId }` | evaluations of two fixed actions; refused unless test hooks are compiled in (debug and `e2e` builds) |
 
 Rules that bind every command: ids validated with `is_valid_id`; the WebView never supplies paths,
 executables or shell strings; Bypass can only be set by a user action with `confirmBypass: true`

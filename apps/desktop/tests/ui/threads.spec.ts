@@ -282,6 +282,39 @@ test.describe("threads", () => {
     ).toHaveCount(0);
   });
 
+  test("a request the thread opens is answered in the thread through the permission engine", async ({ page }) => {
+    await openThreads(page);
+    await createThread(page, "install lodash for the debounce helper");
+    const request = detail(page).getByRole("region", { name: "Run npm install lodash" });
+    await expect(detail(page).getByText("Waiting for 1 permission decision")).toBeVisible();
+    await expect(request.getByText("npm install lodash", { exact: true })).toBeVisible();
+    // Deny first, Approve once (primary) last.
+    await expect(request.getByRole("button")).toHaveText([
+      "Deny",
+      "Allow for workspace",
+      "Allow for thread",
+      "Approve once",
+    ]);
+    // The same request is waiting in the Approvals panel.
+    await expect(page.getByRole("button", { name: "Approvals, 1 waiting" })).toBeVisible();
+
+    await request.getByRole("button", { name: "Approve once" }).click();
+    const tool = conversation(page).getByRole("listitem").filter({ hasText: "Run npm install lodash" });
+    await expect(tool.getByText("added 1 package")).toBeVisible();
+    await expect(conversation(page).getByText("Installed lodash and wired up the debounce helper.")).toBeVisible();
+    await expect(detail(page).getByText("Ready", { exact: true })).toBeVisible();
+    await expect(detail(page).getByText("Waiting for 1 permission decision")).toHaveCount(0);
+  });
+
+  test("interrupting a waiting thread expires its request", async ({ page }) => {
+    await openThreads(page);
+    await createThread(page, "install lodash please");
+    await expect(detail(page).getByRole("region", { name: "Run npm install lodash" })).toBeVisible();
+    await detail(page).getByRole("button", { name: "Interrupt" }).click();
+    await expect(detail(page).getByRole("region", { name: "Run npm install lodash" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Approvals, none waiting" })).toBeVisible();
+  });
+
   test("failed threads explain why and can be resumed", async ({ page }) => {
     await openThreads(page, "threads");
     await list(page)

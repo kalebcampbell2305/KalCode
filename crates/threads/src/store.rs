@@ -242,12 +242,36 @@ pub fn archive(conn: &Connection, id: &str, now: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn set_permission_mode(conn: &Connection, id: &str, mode: PermissionMode) -> Result<()> {
+/// Stores a thread's permission mode and, for Custom, its profile (cleared otherwise).
+pub fn set_permission_mode(
+    conn: &Connection,
+    id: &str,
+    mode: PermissionMode,
+    profile_id: Option<&str>,
+) -> Result<()> {
+    let profile_id = if mode == PermissionMode::Custom {
+        profile_id
+    } else {
+        None
+    };
     conn.execute(
-        "UPDATE threads SET permission_mode = ?2 WHERE id = ?1",
-        params![id, enum_str(mode)],
+        "UPDATE threads SET permission_mode = ?2, permission_profile_id = ?3 WHERE id = ?1",
+        params![id, enum_str(mode), profile_id],
     )?;
     Ok(())
+}
+
+/// The Custom permission profile a thread uses, if any.
+pub fn permission_profile_id(conn: &Connection, id: &str) -> Result<Option<String>> {
+    use rusqlite::OptionalExtension;
+    Ok(conn
+        .query_row(
+            "SELECT permission_profile_id FROM threads WHERE id = ?1",
+            [id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten())
 }
 
 pub fn set_cwd(conn: &Connection, id: &str, cwd: &str, workspace_name: &str) -> Result<()> {

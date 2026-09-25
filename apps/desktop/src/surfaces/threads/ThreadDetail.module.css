@@ -268,3 +268,11 @@
   color: var(--color-text-faint);
   font-size: var(--text-xs);
 }
+
+.approvals {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}

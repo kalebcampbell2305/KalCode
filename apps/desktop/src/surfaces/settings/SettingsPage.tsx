@@ -9,6 +9,7 @@ import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useDiagnostics } from "../../runtime/useDiagnostics.ts";
 import { KalCodeTagline, Wordmark } from "../../shell/Brand.tsx";
 import { Page } from "../../shell/Page.tsx";
+import { PermissionsSettings } from "../permissions/index.ts";
 import styles from "./SettingsPage.module.css";
 import { useDiagnosticsActions } from "./useDiagnosticsActions.ts";
 
@@ -22,6 +23,7 @@ export function SettingsPage() {
   return (
     <Page title="Settings" description="Changes apply immediately and are saved on this device." width="narrow">
       <Appearance />
+      <PermissionsSettings />
       <DiagnosticsSection />
       <About />
     </Page>

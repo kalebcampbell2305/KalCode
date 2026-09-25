@@ -1,16 +1,12 @@
-import type { ApprovalRequest, TerminalInfo, ThreadSummary } from "@kalcode/protocol";
+import type { ApprovalView, TerminalInfo, ThreadSummary } from "@kalcode/protocol";
 import { useMemo } from "react";
 import { Page } from "../../shell/Page.tsx";
+import { usePermissions } from "../permissions/index.ts";
 import { ActivityFeed } from "./ActivityFeed.tsx";
 import { Announcer } from "./Announcer.tsx";
 import { ApprovalQueue } from "./ApprovalQueue.tsx";
 import styles from "./Dashboard.module.css";
-import {
-  DashboardDataProvider,
-  usePendingApprovals,
-  useRunningTerminals,
-  useThreadSummaries,
-} from "./data/DashboardData.tsx";
+import { DashboardDataProvider, useRunningTerminals, useThreadSummaries } from "./data/DashboardData.tsx";
 import { readyData } from "./data/resource.ts";
 import { describeRuntime, summarizeRuntime } from "./data/summary.ts";
 import { RecentOutcomes } from "./RecentOutcomes.tsx";
@@ -21,7 +17,7 @@ import { ThreadList } from "./ThreadList.tsx";
 import { useNow } from "./useNow.ts";
 
 const NO_THREADS: readonly ThreadSummary[] = [];
-const NO_APPROVALS: readonly ApprovalRequest[] = [];
+const NO_APPROVALS: readonly ApprovalView[] = [];
 const NO_TERMINALS: readonly TerminalInfo[] = [];
 
 export function Dashboard() {
@@ -34,15 +30,14 @@ export function Dashboard() {
 
 function DashboardPage() {
   const threads = useThreadSummaries();
-  const approvals = usePendingApprovals();
+  const approvals = usePermissions();
   const terminals = useRunningTerminals();
   const now = useNow(30_000);
 
   const threadList = readyData(threads.state) ?? NO_THREADS;
-  const approvalList = readyData(approvals.state) ?? NO_APPROVALS;
+  const approvalList = approvals.pendingState === "loading" ? NO_APPROVALS : approvals.pending;
   const terminalList = readyData(terminals.state) ?? NO_TERMINALS;
 
-  const threadsById = useMemo(() => new Map(threadList.map((t) => [t.id, t])), [threadList]);
   const threadNames = useMemo(() => new Map(threadList.map((t) => [t.id, t.name])), [threadList]);
   const summary = useMemo(
     () => (threads.state.status === "ready" ? summarizeRuntime(threadList, approvalList, terminalList) : null),
@@ -58,13 +53,13 @@ function DashboardPage() {
         <SummaryStrip
           summary={summary}
           loading={threads.state.status === "loading"}
-          approvalsAvailable={approvals.state.status !== "unavailable"}
+          approvalsAvailable
           terminalsAvailable={terminals.state.status !== "unavailable"}
         />
       ) : null}
       <div className={styles.layout}>
         <div className={styles.approvals}>
-          <ApprovalQueue threadsById={threadsById} now={now} />
+          <ApprovalQueue />
         </div>
         <div className={styles.threads}>
           <ThreadList now={now} />

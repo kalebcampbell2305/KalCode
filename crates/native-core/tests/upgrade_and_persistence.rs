@@ -31,7 +31,12 @@ fn migrations_are_numbered_contiguously() {
     let numbering: Vec<(i64, &str)> = MIGRATIONS.iter().map(|m| (m.version, m.name)).collect();
     assert_eq!(
         numbering,
-        vec![(1, "foundation"), (2, "workspaces"), (3, "threads")]
+        vec![
+            (1, "foundation"),
+            (2, "workspaces"),
+            (3, "threads"),
+            (4, "permissions")
+        ]
     );
 }
 
@@ -149,12 +154,12 @@ fn upgrade_from_v1_keeps_data_and_writes_backup() {
         .find_map(|e| match e.event {
             EventPayload::DatabaseMigrated {
                 from_version: 1,
-                to_version: 3,
+                to_version: 4,
                 backup_created,
             } => Some(backup_created),
             _ => None,
         })
-        .expect("database.migrated 1 -> 3");
+        .expect("database.migrated 1 -> 4");
     assert!(migrated);
 
     // Backup file exists and is a valid v1 database with the pre-upgrade data.
@@ -187,11 +192,41 @@ fn upgrade_from_v1_keeps_data_and_writes_backup() {
         Some(workspace.id)
     );
 
-    // The v3 thread tables exist.
+    // The v3 thread tables and the v4 permission tables exist.
     assert_eq!(thread_tables(&core), THREAD_TABLES);
+    assert_eq!(permission_tables(&core), PERMISSION_TABLES);
 }
 
 const THREAD_TABLES: [&str; 4] = ["thread_files", "thread_messages", "threads", "tool_calls"];
+
+const PERMISSION_TABLES: [&str; 5] = [
+    "approvals",
+    "permission_audit",
+    "permission_grants",
+    "permission_profiles",
+    "permission_settings",
+];
+
+// Test helper: panics on setup failures by design.
+#[allow(clippy::expect_used)]
+fn permission_tables(core: &Core) -> Vec<String> {
+    core.read(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table'
+               AND name IN ('approvals', 'permission_audit', 'permission_grants',
+                            'permission_profiles', 'permission_settings')
+             ORDER BY name",
+        )?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    })
+    .expect("list tables")
+}
+
+/// Schema v3 (v2 + Z3 threads).
+fn v3_only() -> &'static [Migration] {
+    &MIGRATIONS[..3]
+}
 
 // Test helper: panics on setup failures by design.
 #[allow(clippy::expect_used)]
@@ -223,10 +258,10 @@ fn backup_versions(dir: &std::path::Path) -> Vec<i64> {
     versions
 }
 
-/// v1 (first release) → v2 (a build with Z1) → v3 (this build), one step at a time, with data
+/// v1 (first release) → v2 (Z1) → v3 (Z3) → v4 (Z4, this build), one step at a time, with data
 /// written at every version. Each upgrade writes a backup of the version it started from.
 #[test]
-fn upgrade_v1_to_v2_to_v3_keeps_data_and_backs_up_each_step() {
+fn upgrade_v1_to_v4_step_by_step_keeps_data_and_backs_up_each_step() {
     let dir = tempfile::tempdir().expect("tempdir");
     let project = tempfile::tempdir().expect("project");
     {
@@ -258,17 +293,40 @@ fn upgrade_v1_to_v2_to_v3_keeps_data_and_backs_up_each_step() {
     };
     assert_eq!(backup_versions(dir.path()), vec![1]);
 
-    let core = Core::open(config(dir.path())).expect("v3 open");
+    let thread_id = kalcode_contracts::ids::new_id();
+    {
+        let core = Core::open_with_migrations(config(dir.path()), v3_only()).expect("v3 open");
+        assert!(
+            permission_tables(&core).is_empty(),
+            "v3 has no permission tables yet"
+        );
+        // A thread row as Z3 writes it (raw SQL: this test stays independent of the runtime).
+        core.write_with_events(|tx| {
+            tx.execute(
+                "INSERT INTO threads (id, name, provider_id, provider_name, workspace_id,
+                   workspace_name, cwd, permission_mode, status, created_at, last_activity_at)
+                 VALUES (?1, 'Fix login', 'claude-code', 'Claude Code', ?2, 'project', 'C:\\p',
+                   'approve', 'interrupted', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z')",
+                [&thread_id, &workspace_id],
+            )?;
+            Ok(((), Vec::new()))
+        })
+        .expect("insert thread");
+        core.shutdown();
+    }
     assert_eq!(backup_versions(dir.path()), vec![1, 2]);
+
+    let core = Core::open(config(dir.path())).expect("v4 open");
+    assert_eq!(backup_versions(dir.path()), vec![1, 2, 3]);
     assert_eq!(
         core.diagnostics()
             .expect("diagnostics")
             .database
             .schema_version,
-        3
+        4
     );
 
-    // v1 settings, v2 workspace and the whole event history survive.
+    // v1 settings, the v2 workspace, the v3 thread and the whole event history survive.
     let settings = core.settings().expect("settings");
     assert_eq!(settings.theme, ThemePreference::Light);
     assert_eq!(settings.density, Density::Compact);
@@ -292,7 +350,7 @@ fn upgrade_v1_to_v2_to_v3_keeps_data_and_backs_up_each_step() {
         .collect();
     assert_eq!(
         migrations,
-        vec![(0, 1, false), (1, 2, true), (2, 3, true)],
+        vec![(0, 1, false), (1, 2, true), (2, 3, true), (3, 4, true)],
         "each step recorded, backups for every existing database"
     );
     let types: Vec<&str> = core
@@ -304,6 +362,17 @@ fn upgrade_v1_to_v2_to_v3_keeps_data_and_backs_up_each_step() {
     assert!(types.contains(&"settings.changed"));
     assert!(types.contains(&"workspace.created"));
     assert_eq!(thread_tables(&core), THREAD_TABLES);
+    let name: String = core
+        .read(|conn| {
+            Ok(conn.query_row(
+                "SELECT name FROM threads WHERE id = ?1",
+                [&thread_id],
+                |r| r.get(0),
+            )?)
+        })
+        .expect("thread kept");
+    assert_eq!(name, "Fix login");
+    assert_eq!(permission_tables(&core), PERMISSION_TABLES);
 }
 
 #[test]

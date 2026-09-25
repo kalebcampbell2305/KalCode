@@ -1,7 +1,8 @@
 import type { SurfaceId } from "@kalcode/protocol";
 import { IconButton, Tooltip } from "@kalcode/ui/components";
-import { PanelLeftClose, PanelLeftOpen, Search } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen, Search, ShieldAlert, ShieldCheck, TriangleAlert } from "lucide-react";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
+import { usePermissions } from "../surfaces/permissions/PermissionsProvider.tsx";
 import { Mark, Wordmark } from "./Brand.tsx";
 import { PRIMARY_ORDER, SURFACES, useNavigation } from "./navigation.tsx";
 import styles from "./Sidebar.module.css";
@@ -69,7 +70,11 @@ export function Sidebar({ collapsed, onOpenPalette }: SidebarProps) {
       ) : null}
 
       <div className={styles.footer}>
-        <ul className={styles.list}>{visible("settings") ? <NavItem id="settings" collapsed={collapsed} /> : null}</ul>
+        <BypassNotice collapsed={collapsed} />
+        <ul className={styles.list}>
+          <ApprovalsItem collapsed={collapsed} />
+          {visible("settings") ? <NavItem id="settings" collapsed={collapsed} /> : null}
+        </ul>
         <div className={styles.footerRow}>
           {collapsed ? null : (
             <p className={styles.build}>
@@ -115,9 +120,55 @@ function NavItem({ id, collapsed, gated = false }: { id: SurfaceId; collapsed: b
   );
 }
 
+/** Z4: the global pending-approvals indicator. Opens the approvals panel. */
+function ApprovalsItem({ collapsed }: { collapsed: boolean }) {
+  const { pending, setPanelOpen } = usePermissions();
+  const count = pending.length;
+  return (
+    <li>
+      <SidebarButton
+        collapsed={collapsed}
+        label="Approvals"
+        accessibleLabel={count === 0 ? "Approvals, none waiting" : `Approvals, ${count} waiting`}
+        icon={count > 0 ? <ShieldAlert /> : <ShieldCheck />}
+        onClick={() => setPanelOpen(true)}
+        className={[styles.item, count > 0 && styles.approvalsWaiting].filter(Boolean).join(" ")}
+        badge={
+          count > 0 ? (
+            <span className={styles.countBadge} aria-hidden="true">
+              {count > 99 ? "99+" : count}
+            </span>
+          ) : null
+        }
+      />
+    </li>
+  );
+}
+
+/** Z4: persistent indicator while Bypass is the default for new threads. */
+function BypassNotice({ collapsed }: { collapsed: boolean }) {
+  const { settings } = usePermissions();
+  const { navigate } = useNavigation();
+  if (settings?.defaultMode !== "bypass") return null;
+  return (
+    <SidebarButton
+      collapsed={collapsed}
+      label="Bypass is on"
+      accessibleLabel="Bypass is on for new threads. Open permission settings"
+      icon={<TriangleAlert />}
+      onClick={() => navigate("settings")}
+      className={styles.bypassNotice}
+    />
+  );
+}
+
 interface SidebarButtonProps {
   collapsed: boolean;
   label: string;
+  /** Overrides the accessible name (e.g. to include a count). */
+  accessibleLabel?: string;
+  /** Shown after the label (and as a dot when collapsed). */
+  badge?: React.ReactNode;
   icon: React.ReactNode;
   hint?: string;
   onClick: () => void;
@@ -125,28 +176,43 @@ interface SidebarButtonProps {
   "aria-current"?: "page";
 }
 
-function SidebarButton({ collapsed, label, icon, hint, onClick, className, ...aria }: SidebarButtonProps) {
+function SidebarButton({
+  collapsed,
+  label,
+  accessibleLabel,
+  badge,
+  icon,
+  hint,
+  onClick,
+  className,
+  ...aria
+}: SidebarButtonProps) {
   const button = (
     <button
       type="button"
       className={[styles.button, className].filter(Boolean).join(" ")}
       onClick={onClick}
-      aria-label={collapsed ? label : undefined}
+      aria-label={accessibleLabel ?? (collapsed ? label : undefined)}
       {...aria}
     >
       <span className={styles.icon} aria-hidden="true">
         {icon}
       </span>
-      {collapsed ? null : (
+      {collapsed ? (
+        badge ? (
+          <span className={styles.badgeDot} aria-hidden="true" />
+        ) : null
+      ) : (
         <>
           <span className={styles.label}>{label}</span>
           {hint ? <kbd className={styles.hint}>{hint}</kbd> : null}
+          {badge}
         </>
       )}
     </button>
   );
   return collapsed ? (
-    <Tooltip content={hint ? `${label} (${hint})` : label} side="right">
+    <Tooltip content={hint ? `${label} (${hint})` : (accessibleLabel ?? label)} side="right">
       {button}
     </Tooltip>
   ) : (

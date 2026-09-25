@@ -24,6 +24,15 @@ export {
 } from "./DropdownMenu.tsx";
 export { Field, type FieldProps, Select, TextArea, TextInput } from "./Field.tsx";
 export { Kbd, type KeyValueItem, KeyValueList, Section, type SectionProps } from "./Layout.tsx";
+export {
+  PermissionPrompt,
+  type PermissionPromptContext,
+  type PermissionPromptOption,
+  type PermissionPromptProps,
+  type PermissionPromptScope,
+  type PermissionPromptStatus,
+  type PermissionScopeTone,
+} from "./PermissionPrompt.tsx";
 export { SegmentedControl, type SegmentedControlProps, type SegmentedOption } from "./SegmentedControl.tsx";
 export { EmptyState, ErrorState, Skeleton } from "./States.tsx";
 export { StatusIndicator, type StatusTone } from "./StatusIndicator.tsx";

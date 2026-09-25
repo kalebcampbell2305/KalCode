@@ -296,6 +296,15 @@ impl Core {
         read(&self.conn())
     }
 
+    /// Same as [`Core::write_with_events`] (Z4's name for it): one transaction for a state change
+    /// and its events, published after commit.
+    pub fn transact<R>(
+        &self,
+        work: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<(R, Vec<NewEvent>)>,
+    ) -> Result<(R, Vec<EventEnvelope>)> {
+        self.write_with_events(work)
+    }
+
     pub fn app_info(&self) -> AppInfo {
         AppInfo::current(&self.config.app_version, self.config.channel)
     }

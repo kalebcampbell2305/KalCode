@@ -6,6 +6,7 @@ import { useNewTerminalShortcut } from "../surfaces/code/useNewTerminalShortcut.
 import { Dashboard } from "../surfaces/dashboard/Dashboard.tsx";
 import { GatedSurface } from "../surfaces/gated/GatedSurface.tsx";
 import { ProvidersPage } from "../surfaces/providers/ProvidersPage.tsx";
+import { ApprovalAnnouncer, ApprovalsPanel, PermissionsProvider } from "../surfaces/permissions/index.ts";
 import { SettingsPage } from "../surfaces/settings/SettingsPage.tsx";
 import { ThreadsIntentProvider } from "../surfaces/threads/intent.tsx";
 import { ThreadsSurface } from "../surfaces/threads/ThreadsSurface.tsx";
@@ -22,9 +23,11 @@ export function Shell() {
   return (
     <NavigationProvider flags={info.flags.surfaces}>
       <WorkspaceProvider>
-        <ThreadsIntentProvider>
-          <ShellLayout />
-        </ThreadsIntentProvider>
+        <PermissionsProvider>
+          <ThreadsIntentProvider>
+            <ShellLayout />
+          </ThreadsIntentProvider>
+        </PermissionsProvider>
       </WorkspaceProvider>
     </NavigationProvider>
   );
@@ -63,6 +66,8 @@ function ShellLayout() {
         )}
       </main>
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+      <ApprovalsPanel />
+      <ApprovalAnnouncer />
     </div>
   );
 }

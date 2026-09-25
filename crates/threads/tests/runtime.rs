@@ -1041,23 +1041,42 @@ fn rename_archive_and_list() {
 }
 
 #[test]
-fn permission_mode_changes_are_recorded() {
+fn permission_modes_are_stored_for_the_permission_engine() {
     let h = Harness::new();
     let id = started(&h, "x");
     let thread = h
         .runtime
-        .set_permission_mode(&id, PermissionMode::Auto)
+        .set_permission_mode(&id, PermissionMode::Auto, None)
         .expect("mode");
     assert_eq!(thread.permission_mode, PermissionMode::Auto);
-    let changed = h
-        .events_for(&id)
-        .into_iter()
-        .find_map(|e| match e.event {
-            EventPayload::PermissionModeChanged { from, to, .. } => Some((from, to)),
-            _ => None,
-        })
-        .expect("permission.mode_changed");
-    assert_eq!(changed, (PermissionMode::Approve, PermissionMode::Auto));
+    assert_eq!(h.runtime.permission_profile_id(&id).expect("profile"), None);
+    // The engine (Z4) records permission.mode_changed with its audit entry; storing records none.
+    assert!(
+        !h.events_for(&id)
+            .iter()
+            .any(|e| matches!(e.event, EventPayload::PermissionModeChanged { .. }))
+    );
+
+    // Custom keeps its profile; any other mode clears it.
+    h.runtime
+        .set_permission_mode(&id, PermissionMode::Custom, Some("code-reviewer"))
+        .expect("custom");
+    assert_eq!(
+        h.runtime
+            .permission_profile_id(&id)
+            .expect("profile")
+            .as_deref(),
+        Some("code-reviewer")
+    );
+    h.runtime
+        .set_permission_mode(&id, PermissionMode::Plan, Some("code-reviewer"))
+        .expect("plan");
+    assert_eq!(h.runtime.permission_profile_id(&id).expect("profile"), None);
+    assert_code(
+        h.runtime
+            .set_permission_mode(&new_id(), PermissionMode::Plan, None),
+        "thread_not_found",
+    );
 }
 
 #[test]

@@ -38,6 +38,11 @@ pub const MIGRATIONS: &[Migration] = &[
         name: "threads",
         sql: include_str!("../migrations/0003_threads.sql"),
     },
+    Migration {
+        version: 4,
+        name: "permissions",
+        sql: include_str!("../migrations/0004_permissions.sql"),
+    },
 ];
 
 /// How many pre-migration backups to keep.

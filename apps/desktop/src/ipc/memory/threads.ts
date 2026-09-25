@@ -30,11 +30,21 @@ export type ThreadsScenario = "default" | "threads" | "no-providers";
 
 export type EmitFn = (event: EventPayload, correlation?: Partial<Correlation>, source?: EventSource) => void;
 
-type ThreadCommand = Extract<CommandName, `thread_${string}`>;
+// `thread_set_permission_mode` belongs to the permission engine (Z4; see ./permissions.ts).
+type ThreadCommand = Exclude<Extract<CommandName, `thread_${string}`>, "thread_set_permission_mode">;
 type Handler = (args: Record<string, unknown>) => unknown;
+
+/** The permission gate as the memory runtime uses it (Z4, see ./permissions.ts). */
+export interface ThreadsGate {
+  /** Opens an approval request for `thread`; returns the request id. */
+  open(thread: ThreadSummary): string;
+  expireForThread(threadId: string): void;
+}
 
 export interface ThreadsMemory {
   handlers: Record<ThreadCommand, Handler>;
+  /** The user answered request `requestId` (forwarded from `approval.*`, like native). */
+  resolveApproval(requestId: string, approved: boolean): void;
   stream(threadId: string, onEvent: (event: AgentEvent) => void): () => void;
   /** Test hook: live stream subscribers for a thread. */
   streamCount(threadId: string): number;
@@ -101,6 +111,8 @@ interface MemThread {
   readThrough: number;
   archived: boolean;
   resumeStatus: ThreadStatus | null;
+  /** The approval request the session is waiting on, if any. */
+  pendingRequest: string | null;
 }
 
 function error(category: IpcError["category"], code: string, message: string): never {
@@ -203,6 +215,8 @@ export function createThreadsMemory(
   openWorkspaces: () => WorkspaceOption[] = () => [],
   /** Providers detection reports usable (Z2); defaults to Claude Code. */
   usableProviders: () => readonly string[] = () => ["claude-code"],
+  /** The permission gate (Z4). Without it, a waiting thread can only be interrupted or stopped. */
+  gate: ThreadsGate | null = null,
 ): ThreadsMemory {
   const threads = new Map<string, MemThread>();
   const streams = new Map<string, Set<(event: AgentEvent) => void>>();
@@ -349,6 +363,7 @@ export function createThreadsMemory(
       later(120, () => {
         t.resumeStatus = t.summary.status;
         t.summary = { ...t.summary, pendingApprovals: 1 };
+        t.pendingRequest = gate?.open(t.summary) ?? null;
         setStatus(t, "waiting_for_permission", "Waiting for approval: Run npm install lodash");
       });
       return;
@@ -427,7 +442,71 @@ export function createThreadsMemory(
 
   const summary = (t: MemThread): ThreadSummary => t.summary;
 
+  /** The user's answer reached the session: run the install (approved) or go on without it. */
+  const continueAfterApproval = (t: MemThread, approved: boolean) => {
+    t.pendingRequest = null;
+    t.summary = { ...t.summary, pendingApprovals: 0 };
+    setStatus(t, "active");
+    let at = 0;
+    const later = (ms: number, fn: () => void) => {
+      at += ms;
+      t.timers.push(
+        setTimeout(() => {
+          if (t.live) fn();
+        }, at),
+      );
+    };
+    const reply = (text: string) => {
+      const messageId = uuid();
+      later(120, () => {
+        addMessage(t, "assistant", text, "provider");
+        publish(t, { kind: "message_completed", messageId, text });
+      });
+    };
+    if (approved) {
+      const toolId = uuid();
+      later(60, () => {
+        t.tools.push({
+          id: toolId,
+          threadId: t.summary.id,
+          tool: "Bash",
+          summary: "Run npm install lodash",
+          status: "running",
+          resultSummary: null,
+          requestedAt: now(),
+          startedAt: now(),
+          completedAt: null,
+        });
+        emit(
+          {
+            type: "tool.requested",
+            payload: { threadId: t.summary.id, toolCallId: toolId, tool: "Bash", summary: "Run npm install lodash" },
+          },
+          corr(t),
+          "provider",
+        );
+        emit({ type: "tool.started", payload: { threadId: t.summary.id, toolCallId: toolId } }, corr(t), "provider");
+        setStatus(t, "running_command", "Run npm install lodash", "provider");
+      });
+      later(300, () => {
+        t.tools = t.tools.map((x) =>
+          x.id === toolId ? { ...x, status: "completed", resultSummary: "added 1 package", completedAt: now() } : x,
+        );
+        emit({ type: "tool.completed", payload: { threadId: t.summary.id, toolCallId: toolId } }, corr(t), "provider");
+        setStatus(t, "active", null, "provider");
+      });
+      reply("Installed lodash and wired up the debounce helper.");
+    } else {
+      reply("Understood, I won't install lodash. I'll write a small debounce helper instead.");
+    }
+    later(60, () => {
+      if (t.summary.status !== "paused") setStatus(t, "idle", null, "provider");
+    });
+  };
+
   const endSession = (t: MemThread, activity: string) => {
+    if (t.pendingRequest) gate?.expireForThread(t.summary.id);
+    t.pendingRequest = null;
     cancelTimers(t);
     t.live = false;
     flush(t);
@@ -544,6 +623,7 @@ export function createThreadsMemory(
         readThrough: 0,
         archived: false,
         resumeStatus: null,
+        pendingRequest: null,
       };
       threads.set(t.summary.id, t);
       emit(
@@ -574,6 +654,9 @@ export function createThreadsMemory(
       if (!t.live) invalid("thread_not_running", "This thread isn't running. Resume it to continue.");
       if (!LIVE.has(t.summary.status) && t.summary.status !== "waiting_for_permission")
         invalid("thread_not_working", "This thread isn't working on anything right now.");
+      // Like native: interrupting denies what the turn was waiting on, so its requests expire.
+      if (t.pendingRequest) gate?.expireForThread(t.summary.id);
+      t.pendingRequest = null;
       cancelTimers(t);
       flush(t);
       cancelTools(t);
@@ -650,6 +733,11 @@ export function createThreadsMemory(
       };
     },
     streamCount: (threadId) => streams.get(threadId)?.size ?? 0,
+    resolveApproval(requestId, approved) {
+      for (const t of threads.values()) {
+        if (t.pendingRequest === requestId && t.live) continueAfterApproval(t, approved);
+      }
+    },
   };
 }
 
@@ -706,6 +794,7 @@ function seed(threads: Map<string, MemThread>) {
       readThrough: 0,
       archived,
       resumeStatus: null,
+      pendingRequest: null,
     };
     t.readThrough = Math.max(0, t.messages.length - (partial.unreadMessages ?? 0));
     threads.set(id, t);

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-test-permission-probe"
+description = "Enables the test_permission_probe command without any pre-configured scope."
+commands.allow = ["test_permission_probe"]
+
+[[permission]]
+identifier = "deny-test-permission-probe"
+description = "Denies the test_permission_probe command without any pre-configured scope."
+commands.deny = ["test_permission_probe"]

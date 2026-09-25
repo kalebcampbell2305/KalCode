@@ -1,10 +1,9 @@
-import type { ApprovalDecision, ApprovalRequest, TerminalInfo, ThreadSummary } from "@kalcode/protocol";
+import type { TerminalInfo, ThreadSummary } from "@kalcode/protocol";
 import { useToast } from "@kalcode/ui/components";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { toKalCodeError } from "../../../ipc/errors.ts";
 import { useEvents, useRuntime } from "../../../runtime/RuntimeProvider.tsx";
 import { ACTION_LABELS, type ThreadAction } from "./actions.ts";
-import { DECISION_LABELS } from "./format.ts";
 import { type DashboardResource, RefreshTracker } from "./refresh.ts";
 import { type Resource, useResource } from "./resource.ts";
 
@@ -18,15 +17,11 @@ export interface Announcement {
 
 interface DashboardDataValue {
   threads: Resource<ThreadSummary[]>;
-  approvals: Resource<ApprovalRequest[]>;
   terminals: Resource<TerminalInfo[]>;
-  /** Approval ids with a decision in flight. */
-  deciding: ReadonlySet<string>;
-  decide: (request: ApprovalRequest, decision: ApprovalDecision) => Promise<void>;
   /** Thread id → action in flight. */
   pendingActions: ReadonlyMap<string, ThreadAction>;
   runAction: (thread: ThreadSummary, action: Exclude<ThreadAction, "open">) => Promise<void>;
-  /** Screen-reader announcements: assertive for new approvals, polite for results. */
+  /** Screen-reader announcements (new approvals are announced app-wide by ApprovalAnnouncer). */
   urgent: Announcement | null;
   polite: Announcement | null;
 }
@@ -68,11 +63,11 @@ function useInvalidation(): [Record<DashboardResource, number>, (stale: Iterable
 }
 
 /**
- * The Dashboard's data layer. Reads threads (Z3 `thread_list`), pending approvals (Z4
- * `approval_list`) and running terminals (Z1 `terminals_running`) through KalCodeClient, and
- * re-reads each whenever the event log records something that can change it. Decisions and thread
- * actions go through the contract commands; results are applied immediately and then reconciled
- * by the event-driven refresh.
+ * The Dashboard's data layer. Reads threads (Z3 `thread_list`) and running terminals (Z1
+ * `terminals_running`) through KalCodeClient, and re-reads each whenever the event log records
+ * something that can change it. Thread actions go through the contract commands; results are
+ * applied immediately and then reconciled by the event-driven refresh. Pending approvals come
+ * from the permission engine's shared state (`usePermissions`, Z4), like the Approvals panel.
  */
 export function DashboardDataProvider({ children }: { children: ReactNode }) {
   const { client } = useRuntime();
@@ -83,10 +78,6 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
   const threads = useResource(
     useCallback(() => client.listThreads(), [client]),
     versions.threads,
-  );
-  const approvals = useResource(
-    useCallback(() => client.listApprovals("pending"), [client]),
-    versions.approvals,
   );
   const terminals = useResource(
     useCallback(() => client.runningTerminals(), [client]),
@@ -115,49 +106,6 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
     (level === "urgent" ? setUrgent : setPolite)(next);
   }, []);
 
-  // Announce approvals that arrive after the first read.
-  const knownApprovals = useRef<Set<string> | null>(null);
-  useEffect(() => {
-    if (approvals.state.status !== "ready") return;
-    const ids = approvals.state.data.map((a) => a.id);
-    if (knownApprovals.current === null) {
-      knownApprovals.current = new Set(ids);
-      return;
-    }
-    const known = knownApprovals.current;
-    const arrived = approvals.state.data.filter((a) => !known.has(a.id));
-    for (const id of ids) known.add(id);
-    if (arrived.length === 1 && arrived[0]) {
-      announce(`New approval request: ${arrived[0].action.summary}`, "urgent");
-    } else if (arrived.length > 1) {
-      announce(`${arrived.length} new approval requests`, "urgent");
-    }
-  }, [approvals.state, announce]);
-
-  const [deciding, setDeciding] = useState<ReadonlySet<string>>(new Set());
-  const decide = useCallback(
-    async (request: ApprovalRequest, decision: ApprovalDecision) => {
-      setDeciding((s) => new Set(s).add(request.id));
-      try {
-        const resolved = await client.decideApproval(request.id, decision);
-        approvals.update((list) => list.filter((a) => a.id !== resolved.id));
-        announce(`${DECISION_LABELS[decision]}: ${request.action.summary}`, "polite");
-        invalidate(["approvals", "threads"]);
-      } catch (raw) {
-        const error = toKalCodeError(raw, "approval_decide");
-        toast.show({ tone: "danger", title: "Decision not recorded", description: error.message });
-        invalidate(["approvals"]);
-      } finally {
-        setDeciding((s) => {
-          const next = new Set(s);
-          next.delete(request.id);
-          return next;
-        });
-      }
-    },
-    [client, approvals.update, announce, invalidate, toast],
-  );
-
   const [pendingActions, setPendingActions] = useState<ReadonlyMap<string, ThreadAction>>(new Map());
   const runAction = useCallback(
     async (thread: ThreadSummary, action: Exclude<ThreadAction, "open">) => {
@@ -182,7 +130,7 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
             : `${thread.name}: ${ACTION_LABELS[action].toLowerCase()} requested`,
           "polite",
         );
-        invalidate(["threads", "approvals"]);
+        invalidate(["threads"]);
       } catch (raw) {
         const error = toKalCodeError(raw);
         toast.show({
@@ -203,8 +151,8 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo<DashboardDataValue>(
-    () => ({ threads, approvals, terminals, deciding, decide, pendingActions, runAction, urgent, polite }),
-    [threads, approvals, terminals, deciding, decide, pendingActions, runAction, urgent, polite],
+    () => ({ threads, terminals, pendingActions, runAction, urgent, polite }),
+    [threads, terminals, pendingActions, runAction, urgent, polite],
   );
 
   return <DashboardDataContext.Provider value={value}>{children}</DashboardDataContext.Provider>;
@@ -220,12 +168,6 @@ function useDashboardData(): DashboardDataValue {
 export function useThreadSummaries() {
   const { threads, pendingActions, runAction } = useDashboardData();
   return { ...threads, pendingActions, runAction };
-}
-
-/** Pending approvals from Z4 `approval_list`; decisions go through `approval_decide`. */
-export function usePendingApprovals() {
-  const { approvals, deciding, decide } = useDashboardData();
-  return { ...approvals, deciding, decide };
 }
 
 /** Running terminals from Z1 `terminals_running`, refreshed on shell events. */

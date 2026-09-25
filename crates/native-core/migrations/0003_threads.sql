@@ -23,6 +23,9 @@ CREATE TABLE threads (
   cwd                 TEXT NOT NULL,
   permission_mode     TEXT NOT NULL
     CHECK (permission_mode IN ('plan', 'approve', 'auto', 'bypass', 'custom')),
+  -- The Custom permission profile (permission_profiles.id or a built-in id) when the mode is
+  -- Custom; set only by the permission engine (schema v4).
+  permission_profile_id TEXT CHECK (permission_profile_id IS NULL OR permission_mode = 'custom'),
   status              TEXT NOT NULL CHECK (status IN (
     'starting', 'active', 'thinking', 'running_tool', 'running_command', 'editing', 'testing',
     'reviewing', 'idle', 'waiting_for_permission', 'waiting_for_user', 'waiting_for_dependency',

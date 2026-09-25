@@ -7,12 +7,13 @@
 //! directory comes from the workspace resolver.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use kalcode_contracts::agent::{AgentEvent, AgentProvider, ProviderId};
-use kalcode_contracts::permissions::{AskUnlessReadGate, PermissionMode};
+use kalcode_contracts::permissions::{PermissionGate, PermissionMode};
 use kalcode_contracts::threads::{ThreadMessage, ThreadStatus, ThreadSummary};
 use kalcode_core::{Core, IpcError, KalError};
+use kalcode_permissions::{PermissionService, ThreadModeStore};
 use kalcode_providers::model::AdapterState;
 use kalcode_providers::{ClaudeCodeProvider, DetectEnv};
 use kalcode_threads::{
@@ -28,9 +29,62 @@ use crate::provider_commands::detect_and_record;
 /// Detection results (Z2) that decide which providers threads may use.
 type Detection = kalcode_providers::ProviderRegistry;
 
-/// Thread runtime state for the shell. `runtime` is `None` when the core failed to start.
+/// The thread runtime as the permission engine's `ThreadModeStore` (Z4). Bound after the runtime
+/// starts (the runtime holds the engine as its gate, so the engine can't hold the runtime
+/// strongly). Until then, and if the runtime is gone, threads can't be found or changed.
+#[derive(Default)]
+pub struct ThreadModes {
+    runtime: OnceLock<Weak<ThreadRuntime>>,
+}
+
+impl ThreadModes {
+    fn bind(&self, runtime: &Arc<ThreadRuntime>) {
+        let _ = self.runtime.set(Arc::downgrade(runtime));
+    }
+
+    fn runtime(&self) -> kalcode_core::Result<Arc<ThreadRuntime>> {
+        self.runtime.get().and_then(Weak::upgrade).ok_or_else(|| {
+            KalError::internal(
+                "threads_unavailable",
+                "KalCode's thread runtime isn't available.",
+            )
+        })
+    }
+}
+
+impl ThreadModeStore for ThreadModes {
+    fn thread(&self, thread_id: &str) -> kalcode_core::Result<Option<ThreadSummary>> {
+        match self.runtime()?.get(thread_id) {
+            Ok(thread) => Ok(Some(thread)),
+            Err(error) if error.code == "thread_not_found" => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn set_mode(
+        &self,
+        thread_id: &str,
+        mode: PermissionMode,
+        profile_id: Option<&str>,
+    ) -> kalcode_core::Result<ThreadSummary> {
+        self.runtime()?
+            .set_permission_mode(thread_id, mode, profile_id)
+    }
+
+    fn custom_profile_id(&self, thread_id: &str) -> Option<String> {
+        self.runtime()
+            .ok()?
+            .permission_profile_id(thread_id)
+            .ok()
+            .flatten()
+    }
+}
+
+/// Thread runtime state for the shell. `runtime` is `None` when the core or the permission
+/// engine failed to start: threads never run without the engine deciding their actions.
 pub struct ThreadsState {
     runtime: Option<Arc<ThreadRuntime>>,
+    permissions: Option<Arc<PermissionService>>,
     /// Adapters offered to threads: exactly the providers detection reports usable.
     providers: Arc<ProviderRegistry>,
     detection: Arc<Detection>,
@@ -56,28 +110,49 @@ impl ThreadsState {
     ///   so a thread can only use a provider that is installed at a supported version, not
     ///   known to be signed out, and has a KalCode adapter (today: Claude Code).
     /// - Workspaces (Z1): [`CoreWorkspaces`] over the workspaces table (canonical roots).
-    /// - Permissions (Z4, not merged): the conservative development gate asks before anything
-    ///   but a read, and nothing can answer yet. The Claude Code adapter additionally denies
-    ///   anything that would prompt (`--permission-prompts none`), so no action is ever
-    ///   approved without the user.
-    pub fn start(core: Option<&Arc<Core>>, detection: Arc<Detection>) -> Self {
+    /// - Permissions (Z4): the permission engine is the runtime's `PermissionGate`: every
+    ///   action a provider asks about is evaluated (allow, deny, or an approval request the
+    ///   user answers), decisions arrive back as `approval.*` events by request id, and a
+    ///   stopped thread's pending requests expire. `modes` is bound to the runtime so the
+    ///   engine can read and change thread modes. Without the engine, threads don't start.
+    pub fn start(
+        core: Option<&Arc<Core>>,
+        detection: Arc<Detection>,
+        permissions: Option<Arc<PermissionService>>,
+        modes: &ThreadModes,
+    ) -> Self {
         let providers = Arc::new(ProviderRegistry::new());
-        let runtime = core.and_then(|core| {
-            match ThreadRuntime::new(
-                core.clone(),
-                Arc::clone(&providers),
-                Arc::new(CoreWorkspaces::new(core.clone())),
-                Arc::new(AskUnlessReadGate),
-            ) {
-                Ok(runtime) => Some(Arc::new(runtime)),
-                Err(error) => {
-                    tracing::error!(event = "threads.start_failed", error_code = error.code, error = %error.diagnostic());
-                    None
+        let runtime = match (core, &permissions) {
+            (Some(core), Some(service)) => {
+                let gate: Arc<dyn PermissionGate> = service.clone();
+                match ThreadRuntime::new(
+                    core.clone(),
+                    Arc::clone(&providers),
+                    Arc::new(CoreWorkspaces::new(core.clone())),
+                    gate,
+                ) {
+                    Ok(runtime) => Some(Arc::new(runtime)),
+                    Err(error) => {
+                        tracing::error!(event = "threads.start_failed", error_code = error.code, error = %error.diagnostic());
+                        None
+                    }
                 }
             }
-        });
+            (Some(_), None) => {
+                tracing::error!(
+                    event = "threads.start_failed",
+                    reason = "permission_engine_unavailable"
+                );
+                None
+            }
+            (None, _) => None,
+        };
+        if let Some(runtime) = &runtime {
+            modes.bind(runtime);
+        }
         let state = Self {
             runtime,
+            permissions,
             providers,
             detection,
             streams: Mutex::new(HashMap::new()),
@@ -244,10 +319,22 @@ pub fn thread_options(
     state: State<'_, ThreadsState>,
 ) -> Result<ThreadOptions, IpcError> {
     state.ensure_providers(app.core.as_ref());
-    state
+    let mut options = state
         .runtime()?
         .options()
-        .map_err(|e| e.log_and_convert("thread_options"))
+        .map_err(|e| e.log_and_convert("thread_options"))?;
+    // New threads start in the user's default mode (Settings → Permissions) when it can be
+    // chosen at creation; Bypass and Custom are set on the thread afterwards, with confirmation.
+    if let Some(default) = state
+        .permissions
+        .as_ref()
+        .and_then(|service| service.settings().ok())
+        .map(|settings| settings.default_mode)
+        .filter(|mode| options.permission_modes.contains(mode))
+    {
+        options.default_permission_mode = default;
+    }
+    Ok(options)
 }
 
 #[tauri::command(async)]

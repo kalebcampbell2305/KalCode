@@ -618,14 +618,30 @@ impl ThreadRuntime {
     /// Changes a thread's permission mode and records `permission.mode_changed` atomically.
     /// For the permission engine (Z4), which enforces who may change it (Bypass needs a
     /// confirmed user action). A live session keeps the provider setting it started with.
+    /// Stores a thread's permission mode (and Custom profile). This is the permission engine's
+    /// storage seam (`ThreadModeStore`, Z4): callers change modes through
+    /// `PermissionService::set_thread_mode`, which checks who may change it (Bypass needs the
+    /// user's confirmation; agents and KalVoice are refused), expires the thread's pending
+    /// requests, and records `permission.mode_changed` with its audit entry in one transaction.
+    /// So this method records no event of its own. New decisions use the new mode immediately.
     pub fn set_permission_mode(
         &self,
         thread_id: &str,
         mode: PermissionMode,
+        profile_id: Option<&str>,
     ) -> Result<ThreadSummary> {
         validate::thread_id(thread_id)?;
-        self.inner.set_permission_mode(thread_id, mode)?;
+        self.inner
+            .set_permission_mode(thread_id, mode, profile_id)?;
         self.inner.summary(thread_id)
+    }
+
+    /// The Custom permission profile a thread uses, if any.
+    pub fn permission_profile_id(&self, thread_id: &str) -> Result<Option<String>> {
+        validate::thread_id(thread_id)?;
+        self.inner
+            .core
+            .read(|conn| store::permission_profile_id(conn, thread_id))
     }
 
     /// Pauses every working thread in `scope`. A single named thread is always attempted, so
@@ -2154,25 +2170,17 @@ impl Inner {
         Ok(())
     }
 
-    fn set_permission_mode(&self, thread_id: &str, mode: PermissionMode) -> Result<()> {
-        let row = self.row(thread_id)?;
-        if row.permission_mode == mode {
-            return Ok(());
-        }
-        let ctx = Ctx::from_row(&row);
+    fn set_permission_mode(
+        &self,
+        thread_id: &str,
+        mode: PermissionMode,
+        profile_id: Option<&str>,
+    ) -> Result<()> {
+        // Exists (or `thread_not_found`), then store; the permission engine records the event.
+        self.row(thread_id)?;
         self.core.write_with_events(|tx| {
-            store::set_permission_mode(tx, thread_id, mode)?;
-            Ok((
-                (),
-                vec![ctx.event(
-                    EventSource::Core,
-                    EventPayload::PermissionModeChanged {
-                        thread_id: Some(thread_id.to_owned()),
-                        from: row.permission_mode,
-                        to: mode,
-                    },
-                )],
-            ))
+            store::set_permission_mode(tx, thread_id, mode, profile_id)?;
+            Ok(((), Vec::new()))
         })?;
         Ok(())
     }

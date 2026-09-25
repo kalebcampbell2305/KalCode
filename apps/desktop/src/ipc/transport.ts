@@ -29,10 +29,13 @@ export type CommandName =
   | "thread_rename"
   | "thread_archive"
   | "thread_stream"
-  // Approvals (Z4, not merged yet): the Dashboard consumes them; until Z4 lands the native
-  // runtime rejects them and the client reports `command_unavailable`.
+  // Permissions (Z4)
   | "approval_list"
   | "approval_decide"
+  | "permission_profiles_list"
+  | "thread_set_permission_mode"
+  | "permission_settings_get"
+  | "permission_settings_update"
   // Workspaces and terminals (Z1)
   | "workspace_list"
   | "workspace_active"
@@ -123,6 +126,8 @@ export async function resolveTransport(): Promise<Transport | null> {
   if (isTauri()) return createTauriTransport();
   // The in-memory transport is compiled only into the `ui-test` build (see vite.config.ts).
   if (__KALCODE_MEMORY_TRANSPORT__) {
+    // One in-memory runtime per page, even when React StrictMode boots the UI twice. Its test
+    // hooks are on `window.__kalcodeMemory` (see memoryTransport.ts).
     const { sharedMemoryTransport } = await import("./memoryTransport.ts");
     return sharedMemoryTransport();
   }
