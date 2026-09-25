@@ -590,3 +590,26 @@
 .home[data-in-pane] .greeting {
   font-size: var(--type-headline);
 }
+
+/* A narrow Home (a slim pane, ~20rem): titles keep the row; status and time wrap under them. */
+@container (max-width: 26rem) {
+  .item,
+  .workItem {
+    flex-wrap: wrap;
+    row-gap: var(--space-1);
+  }
+
+  .itemText {
+    flex-basis: calc(100% - 2rem);
+  }
+
+  .item > :nth-child(3),
+  .workItem > :nth-child(3) {
+    margin-left: calc(1.25rem + var(--space-3));
+  }
+
+  .go,
+  .resume {
+    display: none;
+  }
+}
