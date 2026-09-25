@@ -35,7 +35,8 @@ fn migrations_are_numbered_contiguously() {
             (1, "foundation"),
             (2, "workspaces"),
             (3, "threads"),
-            (4, "permissions")
+            (4, "permissions"),
+            (5, "event_correlation")
         ]
     );
 }
@@ -154,12 +155,12 @@ fn upgrade_from_v1_keeps_data_and_writes_backup() {
         .find_map(|e| match e.event {
             EventPayload::DatabaseMigrated {
                 from_version: 1,
-                to_version: 4,
+                to_version: 5,
                 backup_created,
             } => Some(backup_created),
             _ => None,
         })
-        .expect("database.migrated 1 -> 4");
+        .expect("database.migrated 1 -> 5");
     assert!(migrated);
 
     // Backup file exists and is a valid v1 database with the pre-upgrade data.
@@ -228,6 +229,11 @@ fn v3_only() -> &'static [Migration] {
     &MIGRATIONS[..3]
 }
 
+/// Schema v4 (v3 + Z4 permissions): what the installed app ships before L-1.
+fn v4_only() -> &'static [Migration] {
+    &MIGRATIONS[..4]
+}
+
 // Test helper: panics on setup failures by design.
 #[allow(clippy::expect_used)]
 fn thread_tables(core: &Core) -> Vec<String> {
@@ -258,10 +264,11 @@ fn backup_versions(dir: &std::path::Path) -> Vec<i64> {
     versions
 }
 
-/// v1 (first release) → v2 (Z1) → v3 (Z3) → v4 (Z4, this build), one step at a time, with data
-/// written at every version. Each upgrade writes a backup of the version it started from.
+/// v1 (first release) → v2 (Z1) → v3 (Z3) → v4 (Z4) → v5 (L-1, this build), one step at a time,
+/// with data written at every version. Each upgrade writes a backup of the version it started
+/// from.
 #[test]
-fn upgrade_v1_to_v4_step_by_step_keeps_data_and_backs_up_each_step() {
+fn upgrade_v1_to_v5_step_by_step_keeps_data_and_backs_up_each_step() {
     let dir = tempfile::tempdir().expect("tempdir");
     let project = tempfile::tempdir().expect("project");
     {
@@ -316,14 +323,31 @@ fn upgrade_v1_to_v4_step_by_step_keeps_data_and_backs_up_each_step() {
     }
     assert_eq!(backup_versions(dir.path()), vec![1, 2]);
 
-    let core = Core::open(config(dir.path())).expect("v4 open");
+    {
+        let core = Core::open_with_migrations(config(dir.path()), v4_only()).expect("v4 open");
+        assert_eq!(
+            core.diagnostics()
+                .expect("diagnostics")
+                .database
+                .schema_version,
+            4
+        );
+        assert!(
+            event_columns(&core).is_empty(),
+            "v4 has no v5 correlation columns yet"
+        );
+        core.shutdown();
+    }
     assert_eq!(backup_versions(dir.path()), vec![1, 2, 3]);
+
+    let core = Core::open(config(dir.path())).expect("v5 open");
+    assert_eq!(backup_versions(dir.path()), vec![1, 2, 3, 4]);
     assert_eq!(
         core.diagnostics()
             .expect("diagnostics")
             .database
             .schema_version,
-        4
+        5
     );
 
     // v1 settings, the v2 workspace, the v3 thread and the whole event history survive.
@@ -350,7 +374,13 @@ fn upgrade_v1_to_v4_step_by_step_keeps_data_and_backs_up_each_step() {
         .collect();
     assert_eq!(
         migrations,
-        vec![(0, 1, false), (1, 2, true), (2, 3, true), (3, 4, true)],
+        vec![
+            (0, 1, false),
+            (1, 2, true),
+            (2, 3, true),
+            (3, 4, true),
+            (4, 5, true)
+        ],
         "each step recorded, backups for every existing database"
     );
     let types: Vec<&str> = core
@@ -373,6 +403,218 @@ fn upgrade_v1_to_v4_step_by_step_keeps_data_and_backs_up_each_step() {
         .expect("thread kept");
     assert_eq!(name, "Fix login");
     assert_eq!(permission_tables(&core), PERMISSION_TABLES);
+    assert_eq!(event_columns(&core), V5_EVENT_COLUMNS);
+}
+
+const V5_EVENT_COLUMNS: [&str; 4] = ["agent_id", "automation_id", "causation_id", "task_id"];
+
+// Test helper: panics on setup failures by design.
+#[allow(clippy::expect_used)]
+fn event_columns(core: &Core) -> Vec<String> {
+    core.read(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT name FROM pragma_table_info('events')
+             WHERE name IN ('agent_id', 'task_id', 'automation_id', 'causation_id') ORDER BY name",
+        )?;
+        let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+        Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+    })
+    .expect("event columns")
+}
+
+/// The installed app is at schema v4. Opening its database in this build upgrades it to v5: a
+/// backup of the untouched v4 database is written first, every row survives, old events read
+/// back with the new correlation ids as null, and the new columns and partial indexes work.
+#[test]
+fn upgrade_v4_to_v5_backs_up_and_preserves_everything() {
+    use kalcode_contracts::events::{CorrelationFilter, EventQuery, SeqOrder};
+    use kalcode_core::events::{Correlation, NewEvent};
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = tempfile::tempdir().expect("project");
+    let thread_id = kalcode_contracts::ids::new_id();
+    let (workspace_id, v4_events) = {
+        let core = Core::open_with_migrations(config(dir.path()), v4_only()).expect("v4 open");
+        core.update_settings(&SettingsPatch {
+            theme: Some(ThemePreference::Light),
+            ..Default::default()
+        })
+        .expect("settings");
+        let workspace = core.open_workspace(project.path()).expect("workspace");
+        core.write_with_events(|tx| {
+            tx.execute(
+                "INSERT INTO threads (id, name, provider_id, provider_name, workspace_id,
+                   workspace_name, cwd, permission_mode, status, created_at, last_activity_at)
+                 VALUES (?1, 'Keep me', 'claude-code', 'Claude Code', ?2, 'project', 'C:\\p',
+                   'approve', 'idle', '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z')",
+                [&thread_id, &workspace.id],
+            )?;
+            tx.execute(
+                "INSERT INTO permission_settings (key, value, updated_at)
+                 VALUES ('defaults', '{\"defaultMode\":\"plan\"}', '2026-09-01T00:00:00Z')",
+                [],
+            )?;
+            Ok((
+                (),
+                vec![
+                    NewEvent::core(EventPayload::ThreadStarted {
+                        thread_id: thread_id.clone(),
+                    })
+                    .with_correlation(Correlation {
+                        workspace_id: Some(workspace.id.clone()),
+                        thread_id: Some(thread_id.clone()),
+                        provider_id: Some("claude-code".into()),
+                        ..Correlation::default()
+                    }),
+                ],
+            ))
+        })
+        .expect("thread");
+        let events = core.recent_events(500, None).expect("v4 events");
+        core.shutdown();
+        (workspace.id, events)
+    };
+    let v4_count = v4_events.len() + 1; // + app.stopped
+
+    let core = Core::open(config(dir.path())).expect("v5 open");
+
+    // The backup is the untouched v4 database.
+    assert_eq!(backup_versions(dir.path()), vec![4]);
+    let backup_path = std::fs::read_dir(dir.path().join("backups"))
+        .expect("backups")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .next()
+        .expect("backup");
+    let backup = rusqlite::Connection::open(&backup_path).expect("open backup");
+    let backup_events: i64 = backup
+        .query_row("SELECT COUNT(*) FROM events", [], |r| r.get(0))
+        .expect("backup events");
+    assert_eq!(backup_events, v4_count as i64);
+    let backup_columns: i64 = backup
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('events') WHERE name = 'causation_id'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("backup columns");
+    assert_eq!(backup_columns, 0, "the backup is the pre-upgrade schema");
+
+    // Schema v5, with the columns and indexes.
+    assert_eq!(
+        core.diagnostics()
+            .expect("diagnostics")
+            .database
+            .schema_version,
+        5
+    );
+    assert_eq!(event_columns(&core), V5_EVENT_COLUMNS);
+    let indexes: Vec<String> = core
+        .read(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'events'
+                   AND name IN ('events_agent_id_idx', 'events_task_id_idx',
+                     'events_automation_id_idx', 'events_causation_id_idx', 'events_request_id_idx')
+                 ORDER BY name",
+            )?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        })
+        .expect("indexes");
+    assert_eq!(
+        indexes,
+        vec![
+            "events_agent_id_idx",
+            "events_automation_id_idx",
+            "events_causation_id_idx",
+            "events_request_id_idx",
+            "events_task_id_idx"
+        ]
+    );
+
+    // Every v4 row survives, and old events decode identically (new ids null).
+    let after = core.recent_events(500, None).expect("events");
+    for old in &v4_events {
+        let same = after.iter().find(|e| e.id == old.id).expect("event kept");
+        assert_eq!(same, old);
+        assert_eq!(same.correlation.causation_id, None);
+    }
+    assert_eq!(
+        core.settings().expect("settings").theme,
+        ThemePreference::Light
+    );
+    assert_eq!(
+        core.active_workspace().expect("active").map(|w| w.id),
+        Some(workspace_id.clone())
+    );
+    let kept: (String, String) = core
+        .read(|conn| {
+            Ok(conn.query_row(
+                "SELECT t.name, s.value FROM threads t, permission_settings s
+                 WHERE t.id = ?1 AND s.key = 'defaults'",
+                [&thread_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?)
+        })
+        .expect("rows kept");
+    assert_eq!(
+        kept,
+        (
+            "Keep me".to_owned(),
+            "{\"defaultMode\":\"plan\"}".to_owned()
+        )
+    );
+    let migrated = after
+        .iter()
+        .find_map(|e| match e.event {
+            EventPayload::DatabaseMigrated {
+                from_version: 4,
+                to_version: 5,
+                backup_created,
+            } => Some(backup_created),
+            _ => None,
+        })
+        .expect("database.migrated 4 -> 5");
+    assert!(migrated);
+
+    // The query API reads old rows by their v1 correlation, and new rows by the v5 ids.
+    let by_thread = core
+        .query_events(&EventQuery {
+            correlation: CorrelationFilter {
+                thread_id: Some(thread_id.clone()),
+                ..CorrelationFilter::default()
+            },
+            ..EventQuery::default()
+        })
+        .expect("by thread");
+    assert_eq!(by_thread.events.len(), 1);
+    let cause = by_thread.events[0].id.clone();
+    let reaction = core
+        .emit(
+            NewEvent::core(EventPayload::ThreadCompleted {
+                thread_id: thread_id.clone(),
+            })
+            .with_correlation(Correlation {
+                thread_id: Some(thread_id.clone()),
+                agent_id: Some("agent".into()),
+                causation_id: Some(cause.clone()),
+                ..Correlation::default()
+            }),
+        )
+        .expect("emit");
+    let caused = core
+        .query_events(&EventQuery {
+            types: vec!["thread.*".into()],
+            correlation: CorrelationFilter {
+                causation_id: Some(cause),
+                ..CorrelationFilter::default()
+            },
+            order: SeqOrder::Asc,
+            ..EventQuery::default()
+        })
+        .expect("caused");
+    assert_eq!(caused.events, vec![reaction]);
+    core.shutdown();
 }
 
 #[test]

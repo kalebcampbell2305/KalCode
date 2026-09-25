@@ -255,6 +255,7 @@ pub fn run(removed_overrides: Vec<&'static str>) {
             commands::settings_get,
             commands::settings_update,
             commands::events_recent,
+            commands::events_query,
             commands::events_subscribe,
             commands::events_unsubscribe,
             commands::diagnostics_get,

@@ -1023,7 +1023,8 @@ fn migrations_keep_permissions_at_v4() {
             (1, "foundation"),
             (2, "workspaces"),
             (3, "threads"),
-            (4, "permissions")
+            (4, "permissions"),
+            (5, "event_correlation")
         ]
     );
 }

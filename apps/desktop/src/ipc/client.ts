@@ -3,8 +3,11 @@ import type {
   ApprovalDecision,
   ApprovalView,
   BootState,
+  CorrelationFilter,
   Diagnostics,
   EventEnvelope,
+  EventPage,
+  EventQuery,
   PermissionMode,
   PermissionProfile,
   PermissionSettings,
@@ -89,6 +92,38 @@ export class KalCodeClient {
   recentEvents(limit: number, beforeSeq?: number): Promise<EventEnvelope[]> {
     const safeLimit = Math.max(1, Math.min(MAX_EVENT_PAGE, Math.floor(limit)));
     return this.call("events_recent", { limit: safeLimit, beforeSeq: beforeSeq ?? null });
+  }
+
+  /**
+   * A filtered page of the event log (`events_query`): exact types or `domain.*` prefixes,
+   * correlation ids, seq and time windows, ascending or descending. Omitted fields take the native
+   * defaults (all types, newest first, 100 per page); the page size is clamped to 1..=500.
+   */
+  queryEvents(
+    query: Omit<Partial<EventQuery>, "correlation"> & { correlation?: Partial<CorrelationFilter> } = {},
+  ): Promise<EventPage> {
+    const full: EventQuery = {
+      types: query.types ?? [],
+      correlation: {
+        workspaceId: null,
+        threadId: null,
+        missionId: null,
+        providerId: null,
+        requestId: null,
+        agentId: null,
+        taskId: null,
+        automationId: null,
+        causationId: null,
+        ...query.correlation,
+      },
+      afterSeq: query.afterSeq ?? null,
+      beforeSeq: query.beforeSeq ?? null,
+      from: query.from ?? null,
+      to: query.to ?? null,
+      order: query.order ?? "desc",
+      limit: Math.max(1, Math.min(MAX_EVENT_PAGE, Math.floor(query.limit ?? 100))),
+    };
+    return this.call("events_query", { query: full });
   }
 
   async subscribeEvents(onEvent: (event: EventEnvelope) => void): Promise<Unsubscribe> {
