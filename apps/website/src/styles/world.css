@@ -11,27 +11,6 @@
  * continuously; reveals are one-shot and honour reduced motion.
  */
 
-:root {
-  --world-base: #03050c;
-  --world-deep: #010208;
-  --world-blue: 76 141 255;
-  --world-cyan: 110 196 255;
-  --world-violet: 108 92 231;
-  --world-gold: 255 181 84;
-  --world-line: 150 186 255;
-  --world-frame-radius: 1.25rem;
-}
-
-/* World pages are always dark; keep the canvas dark too (overscroll, scrollbars). */
-html:has(> body[data-world]) {
-  background: var(--world-base);
-  color-scheme: dark;
-}
-
-body[data-world] {
-  background: var(--world-base);
-}
-
 /* ---------- Backdrop (CSS fallback for SpaceBackdrop) ---------- */
 
 .backdrop {
@@ -126,112 +105,6 @@ body[data-world] {
   display: none;
 }
 
-/* ---------- Procedural planets at the section edges ---------- */
-
-.planet {
-  position: absolute;
-  z-index: -1;
-  aspect-ratio: 1;
-  border-radius: var(--radius-full);
-  background:
-    radial-gradient(circle at 70% 30%, rgb(40 70 140 / 0.35), transparent 55%),
-    radial-gradient(circle at 60% 40%, #0b1428 0%, #050915 55%, #010207 100%);
-  box-shadow:
-    inset 1.25rem -0.5rem 2.5rem -1rem rgb(var(--world-cyan) / 0.55),
-    inset 0.35rem -0.15rem 0.6rem -0.2rem rgb(210 232 255 / 0.8),
-    0 0 4rem -0.5rem rgb(var(--world-blue) / 0.4),
-    0 0 12rem 1rem rgb(var(--world-blue) / 0.12);
-  pointer-events: none;
-}
-
-.planet--sm {
-  width: clamp(9rem, 6rem + 10vw, 16rem);
-}
-
-.planet--md {
-  width: clamp(16rem, 10rem + 18vw, 30rem);
-}
-
-.planet--lg {
-  width: clamp(22rem, 12rem + 28vw, 44rem);
-}
-
-.planet--left {
-  left: 0;
-  transform: translateX(-62%);
-  box-shadow:
-    inset -1.25rem -0.5rem 2.5rem -1rem rgb(var(--world-cyan) / 0.55),
-    inset -0.35rem -0.15rem 0.6rem -0.2rem rgb(210 232 255 / 0.8),
-    0 0 4rem -0.5rem rgb(var(--world-blue) / 0.4),
-    0 0 12rem 1rem rgb(var(--world-blue) / 0.12);
-}
-
-.planet--right {
-  right: 0;
-  transform: translateX(58%);
-}
-
-.planet--at-top {
-  top: 4%;
-}
-
-.planet--at-middle {
-  top: 30%;
-}
-
-.planet--at-bottom {
-  bottom: 6%;
-}
-
-@media (max-width: 47.99rem) {
-  .planet--lg,
-  .planet--md {
-    width: 16rem;
-  }
-}
-
-/* ---------- Planetary horizon with a rocky ridge (final CTA) ---------- */
-
-.horizon {
-  position: absolute;
-  inset: auto 0 0;
-  z-index: -1;
-  height: 46%;
-  pointer-events: none;
-  overflow: hidden;
-}
-
-.horizon__limb {
-  position: absolute;
-  left: 50%;
-  top: 22%;
-  width: max(240%, 150rem);
-  aspect-ratio: 1;
-  transform: translateX(-50%);
-  border-radius: var(--radius-full);
-  background: radial-gradient(circle at 50% 0%, #0a1430 0%, #040817 22%, #010207 60%);
-  box-shadow:
-    0 -0.25rem 0.75rem -0.1rem rgb(200 228 255 / 0.9),
-    0 -1.5rem 3rem -0.5rem rgb(var(--world-cyan) / 0.55),
-    0 -6rem 10rem -2rem rgb(var(--world-blue) / 0.4);
-}
-
-.horizon__ridge {
-  position: absolute;
-  inset: auto 0 0;
-  width: 100%;
-  height: clamp(6rem, 4rem + 8vw, 12rem);
-}
-
-.horizon__far {
-  fill: #06101f;
-  filter: drop-shadow(0 -1px 0 rgb(var(--world-line) / 0.25));
-}
-
-.horizon__near {
-  fill: #010208;
-}
-
 /* ---------- Sections and frames ---------- */
 
 /* Content always stacks above the environment layers (SpaceBackdrop sits at z-index 0). */
@@ -247,7 +120,7 @@ body[data-world] {
 
 /* Tight rhythm, as in the approved concepts: moments follow each other closely. */
 .world-section {
-  --world-section-y: clamp(2.75rem, 1.75rem + 3vw, 5.5rem);
+  --world-section-y: clamp(1.75rem, 1.25rem + 1.6vw, 3.25rem);
   position: relative;
   isolation: isolate;
   overflow: clip;
@@ -270,7 +143,7 @@ body[data-world] {
 }
 
 .world-section--tall {
-  padding-block: calc(var(--world-section-y) * 1.15);
+  padding-block: var(--world-section-y);
 }
 
 .world-section--tight {
@@ -293,8 +166,8 @@ body[data-world] {
 
 .frame--feature {
   display: grid;
-  gap: clamp(2rem, 1.25rem + 2vw, 3rem);
-  padding: clamp(1.25rem, 0.75rem + 2.5vw, 3rem);
+  gap: clamp(1.25rem, 1rem + 1vw, 2rem);
+  padding: clamp(1rem, 0.6rem + 1.6vw, 2rem);
 }
 
 .frame--feature .statement {
@@ -305,7 +178,7 @@ body[data-world] {
   display: grid;
   gap: clamp(2rem, 1.25rem + 2.5vw, 3.5rem);
   align-items: center;
-  padding: clamp(1.5rem, 1rem + 3vw, 3.5rem);
+  padding: clamp(1.25rem, 0.8rem + 2vw, 2.5rem);
 }
 
 .frame__copy {
@@ -461,7 +334,7 @@ body[data-world] {
 .statement {
   display: grid;
   gap: var(--space-5);
-  margin-bottom: clamp(2rem, 1.5rem + 1.8vw, 3.5rem);
+  margin-bottom: clamp(1.25rem, 1rem + 1vw, 2.25rem);
 }
 
 .statement--center {
@@ -506,297 +379,11 @@ body[data-world] {
   }
 }
 
-/* ---------- Home hero ----------
- * Full-bleed first viewport. HeroWorld (sky, orbital platform, energy column, orb) fills the
- * section; the lockup and copy sit over the lower part of the orb and the column, inside the
- * text-safe band.
- */
-
-.hero {
-  /* HeroOrb/HeroWorld hooks (see its header comment). The orb square's top sits just under the
-     header; the sphere centre is 0.5211 of the square, its bottom 0.281 below the centre. */
-  --hero-orb-max: min(44svh, 40vw, 40rem);
-  --hero-orb-center-y: calc(var(--site-header-h) + 1svh + 0.5211 * var(--hero-orb-max));
-  --hero-text-top: calc(var(--hero-orb-center-y) + 0.22 * var(--hero-orb-max));
-  --hero-beam-safe-top: var(--hero-text-top);
-  --hero-beam-safe-inset: 2rem;
-  --hero-beam-safe-level: 0.12;
-  --hero-beam-safe-resume: 0.9;
-  --hero-scrim-y: 74%;
-  --hero-scrim: 0.5;
-
-  position: relative;
-  isolation: isolate;
-  overflow: clip;
-  display: grid;
-  min-height: max(100svh, 44rem);
-  background: var(--world-deep);
-  color: var(--color-text);
-}
-
-@media (max-width: 47.99rem) {
-  .hero {
-    --hero-orb-max: min(94vw, 42svh);
-    --hero-text-top: calc(var(--hero-orb-center-y) + 0.25 * var(--hero-orb-max));
-  }
-}
-
-.hero__world {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-}
-
-.hero__content {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  justify-items: center;
-  align-content: start;
-  padding-block: var(--hero-text-top) calc(6svh + clamp(3rem, 2rem + 3vw, 5rem));
-  text-align: center;
-}
-
-.hero__lockup {
-  display: grid;
-  justify-items: center;
-  gap: clamp(0.75rem, 0.5rem + 0.6vw, 1.125rem);
-}
-
-/* The real KalCode wordmark (board lettering, as a mask), lit from below like the reference. */
-.hero__wordmark {
-  display: block;
-  width: min(84vw, 34rem);
-  aspect-ratio: 687 / 69;
-  background:
-    radial-gradient(9% 70% at 20.6% 100%, rgb(var(--world-cyan) / 1), transparent 100%),
-    linear-gradient(180deg, #ffffff 35%, #c9d9ff 100%);
-  -webkit-mask: url("/assets/brand/kalcode-wordmark.png") center / 100% 100% no-repeat;
-  mask: url("/assets/brand/kalcode-wordmark.png") center / 100% 100% no-repeat;
-}
-
-.hero__wordmark-glow {
-  display: block;
-  filter: drop-shadow(0 0 1.25rem rgb(1 2 8 / 0.95)) drop-shadow(0 0 2.5rem rgb(var(--world-blue) / 0.35));
-}
-
-@media (forced-colors: active) {
-  .hero__wordmark {
-    forced-color-adjust: none;
-    background: CanvasText;
-  }
-}
-
-/* CODE THE FUTURE: the sub-brand line, set between two lines of light. */
-.hero__tagline {
-  display: inline-flex;
-  align-items: center;
-  gap: clamp(0.75rem, 0.4rem + 1.2vw, 1.5rem);
-  color: #e9f1ff;
-  font-family: var(--font-wider);
-  font-size: clamp(0.8125rem, 0.65rem + 0.55vw, 1.125rem);
-  font-weight: var(--weight-medium);
-  letter-spacing: 0.5em;
-  text-transform: uppercase;
-  text-shadow: 0 0 1rem rgb(var(--world-blue) / 0.9);
-}
-
-.hero__tagline::before,
-.hero__tagline::after {
-  content: "";
-  width: clamp(1.5rem, 0.5rem + 4vw, 4.5rem);
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgb(var(--world-cyan) / 0.9));
-}
-
-.hero__tagline::after {
-  /* The tracking leaves a gap after the last letter; the right line starts there. */
-  margin-left: -0.5em;
-  background: linear-gradient(90deg, rgb(var(--world-cyan) / 0.9), transparent);
-}
-
-.hero__statement {
-  max-width: 28ch;
-  margin-top: clamp(1rem, 0.6rem + 1vw, 1.5rem);
-  font-family: var(--font-display);
-  font-size: clamp(1.875rem, 1.15rem + 1.95vw, 2.875rem);
-  font-weight: 700;
-  line-height: 1.02;
-  letter-spacing: -0.035em;
-  color: var(--color-text);
-  text-wrap: balance;
-}
-
-.hero__line {
-  max-width: 50ch;
-  margin-top: clamp(0.75rem, 0.5rem + 0.6vw, 1rem);
-  color: var(--color-text-secondary);
-  font-size: var(--site-text-lead);
-  line-height: 1.55;
-  text-wrap: balance;
-}
-
-.hero__statement,
-.hero__line,
-.hero__status,
-.hero__meta {
-  text-shadow:
-    0 0 1.25rem var(--world-deep),
-    0 0 0.35rem var(--world-deep);
-}
-
-.hero__actions {
-  justify-content: center;
-  margin-top: clamp(1.5rem, 1rem + 0.8vw, 2rem);
-  gap: var(--space-5);
-}
-
-/* The build status as a small dark pill, legible wherever the platform light falls. */
-.hero__status {
-  display: inline-flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  align-items: center;
-  gap: var(--space-1) var(--space-3);
-  margin-top: var(--space-5);
-  padding: 0.4375rem 1rem;
-  border-radius: var(--radius-full);
-  background: rgb(2 4 10 / 0.78);
-  box-shadow: inset 0 0 0 1px rgb(var(--world-line) / 0.16);
-  color: var(--color-text-secondary);
-  font-size: var(--site-text-small);
-}
-
-.hero__status a {
-  color: var(--color-text);
-}
-
-.hero__meta {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: var(--space-3) clamp(1.25rem, 0.5rem + 2vw, 2.5rem);
-  margin-top: clamp(1.25rem, 0.75rem + 0.8vw, 1.75rem);
-  color: var(--color-text-secondary);
-  font-size: var(--site-text-xs);
-  font-weight: var(--weight-medium);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.hero__meta li {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.hero__meta svg {
-  width: 1rem;
-  height: 1rem;
-  color: var(--color-accent-text);
-}
-
-/* Side annotations at the hero edges, echoing the brand board. */
-.hero__aside {
-  position: absolute;
-  top: 42%;
-  z-index: 1;
-  display: none;
-  gap: 0.375rem;
-  color: rgb(214 228 255 / 0.62);
-  font-family: var(--font-wider);
-  font-size: 0.625rem;
-  font-weight: var(--weight-medium);
-  letter-spacing: 0.3em;
-  line-height: 1.5;
-  text-transform: uppercase;
-}
-
-.hero__aside::after {
-  content: "";
-  width: 1.5rem;
-  height: 1px;
-  margin-top: var(--space-3);
-  background: currentColor;
-}
-
-.hero__aside--left {
-  left: max(var(--site-gutter), calc((100vw - var(--site-wide)) / 2));
-}
-
-.hero__aside--right {
-  right: max(var(--site-gutter), calc((100vw - var(--site-wide)) / 2));
-  top: 16%;
-  text-align: right;
-  justify-items: end;
-}
-
-.hero__aside span:last-of-type {
-  color: #e9f1ff;
-}
-
-@media (min-width: 80rem) {
-  .hero__aside {
-    display: grid;
-  }
-}
-
-.status-dot {
-  flex: none;
-  width: 0.4375rem;
-  height: 0.4375rem;
-  border-radius: var(--radius-full);
-  background: var(--color-waiting);
-  box-shadow: 0 0 0.5rem rgb(var(--world-gold) / 0.7);
-}
-
-.status-dot--idle {
-  background: var(--color-idle);
-  box-shadow: none;
-}
-
-.status-dot--built {
-  background: var(--color-success);
-  box-shadow: 0 0 0.5rem rgb(53 196 141 / 0.7);
-}
-
-@media (max-width: 30rem) {
-  .hero__actions {
-    display: grid;
-    width: 100%;
-    gap: var(--space-4);
-  }
-}
-
-.hero__orb-poster {
-  position: absolute;
-  left: 50%;
-  top: calc(var(--hero-orb-center-y) - 0.5211 * var(--hero-orb-max));
-  width: var(--hero-orb-max);
-  aspect-ratio: 1;
-  transform: translateX(-50%);
-}
-
-.globe {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  -webkit-mask-image: radial-gradient(closest-side, #000 80%, transparent 100%);
-  mask-image: radial-gradient(closest-side, #000 80%, transparent 100%);
-}
-
-.globe img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
 /* ---------- Providers band ---------- */
 
 .providers {
   position: relative;
-  padding-block: clamp(2.5rem, 1.5rem + 3vw, 4.5rem);
+  padding-block: clamp(1.75rem, 1.25rem + 1.6vw, 3rem);
   border-block: 1px solid rgb(var(--world-line) / 0.1);
   background: linear-gradient(180deg, rgb(var(--world-blue) / 0.05), transparent);
 }

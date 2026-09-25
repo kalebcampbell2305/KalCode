@@ -6,6 +6,7 @@ import DownloadButton from "../components/DownloadButton.astro";
 import Globe from "../components/Globe.astro";
 import HeroOrbSlot from "../components/HeroOrbSlot.astro";
 import Icon from "../components/Icon.astro";
+import PageStyles from "../components/PageStyles.astro";
 import ProviderGlyph from "../components/ProviderGlyph.astro";
 import StageSlot from "../components/StageSlot.astro";
 import Base from "../layouts/Base.astro";
@@ -46,7 +47,7 @@ const policies = [
   { action: "Deploy to production", policy: "Approval required", tone: "block" },
 ] as const;
 ---
-<Base title={page.title} description={page.description} path={page.path} world jsonLd={structuredData()}>
+<Base title={page.title} description={page.description} path={page.path} world lateStyles jsonLd={structuredData()}>
   <!-- The wordmark is a CSS mask (fetched in CORS mode), and often the LCP element: fetch it early. -->
   <link
     slot="head"
@@ -117,6 +118,9 @@ const policies = [
     </div>
   </section>
 
+  <!-- Everything below the first viewport: its styles load here, not in <head>. -->
+  <PageStyles />
+
   <!-- Providers: the names you already use, with honest adapter status. -->
   <section class="providers" aria-labelledby="providers-title">
     <div class="container">
@@ -151,8 +155,9 @@ const policies = [
   {
     workspaceStage && (
       <section class="world-section" id="workspace" aria-labelledby="workspace-title">
-        <Backdrop variant="orbital" />
-        <Backdrop variant="planet" side="right" size="md" />
+        <Backdrop variant="deep" />
+        <Backdrop variant="orbital" intensity="low" />
+        <Backdrop variant="planet" side="right" size="lg" intensity="high" />
         <div class="container container--wide">
           <div class="frame frame--feature">
             <header class="statement statement--wide" data-reveal>
@@ -177,7 +182,8 @@ const policies = [
 
   <!-- KalVoice: a wide feature panel, the orb and the one key. -->
   <section class="world-section" id="kalvoice" aria-labelledby="kalvoice-title">
-    <Backdrop variant="void" />
+    <Backdrop variant="nebula" />
+    <Backdrop variant="void" intensity="high" />
     <div class="container container--wide">
       <div class="frame frame--split">
         <div class="frame__copy" data-reveal>
@@ -212,7 +218,7 @@ const policies = [
     commandStage && (
       <section class="world-section world-section--tall" id="command" aria-labelledby="command-title">
         <Backdrop variant="deep" accent="grid" />
-        <Backdrop variant="planet" side="left" size="lg" />
+        <Backdrop variant="planet" side="left" size="xl" intensity="high" />
         <div class="container">
           <header class="statement statement--center" data-reveal>
             <p class="eyebrow">Command center</p>
@@ -234,20 +240,19 @@ const policies = [
   {
     hasStage("MissionGraph") && (
       <section class="world-section" id="agents" aria-labelledby="agents-title">
+        <Backdrop variant="deep" />
         <Backdrop variant="gravity" />
         <div class="container container--wide">
-          <div class="frame frame--split frame--flip">
-            <div class="frame__copy" data-reveal>
+          <div class="frame frame--feature">
+            <header class="statement statement--wide" data-reveal>
               <p class="eyebrow">Parallel agents · planned</p>
               <h2 id="agents-title" class="h2">Complex goals. Coordinated agents.</h2>
               <p class="body-lg">
                 A planner breaks the objective down, agents build and review in parallel, and KalCode
                 verifies the result before anything is called done.
               </p>
-            </div>
-            <div class="frame__visual">
-              <StageSlot name="MissionGraph" width="contained" />
-            </div>
+            </header>
+            <StageSlot name="MissionGraph" width="wide" />
           </div>
         </div>
       </section>
@@ -256,7 +261,8 @@ const policies = [
 
   <!-- Providers, control, local-first: three framed facts, each with its own proof. -->
   <section class="world-section" id="control" aria-labelledby="control-title">
-    <Backdrop variant="vault" />
+    <Backdrop variant="nebula" intensity="low" />
+    <Backdrop variant="vault" intensity="high" />
     <div class="container container--wide">
       <h2 id="control-title" class="visually-hidden">Your keys, your rules, your machine</h2>
       <div class="trio">
@@ -264,24 +270,31 @@ const policies = [
           <p class="eyebrow">Your providers</p>
           <h3 id="keys-title" class="headline">Bring your own keys. Use your own accounts.</h3>
           <p>Claude Code, Codex and Gemini CLI run on the sign-in or API key you already have.</p>
-          <ul class="tile-list" role="list">
-            {
-              PROVIDERS.map((provider) => (
-                <li>
-                  <ProviderGlyph />
-                  <span>{provider.name}</span>
-                  <span class="tile-list__meta">{provider.access}</span>
-                </li>
-              ))
-            }
-          </ul>
+          {
+            hasStage("ProviderSwitch") ? (
+              <StageSlot name="ProviderSwitch" width="compact" />
+            ) : (
+              <ul class="tile-list" role="list">
+                {PROVIDERS.map((provider) => (
+                  <li>
+                    <ProviderGlyph />
+                    <span>{provider.name}</span>
+                    <span class="tile-list__meta">{provider.access}</span>
+                  </li>
+                ))}
+              </ul>
+            )
+          }
           <a class="text-link" href="/docs/providers">Provider setup <Icon name="arrow-right" /></a>
         </article>
 
         <article class="frame frame--tile" aria-labelledby="rules-title">
           <p class="eyebrow">Built for control</p>
           <h3 id="rules-title" class="headline">You set the rules. Agents follow them.</h3>
-          <p>Every mode on every plan. In Approve mode, the default:</p>
+          <p>Every mode on every plan. Anything outside your rules waits for you.</p>
+          {hasStage("PermissionModes") ? (
+            <StageSlot name="PermissionModes" width="compact" />
+          ) : (
           <table class="policy">
             <caption class="visually-hidden">What agents may do in Approve mode</caption>
             <tbody>
@@ -297,6 +310,7 @@ const policies = [
               }
             </tbody>
           </table>
+          )}
           <a class="text-link" href="/docs/permissions">How permissions work <Icon name="arrow-right" /></a>
         </article>
 
@@ -321,6 +335,7 @@ const policies = [
 
   <!-- Pricing: three plans over a lit horizon. -->
   <section class="world-section pricing-band" id="plans" aria-labelledby="plans-title">
+    <Backdrop variant="deep" />
     <Backdrop variant="horizon" rocks={false} />
     
     <div class="container container--wide">
