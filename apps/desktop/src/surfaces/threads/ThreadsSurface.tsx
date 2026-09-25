@@ -1,5 +1,5 @@
 import { Button, EmptyState } from "@kalcode/ui/components";
-import { Plus } from "lucide-react";
+import { MessagesSquare, Plus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useThreadsIntent } from "./intent.tsx";
 import { NewThread } from "./NewThread.tsx";
@@ -96,6 +96,7 @@ export function ThreadsSurface() {
               ) : (
                 <EmptyState
                   headingLevel={2}
+                  art={<MessagesSquare />}
                   title="No threads yet"
                   actions={
                     <Button variant="primary" icon={<Plus />} onClick={() => setPane({ kind: "new" })}>

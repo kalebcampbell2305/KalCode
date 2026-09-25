@@ -2,7 +2,7 @@
   display: grid;
   grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
   height: 100%;
-  background: var(--color-bg);
+  background: var(--app-backdrop), var(--color-bg);
   transition: grid-template-columns var(--dur-base) var(--ease-out);
 }
 
@@ -31,9 +31,9 @@
   z-index: var(--z-overlay);
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-sm);
-  background: var(--color-accent);
-  color: var(--color-accent-fg);
-  font-size: var(--text-sm);
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-fg);
+  font-size: var(--type-ui);
   text-decoration: none;
   transform: translateY(-200%);
 }

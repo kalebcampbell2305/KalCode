@@ -1,0 +1,92 @@
+.list {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.line {
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.pill {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-sunken);
+}
+
+.trigger {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  height: var(--control-h-md);
+  padding: 0 var(--space-3);
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: var(--type-ui);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+
+.trigger svg {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.trigger:hover {
+  color: var(--color-text);
+}
+
+.line .trigger[data-state="active"] {
+  color: var(--color-text);
+}
+
+/* The active tab carries a lit underline. */
+.line .trigger::after {
+  content: "";
+  position: absolute;
+  left: var(--space-2);
+  right: var(--space-2);
+  bottom: -1px;
+  height: 2px;
+  border-radius: var(--radius-full) var(--radius-full) 0 0;
+  background: var(--color-accent);
+  box-shadow: 0 0 10px var(--color-glow);
+  opacity: 0;
+  transform: scaleX(0.6);
+  transition:
+    opacity var(--dur-fast) var(--ease-out),
+    transform var(--dur-base) var(--ease-emphasized);
+}
+
+.line .trigger[data-state="active"]::after {
+  opacity: 1;
+  transform: none;
+}
+
+.pill .trigger {
+  height: calc(var(--control-h-sm) - 2px);
+  padding: 0 var(--space-2-5);
+  border-radius: var(--radius-sm);
+  font-size: var(--type-small);
+}
+
+.pill .trigger[data-state="active"] {
+  background: var(--color-surface-3);
+  color: var(--color-text);
+  box-shadow: 0 0 0 1px var(--color-border-strong);
+}
+
+.trigger:focus-visible {
+  outline-offset: -2px;
+}
+
+.content:focus-visible {
+  outline-offset: 2px;
+}

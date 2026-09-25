@@ -11,6 +11,17 @@
  *
  * Theme is selected with [data-theme="light"|"dark"] on <html>; density with
  * [data-density="compact"]; motion with [data-motion="reduced"].
+ *
+ * Z7-W0 (premium direction) adds, without changing any existing value the website relies on:
+ *   - type roles (--type-display/headline/title/body/ui/label/mono + weights/tracking);
+ *     the website overrides the sizes with its marketing scale, the roles stay the same
+ *   - surface elevation steps (--color-surface-1..3), panel sheen, blue-lit hairlines
+ *     (--color-border-lit*) and an elevation/shadow scale (--shadow-panel, --shadow-lit, --shadow-xl)
+ *   - contract status tones (--status-<tone>, -soft, -text, -line) for `StatusTone`
+ *     (working, waiting, muted, done, failed, paused, recovering). Legacy --color-live/waiting/
+ *     success/danger/idle keep their values; new status UI uses --status-*
+ *   - motion roles (--ease-standard, --ease-emphasized, --dur-pulse, --dur-status)
+ *   - density-tuned panel metrics (--panel-*, --row-h-dense, --space-2-5, --space-3-5, --space-7)
  */
 
 :root {
@@ -49,6 +60,34 @@
   --tracking-normal: 0;
   --tracking-wide: 0.04em;
   --tracking-brand: 0.32em;
+  --tracking-label: 0.08em;
+
+  /* Type roles (Z7-W0). One family, Lexend; roles are size + weight + tracking.
+     DISPLAY   empty states, home greeting, boot            (website overrides with its scale)
+     HEADLINE  page / surface titles
+     TITLE     panel and card titles, dialog titles
+     BODY      running text
+     UI        controls, rows, table cells (dense)
+     LABEL     eyebrows, column heads, chip text: small caps-style uppercase, wide tracking
+     MONO      commands, paths, IDs, terminal-adjacent text, numbers that align */
+  --font-display: var(--font-sans);
+  --font-label: var(--font-sans);
+  --type-display: 1.75rem; /* 28 */
+  --type-display-weight: var(--weight-semibold);
+  --type-display-tracking: -0.03em;
+  --type-headline: 1.25rem; /* 20 */
+  --type-headline-weight: var(--weight-semibold);
+  --type-headline-tracking: -0.02em;
+  --type-title: 0.875rem; /* 14 */
+  --type-title-weight: var(--weight-semibold);
+  --type-title-tracking: -0.005em;
+  --type-body: 0.875rem; /* 14 */
+  --type-ui: 0.8125rem; /* 13 */
+  --type-small: 0.75rem; /* 12 */
+  --type-label: 0.6875rem; /* 11 */
+  --type-label-weight: var(--weight-medium);
+  --type-mono: 0.78125rem; /* 12.5 */
+  --type-kpi: 1.625rem; /* 26: stat values */
 
   /* ---------- Spacing (4px base) ---------- */
   --space-0: 0;
@@ -57,10 +96,13 @@
   --space-1: 0.25rem;
   --space-1-5: 0.375rem;
   --space-2: 0.5rem;
+  --space-2-5: 0.625rem;
   --space-3: 0.75rem;
+  --space-3-5: 0.875rem;
   --space-4: 1rem;
   --space-5: 1.25rem;
   --space-6: 1.5rem;
+  --space-7: 1.75rem;
   --space-8: 2rem;
   --space-10: 2.5rem;
   --space-12: 3rem;
@@ -74,8 +116,15 @@
   --control-h-lg: 2.5rem;
   --control-px: var(--space-3);
   --row-h: 2.5rem;
+  --row-h-dense: 2rem;
   --page-px: var(--space-8);
   --page-py: var(--space-6);
+
+  /* Panels (Z7-W0): the framed surfaces the app is composed of */
+  --panel-px: var(--space-4);
+  --panel-py: var(--space-3);
+  --panel-header-h: 2.5rem;
+  --panel-gap: var(--space-3);
 
   /* ---------- Radius: small for controls, larger only for floating layers ---------- */
   --radius-xs: 3px;
@@ -83,7 +132,10 @@
   --radius-md: 7px;
   --radius-lg: 10px;
   --radius-xl: 14px;
+  --radius-2xl: 18px;
   --radius-full: 999px;
+  --radius-panel: var(--radius-lg);
+  --radius-control: var(--radius-sm);
 
   /* ---------- Layout ---------- */
   --sidebar-w: 15rem;
@@ -112,6 +164,12 @@
   --dur-base: 220ms;
   --dur-slow: 380ms;
   --dur-deliberate: 640ms;
+  /* Motion roles (Z7-W0). Standard for state changes, emphasized for entering surfaces.
+     Loops (working pulse) use --dur-pulse and are removed entirely under reduced motion. */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-emphasized: cubic-bezier(0.05, 0.7, 0.1, 1);
+  --dur-status: 900ms; /* one-shot highlight when a status changes (done, failed) */
+  --dur-pulse: 2400ms; /* working breathe */
 
   color-scheme: dark;
 }
@@ -167,6 +225,66 @@
   --shadow-lg: 0 24px 64px -16px rgb(0 0 0 / 0.75), 0 0 0 1px var(--color-border-strong);
   --shadow-focus: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-border-focus);
 
+  /* ---- Z7-W0: elevation, lit hairlines, panels ---- */
+  /* Surface steps: bg (0) < surface-1 panel < surface-2 panel header/input well < surface-3 popover.
+     Every text token keeps >= 4.5:1 on all of them. */
+  --color-surface-1: #09101d;
+  --color-surface-2: #0d1627;
+  --color-surface-3: #111c31;
+  --color-border-subtle: rgb(142 170 220 / 0.08);
+  /* Blue-lit hairlines: focused / active / selected surfaces only. Used sparingly. */
+  --color-border-lit: rgb(92 150 255 / 0.55);
+  --color-border-lit-soft: rgb(92 150 255 / 0.26);
+  --color-accent-icy: #a9c8ff;
+  --panel-sheen: linear-gradient(180deg, rgb(140 175 240 / 0.045) 0%, rgb(140 175 240 / 0) 3.5rem);
+  --app-backdrop:
+    radial-gradient(90rem 40rem at 78% -18%, rgb(76 141 255 / 0.075), transparent 62%),
+    radial-gradient(60rem 30rem at -10% 110%, rgb(76 141 255 / 0.035), transparent 60%);
+  --shadow-panel: inset 0 1px 0 rgb(200 220 255 / 0.035), 0 1px 0 rgb(0 0 0 / 0.45), 0 18px 40px -26px rgb(0 0 0 / 0.9);
+  --shadow-lit: 0 0 0 1px var(--color-border-lit-soft), 0 0 28px -10px rgb(76 141 255 / 0.4);
+  --shadow-xl: 0 32px 80px -24px rgb(0 0 0 / 0.85), 0 0 0 1px var(--color-border-strong);
+  --shadow-well: inset 0 1px 2px rgb(0 0 0 / 0.45);
+
+  /* Primary button: deep constellation blue, white label (>= 4.5:1 on the base colour). */
+  --btn-primary-bg: #2a64e6;
+  --btn-primary-top: #2f6bec;
+  --btn-primary-bottom: #2257d6;
+  --btn-primary-fg: #ffffff;
+  --btn-primary-edge: rgb(170 205 255 / 0.5);
+  --btn-primary-glow: rgb(76 141 255 / 0.42);
+
+  /* Contract status tones (StatusTone). Always paired with a glyph and words.
+     working green · waiting neutral (emphasized) · muted · done high-contrast neutral ·
+     failed red · paused amber (the only amber) · recovering blue. */
+  --status-working: #3ccf8e;
+  --status-working-soft: rgb(60 207 142 / 0.12);
+  --status-working-text: #62dca4;
+  --status-working-line: rgb(60 207 142 / 0.4);
+  --status-waiting: #c7d1e0;
+  --status-waiting-soft: rgb(199 209 224 / 0.1);
+  --status-waiting-text: #e6edf8;
+  --status-waiting-line: rgb(199 209 224 / 0.36);
+  --status-muted: #8593ab;
+  --status-muted-soft: rgb(133 147 171 / 0.12);
+  --status-muted-text: #a8b4c9;
+  --status-muted-line: rgb(133 147 171 / 0.28);
+  --status-done: #eef3fb;
+  --status-done-soft: rgb(238 243 251 / 0.08);
+  --status-done-text: #f3f6fb;
+  --status-done-line: rgb(238 243 251 / 0.3);
+  --status-failed: #ef5f6b;
+  --status-failed-soft: rgb(239 95 107 / 0.13);
+  --status-failed-text: #ff8a93;
+  --status-failed-line: rgb(239 95 107 / 0.42);
+  --status-paused: #f2b544;
+  --status-paused-soft: rgb(242 181 68 / 0.12);
+  --status-paused-text: #f6c566;
+  --status-paused-line: rgb(242 181 68 / 0.4);
+  --status-recovering: #5f9bff;
+  --status-recovering-soft: rgb(95 155 255 / 0.13);
+  --status-recovering-text: #8db6ff;
+  --status-recovering-line: rgb(95 155 255 / 0.42);
+
   color-scheme: dark;
 }
 
@@ -219,6 +337,58 @@
   --shadow-lg: 0 24px 60px -18px rgb(16 32 64 / 0.3), 0 0 0 1px var(--color-border);
   --shadow-focus: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-border-focus);
 
+  --color-surface-1: #ffffff;
+  --color-surface-2: #f7f9fc;
+  --color-surface-3: #ffffff;
+  --color-border-subtle: rgb(16 32 64 / 0.06);
+  --color-border-lit: rgb(29 91 224 / 0.5);
+  --color-border-lit-soft: rgb(29 91 224 / 0.22);
+  --color-accent-icy: #1a52cb;
+  --panel-sheen: linear-gradient(180deg, rgb(29 91 224 / 0.022) 0%, rgb(29 91 224 / 0) 3.5rem);
+  --app-backdrop:
+    radial-gradient(90rem 40rem at 78% -18%, rgb(29 91 224 / 0.05), transparent 62%),
+    radial-gradient(60rem 30rem at -10% 110%, rgb(29 91 224 / 0.025), transparent 60%);
+  --shadow-panel: 0 1px 2px rgb(16 32 64 / 0.05), 0 10px 28px -20px rgb(16 32 64 / 0.22);
+  --shadow-lit: 0 0 0 1px var(--color-border-lit-soft), 0 8px 22px -12px rgb(29 91 224 / 0.32);
+  --shadow-xl: 0 28px 70px -24px rgb(16 32 64 / 0.35), 0 0 0 1px var(--color-border);
+  --shadow-well: inset 0 1px 2px rgb(16 32 64 / 0.06);
+
+  --btn-primary-bg: #1d5be0;
+  --btn-primary-top: #2765e8;
+  --btn-primary-bottom: #174ec4;
+  --btn-primary-fg: #ffffff;
+  --btn-primary-edge: rgb(255 255 255 / 0.28);
+  --btn-primary-glow: rgb(29 91 224 / 0.3);
+
+  --status-working: #0b7a51;
+  --status-working-soft: rgb(11 122 81 / 0.09);
+  --status-working-text: #0a6e49;
+  --status-working-line: rgb(11 122 81 / 0.35);
+  --status-waiting: #37445a;
+  --status-waiting-soft: rgb(55 68 90 / 0.08);
+  --status-waiting-text: #0b1424;
+  --status-waiting-line: rgb(55 68 90 / 0.34);
+  --status-muted: #66728a;
+  --status-muted-soft: rgb(102 114 138 / 0.1);
+  --status-muted-text: #4f5b72;
+  --status-muted-line: rgb(102 114 138 / 0.28);
+  --status-done: #0b1424;
+  --status-done-soft: rgb(11 20 36 / 0.07);
+  --status-done-text: #0b1424;
+  --status-done-line: rgb(11 20 36 / 0.3);
+  --status-failed: #cc2f3d;
+  --status-failed-soft: rgb(204 47 61 / 0.08);
+  --status-failed-text: #b3222f;
+  --status-failed-line: rgb(204 47 61 / 0.36);
+  --status-paused: #9a6200;
+  --status-paused-soft: rgb(214 140 0 / 0.12);
+  --status-paused-text: #8f5a00;
+  --status-paused-line: rgb(154 98 0 / 0.38);
+  --status-recovering: #1d5be0;
+  --status-recovering-soft: rgb(29 91 224 / 0.08);
+  --status-recovering-text: #1a52cb;
+  --status-recovering-line: rgb(29 91 224 / 0.36);
+
   color-scheme: light;
 }
 
@@ -229,12 +399,18 @@
   --control-h-lg: 2.25rem;
   --control-px: var(--space-2);
   --row-h: 2.125rem;
+  --row-h-dense: 1.75rem;
   --page-px: var(--space-6);
   --page-py: var(--space-4);
+  --panel-px: var(--space-3);
+  --panel-py: var(--space-2-5);
+  --panel-header-h: 2.25rem;
+  --panel-gap: var(--space-2-5);
 }
 
 /* ---------- Motion ---------- */
 [data-motion="reduced"] {
+  --dur-status: 0ms;
   --dur-instant: 0ms;
   --dur-fast: 0ms;
   --dur-base: 0ms;
@@ -244,6 +420,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   :root:not([data-motion="full"]) {
+    --dur-status: 0ms;
     --dur-instant: 0ms;
     --dur-fast: 0ms;
     --dur-base: 0ms;

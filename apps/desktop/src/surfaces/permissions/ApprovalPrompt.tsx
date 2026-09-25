@@ -23,7 +23,7 @@ export interface ApprovalPromptProps {
 
 /**
  * The approval prompt for one request (directive §7.4): provider, thread, requested action,
- * workspace and mode, with Deny / Approve once / Allow for thread / Allow for workspace — only
+ * workspace and mode, with Deny · Allow for workspace · Allow for thread · Approve once — only
  * the answers the engine allows for this request. Used by the approvals panel and the Dashboard.
  */
 export function ApprovalPrompt({ request, onDecide, headingLevel = 3, className }: ApprovalPromptProps) {

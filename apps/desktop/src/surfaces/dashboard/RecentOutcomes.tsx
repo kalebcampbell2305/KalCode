@@ -1,4 +1,4 @@
-import { Section } from "@kalcode/ui/components";
+import { Panel } from "@kalcode/ui/components";
 import { useThreadSummaries } from "./data/DashboardData.tsx";
 import { recentOutcomes } from "./data/status.ts";
 import styles from "./ThreadList.module.css";
@@ -15,7 +15,7 @@ export function RecentOutcomes({ now }: { now: number }) {
   if (outcomes.length === 0) return null;
 
   return (
-    <Section id="recent" title="Recent completions and failures">
+    <Panel id="recent" title="Recent completions and failures">
       <div className={styles.groups}>
         <ul className={styles.list} aria-label="Recent completions and failures">
           {outcomes.map((thread) => (
@@ -30,6 +30,6 @@ export function RecentOutcomes({ now }: { now: number }) {
           ))}
         </ul>
       </div>
-    </Section>
+    </Panel>
   );
 }

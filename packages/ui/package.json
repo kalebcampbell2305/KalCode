@@ -8,6 +8,7 @@
     "./tokens.css": "./src/styles/tokens.css",
     "./fonts.css": "./src/styles/fonts.css",
     "./base.css": "./src/styles/base.css",
+    "./terminal.css": "./src/styles/terminal.css",
     "./brand/*": "./src/brand/*",
     "./components": "./src/components/index.ts"
   },
@@ -17,6 +18,7 @@
     "test:ui": "playwright test --config tests/diffview/playwright.config.ts"
   },
   "dependencies": {
+    "@kalcode/protocol": "workspace:*",
     "@fontsource-variable/jetbrains-mono": "5.3.0",
     "@fontsource-variable/lexend-deca": "5.3.0",
     "@fontsource-variable/lexend-exa": "5.3.0",

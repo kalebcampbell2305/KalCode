@@ -58,45 +58,47 @@ export function ApprovalQueue() {
         ) : null}
       </header>
 
-      {pendingState === "loading" && pending.length === 0 ? (
-        <div className={styles.loading} role="status" aria-busy="true">
-          <span className="visually-hidden">Loading approval requests</span>
-          {[0, 1].map((i) => (
-            <div key={i} className={styles.skeletonItem}>
-              <Skeleton width="40%" height="1rem" />
-              <Skeleton width="70%" />
-              <Skeleton width="55%" />
-            </div>
-          ))}
-        </div>
-      ) : pendingState === "error" && pending.length === 0 ? (
-        <ErrorState
-          title="Approval requests couldn't load"
-          code={pendingError ? `${pendingError.category}/${pendingError.code}` : undefined}
-          actions={<Button onClick={() => void refreshPending()}>Try again</Button>}
-        >
-          <p>{pendingError?.message}</p>
-        </ErrorState>
-      ) : queue.length === 0 ? (
-        <p className={styles.clear}>Nothing is waiting for your approval.</p>
-      ) : (
-        <>
-          <ol ref={listRef} className={styles.list} aria-label="Pending approvals">
-            {(expanded ? queue : queue.slice(0, VISIBLE)).map((request) => (
-              <li key={request.id} data-approval-id={request.id}>
-                <ApprovalPrompt request={request} onDecide={onDecide} headingLevel={3} />
-              </li>
+      <div className={styles.body}>
+        {pendingState === "loading" && pending.length === 0 ? (
+          <div className={styles.loading} role="status" aria-busy="true">
+            <span className="visually-hidden">Loading approval requests</span>
+            {[0, 1].map((i) => (
+              <div key={i} className={styles.skeletonItem}>
+                <Skeleton width="40%" height="1rem" />
+                <Skeleton width="70%" />
+                <Skeleton width="55%" />
+              </div>
             ))}
-          </ol>
-          {queue.length > VISIBLE ? (
-            <div>
-              <Button variant="ghost" size="sm" onClick={() => setExpanded((v) => !v)} aria-expanded={expanded}>
-                {expanded ? "Show fewer" : `Show ${queue.length - VISIBLE} more`}
-              </Button>
-            </div>
-          ) : null}
-        </>
-      )}
+          </div>
+        ) : pendingState === "error" && pending.length === 0 ? (
+          <ErrorState
+            title="Approval requests couldn't load"
+            code={pendingError ? `${pendingError.category}/${pendingError.code}` : undefined}
+            actions={<Button onClick={() => void refreshPending()}>Try again</Button>}
+          >
+            <p>{pendingError?.message}</p>
+          </ErrorState>
+        ) : queue.length === 0 ? (
+          <p className={styles.clear}>Nothing is waiting for your approval.</p>
+        ) : (
+          <>
+            <ol ref={listRef} className={styles.list} aria-label="Pending approvals">
+              {(expanded ? queue : queue.slice(0, VISIBLE)).map((request) => (
+                <li key={request.id} data-approval-id={request.id}>
+                  <ApprovalPrompt request={request} onDecide={onDecide} headingLevel={3} />
+                </li>
+              ))}
+            </ol>
+            {queue.length > VISIBLE ? (
+              <div>
+                <Button variant="ghost" size="sm" onClick={() => setExpanded((v) => !v)} aria-expanded={expanded}>
+                  {expanded ? "Show fewer" : `Show ${queue.length - VISIBLE} more`}
+                </Button>
+              </div>
+            ) : null}
+          </>
+        )}
+      </div>
     </section>
   );
 }

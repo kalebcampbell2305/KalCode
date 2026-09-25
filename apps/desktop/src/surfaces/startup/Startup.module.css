@@ -1,24 +1,61 @@
+/* Full-window startup screens: calm and cinematic. A soft constellation glow behind one framed card. */
 .screen {
+  position: relative;
   display: grid;
   place-items: center;
   min-height: 100vh;
   padding: var(--space-8);
-  background: radial-gradient(60rem 40rem at 50% -10%, var(--color-accent-soft), transparent 70%), var(--color-bg);
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 18% 22%, var(--color-glow) 0 1.5px, transparent 2px),
+    radial-gradient(circle at 78% 16%, var(--color-border-strong) 0 1px, transparent 1.5px),
+    radial-gradient(circle at 86% 72%, var(--color-border-strong) 0 1px, transparent 1.5px),
+    radial-gradient(circle at 10% 80%, var(--color-border-strong) 0 1px, transparent 1.5px),
+    radial-gradient(60rem 40rem at 50% -10%, var(--color-accent-soft), transparent 70%),
+    radial-gradient(40rem 24rem at 50% 110%, var(--color-accent-soft), transparent 70%), var(--color-bg);
 }
 
 .panel {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: var(--space-8);
-  width: min(34rem, 100%);
+  gap: var(--space-5);
+  width: min(36rem, 100%);
+  padding: var(--space-6);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  background: var(--panel-sheen), var(--color-surface-1);
+  box-shadow: var(--shadow-xl);
+}
+
+/* A lit hairline along the card's top edge. */
+.panel::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 10%;
+  right: 10%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--color-border-lit), transparent);
 }
 
 .lockup {
   align-self: flex-start;
   color: var(--color-text);
+  filter: drop-shadow(0 0 10px var(--color-glow));
+}
+
+.panel code {
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-xs);
+  background: var(--color-surface-2);
+  font-size: var(--type-mono);
 }
 
 .meta {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
   color: var(--color-text-faint);
-  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  font-size: var(--type-small);
 }

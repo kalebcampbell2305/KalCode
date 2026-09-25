@@ -5,20 +5,26 @@
   width: 100%;
   min-height: 2.75rem;
   padding: var(--space-1-5) var(--space-2);
-  border: 0;
-  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--color-text-secondary);
   text-align: left;
   transition:
     background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
     color var(--dur-fast) var(--ease-out);
 }
 
 .switcher:hover,
 .switcher[data-state="open"] {
+  border-color: var(--color-border);
   background: var(--color-surface-hover);
   color: var(--color-text);
+}
+
+.switcher[data-state="open"] {
+  border-color: var(--color-border-lit-soft);
 }
 
 .switcher[data-collapsed] {
@@ -47,8 +53,12 @@
 
 .caption {
   color: var(--color-text-faint);
-  font-size: var(--text-2xs);
+  font-family: var(--font-label);
+  font-size: 0.625rem;
+  font-weight: var(--type-label-weight);
+  letter-spacing: var(--tracking-label);
   line-height: var(--leading-snug);
+  text-transform: uppercase;
 }
 
 /* Faint text drops below AA on the hover background in the light theme. */
@@ -60,7 +70,8 @@
 .name {
   overflow: hidden;
   color: var(--color-text);
-  font-size: var(--text-sm);
+  font-size: var(--type-ui);
+  font-weight: var(--weight-medium);
   line-height: var(--leading-snug);
   text-overflow: ellipsis;
   white-space: nowrap;

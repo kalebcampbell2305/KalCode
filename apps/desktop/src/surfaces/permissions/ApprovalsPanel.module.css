@@ -16,10 +16,24 @@
   flex-direction: column;
   width: min(40rem, calc(100vw - var(--sidebar-w-collapsed)));
   border-left: 1px solid var(--color-border-strong);
-  background: var(--color-bg);
-  box-shadow: var(--shadow-lg);
-  animation: slide var(--dur-base) var(--ease-expo);
+  background:
+    radial-gradient(40rem 18rem at 100% 0%, var(--color-accent-soft), transparent 70%), var(--panel-sheen),
+    var(--color-surface-3);
+  box-shadow: var(--shadow-xl);
+  animation: slide var(--dur-base) var(--ease-emphasized);
   outline: none;
+}
+
+/* A lit hairline along the top of the sheet edge, fading down. */
+.sheet::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -1px;
+  width: 1px;
+  height: 12rem;
+  background: linear-gradient(180deg, var(--color-border-lit), transparent);
+  pointer-events: none;
 }
 
 .header {
@@ -27,26 +41,27 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-4);
-  padding: var(--space-5) var(--space-6) var(--space-4);
-  border-bottom: 1px solid var(--color-border);
+  padding: var(--space-4) var(--space-5) var(--space-3-5);
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .title {
   color: var(--color-text);
-  font-size: var(--text-xl);
-  font-weight: var(--weight-medium);
+  font-size: var(--type-headline);
+  font-weight: var(--type-headline-weight);
+  letter-spacing: var(--type-headline-tracking);
 }
 
 .description {
   margin-top: var(--space-1);
   color: var(--color-text-muted);
-  font-size: var(--text-sm);
+  font-size: var(--type-ui);
 }
 
 .body {
   flex: 1;
   min-height: 0;
-  padding: var(--space-5) var(--space-6) var(--space-8);
+  padding: var(--space-4) var(--space-5) var(--space-8);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -54,7 +69,7 @@
 .list {
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
+  gap: var(--space-2-5);
   margin: 0;
   padding: 0;
   list-style: none;

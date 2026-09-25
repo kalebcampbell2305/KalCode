@@ -1,0 +1,225 @@
+/* Status: tone + glyph + words. Tones come from the contract (`StatusTone`) via --status-*. */
+.status {
+  --_c: var(--status-muted);
+  --_soft: var(--status-muted-soft);
+  --_text: var(--status-muted-text);
+  --_line: var(--status-muted-line);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+  max-width: 100%;
+  font-family: var(--font-sans);
+  font-size: var(--type-small);
+  line-height: 1.2;
+  white-space: nowrap;
+  color: var(--_text);
+}
+
+.status[data-tone="working"] {
+  --_c: var(--status-working);
+  --_soft: var(--status-working-soft);
+  --_text: var(--status-working-text);
+  --_line: var(--status-working-line);
+}
+
+.status[data-tone="waiting"] {
+  --_c: var(--status-waiting);
+  --_soft: var(--status-waiting-soft);
+  --_text: var(--status-waiting-text);
+  --_line: var(--status-waiting-line);
+}
+
+.status[data-tone="done"] {
+  --_c: var(--status-done);
+  --_soft: var(--status-done-soft);
+  --_text: var(--status-done-text);
+  --_line: var(--status-done-line);
+}
+
+.status[data-tone="failed"] {
+  --_c: var(--status-failed);
+  --_soft: var(--status-failed-soft);
+  --_text: var(--status-failed-text);
+  --_line: var(--status-failed-line);
+}
+
+.status[data-tone="paused"] {
+  --_c: var(--status-paused);
+  --_soft: var(--status-paused-soft);
+  --_text: var(--status-paused-text);
+  --_line: var(--status-paused-line);
+}
+
+.status[data-tone="recovering"] {
+  --_c: var(--status-recovering);
+  --_soft: var(--status-recovering-soft);
+  --_text: var(--status-recovering-text);
+  --_line: var(--status-recovering-line);
+}
+
+.glyph {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  color: var(--_c);
+}
+
+.dot {
+  position: relative;
+  flex: none;
+  width: 0.4375rem;
+  height: 0.4375rem;
+  border-radius: var(--radius-full);
+  background: var(--_c);
+}
+
+.text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.qualifier {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-text-muted);
+  font-weight: var(--weight-regular);
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.qualifier::before {
+  content: "·";
+  margin-right: var(--space-1-5);
+}
+
+/* ---- chip: bordered, caps label ---- */
+.chip {
+  height: 1.375rem;
+  padding: 0 var(--space-2) 0 var(--space-1-5);
+  border: 1px solid var(--_line);
+  border-radius: var(--radius-full);
+  background: var(--_soft);
+  font-family: var(--font-label);
+  font-size: var(--type-label);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.chip .glyph {
+  width: 0.8125rem;
+  height: 0.8125rem;
+}
+
+.chip .dot {
+  margin-left: var(--space-0-5);
+}
+
+.sm.chip {
+  height: 1.125rem;
+  padding: 0 var(--space-1-5) 0 var(--space-1);
+  gap: var(--space-1);
+  font-size: 0.625rem;
+}
+
+.sm .glyph {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+/* ---- inline: glyph + sentence text ---- */
+.inline {
+  font-weight: var(--weight-medium);
+}
+
+/* ---- dot ---- */
+.dot + .text {
+  color: var(--color-text-secondary);
+}
+
+.status[data-tone="waiting"] .dot + .text,
+.status[data-tone="failed"] .dot + .text,
+.status[data-tone="done"] .dot + .text {
+  color: var(--color-text);
+}
+
+/* ---- motion ---- */
+
+/* WORKING: a slow breathe on the glyph/dot. Calm, not flashing. */
+.status[data-tone="working"] .glyph,
+.status[data-tone="working"] .dot {
+  animation: breathe var(--dur-pulse) var(--ease-in-out) infinite;
+}
+
+.status[data-tone="working"] .dot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--_c);
+  animation: ring var(--dur-pulse) var(--ease-out) infinite;
+}
+
+/* STARTING: the progress glyph turns slowly. */
+.status[data-status="starting"] .glyph,
+.status[data-status="recovering"] .glyph {
+  animation: turn 1.6s linear infinite;
+}
+
+/* A status change (e.g. to DONE) lights the chip once. */
+.status[data-changed] {
+  animation: changed var(--dur-status) var(--ease-out) 1;
+}
+
+@keyframes breathe {
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@keyframes ring {
+  from {
+    opacity: 0.5;
+    transform: scale(1);
+  }
+  70%,
+  to {
+    opacity: 0;
+    transform: scale(2.6);
+  }
+}
+
+@keyframes turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes changed {
+  from {
+    box-shadow: 0 0 0 3px var(--_line);
+  }
+  to {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+/* :root raises specificity above the tone rules without !important; these rules come last. */
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion="full"]) .status,
+  :root:not([data-motion="full"]) .status .glyph,
+  :root:not([data-motion="full"]) .status .dot,
+  :root:not([data-motion="full"]) .status .dot::after {
+    animation: none;
+  }
+}
+
+:global([data-motion="reduced"]) .status,
+:global([data-motion="reduced"]) .status .glyph,
+:global([data-motion="reduced"]) .status .dot,
+:global([data-motion="reduced"]) .status .dot::after {
+  animation: none;
+}

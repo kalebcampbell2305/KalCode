@@ -1,43 +1,56 @@
-import type {
-  PermissionMode,
-  ProviderOption,
-  ProviderStatus,
-  ThreadMessage,
-  ThreadStatus,
-  ThreadSummary,
-  ToolCallRecord,
-  ToolCallStatus,
+import {
+  DISPLAY_STATUS_TONE,
+  type DisplayStatus,
+  type StatusTone as DisplayTone,
+  displayStatusOf,
+  type PermissionMode,
+  type ProviderOption,
+  type ProviderStatus,
+  type ThreadMessage,
+  type ThreadStatus,
+  type ThreadSummary,
+  type ToolCallRecord,
+  type ToolCallStatus,
 } from "@kalcode/protocol";
-import type { StatusTone } from "@kalcode/ui/components";
 
 export interface StatusPresentation {
   label: string;
-  tone: StatusTone;
+  /** Contract tone (working green, waiting neutral, paused amber, failed red, ...). */
+  tone: DisplayTone;
+  /** The normalized display status (drives the status glyph). */
+  display: DisplayStatus;
   /** The provider is actively working (animated indicator). */
   working: boolean;
 }
 
 /** Sentence-case labels for the structured thread states. Never derived from model prose. */
-const STATUS: Record<ThreadStatus, StatusPresentation> = {
-  starting: { label: "Starting", tone: "live", working: true },
-  active: { label: "Working", tone: "live", working: true },
-  thinking: { label: "Thinking", tone: "live", working: true },
-  running_tool: { label: "Running a tool", tone: "live", working: true },
-  running_command: { label: "Running a command", tone: "live", working: true },
-  editing: { label: "Editing", tone: "live", working: true },
-  testing: { label: "Testing", tone: "live", working: true },
-  reviewing: { label: "Reviewing", tone: "live", working: true },
-  recovering: { label: "Recovering", tone: "live", working: true },
-  idle: { label: "Ready", tone: "success", working: false },
-  waiting_for_permission: { label: "Needs approval", tone: "waiting", working: false },
-  waiting_for_user: { label: "Needs your input", tone: "waiting", working: false },
-  waiting_for_dependency: { label: "Waiting on another task", tone: "waiting", working: false },
-  paused: { label: "Paused", tone: "idle", working: false },
-  completed: { label: "Completed", tone: "success", working: false },
-  failed: { label: "Failed", tone: "danger", working: false },
-  interrupted: { label: "Stopped", tone: "idle", working: false },
-  offline: { label: "Offline", tone: "danger", working: false },
+const LABELS: Record<ThreadStatus, { label: string; working: boolean }> = {
+  starting: { label: "Starting", working: true },
+  active: { label: "Working", working: true },
+  thinking: { label: "Thinking", working: true },
+  running_tool: { label: "Running a tool", working: true },
+  running_command: { label: "Running a command", working: true },
+  editing: { label: "Editing", working: true },
+  testing: { label: "Testing", working: true },
+  reviewing: { label: "Reviewing", working: true },
+  recovering: { label: "Recovering", working: true },
+  idle: { label: "Ready", working: false },
+  waiting_for_permission: { label: "Needs approval", working: false },
+  waiting_for_user: { label: "Needs your input", working: false },
+  waiting_for_dependency: { label: "Waiting on another task", working: false },
+  paused: { label: "Paused", working: false },
+  completed: { label: "Completed", working: false },
+  failed: { label: "Failed", working: false },
+  interrupted: { label: "Stopped", working: false },
+  offline: { label: "Offline", working: false },
 };
+
+const STATUS = Object.fromEntries(
+  (Object.keys(LABELS) as ThreadStatus[]).map((status) => {
+    const display = displayStatusOf(status).status;
+    return [status, { ...LABELS[status], display, tone: DISPLAY_STATUS_TONE[display] }];
+  }),
+) as Record<ThreadStatus, StatusPresentation>;
 
 export function presentStatus(status: ThreadStatus): StatusPresentation {
   return STATUS[status];
@@ -118,12 +131,12 @@ export function buildTimeline(messages: readonly ThreadMessage[], tools: readonl
   return items.sort((a, b) => a.at.localeCompare(b.at) || (order.get(a.key) ?? 0) - (order.get(b.key) ?? 0));
 }
 
-export const TOOL_STATUS: Record<ToolCallStatus, { label: string; tone: StatusTone }> = {
+export const TOOL_STATUS: Record<ToolCallStatus, { label: string; tone: DisplayTone }> = {
   requested: { label: "Requested", tone: "waiting" },
-  running: { label: "Running", tone: "live" },
-  completed: { label: "Done", tone: "success" },
-  failed: { label: "Failed", tone: "danger" },
-  cancelled: { label: "Cancelled", tone: "idle" },
+  running: { label: "Running", tone: "working" },
+  completed: { label: "Done", tone: "done" },
+  failed: { label: "Failed", tone: "failed" },
+  cancelled: { label: "Cancelled", tone: "muted" },
 };
 
 /** Case-insensitive match on the fields people search threads by. */

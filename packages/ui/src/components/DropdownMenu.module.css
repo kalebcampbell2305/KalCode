@@ -5,22 +5,23 @@
   max-height: min(28rem, var(--radix-dropdown-menu-content-available-height));
   padding: var(--space-1);
   overflow-y: auto;
+  border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
-  background: var(--color-surface-overlay);
-  box-shadow: var(--shadow-md);
+  background: var(--panel-sheen), var(--color-surface-3);
+  box-shadow: var(--shadow-xl);
   transform-origin: var(--radix-dropdown-menu-content-transform-origin);
-  animation: appear var(--dur-fast) var(--ease-out);
+  animation: appear var(--dur-fast) var(--ease-emphasized);
 }
 
 .item {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  min-height: 2.125rem;
+  min-height: 2rem;
   padding: var(--space-1-5) var(--space-2);
   border-radius: var(--radius-sm);
   color: var(--color-text-secondary);
-  font-size: var(--text-sm);
+  font-size: var(--type-ui);
   line-height: var(--leading-snug);
   cursor: pointer;
   outline: none;
@@ -29,6 +30,7 @@
 
 .item[data-highlighted] {
   background: var(--color-surface-selected);
+  box-shadow: inset 0 0 0 1px var(--color-border-lit-soft);
   color: var(--color-text);
 }
 
@@ -82,7 +84,7 @@
 .description {
   overflow: hidden;
   color: var(--color-text-muted);
-  font-size: var(--text-xs);
+  font-size: var(--type-small);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -98,7 +100,11 @@
 .menuLabel {
   padding: var(--space-2) var(--space-2) var(--space-1);
   color: var(--color-text-faint);
-  font-size: var(--text-xs);
+  font-family: var(--font-label);
+  font-size: var(--type-label);
+  font-weight: var(--type-label-weight);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
 }
 
 .separator {

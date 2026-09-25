@@ -1,3 +1,4 @@
+import { CircleAlert } from "lucide-react";
 import type { HTMLAttributes, ReactNode } from "react";
 import { cx } from "./cx.ts";
 import styles from "./States.module.css";
@@ -9,25 +10,46 @@ export interface EmptyStateProps {
   headingLevel?: HeadingLevel;
   /** Decorative illustration or icon. */
   art?: ReactNode;
+  /** tile: the art sits on a lit tile (for icons, the default). free: illustration as-is. */
+  artStyle?: "tile" | "free";
   title: string;
   children?: ReactNode;
   actions?: ReactNode;
+  /**
+   * Frame the state as a designed well: a sunken surface with a faint constellation field.
+   * Default true; pass false when the state already sits inside a Panel.
+   */
+  framed?: boolean;
+  /** Centre the content (large wells) instead of aligning to the start. */
+  align?: "start" | "center";
   className?: string;
 }
 
-/** Guides the user when a surface has nothing to show yet. */
-export function EmptyState({ art, title, children, actions, className, headingLevel = 3 }: EmptyStateProps) {
+/** Guides the user when a surface has nothing to show yet: what this place is for, and the next step. */
+export function EmptyState({
+  art,
+  artStyle = "tile",
+  title,
+  children,
+  actions,
+  className,
+  headingLevel = 3,
+  framed = true,
+  align = "start",
+}: EmptyStateProps) {
   const Heading = `h${headingLevel}` as const;
   return (
-    <div className={cx(styles.empty, className)}>
+    <div className={cx(styles.empty, framed && styles.framed, className)} data-align={align}>
       {art ? (
-        <div className={styles.art} aria-hidden="true">
+        <div className={cx(styles.art, artStyle === "tile" && styles.tile)} aria-hidden="true">
           {art}
         </div>
       ) : null}
-      <Heading className={styles.title}>{title}</Heading>
-      {children ? <div className={styles.body}>{children}</div> : null}
-      {actions ? <div className={styles.actions}>{actions}</div> : null}
+      <div className={styles.copy}>
+        <Heading className={styles.title}>{title}</Heading>
+        {children ? <div className={styles.body}>{children}</div> : null}
+        {actions ? <div className={styles.actions}>{actions}</div> : null}
+      </div>
     </div>
   );
 }
@@ -41,17 +63,30 @@ export interface ErrorStateProps {
   actions?: ReactNode;
   /** Stable error code, shown small for support. */
   code?: string;
+  /** Frame with the failed hairline (default true). */
+  framed?: boolean;
   className?: string;
 }
 
-export function ErrorState({ title, children, actions, code, className, headingLevel = 3 }: ErrorStateProps) {
+export function ErrorState({
+  title,
+  children,
+  actions,
+  code,
+  className,
+  headingLevel = 3,
+  framed = true,
+}: ErrorStateProps) {
   const Heading = `h${headingLevel}` as const;
   return (
-    <div className={cx(styles.error, className)} role="alert">
-      <Heading className={styles.title}>{title}</Heading>
-      {children ? <div className={styles.body}>{children}</div> : null}
-      {actions ? <div className={styles.actions}>{actions}</div> : null}
-      {code ? <p className={styles.code}>Error code: {code}</p> : null}
+    <div className={cx(styles.error, framed && styles.errorFramed, className)} role="alert">
+      <CircleAlert className={styles.errorIcon} aria-hidden="true" />
+      <div className={styles.copy}>
+        <Heading className={styles.title}>{title}</Heading>
+        {children ? <div className={styles.body}>{children}</div> : null}
+        {actions ? <div className={styles.actions}>{actions}</div> : null}
+        {code ? <p className={styles.code}>Error code: {code}</p> : null}
+      </div>
     </div>
   );
 }

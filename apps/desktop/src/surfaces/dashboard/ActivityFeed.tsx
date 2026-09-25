@@ -1,5 +1,5 @@
 import type { EventEnvelope } from "@kalcode/protocol";
-import { Button, ErrorState, Section, Skeleton } from "@kalcode/ui/components";
+import { Button, ErrorState, Panel, Skeleton } from "@kalcode/ui/components";
 import { useState } from "react";
 import { describeEvent, formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
 import { useEvents } from "../../runtime/RuntimeProvider.tsx";
@@ -39,7 +39,7 @@ export function ActivityFeed({ threadNames }: ActivityFeedProps = {}) {
   };
 
   return (
-    <Section id="activity" title="Activity" description="Recorded by KalCode's event log. Updates live.">
+    <Panel id="activity" title="Activity" description="Recorded by KalCode's event log. Updates live.">
       {state === "loading" ? (
         <div className={styles.list} role="status" aria-busy="true">
           <span className="visually-hidden">Loading activity</span>
@@ -90,6 +90,6 @@ export function ActivityFeed({ threadNames }: ActivityFeedProps = {}) {
           ) : null}
         </>
       )}
-    </Section>
+    </Panel>
   );
 }

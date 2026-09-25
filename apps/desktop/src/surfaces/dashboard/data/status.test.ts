@@ -39,11 +39,16 @@ describe("status groups", () => {
     }
   });
 
-  it("uses distinct tones for needing the user and for working", () => {
+  it("uses the contract tones: neutral waiting, green working, amber only for paused", () => {
     expect(STATUS_META.waiting_for_permission.tone).toBe("waiting");
     expect(STATUS_META.waiting_for_user.tone).toBe("waiting");
-    expect(STATUS_META.running_command.tone).toBe("live");
-    expect(STATUS_META.failed.tone).toBe("danger");
+    expect(STATUS_META.running_command.tone).toBe("working");
+    expect(STATUS_META.recovering.tone).toBe("recovering");
+    expect(STATUS_META.completed.tone).toBe("done");
+    expect(STATUS_META.failed.tone).toBe("failed");
+    expect(STATUS_META.interrupted.tone).toBe("muted");
+    const amber = ALL_STATUSES.filter((status) => STATUS_META[status].tone === "paused");
+    expect(amber).toEqual(["paused"]);
   });
 });
 

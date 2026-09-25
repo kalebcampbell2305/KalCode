@@ -6,9 +6,12 @@ import {
   DropdownMenuTrigger,
   EmptyState,
   ErrorState,
+  Kbd,
+  ProviderGlyph,
   Skeleton,
+  StatusChip,
 } from "@kalcode/ui/components";
-import { ChevronDown, FolderOpen, RotateCcw, X } from "lucide-react";
+import { ChevronDown, FolderOpen, PowerOff, RotateCcw, SquareTerminal, X } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { cycleTerminal, defaultShell, describeTerminalStatus, tabLabels } from "../../runtime/workspaceState.ts";
@@ -16,7 +19,7 @@ import { useResolvedTheme } from "../../shell/useResolvedTheme.ts";
 import styles from "./Code.module.css";
 import { CodeEmpty } from "./CodeEmpty.tsx";
 import { ProviderPanesSection } from "./panes/ProviderPanesSection.tsx";
-import { codeShortcut } from "./shortcuts.ts";
+import { CODE_SHORTCUT_LABELS, codeShortcut } from "./shortcuts.ts";
 import { panelId, TerminalTabs, tabId } from "./TerminalTabs.tsx";
 import { TerminalView } from "./TerminalView.tsx";
 import { WorkspaceMenuContent } from "./WorkspaceMenu.tsx";
@@ -101,6 +104,7 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
 
   const shell = defaultShell(shells);
   const activeTerminal = terminals.find((t) => t.id === activeTerminalId) ?? null;
+  const activeLabel = activeTerminal ? (labels.get(activeTerminal.id) ?? activeTerminal.title) : null;
 
   return (
     <div className={styles.code}>
@@ -171,6 +175,8 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
           <div className={styles.panelMessage}>
             <EmptyState
               headingLevel={2}
+              framed={false}
+              art={<SquareTerminal />}
               title="No terminals open"
               actions={
                 <Button variant="primary" onClick={() => void create(null)} disabled={!shell}>
@@ -201,6 +207,58 @@ function WorkspaceView({ workspace }: { workspace: Workspace }) {
             ))
           : null}
       </div>
+
+      {workspace.available && terminals.length > 0 ? (
+        <TerminalStatusBar terminals={terminals} active={activeTerminal} label={activeLabel} />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * The foot of the terminal window: the active terminal and its state, how many are running,
+ * and the keys that drive the tab strip. Decorative duplicate of the tab state, so it is not a
+ * live region (each panel announces its own status).
+ */
+function TerminalStatusBar({
+  terminals,
+  active,
+  label,
+}: {
+  terminals: readonly TerminalInfo[];
+  active: TerminalInfo | null;
+  label: string | null;
+}) {
+  const running = terminals.filter((t) => t.status === "running").length;
+  const failed = active?.status === "exited" && active.exitCode !== null && active.exitCode !== 0;
+  return (
+    <div className={styles.statusBar}>
+      {active ? (
+        <span className={styles.statusItem}>
+          <ProviderGlyph provider="shell" size="xs" />
+          <span className={styles.statusStrong}>{label}</span>
+          <StatusChip
+            variant="dot"
+            size="sm"
+            tone={active.status === "running" ? "working" : failed ? "failed" : "muted"}
+            label={active.status === "running" ? "Running" : "Ended"}
+          />
+        </span>
+      ) : null}
+      <span className={styles.statusItem}>
+        {running} of {terminals.length} running
+      </span>
+      <span className={styles.statusKeys} aria-hidden="true">
+        <span>
+          <Kbd>{CODE_SHORTCUT_LABELS["next-tab"]}</Kbd> next
+        </span>
+        <span>
+          <Kbd>{CODE_SHORTCUT_LABELS["new-terminal"]}</Kbd> new
+        </span>
+        <span>
+          <Kbd>{CODE_SHORTCUT_LABELS["leave-terminal"]}</Kbd> leave terminal
+        </span>
+      </span>
     </div>
   );
 }
@@ -240,6 +298,8 @@ function TerminalPanel({
         <div className={styles.panelMessage}>
           <EmptyState
             headingLevel={2}
+            framed={false}
+            art={<PowerOff />}
             title="This terminal ended when KalCode closed"
             actions={
               <>

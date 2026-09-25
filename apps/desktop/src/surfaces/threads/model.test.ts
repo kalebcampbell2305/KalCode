@@ -61,9 +61,15 @@ describe("presentStatus", () => {
     expect(presentStatus("waiting_for_permission")).toEqual({
       label: "Needs approval",
       tone: "waiting",
+      display: "permission_required",
       working: false,
     });
-    expect(presentStatus("failed").tone).toBe("danger");
+    expect(presentStatus("failed").tone).toBe("failed");
+    // Owner palette: working green, waiting neutral, paused amber (the only amber), done neutral.
+    expect(presentStatus("running_tool").tone).toBe("working");
+    expect(presentStatus("paused").tone).toBe("paused");
+    expect(presentStatus("completed").tone).toBe("done");
+    expect(presentStatus("recovering").tone).toBe("recovering");
     expect(presentStatus("running_tool").working).toBe(true);
   });
 });

@@ -1,4 +1,5 @@
-import { Badge, Button, ErrorState, Skeleton, StatusIndicator, TextInput } from "@kalcode/ui/components";
+import { Badge, Button, ErrorState, ProviderGlyph, Skeleton, StatusChip, TextInput } from "@kalcode/ui/components";
+import { Search } from "lucide-react";
 import { type KeyboardEvent, type RefObject, useEffect, useState } from "react";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
 import { matchesQuery, presentStatus } from "./model.ts";
@@ -59,15 +60,26 @@ export function ThreadList({
   return (
     <section className={styles.pane} aria-label="Thread list">
       <div className={styles.toolbar}>
-        <TextInput
-          ref={searchRef}
-          type="search"
-          value={query}
-          onChange={(event) => onQueryChange(event.target.value)}
-          placeholder="Search threads"
-          aria-label="Search threads"
-          className={styles.search}
-        />
+        <div className={styles.toolbarHead}>
+          <p className={styles.eyebrow}>{showArchived ? "Recent · with archived" : "Recent"}</p>
+          {list.state === "ready" ? (
+            <span className={styles.total}>
+              {query.trim() ? `${shown.length} of ${list.entries.length}` : list.entries.length}
+            </span>
+          ) : null}
+        </div>
+        <span className={styles.searchWrap}>
+          <Search className={styles.searchIcon} aria-hidden="true" />
+          <TextInput
+            ref={searchRef}
+            type="search"
+            value={query}
+            onChange={(event) => onQueryChange(event.target.value)}
+            placeholder="Search threads"
+            aria-label="Search threads"
+            className={styles.search}
+          />
+        </span>
         <label className={styles.toggle}>
           <input
             type="checkbox"
@@ -116,27 +128,41 @@ export function ThreadList({
                   aria-current={selected ? "true" : undefined}
                   onClick={() => onSelect(thread.id)}
                 >
-                  <span className={styles.name}>
-                    {thread.unreadMessages > 0 ? (
-                      <span className={styles.unread}>
-                        <span className="visually-hidden">
-                          {thread.unreadMessages === 1
-                            ? "1 unread message, "
-                            : `${thread.unreadMessages} unread messages, `}
+                  <span className={styles.nameRow}>
+                    <span className={styles.name}>
+                      {thread.unreadMessages > 0 ? (
+                        <span className={styles.unread}>
+                          <span className="visually-hidden">
+                            {thread.unreadMessages === 1
+                              ? "1 unread message, "
+                              : `${thread.unreadMessages} unread messages, `}
+                          </span>
                         </span>
-                      </span>
-                    ) : null}
-                    {thread.name}
+                      ) : null}
+                      <span className={styles.nameText}>{thread.name}</span>
+                    </span>
+                    <time
+                      className={styles.time}
+                      dateTime={thread.lastActivityAt}
+                      title={formatAbsolute(thread.lastActivityAt)}
+                    >
+                      {formatRelative(thread.lastActivityAt, now)}
+                    </time>
                   </span>
                   <span className={styles.status}>
-                    <StatusIndicator tone={status.tone} pulse={status.working}>
-                      {status.label}
-                    </StatusIndicator>
+                    <StatusChip
+                      variant="inline"
+                      size="sm"
+                      status={status.display}
+                      tone={status.tone}
+                      label={status.label}
+                    />
                     {thread.currentActivity && thread.status !== "waiting_for_permission" ? (
                       <span className={styles.activity}>{thread.currentActivity}</span>
                     ) : null}
                   </span>
                   <span className={styles.meta}>
+                    <ProviderGlyph provider={thread.providerId} size="xs" />
                     <span className={styles.metaText}>
                       {thread.providerName} · {thread.workspaceName}
                     </span>
@@ -146,13 +172,6 @@ export function ThreadList({
                       </Badge>
                     ) : null}
                     {archived ? <Badge tone="outline">Archived</Badge> : null}
-                    <time
-                      className={styles.time}
-                      dateTime={thread.lastActivityAt}
-                      title={formatAbsolute(thread.lastActivityAt)}
-                    >
-                      {formatRelative(thread.lastActivityAt, now)}
-                    </time>
                   </span>
                 </button>
               </li>

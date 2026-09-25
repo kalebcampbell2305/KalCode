@@ -1,6 +1,6 @@
 import type { Density, MotionPreference, ThemePreference } from "@kalcode/protocol";
-import { Button, ErrorState, KeyValueList, Section, SegmentedControl, Skeleton } from "@kalcode/ui/components";
-import { ClipboardCopy, FolderOpen, KeyRound, Monitor, Moon, Sun } from "lucide-react";
+import { Button, ErrorState, KeyValueList, Panel, SegmentedControl, Skeleton } from "@kalcode/ui/components";
+import { Activity, ClipboardCopy, FolderOpen, Info, KeyRound, Monitor, Moon, Palette, Sun } from "lucide-react";
 import type { ReactNode } from "react";
 import kalcodeGlobe362 from "../../assets/brand/kalcode-globe-362.webp";
 import kalcodeGlobe724 from "../../assets/brand/kalcode-globe-724.webp";
@@ -58,7 +58,7 @@ function SettingRow({ id, label, help, control }: { id: string; label: string; h
 function Appearance() {
   const { settings, updateSettings } = useRuntime();
   return (
-    <Section id="appearance" title="Appearance">
+    <Panel id="appearance" title="Appearance" icon={<Palette />} padding="none">
       <div className={styles.rows}>
         <SettingRow
           id="theme"
@@ -111,7 +111,7 @@ function Appearance() {
           }
         />
       </div>
-    </Section>
+    </Panel>
   );
 }
 
@@ -120,10 +120,26 @@ function DiagnosticsSection() {
   const { copyReport, openLogs, checkSecureStore, checking } = useDiagnosticsActions();
 
   return (
-    <Section
+    <Panel
       id="diagnostics"
       title="Diagnostics"
+      icon={<Activity />}
       description="Health information for support. Reports never include project files, prompts or credentials."
+      padding="none"
+      bodyClassName={styles.panelBody}
+      footer={
+        <div className={styles.actions}>
+          <Button icon={<ClipboardCopy />} onClick={() => void copyReport()}>
+            Copy diagnostic report
+          </Button>
+          <Button icon={<FolderOpen />} onClick={() => void openLogs()}>
+            Open logs folder
+          </Button>
+          <Button icon={<KeyRound />} onClick={() => void checkSecureStore()} busy={checking}>
+            Check credential store
+          </Button>
+        </div>
+      }
     >
       {error && !data ? (
         <ErrorState title="Diagnostics unavailable" actions={<Button onClick={refresh}>Try again</Button>}>
@@ -138,6 +154,7 @@ function DiagnosticsSection() {
         </div>
       ) : (
         <KeyValueList
+          className={styles.kv}
           items={[
             { key: "version", label: "Version", value: `${data.app.version} (${data.app.channel})` },
             {
@@ -166,25 +183,14 @@ function DiagnosticsSection() {
           ]}
         />
       )}
-      <div className={styles.actions}>
-        <Button icon={<ClipboardCopy />} onClick={() => void copyReport()}>
-          Copy diagnostic report
-        </Button>
-        <Button icon={<FolderOpen />} onClick={() => void openLogs()}>
-          Open logs folder
-        </Button>
-        <Button icon={<KeyRound />} onClick={() => void checkSecureStore()} busy={checking}>
-          Check credential store
-        </Button>
-      </div>
-    </Section>
+    </Panel>
   );
 }
 
 function About() {
   const { info } = useRuntime();
   return (
-    <Section id="about" title="About KalCode">
+    <Panel id="about" title="About KalCode" icon={<Info />} padding="none">
       <figure className={styles.about}>
         <img
           src={kalcodeGlobe362}
@@ -205,6 +211,6 @@ function About() {
           </p>
         </figcaption>
       </figure>
-    </Section>
+    </Panel>
   );
 }

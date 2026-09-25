@@ -1,63 +1,115 @@
+/* A thread status as glyph + words, in the contract tones (--status-*). Mirrors the ui StatusChip
+   "inline" variant, but keeps a glyph per runtime ThreadStatus (thinking, editing, …). */
 .label {
-  --_c: var(--color-idle);
-  --_soft: var(--color-idle-soft);
+  --_c: var(--status-muted);
+  --_soft: var(--status-muted-soft);
+  --_text: var(--status-muted-text);
+  --_line: var(--status-muted-line);
   display: inline-flex;
-  align-items: flex-start;
+  align-items: center;
   gap: var(--space-1-5);
   max-width: 100%;
   min-width: 0;
-  padding: var(--space-0-5) var(--space-1-5) var(--space-0-5) var(--space-1);
-  margin-left: calc(-1 * var(--space-1));
-  border-radius: var(--radius-xs);
-  color: var(--color-text-secondary);
-  font-size: var(--text-sm);
-  line-height: var(--leading-snug);
+  height: 1.375rem;
+  padding: 0 var(--space-2) 0 var(--space-1-5);
+  border: 1px solid var(--_line);
+  border-radius: var(--radius-full);
+  background: var(--_soft);
+  color: var(--_text);
+  font-size: var(--type-small);
+  font-weight: var(--weight-medium);
+  line-height: 1;
+  white-space: nowrap;
 }
 
-.label[data-tone="live"] {
-  --_c: var(--color-live);
-  --_soft: var(--color-live-soft);
+.label[data-tone="working"] {
+  --_c: var(--status-working);
+  --_soft: var(--status-working-soft);
+  --_text: var(--status-working-text);
+  --_line: var(--status-working-line);
 }
 
 .label[data-tone="waiting"] {
-  --_c: var(--color-waiting);
-  --_soft: var(--color-waiting-soft);
-  color: var(--color-text);
+  --_c: var(--status-waiting);
+  --_soft: var(--status-waiting-soft);
+  --_text: var(--status-waiting-text);
+  --_line: var(--status-waiting-line);
 }
 
-.label[data-tone="success"] {
-  --_c: var(--color-success);
-  --_soft: var(--color-success-soft);
+.label[data-tone="done"] {
+  --_c: var(--status-done);
+  --_soft: var(--status-done-soft);
+  --_text: var(--status-done-text);
+  --_line: var(--status-done-line);
 }
 
-.label[data-tone="danger"] {
-  --_c: var(--color-danger);
-  --_soft: var(--color-danger-soft);
-  color: var(--color-text);
+.label[data-tone="failed"] {
+  --_c: var(--status-failed);
+  --_soft: var(--status-failed-soft);
+  --_text: var(--status-failed-text);
+  --_line: var(--status-failed-line);
+}
+
+.label[data-tone="paused"] {
+  --_c: var(--status-paused);
+  --_soft: var(--status-paused-soft);
+  --_text: var(--status-paused-text);
+  --_line: var(--status-paused-line);
+}
+
+.label[data-tone="recovering"] {
+  --_c: var(--status-recovering);
+  --_soft: var(--status-recovering-soft);
+  --_text: var(--status-recovering-text);
+  --_line: var(--status-recovering-line);
 }
 
 .icon {
   flex: none;
-  margin-top: 0.125rem;
-  width: 0.9375rem;
-  height: 0.9375rem;
+  width: 0.8125rem;
+  height: 0.8125rem;
   color: var(--_c);
 }
 
 .text {
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
+/* Working breathes softly; calm for everything else. */
+.label[data-tone="working"] .icon {
+  animation: breathe var(--dur-pulse) var(--ease-in-out) infinite;
+}
+
+/* A status change lights the chip once. */
 .label[data-changed] {
-  animation: changed var(--dur-deliberate) var(--ease-out) 2;
-  animation-direction: alternate;
+  animation: changed var(--dur-status) var(--ease-out) 1;
+}
+
+@keyframes breathe {
+  50% {
+    opacity: 0.5;
+  }
 }
 
 @keyframes changed {
   from {
-    background: transparent;
+    box-shadow: 0 0 0 3px var(--_line);
   }
   to {
-    background: var(--_soft);
+    box-shadow: 0 0 0 0 transparent;
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion="full"]) .label,
+  :root:not([data-motion="full"]) .label .icon {
+    animation: none;
+  }
+}
+
+:global([data-motion="reduced"]) .label,
+:global([data-motion="reduced"]) .label .icon {
+  animation: none;
 }

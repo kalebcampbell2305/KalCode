@@ -1,6 +1,16 @@
-import type { ThreadStatus, ThreadSummary } from "@kalcode/protocol";
+import {
+  DISPLAY_STATUS_TONE,
+  displayStatusOf,
+  type StatusTone,
+  type ThreadStatus,
+  type ThreadSummary,
+} from "@kalcode/protocol";
 
-export type StatusTone = "live" | "success" | "waiting" | "danger" | "idle";
+/**
+ * The contract tone (ADVANCED.md §16.3): working green, waiting / permission NEUTRAL, muted,
+ * done high-contrast neutral, failed red, paused amber (the only amber), recovering blue.
+ */
+export type { StatusTone };
 
 /**
  * Where a thread belongs on the Dashboard:
@@ -15,30 +25,37 @@ export type StatusGroup = "attention" | "working" | "waiting" | "idle" | "finish
 export interface StatusMeta {
   /** Sentence-case label shown next to the status glyph. */
   label: string;
+  /** Always the contract tone of the status's display status (never chosen per surface). */
   tone: StatusTone;
   group: StatusGroup;
 }
 
+const toneOf = (status: ThreadStatus): StatusTone => DISPLAY_STATUS_TONE[displayStatusOf(status).status];
+
+function meta(status: ThreadStatus, label: string, group: StatusGroup): StatusMeta {
+  return { label, tone: toneOf(status), group };
+}
+
 /** Every contract status, exhaustively (a new status fails to compile until it is described). */
 export const STATUS_META: Record<ThreadStatus, StatusMeta> = {
-  starting: { label: "Starting", tone: "live", group: "working" },
-  active: { label: "Working", tone: "live", group: "working" },
-  thinking: { label: "Thinking", tone: "live", group: "working" },
-  running_tool: { label: "Using a tool", tone: "live", group: "working" },
-  running_command: { label: "Running command", tone: "live", group: "working" },
-  editing: { label: "Editing files", tone: "live", group: "working" },
-  testing: { label: "Testing", tone: "live", group: "working" },
-  reviewing: { label: "Reviewing", tone: "live", group: "working" },
-  recovering: { label: "Recovering", tone: "waiting", group: "working" },
-  waiting_for_permission: { label: "Needs approval", tone: "waiting", group: "attention" },
-  waiting_for_user: { label: "Needs your reply", tone: "waiting", group: "attention" },
-  waiting_for_dependency: { label: "Blocked", tone: "idle", group: "waiting" },
-  idle: { label: "Idle", tone: "idle", group: "idle" },
-  paused: { label: "Paused", tone: "idle", group: "idle" },
-  offline: { label: "Offline", tone: "danger", group: "idle" },
-  completed: { label: "Completed", tone: "success", group: "finished" },
-  failed: { label: "Failed", tone: "danger", group: "finished" },
-  interrupted: { label: "Stopped", tone: "idle", group: "finished" },
+  starting: meta("starting", "Starting", "working"),
+  active: meta("active", "Working", "working"),
+  thinking: meta("thinking", "Thinking", "working"),
+  running_tool: meta("running_tool", "Using a tool", "working"),
+  running_command: meta("running_command", "Running command", "working"),
+  editing: meta("editing", "Editing files", "working"),
+  testing: meta("testing", "Testing", "working"),
+  reviewing: meta("reviewing", "Reviewing", "working"),
+  recovering: meta("recovering", "Recovering", "working"),
+  waiting_for_permission: meta("waiting_for_permission", "Needs approval", "attention"),
+  waiting_for_user: meta("waiting_for_user", "Needs your reply", "attention"),
+  waiting_for_dependency: meta("waiting_for_dependency", "Blocked", "waiting"),
+  idle: meta("idle", "Idle", "idle"),
+  paused: meta("paused", "Paused", "idle"),
+  offline: meta("offline", "Offline", "idle"),
+  completed: meta("completed", "Completed", "finished"),
+  failed: meta("failed", "Failed", "finished"),
+  interrupted: meta("interrupted", "Stopped", "finished"),
 };
 
 /** Mirrors `ThreadStatus::is_live` in crates/contracts/src/threads.rs. */

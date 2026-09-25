@@ -4,14 +4,27 @@ import {
   Button,
   ErrorState,
   IconButton,
+  ProviderGlyph,
   Skeleton,
+  StatusChip,
   StatusIndicator,
   TextArea,
   TextInput,
   Tooltip,
   useToast,
 } from "@kalcode/ui/components";
-import { Archive, CirclePause, Pencil, Play, Square, Wrench } from "lucide-react";
+import {
+  Archive,
+  CirclePause,
+  CircleX,
+  Info,
+  Pencil,
+  Play,
+  ShieldAlert,
+  Square,
+  UserRound,
+  Wrench,
+} from "lucide-react";
 import { type FormEvent, type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { toKalCodeError } from "../../ipc/errors.ts";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
@@ -157,9 +170,7 @@ export function ThreadDetail({ threadId, archived, onArchived }: ThreadDetailPro
           </div>
         </div>
         <p className={styles.status} aria-live="polite">
-          <StatusIndicator tone={status.tone} pulse={status.working}>
-            {status.label}
-          </StatusIndicator>
+          <StatusChip status={status.display} tone={status.tone} label={status.label} />
           {thread.currentActivity ? <span className={styles.activity}>{thread.currentActivity}</span> : null}
           {archived ? <Badge tone="outline">Archived</Badge> : null}
         </p>
@@ -167,6 +178,7 @@ export function ThreadDetail({ threadId, archived, onArchived }: ThreadDetailPro
           <div>
             <dt>Provider</dt>
             <dd>
+              <ProviderGlyph provider={thread.providerId} size="xs" />
               {thread.providerName}
               {thread.model ? ` · ${thread.model}` : ""}
               {thread.accountLabel ? ` · ${thread.accountLabel}` : ""}
@@ -197,6 +209,7 @@ export function ThreadDetail({ threadId, archived, onArchived }: ThreadDetailPro
 
       {thread.error ? (
         <div className={styles.notice} data-tone="danger" role="alert">
+          <CircleX className={styles.noticeIcon} aria-hidden="true" />
           <p className={styles.noticeTitle}>
             {thread.status === "failed" ? "This thread failed" : "The provider reported a problem"}
           </p>
@@ -206,6 +219,7 @@ export function ThreadDetail({ threadId, archived, onArchived }: ThreadDetailPro
       ) : null}
       {thread.status === "waiting_for_permission" ? (
         <div className={styles.notice} data-tone="waiting">
+          <ShieldAlert className={styles.noticeIcon} aria-hidden="true" />
           <p className={styles.noticeTitle}>
             {thread.pendingApprovals === 1
               ? "Waiting for 1 permission decision"
@@ -227,7 +241,7 @@ export function ThreadDetail({ threadId, archived, onArchived }: ThreadDetailPro
         </ol>
       ) : null}
 
-      <Timeline detail={detail} providerName={thread.providerName} />
+      <Timeline detail={detail} providerName={thread.providerName} providerId={thread.providerId} />
 
       <Composer
         thread={thread}
@@ -321,7 +335,29 @@ function ThreadTitle({
   );
 }
 
-function Timeline({ detail, providerName }: { detail: ReturnType<typeof useThreadDetail>; providerName: string }) {
+function AuthorMark({ author, providerId }: { author: string; providerId: string }) {
+  return (
+    <span className={styles.authorMark} aria-hidden="true">
+      {author === "user" ? (
+        <UserRound />
+      ) : author === "assistant" ? (
+        <ProviderGlyph provider={providerId} size="xs" />
+      ) : (
+        <Info />
+      )}
+    </span>
+  );
+}
+
+function Timeline({
+  detail,
+  providerName,
+  providerId,
+}: {
+  detail: ReturnType<typeof useThreadDetail>;
+  providerName: string;
+  providerId: string;
+}) {
   const items = buildTimeline(detail.messages, detail.tools);
   const streaming = detail.live.filter((m) => m.text.trim());
   const scroller = useRef<HTMLDivElement>(null);
@@ -352,6 +388,7 @@ function Timeline({ detail, providerName }: { detail: ReturnType<typeof useThrea
             item.kind === "message" ? (
               <li key={item.key} className={styles.message} data-role={item.message.role}>
                 <p className={styles.author}>
+                  <AuthorMark author={item.message.role} providerId={providerId} />
                   <span>
                     {item.message.role === "user"
                       ? "You"
@@ -382,9 +419,10 @@ function Timeline({ detail, providerName }: { detail: ReturnType<typeof useThrea
           {streaming.map((message: LiveMessage) => (
             <li key={message.messageId} className={styles.message} data-role="assistant" aria-busy={!message.done}>
               <p className={styles.author}>
+                <AuthorMark author="assistant" providerId={providerId} />
                 <span>{providerName}</span>
                 {message.done ? null : (
-                  <StatusIndicator tone="live" pulse>
+                  <StatusIndicator tone="working" pulse>
                     Writing
                   </StatusIndicator>
                 )}
@@ -441,23 +479,25 @@ function Composer({
       <label htmlFor="thread-composer" className="visually-hidden">
         Message
       </label>
-      <TextArea
-        id="thread-composer"
-        rows={3}
-        value={text}
-        disabled={blocked}
-        onChange={(event) => setText(event.target.value)}
-        onKeyDown={onKeyDown}
-        placeholder={blocked ? "" : `Message ${thread.providerName}`}
-        aria-describedby="thread-composer-hint"
-      />
-      <div className={styles.composerFooter}>
-        <p id="thread-composer-hint" className={styles.composerHint}>
-          {hint}
-        </p>
-        <Button type="submit" variant="primary" busy={busy} disabled={blocked || !text.trim()}>
-          {mode === "resume" ? "Resume and send" : "Send"}
-        </Button>
+      <div className={styles.well} data-disabled={blocked || undefined}>
+        <TextArea
+          id="thread-composer"
+          rows={3}
+          value={text}
+          disabled={blocked}
+          onChange={(event) => setText(event.target.value)}
+          onKeyDown={onKeyDown}
+          placeholder={blocked ? "" : `Message ${thread.providerName}`}
+          aria-describedby="thread-composer-hint"
+        />
+        <div className={styles.composerFooter}>
+          <p id="thread-composer-hint" className={styles.composerHint}>
+            {hint}
+          </p>
+          <Button type="submit" variant="primary" size="sm" busy={busy} disabled={blocked || !text.trim()}>
+            {mode === "resume" ? "Resume and send" : "Send"}
+          </Button>
+        </div>
       </div>
     </form>
   );

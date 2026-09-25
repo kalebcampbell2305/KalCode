@@ -1,9 +1,12 @@
 import type { PermissionMode, ProviderStatus, ThreadOptions, ThreadSummary } from "@kalcode/protocol";
 import {
+  Badge,
   Button,
   EmptyState,
   ErrorState,
   Field,
+  ProviderGlyph,
+  ProviderMark,
   SegmentedControl,
   Select,
   Skeleton,
@@ -11,6 +14,7 @@ import {
   TextInput,
   useToast,
 } from "@kalcode/ui/components";
+import { FolderGit2, PlugZap } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useId, useRef, useState } from "react";
 import { type KalCodeError, toKalCodeError } from "../../ipc/errors.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
@@ -51,6 +55,7 @@ export function NewThread({ onCreated, onCancel }: NewThreadProps) {
     <div className={styles.pane}>
       <div className={styles.inner}>
         <header className={styles.header}>
+          <p className={styles.eyebrow}>Launch</p>
           <h2 className={styles.title}>New thread</h2>
           <p className={styles.description}>Give a provider a task in one of your workspaces.</p>
         </header>
@@ -78,6 +83,7 @@ export function NewThread({ onCreated, onCancel }: NewThreadProps) {
           </div>
         ) : options.providers.length === 0 ? (
           <EmptyState
+            art={<PlugZap />}
             title="No provider is ready for threads"
             actions={
               <>
@@ -96,6 +102,7 @@ export function NewThread({ onCreated, onCancel }: NewThreadProps) {
           </EmptyState>
         ) : options.workspaces.length === 0 ? (
           <EmptyState
+            art={<FolderGit2 />}
             title="No workspaces yet"
             actions={
               <>
@@ -123,6 +130,7 @@ function ProviderAvailability({ providers }: { providers: readonly UnavailablePr
     <ul className={styles.unavailable} aria-label="Not available for threads">
       {providers.map((p) => (
         <li key={p.id}>
+          <ProviderGlyph provider={p.id} size="xs" tone="neutral" />
           <span className={styles.unavailableName}>{p.name}</span>
           <span className={styles.unavailableReason}>{p.reason}</span>
         </li>
@@ -152,6 +160,8 @@ function NewThreadForm({
 
   const provider = options.providers.find((p) => p.id === providerId);
   const modes = options.permissionModes;
+  const workspace = options.workspaces.find((w) => w.id === workspaceId);
+  const modelName = provider?.models.find((m) => m.id === model)?.displayName ?? "Provider default";
 
   useEffect(() => {
     taskRef.current?.focus();
@@ -205,6 +215,20 @@ function NewThreadForm({
       }}
       aria-describedby={error ? `${id}-error` : undefined}
     >
+      {provider ? (
+        // A visual summary of the choices below; the controls themselves carry the state.
+        <div className={styles.launch} aria-hidden="true">
+          <ProviderMark provider={provider.id} name={provider.displayName} tile size="md" detail={modelName} />
+          {workspace ? (
+            <span className={styles.launchWhere}>
+              in <strong>{workspace.name}</strong>
+            </span>
+          ) : null}
+          <Badge tone={mode === "bypass" ? "danger" : "accent"} className={styles.launchMode}>
+            {PERMISSION_MODES[mode].label} mode
+          </Badge>
+        </div>
+      ) : null}
       <div className={styles.providerGroup}>
         <div className={styles.pair}>
           <Field htmlFor={`${id}-provider`} label="Provider">

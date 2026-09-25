@@ -6,7 +6,8 @@ import {
   IconButton,
   type KeyValueItem,
   KeyValueList,
-  Section,
+  Panel,
+  ProviderMark,
   Skeleton,
   StatusIndicator,
   useToast,
@@ -70,13 +71,13 @@ export function ProvidersPage() {
           <p>{listError.message}</p>
         </ErrorState>
       ) : !statuses ? (
-        <div role="status" aria-busy="true" className={styles.loading}>
+        <Panel as="div" className={styles.loading} role="status" aria-busy="true">
           <span className="visually-hidden">Loading providers</span>
           <Skeleton width="30%" height="1rem" />
           <Skeleton width="65%" />
           <Skeleton width="55%" />
           <Skeleton width="60%" />
-        </div>
+        </Panel>
       ) : (
         <>
           {detectError ? (
@@ -192,18 +193,20 @@ function ProviderSection({ status, checking, now }: { status: ProviderStatus; ch
   ];
 
   return (
-    <Section
+    <Panel
       id={sectionId}
-      title={status.displayName}
+      className={styles.provider}
+      title={<ProviderMark provider={status.id} name={status.displayName} tile size="md" />}
       description={adapter.description}
       actions={<Badge tone={status.adapter === "implemented" ? "accent" : "outline"}>{adapter.badge}</Badge>}
+      padding="none"
     >
       <div className={styles.overview}>
         <KeyValueList items={setup} className={styles.kv} />
         <KeyValueList items={details} className={styles.kv} />
       </div>
       <MappingTable status={status} />
-    </Section>
+    </Panel>
   );
 }
 
@@ -289,18 +292,26 @@ function MappingTable({ status }: { status: ProviderStatus }) {
         <tbody>
           {mappings.map((mapping) => (
             <tr key={mapping.mode}>
-              <th scope="row">{modeLabel(mapping.mode)}</th>
+              <th scope="row">
+                <span className={styles.mode} data-mode={mapping.mode}>
+                  {modeLabel(mapping.mode)}
+                </span>
+              </th>
               <td>
                 <code data-selectable className={styles.setting}>
                   {settingGroups(mapping.providerSetting).map((group, index) => (
                     // biome-ignore lint/suspicious/noArrayIndexKey: groups are static text; a flag may repeat.
                     <span key={index} className={styles.flag}>
-                      {group}
+                      {withCommaBreaks(group)}
                     </span>
                   ))}
                 </code>
               </td>
-              <td>{fidelityLabel(mapping.fidelity)}</td>
+              <td>
+                <span className={styles.fidelity} data-fidelity={mapping.fidelity}>
+                  {fidelityLabel(mapping.fidelity)}
+                </span>
+              </td>
               <td className={styles.notes}>{mapping.notes}</td>
             </tr>
           ))}
@@ -308,4 +319,20 @@ function MappingTable({ status }: { status: ProviderStatus }) {
       </table>
     </div>
   );
+}
+
+/** Long comma lists ("Edit,Write,…") may wrap after a comma, never inside a name. */
+function withCommaBreaks(text: string) {
+  const parts = text.split(",");
+  return parts.map((part, index) => (
+    // biome-ignore lint/suspicious/noArrayIndexKey: static text fragments in a fixed order.
+    <span key={index}>
+      {part}
+      {index < parts.length - 1 ? (
+        <>
+          ,<wbr />
+        </>
+      ) : null}
+    </span>
+  ));
 }
