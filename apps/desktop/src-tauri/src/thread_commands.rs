@@ -9,43 +9,64 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use kalcode_contracts::agent::AgentEvent;
+use kalcode_contracts::agent::{AgentEvent, AgentProvider, ProviderId};
 use kalcode_contracts::permissions::{AskUnlessReadGate, PermissionMode};
-use kalcode_contracts::threads::{ThreadMessage, ThreadSummary};
+use kalcode_contracts::threads::{ThreadMessage, ThreadStatus, ThreadSummary};
 use kalcode_core::{Core, IpcError, KalError};
+use kalcode_providers::model::AdapterState;
+use kalcode_providers::{ClaudeCodeProvider, DetectEnv};
 use kalcode_threads::{
-    CreateThread, NoWorkspaces, ProviderRegistry, StreamId, ThreadOptions, ThreadRuntime,
-    ToolCallRecord, WorkspaceResolver,
+    CoreWorkspaces, CreateThread, ProviderRegistry, StreamId, ThreadOptions, ThreadRuntime,
+    ToolCallRecord,
 };
 use tauri::ipc::Channel;
 use tauri::{State, Webview};
 
+use crate::AppState;
+use crate::provider_commands::detect_and_record;
+
+/// Detection results (Z2) that decide which providers threads may use.
+type Detection = kalcode_providers::ProviderRegistry;
+
 /// Thread runtime state for the shell. `runtime` is `None` when the core failed to start.
 pub struct ThreadsState {
     runtime: Option<Arc<ThreadRuntime>>,
+    /// Adapters offered to threads: exactly the providers detection reports usable.
+    providers: Arc<ProviderRegistry>,
+    detection: Arc<Detection>,
     /// One live stream per webview; a new `thread_stream` call replaces the previous one.
     streams: Mutex<HashMap<String, StreamId>>,
+}
+
+/// The native adapter for a provider, when KalCode has one. Codex and Gemini CLI are detected
+/// but have no adapter yet, so they are never offered to threads.
+fn adapter(id: &ProviderId) -> Option<Arc<dyn AgentProvider>> {
+    match id.as_str() {
+        ProviderId::CLAUDE_CODE => {
+            Some(Arc::new(ClaudeCodeProvider::new(DetectEnv::from_process())))
+        }
+        _ => None,
+    }
 }
 
 impl ThreadsState {
     /// Starts the thread runtime over `core`.
     ///
-    /// Integration seams (see docs/AGENT_RUNTIME.md §Integration): providers come from Z2's
-    /// adapters, workspaces from Z1's resolver, decisions from Z4's permission engine. Until
-    /// those land there are no providers and no workspaces (so no thread can be created), and
-    /// the conservative development gate asks before anything but a read.
-    pub fn start(core: Option<&Arc<Core>>) -> Self {
-        // INTEGRATION (Z2): register provider adapters here, e.g.
-        // `providers.register(Arc::new(ClaudeCodeProvider::new(..)))`.
+    /// - Providers (Z2): adapters are registered from `detection` by [`Self::sync_providers`],
+    ///   so a thread can only use a provider that is installed at a supported version, not
+    ///   known to be signed out, and has a KalCode adapter (today: Claude Code).
+    /// - Workspaces (Z1): [`CoreWorkspaces`] over the workspaces table (canonical roots).
+    /// - Permissions (Z4, not merged): the conservative development gate asks before anything
+    ///   but a read, and nothing can answer yet. The Claude Code adapter additionally denies
+    ///   anything that would prompt (`--permission-prompts none`), so no action is ever
+    ///   approved without the user.
+    pub fn start(core: Option<&Arc<Core>>, detection: Arc<Detection>) -> Self {
         let providers = Arc::new(ProviderRegistry::new());
-        // INTEGRATION (Z1): replace with Z1's resolver over its workspace store.
-        let workspaces: Arc<dyn WorkspaceResolver> = Arc::new(NoWorkspaces);
         let runtime = core.and_then(|core| {
             match ThreadRuntime::new(
                 core.clone(),
-                providers,
-                workspaces,
-                // INTEGRATION (Z4): replace with the permission engine.
+                Arc::clone(&providers),
+                Arc::new(CoreWorkspaces::new(core.clone())),
                 Arc::new(AskUnlessReadGate),
             ) {
                 Ok(runtime) => Some(Arc::new(runtime)),
@@ -55,10 +76,84 @@ impl ThreadsState {
                 }
             }
         });
-        Self {
+        let state = Self {
             runtime,
+            providers,
+            detection,
             streams: Mutex::new(HashMap::new()),
+        };
+        state.sync_providers();
+        state
+    }
+
+    /// Registers the adapter of every provider detection reports usable and unregisters the
+    /// rest. Threads already running keep their sessions. Uses the cached detection.
+    pub fn sync_providers(&self) {
+        let usable = self.detection.usable();
+        for status in self.detection.list() {
+            if status.adapter != AdapterState::Implemented {
+                continue;
+            }
+            if usable.contains(&status.id) {
+                if self.providers.get(&status.id).is_none()
+                    && let Some(provider) = adapter(&status.id)
+                {
+                    self.providers.register(provider);
+                    tracing::info!(
+                        event = "threads.provider_registered",
+                        provider_id = status.id.as_str()
+                    );
+                }
+            } else if self.providers.unregister(&status.id) {
+                tracing::info!(
+                    event = "threads.provider_unregistered",
+                    provider_id = status.id.as_str()
+                );
+            }
         }
+    }
+
+    /// Before the first thread operation of a session, detects providers once (read-only:
+    /// `--version` and the documented sign-in status command, never a prompt) so the runtime
+    /// offers the real set. Later changes arrive through `providers_detect`.
+    fn ensure_providers(&self, core: Option<&Arc<Core>>) {
+        let never_detected = self
+            .detection
+            .list()
+            .iter()
+            .all(|status| status.detection.is_none());
+        if never_detected {
+            detect_and_record(core, &self.detection);
+            self.sync_providers();
+        }
+    }
+
+    /// Refuses to forget a workspace while one of its threads may still have a provider
+    /// session (anything but completed, failed, interrupted or offline).
+    pub fn refuse_if_threads_open(&self, workspace_id: &str) -> Result<(), IpcError> {
+        let Some(runtime) = &self.runtime else {
+            return Ok(());
+        };
+        let threads = runtime
+            .list(Some(workspace_id), false)
+            .map_err(|e| e.log_and_convert("workspace_remove"))?;
+        let open = threads.iter().any(|t| {
+            !matches!(
+                t.status,
+                ThreadStatus::Completed
+                    | ThreadStatus::Failed
+                    | ThreadStatus::Interrupted
+                    | ThreadStatus::Offline
+            )
+        });
+        if open {
+            return Err(KalError::validation(
+                "threads_running",
+                "Stop this workspace's threads before removing it.",
+            )
+            .to_ipc());
+        }
+        Ok(())
     }
 
     fn runtime(&self) -> Result<&Arc<ThreadRuntime>, IpcError> {
@@ -144,7 +239,11 @@ pub fn thread_tool_calls(
 }
 
 #[tauri::command(async)]
-pub fn thread_options(state: State<'_, ThreadsState>) -> Result<ThreadOptions, IpcError> {
+pub fn thread_options(
+    app: State<'_, AppState>,
+    state: State<'_, ThreadsState>,
+) -> Result<ThreadOptions, IpcError> {
+    state.ensure_providers(app.core.as_ref());
     state
         .runtime()?
         .options()
@@ -154,6 +253,7 @@ pub fn thread_options(state: State<'_, ThreadsState>) -> Result<ThreadOptions, I
 #[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
 pub fn thread_create(
+    app: State<'_, AppState>,
     state: State<'_, ThreadsState>,
     provider_id: String,
     workspace_id: String,
@@ -162,6 +262,7 @@ pub fn thread_create(
     prompt: String,
     name: Option<String>,
 ) -> Result<ThreadSummary, IpcError> {
+    state.ensure_providers(app.core.as_ref());
     state
         .runtime()?
         .create(CreateThread {
@@ -201,10 +302,12 @@ pub fn thread_interrupt(
 
 #[tauri::command(async)]
 pub fn thread_resume(
+    app: State<'_, AppState>,
     state: State<'_, ThreadsState>,
     thread_id: String,
     text: Option<String>,
 ) -> Result<ThreadSummary, IpcError> {
+    state.ensure_providers(app.core.as_ref());
     state
         .runtime()?
         .resume(&thread_id, text.as_deref())

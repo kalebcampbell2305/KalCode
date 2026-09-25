@@ -1,7 +1,7 @@
 # KalCode Data Model
 
-Status: schema v2 implemented (Z0 v1 + Z1 workspaces and terminals); later entities defined for
-planning.
+Status: schema v3 implemented (Z0 v1 + Z1 workspaces and terminals + Z3 threads); later entities
+defined for planning.
 
 ## 1. Local database (SQLite, `<app-data>/kalcode.db`)
 
@@ -55,6 +55,43 @@ terminals(
 tab with `started_at` set and `ended_at` null is running; at startup any such tab (left by a
 crash) is marked `app_closed`. The v1 to v2 upgrade is tested with v1 data
 (`crates/native-core/tests/upgrade_and_persistence.rs`).
+
+### Implemented — schema version 3 (`0003_threads.sql`, Z3)
+
+```sql
+threads(
+  id TEXT PK, name TEXT NOT NULL (1..200),
+  provider_id TEXT NOT NULL, provider_name TEXT NOT NULL, model TEXT, account_label TEXT,
+  workspace_id TEXT NOT NULL,      -- a workspaces.id; no FOREIGN KEY (see below)
+  workspace_name TEXT NOT NULL, cwd TEXT NOT NULL,   -- snapshot at creation
+  permission_mode TEXT NOT NULL CHECK (plan|approve|auto|bypass|custom),
+  status TEXT NOT NULL CHECK (the 18 ThreadStatus values), current_activity TEXT,
+  provider_session_id TEXT, created_at TEXT NOT NULL, last_activity_at TEXT NOT NULL,
+  last_read_seq INTEGER NOT NULL, pending_approvals INTEGER NOT NULL, archived_at TEXT,
+  error_code TEXT, error_message TEXT,
+  input_tokens INTEGER, output_tokens INTEGER, cost_usd_micros INTEGER
+) STRICT -- indexes: workspace_id, last_activity_at, open status (archived_at IS NULL)
+thread_messages(seq INTEGER PK AUTOINCREMENT, id TEXT UNIQUE,
+  thread_id TEXT REFERENCES threads(id) ON DELETE CASCADE, role TEXT CHECK (user|assistant|system),
+  content TEXT NOT NULL, provider_message_id TEXT, created_at TEXT NOT NULL) STRICT
+tool_calls(seq INTEGER PK AUTOINCREMENT, id TEXT UNIQUE,
+  thread_id TEXT REFERENCES threads(id) ON DELETE CASCADE, provider_call_id TEXT, tool TEXT,
+  summary TEXT, status TEXT CHECK (requested|running|completed|failed|cancelled),
+  result_summary TEXT, requested_at TEXT, started_at TEXT, completed_at TEXT) STRICT
+thread_files(thread_id TEXT REFERENCES threads(id) ON DELETE CASCADE, path TEXT,
+  change TEXT CHECK (created|modified|deleted), changed_at TEXT, PRIMARY KEY (thread_id, path)) STRICT
+```
+
+`threads.workspace_id` has no foreign key on purpose: `workspace_remove` deletes the workspace
+row (files are never touched), and a thread's history must outlive that. `RESTRICT` would make
+removal fail with a constraint error; `CASCADE` would silently delete history. The thread
+runtime resolves every workspace through Z1 before use (a removed or moved folder cannot be
+resumed in), and `workspace_remove` refuses while a thread in that workspace may still have a
+provider session (`validation/threads_running`). No credentials are stored; accounts are labels.
+
+Upgrades are tested v1 → v3 in one step and v1 → v2 → v3 step by step, each with a backup of the
+version it started from and settings, workspaces and events preserved
+(`crates/native-core/tests/upgrade_and_persistence.rs`, `crates/threads/tests/migration.rs`).
 
 ### Migration rules
 

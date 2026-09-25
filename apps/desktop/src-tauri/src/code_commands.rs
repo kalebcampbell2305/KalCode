@@ -174,7 +174,12 @@ pub fn workspace_activate(
 
 /// Removes a workspace from KalCode's list. Its folder and files are never touched.
 #[tauri::command(async)]
-pub fn workspace_remove(state: State<'_, AppState>, workspace_id: String) -> Result<(), IpcError> {
+pub fn workspace_remove(
+    state: State<'_, AppState>,
+    threads: State<'_, crate::thread_commands::ThreadsState>,
+    workspace_id: String,
+) -> Result<(), IpcError> {
+    threads.refuse_if_threads_open(&workspace_id)?;
     state
         .core()?
         .remove_workspace(&workspace_id)

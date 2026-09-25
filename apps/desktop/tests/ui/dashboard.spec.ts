@@ -4,7 +4,7 @@ import { expect, type Locator, type Page, test } from "@playwright/test";
 /**
  * Dashboard behaviour against the in-memory transport's Dashboard scenarios
  * (src/ipc/memory/dashboard.ts). Without a scenario the transport mirrors today's native build,
- * where the thread and approval commands do not exist yet.
+ * where the approval commands (Z4) do not exist yet.
  */
 
 type Scenario = "default" | "busy" | "empty" | "approvals-flood" | "errors" | "loading";
@@ -45,12 +45,10 @@ async function setTheme(page: Page, theme: "light" | "dark") {
   await page.getByRole("button", { name: "Dashboard" }).click();
 }
 
-test.describe("dashboard in a build without threads or approvals", () => {
+test.describe("dashboard in a build without approvals", () => {
   test("says so honestly and never shows sample data", async ({ page }) => {
     await open(page);
-    await expect(main(page).getByRole("heading", { name: "Threads arrive with provider support" })).toBeVisible();
-    await expect(main(page).getByText("This build doesn't run threads yet")).toBeVisible();
-    await expect(summary(page)).toHaveCount(0);
+    await expect(main(page).getByText("No threads are open.")).toBeVisible();
     await expect(approvals(page)).toHaveCount(0);
     await expect(page.getByRole("region", { name: "Terminals" }).getByText("No terminals are running.")).toBeVisible();
     await expect(main(page).getByText("Refactor auth middleware")).toHaveCount(0);

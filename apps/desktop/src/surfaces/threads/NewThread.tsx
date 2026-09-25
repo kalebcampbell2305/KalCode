@@ -1,4 +1,4 @@
-import type { PermissionMode, ThreadOptions, ThreadSummary } from "@kalcode/protocol";
+import type { PermissionMode, ProviderStatus, ThreadOptions, ThreadSummary } from "@kalcode/protocol";
 import {
   Button,
   EmptyState,
@@ -14,8 +14,9 @@ import {
 import { type FormEvent, useCallback, useEffect, useId, useRef, useState } from "react";
 import { type KalCodeError, toKalCodeError } from "../../ipc/errors.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
+import { useNavigation } from "../../shell/navigation.tsx";
 import { MOD_LABEL } from "../../shell/shortcuts.ts";
-import { PERMISSION_MODES } from "./model.ts";
+import { PERMISSION_MODES, type UnavailableProvider, unavailableProviders } from "./model.ts";
 import styles from "./NewThread.module.css";
 
 interface NewThreadProps {
@@ -26,14 +27,22 @@ interface NewThreadProps {
 /** New thread flow: provider, model, workspace, permission mode (Approve by default), task. */
 export function NewThread({ onCreated, onCancel }: NewThreadProps) {
   const { client } = useRuntime();
+  const { navigate } = useNavigation();
   const [options, setOptions] = useState<ThreadOptions | null>(null);
+  const [unavailable, setUnavailable] = useState<UnavailableProvider[]>([]);
   const [loadError, setLoadError] = useState<KalCodeError | null>(null);
 
   const load = useCallback(() => {
     setLoadError(null);
     client
       .threadOptions()
-      .then(setOptions)
+      .then(async (next) => {
+        // `thread_options` runs provider detection first when it hasn't run yet, so the cached
+        // statuses explain every provider that isn't offered.
+        const statuses: ProviderStatus[] = await client.listProviders().catch(() => []);
+        setUnavailable(unavailableProviders(statuses, new Set(next.providers.map((p) => p.id))));
+        setOptions(next);
+      })
       .catch((error) => setLoadError(toKalCodeError(error)));
   }, [client]);
   useEffect(load, [load]);
@@ -68,28 +77,66 @@ export function NewThread({ onCreated, onCancel }: NewThreadProps) {
             <Skeleton width="40%" />
           </div>
         ) : options.providers.length === 0 ? (
-          <EmptyState title="No providers connected" actions={<Button onClick={onCancel}>Back to threads</Button>}>
+          <EmptyState
+            title="No provider is ready for threads"
+            actions={
+              <>
+                <Button onClick={() => navigate("providers")}>Go to Providers</Button>
+                <Button variant="ghost" onClick={onCancel}>
+                  Back to threads
+                </Button>
+              </>
+            }
+          >
             <p>
-              A thread runs a provider you've connected, such as Claude Code, Codex or Gemini CLI. Connecting providers
-              arrives with the Providers surface.
+              Threads run Claude Code with your own sign-in. Install it or sign in with its CLI, then check again on the
+              Providers page.
             </p>
+            <ProviderAvailability providers={unavailable} />
           </EmptyState>
         ) : options.workspaces.length === 0 ? (
-          <EmptyState title="No workspaces yet" actions={<Button onClick={onCancel}>Back to threads</Button>}>
-            <p>
-              A thread works inside a project folder you've added to KalCode. Adding workspaces arrives with the Code
-              surface.
-            </p>
+          <EmptyState
+            title="No workspaces yet"
+            actions={
+              <>
+                <Button onClick={() => navigate("code")}>Open Code</Button>
+                <Button variant="ghost" onClick={onCancel}>
+                  Back to threads
+                </Button>
+              </>
+            }
+          >
+            <p>A thread works inside a project folder. Open one in Code first; it appears here as a workspace.</p>
           </EmptyState>
         ) : (
-          <NewThreadForm options={options} onCreated={onCreated} onCancel={onCancel} />
+          <NewThreadForm options={options} unavailable={unavailable} onCreated={onCreated} onCancel={onCancel} />
         )}
       </div>
     </div>
   );
 }
 
-function NewThreadForm({ options, onCreated, onCancel }: { options: ThreadOptions } & NewThreadProps) {
+/** Why each provider KalCode knows isn't offered for threads. */
+function ProviderAvailability({ providers }: { providers: readonly UnavailableProvider[] }) {
+  if (providers.length === 0) return null;
+  return (
+    <ul className={styles.unavailable} aria-label="Not available for threads">
+      {providers.map((p) => (
+        <li key={p.id}>
+          <span className={styles.unavailableName}>{p.name}</span>
+          <span className={styles.unavailableReason}>{p.reason}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function NewThreadForm({
+  options,
+  unavailable,
+  onCreated,
+  onCancel,
+}: { options: ThreadOptions; unavailable: readonly UnavailableProvider[] } & NewThreadProps) {
   const { client } = useRuntime();
   const toast = useToast();
   const id = useId();
@@ -158,33 +205,36 @@ function NewThreadForm({ options, onCreated, onCancel }: { options: ThreadOption
       }}
       aria-describedby={error ? `${id}-error` : undefined}
     >
-      <div className={styles.pair}>
-        <Field htmlFor={`${id}-provider`} label="Provider">
-          <Select
-            id={`${id}-provider`}
-            value={providerId}
-            onChange={(event) => {
-              setProviderId(event.target.value);
-              setModel("");
-            }}
-          >
-            {options.providers.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.accountLabel ? `${p.displayName} (${p.accountLabel})` : p.displayName}
-              </option>
-            ))}
-          </Select>
-        </Field>
-        <Field htmlFor={`${id}-model`} label="Model">
-          <Select id={`${id}-model`} value={model} onChange={(event) => setModel(event.target.value)}>
-            <option value="">Provider default</option>
-            {provider?.models.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.displayName}
-              </option>
-            ))}
-          </Select>
-        </Field>
+      <div className={styles.providerGroup}>
+        <div className={styles.pair}>
+          <Field htmlFor={`${id}-provider`} label="Provider">
+            <Select
+              id={`${id}-provider`}
+              value={providerId}
+              onChange={(event) => {
+                setProviderId(event.target.value);
+                setModel("");
+              }}
+            >
+              {options.providers.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.accountLabel ? `${p.displayName} (${p.accountLabel})` : p.displayName}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Field htmlFor={`${id}-model`} label="Model">
+            <Select id={`${id}-model`} value={model} onChange={(event) => setModel(event.target.value)}>
+              <option value="">Provider default</option>
+              {provider?.models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.displayName}
+                </option>
+              ))}
+            </Select>
+          </Field>
+        </div>
+        <ProviderAvailability providers={unavailable} />
       </div>
 
       <Field htmlFor={`${id}-workspace`} label="Workspace">

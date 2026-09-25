@@ -8,19 +8,36 @@
 use std::sync::Arc;
 
 use kalcode_core::events::{Correlation, EventPayload, EventSource, NewEvent};
-use kalcode_core::{IpcError, KalError};
+use kalcode_core::{Core, IpcError, KalError};
 use kalcode_providers::{DetectEnv, ProviderRegistry, ProviderStatus};
 use tauri::State;
 
 use crate::AppState;
+use crate::thread_commands::ThreadsState;
 
-/// Managed state: the provider registry, shared with detection's blocking worker.
+/// Managed state: the provider registry, shared with detection's blocking worker and with the
+/// thread runtime (which offers only the providers detection reports usable).
 pub struct ProviderState(Arc<ProviderRegistry>);
 
 impl ProviderState {
     pub fn from_process() -> Self {
         Self(Arc::new(ProviderRegistry::new(DetectEnv::from_process())))
     }
+
+    pub fn registry(&self) -> Arc<ProviderRegistry> {
+        Arc::clone(&self.0)
+    }
+}
+
+/// Runs detection (blocking) and records the resulting `provider.*` events when the core is
+/// available. Shared by `providers_detect` and the thread runtime's first use.
+pub fn detect_and_record(
+    core: Option<&Arc<Core>>,
+    registry: &ProviderRegistry,
+) -> Vec<ProviderStatus> {
+    let (statuses, events) = registry.detect_all();
+    record(core, events);
+    statuses
 }
 
 /// The cached status of every provider (`detection` is null until the first check).
@@ -34,6 +51,7 @@ pub fn providers_list(providers: State<'_, ProviderState>) -> Vec<ProviderStatus
 pub async fn providers_detect(
     state: State<'_, AppState>,
     providers: State<'_, ProviderState>,
+    threads: State<'_, ThreadsState>,
 ) -> Result<Vec<ProviderStatus>, IpcError> {
     let registry = Arc::clone(&providers.0);
     let (statuses, events) = tauri::async_runtime::spawn_blocking(move || registry.detect_all())
@@ -46,8 +64,14 @@ pub async fn providers_detect(
             .with_source(e)
             .log_and_convert("providers_detect")
         })?;
+    record(state.core.as_ref(), events);
+    // Threads offer exactly the providers this detection found usable.
+    threads.sync_providers();
+    Ok(statuses)
+}
 
-    match &state.core {
+fn record(core: Option<&Arc<Core>>, events: Vec<EventPayload>) {
+    match core {
         Some(core) => {
             for event in events {
                 let provider_id = provider_of(&event);
@@ -78,7 +102,6 @@ pub async fn providers_detect(
         }
         None => {}
     }
-    Ok(statuses)
 }
 
 fn provider_of(event: &EventPayload) -> Option<String> {

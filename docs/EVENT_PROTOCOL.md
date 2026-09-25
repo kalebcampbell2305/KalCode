@@ -63,10 +63,16 @@ Status legend: **I** implemented and emitted · **D** defined, emitted from its 
 | `provider.detected` | 1 | I (Z2) | `{ providerId, installed, version? }` — on the first detection and whenever the state or version changes; `installed` is true for installed and outdated |
 | `provider.error` | 1 | I (Z2) | `{ providerId, code, message }` — when detection first ends in error (not repeated while it stays in error); `code` e.g. `version_timeout` |
 | `provider.connected` / `.disconnected` | 1 | D (accounts, later campaign) | `{ providerId, accountLabel? }` |
-| `thread.created` / `.started` / `.status_changed` / `.idle` / `.paused` / `.resumed` / `.completed` / `.failed` | 1 | D (Z3) | `{ threadId, status, … }` |
-| `agent.message` | 1 | D (Z3) | `{ threadId, messageId, role }` |
-| `tool.requested` / `.started` / `.completed` / `.failed` | 1 | D (Z3) | `{ threadId, toolCallId, tool }` |
-| `file.created` / `.modified` / `.deleted` | 1 | D (Z3) | `{ workspaceId, path }` |
+| `thread.created` | 1 | I (Z3) | `{ threadId, name, providerId, workspaceId }` |
+| `thread.started` | 1 | I (Z3) | `{ threadId }` — a provider session started (create or resume) |
+| `thread.status_changed` | 1 | I (Z3) | `{ threadId, from, to, detail? }` — idle, paused, resumed and waiting states are status changes, not separate types |
+| `thread.renamed` / `.archived` / `.completed` | 1 | I (Z3) | `{ threadId, name? }` |
+| `thread.failed` | 1 | I (Z3) | `{ threadId, code, message }` — user-safe message |
+| `agent.message` | 1 | I (Z3) | `{ threadId, messageId, role }` — never the message text |
+| `tool.requested` | 1 | I (Z3) | `{ threadId, toolCallId, tool, summary }` |
+| `tool.started` / `.completed` | 1 | I (Z3) | `{ threadId, toolCallId }` |
+| `tool.failed` | 1 | I (Z3) | `{ threadId, toolCallId, summary? }` |
+| `file.created` / `.modified` / `.deleted` | 1 | I (Z3) | `{ threadId?, path }` — workspace-relative where possible |
 | `approval.requested` / `.approved` / `.denied` | 1 | D (Z4) | `{ requestId, scope, decision? }` |
 | `git.branch_changed` / `.diff_changed` / `.commit_created` | 1 | D (Z6) | `{ workspaceId, … }` |
 | `kalvoice.dictation_started` / `.dictation_completed` / `.dictation_failed` | 1 | D (Z12) | `{ sessionId, durationMs?, characters?, code? }` — never the transcript |
@@ -85,6 +91,11 @@ Provider sessions emit normalized `AgentEvent`s (message deltas, tool status, us
 thread runtime (`thread_stream`, Z3), which records only lifecycle transitions (`thread.*`,
 `tool.*`, `agent.message`) in the event log. `provider.*` events come from detection, recorded
 by `providers_detect`.
+
+Z3 thread, agent, tool and file events carry `correlation.threadId`, `correlation.workspaceId`
+and `correlation.providerId`; a state change and its events commit in one transaction
+(`Core::write_with_events`). Live message deltas stream over `thread_stream` and are never
+events.
 
 Z1 events carry `correlation.workspaceId`. A tab and its `shell.started` event commit in one
 transaction; so does a close and its `shell.completed { closedByUser: true }`. Shells that end

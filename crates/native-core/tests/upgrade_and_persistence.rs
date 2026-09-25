@@ -193,6 +193,8 @@ fn upgrade_from_v1_keeps_data_and_writes_backup() {
 
 const THREAD_TABLES: [&str; 4] = ["thread_files", "thread_messages", "threads", "tool_calls"];
 
+// Test helper: panics on setup failures by design.
+#[allow(clippy::expect_used)]
 fn thread_tables(core: &Core) -> Vec<String> {
     core.read(|conn| {
         let mut stmt = conn.prepare(
@@ -206,6 +208,8 @@ fn thread_tables(core: &Core) -> Vec<String> {
     .expect("list tables")
 }
 
+// Test helper: panics on setup failures by design.
+#[allow(clippy::expect_used)]
 fn backup_versions(dir: &std::path::Path) -> Vec<i64> {
     let mut versions: Vec<i64> = std::fs::read_dir(dir.join("backups"))
         .expect("backups dir")
@@ -238,7 +242,10 @@ fn upgrade_v1_to_v2_to_v3_keeps_data_and_backs_up_each_step() {
     let workspace_id = {
         let core = Core::open_with_migrations(config(dir.path()), v2_only()).expect("v2 open");
         assert_eq!(
-            core.diagnostics().expect("diagnostics").database.schema_version,
+            core.diagnostics()
+                .expect("diagnostics")
+                .database
+                .schema_version,
             2
         );
         assert!(
@@ -254,7 +261,10 @@ fn upgrade_v1_to_v2_to_v3_keeps_data_and_backs_up_each_step() {
     let core = Core::open(config(dir.path())).expect("v3 open");
     assert_eq!(backup_versions(dir.path()), vec![1, 2]);
     assert_eq!(
-        core.diagnostics().expect("diagnostics").database.schema_version,
+        core.diagnostics()
+            .expect("diagnostics")
+            .database
+            .schema_version,
         3
     );
 

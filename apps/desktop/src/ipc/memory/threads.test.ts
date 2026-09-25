@@ -9,10 +9,14 @@ import { nameFromPrompt } from "./threads.ts";
 let WORKSPACE = "";
 
 async function setup(scenario: "default" | "threads" | "no-providers" = "default") {
-  const transport = createMemoryTransport(scenario);
+  const transport = createMemoryTransport(scenario, { detectDelayMs: 0 });
   const client = new KalCodeClient(transport);
   const events: EventEnvelope[] = [];
   void transport.subscribe((event) => events.push(event));
+  // Provider detection (Z2) decides which providers threads may use; run it up front.
+  const detected = client.detectProviders();
+  if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(1);
+  await detected;
   transport.workspaces.queueFolders("kalcode");
   const workspace = await client.openWorkspaceDialog();
   if (!workspace) throw new Error("the fake folder picker returned nothing");

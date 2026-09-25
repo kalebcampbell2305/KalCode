@@ -18,18 +18,18 @@ IPC (Z3) ──▶│ create/send/interrupt/pause/stop/resume/rename/archive/lis
             │  ProviderRegistry ──▶ Arc<dyn AgentProvider>      (Z2 adapters) │
             │  WorkspaceResolver ─▶ name + canonical root        (Z1)         │
             │  PermissionGate ────▶ evaluate / open_request / expire (Z4)     │
-            │  Core ──────────────▶ SQLite (0004) + event store + event bus   │
+            │  Core ──────────────▶ SQLite (v3)  + event store + event bus   │
             └─────────────────────────────────────────────────────────────────┘
 ```
 
 The runtime depends only on the shared contracts (`crates/contracts`) and on three injected
 seams. Nothing provider-, workspace- or policy-specific lives in it.
 
-| Seam | Type | Implemented by | On this branch |
+| Seam | Type | Implemented by | In the app (wave 2) |
 | --- | --- | --- | --- |
-| Providers | `ProviderRegistry` holding `Arc<dyn AgentProvider>` (+ account label, secret reference) | Z2 adapters | empty in the app; fake providers in tests |
-| Workspaces | `trait WorkspaceResolver { list(); resolve(id) -> ResolvedWorkspace { id, name, root } }` | Z1 over its `workspaces` table | `NoWorkspaces` in the app; fakes in tests |
-| Permissions | `PermissionGate` (contracts) | Z4 engine | `AskUnlessReadGate` in the app; a scriptable test gate in tests |
+| Providers | `ProviderRegistry` holding `Arc<dyn AgentProvider>` (+ account label, secret reference) | Z2 adapters | `ThreadsState::sync_providers` registers the Claude Code adapter when Z2 detection reports it usable (installed at a supported version, not signed out) and unregisters it otherwise. Detection runs once before the first thread operation of a session and again on every `providers_detect`. Codex and Gemini CLI are detection-only and never offered; fake providers in tests |
+| Workspaces | `trait WorkspaceResolver { list(); resolve(id) -> ResolvedWorkspace { id, name, root } }` | Z1 | `CoreWorkspaces`: existing folders only; `resolve` re-canonicalizes the stored root and refuses a moved, deleted or re-pointed folder (`workspace_unavailable`); fakes in tests |
+| Permissions | `PermissionGate` (contracts) | Z4 engine | `AskUnlessReadGate` until Z4 merges; a scriptable test gate in tests |
 
 `ResolvedWorkspace.root` is native-resolved and canonical; it becomes the session's working
 directory and never crosses IPC. The WebView supplies only ids.
@@ -117,9 +117,9 @@ confirmed user action and Custom needs a profile; both are set after creation th
 permission engine, which calls `ThreadRuntime::set_permission_mode` (records
 `permission.mode_changed` atomically).
 
-## 4. Persistence (migration 0004)
+## 4. Persistence (schema v3, migration 0003)
 
-`crates/native-core/migrations/0004_threads.sql`:
+`crates/native-core/migrations/0003_threads.sql`:
 
 | Table | Holds |
 | --- | --- |
@@ -135,15 +135,12 @@ never message text.
 **Atomicity.** Every state change and its events commit in one SQLite transaction through
 `Core::write_with_events` (added to native-core); events are published only after commit.
 
-**Numbering and the workspace foreign key (integration).** Versions must be contiguous, and this
-branch doesn't have Z1's `0002` or Z2's `0003`, so `db.rs` registers `0004_threads.sql` as
-version 2 here. At integration register it as version **4**, after `0002` (Z1) and `0003` (Z2);
-if Z2 ships no `0003`, either renumber the threads migration to 3 or add an empty `0003`
-placeholder. `threads.workspace_id` has an index but no `REFERENCES workspaces(id)` clause, so
-the migration applies independently of 0002. Because 0004 is unreleased, the lead may add
-`REFERENCES workspaces (id) ON DELETE RESTRICT` to it at integration once Z1 guarantees a
-workspace referenced by threads is never hard-deleted (or a later migration can rebuild the
-table with the constraint).
+**Numbering and the workspace foreign key.** Integrated in wave 2 as schema **v3**
+(`0003_threads.sql`), after Z1's v2; Z2 shipped no migration. `threads.workspace_id` is indexed
+but has no `REFERENCES workspaces(id)`: Z1's `workspace_remove` hard-deletes the workspace row,
+so `RESTRICT` would make removal fail and `CASCADE` would delete thread history. Instead the
+runtime resolves the workspace through `CoreWorkspaces` before every use, and the desktop's
+`workspace_remove` refuses while a thread in that workspace may still have a session.
 
 ## 5. Concurrency and isolation
 

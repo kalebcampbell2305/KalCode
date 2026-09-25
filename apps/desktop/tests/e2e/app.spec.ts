@@ -211,9 +211,12 @@ test("the Threads surface runs on the native thread runtime", async () => {
     await expect(app.page.getByRole("heading", { name: "No threads yet" })).toBeVisible();
     await expect(app.page.getByText("Threads couldn't load")).toHaveCount(0);
 
-    // `thread_options` answered natively: this build registers no provider adapters yet.
+    // `thread_options` answered natively. A fresh data folder has no workspace yet, so the flow
+    // asks for one (or explains why no provider is ready when Claude Code isn't usable here).
     await app.page.getByRole("button", { name: "New thread" }).first().click();
-    await expect(app.page.getByRole("heading", { name: "No providers connected" })).toBeVisible();
+    await expect(
+      app.page.getByRole("heading", { name: /^(No workspaces yet|No provider is ready for threads)$/ }),
+    ).toBeVisible({ timeout: 60_000 });
     await closeGracefully(app);
 
     // The threads schema was created in the isolated database.

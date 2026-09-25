@@ -188,7 +188,10 @@ export function createMemoryTransport(
   const sessionStart = dashboard ? { occurredAt: new Date(sessionStartMs).toISOString() } : {};
 
   if (!startupError) {
-    emit({ type: "database.migrated", payload: { fromVersion: 0, toVersion: SCHEMA_VERSION, backupCreated: false } }, sessionStart);
+    emit(
+      { type: "database.migrated", payload: { fromVersion: 0, toVersion: SCHEMA_VERSION, backupCreated: false } },
+      sessionStart,
+    );
     emit(
       {
         type: "app.started",
@@ -240,19 +243,42 @@ export function createMemoryTransport(
     preload: scenario === "code",
   });
 
+  const ensureDetected = async () => {
+    if (providers.some((p) => p.detection !== null)) return;
+    detecting ??= detectProviders().finally(() => {
+      detecting = null;
+    });
+    await detecting.catch(() => undefined);
+  };
+
   const threads = createThreadsMemory(
     (event, correlation = {}, source = "core") => emit(event, { correlation, source }),
     requireCore,
     scenario === "threads" || scenario === "no-providers" ? scenario : "default",
     () =>
-      (code.handlers.workspace_list?.({}) as Workspace[])
+      ((code.handlers.workspace_list?.({}) ?? []) as Workspace[])
         .filter((w) => w.available)
         .map((w) => ({ id: w.id, name: w.name })),
+    () => usableProviders(providers),
   );
 
   const handlers: DashboardHandlers = {
     ...code.handlers,
     ...threads.handlers,
+    // Like native: the first thread operation detects providers once, so threads use exactly
+    // the providers detection reports usable.
+    thread_options: async (args) => {
+      await ensureDetected();
+      return threads.handlers.thread_options(args);
+    },
+    thread_create: async (args) => {
+      await ensureDetected();
+      return threads.handlers.thread_create(args);
+    },
+    thread_resume: async (args) => {
+      await ensureDetected();
+      return threads.handlers.thread_resume(args);
+    },
     boot: (): BootState => ({ info, startupError }),
     window_ready: () => undefined,
     settings_get: () => {
@@ -434,4 +460,14 @@ function readScenario(): MemoryScenario {
   }
   if (value !== null && PROVIDER_SCENARIOS.includes(value)) return value as ProviderScenario;
   return "default";
+}
+
+/** Mirrors `ProviderRegistry::usable` (crates/providers/src/registry.rs). */
+function usableProviders(statuses: readonly ProviderStatus[]): string[] {
+  return statuses
+    .filter(
+      (s) =>
+        s.adapter === "implemented" && s.detection?.state === "installed" && s.detection.auth !== "not_authenticated",
+    )
+    .map((s) => s.id);
 }

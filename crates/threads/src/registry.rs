@@ -3,15 +3,17 @@
 //! Both are owned by other campaigns. The thread runtime depends only on these boundaries:
 //! - [`ProviderRegistry`] holds `Arc<dyn AgentProvider>` adapters (Z2 registers Claude Code,
 //!   Codex, …). Nothing is registered until an adapter exists; tests register fakes.
-//! - [`WorkspaceResolver`] maps a workspace id to its name and canonical root (Z1 implements it
-//!   over its `workspaces` table). Until then [`NoWorkspaces`] reports that none exist.
+//! - [`WorkspaceResolver`] maps a workspace id to its name and canonical root. [`CoreWorkspaces`]
+//!   implements it over Z1's workspaces; [`NoWorkspaces`] (tests, a core that failed to start)
+//!   reports that none exist.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use kalcode_contracts::agent::{AgentProvider, ProviderId};
-use kalcode_core::{ErrorCategory, KalError, Result};
+use kalcode_core::workspaces::{Workspace, canonical_folder};
+use kalcode_core::{Core, ErrorCategory, KalError, Result};
 
 /// A registered provider adapter and the account it uses.
 #[derive(Clone)]
@@ -107,6 +109,69 @@ impl WorkspaceResolver for NoWorkspaces {
     fn resolve(&self, _workspace_id: &str) -> Result<ResolvedWorkspace> {
         Err(workspace_not_found())
     }
+}
+
+/// Z1's workspaces (the `workspaces` table) as the thread runtime sees them.
+///
+/// Only folders that still exist are offered, most recently opened first. Resolving
+/// re-canonicalizes the stored root and refuses it when the folder is gone or now resolves
+/// somewhere else (for example replaced by a link), so a thread never starts outside the
+/// folder the user chose. It reads through [`Core`] only and never calls the thread runtime.
+pub struct CoreWorkspaces {
+    core: Arc<Core>,
+}
+
+impl CoreWorkspaces {
+    pub fn new(core: Arc<Core>) -> Self {
+        Self { core }
+    }
+
+    fn find(&self, workspace_id: &str) -> Result<Workspace> {
+        self.core
+            .workspaces()?
+            .into_iter()
+            .find(|w| w.id == workspace_id)
+            .ok_or_else(workspace_not_found)
+    }
+}
+
+impl WorkspaceResolver for CoreWorkspaces {
+    fn list(&self) -> Result<Vec<ResolvedWorkspace>> {
+        Ok(self
+            .core
+            .workspaces()?
+            .into_iter()
+            .filter(|w| w.available)
+            .map(|w| ResolvedWorkspace {
+                root: PathBuf::from(&w.root_path),
+                id: w.id,
+                name: w.name,
+            })
+            .collect())
+    }
+
+    fn resolve(&self, workspace_id: &str) -> Result<ResolvedWorkspace> {
+        let workspace = self.find(workspace_id)?;
+        let stored = PathBuf::from(&workspace.root_path);
+        let root = canonical_folder(&stored).map_err(|e| workspace_unavailable().with_source(e))?;
+        if root != stored {
+            return Err(workspace_unavailable());
+        }
+        Ok(ResolvedWorkspace {
+            id: workspace.id,
+            name: workspace.name,
+            root,
+        })
+    }
+}
+
+/// The workspace exists in KalCode but its folder was moved, deleted or replaced.
+pub fn workspace_unavailable() -> KalError {
+    KalError::new(
+        ErrorCategory::Filesystem,
+        "workspace_unavailable",
+        "This workspace's folder can't be found. It may have been moved or deleted.",
+    )
 }
 
 pub fn workspace_not_found() -> KalError {

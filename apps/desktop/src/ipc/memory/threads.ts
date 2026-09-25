@@ -201,11 +201,18 @@ export function createThreadsMemory(
   scenario: ThreadsScenario = "default",
   /** Open workspaces (Z1). The `threads` scenario adds its fixture workspaces. */
   openWorkspaces: () => WorkspaceOption[] = () => [],
+  /** Providers detection reports usable (Z2); defaults to Claude Code. */
+  usableProviders: () => readonly string[] = () => ["claude-code"],
 ): ThreadsMemory {
   const threads = new Map<string, MemThread>();
   const streams = new Map<string, Set<(event: AgentEvent) => void>>();
-  // Like native `thread_options`: only providers with a thread adapter are offered (Claude Code).
-  const providers = scenario === "no-providers" ? [] : scenario === "threads" ? PROVIDERS : PROVIDERS.slice(0, 1);
+  // Like native `thread_options`: only providers with a thread adapter (Claude Code) that
+  // detection reports usable are offered. Codex fixture threads exist only as history.
+  const offered = (): ProviderOption[] => {
+    if (scenario === "no-providers") return [];
+    const usable = usableProviders();
+    return PROVIDERS.filter((p) => p.id === "claude-code" && usable.includes(p.id));
+  };
   const workspaces = (): WorkspaceOption[] =>
     scenario === "threads" ? [...WORKSPACES, ...openWorkspaces()] : openWorkspaces();
 
@@ -432,7 +439,12 @@ export function createThreadsMemory(
   const handlers: Record<ThreadCommand, Handler> = {
     thread_options: (): ThreadOptions => {
       requireCore();
-      return { providers, workspaces: workspaces(), permissionModes: CREATE_MODES, defaultPermissionMode: "approve" };
+      return {
+        providers: offered(),
+        workspaces: workspaces(),
+        permissionModes: CREATE_MODES,
+        defaultPermissionMode: "approve",
+      };
     },
     thread_list: (args) => {
       requireCore();
@@ -484,7 +496,7 @@ export function createThreadsMemory(
       if (!CREATE_MODES.includes(mode)) error("internal", "ipc_rejected", "KalCode couldn't complete that request.");
       const prompt = validPrompt(args.prompt);
       const name = args.name == null || String(args.name).trim() === "" ? nameFromPrompt(prompt) : validName(args.name);
-      const provider = providers.find((p) => p.id === providerId);
+      const provider = offered().find((p) => p.id === providerId);
       if (!provider)
         return error(
           "provider",
@@ -590,7 +602,7 @@ export function createThreadsMemory(
         if (text) send(t, text);
         return summary(t);
       }
-      const provider = providers.find((p) => p.id === t.summary.providerId);
+      const provider = offered().find((p) => p.id === t.summary.providerId);
       if (!provider)
         return error(
           "provider",

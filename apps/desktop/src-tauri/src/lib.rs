@@ -209,9 +209,10 @@ pub fn run(removed_overrides: Vec<&'static str>) {
         })
         .setup(move |app| {
             let state = start(app, &removed_overrides);
-            let threads = ThreadsState::start(state.core.as_ref());
+            let providers = provider_commands::ProviderState::from_process();
+            let threads = ThreadsState::start(state.core.as_ref(), providers.registry());
             app.manage(state);
-            app.manage(provider_commands::ProviderState::from_process());
+            app.manage(providers);
             app.manage(threads);
 
             // Safety net: the frontend shows the window after its first themed paint

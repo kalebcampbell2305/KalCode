@@ -63,6 +63,11 @@ for (const theme of ["dark", "light"] as const) {
       await open(page, "default", theme);
       await expect(page.getByRole("heading", { name: "No threads yet" })).toBeVisible();
       await shot(page, `threads-empty-${theme}-${size.name}`);
+
+      await open(page, "providers-none", theme);
+      await page.getByRole("button", { name: "New thread" }).first().click();
+      await expect(page.getByRole("heading", { name: "No provider is ready for threads" })).toBeVisible();
+      await shot(page, `threads-no-provider-${theme}-${size.name}`);
     });
   }
 }

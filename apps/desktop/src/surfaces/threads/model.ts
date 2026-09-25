@@ -1,5 +1,6 @@
 import type {
   PermissionMode,
+  ProviderStatus,
   ThreadMessage,
   ThreadStatus,
   ThreadSummary,
@@ -132,4 +133,46 @@ export function isThreadEvent(type: string): boolean {
     type === "provider.error" ||
     type === "permission.mode_changed"
   );
+}
+
+export interface UnavailableProvider {
+  id: string;
+  name: string;
+  /** Plain-language reason threads can't use it, e.g. "Not installed". */
+  reason: string;
+}
+
+/**
+ * Providers KalCode knows that the New thread flow does not offer, with the reason. Threads use
+ * a provider only when KalCode has an adapter for it (Claude Code today) and detection found it
+ * installed at a supported version and not signed out (`ProviderRegistry::usable`).
+ */
+export function unavailableProviders(
+  statuses: readonly ProviderStatus[],
+  offered: ReadonlySet<string>,
+): UnavailableProvider[] {
+  return statuses
+    .filter((status) => !offered.has(status.id))
+    .map((status) => ({ id: status.id, name: status.displayName, reason: unavailableReason(status) }));
+}
+
+function unavailableReason(status: ProviderStatus): string {
+  const detection = status.detection;
+  const state = detection?.state;
+  if (status.adapter !== "implemented") {
+    return state === "installed" || state === "outdated"
+      ? "Installed, but KalCode can't run threads with it yet"
+      : "KalCode can't run threads with it yet";
+  }
+  if (!detection) return "Not checked yet";
+  switch (detection.state) {
+    case "not_installed":
+      return "Not installed";
+    case "outdated":
+      return detection.minimumVersion ? `Needs version ${detection.minimumVersion} or later` : "Needs an update";
+    case "error":
+      return "Couldn't be checked";
+    default:
+      return detection.auth === "not_authenticated" ? "Signed out" : "Not available";
+  }
 }

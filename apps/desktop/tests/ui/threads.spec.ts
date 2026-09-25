@@ -2,14 +2,33 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
 
 /**
- * Threads surface against the in-memory transport: fixture providers/workspaces and a scripted
- * fake provider session (see src/ipc/memory/threads.ts).
+ * Threads surface against the in-memory transport: fixture provider detection (Claude Code
+ * installed and signed in, Codex installed without an adapter, Gemini CLI missing), workspaces
+ * opened through Z1's fake folder picker, and a scripted fake provider session (see
+ * src/ipc/memory/threads.ts).
  */
 const MOD = process.platform === "darwin" ? "Meta" : "Control";
+
+/** Opens project folders through the command palette and the fake native folder picker. */
+async function openFolders(page: Page, ...names: string[]) {
+  await page.evaluate((list) => {
+    (window as unknown as { __kalcodeMemory: { queueFolders: (...f: string[]) => void } }).__kalcodeMemory.queueFolders(
+      ...list,
+    );
+  }, names);
+  for (const name of names) {
+    await page.keyboard.press(`${MOD}+k`);
+    await page.keyboard.type("Open folder");
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("heading", { level: 1, name })).toBeVisible();
+  }
+}
 
 async function openThreads(page: Page, scenario?: string) {
   await page.goto(scenario ? `/?scenario=${scenario}` : "/");
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  // Without a Threads scenario, threads run in folders opened in Code (Z1).
+  if (!scenario) await openFolders(page, "kalcode", "kalcoded.com");
   await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Threads" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toBeVisible();
 }
@@ -93,11 +112,25 @@ test.describe("threads", () => {
     await expect(activity.getByText("Tool finished").first()).toBeVisible();
   });
 
-  test("an explicit name, provider and permission mode are used", async ({ page }) => {
+  test("only providers that can run threads are offered; the others say why", async ({ page }) => {
     await openThreads(page);
     await page.getByRole("button", { name: "New thread" }).first().click();
     const form = page.getByRole("region", { name: "New thread" });
-    await form.getByLabel("Provider").selectOption("codex");
+    await expect(form.getByLabel("Provider").locator("option")).toHaveText(["Claude Code (Personal)"]);
+    const others = form.getByRole("list", { name: "Not available for threads" });
+    await expect(others.getByRole("listitem")).toHaveCount(2);
+    await expect(others.getByRole("listitem").filter({ hasText: "Codex" })).toContainText(
+      "Installed, but KalCode can't run threads with it yet",
+    );
+    await expect(others.getByRole("listitem").filter({ hasText: "Gemini CLI" })).toContainText(
+      "KalCode can't run threads with it yet",
+    );
+  });
+
+  test("an explicit name and permission mode are used", async ({ page }) => {
+    await openThreads(page);
+    await page.getByRole("button", { name: "New thread" }).first().click();
+    const form = page.getByRole("region", { name: "New thread" });
     await expect(form.getByLabel("Model")).toHaveValue("");
     const approve = form.getByRole("radio", { name: "Approve" });
     await approve.focus();
@@ -112,16 +145,38 @@ test.describe("threads", () => {
     await expect(
       detail(page)
         .locator("dd")
-        .filter({ hasText: /^Codex$/ }),
+        .filter({ hasText: /^Claude Code · Personal$/ }),
     ).toBeVisible();
   });
 
-  test("cancel returns to the list; no providers is explained", async ({ page }) => {
+  test("cancel returns to the list; no usable provider is explained", async ({ page }) => {
     await openThreads(page, "no-providers");
     await page.getByRole("button", { name: "New thread" }).first().click();
-    await expect(page.getByRole("heading", { name: "No providers connected" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "No provider is ready for threads" })).toBeVisible();
     await page.getByRole("button", { name: "Back to threads" }).click();
     await expect(page.getByRole("heading", { name: "No threads yet" })).toBeVisible();
+
+    // Claude Code missing on this machine: the reason is shown, with a way to the Providers page.
+    await openThreads(page, "providers-none");
+    await page.getByRole("button", { name: "New thread" }).first().click();
+    await expect(page.getByRole("heading", { name: "No provider is ready for threads" })).toBeVisible();
+    await expect(
+      page
+        .getByRole("list", { name: "Not available for threads" })
+        .getByRole("listitem")
+        .filter({ hasText: "Claude Code" }),
+    ).toContainText("Not installed");
+    await page.getByRole("button", { name: "Go to Providers" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Providers" })).toBeVisible();
+  });
+
+  test("without a workspace, New thread points to Code", async ({ page }) => {
+    await page.goto("/");
+    await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Threads" }).click();
+    await page.getByRole("button", { name: "New thread" }).first().click();
+    await expect(page.getByRole("heading", { name: "No workspaces yet" })).toBeVisible();
+    await page.getByRole("button", { name: "Open Code" }).click();
+    await expect(page.getByRole("heading", { name: "Open a project folder" })).toBeVisible();
   });
 
   test("interrupt stops a slow turn and keeps what was written", async ({ page }) => {

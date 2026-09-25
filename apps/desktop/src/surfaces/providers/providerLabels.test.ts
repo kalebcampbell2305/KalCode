@@ -130,7 +130,9 @@ describe("static labels", () => {
     expect(fidelityLabel("exact")).toBe("Exact");
     expect(fidelityLabel("unsupported")).toBe("Not supported");
     expect(adapterLabel("implemented").badge).toBe("Adapter ready");
-    expect(adapterLabel("planned").description).toBe("Detection only. KalCode's adapter for it is planned.");
+    expect(adapterLabel("planned").description).toBe(
+      "Detection only. Threads can't use it until KalCode's adapter for it ships.",
+    );
   });
 
   it("lists capabilities as yes/no items", () => {

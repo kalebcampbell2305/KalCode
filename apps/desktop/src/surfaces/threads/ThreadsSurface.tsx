@@ -103,8 +103,8 @@ export function ThreadsSurface() {
                   }
                 >
                   <p>
-                    A thread gives a provider such as Claude Code, Codex or Gemini CLI a task in one of your workspaces.
-                    You'll see what it's doing, the tools it runs and anything waiting for your approval.
+                    A thread gives Claude Code a task in one of your workspaces. You'll see what it's doing, the tools
+                    it runs and anything waiting for your approval.
                   </p>
                 </EmptyState>
               )}

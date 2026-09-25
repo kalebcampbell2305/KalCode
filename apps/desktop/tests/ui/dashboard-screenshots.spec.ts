@@ -16,7 +16,8 @@ const SIZES = [
   { name: "1024", width: 1024, height: 700 },
 ] as const;
 
-const SCENARIOS = ["busy", "approvals-flood", "empty", "errors", "loading", "unavailable"] as const;
+/** `fresh`: a new install (no scenario); `code`: workspaces with running terminals (Z1). */
+const SCENARIOS = ["busy", "approvals-flood", "empty", "errors", "loading", "fresh", "code"] as const;
 
 function path(name: string) {
   return new URL(`${name}.png`, OUT).pathname.replace(/^\/([A-Za-z]:)/, "$1");
@@ -41,8 +42,10 @@ async function ready(page: Page, scenario: (typeof SCENARIOS)[number]) {
     await expect(main.getByRole("heading", { name: "No active threads" })).toBeVisible();
   } else if (scenario === "errors") {
     await expect(main.getByRole("heading", { name: "Threads couldn't load" })).toBeVisible();
-  } else if (scenario === "unavailable") {
-    await expect(main.getByRole("heading", { name: "Threads arrive with provider support" })).toBeVisible();
+  } else if (scenario === "fresh") {
+    await expect(main.getByText("No threads are open.")).toBeVisible();
+  } else if (scenario === "code") {
+    await expect(page.getByRole("region", { name: "Terminals" }).getByText("Git Bash")).toBeVisible();
   } else {
     await expect(main.getByText("Loading threads")).toBeAttached();
   }
@@ -53,7 +56,7 @@ for (const theme of ["dark", "light"] as const) {
   for (const scenario of SCENARIOS) {
     test(`@dashboard-shots ${scenario} in ${theme} theme`, async ({ page }) => {
       await page.setViewportSize({ width: 1440, height: 900 });
-      await page.goto(scenario === "unavailable" ? "/" : `/?scenario=${scenario}`);
+      await page.goto(scenario === "fresh" ? "/" : `/?scenario=${scenario}`);
       await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
       await setTheme(page, theme);
       await ready(page, scenario);
