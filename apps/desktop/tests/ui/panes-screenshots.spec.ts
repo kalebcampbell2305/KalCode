@@ -24,7 +24,8 @@ const panes = (page: Page) => page.locator("[data-pane-id]:not([hidden])");
 const pane = (page: Page, n: number) => panes(page).nth(n);
 
 async function shot(page: Page, name: string) {
-  // Let xterm fit and the provider TUI settle.
+  // No hover tooltips in review shots; let xterm fit and the provider TUI settle.
+  await page.mouse.move(1, 1);
   await page.waitForTimeout(450);
   await page.screenshot({ path: `${OUT}${name}.png` });
 }
