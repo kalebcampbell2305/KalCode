@@ -4,7 +4,7 @@
  */
 import { getApp, initAutoApps } from "./app";
 import { bindPushToTalk } from "./ptt";
-import { qsa, whenNear } from "./util";
+import { qsa, reducedMotion, whenNear } from "./util";
 
 type Say = "dictation" | "command";
 
@@ -38,6 +38,22 @@ function wire(block: HTMLElement): void {
       showNext("dictation");
     }
   });
+
+  // The stage plays its first take by itself, once, when it is well in view.
+  if (block.dataset.autoplay === "true" && !reducedMotion()) {
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (!entries.some((e) => e.isIntersecting)) return;
+        io.disconnect();
+        const app = getApp(root);
+        if (app.voiceBusy || next() !== "dictation") return;
+        app.dictate();
+        showNext("command");
+      },
+      { threshold: 0.5 },
+    );
+    io.observe(root);
+  }
 }
 
 initAutoApps();

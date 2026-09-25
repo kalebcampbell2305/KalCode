@@ -12,14 +12,18 @@ import StageLabel from "./parts/StageLabel.astro";
 
 interface Props {
   id?: string;
+  headingLevel?: 2 | 3 | 4;
+  /** compact: a small panel (about 380 × 260, no outer frame) for a card the page draws. */
+  width?: "compact" | "contained" | "wide" | "full";
   class?: string;
 }
-const { id = "providers", class: className } = Astro.props;
+const { id = "providers", width = "contained", class: className } = Astro.props;
+const compact = width === "compact";
 const threadFor = { claude: "claude-checkout", codex: "codex-signup", gemini: "gemini-research" } as const;
 ---
 <StageStyles />
-<div class:list={["kc-ps", className]} data-kc-ps data-testid="provider-switch">
-  <StageLabel tag="Claude Code adapter built · Codex and Gemini CLI planned" />
+<div class:list={["kc-ps", compact ? "kc-ps--compact" : `kc-w--${width}`, className]} data-kc-ps data-testid="provider-switch">
+  {!compact && <StageLabel tag="Claude Code adapter built · Codex and Gemini CLI planned" />}
   <div class="kc-ps__tabs" role="tablist" aria-label="Provider">
     {AGENT_PROVIDERS.map((p, i) => (
       <button
@@ -53,6 +57,7 @@ const threadFor = { claude: "claude-checkout", codex: "codex-signup", gemini: "g
       </div>
     ))}
   </div>
+  {compact && <StageLabel class="kc-ps__label" tag="Claude Code adapter built · others planned" />}
   <p class="visually-hidden" aria-live="polite" data-kc-ps-live></p>
 </div>
 

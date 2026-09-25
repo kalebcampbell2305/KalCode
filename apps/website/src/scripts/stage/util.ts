@@ -169,7 +169,15 @@ export function fitLog(log: HTMLElement): void {
       break;
     }
     if (child.classList.contains("kc-diff")) {
-      for (const row of Array.from(child.children)) if (row.getBoundingClientRect().top < edge) cut.push(row);
+      for (const row of Array.from(child.children)) {
+        const top = row.getBoundingClientRect().top;
+        if (top < edge) cut.push(row);
+        else {
+          firstShown = top;
+          break;
+        }
+      }
+      if (firstShown > edge) break;
     } else cut.push(child);
   }
   for (const el of cut) el.setAttribute("data-clipped", "");

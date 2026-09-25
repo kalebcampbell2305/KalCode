@@ -1,0 +1,13 @@
+---
+/** The workspace status bar (planned): core, branch, activity, KalVoice key, mode. */
+import { VOICE } from "../../../data/story";
+---
+<div class="kc-ws__status" aria-hidden="true">
+  <span><span class="kc-dot" data-tone="live"></span>Core running</span>
+  <span><span class="kc-i" data-i="branch"></span>feat/rate-limit</span>
+  <span data-kc-statusline>3 working · 1 needs approval</span>
+  <span class="kc-ws__statusgap"></span>
+  <span><span class="kc-i" data-i="voice"></span>KalVoice ready · {VOICE.key}</span>
+  <span>Approve mode</span>
+  <span>UTF-8 · LF</span>
+</div>

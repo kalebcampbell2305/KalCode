@@ -28,14 +28,22 @@ test.describe("TryKalCode", () => {
   test("provider buttons open and focus the matching pane", async ({ page }) => {
     const block = await open(page);
     const app = block.locator("[data-kc-app]");
+    // The workspace opens with Claude Code, Codex and Gemini CLI side by side.
+    await expect(app).toHaveAttribute("data-count", "3");
     await block.getByTestId("try-provider-gemini").click();
     const gemini = block.getByTestId("pane-gemini-research");
     await expect(gemini).toBeVisible();
     await expect(gemini).toHaveAttribute("data-focus", "true");
     await expect(block.getByTestId("try-provider-gemini")).toHaveAttribute("aria-pressed", "true");
     await expect(block.getByTestId("try-provider-claude")).toHaveAttribute("aria-pressed", "false");
-    await expect(app).toHaveAttribute("data-count", "3");
 
+    // Closing Codex, then asking for it again, reopens its pane.
+    await block.getByTestId("pane-codex-signup").hover();
+    await block
+      .getByTestId("pane-codex-signup")
+      .getByRole("button", { name: /^Close/ })
+      .click();
+    await expect(app).toHaveAttribute("data-count", "2");
     await block.getByTestId("try-provider-codex").click();
     await expect(block.getByTestId("pane-codex-signup")).toHaveAttribute("data-focus", "true");
     await expect(app).toHaveAttribute("data-count", "3");
@@ -63,11 +71,11 @@ test.describe("TryKalCode", () => {
   test("Split pane toggles stacked and side by side", async ({ page }) => {
     const block = await open(page);
     const app = block.locator("[data-kc-app]");
-    await expect(app).toHaveAttribute("data-layout", "rows");
-    await block.getByTestId("try-split").click();
     await expect(app).toHaveAttribute("data-layout", "cols");
     await block.getByTestId("try-split").click();
     await expect(app).toHaveAttribute("data-layout", "rows");
+    await block.getByTestId("try-split").click();
+    await expect(app).toHaveAttribute("data-layout", "cols");
   });
 
   test("Open browser and Open dashboard switch the dock", async ({ page }) => {
@@ -208,7 +216,22 @@ test.describe("TryKalCode", () => {
     await block.getByTestId("try-reset").click();
     await expect(block.getByTestId("pane-new-1")).toHaveCount(0);
     const app = block.locator("[data-kc-app]");
-    await expect(app).toHaveAttribute("data-count", "2");
-    await expect(app).toHaveAttribute("data-layout", "rows");
+    await expect(app).toHaveAttribute("data-count", "3");
+    await expect(app).toHaveAttribute("data-layout", "cols");
+  });
+
+  test("workspace chrome: explorer, Threads panel and status bar", async ({ page }) => {
+    const block = await open(page);
+    await expect(block.locator(".kc-explorer")).toContainText("reserve.ts");
+    await expect(block.locator(".kc-explorer")).toContainText("Planned");
+    await expect(block.getByTestId("dock-tab-threads")).toHaveAttribute("aria-selected", "true");
+    await expect(block.getByTestId("threads-panel")).toContainText("Validate signup input");
+    await expect(block.locator(".kc-ws__status")).toContainText("KalVoice ready");
+    // A thread in the panel focuses its terminal.
+    await block
+      .getByTestId("threads-panel")
+      .getByRole("button", { name: /Gemini CLI, Research/ })
+      .click();
+    await expect(block.getByTestId("pane-gemini-research")).toHaveAttribute("data-focus", "true");
   });
 });

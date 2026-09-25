@@ -1,0 +1,109 @@
+---
+/**
+ * KalVoiceStage: one spoken command becoming coordinated work. A large KalVoice orb in a live
+ * waveform ring, the minimal KalVoice widget status (Ready → Listening → Processing → Executing →
+ * Done), one push-to-talk key (F8), and beside it the words as they are heard ("Build a user
+ * authentication system with tests.") followed by the run: Planning → Claude Code implementing →
+ * Codex reviewing → Tests passing → Done. Voice-only: no text box, no send button. "Type it
+ * instead" stops the run and types the words into the focused pane.
+ *
+ * `width="compact"` renders a self-contained panel (about 560 × 360) with no outer frame, for a
+ * card the page draws. The run plays once by itself when in view; holding the key plays it again.
+ * No microphone is used: the waveform is baked sample data.
+ */
+import { VOICE, VOICE_FLOW } from "../../data/story";
+import Glyph from "./parts/Glyph.astro";
+import StageLabel from "./parts/StageLabel.astro";
+import StageStyles from "./parts/StageStyles.astro";
+import StatusLabel from "./parts/StatusLabel.astro";
+
+interface Props {
+  id?: string;
+  headingLevel?: 2 | 3 | 4;
+  width?: "compact" | "contained" | "wide" | "full";
+  class?: string;
+}
+const { id = "kalvoice-stage", width = "wide", class: className } = Astro.props;
+const compact = width === "compact";
+const spokes = Array.from({ length: compact ? 40 : 56 }, (_, i) => VOICE.amplitudes[(i * 3) % VOICE.amplitudes.length] ?? 0.2);
+---
+<StageStyles />
+<div
+  class:list={["kc-vs", compact ? "kc-vs--compact" : `kc-w--${width}`, className]}
+  id={id}
+  data-kc-vs
+  data-state="done"
+  data-step="done"
+  data-testid="kalvoice-stage"
+>
+  {!compact && (
+    <div class="kc-vs__head">
+      <StageLabel tag="Preview · KalVoice commands and multi-agent runs are in development" />
+      <button type="button" class="button button--secondary button--sm" data-kc-vs-replay data-testid="kvs-replay">
+        <span class="kc-i" data-i="replay" aria-hidden="true"></span>Play again
+      </button>
+    </div>
+  )}
+
+  <div class="kc-vs__body">
+    <div class="kc-vs__voice">
+      <div class="kc-vs__orbwrap" aria-hidden="true">
+        <span class="kc-vs__halo"></span>
+        <div class="kc-vs__ring" data-kc-vs-wave>
+          {spokes.map((a) => (
+            <span class="kc-vs__spoke"><span class="kc-wave__bar" data-l={Math.max(1, Math.round(a * 10))}></span></span>
+          ))}
+        </div>
+        <picture>
+          <source srcset="/assets/brand/kalvoice-globe-600.avif" type="image/avif" />
+          <img class="kc-vs__orb" src="/assets/brand/kalvoice-globe-600.webp" alt="" width="600" height="600" loading="lazy" decoding="async" data-kc-vs-orb />
+        </picture>
+      </div>
+      <p class="kc-vs__widget" data-testid="kalvoice-widget">
+        <span class="kc-vs__wdot" aria-hidden="true"></span>
+        <span class="kc-vs__brand">KALVOICE</span>
+        <span data-kc-vs-label data-testid="kalvoice-state">Done</span>
+      </p>
+      <button type="button" class="kc-vd__key kc-vs__key" data-kc-vs-hold aria-describedby={`${id}-hint`} aria-keyshortcuts={VOICE.key} data-testid="kv-hold">
+        <kbd>{VOICE.key}</kbd>
+        <span>Hold to talk</span>
+      </button>
+      <p class="kc-vs__hint" id={`${id}-hint`}>{VOICE.hint}. Press and hold, speak, release.</p>
+    </div>
+
+    <div class="kc-vs__flow">
+      <figure class="kc-vs__quote">
+        <span class="kc-vs__mic" aria-hidden="true"><span class="kc-i" data-i="mic"></span></span>
+        <blockquote class="kc-vs__text" data-kc-vs-text data-testid="kalvoice-transcript">“{VOICE_FLOW.phrase}”</blockquote>
+      </figure>
+      <div class="kc-vs__cmd" data-testid="kalvoice-command">
+        <span class="kc-i" data-i="voice" aria-hidden="true"></span>
+        <span>Command recognised</span>
+        <button type="button" class="kc-voice__instead" data-kc-vs-instead data-testid="kalvoice-type-instead">Type it instead</button>
+      </div>
+      <ol class="kc-vs__steps" role="list" data-testid="kalvoice-steps">
+        {VOICE_FLOW.steps.map((s) => (
+          <li class="kc-vs__step" data-step={s.id} data-state="done">
+            <span class="kc-vs__who">{s.provider ? <Glyph provider={s.provider} /> : <span class="kc-i" data-i="missions" aria-hidden="true"></span>}</span>
+            <span class="kc-vs__sl">
+              <b>{s.label}</b>
+              <span>{s.detail}</span>
+            </span>
+            <span class="kc-vs__ss">
+              <span data-for="queued" class="kc-mg__queued"><span class="kc-mg__ring" aria-hidden="true"></span>Queued</span>
+              <span data-for="active"><StatusLabel status={s.status} /></span>
+              <span data-for="done"><StatusLabel status="completed" /></span>
+            </span>
+          </li>
+        ))}
+      </ol>
+      <p class="kc-vs__done" data-kc-vs-done data-testid="kalvoice-result"><span class="kc-i" data-i="done" aria-hidden="true"></span><span data-kc-vs-result>{VOICE_FLOW.done}</span></p>
+    </div>
+  </div>
+  {compact && <StageLabel class="kc-vs__compactlabel" tag="In development" />}
+  <p class="visually-hidden" aria-live="polite" data-kc-vs-live data-testid={`live-${id}`}></p>
+</div>
+
+<script>
+  import "../../scripts/stage/voice-stage";
+</script>

@@ -1,0 +1,35 @@
+---
+/**
+ * TimelineStage (planned): a thread's run as a horizontal, scrollable timeline of checkpoints,
+ * from the prompt through edits, the approval and the test run to the result. Keyboard: the
+ * track is focusable and scrolls with the arrow keys. Labelled Planned.
+ */
+import { PROVIDERS, TIMELINE } from "../../data/story";
+import Glyph from "./parts/Glyph.astro";
+import StageLabel from "./parts/StageLabel.astro";
+import StageStyles from "./parts/StageStyles.astro";
+
+interface Props {
+  id?: string;
+  headingLevel?: 2 | 3 | 4;
+  width?: "contained" | "wide" | "full";
+  class?: string;
+}
+const { id = "timeline", width = "wide", class: className } = Astro.props;
+---
+<StageStyles />
+<div class:list={["kc-tl", `kc-w--${width}`, className]} id={id} data-testid="timeline-stage">
+  <div class="kc-tl__head">
+    <StageLabel tag="Planned · the time machine is not in the app yet" />
+    <p class="kc-tl__thread"><Glyph provider={TIMELINE.provider} />{PROVIDERS[TIMELINE.provider].name} · <b>{TIMELINE.thread}</b></p>
+  </div>
+  <ol class="kc-tl__track" role="list" tabindex="0" aria-label={`Timeline of “${TIMELINE.thread}”, ${TIMELINE.events.length} checkpoints. Scroll sideways to see them all.`}>
+    {TIMELINE.events.map((e) => (
+      <li class="kc-tl__event" data-kind={e.kind}>
+        <span class="kc-tl__t">{e.t}</span>
+        <span class="kc-tl__label">{e.label}</span>
+        <span class="kc-tl__detail">{e.detail}</span>
+      </li>
+    ))}
+  </ol>
+</div>

@@ -1,0 +1,120 @@
+---
+/**
+ * MissionGraph (planned surface): one objective fans out to several agents working in parallel,
+ * their results flow along the dependency paths, and the graph collapses into one verified result.
+ *
+ * Nodes are HTML over an SVG of edges (one 1200 × 560 box, so both scale together). Light travels
+ * along the paths (SVG animateMotion, no inline styles). Hovering or focusing a node reveals what it
+ * depends on and what it unblocks. Without JS or with reduced motion the finished graph is shown;
+ * on phones the graph becomes a vertical flow.
+ */
+import { MISSION_GRAPH } from "../../data/story";
+import Glyph from "./parts/Glyph.astro";
+import StageLabel from "./parts/StageLabel.astro";
+import StageStyles from "./parts/StageStyles.astro";
+import StatusLabel from "./parts/StatusLabel.astro";
+
+interface Props {
+  id?: string;
+  headingLevel?: 2 | 3 | 4;
+  width?: "contained" | "wide" | "full";
+  class?: string;
+}
+const { id = "mission", width = "wide", class: className } = Astro.props;
+
+const nodes = MISSION_GRAPH.nodes;
+const byId = new Map(nodes.map((n) => [n.id, n]));
+/** Half a node card in graph units (width 188; height about 104). */
+const HALF = 94;
+const HALF_H = 52;
+const edges = MISSION_GRAPH.edges.map(([from, to]) => {
+  const a = byId.get(from);
+  const b = byId.get(to);
+  if (!a || !b) throw new Error(`Unknown mission edge ${from} → ${to}`);
+  const eid = `${id}-e-${from}-${to}`;
+  if (Math.abs(a.x - b.x) < HALF) {
+    // Same column: hand over straight down, card edge to card edge.
+    const dir = b.y > a.y ? 1 : -1;
+    const y1 = a.y + dir * HALF_H;
+    const y2 = b.y - dir * HALF_H;
+    return { from, to, id: eid, d: `M ${a.x} ${y1} C ${a.x} ${y1 + dir * 24}, ${b.x} ${y2 - dir * 24}, ${b.x} ${y2}` };
+  }
+  const x1 = a.x + HALF;
+  const x2 = b.x - HALF;
+  const bend = Math.max(60, (x2 - x1) * 0.5);
+  return { from, to, id: eid, d: `M ${x1} ${a.y} C ${x1 + bend} ${a.y}, ${x2 - bend} ${b.y}, ${x2} ${b.y}` };
+});
+const upstream = (n: string): string[] => MISSION_GRAPH.edges.filter(([, to]) => to === n).map(([from]) => from);
+const downstream = (n: string): string[] => MISSION_GRAPH.edges.filter(([from]) => from === n).map(([, to]) => to);
+const roleOf = (n: string) => byId.get(n)?.role ?? n;
+const depsText = (n: string) => {
+  const up = upstream(n).map(roleOf);
+  const down = downstream(n).map(roleOf);
+  return [up.length ? `Depends on ${up.join(", ")}.` : "Starts the mission.", down.length ? `Unblocks ${down.join(", ")}.` : "Produces the verified result."].join(" ");
+};
+---
+<StageStyles />
+<div
+  class:list={["kc-mg", `kc-w--${width}`, className]}
+  id={id}
+  data-kc-mg
+  data-stage="verified"
+  data-testid="mission-graph"
+>
+  <div class="kc-mg__head">
+    <StageLabel tag="Planned · missions are not in the app yet" />
+    <p class="kc-mg__objective"><span class="kc-i" data-i="missions" aria-hidden="true"></span><span>Goal:</span> <b>{MISSION_GRAPH.objective}</b></p>
+    <button type="button" class="kc-btn kc-btn--ghost kc-mg__replay" data-kc-mg-replay data-testid="mission-replay">
+      <span class="kc-i" data-i="replay" aria-hidden="true"></span>Run again
+    </button>
+  </div>
+
+  <div class="kc-mg__board" data-kc-mg-board role="group" aria-label="Mission graph, a planned KalCode feature: the planner fans the goal out to research, coding and frontend agents; their work goes through review and tests; the production deploy waits for your approval.">
+    <svg class="kc-mg__edges" viewBox="0 0 1200 560" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+      {edges.map((e) => (
+        <path id={e.id} class="kc-mg__edge" d={e.d} pathLength="1" data-from={e.from} data-to={e.to} data-state="done" vector-effect="non-scaling-stroke" />
+      ))}
+      {edges.map((e) => (
+        <circle class="kc-mg__pulse" r="5" cx="0" cy="0" data-from={e.from} data-to={e.to}>
+          <animateMotion begin="indefinite" dur="0.95s" fill="remove" calcMode="spline" keyTimes="0;1" keySplines="0.45 0 0.2 1">
+            <mpath href={`#${e.id}`} />
+          </animateMotion>
+        </circle>
+      ))}
+    </svg>
+
+    <ol class="kc-mg__nodes" role="list">
+      {nodes.map((n) => (
+        <li class:list={["kc-mg__node", `kc-mg__node--${n.id}`]} data-node={n.id} data-kind={n.kind} data-end={n.end} data-state="done">
+          <button type="button" class="kc-mg__card" data-kc-mg-node={n.id} aria-describedby={`${id}-deps-${n.id}`} data-testid={`mission-node-${n.id}`}>
+            <span class="kc-mg__top">
+              {n.provider ? <Glyph provider={n.provider} /> : <span class="kc-i" data-i={n.kind === "verify" ? "shield" : "missions"} aria-hidden="true"></span>}
+              <b class="kc-mg__role">{n.role}</b>
+            </span>
+            <span class="kc-mg__who">{n.who}</span>
+            <span class="kc-mg__detail">{n.detail}</span>
+            <span class="kc-mg__status">
+              <span class="kc-mg__st" data-for="waiting"><span class="kc-mg__queued"><span class="kc-mg__ring" aria-hidden="true"></span>Queued</span></span>
+              <span class="kc-mg__st" data-for="active"><StatusLabel status={n.working} /></span>
+              <span class="kc-mg__st" data-for="done"><StatusLabel status={n.end === "approval" ? "waiting_for_permission" : "completed"} /></span>
+            </span>
+          </button>
+          <span class="visually-hidden" id={`${id}-deps-${n.id}`}>{depsText(n.id)}</span>
+        </li>
+      ))}
+    </ol>
+
+    <div class="kc-mg__result" data-kc-mg-result data-testid="mission-result">
+      <span class="kc-mg__resultmark" aria-hidden="true"><span class="kc-i" data-i="check"></span></span>
+      <span class="kc-mg__resulttext">
+        <b>Verified · {MISSION_GRAPH.checks.length} checks passed</b>
+        <span>{MISSION_GRAPH.checks.join(" · ")}. The production deploy waits for your approval.</span>
+      </span>
+    </div>
+  </div>
+  <p class="visually-hidden" aria-live="polite" data-kc-mg-live></p>
+</div>
+
+<script>
+  import "../../scripts/stage/mission-graph";
+</script>

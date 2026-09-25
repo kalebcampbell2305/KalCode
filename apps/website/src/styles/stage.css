@@ -8,6 +8,8 @@
  */
 @import "../../../../packages/ui/src/styles/terminal.css";
 @import "../components/stage/icons.css";
+@import "../components/stage/moments.css";
+@import "../components/stage/workspace.css";
 
 /* ================================================================ shared bits */
 
@@ -15,7 +17,8 @@
  * Status accents (owner spec): waiting for you (Needs approval, Needs your reply) is neutral
  * grey; amber is reserved for Paused. The desktop app follows in Z7.
  */
-:root {
+:root,
+[data-theme] {
   --kc-attention: var(--color-idle);
   --kc-attention-soft: var(--color-idle-soft);
   --kc-paused: var(--color-waiting);
@@ -24,7 +27,23 @@
 
 /* State-driven parts use the hidden attribute; component display rules must never revive them. */
 /* biome-ignore-start lint/complexity/noImportantStyles: hidden must win over component display rules. */
-:where(.kc-app, .kc-still, .kc-ps, .kc-pm, .kc-story, .kc-ba, .kc-demo, .kc-vd, .kc-try) [hidden] {
+:where(
+  .kc-app,
+  .kc-still,
+  .kc-ps,
+  .kc-pm,
+  .kc-story,
+  .kc-ba,
+  .kc-demo,
+  .kc-vd,
+  .kc-try,
+  .kc-ws,
+  .kc-maw,
+  .kc-vs,
+  .kc-cc,
+  .kc-mg,
+  .kc-tl
+) [hidden] {
   display: none !important;
 }
 /* biome-ignore-end lint/complexity/noImportantStyles: - */
@@ -650,7 +669,7 @@ button.kc-rail__thread:hover {
 }
 
 .kc-app[data-count="3"][data-layout="cols"] .kc-grid {
-  grid-template: "a b" minmax(0, 1fr) "a c" minmax(0, 1fr) / minmax(0, 1fr) minmax(0, 1fr);
+  grid-template: "a b c" minmax(0, 1fr) / minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
 }
 
 .kc-app[data-count="4"] .kc-grid {
@@ -823,7 +842,7 @@ button.kc-rail__thread:hover {
 }
 
 @container kc-pane (max-width: 300px) {
-  .kc-pane__provider {
+  .kc-pane__meta .kc-status__text {
     display: none;
   }
 }
@@ -3255,14 +3274,7 @@ button.kc-voice__instead:hover {
 /* ================================================================ motion: panes and lines */
 
 .kc-pane[data-enter] {
-  animation: kc-pane-in var(--dur-base) var(--ease-out) both;
-}
-
-@keyframes kc-pane-in {
-  from {
-    opacity: 0;
-    transform: scale(0.985);
-  }
+  animation: kc-pane-in 520ms var(--ease-expo) both;
 }
 
 .kc-dock[data-enter] > * {
@@ -4476,17 +4488,29 @@ button.kc-voice__instead:hover {
 /* ================================================================ reduced motion */
 
 @media (prefers-reduced-motion: reduce) {
-  :root:not([data-motion="full"]) :is(.kc-app, .kc-story, .kc-ba, .kc-pm, .kc-ps, .kc-still, .kc-vd) *,
-  :root:not([data-motion="full"]) :is(.kc-app, .kc-story, .kc-ba, .kc-pm, .kc-ps, .kc-still, .kc-vd) *::before,
-  :root:not([data-motion="full"]) :is(.kc-app, .kc-story, .kc-ba, .kc-pm, .kc-ps, .kc-still, .kc-vd) *::after {
+  :root:not([data-motion="full"])
+    :is(.kc-app, .kc-story, .kc-ba, .kc-pm, .kc-ps, .kc-still, .kc-vd, .kc-maw, .kc-vs, .kc-cc, .kc-mg, .kc-tl, .kc-ws)
+    *,
+  :root:not([data-motion="full"])
+    :is(.kc-app, .kc-story, .kc-ba, .kc-pm, .kc-ps, .kc-still, .kc-vd, .kc-maw, .kc-vs, .kc-cc, .kc-mg, .kc-tl, .kc-ws)
+    *::before,
+  :root:not([data-motion="full"])
+    :is(.kc-app, .kc-story, .kc-ba, .kc-pm, .kc-ps, .kc-still, .kc-vd, .kc-maw, .kc-vs, .kc-cc, .kc-mg, .kc-tl, .kc-ws)
+    *::after {
     animation: none !important;
     transition: none !important;
   }
 }
 
-[data-motion="reduced"] :is(.kc-app, .kc-story, .kc-ba, .kc-pm, .kc-ps, .kc-still, .kc-vd) *,
-[data-motion="reduced"] :is(.kc-app, .kc-story, .kc-ba, .kc-pm, .kc-ps, .kc-still, .kc-vd) *::before,
-[data-motion="reduced"] :is(.kc-app, .kc-story, .kc-ba, .kc-pm, .kc-ps, .kc-still, .kc-vd) *::after {
+[data-motion="reduced"]
+  :is(.kc-app, .kc-story, .kc-ba, .kc-pm, .kc-ps, .kc-still, .kc-vd, .kc-maw, .kc-vs, .kc-cc, .kc-mg, .kc-tl, .kc-ws)
+  *,
+[data-motion="reduced"]
+  :is(.kc-app, .kc-story, .kc-ba, .kc-pm, .kc-ps, .kc-still, .kc-vd, .kc-maw, .kc-vs, .kc-cc, .kc-mg, .kc-tl, .kc-ws)
+  *::before,
+[data-motion="reduced"]
+  :is(.kc-app, .kc-story, .kc-ba, .kc-pm, .kc-ps, .kc-still, .kc-vd, .kc-maw, .kc-vs, .kc-cc, .kc-mg, .kc-tl, .kc-ws)
+  *::after {
   animation: none !important;
   transition: none !important;
 }

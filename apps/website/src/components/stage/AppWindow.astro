@@ -19,6 +19,7 @@ import {
   FRESH_PLACEHOLDER,
   PROVIDERS,
   type ProviderId,
+  type DockTab,
   type Scene,
   THREADS,
   type Thread,
@@ -33,6 +34,8 @@ import MissionStrip from "./parts/MissionStrip.astro";
 import Pane from "./parts/Pane.astro";
 import PermissionsPanel from "./parts/PermissionsPanel.astro";
 import Rail from "./parts/Rail.astro";
+import StatusBar from "./parts/StatusBar.astro";
+import ThreadsPanel from "./parts/ThreadsPanel.astro";
 
 interface Props {
   /** Unique id on the page (prefixes every id inside). */
@@ -46,6 +49,16 @@ interface Props {
   auto?: boolean;
   /** A sequence to play once, the first time the window is in view (e.g. "reveal" in the hero). */
   intro?: "reveal" | "approve" | "dictate" | "command" | "mission";
+  /** Panes the window may show at once (4 in the demos, 6 on the multi-agent wall). */
+  maxPanes?: 4 | 6;
+  /**
+   * For windows that are pictures: every pane and dock panel any of its scenes will show. Only
+   * these are rendered (smaller pages). Defaults to the initial scene. Interactive windows render all.
+   */
+  panesUsed?: readonly string[];
+  docksUsed?: readonly DockTab[];
+  /** "workspace": explorer in the rail, a Threads tab in the dock and a status bar (round-3 workspace). */
+  chrome?: "app" | "workspace";
   class?: string;
 }
 
@@ -57,6 +70,10 @@ const {
   size = "section",
   auto = true,
   intro,
+  maxPanes = 4,
+  panesUsed,
+  docksUsed,
+  chrome = "app",
   class: className,
 } = Astro.props;
 
@@ -65,6 +82,8 @@ const spawns: readonly string[] = VOICE.spawns;
 const present = spawns.filter((s) => scene.panes.includes(s) || scene.voice === "spawned" || scene.mission > 0);
 const focusThread = THREADS.find((t) => t.id === scene.focus);
 const dock = scene.view === "dashboard" && scene.dock === "dashboard" ? "browser" : scene.dock;
+const usePane = (tid: string) => interactive || (panesUsed ?? scene.panes).includes(tid);
+const useDock = (d: DockTab) => interactive || (docksUsed ?? [dock]).includes(d);
 
 const fresh = (p: ProviderId): Thread => ({
   id: `fresh-${p}`,
@@ -82,7 +101,9 @@ const fresh = (p: ProviderId): Thread => ({
   placeholder: FRESH_PLACEHOLDER[p],
 });
 
+const workspaceChrome = chrome === "workspace";
 const dockTabs = [
+  ...(workspaceChrome ? [{ id: "threads", label: "Threads", icon: "threads" } as const] : []),
   { id: "browser", label: "Browser", icon: "globe" },
   { id: "dashboard", label: "Dashboard", icon: "dashboard" },
   { id: "permissions", label: "Permissions", icon: "shield" },
@@ -97,11 +118,12 @@ const statusBy = (t: Thread) =>
 ---
 <StageStyles />
 <div
-  class:list={["kc-app", `kc-app--${size}`, className]}
+  class:list={["kc-app", `kc-app--${size}`, workspaceChrome && "kc-app--workspace", className]}
   id={id}
   data-kc-app
   data-kc-auto={auto ? "true" : undefined}
   data-kc-intro={intro}
+  data-max-panes={maxPanes}
   data-interactive={interactive ? "true" : "false"}
   data-view={scene.view}
   data-dock={dock}
@@ -147,7 +169,7 @@ const statusBy = (t: Thread) =>
     </div>
 
     <div class="kc-app__body">
-      <Rail threads={THREADS} approval={scene.approval} interactive={interactive} focus={scene.focus} view={scene.view} present={present} />
+      <Rail threads={THREADS} approval={scene.approval} interactive={interactive} focus={scene.focus} view={scene.view} present={present} explorer={workspaceChrome} />
 
       <div class="kc-app__main" data-kc-main>
         <div class="kc-app__center">
@@ -156,6 +178,7 @@ const statusBy = (t: Thread) =>
             {THREADS.map((t) => {
               const slot = scene.panes.indexOf(t.id);
               // Closed panes wait in templates: parsed, but no style or layout work until opened.
+              if (slot < 0 && !usePane(t.id)) return null;
               return slot >= 0 ? (
                 <Pane thread={t} approval={scene.approval} interactive={interactive} open={true} focus={scene.focus === t.id} position={slot} />
               ) : (
@@ -204,23 +227,42 @@ const statusBy = (t: Thread) =>
               </button>
             )}
           </div>
+          {workspaceChrome && (
+            <div class="kc-dock__panel" data-kc-panel="threads" id={`${id}-panel-threads`} role={interactive ? "tabpanel" : undefined} aria-labelledby={interactive ? `${id}-tab-threads` : undefined} hidden={dock !== "threads"}>
+              <ThreadsPanel approval={scene.approval} interactive={interactive} />
+            </div>
+          )}
           <div class="kc-dock__panel" data-kc-panel="browser" id={`${id}-panel-browser`} role={interactive ? "tabpanel" : undefined} aria-labelledby={interactive ? `${id}-tab-browser` : undefined} hidden={dock !== "browser"}>
-            {dock === "browser" ? <BrowserPreview interactive={interactive} /> : <template data-kc-lazy><BrowserPreview interactive={interactive} /></template>}
+            {dock === "browser" ? (
+              <BrowserPreview interactive={interactive} />
+            ) : (
+              useDock("browser") && <template data-kc-lazy><BrowserPreview interactive={interactive} /></template>
+            )}
           </div>
           <div class="kc-dock__panel" data-kc-panel="dashboard" id={`${id}-panel-dashboard`} role={interactive ? "tabpanel" : undefined} aria-labelledby={interactive ? `${id}-tab-dashboard` : undefined} hidden={dock !== "dashboard"} data-kc-dash-home>
-            {scene.view !== "dashboard" && <DashboardPanel uid={id} approval={scene.approval} interactive={interactive} present={present} />}
+            {scene.view !== "dashboard" &&
+              (dock === "dashboard" ? (
+                <DashboardPanel uid={id} approval={scene.approval} interactive={interactive} present={present} />
+              ) : (
+                useDock("dashboard") && (
+                  <template data-kc-lazy><DashboardPanel uid={id} approval={scene.approval} interactive={interactive} present={present} /></template>
+                )
+              ))}
           </div>
           <div class="kc-dock__panel" data-kc-panel="permissions" id={`${id}-panel-permissions`} role={interactive ? "tabpanel" : undefined} aria-labelledby={interactive ? `${id}-tab-permissions` : undefined} hidden={dock !== "permissions"}>
             {dock === "permissions" ? (
               <PermissionsPanel uid={id} mode={scene.mode} approval={scene.approval} interactive={interactive} variant="compact" />
             ) : (
-              <template data-kc-lazy><PermissionsPanel uid={id} mode={scene.mode} approval={scene.approval} interactive={interactive} variant="compact" /></template>
+              useDock("permissions") && (
+                <template data-kc-lazy><PermissionsPanel uid={id} mode={scene.mode} approval={scene.approval} interactive={interactive} variant="compact" /></template>
+              )
             )}
           </div>
         </aside>
       </div>
 
     </div>
+    {workspaceChrome && <StatusBar />}
   </div>
 
   {interactive && (
