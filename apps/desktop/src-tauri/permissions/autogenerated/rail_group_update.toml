@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-rail-group-update"
+description = "Enables the rail_group_update command without any pre-configured scope."
+commands.allow = ["rail_group_update"]
+
+[[permission]]
+identifier = "deny-rail-group-update"
+description = "Denies the rail_group_update command without any pre-configured scope."
+commands.deny = ["rail_group_update"]

@@ -790,6 +790,64 @@ fn build_rules() -> Vec<Rule> {
         );
     }
 
+    // Search sessions (the Session Locator, Z7-W2). The query goes to the local index only and
+    // is never stored; KalVoice reads back names and statuses, never content.
+    for p in [
+        "(search|look) (for|up) <name>",
+        "search [my|the] (threads|sessions|workspaces|everything) (for|about) <name>",
+        "find [me] [the|my] (thread|session|workspace|project|terminal) (about|for|called|named) <name>",
+        "find [me] [the|my] (thread|session|workspace|project) <name>",
+    ] {
+        add(
+            p.into(),
+            Box::new(|c| {
+                Understood::intent(KalVoiceIntent::Search {
+                    query: c.names.first().cloned().unwrap_or_default(),
+                })
+            }),
+        );
+    }
+    // "What was I working on yesterday?" — recent work, answered from the event log.
+    for (when, query) in [
+        ("yesterday", "yesterday"),
+        ("today", "today"),
+        ("this week", "this week"),
+        ("last week", "last week"),
+        ("lately", "recent"),
+        ("recently", "recent"),
+    ] {
+        for p in [
+            format!("what (was|were) (i|we) (working on|doing) {when}"),
+            format!("what did (i|we) (work on|do) {when}"),
+            format!("(find|show|show me|find me) what (i|we) (was|were) (working on|doing) {when}"),
+            format!("(find|show|show me) [my] (recent work|work) [from] {when}"),
+        ] {
+            let query = query.to_owned();
+            add(
+                p,
+                Box::new(move |_| {
+                    Understood::intent(KalVoiceIntent::Search {
+                        query: query.clone(),
+                    })
+                }),
+            );
+        }
+    }
+    for p in [
+        "what (was|were) (i|we) (working on|doing)",
+        "(find|show|show me) what (i|we) (was|were) (working on|doing)",
+        "(show|show me) [my] recent work",
+    ] {
+        add(
+            p.into(),
+            Box::new(|_| {
+                Understood::intent(KalVoiceIntent::Search {
+                    query: "recent".into(),
+                })
+            }),
+        );
+    }
+
     // Ask for a thread's permission mode to change. KalVoice only asks: the person confirms the
     // change in KalCode. Bypass can't be requested at all (the contract can't represent it).
     for (word, mode) in [

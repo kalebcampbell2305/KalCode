@@ -4,4 +4,4 @@ import type { SurfaceId } from "./SurfaceId.ts";
 /**
  * Something the UI does as part of a result (navigation lives in the UI).
  */
-export type UiDirective = { "kind": "navigate", surface: SurfaceId, } | { "kind": "open_workspace", workspaceId: string, } | { "kind": "open_thread", threadId: string, } | { "kind": "open_terminal", workspaceId: string, terminalId: string, } | { "kind": "show_approvals" };
+export type UiDirective = { "kind": "navigate", surface: SurfaceId, } | { "kind": "open_workspace", workspaceId: string, } | { "kind": "open_thread", threadId: string, } | { "kind": "open_terminal", workspaceId: string, terminalId: string, } | { "kind": "show_approvals" } | { "kind": "search", query: string, };

@@ -76,6 +76,23 @@
     "allow-provider-pane-detach",
     "allow-provider-pane-write",
     "allow-provider-pane-resize",
-    "allow-provider-pane-info"
+    "allow-provider-pane-info",
+    "allow-locator-search",
+    "allow-locator-open",
+    "allow-rail-state",
+    "allow-rail-update",
+    "allow-rail-section-set",
+    "allow-rail-group-create",
+    "allow-rail-group-update",
+    "allow-rail-group-delete",
+    "allow-rail-group-reorder",
+    "allow-home-summary",
+    "allow-recent-work",
+    "allow-workspace-reveal",
+    "allow-workspace-create",
+    "allow-files-list",
+    "allow-git-status",
+    "allow-git-log",
+    "allow-git-branches"
   ]
 }

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-recent-work"
+description = "Enables the recent_work command without any pre-configured scope."
+commands.allow = ["recent_work"]
+
+[[permission]]
+identifier = "deny-recent-work"
+description = "Denies the recent_work command without any pre-configured scope."
+commands.deny = ["recent_work"]

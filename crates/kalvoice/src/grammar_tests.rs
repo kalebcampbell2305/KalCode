@@ -583,3 +583,48 @@ fn focus_and_permission_mode_requests_never_bypass() {
         "don't switch the login fix thread to plan mode"
     ));
 }
+
+#[test]
+fn search_and_recent_work_are_deterministic_reads() {
+    assert_eq!(
+        intent("search for auth"),
+        KalVoiceIntent::Search {
+            query: "auth".into()
+        }
+    );
+    assert_eq!(
+        intent("find the thread about oauth refresh"),
+        KalVoiceIntent::Search {
+            query: "oauth refresh".into()
+        }
+    );
+    assert_eq!(
+        intent("find what I was working on yesterday"),
+        KalVoiceIntent::Search {
+            query: "yesterday".into()
+        }
+    );
+    assert_eq!(
+        intent("What was I working on yesterday?"),
+        KalVoiceIntent::Search {
+            query: "yesterday".into()
+        }
+    );
+    assert_eq!(
+        intent("what did I work on this week"),
+        KalVoiceIntent::Search {
+            query: "this week".into()
+        }
+    );
+    assert_eq!(
+        intent("what was I working on"),
+        KalVoiceIntent::Search {
+            query: "recent".into()
+        }
+    );
+    // Status questions keep their meaning.
+    assert_eq!(
+        intent("what are my threads working on"),
+        KalVoiceIntent::StatusReport
+    );
+}

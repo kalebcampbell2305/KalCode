@@ -28,11 +28,15 @@ kalcode-permissions = { path = "../../../crates/permissions" }
 kalcode-kalvoice = { path = "../../../crates/kalvoice" }
 tauri-plugin-global-shortcut = "2.3"
 kalcode-hook-bridge = { path = "../../../crates/hook-bridge" }
+kalcode-locator = { path = "../../../crates/locator" }
+kalcode-git = { path = "../../../crates/git" }
 tauri = { version = "2.11", features = [] }
 tauri-plugin-opener = "2.5"
 tauri-plugin-single-instance = "2.4"
 serde.workspace = true
 serde_json.workspace = true
+# KalVoice "what was I working on yesterday" (Z7-W2): the local calendar day.
+time = { workspace = true, features = ["local-offset"] }
 tracing.workspace = true
 tauri-plugin-dialog = "2"
 
