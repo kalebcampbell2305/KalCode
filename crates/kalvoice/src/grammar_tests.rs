@@ -739,6 +739,51 @@ fn focuses_a_pane_by_name() {
 }
 
 #[test]
+fn search_and_recent_work_are_deterministic_reads() {
+    assert_eq!(
+        intent("search for auth"),
+        KalVoiceIntent::Search {
+            query: "auth".into()
+        }
+    );
+    assert_eq!(
+        intent("find the thread about oauth refresh"),
+        KalVoiceIntent::Search {
+            query: "oauth refresh".into()
+        }
+    );
+    assert_eq!(
+        intent("find what I was working on yesterday"),
+        KalVoiceIntent::Search {
+            query: "yesterday".into()
+        }
+    );
+    assert_eq!(
+        intent("What was I working on yesterday?"),
+        KalVoiceIntent::Search {
+            query: "yesterday".into()
+        }
+    );
+    assert_eq!(
+        intent("what did I work on this week"),
+        KalVoiceIntent::Search {
+            query: "this week".into()
+        }
+    );
+    assert_eq!(
+        intent("what was I working on"),
+        KalVoiceIntent::Search {
+            query: "recent".into()
+        }
+    );
+    // Status questions keep their meaning.
+    assert_eq!(
+        intent("what are my threads working on"),
+        KalVoiceIntent::StatusReport
+    );
+}
+
+#[test]
 fn dashboard_filters_by_chip() {
     use kalcode_contracts::workspace_ui::DashboardChip;
     let cases: &[(&str, DashboardChip)] = &[

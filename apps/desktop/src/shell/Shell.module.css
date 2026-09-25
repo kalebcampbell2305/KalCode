@@ -1,13 +1,14 @@
 .shell {
   display: grid;
-  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  /* Sidebar · workspace rail (Z7-W2; `auto`: its own width, 0 when the build has none) · page. */
+  grid-template-columns: var(--sidebar-w) auto minmax(0, 1fr);
   height: 100%;
   background: var(--app-backdrop), var(--color-bg);
   transition: grid-template-columns var(--dur-base) var(--ease-out);
 }
 
 .shell[data-sidebar="collapsed"] {
-  grid-template-columns: var(--sidebar-w-collapsed) minmax(0, 1fr);
+  grid-template-columns: var(--sidebar-w-collapsed) auto minmax(0, 1fr);
 }
 
 /*
@@ -30,8 +31,15 @@
   grid-template-rows: minmax(0, 1fr) var(--voice-slot-h);
 }
 
-.voiceSlot {
+/* Z7-W2: the workspace rail is column 2, full height like the sidebar; the page and the
+   KalVoice band are column 3. */
+.shell > [data-workspace-rail] {
   grid-column: 2;
+  grid-row: 1 / -1;
+}
+
+.voiceSlot {
+  grid-column: 3;
   min-width: 0;
 }
 
@@ -56,6 +64,8 @@
 }
 
 .main {
+  grid-column: 3;
+  grid-row: 1;
   min-width: 0;
   height: 100%;
   overflow-y: auto;

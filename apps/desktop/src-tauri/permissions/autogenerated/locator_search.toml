@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-locator-search"
+description = "Enables the locator_search command without any pre-configured scope."
+commands.allow = ["locator_search"]
+
+[[permission]]
+identifier = "deny-locator-search"
+description = "Denies the locator_search command without any pre-configured scope."
+commands.deny = ["locator_search"]

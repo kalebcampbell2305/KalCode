@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-rail-group-delete"
+description = "Enables the rail_group_delete command without any pre-configured scope."
+commands.allow = ["rail_group_delete"]
+
+[[permission]]
+identifier = "deny-rail-group-delete"
+description = "Denies the rail_group_delete command without any pre-configured scope."
+commands.deny = ["rail_group_delete"]

@@ -4,9 +4,15 @@
 mod code_commands;
 mod commands;
 pub mod environment;
+mod files_commands;
+// Z6a: only the read-only `git_status`, `git_log` and `git_branches` are registered (Z7-W2's
+// folder surface); the worktree and checkpoint commands wait for v7 and the lead's wiring.
+#[allow(dead_code)]
+mod git_commands;
 mod kalvoice_commands;
 mod kalvoice_executor;
 mod layout_commands;
+mod locator_commands;
 pub mod native_confirm;
 mod notification_commands;
 pub mod permission_commands;
@@ -177,7 +183,8 @@ fn start(app: &tauri::App, removed_overrides: &[String]) -> AppState {
         app_version: version,
         channel,
     };
-    match Core::open(config) {
+    // Z7-W2: `open_core` is `Core::open` (plus the provisional v11 for the E2E suite only).
+    match locator_commands::open_core(config) {
         Ok(core) => state.core = Some(Arc::new(core)),
         Err(error) => {
             tracing::error!(event = "app.startup_failed", error_code = error.code, error = %error.diagnostic());
@@ -261,6 +268,13 @@ pub fn run(removed_overrides: Vec<String>) {
                 permissions.service(),
                 &modes,
             );
+            // Z7-W2: the Session Locator (search, rail, home) over Z1/Z3/Z2, off the UI thread.
+            let locator = locator_commands::LocatorState::start(
+                &state,
+                threads.runtime_handle(),
+                providers.registry(),
+            );
+            let git = git_commands::GitState::new(&state.paths.data_dir);
             let kalvoice = kalvoice_commands::init(
                 app.handle(),
                 state.core.clone(),
@@ -268,6 +282,7 @@ pub fn run(removed_overrides: Vec<String>) {
                 providers.registry(),
                 threads.runtime_handle(),
                 permissions.service(),
+                locator.handle(),
             );
             app.manage(kalvoice);
             panes.bind(permissions.service().as_ref(), threads.runtime().ok());
@@ -277,6 +292,8 @@ pub fn run(removed_overrides: Vec<String>) {
             app.manage(permissions);
             app.manage(threads);
             app.manage(panes);
+            app.manage(locator);
+            app.manage(git);
             app.manage(notifications);
 
             // Safety net: the frontend shows the window after its first themed paint
@@ -365,6 +382,25 @@ pub fn run(removed_overrides: Vec<String>) {
             provider_pane_commands::provider_pane_write,
             provider_pane_commands::provider_pane_resize,
             provider_pane_commands::provider_pane_info,
+            // Z7-W2: Session Locator, rail, home, recent work, workspace actions.
+            locator_commands::locator_search,
+            locator_commands::locator_open,
+            locator_commands::rail_state,
+            locator_commands::rail_update,
+            locator_commands::rail_section_set,
+            locator_commands::rail_group_create,
+            locator_commands::rail_group_update,
+            locator_commands::rail_group_delete,
+            locator_commands::rail_group_reorder,
+            locator_commands::home_summary,
+            locator_commands::recent_work,
+            locator_commands::workspace_reveal,
+            locator_commands::workspace_create,
+            // Z6a read-only (folder surface).
+            files_commands::files_list,
+            git_commands::git_status,
+            git_commands::git_log,
+            git_commands::git_branches,
             layout_commands::layout_get,
             layout_commands::layout_save,
             layout_commands::layout_presets,
@@ -396,6 +432,9 @@ pub fn run(removed_overrides: Vec<String>) {
             }
             if let Some(panes) = handle.try_state::<provider_pane_commands::ProviderPanesState>() {
                 panes.shutdown();
+            }
+            if let Some(locator) = handle.try_state::<locator_commands::LocatorState>() {
+                locator.shutdown();
             }
             if let Some(notifications) =
                 handle.try_state::<notification_commands::NotificationsState>()

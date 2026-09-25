@@ -38,6 +38,29 @@ import type {
   Workspace,
   WorkspaceLayout,
 } from "@kalcode/protocol";
+import type {
+  Branch,
+  BranchState,
+  Commit,
+  FileEntry,
+  FileHandle,
+  GitStatusSummary,
+  HomeSummary,
+  LocatorEntityKind,
+  LocatorOpenTarget,
+  LocatorQuery,
+  LocatorResponse,
+  LocatorVia,
+  Page,
+  RailSection,
+  RailState,
+  RailUpdate,
+  RecentWorkItem,
+  RecentWorkWhen,
+  StatusFile,
+  WorkspaceGroup,
+  WorkspaceRailEntry,
+} from "@kalcode/protocol";
 import { toKalCodeError } from "./errors.ts";
 import type { CommandName, NativeTheme, Transport, Unsubscribe } from "./transport.ts";
 
@@ -73,6 +96,20 @@ export interface CreateThreadInput {
   permissionMode: PermissionMode;
   prompt: string;
   name: string | null;
+}
+
+/** `git_status` (Z6a): the working tree's state; `repository: false` for a plain folder. */
+export interface GitStatusResponse {
+  repository: boolean;
+  summary: GitStatusSummary | null;
+  branch: BranchState | null;
+  files: Page<StatusFile>;
+  truncated: boolean;
+}
+
+/** The person's UTC offset in minutes (calendar words like "yesterday" are local). */
+export function localOffsetMinutes(at: Date = new Date()): number {
+  return -at.getTimezoneOffset();
 }
 
 function clampPage(limit: number): number {
@@ -433,6 +470,109 @@ export class KalCodeClient {
 
   setActiveTerminal(workspaceId: string, terminalId: string): Promise<void> {
     return this.call("terminal_set_active", { workspaceId, terminalId });
+  }
+
+  // ---------- Session Locator, rail, home (Z7-W2) ----------
+
+  /** Local search. The text is never stored or logged. */
+  locatorSearch(query: Partial<LocatorQuery> & { text: string }): Promise<LocatorResponse> {
+    const full: LocatorQuery = {
+      text: query.text.slice(0, 256),
+      kinds: query.kinds ?? [],
+      statuses: query.statuses ?? [],
+      providerId: query.providerId ?? null,
+      workspaceId: query.workspaceId ?? null,
+      recency: query.recency ?? null,
+      since: query.since ?? null,
+      activeOnly: query.activeOnly ?? false,
+      sort: query.sort ?? "relevance",
+      page: query.page ?? { limit: 20, cursor: null },
+      tzOffsetMinutes: query.tzOffsetMinutes ?? localOffsetMinutes(),
+    };
+    return this.call("locator_search", { query: full });
+  }
+
+  /** Resolves a result to open (records that it was opened, never the query). */
+  locatorOpen(kind: LocatorEntityKind, entityId: string, via: LocatorVia): Promise<LocatorOpenTarget> {
+    return this.call("locator_open", { args: { kind, entityId, via } });
+  }
+
+  railState(): Promise<RailState> {
+    return this.call("rail_state");
+  }
+
+  railUpdate(update: RailUpdate): Promise<WorkspaceRailEntry> {
+    return this.call("rail_update", { update });
+  }
+
+  railSectionSet(section: RailSection, collapsed: boolean): Promise<RailState> {
+    return this.call("rail_section_set", { section, collapsed });
+  }
+
+  railGroupCreate(name: string): Promise<WorkspaceGroup> {
+    return this.call("rail_group_create", { name });
+  }
+
+  railGroupUpdate(id: string, patch: { name?: string; collapsed?: boolean }): Promise<WorkspaceGroup> {
+    return this.call("rail_group_update", { id, name: patch.name ?? null, collapsed: patch.collapsed ?? null });
+  }
+
+  railGroupDelete(id: string): Promise<void> {
+    return this.call("rail_group_delete", { id });
+  }
+
+  railGroupReorder(ids: string[]): Promise<WorkspaceGroup[]> {
+    return this.call("rail_group_reorder", { ids });
+  }
+
+  /**
+   * The returning-user home. `visit`: the person opened Home (a new greeting is chosen for
+   * `localHour`); live refreshes pass false and keep the greeting on screen.
+   */
+  homeSummary(visit: boolean, localHour: number = new Date().getHours()): Promise<HomeSummary> {
+    return this.call("home_summary", { localHour: Math.max(0, Math.min(23, Math.floor(localHour))), visit });
+  }
+
+  recentWork(when: RecentWorkWhen, limit = 50, cursor: string | null = null): Promise<Page<RecentWorkItem>> {
+    return this.call("recent_work", {
+      when,
+      tzOffsetMinutes: localOffsetMinutes(),
+      page: { limit: Math.max(1, Math.min(500, Math.floor(limit))), cursor },
+    });
+  }
+
+  /** Shows the workspace's folder in the OS file manager (the path is resolved natively). */
+  revealWorkspace(workspaceId: string): Promise<void> {
+    return this.call("workspace_reveal", { workspaceId });
+  }
+
+  /** Creates an empty folder `name` where the person picks (native dialog) and opens it. */
+  createWorkspace(name: string): Promise<Workspace | null> {
+    return this.call("workspace_create", { name });
+  }
+
+  // ---------- Z6a read-only (folder surface) ----------
+
+  /** One folder of a workspace (the root when `dir` is absent): folders first. */
+  listFiles(
+    workspaceId: string,
+    dir: FileHandle | null = null,
+    limit = 200,
+    cursor: string | null = null,
+  ): Promise<Page<FileEntry>> {
+    return this.call("files_list", { args: { workspaceId, dir, page: { limit, cursor } } });
+  }
+
+  gitStatus(workspaceId: string, limit = 200): Promise<GitStatusResponse> {
+    return this.call("git_status", { args: { workspaceId, worktreeId: null, page: { limit, cursor: null } } });
+  }
+
+  gitLog(workspaceId: string, limit = 20): Promise<Page<Commit>> {
+    return this.call("git_log", { args: { workspaceId, worktreeId: null, page: { limit, cursor: null } } });
+  }
+
+  gitBranches(workspaceId: string): Promise<Branch[]> {
+    return this.call("git_branches", { args: { workspaceId } });
   }
 
   // ---------- Pane layouts (Z7-W1) ----------

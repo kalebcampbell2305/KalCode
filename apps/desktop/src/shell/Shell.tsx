@@ -1,4 +1,4 @@
-import { type CSSProperties, useLayoutEffect, useRef, useState } from "react";
+import { type CSSProperties, useLayoutEffect, useRef } from "react";
 import { FloatingAssistant } from "../kalvoice/FloatingAssistant.tsx";
 import { KalVoicePage } from "../kalvoice/KalVoicePage.tsx";
 import { KalVoiceProvider } from "../kalvoice/KalVoiceProvider.tsx";
@@ -8,7 +8,9 @@ import { WorkspaceProvider } from "../runtime/WorkspaceProvider.tsx";
 import { CodePage } from "../surfaces/code/CodePage.tsx";
 import { useNewTerminalShortcut } from "../surfaces/code/useNewTerminalShortcut.ts";
 import { Dashboard } from "../surfaces/dashboard/Dashboard.tsx";
+import { FolderSurface } from "../surfaces/folder/FolderSurface.tsx";
 import { GatedSurface } from "../surfaces/gated/GatedSurface.tsx";
+import { HomeSurface } from "../surfaces/home/HomeSurface.tsx";
 import { ApprovalAnnouncer, ApprovalsPanel, PermissionsProvider } from "../surfaces/permissions/index.ts";
 import { ProvidersPage } from "../surfaces/providers/ProvidersPage.tsx";
 import { SettingsPage } from "../surfaces/settings/SettingsPage.tsx";
@@ -16,9 +18,15 @@ import { ThreadsIntentProvider } from "../surfaces/threads/intent.tsx";
 import { ThreadsSurface } from "../surfaces/threads/ThreadsSurface.tsx";
 import { useAppearance } from "./appearance.ts";
 import { CommandPalette } from "./CommandPalette.tsx";
-import { NavigationProvider, SURFACES, useNavigation } from "./navigation.tsx";
+import { destinationMeta, NavigationProvider, useNavigation } from "./navigation.tsx";
 import { NotificationCenter } from "./notifications/NotificationCenter.tsx";
 import { NotificationsProvider } from "./notifications/NotificationsProvider.tsx";
+// Z7-W2: Home, the project page, the workspace list and Git status as pane contents.
+import "./rail/paneContents.tsx";
+import { RailProvider, useRail } from "./rail/RailProvider.tsx";
+import { SearchProvider, useSearch } from "./rail/search/SearchProvider.tsx";
+import { useRailShortcut } from "./rail/useRailShortcut.ts";
+import { WorkspaceRail } from "./rail/WorkspaceRail.tsx";
 import styles from "./Shell.module.css";
 import { ShellSlotsProvider, useShellSlots } from "./ShellSlots.tsx";
 import { Sidebar } from "./Sidebar.tsx";
@@ -31,7 +39,7 @@ export function Shell() {
   const kalvoiceFlag = info.flags.surfaces.find((s) => s.id === "kalvoice");
   const kalvoiceEnabled = Boolean(kalvoiceFlag?.visible && kalvoiceFlag.state !== "gated");
   return (
-    <NavigationProvider flags={info.flags.surfaces}>
+    <NavigationProvider flags={info.flags.surfaces} features={info.flags.features}>
       <WorkspaceProvider>
         <PermissionsProvider>
           <ThreadsIntentProvider>
@@ -39,13 +47,18 @@ export function Shell() {
             <UiIntentsProvider>
               <NotificationsProvider>
                 <ShellSlotsProvider>
-                  {kalvoiceEnabled ? (
-                    <KalVoiceProvider>
-                      <ShellLayout kalvoice />
-                    </KalVoiceProvider>
-                  ) : (
-                    <ShellLayout kalvoice={false} />
-                  )}
+                  {/* Z7-W2: shared search (palette + locator) and the workspace rail. */}
+                  <SearchProvider>
+                    <RailProvider>
+                      {kalvoiceEnabled ? (
+                        <KalVoiceProvider>
+                          <ShellLayout kalvoice />
+                        </KalVoiceProvider>
+                      ) : (
+                        <ShellLayout kalvoice={false} />
+                      )}
+                    </RailProvider>
+                  </SearchProvider>
                 </ShellSlotsProvider>
               </NotificationsProvider>
             </UiIntentsProvider>
@@ -59,7 +72,9 @@ export function Shell() {
 function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
   const { settings, updateSettings } = useRuntime();
   const { current } = useNavigation();
-  const [paletteOpen, setPaletteOpen] = useState(false);
+  // Z7-W2: the palette's open state and query are shared (search can open with a query).
+  const { open: paletteOpen, setOpen: setPaletteOpen } = useSearch();
+  const rail = useRail();
   const slots = useShellSlots();
   const voice = slots?.voice ?? null;
   const setMainLeft = slots?.setMainLeft;
@@ -80,11 +95,13 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
     toggleSidebar: () => void updateSettings({ sidebarCollapsed: !settings.sidebarCollapsed }),
   });
   useNewTerminalShortcut();
+  useRailShortcut();
 
   return (
     <div
       className={styles.shell}
       data-sidebar={settings.sidebarCollapsed ? "collapsed" : "expanded"}
+      data-rail={rail.enabled ? (rail.hidden ? "strip" : "shown") : "none"}
       data-voice-slot={voice?.edge}
       style={voice ? ({ "--voice-slot-h": `${voice.height}px` } as CSSProperties) : undefined}
     >
@@ -93,15 +110,20 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
       </a>
       <Sidebar collapsed={settings.sidebarCollapsed} onOpenPalette={() => setPaletteOpen(true)} />
       {voice ? <div className={styles.voiceSlot} data-edge={voice.edge} aria-hidden="true" /> : null}
+      <WorkspaceRail />
       <main
         ref={mainRef}
         id="main"
         className={styles.main}
         tabIndex={-1}
-        aria-label={SURFACES[current].label}
+        aria-label={destinationMeta(current).label}
         data-surface={current}
       >
-        {current === "kalvoice" && kalvoice ? (
+        {current === "home" ? (
+          <HomeSurface />
+        ) : current === "folder" ? (
+          <FolderSurface />
+        ) : current === "kalvoice" && kalvoice ? (
           <KalVoicePage />
         ) : current === "dashboard" ? (
           <Dashboard />

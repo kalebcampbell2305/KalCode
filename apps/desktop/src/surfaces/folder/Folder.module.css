@@ -1,0 +1,619 @@
+/* The folder/project surface (Z7-W2): the active workspace as the whole context. Full window;
+   files take the tall left column, Git and recent files the middle, threads/terminals/branches
+   the right — one or two columns on narrower windows. */
+
+.page {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-height: 100%;
+  padding: calc(var(--space-6)) var(--page-px, var(--space-8)) var(--space-10);
+}
+
+.header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding-bottom: var(--space-5);
+  border-bottom: 1px solid var(--color-border);
+  position: relative;
+}
+
+.header::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  width: min(20rem, 35%);
+  height: 1px;
+  background: linear-gradient(90deg, var(--color-border-lit), transparent);
+}
+
+.titleBlock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  min-width: 0;
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin: 0;
+  color: var(--color-text-muted);
+  font-family: var(--font-label);
+  font-size: var(--type-label);
+  font-weight: var(--type-label-weight);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.eyebrow svg {
+  width: 0.875rem;
+  height: 0.875rem;
+  color: var(--color-accent-text);
+}
+
+.title {
+  margin: 0;
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: var(--type-display);
+  font-weight: var(--type-display-weight);
+  letter-spacing: var(--type-display-tracking);
+  line-height: var(--leading-tight);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.path {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: var(--type-mono);
+}
+
+.branch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: 1.375rem;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-2);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+
+.branch svg {
+  width: 0.75rem;
+  height: 0.75rem;
+  color: var(--color-accent-text);
+}
+
+.ahead,
+.behind {
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.missing {
+  padding: 0 var(--space-1-5);
+  border: 1px solid var(--status-failed-line);
+  border-radius: var(--radius-xs);
+  color: var(--status-failed-text);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.stats {
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+}
+
+/* ---------------------------------------------------------------- layout */
+
+.grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "files"
+    "git"
+    "context";
+  gap: var(--panel-gap, var(--space-4));
+  align-items: start;
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--panel-gap, var(--space-4));
+  min-width: 0;
+}
+
+.files {
+  grid-area: files;
+  min-width: 0;
+}
+
+.gitColumn {
+  grid-area: git;
+}
+
+.contextColumn {
+  grid-area: context;
+}
+
+/* Two columns: files with the workspace context under it; Git and recent files beside them. */
+@container (min-width: 50rem) {
+  .grid {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas:
+      "files git"
+      "context git";
+  }
+}
+
+@container (min-width: 100rem) {
+  .grid {
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas: "files git context";
+  }
+}
+
+/* ---------------------------------------------------------------- shared rows */
+
+.note {
+  margin: 0;
+  padding: var(--space-3) var(--panel-px, var(--space-4));
+  color: var(--color-text-muted);
+  font-size: var(--type-ui);
+  line-height: var(--leading-normal);
+}
+
+.loading {
+  padding: var(--space-3) var(--panel-px, var(--space-4));
+}
+
+.subhead {
+  margin: 0;
+  padding: var(--space-3) var(--panel-px, var(--space-4)) var(--space-1);
+  color: var(--color-text-faint);
+  font-family: var(--font-label);
+  font-size: var(--type-label);
+  font-weight: var(--type-label-weight);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.age {
+  flex: none;
+  color: var(--color-text-faint);
+  font-size: var(--type-small);
+  font-variant-numeric: tabular-nums;
+}
+
+.dir {
+  color: var(--color-text-muted);
+}
+
+/* ---------------------------------------------------------------- files */
+
+.treeLoading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+
+.fileTree {
+  display: flex;
+  flex-direction: column;
+  max-height: min(40rem, 70vh);
+  padding: var(--space-1-5);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.fileRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+  height: 1.75rem;
+  padding-right: var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  font-size: var(--type-ui);
+  cursor: pointer;
+  user-select: none;
+  outline: none;
+}
+
+.fileRow:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.fileRow:focus-visible {
+  background: var(--color-surface-hover);
+  box-shadow: inset 0 0 0 1px var(--color-border-focus);
+}
+
+.fileRow[data-selected] {
+  background: linear-gradient(90deg, var(--color-surface-selected), transparent 110%);
+  box-shadow: inset 0 0 0 1px var(--color-border-lit-soft);
+  color: var(--color-text);
+}
+
+.fileRow[data-ignored] {
+  color: var(--color-text-muted);
+}
+
+.fileCaret {
+  display: inline-flex;
+  flex: none;
+  width: 0.75rem;
+  color: var(--color-text-faint);
+}
+
+.fileCaret svg {
+  width: 0.75rem;
+  height: 0.75rem;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.fileCaret[data-open] svg {
+  transform: rotate(90deg);
+}
+
+.fileIcon {
+  display: inline-flex;
+  flex: none;
+  color: var(--color-text-muted);
+}
+
+.fileIcon svg {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.fileName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: var(--type-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ignored,
+.fileNote {
+  flex: none;
+  color: var(--color-text-faint);
+  font-size: var(--text-2xs);
+}
+
+.ignored {
+  padding: 0 var(--space-1);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xs);
+}
+
+.fileSize {
+  flex: none;
+  color: var(--color-text-faint);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------- git */
+
+.clean {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3) var(--panel-px, var(--space-4));
+  color: var(--status-working-text);
+  font-size: var(--type-ui);
+}
+
+.clean svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.changes,
+.recentFiles,
+.commits,
+.threads,
+.branches {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: var(--space-1) var(--space-1-5) var(--space-2);
+  list-style: none;
+}
+
+.change,
+.recentFile,
+.commit,
+.branchRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  min-height: 1.75rem;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--type-ui);
+}
+
+.changeLetter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 1.125rem;
+  height: 1.125rem;
+  border-radius: var(--radius-xs);
+  background: var(--color-surface-2);
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+}
+
+.changeLetter[data-tone="added"] {
+  background: var(--status-working-soft);
+  color: var(--status-working-text);
+}
+
+.changeLetter[data-tone="deleted"],
+.changeLetter[data-tone="conflict"] {
+  background: var(--status-failed-soft);
+  color: var(--status-failed-text);
+}
+
+.changeLetter[data-tone="modified"],
+.changeLetter[data-tone="renamed"] {
+  background: var(--status-recovering-soft);
+  color: var(--status-recovering-text);
+}
+
+.changePath {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--type-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.staged {
+  flex: none;
+  color: var(--color-text-muted);
+  font-size: var(--text-2xs);
+}
+
+.fileChange {
+  flex: none;
+  color: var(--color-text-muted);
+  font-size: var(--text-2xs);
+}
+
+.fileChange[data-change="created"] {
+  color: var(--status-working-text);
+}
+
+.fileChange[data-change="deleted"] {
+  color: var(--status-failed-text);
+}
+
+.oid {
+  flex: none;
+  color: var(--color-accent-text);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+
+.subject {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branchRow svg {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  color: var(--color-text-muted);
+}
+
+.branchName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--type-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branchRow[data-current] .branchName {
+  color: var(--color-text);
+}
+
+.branchRow[data-current] svg {
+  color: var(--color-accent-text);
+}
+
+.current {
+  flex: none;
+  padding: 0 var(--space-1-5);
+  border: 1px solid var(--color-border-lit-soft);
+  border-radius: var(--radius-xs);
+  color: var(--color-accent-text);
+  font-size: var(--text-2xs);
+}
+
+/* ---------------------------------------------------------------- threads & terminals */
+
+.threadButton {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: 2.25rem;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--type-ui);
+  text-align: left;
+  cursor: pointer;
+}
+
+.threadButton:hover,
+.threadButton:focus-visible {
+  outline: none;
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.threadButton:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--color-border-focus);
+}
+
+.threadName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminalIcon {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  color: var(--color-text-muted);
+}
+
+/* ---------------------------------------------------------------- later & search */
+
+.later {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3) var(--panel-px, var(--space-4));
+  list-style: none;
+}
+
+.later li {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  color: var(--color-text-muted);
+  font-size: var(--type-ui);
+}
+
+.later strong {
+  color: var(--color-text-secondary);
+  font-weight: var(--weight-medium);
+}
+
+.later svg {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  margin-top: 0.15rem;
+  color: var(--color-text-faint);
+}
+
+.toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  cursor: pointer;
+}
+
+.toggle input {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  margin-top: 0.15rem;
+  accent-color: var(--color-accent);
+}
+
+.toggle > span {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.toggleTitle {
+  color: var(--color-text);
+  font-size: var(--type-ui);
+  font-weight: var(--weight-medium);
+}
+
+.toggleText {
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
+  line-height: var(--leading-normal);
+}
+
+/* In a pane (`kalcode.project`, the Git pane): the pane is the frame. */
+.page[data-in-pane] {
+  gap: var(--space-4);
+  min-height: auto;
+  padding: var(--space-4) var(--space-5) var(--space-6);
+}
+
+.page[data-in-pane] .title {
+  font-size: var(--type-headline);
+}
+
+.gitPaneGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--panel-gap, var(--space-4));
+  align-items: start;
+}
+
+@container (min-width: 44rem) {
+  .gitPaneGrid {
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  }
+}

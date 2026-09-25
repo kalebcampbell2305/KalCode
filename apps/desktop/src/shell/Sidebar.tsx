@@ -13,7 +13,7 @@ import {
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { usePermissions } from "../surfaces/permissions/PermissionsProvider.tsx";
 import { Mark, Wordmark } from "./Brand.tsx";
-import { PRIMARY_ORDER, SURFACES, useNavigation } from "./navigation.tsx";
+import { type Destination, destinationMeta, PRIMARY_ORDER, useNavigation, viewVisible } from "./navigation.tsx";
 import { useNotifications } from "./notifications/NotificationsProvider.tsx";
 import styles from "./Sidebar.module.css";
 import { MOD_LABEL } from "./shortcuts.ts";
@@ -57,6 +57,7 @@ export function Sidebar({ collapsed, onOpenPalette }: SidebarProps) {
       </div>
 
       <ul className={styles.list}>
+        {viewVisible("home", info.flags.features) ? <NavItem id="home" collapsed={collapsed} /> : null}
         {available.map((id) => (
           <NavItem key={id} id={id} collapsed={collapsed} />
         ))}
@@ -112,9 +113,9 @@ function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-function NavItem({ id, collapsed, gated = false }: { id: SurfaceId; collapsed: boolean; gated?: boolean }) {
+function NavItem({ id, collapsed, gated = false }: { id: Destination; collapsed: boolean; gated?: boolean }) {
   const { current, navigate } = useNavigation();
-  const meta = SURFACES[id];
+  const meta = destinationMeta(id);
   const Icon = meta.icon;
   const active = current === id;
   return (

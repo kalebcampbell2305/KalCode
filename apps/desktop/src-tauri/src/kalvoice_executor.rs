@@ -42,6 +42,9 @@ pub struct DesktopExecutor {
     pub threads: Option<Arc<ThreadRuntime>>,
     /// `None` when the permission engine didn't start.
     pub permissions: Option<Arc<PermissionService>>,
+    /// The Session Locator (Z7-W2), for Search and for Focus by meaning. `None` when it didn't
+    /// start.
+    pub locator: Option<Arc<kalcode_locator::Locator>>,
 }
 
 fn from_core(error: &KalError) -> ExecError {
@@ -53,6 +56,36 @@ fn threads_unavailable() -> ExecError {
         "threads_unavailable",
         "KalCode's thread runtime isn't running, so KalVoice can't manage threads. Restart KalCode; if this keeps happening, export diagnostics.",
     )
+}
+
+fn search_unavailable() -> ExecError {
+    ExecError::new(
+        "search_unavailable",
+        "Search isn't available right now, so KalVoice can't look that up.",
+    )
+}
+
+/// This computer's UTC offset in minutes (for "yesterday"); 0 if it can't be read.
+fn local_offset_minutes() -> i32 {
+    time::UtcOffset::current_local_offset().map_or(0, |o| i32::from(o.whole_minutes()))
+}
+
+/// A locator status as KalVoice says it (names and statuses only, never content).
+fn spoken_status(status: &str) -> Option<&'static str> {
+    Some(match status {
+        "starting" => "starting",
+        "working" | "testing" | "reviewing" | "recovering" => "working",
+        "permission_required" => "needs your permission",
+        "waiting_for_you" => "waiting for you",
+        "idle" => "idle",
+        "paused" => "paused",
+        "done" => "done",
+        "failed" => "failed",
+        "running" => "running",
+        "ended" => "ended",
+        "missing" => "folder missing",
+        _ => return None,
+    })
 }
 
 fn plural(n: usize, one: &str, many: &str) -> String {
@@ -259,22 +292,93 @@ impl DesktopExecutor {
 }
 
 impl DesktopExecutor {
-    /// The first open thread matching a spoken name, or a user-safe "not found".
+    /// The first open thread matching a spoken name — by name first, then by meaning through
+    /// the Session Locator ("focus the auth thread" finds "Authentication Refactor") — or a
+    /// user-safe "not found".
     fn named_thread(
         &self,
         query: &str,
     ) -> Result<kalcode_contracts::threads::ThreadSummary, ExecError> {
-        self.threads()?
+        let threads = self.threads()?;
+        if let Some(found) = threads
             .find(query)
             .map_err(|e| from_core(&e))?
             .into_iter()
             .next()
-            .ok_or_else(|| {
-                ExecError::new(
-                    "thread_not_found",
-                    format!("KalCode has no open thread named \u{201c}{query}\u{201d}."),
-                )
+        {
+            return Ok(found);
+        }
+        let located = self.locator.as_ref().and_then(|locator| {
+            locator
+                .search(&kalcode_locator::LocatorQuery {
+                    text: query.to_owned(),
+                    kinds: vec![kalcode_locator::LocatorEntityKind::Thread],
+                    tz_offset_minutes: local_offset_minutes(),
+                    ..kalcode_locator::LocatorQuery::default()
+                })
+                .ok()
+                .and_then(|r| r.results.items.into_iter().next())
+        });
+        if let Some(hit) = located
+            && let Ok(thread) = threads.get(&hit.entity_id)
+            && thread.archived_at.is_none()
+        {
+            return Ok(thread);
+        }
+        Err(ExecError::new(
+            "thread_not_found",
+            format!("KalCode has no open thread named \u{201c}{query}\u{201d}."),
+        ))
+    }
+
+    /// Search by voice: names and statuses are read back, never content (LOC-04).
+    fn search(&self, query: &str) -> Result<Executed, ExecError> {
+        let locator = self.locator.as_ref().ok_or_else(search_unavailable)?;
+        let response = locator
+            .search(&kalcode_locator::LocatorQuery {
+                text: query.to_owned(),
+                tz_offset_minutes: local_offset_minutes(),
+                ..kalcode_locator::LocatorQuery::default()
             })
+            .map_err(|e| from_core(&e))?;
+        // Things, not the activity log: "Added workspace · X" would repeat X.
+        let items: Vec<&kalcode_locator::LocatorResult> = response
+            .results
+            .items
+            .iter()
+            .filter(|r| r.kind != kalcode_locator::LocatorEntityKind::Activity)
+            .collect();
+        let hidden = response.results.items.len() - items.len();
+        let total = response
+            .results
+            .total_estimate
+            .unwrap_or(response.results.items.len() as u64)
+            .saturating_sub(hidden as u64);
+        let named: Vec<String> = items
+            .iter()
+            .take(3)
+            .map(|r| match r.status.as_deref().and_then(spoken_status) {
+                Some(status) => format!("{} ({status})", r.title),
+                None => r.title.clone(),
+            })
+            .collect();
+        let summary = if named.is_empty() {
+            format!("Nothing matched \u{201c}{query}\u{201d}.")
+        } else {
+            let more = total.saturating_sub(named.len() as u64);
+            let list = named.join(", ");
+            if more > 0 {
+                format!("Found {total}: {list}, and {more} more.")
+            } else {
+                format!("Found {total}: {list}.")
+            }
+        };
+        Ok(Executed {
+            summary,
+            directive: Some(UiDirective::Search {
+                query: query.to_owned(),
+            }),
+        })
     }
 }
 
@@ -327,12 +431,11 @@ impl Executor for DesktopExecutor {
                 }
                 Ok(())
             }
-            KalVoiceIntent::Search { .. } | KalVoiceIntent::SwitchProvider { .. } => {
-                Err(ExecError::new(
-                    "not_in_this_build",
-                    "Search and provider switching aren't in this build yet, so KalVoice can't do that.",
-                ))
-            }
+            KalVoiceIntent::Search { .. } if self.locator.is_none() => Err(search_unavailable()),
+            KalVoiceIntent::SwitchProvider { .. } => Err(ExecError::new(
+                "not_in_this_build",
+                "Provider switching isn't in this build yet, so KalVoice can't do that.",
+            )),
             KalVoiceIntent::ShowApprovals if self.permissions.is_none() => Err(ExecError::new(
                 "approvals_unavailable",
                 "KalCode's permission engine isn't running, so there's nothing KalVoice can show.",
@@ -475,6 +578,7 @@ impl Executor for DesktopExecutor {
                 })
             }
             KalVoiceIntent::StatusReport => self.status_report(),
+            KalVoiceIntent::Search { query } => self.search(query),
             KalVoiceIntent::FilterDashboard { chip } => {
                 // Counting is best effort: the filter works even without the thread runtime.
                 let counts = self
@@ -520,12 +624,10 @@ impl Executor for DesktopExecutor {
                     directive: Some(UiDirective::ClosePane { query }),
                 })
             }
-            KalVoiceIntent::Search { .. } | KalVoiceIntent::SwitchProvider { .. } => {
-                Err(ExecError::new(
-                    "not_in_this_build",
-                    "Search and provider switching aren't in this build yet, so KalVoice can't do that.",
-                ))
-            }
+            KalVoiceIntent::SwitchProvider { .. } => Err(ExecError::new(
+                "not_in_this_build",
+                "Provider switching isn't in this build yet, so KalVoice can't do that.",
+            )),
         }
     }
 }
@@ -591,7 +693,73 @@ mod tests {
             core: Arc::new(core),
             threads: None,
             permissions: None,
+            locator: None,
         }
+    }
+
+    /// Z3/Z2 stand-ins: no threads, no providers (the locator still indexes workspaces).
+    struct NoSources;
+
+    impl kalcode_locator::LocatorSources for NoSources {
+        fn threads(&self) -> kalcode_core::Result<Vec<kalcode_contracts::threads::ThreadSummary>> {
+            Ok(Vec::new())
+        }
+        fn thread(
+            &self,
+            _: &str,
+        ) -> kalcode_core::Result<Option<kalcode_contracts::threads::ThreadSummary>> {
+            Ok(None)
+        }
+        fn thread_text(&self, _: &str, _: usize) -> kalcode_core::Result<String> {
+            Ok(String::new())
+        }
+        fn providers(&self) -> Vec<kalcode_locator::ProviderInfo> {
+            Vec::new()
+        }
+    }
+
+    #[test]
+    fn search_reads_back_names_only_and_opens_search() {
+        let dir = tempfile::tempdir().expect("data");
+        let projects = tempfile::tempdir().expect("projects");
+        let mut executor = executor(dir.path());
+        let search = KalVoiceIntent::Search {
+            query: "orbit".into(),
+        };
+        assert_eq!(
+            executor.check(&search).map_err(|e| e.code),
+            Err("search_unavailable".into())
+        );
+        let folder = projects.path().join("orbit-payments");
+        std::fs::create_dir_all(&folder).expect("folder");
+        executor.core.open_workspace(&folder).expect("open");
+        let locator = kalcode_locator::Locator::start(executor.core.clone(), Arc::new(NoSources))
+            .expect("locator");
+        assert!(locator.wait_ready(std::time::Duration::from_secs(20)));
+        executor.locator = Some(locator.clone());
+        assert!(executor.check(&search).is_ok());
+        let done = executor.execute(&search, &ctx()).expect("search");
+        assert!(
+            done.summary.starts_with("Found 1: orbit-payments"),
+            "{}",
+            done.summary
+        );
+        assert_eq!(
+            done.directive,
+            Some(UiDirective::Search {
+                query: "orbit".into()
+            })
+        );
+        let none = executor
+            .execute(
+                &KalVoiceIntent::Search {
+                    query: "zebracorn".into(),
+                },
+                &ctx(),
+            )
+            .expect("search");
+        assert_eq!(none.summary, "Nothing matched \u{201c}zebracorn\u{201d}.");
+        locator.shutdown();
     }
 
     fn ctx() -> ExecContext {
@@ -689,11 +857,20 @@ mod tests {
         // Still not in this build.
         assert_eq!(
             executor
+                .check(&KalVoiceIntent::SwitchProvider {
+                    provider_id: ProviderId::new(ProviderId::GEMINI_CLI),
+                })
+                .map_err(|e| e.code),
+            Err("not_in_this_build".into())
+        );
+        // Search is Z7-W2's; this test executor has no locator.
+        assert_eq!(
+            executor
                 .check(&KalVoiceIntent::Search {
                     query: "oauth".into()
                 })
                 .map_err(|e| e.code),
-            Err("not_in_this_build".into())
+            Err("search_unavailable".into())
         );
     }
 

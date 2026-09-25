@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-rail-section-set"
+description = "Enables the rail_section_set command without any pre-configured scope."
+commands.allow = ["rail_section_set"]
+
+[[permission]]
+identifier = "deny-rail-section-set"
+description = "Denies the rail_section_set command without any pre-configured scope."
+commands.deny = ["rail_section_set"]

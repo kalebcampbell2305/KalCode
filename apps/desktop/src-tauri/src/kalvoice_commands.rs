@@ -289,6 +289,7 @@ pub fn init(
     registry: Arc<ProviderRegistry>,
     threads: Option<Arc<kalcode_threads::ThreadRuntime>>,
     permissions: Option<Arc<kalcode_permissions::PermissionService>>,
+    locator: Option<Arc<kalcode_locator::Locator>>,
 ) -> KalVoiceState {
     let enabled = info.flags.surfaces.iter().any(|s| {
         s.id == SurfaceId::KalVoice
@@ -333,6 +334,7 @@ pub fn init(
             core: core.clone(),
             threads,
             permissions,
+            locator,
         }),
         gate,
         providers.clone(),

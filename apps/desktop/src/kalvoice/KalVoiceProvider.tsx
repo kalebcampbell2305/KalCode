@@ -7,7 +7,6 @@ import type {
   PanelAnchor,
   PanelView,
   SizeClass,
-  SurfaceId,
   TalkTarget,
   UiDirective,
 } from "@kalcode/protocol";
@@ -28,8 +27,9 @@ import { type KalCodeError, toKalCodeError } from "../ipc/errors.ts";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { useUiIntents } from "../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../runtime/WorkspaceProvider.tsx";
-import { useNavigation } from "../shell/navigation.tsx";
+import { type Destination, useNavigation } from "../shell/navigation.tsx";
 import { dispatchPaneCommand, type PaneCommand, paneCanvasListening } from "../shell/panes/paneCommands.ts";
+import { useOptionalSearch } from "../shell/rail/search/SearchProvider.tsx";
 import { usePermissions } from "../surfaces/permissions/index.ts";
 import { type AssistantState, INITIAL_STATE, reduce } from "./assistantState.ts";
 import {
@@ -127,6 +127,9 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   const workspaces = useWorkspaces();
   const permissions = usePermissions();
   const uiIntents = useUiIntents();
+  const searchValue = useOptionalSearch();
+  const search = useRef(searchValue);
+  search.current = searchValue;
   const toast = useToast();
   const [status, setStatus] = useState<KalVoiceStatus | null>(null);
   const [statusError, setStatusError] = useState<KalCodeError | null>(null);
@@ -143,7 +146,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   const targets = useRef(new Map<string, DictationTarget | null>());
   const cancelled = useRef(new Set<string>());
   /** For "Type it instead": where the words would have gone and the page before a navigation. */
-  const undo = useRef<{ requestId: string; target: DictationTarget | null; previous: SurfaceId | null } | null>(null);
+  const undo = useRef<{ requestId: string; target: DictationTarget | null; previous: Destination | null } | null>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
   const currentRef = useRef(current);
@@ -238,6 +241,10 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
         case "filter_dashboard":
           // Z7-W3: "Show only agents that are working" and friends.
           intents.filterDashboard(directive.chip);
+          break;
+        case "search":
+          // Z7-W2: KalVoice already read back the names; the palette shows the results.
+          search.current?.openWith(directive.query);
           break;
         default:
           break;

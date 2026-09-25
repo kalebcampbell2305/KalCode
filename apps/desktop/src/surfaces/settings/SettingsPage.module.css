@@ -167,3 +167,37 @@
   font-family: var(--font-mono);
   font-size: var(--type-small);
 }
+
+/* Z7-W2: Settings → Profile (display name). */
+.profileControl {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-2);
+  width: min(18rem, 100%);
+}
+
+.profileButtons {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.fieldError {
+  margin: var(--space-1) 0 0;
+  color: var(--status-failed-text);
+  font-size: var(--type-small);
+}
+
+.saved {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--status-working-text);
+  font-size: var(--type-small);
+}
+
+.saved svg {
+  width: 0.875rem;
+  height: 0.875rem;
+}

@@ -1,4 +1,4 @@
-import type { SurfaceFlag, SurfaceId } from "@kalcode/protocol";
+import type { FeatureFlag, SurfaceFlag, SurfaceId } from "@kalcode/protocol";
 import {
   AudioLines,
   Blocks,
@@ -7,6 +7,8 @@ import {
   CalendarClock,
   Code2,
   Flag,
+  FolderGit2,
+  House,
   LayoutDashboard,
   type LucideIcon,
   MessagesSquare,
@@ -118,6 +120,47 @@ export const SURFACES: Record<SurfaceId, SurfaceMeta> = {
   },
 };
 
+/**
+ * Places in the app that aren't contract surfaces (Z7-W2): the returning-user home and the
+ * folder/project surface of the active workspace. They follow the `workspace_home` and
+ * `workspace_rail` feature flags.
+ */
+export type AppView = "home" | "folder";
+export type Destination = SurfaceId | AppView;
+
+export interface ViewMeta {
+  id: AppView;
+  label: string;
+  icon: LucideIcon;
+  summary: string;
+}
+
+export const VIEWS: Record<AppView, ViewMeta> = {
+  home: {
+    id: "home",
+    label: "Home",
+    icon: House,
+    summary: "Where you left off: what's running, what needs you and what finished.",
+  },
+  folder: {
+    id: "folder",
+    label: "Project",
+    icon: FolderGit2,
+    summary: "The active workspace: files, Git status, recent files, threads and terminals.",
+  },
+};
+
+/** Label and icon of any destination. */
+export function destinationMeta(id: Destination): { label: string; icon: LucideIcon; summary: string } {
+  return id === "home" || id === "folder" ? VIEWS[id] : SURFACES[id];
+}
+
+/** Whether the build shows a view (its feature flag is visible). */
+export function viewVisible(view: AppView, features: readonly FeatureFlag[] | undefined): boolean {
+  const feature = view === "home" ? "workspace_home" : "workspace_rail";
+  return features?.some((f) => f.id === feature && f.visible) ?? false;
+}
+
 /** Navigation order within the sidebar. Settings is pinned to the bottom separately. */
 export const PRIMARY_ORDER: readonly SurfaceId[] = [
   "dashboard",
@@ -135,17 +178,34 @@ export const PRIMARY_ORDER: readonly SurfaceId[] = [
 ];
 
 interface NavigationValue {
-  current: SurfaceId;
-  navigate: (id: SurfaceId) => void;
+  current: Destination;
+  navigate: (id: Destination) => void;
 }
 
 const NavigationContext = createContext<NavigationValue | null>(null);
 
-export function NavigationProvider({ flags, children }: { flags: readonly SurfaceFlag[]; children: ReactNode }) {
-  const [current, setCurrent] = useState<SurfaceId>("dashboard");
-  const visible = useMemo(() => new Set(flags.filter((f) => f.visible).map((f) => f.id)), [flags]);
+export function NavigationProvider({
+  flags,
+  features,
+  children,
+}: {
+  flags: readonly SurfaceFlag[];
+  /** Feature flags (Z7-W2 views follow `workspace_home` / `workspace_rail`). */
+  features?: readonly FeatureFlag[];
+  children: ReactNode;
+}) {
+  // Home is where a session starts once its feature is available (not merely visible in a
+  // development build), so gated builds keep the Dashboard as the first page.
+  const [current, setCurrent] = useState<Destination>(() =>
+    features?.some((f) => f.id === "workspace_home" && f.state === "available" && f.visible) ? "home" : "dashboard",
+  );
+  const visible = useMemo(() => {
+    const ids = new Set<Destination>(flags.filter((f) => f.visible).map((f) => f.id));
+    for (const view of ["home", "folder"] as const) if (viewVisible(view, features)) ids.add(view);
+    return ids;
+  }, [flags, features]);
   const navigate = useCallback(
-    (id: SurfaceId) => {
+    (id: Destination) => {
       if (visible.has(id)) setCurrent(id);
     },
     [visible],

@@ -189,6 +189,10 @@ pub enum UiDirective {
     FilterDashboard {
         chip: kalcode_contracts::workspace_ui::DashboardChip,
     },
+    /// Opens search with this query (Session Locator, Z7-W2).
+    Search {
+        query: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
