@@ -1,32 +1,88 @@
 # Universal Context Drop and Context Firewall
-Status: **planned — not built.** Nothing described here exists in KalCode yet. Plan and
-acceptance criteria: `docs/campaigns/ADVANCED.md`; proposed types, events, IPC and tables:
+
+Status: **library built (P0) — not wired into the app yet.** The crate `crates/context`
+(`kalcode_context`) implements context packages, the Context Firewall, folder analysis,
+provider-safe translation, the decision log and schema v8. There is no IPC command, UI, or event
+emission yet: the lead wires it in at integration and the composer tray arrives in P2. Campaign
+report and evidence: `docs/campaigns/CTX.md`. Plan and acceptance criteria:
+`docs/campaigns/ADVANCED.md` §7.8; proposed contract types, events, IPC and tables:
 `docs/CONTRACTS_ADVANCED.md` (PROPOSED, pending lead approval).
 
-System code **CTX / FW** · Phase **P0 (library) · P2 (UI)**
+System code **CTX / FW** · Phase **P0 (library, built) · P2 (UI)**
 
 Typed context packages that the user previews and edits before anything is sent to a provider,
 and the firewall every KalCode-originated provider send passes through.
 
 ## Context packages
 
-Items: file, file range, selection, terminal excerpt, diff, event range, memory record, thread
-excerpt, text. Files are referenced by native-issued handles, never by paths from the WebView.
-The preview shows every item, its size, its firewall verdict and redactions; any item can be
-removed. The content hash at send time must match the preview. Translation adapts the package to
-what the target provider accepts.
+Items: file, file range (lines), folder, image or screenshot, document, diff, log or error output,
+terminal excerpt, test report, Git commit, mission artifact, link, selection, text, memory record,
+thread excerpt and event range. Paths are resolved natively from file handles; the WebView never
+supplies them. Each item carries its source, size, sensitivity (public, internal, confidential,
+secret), firewall verdict with reasons, and a translation plan.
+
+**Preview.** The preview lists every item with its size, sensitivity, verdict, the rules that
+fired, a redacted excerpt (at most 4 KiB), and how it will be sent. Any item can be removed.
+Overridable items (confidential content, ignored paths, images and documents) are sent only after
+the user confirms that item.
+
+**Hash pinning.** The package hash covers exactly what would be sent. At send time every source is
+read again and checked again; if the hash differs from the previewed one, nothing is sent and the
+updated preview is shown instead.
+
+**Translation.** Each item becomes provider input according to what the target provider declares:
+inline text, trimmed output (first and last parts of logs, test reports and excerpts), an
+attachment (only when the provider declares that modality, format and size), a description (an
+image or document the provider can't take, a folder listing), a workspace path reference
+(optional, only for fully allowed files, when the provider declares it can read files itself), or
+refused with a reason. A provider that declares nothing is treated as text-only. The budget is the
+smaller of the provider's input limit and the package cap (2 MiB by default). Links are sent as
+addresses only; KalCode never opens them. Provider output passed on as context is framed as
+untrusted data.
+
+**Folders.** A folder is never inlined wholesale. The analysis honours `.gitignore`, `.ignore`,
+`.kalcodeignore` and Git's exclude files, skips `.git/` and never-share folders, never follows links
+or junctions, detects binaries, applies file-count, byte, per-file and walk budgets, and ranks files
+by relevance (project descriptions and manifests first, lockfiles and generated files last). The
+result lists exactly which files would be shared and why everything else was left out; the user can
+prune it before it becomes package items.
 
 ## Context Firewall
 
 Runs before every KalCode-originated provider send: context drops, handoff capsules, memory,
 automation prompts, delegation prompts and KalVoice reasoning. User-typed prompts get a
-warn-and-confirm on secret patterns. It blocks or redacts secrets (the shared redactor plus
-detectors), ignored paths (`.gitignore`, workspace "never share" globs, built-in sensitive names),
-items outside the mission scope or the workspace, and binaries. *Secret* sensitivity can never be
-overridden; *confidential* needs per-item confirmation. Every decision is logged.
+warn-and-confirm on secret patterns (a warning, never a block).
+
+Every applicable rule fires and the strongest wins (**deny wins**):
+
+| Rule | Result |
+| --- | --- |
+| Sharing from this workspace not permitted | Blocked |
+| Outside the workspace, or an unsafe path (alternate data stream, device name, trailing dot or space, invisible characters) | Blocked |
+| Built-in never-share names: `.env*` (not `.env.example`), private keys (`id_*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, …), credential directories (`.ssh`, `.aws`, `.gnupg`, `.azure`, `.kube`, …), credential and token files (`.npmrc`, `.pypirc`, `.netrc`, `.git-credentials`, `terraform.tfstate`, service-account JSON, …) | Blocked (secret; never overridable) |
+| Data exports and dumps that may hold customer data; Git's internal folder | Needs confirmation (confidential) |
+| Your never-share patterns (all workspaces or one workspace) | Blocked (secret) or needs confirmation (confidential) |
+| Your exclusions; outside the mission's scope | Blocked |
+| Ignored by `.gitignore` / `.ignore` / `.kalcodeignore` | Needs confirmation |
+| Binary files, or larger than the per-item limit | Blocked |
+| Images, PDFs and office documents (can't be checked for secrets) | Needs confirmation |
+| Secrets in content (known key and token formats, credentials in links and connection strings, private keys, sensitive assignments, high-entropy values) | Sent with the values replaced (or blocked, if the workspace chooses) |
+| A never-share file inside a diff | That file's changes withheld |
+| Provider output | Labelled as untrusted, not blocked |
+
+Names are matched after case folding and look-alike folding (full-width letters and dots, for
+example), on the canonical path after links, junctions and short names are resolved. Redaction
+replaces only the secret value; key names, quotes and line numbers stay. No confirmation ever
+removes a redaction.
+
+Every block, redaction, override and prompt warning is written to an append-only log that holds
+rule codes, counts, paths and hashes — never content. Stored packages hold references and hashes,
+never content.
 
 ## Honest limit
 
 The firewall governs what KalCode sends. A provider reading files with its own tools is
-governed by the Trust Kernel and the provider mapping; "never share" globs are also offered as
-Trust Kernel deny rules for reads.
+governed by the Trust Kernel and the provider mapping; "never share" patterns are also offered as
+Trust Kernel deny rules for reads. Secret detection is pattern- and heuristic-based: it can miss an
+unknown credential format, and it cannot look inside images or PDFs. The preview is the final
+check.
