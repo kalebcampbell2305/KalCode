@@ -7,24 +7,14 @@
 mod common;
 
 use common::Fixture;
-use kalcode_core::db::Migration;
 use kalcode_git::repo::Repo;
-use kalcode_git::store::{self, GIT_MIGRATION};
+use kalcode_git::store;
 use kalcode_git::types::{WorktreePurpose, WorktreeStatus};
 use kalcode_git::worktree::{self, RemoveMode, WorktreeStart};
 
 fn db() -> rusqlite::Connection {
     let mut conn = kalcode_core::db::open_in_memory().expect("db");
-    let mut all = kalcode_core::db::MIGRATIONS.to_vec();
-    for version in (all.len() as i64 + 1)..7 {
-        all.push(Migration {
-            version,
-            name: "reserved",
-            sql: "SELECT 1;",
-        });
-    }
-    all.push(GIT_MIGRATION);
-    kalcode_core::db::migrate(&mut conn, &all, None).expect("migrate");
+    kalcode_core::db::migrate(&mut conn, kalcode_core::db::MIGRATIONS, None).expect("migrate");
     conn
 }
 
