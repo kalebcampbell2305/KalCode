@@ -8,6 +8,17 @@ export {
   type IconButtonProps,
 } from "./Button.tsx";
 export { cx } from "./cx.ts";
+export {
+  buildRows,
+  type DiffChange,
+  type DiffFileData,
+  type DiffHunk,
+  type DiffLine,
+  type DiffLineKind,
+  type DiffMode,
+  pairLines,
+} from "./DiffView.model.ts";
+export { DiffView, type DiffViewProps } from "./DiffView.tsx";
 export { Kbd, type KeyValueItem, KeyValueList, Section, type SectionProps } from "./Layout.tsx";
 export { SegmentedControl, type SegmentedControlProps, type SegmentedOption } from "./SegmentedControl.tsx";
 export { EmptyState, ErrorState, Skeleton } from "./States.tsx";

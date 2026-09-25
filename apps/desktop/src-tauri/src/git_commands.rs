@@ -55,7 +55,10 @@ fn invalid_id() -> KalError {
 }
 
 /// Resolves a workspace id to its canonical root (natively, from the workspace record).
-pub(crate) fn workspace_root(state: &AppState, workspace_id: &str) -> Result<WorkspaceRoot, KalError> {
+pub(crate) fn workspace_root(
+    state: &AppState,
+    workspace_id: &str,
+) -> Result<WorkspaceRoot, KalError> {
     if !kalcode_contracts::ids::is_valid_id(workspace_id) {
         return Err(invalid_id());
     }
@@ -67,14 +70,22 @@ pub(crate) fn workspace_root(state: &AppState, workspace_id: &str) -> Result<Wor
         .into_iter()
         .find(|w| w.id == workspace_id)
         .ok_or_else(|| {
-            KalError::new(ErrorCategory::Validation, "workspace_unknown", "That workspace no longer exists.")
+            KalError::new(
+                ErrorCategory::Validation,
+                "workspace_unknown",
+                "That workspace no longer exists.",
+            )
         })?;
     WorkspaceRoot::new(&workspace.id, Path::new(&workspace.root_path))
 }
 
 /// Resolves the folder a Git command runs in: the workspace, or one of its KalCode worktrees.
 /// Handles are then scoped to that folder's id.
-fn target_root(state: &AppState, workspace_id: &str, worktree_id: Option<&str>) -> Result<WorkspaceRoot, KalError> {
+fn target_root(
+    state: &AppState,
+    workspace_id: &str,
+    worktree_id: Option<&str>,
+) -> Result<WorkspaceRoot, KalError> {
     let root = workspace_root(state, workspace_id)?;
     let Some(worktree_id) = worktree_id else {
         return Ok(root);
@@ -83,10 +94,17 @@ fn target_root(state: &AppState, workspace_id: &str, worktree_id: Option<&str>) 
         KalError::internal("core_unavailable", "KalCode's runtime is not available.")
     })?;
     let (row, path) = core.read(|conn| {
-        Ok((store::get_worktree(conn, worktree_id)?, store::worktree_path(conn, worktree_id)?))
+        Ok((
+            store::get_worktree(conn, worktree_id)?,
+            store::worktree_path(conn, worktree_id)?,
+        ))
     })?;
     if row.workspace_id != workspace_id || row.status == WorktreeStatus::Removed {
-        return Err(KalError::new(ErrorCategory::Git, "worktree_unknown", "That worktree no longer exists."));
+        return Err(KalError::new(
+            ErrorCategory::Git,
+            "worktree_unknown",
+            "That worktree no longer exists.",
+        ));
     }
     WorkspaceRoot::new(&row.id, &path)
 }
@@ -110,7 +128,10 @@ async fn blocking<T: Send + 'static>(
 /// `EventPayload` (see the table in `docs/campaigns/Z6a.md` §7); the facts are logged meanwhile.
 fn record(events: Vec<GitEvent>) -> Vec<NewEvent> {
     for event in &events {
-        tracing::info!(event = event.event_type(), workspace_id = event.workspace_id());
+        tracing::info!(
+            event = event.event_type(),
+            workspace_id = event.workspace_id()
+        );
     }
     Vec::new()
 }
@@ -216,7 +237,10 @@ pub async fn git_log(
     let root = target_root(&state, &args.workspace_id, args.worktree_id.as_deref())
         .map_err(|e| e.log_and_convert("git_log"))?;
     let core = Arc::clone(&git.0);
-    blocking("git_log", move || core.log(&root, args.page.limit, args.page.cursor.as_deref())).await
+    blocking("git_log", move || {
+        core.log(&root, args.page.limit, args.page.cursor.as_deref())
+    })
+    .await
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -231,7 +255,8 @@ pub async fn git_branches(
     git: State<'_, GitState>,
     args: WorkspaceArgs,
 ) -> Result<Vec<Branch>, IpcError> {
-    let root = workspace_root(&state, &args.workspace_id).map_err(|e| e.log_and_convert("git_branches"))?;
+    let root = workspace_root(&state, &args.workspace_id)
+        .map_err(|e| e.log_and_convert("git_branches"))?;
     let core = Arc::clone(&git.0);
     blocking("git_branches", move || core.branches(&root)).await
 }
@@ -278,13 +303,18 @@ pub async fn worktree_create(
         )
         .to_ipc());
     }
-    let root = workspace_root(&state, &args.workspace_id).map_err(|e| e.log_and_convert("worktree_create"))?;
-    let core = Arc::clone(&state.core()?.clone());
+    let root = workspace_root(&state, &args.workspace_id)
+        .map_err(|e| e.log_and_convert("worktree_create"))?;
+    let core = Arc::clone(state.core()?);
     let gitcore = Arc::clone(&git.0);
     blocking("worktree_create", move || {
         let git = gitcore.git()?;
         let repo = gitcore.repo(&root)?.ok_or_else(|| {
-            KalError::new(ErrorCategory::Git, "not_a_repository", "This folder isn't a Git repository.")
+            KalError::new(
+                ErrorCategory::Git,
+                "not_a_repository",
+                "This folder isn't a Git repository.",
+            )
         })?;
         let new = worktree::create_managed(
             git,
@@ -336,14 +366,24 @@ pub async fn worktree_remove(
     }
     let core = Arc::clone(state.core()?);
     let (row, path) = core
-        .read(|conn| Ok((store::get_worktree(conn, &args.worktree_id)?, store::worktree_path(conn, &args.worktree_id)?)))
+        .read(|conn| {
+            Ok((
+                store::get_worktree(conn, &args.worktree_id)?,
+                store::worktree_path(conn, &args.worktree_id)?,
+            ))
+        })
         .map_err(|e| e.log_and_convert("worktree_remove"))?;
-    let root = workspace_root(&state, &row.workspace_id).map_err(|e| e.log_and_convert("worktree_remove"))?;
+    let root = workspace_root(&state, &row.workspace_id)
+        .map_err(|e| e.log_and_convert("worktree_remove"))?;
     let gitcore = Arc::clone(&git.0);
     blocking("worktree_remove", move || {
         let git = gitcore.git()?;
         let repo = gitcore.repo(&root)?.ok_or_else(|| {
-            KalError::new(ErrorCategory::Git, "not_a_repository", "This folder isn't a Git repository.")
+            KalError::new(
+                ErrorCategory::Git,
+                "not_a_repository",
+                "This folder isn't a Git repository.",
+            )
         })?;
         if path.exists() {
             worktree::remove(git, &repo, &path, RemoveMode::Safe)?;
@@ -391,7 +431,8 @@ pub async fn checkpoint_create(
     git: State<'_, GitState>,
     args: WorkspaceArgs,
 ) -> Result<Checkpoint, IpcError> {
-    let root = workspace_root(&state, &args.workspace_id).map_err(|e| e.log_and_convert("checkpoint_create"))?;
+    let root = workspace_root(&state, &args.workspace_id)
+        .map_err(|e| e.log_and_convert("checkpoint_create"))?;
     let core = Arc::clone(state.core()?);
     let gitcore = Arc::clone(&git.0);
     blocking("checkpoint_create", move || {
@@ -409,13 +450,16 @@ pub async fn checkpoint_create(
         let created = match outcome {
             CreateOutcome::Created(created) => created,
             CreateOutcome::Unchanged { .. } => {
-                return latest.ok_or_else(|| KalError::internal("checkpoint_missing", "The latest checkpoint is missing."));
+                return latest.ok_or_else(|| {
+                    KalError::internal("checkpoint_missing", "The latest checkpoint is missing.")
+                });
             }
         };
         let event_seq = core.recent_events(1, None)?.first().map_or(0, |e| e.seq);
         let trigger = CheckpointTrigger::User;
         let (row, _) = core.write_with_events(|tx| {
-            let row = store::insert_checkpoint(tx, root.id(), &created, &trigger, event_seq, false)?;
+            let row =
+                store::insert_checkpoint(tx, root.id(), &created, &trigger, event_seq, false)?;
             let events = record(vec![GitEvent::CheckpointCreated {
                 checkpoint_id: row.id.clone(),
                 workspace_id: row.workspace_id.clone(),
@@ -474,9 +518,14 @@ pub async fn checkpoint_pin(
     args: CheckpointPinArgs,
 ) -> Result<Checkpoint, IpcError> {
     let core = state.core()?;
-    core.write_with_events(|tx| Ok((store::set_pinned(tx, &args.checkpoint_id, args.pinned)?, Vec::new())))
-        .map(|(row, _)| row)
-        .map_err(|e| e.log_and_convert("checkpoint_pin"))
+    core.write_with_events(|tx| {
+        Ok((
+            store::set_pinned(tx, &args.checkpoint_id, args.pinned)?,
+            Vec::new(),
+        ))
+    })
+    .map(|(row, _)| row)
+    .map_err(|e| e.log_and_convert("checkpoint_pin"))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -505,10 +554,18 @@ pub async fn checkpoint_diff(
             Ok((from, to))
         })
         .map_err(|e| e.log_and_convert("checkpoint_diff"))?;
-    if to.as_ref().is_some_and(|t| t.workspace_id != from.workspace_id) {
-        return Err(KalError::validation("checkpoint_workspace_mismatch", "Those checkpoints belong to different workspaces.").to_ipc());
+    if to
+        .as_ref()
+        .is_some_and(|t| t.workspace_id != from.workspace_id)
+    {
+        return Err(KalError::validation(
+            "checkpoint_workspace_mismatch",
+            "Those checkpoints belong to different workspaces.",
+        )
+        .to_ipc());
     }
-    let root = workspace_root(&state, &from.workspace_id).map_err(|e| e.log_and_convert("checkpoint_diff"))?;
+    let root = workspace_root(&state, &from.workspace_id)
+        .map_err(|e| e.log_and_convert("checkpoint_diff"))?;
     let gitcore = Arc::clone(&git.0);
     blocking("checkpoint_diff", move || {
         gitcore.checkpoints().diff(

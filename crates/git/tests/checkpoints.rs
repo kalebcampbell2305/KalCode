@@ -593,21 +593,50 @@ fn snapshots_never_follow_links_out_of_the_workspace() {
     fx.write("inside.txt", "ok");
     assert!(dir_link(&fx.path("link"), &outside));
     let store = store(&fx);
-    let cp = created(store.create(&fx.git, &fx.ws, &new_id(), None, None).expect("create"));
-    let shadow = fx.data.join("checkpoints").join(format!("{}.git", fx.ws.id()));
+    let cp = created(
+        store
+            .create(&fx.git, &fx.ws, &new_id(), None, None)
+            .expect("create"),
+    );
+    let shadow = fx
+        .data
+        .join("checkpoints")
+        .join(format!("{}.git", fx.ws.id()));
     let listed = common::run_plain(
         fx.temp.path(),
-        &["--git-dir", &shadow.to_string_lossy(), "ls-tree", "-r", "--name-only", &cp.commit_oid],
+        &[
+            "--git-dir",
+            &shadow.to_string_lossy(),
+            "ls-tree",
+            "-r",
+            "--name-only",
+            &cp.commit_oid,
+        ],
     );
     assert!(!listed.contains("secret"), "{listed}");
     assert!(listed.contains("inside.txt"));
     // Restoring never writes through the link either.
     std::fs::remove_file(fx.path("inside.txt")).expect("rm");
-    let plan = store.plan_restore(&fx.git, &fx.ws, &cp.commit_oid, None, true).expect("plan");
-    assert!(plan.changes.iter().all(|c| !c.path.starts_with("link")), "{plan:?}");
+    let plan = store
+        .plan_restore(&fx.git, &fx.ws, &cp.commit_oid, None, true)
+        .expect("plan");
+    assert!(
+        plan.changes.iter().all(|c| !c.path.starts_with("link")),
+        "{plan:?}"
+    );
     store
-        .execute_restore(&fx.git, &fx.ws, &plan, RestoreConfirmation::confirmed_natively(&plan), &new_id(), None)
+        .execute_restore(
+            &fx.git,
+            &fx.ws,
+            &plan,
+            RestoreConfirmation::confirmed_natively(&plan),
+            &new_id(),
+            None,
+        )
         .expect("restore");
-    assert_eq!(std::fs::read(outside.join("secret.txt")).expect("read"), b"secret");
+    assert_eq!(
+        std::fs::read(outside.join("secret.txt")).expect("read"),
+        b"secret"
+    );
     assert!(fx.exists("inside.txt"));
 }

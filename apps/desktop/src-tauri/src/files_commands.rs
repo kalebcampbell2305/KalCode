@@ -35,14 +35,17 @@ pub async fn files_list(
     git: State<'_, GitState>,
     args: FilesListArgs,
 ) -> Result<Page<FileEntry>, IpcError> {
-    let root = workspace_root(&state, &args.workspace_id).map_err(|e| e.log_and_convert("files_list"))?;
+    let root =
+        workspace_root(&state, &args.workspace_id).map_err(|e| e.log_and_convert("files_list"))?;
     let core = Arc::clone(&git.0);
-    tauri::async_runtime::spawn_blocking(move || core.list_files(&root, args.dir.as_ref(), &args.page))
-        .await
-        .map_err(|e| {
-            kalcode_core::KalError::internal("files_interrupted", "Listing files was interrupted.")
-                .with_source(e)
-                .log_and_convert("files_list")
-        })?
-        .map_err(|e| e.log_and_convert("files_list"))
+    tauri::async_runtime::spawn_blocking(move || {
+        core.list_files(&root, args.dir.as_ref(), &args.page)
+    })
+    .await
+    .map_err(|e| {
+        kalcode_core::KalError::internal("files_interrupted", "Listing files was interrupted.")
+            .with_source(e)
+            .log_and_convert("files_list")
+    })?
+    .map_err(|e| e.log_and_convert("files_list"))
 }
