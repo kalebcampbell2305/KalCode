@@ -100,6 +100,33 @@ test.describe("every page", () => {
     await expect(providers).toContainText("adapter planned");
   });
 
+  test("the header offers Download (plain label) while there is no public build", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/");
+    const cta = page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Download", exact: true });
+    await expect(cta).toHaveText("Download");
+    await expect(cta).toHaveAttribute("href", "/download");
+    await page.setViewportSize({ width: 390, height: 844 });
+    const compact = page.locator(".header-tools").getByRole("link", { name: "Download", exact: true });
+    await expect(compact).toHaveText("Download");
+    await expect(compact).toHaveAttribute("href", "/download");
+  });
+
+  test("from 1024 px the hero copy sits left, clear of the orb and its stream", async ({ page }) => {
+    for (const width of [1024, 1440, 2560]) {
+      await page.setViewportSize({ width, height: width > 2000 ? 1440 : 900 });
+      await page.goto("/");
+      const orb = await page.locator(".hero__orb").boundingBox();
+      for (const selector of [".hero__title", ".hero__support", ".hero__actions", ".hero__note"]) {
+        const box = await page.locator(selector).boundingBox();
+        expect(box && orb && box.x + box.width <= orb.x + 1, `${selector} at ${width}px`).toBe(true);
+      }
+      // The stream lands on the provider bar: the orb cell ends where the hero ends.
+      const hero = await page.locator(".hero").boundingBox();
+      expect(orb && hero && Math.abs(orb.y + orb.height - (hero.y + hero.height)) < 1).toBe(true);
+    }
+  });
+
   test("home carries Organization and SoftwareApplication JSON-LD built from site data", async ({ page }) => {
     await page.goto("/");
     const raw = await page.locator('script[type="application/ld+json"]').textContent();

@@ -869,6 +869,60 @@ a:hover {
   font-size: var(--site-text-xs);
 }
 
+/* 1024 px and up: a split hero. The copy sits left, clear of the energy stream; the orb owns the
+   right half, symbol near the top, stream running to the hero's bottom edge and the provider bar. */
+@media (min-width: 64rem) {
+  .hero {
+    --hero-orb-max: min(32rem, 58svh);
+    --hero-orb-top: clamp(1.5rem, 4svh, 3rem);
+  }
+
+  .hero__orb {
+    inset: 0 0 0 auto;
+    width: 50%;
+  }
+
+  .hero__orb-poster {
+    margin-top: var(--hero-orb-top);
+  }
+
+  .hero__inner {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-content: center;
+    justify-items: start;
+    min-height: clamp(34rem, calc(100svh - var(--site-header-h) - 7.5rem), 52rem);
+    padding-block: clamp(3rem, 2rem + 3vh, 5rem);
+    text-align: left;
+  }
+
+  .hero__inner > * {
+    grid-column: 1;
+  }
+
+  .hero__title {
+    justify-items: start;
+  }
+
+  .hero__name {
+    font-size: clamp(4.5rem, 1.5rem + 5vw, 7rem);
+    margin-right: 0;
+  }
+
+  .hero__line {
+    max-width: 22ch;
+    text-wrap: pretty;
+  }
+
+  .hero__support {
+    max-width: 44ch;
+    text-wrap: pretty;
+  }
+
+  .hero__actions {
+    justify-content: flex-start;
+  }
+}
+
 /* Provider bar: the concrete names, with honest adapter status. */
 .provider-band {
   border-block: 1px solid var(--color-border);
