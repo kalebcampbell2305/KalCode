@@ -1,0 +1,105 @@
+---
+/**
+ * ScrollStory: the window builds itself as you scroll (shell → Claude Code → Codex split →
+ * browser → Dashboard → approval → KalVoice → command opens agents → mission verifies).
+ *
+ * Desktop with motion: the captions scroll on the left and the window stays pinned (sticky) on
+ * the right; each caption crossing the middle of the viewport sets the step (discrete steps,
+ * 380 ms transitions, no scrubbing). Phones, reduced motion and no-JS: no pinning; every step is
+ * a caption with a still of the part of the window it is about, all content visible. On phones
+ * with motion, a Play button replays a still's micro-animation.
+ */
+import "../../styles/stage.css";
+import { BASE_SCENE, type Scene, STORY, THREADS, threadById, VOICE, ZOD_APPROVAL } from "../../data/story";
+import AppWindow from "./AppWindow.astro";
+import ApprovalCard from "./parts/ApprovalCard.astro";
+import BrowserPreview from "./parts/BrowserPreview.astro";
+import DashboardPanel from "./parts/DashboardPanel.astro";
+import KalVoicePanel from "./parts/KalVoicePanel.astro";
+import MissionStrip from "./parts/MissionStrip.astro";
+import Pane from "./parts/Pane.astro";
+import Rail from "./parts/Rail.astro";
+import StageLabel from "./parts/StageLabel.astro";
+
+interface Props {
+  id?: string;
+  /** Heading level of the step captions (they sit under the section's own heading). */
+  headingLevel?: 2 | 3 | 4;
+  class?: string;
+}
+const { id = "story", headingLevel = 3, class: className } = Astro.props;
+const Heading = `h${headingLevel}` as "h2" | "h3" | "h4";
+
+const cumulative = (index: number): Scene =>
+  STORY.slice(0, index + 1).reduce<Scene>((scene, step) => ({ ...scene, ...step.scene }), { ...BASE_SCENE });
+const first = cumulative(0);
+const total = String(STORY.length).padStart(2, "0");
+const replayable = ["shell", "claude", "codex", "approval", "voice", "mission"];
+---
+<section class:list={["kc-story", className]} data-kc-story data-testid="scroll-story" aria-label="How KalCode works, step by step">
+  <ol class="kc-story__steps" role="list">
+    {STORY.map((step, i) => (
+      <li class="kc-step" data-kc-step={i} data-active={i === 0 ? "true" : undefined} data-testid={`story-step-${step.id}`}>
+        <div class="kc-step__copy">
+          <span class="kc-step__num" aria-hidden="true">{String(i + 1).padStart(2, "0")} / {total}</span>
+          <Heading class="kc-step__title">{step.title}</Heading>
+          <p class="kc-step__line">{step.line}</p>
+          <span class="kc-tag kc-step__tag">{step.tag}</span>
+        </div>
+        <div class="kc-still-wrap">
+          <figure
+            class:list={[
+              "kc-still",
+              (step.still === "browser" || step.still === "dashboard") && "kc-still--dock",
+              (step.still === "approval" || step.still === "mission") && "kc-still--pad",
+              step.still === "voice" && "kc-still--voice",
+              step.still === "threads" && "kc-still--threads",
+            ]}
+            role="img"
+            aria-label={`Preview: ${step.describe}`}
+            data-kc-app
+            data-kc-still={step.still}
+            data-interactive="false"
+            data-panes={step.still === "voice" ? "claude-checkout" : ""}
+            data-focus="claude-checkout"
+            data-approval={step.still === "approval" ? "pending" : "none"}
+            data-mission={step.still === "mission" ? "5" : "0"}
+            data-voice={step.still === "voice" ? "done" : "off"}
+            data-testid={`still-${step.id}`}
+          >
+            {step.still === "shell" && <Pane thread={threadById("shell")} approval="none" interactive={false} still />}
+            {step.still === "claude" && <Pane thread={threadById("claude-checkout")} approval="none" interactive={false} still focus />}
+            {step.still === "codex" && <Pane thread={threadById("codex-signup")} approval="none" interactive={false} still />}
+            {step.still === "browser" && <BrowserPreview interactive={false} />}
+            {step.still === "dashboard" && <DashboardPanel uid={`${id}-still`} approval="none" interactive={false} present={[]} />}
+            {step.still === "approval" && <ApprovalCard uid={`${id}-still`} approval={ZOD_APPROVAL} state="pending" interactive={false} />}
+            {step.still === "voice" && (
+              <>
+                <Pane thread={threadById("claude-checkout")} approval="approved" interactive={false} still focus typed={VOICE.dictation} />
+                <KalVoicePanel state="done" interactive={false} still />
+              </>
+            )}
+            {step.still === "threads" && <Rail threads={THREADS} approval="approved" interactive={false} focus="claude-e2e" view="code" present={VOICE.spawns} />}
+            {step.still === "mission" && <MissionStrip stage={5} still />}
+          </figure>
+          {replayable.includes(step.still) && (
+            <button type="button" class="kc-btn kc-still__replay" data-kc-replay={step.still} aria-label={`Play step ${i + 1}: ${step.title}`}>
+              <span class="kc-i" data-i="play" aria-hidden="true"></span>Play
+            </button>
+          )}
+        </div>
+      </li>
+    ))}
+  </ol>
+
+  <div class="kc-story__stage">
+    <div class="kc-story__sticky">
+      <StageLabel class="kc-story__label" />
+      <AppWindow id={`${id}-app`} scene={first} interactive={false} auto={false} size="hero" label={`Preview: ${STORY[0]?.describe ?? ""}`} />
+    </div>
+  </div>
+</section>
+
+<script>
+  import "../../scripts/stage/story";
+</script>

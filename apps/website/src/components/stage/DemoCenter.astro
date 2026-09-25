@@ -1,0 +1,64 @@
+---
+/**
+ * DemoCenter ("See KalCode in action"): tabs for Multi-agent, KalVoice, Permissions, Dashboard
+ * and Code Mode. Each tab moves one interactive window to its scene and plays its sequence,
+ * without a reload. Each tab's copy block has a named slot (`video-<tab id>`) so a recorded
+ * video can replace the drawn window later.
+ */
+import "../../styles/stage.css";
+import { BASE_SCENE, DEMO_TABS } from "../../data/story";
+import AppWindow from "./AppWindow.astro";
+import StageLabel from "./parts/StageLabel.astro";
+
+interface Props {
+  id?: string;
+  /** Heading level for each tab's title. */
+  headingLevel?: 2 | 3 | 4;
+  class?: string;
+}
+const { id = "demo", headingLevel = 3, class: className } = Astro.props;
+const Heading = `h${headingLevel}` as "h2" | "h3" | "h4";
+const first = DEMO_TABS[0];
+---
+<div class:list={["kc-demo", className]} data-kc-demo data-testid="demo-center">
+  <div class="kc-tabs" role="tablist" aria-label="See KalCode in action">
+    {DEMO_TABS.map((t, i) => (
+      <button
+        type="button"
+        role="tab"
+        class="kc-tab"
+        id={`${id}-tab-${t.id}`}
+        aria-controls={`${id}-panel`}
+        aria-selected={i === 0 ? "true" : "false"}
+        tabindex={i === 0 ? 0 : -1}
+        data-kc-demo-tab={t.id}
+        data-testid={`demo-tab-${t.id}`}
+      >
+        {t.label}
+      </button>
+    ))}
+  </div>
+  <div class="kc-demo__panel" id={`${id}-panel`} role="tabpanel" aria-labelledby={`${id}-tab-${first?.id}`} data-kc-demo-panel>
+    <div class="kc-demo__copies">
+      {DEMO_TABS.map((t, i) => (
+        <div class="kc-demo__copy" data-kc-demo-copy={t.id} hidden={i !== 0}>
+          <Heading class="kc-demo__title">{t.title}</Heading>
+          <p class="kc-demo__line">{t.line}</p>
+          <span class="kc-tag">{t.tag}</span>
+          <slot name={`video-${t.id}`} />
+          <button type="button" class="kc-btn kc-btn--ghost" data-kc-demo-replay data-testid={`demo-replay-${t.id}`}>
+            <span class="kc-i" data-i="replay" aria-hidden="true"></span>Replay
+          </button>
+        </div>
+      ))}
+    </div>
+    <div class="kc-demo__stage">
+      <StageLabel />
+      <AppWindow id={`${id}-app`} interactive={true} scene={{ ...BASE_SCENE, ...first?.scene }} size="section" />
+    </div>
+  </div>
+</div>
+
+<script>
+  import "../../scripts/stage/demo-center";
+</script>

@@ -1,0 +1,119 @@
+---
+/**
+ * The Dashboard (Z5 design), drawn with sample data: lead sentence, summary strip with its
+ * proportional rule, the approval queue, thread rows and (when wide) the Runtime and Terminals
+ * rail. One element serves both the narrow dock and the full Dashboard view; container queries
+ * choose the layout.
+ */
+import {
+  type ApprovalState,
+  PUSH_APPROVAL,
+  RUNTIME,
+  statusFor,
+  summarize,
+  summaryLead,
+  TERMINALS,
+  THREADS,
+  ZOD_APPROVAL,
+} from "../../../data/story";
+import ApprovalCard from "./ApprovalCard.astro";
+import ThreadRow from "./ThreadRow.astro";
+
+interface Props {
+  uid: string;
+  approval: ApprovalState;
+  interactive: boolean;
+  present: readonly string[];
+}
+
+const { uid, approval, interactive, present } = Astro.props;
+const agents = THREADS.filter((t) => t.provider !== "shell");
+const shown = agents.filter((t) => !t.spawned || present.includes(t.id));
+const summary = summarize(
+  shown.map((t) => statusFor(t, approval)),
+  1 + (approval === "pending" ? 1 : 0),
+);
+const total = Math.max(1, summary.working + summary.approvals + summary.reply + summary.idle);
+const w = (n: number) => ((n / total) * 100).toFixed(2);
+const segments = [
+  { key: "working", label: "Working", icon: "working", tone: "live" },
+  { key: "approvals", label: summary.approvals === 1 ? "Needs approval" : "Need approval", icon: "approval", tone: "waiting" },
+  { key: "reply", label: "Needs a reply", icon: "reply", tone: "waiting" },
+  { key: "failed", label: "Failed", icon: "failed", tone: "danger" },
+  { key: "terminals", label: "Terminals", icon: "terminal", tone: "idle" },
+] as const;
+---
+<div class="kc-dash" data-kc-dash data-testid="dashboard">
+  <div class="kc-dash__head">
+    <p class="kc-dash__title">Dashboard</p>
+    <p class="kc-dash__lead" data-kc-dash-lead>{summaryLead(summary)}</p>
+  </div>
+
+  <div class="kc-sum" data-kc-summary>
+    <svg class="kc-sum__rule" viewBox="0 0 100 2" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+      <rect class="kc-sum__seg kc-sum__seg--live" data-seg="working" x="0" y="0" height="2" width={w(summary.working)} />
+      <rect class="kc-sum__seg kc-sum__seg--waiting" data-seg="attention" x={w(summary.working)} y="0" height="2" width={w(summary.approvals + summary.reply)} />
+      <rect class="kc-sum__seg kc-sum__seg--idle" data-seg="idle" x={w(summary.working + summary.approvals + summary.reply)} y="0" height="2" width={w(summary.idle)} />
+    </svg>
+    <ul class="kc-sum__list" role="list">
+      {segments.map((s) => (
+        <li class="kc-sum__item" data-tone={s.tone}>
+          <span class="kc-sum__n" data-kc-count={s.key}>{summary[s.key]}</span>
+          <span class="kc-i" data-i={s.icon} aria-hidden="true"></span>
+          <span class="kc-sum__label" data-kc-count-label={s.key}>{s.label}</span>
+        </li>
+      ))}
+    </ul>
+  </div>
+
+  <div class="kc-dash__grid">
+    <div class="kc-dash__primary">
+      <div class="kc-dash__section kc-dash__approvals" data-kc-approvals>
+        <p class="kc-dash__h"><span class="kc-i" data-i="approval" aria-hidden="true"></span>Needs approval <span class="kc-count" data-kc-count="approvals">{summary.approvals}</span></p>
+        <div class="kc-dash__cards">
+          <ApprovalCard uid={`${uid}-dash`} approval={ZOD_APPROVAL} state={approval} interactive={interactive} />
+          <ApprovalCard uid={`${uid}-dash`} approval={PUSH_APPROVAL} state="pending" interactive={interactive} class="kc-approval--secondary" />
+        </div>
+      </div>
+
+      <div class="kc-dash__section">
+        <p class="kc-dash__h">Threads</p>
+        <ul class="kc-dash__rows" role="list">
+          {agents.map((t) => (
+            <ThreadRow thread={t} approval={approval} interactive={interactive} hidden={t.spawned && !present.includes(t.id)} />
+          ))}
+        </ul>
+      </div>
+    </div>
+
+    <div class="kc-dash__side">
+      <div class="kc-dash__section">
+        <p class="kc-dash__h">Runtime</p>
+        <dl class="kc-runtime">
+          {RUNTIME.map((r) => (
+            <div>
+              <dt>{r.label}</dt>
+              <dd>
+                {r.tone && <span class="kc-dot" data-tone={r.tone} aria-hidden="true"></span>}
+                <span>{r.value}</span>
+                {r.sub && <span class="kc-sub">{r.sub}</span>}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </div>
+      <div class="kc-dash__section">
+        <p class="kc-dash__h">Terminals</p>
+        <ul class="kc-terms" role="list">
+          {TERMINALS.map((t) => (
+            <li>
+              <span class="kc-i" data-i="terminal" aria-hidden="true"></span>
+              <span class="kc-terms__name">{t.name}<span class="kc-sub">{t.workspace}</span></span>
+              <span class="kc-terms__age">{t.age}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>

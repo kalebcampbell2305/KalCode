@@ -1,0 +1,27 @@
+---
+/**
+ * A thread status as glyph + words, never colour alone. Mirrors the desktop StatusLabel:
+ * same labels, tones and icons. Scripts keep every label for a thread in sync through
+ * `data-kc-status-for`.
+ */
+import { STATUS, type ThreadStatus } from "../../../data/story";
+
+interface Props {
+  status: ThreadStatus;
+  threadId?: string;
+  /** "dot" renders the compact rail form (dot only, label visually hidden). */
+  variant?: "label" | "dot";
+  class?: string;
+}
+const { status, threadId, variant = "label", class: className } = Astro.props;
+const meta = STATUS[status];
+---
+<span
+  class:list={["kc-status", `kc-status--${variant}`, className]}
+  data-status={status}
+  data-tone={meta.tone}
+  data-kc-status-for={threadId}
+>
+  {variant === "dot" ? <span class="kc-status__dot" aria-hidden="true" /> : <span class="kc-i kc-status__icon" data-i={meta.icon} aria-hidden="true" />}
+  <span class:list={["kc-status__text", variant === "dot" && "visually-hidden"]}>{meta.label}</span>
+</span>

@@ -1,0 +1,41 @@
+---
+/** One Dashboard thread row (the app's ThreadRow, condensed): status, name, activity, who and where. */
+import { type ApprovalState, activityFor, PROVIDERS, statusFor, type Thread } from "../../../data/story";
+import Btn from "./Btn.astro";
+import Glyph from "./Glyph.astro";
+import StatusLabel from "./StatusLabel.astro";
+
+interface Props {
+  thread: Thread;
+  approval: ApprovalState;
+  interactive: boolean;
+  hidden?: boolean;
+}
+const { thread, approval, interactive, hidden = false } = Astro.props;
+const provider = PROVIDERS[thread.provider];
+const approvals = thread.id === "claude-runner" ? 1 : 0;
+---
+<li class="kc-row" data-kc-row={thread.id} hidden={hidden} data-testid={`row-${thread.id}`}>
+  <Btn
+    interactive={interactive}
+    class="kc-row__btn"
+    data-kc-action="focus"
+    data-thread={thread.id}
+    aria-label={interactive ? `${provider.name}, ${thread.name}. Focus its terminal` : undefined}
+  >
+    <span class="kc-row__top">
+      <StatusLabel status={statusFor(thread, approval)} threadId={thread.id} />
+      <span class="kc-row__dur">{thread.duration}</span>
+    </span>
+    <span class="kc-row__name">
+      {thread.name}
+      {approvals > 0 && <span class="kc-flag"><span class="kc-i" data-i="approval" aria-hidden="true"></span>1 approval</span>}
+    </span>
+    <span class="kc-row__act" data-kc-activity-for={thread.id} data-activity-by={thread.activityByApproval ? JSON.stringify(thread.activityByApproval) : undefined} data-activity={thread.activity}>{activityFor(thread, approval)}</span>
+    <span class="kc-row__meta">
+      <span class="kc-row__prov"><Glyph provider={thread.provider} />{provider.name}</span>
+      <span>{provider.model}</span>
+      <span><span class="kc-i" data-i="branch" aria-hidden="true"></span>{thread.branch}</span>
+    </span>
+  </Btn>
+</li>
