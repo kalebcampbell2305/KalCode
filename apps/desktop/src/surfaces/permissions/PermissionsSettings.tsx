@@ -1,6 +1,6 @@
 import type { PermissionMode, PermissionProfile } from "@kalcode/protocol";
-import { Button, Section, SegmentedControl } from "@kalcode/ui/components";
-import { TriangleAlert } from "lucide-react";
+import { Button, Panel, SegmentedControl } from "@kalcode/ui/components";
+import { ShieldCheck, TriangleAlert } from "lucide-react";
 import { AlertDialog } from "radix-ui";
 import { useId, useState } from "react";
 import { EFFECT_LABELS, MODE_DESCRIPTIONS, MODE_LABELS, SCOPE_LABELS } from "./labels.ts";
@@ -26,10 +26,15 @@ export function PermissionsSettings() {
   };
 
   return (
-    <Section
+    <Panel
       id="permissions"
       title="Permissions"
+      icon={<ShieldCheck />}
       description="How much agents, providers and KalVoice may do without asking. Every mode is available on every plan."
+      padding="none"
+      bodyClassName={styles.body}
+      className={styles.panel}
+      data-bypass={mode === "bypass" || undefined}
     >
       {mode === "bypass" ? (
         <div className={styles.bypassBanner} role="status">
@@ -93,7 +98,7 @@ export function PermissionsSettings() {
           if (await setDefaultMode("bypass", { confirmed: true })) setConfirming(false);
         }}
       />
-    </Section>
+    </Panel>
   );
 }
 

@@ -6,7 +6,8 @@
 
 .checked {
   color: var(--color-text-muted);
-  font-size: var(--text-sm);
+  font-size: var(--type-small);
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
@@ -15,16 +16,46 @@
   gap: var(--space-3);
 }
 
-/* Setup facts on the left, what KalCode does with the provider on the right. */
+/* One framed panel per provider. */
+.provider {
+  overflow: hidden;
+}
+
+/* Setup facts on the left, what KalCode does with the provider on the right, split by a hairline. */
 .overview {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 var(--space-10);
-  align-items: start;
+  align-items: stretch;
+}
+
+.overview > .kv {
+  padding: var(--space-1) var(--panel-px);
+}
+
+.overview > .kv + .kv {
+  border-left: 1px solid var(--color-border-subtle);
 }
 
 .kv > div {
-  grid-template-columns: minmax(7rem, min(32%, 14rem)) 1fr;
+  grid-template-columns: minmax(7rem, min(32%, 11rem)) 1fr;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom-color: var(--color-border-subtle);
+}
+
+/* LABEL role keys: small caps, wide tracking. */
+.kv dt {
+  padding-top: 0.1875rem;
+  color: var(--color-text-muted);
+  font-family: var(--font-label);
+  font-size: var(--type-label);
+  font-weight: var(--type-label-weight);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.kv dd {
+  font-size: var(--type-ui);
 }
 
 @media (max-width: 1180px) {
@@ -32,9 +63,9 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  /* Stacked lists read as one: the hairline continues between them. */
-  .overview > .kv:first-child > div:last-child {
-    border-bottom: 1px solid var(--color-border);
+  .overview > .kv + .kv {
+    border-left: 0;
+    border-top: 1px solid var(--color-border-subtle);
   }
 
   .kv > div {
@@ -50,12 +81,12 @@
 
 .statusDetail {
   color: var(--color-text-muted);
-  font-size: var(--text-xs);
+  font-size: var(--type-small);
   line-height: var(--leading-snug);
 }
 
 .status > .statusDetail {
-  padding-left: calc(0.5rem + var(--space-2));
+  padding-left: calc(0.4375rem + var(--space-2));
 }
 
 .pending {
@@ -73,13 +104,16 @@
 }
 
 .url {
-  color: var(--color-text-secondary);
+  color: var(--color-accent-text);
+  font-family: var(--font-mono);
+  font-size: var(--type-mono);
   overflow-wrap: anywhere;
 }
 
 .overview code,
 .table code {
   color: var(--color-text);
+  font-size: var(--type-mono);
   overflow-wrap: anywhere;
 }
 
@@ -100,9 +134,15 @@
   flex: 1 1 auto;
   min-width: 0;
   padding: var(--space-1) var(--space-2);
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-xs);
-  background: var(--color-code-bg);
+  background: var(--term-bg, var(--color-code-bg));
+  box-shadow: var(--shadow-well);
+}
+
+.command::before {
+  content: "$ ";
+  color: var(--color-text-faint);
 }
 
 .capabilities {
@@ -125,7 +165,7 @@
   flex: none;
   width: 0.875rem;
   height: 0.875rem;
-  color: var(--color-success);
+  color: var(--status-working);
 }
 
 .capability[data-supported="false"] {
@@ -138,24 +178,26 @@
 
 .capabilityValue {
   color: var(--color-text-muted);
+  font-size: var(--type-small);
 }
 
-/* ---------- Permission mapping table ---------- */
+/* ---------- Permission mapping table (Table language: LABEL heads, hairline rows) ---------- */
 
 .tableWrap {
   min-width: 0;
-  margin-top: var(--space-2);
+  border-top: 1px solid var(--color-border);
+  background: linear-gradient(180deg, var(--color-surface-2), transparent 6rem);
 }
 
 .table {
   width: 100%;
   border-collapse: collapse;
   table-layout: fixed;
-  font-size: var(--text-sm);
+  font-size: var(--type-ui);
 }
 
 .caption {
-  padding-bottom: var(--space-3);
+  padding: var(--space-3) var(--panel-px) var(--space-2);
   text-align: left;
   caption-side: top;
 }
@@ -163,55 +205,74 @@
 .captionTitle {
   display: block;
   color: var(--color-text);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
+  font-size: var(--type-title);
+  font-weight: var(--type-title-weight);
+  letter-spacing: var(--type-title-tracking);
 }
 
 .captionText {
   display: block;
   margin-top: var(--space-0-5);
-  max-width: 72ch;
+  max-width: 80ch;
   color: var(--color-text-muted);
-  font-size: var(--text-sm);
+  font-size: var(--type-small);
 }
 
 .colMode {
-  width: 7.5rem;
+  width: 8.5rem;
 }
 
 .colSetting {
-  width: 34%;
+  width: 38%;
 }
 
 .colFidelity {
-  width: 11rem;
+  width: 11.5rem;
 }
 
 .table th,
 .table td {
-  padding: var(--space-2) var(--space-4) var(--space-2) 0;
-  border-top: 1px solid var(--color-border);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
   text-align: left;
   vertical-align: top;
+  overflow-wrap: anywhere;
+}
+
+.table th:first-child,
+.table td:first-child {
+  padding-left: var(--panel-px);
 }
 
 .table th:last-child,
 .table td:last-child {
-  padding-right: 0;
+  padding-right: var(--panel-px);
 }
 
 .table thead th {
-  padding-top: 0;
-  border-top: 0;
-  border-bottom: 1px solid var(--color-border-strong);
+  height: 2rem;
+  padding-block: 0;
+  border-top: 1px solid var(--color-border-subtle);
+  border-bottom: 1px solid var(--color-border);
   color: var(--color-text-muted);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-regular);
+  font-family: var(--font-label);
+  font-size: var(--type-label);
+  font-weight: var(--type-label-weight);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  vertical-align: middle;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.table tbody th {
-  color: var(--color-text);
-  font-weight: var(--weight-medium);
+.table tbody tr {
+  transition: background-color var(--dur-fast) var(--ease-out);
+}
+
+.table tbody tr:hover {
+  background: var(--color-surface-hover);
 }
 
 .table tbody tr:first-child th,
@@ -219,20 +280,81 @@
   border-top: 0;
 }
 
+.table tbody th {
+  color: var(--color-text);
+  font-weight: var(--weight-medium);
+}
+
 .table td {
   color: var(--color-text-secondary);
 }
 
+.mode {
+  display: inline-flex;
+  align-items: center;
+  height: 1.25rem;
+  padding: 0 var(--space-1-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xs);
+  background: var(--color-surface-2);
+  font-size: var(--type-small);
+}
+
+.mode[data-mode="bypass"] {
+  border-color: var(--status-failed-line);
+  background: var(--status-failed-soft);
+  color: var(--status-failed-text);
+}
+
+/* One flag group per line; long rule lists wrap inside the column instead of overflowing it. */
 .setting {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0 0.6em;
-  font-size: var(--text-xs);
-  line-height: var(--leading-normal);
+  flex-direction: column;
+  gap: var(--space-0-5);
+  min-width: 0;
+  font-size: var(--type-mono);
+  line-height: var(--leading-snug);
 }
 
 .flag {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: break-word;
+}
+
+.flag > span {
   white-space: nowrap;
+}
+
+.fidelity {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  color: var(--color-text-secondary);
+  font-size: var(--type-small);
+}
+
+.fidelity::before {
+  content: "";
+  flex: none;
+  width: 0.4375rem;
+  height: 0.4375rem;
+  border-radius: var(--radius-full);
+  background: var(--status-muted);
+}
+
+.fidelity[data-fidelity="exact"]::before {
+  background: var(--status-working);
+}
+
+.fidelity[data-fidelity="approximate_stricter"]::before {
+  border-radius: 1px;
+  background: var(--status-waiting);
+}
+
+.fidelity[data-fidelity="unsupported"]::before {
+  width: 0.5rem;
+  height: 2px;
 }
 
 .notes {
@@ -242,14 +364,20 @@
 /* Narrow windows: tighter fixed columns so the setting and notes keep readable widths. */
 @media (max-width: 1180px) {
   .colMode {
-    width: 6.5rem;
+    width: 6.75rem;
   }
 
   .colSetting {
-    width: 32%;
+    width: 36%;
   }
 
   .colFidelity {
-    width: 7.5rem;
+    width: 8rem;
   }
+}
+
+/* The provider name in the panel header reads as a TITLE. */
+.provider h2 > span:first-child {
+  font-size: var(--type-title);
+  font-weight: var(--type-title-weight);
 }

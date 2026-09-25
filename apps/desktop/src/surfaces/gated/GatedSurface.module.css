@@ -1,57 +1,85 @@
-.body {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--space-4);
-  max-width: var(--prose-max);
-}
-
-.summary {
-  color: var(--color-text-secondary);
-  font-size: var(--text-lg);
-  line-height: var(--leading-relaxed);
-}
-
-.depends {
-  color: var(--color-text-muted);
-  font-size: var(--text-sm);
-}
-
-.depends span {
-  color: var(--color-text-secondary);
-}
-
-/* The KalVoice artwork keeps its own dark ground in both themes. */
-.kalvoice {
-  --artwork-bg: #010205;
-  display: flex;
+/*
+ * The hero keeps the brand artwork's own dark ground in both themes (like Settings → About), so
+ * its text colours are fixed light values chosen for that ground (all >= 7:1), not theme tokens.
+ */
+.hero {
+  --ground: #000104;
+  --ink: #eef3fb;
+  --ink-2: #b4c1d6;
+  --ink-3: #8d9bb3;
+  --line: rgb(142 170 220 / 0.16);
+  --lit: rgb(92 150 255 / 0.55);
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-8);
-  width: 100%;
-  margin: 0 0 var(--space-4);
-  padding: var(--space-6) var(--space-8);
+  min-height: 20rem;
+  padding: var(--space-8) var(--space-10);
+  overflow: hidden;
+  border: 1px solid var(--line);
   border-radius: var(--radius-xl);
-  background: var(--artwork-bg);
-  color: #eef3fb;
+  background:
+    radial-gradient(34rem 22rem at 86% 50%, rgb(76 141 255 / 0.2), transparent 70%),
+    radial-gradient(26rem 14rem at 0% 0%, rgb(76 141 255 / 0.08), transparent 70%), var(--ground);
+  box-shadow: var(--shadow-panel);
+  color: var(--ink);
 }
 
-.globe {
-  flex: none;
-  width: 11rem;
-  height: 11rem;
-  /* Blend the artwork's square crop into its ground. */
-  -webkit-mask: radial-gradient(closest-side, #000 82%, transparent 100%);
-  mask: radial-gradient(closest-side, #000 82%, transparent 100%);
+/* A lit hairline along the top edge, fading out at both ends. */
+.hero::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 8%;
+  right: 8%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--lit), transparent);
 }
 
-.lockup {
+.copy {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
   min-width: 0;
+  max-width: 40rem;
 }
 
-.kalvoiceName {
+.head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.iconTile {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 2.25rem;
+  height: 2.25rem;
+  border: 1px solid rgb(92 150 255 / 0.35);
+  border-radius: var(--radius-md);
+  background: linear-gradient(180deg, rgb(76 141 255 / 0.18), rgb(76 141 255 / 0.04));
+  box-shadow: 0 0 22px -8px rgb(76 141 255 / 0.6);
+  color: #a9c8ff;
+}
+
+.iconTile svg {
+  width: 1.125rem;
+  height: 1.125rem;
+  stroke-width: 1.75;
+}
+
+.eyebrow {
+  color: #a9c8ff;
+  font-family: var(--font-label);
+  font-size: var(--type-label);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-brand);
+  text-transform: uppercase;
+}
+
+.voiceName {
   font-family: var(--font-wider);
   font-size: var(--text-2xl);
   font-weight: var(--weight-light);
@@ -59,9 +87,79 @@
   text-transform: uppercase;
 }
 
-.kalvoiceLine {
-  max-width: 32ch;
-  color: #aebbd0;
-  font-size: var(--text-sm);
+.summary {
+  max-width: 36ch;
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: var(--type-headline);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--type-headline-tracking);
   line-height: var(--leading-snug);
+}
+
+.spec {
+  display: grid;
+  margin: 0;
+  border-top: 1px solid var(--line);
+}
+
+.specRow {
+  display: grid;
+  grid-template-columns: 8rem minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: baseline;
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.specRow dt {
+  color: var(--ink-3);
+  font-family: var(--font-label);
+  font-size: var(--type-label);
+  font-weight: var(--type-label-weight);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.specRow dd {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--type-ui);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  height: 1.25rem;
+  padding: 0 var(--space-2);
+  border: 1px solid rgb(142 170 220 / 0.35);
+  border-radius: var(--radius-full);
+  color: var(--ink);
+  font-size: var(--type-small);
+  font-weight: var(--weight-medium);
+}
+
+.art {
+  display: grid;
+  place-items: center;
+  margin: 0;
+}
+
+.globe {
+  width: 15rem;
+  height: 15rem;
+  /* Blend the artwork's square crop into its ground. */
+  -webkit-mask: radial-gradient(closest-side, #000 82%, transparent 100%);
+  mask: radial-gradient(closest-side, #000 82%, transparent 100%);
+}
+
+@media (max-width: 1100px) {
+  .hero {
+    grid-template-columns: minmax(0, 1fr);
+    padding: var(--space-6);
+  }
+
+  .art {
+    display: none;
+  }
 }
