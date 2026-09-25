@@ -15,7 +15,6 @@ use kalcode_contracts::notifications::{
     Notification, NotificationEntityKind, NotificationKind, NotificationMark, NotificationPage,
     Severity,
 };
-use kalcode_core::db::Migration;
 use kalcode_core::time::format_rfc3339;
 use kalcode_core::{KalError, Result};
 use rusqlite::{Connection, OptionalExtension, Row, params};
@@ -614,7 +613,7 @@ mod tests {
     }
 
     /// Every registered migration (v10 `notifications` included).
-    pub(crate) fn with_notifications() -> Vec<Migration> {
+    pub(crate) fn with_notifications() -> Vec<kalcode_core::db::Migration> {
         kalcode_core::db::MIGRATIONS.to_vec()
     }
 
