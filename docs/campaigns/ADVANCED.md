@@ -1106,3 +1106,29 @@ imitate a provider's mark. Related, from the same Anthropic page: products that 
 must run the **unmodified** binary with each user's **own** authentication, and must not
 intermediate Claude usage. Interactive panes (and today's headless adapter) comply: the user
 signs in through the provider's own flow, and KalCode never collects provider credentials.
+
+## 14a. Decisions recorded (2026-09-24)
+
+Owner decisions:
+
+1. **Plan placement — tiered by power.** Safety systems (Trust Kernel, Context Firewall, host-key
+   verification, Environment Doctor, safe restore, kill switches, permission modes) are on every
+   plan. Free: Environment Doctor, Provider Health, Session Locator, Process Continuity, Utility
+   Dock basics. Pro: Agent teams, Provider Profiles, Workspace Blueprints, Time Machine,
+   Hot-Swap, Distributed Workspaces (SSH), scheduled automations. MAX: Command Center graphs,
+   Intelligent Scheduler at high concurrency, event-driven automations, Benchmark Lab, Diff
+   Intelligence. OWNER: everything, current and future. Implemented as entitlement features
+   (`packages/protocol` plans + `crates/entitlements`), never as frontend-only checks.
+2. **Automations and Bypass — allowed with explicit confirmation** (native confirmation when
+   enabling Bypass on an automation); Trust Kernel invariants still apply.
+9. **Provider panes by default** — confirmed by the owner's Z7 directive: user-created threads run
+   the real provider CLI interactively; headless threads remain for missions, automations,
+   delegations and handoffs.
+- Returning-user greeting name: a display name set in Settings (`profile.displayName`).
+
+Lead decisions (recommended defaults adopted): 3 profile precedence thread > mission > agent >
+workspace > global; 4 never auto-delete events younger than 180 days; 5 one new top-level surface
+(Command Center), others as sections; 6 message-content indexing off by default, opt-in per
+workspace; 7 native confirmations for Bypass; 8 status mapping as proposed, approval/waiting
+accent is neutral grey (owner's colour spec), amber reserved for PAUSED; 10 neutral glyph + name
+for providers until written permission is recorded.
