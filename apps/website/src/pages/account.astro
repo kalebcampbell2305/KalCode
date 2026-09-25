@@ -1,0 +1,437 @@
+---
+import Backdrop from "../components/Backdrop.astro";
+import Icon from "../components/Icon.astro";
+import PageHead from "../components/PageHead.astro";
+import Base from "../layouts/Base.astro";
+import { formatPrice, PLANS } from "@kalcode/protocol/plans";
+import { ACCOUNT_PAGE } from "../lib/site";
+
+const page = ACCOUNT_PAGE;
+const paidPlans = PLANS.filter((plan) => plan.price.amountUsd > 0);
+const checkoutEnabled = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
+---
+<Base title={page.title} description={page.description} path={page.path} world noindex>
+  <meta slot="head" name="referrer" content="no-referrer" />
+  <PageHead
+    backdrop="orbital"
+    title="Your KalCode account"
+    lead="Sign in with a one-time email link. Your plan, KalVoice Requests and billing stay together across the website and desktop app."
+    status="Passwordless account access"
+    statusKind="built"
+  />
+
+  <section class="world-section account-section" aria-labelledby="account-title">
+    <Backdrop variant="deep" />
+    <div class="container account-shell">
+      <div class="account-panel">
+        <div class="account-panel__head">
+          <span class="account-panel__eyebrow">Account access</span>
+          <h2 id="account-title" class="h2 h2--sm">One account. No password to remember.</h2>
+          <p>
+            KalCode sends a one-time link to verify your email. Website sessions use a secure, HttpOnly cookie; desktop sessions stay in your operating system credential store.
+          </p>
+        </div>
+        <form class="account-form" data-account-signin>
+          <label for="account-email">Email address</label>
+          <div class="account-form__row">
+            <input id="account-email" name="email" type="email" autocomplete="email" required maxlength="254" placeholder="you@example.com" />
+            <button class="button button--primary" type="submit">Email my sign-in link <Icon name="arrow-right" /></button>
+          </div>
+        </form>
+        <div class="account-summary" data-account-summary hidden>
+          <p class="account-summary__email" data-account-email></p>
+          <div class="account-summary__metrics">
+            <div><span>Plan</span><strong data-account-plan>Choose a plan</strong></div>
+            <div><span>KalVoice Requests</span><strong data-account-usage>Available after activation</strong></div>
+            <div><span>Local Dictation</span><strong>Unlimited</strong></div>
+          </div>
+          <div class="account-upgrades" aria-label="Paid plans" data-account-upgrades>
+            {paidPlans.map((plan) => (
+              <button class="button button--secondary" type="button" data-checkout-tier={plan.id} disabled={!checkoutEnabled}>
+                {plan.name} · {formatPrice(plan.price)}
+              </button>
+            ))}
+          </div>
+          {!checkoutEnabled && <p>Paid plans are not open yet. You can activate Free below.</p>}
+          <div class="account-actions">
+            <button class="button button--primary" type="button" data-activate-free>Activate Free</button>
+            <button class="button button--secondary" type="button" data-billing-portal>Manage billing</button>
+            <button class="button button--secondary" type="button" data-logout>Sign out</button>
+          </div>
+          <button class="account-delete" type="button" data-delete-account>Delete account</button>
+        </div>
+        <p class="account-status" data-account-status role="status" aria-live="polite"></p>
+      </div>
+
+      <ul class="account-facts" aria-label="Account and billing facts">
+        <li class="account-fact">
+          <span class="account-fact__index">01</span>
+          <h3>KalVoice Requests</h3>
+          <p>The app shows requests used, requests remaining and the exact renewal date from the signed server record.</p>
+        </li>
+        <li class="account-fact">
+          <span class="account-fact__index">02</span>
+          <h3>Local Dictation</h3>
+          <p><strong>Unlimited on every plan.</strong> Speech-to-text does not consume a KalVoice Request.</p>
+        </li>
+        <li class="account-fact">
+          <span class="account-fact__index">03</span>
+          <h3>Provider usage</h3>
+          <p>Handled by your connected provider. KalCode does not resell or meter Claude Code, Codex or Gemini usage.</p>
+        </li>
+        <li class="account-fact">
+          <span class="account-fact__index">04</span>
+          <h3>Billing</h3>
+          <p>Checkout and subscription management open on Stripe's hosted pages. Payment details never pass through this site.</p>
+        </li>
+      </ul>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .account-section {
+    min-height: 42rem;
+  }
+
+  .account-shell {
+    display: grid;
+    gap: clamp(2rem, 5vw, 5rem);
+    grid-template-columns: minmax(0, 1.05fr) minmax(19rem, 0.95fr);
+    align-items: start;
+  }
+
+  .account-panel {
+    position: relative;
+    padding: clamp(1.5rem, 4vw, 3rem);
+    border: 1px solid color-mix(in srgb, var(--blue-400, #52a8ff) 36%, transparent);
+    border-radius: 1.5rem;
+    background: linear-gradient(145deg, rgba(10, 20, 40, 0.9), rgba(4, 8, 17, 0.76));
+    box-shadow: 0 2rem 7rem rgba(0, 67, 156, 0.16), inset 0 1px rgba(255, 255, 255, 0.05);
+  }
+
+  .account-panel::before {
+    content: "";
+    position: absolute;
+    inset: -1px auto auto 12%;
+    width: 42%;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, #65b5ff, transparent);
+  }
+
+  .account-panel__eyebrow,
+  .account-fact__index {
+    color: #78bdff;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+  }
+
+  .account-panel h2 {
+    margin: 0.8rem 0 1rem;
+  }
+
+  .account-panel p,
+  .account-fact p {
+    color: var(--text-secondary, #aab8cf);
+    line-height: 1.7;
+  }
+
+  .account-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-top: 2rem;
+  }
+
+  .account-form {
+    display: grid;
+    gap: 0.6rem;
+    margin-top: 2rem;
+  }
+
+  .account-form label,
+  .account-summary__metrics span {
+    color: var(--text-secondary, #aab8cf);
+    font-size: 0.78rem;
+    font-weight: 650;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .account-form__row {
+    display: flex;
+    gap: 0.7rem;
+  }
+
+  .account-form input {
+    min-width: 0;
+    flex: 1;
+    border: 1px solid rgba(128, 169, 220, 0.3);
+    border-radius: 0.75rem;
+    background: rgba(2, 7, 16, 0.82);
+    color: var(--text-primary, #f4f8ff);
+    padding: 0.8rem 0.95rem;
+    font: inherit;
+  }
+
+  .account-form input:focus-visible {
+    border-color: #65b5ff;
+    outline: 2px solid rgba(82, 168, 255, 0.35);
+    outline-offset: 2px;
+  }
+
+  .account-status {
+    min-height: 1.5rem;
+    margin: 1rem 0 0;
+    color: #8fc9ff;
+  }
+
+  .account-summary__email {
+    margin: 1.6rem 0 1rem;
+    color: var(--text-primary, #f4f8ff);
+    font-weight: 650;
+  }
+
+  .account-summary__metrics {
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .account-upgrades {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.65rem;
+    margin-top: 1rem;
+  }
+
+  .account-upgrades[hidden],
+  .account-actions .button[hidden] {
+    display: none;
+  }
+
+  .account-summary__metrics div {
+    display: grid;
+    gap: 0.35rem;
+    padding: 0.9rem;
+    border: 1px solid rgba(128, 169, 220, 0.18);
+    border-radius: 0.8rem;
+    background: rgba(5, 12, 25, 0.72);
+  }
+
+  .account-delete {
+    margin-top: 1.25rem;
+    border: 0;
+    background: none;
+    color: #aab8cf;
+    font: inherit;
+    text-decoration: underline;
+    cursor: pointer;
+  }
+
+  .account-facts {
+    display: grid;
+    gap: 0;
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid rgba(128, 169, 220, 0.18);
+    list-style: none;
+  }
+
+  .account-fact {
+    display: grid;
+    grid-template-columns: 2.4rem 1fr;
+    column-gap: 1rem;
+    padding: 1.25rem 0;
+    border-bottom: 1px solid rgba(128, 169, 220, 0.18);
+  }
+
+  .account-fact h3 {
+    margin: 0;
+    font-size: 1rem;
+  }
+
+  .account-fact p {
+    grid-column: 2;
+    margin: 0.45rem 0 0;
+    font-size: 0.92rem;
+  }
+
+  @media (max-width: 52rem) {
+    .account-shell {
+      grid-template-columns: 1fr;
+    }
+
+    .account-form__row {
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .account-summary__metrics {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .account-panel,
+    .account-actions a {
+      transition: none;
+    }
+  }
+</style>
+
+<script>
+  const API = "https://api.kalcoded.com";
+  const form = document.querySelector<HTMLFormElement>("[data-account-signin]");
+  const summary = document.querySelector<HTMLElement>("[data-account-summary]");
+  const status = document.querySelector<HTMLElement>("[data-account-status]");
+  const emailOutput = document.querySelector<HTMLElement>("[data-account-email]");
+  const planOutput = document.querySelector<HTMLElement>("[data-account-plan]");
+  const usageOutput = document.querySelector<HTMLElement>("[data-account-usage]");
+  const upgrades = document.querySelector<HTMLElement>("[data-account-upgrades]");
+  const activateFree = document.querySelector<HTMLButtonElement>("[data-activate-free]");
+
+  async function api(path: string, init: RequestInit = {}) {
+    try {
+      return await fetch(`${API}${path}`, { ...init, credentials: "include" });
+    } catch {
+      return null;
+    }
+  }
+
+  function message(value: string) {
+    if (status) status.textContent = value;
+  }
+
+  async function loadAccount(): Promise<string | null> {
+    const response = await api("/v1/account");
+    if (!response?.ok) return null;
+    const body = await response.json() as { account: { email: string; activatedAt: string | null } };
+    if (form) form.hidden = true;
+    if (summary) summary.hidden = false;
+    if (emailOutput) emailOutput.textContent = body.account.email;
+    if (!body.account.activatedAt) return "pending";
+    if (activateFree) activateFree.hidden = true;
+    const [entitlementResponse, usageResponse] = await Promise.all([
+      api("/v1/entitlement"),
+      api("/v1/kalvoice/usage"),
+    ]);
+    let tier: string | null = null;
+    if (entitlementResponse?.ok) {
+      const entitlement = await entitlementResponse.json() as { entitlement: { tier: string } };
+      tier = entitlement.entitlement.tier;
+      if (planOutput) planOutput.textContent = entitlement.entitlement.tier === "max2x" ? "MAX 2X" : entitlement.entitlement.tier.toUpperCase();
+      if (upgrades) upgrades.hidden = entitlement.entitlement.tier !== "free";
+    }
+    if (usageResponse?.ok) {
+      const usage = await usageResponse.json() as {
+        usage: { used: number; allowance: number | null; resetsAt: string };
+      };
+      const used = usage.usage.used.toLocaleString("en-US");
+      if (usageOutput) {
+        usageOutput.textContent = usage.usage.allowance === null
+          ? `${used} used · Unlimited`
+          : `${used} / ${usage.usage.allowance.toLocaleString("en-US")} used · ${Math.max(0, usage.usage.allowance - usage.usage.used).toLocaleString("en-US")} remaining · Renews ${new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" }).format(new Date(usage.usage.resetsAt))}`;
+      }
+    }
+    return tier;
+  }
+
+  async function confirmCheckout() {
+    message("Confirming your plan…");
+    for (let attempt = 0; attempt < 15; attempt += 1) {
+      const tier = await loadAccount();
+      if (tier && tier !== "free" && tier !== "pending") {
+        message(`${tier === "max2x" ? "MAX 2X" : tier.toUpperCase()} is active.`);
+        return;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+    }
+    message("Your paid plan is not active yet. If checkout completed, Stripe may still be confirming it. Refresh in a moment.");
+  }
+
+  form?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const email = new FormData(form).get("email");
+    message("Sending your one-time link…");
+    const response = await api("/v1/auth/email/start", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email, client: "website" }),
+    });
+    message(response?.ok ? "Check your email. The link expires in 10 minutes." : "Email sign-in is temporarily unavailable.");
+  });
+
+  document.querySelector("[data-activate-free]")?.addEventListener("click", async () => {
+    const response = await api("/v1/account/activate-free", { method: "POST" });
+    message(response?.ok ? "Free is active." : "Free could not be activated.");
+    if (response?.ok) await loadAccount();
+  });
+
+  document.querySelector("[data-billing-portal]")?.addEventListener("click", async () => {
+    const response = await api("/v1/billing/portal", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ requestId: crypto.randomUUID().replaceAll("-", "") }),
+    });
+    const body = response ? await response.json() as { url?: string } : {};
+    if (response?.ok && body.url) location.assign(body.url);
+    else message("Billing is available after you start a paid subscription.");
+  });
+
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-checkout-tier]")) {
+    button.addEventListener("click", async () => {
+      const response = await api("/v1/billing/checkout", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          tier: button.dataset.checkoutTier,
+          requestId: crypto.randomUUID().replaceAll("-", ""),
+        }),
+      });
+      const body = response ? await response.json() as { url?: string; error?: string } : {};
+      if (response?.ok && body.url) location.assign(body.url);
+      else message(body.error === "manage_existing_subscription" ? "Use Manage billing to change your current plan." : "Checkout could not be started.");
+    });
+  }
+
+  document.querySelector("[data-logout]")?.addEventListener("click", async () => {
+    const response = await api("/v1/auth/logout", { method: "POST" });
+    if (response?.ok) location.reload();
+    else message("Sign out is temporarily unavailable.");
+  });
+
+  document.querySelector("[data-delete-account]")?.addEventListener("click", async () => {
+    const response = await api("/v1/account/delete/start", { method: "POST" });
+    message(response?.ok ? "Check your email to confirm account deletion." : "Account deletion is unavailable while billing needs attention.");
+  });
+
+  const verifyToken = new URLSearchParams(location.hash.slice(1)).get("verify");
+  if (verifyToken) {
+    history.replaceState({}, "", "/account");
+    const response = await api("/v1/auth/email/verify", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token: verifyToken }),
+    });
+    const result = response ? await response.json() as { status?: string } : {};
+    message(
+      response?.ok
+        ? result.status === "deleted"
+          ? "Your KalCode account was deleted."
+          : result.status === "verified"
+            ? "Email verified. Return to KalCode to finish sign-in."
+          : "Email verified."
+        : "That link is invalid, expired or cannot be used while billing needs attention.",
+    );
+  }
+  const checkoutSucceeded = new URL(location.href).searchParams.get("checkout") === "success";
+  if (checkoutSucceeded) {
+    history.replaceState({}, "", "/account");
+    void confirmCheckout();
+  } else {
+    await loadAccount();
+  }
+</script>

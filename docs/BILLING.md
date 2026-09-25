@@ -1,8 +1,9 @@
 # KalCode Billing, Entitlements and KalVoice Requests
 
 Status: entitlement foundation built (branch `z13/owner-entitlement`); **local only**. Sign-in,
-Stripe checkout and deployment of the API land in campaign Z13. Nothing here is deployed, and no
-Cloudflare resource for the API exists yet.
+Passwordless email sign-in, optional GitHub OAuth, and Stripe billing are implemented in the local
+API for campaign Z13. A production D1 resource exists, but no account or billing migrations,
+Worker deployment, public API route, or live billing resource is active yet.
 
 This document is the reference for what an account may use, who decides it, and how that decision
 reaches the desktop app. Prices and plan limits live in one place:
@@ -12,9 +13,10 @@ reaches the desktop app. Prices and plan limits live in one place:
 
 | Plan | Price | KalVoice Requests / cycle | Public |
 | --- | --- | --- | --- |
-| **Free** | $0 | 250 | yes |
-| **Pro** | $10 / month | 2,500 | yes |
-| **MAX** | $25 / month | 10,000 | yes |
+| **Free** | $0 | 75 | yes |
+| **Pro** | $10 / month | 1,500 | yes |
+| **MAX** | $25 / month | 5,000 | yes |
+| **MAX 2X** | $50 / month | 10,000 | yes |
 | **OWNER** | $0, forever | unlimited | **no** — private, never listed, never purchasable |
 
 Rules (owner decisions, encoded in `plans.ts` and enforced by the code below):
@@ -40,7 +42,7 @@ document. The model is shared by TypeScript (`packages/protocol/src/entitlements
 (`crates/entitlements`, `kalcode_entitlements`).
 
 ```ts
-type EntitlementTier = "free" | "pro" | "max" | "owner";
+type EntitlementTier = "free" | "pro" | "max" | "max2x" | "owner";
 
 interface Entitlement {           // signed document payload (JWS, typ kalcode-entitlement.v1)
   version: 1;
@@ -62,7 +64,7 @@ Evaluation (`hasFeature` / `limitFor` in TS, `has_feature` / `limit` in Rust):
   is covered automatically — there is no list to forget to update.
 - Otherwise a feature is granted only if the document lists it, and a limit is its documented
   value. An unknown feature is `false` and an unmentioned limit is `0` (fail closed).
-- Free/Pro/MAX grants are derived from `plans.ts` by `tierGrants(tier)`; the server puts them into
+- Public-tier grants are derived from `plans.ts` by `tierGrants(tier)`; the server puts them into
   every document it signs, so the client never needs its own copy of the catalog.
 
 Both implementations reject the same documents: wrong version, unknown tier, `unrestricted` not
@@ -85,6 +87,8 @@ OWNER is a private, server-authoritative entitlement for the KalCode owner's own
 - **No frontend check, no email bypass:** no code compares an email address or account id to a
   constant; the desktop only honours a document signed by the API; the grant is a row in D1 that
   only a trusted operator with Cloudflare credentials to the production database can write.
+- **Atomic activation:** the valid operator grant activates the verified account in the same D1
+  statement. Deleted accounts are refused by a database trigger and cannot regain authority.
 
 ## 4. Server-side resolution and the API
 
@@ -92,7 +96,7 @@ OWNER is a private, server-authoritative entitlement for the KalCode owner's own
 `apps/api/migrations/` and `docs/DATA_MODEL.md` §4.
 
 `resolveEntitlement(accountId)`: among grants that are not revoked and not expired —
-an active OWNER operator grant, else the highest active Pro/MAX grant (billing or operator),
+an active OWNER operator grant, else the highest active public paid grant (billing or operator),
 else Free. Free is the absence of grants.
 
 | Endpoint | Access | Purpose |
@@ -107,8 +111,10 @@ There is **no** endpoint that grants, changes or revokes a tier (pinned by
 KalVoice Request rows (pinned by `tests/unit/source-invariants.test.ts`).
 
 **Authentication.** Account routes run behind `authenticate(request)` (`worker/lib/auth.ts`).
-Sign-in does not exist yet, so the only production authenticator, `SIGN_IN_UNAVAILABLE`, rejects
-every request: in every deployed configuration these routes answer **401**. Tests use
+The production authenticator accepts only unexpired, unrevoked server-issued sessions whose bearer
+token hashes to a D1 record. Passwordless email is the primary session-creation path; GitHub OAuth
+is optional. Until the account Worker is configured and deployed, `SIGN_IN_UNAVAILABLE` rejects
+every request. Tests use
 `tests/support/test-auth.ts`, which is never imported by the Worker entry point. The account id
 always comes from the authenticator — never from a request body, query or header the client
 controls.
@@ -156,8 +162,9 @@ Entitlement documents and usage receipts are compact JWS (RFC 7515) signed with 
   503 — never an unsigned document.
 - **Public keys:** published at `GET /v1/entitlement/keys`; the desktop trusts only keys
   **compiled into the binary** (`crates/entitlements/src/keys.rs`), never keys fetched at runtime.
-  There is no production key yet: until one is generated, every document is rejected with
-  `unknown_key` and the desktop runs on Free.
+  The first production public key (`k2026-09-25`) was pinned on 2026-09-25 after the private
+  key was piped directly into the `kalcode-api` Worker secret. Secret-name verification passed;
+  authenticated server-token verification by the installed desktop remains a release gate.
 - **Create the production key** (Z13, at first deploy; nothing is written to disk):
 
   ```bash
@@ -172,8 +179,14 @@ Entitlement documents and usage receipts are compact JWS (RFC 7515) signed with 
   desktop release; (3) once the release is the minimum supported version, switch the secret and
   move the old public key into `ENTITLEMENT_PREVIOUS_PUBLIC_KEYS` (published, still verifiable);
   (4) after every document signed by the old key has expired (≤ 14 days), remove it from both.
-  A compromised key is handled the same way, immediately, accepting that older desktop builds
-  fall back to Free until updated.
+  A compromised key requires a desktop update removing that pin and server-side minimum-version
+  enforcement. Old offline binaries cannot remotely revoke an embedded key; do not claim that
+  rotating the Worker secret alone makes those binaries reject forged documents.
+- **Key-loss recovery:** the first private key exists only in the Worker secret and is not
+  retrievable. Loss requires generating a unique replacement key, distributing its public pin
+  in a verified desktop update, then switching API signing. Existing signed documents remain
+  bounded by their expiry; no unsigned entitlement fallback is permitted. A separately secured
+  recovery-key ceremony and end-to-end rotation exercise remain release-readiness work.
 
 ## 7. KalVoice Requests and the usage ledger
 
@@ -186,7 +199,7 @@ timestamp — never request text, transcripts, audio or provider output.
 
 - when an active **paid subscription** (billing grant) decides the tier → the subscription's start
   (`granted_at` of that billing grant; Z13 sets it to Stripe's billing-cycle anchor);
-- otherwise — **Free**, OWNER, operator Pro/MAX grants → the **account's creation time**.
+- otherwise — **Free**, OWNER, operator paid-tier grants → the **account's creation time**.
 
 Cycle *k* runs from anchor + *k* months to anchor + *k*+1 months; a day that does not exist in a
 month is clamped to its last day (anchor Jan 31 → Feb 28/29 → Mar 31 → Apr 30), always computed
@@ -211,7 +224,7 @@ periodStart, resetsAt }, receipt }` (`usage` matches the `KalVoiceUsage` contrac
 **Receipts.** Every usage response carries a signed receipt (`typ kalcode-usage.v1`) with
 `accountId, tier, used, allowance, periodStart, resetsAt, issuedAt, expiresAt, keyId`. It is valid
 for 72 hours or until the cycle resets, whichever is sooner (verifiers reject claims beyond 7
-days). The desktop shows "Used 412 of 2,500, resets …" from it.
+days). The desktop can show "412 / 1,500 used; 1,088 remaining; renews October 10" from it.
 
 **Offline allowance and reconciliation** (`EffectiveEntitlement::kalvoice_decision` in Rust):
 
@@ -220,7 +233,7 @@ days). The desktop shows "Used 412 of 2,500, resets …" from it.
    `receipt.used + unsynced < min(receipt.allowance, entitlement allowance)`, where `unsynced` is
    the number of requests served on this device since that receipt was issued.
 3. Without a valid receipt (never synced, receipt expired, not signed in): the device's
-   provisional count for its cycle is checked against the entitlement's allowance (Free's 250
+   provisional count for its cycle is checked against the entitlement's allowance (Free's 75
    when there is no valid entitlement document).
 4. Each request served offline keeps its client request id; when the device is online again it
    reports them with `mode: "offline"`. Idempotency makes replays safe to repeat; the fresh
@@ -233,8 +246,9 @@ gating, not cost protection (KalCode has no AI cost to protect).
 
 ## 8. Desktop verification and offline grace
 
-`crates/entitlements` (`kalcode_entitlements`) is the desktop's verifier. It is not wired into
-the app yet (no account UI exists); Z13 integrates it.
+`crates/entitlements` (`kalcode_entitlements`) is the desktop's canonical verifier. The Z13 native
+account runtime owns secure token custody, refresh and this verifier call; a release remains
+fail-closed until that runtime is integrated and the production public key is pinned.
 
 - `Verifier::verify(token, now)`: strict base64url, `alg = EdDSA`, `typ = kalcode-entitlement.v1`,
   known `kid`, `ed25519-dalek` `verify_strict` (rejects malleable signatures and weak keys),
@@ -249,16 +263,73 @@ the app yet (no account UI exists); Z13 integrates it.
   expires the device runs on Free until it can fetch a fresh document. This applies to OWNER as
   well, so a revocation reaches every device within 7 days.
 
-## 9. What Z13 adds, and where it plugs in
+## 9. Z13 account and billing implementation
 
 | Z13 piece | Plugs into | Notes |
 | --- | --- | --- |
-| Sign-in (verified email / OAuth) | replace `SIGN_IN_UNAVAILABLE` in `worker/lib/env.ts` with a real `Authenticator` | Creates `accounts` rows only after the email is verified. Session credentials are bearer tokens (the API refuses browser `Origin` writes). Add per-account rate limiting. |
-| Desktop account flow | `crates/entitlements` + new IPC | Fetch `/v1/entitlement` and `/v1/kalvoice/usage`, cache the tokens, call `effective_entitlement` / `kalvoice_decision`, show usage. |
-| Stripe checkout | website + API | Checkout sessions for Pro/MAX only; OWNER has no price and no product. |
-| Stripe webhook | new endpoint writing billing grants | Verifies the Stripe signature; inserts `source = 'billing'` Pro/MAX grants (the database rejects billing OWNER), updates `expires_at` on renewal (audited), revokes on cancellation. The only new write path to `entitlement_grants`; `source-invariants.test.ts` must be updated deliberately. |
+| Passwordless sign-in | `worker/lib/email-auth.ts`, `account-mailer.ts`, `account-store.ts` | A random, single-use email link verifies the address. Website sign-in returns an HttpOnly, Secure, SameSite=Lax host cookie. Desktop sign-in also requires a one-time poll token and S256 PKCE verifier, so an intercepted email link cannot create a desktop session. Attempts expire after ten minutes. Responses do not reveal whether an account exists. Only token hashes are stored. |
+| Optional GitHub OAuth | `worker/lib/auth-routes.ts`, `github-oauth.ts`, `account-store.ts` | System-browser OAuth with state and S256 PKCE. A wrong verifier cannot consume the one-use challenge. Only a primary verified GitHub email creates an account; identity authority is GitHub's stable numeric subject, never email matching. This is an optional alternative provider-bound path and never auto-links an existing passwordless account by matching email. It is not a production prerequisite. |
+| Session and account lifecycle | `worker/lib/auth.ts`, `email-auth.ts`, `account-store.ts` | Random 30-day sessions are stored only as SHA-256 hashes and are revocable. Refresh atomically rotates a desktop token and revokes the old token. Logout revokes the current session. Account deletion needs a fresh email proof, refuses active billing or a pending Checkout, redacts the address, revokes every session, and prevents delayed webhooks from restoring access. |
+| Activation gate | `worker/lib/router.ts`, `account-store.ts` | A newly verified account must explicitly activate Free or receive an active/trialing paid subscription webhook before entitlement and usage routes unlock. Checkout success alone never unlocks a paid tier. |
+| Website account flow | `apps/website/src/pages/account.astro` | Uses the API's secure host cookie, never browser token storage. Shows plan and usage, activates Free, opens Stripe-hosted Checkout/Portal, signs out, and starts verified account deletion. The private page is `noindex`. |
+| Desktop account flow | `crates/entitlements` + native account IPC | Desktop tokens remain in the OS credential store. The native layer fetches `/v1/entitlement` and `/v1/kalvoice/usage`, verifies and caches signed documents, calls `effective_entitlement` / `kalvoice_decision`, and exposes only non-secret account state to the WebView. |
+| Stripe price catalog | `worker/lib/billing-plans.ts` | Fail-closed mapping from configured Stripe Price ids to Pro/MAX/MAX 2X. Missing, malformed or duplicate ids disable resolution. Free and OWNER have no price. |
+| Stripe checkout and portal | `worker/lib/billing-routes.ts`, `stripe.ts` | Authenticated callers select only Pro/MAX/MAX 2X. Customer, Price, quantity and fixed return URLs are server-owned. A stable D1 idempotency key prevents duplicate customers after retries. After Stripe creates a session, a D1 compare-and-set binds its id to the exact still-authorized intent; if the account became subscribed, OWNER, deleted or otherwise lost the fence, the API expires the remote session and returns no URL. Replacing an expired reservation clears every prior session handle before reuse. An OWNER grant is refused while a finalized, unexpired public Checkout is still usable. Portal and Checkout use Stripe-hosted pages; Free and OWNER cannot be purchased. |
+| Stripe webhook | `worker/lib/billing-routes.ts`, `billing-store.ts` | Reads the untouched bounded request body, verifies Stripe's timestamped HMAC, deduplicates event ids, and retrieves the current subscription because event delivery is unordered. Exactly one known Price at quantity one is required. D1 applies the current snapshot only under an unexpired versioned fencing lease; active/trialing grants are inserted or renewed and every other status revokes. Before subscription activation removes a finalized Checkout intent, its session id is committed to a durable invalidation outbox. The event stays unfinished until Stripe reports that session terminal and the outbox row is atomically completed, so crashes and ambiguous responses retry cleanup. A stale worker cannot overwrite a newer snapshot. |
 | Deployment | `apps/api/wrangler.jsonc` | `wrangler d1 create kalcode-api` (real `database_id`), `wrangler d1 migrations apply kalcode-api --remote`, signing key (§6), public key into `keys.rs`, route (e.g. `api.kalcoded.com`), deploy. |
-| Account deletion | schema | Grants and audit rows are immutable by design; deletion needs an explicit anonymization migration. |
+| Account deletion | `worker/lib/email-auth.ts`, `account-store.ts` | A fresh one-time email proof authorizes soft deletion. Immutable grants and audit history remain for integrity, while the email is replaced with a non-identifying tombstone and all sessions are revoked. |
+
+Migration `0005_accounts_billing.sql` marks accounts that existed before the plan-choice gate as
+activated at their original creation time, preserving upgrade access. Accounts created after the
+migration begin unactivated. A trusted OWNER grant atomically activates its account.
+
+### External setup still required before LIVE
+
+Code presence is **IMPLEMENTED**, not CONFIGURED or LIVE. Production remains fail-closed until the
+owner provisions the following through the providers' supported dashboards/secret commands:
+
+1. The API's `ACCOUNT_MAILER` service binding targets the website Worker's internal named
+   `AccountMailEntrypoint`. It reuses the website's existing domain-restricted Resend secret and
+   verified sender, and has no public HTTP route. The website D1 store enforces one durable claim
+   per proof plus the shared daily email budget; ambiguous provider outcomes are not replayed or
+   refunded.
+   The verified sender is `KalCode <hello@kalcoded.com>` and account links always use
+   `https://kalcoded.com/account`, independent of request headers.
+2. A random Worker secret `AUTH_RATE_LIMIT_KEY` (at least 32 characters). It HMACs client network
+   buckets; never put it in source or chat.
+3. Stripe monthly recurring Prices for Pro, MAX and MAX 2X; set their ids as `STRIPE_PRICE_PRO`,
+   `STRIPE_PRICE_MAX`, and `STRIPE_PRICE_MAX_2X`. Missing, malformed or duplicate values disable
+   billing.
+4. Worker secrets `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET`, plus a Stripe webhook endpoint
+   at `https://api.kalcoded.com/v1/billing/webhook` for
+   `customer.subscription.created`, `.updated`, and `.deleted`. Configure the Stripe customer
+     portal in the same account.
+5. The production D1 binding and `api.kalcoded.com` Worker route, remote migration application,
+   entitlement signing secret/key pinning, deploy, and live passwordless sign-in,
+   Checkout/Portal/webhook probes.
+6. Desktop OS-secure session-token custody, bounded PKCE polling, cancellation/timeout UI and
+   signed entitlement refresh. The server never returns a bearer token to the website account
+   page.
+
+An optional GitHub OAuth App may be configured later with callback URL exactly
+`https://api.kalcoded.com/v1/auth/github/callback`, `GITHUB_OAUTH_CLIENT_ID`, and the Worker secret
+`GITHUB_OAUTH_CLIENT_SECRET`. Passwordless email remains the primary sign-in path.
+
+Do not enable purchase links until all six items and the clean-install/upgrade release gates pass.
+
+New checkout is independently held closed by the API's `CHECKOUT_ENABLED` variable:
+only the exact string `true` opens it. Its committed production default is `false`.
+The website build uses the same strict rule for `PUBLIC_CHECKOUT_ENABLED`, defaulting
+to disabled paid-plan buttons. Existing-customer portal access and signed webhook
+processing remain available during a checkout hold. After release certification,
+enable both flags in one verified deployment increment; rollback closes checkout
+without interrupting existing subscription reconciliation.
+
+The API accepts live restricted server keys as well as live standard secret keys;
+publishable and sandbox keys are rejected. Restricted keys still require the
+permissions used by the fixed Stripe client (customers, Checkout sessions,
+billing portal sessions, and subscription reads). Key shape and secret presence
+are configuration checks, not proof of authentication or sufficient permissions.
 
 ## 10. Threat model
 
@@ -268,7 +339,11 @@ the app yet (no account UI exists); Z13 integrates it.
 | A user forges or edits a signed document | Ed25519 `verify_strict` over the exact bytes; header and payload are both signed; vectors include tampered payloads and flipped signature bits. |
 | A document is copied to another machine or account | `effective_entitlement` requires the document's `accountId` to equal the signed-in account; documents expire within 7 days. |
 | An old document is replayed after revocation | Documents expire (≤ 7 days as issued, ≤ 14 days accepted); revocation is effective server-side immediately. |
-| An API client asks for a higher tier | No endpoint accepts a tier; request bodies/queries/headers never influence resolution; production answers 401 until sign-in exists. |
+| An API client asks for a higher tier | Checkout accepts only a public plan id and resolves it through the server Price catalog. Entitlement resolution never accepts a client tier, Price, customer or account id. |
+| Login CSRF, intercepted link/callback or replay | Website sessions are set only by the fixed API origin in HttpOnly, Secure, SameSite=Lax cookies. Desktop email sign-in requires both the email proof and S256 PKCE verifier; the verifier is checked before atomic consume. Optional GitHub OAuth also uses 256-bit state and S256 PKCE. All attempts expire after ten minutes. |
+| Account enumeration or email-link theft | Start and delete-start responses are neutral. Tokens are high entropy, stored only as SHA-256 hashes, single-use and short-lived. The email proof stays in a URL fragment, so website/CDN request logs never receive it. A desktop link alone cannot complete without its native-only PKCE verifier. |
+| Account takeover by email reuse | Passwordless identity is created only after control of the mailbox is proven. Optional GitHub identities bind to a stable numeric subject, and matching email alone never links a second GitHub subject. Deleted accounts cannot authenticate or be silently restored. |
+| Forged, duplicated or unordered billing callbacks | Raw-body Stripe signature verification with a five-minute tolerance, event-id idempotency, current-subscription retrieval, exact Price/quantity validation and a versioned D1 fencing lease. |
 | Someone knows the owner's email address | Email is never an authority: no code compares emails; OWNER is a database grant tied to an account id created by verified sign-in. |
 | A billing bug or a malicious webhook grants OWNER | `CHECK (tier <> 'owner' OR source = 'grant')` in the database, plus resolution ignores non-operator OWNER rows. |
 | Silent entitlement changes | Triggers write `audit_log` in the same statement; grants cannot be edited or deleted; `audit_log` is append-only. |
@@ -276,7 +351,7 @@ the app yet (no account UI exists); Z13 integrates it.
 | Algorithm confusion (`alg: none`, HMAC) | Only `EdDSA` with the expected `typ` is accepted; keys are Ed25519 only. |
 | Usage double counting / racing past the allowance | `UNIQUE (account_id, client_request_id)`; the allowance check and insert are one statement. |
 | Usage data exposure | The ledger stores ids and timestamps only; no request text, transcripts or audio. |
-| Company AI cost | The API makes no outbound calls at all; zero-cost guards in CI. |
+| Company AI cost | The API's only outbound internet clients are optional GitHub identity and Stripe billing on fixed official HTTPS hosts. Account email uses the internal website Worker service binding, whose canonical Resend adapter is fixed to Resend's official HTTPS endpoint. Zero-cost guards continue to ban every AI and speech provider host, key and SDK. |
 
 ## 11. How the owner receives OWNER
 

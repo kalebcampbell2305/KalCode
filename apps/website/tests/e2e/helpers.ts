@@ -53,7 +53,7 @@ export function d1Local<T>(sql: string): T[] {
       "--command",
       sql,
     ],
-    { cwd: APP_ROOT, encoding: "utf8" },
+    { cwd: APP_ROOT, encoding: "utf8", windowsHide: true },
   );
   const parsed = JSON.parse(output.slice(output.indexOf("["))) as { results: T[] }[];
   return parsed[0]?.results ?? [];

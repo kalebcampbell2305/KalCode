@@ -49,7 +49,7 @@ export interface Release {
   publishedAt: string;
   /** Full git commit the installer was built from. */
   commit: string;
-  /** Site-relative link to the release notes, e.g. "/changelog#release-0-1-0". */
+  /** Site-relative link to the release notes, e.g. "/updates#release-0-1-0". */
   notesUrl: string;
   platforms: ReleasePlatform[];
 }

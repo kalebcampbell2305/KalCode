@@ -410,7 +410,7 @@
 
 @media (min-width: 64rem) {
   .ladder-strip {
-    grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(0, 1.35fr);
+    grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(0, 1.35fr);
   }
 
   .ladder-strip__plan {
@@ -463,7 +463,7 @@
 
 .ladder {
   width: 100%;
-  min-width: 21rem;
+  min-width: 52rem;
   border-collapse: collapse;
   font-size: var(--site-text-small);
   font-variant-numeric: tabular-nums;
@@ -1279,7 +1279,7 @@ kbd.ptt__key {
   border-top: 0;
 }
 
-/* ---------- Prose (docs, legal, changelog) ---------- */
+/* ---------- Prose (docs and legal) ---------- */
 
 .prose {
   max-width: var(--site-measure);
@@ -1522,45 +1522,6 @@ kbd.shortcut > kbd {
   font-size: var(--site-h3);
   font-weight: var(--weight-medium);
   transition: color var(--dur-fast) var(--ease-out);
-}
-
-/* ---------- Changelog ---------- */
-
-.release {
-  display: grid;
-  gap: var(--space-6);
-  padding-block: var(--space-10);
-  border-top: 1px solid var(--color-border);
-}
-
-.page-head + .section .release:first-child {
-  border-top: 0;
-  padding-top: 0;
-}
-
-.release__meta {
-  display: grid;
-  gap: var(--space-2);
-  align-content: start;
-  justify-items: start;
-  color: var(--color-text-muted);
-  font-size: var(--site-text-small);
-}
-
-.release__version {
-  font-family: var(--font-display);
-  font-weight: var(--weight-semibold);
-  font-size: clamp(1.25rem, 1.15rem + 0.4vw, 1.5rem);
-  letter-spacing: -0.03em;
-  line-height: 1.2;
-  color: var(--color-text);
-}
-
-@media (min-width: 52rem) {
-  .release {
-    grid-template-columns: 17rem minmax(0, 1fr);
-    gap: var(--space-12);
-  }
 }
 
 /* ---------- 404 ---------- */

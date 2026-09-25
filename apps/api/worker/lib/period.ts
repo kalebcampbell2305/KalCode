@@ -5,7 +5,7 @@
  *   - an active paid (billing) subscription decides the tier → the subscription's start
  *     (`entitlement_grants.granted_at` of that billing grant, which Z13 sets to the Stripe
  *     billing-cycle anchor);
- *   - otherwise (Free, OWNER, operator Pro/MAX grants) → the account's creation time.
+ *   - otherwise (Free, OWNER, operator paid-tier grants) → the account's creation time.
  *
  * Cycle k runs from anchor + k months to anchor + (k + 1) months. A day that does not exist in a
  * month is clamped to that month's last day (anchor Jan 31 → Feb 28/29 → Mar 31 → Apr 30), always

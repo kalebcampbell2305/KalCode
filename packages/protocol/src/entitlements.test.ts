@@ -78,12 +78,14 @@ describe("restricted tiers", () => {
       expect(hasFeature(grants, "persistentAgents")).toBe(plan.limits.persistentAgents);
       expect(hasFeature(grants, "advancedMissions")).toBe(plan.limits.advancedMissions);
     }
-    expect(limitFor(tierGrants("free"), "kalvoiceRequestsPerMonth")).toBe(250);
-    expect(limitFor(tierGrants("pro"), "kalvoiceRequestsPerMonth")).toBe(2500);
-    expect(limitFor(tierGrants("max"), "kalvoiceRequestsPerMonth")).toBe(10000);
+    expect(limitFor(tierGrants("free"), "kalvoiceRequestsPerMonth")).toBe(75);
+    expect(limitFor(tierGrants("pro"), "kalvoiceRequestsPerMonth")).toBe(1500);
+    expect(limitFor(tierGrants("max"), "kalvoiceRequestsPerMonth")).toBe(5000);
+    expect(limitFor(tierGrants("max2x"), "kalvoiceRequestsPerMonth")).toBe(10000);
     expect(tierGrants("free").features).toEqual([]);
     expect(tierGrants("pro").features).toEqual(["persistentAgents", "multiAgentWorkflows", "scheduledAutomations"]);
     expect(tierGrants("max").features).toEqual([...FEATURES]);
+    expect(tierGrants("max2x").features).toEqual([...FEATURES]);
   });
 
   it("fail closed for unknown features and missing limits", () => {

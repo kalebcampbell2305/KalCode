@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
+import type { AccountStore } from "../../worker/lib/account-store";
 import { depsFromEnv, type Env } from "../../worker/lib/env";
 import {
   type Deps,
@@ -88,6 +89,10 @@ function deps(overrides: Partial<Deps> = {}): Deps & { logs: Record<string, stri
   return {
     logs,
     store: fakeStore(),
+    accountStore: {
+      accountProfile: async (accountId: string) => ({ id: accountId, email: "user@example.com", activatedAt: CREATED }),
+      activateFree: async () => true,
+    } as unknown as AccountStore,
     auth: TEST_ONLY_AUTHENTICATOR,
     signingKey: async (): Promise<EntitlementSigningKey> => signer.key,
     previousPublicKeys: () => [],
@@ -118,6 +123,7 @@ const asAccount = (accountId: string, path = ENTITLEMENT_PATH, init: RequestInit
 
 interface UsageBody {
   ok: boolean;
+  error?: string;
   allowed?: boolean;
   outcome?: string;
   usage: { used: number; allowance: number | null; periodStart: string; resetsAt: string };
@@ -137,8 +143,22 @@ async function post(d: Deps, accountId: string, body: unknown, headers: Record<s
 }
 
 describe("route table", () => {
-  it("is exactly the entitlement and KalVoice usage routes", () => {
+  it("is exactly the account, auth, billing, entitlement and KalVoice routes", () => {
     expect(ROUTES.map(({ method, path, access }) => ({ method, path, access }))).toEqual([
+      { method: "GET", path: "/v1/account", access: "account" },
+      { method: "POST", path: "/v1/auth/github/start", access: "public" },
+      { method: "GET", path: "/v1/auth/github/callback", access: "public" },
+      { method: "POST", path: "/v1/auth/github/complete", access: "public" },
+      { method: "POST", path: "/v1/auth/email/start", access: "public" },
+      { method: "POST", path: "/v1/auth/email/verify", access: "public" },
+      { method: "POST", path: "/v1/auth/email/poll", access: "public" },
+      { method: "POST", path: "/v1/auth/session/refresh", access: "public" },
+      { method: "POST", path: "/v1/auth/logout", access: "public" },
+      { method: "POST", path: "/v1/account/activate-free", access: "account" },
+      { method: "POST", path: "/v1/account/delete/start", access: "account" },
+      { method: "POST", path: "/v1/billing/checkout", access: "account" },
+      { method: "POST", path: "/v1/billing/portal", access: "account" },
+      { method: "POST", path: "/v1/billing/webhook", access: "public" },
       { method: "GET", path: "/v1/entitlement", access: "account" },
       { method: "GET", path: "/v1/entitlement/keys", access: "public" },
       { method: "GET", path: "/v1/kalvoice/usage", access: "account" },
@@ -146,11 +166,15 @@ describe("route table", () => {
     ]);
   });
 
-  it("has no endpoint that could grant, change or revoke a tier", () => {
+  it("has no direct endpoint that accepts a tier grant, owner elevation or revocation", () => {
     for (const route of ROUTES) {
-      expect(route.path).not.toMatch(/grant|revoke|tier|owner|admin|upgrade|plan|billing|checkout|webhook|account/i);
-      if (route.method !== "GET") expect(route.path).toBe(KALVOICE_REQUESTS_PATH);
+      expect(route.path).not.toMatch(/grant|revoke|owner|admin|set-tier|entitlement\/update/i);
     }
+    expect(ROUTES.filter((route) => route.path.startsWith("/v1/billing/")).map((route) => route.path)).toEqual([
+      "/v1/billing/checkout",
+      "/v1/billing/portal",
+      "/v1/billing/webhook",
+    ]);
   });
 
   it.each(["GET", "POST", "PUT", "PATCH", "DELETE"])(
@@ -182,7 +206,7 @@ describe("route table", () => {
 });
 
 describe("the production configuration", () => {
-  it("answers 401 on every account route: sign-in does not exist yet, whatever the request claims", async () => {
+  it("fails closed without auth configuration and never trusts caller identity claims", async () => {
     const secret = await generateSigningSecret("prod-test");
     const env = { DB: {} as D1Database, ENTITLEMENT_SIGNING_KEY: secret } satisfies Env;
     const production = { ...depsFromEnv(env), store: fakeStore() };
@@ -202,6 +226,24 @@ describe("the production configuration", () => {
       }
     }
     expect(ledgerOf(production)).toHaveLength(0);
+  });
+});
+
+describe("account activation gate", () => {
+  it("blocks entitlement, usage reads and request counting until the user chooses a plan", async () => {
+    const d = deps({
+      accountStore: {
+        accountProfile: async (accountId: string) => ({ id: accountId, email: "user@example.com", activatedAt: null }),
+      } as unknown as AccountStore,
+    });
+    const entitlement = await handleRequest(asAccount(FREE_ACCOUNT, ENTITLEMENT_PATH), d);
+    const usage = await handleRequest(asAccount(FREE_ACCOUNT, KALVOICE_USAGE_PATH), d);
+    const request = await post(d, FREE_ACCOUNT, { requestId: "req-unactivated" });
+    expect([entitlement.status, usage.status, request.status]).toEqual([409, 409, 409]);
+    expect(await entitlement.json()).toMatchObject({ error: "account_not_activated" });
+    expect(await usage.json()).toMatchObject({ error: "account_not_activated" });
+    expect(request.body).toMatchObject({ error: "account_not_activated" });
+    expect(ledgerOf(d)).toHaveLength(0);
   });
 });
 
@@ -266,7 +308,8 @@ describe("GET /v1/entitlement (authenticated)", () => {
 
 describe("GET /v1/entitlement/keys", () => {
   it("publishes the current and retired public keys, never private material", async () => {
-    const previous = [{ kid: "k-old", x: signer.key.publicKey }];
+    const retired = await generateSigningKey("k-old");
+    const previous = [{ kid: "k-old", x: retired.key.publicKey }];
     const response = await handleRequest(
       new Request(`${BASE}${KEYS_PATH}`),
       deps({ previousPublicKeys: () => previous }),
@@ -278,9 +321,17 @@ describe("GET /v1/entitlement/keys", () => {
     expect(JSON.parse(text)).toEqual({
       keys: [
         { kty: "OKP", crv: "Ed25519", alg: "EdDSA", use: "sig", kid: "test-router", x: signer.key.publicKey },
-        { kty: "OKP", crv: "Ed25519", alg: "EdDSA", use: "sig", kid: "k-old", x: signer.key.publicKey },
+        { kty: "OKP", crv: "Ed25519", alg: "EdDSA", use: "sig", kid: "k-old", x: retired.key.publicKey },
       ],
     });
+  });
+  it("fails closed when a retired identity aliases the current key", async () => {
+    const response = await handleRequest(
+      new Request(`${BASE}${KEYS_PATH}`),
+      deps({ previousPublicKeys: () => [{ kid: "k-old", x: signer.key.publicKey }] }),
+    );
+    expect(response.status).toBe(500);
+    expect(await response.text()).not.toContain(signer.key.publicKey);
   });
 });
 
@@ -289,14 +340,14 @@ describe("KalVoice Requests", () => {
     const d = deps();
     const first = await post(d, FREE_ACCOUNT, { requestId: "req-00000001" });
     expect(first.status).toBe(200);
-    expect(first.body).toMatchObject({ allowed: true, outcome: "recorded", usage: { used: 1, allowance: 250 } });
+    expect(first.body).toMatchObject({ allowed: true, outcome: "recorded", usage: { used: 1, allowance: 75 } });
     const retry = await post(d, FREE_ACCOUNT, { requestId: "req-00000001" });
     expect(retry.body).toMatchObject({ allowed: true, outcome: "duplicate", usage: { used: 1 } });
     expect(ledgerOf(d)).toHaveLength(1);
     const receipt = await verifyUsageReceipt(retry.body.receipt, signer.trusted, NOW_S);
     expect(receipt).toMatchObject({
       ok: true,
-      receipt: { accountId: FREE_ACCOUNT, tier: "free", used: 1, allowance: 250 },
+      receipt: { accountId: FREE_ACCOUNT, tier: "free", used: 1, allowance: 75 },
     });
   });
 
@@ -309,7 +360,7 @@ describe("KalVoice Requests", () => {
     });
     const pro = await post(d, PRO_ACCOUNT, { requestId: "req-pro-00001" });
     expect(pro.body.usage).toMatchObject({
-      allowance: 2500,
+      allowance: 1500,
       periodStart: "2026-09-10T08:00:00.000Z",
       resetsAt: "2026-10-10T08:00:00.000Z",
     });
@@ -317,14 +368,14 @@ describe("KalVoice Requests", () => {
 
   it("denies online requests once the allowance is used, without counting them", async () => {
     const d = deps();
-    seed(d, FREE_ACCOUNT, 250);
-    const denied = await post(d, FREE_ACCOUNT, { requestId: "req-00000251" });
-    expect(denied.body).toMatchObject({ allowed: false, outcome: "denied", usage: { used: 250, allowance: 250 } });
-    expect(ledgerOf(d)).toHaveLength(250);
+    seed(d, FREE_ACCOUNT, 75);
+    const denied = await post(d, FREE_ACCOUNT, { requestId: "req-00000076" });
+    expect(denied.body).toMatchObject({ allowed: false, outcome: "denied", usage: { used: 75, allowance: 75 } });
+    expect(ledgerOf(d)).toHaveLength(75);
     expect(d.logs).toContainEqual({ level: "info", event: "kalvoice.allowance_exhausted", tier: "free" });
     // A request already served offline (within the device's signed allowance) is still recorded.
     const replay = await post(d, FREE_ACCOUNT, { requestId: "req-offline-01", mode: "offline" });
-    expect(replay.body).toMatchObject({ allowed: true, outcome: "recorded", usage: { used: 251 } });
+    expect(replay.body).toMatchObject({ allowed: true, outcome: "recorded", usage: { used: 76 } });
   });
 
   it("never denies OWNER", async () => {
@@ -379,7 +430,7 @@ describe("KalVoice Requests", () => {
     const body = (await response.json()) as UsageBody;
     expect(body.usage).toEqual({
       used: 2,
-      allowance: 2500,
+      allowance: 1500,
       periodStart: "2026-09-10T08:00:00.000Z",
       resetsAt: "2026-10-10T08:00:00.000Z",
     });

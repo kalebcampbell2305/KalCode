@@ -86,6 +86,14 @@ export interface PageInfo {
   description: string;
 }
 
+/** Private account entry point. It is routable from site chrome but excluded from search/sitemap. */
+export const ACCOUNT_PAGE = {
+  path: "/account",
+  title: "Account — KalCode",
+  description:
+    "Open your KalCode account to view your plan, KalVoice Requests and billing. Sign-in uses GitHub in the system browser; provider usage remains on your connected provider accounts.",
+} as const satisfies PageInfo;
+
 /**
  * Every public page. Titles are the exact <title> text; tests assert against this list and
  * the Worker accepts only these paths as an early-access `source`.
@@ -113,7 +121,7 @@ export const PAGES = [
     path: "/pricing",
     title: "Pricing — KalCode",
     description:
-      "KalCode plans: Free, Pro and MAX. Every plan includes all providers, all permission modes and unlimited local dictation; plans differ in KalVoice Requests and workspace features. AI usage stays on your own provider account.",
+      "KalCode plans: Free, Pro, MAX and MAX 2X. Every plan includes all providers, all permission modes and unlimited local dictation; plans differ in KalVoice Requests and workspace features. AI usage stays on your own provider account.",
   },
   {
     path: "/download",
@@ -143,7 +151,7 @@ export const PAGES = [
     path: "/docs/kalvoice",
     title: "KalVoice — KalCode Docs",
     description:
-      "KalVoice reference: the push-to-talk key, dictation and commands, how KalVoice Requests are counted, which provider reasoning uses, and how audio stays on your device.",
+      "KalVoice reference: the push-to-talk key, dictation and commands, how KalVoice Requests are counted, local command interpretation, and how audio stays on your device.",
   },
   {
     path: "/docs/local-first",
@@ -152,10 +160,10 @@ export const PAGES = [
       "What KalCode keeps on your device, how it stores secrets in the OS keychain, and what never leaves your machine.",
   },
   {
-    path: "/changelog",
-    title: "Changelog — KalCode",
+    path: "/updates",
+    title: "Updates — KalCode",
     description:
-      "Development milestones for KalCode: the website redesign and official X accounts, the KalVoice and bring-your-own-provider announcement, and 0.1.0 — Foundation.",
+      "KalCode product updates: Windows releases, KalVoice progress, provider workspace improvements and meaningful product news without the engineering noise.",
   },
   {
     path: "/security",
@@ -221,7 +229,7 @@ export const PRIMARY_NAV = [
   { href: "/kalvoice", label: "KalVoice" },
   { href: "/pricing", label: "Pricing" },
   { href: "/docs", label: "Docs" },
-  { href: "/changelog", label: "Changelog" },
+  { href: "/updates", label: "Updates" },
 ] as const;
 
 export const FOOTER_NAV = {
@@ -230,7 +238,7 @@ export const FOOTER_NAV = {
     { href: "/kalvoice", label: "KalVoice" },
     { href: "/pricing", label: "Pricing" },
     { href: "/download", label: "Download" },
-    { href: "/changelog", label: "Changelog" },
+    { href: "/updates", label: "Updates" },
   ],
   docs: [
     { href: "/docs", label: "Overview" },

@@ -349,32 +349,32 @@ fn kalvoice_allowance_decisions_offline() {
         .expect("account")
         .to_owned();
 
-    // Pro: 412 used of 2,500 per the signed receipt.
+    // Pro: 412 used of 1,500 per the signed receipt.
     let pro = effective("pro", &account);
     let pro_receipt = receipt("pro-receipt");
     assert_eq!(
         pro.kalvoice_decision(Some(&pro_receipt), 0),
         KalVoiceDecision::Allowed {
-            remaining: Some(2500 - 412 - 1)
+            remaining: Some(1500 - 412 - 1)
         }
     );
     assert_eq!(
-        pro.kalvoice_decision(Some(&pro_receipt), 2500 - 412 - 1),
+        pro.kalvoice_decision(Some(&pro_receipt), 1500 - 412 - 1),
         KalVoiceDecision::Allowed { remaining: Some(0) }
     );
     assert_eq!(
-        pro.kalvoice_decision(Some(&pro_receipt), 2500 - 412),
+        pro.kalvoice_decision(Some(&pro_receipt), 1500 - 412),
         KalVoiceDecision::Denied {
             resets_at: Some("2026-10-10T08:00:00.000Z".into())
         }
     );
     // Without a receipt the provisional local count is checked against the plan allowance.
     assert_eq!(
-        pro.kalvoice_decision(None, 2499),
+        pro.kalvoice_decision(None, 1499),
         KalVoiceDecision::Allowed { remaining: Some(0) }
     );
     assert_eq!(
-        pro.kalvoice_decision(None, 2500),
+        pro.kalvoice_decision(None, 1500),
         KalVoiceDecision::Denied { resets_at: None }
     );
 
@@ -392,17 +392,17 @@ fn kalvoice_allowance_decisions_offline() {
         );
     }
 
-    // Free fallback (no valid document): 250 per cycle, exhausted receipts are not trusted
+    // Free fallback (no valid document): 75 per cycle, exhausted receipts are not trusted
     // without a verified account, so only the local count applies.
     let free = verifier.effective_entitlement(None, at(v.cases[0].now));
     assert_eq!(
         free.kalvoice_decision(Some(&exhausted), 0),
         KalVoiceDecision::Allowed {
-            remaining: Some(249)
+            remaining: Some(74)
         }
     );
     assert_eq!(
-        free.kalvoice_decision(None, 250),
+        free.kalvoice_decision(None, 75),
         KalVoiceDecision::Denied { resets_at: None }
     );
     let signed_free = effective("free", &account);
@@ -419,7 +419,7 @@ fn kalvoice_allowance_decisions_offline() {
     assert_eq!(
         pro.kalvoice_decision(Some(&foreign), 0),
         KalVoiceDecision::Allowed {
-            remaining: Some(2499)
+            remaining: Some(1499)
         }
     );
 }

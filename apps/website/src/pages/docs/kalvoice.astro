@@ -76,10 +76,9 @@ import { KALVOICE } from "../../lib/site";
   </ul>
   <p>
     Structured commands like these are understood directly by KalCode and run without any AI model.
-    Requests that need reasoning, such as “Have Claude implement this, Codex review it, then run the
-    tests”, use the provider you choose from the ones you have connected: a global default, with
-    optional defaults per workspace. If no provider is connected, KalVoice tells you so instead of
-    guessing: “Connect a supported AI provider to use KalVoice reasoning for this request.”
+    More complex interpretation requires KalVoice's on-device runtime. When it is unavailable,
+    KalVoice reports that limitation without sending your request to a connected provider.
+    Unavailable requests do not consume your allowance.
   </p>
 
   <h2>KalVoice Requests</h2>
@@ -106,10 +105,9 @@ import { KALVOICE } from "../../lib/site";
 
   <h2>Your provider, your account</h2>
   <p>
-    KalVoice reasoning runs on the provider accounts you already have — your Claude Code, Codex or
-    Gemini CLI sign-in or API key. Your usage is billed by that provider, as it is when you use it
-    directly. KalCode does not charge for, resell or meter provider usage, and there is no
-    KalCode-paid fallback.
+    Coding tasks you intentionally send to Claude Code, Codex or Gemini use your connected
+    provider account and its native permissions. Provider usage is handled by that provider.
+    KalVoice's local command interpretation does not use a paid provider fallback.
   </p>
 
   <h2>Private by default</h2>
@@ -123,8 +121,8 @@ import { KALVOICE } from "../../lib/site";
   <h2>Inside your permissions</h2>
   <p>
     KalVoice calls the same runtime as the rest of KalCode: the same workspaces, terminals, threads
-    and approvals. Every consequential action it takes goes through your permission mode. It cannot
-    raise its own permissions, cannot approve its own requests, and can never enable Bypass. Read
+    and approvals. Ordinary workspace controls require no extra KalCode approval. Provider coding
+    tasks keep their native permissions; KalVoice cannot answer those approvals or enable Bypass. Read
     the <a href="/docs/permissions">permission model</a>.
   </p>
 </Docs>

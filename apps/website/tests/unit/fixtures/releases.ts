@@ -8,7 +8,7 @@ export const publishedManifest: ReleaseManifest = {
     channel: "preview",
     publishedAt: "2026-09-24T12:00:00.000Z",
     commit: "0123456789abcdef0123456789abcdef01234567",
-    notesUrl: "/changelog#release-0-1-0",
+    notesUrl: "/updates#release-0-1-0",
     platforms: [
       {
         os: "windows",

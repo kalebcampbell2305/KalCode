@@ -1,5 +1,5 @@
 ---
-import { PRIMARY_NAV } from "../lib/site";
+import { ACCOUNT_PAGE, PRIMARY_NAV } from "../lib/site";
 import BrandMark from "./BrandMark.astro";
 import Icon from "./Icon.astro";
 import Lettering from "./Lettering.astro";
@@ -33,6 +33,11 @@ function current(href: string): "page" | "true" | undefined {
             </li>
           ))
         }
+        <li class="site-nav__utility">
+          <a class="site-nav__utility-link" href={ACCOUNT_PAGE.path} aria-current={current(ACCOUNT_PAGE.path)}>
+            Account
+          </a>
+        </li>
         <li class="site-nav__social">
           <XLink account="official" withHandle="menu" />
         </li>

@@ -43,6 +43,33 @@ export interface AddressClaim {
   previous: { lastEmailAt: string | null; emailDay: string | null; emailDayCount: number };
 }
 
+export type EmailAdmissionState = "claimed" | "sent" | "ambiguous" | "rejected";
+
+export interface MarketingSendClaim {
+  claimId: string;
+  day: string;
+}
+
+export const EMAIL_ADMISSION_LIMITS = {
+  hardDaily: 90,
+  marketingDaily: 60,
+  nonDeletionDaily: 80,
+  accountNetworkPerPurposeDaily: 20,
+  accountRecipientPerPurposeDaily: 5,
+} as const;
+
+/** A lower emergency limit preserves the same account/deletion reserves. */
+export function emailAdmissionCaps(configuredLimit: number) {
+  const hard = Number.isInteger(configuredLimit)
+    ? Math.min(Math.max(configuredLimit, 0), EMAIL_ADMISSION_LIMITS.hardDaily)
+    : 0;
+  return {
+    hard,
+    marketing: Math.min(EMAIL_ADMISSION_LIMITS.marketingDaily, Math.max(0, hard - 30)),
+    nonDeletion: Math.min(EMAIL_ADMISSION_LIMITS.nonDeletionDaily, Math.max(0, hard - 10)),
+  } as const;
+}
+
 export interface EarlyAccessStore {
   /**
    * Deletes expired links, pending sign-ups older than `pendingCutoff` that have no live
@@ -61,9 +88,10 @@ export interface EarlyAccessStore {
   /** Reserves one email to this address if the throttle allows; null when it does not. */
   claimAddressSend(subscriberId: number, now: Date, policy: ThrottlePolicy): Promise<AddressClaim | null>;
   releaseAddressSend(claim: AddressClaim): Promise<void>;
-  /** Reserves one email in today's site-wide budget; false when the budget is spent. */
-  claimDailySend(now: Date, limit: number): Promise<boolean>;
-  releaseDailySend(now: Date): Promise<void>;
+  /** Reserves one marketing email while preserving the account and deletion lanes. */
+  claimMarketingSend(now: Date, limit: number): Promise<MarketingSendClaim | null>;
+  /** Definite rejection refunds the claim; sent and ambiguous outcomes retain it. */
+  finalizeMarketingSend(claim: MarketingSendClaim, state: Exclude<EmailAdmissionState, "claimed">): Promise<void>;
   addTokens(tokens: TokenRecord[]): Promise<void>;
   deleteTokens(hashes: string[]): Promise<void>;
   /**
@@ -132,6 +160,7 @@ export function d1Store(db: D1Database): EarlyAccessStore {
           )
           .bind(pendingCutoff.toISOString()),
         db.prepare("DELETE FROM email_send_budget WHERE day < ?1").bind(utcDay(now)),
+        db.prepare("DELETE FROM marketing_email_dispatches WHERE claimed_day < ?1").bind(utcDay(now)),
       ]);
     },
 
@@ -216,21 +245,32 @@ export function d1Store(db: D1Database): EarlyAccessStore {
         .run();
     },
 
-    async claimDailySend(now, limit) {
-      const result = await db
-        .prepare(
-          "INSERT INTO email_send_budget (day, sent) VALUES (?1, 1) " +
-            "ON CONFLICT(day) DO UPDATE SET sent = sent + 1 WHERE sent < ?2",
-        )
-        .bind(utcDay(now), limit)
-        .run();
-      return limit > 0 && result.meta.changes === 1;
+    async claimMarketingSend(now, limit) {
+      const caps = emailAdmissionCaps(limit);
+      if (caps.hard <= 0 || caps.marketing <= 0) return null;
+      const claimId = crypto.randomUUID();
+      try {
+        await db
+          .prepare(
+            `INSERT INTO marketing_email_dispatches
+             (claim_id, claimed_day, budget_limit, marketing_limit, non_deletion_limit, state, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'claimed', ?6)`,
+          )
+          .bind(claimId, utcDay(now), caps.hard, caps.marketing, caps.nonDeletion, now.toISOString())
+          .run();
+        return { claimId, day: utcDay(now) };
+      } catch {
+        return null;
+      }
     },
 
-    async releaseDailySend(now) {
+    async finalizeMarketingSend(claim, state) {
       await db
-        .prepare("UPDATE email_send_budget SET sent = sent - 1 WHERE day = ?1 AND sent > 0")
-        .bind(utcDay(now))
+        .prepare(
+          "UPDATE marketing_email_dispatches SET state = ?2, completed_at = CURRENT_TIMESTAMP " +
+            "WHERE claim_id = ?1 AND state = 'claimed'",
+        )
+        .bind(claim.claimId, state)
         .run();
     },
 

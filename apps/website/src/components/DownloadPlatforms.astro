@@ -14,6 +14,8 @@ interface Props {
 const { manifest = RELEASES } = Astro.props;
 const rows = platformRows(manifest);
 const latest = manifest.latest;
+// Release manifests published before Updates keep working, while new page links stay canonical.
+const notesUrl = latest?.notesUrl.replace(/^\/changelog(?=#|$)/, "/updates");
 ---
 <ul class="platforms" role="list" data-platforms>
   {
@@ -69,7 +71,7 @@ const latest = manifest.latest;
                 <Icon name="download" />
                 Download for {row.name}
               </a>
-              <a class="text-link" href={latest.notesUrl}>Release notes</a>
+              <a class="text-link" href={notesUrl}>Release notes</a>
             </div>
             <p class="muted small">
               By downloading or using KalCode you agree to the{" "}

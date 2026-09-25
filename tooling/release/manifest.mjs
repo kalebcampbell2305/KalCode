@@ -39,7 +39,7 @@ export function emptyManifest() {
   return { schemaVersion: SCHEMA_VERSION, latest: null, unavailable: [WINDOWS_UNPUBLISHED, ...NOT_BUILT] };
 }
 
-/** Changelog anchor for a version, matching the site's `id="release-0-1-0"` convention. */
+/** Updates-page anchor for a version, matching the site's `id="release-0-1-0"` convention. */
 export function notesAnchor(version) {
   return `release-${version.replaceAll(".", "-")}`;
 }
@@ -57,7 +57,7 @@ export function buildManifest({ version, commit, publishedAt, channel = "preview
       channel,
       publishedAt,
       commit,
-      notesUrl: `/changelog#${notesAnchor(version)}`,
+      notesUrl: `/updates#${notesAnchor(version)}`,
       platforms: [
         {
           os: "windows",

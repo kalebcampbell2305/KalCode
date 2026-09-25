@@ -24,7 +24,8 @@ Status: built and tested in Z0 · Canonical origin: **https://kalcoded.com**
 | `/kalvoice` | Dictation and command mode, the KalVoice demo, KalVoice Requests per plan, privacy. |
 | `/pricing` | One comparison table built from `@kalcode/protocol/plans` (never hardcoded), an "every plan includes" line, FAQ accordion. |
 | `/download` | Build status per OS from the release manifest, the early-access form, what to expect. |
-| `/docs/*`, `/changelog`, `/security`, `/privacy`, `/terms` | Content pages; docs carry a one-line "Describes the design" chip. |
+| `/updates` | Product news and release communication. `/changelog` permanently redirects here, and historic release anchors remain valid. |
+| `/docs/*`, `/security`, `/privacy`, `/terms` | Content pages; docs carry a one-line "Describes the design" chip. |
 
 Rules the pages follow:
 
@@ -36,6 +37,11 @@ Rules the pages follow:
   each OS with the manifest's reason. With a published Windows build, the call to action becomes
   "Download for Windows" and `/download` shows version, size, SHA-256 and the SmartScreen note for
   unsigned previews. A malformed manifest fails the build.
+- **Release authority changes explicitly.** `RELEASE_CATALOG_ENABLED` defaults to `false`, so the
+  existing verified preview continues to use the legacy integrity-checked R2 manifest and object
+  routes while the immutable D1 catalog is empty. Only exact `true` switches all manifest, updater
+  and artifact selection to D1. In that state missing pointers, descriptor mismatches and catalog
+  outages fail closed; the Worker never falls back to mutable legacy pointers.
 - **One early-access form per page**, only on `/` (closing section) and `/download`; other pages
   link to `/download#early-access`.
 - **Type:** Lexend Exa 600 for display, Lexend Deca for text, JetBrains Mono only for technical
@@ -53,8 +59,8 @@ Rules the pages follow:
 
 ## Round 3: the cinematic world (2026-09-24)
 
-- **World pages** (`/`, `/product`, `/kalvoice`, `/pricing`, `/download`, 404) are always dark:
-  `Base world` sets `data-theme="dark"` on `<body>`. Reading pages (docs, changelog, legal) follow
+- **World pages** (`/`, `/product`, `/kalvoice`, `/pricing`, `/download`, `/updates`, 404) are always dark:
+  `Base world` sets `data-theme="dark"` on `<body>`. Reading pages (docs and legal) follow
   the visitor's theme, and only they show the theme toggle. Space imagery is never drawn on light
   surfaces (backdrops and planets are hidden in the light theme).
 - **Environments:** `Backdrop.astro` renders the hero work's `SpaceBackdrop` (nebula, deep,
@@ -86,6 +92,7 @@ Rules the pages follow:
 | --- | --- |
 | `www.kalcoded.com/*` | 301 → `https://kalcoded.com/*` (path and query kept) |
 | Plain HTTP at the edge (`cf-visitor` scheme `http`) | 301 → HTTPS |
+| `/changelog` or `/changelog/` | 301 → `/updates` (query kept; browsers retain historic fragment anchors) |
 | `POST /api/early-access` `{email, source, website}` | Stores a pending row and emails a confirmation link (a confirmed address gets an "already on the list" email instead). 200 with the same body for new, pending, confirmed, throttled and honeypot submissions; 502 `email_failed` if the email could not be sent (nothing kept); 503 `email_unavailable` when the daily email budget is spent |
 | `POST /api/early-access/remove` `{email}` | Emails a removal link only if the address is on the list; 200 with the same body either way (502/503 as above) |
 | `POST /api/early-access/confirm` `{token}` | 200 confirmed; 410 `invalid_link` for a used, expired or unknown link; 400 for a malformed one. GET → 405 |
@@ -101,10 +108,29 @@ All responses carry: CSP with a SHA-256 hash for the single inline theme script,
 `X-Content-Type-Options: nosniff`, `Referrer-Policy`, `Permissions-Policy`, and
 `frame-ancestors 'none'`. Hashed `/_astro/*` assets are immutable-cached.
 
-Privacy: the site sets no cookies and runs no analytics. D1 stores the email, timestamp, source
+Privacy: the public marketing and early-access pages set no cookies and run no analytics. The
+private `/account` page uses one HttpOnly, Secure, SameSite=Lax host session cookie issued by
+`api.kalcoded.com`; scripts cannot read it. D1 stores the email, timestamp, source
 page, consent version, confirmation status and time, per-address throttle counters and the
 SHA-256 of each live link (docs/DATA_MODEL.md §3). Workers invocation logs are disabled so client
 IPs and user agents are not retained by us; the Worker's own logs never contain emails or links.
+
+## Account and billing
+
+`/account` is a `noindex` authenticated surface backed by the separate account API at the fixed
+origin `https://api.kalcoded.com`. Passwordless sign-in sends a high-entropy, single-use link to
+the supplied address. Its proof stays in the URL fragment, is removed before the API call, and
+never reaches website/CDN request logs. Responses are account-enumeration neutral. The website never receives or
+stores a bearer token: the API sets a secure host cookie after link verification, and every
+credentialed write must come from the exact production website origin.
+
+After sign-in, the page reads server-authoritative account, entitlement and usage state. A new
+account must explicitly activate Free, or wait for a verified active/trialing Stripe webhook after
+Checkout, before protected entitlement and usage routes unlock. Paid buttons submit only a public
+tier plus an idempotent request id; customer, Price, quantity and return URLs are server owned.
+Checkout and subscription management open on Stripe-hosted pages. Account deletion requires a
+fresh email proof and is refused while billing or a Checkout reservation is active. See
+`docs/BILLING.md` §9–10 for contracts, external setup and the threat model.
 
 ## Early access and email (double opt-in)
 
@@ -145,6 +171,13 @@ cannot cause provider failures, and the per-IP rate limit bounds probing.
 | --- | --- | --- |
 | `resend` | production (`wrangler.jsonc` vars) | `POST https://api.resend.com/emails` with `Authorization: Bearer $RESEND_API_KEY`, JSON `from`, `reply_to`, `to`, `subject`, `text`, `html`, an `Idempotency-Key`, 8 s timeout. Links always use `https://kalcoded.com`. |
 | `capture` | Playwright | POSTs the message to `EMAIL_CAPTURE_URL`, which must be a loopback `http://` URL (the suite's mail sink, `tests/e2e/mail-sink.mjs`). |
+
+The account API reuses this same Resend authority through the website Worker's internal named
+`AccountMailEntrypoint` RPC service binding. It is not an HTTP route. The method accepts only a
+validated recipient, a `signin` or `delete` purpose, and a one-time proof; it renders fixed
+templates and claims a proof hash plus the shared daily D1 budget before sending. Provider
+timeouts remain charged and cannot replay the proof because the provider may already have
+accepted the message.
 | `log` | local `pnpm preview` | Prints the message, links included, to the wrangler console (recipient redacted). |
 
 `capture` and `log` also need `EMAIL_LINK_ORIGIN`, a loopback origin such as
@@ -199,6 +232,15 @@ that inspect built HTML read `KALCODE_DIST` (default `dist`).
 Production: Worker `kalcode-website`, D1 `kalcode-web` (`f7b3e324-c093-4231-b768-2a4a930d2744`),
 custom domains `kalcoded.com` and `www.kalcoded.com`. First deployed 2026-09-24.
 Contact published on the site: `CONTACT_EMAIL` in `src/lib/site.ts`.
+
+Keep `RELEASE_CATALOG_ENABLED=false` until signed-release publishing has uploaded and verified every
+content-addressed descriptor and artifact, committed the immutable version row, advanced the stable
+pointer, and probed the public stable manifest and installer. Enabling the flag is the final atomic
+authority transition and belongs to that reviewed publish transaction; this website deployment does
+not enable it automatically. Before the first authoritative signed release, rollback may restore
+`false` to preserve the verified preview. After the transition, rollback must preserve catalog
+authority. Never toggle the flag to `false` automatically or in response to catalog errors, because
+that would silently downgrade release authority to mutable legacy objects.
 
 ```bash
 wrangler d1 create kalcode-web                      # once; put the id in wrangler.jsonc

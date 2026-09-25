@@ -119,6 +119,31 @@ describe("entitlement_grants cannot be replaced", () => {
     expect(await grants(id)).toEqual(before);
   });
 
+  it("refuses swapping an active billing grant through the subscription index", async () => {
+    const first = await account();
+    const second = await account();
+    await db
+      .prepare(
+        "INSERT INTO entitlement_grants (account_id, tier, source, granted_by, reason, granted_at, expires_at, billing_subscription_id) VALUES (?1, 'pro', 'billing', 'billing', 'original', ?2, ?3, 'sub_replace_guard')",
+      )
+      .bind(first, T, "2026-10-24T12:00:00.000Z")
+      .run();
+    const before = await grants(first);
+    const auditBefore = await audit(first);
+    await expect(
+      db
+        .prepare(
+          "INSERT OR REPLACE INTO entitlement_grants (account_id, tier, source, granted_by, reason, granted_at, expires_at, billing_subscription_id) VALUES (?1, 'max2x', 'billing', 'billing', 'swapped', ?2, ?3, 'sub_replace_guard')",
+        )
+        .bind(second, T, "2026-10-24T12:00:00.000Z")
+        .run(),
+    ).rejects.toThrow(/active billing subscription grant cannot be replaced/);
+    expect(await grants(first)).toEqual(before);
+    expect(await grants(second)).toEqual([]);
+    expect(await audit(first)).toEqual(auditBefore);
+    expect(await audit(second)).toEqual([]);
+  });
+
   it("refuses an upsert that rewrites a grant", async () => {
     const id = await account();
     const grantId = await grantAndRevokeOwner(id);
@@ -144,7 +169,7 @@ describe("entitlement_grants cannot be replaced", () => {
       .run();
     await db
       .prepare(
-        "INSERT INTO entitlement_grants (account_id, tier, source, granted_by, reason, granted_at, expires_at) VALUES (?1, 'pro', 'billing', 'billing', 'subscription', ?2, ?3)",
+        "INSERT INTO entitlement_grants (account_id, tier, source, granted_by, reason, granted_at, expires_at, billing_subscription_id) VALUES (?1, 'pro', 'billing', 'billing', 'subscription', ?2, ?3, 'sub_no_replace_test')",
       )
       .bind(id, T, "2026-10-24T12:00:00.000Z")
       .run();

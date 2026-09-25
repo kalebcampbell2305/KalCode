@@ -32,11 +32,12 @@ interface GrantInput {
 }
 
 function insertGrant(accountId: string, grant: GrantInput) {
+  const billingSubscriptionId = grant.source === "billing" ? `sub_test_${++seq}` : null;
   return db
     .prepare(
-      "INSERT INTO entitlement_grants (account_id, tier, source, granted_by, reason, granted_at, expires_at) VALUES (?1, ?2, ?3, 'test', 'test', ?4, ?5)",
+      "INSERT INTO entitlement_grants (account_id, tier, source, granted_by, reason, granted_at, expires_at, billing_subscription_id) VALUES (?1, ?2, ?3, 'test', 'test', ?4, ?5, ?6)",
     )
-    .bind(accountId, grant.tier, grant.source, grant.grantedAt ?? T, grant.expiresAt ?? null)
+    .bind(accountId, grant.tier, grant.source, grant.grantedAt ?? T, grant.expiresAt ?? null, billingSubscriptionId)
     .run();
 }
 
@@ -125,6 +126,38 @@ describe("OWNER invariants (database constraints)", () => {
     await expect(insertGrant(id, { tier: "pro", source: "billing" })).rejects.toThrow(/billing_has_period_end/);
   });
 
+  it("stores MAX 2X as a billable tier while keeping OWNER non-billable", async () => {
+    const id = await account();
+    await insertGrant(id, { tier: "max2x", source: "billing", expiresAt: "2026-10-24T12:00:00.000Z" });
+    expect((await resolveEntitlement(d1Store(db), id, new Date(T))).tier).toBe("max2x");
+    expect(await auditFor(id)).toEqual([
+      expect.objectContaining({
+        action: "entitlement.granted",
+        details: expect.objectContaining({ tier: "max2x", source: "billing" }),
+      }),
+    ]);
+  });
+
+  it("requires every new billing grant to be subscription-owned", async () => {
+    const id = await account();
+    await expect(
+      db
+        .prepare(
+          "INSERT INTO entitlement_grants (account_id, tier, source, granted_by, reason, granted_at, expires_at) VALUES (?1, 'pro', 'billing', 'test', 'test', ?2, ?3)",
+        )
+        .bind(id, T, "2026-10-24T12:00:00.000Z")
+        .run(),
+    ).rejects.toThrow(/require exactly one billing subscription/);
+    await expect(
+      db
+        .prepare(
+          "INSERT INTO entitlement_grants (account_id, tier, source, granted_by, reason, granted_at, billing_subscription_id) VALUES (?1, 'pro', 'grant', 'test', 'test', ?2, 'sub_not_billing')",
+        )
+        .bind(id, T)
+        .run(),
+    ).rejects.toThrow(/require exactly one billing subscription/);
+  });
+
   it("keeps grants immutable, revocation final, and never deletes them", async () => {
     const id = await account();
     await insertGrant(id, { tier: "owner", source: "grant" });
@@ -207,6 +240,8 @@ describe("resolveEntitlement against D1", () => {
     });
     await insertGrant(id, { tier: "max", source: "billing", expiresAt: "2026-10-24T12:00:00.000Z" });
     expect((await resolveEntitlement(store, id, at(T))).tier).toBe("max");
+    await insertGrant(id, { tier: "max2x", source: "billing", expiresAt: "2026-10-24T12:00:00.000Z" });
+    expect((await resolveEntitlement(store, id, at(T))).tier).toBe("max2x");
     await insertGrant(id, { tier: "owner", source: "grant" });
     expect(await resolveEntitlement(store, id, at(T))).toEqual({
       tier: "owner",

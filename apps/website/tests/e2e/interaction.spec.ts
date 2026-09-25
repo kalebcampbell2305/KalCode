@@ -92,7 +92,7 @@ test.describe("theme", () => {
 
     await page.reload();
     await expect(html).toHaveAttribute("data-theme", "light");
-    await page.goto("/changelog");
+    await page.goto("/privacy");
     await expect(html).toHaveAttribute("data-theme", "light");
     expect(await page.evaluate(() => localStorage.getItem("kalcode-theme"))).toBe("light");
 

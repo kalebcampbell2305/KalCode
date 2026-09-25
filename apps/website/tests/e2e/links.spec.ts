@@ -66,12 +66,18 @@ test("no dead internal links or anchors", async ({ page, request }) => {
 test("header navigation and footer links resolve", async ({ page }) => {
   await page.goto("/");
   const header = page.getByRole("navigation", { name: "Main" });
-  for (const name of ["Product", "KalVoice", "Pricing", "Docs", "Changelog"]) {
+  for (const name of ["Product", "KalVoice", "Pricing", "Docs", "Updates"]) {
     await header.getByRole("link", { name, exact: true }).click();
     await expect(page.locator("h1")).toBeVisible();
     await expect(header.getByRole("link", { name, exact: true })).toHaveAttribute("aria-current", "page");
     await page.goto("/");
   }
+  const account = header.getByRole("link", { name: "Account", exact: true });
+  await expect(account).toHaveAttribute("href", "/account");
+  await account.click();
+  await expect(page).toHaveURL(/\/account$/);
+  await expect(account).toHaveAttribute("aria-current", "page");
+  await page.goto("/");
   // The X link comes from SOCIAL and opens in a new tab.
   const x = header.getByRole("link", { name: /KalCode on X/ });
   await expect(x).toHaveAttribute("href", "https://x.com/KalCodeDev");
@@ -80,6 +86,7 @@ test("header navigation and footer links resolve", async ({ page }) => {
   await expect(page).toHaveURL(/\/download$/);
   await page.goto("/");
   const footer = page.locator("footer");
+  await expect(footer.getByRole("link", { name: "Account", exact: true })).toHaveAttribute("href", "/account");
   const footerLinks = await footer.locator("a[href]").count();
   expect(footerLinks).toBeGreaterThanOrEqual(12);
   for (const label of ["Security", "Privacy", "Terms"]) {

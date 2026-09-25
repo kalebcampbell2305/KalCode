@@ -130,7 +130,7 @@ const policies = [
           PROVIDERS.map((provider) => (
             <li class="providers__item">
               <span class="providers__name">
-                <ProviderGlyph />
+                <ProviderGlyph provider={provider.id} />
                 {provider.name}
               </span>
               <span class="providers__status">
@@ -277,7 +277,7 @@ const policies = [
               <ul class="tile-list" role="list">
                 {PROVIDERS.map((provider) => (
                   <li>
-                    <ProviderGlyph />
+                    <ProviderGlyph provider={provider.id} />
                     <span>{provider.name}</span>
                     <span class="tile-list__meta">{provider.access}</span>
                   </li>

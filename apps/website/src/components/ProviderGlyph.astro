@@ -1,8 +1,60 @@
 ---
-/**
- * The neutral provider glyph KalCode draws for itself: a terminal prompt in a rounded square.
- * Never a provider's logo; the provider's name is always set beside it as text.
- */
-import Icon from "./Icon.astro";
+/** Provider-published identity mark. Always place it beside the provider's visible name. */
+import claudeSpark from "@kalcode/ui/brand/providers/claude-spark.svg?url";
+import geminiCliIcon from "@kalcode/ui/brand/providers/gemini-cli.png?url";
+import openAiBlossom from "@kalcode/ui/brand/providers/openai-blossom.svg?url";
+
+interface Props {
+  provider: string;
+}
+
+const { provider } = Astro.props;
+const kind =
+  provider === "claude" || provider === "claude-code"
+    ? "claude"
+    : provider === "codex"
+      ? "codex"
+      : provider === "gemini" || provider === "gemini-cli"
+        ? "gemini"
+        : "generic";
+const source = kind === "claude" ? claudeSpark : kind === "codex" ? openAiBlossom : kind === "gemini" ? geminiCliIcon : null;
+const brandSources = { claude: "anthropic", codex: "openai", gemini: "google-gemini-cli", generic: null };
 ---
-<span class="provider-glyph" aria-hidden="true"><Icon name="prompt" /></span>
+
+<span class="provider-glyph" data-provider={kind} aria-hidden="true">
+  {
+    source ? (
+      <img
+        class="provider-glyph__mark"
+        src={source}
+        alt=""
+        data-brand-source={brandSources[kind]}
+      />
+    ) : (
+      <span class="provider-glyph__fallback">?</span>
+    )
+  }
+</span>
+
+<style>
+  .provider-glyph__mark {
+    display: block;
+    width: 1.125rem;
+    height: 1.125rem;
+    object-fit: contain;
+  }
+
+  :global(:root:not([data-theme="light"])) .provider-glyph[data-provider="codex"] .provider-glyph__mark,
+  :global([data-theme="dark"]) .provider-glyph[data-provider="codex"] .provider-glyph__mark {
+    filter: invert(1);
+  }
+
+  :global([data-theme="light"]) .provider-glyph[data-provider="codex"] .provider-glyph__mark {
+    filter: none;
+  }
+
+  .provider-glyph__fallback {
+    color: var(--color-text-muted);
+    font: 600 0.75rem/1 var(--font-sans);
+  }
+</style>

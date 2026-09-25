@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   // KalCode API: accounts and server-authoritative entitlements (docs/BILLING.md).
-  // LOCAL ONLY until campaign Z13: no routes, no workers.dev URL, no remote database yet.
+  // Provisioned but not publicly routed until account/billing release verification passes.
   "name": "kalcode-api",
   "main": "worker/index.ts",
   // Latest date supported by the workerd bundled with the pinned wrangler (1.20260921.1).
@@ -12,18 +12,32 @@
     {
       "binding": "DB",
       "database_name": "kalcode-api",
-      // Placeholder for local development and tests. Z13 creates the production database with
-      // `wrangler d1 create kalcode-api` and puts its id here before any deploy.
-      "database_id": "00000000-0000-4000-8000-000000000000",
+      // Dedicated production account database; local tests use isolated local D1 state.
+      "database_id": "576dc65f-2e33-4737-8008-f0a9434f0326",
       "migrations_dir": "migrations"
     }
   ],
+  "services": [
+    {
+      "binding": "ACCOUNT_MAILER",
+      "service": "kalcode-website",
+      "entrypoint": "AccountMailEntrypoint"
+    }
+  ],
   // Secrets (never in this file or the repository):
+  //   GITHUB_OAUTH_CLIENT_SECRET, AUTH_RATE_LIMIT_KEY
+  //   STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
   //   ENTITLEMENT_SIGNING_KEY — Ed25519 private JWK; see docs/BILLING.md §6.
   // Local development reads them from .dev.vars (git-ignored; `pnpm keys:dev` creates one).
   "vars": {
+    "CHECKOUT_ENABLED": "false",
     // JSON array of retired public keys ([{"kid":"…","x":"…"}]) still published during rotation.
-    "ENTITLEMENT_PREVIOUS_PUBLIC_KEYS": "[]"
+    "ENTITLEMENT_PREVIOUS_PUBLIC_KEYS": "[]",
+    // Verified live monthly USD catalog, provisioned 2026-09-25.
+    "STRIPE_PRICE_PRO": "price_1UJg7nK2Cbd8I5MGRbyJcBiy",
+    "STRIPE_PRICE_MAX": "price_1UJg7oK2Cbd8I5MGK9THeqLP",
+    "STRIPE_PRICE_MAX_2X": "price_1UJg7pK2Cbd8I5MGxQFg9YUU"
+    // GitHub OAuth remains disabled until its registered client is configured.
   },
   "observability": {
     "enabled": true,

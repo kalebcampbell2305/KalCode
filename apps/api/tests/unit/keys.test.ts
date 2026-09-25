@@ -33,21 +33,47 @@ describe("importSigningKey", () => {
 describe("previous public keys", () => {
   it("parses rotation entries and rejects invalid ones", async () => {
     const x = JSON.parse(await generateSigningSecret("a")).x as string;
+    const otherX = JSON.parse(await generateSigningSecret("b")).x as string;
     expect(parsePreviousPublicKeys(undefined)).toEqual([]);
     expect(parsePreviousPublicKeys("[]")).toEqual([]);
     expect(parsePreviousPublicKeys(JSON.stringify([{ kid: "k-old", x }]))).toEqual([{ kid: "k-old", x }]);
     expect(() => parsePreviousPublicKeys(JSON.stringify([{ kid: "k-old", x: "short" }]))).toThrow(SigningKeyError);
     expect(() => parsePreviousPublicKeys(JSON.stringify({ kid: "k-old", x }))).toThrow(SigningKeyError);
+    expect(() =>
+      parsePreviousPublicKeys(
+        JSON.stringify([
+          { kid: "k-old", x },
+          { kid: "k-old", x: otherX },
+        ]),
+      ),
+    ).toThrow(SigningKeyError);
+    expect(() =>
+      parsePreviousPublicKeys(
+        JSON.stringify([
+          { kid: "k-old", x },
+          { kid: "k-alias", x },
+        ]),
+      ),
+    ).toThrow(SigningKeyError);
   });
 
-  it("publishes the current key first and never duplicates a kid", () => {
-    const keys = publishedKeySet({ kid: "a", x: "X1" }, [
-      { kid: "a", x: "X2" },
-      { kid: "b", x: "X3" },
-    ]);
+  it("publishes the current key first", () => {
+    const keys = publishedKeySet({ kid: "a", x: "X1" }, [{ kid: "b", x: "X2" }]);
     expect(keys.map((key) => [key.kid, key.x])).toEqual([
       ["a", "X1"],
-      ["b", "X3"],
+      ["b", "X2"],
     ]);
+  });
+
+  it("rejects duplicate ids and public-key aliases instead of silently collapsing them", () => {
+    expect(() => publishedKeySet({ kid: "a", x: "X1" }, [{ kid: "a", x: "X1" }])).toThrow(SigningKeyError);
+    expect(() => publishedKeySet({ kid: "a", x: "X1" }, [{ kid: "a", x: "X2" }])).toThrow(SigningKeyError);
+    expect(() => publishedKeySet({ kid: "a", x: "X1" }, [{ kid: "b", x: "X1" }])).toThrow(SigningKeyError);
+    expect(() =>
+      publishedKeySet(null, [
+        { kid: "a", x: "X1" },
+        { kid: "a", x: "X2" },
+      ]),
+    ).toThrow(SigningKeyError);
   });
 });

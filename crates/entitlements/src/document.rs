@@ -27,6 +27,7 @@ pub enum Tier {
     Free,
     Pro,
     Max,
+    Max2x,
     Owner,
 }
 
@@ -41,6 +42,7 @@ impl Tier {
             Tier::Free => feature.placement().included_in(0),
             Tier::Pro => feature.placement().included_in(1),
             Tier::Max => feature.placement().included_in(2),
+            Tier::Max2x => feature.placement().included_in(2),
         }
     }
 }
@@ -73,7 +75,7 @@ impl Grants {
             features: Vec::new(),
             limits: BTreeMap::from([
                 (limits::CONCURRENT_THREADS.to_owned(), Some(2)),
-                (limits::KALVOICE_REQUESTS_PER_MONTH.to_owned(), Some(250)),
+                (limits::KALVOICE_REQUESTS_PER_MONTH.to_owned(), Some(75)),
             ]),
         }
     }
@@ -268,8 +270,16 @@ mod tests {
         assert_eq!(free.limit(limits::CONCURRENT_THREADS), Limit::AtMost(2));
         assert_eq!(
             free.limit(limits::KALVOICE_REQUESTS_PER_MONTH),
-            Limit::AtMost(250)
+            Limit::AtMost(75)
         );
+    }
+
+    #[test]
+    fn max_2x_is_restricted_and_keeps_max_features() {
+        let max_2x = document(Tier::Max2x);
+        assert!(max_2x.validate());
+        assert!(!max_2x.unrestricted);
+        assert!(Tier::Max2x.includes(kalcode_contracts::app::FeatureId::BenchmarkLab));
     }
 
     #[test]

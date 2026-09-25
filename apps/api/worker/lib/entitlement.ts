@@ -20,10 +20,10 @@ export interface ResolvedEntitlement {
   billingAnchor: string | null;
 }
 
-const RANK: Readonly<Record<EntitlementTier, number>> = { free: 0, pro: 1, max: 2, owner: 3 };
+const RANK: Readonly<Record<EntitlementTier, number>> = { free: 0, pro: 1, max: 2, max2x: 3, owner: 4 };
 
 /**
- * Precedence: an active OWNER operator grant, then the highest active Pro/MAX grant (billing or
+ * Precedence: an active OWNER operator grant, then the highest active public paid grant (billing or
  * operator), then Free. An `owner` row with any source other than `grant` is ignored — the
  * database already refuses such rows; this is defence in depth.
  */

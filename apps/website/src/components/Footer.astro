@@ -1,6 +1,6 @@
 ---
 import { buildStatus, RELEASES } from "../lib/releases";
-import { FOOTER_NAV, TAGLINE } from "../lib/site";
+import { ACCOUNT_PAGE, FOOTER_NAV, TAGLINE } from "../lib/site";
 import BrandMark from "./BrandMark.astro";
 import Lettering from "./Lettering.astro";
 import ThemeToggle from "./ThemeToggle.astro";
@@ -13,7 +13,7 @@ interface Props {
 const { themeToggle = true } = Astro.props;
 
 const columns = [
-  { heading: "Product", links: FOOTER_NAV.product },
+  { heading: "Product", links: [...FOOTER_NAV.product, { href: ACCOUNT_PAGE.path, label: "Account" }] },
   { heading: "Docs", links: FOOTER_NAV.docs },
   { heading: "Legal", links: FOOTER_NAV.legal },
 ] as const;

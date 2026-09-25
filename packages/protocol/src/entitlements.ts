@@ -1,7 +1,7 @@
 /**
  * The KalCode entitlement model: what an account may use, as issued by the API.
  *
- * The public catalog in `plans.ts` lists what can be bought (Free, Pro, MAX). An *entitlement*
+ * The public catalog in `plans.ts` lists what can be bought (Free, Pro, MAX, MAX 2X). An *entitlement*
  * is the server-authoritative answer for one account. It adds one tier that is not in the
  * catalog: `owner` — non-billable, non-expiring, never purchasable, granted only by trusted
  * operator tooling against the database (see docs/BILLING.md).
@@ -21,7 +21,7 @@ import { type EntitlementTier, getPlan } from "./plans.ts";
 
 export type { EntitlementTier };
 
-export const ENTITLEMENT_TIERS: readonly EntitlementTier[] = ["free", "pro", "max", "owner"];
+export const ENTITLEMENT_TIERS: readonly EntitlementTier[] = ["free", "pro", "max", "max2x", "owner"];
 
 /**
  * Entitlement features the signed document lists by name (gated by plan today). Adding one here
@@ -86,7 +86,7 @@ export interface TierGrants {
 }
 
 /**
- * The grants for a tier. Free/Pro/MAX derive from the public catalog in `plans.ts` (the single
+ * The grants for a tier. Public tiers derive from the catalog in `plans.ts` (the single
  * source of truth for prices and plan limits). Owner enumerates nothing: it is unrestricted by
  * construction — `OWNER_LIMITS` in `plans.ts` describes it for display, but evaluation never
  * consults a list for it. Provider connections, permission modes and local dictation are never

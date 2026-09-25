@@ -340,6 +340,11 @@ const API_ROUTES: Readonly<Record<string, ApiHandler>> = {
   [REMOVE_CONFIRM_PATH]: handleRemoveConfirm,
 };
 
+/** Product news replaced the public changelog. Keep old bookmarks and indexed URLs useful. */
+function legacyPageRedirect(url: URL): string | null {
+  return url.pathname === "/changelog" || url.pathname === "/changelog/" ? `/updates${url.search}` : null;
+}
+
 /** Routes one request. Security headers are applied to every response, including redirects. */
 export async function handleRequest(request: Request, deps: Deps): Promise<Response> {
   const url = new URL(request.url);
@@ -351,8 +356,11 @@ export async function handleRequest(request: Request, deps: Deps): Promise<Respo
     return withSecurityHeaders(new Response("Not found", { status: 404 }), url.pathname, csp);
   }
   const redirect = canonicalRedirect(url, request);
+  const legacyRedirect = legacyPageRedirect(url);
   if (redirect) {
     response = new Response(null, { status: 301, headers: { location: redirect } });
+  } else if (legacyRedirect) {
+    response = new Response(null, { status: 301, headers: { location: legacyRedirect } });
   } else if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {
     const handler = API_ROUTES[url.pathname];
     if (handler) {

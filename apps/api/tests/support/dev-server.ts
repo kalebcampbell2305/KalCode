@@ -37,6 +37,7 @@ export async function startDevServer(options: DevServerOptions): Promise<DevServ
   const child: ChildProcess = spawn(process.execPath, args, {
     cwd: API_DIR,
     stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
     env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
   });
   let output = "";
