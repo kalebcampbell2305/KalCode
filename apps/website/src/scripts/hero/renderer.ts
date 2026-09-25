@@ -164,6 +164,11 @@ export interface Layout {
   stageSize: number;
   /** Text-safe band: top, bottom (from the canvas top), level inside, level below; or null. */
   band: [number, number, number, number] | null;
+  /** Where the stream starts (the platform ring centre, or the canvas bottom), from the canvas top-left. */
+  originX: number;
+  originY: number;
+  /** Radius of the platform's outer ring (0 when there is no platform). */
+  platformRadius: number;
 }
 
 type Canvas = HTMLCanvasElement | OffscreenCanvas;
@@ -201,7 +206,18 @@ export async function createOrb(canvas: Canvas, baseUrl: string, options: OrbOpt
   } else {
     await breathe();
   }
-  const beam = finishProgram(gl, beamStart, ["uRect", "uRes", "uPx", "uInk", "uQ", "uBeam", "uSurge", "uPh", "uBand"]);
+  const beam = finishProgram(gl, beamStart, [
+    "uRect",
+    "uRes",
+    "uPx",
+    "uInk",
+    "uQ",
+    "uBeam",
+    "uSurge",
+    "uPh",
+    "uBand",
+    "uOrigin",
+  ]);
   await breathe();
   const orb = finishProgram(gl, orbStart, [
     "uRes",
@@ -259,11 +275,22 @@ export async function createOrb(canvas: Canvas, baseUrl: string, options: OrbOpt
   const pointer = { x: 0, y: 0, tx: 0, ty: 0 };
   let scroll = 0;
   let px = 1;
-  const geo = { w: 1, h: 1, cx: 0, cy: 0, s: 1, bx: 0, by: 0 };
+  const geo = { w: 1, h: 1, cx: 0, cy: 0, s: 1, bx: 0, by: 0, ox: 0, oy: 0, pr: 0 };
   /** Text-safe band: top y, bottom y (canvas px, y up), level inside, level below. */
   let band: [number, number, number, number] = [0, 0, 1, 1];
 
-  let lay: Layout = { width: 1, height: 1, dpr: 1, stageX: 0, stageY: 0, stageSize: 1, band: null };
+  let lay: Layout = {
+    width: 1,
+    height: 1,
+    dpr: 1,
+    stageX: 0,
+    stageY: 0,
+    stageSize: 1,
+    band: null,
+    originX: 0,
+    originY: 1,
+    platformRadius: 0,
+  };
 
   function apply() {
     const [cap] = ladder[step] ?? [1, 0];
@@ -284,6 +311,9 @@ export async function createOrb(canvas: Canvas, baseUrl: string, options: OrbOpt
     geo.cy = h - (lay.stageY + size / 2) * sy;
     geo.bx = (lay.stageX + size * SPHERE_X) * sx;
     geo.by = h - (lay.stageY + size * ENTRY_Y) * sy;
+    geo.ox = lay.originX * sx;
+    geo.oy = h - lay.originY * sy;
+    geo.pr = lay.platformRadius * sx;
     band = lay.band ? [h - lay.band[0] * sy, h - lay.band[1] * sy, lay.band[2], lay.band[3]] : [0, 0, 1, 1];
     gl?.viewport(0, 0, w, h);
   }
@@ -346,9 +376,15 @@ export async function createOrb(canvas: Canvas, baseUrl: string, options: OrbOpt
 
     // 1. Beam
     const s = geo.s;
-    const halfW = s * 0.75;
+    const halfW = Math.max(s * 0.75, geo.pr * 1.1);
     gl.useProgram(beam.program);
-    gl.uniform4f(beam.u.uRect ?? null, geo.bx - halfW, 0, geo.bx + halfW, geo.by + s * 0.03);
+    gl.uniform4f(
+      beam.u.uRect ?? null,
+      geo.bx - halfW,
+      Math.max(0, geo.oy - Math.max(geo.pr * 0.12, s * 0.12)),
+      geo.bx + halfW,
+      geo.by + s * 0.03,
+    );
     gl.uniform2f(beam.u.uRes ?? null, geo.w, geo.h);
     gl.uniform1f(beam.u.uPx ?? null, px);
     gl.uniform1f(beam.u.uInk ?? null, ink);
@@ -357,6 +393,7 @@ export async function createOrb(canvas: Canvas, baseUrl: string, options: OrbOpt
     gl.uniform4f(beam.u.uSurge ?? null, surgePos, surgeVis * strength, 0, 0);
     gl.uniform4f(beam.u.uPh ?? null, (t * 0.55) % 64, (t * 2.4) % 64, 0, 0);
     gl.uniform4f(beam.u.uBand ?? null, ...band);
+    gl.uniform4f(beam.u.uOrigin ?? null, geo.ox, geo.oy, geo.pr, tc < RISE ? tc / RISE : 1);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
     // 2. Orb
