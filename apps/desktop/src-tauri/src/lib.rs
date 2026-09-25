@@ -209,6 +209,10 @@ pub fn run(removed_overrides: Vec<String>) {
             }
         })
         .setup(move |app| {
+            // Test hooks' grant (debug and `e2e` builds only; release builds don't register the
+            // commands). Kept outside `capabilities/` so it is never loaded otherwise.
+            #[cfg(any(debug_assertions, feature = "e2e"))]
+            app.add_capability(include_str!("../test-capabilities/test-hooks.json"))?;
             let state = start(app, &removed_overrides);
             let providers = provider_commands::ProviderState::from_process();
             // Z4 over Z1 (workspace roots) and Z3 (thread modes, bound once the runtime starts).
@@ -299,6 +303,7 @@ pub fn run(removed_overrides: Vec<String>) {
             permission_commands::thread_set_permission_mode,
             permission_commands::permission_settings_get,
             permission_commands::permission_settings_update,
+            #[cfg(any(debug_assertions, feature = "e2e"))]
             permission_commands::test_permission_probe,
         ])
         .build(tauri::generate_context!());
