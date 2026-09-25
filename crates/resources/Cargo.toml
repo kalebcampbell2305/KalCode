@@ -1,0 +1,28 @@
+[package]
+name = "kalcode-resources"
+description = "KalCode Workspace Resource Governor (RG): low-overhead adaptive system sampling, pressure levels with hysteresis, and a pure advisory capacity API. Advisory only: it never kills or suspends processes."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "kalcode_resources"
+
+[dependencies]
+kalcode-contracts = { path = "../contracts" }
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+# System sampling. 0.37 is the newest line whose MSRV (1.88) fits the workspace's 1.89 and whose
+# `windows` range (0.59–0.61) unifies with the copy Tauri already brings, so no second `windows`
+# crate is compiled. Default features are off: no `multithread` (a rayon pool would cost more
+# than it saves at our process counts), no `component` (WMI/COM temperature sensors), no `user`.
+sysinfo = { version = "0.37.2", default-features = false, features = ["system", "disk", "network"] }
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,29 @@
+[package]
+name = "kalcode-git"
+description = "KalCode Git and workspace files core: argv-invoked git with a sanitized environment, status/diff/log/branches/worktrees, the checkpoint store, the file index and opaque file handles."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "kalcode_git"
+
+[dependencies]
+kalcode-contracts = { path = "../contracts" }
+kalcode-native-core = { path = "../native-core" }
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+rusqlite.workspace = true
+sha2 = "0.10"
+ignore = "0.4"
+notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
