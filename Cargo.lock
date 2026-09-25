@@ -2715,7 +2715,7 @@ dependencies = [
 
 [[package]]
 name = "kalcode-locator"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "kalcode-contracts",
  "kalcode-native-core",
