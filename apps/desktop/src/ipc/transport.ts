@@ -95,6 +95,12 @@ export type CommandName =
   | "git_status"
   | "git_log"
   | "git_branches"
+  // Pane layouts (Z7-W1)
+  | "layout_get"
+  | "layout_save"
+  | "layout_presets"
+  | "layout_preset_save"
+  | "layout_preset_delete"
   // Notification center (Z7-W3)
   | "notification_list"
   | "notification_mark";

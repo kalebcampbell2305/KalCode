@@ -29,6 +29,8 @@ export interface ProviderPaneProps {
   focusRequest: number;
   /** The thread changed (rename, stop); the host refreshes its list. */
   onChanged?: (thread: ThreadSummary) => void;
+  /** The pane isn't focused (Z7-W1): terminal output renders in batches. */
+  throttled?: boolean;
   /** Pane-system controls (Z7-W1). Rendered only when provided. */
   onClose?: () => void;
   onMaximize?: () => void;
@@ -49,6 +51,7 @@ export function ProviderPane({
   onClose,
   onMaximize,
   onSplit,
+  throttled = false,
 }: ProviderPaneProps) {
   const { client } = useRuntime();
   const { pending, decide } = usePermissions();
@@ -141,6 +144,7 @@ export function ProviderPane({
           running={running}
           focusRequest={focusRequest + localFocus}
           theme={theme}
+          throttled={throttled}
         />
         {showOverlay && request ? (
           <section

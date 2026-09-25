@@ -1,4 +1,4 @@
-//! Schema v8: the isolated migration applies through the core runner, packages store
+//! Schema v8: the registered migration applies through the core runner, packages store
 //! references only, finished packages are immutable, and the decision log is append-only.
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
@@ -15,45 +15,26 @@ use kalcode_context::store::{
     never_share_for_workspace, never_share_list, never_share_set, package_status, save_preview,
 };
 use kalcode_context::{ContextPurpose, Firewall, MIGRATION_V8, Sensitivity};
-use kalcode_core::db::{MIGRATIONS, Migration, migrate, open_in_memory, schema_version};
+use kalcode_core::db::{MIGRATIONS, migrate, open_in_memory, schema_version};
 use rusqlite::Connection;
-
-/// Stand-ins for the versions between the registered migrations and v8 (owned by other
-/// branches until they are integrated), so the core runner, which requires a contiguous
-/// sequence, can apply v8 exactly as it will after integration.
-const STUB_NAMES: [&str; 7] = [
-    "stub_v1", "stub_v2", "stub_v3", "stub_v4", "stub_v5", "stub_v6", "stub_v7",
-];
-
-fn stubs() -> Vec<Migration> {
-    let registered = MIGRATIONS.iter().map(|m| m.version).max().unwrap_or(0);
-    ((registered + 1)..8)
-        .map(|version| Migration {
-            version,
-            name: STUB_NAMES[(version - 1) as usize],
-            sql: "SELECT 1;",
-        })
-        .collect()
-}
 
 fn db() -> Connection {
     let mut conn = open_in_memory().expect("db");
-    let mut all: Vec<Migration> = MIGRATIONS.to_vec();
-    all.extend(stubs());
-    all.push(MIGRATION_V8);
-    migrate(&mut conn, &all, None).expect("migrate");
-    assert_eq!(schema_version(&conn).expect("version"), 8);
+    migrate(&mut conn, MIGRATIONS, None).expect("migrate");
+    assert!(schema_version(&conn).expect("version") >= 8);
     conn
 }
 
 #[test]
-fn migration_is_isolated_and_well_formed() {
+fn migration_is_registered_as_v8_and_well_formed() {
     assert_eq!(MIGRATION_V8.version, 8);
     assert_eq!(MIGRATION_V8.name, "context");
-    assert!(
-        MIGRATIONS.iter().all(|m| m.version != 8),
-        "v8 must not be registered by this branch"
-    );
+    let registered = MIGRATIONS
+        .iter()
+        .find(|m| m.version == 8)
+        .expect("v8 is registered");
+    assert_eq!(registered.name, "context");
+    assert_eq!(registered.sql, MIGRATION_V8.sql);
     let conn = db();
     for table in [
         "context_packages",

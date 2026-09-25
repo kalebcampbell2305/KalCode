@@ -3,19 +3,27 @@ import { Command } from "cmdk";
 import {
   ArrowRightLeft,
   AudioLines,
+  ChevronsDownUp,
   ClipboardCopy,
+  Columns2,
+  Equal,
   FolderOpen,
   FolderPlus,
   KeyRound,
+  LayoutGrid,
+  Maximize2,
   MessageSquarePlus,
   Monitor,
   Moon,
   PanelLeft,
   PanelsLeftBottom,
+  Rows2,
   Rows3,
   Search,
   SquareTerminal,
   Sun,
+  Undo2,
+  X,
 } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { useOptionalKalVoice } from "../kalvoice/KalVoiceProvider.tsx";
@@ -26,6 +34,8 @@ import { useDiagnosticsActions } from "../surfaces/settings/useDiagnosticsAction
 import { useThreadsIntent } from "../surfaces/threads/intent.tsx";
 import styles from "./CommandPalette.module.css";
 import { PRIMARY_ORDER, SURFACES, useNavigation, VIEWS, viewVisible } from "./navigation.tsx";
+import { dispatchPaneCommand, type PaneCommand } from "./panes/paneCommands.ts";
+import { PANE_SHORTCUT_LABELS } from "./panes/paneShortcuts.ts";
 import { useOptionalRail } from "./rail/RailProvider.tsx";
 import { RAIL_SHORTCUT } from "./rail/WorkspaceRail.tsx";
 import { LocatorFilterBar, LocatorResultItems } from "./rail/search/LocatorResults.tsx";
@@ -75,6 +85,12 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     void action();
   };
   const set = (patch: SettingsPatch) => run(() => updateSettings(patch));
+  // Pane commands (Z7-W1) run on the Code canvas; they wait for it when Code isn't on screen.
+  const pane = (command: PaneCommand) =>
+    run(() => {
+      navigate("code");
+      dispatchPaneCommand(command, { queue: true });
+    });
 
   const visible = new Set(info.flags.surfaces.filter((f) => f.visible).map((f) => f.id));
   const destinations = [...PRIMARY_ORDER, "settings" as const].filter((id): id is SurfaceId => visible.has(id));
@@ -192,6 +208,64 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
               </Item>
             ))}
         </Command.Group>
+
+        {visible.has("code") && workspaces.active?.available ? (
+          <Command.Group heading="Panes" className={styles.group}>
+            <Item
+              icon={<Columns2 />}
+              onSelect={pane({ kind: "split", axis: "horizontal" })}
+              shortcut={PANE_SHORTCUT_LABELS.splitRight}
+              keywords={["side by side", "layout"]}
+            >
+              Split pane right
+            </Item>
+            <Item
+              icon={<Rows2 />}
+              onSelect={pane({ kind: "split", axis: "vertical" })}
+              shortcut={PANE_SHORTCUT_LABELS.splitDown}
+              keywords={["stack", "layout"]}
+            >
+              Split pane down
+            </Item>
+            <Item icon={<Maximize2 />} onSelect={pane({ kind: "maximize" })} shortcut={PANE_SHORTCUT_LABELS.maximize}>
+              Maximize pane
+            </Item>
+            <Item icon={<ChevronsDownUp />} onSelect={pane({ kind: "restore" })} keywords={["unmaximize", "layout"]}>
+              Restore pane layout
+            </Item>
+            <Item icon={<Equal />} onSelect={pane({ kind: "even" })} shortcut={PANE_SHORTCUT_LABELS.even}>
+              Even out pane sizes
+            </Item>
+            <Item icon={<Undo2 />} onSelect={pane({ kind: "reopen" })} shortcut={PANE_SHORTCUT_LABELS.reopen}>
+              Reopen closed pane
+            </Item>
+            <Item
+              icon={<X />}
+              onSelect={pane({ kind: "close" })}
+              shortcut={PANE_SHORTCUT_LABELS.close}
+              keywords={["keeps running"]}
+            >
+              Close pane
+            </Item>
+            {(
+              [
+                ["two", "Arrange 2 panes"],
+                ["three", "Arrange 3 panes"],
+                ["four", "Arrange 4 panes (2 × 2)"],
+                ["six", "Arrange 6 panes (3 × 2)"],
+              ] as const
+            ).map(([preset, label]) => (
+              <Item
+                key={preset}
+                icon={<LayoutGrid />}
+                onSelect={pane({ kind: "preset", preset })}
+                keywords={["layout", "preset", "grid"]}
+              >
+                {label}
+              </Item>
+            ))}
+          </Command.Group>
+        ) : null}
 
         <Command.Group heading="Appearance" className={styles.group}>
           <Item icon={<Monitor />} onSelect={set({ theme: "system" })} current={settings.theme === "system"}>

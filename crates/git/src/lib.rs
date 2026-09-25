@@ -10,8 +10,8 @@
 //!   explicit, additive "branch from checkpoint".
 //! * [`paths`], [`handles`], [`index`], [`watch`] — workspace containment, opaque file handles
 //!   (D4), the ignore-aware file index and its incremental watcher.
-//! * [`store`] — SQLite migration v7 ([`store::GIT_MIGRATION`], not yet registered) and its
-//!   tables `git_worktrees` and `checkpoints`.
+//! * [`store`] — SQLite migration v7 ([`store::GIT_MIGRATION`], registered in
+//!   `kalcode_core::db::MIGRATIONS`) and its tables `git_worktrees` and `checkpoints`.
 //! * [`events`] — the proposed `git.*` / `timeline.checkpoint_*` event facts.
 //! * [`service`] — [`service::GitCore`], what the desktop shell holds.
 //!

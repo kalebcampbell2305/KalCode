@@ -32,14 +32,27 @@ interface Bounds {
   maxTop: number;
 }
 
-function bounds(viewport: Size, panel: Size): Bounds {
-  const minLeft = EDGE_MARGIN;
-  const minTop = EDGE_MARGIN;
+/**
+ * Where the panel may sit (Z7-W1 shell slot): right of `left` (the sidebar), and `top` /
+ * `bottom` pixels from those edges (the reserved voice slot centres it). Defaults: the whole
+ * window with the usual margins.
+ */
+export interface PanelArea {
+  left: number;
+  top: number;
+  bottom: number;
+}
+
+const WHOLE_WINDOW: PanelArea = { left: 0, top: EDGE_MARGIN, bottom: EDGE_MARGIN };
+
+function bounds(viewport: Size, panel: Size, area: PanelArea = WHOLE_WINDOW): Bounds {
+  const minLeft = area.left + EDGE_MARGIN;
+  const minTop = area.top;
   return {
     minLeft,
     minTop,
     maxLeft: Math.max(minLeft, viewport.width - panel.width - EDGE_MARGIN),
-    maxTop: Math.max(minTop, viewport.height - panel.height - EDGE_MARGIN),
+    maxTop: Math.max(minTop, viewport.height - panel.height - area.bottom),
   };
 }
 
@@ -57,8 +70,9 @@ export function positionFor(
   placement: { anchor: PanelAnchor; x: number; y: number },
   viewport: Size,
   panel: Size,
+  area?: PanelArea,
 ): Point {
-  const b = bounds(viewport, panel);
+  const b = bounds(viewport, panel, area);
   const freeLeft = fromFraction(placement.x, b.minLeft, b.maxLeft);
   const freeTop = fromFraction(placement.y, b.minTop, b.maxTop);
   const centerLeft = (b.minLeft + b.maxLeft) / 2;
@@ -86,8 +100,9 @@ export function placementAt(
   viewport: Size,
   panel: Size,
   snap: number = SNAP_DISTANCE,
+  area?: PanelArea,
 ): { anchor: PanelAnchor; x: number; y: number } {
-  const b = bounds(viewport, panel);
+  const b = bounds(viewport, panel, area);
   const left = Math.min(b.maxLeft, Math.max(b.minLeft, point.left));
   const top = Math.min(b.maxTop, Math.max(b.minTop, point.top));
   const nearLeft = left - b.minLeft <= snap;
@@ -116,9 +131,10 @@ export function nudge(
   dy: number,
   viewport: Size,
   panel: Size,
+  area?: PanelArea,
 ): { anchor: PanelAnchor; x: number; y: number } {
-  const from = positionFor(placement, viewport, panel);
-  return placementAt({ left: from.left + dx, top: from.top + dy }, viewport, panel, 0);
+  const from = positionFor(placement, viewport, panel, area);
+  return placementAt({ left: from.left + dx, top: from.top + dy }, viewport, panel, 0, area);
 }
 
 /** The saved placement for a size class, or the default anchor in compact view. */

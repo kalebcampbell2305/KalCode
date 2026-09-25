@@ -12,6 +12,7 @@ mod git_commands;
 mod kalvoice_commands;
 mod kalvoice_executor;
 mod locator_commands;
+mod layout_commands;
 pub mod native_confirm;
 mod notification_commands;
 pub mod permission_commands;
@@ -400,6 +401,11 @@ pub fn run(removed_overrides: Vec<String>) {
             git_commands::git_status,
             git_commands::git_log,
             git_commands::git_branches,
+            layout_commands::layout_get,
+            layout_commands::layout_save,
+            layout_commands::layout_presets,
+            layout_commands::layout_preset_save,
+            layout_commands::layout_preset_delete,
             notification_commands::notification_list,
             notification_commands::notification_mark,
             #[cfg(any(debug_assertions, feature = "e2e"))]

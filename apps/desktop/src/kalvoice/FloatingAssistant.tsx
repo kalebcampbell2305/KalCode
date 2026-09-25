@@ -11,10 +11,20 @@ import {
   useState,
 } from "react";
 import { useNavigation } from "../shell/navigation.tsx";
+import { type SlotEdge, useShellSlots, VOICE_SLOT_GAP } from "../shell/ShellSlots.tsx";
 import { announcement, STATE_LABELS, usageLine } from "./assistantState.ts";
 import styles from "./FloatingAssistant.module.css";
 import { useKalVoice } from "./KalVoiceProvider.tsx";
-import { ANCHOR_LABELS, nudge, type Point, placementAt, positionFor, type Size } from "./panelGeometry.ts";
+import {
+  ANCHOR_LABELS,
+  EDGE_MARGIN,
+  nudge,
+  type PanelArea,
+  type Point,
+  placementAt,
+  positionFor,
+  type Size,
+} from "./panelGeometry.ts";
 import { displayKey } from "./shortcutModel.ts";
 import { KalVoiceWordmark, Orb, Waveform } from "./Visuals.tsx";
 
@@ -83,9 +93,41 @@ export function FloatingAssistant() {
     return () => clearTimeout(timer);
   }, [state.phase, kv.dismiss]);
 
+  // Docked to the top or bottom edge, the widget lives in a band the shell reserves for it
+  // (Z7-W1), right of the sidebar, so it never covers a page header.
+  const slots = useShellSlots();
+  const slotEdge: SlotEdge | null = panel.anchor.startsWith("top")
+    ? "top"
+    : panel.anchor.startsWith("bottom")
+      ? "bottom"
+      : null;
+  const compactHeight = useRef(0);
+  const detailShown =
+    state.phase === "listening" ||
+    state.phase === "transcribing" ||
+    state.phase === "done" ||
+    state.phase === "error" ||
+    state.phase === "waiting_for_permission";
+  if (panel.view !== "expanded" && !detailShown && size.height > 0) compactHeight.current = size.height;
+  const reserving = panel.visible && status !== null && slotEdge !== null && slots !== null;
+  const bandHeight = Math.ceil((compactHeight.current || 44) + 2 * VOICE_SLOT_GAP);
+  const setVoice = slots?.setVoice;
+  useEffect(() => {
+    if (!setVoice) return;
+    setVoice(reserving && slotEdge ? { edge: slotEdge, height: bandHeight } : null);
+  }, [setVoice, reserving, slotEdge, bandHeight]);
+  useEffect(() => () => setVoice?.(null), [setVoice]);
+  const area: PanelArea | undefined = slots
+    ? {
+        left: slots.mainLeft,
+        top: slotEdge === "top" ? VOICE_SLOT_GAP : EDGE_MARGIN,
+        bottom: slotEdge === "bottom" ? VOICE_SLOT_GAP : EDGE_MARGIN,
+      }
+    : undefined;
+
   if (!panel.visible || !status) return null;
 
-  const resting = positionFor(panel, viewport, size);
+  const resting = positionFor(panel, viewport, size, area);
   const position = drag ?? resting;
   const view = panel.view;
   const talkKey = displayKey(status.preferences.talkKey);
@@ -109,10 +151,11 @@ export function FloatingAssistant() {
     const dy = event.clientY - start.pointer.top;
     if (!start.moved && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
     start.moved = true;
-    const maxLeft = Math.max(16, viewport.width - size.width - 16);
+    const minLeft = (area?.left ?? 0) + 16;
+    const maxLeft = Math.max(minLeft, viewport.width - size.width - 16);
     const maxTop = Math.max(16, viewport.height - size.height - 16);
     setDrag({
-      left: Math.min(maxLeft, Math.max(16, start.origin.left + dx)),
+      left: Math.min(maxLeft, Math.max(minLeft, start.origin.left + dx)),
       top: Math.min(maxTop, Math.max(16, start.origin.top + dy)),
     });
   };
@@ -128,7 +171,7 @@ export function FloatingAssistant() {
       return;
     }
     suppressClick.current = true;
-    setPanel(placementAt(drag, viewport, size));
+    setPanel(placementAt(drag, viewport, size, undefined, area));
     setDrag(null);
   };
 
@@ -143,7 +186,7 @@ export function FloatingAssistant() {
     const d = delta[event.key];
     if (!d) return;
     event.preventDefault();
-    setPanel(nudge(panel, d[0], d[1], viewport, size));
+    setPanel(nudge(panel, d[0], d[1], viewport, size, area));
   };
 
   const dragProps = { onPointerDown, onPointerMove, onPointerUp, onPointerCancel: onPointerUp };

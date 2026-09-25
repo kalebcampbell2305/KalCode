@@ -30,6 +30,7 @@ tauri-plugin-global-shortcut = "2.3"
 kalcode-hook-bridge = { path = "../../../crates/hook-bridge" }
 kalcode-locator = { path = "../../../crates/locator" }
 kalcode-git = { path = "../../../crates/git" }
+kalcode-workspace-ui = { path = "../../../crates/workspace-ui" }
 kalcode-notifications = { path = "../../../crates/notifications" }
 tauri = { version = "2.11", features = [] }
 tauri-plugin-opener = "2.5"

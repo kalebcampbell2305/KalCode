@@ -8,7 +8,7 @@
   flex-direction: column;
   gap: var(--space-6);
   min-height: 100%;
-  padding: calc(var(--space-8) + var(--kalvoice-clearance, 0px)) var(--page-px, var(--space-8)) var(--space-10);
+  padding: calc(var(--space-8)) var(--page-px, var(--space-8)) var(--space-10);
   background:
     radial-gradient(48rem 18rem at 0% -10%, var(--color-accent-soft), transparent 70%),
     radial-gradient(

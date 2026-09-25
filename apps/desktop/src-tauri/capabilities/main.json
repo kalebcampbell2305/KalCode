@@ -94,6 +94,11 @@
     "allow-git-status",
     "allow-git-log",
     "allow-git-branches",
+    "allow-layout-get",
+    "allow-layout-save",
+    "allow-layout-presets",
+    "allow-layout-preset-save",
+    "allow-layout-preset-delete",
     "allow-notification-list",
     "allow-notification-mark"
   ]

@@ -1,15 +1,14 @@
 //! SQLite persistence for schema v8.
 //!
-//! The migration is exported as [`MIGRATION_V8`] and is **not** registered in
-//! `kalcode_core::db::MIGRATIONS`: the lead registers it at integration (ADVANCED.md §5.2;
-//! the SQL file moves to `crates/native-core/migrations/0008_context.sql` then). Every function
-//! here takes a `rusqlite::Connection` so it works on the core's writer connection.
+//! The migration is registered in `kalcode_core::db::MIGRATIONS` as v8; its SQL lives in
+//! `crates/native-core/migrations/0008_context.sql` (native-core cannot depend on this crate),
+//! and [`MIGRATION_V8`] re-exports the core constant. Every function here takes a
+//! `rusqlite::Connection` so it works on the core's writer connection.
 //!
 //! Stored: package headers, item *references* (kind, canonical path, line range, label,
 //! content hash, size, verdict), the append-only decision log, and never-share patterns.
 //! Never stored: item content, excerpts, secret values.
 
-use kalcode_core::db::Migration;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::error::{ContextError, Result};
@@ -18,12 +17,8 @@ use crate::model::Sensitivity;
 use crate::never_share::{NeverSharePattern, PatternScope, validate_pattern};
 use crate::package::{ContextPackage, ItemSource};
 
-/// Schema v8 (CTX/FW). Registered by the lead at integration.
-pub const MIGRATION_V8: Migration = Migration {
-    version: 8,
-    name: "context",
-    sql: include_str!("../migrations/0008_context.sql"),
-};
+/// Schema v8 (CTX/FW), registered in `kalcode_core::db::MIGRATIONS`.
+pub use kalcode_core::db::CONTEXT_MIGRATION as MIGRATION_V8;
 
 /// Lifecycle status of a stored package.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

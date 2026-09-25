@@ -1,3 +1,4 @@
+import { type CSSProperties, useLayoutEffect, useRef } from "react";
 import { FloatingAssistant } from "../kalvoice/FloatingAssistant.tsx";
 import { KalVoicePage } from "../kalvoice/KalVoicePage.tsx";
 import { KalVoiceProvider } from "../kalvoice/KalVoiceProvider.tsx";
@@ -25,6 +26,7 @@ import { useRailShortcut } from "./rail/useRailShortcut.ts";
 import { WorkspaceRail } from "./rail/WorkspaceRail.tsx";
 import { SearchProvider, useSearch } from "./rail/search/SearchProvider.tsx";
 import styles from "./Shell.module.css";
+import { ShellSlotsProvider, useShellSlots } from "./ShellSlots.tsx";
 import { Sidebar } from "./Sidebar.tsx";
 import { useShortcuts } from "./shortcuts.ts";
 
@@ -42,18 +44,20 @@ export function Shell() {
             {/* Z7-W3: cross-surface focus/filter intents and the notification center. */}
             <UiIntentsProvider>
               <NotificationsProvider>
-                {/* Z7-W2: shared search (palette + locator) and the workspace rail. */}
-                <SearchProvider>
-                  <RailProvider>
-                    {kalvoiceEnabled ? (
-                      <KalVoiceProvider>
-                        <ShellLayout kalvoice />
-                      </KalVoiceProvider>
-                    ) : (
-                      <ShellLayout kalvoice={false} />
-                    )}
-                  </RailProvider>
-                </SearchProvider>
+                <ShellSlotsProvider>
+                  {/* Z7-W2: shared search (palette + locator) and the workspace rail. */}
+                  <SearchProvider>
+                    <RailProvider>
+                      {kalvoiceEnabled ? (
+                        <KalVoiceProvider>
+                          <ShellLayout kalvoice />
+                        </KalVoiceProvider>
+                      ) : (
+                        <ShellLayout kalvoice={false} />
+                      )}
+                    </RailProvider>
+                  </SearchProvider>
+                </ShellSlotsProvider>
               </NotificationsProvider>
             </UiIntentsProvider>
           </ThreadsIntentProvider>
@@ -69,6 +73,20 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
   // Z7-W2: the palette's open state and query are shared (search can open with a query).
   const { open: paletteOpen, setOpen: setPaletteOpen } = useSearch();
   const rail = useRail();
+  const slots = useShellSlots();
+  const voice = slots?.voice ?? null;
+  const setMainLeft = slots?.setMainLeft;
+  const mainRef = useRef<HTMLElement>(null);
+  // The KalVoice widget stays right of the sidebar (Z7-W1 shell slot).
+  useLayoutEffect(() => {
+    const main = mainRef.current;
+    if (!main || !setMainLeft) return;
+    const measure = () => setMainLeft(main.getBoundingClientRect().left);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(main);
+    return () => observer.disconnect();
+  }, [setMainLeft]);
 
   useShortcuts({
     openPalette: () => setPaletteOpen(true),
@@ -82,14 +100,17 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
       className={styles.shell}
       data-sidebar={settings.sidebarCollapsed ? "collapsed" : "expanded"}
       data-rail={rail.enabled ? (rail.hidden ? "strip" : "shown") : "none"}
-      data-kalvoice={kalvoice || undefined}
+      data-voice-slot={voice?.edge}
+      style={voice ? ({ "--voice-slot-h": `${voice.height}px` } as CSSProperties) : undefined}
     >
       <a className={styles.skipLink} href="#main">
         Skip to content
       </a>
       <Sidebar collapsed={settings.sidebarCollapsed} onOpenPalette={() => setPaletteOpen(true)} />
+      {voice ? <div className={styles.voiceSlot} data-edge={voice.edge} aria-hidden="true" /> : null}
       <WorkspaceRail />
       <main
+        ref={mainRef}
         id="main"
         className={styles.main}
         tabIndex={-1}

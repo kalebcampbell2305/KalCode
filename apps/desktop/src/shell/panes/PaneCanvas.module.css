@@ -1,0 +1,601 @@
+/*
+ * The pane canvas (Z7-W1): framed panes on the app backdrop, edge to edge, with thin gutters.
+ * Dense like the approved workspace concepts: a 34px tab strip per pane, the provider glyph and
+ * name in each tab, status as dot + words. Exactly one pane is lit: the focused one.
+ */
+
+.canvas {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  outline: none;
+  isolation: isolate;
+}
+
+.canvas[data-dragging] {
+  cursor: grabbing;
+  user-select: none;
+}
+
+/* ---------- Pane frame ---------- */
+
+.frame {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-1);
+  box-shadow: var(--shadow-panel);
+  container-type: inline-size;
+  container-name: pane;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+  animation: pane-in var(--dur-base) var(--ease-emphasized);
+}
+
+.frame[hidden] {
+  display: none;
+}
+
+.frame[data-focused] {
+  border-color: var(--color-border-lit);
+  box-shadow:
+    var(--shadow-panel),
+    0 0 0 1px var(--color-border-lit-soft),
+    0 0 28px -10px var(--color-glow);
+}
+
+.frame[data-drop-target] {
+  border-color: var(--color-border-lit);
+}
+
+.frame[data-maximized] {
+  border-radius: var(--radius-md);
+}
+
+@keyframes pane-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* ---------- Header: the tab strip ---------- */
+
+.header {
+  display: flex;
+  flex: none;
+  align-items: stretch;
+  gap: var(--space-1);
+  height: 2.125rem; /* 34px, the collapsed size (DEFAULT_GEOMETRY.collapsedSize) */
+  padding: 0 var(--space-1) 0 var(--space-1);
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: var(--panel-sheen), var(--color-surface-2);
+  cursor: grab;
+  touch-action: none;
+}
+
+.canvas[data-dragging] .header {
+  cursor: grabbing;
+}
+
+.tabs {
+  display: flex;
+  flex: 0 1 auto;
+  align-items: flex-end;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.tab {
+  position: relative;
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 5.5rem;
+  max-width: 15rem;
+  height: 1.875rem;
+  padding: 0 var(--space-1) 0 var(--space-2);
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--type-ui);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  touch-action: none;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.tab:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.tab[aria-selected="true"] {
+  flex-shrink: 0;
+  border-color: var(--color-border-subtle);
+  background: var(--color-surface-1);
+  color: var(--color-text);
+}
+
+.frame[data-terminal] .tab[aria-selected="true"] {
+  background: var(--term-bg, var(--color-code-bg));
+}
+
+/* The focused pane's active tab carries the lit edge. */
+.frame[data-focused] .tab[aria-selected="true"]::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  right: var(--space-1-5);
+  left: var(--space-1-5);
+  height: 2px;
+  border-radius: 0 0 2px 2px;
+  background: var(--color-accent);
+  box-shadow: 0 0 10px var(--color-glow);
+}
+
+.tab:focus-visible {
+  outline-offset: -2px;
+}
+
+.tabGlyph {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  color: var(--color-text-secondary);
+}
+
+.tabGlyph svg {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.tabLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tabState {
+  flex: none;
+  color: var(--color-text-muted);
+  font-family: var(--font-label);
+  font-size: var(--type-label);
+  font-weight: var(--type-label-weight);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.dot {
+  flex: none;
+  width: 0.4375rem;
+  height: 0.4375rem;
+  border-radius: var(--radius-full);
+  background: var(--status-muted);
+}
+
+.dot[data-tone="working"] {
+  background: var(--status-working);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--status-working) 60%, transparent);
+}
+
+.dot[data-tone="waiting"] {
+  background: var(--status-waiting);
+  box-shadow: 0 0 0 2px var(--status-waiting-soft);
+}
+
+.dot[data-tone="done"] {
+  background: var(--status-done);
+}
+
+.dot[data-tone="failed"] {
+  background: var(--status-failed);
+}
+
+.dot[data-tone="paused"] {
+  background: var(--status-paused);
+}
+
+.dot[data-tone="recovering"] {
+  background: var(--status-recovering);
+}
+
+.tabClose {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 1.125rem;
+  height: 1.125rem;
+  border-radius: var(--radius-xs);
+  color: var(--color-text-faint);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.tab:hover .tabClose,
+.tab[aria-selected="true"] .tabClose {
+  opacity: 1;
+}
+
+.tabClose:hover {
+  background: var(--color-surface-active);
+  color: var(--color-text);
+}
+
+.tabClose svg {
+  width: 0.75rem;
+  height: 0.75rem;
+  stroke-width: 2;
+}
+
+.headerActions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 1px;
+  margin-left: auto;
+  cursor: default;
+}
+
+/* Narrow panes keep the essentials; the rest stays in the pane menu. */
+@container pane (max-width: 36rem) {
+  .optional {
+    display: none;
+  }
+}
+
+@container pane (max-width: 22rem) {
+  .tab {
+    min-width: 3rem;
+  }
+
+  .tabState {
+    display: none;
+  }
+}
+
+.addTab {
+  display: flex;
+  flex: none;
+  align-items: center;
+  padding-left: var(--space-0-5);
+}
+
+@container pane (max-width: 13rem) {
+  .tab:not([aria-selected="true"]) {
+    display: none;
+  }
+}
+
+/* ---------- Body ---------- */
+
+.body {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.frame[data-terminal] .body {
+  background: var(--term-bg, var(--color-code-bg));
+}
+
+.panel {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* ---------- Collapsed pane ---------- */
+
+.collapsedBar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 100%;
+  min-width: 0;
+  padding: 0 var(--space-2) 0 var(--space-1);
+  background: var(--panel-sheen), var(--color-surface-2);
+  color: var(--color-text-secondary);
+  font-size: var(--type-ui);
+}
+
+.frame[data-collapsed="strip"] .collapsedBar {
+  flex-direction: column;
+  padding: var(--space-1) 0 var(--space-2);
+}
+
+.collapsedGlyph {
+  display: inline-flex;
+  flex: none;
+}
+
+.collapsedGlyph svg {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.collapsedTitle {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.frame[data-collapsed="strip"] .collapsedTitle {
+  writing-mode: vertical-rl;
+}
+
+.collapsedCount {
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Dividers ---------- */
+
+.divider {
+  position: absolute;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  outline: none;
+  touch-action: none;
+}
+
+.divider[data-axis="horizontal"] {
+  cursor: col-resize;
+}
+
+.divider[data-axis="vertical"] {
+  cursor: row-resize;
+}
+
+.divider[aria-disabled="true"] {
+  cursor: default;
+}
+
+.dividerLine {
+  border-radius: var(--radius-full);
+  background: transparent;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.divider[data-axis="horizontal"] .dividerLine {
+  width: 2px;
+  height: calc(100% - var(--space-4));
+}
+
+.divider[data-axis="vertical"] .dividerLine {
+  width: calc(100% - var(--space-4));
+  height: 2px;
+}
+
+.divider:not([aria-disabled="true"]):hover .dividerLine {
+  background: var(--color-border-lit-soft);
+}
+
+.divider:focus-visible .dividerLine,
+.divider:active .dividerLine {
+  background: var(--color-accent);
+  box-shadow: 0 0 10px var(--color-glow);
+}
+
+/* ---------- Drag and drop ---------- */
+
+.dropZone {
+  position: absolute;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--color-border-lit);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-accent) 11%, transparent);
+  box-shadow: inset 0 0 40px -18px var(--color-glow);
+  pointer-events: none;
+  transition:
+    left var(--dur-fast) var(--ease-out),
+    top var(--dur-fast) var(--ease-out),
+    width var(--dur-fast) var(--ease-out),
+    height var(--dur-fast) var(--ease-out);
+}
+
+.dropLabel {
+  padding: var(--space-1) var(--space-2-5);
+  border: 1px solid var(--color-border-lit-soft);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-3);
+  box-shadow: var(--shadow-md);
+  color: var(--color-text);
+  font-family: var(--font-label);
+  font-size: var(--type-label);
+  font-weight: var(--type-label-weight);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* ---------- Built-in notices (coming / unavailable) ---------- */
+
+.notice {
+  display: flex;
+  gap: var(--space-3-5);
+  align-items: flex-start;
+  align-self: center;
+  max-width: 30rem;
+  margin: auto;
+  padding: var(--space-6);
+}
+
+.noticeArt {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border: 1px solid var(--color-border-lit-soft);
+  border-radius: var(--radius-md);
+  background: var(--color-accent-soft);
+  color: var(--color-accent-icy);
+}
+
+.noticeArt svg {
+  width: 1.125rem;
+  height: 1.125rem;
+  stroke-width: 1.6;
+}
+
+.noticeText {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  min-width: 0;
+}
+
+.noticeTitle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-text);
+  font-size: var(--type-title);
+  font-weight: var(--type-title-weight);
+}
+
+.noticeBody {
+  color: var(--color-text-secondary);
+  font-size: var(--type-ui);
+  line-height: 1.5;
+}
+
+.noticeActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+/* ---------- Side dock ---------- */
+
+.dock {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--panel-sheen), var(--color-surface-1);
+  box-shadow: var(--shadow-panel);
+}
+
+.dockTitle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-1) 0;
+  color: var(--color-text-muted);
+  font-family: var(--font-label);
+  font-size: var(--type-label);
+  font-weight: var(--type-label-weight);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.dockCount {
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.dockList {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.dockItem {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.dockOpen {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+  min-height: var(--row-h-dense);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  font-size: var(--type-ui);
+  text-align: left;
+}
+
+.dockOpen:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text);
+}
+
+.dockLabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dockNote {
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
+}
+
+.maxBadge {
+  margin-right: var(--space-2);
+  color: var(--color-text-muted);
+  font-family: var(--font-label);
+  font-size: var(--type-label);
+  font-weight: var(--type-label-weight);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+@container pane (max-width: 36rem) {
+  .maxBadge {
+    display: none;
+  }
+}

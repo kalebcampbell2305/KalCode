@@ -128,9 +128,26 @@ file and every row preserved (`crates/kalvoice/tests/schema.rs`) and end to end 
 real app (`apps/desktop/tests/e2e/integrity.spec.ts`, which opens a v5 database as the owner's
 app will have it after the update that ships v5).
 
-Schema versions 7 (`crates/git`, `GIT_MIGRATION`) and 8 (`crates/context`, `MIGRATION_V8`) stay
-isolated constants in their crates until the lead registers them; their tests fill the versions
-between the registered migrations and theirs with stand-ins.
+### Implemented — schema versions 7 and 8 (`0007_git.sql` Z6a, `0008_context.sql` CTX/FW)
+
+Both SQL files live in `crates/native-core/migrations/` (moved byte-identical from their crates,
+so the checksums are unchanged) and are registered in `MIGRATIONS` after v6 as
+`kalcode_core::db::GIT_MIGRATION` and `CONTEXT_MIGRATION`. The owning crates re-export the core
+constants (`kalcode_git::store::GIT_MIGRATION`, `kalcode_context::MIGRATION_V8`) and keep owning
+the tables. A v6 database (the owner's installed app) upgrades to the latest schema in one start
+with exactly one backup of the untouched v6 file
+(`crates/native-core/tests/upgrade_and_persistence.rs::upgrade_v6_to_latest_backs_up_once_and_keeps_everything`,
+and end to end in `apps/desktop/tests/e2e/integrity.spec.ts`).
+
+### Implemented — schema version 9 (`0009_workspace_ui.sql`, Z7-W1 pane system)
+
+`workspace_layouts` holds one pane layout per workspace: the versioned `PaneLayout` split tree
+from `crates/contracts/src/workspace_ui.rs` as JSON (≤ 64 KiB), validated natively
+(`PaneLayout::validate` plus content-id checks) before every write. `layout_presets` holds the
+user's saved layout *shapes* (content ids stripped). Owned by `crates/workspace-ui`; workspace
+ids are resolved through Z1's Rust API, so there is no foreign key. Layouts are rebuildable UI
+state: a stored row that no longer validates is ignored (logged) and the UI builds a default.
+Saves emit no events.
 
 ### Migration rules
 

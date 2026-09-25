@@ -1,9 +1,9 @@
 //! The notification center: one store and policy, used by every system that notifies, and the
 //! listener that turns runtime events into notifications.
 //!
-//! Backends: the v11 SQLite table when it exists (row and `notification.created` event commit in
+//! Backends: the v10 SQLite table when it exists (row and `notification.created` event commit in
 //! one transaction), otherwise an in-memory table (bounded, lost on exit) until the lead registers
-//! v11. Both run the same policy (`store.rs`).
+//! v10. Both run the same policy (`store.rs`).
 
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
@@ -84,7 +84,7 @@ impl NotificationCenter {
         } else {
             tracing::warn!(
                 event = "notifications.not_persisted",
-                reason = "migration v11 isn't registered in this build; notifications last until KalCode closes"
+                reason = "the notifications table (migration v10) is missing; notifications last until KalCode closes"
             );
             Backend::Memory(Mutex::new(MemoryTable::default()))
         };
@@ -96,7 +96,7 @@ impl NotificationCenter {
         })
     }
 
-    /// Whether notifications survive a restart (the v11 table exists).
+    /// Whether notifications survive a restart (the v10 table exists).
     pub fn persisted(&self) -> bool {
         matches!(self.backend, Backend::Sql)
     }
@@ -364,18 +364,8 @@ mod tests {
         )
     }
 
-    fn with_v11() -> Vec<Migration> {
-        let mut all = kalcode_core::db::MIGRATIONS.to_vec();
-        let next = all.last().map_or(1, |m| m.version + 1);
-        for version in next..11 {
-            all.push(Migration {
-                version,
-                name: "reserved",
-                sql: "SELECT 1;",
-            });
-        }
-        all.push(store::NOTIFICATIONS_MIGRATION);
-        all
+    fn with_notifications() -> Vec<Migration> {
+        kalcode_core::db::MIGRATIONS.to_vec()
     }
 
     fn emit(core: &Core, payload: EventPayload) {
@@ -462,18 +452,24 @@ mod tests {
 
     #[test]
     fn the_listener_works_on_the_sqlite_table() {
-        listener_flow(&with_v11(), true);
+        listener_flow(&with_notifications(), true);
     }
 
     #[test]
-    fn the_listener_falls_back_to_memory_until_v11_is_registered() {
-        listener_flow(kalcode_core::db::MIGRATIONS, false);
+    fn the_listener_falls_back_to_memory_without_the_v10_table() {
+        // A database from a build without migration v10 (an older KalCode) has no table.
+        let before_v10: Vec<Migration> = kalcode_core::db::MIGRATIONS
+            .iter()
+            .filter(|m| m.version < 10)
+            .cloned()
+            .collect();
+        listener_flow(&before_v10, false);
     }
 
     #[test]
     fn sqlite_notifications_survive_a_restart() {
         let dir = tempfile::tempdir().expect("dir");
-        let migrations = with_v11();
+        let migrations = with_notifications();
         let id = {
             let core = core(dir.path(), &migrations);
             let center = NotificationCenter::open(core.clone()).expect("center");

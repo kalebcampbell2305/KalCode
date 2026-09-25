@@ -63,9 +63,11 @@ as PowerShell 7 (a `pwsh.cmd` or `.bat` does not).
   for a slow or unresponsive view is bounded.
 - **Scrollback.** Each session keeps the last 512 KB of output in memory, trimmed at line starts.
   Output is never written to the database or the event log.
-- **Views.** The UI renders with xterm.js 6 and its DOM renderer. Tabs of the active workspace
-  stay mounted and attached, so switching tabs is instant; leaving the Code surface detaches, and
-  coming back re-attaches and replays the scrollback.
+- **Views.** The UI renders with xterm.js 6 and its DOM renderer, inside the pane canvas
+  (Z7-W1, `docs/campaigns/Z7-W1.md`). Only the tab in front of each visible pane has a view:
+  inactive tabs, collapsed panes and panes behind a maximized one are detached (the shell keeps
+  running) and re-attach with a scrollback replay when shown. Unfocused panes render output in
+  batches, at most 4 times a second. Leaving the Code surface detaches every view.
 - **Terminal reports.** ConPTY asks for the cursor position when a shell starts. If no view is
   attached, the session answers itself; if a view is attached, xterm.js answers. Requests are
   never kept in the scrollback, and reports xterm.js generates while replaying are not sent to
@@ -79,7 +81,11 @@ as PowerShell 7 (a `pwsh.cmd` or `.bat` does not).
 - **Limits.** Up to 12 tabs per workspace (`validation/too_many_terminals`).
 - **Exit.** When a shell exits on its own, its tab stays with its final output and a Restart
   action. Exit code 0 records `shell.completed`; anything else `shell.failed`.
-- **Close.** Closing a tab ends the shell by closing its pseudo-terminal — on Windows every
+- **Close tab vs. End terminal (Z7-W1).** Closing a tab or a pane only takes it out of the
+  layout: a running shell keeps running "in the background" (header menu and the pane "Add"
+  menu bring it back with its output). The explicit **End terminal** (pane menu) ends it as
+  described next. Closing the tab of a shell that already exited forgets the tab.
+- **End.** Ending a terminal ends the shell by closing its pseudo-terminal — on Windows every
   process attached to that console, including programs started from the shell, receives the
   close; on macOS and Linux the shell's process group gets SIGHUP and, if anything is still
   running after 3 s, SIGKILL — then forgets the tab. A running shell's end is recorded as
@@ -114,11 +120,12 @@ Processes cannot survive KalCode exiting.
 | --- | --- |
 | Ctrl+Shift+` | New terminal in the active workspace (from anywhere; asks for a folder if none) |
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab |
-| Ctrl+Shift+W | Close the tab in front |
+| Ctrl+Shift+W | Close the tab in front (a running shell keeps running) |
 | Ctrl+Shift+E | Leave the terminal: focus moves to its tab |
 | ←/→, Home, End (on tabs) | Move between tabs |
 | Enter (on a tab) | Focus its terminal |
-| Delete (on a tab) | Close it |
+| Delete (on a tab) | Close it (a running shell keeps running) |
+| Ctrl+Alt+←↑→↓ / +Shift | Focus / grow the pane in that direction (pane shortcuts: `docs/campaigns/Z7-W1.md`) |
 | Ctrl+C with a selection / Ctrl+Shift+C | Copy |
 | Ctrl+V / Ctrl+Shift+V | Paste |
 

@@ -117,7 +117,9 @@ fn upgrade_from_v4_to_v6_keeps_data_and_backs_up() {
         id
     };
 
-    let core = Core::open(config(dir.path())).expect("upgrade");
+    // Exactly up to KalVoice's v6; later versions' upgrades are tested by their owners.
+    let core = Core::open_with_migrations(config(dir.path()), through(KALVOICE_SCHEMA_VERSION))
+        .expect("upgrade");
     assert_kept(&core, &workspace_id);
     assert_eq!(
         core.read(db::schema_version).expect("version"),
@@ -164,7 +166,9 @@ fn upgrade_from_v5_to_v6_keeps_data_and_backs_up() {
     };
     assert_eq!(backup_versions(dir.path()), Vec::<i64>::new());
 
-    let core = Core::open(config(dir.path())).expect("upgrade");
+    // Exactly up to KalVoice's v6; later versions' upgrades are tested by their owners.
+    let core = Core::open_with_migrations(config(dir.path()), through(KALVOICE_SCHEMA_VERSION))
+        .expect("upgrade");
     assert_kept(&core, &workspace_id);
     assert_eq!(
         core.read(db::schema_version).expect("version"),

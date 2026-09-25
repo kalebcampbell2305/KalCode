@@ -62,7 +62,12 @@ function RailColumn({ onDialog }: { onDialog: (dialog: RailDialogHost) => void }
   const [query, setQuery] = useState("");
   const count = rail.rail ? allEntries(rail.rail).filter((e) => !e.archived).length : 0;
   return (
-    <aside className={styles.rail} aria-label="Workspace rail" data-persistent={rail.rail?.persistent ?? true}>
+    <aside
+      className={styles.rail}
+      aria-label="Workspace rail"
+      data-workspace-rail
+      data-persistent={rail.rail?.persistent ?? true}
+    >
       <div className={styles.header}>
         <h2 className={styles.heading} id="rail-heading">
           Workspaces
@@ -274,7 +279,7 @@ function RailStrip() {
     ? [...rail.rail.pinned, ...rail.rail.groups.flatMap((g) => g.workspaces), ...rail.rail.recent]
     : [];
   return (
-    <nav className={styles.strip} aria-label="Workspaces (collapsed rail)">
+    <nav className={styles.strip} aria-label="Workspaces (collapsed rail)" data-workspace-rail>
       <Tooltip content={`Show the rail (${RAIL_SHORTCUT})`} side="right">
         <IconButton size="sm" label="Show the workspace rail" icon={<PanelLeftOpen />} onClick={rail.toggleHidden} />
       </Tooltip>
