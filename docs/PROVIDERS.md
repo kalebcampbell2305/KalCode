@@ -3,7 +3,8 @@
 Status: contract defined in Z0 · Implemented in Z2 (detection for Claude Code, Codex and Gemini
 CLI; Claude Code adapter) · Code: `crates/providers` · Contract: `crates/contracts/src/agent.rs`
 · Facts verified 2026-09-24 against official docs and the installed CLIs (Claude Code 2.1.282,
-codex-cli 0.155.1; Gemini CLI not installed)
+codex-cli 0.155.1; Gemini CLI not installed) · Launch and permission hardening: SEC-0.1.1
+(`docs/campaigns/SEC-0.1.1.md`)
 
 ## 1. Principles
 
@@ -69,6 +70,10 @@ Owner decision. KalCode is **zero-cost to run for providers**: it never pays for
   `KALCODE_*`, `WEBVIEW2_*` and `WEBKIT_INSPECTOR*` never pass, even if a prefix would match.
   A Claude Code process never sees an OpenAI key, and unrelated secrets (`GITHUB_TOKEN`, cloud
   keys) never pass at all.
+- **No lookups in the working directory** (`env::harden`, applied when the environment is built
+  and again at spawn). Every provider environment has `NoDefaultCurrentDirectoryInExePath=1`, so
+  `cmd.exe` never looks for a bare program name (`node`) in the workspace, and its `PATH` keeps
+  only absolute entries (empty and relative entries such as `.` are dropped).
 - **Choosing a provider.** `ProviderRegistry::usable()` lists providers that have an implemented
   adapter, are installed at a supported version, and are not known to be signed out. Threads and
   KalVoice (the in-app assistant) let the user pick from this list.
@@ -101,30 +106,74 @@ their planned adapters.
 
 Why nothing is broader:
 
-- **No host approvals until Z4.** Nobody can answer a provider prompt yet, so anything that would
+- **No host approvals yet.** Nobody can answer a provider prompt yet, so anything that would
   prompt is denied, never left waiting and never auto-approved.
 - Claude Code's `auto` mode is never used (its classifier's decisions are not KalCode policy),
   and `bypassPermissions` / `--dangerously-skip-permissions` are never used (they would also
   allow remote-consequential actions such as `git push`).
 - Codex `danger-full-access` and Gemini CLI `yolo` are never used.
-- **Custom** profiles run on the Approve baseline until the permission engine (Z4) can enforce
-  their rules.
+- **Custom** profiles run on the Approve baseline. Their rules are not applied to provider
+  sessions yet (see below).
 
 Unit tests fail the build if a mapping becomes exact or uses a forbidden mode or flag, or if a
 Claude Code mode ranks above its cap.
 
 ### Claude Code
 
-Every session also passes `--permission-prompts none` (v2.1.259+: deny what would prompt) and
-`--strict-mcp-config` [2][6].
+Every session also passes `--permission-prompts none` (v2.1.259+: deny what would prompt),
+`--strict-mcp-config` [2][6], and KalCode's own deny rules with `--disallowedTools`
+(`deny_rules` in `argv.rs`, one argv element per rule) [2][12].
 
-| KalCode | Claude Code flags | Fidelity | Notes |
-| --- | --- | --- | --- |
-| Plan | `--restricted --permission-mode plan` | Stricter | `--restricted` (v2.1.248+) removes command/code-running tools and WebFetch, confines file tools to the working directory, loads only managed settings, refuses `bypassPermissions`. Plan blocks edits. Even read-only commands are unavailable. |
-| Approve | `--setting-sources user --permission-mode default` | Stricter | Reads and Claude Code's built-in read-only commands run; edits and other commands are denied instead of asking. |
-| Auto | `--setting-sources user --permission-mode default` | Stricter | Runs like Approve. |
-| Bypass | `--setting-sources user --permission-mode acceptEdits` | Stricter | File edits and `mkdir`/`touch`/`rm`/`rmdir`/`mv`/`cp`/`sed` in the working directory. Other commands and network are denied. |
-| Custom | as Approve | Stricter | Approve baseline. |
+| KalCode | Claude Code flags | KalCode deny rules | Fidelity | Notes |
+| --- | --- | --- | --- | --- |
+| Plan | `--restricted --permission-mode plan` | edit and web tools + credential files + remote actions | Stricter | `--restricted` (v2.1.248+) removes command/code-running tools and WebFetch, confines file tools to the working directory, ignores user, project and local settings (managed settings and KalCode's flags still apply), refuses `bypassPermissions`. Plan blocks edits. Even read-only commands are unavailable. |
+| Approve | `--setting-sources user --permission-mode default` | edit and web tools + credential files + remote actions | Stricter | Reads and Claude Code's built-in read-only commands run. `Edit`, `Write`, `NotebookEdit`, `WebFetch` and `WebSearch` are removed. Anything else that would ask is refused, unless the user's own Claude Code allow rules cover it (below). |
+| Auto | `--setting-sources user --permission-mode default` | edit and web tools + credential files + remote actions | Stricter | Runs like Approve. |
+| Bypass | `--setting-sources user --permission-mode acceptEdits` | credential files + remote actions | Stricter | File edits and `mkdir`/`touch`/`rm`/`rmdir`/`mv`/`cp`/`sed` in the working directory. Other commands and network are refused unless the user's own Claude Code allow rules cover them. |
+| Custom | as Approve | as Approve | Stricter | Approve baseline; Custom rules are not applied yet. |
+
+**Remote-action deny rules (every mode, including Plan and Bypass).** For both the `Bash` and
+`PowerShell` tools: every use of `gh`, `vercel`, `netlify`, `wrangler`, `firebase`, `fly`/`flyctl`,
+`heroku`, `railway`, `surge`, `aws`, `gcloud`, `az`/`azd`, `doctl`, `kubectl`, `helm`,
+`terraform`/`tofu`, `pulumi`, `cdk`, `sam`, `serverless`/`sls`, `eb`, `stripe`, `ssh`, `scp`,
+`sftp`; and `git push` (also `git <options> push`), `git send-pack`, `git http-push`,
+`git svn dcommit`, `git p4 submit`, `git subtree push`, `npm publish` (also
+`npm <options> publish`), `pnpm`/`yarn`/`bun publish`, `yarn npm publish`, `cargo publish`,
+`twine upload`, `poetry`/`uv`/`flit`/`hatch publish`, `gem push`, `dotnet nuget push`,
+`nuget push`, `mvn deploy`, `docker push`, `podman push`. These are KalCode's
+remote-consequential scopes (`git.push`, `deploy.production`, `cloud.modify`,
+`messaging.send`), which no KalCode mode allows without an approval KalCode can't give yet.
+
+**Credential-file deny rules (every mode).** `Read` deny rules for `.env`, `.env.*`, `.npmrc`,
+`.pypirc`, `.netrc`/`_netrc`, `.git-credentials`, `id_rsa*`/`id_ecdsa*`/`id_ed25519*`,
+`secrets.json` and `credentials.json` on any drive, and `~/.ssh`, `~/.aws`, `~/.azure`,
+`~/.config/gcloud`, `~/.kube` and `~/.docker/config.json` (KalCode's `credentials.access`, which
+asks in every mode). A `Read` deny rule also blocks editing the path. Claude Code applies it to
+its file tools and to the file commands it recognizes in Bash (`cat`, `head`, `sed`,
+redirections), not to a script that opens files itself [12].
+
+#### What KalCode enforces for Claude Code threads today (0.1.1)
+
+KalCode's permission engine (`docs/PERMISSIONS.md`) judges actions only when a provider hands
+them to KalCode. Claude Code headless threads don't (`hostApprovals: false`), so the engine,
+Custom profile rules, standing grants and the "remote-consequential always asks" rule are **not**
+evaluated per tool call for Claude Code today. What does hold:
+
+| Enforced by | Guarantee |
+| --- | --- |
+| KalCode (launch flags) | The mode's Claude Code permission mode (never `auto` or `bypassPermissions`); prompts denied (`--permission-prompts none`); repository settings, hooks and `.mcp.json` servers not loaded; the deny rules above. Deny rules win over allow rules from every settings source and over a `PreToolUse` hook that returns "allow" [12], so the user's own Claude Code settings can't re-enable them. |
+| Claude Code | Everything else: which commands run without a prompt (its built-in read-only set, `acceptEdits` in Bypass) and **the user's own user-level Claude Code settings**, which are loaded in every mode except Plan. A command allowed there (for example `Bash(npm test)`) runs in a KalCode thread without a KalCode approval, and the user's own hooks run. |
+
+Limits of the deny rules: a Bash or PowerShell rule matches the command as Claude writes it, after
+Claude Code splits compound commands (`&&`, `;`, `|`, subshells, `$(…)`) and strips simple wrappers
+(`timeout`, `nice`, `env` assignments…). The same program started another way — by full path
+(`/usr/bin/git push`), through `sh -c`, or quoted (`git 'push'`) — is not matched [12]. Claude
+Code then decides it by its mode: nobody can approve, so it is refused unless the user's own
+Claude Code allow rules cover that form (for example a broad `Bash(git *)` allow rule).
+
+Per-action KalCode decisions for Claude Code — every tool call through the Trust Kernel, KalCode
+approval prompts, Custom rules — arrive with provider panes and the hook bridge (Z7,
+`docs/PROVIDER_PANES.md` §2 and §4), where a KalCode `PreToolUse` hook is the enforcement point.
 
 `--setting-sources user` and `--strict-mcp-config` exist because `-p` skips the workspace trust
 dialog and would otherwise run a repository's project hooks, allow rules and `.mcp.json` servers
@@ -158,8 +207,11 @@ without approval [1]. Managed settings always apply.
 
 `crates/providers/src/detect.rs`. Read-only: never installs, updates, signs in or sends a prompt.
 
-1. **Resolve** the executable on `PATH`, then in documented install folders. On Windows only
-   `PATHEXT` kinds the OS can start directly (`.exe`, `.com`, `.cmd`, `.bat`) are tried.
+1. **Resolve** the executable on `PATH`, then in documented install folders. Only absolute
+   folders are searched: empty and relative `PATH` entries are skipped. On Windows only `PATHEXT`
+   kinds the OS can start directly (`.exe`, `.com`, `.cmd`, `.bat`) are tried, and a native
+   executable anywhere on the search path (the native installer's `claude.exe`) wins over a
+   `.cmd`/`.bat` script launcher (an npm shim).
 
    | Provider | Documented folders checked after `PATH` |
    | --- | --- |
@@ -202,6 +254,7 @@ documented install command but never runs an installer.
 | Rule | Detail |
 | --- | --- |
 | argv only | `Command` with an argument vector, never a shell string. Model names and session ids are validated before they reach argv (no leading `-`, restricted charset; ids must be UUIDs). |
+| Launch (Windows shims) | `crates/providers/src/launch.rs`. A `.cmd`/`.bat` shim is read (at most 16 KiB, never executed) and its single `%dp0%` target resolved to an absolute file: a native target (current npm Claude Code: `bin\claude.exe`) starts directly; a script target starts as `<node.exe> <script>`, with `node.exe` from the shim's folder or an absolute `PATH` entry (never `node.cmd`). `cmd.exe` is used only for a shim KalCode can't read, with the hardened environment (§3) and the system `cmd.exe` with `/d`. Starting the shim in an empty KalCode folder instead is not possible: Claude Code has no flag that sets its project folder apart from its working directory. |
 | Sanitized environment | `env_clear()`, then the per-provider allow-list (§3). |
 | Bounded stdout | Read line by line on its own thread; lines over 8 MiB are discarded without buffering. |
 | Redacted stderr | Last 16 KiB kept on its own thread, passed through the log redactor, and only logged. |
@@ -224,7 +277,8 @@ existing absolute folder resolved natively. argv:
 ```text
 claude -p --input-format stream-json --output-format stream-json --verbose
        --include-partial-messages --permission-prompts none --strict-mcp-config
-       <permission flags (§5)> [--model <alias>] (--session-id <new uuid> | --resume <uuid>)
+       <permission flags (§5)> --disallowedTools <KalCode deny rules (§5)>
+       [--model <alias>] (--session-id <new uuid> | --resume <uuid>)
 ```
 
 Input is one SDKUserMessage per line:
@@ -317,6 +371,7 @@ the classification drives status and summaries; `actions::normalize` builds the 
 | Interrupt request field name | The `interrupt` control request is documented by name, but its discriminator field (`subtype`) is inferred. Sent only when `interrupt_receipt_v1` is advertised, with a 5 s wait and termination as fallback. |
 | `codex login status` output | Exit codes and wording are undocumented. Observed: `Logged in using ChatGPT`. Anything unexpected reads as unknown, never as signed in. |
 | Gemini CLI | Not installed on the verification machine; detection is tested only against the fake provider. |
+| Claude Code deny rules and command forms | Bash/PowerShell deny rules match the command text, not the program (§5). A full path, `sh -c` or quoting escapes them; the Claude Code mode then refuses the command unless the user's own allow rules cover it. Closed by the Z7 hook bridge. |
 | Claude Code plan mode and `useAutoModeDuringPlan` | Plan mode may run classifier-approved commands when auto mode is available. Not relied on: Plan also passes `--restricted`, which removes command-running tools. |
 | Codex / Gemini CLI adapters | Mappings are declared, not yet executed; re-verify flags when each adapter is built. |
 
@@ -333,6 +388,8 @@ the classification drives status and summaries; `actions::normalize` builds the 
 9. Gemini CLI headless mode — https://geminicli.com/docs/cli/headless/
 10. Gemini CLI reference — https://geminicli.com/docs/cli/cli-reference/
 11. Codex authentication — https://learn.chatgpt.com/codex/auth
+12. Claude Code permissions (rule syntax, Bash rule limits, settings precedence, hooks) —
+    https://code.claude.com/docs/en/permissions
 
 Install: Claude Code https://code.claude.com/docs/en/setup (`curl -fsSL
 https://claude.ai/install.sh | bash`, `irm https://claude.ai/install.ps1 | iex`, Homebrew, WinGet,

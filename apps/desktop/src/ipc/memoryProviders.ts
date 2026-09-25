@@ -14,6 +14,13 @@ const stricter = (mode: PermissionMapping["mode"], providerSetting: string, note
   notes,
 });
 
+const remoteDenied = "18-credential-file-rules,112-remote-action-rules";
+const askFirstDenied = `Edit,Write,NotebookEdit,WebFetch,WebSearch,${remoteDenied}`;
+const claudeEnforced =
+  "KalCode always denies git push, package publishes, deploy and cloud CLIs, gh and ssh, and reading credential files such as .env and SSH keys, whatever your Claude Code settings allow.";
+const claudeNotYet =
+  "Other commands follow Claude Code's own rules, including your Claude Code user settings (allow rules and hooks), and a push written in an unusual form is decided by them. KalCode approvals and Custom rules for each action arrive with provider panes.";
+
 export function providerCatalog(): ProviderStatus[] {
   const codexReadOnly = "--sandbox read-only --ask-for-approval never";
   return [
@@ -38,23 +45,23 @@ export function providerCatalog(): ProviderStatus[] {
         permissionMappings: [
           stricter(
             "plan",
-            "--restricted --permission-mode plan --permission-prompts none",
-            "Claude Code can read and plan but has no tools that run commands or fetch web pages, so even read-only commands are unavailable. Edits are blocked.",
+            `--restricted --permission-mode plan --permission-prompts none --disallowedTools ${askFirstDenied}`,
+            `Claude Code can read and plan but has no tools that run commands, edit files or fetch web pages, and your Claude Code settings are not loaded. ${claudeEnforced}`,
           ),
           stricter(
             "approve",
-            "--setting-sources user --permission-mode default --permission-prompts none",
-            "Reads and read-only commands run. Edits and other commands are denied instead of asking, until KalCode can answer Claude Code's permission prompts.",
+            `--setting-sources user --permission-mode default --permission-prompts none --disallowedTools ${askFirstDenied}`,
+            `Reads and Claude Code's read-only commands run. Edits and web access are removed, and anything else that would ask is refused, because KalCode can't answer Claude Code's approval prompts yet. ${claudeEnforced} ${claudeNotYet}`,
           ),
           stricter(
             "auto",
-            "--setting-sources user --permission-mode default --permission-prompts none",
-            "Runs like Approve. Claude Code's own auto mode is not used, because its classifier's decisions are not your KalCode policy.",
+            `--setting-sources user --permission-mode default --permission-prompts none --disallowedTools ${askFirstDenied}`,
+            `Runs like Approve. Claude Code's own auto mode is not used, because its classifier's decisions are not your KalCode policy. ${claudeEnforced} ${claudeNotYet}`,
           ),
           stricter(
             "bypass",
-            "--setting-sources user --permission-mode acceptEdits --permission-prompts none",
-            "File edits and common file commands in the workspace run without asking. Other commands and network access are denied. Claude Code's bypassPermissions mode is never used, because it would also allow actions like git push.",
+            `--setting-sources user --permission-mode acceptEdits --permission-prompts none --disallowedTools ${remoteDenied}`,
+            `File edits and common file commands in the workspace run without asking; anything else that would ask is refused. Claude Code's bypassPermissions mode is never used. ${claudeEnforced} ${claudeNotYet}`,
           ),
         ],
       },

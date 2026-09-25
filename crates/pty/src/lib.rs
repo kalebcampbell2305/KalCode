@@ -10,7 +10,7 @@ mod shells;
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -137,20 +137,13 @@ impl PtySession {
         spec: SpawnSpec,
         on_exit: impl FnOnce(ExitInfo) + Send + 'static,
     ) -> Result<Self, PtyError> {
+        preflight_program(&spec.program)?;
         let system = native_pty_system();
         let pair = system
             .openpty(spec.size.to_pty())
             .map_err(|e| PtyError::Spawn(e.to_string()))?;
 
-        let mut command = CommandBuilder::new(&spec.program);
-        command.args(&spec.args);
-        command.cwd(&spec.cwd);
-        for key in &spec.env_remove {
-            command.env_remove(key);
-        }
-        for (key, value) in &spec.env {
-            command.env(key, value);
-        }
+        let command = build_command(&spec);
         let mut child = pair
             .slave
             .spawn_command(command)
@@ -303,6 +296,72 @@ impl PtySession {
             return Err(PtyError::Io(error.to_string()));
         }
         Ok(())
+    }
+}
+
+/// The shell must be an absolute path to an existing regular file. Checked before anything reaches
+/// portable-pty: a missing program would make it search `PATH` (see [`sanitized_pathext`]), and a
+/// relative one would be resolved against folders KalCode doesn't control.
+fn preflight_program(program: &Path) -> Result<(), PtyError> {
+    if !program.is_absolute() {
+        tracing::warn!(event = "pty.program_not_absolute");
+        return Err(PtyError::Spawn(
+            "the shell must be given as an absolute path".into(),
+        ));
+    }
+    match std::fs::canonicalize(program).and_then(std::fs::metadata) {
+        Ok(meta) if meta.is_file() => Ok(()),
+        Ok(_) => Err(PtyError::Spawn("the shell is not a program file".into())),
+        Err(_) => Err(PtyError::Spawn(
+            "the shell program no longer exists; choose another shell".into(),
+        )),
+    }
+}
+
+/// The portable-pty command for `spec`.
+fn build_command(spec: &SpawnSpec) -> CommandBuilder {
+    let mut command = CommandBuilder::new(&spec.program);
+    command.args(&spec.args);
+    command.cwd(&spec.cwd);
+    for key in &spec.env_remove {
+        command.env_remove(key);
+    }
+    for (key, value) in &spec.env {
+        command.env(key, value);
+    }
+    // portable-pty 0.9 (`CommandBuilder::search_path`, Windows) slices every PATHEXT entry with
+    // `&ext[1..]` and `expect`s UTF-8, so an empty, one-character or non-UTF-8 entry panics (an
+    // abort in release builds) whenever the program isn't found at its exact path. The program
+    // is checked first ([`preflight_program`]), but it can disappear between the check and the
+    // spawn, so the child's PATHEXT is always made safe too.
+    #[cfg(windows)]
+    if let Some(pathext) = command.get_env("PATHEXT").map(sanitized_pathext) {
+        command.env("PATHEXT", pathext);
+    }
+    command
+}
+
+/// PATHEXT keeping only well-formed entries (`.` followed by ASCII letters or digits), or the
+/// Windows default when none remain.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn sanitized_pathext(value: &std::ffi::OsStr) -> std::ffi::OsString {
+    let kept: Vec<&str> = value
+        .to_str()
+        .map(|text| {
+            text.split(';')
+                .map(str::trim)
+                .filter(|ext| {
+                    ext.len() >= 2
+                        && ext.starts_with('.')
+                        && ext[1..].bytes().all(|b| b.is_ascii_alphanumeric())
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if kept.is_empty() {
+        ".COM;.EXE;.BAT;.CMD".into()
+    } else {
+        kept.join(";").into()
     }
 }
 

@@ -351,3 +351,82 @@ fn removed_variables_do_not_reach_the_shell() {
         run.text()
     );
 }
+
+/// Regression (review finding): a shell that no longer exists, with an empty PATHEXT entry, made
+/// portable-pty panic (abort in release) instead of returning an error.
+#[test]
+fn a_missing_shell_with_a_malformed_pathext_is_a_clean_error() {
+    let gone = tempfile::tempdir().expect("tempdir");
+    let mut spec = command_spec("");
+    spec.program = gone.path().join("pwsh.exe");
+    spec.env.push(("PATHEXT".into(), ".COM;;.EXE;é;.".into()));
+    spec.env.push((
+        "PATH".into(),
+        gone.path().to_string_lossy().into_owned()
+            + ";"
+            + &std::env::var("PATH").unwrap_or_default(),
+    ));
+    let error = PtySession::spawn(spec, |_| {}).expect_err("missing program");
+    assert!(matches!(error, PtyError::Spawn(_)), "{error:?}");
+}
+
+/// The same program vanishing *after* the pre-flight check still reaches portable-pty's `PATH`
+/// search; the sanitized PATHEXT keeps that from panicking.
+#[test]
+fn portable_pty_never_sees_a_malformed_pathext() {
+    let gone = tempfile::tempdir().expect("tempdir");
+    let mut spec = command_spec("");
+    spec.program = gone.path().join("pwsh.exe");
+    spec.env.push(("PATHEXT".into(), ".COM;;.EXE;é;.".into()));
+    spec.env
+        .push(("PATH".into(), gone.path().to_string_lossy().into_owned()));
+    let command = build_command(&spec);
+    if cfg!(windows) {
+        assert_eq!(
+            command.get_env("PATHEXT"),
+            Some(std::ffi::OsStr::new(".COM;.EXE"))
+        );
+    }
+    let pair = native_pty_system()
+        .openpty(TerminalSize::new(80, 24).expect("size").to_pty())
+        .expect("openpty");
+    let spawned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        pair.slave.spawn_command(command).map(|mut child| {
+            let _ = child.kill();
+        })
+    }));
+    let result = spawned.expect("portable-pty must not panic");
+    assert!(result.is_err(), "a missing program can't start");
+}
+
+#[test]
+fn pathext_keeps_only_well_formed_entries() {
+    let clean = |s: &str| sanitized_pathext(std::ffi::OsStr::new(s));
+    assert_eq!(clean(".COM;.EXE;.BAT;.CMD"), ".COM;.EXE;.BAT;.CMD");
+    assert_eq!(clean(";.EXE;;. ;é;.c md;x;.PS1;"), ".EXE;.PS1");
+    assert_eq!(clean(""), ".COM;.EXE;.BAT;.CMD");
+    assert_eq!(clean(";;"), ".COM;.EXE;.BAT;.CMD");
+}
+
+#[test]
+fn relative_or_non_file_programs_are_refused() {
+    for program in [
+        PathBuf::from("cmd.exe"),
+        PathBuf::from("pwsh"),
+        PathBuf::from(r"bin\bash.exe"),
+    ] {
+        let mut spec = command_spec("");
+        spec.program = program.clone();
+        assert!(
+            matches!(PtySession::spawn(spec, |_| {}), Err(PtyError::Spawn(_))),
+            "{program:?}"
+        );
+    }
+    let folder = tempfile::tempdir().expect("tempdir");
+    let mut spec = command_spec("");
+    spec.program = folder.path().to_path_buf();
+    assert!(matches!(
+        PtySession::spawn(spec, |_| {}),
+        Err(PtyError::Spawn(_))
+    ));
+}

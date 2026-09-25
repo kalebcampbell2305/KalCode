@@ -15,5 +15,8 @@ portable-pty = "0.9"
 thiserror.workspace = true
 tracing.workspace = true
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true

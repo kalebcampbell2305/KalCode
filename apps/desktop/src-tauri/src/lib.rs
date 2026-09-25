@@ -129,7 +129,7 @@ fn install_panic_hook(log_dir: PathBuf) {
     }));
 }
 
-fn start(app: &tauri::App, removed_overrides: &[&str]) -> AppState {
+fn start(app: &tauri::App, removed_overrides: &[String]) -> AppState {
     let channel = BuildChannel::current();
     let version = app.package_info().version.to_string();
     let info = AppInfo::current(&version, channel);
@@ -178,7 +178,7 @@ fn uses_default_data_dir() -> bool {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run(removed_overrides: Vec<&'static str>) {
+pub fn run(removed_overrides: Vec<String>) {
     let mut builder = tauri::Builder::default();
     // A second launch against the default data folder focuses the running window. (Exclusive
     // use of a data folder is enforced separately by the core's lock file, in every mode.)
@@ -209,6 +209,10 @@ pub fn run(removed_overrides: Vec<&'static str>) {
             }
         })
         .setup(move |app| {
+            // Test hooks' grant (debug and `e2e` builds only; release builds don't register the
+            // commands). Kept outside `capabilities/` so it is never loaded otherwise.
+            #[cfg(any(debug_assertions, feature = "e2e"))]
+            app.add_capability(include_str!("../test-capabilities/test-hooks.json"))?;
             let state = start(app, &removed_overrides);
             let providers = provider_commands::ProviderState::from_process();
             // Z4 over Z1 (workspace roots) and Z3 (thread modes, bound once the runtime starts).
@@ -299,6 +303,7 @@ pub fn run(removed_overrides: Vec<&'static str>) {
             permission_commands::thread_set_permission_mode,
             permission_commands::permission_settings_get,
             permission_commands::permission_settings_update,
+            #[cfg(any(debug_assertions, feature = "e2e"))]
             permission_commands::test_permission_probe,
         ])
         .build(tauri::generate_context!());

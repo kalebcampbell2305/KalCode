@@ -3,9 +3,21 @@
 Status: implemented in campaign Z4 (`crates/permissions`, schema v4, migration `0004`) · Contract types:
 `crates/contracts/src/permissions.rs` (TypeScript: `packages/protocol/src/generated`)
 
-Permissions are security infrastructure. They govern every provider, agent, KalVoice action,
-automation and plugin. **KalVoice is not above the permission model.** Every permission mode —
-Plan, Approve, Auto, Bypass and Custom — is available on every plan, including Free.
+Permissions are security infrastructure. They are designed to govern every provider, agent,
+KalVoice action, automation and plugin. **KalVoice is not above the permission model.** Every
+permission mode — Plan, Approve, Auto, Bypass and Custom — is available on every plan, including
+Free.
+
+> **What is enforced today (0.1.1).** The engine judges an action only when a provider hands it
+> to KalCode (`ApprovalRequired`). Claude Code headless threads don't (`hostApprovals: false`),
+> so for them the rules in §3–§5 — Custom rules, standing grants, "remote-consequential always
+> asks" — are **not** applied per tool call. KalCode enforces for Claude Code through launch
+> flags instead: a Claude Code mode no broader than the KalCode mode, prompts denied, and
+> KalCode deny rules for remote actions and credential files (and, outside Bypass, the edit and
+> web tools) that the user's own Claude Code settings can't override. Other commands follow
+> Claude Code's own rules, including the user's own Claude Code user settings. Details and
+> limits: §8 and `docs/PROVIDERS.md` §5. Per-action enforcement for Claude Code arrives with
+> provider panes and the hook bridge (Z7, `docs/PROVIDER_PANES.md`).
 
 ## 1. Model
 
@@ -204,13 +216,15 @@ uses and whether the mapping is **exact**, **approximate (stricter)** or **unsup
 - Bypass never maps to a provider's "skip all permissions" flag unless the adapter still routes
   remote-consequential and opaque actions through the gate.
 
-| Provider | Plan | Approve | Auto | Bypass | Custom | Source |
+| Provider | Plan | Approve | Auto | Bypass | Custom | Who decides each tool call today |
 | --- | --- | --- | --- | --- | --- | --- |
-| Claude Code | pending Z2 | pending Z2 | pending Z2 | pending Z2 | pending Z2 | Z2 research against current official docs |
-| Codex | pending Z2 | pending Z2 | pending Z2 | pending Z2 | pending Z2 | Z2 |
-| Gemini CLI | pending Z2 | pending Z2 | pending Z2 | pending Z2 | pending Z2 | Z2 |
+| Claude Code (headless) | `--restricted --permission-mode plan` | `--permission-mode default` | as Approve | `--permission-mode acceptEdits` | as Approve (rules not applied) | Claude Code, within KalCode's launch flags: prompts denied, KalCode deny rules (remote actions and credential files in every mode; edit and web tools outside Bypass). **Not** this engine. |
+| Codex | declared, adapter planned | declared | declared | declared | as Approve | — |
+| Gemini CLI | declared, adapter planned | declared | declared | declared | as Approve | — |
 
-Details live in `docs/PROVIDERS.md` once Z2 lands.
+All mappings are *approximate (stricter)*. Flags, deny rules and their limits (a Bash deny rule
+matches the command text, so a push written another way falls back to Claude Code's mode and the
+user's own Claude Code allow rules): `docs/PROVIDERS.md` §5.
 
 ## 9. Threat model (summary)
 

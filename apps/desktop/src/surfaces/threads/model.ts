@@ -1,5 +1,6 @@
 import type {
   PermissionMode,
+  ProviderOption,
   ProviderStatus,
   ThreadMessage,
   ThreadStatus,
@@ -55,6 +56,25 @@ export const PERMISSION_MODES: Record<PermissionMode, { label: string; descripti
   bypass: { label: "Bypass", description: "Broad local authority. Remote actions still follow their own rules." },
   custom: { label: "Custom", description: "A named rule set." },
 };
+
+/**
+ * What the chosen provider actually enforces in a mode, when it can't hand approvals to KalCode.
+ * The text is the provider's own mapping note (generated natively from the flags KalCode passes),
+ * so this copy can't claim more than the launch does. Custom runs on the Approve mapping.
+ */
+export function providerModeNote(
+  provider: Pick<ProviderOption, "displayName" | "hostApprovals" | "permissionMappings">,
+  mode: PermissionMode,
+): string {
+  if (provider.hostApprovals) return "";
+  const mapped = mode === "custom" ? "approve" : mode;
+  const mapping = provider.permissionMappings.find((m) => m.mode === mapped);
+  if (!mapping) {
+    return ` ${provider.displayName} can't hand approvals to KalCode yet, so anything that would ask is refused.`;
+  }
+  const custom = mode === "custom" ? " Custom rules aren't applied to this provider yet; it runs as Approve." : "";
+  return ` With ${provider.displayName}: ${mapping.notes}${custom}`;
+}
 
 const TERMINAL: ReadonlySet<ThreadStatus> = new Set(["completed", "failed", "interrupted"]);
 

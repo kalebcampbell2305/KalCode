@@ -6,32 +6,52 @@
 //! are removed before anything else runs, and `KALCODE_DATA_DIR` is ignored. Debug builds and
 //! builds with the `e2e` feature (used only by the end-to-end test suite) keep them.
 
+use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 
 /// Whether test and development hooks are compiled in.
 pub const TEST_HOOKS_ENABLED: bool = cfg!(any(debug_assertions, feature = "e2e"));
 
-/// Browser-runtime overrides removed from the environment in normal builds.
-pub const WEBVIEW_OVERRIDES: &[&str] = &[
-    "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-    "WEBVIEW2_BROWSER_EXECUTABLE_FOLDER",
-    "WEBVIEW2_USER_DATA_FOLDER",
-    "WEBVIEW2_RELEASE_CHANNEL_PREFERENCE",
-    "WEBVIEW2_PIPE_FOR_SCRIPT_DEBUGGER",
-    "WEBKIT_INSPECTOR_SERVER",
-    "WEBKIT_INSPECTOR_HTTP_SERVER",
-];
+/// Prefixes of browser-runtime override variables removed from the environment in normal
+/// builds. Prefixes rather than a fixed list, so a variable a newer runtime starts honouring is
+/// removed too. Sources (Microsoft Learn, WebView2): `WEBVIEW2_*` — the loader's documented
+/// overrides (`WEBVIEW2_BROWSER_EXECUTABLE_FOLDER`, `WEBVIEW2_USER_DATA_FOLDER`,
+/// `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`, `WEBVIEW2_RELEASE_CHANNEL_PREFERENCE`,
+/// `WEBVIEW2_CHANNEL_SEARCH_KIND`, `WEBVIEW2_RELEASE_CHANNELS`, `WEBVIEW2_PIPE_FOR_SCRIPT_DEBUGGER`,
+/// `WEBVIEW2_WAIT_FOR_SCRIPT_DEBUGGER`, …;
+/// https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/webview2-idl);
+/// `COREWEBVIEW2_*` — runtime overrides such as `COREWEBVIEW2_MAX_INSTANCES` and
+/// `COREWEBVIEW2_FORCED_HOSTING_MODE` (same reference). `WEBKIT_INSPECTOR*` covers the WebKit
+/// remote inspector (`WEBKIT_INSPECTOR_SERVER`, `WEBKIT_INSPECTOR_HTTP_SERVER`) on Linux.
+pub const WEBVIEW_OVERRIDE_PREFIXES: &[&str] = &["WEBVIEW2_", "COREWEBVIEW2_", "WEBKIT_INSPECTOR"];
 
-/// Names of overrides present in the environment (to be removed by `main`).
-pub fn present_webview_overrides() -> Vec<&'static str> {
+/// Whether an environment variable name is a browser-runtime override. Case-insensitive: Windows
+/// environment names are, and matching more names only removes more.
+pub fn is_webview_override(name: &OsStr) -> bool {
+    let name = name.to_string_lossy().to_ascii_uppercase();
+    WEBVIEW_OVERRIDE_PREFIXES
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+}
+
+/// The override names among `names` (pure; used by [`present_webview_overrides`] and tests).
+pub fn webview_overrides_in<I>(names: I) -> Vec<OsString>
+where
+    I: IntoIterator<Item = OsString>,
+{
+    names
+        .into_iter()
+        .filter(|name| is_webview_override(name))
+        .collect()
+}
+
+/// Names of overrides present in the environment (to be removed by `main`). Empty in builds
+/// with test hooks, which keep them.
+pub fn present_webview_overrides() -> Vec<OsString> {
     if TEST_HOOKS_ENABLED {
         return Vec::new();
     }
-    WEBVIEW_OVERRIDES
-        .iter()
-        .copied()
-        .filter(|name| std::env::var_os(name).is_some())
-        .collect()
+    webview_overrides_in(std::env::vars_os().map(|(name, _)| name))
 }
 
 /// Outcome of reading `KALCODE_DATA_DIR`.
@@ -71,5 +91,55 @@ pub fn data_dir_override() -> DataDirOverride {
                 DataDirOverride::Invalid
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(list: &[&str]) -> Vec<OsString> {
+        list.iter().map(OsString::from).collect()
+    }
+
+    #[test]
+    fn every_webview2_and_corewebview2_variable_matches_by_prefix() {
+        let found = webview_overrides_in(names(&[
+            "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+            "WEBVIEW2_BROWSER_EXECUTABLE_FOLDER",
+            "WEBVIEW2_USER_DATA_FOLDER",
+            "WEBVIEW2_CHANNEL_SEARCH_KIND",
+            "WEBVIEW2_RELEASE_CHANNELS",
+            "WEBVIEW2_WAIT_FOR_SCRIPT_DEBUGGER",
+            "WEBVIEW2_SOME_FUTURE_OVERRIDE",
+            "COREWEBVIEW2_FORCED_HOSTING_MODE",
+            "COREWEBVIEW2_MAX_INSTANCES",
+            "WEBKIT_INSPECTOR_SERVER",
+            "WEBKIT_INSPECTOR_HTTP_SERVER",
+        ]));
+        assert_eq!(found.len(), 11, "{found:?}");
+    }
+
+    #[test]
+    fn matching_ignores_case() {
+        let found = webview_overrides_in(names(&[
+            "webview2_additional_browser_arguments",
+            "WebView2_User_Data_Folder",
+            "CoreWebView2_Forced_Hosting_Mode",
+        ]));
+        assert_eq!(found.len(), 3, "{found:?}");
+    }
+
+    #[test]
+    fn unrelated_variables_are_kept() {
+        let found = webview_overrides_in(names(&[
+            "PATH",
+            "KALCODE_DATA_DIR",
+            "MY_WEBVIEW2_NOTE",
+            "WEBVIEW2",
+            "WEBVIEW",
+            "COREWEBVIEW",
+        ]));
+        assert!(found.is_empty(), "{found:?}");
     }
 }
