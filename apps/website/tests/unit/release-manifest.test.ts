@@ -13,10 +13,15 @@ const published = buildManifest({
 });
 
 describe("release manifest (tooling ↔ worker)", () => {
-  it("the committed manifest is the honest empty state until a publish", () => {
-    expect(committed).toEqual(emptyManifest());
-    expect(committed.latest).toBeNull();
+  it("the committed manifest is valid: the empty state before a publish, or a published release", () => {
     expect(validateManifest(committed)).toEqual([]);
+    if (committed.latest === null) {
+      expect(committed).toEqual(emptyManifest());
+    } else {
+      // Whatever `pnpm release:publish` wrote must round-trip through the Worker's parser.
+      expect(parseReleaseManifest(committed)).toEqual(committed);
+      expect(committed.latest.platforms.every((p: { signed: boolean }) => p.signed === false)).toBe(true);
+    }
   });
 
   it("a published manifest from the tooling is accepted by the Worker unchanged", () => {

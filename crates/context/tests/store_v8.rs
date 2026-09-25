@@ -18,45 +18,28 @@ use kalcode_context::{ContextPurpose, Firewall, MIGRATION_V8, Sensitivity};
 use kalcode_core::db::{MIGRATIONS, Migration, migrate, open_in_memory, schema_version};
 use rusqlite::Connection;
 
-/// Stand-ins for v2..v7 (owned by other branches) so the core runner, which requires a
-/// contiguous sequence, can apply v8 exactly as it will after integration.
-const STUBS: [Migration; 6] = [
-    Migration {
-        version: 2,
-        name: "stub_v2",
-        sql: "SELECT 1;",
-    },
-    Migration {
-        version: 3,
-        name: "stub_v3",
-        sql: "SELECT 1;",
-    },
-    Migration {
-        version: 4,
-        name: "stub_v4",
-        sql: "SELECT 1;",
-    },
-    Migration {
-        version: 5,
-        name: "stub_v5",
-        sql: "SELECT 1;",
-    },
-    Migration {
-        version: 6,
-        name: "stub_v6",
-        sql: "SELECT 1;",
-    },
-    Migration {
-        version: 7,
-        name: "stub_v7",
-        sql: "SELECT 1;",
-    },
+/// Stand-ins for the versions between the registered migrations and v8 (owned by other
+/// branches until they are integrated), so the core runner, which requires a contiguous
+/// sequence, can apply v8 exactly as it will after integration.
+const STUB_NAMES: [&str; 7] = [
+    "stub_v1", "stub_v2", "stub_v3", "stub_v4", "stub_v5", "stub_v6", "stub_v7",
 ];
+
+fn stubs() -> Vec<Migration> {
+    let registered = MIGRATIONS.iter().map(|m| m.version).max().unwrap_or(0);
+    ((registered + 1)..8)
+        .map(|version| Migration {
+            version,
+            name: STUB_NAMES[(version - 1) as usize],
+            sql: "SELECT 1;",
+        })
+        .collect()
+}
 
 fn db() -> Connection {
     let mut conn = open_in_memory().expect("db");
     let mut all: Vec<Migration> = MIGRATIONS.to_vec();
-    all.extend(STUBS);
+    all.extend(stubs());
     all.push(MIGRATION_V8);
     migrate(&mut conn, &all, None).expect("migrate");
     assert_eq!(schema_version(&conn).expect("version"), 8);
