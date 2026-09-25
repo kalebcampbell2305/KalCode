@@ -244,7 +244,53 @@ pub fn canonical_folder(path: &Path) -> Result<PathBuf> {
             "Choose a folder, not a file.",
         ));
     }
-    Ok(strip_verbatim(canonical))
+    let root = strip_verbatim(canonical);
+    refuse_broad_root(&root, home_folder().as_deref())?;
+    Ok(root)
+}
+
+/// The user's home folder, canonicalized (plain form) when possible.
+fn home_folder() -> Option<PathBuf> {
+    let name = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    let home = std::env::var_os(name)
+        .or_else(|| std::env::var_os("HOME"))
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())?;
+    Some(std::fs::canonicalize(&home).map_or(home, strip_verbatim))
+}
+
+/// A workspace root gives agents and tools their working area, so it must be a project folder:
+/// never a whole drive (or network share root) and never the home folder itself, which holds
+/// credentials and every other project. Subfolders of either are fine.
+fn refuse_broad_root(root: &Path, home: Option<&Path>) -> Result<()> {
+    let root = strip_verbatim(root.to_path_buf());
+    let is_drive_root = root.parent().is_none();
+    let is_home = home.is_some_and(|home| same_path(&root, &strip_verbatim(home.to_path_buf())));
+    if is_drive_root || is_home {
+        return Err(KalError::validation(
+            "folder_too_broad",
+            "Choose a project folder, not a whole drive or your home folder.",
+        ));
+    }
+    Ok(())
+}
+
+/// Component-wise path equality; case-insensitive on Windows, ignoring trailing separators.
+fn same_path(a: &Path, b: &Path) -> bool {
+    let key = |p: &Path| -> Vec<String> {
+        p.components()
+            .map(|c| {
+                let text = c.as_os_str().to_string_lossy().into_owned();
+                if cfg!(windows) {
+                    text.to_lowercase()
+                } else {
+                    text
+                }
+            })
+            .collect()
+    };
+    key(a) == key(b)
 }
 
 /// `std::fs::canonicalize` returns `\\?\C:\...` (or `\\?\UNC\server\share`) on Windows; shells
@@ -1212,6 +1258,55 @@ mod tests {
         assert_eq!(
             strip_verbatim(PathBuf::from("/home/me/site")),
             PathBuf::from("/home/me/site")
+        );
+    }
+
+    #[test]
+    fn drive_roots_and_the_home_folder_are_not_workspaces() {
+        let broad = |root: &str, home: Option<&str>| {
+            refuse_broad_root(Path::new(root), home.map(Path::new))
+                .err()
+                .map(|e| e.code)
+        };
+        if cfg!(windows) {
+            let home = Some(r"C:\Users\me");
+            for root in [
+                r"C:\",
+                r"\\?\C:\",
+                r"D:\",
+                r"\\server\share\",
+                r"\\?\UNC\server\share\",
+                r"C:\Users\me",
+                r"c:\users\ME\",
+                r"\\?\C:\Users\me",
+            ] {
+                assert_eq!(broad(root, home), Some("folder_too_broad"), "{root}");
+            }
+            for root in [
+                r"C:\Users\me\site",
+                r"C:\Users",
+                r"D:\work",
+                r"C:\Users\me2",
+            ] {
+                assert_eq!(broad(root, home), None, "{root}");
+            }
+            assert_eq!(
+                broad(r"C:\Users\me", Some(r"\\?\C:\Users\me")),
+                Some("folder_too_broad")
+            );
+        } else {
+            let home = Some("/home/me");
+            for root in ["/", "/home/me", "/home/me/"] {
+                assert_eq!(broad(root, home), Some("folder_too_broad"), "{root}");
+            }
+            for root in ["/home/me/site", "/home", "/home/Me", "/home/me2"] {
+                assert_eq!(broad(root, home), None, "{root}");
+            }
+        }
+        // Without a known home folder only drive roots are refused.
+        assert_eq!(
+            broad(if cfg!(windows) { r"C:\" } else { "/" }, None),
+            Some("folder_too_broad")
         );
     }
 

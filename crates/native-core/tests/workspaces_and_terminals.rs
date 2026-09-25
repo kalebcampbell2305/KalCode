@@ -216,6 +216,51 @@ fn invalid_folders_are_rejected_with_typed_errors() {
     );
 }
 
+/// Regression (review finding): a whole drive or the home folder itself must not become a
+/// workspace root; project folders inside them still can.
+#[test]
+fn drive_roots_and_the_home_folder_are_refused() {
+    let data = tempfile::tempdir().expect("data");
+    let core = open(data.path());
+
+    let drive_root = std::env::temp_dir()
+        .ancestors()
+        .last()
+        .expect("root")
+        .to_path_buf();
+    let refused = core.open_workspace(&drive_root).expect_err("drive root");
+    assert_eq!(refused.code, "folder_too_broad");
+    if cfg!(windows) {
+        let verbatim = std::path::PathBuf::from(format!(r"\\?\{}", drive_root.display()));
+        assert_eq!(
+            core.open_workspace(&verbatim).expect_err("verbatim").code,
+            "folder_too_broad"
+        );
+    }
+
+    let home_var = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    if let Some(home) = std::env::var_os(home_var).map(std::path::PathBuf::from)
+        && home.is_dir()
+    {
+        assert_eq!(
+            core.open_workspace(&home).expect_err("home").code,
+            "folder_too_broad"
+        );
+        // Through a `..` detour it is still the home folder.
+        let detour = home.join("..").join(home.file_name().expect("home name"));
+        assert_eq!(
+            core.open_workspace(&detour).expect_err("home detour").code,
+            "folder_too_broad"
+        );
+    }
+    assert!(core.workspaces().expect("list").is_empty());
+
+    // A project folder (the temp folder lives under the home folder on most machines) opens.
+    let projects = tempfile::tempdir().expect("projects");
+    core.open_workspace(projects.path())
+        .expect("subfolder opens");
+}
+
 #[test]
 fn active_workspace_persists_across_restart() {
     let data = tempfile::tempdir().expect("data");
