@@ -6,6 +6,7 @@ use kalcode_contracts::kalvoice::{KalVoiceMode, KalVoiceUsage};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::latency::StageTimings;
 use crate::models::SpeechModelInfo;
 use crate::orchestrator::RequestStage;
 use crate::orchestrator::{KalVoiceResponse, ProviderChoice};
@@ -42,6 +43,10 @@ pub struct KalVoiceStatus {
     /// Connected providers that can power KalVoice reasoning.
     pub providers: Vec<ProviderChoice>,
     pub reserved_shortcuts: Vec<ReservedShortcut>,
+    /// Keys that can be the push-to-talk key on this system.
+    pub talk_keys: Vec<String>,
+    /// Whether the push-to-talk key is registered right now (only while KalCode is focused).
+    pub talk_key_active: bool,
     pub shortcut_issues: Vec<ShortcutIssue>,
     /// The session listening right now, if any.
     pub listening: Option<ListeningSession>,
@@ -74,6 +79,11 @@ pub enum KalVoiceSignal {
         session_id: String,
         level: f32,
     },
+    /// A partial transcript while the key is still held (shown as ghost text; never stored).
+    Partial {
+        session_id: String,
+        text: String,
+    },
     /// Recording stopped; recognizing on the device.
     Transcribing {
         session_id: String,
@@ -82,6 +92,8 @@ pub enum KalVoiceSignal {
     /// Recognition finished.
     Result {
         result: VoiceResult,
+        /// Stage timings measured natively (key-down to final transcript).
+        timings: StageTimings,
     },
     /// Listening could not start or finish.
     ListeningFailed {
@@ -95,8 +107,8 @@ pub enum KalVoiceSignal {
         session_id: String,
         mode: KalVoiceMode,
     },
-    /// The command shortcut was pressed.
-    OpenCommandBar,
+    /// The push-to-talk key was pressed: bring the widget back if it was hidden.
+    Reveal,
     ModelProgress {
         model_id: String,
         received_bytes: u64,

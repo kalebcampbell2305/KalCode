@@ -1,47 +1,53 @@
 import type { KalVoiceResponse, ReservedShortcut } from "@kalcode/protocol";
 import { describe, expect, it } from "vitest";
-import { announcement, formatBytes, INITIAL_STATE, reduce, stateLine, usageLine } from "./assistantState.ts";
+import { announcement, formatBytes, INITIAL_STATE, reduce, STATE_LABELS, usageLine } from "./assistantState.ts";
 import { insertTranscript, planInsertion, registerDictationSink, resolveDictationTarget } from "./dictation.ts";
 import { nudge, placementAt, placementFor, positionFor, sizeClassFor } from "./panelGeometry.ts";
-import { canonicalize, displayShortcut, shortcutFromEvent, shortcutKeys, validateShortcut } from "./shortcutModel.ts";
+import { checkReserved, displayKey, isTalkKey, talkKeyFromEvent } from "./shortcutModel.ts";
 
 const RESERVED: ReservedShortcut[] = [
-  { accelerator: "CommandOrControl+K", owner: "KalCode command palette" },
-  { accelerator: "CommandOrControl+C", owner: "Copy / interrupt in terminals" },
+  { accelerator: "F5", owner: "reloading the window" },
+  { accelerator: "F12", owner: "developer tools" },
 ];
+const ALLOWED = [...Array.from({ length: 24 }, (_, i) => `F${i + 1}`), "Pause", "ScrollLock", "Insert"];
+const key = (code: string, extra: Partial<{ key: string; ctrlKey: boolean; shiftKey: boolean }> = {}) => ({
+  code,
+  key: extra.key ?? code,
+  ctrlKey: extra.ctrlKey ?? false,
+  metaKey: false,
+  altKey: false,
+  shiftKey: extra.shiftKey ?? false,
+});
 
-describe("shortcuts", () => {
-  it("canonicalizes like the native side", () => {
-    expect(canonicalize("ctrl+shift+space")).toEqual({ ok: true, value: "CommandOrControl+Shift+Space" });
-    expect(canonicalize("Shift + Ctrl + k")).toEqual({ ok: true, value: "CommandOrControl+Shift+K" });
-    expect(canonicalize("Shift+K")).toMatchObject({ ok: false, code: "shortcut_needs_modifier" });
-    expect(canonicalize("Ctrl+Escape")).toMatchObject({ ok: false, code: "shortcut_invalid" });
-    expect(canonicalize("Ctrl+K+J")).toMatchObject({ ok: false, code: "shortcut_invalid" });
+describe("push-to-talk key capture", () => {
+  it("accepts one supported key on its own", () => {
+    expect(talkKeyFromEvent(key("F8"), ALLOWED)).toEqual({ ok: true, value: "F8" });
+    expect(talkKeyFromEvent(key("ScrollLock"), ALLOWED)).toEqual({ ok: true, value: "ScrollLock" });
+    expect(talkKeyFromEvent(key("Pause"), ALLOWED)).toEqual({ ok: true, value: "Pause" });
+    expect(displayKey("ScrollLock")).toBe("Scroll Lock");
   });
 
-  it("detects conflicts with KalCode bindings and the other KalVoice shortcut", () => {
-    expect(validateShortcut("Ctrl+K", null, RESERVED)).toEqual({
+  it("explains keys it can't use", () => {
+    expect(talkKeyFromEvent(key("F8", { ctrlKey: true }), ALLOWED)).toMatchObject({ code: "talk_key_single" });
+    expect(talkKeyFromEvent(key("Fn", { key: "Fn" }), ALLOWED)).toMatchObject({ code: "talk_key_unsupported" });
+    expect(talkKeyFromEvent(key("CapsLock"), ALLOWED)).toMatchObject({ code: "talk_key_unsupported" });
+    expect(talkKeyFromEvent(key("ControlRight", { key: "Control" }), ALLOWED)).toMatchObject({
+      code: "talk_key_unsupported",
+    });
+    expect(talkKeyFromEvent(key("KeyK", { key: "k" }), ALLOWED)).toMatchObject({ code: "talk_key_invalid" });
+    expect(talkKeyFromEvent(key("Space", { key: " " }), ALLOWED)).toMatchObject({ code: "talk_key_invalid" });
+  });
+
+  it("refuses keys KalCode uses and matches key events", () => {
+    expect(checkReserved("F5", RESERVED)).toEqual({
       ok: false,
-      code: "shortcut_conflict",
-      message: "Ctrl+K is already used for KalCode command palette.",
+      code: "talk_key_conflict",
+      message: "F5 is used for reloading the window in KalCode.",
     });
-    expect(validateShortcut("Ctrl+Shift+K", "CommandOrControl+Shift+K", RESERVED)).toMatchObject({
-      code: "shortcut_conflict",
-    });
-    expect(validateShortcut("Ctrl+Alt+J", "CommandOrControl+Shift+K", RESERVED)).toEqual({
-      ok: true,
-      value: "CommandOrControl+Alt+J",
-    });
-  });
-
-  it("reads key presses and displays per platform", () => {
-    const event = { code: "Space", ctrlKey: true, metaKey: false, altKey: false, shiftKey: true };
-    expect(shortcutFromEvent(event)).toBe("CommandOrControl+Shift+Space");
-    expect(shortcutFromEvent({ ...event, code: "ShiftLeft" })).toBeNull();
-    expect(shortcutFromEvent({ ...event, code: "KeyJ", shiftKey: false, altKey: true })).toBe("CommandOrControl+Alt+J");
-    expect(displayShortcut("CommandOrControl+Shift+Space")).toBe("Ctrl+Shift+Space");
-    expect(displayShortcut("CommandOrControl+Shift+Space", true)).toBe("⌘⇧Space");
-    expect(shortcutKeys("CommandOrControl+Alt+Slash")).toEqual(["Ctrl", "Alt", "/"]);
+    expect(checkReserved("F8", RESERVED)).toEqual({ ok: true, value: "F8" });
+    expect(isTalkKey(key("F8"), "F8")).toBe(true);
+    expect(isTalkKey(key("F8", { shiftKey: true }), "F8")).toBe(false);
+    expect(isTalkKey(key("F9"), "F8")).toBe(false);
   });
 });
 
@@ -183,29 +189,37 @@ describe("assistant state", () => {
       type: "signal",
       signal: { kind: "listening_started", sessionId: "s1", mode: "command" },
     });
-    expect(s.phase).toBe("listening");
-    expect(stateLine(s)).toBe("Listening… release to send");
+    expect(STATE_LABELS[s.phase]).toBe("Listening");
+    s = reduce(s, { type: "signal", signal: { kind: "partial", sessionId: "s1", text: "open four" } });
+    expect(s.partial).toBe("open four");
     s = reduce(s, { type: "signal", signal: { kind: "transcribing", sessionId: "s1", mode: "command" } });
-    expect(s.phase).toBe("transcribing");
+    expect(STATE_LABELS[s.phase]).toBe("Processing");
     s = reduce(s, { type: "submitted", requestId: "r1" });
-    expect(s.phase).toBe("thinking");
+    expect(STATE_LABELS[s.phase]).toBe("Processing");
     s = reduce(s, { type: "signal", signal: { kind: "request_stage", requestId: "r1", stage: "executing" } });
-    expect(s.phase).toBe("executing");
+    expect(STATE_LABELS[s.phase]).toBe("Executing");
+    s = reduce(s, {
+      type: "talked",
+      talk: { requestId: "r1", text: "go to settings", route: "command", hadTarget: true },
+    });
     s = reduce(s, { type: "response", response: response({ kind: "completed", summary: "Opened Settings." }) });
-    expect(s.phase).toBe("done");
+    expect(STATE_LABELS[s.phase]).toBe("Done");
+    expect(s.lastTalk?.hadTarget).toBe(true);
     expect(announcement(s)).toBe("KalVoice: Done. Opened Settings.");
+    s = reduce(s, { type: "typed_instead", message: "Typed instead." });
+    expect(s.lastTalk).toBeNull();
     s = reduce(s, { type: "settle" });
-    expect(s.phase).toBe("idle");
+    expect(STATE_LABELS[s.phase]).toBe("Ready");
   });
 
   it("maps outcomes to permission and error states", () => {
     const submitted = reduce(INITIAL_STATE, { type: "submitted", requestId: "r1" });
-    expect(
-      reduce(submitted, {
-        type: "response",
-        response: response({ kind: "permission_required", approvalRequestId: "a" }),
-      }).phase,
-    ).toBe("waiting_for_permission");
+    const waiting = reduce(submitted, {
+      type: "response",
+      response: response({ kind: "permission_required", approvalRequestId: "a" }),
+    });
+    expect(STATE_LABELS[waiting.phase]).toBe("Needs Approval");
+    expect(waiting.approvalRequestId).toBe("a");
     const needs = reduce(submitted, {
       type: "response",
       response: response({ kind: "needs_provider", message: "Connect a supported AI provider." }),

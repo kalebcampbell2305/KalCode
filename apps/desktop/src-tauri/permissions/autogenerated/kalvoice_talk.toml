@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-kalvoice-talk"
+description = "Enables the kalvoice_talk command without any pre-configured scope."
+commands.allow = ["kalvoice_talk"]
+
+[[permission]]
+identifier = "deny-kalvoice-talk"
+description = "Denies the kalvoice_talk command without any pre-configured scope."
+commands.deny = ["kalvoice_talk"]

@@ -127,6 +127,40 @@ pub fn is_recorded(conn: &Connection, request_id: &str) -> Result<bool> {
         .is_some())
 }
 
+/// Intents whose effect the UI can undo ("Type it instead" after a spoken command).
+pub const REVERSIBLE_INTENTS: &[&str] = &["navigate"];
+
+/// Un-counts a request the user turned into typing, when its command was reversible and it was
+/// counted within `max_age`. Returns whether it was un-counted.
+pub fn refund(
+    conn: &Connection,
+    request_id: &str,
+    now: OffsetDateTime,
+    max_age: time::Duration,
+) -> Result<bool> {
+    let row: Option<(String, String)> = conn
+        .query_row(
+            "SELECT intent, recorded_at FROM kalvoice_requests WHERE request_id = ?1",
+            [request_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    let Some((intent, recorded_at)) = row else {
+        return Ok(false);
+    };
+    let recent =
+        OffsetDateTime::parse(&recorded_at, &time::format_description::well_known::Rfc3339)
+            .is_ok_and(|at| now - at <= max_age);
+    if !recent || !REVERSIBLE_INTENTS.contains(&intent.as_str()) {
+        return Ok(false);
+    }
+    conn.execute(
+        "DELETE FROM kalvoice_requests WHERE request_id = ?1",
+        [request_id],
+    )?;
+    Ok(true)
+}
+
 /// Counts one top-level request, atomically with the allowance check. Call inside the
 /// transaction that records the request's events.
 pub fn consume(
@@ -322,6 +356,39 @@ mod tests {
                 "2026-09-01T00:00:00.000Z".into()
             )
         );
+    }
+
+    #[test]
+    fn only_recent_reversible_requests_are_refunded() {
+        let conn = conn();
+        let nav = new_id();
+        consume(
+            &conn,
+            &nav,
+            KalVoiceInput::Voice,
+            "navigate",
+            NOW,
+            1,
+            Some(250),
+        )
+        .expect("nav");
+        let stop = new_id();
+        consume(
+            &conn,
+            &stop,
+            KalVoiceInput::Voice,
+            "stop_threads",
+            NOW,
+            1,
+            Some(250),
+        )
+        .expect("stop");
+        let later = NOW + time::Duration::minutes(10);
+        assert!(!refund(&conn, &nav, later, time::Duration::minutes(2)).expect("old"));
+        assert!(!refund(&conn, &stop, NOW, time::Duration::minutes(2)).expect("irreversible"));
+        assert!(refund(&conn, &nav, NOW, time::Duration::minutes(2)).expect("refund"));
+        assert!(!refund(&conn, &nav, NOW, time::Duration::minutes(2)).expect("twice"));
+        assert_eq!(usage(&conn, NOW, 1, Some(250)).expect("usage").used, 1);
     }
 
     #[test]

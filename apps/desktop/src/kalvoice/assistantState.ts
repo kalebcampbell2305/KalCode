@@ -1,8 +1,11 @@
 /**
- * The KalVoice assistant's visible state, derived only from things that really happen: native
- * listening signals, pipeline stages, and request outcomes.
+ * The KalVoice widget's state, derived only from things that really happen: native listening
+ * signals, pipeline stages and request outcomes.
+ *
+ * States shown to people: Ready · Listening · Processing · Executing · Needs Approval · Done ·
+ * Error.
  */
-import type { KalVoiceMode, KalVoiceResponse, KalVoiceSignal, KalVoiceUsage } from "@kalcode/protocol";
+import type { KalVoiceMode, KalVoiceResponse, KalVoiceSignal, KalVoiceUsage, TalkRoute } from "@kalcode/protocol";
 
 export type AssistantPhase =
   | "idle"
@@ -14,16 +17,29 @@ export type AssistantPhase =
   | "done"
   | "error";
 
+/** The last push-to-talk utterance, for "Type it instead". Kept in this window only. */
+export interface LastTalk {
+  requestId: string;
+  text: string;
+  route: TalkRoute;
+  /** Something that accepts text had focus when the key went down. */
+  hadTarget: boolean;
+}
+
 export interface AssistantState {
   phase: AssistantPhase;
   mode: KalVoiceMode | null;
   sessionId: string | null;
   requestId: string | null;
+  /** Live partial transcript while the key is held (never stored). */
+  partial: string | null;
   /** Detail for the state line and the result area (never persisted). */
   message: string | null;
   /** Error code for ERROR (e.g. `needs_provider`, `limit_reached`, `model_not_installed`). */
   code: string | null;
   lastResponse: KalVoiceResponse | null;
+  lastTalk: LastTalk | null;
+  approvalRequestId: string | null;
 }
 
 export const INITIAL_STATE: AssistantState = {
@@ -31,9 +47,12 @@ export const INITIAL_STATE: AssistantState = {
   mode: null,
   sessionId: null,
   requestId: null,
+  partial: null,
   message: null,
   code: null,
   lastResponse: null,
+  lastTalk: null,
+  approvalRequestId: null,
 };
 
 export type AssistantEvent =
@@ -41,12 +60,23 @@ export type AssistantEvent =
   | { type: "submitted"; requestId: string }
   | { type: "response"; response: KalVoiceResponse }
   | { type: "request_error"; requestId: string; message: string; code: string }
+  | { type: "talked"; talk: LastTalk }
   | { type: "dictation_inserted"; characters: number }
   | { type: "dictation_blocked"; message: string }
+  | { type: "typed_instead"; message: string }
+  | { type: "dismiss" }
   | { type: "settle" };
 
 function fromResponse(state: AssistantState, response: KalVoiceResponse): AssistantState {
-  const base = { ...state, requestId: response.requestId, lastResponse: response, mode: null, sessionId: null };
+  const base = {
+    ...state,
+    requestId: response.requestId,
+    lastResponse: response,
+    mode: null,
+    sessionId: null,
+    partial: null,
+    approvalRequestId: null,
+  };
   const outcome = response.outcome;
   switch (outcome.kind) {
     case "completed":
@@ -57,6 +87,7 @@ function fromResponse(state: AssistantState, response: KalVoiceResponse): Assist
         phase: "waiting_for_permission",
         message: "This needs your approval before it runs.",
         code: null,
+        approvalRequestId: outcome.approvalRequestId,
       };
     case "needs_provider":
       return { ...base, phase: "error", message: outcome.message, code: "needs_provider" };
@@ -77,27 +108,40 @@ export function reduce(state: AssistantState, event: AssistantEvent): AssistantS
     case "submitted":
       return { ...state, phase: "thinking", requestId: event.requestId, message: null, code: null };
     case "response":
-      // A late answer to a request the user already moved on from updates the result only.
-      if (state.requestId !== null && event.response.requestId !== state.requestId) {
-        return state;
-      }
+      // A late answer to a request the user already moved on from is ignored.
+      if (state.requestId !== null && event.response.requestId !== state.requestId) return state;
       return fromResponse(state, event.response);
     case "request_error":
       if (state.requestId !== event.requestId) return state;
-      return { ...state, phase: "error", message: event.message, code: event.code };
+      return { ...state, phase: "error", message: event.message, code: event.code, partial: null };
+    case "talked":
+      return { ...state, lastTalk: event.talk };
     case "dictation_inserted":
       return {
         ...state,
         phase: "done",
         mode: null,
         sessionId: null,
+        partial: null,
         message: `Inserted ${event.characters.toLocaleString()} character${event.characters === 1 ? "" : "s"}.`,
         code: null,
       };
     case "dictation_blocked":
-      return { ...state, phase: "error", mode: null, sessionId: null, message: event.message, code: "no_target" };
+      return {
+        ...state,
+        phase: "error",
+        mode: null,
+        sessionId: null,
+        partial: null,
+        message: event.message,
+        code: "no_target",
+      };
+    case "typed_instead":
+      return { ...state, phase: "done", message: event.message, code: null, lastTalk: null };
+    case "dismiss":
+      return { ...state, phase: "idle", message: null, code: null, partial: null };
     case "settle":
-      return state.phase === "done" ? { ...state, phase: "idle" } : state;
+      return state.phase === "done" ? { ...state, phase: "idle", message: null } : state;
     case "signal":
       return onSignal(state, event.signal);
   }
@@ -111,37 +155,40 @@ function onSignal(state: AssistantState, signal: KalVoiceSignal): AssistantState
         phase: "listening",
         mode: signal.mode,
         sessionId: signal.sessionId,
+        partial: null,
         message: null,
         code: null,
+        lastTalk: null,
       };
+    case "partial":
+      return state.sessionId === signal.sessionId ? { ...state, partial: signal.text } : state;
     case "transcribing":
       return state.sessionId === signal.sessionId ? { ...state, phase: "transcribing" } : state;
     case "result": {
       const result = signal.result;
       if (state.sessionId !== result.sessionId) return state;
       if (result.kind === "nothing_heard") {
-        return { ...state, phase: "idle", mode: null, sessionId: null, message: "Nothing was heard.", code: null };
+        return { ...state, phase: "idle", mode: null, sessionId: null, partial: null, message: "Nothing was heard." };
       }
-      // Dictation results are inserted by the provider (then `dictation_inserted`); command
-      // transcripts are submitted as a request (then `submitted`).
-      return state;
+      // The provider routes the transcript next (command, dictation or request).
+      return { ...state, partial: result.text };
     }
     case "listening_failed":
-      return { ...state, phase: "error", mode: null, sessionId: null, message: signal.message, code: signal.code };
-    case "cancelled":
-      if (state.sessionId !== signal.sessionId) return state;
-      // A quick tap of the command shortcut opens the assistant for typing: nothing to report.
       return {
         ...state,
-        phase: "idle",
+        phase: "error",
         mode: null,
         sessionId: null,
-        message: signal.mode === "command" ? null : "Cancelled.",
-        code: null,
+        partial: null,
+        message: signal.message,
+        code: signal.code,
       };
+    case "cancelled":
+      if (state.sessionId !== signal.sessionId) return state;
+      return { ...state, phase: "idle", mode: null, sessionId: null, partial: null, message: "Cancelled.", code: null };
     case "request_stage":
       if (state.requestId !== signal.requestId) return state;
-      if (state.phase !== "thinking" && state.phase !== "executing") return state;
+      if (state.phase !== "thinking" && state.phase !== "executing" && state.phase !== "transcribing") return state;
       return { ...state, phase: signal.stage === "executing" ? "executing" : "thinking" };
     case "request_resolved":
       return state.requestId === signal.response.requestId ? fromResponse(state, signal.response) : state;
@@ -150,42 +197,27 @@ function onSignal(state: AssistantState, signal: KalVoiceSignal): AssistantState
   }
 }
 
-const LABELS: Record<AssistantPhase, string> = {
+/** The state name shown next to the status dot. */
+export const STATE_LABELS: Record<AssistantPhase, string> = {
   idle: "Ready",
-  listening: "Listening…",
-  transcribing: "Transcribing…",
-  thinking: "Thinking…",
-  executing: "Running the command…",
-  waiting_for_permission: "Waiting for your approval",
+  listening: "Listening",
+  transcribing: "Processing",
+  thinking: "Processing",
+  executing: "Executing",
+  waiting_for_permission: "Needs Approval",
   done: "Done",
-  error: "Needs attention",
+  error: "Error",
 };
-
-/** The short state line under the KALVOICE header. */
-export function stateLine(state: AssistantState): string {
-  if (state.phase === "listening") {
-    return state.mode === "dictation" ? "Listening… release to insert" : "Listening… release to send";
-  }
-  if (state.phase === "idle" && state.message) return state.message;
-  return LABELS[state.phase];
-}
 
 /** What screen readers hear when the state changes. */
 export function announcement(state: AssistantState): string {
-  const detail = state.phase === "done" || state.phase === "error" ? state.message : null;
-  return detail ? `KalVoice: ${LABELS[state.phase]}. ${detail}` : `KalVoice: ${stateLine(state)}`;
+  const label = STATE_LABELS[state.phase];
+  const detail =
+    (state.phase === "done" || state.phase === "error" || state.phase === "waiting_for_permission") && state.message
+      ? ` ${state.message}`
+      : "";
+  return `KalVoice: ${label}.${detail}`;
 }
-
-export const PHASE_NAMES: Record<AssistantPhase, string> = {
-  idle: "IDLE",
-  listening: "LISTENING",
-  transcribing: "TRANSCRIBING",
-  thinking: "THINKING",
-  executing: "EXECUTING",
-  waiting_for_permission: "WAITING FOR PERMISSION",
-  done: "DONE",
-  error: "ERROR",
-};
 
 const DAY = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 
@@ -194,7 +226,7 @@ export function formatDay(iso: string): string {
   return Number.isNaN(date.getTime()) ? iso : DAY.format(date);
 }
 
-/** "Used 3 of 250 · resets Oct 1" / "Unlimited KalVoice Requests". */
+/** "Used 3 of 250 · resets Oct 1" / "… · unlimited". */
 export function usageLine(usage: KalVoiceUsage): string {
   if (usage.allowance === null) return `${usage.used.toLocaleString("en-US")} KalVoice Requests this month · unlimited`;
   return `Used ${usage.used.toLocaleString("en-US")} of ${usage.allowance.toLocaleString("en-US")} · resets ${formatDay(usage.resetsAt)}`;

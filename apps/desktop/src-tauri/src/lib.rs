@@ -254,6 +254,10 @@ pub fn run(removed_overrides: Vec<&'static str>) {
             kalvoice_commands::kalvoice_model_download,
             kalvoice_commands::kalvoice_model_cancel,
             kalvoice_commands::kalvoice_model_delete,
+            kalvoice_commands::kalvoice_talk,
+            kalvoice_commands::kalvoice_type_instead,
+            kalvoice_commands::kalvoice_latency,
+            kalvoice_commands::kalvoice_latency_record,
             provider_commands::providers_list,
             provider_commands::providers_detect,
         ])

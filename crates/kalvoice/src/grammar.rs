@@ -59,8 +59,30 @@ impl Understood {
     }
 }
 
+/// How sure the grammar is that an utterance was meant as a command rather than words to type.
+/// Verb-led commands ("open four Codex threads", "show approvals") are `High`; bare phrases
+/// that could just as well be dictated text ("settings", "status", "pending approvals") are
+/// `Low`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Confidence {
+    High,
+    Low,
+}
+
 /// Understands one request. Pure and deterministic.
 pub fn understand(text: &str) -> Understood {
+    understand_with_confidence(text).0
+}
+
+/// As [`understand`], with how confidently the utterance reads as a command. Reasoning and
+/// empty requests are always `Low`.
+pub fn understand_with_confidence(text: &str) -> (Understood, Confidence) {
+    let mut confidence = Confidence::Low;
+    let understood = understand_inner(text, &mut confidence);
+    (understood, confidence)
+}
+
+fn understand_inner(text: &str, confidence: &mut Confidence) -> Understood {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return Understood::Rejected {
@@ -85,7 +107,18 @@ pub fn understand(text: &str) -> Understood {
     }
     for rule in rules() {
         if let Some(caps) = match_nodes(&rule.nodes, core, &Caps::default()) {
-            return (rule.build)(&caps);
+            let understood = (rule.build)(&caps);
+            let deterministic = !matches!(
+                understood,
+                Understood::Intent {
+                    intent: KalVoiceIntent::Reasoning { .. },
+                    ..
+                }
+            );
+            if rule.high && deterministic {
+                *confidence = Confidence::High;
+            }
+            return understood;
         }
     }
     Understood::reasoning(trimmed)
@@ -477,6 +510,10 @@ fn count_word(token: &str) -> Option<u32> {
     }
     Some(match token {
         "a" | "an" | "another" | "single" => 1,
+        // How speech recognition often writes "four" and "two" before "Codex threads". Only
+        // ever read as counts inside a full command pattern.
+        "for" => 4,
+        "to" | "too" => 2,
         "zero" => 0,
         other => small_number(other)?,
     })
@@ -578,7 +615,17 @@ type Build = Box<dyn Fn(&Caps) -> Understood + Send + Sync>;
 struct Rule {
     nodes: Vec<Node>,
     build: Build,
+    /// Verb-led patterns; bare noun phrases are low confidence.
+    high: bool,
 }
+
+/// Patterns that are plausible as ordinary dictated text.
+const LOW_CONFIDENCE: &[&str] = &[
+    "[give me] [a|the] [thread|threads] status [report|update]",
+    "[are there|is there] any [pending] (approvals|approval requests|permission requests)",
+    "[pending] (approvals|approval requests|permission requests)",
+    "<surface> [page|view|screen|tab|section]",
+];
 
 const OPEN_VERB: &str =
     "(open|start|create|launch|spin up|spin|make|add|new|fire up|kick off|begin|give me)";
@@ -596,6 +643,7 @@ fn build_rules() -> Vec<Rule> {
     let mut rules = Vec::new();
     let mut add = |pattern: String, build: Build| {
         rules.push(Rule {
+            high: !LOW_CONFIDENCE.contains(&pattern.as_str()),
             nodes: compile(&pattern),
             build,
         });
@@ -623,6 +671,8 @@ fn build_rules() -> Vec<Rule> {
         "[are there|is there] any [pending] (approvals|approval requests|permission requests)",
         "[pending] (approvals|approval requests|permission requests)",
         "(does anything|anything) (need|needs) [my] (approval|permission)",
+        "(show|tell) [me] what is waiting [on me]",
+        "what is waiting [on me]",
     ] {
         add(p.into(), approvals());
     }

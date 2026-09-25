@@ -18,6 +18,7 @@
 
 pub mod audio;
 pub mod grammar;
+pub mod latency;
 pub mod ledger;
 pub mod models;
 pub mod orchestrator;
@@ -26,5 +27,6 @@ pub mod prefs;
 pub mod shortcuts;
 pub mod signals;
 pub mod speech_output;
+pub mod streaming;
 pub mod stt;
 pub mod voice;

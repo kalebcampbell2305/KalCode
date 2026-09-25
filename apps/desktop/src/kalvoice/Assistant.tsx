@@ -1,27 +1,19 @@
 import { Button, IconButton } from "@kalcode/ui/components";
-import { CircleAlert, CircleCheck, Mic, Send, ShieldQuestion, Square } from "lucide-react";
-import { type FormEvent, useEffect, useRef, useState } from "react";
+import { CircleAlert, CircleCheck, Send, ShieldQuestion } from "lucide-react";
+import { type FormEvent, useState } from "react";
 import { useNavigation } from "../shell/navigation.tsx";
-import { IS_MAC } from "../shell/shortcuts.ts";
 import styles from "./Assistant.module.css";
 import { usageLine } from "./assistantState.ts";
 import { useKalVoice } from "./KalVoiceProvider.tsx";
-import { displayShortcut } from "./shortcutModel.ts";
+import { displayKey } from "./shortcutModel.ts";
 
 const EXAMPLES = ["Go to settings", "Open four Codex threads", "What needs permission?", "Pause every active thread"];
 
 /** Type or speak a request. Shared by the floating panel and the KalVoice page. */
-export function RequestForm({ id, autoFocusToken }: { id: string; autoFocusToken?: number }) {
-  const { submit, state, startListening, stopListening, status } = useKalVoice();
+export function RequestForm({ id }: { id: string }) {
+  const { submit, state } = useKalVoice();
   const [text, setText] = useState("");
-  const inputRef = useRef<HTMLInputElement | null>(null);
   const busy = state.phase === "thinking" || state.phase === "executing";
-  const listeningHere = state.mode === "command" && (state.phase === "listening" || state.phase === "transcribing");
-  const speechReady = Boolean(status?.speechEngine && status.activeModel && status.microphoneSupported);
-
-  useEffect(() => {
-    if (autoFocusToken) inputRef.current?.focus();
-  }, [autoFocusToken]);
 
   const onSubmit = (event: FormEvent) => {
     event.preventDefault();
@@ -33,26 +25,16 @@ export function RequestForm({ id, autoFocusToken }: { id: string; autoFocusToken
   return (
     <form className={styles.form} onSubmit={onSubmit} aria-label="Ask KalVoice">
       <input
-        ref={inputRef}
         id={id}
         className={styles.input}
         value={text}
         onChange={(e) => setText(e.target.value)}
-        placeholder="Ask KalVoice or give a command"
-        aria-label="Request for KalVoice"
+        placeholder="Type a request for KalVoice"
+        aria-label="Type a request for KalVoice"
         autoComplete="off"
         spellCheck={false}
         maxLength={4000}
       />
-      {speechReady ? (
-        <IconButton
-          label={listeningHere ? "Stop and send" : "Speak a command"}
-          aria-pressed={listeningHere}
-          icon={listeningHere ? <Square /> : <Mic />}
-          onClick={() => void (listeningHere ? stopListening() : startListening("command"))}
-          disabled={busy || state.phase === "transcribing"}
-        />
-      ) : null}
       <IconButton label="Send" icon={<Send />} type="submit" disabled={!text.trim() || busy} />
     </form>
   );
@@ -123,13 +105,12 @@ export function UsageFooter() {
   );
 }
 
-export function ShortcutHint() {
+export function TalkHint() {
   const { status } = useKalVoice();
   if (!status) return null;
   return (
     <p className={styles.hint}>
-      Hold <kbd>{displayShortcut(status.preferences.dictationShortcut, IS_MAC)}</kbd> to dictate ·{" "}
-      <kbd>{displayShortcut(status.preferences.commandShortcut, IS_MAC)}</kbd> for commands
+      Hold <kbd>{displayKey(status.preferences.talkKey)}</kbd> to talk to KalVoice.
     </p>
   );
 }

@@ -1,6 +1,6 @@
 import type {
+  ApprovalDecision,
   KalVoiceInput,
-  KalVoiceMode,
   KalVoicePreferencesPatch,
   KalVoiceResponse,
   KalVoiceSignal,
@@ -8,6 +8,8 @@ import type {
   PanelAnchor,
   PanelView,
   SizeClass,
+  SurfaceId,
+  TalkTarget,
 } from "@kalcode/protocol";
 import { useToast } from "@kalcode/ui/components";
 import {
@@ -49,18 +51,23 @@ interface KalVoiceValue {
   state: AssistantState;
   /** Latest microphone level (0–1), for animation without re-rendering. */
   levelRef: MutableRefObject<number>;
+  /** A typed request (KalVoice page, for people who can't or don't want to speak). */
   submit: (text: string, input?: KalVoiceInput) => Promise<void>;
-  startListening: (mode: KalVoiceMode) => Promise<void>;
+  /** Press-and-hold on the orb (pointer alternative to the push-to-talk key). */
+  startListening: () => Promise<void>;
   stopListening: () => Promise<void>;
   cancel: () => Promise<void>;
+  /** Undo a spoken command: type the words into the box that had focus instead. */
+  typeInstead: () => Promise<void>;
+  canTypeInstead: boolean;
+  decideApproval: (decision: ApprovalDecision) => Promise<void>;
+  dismiss: () => void;
   updatePreferences: (patch: KalVoicePreferencesPatch) => Promise<KalVoiceStatus>;
   downloads: Record<string, DownloadProgress>;
   downloadModel: (modelId: string) => Promise<void>;
   cancelDownload: (modelId: string) => Promise<void>;
   deleteModel: (modelId: string) => Promise<void>;
   history: readonly HistoryItem[];
-  /** Incremented when the request box should take focus (command shortcut). */
-  focusToken: number;
   sizeClass: SizeClass;
   panel: {
     visible: boolean;
@@ -71,7 +78,6 @@ interface KalVoiceValue {
   };
   setPanel: (next: { anchor?: PanelAnchor; x?: number; y?: number; view?: PanelView }) => void;
   setPanelVisible: (visible: boolean) => void;
-  openAssistant: () => void;
 }
 
 const KalVoiceContext = createContext<KalVoiceValue | null>(null);
@@ -88,16 +94,25 @@ function useWindowWidth(): number {
   return width;
 }
 
+function targetKind(target: DictationTarget | null): TalkTarget {
+  if (!target) return "none";
+  return target.kind === "sink" ? "terminal" : "field";
+}
+
+/** Runs `fn` after the browser has painted the current update (for "visible action" timing). */
+function afterPaint(fn: () => void) {
+  requestAnimationFrame(() => setTimeout(fn, 0));
+}
+
 export function KalVoiceProvider({ children }: { children: ReactNode }) {
   const { client } = useRuntime();
-  const { navigate } = useNavigation();
+  const { current, navigate } = useNavigation();
   const toast = useToast();
   const [status, setStatus] = useState<KalVoiceStatus | null>(null);
   const [statusError, setStatusError] = useState<KalCodeError | null>(null);
   const [state, dispatch] = useReducer(reduce, INITIAL_STATE);
   const [downloads, setDownloads] = useState<Record<string, DownloadProgress>>({});
   const [history, setHistory] = useState<HistoryItem[]>([]);
-  const [focusToken, setFocusToken] = useState(0);
   const [localPanel, setLocalPanel] = useState<{
     anchor?: PanelAnchor;
     x?: number;
@@ -105,10 +120,14 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
     view?: PanelView;
   } | null>(null);
   const levelRef = useRef(0);
-  const targets = useRef(new Map<string, DictationTarget>());
+  const targets = useRef(new Map<string, DictationTarget | null>());
   const cancelled = useRef(new Set<string>());
+  /** For "Type it instead": where the words would have gone and the page before a navigation. */
+  const undo = useRef<{ requestId: string; target: DictationTarget | null; previous: SurfaceId | null } | null>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
+  const currentRef = useRef(current);
+  currentRef.current = current;
   const width = useWindowWidth();
   const sizeClass = sizeClassFor(width);
 
@@ -136,7 +155,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       setHistory((items) =>
         items.map((item) => (item.requestId === response.requestId ? { ...item, response } : item)),
       );
-      setStatus((current) => (current ? { ...current, usage: response.usage } : current));
+      setStatus((s) => (s ? { ...s, usage: response.usage } : s));
       if (response.directive?.kind === "navigate") navigate(response.directive.surface);
     },
     [navigate],
@@ -150,8 +169,57 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       setHistory((items) => [{ requestId, text: trimmed, input, response: null }, ...items].slice(0, 20));
       dispatch({ type: "submitted", requestId });
       try {
-        const response = await client.kalvoiceRequest({ requestId, text: trimmed, input, workspaceId: null });
+        applyResponse(await client.kalvoiceRequest({ requestId, text: trimmed, input, workspaceId: null }));
+      } catch (error) {
+        const e = toKalCodeError(error);
+        dispatch({ type: "request_error", requestId, message: e.message, code: e.code });
+      }
+    },
+    [client, applyResponse],
+  );
+
+  /** One utterance: native routing decides command, dictation or request. */
+  const talk = useCallback(
+    async (sessionId: string, text: string, durationMs: number) => {
+      const started = performance.now();
+      const target = targets.current.get(sessionId) ?? null;
+      targets.current.delete(sessionId);
+      const requestId = crypto.randomUUID();
+      dispatch({ type: "submitted", requestId });
+      const recordAction = () =>
+        afterPaint(() => void client.kalvoiceLatencyRecord(performance.now() - started).catch(() => undefined));
+      try {
+        const previous = currentRef.current;
+        const talked = await client.kalvoiceTalk({
+          requestId,
+          sessionId,
+          text,
+          target: targetKind(target),
+          durationMs,
+          workspaceId: null,
+        });
+        if (talked.route === "dictation") {
+          if (target && targetIsAlive(target)) {
+            dispatch({ type: "dictation_inserted", characters: insertTranscript(target, text) });
+          } else {
+            dispatch({
+              type: "dictation_blocked",
+              message: `The text box closed before your words arrived. You said: “${text}”`,
+            });
+          }
+          recordAction();
+          return;
+        }
+        const response = talked.response;
+        if (!response) return;
+        setHistory((items) => [{ requestId, text, input: "voice" as const, response }, ...items].slice(0, 20));
+        undo.current = { requestId, target, previous: response.directive?.kind === "navigate" ? previous : null };
+        dispatch({
+          type: "talked",
+          talk: { requestId, text, route: talked.route, hadTarget: target !== null },
+        });
         applyResponse(response);
+        recordAction();
       } catch (error) {
         const e = toKalCodeError(error);
         dispatch({ type: "request_error", requestId, message: e.message, code: e.code });
@@ -168,55 +236,24 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           return;
         case "listening_started":
           levelRef.current = 0;
-          if (signal.mode === "dictation") {
-            // Resolve the target now: switching focus while speaking can't redirect the text.
-            const target = resolveDictationTarget(document.activeElement);
-            if (!target) {
-              void client.kalvoiceListenCancel().catch(() => undefined);
-              cancelled.current.add(signal.sessionId);
-              dispatch({
-                type: "dictation_blocked",
-                message: "Click into a text box first, then hold the dictation shortcut.",
-              });
-              return;
-            }
-            targets.current.set(signal.sessionId, target);
-          }
+          // The target is fixed now: switching focus while speaking can't redirect the text.
+          targets.current.set(signal.sessionId, resolveDictationTarget(document.activeElement));
           break;
-        case "open_command_bar":
-          setLocalPanel((p) => ({ ...p, view: "expanded" }));
-          setFocusToken((n) => n + 1);
-          setStatus((current) =>
-            current && !current.preferences.panelVisible
-              ? { ...current, preferences: { ...current.preferences, panelVisible: true } }
-              : current,
+        case "reveal":
+          setStatus((s) =>
+            s && !s.preferences.panelVisible ? { ...s, preferences: { ...s.preferences, panelVisible: true } } : s,
           );
-          void client.kalvoiceUpdatePreferences({ panelVisible: true }).catch(() => undefined);
+          if (status && !status.preferences.panelVisible) {
+            void client.kalvoiceUpdatePreferences({ panelVisible: true }).catch(() => undefined);
+          }
           return;
         case "result": {
           const result = signal.result;
-          if (cancelled.current.delete(result.sessionId)) return;
-          const target = targets.current.get(result.sessionId);
-          targets.current.delete(result.sessionId);
           levelRef.current = 0;
-          if (result.kind === "transcript") {
-            if (result.mode === "command") {
-              dispatch({ type: "signal", signal });
-              void submit(result.text, "voice");
-              return;
-            }
-            if (target && targetIsAlive(target)) {
-              const characters = insertTranscript(target, result.text);
-              dispatch({ type: "dictation_inserted", characters });
-            } else {
-              dispatch({
-                type: "dictation_blocked",
-                message: `The text box closed before your words arrived. You said: “${result.text}”`,
-              });
-            }
-            return;
-          }
-          break;
+          if (cancelled.current.delete(result.sessionId)) return;
+          dispatch({ type: "signal", signal });
+          if (result.kind === "transcript") void talk(result.sessionId, result.text, result.durationMs);
+          return;
         }
         case "cancelled":
         case "listening_failed":
@@ -231,7 +268,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           return;
         case "model_installed":
           setDownloads(({ [signal.modelId]: _, ...rest }) => rest);
-          toast.show({ tone: "success", title: "Speech model installed", description: "Dictation is ready." });
+          toast.show({ tone: "success", title: "Speech model installed", description: "Push to talk is ready." });
           void refreshStatus();
           return;
         case "model_failed":
@@ -249,7 +286,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       }
       dispatch({ type: "signal", signal });
     },
-    [client, submit, applyResponse, refreshStatus, toast],
+    [client, talk, applyResponse, refreshStatus, toast, status],
   );
 
   const onSignalRef = useRef(onSignal);
@@ -273,7 +310,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
     };
   }, [client, refreshStatus]);
 
-  // A completed state is shown briefly, then the assistant returns to idle.
+  // Done is shown briefly, then the widget returns to Ready on its own.
   useEffect(() => {
     if (state.phase !== "done") return;
     const timer = setTimeout(() => dispatch({ type: "settle" }), DONE_SETTLE_MS);
@@ -281,17 +318,17 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   }, [state.phase]);
 
   const cancel = useCallback(async () => {
-    const current = stateRef.current;
-    if (current.sessionId) cancelled.current.add(current.sessionId);
+    const now = stateRef.current;
+    if (now.sessionId) cancelled.current.add(now.sessionId);
     try {
       await client.kalvoiceListenCancel();
     } catch {
       // Nothing was listening.
     }
-    if (current.phase === "transcribing" && current.sessionId) {
+    if (now.phase === "transcribing" && now.sessionId) {
       dispatch({
         type: "signal",
-        signal: { kind: "cancelled", sessionId: current.sessionId, mode: current.mode ?? "dictation" },
+        signal: { kind: "cancelled", sessionId: now.sessionId, mode: now.mode ?? "command" },
       });
     }
   }, [client]);
@@ -310,26 +347,62 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [cancel]);
 
-  const startListening = useCallback(
-    async (mode: KalVoiceMode) => {
-      try {
-        await client.kalvoiceListenStart(mode);
-      } catch {
-        // The native side reports why as a `listening_failed` signal.
-      }
-    },
-    [client],
-  );
+  const startListening = useCallback(async () => {
+    try {
+      await client.kalvoiceListenStart("command");
+    } catch {
+      // The native side reports why as a `listening_failed` signal.
+    }
+  }, [client]);
 
   const stopListening = useCallback(async () => {
     const id = stateRef.current.sessionId;
     if (!id) return;
     try {
       await client.kalvoiceListenStop(id);
-    } catch (error) {
-      toast.show({ tone: "danger", title: "KalVoice", description: toKalCodeError(error).message });
+    } catch {
+      // Already finished (e.g. the release came first).
     }
-  }, [client, toast]);
+  }, [client]);
+
+  const typeInstead = useCallback(async () => {
+    const last = stateRef.current.lastTalk;
+    const saved = undo.current;
+    if (!last || !saved || saved.requestId !== last.requestId || !saved.target) return;
+    if (!targetIsAlive(saved.target)) {
+      dispatch({ type: "dictation_blocked", message: "That text box has closed." });
+      return;
+    }
+    if (saved.previous) navigate(saved.previous);
+    insertTranscript(saved.target, last.text);
+    let refunded = false;
+    try {
+      refunded = await client.kalvoiceTypeInstead(last.requestId);
+    } catch {
+      // Keeps the typed text either way.
+    }
+    undo.current = null;
+    dispatch({
+      type: "typed_instead",
+      message: refunded ? "Typed instead." : "Typed instead. The command itself can't be undone.",
+    });
+    if (refunded) void refreshStatus();
+  }, [client, navigate, refreshStatus]);
+
+  const decideApproval = useCallback(
+    async (decision: ApprovalDecision) => {
+      const id = stateRef.current.approvalRequestId;
+      if (!id) return;
+      try {
+        await client.decideApproval(id, decision);
+      } catch (error) {
+        toast.show({ tone: "danger", title: "Approval not recorded", description: toKalCodeError(error).message });
+      }
+    },
+    [client, toast],
+  );
+
+  const dismiss = useCallback(() => dispatch({ type: "dismiss" }), []);
 
   const downloadModel = useCallback(
     async (modelId: string) => {
@@ -383,10 +456,9 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
 
   const panelRef = useRef(panel);
   panelRef.current = panel;
-
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  /** Moves or resizes the panel now and saves it shortly after (keyboard moves come in bursts). */
+  /** Moves or resizes the widget now and saves it shortly after (keyboard moves come in bursts). */
   const setPanel = useCallback(
     (next: { anchor?: PanelAnchor; x?: number; y?: number; view?: PanelView }) => {
       const merged = { ...panelRef.current, ...next };
@@ -399,7 +471,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
         }).catch((error) => {
           toast.show({
             tone: "danger",
-            title: "KalVoice panel position not saved",
+            title: "KalVoice position not saved",
             description: toKalCodeError(error).message,
           });
         });
@@ -409,20 +481,16 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   );
 
   const setPanelVisible = useCallback(
-    (visible: boolean) => {
-      setStatus((current) =>
-        current ? { ...current, preferences: { ...current.preferences, panelVisible: visible } } : current,
-      );
-      void updatePreferences({ panelVisible: visible }).catch(() => undefined);
+    (next: boolean) => {
+      setStatus((s) => (s ? { ...s, preferences: { ...s.preferences, panelVisible: next } } : s));
+      void updatePreferences({ panelVisible: next }).catch(() => undefined);
     },
     [updatePreferences],
   );
 
-  const openAssistant = useCallback(() => {
-    setPanelVisible(true);
-    setLocalPanel((p) => ({ ...p, view: "expanded" }));
-    setFocusToken((n) => n + 1);
-  }, [setPanelVisible]);
+  const canTypeInstead = Boolean(
+    state.lastTalk?.route === "command" && state.lastTalk.hadTarget && state.phase === "done",
+  );
 
   const value = useMemo<KalVoiceValue>(
     () => ({
@@ -435,18 +503,20 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       startListening,
       stopListening,
       cancel,
+      typeInstead,
+      canTypeInstead,
+      decideApproval,
+      dismiss,
       updatePreferences,
       downloads,
       downloadModel,
       cancelDownload,
       deleteModel,
       history,
-      focusToken,
       sizeClass,
       panel,
       setPanel,
       setPanelVisible,
-      openAssistant,
     }),
     [
       status,
@@ -457,18 +527,20 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       startListening,
       stopListening,
       cancel,
+      typeInstead,
+      canTypeInstead,
+      decideApproval,
+      dismiss,
       updatePreferences,
       downloads,
       downloadModel,
       cancelDownload,
       deleteModel,
       history,
-      focusToken,
       sizeClass,
       panel,
       setPanel,
       setPanelVisible,
-      openAssistant,
     ],
   );
 

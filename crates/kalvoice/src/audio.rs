@@ -57,6 +57,11 @@ pub trait ActiveCapture: Send {
     fn level(&self) -> f32 {
         0.0
     }
+    /// The audio so far, mono at [`TARGET_RATE`], for streaming recognition while the key is
+    /// held. A copy that stays in memory.
+    fn snapshot(&self) -> Vec<f32> {
+        Vec::new()
+    }
 }
 
 /// Maps an RMS amplitude to a 0–1 display level (speech sits around 0.3–0.8).
@@ -317,6 +322,20 @@ mod mic {
 
         fn level(&self) -> f32 {
             super::display_level(f32::from_bits(self.shared.level.load(Ordering::Relaxed)))
+        }
+
+        fn snapshot(&self) -> Vec<f32> {
+            let rate = self.shared.rate.load(Ordering::SeqCst);
+            let raw = self
+                .shared
+                .samples
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            let mut raw = raw;
+            let out = resample_to_16k(&raw, rate);
+            raw.fill(0.0);
+            out
         }
     }
 

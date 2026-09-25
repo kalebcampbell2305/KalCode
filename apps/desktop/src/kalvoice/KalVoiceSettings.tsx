@@ -1,14 +1,13 @@
-import type { KalVoiceMode, PanelAnchor, SpeechModelInfo } from "@kalcode/protocol";
+import type { PanelAnchor, SpeechModelInfo } from "@kalcode/protocol";
 import { Badge, Button, Section, Skeleton } from "@kalcode/ui/components";
 import { AlertDialog } from "radix-ui";
 import { type KeyboardEvent, useId, useState } from "react";
 import { toKalCodeError } from "../ipc/errors.ts";
-import { IS_MAC } from "../shell/shortcuts.ts";
 import { formatBytes } from "./assistantState.ts";
 import { useKalVoice, useOptionalKalVoice } from "./KalVoiceProvider.tsx";
 import styles from "./KalVoiceSettings.module.css";
 import { ANCHOR_LABELS } from "./panelGeometry.ts";
-import { shortcutFromEvent, shortcutKeys, validateShortcut } from "./shortcutModel.ts";
+import { checkReserved, displayKey, talkKeyFromEvent } from "./shortcutModel.ts";
 
 const ANCHORS: PanelAnchor[] = [
   "bottom_right",
@@ -67,13 +66,13 @@ function KalVoiceSettingsSection() {
         )
       ) : (
         <div className={styles.rows}>
-          <ShortcutRow mode="dictation" />
-          <ShortcutRow mode="command" />
+          <TalkKeyRow />
           {status.shortcutIssues.map((issue) => (
-            <p key={issue.mode} className={styles.issue} role="alert">
-              {issue.mode === "dictation" ? "Dictation" : "Command"} shortcut unavailable: {issue.message}
+            <p key={issue.accelerator} className={styles.issue} role="alert">
+              {displayKey(issue.accelerator)} unavailable: {issue.message}
             </p>
           ))}
+          <TalkEnabledRow />
           <IntelligenceRow />
           <ModelsRow />
           <VoiceRepliesRow />
@@ -84,39 +83,34 @@ function KalVoiceSettingsSection() {
   );
 }
 
-function ShortcutRow({ mode }: { mode: KalVoiceMode }) {
+function TalkKeyRow() {
   const { status, updatePreferences } = useKalVoice();
-  const [recording, setRecording] = useState(false);
+  const [capturing, setCapturing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const errorId = useId();
   if (!status) return null;
-  const prefs = status.preferences;
-  const current = mode === "dictation" ? prefs.dictationShortcut : prefs.commandShortcut;
-  const other = mode === "dictation" ? prefs.commandShortcut : prefs.dictationShortcut;
-  const id = `kalvoice-${mode}-shortcut`;
+  const current = status.preferences.talkKey;
 
   const onKeyDown = async (event: KeyboardEvent<HTMLButtonElement>) => {
-    if (!recording) return;
+    if (!capturing) return;
     event.preventDefault();
     event.stopPropagation();
     if (event.key === "Escape") {
-      setRecording(false);
+      setCapturing(false);
       return;
     }
-    const pressed = shortcutFromEvent(event);
-    if (!pressed) return; // modifiers only so far
-    setRecording(false);
-    const checked = validateShortcut(pressed, other, status.reservedShortcuts, IS_MAC);
+    setCapturing(false);
+    // Whatever the keyboard actually delivers: Fn is only ever offered if it arrives.
+    const pressed = talkKeyFromEvent(event, status.talkKeys);
+    const checked = pressed.ok ? checkReserved(pressed.value, status.reservedShortcuts) : pressed;
     if (!checked.ok) {
       setError(checked.message);
       return;
     }
     setSaving(true);
     try {
-      await updatePreferences(
-        mode === "dictation" ? { dictationShortcut: checked.value } : { commandShortcut: checked.value },
-      );
+      await updatePreferences({ talkKey: checked.value });
       setError(null);
     } catch (e) {
       setError(toKalCodeError(e).message);
@@ -128,41 +122,63 @@ function ShortcutRow({ mode }: { mode: KalVoiceMode }) {
   return (
     <div className={styles.shortcutBlock}>
       <Row
-        id={id}
-        label={mode === "dictation" ? "Dictation shortcut" : "Command shortcut"}
-        help={
-          mode === "dictation"
-            ? "Hold to dictate into the focused text box; release to insert. Unlimited on every plan."
-            : "Press to open KalVoice and type; hold to speak a command. Each request counts once."
-        }
+        id="kalvoice-talk-key"
+        label="Push-to-talk key"
+        help="Hold it, speak, release. KalVoice runs commands it recognizes, types into the box you're in, or answers with your provider. It works only while KalCode is in front, so other apps keep the key."
       >
         <span className={styles.keys}>
-          {shortcutKeys(current, IS_MAC).map((k) => (
-            <kbd key={k}>{k}</kbd>
-          ))}
+          <kbd>{displayKey(current)}</kbd>
         </span>
         <Button
           size="sm"
           busy={saving}
           aria-describedby={error ? errorId : undefined}
-          aria-label={recording ? "Press the new shortcut, or Escape to cancel" : `Change ${mode} shortcut`}
+          aria-label={capturing ? "Press the key you want to use, or Escape to cancel" : "Change the push-to-talk key"}
           onClick={() => {
             setError(null);
-            setRecording((r) => !r);
+            setCapturing((c) => !c);
           }}
           onKeyDown={(e) => void onKeyDown(e)}
-          onBlur={() => setRecording(false)}
-          data-recording={recording || undefined}
+          onBlur={() => setCapturing(false)}
         >
-          {recording ? "Press new shortcut…" : "Change"}
+          {capturing ? "Press the key you want to use…" : "Change"}
         </Button>
       </Row>
       {error ? (
         <p id={errorId} className={styles.fieldError} role="alert">
           {error}
         </p>
-      ) : null}
+      ) : (
+        <p className={styles.conflictNote}>
+          One key on its own: F1–F24, Pause, Scroll Lock or Insert. Fn isn't offered because it doesn't reach apps on
+          this system; Caps Lock would switch on and off while held.
+        </p>
+      )}
     </div>
+  );
+}
+
+function TalkEnabledRow() {
+  const { status, updatePreferences } = useKalVoice();
+  if (!status) return null;
+  const on = status.preferences.talkEnabled;
+  return (
+    <Row
+      id="kalvoice-talk-enabled"
+      label="Push to talk"
+      help="On by default, including while the widget is hidden. Turn it off to free the key."
+    >
+      <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        aria-labelledby="kalvoice-talk-enabled-label"
+        className={styles.switch}
+        onClick={() => void updatePreferences({ talkEnabled: !on })}
+      >
+        <span className={styles.switchThumb} />
+      </button>
+    </Row>
   );
 }
 
@@ -393,7 +409,7 @@ function PanelRow() {
     <>
       <Row
         id="kalvoice-panel-position"
-        label="Assistant position"
+        label="Widget position"
         help="Where the floating KalVoice assistant starts. Changing it moves the assistant there in every window size."
       >
         <select
@@ -411,8 +427,8 @@ function PanelRow() {
       </Row>
       <Row
         id="kalvoice-panel-visible"
-        label="Show the assistant"
-        help="The floating assistant over your workspace. The command shortcut always brings it back."
+        label="Show the widget"
+        help="The floating KalVoice widget over your workspace. The push-to-talk key brings it back."
       >
         <button
           type="button"

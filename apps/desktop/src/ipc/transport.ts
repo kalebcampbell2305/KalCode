@@ -25,6 +25,10 @@ export type CommandName =
   | "kalvoice_model_download"
   | "kalvoice_model_cancel"
   | "kalvoice_model_delete"
+  | "kalvoice_talk"
+  | "kalvoice_type_instead"
+  | "kalvoice_latency"
+  | "kalvoice_latency_record"
   // Contract commands the Dashboard consumes (docs/CONTRACTS.md). They are implemented natively
   // by Z1 (terminals), Z3 (threads) and Z4 (approvals); until those land, the native runtime
   // rejects them and the client reports `command_unavailable`.

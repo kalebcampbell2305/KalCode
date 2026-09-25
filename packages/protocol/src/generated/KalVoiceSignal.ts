@@ -2,6 +2,11 @@
 import type { KalVoiceMode } from "./KalVoiceMode.ts";
 import type { KalVoiceResponse } from "./KalVoiceResponse.ts";
 import type { RequestStage } from "./RequestStage.ts";
+import type { StageTimings } from "./StageTimings.ts";
 import type { VoiceResult } from "./VoiceResult.ts";
 
-export type KalVoiceSignal = { "kind": "listening_started", sessionId: string, mode: KalVoiceMode, } | { "kind": "level", sessionId: string, level: number, } | { "kind": "transcribing", sessionId: string, mode: KalVoiceMode, } | { "kind": "result", result: VoiceResult, } | { "kind": "listening_failed", sessionId: string | null, mode: KalVoiceMode, code: string, message: string, } | { "kind": "cancelled", sessionId: string, mode: KalVoiceMode, } | { "kind": "open_command_bar" } | { "kind": "model_progress", modelId: string, receivedBytes: number, totalBytes: number, } | { "kind": "model_installed", modelId: string, } | { "kind": "model_failed", modelId: string, code: string, message: string, } | { "kind": "request_stage", requestId: string, stage: RequestStage, } | { "kind": "request_resolved", response: KalVoiceResponse, } | { "kind": "speaking", requestId: string, active: boolean, };
+export type KalVoiceSignal = { "kind": "listening_started", sessionId: string, mode: KalVoiceMode, } | { "kind": "level", sessionId: string, level: number, } | { "kind": "partial", sessionId: string, text: string, } | { "kind": "transcribing", sessionId: string, mode: KalVoiceMode, } | { "kind": "result", result: VoiceResult, 
+/**
+ * Stage timings measured natively (key-down to final transcript).
+ */
+timings: StageTimings, } | { "kind": "listening_failed", sessionId: string | null, mode: KalVoiceMode, code: string, message: string, } | { "kind": "cancelled", sessionId: string, mode: KalVoiceMode, } | { "kind": "reveal" } | { "kind": "model_progress", modelId: string, receivedBytes: number, totalBytes: number, } | { "kind": "model_installed", modelId: string, } | { "kind": "model_failed", modelId: string, code: string, message: string, } | { "kind": "request_stage", requestId: string, stage: RequestStage, } | { "kind": "request_resolved", response: KalVoiceResponse, } | { "kind": "speaking", requestId: string, active: boolean, };

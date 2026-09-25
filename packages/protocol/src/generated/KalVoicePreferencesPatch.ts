@@ -6,7 +6,7 @@ import type { PanelPlacement } from "./PanelPlacement.ts";
 /**
  * A partial update. Unknown fields are rejected.
  */
-export type KalVoicePreferencesPatch = { dictationShortcut?: string, commandShortcut?: string, intelligence?: IntelligenceChoice, speechModel?: string, voiceReplies?: boolean, 
+export type KalVoicePreferencesPatch = { talkKey?: string, talkEnabled?: boolean, intelligence?: IntelligenceChoice, speechModel?: string, voiceReplies?: boolean, 
 /**
  * Also forgets remembered placements, so the panel moves to the new default.
  */

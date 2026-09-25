@@ -1,0 +1,15 @@
+{
+  "$comment": "KalVoice latency budgets (milliseconds). `targets` are the product goals; `regression` is the measured baseline on the reference machine plus headroom, and fails `latency_bench --check`. Refresh `regression` only with a written reason in docs/campaigns/Z12.md.",
+  "targets": {
+    "keyDownToMic": { "p95": 50 },
+    "keyUpToFinal": { "p95": 250 },
+    "finalToRecognized": { "p95": 5 },
+    "recognizedToExecuted": { "p95": 100 }
+  },
+  "regression": {
+    "keyDownToMic": { "p95": 50 },
+    "keyUpToFinal": { "p95": 1500 },
+    "finalToRecognized": { "p95": 5 },
+    "recognizedToExecuted": { "p95": 100 }
+  }
+}

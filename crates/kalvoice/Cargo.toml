@@ -42,3 +42,14 @@ tempfile.workspace = true
 
 [lints]
 workspace = true
+
+[[example]]
+name = "stt_probe"
+required-features = ["whisper"]
+
+[[example]]
+name = "mic_probe"
+
+[[example]]
+name = "latency_bench"
+required-features = ["whisper"]

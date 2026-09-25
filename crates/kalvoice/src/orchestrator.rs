@@ -37,7 +37,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use ts_rs::TS;
 
-use crate::grammar::{self, NamedTarget, Understood};
+use crate::grammar::{self, Confidence, NamedTarget, Understood};
 use crate::ledger::{self, Consumption};
 use crate::plan::EntitlementSource;
 use crate::prefs::{self, KalVoicePreferences, KalVoicePreferencesPatch};
@@ -65,6 +65,73 @@ pub enum RequestStage {
     Thinking,
     /// Running a command through the runtime.
     Executing,
+}
+
+/// What had focus when the push-to-talk key went down.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum TalkTarget {
+    /// A text box (composer, search, form field).
+    Field,
+    /// A terminal or provider pane (text goes to its PTY).
+    Terminal,
+    /// Nothing that accepts text.
+    None,
+}
+
+/// Which way a push-to-talk utterance went.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum TalkRoute {
+    /// Ran as a KalCode command.
+    Command,
+    /// Typed into the focused input (never counted).
+    Dictation,
+    /// Sent to the user's provider for reasoning, or refused asking to connect one.
+    Request,
+}
+
+/// One push-to-talk utterance after recognition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TalkRequest {
+    /// Client-generated UUID for the request, if it becomes one.
+    pub request_id: String,
+    pub session_id: String,
+    pub text: String,
+    pub target: TalkTarget,
+    pub duration_ms: u64,
+    pub workspace_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct TalkResponse {
+    pub route: TalkRoute,
+    /// The command or request result (none for dictation).
+    pub response: Option<KalVoiceResponse>,
+    /// Final transcript → route decided, in milliseconds.
+    pub recognized_ms: f64,
+}
+
+/// Decides what an utterance was meant as (docs/KALVOICE.md, "One gesture"):
+/// a command when the grammar recognizes it with high confidence (or at all, when nothing that
+/// takes text had focus); otherwise text for the focused input; otherwise a request.
+pub fn talk_route(text: &str, target: TalkTarget) -> TalkRoute {
+    let (understood, confidence) = grammar::understand_with_confidence(text);
+    let command_like = match &understood {
+        Understood::Intent { intent, .. } => !intent.needs_reasoning(),
+        Understood::Rejected { code, .. } => *code != "empty_request",
+    };
+    match (command_like, confidence, target) {
+        (true, Confidence::High, _) | (true, _, TalkTarget::None) => TalkRoute::Command,
+        (_, _, TalkTarget::Field | TalkTarget::Terminal) => TalkRoute::Dictation,
+        _ => TalkRoute::Request,
+    }
 }
 
 /// A top-level command request from the command bar.
@@ -430,6 +497,74 @@ impl Orchestrator {
                     )
                 }),
         }
+    }
+
+    /// Handles one push-to-talk utterance: routes it, then runs the command or request, or
+    /// records the dictation (never counted). Blocking; call from a background thread.
+    pub fn talk(&self, req: TalkRequest, on_stage: &dyn Fn(RequestStage)) -> Result<TalkResponse> {
+        let started = Instant::now();
+        let route = talk_route(&req.text, req.target);
+        let recognized_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let response = match route {
+            TalkRoute::Dictation => {
+                self.emit(vec![event(
+                    EventPayload::KalVoiceDictationCompleted {
+                        session_id: req.session_id.clone(),
+                        duration_ms: req.duration_ms,
+                        characters: u32::try_from(req.text.chars().count()).unwrap_or(u32::MAX),
+                    },
+                    Correlation::default(),
+                )]);
+                None
+            }
+            TalkRoute::Command | TalkRoute::Request => Some(self.handle_with_stages(
+                CommandRequest {
+                    request_id: req.request_id,
+                    text: req.text,
+                    input: KalVoiceInput::Voice,
+                    workspace_id: req.workspace_id,
+                },
+                on_stage,
+            )?),
+        };
+        Ok(TalkResponse {
+            route,
+            response,
+            recognized_ms,
+        })
+    }
+
+    /// "Type it instead": un-counts a spoken command the user turned into text, when the UI
+    /// could undo it (navigation) and it ran within the last two minutes. Returns whether the
+    /// request was un-counted.
+    pub fn type_instead(&self, request_id: &str) -> Result<bool> {
+        if !is_valid_id(request_id) {
+            return Err(KalError::validation(
+                "invalid_request_id",
+                "KalVoice received an invalid request id.",
+            ));
+        }
+        let now = (self.clock)();
+        let request = request_id.to_owned();
+        let (refunded, _) = self.core.transact(|tx| {
+            let refunded = ledger::refund(tx, &request, now, time::Duration::minutes(2))?;
+            let events = if refunded {
+                vec![event(
+                    EventPayload::KalVoiceRequestFailed {
+                        request_id: request.clone(),
+                        code: "typed_instead".into(),
+                    },
+                    Correlation {
+                        request_id: Some(request.clone()),
+                        ..Correlation::default()
+                    },
+                )]
+            } else {
+                Vec::new()
+            };
+            Ok((refunded, events))
+        })?;
+        Ok(refunded)
     }
 
     /// Continues a command that waited for approval. Returns the final response, or `None`

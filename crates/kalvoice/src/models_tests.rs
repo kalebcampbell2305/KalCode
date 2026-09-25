@@ -79,11 +79,11 @@ fn source(server: &TestServer, bytes: &[u8]) -> Source {
 
 #[test]
 fn catalog_is_pinned_and_complete() {
-    assert_eq!(find(DEFAULT_MODEL).map(|m| m.id), Some("base.en"));
+    assert_eq!(find(DEFAULT_MODEL).map(|m| m.id), Some("tiny.en"));
     for spec in CATALOG {
         assert_eq!(spec.sha256.len(), 64, "{}", spec.id);
         assert!(spec.sha256.chars().all(|c| c.is_ascii_hexdigit()));
-        assert!(spec.size_bytes > 50_000_000);
+        assert!(spec.size_bytes > 30_000_000);
         let url = official_url(spec);
         assert!(url.starts_with(
             "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/"

@@ -366,6 +366,99 @@ fn typed_navigation_runs_counts_once_and_records_facts_only() {
     );
 }
 
+fn talk(text: &str, target: TalkTarget) -> TalkRequest {
+    TalkRequest {
+        request_id: new_id(),
+        session_id: new_id(),
+        text: text.into(),
+        target,
+        duration_ms: 1200,
+        workspace_id: None,
+    }
+}
+
+#[test]
+fn one_gesture_routes_commands_dictation_and_requests() {
+    use TalkRoute::{Command, Dictation, Request};
+    use TalkTarget::{Field, None as Nothing, Terminal};
+    let cases = [
+        ("Open four Codex threads.", Field, Command),
+        ("Pause every active thread", Terminal, Command),
+        ("show approvals", Field, Command),
+        ("go to settings", Nothing, Command),
+        ("settings", Nothing, Command),
+        ("settings", Field, Dictation),
+        ("pending approvals", Field, Dictation),
+        ("fix the parser so it handles empty input", Field, Dictation),
+        ("npm test", Terminal, Dictation),
+        ("plan the release", Nothing, Request),
+        ("don't stop the threads", Field, Dictation),
+        ("don't stop the threads", Nothing, Request),
+        ("open 40 codex threads", Field, Command),
+    ];
+    for (text, target, route) in cases {
+        assert_eq!(talk_route(text, target), route, "{text} / {target:?}");
+    }
+}
+
+#[test]
+fn talk_dictation_is_never_counted_and_records_only_facts() {
+    let h = harness();
+    let secret = "the api key is hunter2";
+    let r = h
+        .orchestrator
+        .talk(talk(secret, TalkTarget::Field), &|_| {})
+        .expect("talk");
+    assert_eq!(r.route, TalkRoute::Dictation);
+    assert!(r.response.is_none());
+    assert!(r.recognized_ms < 50.0);
+    assert_eq!(h.orchestrator.usage().expect("usage").used, 0);
+    let events = kalvoice_events(&h.core);
+    assert_eq!(types(&events), ["kalvoice.dictation_completed"]);
+    assert_eq!(events[0]["payload"]["characters"], secret.len());
+    assert!(
+        !serde_json::to_string(&events)
+            .expect("json")
+            .contains("hunter2")
+    );
+}
+
+#[test]
+fn talk_commands_count_and_type_instead_refunds_reversible_ones() {
+    let h = harness();
+    let r = h
+        .orchestrator
+        .talk(talk("go to settings", TalkTarget::Field), &|_| {})
+        .expect("talk");
+    assert_eq!(r.route, TalkRoute::Command);
+    let response = r.response.expect("response");
+    assert!(response.counted);
+    assert_eq!(h.orchestrator.usage().expect("usage").used, 1);
+    assert!(
+        h.orchestrator
+            .type_instead(&response.request_id)
+            .expect("undo")
+    );
+    assert_eq!(h.orchestrator.usage().expect("usage").used, 0);
+    assert!(
+        !h.orchestrator
+            .type_instead(&response.request_id)
+            .expect("again")
+    );
+    let last = kalvoice_events(&h.core).pop().expect("event");
+    assert_eq!(last["payload"]["code"], "typed_instead");
+
+    let request = h
+        .orchestrator
+        .talk(talk("plan the release", TalkTarget::None), &|_| {})
+        .expect("talk");
+    assert_eq!(request.route, TalkRoute::Request);
+    assert!(matches!(
+        request.response.expect("response").outcome,
+        KalVoiceOutcome::NeedsProvider { .. }
+    ));
+}
+
 #[test]
 fn stages_are_reported_in_order() {
     let h = harness();

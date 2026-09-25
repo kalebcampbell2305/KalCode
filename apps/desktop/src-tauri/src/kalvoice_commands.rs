@@ -1,5 +1,11 @@
-//! KalVoice in the desktop shell (campaign Z12): IPC commands, global shortcuts, the listening
-//! lifecycle, speech model downloads, spoken replies, and the runtime seams KalVoice drives.
+//! KalVoice in the desktop shell (campaign Z12): IPC commands, the push-to-talk key, the
+//! listening lifecycle (streaming recognition, latency timings), speech model downloads,
+//! spoken replies, and the runtime seams KalVoice drives.
+//!
+//! Push to talk: one key (F8 by default), registered through the official global-shortcut plugin
+//! only while a KalCode window has focus, so other apps keep the key. Press opens the
+//! microphone; release finishes recognition. A release that can't arrive (the window lost focus
+//! while the key was held) and the two-minute recording cap both finish the session.
 //!
 //! Seams for other campaigns (each returns an honest "not available in this build" today):
 //! - [`DesktopExecutor`]: workspaces and terminals (Z1), threads and status (Z3), approvals (Z4).
@@ -21,11 +27,14 @@ use kalcode_contracts::kalvoice::{KalVoiceIntent, KalVoiceMode, KalVoiceOutcome}
 use kalcode_contracts::permissions::PermissionMode;
 use kalcode_contracts::permissions::{ApprovalDecision, AskUnlessReadGate};
 use kalcode_core::{AppInfo, Core, IpcError, KalError};
+use kalcode_kalvoice::audio::MAX_RECORDING;
 use kalcode_kalvoice::audio::MicrophoneSource;
+use kalcode_kalvoice::latency::{LatencyLog, LatencySnapshot};
 use kalcode_kalvoice::models::{self, ModelError, ModelStore, SpeechModelInfo};
 use kalcode_kalvoice::orchestrator::{
     CommandRequest, ExecContext, ExecError, Executed, Executor, KalVoiceResponse, Orchestrator,
-    ProviderChoice, ProviderDirectory, RequestStage, UiDirective, provider_display_name,
+    ProviderChoice, ProviderDirectory, RequestStage, TalkRequest, TalkResponse, UiDirective,
+    provider_display_name,
 };
 use kalcode_kalvoice::plan::ProvisionalEntitlement;
 use kalcode_kalvoice::prefs::{KalVoicePreferences, KalVoicePreferencesPatch};
@@ -38,10 +47,6 @@ use kalcode_providers::{ClaudeCodeProvider, DetectEnv, ProviderRegistry};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State, Webview};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, ShortcutState};
-
-/// A press of the command shortcut shorter than this opens the bar for typing; holding it
-/// longer records a spoken command.
-const TAP: Duration = Duration::from_millis(400);
 
 /// Tauri-managed state. `None` when the core failed to start or KalVoice is off in this
 /// build channel (then no shortcut is registered and every command explains why).
@@ -57,8 +62,8 @@ impl KalVoiceState {
 
 #[derive(Default)]
 struct Registered {
-    dictation: Option<Shortcut>,
-    command: Option<Shortcut>,
+    /// The push-to-talk key while it is registered (only while KalCode has focus).
+    talk: Option<Shortcut>,
     issues: Vec<ShortcutIssue>,
 }
 
@@ -74,7 +79,9 @@ pub struct KalVoiceRuntime {
     microphone_supported: bool,
     channels: Mutex<HashMap<String, Channel<KalVoiceSignal>>>,
     shortcuts: Mutex<Registered>,
-    command_pressed_at: Mutex<Option<Instant>>,
+    /// Whether a KalCode window has focus (the talk key is registered only then).
+    focused: AtomicBool,
+    latency: LatencyLog,
 }
 
 impl KalVoiceRuntime {
@@ -104,6 +111,8 @@ impl KalVoiceRuntime {
             voice_output_available: self.speech().available(),
             providers: self.providers.connected(),
             reserved_shortcuts: shortcuts::reserved(),
+            talk_keys: shortcuts::allowed_keys(),
+            talk_key_active: registered.talk.is_some(),
             shortcut_issues: registered.issues.clone(),
             listening: self
                 .voice
@@ -378,6 +387,10 @@ pub fn init(
         Arc::new(MicrophoneSource),
         recognizers.clone(),
     );
+    let focused = app
+        .get_webview_window("main")
+        .and_then(|w| w.is_focused().ok())
+        .unwrap_or(false);
     let runtime = Arc::new(KalVoiceRuntime {
         core: core.clone(),
         providers,
@@ -389,11 +402,24 @@ pub fn init(
         microphone_supported: cfg!(any(windows, target_os = "macos")),
         channels: Mutex::new(HashMap::new()),
         shortcuts: Mutex::new(Registered::default()),
-        command_pressed_at: Mutex::new(None),
+        focused: AtomicBool::new(focused),
+        latency: LatencyLog::new(200),
     });
-    if let Ok(prefs) = runtime.orchestrator.preferences() {
-        register_shortcuts(app, &runtime, &prefs);
-    }
+    // Live partial transcripts go to the UI as ghost text.
+    let partial_runtime = Arc::downgrade(&runtime);
+    runtime
+        .voice
+        .set_partial_notifier(Arc::new(move |session_id: &str, text: &str| {
+            if let Some(runtime) = partial_runtime.upgrade() {
+                runtime.signal(&KalVoiceSignal::Partial {
+                    session_id: session_id.to_owned(),
+                    text: text.to_owned(),
+                });
+            }
+        }));
+    refresh_talk_key(app, &runtime);
+    follow_focus(app, &runtime);
+    keep_warm(&runtime);
     follow_approvals(&runtime);
     KalVoiceState(Some(runtime), "")
 }
@@ -437,121 +463,150 @@ fn parse_shortcut(accelerator: &str) -> Option<Shortcut> {
     Shortcut::from_str(accelerator).ok()
 }
 
-/// (Re)registers both shortcuts. Failures (another app owns the combination) are recorded as
-/// issues for Settings instead of failing startup.
-fn register_shortcuts(app: &AppHandle, runtime: &KalVoiceRuntime, prefs: &KalVoicePreferences) {
+/// Loads the speech model in the background so the first key press doesn't wait for it.
+fn keep_warm(runtime: &Arc<KalVoiceRuntime>) {
+    let runtime = runtime.clone();
+    let _ = std::thread::Builder::new()
+        .name("kalvoice-warm".into())
+        .spawn(move || {
+            let started = Instant::now();
+            match runtime.voice.warm() {
+                Ok(()) => tracing::info!(
+                    event = "kalvoice.model_warm",
+                    load_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+                ),
+                Err(error) => {
+                    tracing::info!(event = "kalvoice.model_not_warm", code = error.code())
+                }
+            }
+        });
+}
+
+/// Registers the talk key while KalCode has focus; releases it (and finishes any session whose
+/// key-up could now be missed) when focus goes elsewhere.
+fn follow_focus(app: &AppHandle, runtime: &Arc<KalVoiceRuntime>) {
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let handle = app.clone();
+    let weak = Arc::downgrade(runtime);
+    window.on_window_event(move |event| {
+        let tauri::WindowEvent::Focused(focused) = event else {
+            return;
+        };
+        let Some(runtime) = weak.upgrade() else {
+            return;
+        };
+        runtime.focused.store(*focused, Ordering::SeqCst);
+        if !*focused && let Some((id, mode)) = runtime.voice.listening() {
+            // The key-up will go to another app: finish with what was said so far.
+            finish_listening(runtime.clone(), id, mode);
+        }
+        refresh_talk_key(&handle, &runtime);
+    });
+}
+
+/// Registers or releases the push-to-talk key to match focus and preferences. A key the OS
+/// refuses (another app registered it globally) is reported as an issue for Settings.
+fn refresh_talk_key(app: &AppHandle, runtime: &KalVoiceRuntime) {
+    let Ok(prefs) = runtime.orchestrator.preferences() else {
+        return;
+    };
+    let want = runtime.focused.load(Ordering::SeqCst) && prefs.talk_enabled;
     let manager = app.global_shortcut();
     let mut registered = runtime
         .shortcuts
         .lock()
         .unwrap_or_else(PoisonError::into_inner);
-    for old in [registered.dictation.take(), registered.command.take()]
-        .into_iter()
-        .flatten()
+    let desired = parse_shortcut(&prefs.talk_key);
+    if (!want || registered.talk != desired)
+        && let Some(old) = registered.talk.take()
     {
         let _ = manager.unregister(old);
     }
+    if !want || registered.talk.is_some() {
+        return;
+    }
     registered.issues.clear();
-    for (mode, accelerator) in [
-        (KalVoiceMode::Dictation, &prefs.dictation_shortcut),
-        (KalVoiceMode::Command, &prefs.command_shortcut),
-    ] {
-        let result = parse_shortcut(accelerator)
-            .ok_or_else(|| "KalCode couldn't read this shortcut.".to_owned())
-            .and_then(|shortcut| {
-                manager.register(shortcut).map(|()| shortcut).map_err(|_| {
-                    "Another app is already using this shortcut. Choose a different one.".to_owned()
-                })
+    let result = desired
+        .ok_or_else(|| "KalCode couldn't read this key.".to_owned())
+        .and_then(|shortcut| {
+            manager
+                .register(shortcut)
+                .map(|()| shortcut)
+                .map_err(|_| "Another app is using this key. Choose a different one.".to_owned())
+        });
+    match result {
+        Ok(shortcut) => registered.talk = Some(shortcut),
+        Err(message) => {
+            tracing::warn!(event = "kalvoice.talk_key_unavailable");
+            registered.issues.push(ShortcutIssue {
+                mode: KalVoiceMode::Command,
+                accelerator: prefs.talk_key.clone(),
+                message,
             });
-        match result {
-            Ok(shortcut) => match mode {
-                KalVoiceMode::Dictation => registered.dictation = Some(shortcut),
-                KalVoiceMode::Command => registered.command = Some(shortcut),
-            },
-            Err(message) => {
-                tracing::warn!(event = "kalvoice.shortcut_unavailable", mode = ?mode);
-                registered.issues.push(ShortcutIssue {
-                    mode,
-                    accelerator: accelerator.clone(),
-                    message,
-                });
-            }
         }
     }
 }
 
-/// Global shortcut handler (registered with the plugin in `lib.rs`).
+/// Global shortcut handler (registered with the plugin in `lib.rs`): hold to talk.
 pub fn on_shortcut(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {
+    let pressed = Instant::now();
     let Some(state) = app.try_state::<KalVoiceState>() else {
         return;
     };
     let Some(runtime) = state.0.clone() else {
         return;
     };
-    let mode = {
-        let registered = runtime
-            .shortcuts
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if registered.dictation.as_ref() == Some(shortcut) {
-            KalVoiceMode::Dictation
-        } else if registered.command.as_ref() == Some(shortcut) {
-            KalVoiceMode::Command
-        } else {
-            return;
-        }
-    };
-    match (mode, event.state) {
-        (KalVoiceMode::Dictation, ShortcutState::Pressed) => {
-            // Dictation only goes into KalCode's own inputs: ignore it while another app is in
-            // front, so the microphone never opens for a window the user isn't looking at.
-            let focused = app
-                .get_webview_window("main")
-                .and_then(|w| w.is_focused().ok())
-                .unwrap_or(false);
-            if focused {
-                let _ = start_listening(&runtime, KalVoiceMode::Dictation, false);
+    let is_talk = runtime
+        .shortcuts
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .talk
+        .as_ref()
+        == Some(shortcut);
+    if !is_talk {
+        return;
+    }
+    match event.state {
+        ShortcutState::Pressed => {
+            // Key repeat and a second press while listening are ignored (one session at a time).
+            if runtime.voice.listening().is_some() {
+                return;
+            }
+            if let Ok(id) = start_listening_at(&runtime, KalVoiceMode::Command, false, pressed) {
+                // Bring the widget back if it was hidden; the key works either way.
+                runtime.signal(&KalVoiceSignal::Reveal);
+                watchdog(runtime.clone(), id);
             }
         }
-        (KalVoiceMode::Dictation, ShortcutState::Released) => {
-            if let Some((id, KalVoiceMode::Dictation)) = runtime.voice.listening() {
-                finish_listening(runtime, id, KalVoiceMode::Dictation);
-            }
-        }
-        (KalVoiceMode::Command, ShortcutState::Pressed) => {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
-            runtime.signal(&KalVoiceSignal::OpenCommandBar);
-            *runtime
-                .command_pressed_at
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner) = Some(Instant::now());
-            // Holding the shortcut speaks a command; quietly skip when speech isn't set up
-            // (the bar is open for typing either way).
-            let _ = start_listening(&runtime, KalVoiceMode::Command, true);
-        }
-        (KalVoiceMode::Command, ShortcutState::Released) => {
-            let pressed = runtime
-                .command_pressed_at
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .take();
-            if let Some((id, KalVoiceMode::Command)) = runtime.voice.listening() {
-                if pressed.is_some_and(|at| at.elapsed() < TAP) {
-                    runtime.voice.cancel(Some(&id));
-                    runtime.signal(&KalVoiceSignal::Cancelled {
-                        session_id: id,
-                        mode: KalVoiceMode::Command,
-                    });
-                } else {
-                    finish_listening(runtime, id, KalVoiceMode::Command);
-                }
+        ShortcutState::Released => {
+            if let Some((id, mode)) = runtime.voice.listening() {
+                finish_listening(runtime, id, mode);
             }
         }
     }
+}
+
+/// Finishes a session that is still open at the recording cap (a key-up that never came).
+fn watchdog(runtime: Arc<KalVoiceRuntime>, session_id: String) {
+    let _ = std::thread::Builder::new()
+        .name("kalvoice-watchdog".into())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(Duration::from_millis(250));
+                match runtime.voice.listening_for(&session_id) {
+                    None => return,
+                    Some(held) if held >= MAX_RECORDING => {
+                        if let Some((id, mode)) = runtime.voice.listening() {
+                            finish_listening(runtime.clone(), id, mode);
+                        }
+                        return;
+                    }
+                    Some(_) => {}
+                }
+            }
+        });
 }
 
 fn start_listening(
@@ -559,7 +614,16 @@ fn start_listening(
     mode: KalVoiceMode,
     quiet: bool,
 ) -> Result<String, VoiceError> {
-    match runtime.voice.begin(mode) {
+    start_listening_at(runtime, mode, quiet, Instant::now())
+}
+
+fn start_listening_at(
+    runtime: &Arc<KalVoiceRuntime>,
+    mode: KalVoiceMode,
+    quiet: bool,
+    pressed: Instant,
+) -> Result<String, VoiceError> {
+    match runtime.voice.begin_at(mode, pressed) {
         Ok(session_id) => {
             runtime.signal(&KalVoiceSignal::ListeningStarted {
                 session_id: session_id.clone(),
@@ -598,7 +662,8 @@ fn stream_level(runtime: Arc<KalVoiceRuntime>, session_id: String) {
         });
 }
 
-/// Stops the microphone and transcribes on a background thread; the result arrives as a signal.
+/// Stops the microphone and finishes recognition on a background thread; the transcript and
+/// stage timings arrive as a signal.
 fn finish_listening(runtime: Arc<KalVoiceRuntime>, session_id: String, mode: KalVoiceMode) {
     runtime.signal(&KalVoiceSignal::Transcribing {
         session_id: session_id.clone(),
@@ -607,8 +672,14 @@ fn finish_listening(runtime: Arc<KalVoiceRuntime>, session_id: String, mode: Kal
     let _ = std::thread::Builder::new()
         .name("kalvoice-transcribe".into())
         .spawn(move || {
-            let signal = match runtime.voice.end(&session_id) {
-                Ok(result) => KalVoiceSignal::Result { result },
+            let signal = match runtime.voice.end_timed(&session_id) {
+                Ok(finished) => {
+                    runtime.latency.record(finished.timings.clone());
+                    KalVoiceSignal::Result {
+                        result: finished.result,
+                        timings: finished.timings,
+                    }
+                }
                 Err(error) => KalVoiceSignal::ListeningFailed {
                     session_id: Some(session_id),
                     mode,
@@ -700,6 +771,70 @@ pub async fn kalvoice_request(
     .await
 }
 
+/// Routes one push-to-talk utterance (command, dictation or request) and runs it.
+#[tauri::command]
+pub async fn kalvoice_talk(
+    state: State<'_, KalVoiceState>,
+    request: TalkRequest,
+) -> Result<TalkResponse, IpcError> {
+    let runtime = state.runtime()?.clone();
+    blocking("kalvoice_talk", move || {
+        let request_id = request.request_id.clone();
+        let stage_runtime = runtime.clone();
+        let on_stage = move |stage: RequestStage| {
+            stage_runtime.signal(&KalVoiceSignal::RequestStage {
+                request_id: request_id.clone(),
+                stage,
+            });
+        };
+        let talked = runtime
+            .orchestrator
+            .talk(request, &on_stage)
+            .map_err(to_ipc("kalvoice_talk"))?;
+        runtime.latency.record_recognized(talked.recognized_ms);
+        if let Some(response) = &talked.response {
+            speak_reply(&runtime, response);
+        }
+        Ok(talked)
+    })
+    .await
+}
+
+/// "Type it instead": un-counts a spoken command the UI has undone. Returns whether it was
+/// un-counted.
+#[tauri::command(async)]
+pub fn kalvoice_type_instead(
+    state: State<'_, KalVoiceState>,
+    request_id: String,
+) -> Result<bool, IpcError> {
+    state
+        .runtime()?
+        .orchestrator
+        .type_instead(&request_id)
+        .map_err(|e| e.to_ipc())
+}
+
+/// Rolling latency percentiles and recent stage waterfalls (developer diagnostics).
+#[tauri::command(async)]
+pub fn kalvoice_latency(state: State<'_, KalVoiceState>) -> Result<LatencySnapshot, IpcError> {
+    Ok(state.runtime()?.latency.snapshot())
+}
+
+/// Records the last stage (command → visible action), measured in the UI.
+#[tauri::command(async)]
+pub fn kalvoice_latency_record(
+    state: State<'_, KalVoiceState>,
+    action_ms: f64,
+) -> Result<(), IpcError> {
+    if !action_ms.is_finite() || !(0.0..=60_000.0).contains(&action_ms) {
+        return Err(
+            KalError::validation("invalid_latency", "That timing is out of range.").to_ipc(),
+        );
+    }
+    state.runtime()?.latency.record_action(action_ms);
+    Ok(())
+}
+
 fn speak_reply(runtime: &Arc<KalVoiceRuntime>, response: &KalVoiceResponse) {
     let enabled = runtime
         .orchestrator
@@ -739,8 +874,8 @@ fn speak_reply(runtime: &Arc<KalVoiceRuntime>, response: &KalVoiceResponse) {
     }
 }
 
-/// Saves preferences. Shortcut changes are registered with the OS first; if the OS refuses a
-/// new combination, nothing is saved.
+/// Saves preferences. A new push-to-talk key is registered with the OS right away (while
+/// KalCode has focus); if the OS refuses it, the previous key is restored and nothing is saved.
 #[tauri::command]
 pub async fn kalvoice_preferences_update(
     app: AppHandle,
@@ -757,40 +892,35 @@ pub async fn kalvoice_preferences_update(
             .orchestrator
             .update_preferences(&patch)
             .map_err(|e| e.to_ipc())?;
-        let shortcuts_changed = saved.dictation_shortcut != before.dictation_shortcut
-            || saved.command_shortcut != before.command_shortcut;
-        if shortcuts_changed {
-            register_shortcuts(&app, &runtime, &saved);
+        if saved.talk_key != before.talk_key || saved.talk_enabled != before.talk_enabled {
+            refresh_talk_key(&app, &runtime);
             let refused = runtime
                 .shortcuts
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .issues
                 .iter()
-                .find(|issue| {
-                    issue.accelerator == saved.dictation_shortcut
-                        || issue.accelerator == saved.command_shortcut
-                })
-                .cloned();
-            if let Some(issue) = refused {
-                // Put the previous shortcuts back, in storage and with the OS.
+                .any(|issue| issue.accelerator == saved.talk_key);
+            if refused && saved.talk_key != before.talk_key {
                 let _ = runtime
                     .orchestrator
                     .update_preferences(&KalVoicePreferencesPatch {
-                        dictation_shortcut: Some(before.dictation_shortcut.clone()),
-                        command_shortcut: Some(before.command_shortcut.clone()),
+                        talk_key: Some(before.talk_key.clone()),
                         ..Default::default()
                     });
-                register_shortcuts(&app, &runtime, &before);
+                refresh_talk_key(&app, &runtime);
                 return Err(KalError::validation(
-                    "shortcut_in_use",
+                    "talk_key_in_use",
                     format!(
-                        "{} is already used by another app. Choose a different one.",
-                        shortcuts::display(&issue.accelerator)
+                        "{} is already used by another app. Choose a different key.",
+                        shortcuts::display(&saved.talk_key)
                     ),
                 )
                 .to_ipc());
             }
+        }
+        if saved.speech_model != before.speech_model {
+            keep_warm(&runtime);
         }
         runtime
             .status()
@@ -880,6 +1010,7 @@ pub fn kalvoice_model_download(
                         });
                     }
                 });
+            let installed = result.is_ok();
             let signal = match result {
                 Ok(_) => KalVoiceSignal::ModelInstalled { model_id },
                 Err(error) => KalVoiceSignal::ModelFailed {
@@ -889,6 +1020,9 @@ pub fn kalvoice_model_download(
                 },
             };
             runtime.signal(&signal);
+            if installed {
+                keep_warm(&runtime);
+            }
         })
         .map_err(|e| {
             KalError::internal(
@@ -930,16 +1064,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_valid_kalvoice_shortcut_parses_for_the_os() {
-        for accelerator in [
-            shortcuts::DEFAULT_DICTATION,
-            shortcuts::DEFAULT_COMMAND,
-            "CommandOrControl+Alt+J",
-            "Alt+F5",
-            "CommandOrControl+Shift+Backquote",
-            "CommandOrControl+Alt+Slash",
-        ] {
-            assert!(parse_shortcut(accelerator).is_some(), "{accelerator}");
+    fn every_talk_key_parses_for_the_os_without_modifiers() {
+        for key in shortcuts::allowed_keys() {
+            let shortcut = parse_shortcut(&key).unwrap_or_else(|| panic!("{key}"));
+            assert!(shortcut.mods.is_empty(), "{key}");
         }
         for reserved in shortcuts::reserved() {
             assert!(

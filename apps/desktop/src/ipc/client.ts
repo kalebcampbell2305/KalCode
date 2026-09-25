@@ -10,11 +10,14 @@ import type {
   KalVoiceResponse,
   KalVoiceSignal,
   KalVoiceStatus,
+  LatencySnapshot,
   ProviderStatus,
   SecureStoreCheck,
   Settings,
   SettingsPatch,
   SpeechModelInfo,
+  TalkRequest,
+  TalkResponse,
   ThreadSummary,
 } from "@kalcode/protocol";
 import { toKalCodeError } from "./errors.ts";
@@ -97,6 +100,24 @@ export class KalCodeClient {
 
   kalvoiceRequest(request: CommandRequest): Promise<KalVoiceResponse> {
     return this.call("kalvoice_request", { request });
+  }
+
+  /** One push-to-talk utterance: routed natively to a command, dictation or a request. */
+  kalvoiceTalk(request: TalkRequest): Promise<TalkResponse> {
+    return this.call("kalvoice_talk", { request });
+  }
+
+  /** "Type it instead": un-counts a spoken command the UI undid. */
+  kalvoiceTypeInstead(requestId: string): Promise<boolean> {
+    return this.call("kalvoice_type_instead", { requestId });
+  }
+
+  kalvoiceLatency(): Promise<LatencySnapshot> {
+    return this.call("kalvoice_latency");
+  }
+
+  kalvoiceLatencyRecord(actionMs: number): Promise<void> {
+    return this.call("kalvoice_latency_record", { actionMs });
   }
 
   kalvoiceUpdatePreferences(patch: KalVoicePreferencesPatch): Promise<KalVoiceStatus> {

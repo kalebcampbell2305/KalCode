@@ -1,30 +1,26 @@
 import { Badge, Button, EmptyState, Section } from "@kalcode/ui/components";
 import { AudioLines, MessageSquareText, Sparkles } from "lucide-react";
+import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { useNavigation } from "../shell/navigation.tsx";
 import { Page } from "../shell/Page.tsx";
-import { IS_MAC } from "../shell/shortcuts.ts";
 import { Examples, RequestForm, ResultView, UsageFooter } from "./Assistant.tsx";
 import { usageLine } from "./assistantState.ts";
 import styles from "./KalVoicePage.module.css";
 import { useKalVoice } from "./KalVoiceProvider.tsx";
-import { shortcutKeys } from "./shortcutModel.ts";
+import { LatencyDiagnostics } from "./LatencyDiagnostics.tsx";
+import { displayKey } from "./shortcutModel.ts";
 import { KalVoiceWordmark, Orb } from "./Visuals.tsx";
 
-function Keys({ accelerator }: { accelerator: string }) {
-  return (
-    <span className={styles.keys}>
-      {shortcutKeys(accelerator, IS_MAC).map((k) => (
-        <kbd key={k}>{k}</kbd>
-      ))}
-    </span>
-  );
+function Key({ name }: { name: string }) {
+  return <kbd>{displayKey(name)}</kbd>;
 }
 
 /** The KalVoice surface: ask, see what's ready, and this session's requests. */
 export function KalVoicePage() {
   const kv = useKalVoice();
-  const { status, state, levelRef, history, submit, openAssistant } = kv;
+  const { status, state, levelRef, history, submit, setPanelVisible } = kv;
   const { navigate } = useNavigation();
+  const { info } = useRuntime();
 
   const dictation = !status
     ? null
@@ -79,8 +75,8 @@ export function KalVoicePage() {
       description="Dictate into any KalCode text box and run KalCode by voice or text."
       actions={
         status && !status.preferences.panelVisible ? (
-          <Button variant="primary" icon={<AudioLines />} onClick={openAssistant}>
-            Show the assistant
+          <Button variant="primary" icon={<AudioLines />} onClick={() => setPanelVisible(true)}>
+            Show the widget
           </Button>
         ) : null
       }
@@ -95,7 +91,11 @@ export function KalVoicePage() {
         </figcaption>
       </figure>
 
-      <Section id="kalvoice-ask" title="Ask KalVoice">
+      <Section
+        id="kalvoice-ask"
+        title="Type a request"
+        description="For when you'd rather not speak. The same commands and answers as push to talk."
+      >
         <div className={styles.ask}>
           <RequestForm id="kalvoice-page-request" />
           <ResultView />
@@ -108,15 +108,15 @@ export function KalVoicePage() {
         {status ? (
           <ul className={styles.tiles}>
             <li className={styles.tile}>
-              <p className={styles.tileTitle}>Dictation</p>
+              <p className={styles.tileTitle}>Push to talk</p>
               {dictation ? <Badge tone={dictation.tone}>{dictation.label}</Badge> : null}
               <p className={styles.tileDetail}>{dictation?.detail}</p>
               <p className={styles.tileMeta}>
-                Hold <Keys accelerator={status.preferences.dictationShortcut} /> · never counted
+                Hold <Key name={status.preferences.talkKey} /> to talk to KalVoice
               </p>
               {dictation?.tone === "waiting" ? (
                 <Button size="sm" onClick={() => navigate("settings")}>
-                  Set up dictation
+                  Set up speech
                 </Button>
               ) : null}
             </li>
@@ -124,11 +124,10 @@ export function KalVoicePage() {
               <p className={styles.tileTitle}>Commands</p>
               <Badge tone="success">Ready</Badge>
               <p className={styles.tileDetail}>
-                Navigation runs now; workspaces, terminals and threads join as they ship.
+                Say “Open Dashboard” or “Show approvals”: it runs the moment you let go. Otherwise your words go into
+                the box you're in, uncounted.
               </p>
-              <p className={styles.tileMeta}>
-                Press <Keys accelerator={status.preferences.commandShortcut} />, then speak or type
-              </p>
+              <p className={styles.tileMeta}>Dictation is never counted</p>
             </li>
             <li className={styles.tile}>
               <p className={styles.tileTitle}>Intelligence</p>
@@ -199,6 +198,8 @@ export function KalVoicePage() {
           </ol>
         )}
       </Section>
+
+      {info.channel === "development" ? <LatencyDiagnostics /> : null}
 
       <Section id="kalvoice-privacy" title="Privacy">
         <ul className={styles.privacy}>

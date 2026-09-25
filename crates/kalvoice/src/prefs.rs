@@ -69,10 +69,10 @@ pub struct PanelPlacement {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct KalVoicePreferences {
-    /// Hold to dictate. Canonical accelerator, e.g. `CommandOrControl+Shift+Space`.
-    pub dictation_shortcut: String,
-    /// Press to open the command bar.
-    pub command_shortcut: String,
+    /// The push-to-talk key: hold, speak, release (`F8` by default).
+    pub talk_key: String,
+    /// Push to talk works even while the floating widget is hidden.
+    pub talk_enabled: bool,
     /// Which connected provider handles requests that need reasoning. `None` = automatic: the
     /// only connected provider, if exactly one is connected.
     pub intelligence: Option<KalVoiceIntelligence>,
@@ -82,7 +82,7 @@ pub struct KalVoicePreferences {
     pub voice_replies: bool,
     /// Where the floating panel starts in a window size class it hasn't been placed in.
     pub panel_default: PanelAnchor,
-    /// Whether the floating panel is shown (it reopens with the command shortcut).
+    /// Whether the floating widget is shown (the push-to-talk key brings it back).
     pub panel_visible: bool,
     /// Remembered placement per window size class.
     pub panel_placements: Vec<PanelPlacement>,
@@ -91,8 +91,8 @@ pub struct KalVoicePreferences {
 impl Default for KalVoicePreferences {
     fn default() -> Self {
         Self {
-            dictation_shortcut: shortcuts::DEFAULT_DICTATION.to_owned(),
-            command_shortcut: shortcuts::DEFAULT_COMMAND.to_owned(),
+            talk_key: shortcuts::DEFAULT_TALK_KEY.to_owned(),
+            talk_enabled: true,
             intelligence: None,
             speech_model: models::DEFAULT_MODEL.to_owned(),
             voice_replies: false,
@@ -110,10 +110,10 @@ impl Default for KalVoicePreferences {
 pub struct KalVoicePreferencesPatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub dictation_shortcut: Option<String>,
+    pub talk_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub command_shortcut: Option<String>,
+    pub talk_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub intelligence: Option<IntelligenceChoice>,
@@ -164,8 +164,8 @@ impl IntelligenceChoice {
     }
 }
 
-const KEY_DICTATION: &str = "dictationShortcut";
-const KEY_COMMAND: &str = "commandShortcut";
+const KEY_TALK: &str = "talkKey";
+const KEY_TALK_ENABLED: &str = "talkEnabled";
 const KEY_INTELLIGENCE: &str = "intelligence";
 const KEY_MODEL: &str = "speechModel";
 const KEY_REPLIES: &str = "voiceReplies";
@@ -184,16 +184,14 @@ pub fn load(conn: &Connection) -> Result<KalVoicePreferences> {
             continue;
         };
         let ok = match key.as_str() {
-            KEY_DICTATION => serde_json::from_value::<String>(value)
+            KEY_TALK => serde_json::from_value::<String>(value)
                 .ok()
-                .and_then(|v| shortcuts::canonicalize(&v).ok())
-                .map(|v| prefs.dictation_shortcut = v)
+                .and_then(|v| shortcuts::validate(&v).ok())
+                .map(|v| prefs.talk_key = v)
                 .is_some(),
-            KEY_COMMAND => serde_json::from_value::<String>(value)
-                .ok()
-                .and_then(|v| shortcuts::canonicalize(&v).ok())
-                .map(|v| prefs.command_shortcut = v)
-                .is_some(),
+            KEY_TALK_ENABLED => serde_json::from_value(value)
+                .map(|v| prefs.talk_enabled = v)
+                .is_ok(),
             KEY_INTELLIGENCE => serde_json::from_value(value)
                 .map(|v| prefs.intelligence = v)
                 .is_ok(),
@@ -245,19 +243,12 @@ pub fn apply(
     }
     let current = load(conn)?;
     let mut next = current.clone();
-    if let Some(v) = &patch.dictation_shortcut {
-        next.dictation_shortcut = v.clone();
+    if let Some(v) = &patch.talk_key {
+        next.talk_key = shortcuts::validate(v).map_err(problem)?;
     }
-    if let Some(v) = &patch.command_shortcut {
-        next.command_shortcut = v.clone();
+    if let Some(v) = patch.talk_enabled {
+        next.talk_enabled = v;
     }
-    // Validate both against each other after applying the patch, so swapping works.
-    next.dictation_shortcut =
-        shortcuts::validate(&next.dictation_shortcut, Some(&next.command_shortcut))
-            .map_err(problem)?;
-    next.command_shortcut =
-        shortcuts::validate(&next.command_shortcut, Some(&next.dictation_shortcut))
-            .map_err(problem)?;
     if let Some(choice) = &patch.intelligence {
         let intelligence = choice.clone().into_selection();
         if let Some(KalVoiceIntelligence::Provider { provider_id }) = &intelligence {
@@ -310,14 +301,11 @@ pub fn apply(
 
     let mut changes = Changes::default();
     let mut writes: Vec<(&str, Value)> = Vec::new();
-    if next.dictation_shortcut != current.dictation_shortcut {
-        writes.push((
-            KEY_DICTATION,
-            Value::String(next.dictation_shortcut.clone()),
-        ));
+    if next.talk_key != current.talk_key {
+        writes.push((KEY_TALK, Value::String(next.talk_key.clone())));
     }
-    if next.command_shortcut != current.command_shortcut {
-        writes.push((KEY_COMMAND, Value::String(next.command_shortcut.clone())));
+    if next.talk_enabled != current.talk_enabled {
+        writes.push((KEY_TALK_ENABLED, Value::Bool(next.talk_enabled)));
     }
     if next.intelligence != current.intelligence {
         writes.push((KEY_INTELLIGENCE, serde_json::to_value(&next.intelligence)?));
@@ -387,10 +375,10 @@ mod tests {
     #[test]
     fn defaults() {
         let prefs = load(&conn()).expect("load");
-        assert_eq!(prefs.dictation_shortcut, "CommandOrControl+Shift+Space");
-        assert_eq!(prefs.command_shortcut, "CommandOrControl+Shift+K");
+        assert_eq!(prefs.talk_key, "F8");
+        assert!(prefs.talk_enabled);
         assert_eq!(prefs.intelligence, None);
-        assert_eq!(prefs.speech_model, "base.en");
+        assert_eq!(prefs.speech_model, "tiny.en");
         assert!(!prefs.voice_replies);
     }
 
@@ -398,7 +386,7 @@ mod tests {
     fn apply_persists_and_reports_changes() {
         let conn = conn();
         let patch = KalVoicePreferencesPatch {
-            command_shortcut: Some("ctrl+alt+j".into()),
+            talk_key: Some("f9".into()),
             intelligence: Some(IntelligenceChoice::Provider {
                 provider_id: ProviderId::new(ProviderId::CODEX),
             }),
@@ -406,11 +394,11 @@ mod tests {
             ..Default::default()
         };
         let (prefs, changes) = apply(&conn, &patch).expect("apply");
-        assert_eq!(prefs.command_shortcut, "CommandOrControl+Alt+J");
+        assert_eq!(prefs.talk_key, "F9");
         assert_eq!(
             changes.keys,
             vec![
-                "kalvoice.commandShortcut",
+                "kalvoice.talkKey",
                 "kalvoice.intelligence",
                 "kalvoice.voiceReplies"
             ]
@@ -432,49 +420,34 @@ mod tests {
     }
 
     #[test]
-    fn shortcut_conflicts_are_refused_and_nothing_is_saved() {
+    fn talk_key_problems_are_refused_and_nothing_is_saved() {
         let conn = conn();
-        for (patch, code) in [
-            (
-                KalVoicePreferencesPatch {
-                    command_shortcut: Some("Ctrl+K".into()),
-                    ..Default::default()
-                },
-                "shortcut_conflict",
-            ),
-            (
-                KalVoicePreferencesPatch {
-                    command_shortcut: Some("Ctrl+Shift+Space".into()),
-                    ..Default::default()
-                },
-                "shortcut_conflict",
-            ),
-            (
-                KalVoicePreferencesPatch {
-                    dictation_shortcut: Some("Shift+D".into()),
-                    ..Default::default()
-                },
-                "shortcut_needs_modifier",
-            ),
+        for (key, code) in [
+            ("F5", "talk_key_conflict"),
+            ("Ctrl+Shift+Space", "talk_key_single"),
+            ("CapsLock", "talk_key_unsupported"),
+            ("K", "talk_key_invalid"),
         ] {
-            assert_eq!(apply(&conn, &patch).expect_err("conflict").code, code);
+            let patch = KalVoicePreferencesPatch {
+                talk_key: Some(key.into()),
+                ..Default::default()
+            };
+            assert_eq!(
+                apply(&conn, &patch).expect_err("refused").code,
+                code,
+                "{key}"
+            );
         }
         assert_eq!(load(&conn).expect("load"), KalVoicePreferences::default());
-    }
-
-    #[test]
-    fn swapping_the_two_shortcuts_in_one_update_is_allowed() {
-        let conn = conn();
         let (prefs, _) = apply(
             &conn,
             &KalVoicePreferencesPatch {
-                dictation_shortcut: Some(shortcuts::DEFAULT_COMMAND.into()),
-                command_shortcut: Some(shortcuts::DEFAULT_DICTATION.into()),
+                talk_enabled: Some(false),
                 ..Default::default()
             },
         )
-        .expect("swap");
-        assert_eq!(prefs.dictation_shortcut, shortcuts::DEFAULT_COMMAND);
+        .expect("disable");
+        assert!(!prefs.talk_enabled);
     }
 
     #[test]

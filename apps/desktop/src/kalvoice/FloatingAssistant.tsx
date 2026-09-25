@@ -1,5 +1,5 @@
 import type { PanelAnchor } from "@kalcode/protocol";
-import { IconButton } from "@kalcode/ui/components";
+import { Button, IconButton } from "@kalcode/ui/components";
 import { ChevronDown, ChevronUp, Circle, GripHorizontal, PanelsTopLeft, X } from "lucide-react";
 import { DropdownMenu } from "radix-ui";
 import {
@@ -10,13 +10,12 @@ import {
   useRef,
   useState,
 } from "react";
-import { IS_MAC } from "../shell/shortcuts.ts";
-import { RequestForm, ResultView, ShortcutHint, UsageFooter } from "./Assistant.tsx";
-import { announcement, PHASE_NAMES, stateLine } from "./assistantState.ts";
+import { useNavigation } from "../shell/navigation.tsx";
+import { announcement, STATE_LABELS, usageLine } from "./assistantState.ts";
 import styles from "./FloatingAssistant.module.css";
 import { useKalVoice } from "./KalVoiceProvider.tsx";
 import { ANCHOR_LABELS, nudge, type Point, placementAt, positionFor, type Size } from "./panelGeometry.ts";
-import { displayShortcut } from "./shortcutModel.ts";
+import { displayKey } from "./shortcutModel.ts";
 import { KalVoiceWordmark, Orb, Waveform } from "./Visuals.tsx";
 
 const DOCK_CHOICES: PanelAnchor[] = [
@@ -31,6 +30,8 @@ const DOCK_CHOICES: PanelAnchor[] = [
 ];
 
 const DRAG_THRESHOLD = 4;
+/** An error collapses back to compact on its own after this long. */
+const ERROR_SETTLE_MS = 12_000;
 
 function useViewport(): Size {
   const [size, setSize] = useState<Size>(() => ({ width: window.innerWidth, height: window.innerHeight }));
@@ -43,20 +44,23 @@ function useViewport(): Size {
 }
 
 /**
- * KalVoice as a compact floating assistant over the workspace: the orb above a small panel
- * (KALVOICE, a state line, a waveform). Draggable within the window and clamped to it; docks to
- * edges and corners; minimizes, collapses to the orb, expands, and closes (the command shortcut
- * reopens it). Placement and view are remembered per window size class.
+ * KalVoice's voice widget, floating over the workspace. Compact by default — the orb,
+ * KALVOICE, and the state beside a status dot. It opens up on its own only when there is
+ * something to show (the live transcript while you talk, a result, an approval, an error) and
+ * settles back afterwards. Draggable within the window, docks to edges and corners, collapses
+ * to the orb, and hides; the push-to-talk key brings it back.
  */
 export function FloatingAssistant() {
   const kv = useKalVoice();
-  const { state, panel, setPanel, setPanelVisible, levelRef, status, focusToken } = kv;
+  const { state, panel, setPanel, setPanelVisible, levelRef, status } = kv;
+  const { navigate } = useNavigation();
   const viewport = useViewport();
   const ref = useRef<HTMLElement | null>(null);
-  const [size, setSize] = useState<Size>({ width: 280, height: 160 });
+  const [size, setSize] = useState<Size>({ width: 240, height: 120 });
   const [drag, setDrag] = useState<Point | null>(null);
   const dragStart = useRef<{ pointer: Point; origin: Point; moved: boolean } | null>(null);
   const suppressClick = useRef(false);
+  const holding = useRef(false);
 
   useLayoutEffect(() => {
     const el = ref.current;
@@ -73,22 +77,25 @@ export function FloatingAssistant() {
     return () => observer.disconnect();
   });
 
+  useEffect(() => {
+    if (state.phase !== "error") return;
+    const timer = setTimeout(kv.dismiss, ERROR_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [state.phase, kv.dismiss]);
+
   if (!panel.visible || !status) return null;
 
   const resting = positionFor(panel, viewport, size);
   const position = drag ?? resting;
   const view = panel.view;
-  const commandKeys = displayShortcut(status.preferences.commandShortcut, IS_MAC);
-  // The compact panel has no result area, so it shows a result's message on its state line.
-  const stateText =
-    view !== "expanded" && (state.phase === "error" || state.phase === "done") && state.message
-      ? state.message
-      : stateLine(state);
+  const talkKey = displayKey(status.preferences.talkKey);
+  const hint = status.preferences.talkEnabled
+    ? `Hold ${talkKey} to talk to KalVoice.`
+    : "Push to talk is off in Settings, KalVoice.";
 
   const onPointerDown = (event: ReactPointerEvent<HTMLElement>) => {
     if (event.button !== 0) return;
-    // Controls inside the handle keep their own behaviour.
-    // (Events from portalled menus bubble through React but aren't inside the panel.)
+    // Events from portalled menus bubble through React but aren't inside the widget.
     const target = event.target as HTMLElement;
     if (!event.currentTarget.contains(target) || target.closest("[data-no-drag]")) return;
     dragStart.current = { pointer: { left: event.clientX, top: event.clientY }, origin: resting, moved: false };
@@ -139,36 +146,54 @@ export function FloatingAssistant() {
     setPanel(nudge(panel, d[0], d[1], viewport, size));
   };
 
-  const dragProps = {
-    onPointerDown,
-    onPointerMove,
-    onPointerUp,
-    onPointerCancel: onPointerUp,
+  const dragProps = { onPointerDown, onPointerMove, onPointerUp, onPointerCancel: onPointerUp };
+
+  // Press and hold on the orb: the pointer alternative to the push-to-talk key.
+  const holdStart = () => {
+    if (holding.current || state.phase === "listening") return;
+    holding.current = true;
+    void kv.startListening();
+  };
+  const holdEnd = () => {
+    if (!holding.current) return;
+    holding.current = false;
+    void kv.stopListening();
   };
 
-  const live = (
-    <p className="visually-hidden" role="status" aria-live="polite">
-      {announcement(state)}
-    </p>
-  );
+  const phase = state.phase;
+  const listening = phase === "listening" || phase === "transcribing";
+  const showsDetail = listening || phase === "done" || phase === "error" || phase === "waiting_for_permission";
+  const fixAction =
+    state.code === "needs_provider" ? (
+      <Button size="sm" onClick={() => navigate("providers")}>
+        Open Providers
+      </Button>
+    ) : state.code === "model_not_installed" || state.code === "speech_engine_unavailable" ? (
+      <Button size="sm" onClick={() => navigate("settings")}>
+        Set up speech
+      </Button>
+    ) : null;
 
   return (
     <section
       ref={ref}
       className={styles.panel}
       data-view={view}
-      data-phase={state.phase}
+      data-phase={phase}
       data-dragging={drag ? "true" : undefined}
       data-anchor={panel.anchor}
-      aria-label="KalVoice assistant"
+      aria-label="KalVoice"
       style={{ left: position.left, top: position.top }}
     >
-      {live}
+      <p className="visually-hidden" role="status" aria-live="polite">
+        {announcement(state)}
+      </p>
       {view === "orb" ? (
         <button
           type="button"
           className={styles.orbOnly}
-          aria-label={`Open the assistant (${stateLine(state)}). Arrow keys move it.`}
+          aria-label={`KalVoice, ${STATE_LABELS[phase]}. Open the widget. Arrow keys move it.`}
+          title={hint}
           onClick={() => {
             if (suppressClick.current) {
               suppressClick.current = false;
@@ -179,19 +204,39 @@ export function FloatingAssistant() {
           onKeyDown={onMoveKey}
           {...dragProps}
         >
-          <Orb phase={state.phase} levelRef={levelRef} size={56} />
+          <Orb phase={phase} levelRef={levelRef} size={52} />
         </button>
       ) : (
-        <>
-          <div className={styles.orbSeat} aria-hidden="true" {...dragProps}>
-            <Orb phase={state.phase} levelRef={levelRef} size={64} />
-          </div>
+        <div className={styles.body}>
+          <button
+            type="button"
+            className={styles.orbButton}
+            aria-label="Hold to talk to KalVoice"
+            title={`Hold to talk (or hold ${talkKey})`}
+            onPointerDown={(e) => {
+              e.currentTarget.setPointerCapture(e.pointerId);
+              holdStart();
+            }}
+            onPointerUp={holdEnd}
+            onPointerCancel={holdEnd}
+            onKeyDown={(e) => {
+              if ((e.key === " " || e.key === "Enter") && !e.repeat) {
+                e.preventDefault();
+                holdStart();
+              }
+            }}
+            onKeyUp={(e) => {
+              if (e.key === " " || e.key === "Enter") holdEnd();
+            }}
+          >
+            <Orb phase={phase} levelRef={levelRef} size={44} />
+          </button>
           <div className={styles.card}>
             <header className={styles.header} {...dragProps}>
               <button
                 type="button"
                 className={styles.handle}
-                aria-label="Move the assistant"
+                aria-label="Move the KalVoice widget"
                 title="Drag to move, or use the arrow keys"
                 onKeyDown={onMoveKey}
               >
@@ -201,7 +246,7 @@ export function FloatingAssistant() {
               <div className={styles.controls} data-no-drag>
                 <IconButton
                   size="sm"
-                  label={view === "expanded" ? "Minimize the assistant" : "Expand the assistant"}
+                  label={view === "expanded" ? "Show less" : "Show more"}
                   icon={view === "expanded" ? <ChevronDown /> : <ChevronUp />}
                   onClick={() => setPanel({ view: view === "expanded" ? "compact" : "expanded" })}
                 />
@@ -213,7 +258,7 @@ export function FloatingAssistant() {
                 />
                 <DropdownMenu.Root>
                   <DropdownMenu.Trigger asChild>
-                    <IconButton size="sm" label="Dock the assistant" icon={<PanelsTopLeft />} />
+                    <IconButton size="sm" label="Dock the widget" icon={<PanelsTopLeft />} />
                   </DropdownMenu.Trigger>
                   <DropdownMenu.Portal>
                     <DropdownMenu.Content className={styles.menu} sideOffset={6} align="end">
@@ -233,29 +278,79 @@ export function FloatingAssistant() {
                 </DropdownMenu.Root>
                 <IconButton
                   size="sm"
-                  label={`Close the assistant (reopen with ${commandKeys})`}
+                  label={`Hide the widget (${talkKey} still works)`}
                   icon={<X />}
                   onClick={() => setPanelVisible(false)}
                 />
               </div>
             </header>
-            <p className={styles.stateLine}>
-              <span className={styles.phaseName}>{PHASE_NAMES[state.phase]}</span>
-              <span className={styles.stateText} title={stateText}>
-                {stateText}
-              </span>
+            <p className={styles.state}>
+              <span className={styles.dot} aria-hidden="true" />
+              <span className={styles.stateName}>{STATE_LABELS[phase]}</span>
             </p>
-            <Waveform phase={state.phase} levelRef={levelRef} />
+
+            {showsDetail ? (
+              <div className={styles.detail}>
+                {listening ? (
+                  <>
+                    <Waveform phase={phase} levelRef={levelRef} />
+                    <p className={styles.transcript} data-empty={state.partial ? undefined : "true"}>
+                      {state.partial ?? (phase === "listening" ? "Listening…" : "")}
+                    </p>
+                  </>
+                ) : null}
+                {phase === "done" && state.message ? (
+                  <div className={styles.result}>
+                    <p className={styles.message}>{state.message}</p>
+                    {kv.canTypeInstead ? (
+                      <Button size="sm" variant="ghost" onClick={() => void kv.typeInstead()}>
+                        Type it instead
+                      </Button>
+                    ) : null}
+                  </div>
+                ) : null}
+                {phase === "waiting_for_permission" ? (
+                  <div className={styles.result}>
+                    <p className={styles.message}>{state.message}</p>
+                    <div className={styles.actions}>
+                      <Button size="sm" variant="ghost" onClick={() => void kv.decideApproval("deny")}>
+                        Deny
+                      </Button>
+                      <Button size="sm" onClick={() => void kv.decideApproval("approve_for_thread")}>
+                        Allow for thread
+                      </Button>
+                      <Button size="sm" variant="primary" onClick={() => void kv.decideApproval("approve_once")}>
+                        Approve once
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+                {phase === "error" && state.message ? (
+                  <div className={styles.result}>
+                    <p className={styles.message}>{state.message}</p>
+                    <div className={styles.actions}>
+                      {fixAction}
+                      <Button size="sm" variant="ghost" onClick={kv.dismiss}>
+                        Dismiss
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
             {view === "expanded" ? (
-              <div className={styles.body}>
-                <RequestForm id="kalvoice-panel-request" autoFocusToken={focusToken} />
-                <ResultView />
-                <UsageFooter />
-                <ShortcutHint />
+              <div className={styles.more}>
+                <p className={styles.hint}>{hint}</p>
+                {phase === "idle" && state.message ? <p className={styles.message}>{state.message}</p> : null}
+                <p className={styles.usage}>
+                  {usageLine(status.usage)}
+                  <span> · dictation is never counted</span>
+                </p>
               </div>
             ) : null}
           </div>
-        </>
+        </div>
       )}
     </section>
   );

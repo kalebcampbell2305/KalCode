@@ -30,7 +30,15 @@ voiceOutputAvailable: boolean,
 /**
  * Connected providers that can power KalVoice reasoning.
  */
-providers: Array<ProviderChoice>, reservedShortcuts: Array<ReservedShortcut>, shortcutIssues: Array<ShortcutIssue>, 
+providers: Array<ProviderChoice>, reservedShortcuts: Array<ReservedShortcut>, 
+/**
+ * Keys that can be the push-to-talk key on this system.
+ */
+talkKeys: Array<string>, 
+/**
+ * Whether the push-to-talk key is registered right now (only while KalCode is focused).
+ */
+talkKeyActive: boolean, shortcutIssues: Array<ShortcutIssue>, 
 /**
  * The session listening right now, if any.
  */

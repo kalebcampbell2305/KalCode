@@ -81,6 +81,8 @@ fn creates_threads_with_counts_and_providers() {
         ("open a new Claude Code thread", ProviderId::CLAUDE_CODE, 1),
         ("open seventeen more codex threads", ProviderId::CODEX, 17),
         ("Open 4 codecs threads.", ProviderId::CODEX, 4),
+        ("Open for Codex threads", ProviderId::CODEX, 4),
+        ("open to claude threads", ProviderId::CLAUDE_CODE, 2),
     ];
     for (text, provider, count) in cases {
         assert_eq!(intent(text), create(provider, *count), "{text}");
@@ -382,6 +384,8 @@ fn approvals_and_status() {
         "show me pending approval requests",
         "approvals",
         "does anything need my approval",
+        "Show what's waiting for me.",
+        "what's waiting on me",
     ] {
         assert_eq!(intent(text), KalVoiceIntent::ShowApprovals, "{text}");
     }
@@ -490,5 +494,42 @@ fn ids_are_never_invented() {
             assert_eq!(name, "kalcode");
         }
         other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn confidence_separates_commands_from_text_you_might_dictate() {
+    for text in [
+        "open four codex threads",
+        "Pause every active thread.",
+        "show approvals",
+        "go to settings",
+        "what are my threads doing",
+        "what needs permission",
+        "new terminal",
+        "stop all threads",
+        "open 40 codex threads",
+    ] {
+        assert_eq!(
+            understand_with_confidence(text).1,
+            Confidence::High,
+            "{text}"
+        );
+    }
+    for text in [
+        "settings",
+        "status",
+        "pending approvals",
+        "approvals",
+        "dashboard",
+        "fix the parser bug",
+        "plan the migration",
+        "",
+    ] {
+        assert_eq!(
+            understand_with_confidence(text).1,
+            Confidence::Low,
+            "{text}"
+        );
     }
 }

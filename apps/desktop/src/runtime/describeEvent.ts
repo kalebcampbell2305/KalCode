@@ -13,14 +13,14 @@ const SETTING_LABELS: Record<string, string> = {
   "appearance.motion": "Motion",
   "appearance.density": "Density",
   "layout.sidebarCollapsed": "Sidebar",
-  "kalvoice.dictationShortcut": "KalVoice dictation shortcut",
-  "kalvoice.commandShortcut": "KalVoice command shortcut",
+  "kalvoice.talkKey": "KalVoice push-to-talk key",
+  "kalvoice.talkEnabled": "KalVoice push to talk",
   "kalvoice.intelligence": "KalVoice intelligence",
   "kalvoice.speechModel": "KalVoice speech model",
   "kalvoice.voiceReplies": "KalVoice spoken replies",
-  "kalvoice.panelDefault": "KalVoice assistant position",
-  "kalvoice.panelVisible": "KalVoice assistant visibility",
-  "kalvoice.panelPlacements": "KalVoice assistant layout",
+  "kalvoice.panelDefault": "KalVoice widget position",
+  "kalvoice.panelVisible": "KalVoice widget visibility",
+  "kalvoice.panelPlacements": "KalVoice widget layout",
 };
 
 const PROVIDER_NAMES: Record<string, string> = {

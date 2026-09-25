@@ -5,13 +5,13 @@ import type { PanelPlacement } from "./PanelPlacement.ts";
 
 export type KalVoicePreferences = { 
 /**
- * Hold to dictate. Canonical accelerator, e.g. `CommandOrControl+Shift+Space`.
+ * The push-to-talk key: hold, speak, release (`F8` by default).
  */
-dictationShortcut: string, 
+talkKey: string, 
 /**
- * Press to open the command bar.
+ * Push to talk works even while the floating widget is hidden.
  */
-commandShortcut: string, 
+talkEnabled: boolean, 
 /**
  * Which connected provider handles requests that need reasoning. `None` = automatic: the
  * only connected provider, if exactly one is connected.
@@ -30,7 +30,7 @@ voiceReplies: boolean,
  */
 panelDefault: PanelAnchor, 
 /**
- * Whether the floating panel is shown (it reopens with the command shortcut).
+ * Whether the floating widget is shown (the push-to-talk key brings it back).
  */
 panelVisible: boolean, 
 /**

@@ -18,8 +18,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use ts_rs::TS;
 
-/// The compact English model: the default.
-pub const DEFAULT_MODEL: &str = "base.en";
+/// The fastest English model: the default, because push-to-talk latency matters most.
+pub const DEFAULT_MODEL: &str = "tiny.en";
 
 /// Pinned revision of <https://huggingface.co/ggerganov/whisper.cpp>.
 pub const REPOSITORY_REVISION: &str = "5359861c739e955e79d9a303bcbc70fb988958b1";
@@ -40,13 +40,22 @@ pub struct ModelSpec {
 /// [`REPOSITORY_REVISION`].
 pub const CATALOG: &[ModelSpec] = &[
     ModelSpec {
+        id: "tiny.en",
+        display_name: "English (fastest)",
+        file_name: "ggml-tiny.en.bin",
+        size_bytes: 77_704_715,
+        sha256: "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f",
+        english_only: true,
+        summary: "Quickest response to commands. Recommended.",
+    },
+    ModelSpec {
         id: "base.en",
-        display_name: "English (compact)",
+        display_name: "English (balanced)",
         file_name: "ggml-base.en.bin",
         size_bytes: 147_964_211,
         sha256: "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
         english_only: true,
-        summary: "Fast and accurate for English. Recommended.",
+        summary: "More accurate dictation; a little slower to respond.",
     },
     ModelSpec {
         id: "small.en",

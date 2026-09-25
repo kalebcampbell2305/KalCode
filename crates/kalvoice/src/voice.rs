@@ -17,6 +17,8 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::audio::{ActiveCapture, AudioSource, CaptureError, MAX_RECORDING};
+use crate::latency::StageTimings;
+use crate::streaming::{FinalSource, FinalTranscript, PartialSink, Snapshot, Streamer};
 use crate::stt::{SpeechRecognizer, SttError, clean_transcript, heard_speech};
 
 /// Provides the recognizer for the selected speech model.
@@ -39,6 +41,8 @@ pub enum VoiceResult {
         session_id: String,
         mode: KalVoiceMode,
         text: String,
+        /// How long the key was held, in milliseconds.
+        duration_ms: u64,
     },
     NothingHeard {
         session_id: String,
@@ -74,14 +78,32 @@ struct Session {
     mode: KalVoiceMode,
     capture: Box<dyn ActiveCapture>,
     started: Instant,
+    key_down_to_mic: f64,
+    streamer: Option<Streamer>,
+}
+
+/// Receives live partial transcripts: `(session_id, text)`.
+pub type PartialNotifier = Arc<dyn Fn(&str, &str) + Send + Sync>;
+
+/// A finished listening session and how long each stage took.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Finished {
+    pub result: VoiceResult,
+    pub timings: StageTimings,
+}
+
+fn ms(d: Duration) -> f64 {
+    d.as_secs_f64() * 1000.0
 }
 
 pub struct VoiceController {
     core: Arc<Core>,
     audio: Arc<dyn AudioSource>,
     recognizers: Arc<dyn RecognizerSource>,
-    active: Mutex<Option<Session>>,
+    active: Arc<Mutex<Option<Session>>>,
     max: Duration,
+    partials: Mutex<Option<PartialNotifier>>,
+    stream_interval: Duration,
 }
 
 impl VoiceController {
@@ -94,9 +116,28 @@ impl VoiceController {
             core,
             audio,
             recognizers,
-            active: Mutex::new(None),
+            active: Arc::new(Mutex::new(None)),
             max: MAX_RECORDING,
+            partials: Mutex::new(None),
+            stream_interval: Duration::from_millis(300),
         }
+    }
+
+    /// How often partial transcripts are refreshed while listening.
+    pub fn with_stream_interval(mut self, interval: Duration) -> Self {
+        self.stream_interval = interval;
+        self
+    }
+
+    /// Where live partial transcripts go (the desktop forwards them to the UI).
+    pub fn set_partial_notifier(&self, notifier: PartialNotifier) {
+        *self.partials.lock().unwrap_or_else(PoisonError::into_inner) = Some(notifier);
+    }
+
+    /// Loads the speech model ahead of the first key press, so nothing loads on the hot path.
+    pub fn warm(&self) -> Result<(), SttError> {
+        self.recognizers.ready()?;
+        self.recognizers.recognizer().map(|_| ())
     }
 
     fn emit(&self, event: EventPayload) {
@@ -129,8 +170,23 @@ impl VoiceController {
             .map(|s| s.capture.level())
     }
 
-    /// Opens the microphone. Returns the session id.
+    /// How long the session listening now has been recording.
+    pub fn listening_for(&self, session_id: &str) -> Option<Duration> {
+        self.active
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .filter(|s| s.id == session_id)
+            .map(|s| s.started.elapsed())
+    }
+
+    /// Opens the microphone now. Returns the session id.
     pub fn begin(&self, mode: KalVoiceMode) -> Result<String, VoiceError> {
+        self.begin_at(mode, Instant::now())
+    }
+
+    /// Opens the microphone for a key pressed at `pressed` (for key-down → mic timing).
+    pub fn begin_at(&self, mode: KalVoiceMode, pressed: Instant) -> Result<String, VoiceError> {
         let mut active = self.active.lock().unwrap_or_else(PoisonError::into_inner);
         if active.is_some() {
             return Err(VoiceError::AlreadyListening);
@@ -157,11 +213,40 @@ impl VoiceController {
                 return Err(e.into());
             }
         };
+        let key_down_to_mic = ms(pressed.elapsed());
+        // Stream partials while the key is held. The model is kept warm, so this doesn't load
+        // anything on the hot path after the first use.
+        let streamer = self.recognizers.recognizer().ok().map(|recognizer| {
+            let shared = self.active.clone();
+            let snapshot_id = id.clone();
+            let snapshot: Snapshot = Arc::new(move || {
+                shared
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .as_ref()
+                    .filter(|s| s.id == snapshot_id)
+                    .map(|s| s.capture.snapshot())
+            });
+            let notifier = self
+                .partials
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone();
+            let partial_id = id.clone();
+            let on_partial: PartialSink = Arc::new(move |text: &str| {
+                if let Some(notify) = &notifier {
+                    notify(&partial_id, text);
+                }
+            });
+            Streamer::start(recognizer, snapshot, on_partial, self.stream_interval)
+        });
         *active = Some(Session {
             id: id.clone(),
             mode,
             capture,
             started: Instant::now(),
+            key_down_to_mic,
+            streamer,
         });
         drop(active);
         if mode == KalVoiceMode::Dictation {
@@ -181,32 +266,39 @@ impl VoiceController {
         }
     }
 
-    /// Stops listening and transcribes on the device. The audio is zeroed and dropped before
-    /// this returns, whatever the outcome. Blocking; call from a background thread.
+    /// Stops listening and finishes recognition on the device. The audio is zeroed and dropped
+    /// before this returns, whatever the outcome. Blocking; call from a background thread.
     pub fn end(&self, session_id: &str) -> Result<VoiceResult, VoiceError> {
+        self.end_timed(session_id).map(|f| f.result)
+    }
+
+    /// As [`Self::end`], with the stage timings of this interaction.
+    pub fn end_timed(&self, session_id: &str) -> Result<Finished, VoiceError> {
+        let key_up = Instant::now();
         let session = self
             .take(Some(session_id))
             .ok_or(VoiceError::NotListening)?;
         let duration_ms = u64::try_from(session.started.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let result = self.transcribe(session.capture, &session.id, session.mode);
-        if session.mode == KalVoiceMode::Dictation {
+        let id = session.id.clone();
+        let mode = session.mode;
+        let result = self.finish(session, key_up);
+        if mode == KalVoiceMode::Dictation {
             match &result {
-                Ok(VoiceResult::Transcript { text, .. }) => {
-                    self.emit(EventPayload::KalVoiceDictationCompleted {
-                        session_id: session.id.clone(),
-                        duration_ms,
-                        characters: u32::try_from(text.chars().count()).unwrap_or(u32::MAX),
-                    })
-                }
-                Ok(VoiceResult::NothingHeard { .. }) => {
-                    self.emit(EventPayload::KalVoiceDictationCompleted {
-                        session_id: session.id.clone(),
-                        duration_ms,
-                        characters: 0,
-                    })
-                }
+                Ok(Finished {
+                    result: VoiceResult::Transcript { text, .. },
+                    ..
+                }) => self.emit(EventPayload::KalVoiceDictationCompleted {
+                    session_id: id.clone(),
+                    duration_ms,
+                    characters: u32::try_from(text.chars().count()).unwrap_or(u32::MAX),
+                }),
+                Ok(_) => self.emit(EventPayload::KalVoiceDictationCompleted {
+                    session_id: id.clone(),
+                    duration_ms,
+                    characters: 0,
+                }),
                 Err(e) => self.emit(EventPayload::KalVoiceDictationFailed {
-                    session_id: session.id.clone(),
+                    session_id: id.clone(),
                     code: e.code().to_owned(),
                 }),
             }
@@ -214,37 +306,80 @@ impl VoiceController {
         result
     }
 
-    fn transcribe(
-        &self,
-        capture: Box<dyn ActiveCapture>,
-        id: &str,
-        mode: KalVoiceMode,
-    ) -> Result<VoiceResult, VoiceError> {
-        let mut audio = capture.finish()?;
-        let outcome = if heard_speech(&audio) {
-            self.recognizers
-                .recognizer()
-                .and_then(|r| r.transcribe(&audio))
-                .map(|raw| clean_transcript(&raw))
-        } else {
-            Ok(String::new())
+    fn finish(&self, session: Session, key_up: Instant) -> Result<Finished, VoiceError> {
+        let Session {
+            id,
+            mode,
+            capture,
+            key_down_to_mic,
+            streamer,
+            started,
+        } = session;
+        let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let mut audio = match capture.finish() {
+            Ok(audio) => audio,
+            Err(e) => {
+                if let Some(s) = streamer {
+                    s.cancel();
+                }
+                return Err(e.into());
+            }
         };
-        // The recording never outlives transcription.
+        let outcome = self
+            .recognizers
+            .recognizer()
+            .and_then(|recognizer| match streamer {
+                Some(streamer) => streamer.finish(&audio, recognizer.as_ref()),
+                None if heard_speech(&audio) => {
+                    recognizer.transcribe(&audio).map(|raw| FinalTranscript {
+                        text: clean_transcript(&raw),
+                        source: FinalSource::FinalPass,
+                        first_voice: None,
+                        first_partial: None,
+                    })
+                }
+                None => Ok(FinalTranscript {
+                    text: String::new(),
+                    source: FinalSource::Silence,
+                    first_voice: None,
+                    first_partial: None,
+                }),
+            });
+        // The recording never outlives recognition.
         audio.fill(0.0);
         drop(audio);
-        let text = outcome?;
-        Ok(if text.is_empty() {
+        let done = outcome?;
+        let timings = StageTimings {
+            key_down_to_mic: Some(key_down_to_mic),
+            speech_to_partial: match (done.first_voice, done.first_partial) {
+                (Some(voice), Some(partial)) => Some(ms(partial.saturating_duration_since(voice))),
+                _ => None,
+            },
+            key_up_to_final: Some(ms(key_up.elapsed())),
+            final_source: Some(
+                match done.source {
+                    FinalSource::ReusedPartial => "reused_partial",
+                    FinalSource::FinalPass => "final_pass",
+                    FinalSource::Silence => "silence",
+                }
+                .to_owned(),
+            ),
+            ..StageTimings::default()
+        };
+        let result = if done.text.is_empty() {
             VoiceResult::NothingHeard {
-                session_id: id.to_owned(),
+                session_id: id,
                 mode,
             }
         } else {
             VoiceResult::Transcript {
-                session_id: id.to_owned(),
+                session_id: id,
                 mode,
-                text,
+                text: done.text,
+                duration_ms,
             }
-        })
+        };
+        Ok(Finished { result, timings })
     }
 
     /// Stops listening and discards the audio (Escape). `None` cancels whatever is listening.
@@ -252,6 +387,9 @@ impl VoiceController {
         let Some(session) = self.take(session_id) else {
             return false;
         };
+        if let Some(streamer) = session.streamer {
+            streamer.cancel();
+        }
         session.capture.cancel();
         if session.mode == KalVoiceMode::Dictation {
             self.emit(EventPayload::KalVoiceDictationFailed {

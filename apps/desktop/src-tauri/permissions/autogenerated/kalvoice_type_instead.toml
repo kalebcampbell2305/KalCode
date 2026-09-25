@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-kalvoice-type-instead"
+description = "Enables the kalvoice_type_instead command without any pre-configured scope."
+commands.allow = ["kalvoice_type_instead"]
+
+[[permission]]
+identifier = "deny-kalvoice-type-instead"
+description = "Denies the kalvoice_type_instead command without any pre-configured scope."
+commands.deny = ["kalvoice_type_instead"]
