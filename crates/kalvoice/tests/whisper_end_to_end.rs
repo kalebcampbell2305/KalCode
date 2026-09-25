@@ -18,6 +18,7 @@ use kalcode_kalvoice::models::{self, ModelStore};
 use kalcode_kalvoice::stt::{RecognizerCache, heard_speech};
 
 /// Minimal reader for 16-bit PCM mono WAV files.
+#[allow(clippy::expect_used)] // test helper: a malformed fixture should fail loudly
 fn read_wav(path: &PathBuf) -> (Vec<f32>, u32) {
     let bytes = std::fs::read(path).expect("wav");
     assert_eq!(&bytes[0..4], b"RIFF");
