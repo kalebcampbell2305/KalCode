@@ -1,0 +1,74 @@
+---
+/**
+ * The docked browser (planned surface): localhost:3000 showing the sample app's signup-limits
+ * admin page, which is what the agents are changing. Chart bars are SVG attributes (no inline
+ * styles under the strict CSP).
+ */
+import { BROWSER } from "../../../data/story";
+
+interface Props {
+  interactive: boolean;
+}
+const { interactive } = Astro.props;
+const max = Math.max(...BROWSER.hours);
+const barW = 100 / BROWSER.hours.length;
+const toneFor = (code: number) => (code === 201 ? "success" : code === 429 ? "waiting" : "danger");
+---
+<div class="kc-browser" data-testid="browser">
+  <div class="kc-browser__bar">
+    <span class="kc-i" data-i="back" aria-hidden="true"></span>
+    <span class="kc-i kc-browser__off" data-i="forward" aria-hidden="true"></span>
+    <span class="kc-i" data-i="reload" aria-hidden="true"></span>
+    <span class="kc-browser__url"><span class="kc-i" data-i="globe" aria-hidden="true"></span>{BROWSER.url}</span>
+    <span class="kc-i" data-i="monitor" aria-hidden="true"></span>
+  </div>
+  <div class="kc-browser__page">
+    <div class="kc-site__nav">
+      <span class="kc-site__logo"><span class="kc-site__logomark" aria-hidden="true"></span>{BROWSER.app}</span>
+      <span class="kc-site__links"><span>Overview</span><span data-current="true">Signups</span><span>Keys</span></span>
+      <span class="kc-site__avatar" aria-hidden="true">AT</span>
+    </div>
+    <div class="kc-site__head">
+      <p class="kc-site__title">{BROWSER.title} <span class="kc-site__chip">{BROWSER.chip}</span></p>
+      <p class="kc-site__sub">{BROWSER.subtitle}</p>
+    </div>
+    <dl class="kc-site__metrics">
+      {BROWSER.metrics.map((m) => (
+        <div><dt>{m.label}</dt><dd>{m.value}{m.unit && <span>{m.unit}</span>}</dd></div>
+      ))}
+    </dl>
+    <div class="kc-site__chart">
+      <p class="kc-site__chartlabel"><span>Requests per hour</span><span class="kc-site__legend"><span class="kc-site__key kc-site__key--ok"></span>allowed <span class="kc-site__key kc-site__key--lim"></span>limited</span></p>
+      <svg viewBox="0 0 100 32" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+        {BROWSER.hours.map((h, i) => {
+          const height = (h / max) * 30;
+          const lim = ((BROWSER.limited[i] ?? 0) / max) * 30 * 3;
+          return (
+            <>
+              <rect class="kc-site__bar" x={(i * barW + 0.35).toFixed(2)} width={(barW - 0.7).toFixed(2)} y={(32 - height).toFixed(2)} height={height.toFixed(2)} rx="0.4" />
+              {lim > 0 && <rect class="kc-site__bar kc-site__bar--lim" x={(i * barW + 0.35).toFixed(2)} width={(barW - 0.7).toFixed(2)} y={(32 - height).toFixed(2)} height={Math.min(lim, height).toFixed(2)} rx="0.4" />}
+            </>
+          );
+        })}
+      </svg>
+    </div>
+    <div class="kc-site__table">
+      <p class="kc-site__chartlabel"><span>Latest attempts</span></p>
+      <ul role="list">
+        {BROWSER.attempts.map((a) => (
+          <li>
+            <span class="kc-site__who">{a.who}</span>
+            <span class="kc-site__ip">{a.ip}</span>
+            <span class="kc-site__code" data-tone={toneFor(a.code)}>{a.code} {a.label}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  </div>
+  <div class="kc-browser__foot">
+    <span>atlas-api · localhost:3000</span>
+    <span class="kc-tag">Planned</span>
+  </div>
+  <p class="kc-browser__toast" data-kc-toast aria-hidden="true"><span class="kc-i" data-i="reload"></span>{BROWSER.toast}</p>
+  {interactive && <span class="visually-hidden">Browser preview of the sample app. This surface is planned.</span>}
+</div>

@@ -1,0 +1,107 @@
+/*
+ * KalCode terminal and provider tokens (additive to tokens.css).
+ *
+ * The ANSI palette is the desktop terminal palette from the Code surface (terminalTheme.ts on the
+ * Z1 branch), expressed as CSS custom properties so the website stage and, later, the desktop app
+ * share one source. Every foreground meets WCAG AA (4.5:1) on --term-bg in its theme, except
+ * --term-black in dark, which programs use as a background colour.
+ *
+ * Provider accents identify a pane (2 px stripe, glyph, a few accent glyphs in the transcript).
+ * They never carry status: status always uses the --color-live/waiting/success/danger/idle set
+ * with a glyph and a label.
+ *
+ * Theme follows tokens.css: [data-theme="light"|"dark"] on <html>.
+ */
+
+:root,
+[data-theme="dark"] {
+  --term-font: var(--font-mono);
+  --term-size: 12.5px;
+  --term-leading: 1.5;
+
+  --term-bg: #070c17;
+  --term-bg-raised: #0b1220;
+  --term-fg: #dfe7f3;
+  --term-cursor: #8db6ff;
+  --term-selection: rgb(76 141 255 / 0.32);
+
+  --term-black: #27324a;
+  --term-red: #f0707a;
+  --term-green: #43cf93;
+  --term-yellow: #efb84f;
+  --term-blue: #5f9bff;
+  --term-magenta: #c595f0;
+  --term-cyan: #4ccbd9;
+  --term-white: #b9c4d6;
+  --term-bright-black: #7d8aa1;
+  --term-bright-red: #ff959d;
+  --term-bright-green: #74e3b0;
+  --term-bright-yellow: #ffd580;
+  --term-bright-blue: #91b8ff;
+  --term-bright-magenta: #dcb6ff;
+  --term-bright-cyan: #87e3ee;
+  --term-bright-white: #f3f6fb;
+
+  /* Derived surfaces for transcript rendering */
+  --term-dim: var(--term-bright-black);
+  --term-rule: rgb(142 170 220 / 0.16);
+  --term-box: rgb(142 170 220 / 0.26);
+  --term-row: rgb(142 170 220 / 0.07); /* user turn band */
+  --term-diff-add-bg: rgb(67 207 147 / 0.13);
+  --term-diff-del-bg: rgb(240 112 122 / 0.13);
+  --term-diff-add-fg: #9ff0c8;
+  --term-diff-del-fg: #ffb3b9;
+
+  /* Provider accents */
+  --provider-claude: #d9825b;
+  --provider-claude-text: #e79a76;
+  --provider-codex: #c4cedd;
+  --provider-codex-text: #4ccbd9; /* Codex renders commands and paths in teal */
+  --provider-gemini: #8b7cf6;
+  --provider-gemini-2: #4c8dff;
+  --provider-gemini-text: #a99cff;
+  --provider-shell: #8593ab;
+}
+
+[data-theme="light"] {
+  --term-bg: #ffffff;
+  --term-bg-raised: #f5f7fb;
+  --term-fg: #131c2e;
+  --term-cursor: #1d5be0;
+  --term-selection: rgb(29 91 224 / 0.2);
+
+  --term-black: #131c2e;
+  --term-red: #c0263a;
+  --term-green: #0b774f;
+  --term-yellow: #875600;
+  --term-blue: #1d57d8;
+  --term-magenta: #8a37b3;
+  --term-cyan: #086f80;
+  --term-white: #5b6880;
+  --term-bright-black: #5f6a80;
+  --term-bright-red: #9e1a2d;
+  --term-bright-green: #07613f;
+  --term-bright-yellow: #6b4400;
+  --term-bright-blue: #1343a8;
+  --term-bright-magenta: #6c2393;
+  --term-bright-cyan: #055866;
+  --term-bright-white: #37445a;
+
+  --term-dim: var(--term-bright-black);
+  --term-rule: rgb(16 32 64 / 0.12);
+  --term-box: rgb(16 32 64 / 0.2);
+  --term-row: rgb(16 32 64 / 0.05);
+  --term-diff-add-bg: rgb(11 119 79 / 0.1);
+  --term-diff-del-bg: rgb(192 38 58 / 0.09);
+  --term-diff-add-fg: #05573a;
+  --term-diff-del-fg: #8f1626;
+
+  --provider-claude: #c2653c;
+  --provider-claude-text: #a14a22;
+  --provider-codex: #6b7890;
+  --provider-codex-text: #086f80;
+  --provider-gemini: #6b5ae0;
+  --provider-gemini-2: #1d5be0;
+  --provider-gemini-text: #5a45d6;
+  --provider-shell: #66728a;
+}

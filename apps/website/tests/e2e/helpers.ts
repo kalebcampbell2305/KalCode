@@ -1,10 +1,19 @@
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Page } from "@playwright/test";
+import type { ReleaseManifest } from "../../src/data/releases";
 
 export const APP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const PERSIST_DIR = ".wrangler/e2e-state";
+/** The committed release manifest: specs assert the state the site is built from. */
+export const MANIFEST = JSON.parse(
+  readFileSync(resolve(APP_ROOT, "src/data/releases.json"), "utf8"),
+) as ReleaseManifest;
+/** The published Windows build, or null while there is no public build. */
+export const WINDOWS_BUILD = MANIFEST.latest?.platforms.find((platform) => platform.os === "windows") ?? null;
+
+const PERSIST_DIR = process.env.KALCODE_E2E_PERSIST ?? ".wrangler/e2e-state";
 
 let ipCounter = 0;
 /**

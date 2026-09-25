@@ -1,0 +1,99 @@
+---
+/**
+ * The workspace rail, as in the desktop shell: KalCode mark, workspace switcher, search,
+ * Dashboard / Code / Threads / KalVoice, the open threads under Code (provider glyph, name,
+ * status dot), then the "In development" group, dimmed.
+ */
+import { type ApprovalState, PROVIDERS, statusFor, type Thread, WORKSPACE } from "../../../data/story";
+import Btn from "./Btn.astro";
+import Glyph from "./Glyph.astro";
+import StatusLabel from "./StatusLabel.astro";
+
+interface Props {
+  threads: readonly Thread[];
+  approval: ApprovalState;
+  interactive: boolean;
+  focus: string;
+  view: "code" | "dashboard";
+  /** Spawned threads already present in this scene. */
+  present: readonly string[];
+}
+
+const { threads, approval, interactive, focus, view, present } = Astro.props;
+const agents = threads.filter((t) => t.provider !== "shell");
+const inDevelopment = [
+  { icon: "agents", label: "Agents" },
+  { icon: "missions", label: "Missions" },
+  { icon: "automations", label: "Automations" },
+  { icon: "providers", label: "Providers" },
+];
+---
+<nav class="kc-rail" aria-label={interactive ? "Workspace" : undefined}>
+  <div class="kc-rail__brand">
+    <img src="/assets/brand/kalcode-mark-64.png" alt="" width="22" height="22" decoding="async" loading="lazy" />
+    <span class="kc-rail__word" role="img" aria-label="KalCode"></span>
+  </div>
+
+  <div class="kc-rail__ws">
+    <span class="kc-i" data-i="folder" aria-hidden="true"></span>
+    <span class="kc-rail__wsname"><span class="kc-rail__wslabel">Workspace</span>{WORKSPACE.name}</span>
+    <span class="kc-i" data-i="updown" aria-hidden="true"></span>
+  </div>
+
+  <div class="kc-rail__search">
+    <span class="kc-i" data-i="search" aria-hidden="true"></span>
+    <span>Search</span>
+    <kbd>Ctrl K</kbd>
+  </div>
+
+  <ul class="kc-rail__nav" role="list">
+    <li>
+      <Btn interactive={interactive} class="kc-rail__item" data-kc-action="view:dashboard" aria-current={view === "dashboard" ? "page" : undefined} data-current={view === "dashboard" ? "true" : undefined}>
+        <span class="kc-i" data-i="dashboard" aria-hidden="true"></span>Dashboard
+      </Btn>
+    </li>
+    <li>
+      <Btn interactive={interactive} class="kc-rail__item" data-kc-action="view:code" aria-current={view === "code" ? "page" : undefined} data-current={view === "code" ? "true" : undefined}>
+        <span class="kc-i" data-i="code" aria-hidden="true"></span>Code
+      </Btn>
+      <ul class="kc-rail__threads" role="list" data-kc-rail-threads>
+        {agents.map((t) => (
+          <li data-kc-rail-thread={t.id} hidden={t.spawned && !present.includes(t.id)}>
+            <Btn
+              interactive={interactive}
+              class="kc-rail__thread"
+              data-kc-action="focus"
+              data-thread={t.id}
+              data-current={focus === t.id ? "true" : undefined}
+              aria-current={interactive && focus === t.id ? "true" : undefined}
+            >
+              <Glyph provider={t.provider} />
+              <span class="kc-rail__tname"><span class="visually-hidden">{PROVIDERS[t.provider].name}: </span>{t.name}</span>
+              <StatusLabel status={statusFor(t, approval)} threadId={t.id} variant="dot" />
+            </Btn>
+          </li>
+        ))}
+      </ul>
+    </li>
+    <li>
+      <span class="kc-rail__item kc-rail__item--static"><span class="kc-i" data-i="threads" aria-hidden="true"></span>Threads</span>
+    </li>
+    <li>
+      <Btn interactive={interactive} class="kc-rail__item" data-kc-action="voice:dictate">
+        <span class="kc-i" data-i="voice" aria-hidden="true"></span>KalVoice
+      </Btn>
+    </li>
+  </ul>
+
+  <p class="kc-rail__group">In development</p>
+  <ul class="kc-rail__nav kc-rail__nav--dim" role="list">
+    {inDevelopment.map((item) => (
+      <li><span class="kc-rail__item kc-rail__item--static"><span class="kc-i" data-i={item.icon} aria-hidden="true"></span>{item.label}</span></li>
+    ))}
+  </ul>
+
+  <div class="kc-rail__foot">
+    <span class="kc-i" data-i="settings" aria-hidden="true"></span>
+    <span>Development build 0.1.0</span>
+  </div>
+</nav>

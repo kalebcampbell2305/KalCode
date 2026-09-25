@@ -31,7 +31,7 @@ test.describe("early-access form", () => {
 
   test("shows a specific error for an invalid email and does not submit", async ({ page }) => {
     await useClientIp(page);
-    await page.goto("/");
+    await page.goto("/download");
     const form = page.locator("form[data-api-form='signup']");
     const input = form.getByLabel("Email address");
     let requests = 0;
@@ -65,7 +65,7 @@ test.describe("early-access form", () => {
   test("a filled honeypot gets the normal success response but is not stored", async ({ page }) => {
     await useClientIp(page);
     const email = uniqueEmail("bot");
-    await page.goto("/pricing");
+    await page.goto("/download");
     const form = page.locator("form[data-api-form='signup']");
     await form.locator("input[name='website']").evaluate((input: HTMLInputElement) => {
       input.value = "https://spam.example";
@@ -77,6 +77,7 @@ test.describe("early-access form", () => {
   });
 
   test("the honeypot is hidden from people and assistive technology", async ({ page }) => {
+    // /download carries the form whether or not a build is published.
     // The trap is hidden only by site.css. If the stylesheet is not applied (for example the
     // E2E server's dist folder was rebuilt mid-run), the trap renders in the page flow; name that
     // cause instead of failing on an opaque boolean. See docs/TESTING.md, "Flaky tests".
@@ -91,7 +92,7 @@ test.describe("early-access form", () => {
         stylesheetErrors.push(`${request.failure()?.errorText ?? "failed"} ${request.url()}`);
       }
     });
-    await page.goto("/");
+    await page.goto("/download");
     expect(stylesheetErrors, "site stylesheet failed to load").toEqual([]);
 
     const trap = page.locator("form[data-api-form='signup'] input[name='website']");

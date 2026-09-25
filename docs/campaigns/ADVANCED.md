@@ -1142,3 +1142,22 @@ workspace > global; 4 never auto-delete events younger than 180 days; 5 one new 
 workspace; 7 native confirmations for Bypass; 8 status mapping as proposed, approval/waiting
 accent is neutral grey (owner's colour spec), amber reserved for PAUSED; 10 neutral glyph + name
 for providers until written permission is recorded.
+
+## 14b. Security review gates (2026-09-24 review of 1bce77f)
+
+Release blockers are being fixed in `sec/fixes-0.1.1` (see `docs/campaigns/SEC-0.1.1.md` once
+merged). These latent findings **block wiring** until fixed and re-reviewed:
+
+- **Permission classifier dialect handling** (`crates/permissions/src/command.rs`, High, latent) and
+  the further classifier gaps (git read commands with execution options, PowerShell Unicode
+  dashes/smart quotes, abbreviated flags, env-var secret printing, glob arguments): must be fixed
+  before any host-approval or hook bridge (Z7-W4) routes provider decisions through the engine.
+- **Context Firewall** (`crates/context`): file-range scanning leaking PEM bodies, secret-format
+  coverage (~25 of 37 common formats undetected), partial redaction, dropped files skipping
+  never-share names, hard links, combined diffs, quadratic entropy pass: must be fixed before the
+  Context Firewall is wired to any provider path (Context Drop, handoff, missions).
+- **Git checkpoint store** "inside workspace" guard skipped on first use: fix before Z6a IPC wiring.
+- **API (D1)** REPLACE bypass of append-only/immutability triggers: fixed in 0.1.1 work; must be in
+  place before any Z13 billing or grant write path ships.
+- **Early-access list**: anyone can add or remove any address (no confirmation). Needs a
+  confirmation flow before the list is used for anything beyond launch notices.

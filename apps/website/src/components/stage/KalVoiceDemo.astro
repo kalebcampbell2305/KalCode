@@ -1,0 +1,51 @@
+---
+/**
+ * KalVoiceDemo: one push-to-talk key, two outcomes, mirroring the app's minimal KalVoice widget.
+ * Press and hold the on-screen F8 key (pointer, Space/Enter on it, or F8 itself while the demo
+ * has focus), hear yourself "speak" (the scripted transcript appears live), release:
+ * - first take: a prompt types into the focused pane (dictation);
+ * - next take: "Open two more agents" is recognised as a command, two threads open, and the widget
+ *   shows "Opened 2 agents" with "Type it instead".
+ * No chat box, no typed commands, no chords, no global key capture, no microphone.
+ */
+import StageStyles from "./parts/StageStyles.astro";
+import { VOICE } from "../../data/story";
+import AppWindow from "./AppWindow.astro";
+import StageLabel from "./parts/StageLabel.astro";
+
+interface Props {
+  id?: string;
+  class?: string;
+}
+const { id = "kalvoice-demo", class: className } = Astro.props;
+---
+<StageStyles />
+<div class:list={["kc-vd", className]} data-kc-vd data-say="dictation" data-testid="kalvoice-demo">
+  <div class="kc-demo-head">
+    <StageLabel tag="KalVoice is in development · no microphone is used here" />
+  </div>
+  <div class="kc-vd__controls">
+    <button type="button" class="kc-vd__key" data-kc-vd="hold" aria-describedby={`${id}-hint ${id}-next`} aria-keyshortcuts={VOICE.key} data-testid="kv-hold">
+      <kbd>{VOICE.key}</kbd>
+      <span>Hold to talk</span>
+    </button>
+    <p class="kc-vd__next" id={`${id}-next`} aria-live="polite">
+      <span data-kc-vd-next="dictation">Next take: a prompt, “{VOICE.dictation}”, typed into the focused pane.</span>
+      <span data-kc-vd-next="command" hidden>Next take: “{VOICE.command}”, which KalCode runs as a command.</span>
+    </p>
+    <button type="button" class="kc-tbtn kc-vd__reset" data-kc-vd="reset" data-testid="kv-reset">
+      <span class="kc-i" data-i="replay" aria-hidden="true"></span>Reset
+    </button>
+  </div>
+  <p class="kc-vd__hint" id={`${id}-hint`}>{VOICE.hint}. Press and hold, speak, release. A quick press plays the whole take.</p>
+  <AppWindow
+    id={id}
+    interactive={true}
+    size="compact"
+    scene={{ view: "code", panes: ["claude-checkout", "codex-signup"], focus: "claude-checkout", layout: "rows", dock: "none", approval: "approved", voice: "off", mission: 0 }}
+  />
+</div>
+
+<script>
+  import "../../scripts/stage/voice-demo";
+</script>

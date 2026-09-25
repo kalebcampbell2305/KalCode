@@ -322,10 +322,17 @@ fn watcher_keeps_the_index_current() {
     fx.write("watched/new.txt", "hello");
     let target = RelPath::parse("watched/new.txt").expect("rel");
     let deadline = Instant::now() + Duration::from_secs(10);
-    while index.get(&target).is_none() && Instant::now() < deadline {
+    // The watcher applies a batch to the index, then reports it through the callback; wait for
+    // both, since a check between the two steps would race.
+    while (index.get(&target).is_none() || batches.load(Ordering::SeqCst) == 0)
+        && Instant::now() < deadline
+    {
         std::thread::sleep(Duration::from_millis(50));
     }
     assert!(index.get(&target).is_some(), "watcher applied the change");
-    assert!(batches.load(Ordering::SeqCst) >= 1);
+    assert!(
+        batches.load(Ordering::SeqCst) >= 1,
+        "watcher reported the batch"
+    );
     drop(watcher);
 }

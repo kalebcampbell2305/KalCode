@@ -2,20 +2,28 @@
 /**
  * The KalCode globe from the brand artwork, cut to a circle (kalcode-mark-*.png from
  * tooling/generate-brand-assets.py). Decorative next to the wordmark: the link carries the name.
+ *
+ * Picks the smallest file that covers the displayed size at 1x and at 2x, so a 28 px header mark
+ * downloads the 64 px file once and never the 90 KB 256 px file.
  */
 interface Props {
   size: number;
+  /** Below the fold (footer, closing section): let the browser defer it. */
+  lazy?: boolean;
 }
-const { size } = Astro.props;
-const oneX = size <= 32 ? 64 : 128;
-const twoX = size <= 32 ? 128 : 256;
+const { size, lazy = false } = Astro.props;
+const FILES = [64, 128, 256] as const;
+const cover = (px: number) => FILES.find((width) => width >= px) ?? 256;
+const oneX = cover(size);
+const twoX = cover(size * 2);
 ---
 <img
   class="brand-mark"
   src={`/assets/brand/kalcode-mark-${oneX}.png`}
-  srcset={`/assets/brand/kalcode-mark-${oneX}.png 1x, /assets/brand/kalcode-mark-${twoX}.png 2x`}
+  srcset={oneX === twoX ? undefined : `/assets/brand/kalcode-mark-${oneX}.png 1x, /assets/brand/kalcode-mark-${twoX}.png 2x`}
   width={size}
   height={size}
   alt=""
   decoding="async"
+  loading={lazy ? "lazy" : undefined}
 />

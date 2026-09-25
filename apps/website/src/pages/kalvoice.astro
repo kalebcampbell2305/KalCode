@@ -1,0 +1,168 @@
+---
+import { PLANS, formatKalVoiceAllowance } from "@kalcode/protocol/plans";
+import Closing from "../components/Closing.astro";
+import Globe from "../components/Globe.astro";
+import Icon from "../components/Icon.astro";
+import SectionHead from "../components/SectionHead.astro";
+import StageSlot from "../components/StageSlot.astro";
+import Base from "../layouts/Base.astro";
+import { KALVOICE, getPage } from "../lib/site";
+
+const page = getPage("/kalvoice");
+
+const allowances = PLANS.map((plan) => plan.limits.kalvoiceRequestsPerMonth ?? 0);
+const logMax = Math.log10(Math.max(...allowances));
+const meterWidth = (value: number | null) =>
+  value === null ? 100 : Math.max(6, Math.round(((Math.log10(value) - 2) / (logMax - 2)) * 100));
+
+const privacy = [
+  {
+    label: "on-device",
+    title: "Audio never leaves your computer.",
+    body: "Speech is captured into memory, transcribed by a model running locally, then discarded. Nothing is stored or uploaded.",
+  },
+  {
+    label: "no transcripts in logs",
+    title: "The log records that you spoke, not what.",
+    body: "KalCode's event log notes that a dictation or request happened. Your words are not written to it.",
+  },
+  {
+    label: "your provider",
+    title: "Reasoning uses an account you connected.",
+    body: "Commands that need a model use the provider you choose. Structured commands run without any model at all.",
+  },
+];
+---
+<Base title={page.title} description={page.description} path={page.path}>
+  <header class="container kv-head">
+    <div class="kv-head__copy">
+      <p class="chip chip--dev">{KALVOICE.status}</p>
+      <p class="kv-head__name">KalVoice</p>
+      <h1 class="h1">Speak your prompts with KalVoice.</h1>
+      <p class="lead">
+        Hold {KALVOICE.pushToTalkKey} to talk to KalVoice. Release, and your words land in the
+        focused agent — or, if you said a command, KalCode does it.
+      </p>
+      <div class="button-row">
+        <a class="button button--secondary button--lg" href="#modes">
+          How it works
+          <Icon name="arrow-down" />
+        </a>
+      </div>
+    </div>
+    <div class="orb-disc">
+      <Globe variant="kalvoice" hero alt={KALVOICE.globeAlt} sizes="(min-width: 60rem) 28rem, 80vw" />
+    </div>
+  </header>
+
+  <section class="section" id="modes" aria-labelledby="modes-title">
+    <div class="container">
+      <SectionHead
+        id="modes-title"
+        title={`Hold ${KALVOICE.pushToTalkKey}. Speak. Release.`}
+        text="One key, one gesture. KalVoice decides from context what you meant."
+      />
+      <p class="ptt">
+        <kbd class="ptt__key">{KALVOICE.pushToTalkKey}</kbd>
+        <span class="ptt__note">{KALVOICE.keyNote}</span>
+      </p>
+      <div class="modes">
+        <article class="mode" aria-labelledby="dictation-title">
+          <p class="mode__keys">Into a focused input</p>
+          <h3 id="dictation-title" class="h2 h2--sm">Your words are typed there.</h3>
+          <ul>
+            <li>A Claude Code, Codex or Gemini CLI thread, a terminal, a search box.</li>
+            <li>The target is fixed when you press the key, so switching windows cannot misdirect your words.</li>
+            <li>Dictation is unlimited on every plan, and never counted.</li>
+          </ul>
+          <p class="mode__example">“also cover the 429 response in the test”</p>
+        </article>
+        <article class="mode" aria-labelledby="command-title">
+          <p class="mode__keys">A command</p>
+          <h3 id="command-title" class="h2 h2--sm">KalCode does it.</h3>
+          <ul>
+            <li>Structured commands run without any model; reasoning uses your own provider.</li>
+            <li>Every action stays inside your permission mode.</li>
+            <li>Each command is one KalVoice Request.</li>
+          </ul>
+          <p class="mode__example">“Open four Codex threads.”</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section--sunken" id="demo" aria-labelledby="demo-title">
+    <div class="container">
+      <SectionHead
+        id="demo-title"
+        title="Hear it land in the pane."
+        text="The KalVoice panel, the waveform and a prompt arriving in the focused agent."
+      />
+    </div>
+    <div class="container container--wide">
+      <StageSlot name="KalVoiceDemo" />
+    </div>
+  </section>
+
+  <section class="section" id="requests" aria-labelledby="requests-title">
+    <div class="container feature-split feature-split--top">
+      <div class="feature-split__copy">
+        <h2 id="requests-title" class="h2">Unlimited dictation. Counted commands.</h2>
+        <p>
+          Dictation is free on every plan. Commands count as KalVoice Requests — one per top-level
+          request, however many steps it takes.
+        </p>
+        <a class="text-link" href="/pricing">Compare plans <Icon name="arrow-right" /></a>
+      </div>
+      <div>
+        <ul class="allowances" role="list" aria-label="KalVoice Requests per month by plan">
+          {
+            PLANS.map((plan) => (
+              <li class="allowance">
+                <span class="allowance__plan">{plan.name}</span>
+                <svg class="meter" viewBox="0 0 100 6" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+                  <rect class="meter__track" width="100" height="6" rx="3" />
+                  <rect class="meter__fill" width={meterWidth(plan.limits.kalvoiceRequestsPerMonth)} height="6" rx="3" />
+                </svg>
+                <span class="allowance__value">{formatKalVoiceAllowance(plan.limits)} a month</span>
+              </li>
+            ))
+          }
+          <li class="allowance">
+            <span class="allowance__plan">Dictation</span>
+            <svg class="meter" viewBox="0 0 100 6" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+              <rect class="meter__fill" width="100" height="6" rx="3" />
+            </svg>
+            <span class="allowance__value">Unlimited on every plan</span>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="privacy" aria-labelledby="privacy-title">
+    <div class="container">
+      <SectionHead
+        id="privacy-title"
+        title="Private by default."
+        text="KalVoice works inside your permission model: it cannot raise its own authority, approve its own requests, or turn on Bypass."
+      />
+      <ul class="facts" role="list">
+        {
+          privacy.map((fact) => (
+            <li class="fact">
+              <span class="fact__label">{fact.label}</span>
+              <p class="fact__title">{fact.title}</p>
+              <p>{fact.body}</p>
+            </li>
+          ))
+        }
+      </ul>
+      <p class="section-foot">
+        <a class="text-link" href="/docs/kalvoice">Read the KalVoice reference <Icon name="arrow-right" /></a>
+      </p>
+    </div>
+  </section>
+
+  <Closing />
+</Base>

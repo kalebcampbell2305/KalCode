@@ -1,0 +1,61 @@
+---
+/**
+ * ProviderSwitch: one pane, three providers. Tabs switch between Claude Code, Codex and Gemini
+ * CLI, each drawn in its own CLI's style inside a KalCode pane. On phones the panes also swipe
+ * (scroll snap); the tabs follow.
+ */
+import StageStyles from "./parts/StageStyles.astro";
+import { AGENT_PROVIDERS, PROVIDERS, threadById } from "../../data/story";
+import Glyph from "./parts/Glyph.astro";
+import Pane from "./parts/Pane.astro";
+import StageLabel from "./parts/StageLabel.astro";
+
+interface Props {
+  id?: string;
+  class?: string;
+}
+const { id = "providers", class: className } = Astro.props;
+const threadFor = { claude: "claude-checkout", codex: "codex-signup", gemini: "gemini-research" } as const;
+---
+<StageStyles />
+<div class:list={["kc-ps", className]} data-kc-ps data-testid="provider-switch">
+  <StageLabel tag="Claude Code adapter built · Codex and Gemini CLI planned" />
+  <div class="kc-ps__tabs" role="tablist" aria-label="Provider">
+    {AGENT_PROVIDERS.map((p, i) => (
+      <button
+        type="button"
+        role="tab"
+        class="kc-ps__tab"
+        id={`${id}-tab-${p}`}
+        aria-controls={`${id}-panel-${p}`}
+        aria-selected={i === 0 ? "true" : "false"}
+        tabindex={i === 0 ? 0 : -1}
+        data-kc-ps-tab={p}
+        data-testid={`provider-tab-${p}`}
+      >
+        <Glyph provider={p} />{PROVIDERS[p].name}
+      </button>
+    ))}
+  </div>
+  <div class="kc-ps__strip" data-kc-ps-strip>
+    {AGENT_PROVIDERS.map((p, i) => (
+      <div
+        class="kc-ps__panel"
+        role="tabpanel"
+        id={`${id}-panel-${p}`}
+        aria-labelledby={`${id}-tab-${p}`}
+        data-kc-ps-panel={p}
+        inert={i !== 0}
+        tabindex={i === 0 ? 0 : -1}
+        data-testid={`provider-panel-${p}`}
+      >
+        <Pane thread={threadById(threadFor[p])} approval="none" interactive={false} still focus />
+      </div>
+    ))}
+  </div>
+  <p class="visually-hidden" aria-live="polite" data-kc-ps-live></p>
+</div>
+
+<script>
+  import "../../scripts/stage/provider-switch";
+</script>

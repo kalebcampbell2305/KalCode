@@ -1,5 +1,7 @@
+import { PLANS } from "@kalcode/protocol/plans";
 import { expect, test } from "@playwright/test";
-import { NOT_FOUND_PAGE, PAGES, SITE_ORIGIN } from "../../src/lib/site";
+import { NOT_FOUND_PAGE, PAGES, SITE_ORIGIN, SOCIAL } from "../../src/lib/site";
+import { MANIFEST, WINDOWS_BUILD } from "./helpers";
 
 test.describe("every page", () => {
   for (const page of PAGES) {
@@ -20,6 +22,7 @@ test.describe("every page", () => {
       await expect(head.locator('meta[property="og:title"]')).toHaveAttribute("content", page.title);
       await expect(head.locator('meta[property="og:image"]')).toHaveAttribute("content", `${SITE_ORIGIN}/og.png`);
       await expect(head.locator('meta[name="twitter:card"]')).toHaveAttribute("content", "summary_large_image");
+      await expect(head.locator('meta[name="twitter:site"]')).toHaveAttribute("content", SOCIAL.official.handle);
       await expect(head.locator('meta[name="theme-color"]').first()).toHaveAttribute("content", /#/);
       await expect(tab.locator("h1")).toHaveCount(1);
       await expect(tab.locator("main#main")).toBeVisible();
@@ -77,7 +80,75 @@ test.describe("every page", () => {
     }
   });
 
-  test("the hero globe is served as AVIF/WebP with explicit size and high priority", async ({ page }) => {
+  test("the home hero names the product, the providers and an honest call to action", async ({ page }) => {
+    await page.goto("/");
+    const h1 = page.locator("h1");
+    await expect(h1).toContainText("KalCode");
+    await expect(h1).toContainText("One intelligence that operates your entire AI workspace.");
+    const hero = page.locator(".hero");
+    await expect(hero).toContainText("Claude Code, Codex and Gemini CLI");
+    const primary = hero.locator(".button--primary");
+    if (WINDOWS_BUILD && MANIFEST.latest) {
+      // A published Windows build: the primary action offers it, on the download page.
+      await expect(primary).toHaveText("Download for Windows");
+      await expect(primary).toHaveAttribute("href", "/download#windows");
+      await expect(hero).toContainText(`Preview ${MANIFEST.latest.version}`);
+    } else {
+      // No public build: the primary action is early access, on this page, and nothing links to a file.
+      await expect(primary).toHaveText("Join early access");
+      await expect(primary).toHaveAttribute("href", "#early-access");
+      await expect(hero).toContainText("No public build yet");
+      await expect(page.locator('a[href^="/download/"]')).toHaveCount(0);
+    }
+    await hero.getByRole("link", { name: "See it in action" }).click();
+    await expect(page).toHaveURL(/#story$/);
+    // Provider bar: honest adapter status.
+    const providers = page.getByRole("list", { name: "Runs the coding agents you already use" });
+    await expect(providers).toContainText("Adapter built");
+    await expect(providers).toContainText("adapter planned");
+  });
+
+  test("the header offers Download (plain label) in every manifest state", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto("/");
+    const cta = page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Download", exact: true });
+    await expect(cta).toHaveText("Download");
+    await expect(cta).toHaveAttribute("href", "/download");
+    await page.setViewportSize({ width: 390, height: 844 });
+    const compact = page.locator(".header-tools").getByRole("link", { name: "Download", exact: true });
+    await expect(compact).toHaveText("Download");
+    await expect(compact).toHaveAttribute("href", "/download");
+  });
+
+  test("from 1024 px the hero copy sits left, clear of the orb and its stream", async ({ page }) => {
+    for (const width of [1024, 1440, 2560]) {
+      await page.setViewportSize({ width, height: width > 2000 ? 1440 : 900 });
+      await page.goto("/");
+      const orb = await page.locator(".hero__orb").boundingBox();
+      for (const selector of [".hero__title", ".hero__support", ".hero__actions", ".hero__note"]) {
+        const box = await page.locator(selector).boundingBox();
+        expect(box && orb && box.x + box.width <= orb.x + 1, `${selector} at ${width}px`).toBe(true);
+      }
+      // The stream lands on the provider bar: the orb cell ends where the hero ends.
+      const hero = await page.locator(".hero").boundingBox();
+      expect(orb && hero && Math.abs(orb.y + orb.height - (hero.y + hero.height)) < 1).toBe(true);
+    }
+  });
+
+  test("home carries Organization and SoftwareApplication JSON-LD built from site data", async ({ page }) => {
+    await page.goto("/");
+    const raw = await page.locator('script[type="application/ld+json"]').textContent();
+    const data = JSON.parse(raw ?? "{}") as { "@graph": Record<string, unknown>[] };
+    const byType = (type: string) => data["@graph"].find((node) => node["@type"] === type);
+    expect(byType("Organization")?.sameAs).toEqual([SOCIAL.official.url]);
+    const app = byType("SoftwareApplication") as { offers: { name: string; price: string }[] };
+    expect(app.offers.map((offer) => [offer.name, Number(offer.price)])).toEqual(
+      PLANS.map((plan) => [plan.name, plan.price.amountUsd]),
+    );
+    expect(raw).not.toMatch(/aggregateRating|review/i);
+  });
+
+  test("the hero orb poster is served as AVIF/WebP with explicit size and high priority", async ({ page }) => {
     await page.goto("/");
     const img = page.locator(".hero img");
     await expect(img).toHaveAttribute("fetchpriority", "high");

@@ -19,7 +19,7 @@ test.describe("mobile navigation", () => {
     await expect(nav.getByRole("link", { name: "Product" })).toBeFocused();
 
     await page.keyboard.press("Tab");
-    await expect(nav.getByRole("link", { name: "Pricing" })).toBeFocused();
+    await expect(nav.getByRole("link", { name: "KalVoice" })).toBeFocused();
 
     await page.keyboard.press("Escape");
     await expect(button).toHaveAttribute("aria-expanded", "false");
@@ -70,8 +70,9 @@ test.describe("theme", () => {
       await page.goto("/");
       await expect(page.locator("html")).toHaveAttribute("data-theme", scheme);
       await expect(page.getByRole("button", { name: "Use system theme" })).toHaveAttribute("aria-pressed", "true");
-      // The hero stays in the Space palette in both themes.
+      // The hero is a night band in both themes, and the header joins it on the home page only.
       await expect(page.locator(".hero")).toHaveAttribute("data-theme", "dark");
+      await expect(page.locator(".site-header")).toHaveAttribute("data-theme", "dark");
       await context.close();
     }
   });

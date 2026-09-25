@@ -1,0 +1,35 @@
+---
+/**
+ * A mission (planned surface): one objective run as Build → Review → Test → Verify across the
+ * panes. `data-stage` 0 hides it, 1–4 light the nodes in turn, 5 means verification passed.
+ */
+import { MISSION } from "../../../data/story";
+
+interface Props {
+  stage: number;
+  still?: boolean;
+}
+const { stage, still = false } = Astro.props;
+const nodeState = (i: number) => (stage > i + 1 || stage === 5 ? "done" : stage === i + 1 ? "active" : "waiting");
+---
+<div class:list={["kc-mission", still && "kc-mission--still"]} data-kc-mission data-stage={stage} data-testid="mission">
+  <p class="kc-mission__head">
+    <span class="kc-i" data-i="missions" aria-hidden="true"></span>
+    <b>Mission</b>
+    <span class="kc-mission__obj">{MISSION.objective}</span>
+    <span class="kc-tag">Planned</span>
+    <span class="kc-mission__result" data-kc-mission-result><span class="kc-i" data-i="done" aria-hidden="true"></span>{MISSION.checks.length} checks passed</span>
+  </p>
+  <ol class="kc-mission__nodes" role="list">
+    {MISSION.nodes.map((n, i) => (
+      <li class="kc-node" data-node={i + 1} data-state={nodeState(i)}>
+        {i > 0 && <span class="kc-node__edge" aria-hidden="true"></span>}
+        <span class="kc-node__dot" aria-hidden="true"><span class="kc-i" data-i="done"></span></span>
+        <span class="kc-node__text">
+          <b>{n.label}</b>
+          <span>{n.who} · {n.detail}</span>
+        </span>
+      </li>
+    ))}
+  </ol>
+</div>

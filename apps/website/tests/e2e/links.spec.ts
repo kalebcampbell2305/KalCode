@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { CONTACT_EMAIL, PAGES } from "../../src/lib/site";
+import { CONTACT_EMAIL, PAGES, SOCIAL } from "../../src/lib/site";
 
 /**
  * Crawls every internal link starting from all known pages. Every target must answer 200
@@ -27,13 +27,18 @@ test("no dead internal links or anchors", async ({ page, request }) => {
       .evaluateAll((anchors) => anchors.map((anchor) => anchor.getAttribute("href") ?? ""));
 
     for (const href of hrefs) {
-      if (href === `mailto:${CONTACT_EMAIL}`) continue; // the one intended external link
+      // The intended external links: the published contact and the configured social accounts.
+      if (href === `mailto:${CONTACT_EMAIL}`) continue;
+      if (Object.values(SOCIAL).some((account) => account.url === href)) continue;
       if (/^(https?:|mailto:|tel:)/.test(href)) {
         problems.push(`${path}: unexpected external link ${href}`);
         continue;
       }
       const url = new URL(href, `http://local${path}`);
       const target = url.pathname;
+      // Installer files are served by the Worker from R2 (worker/downloads.ts and its tests);
+      // a local run has no R2 object behind them.
+      if (target.startsWith("/download/")) continue;
       if (url.hash) {
         const id = decodeURIComponent(url.hash.slice(1));
         if (target === path) {
@@ -61,12 +66,19 @@ test("no dead internal links or anchors", async ({ page, request }) => {
 test("header navigation and footer links resolve", async ({ page }) => {
   await page.goto("/");
   const header = page.getByRole("navigation", { name: "Main" });
-  for (const name of ["Product", "Pricing", "Docs", "Changelog"]) {
+  for (const name of ["Product", "KalVoice", "Pricing", "Docs", "Changelog"]) {
     await header.getByRole("link", { name, exact: true }).click();
     await expect(page.locator("h1")).toBeVisible();
     await expect(header.getByRole("link", { name, exact: true })).toHaveAttribute("aria-current", "page");
     await page.goto("/");
   }
+  // The X link comes from SOCIAL and opens in a new tab.
+  const x = header.getByRole("link", { name: /KalCode on X/ });
+  await expect(x).toHaveAttribute("href", "https://x.com/KalCodeDev");
+  await expect(x).toHaveAttribute("target", "_blank");
+  await header.getByRole("link", { name: "Download", exact: true }).click();
+  await expect(page).toHaveURL(/\/download$/);
+  await page.goto("/");
   const footer = page.locator("footer");
   const footerLinks = await footer.locator("a[href]").count();
   expect(footerLinks).toBeGreaterThanOrEqual(12);

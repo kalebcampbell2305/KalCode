@@ -17,7 +17,7 @@ const flag = (name) => args.find((arg) => arg.startsWith(`--${name}=`))?.split("
 
 const base = positional[0] ?? "http://127.0.0.1:8787";
 const outDir = resolve(positional[1] ?? "qa/screenshots");
-const pages = (flag("pages") ?? "/,/pricing,/download,/docs,/privacy").split(",");
+const pages = (flag("pages") ?? "/,/product,/kalvoice,/pricing,/download,/docs,/changelog,/privacy").split(",");
 const widths = (flag("widths") ?? "1440,390").split(",").map(Number);
 const themes = (flag("themes") ?? "dark,light").split(",");
 const fullPage = flag("full") !== "false";
