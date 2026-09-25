@@ -23,6 +23,16 @@ export {
   DropdownMenuTrigger,
 } from "./DropdownMenu.tsx";
 export { Field, type FieldProps, Select, TextArea, TextInput } from "./Field.tsx";
+  buildRows,
+  type DiffChange,
+  type DiffFileData,
+  type DiffHunk,
+  type DiffLine,
+  type DiffLineKind,
+  type DiffMode,
+  pairLines,
+} from "./DiffView.model.ts";
+export { DiffView, type DiffViewProps } from "./DiffView.tsx";
 export { Kbd, type KeyValueItem, KeyValueList, Section, type SectionProps } from "./Layout.tsx";
 export {
   PermissionPrompt,

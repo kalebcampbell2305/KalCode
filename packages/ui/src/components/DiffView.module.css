@@ -1,0 +1,261 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.summary {
+  display: inline-flex;
+  gap: var(--space-3);
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.additions {
+  color: var(--color-success);
+}
+
+.deletions {
+  color: var(--color-danger-text);
+}
+
+.empty,
+.truncated {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.viewport {
+  position: relative;
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-code-bg);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  contain: strict;
+  overscroll-behavior: contain;
+}
+
+.table {
+  display: block;
+  position: relative;
+  min-width: 100%;
+  width: max-content;
+  border-collapse: collapse;
+}
+
+/* The table is as tall as the whole diff; show focus on the visible viewport instead. */
+.table:focus-visible {
+  outline: none;
+}
+
+.viewport:has(> .table:focus-visible) {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 2px;
+}
+
+.window {
+  display: block;
+  position: absolute;
+  inset: 0 0 auto;
+  will-change: transform;
+}
+
+.row {
+  display: grid;
+  padding: 0;
+  grid-template-columns: 6ch 6ch minmax(0, 1fr);
+  height: var(--diff-row-h);
+  line-height: var(--diff-row-h);
+  white-space: pre;
+  tab-size: 4;
+}
+
+.split .table {
+  width: 100%;
+}
+
+.split .row {
+  grid-template-columns: 6ch minmax(0, 1fr) 6ch minmax(0, 1fr);
+}
+
+/* Zero specificity so the cell classes below decide padding and alignment. */
+:where(.row > td, .row > th) {
+  display: block;
+  padding: 0;
+  text-align: left;
+  font-weight: inherit;
+}
+
+.split .code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.table:focus-visible .row[data-active="true"] {
+  box-shadow: inset 0 0 0 2px var(--color-border-focus);
+}
+
+.num {
+  padding: 0 var(--space-2);
+  color: var(--color-text-faint);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+  border-right: 1px solid var(--color-border);
+}
+
+.code {
+  padding: 0 var(--space-2) 0 0;
+}
+
+.marker {
+  display: inline-block;
+  width: 2ch;
+  text-align: center;
+  user-select: none;
+}
+
+.line_add,
+.side_add {
+  background: var(--color-success-soft);
+}
+
+.line_add .marker,
+.side_add .marker {
+  color: var(--color-success);
+  font-weight: var(--weight-semibold);
+}
+
+.line_delete,
+.side_delete {
+  background: var(--color-danger-soft);
+}
+
+.line_delete .marker,
+.side_delete .marker {
+  color: var(--color-danger-text);
+  font-weight: var(--weight-semibold);
+}
+
+/* Faint numbers lack contrast on tinted rows: use the secondary text colour there. */
+.line_add .num,
+.line_delete .num,
+.num.side_add,
+.num.side_delete {
+  color: var(--color-text-secondary);
+}
+
+.noNewline,
+.line_no_newline {
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+.filler {
+  background: var(--color-bg-sunken);
+}
+
+.fileRow {
+  grid-template-columns: 1fr;
+  background: var(--color-surface-raised);
+  border-block: 1px solid var(--color-border);
+  font-family: var(--font-sans);
+}
+
+.split .fileRow,
+.split .hunkRow,
+.split .noticeRow {
+  grid-template-columns: 1fr;
+}
+
+.fileHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: 0 var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--color-text);
+}
+
+.path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+  font-weight: var(--weight-medium);
+}
+
+.counts {
+  display: inline-flex;
+  gap: var(--space-2);
+  margin-left: auto;
+  padding-left: var(--space-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.change {
+  flex: none;
+  padding: 0 var(--space-1-5);
+  border-radius: var(--radius-xs);
+  line-height: 1.5;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  background: var(--color-idle-soft);
+  color: var(--color-text-secondary);
+}
+
+.change_added {
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+
+.change_deleted,
+.change_unmerged {
+  background: var(--color-danger-soft);
+  color: var(--color-danger-text);
+}
+
+.change_renamed,
+.change_copied {
+  background: var(--color-accent-soft);
+  color: var(--color-accent-text);
+}
+
+.hunkRow,
+.noticeRow {
+  grid-template-columns: 1fr;
+}
+
+.hunk {
+  padding: 0 var(--space-2);
+  background: var(--color-bg-sunken);
+  color: var(--color-text-muted);
+}
+
+.notice {
+  padding: 0 var(--space-3);
+  color: var(--color-text-muted);
+  font-family: var(--font-sans);
+  font-style: italic;
+}
+
+@media (forced-colors: active) {
+  .table:focus-visible .row[data-active="true"] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+}
