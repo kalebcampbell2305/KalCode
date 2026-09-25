@@ -2,8 +2,9 @@
 
 Status: **built in Z7-W2** (`crates/locator`, `apps/desktop/src-tauri/src/locator_commands.rs`).
 Plan and acceptance: `docs/campaigns/ADVANCED.md` §7.12; as built, with evidence:
-`docs/campaigns/Z7-W2.md`. Its tables are migration **v10** (an isolated constant until the lead
-registers it after v9); before that the same tables live in memory for the session.
+`docs/campaigns/Z7-W2.md`. Its tables are migration **v11** (an isolated constant until the lead
+registers it after v10, the notification center); before that the same tables live in memory for
+the session.
 
 System code **LOC** · Phase **P1 (Z7-W2)**
 

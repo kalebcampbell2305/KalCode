@@ -9,6 +9,6 @@ export type LocatorIndexState = { entries: number,
  */
 ready: boolean, 
 /**
- * False when the index lives in memory for this session only (schema v10 not installed).
+ * False when the index lives in memory for this session only (schema v11 not installed).
  */
 persistent: boolean, };

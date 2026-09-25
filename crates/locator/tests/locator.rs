@@ -7,7 +7,7 @@ mod common;
 
 use std::time::Duration;
 
-use common::{FakeSources, core_with_v10, core_without_v10, thread, workspace};
+use common::{FakeSources, core_with_v11, core_without_v11, thread, workspace};
 use kalcode_contracts::events::{Correlation, EventPayload};
 use kalcode_contracts::threads::ThreadStatus;
 use kalcode_core::db::MIGRATIONS;
@@ -46,14 +46,14 @@ fn titles(locator: &Locator, query: &LocatorQuery) -> Vec<String> {
 
 #[test]
 fn migration_is_isolated_and_well_formed() {
-    assert_eq!(RAIL_LOCATOR_MIGRATION.version, 10);
+    assert_eq!(RAIL_LOCATOR_MIGRATION.version, 11);
     assert_eq!(RAIL_LOCATOR_MIGRATION.name, "rail_locator");
     assert!(
-        MIGRATIONS.iter().all(|m| m.version != 10),
-        "v10 is registered by the lead at integration, not on this branch"
+        MIGRATIONS.iter().all(|m| m.version != 11),
+        "v11 is registered by the lead at merge, not on this branch"
     );
     let dir = tempfile::tempdir().unwrap();
-    let core = core_with_v10(dir.path());
+    let core = core_with_v11(dir.path());
     let conn = core.reader();
     for table in [
         "workspace_groups",
@@ -70,13 +70,13 @@ fn migration_is_isolated_and_well_formed() {
             .unwrap();
         assert_eq!(n, 1, "{table}");
     }
-    assert_eq!(kalcode_core::db::schema_version(&conn).unwrap(), 10);
+    assert_eq!(kalcode_core::db::schema_version(&conn).unwrap(), 11);
 }
 
 #[test]
 fn auth_finds_authentication_refactor_first() {
     let dir = tempfile::tempdir().unwrap();
-    let core = core_with_v10(dir.path());
+    let core = core_with_v11(dir.path());
     let ws = workspace(&core, dir.path(), "atlas-api");
     let sources = FakeSources::new();
     for (name, hours) in [
@@ -138,7 +138,7 @@ fn auth_finds_authentication_refactor_first() {
 #[test]
 fn filters_by_kind_status_provider_workspace_and_recency() {
     let dir = tempfile::tempdir().unwrap();
-    let core = core_with_v10(dir.path());
+    let core = core_with_v11(dir.path());
     let a = workspace(&core, dir.path(), "alpha");
     let b = workspace(&core, dir.path(), "beta");
     let sources = FakeSources::new();
@@ -216,7 +216,7 @@ fn filters_by_kind_status_provider_workspace_and_recency() {
 
     // A filter word that is really part of a title: retried as plain text.
     let dir2 = tempfile::tempdir().unwrap();
-    let core2 = core_with_v10(dir2.path());
+    let core2 = core_with_v11(dir2.path());
     let ws2 = workspace(&core2, dir2.path(), "gamma");
     let sources2 = FakeSources::new();
     sources2.add(thread(
@@ -240,7 +240,7 @@ fn filters_by_kind_status_provider_workspace_and_recency() {
 #[test]
 fn what_was_i_working_on_yesterday() {
     let dir = tempfile::tempdir().unwrap();
-    let core = core_with_v10(dir.path());
+    let core = core_with_v11(dir.path());
     let ws = workspace(&core, dir.path(), "kalcode");
     let sources = FakeSources::new();
     sources.add(thread(
@@ -287,7 +287,7 @@ fn what_was_i_working_on_yesterday() {
 #[test]
 fn indexes_incrementally_from_events_and_forgets_removed_items() {
     let dir = tempfile::tempdir().unwrap();
-    let core = core_with_v10(dir.path());
+    let core = core_with_v11(dir.path());
     let ws = workspace(&core, dir.path(), "orbit");
     let sources = FakeSources::new();
     let locator = Locator::start(core.clone(), sources.clone()).expect("start");
@@ -354,7 +354,7 @@ fn indexes_incrementally_from_events_and_forgets_removed_items() {
 #[test]
 fn privacy_names_are_redacted_queries_never_stored_messages_off_by_default() {
     let dir = tempfile::tempdir().unwrap();
-    let core = core_with_v10(dir.path());
+    let core = core_with_v11(dir.path());
     let ws = workspace(&core, dir.path(), "vault");
     let sources = FakeSources::new();
     let secret = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
@@ -439,7 +439,7 @@ fn privacy_names_are_redacted_queries_never_stored_messages_off_by_default() {
 #[test]
 fn a_damaged_index_is_rebuilt_without_touching_anything_else() {
     let dir = tempfile::tempdir().unwrap();
-    let core = core_with_v10(dir.path());
+    let core = core_with_v11(dir.path());
     let ws = workspace(&core, dir.path(), "phoenix");
     let sources = FakeSources::new();
     sources.add(thread(
@@ -478,9 +478,9 @@ fn a_damaged_index_is_rebuilt_without_touching_anything_else() {
 }
 
 #[test]
-fn without_v10_everything_works_for_the_session() {
+fn without_v11_everything_works_for_the_session() {
     let dir = tempfile::tempdir().unwrap();
-    let core = core_without_v10(dir.path());
+    let core = core_without_v11(dir.path());
     let ws = workspace(&core, dir.path(), "nimbus");
     let sources = FakeSources::new();
     let locator = Locator::start(core.clone(), sources).expect("start");
@@ -513,7 +513,7 @@ fn without_v10_everything_works_for_the_session() {
 #[test]
 fn search_input_is_validated() {
     let dir = tempfile::tempdir().unwrap();
-    let core = core_with_v10(dir.path());
+    let core = core_with_v11(dir.path());
     let locator = Locator::start(core.clone(), FakeSources::new()).expect("start");
     let mut bad = q("x");
     bad.workspace_id = Some("../etc".into());

@@ -5,7 +5,7 @@
 
 mod common;
 
-use common::{FakeSources, core_with_v10, thread, workspace};
+use common::{FakeSources, core_with_v11, thread, workspace};
 use kalcode_contracts::events::{Correlation, EventPayload, EventSource};
 use kalcode_contracts::refs::PageRequest;
 use kalcode_contracts::threads::ThreadStatus;
@@ -24,7 +24,7 @@ fn rail_state_persists_across_restart() {
     let dir = tempfile::tempdir().unwrap();
     let (a_id, b_id, c_id, group_id);
     {
-        let core = core_with_v10(dir.path());
+        let core = core_with_v11(dir.path());
         let a = workspace(&core, dir.path(), "alpha");
         let b = workspace(&core, dir.path(), "beta");
         let c = workspace(&core, dir.path(), "gamma");
@@ -72,7 +72,7 @@ fn rail_state_persists_across_restart() {
         core.shutdown();
     }
     // Relaunch.
-    let core = core_with_v10(dir.path());
+    let core = core_with_v11(dir.path());
     let locator = Locator::start(core.clone(), FakeSources::new()).expect("restart");
     let state = locator.rail_state().unwrap();
     assert!(state.persistent);
@@ -122,7 +122,7 @@ fn rail_state_persists_across_restart() {
 #[test]
 fn rail_counts_threads_per_provider_and_badges() {
     let dir = tempfile::tempdir().unwrap();
-    let core = core_with_v10(dir.path());
+    let core = core_with_v11(dir.path());
     let ws = workspace(&core, dir.path(), "atlas");
     let sources = FakeSources::new();
     let at = now();
@@ -193,7 +193,7 @@ fn rail_counts_threads_per_provider_and_badges() {
 #[test]
 fn rail_input_is_validated() {
     let dir = tempfile::tempdir().unwrap();
-    let core = core_with_v10(dir.path());
+    let core = core_with_v11(dir.path());
     let ws = workspace(&core, dir.path(), "atlas");
     let locator = Locator::start(core.clone(), FakeSources::new()).expect("start");
     let err = |update: RailUpdate| locator.rail_update(&update).unwrap_err().code;
@@ -262,7 +262,7 @@ fn rail_input_is_validated() {
 #[test]
 fn greeting_uses_only_the_settings_display_name() {
     let dir = tempfile::tempdir().unwrap();
-    let core = core_with_v10(dir.path());
+    let core = core_with_v11(dir.path());
     let ws = workspace(&core, dir.path(), "home");
     let sources = FakeSources::new();
     sources.add(thread(
@@ -329,7 +329,7 @@ fn home_summary_is_real_state_only() {
     let dir = tempfile::tempdir().unwrap();
     // First run: nothing exists, and nothing is invented.
     {
-        let core = core_with_v10(dir.path());
+        let core = core_with_v11(dir.path());
         let locator = Locator::start(core.clone(), FakeSources::new()).expect("start");
         let summary = locator.home_summary(9, true).unwrap();
         assert!(summary.first_run);
@@ -347,7 +347,7 @@ fn home_summary_is_real_state_only() {
     let sources = FakeSources::new();
     let (ws_id, done_id);
     {
-        let core = core_with_v10(dir.path());
+        let core = core_with_v11(dir.path());
         let ws = workspace(&core, dir.path(), "atlas");
         let working = thread(
             "Build the rail",
@@ -408,7 +408,7 @@ fn home_summary_is_real_state_only() {
         core.shutdown();
     }
     // Session 3: the returning visit.
-    let core = core_with_v10(dir.path());
+    let core = core_with_v11(dir.path());
     let locator = Locator::start(core.clone(), sources).expect("start");
     let summary = locator.home_summary(9, true).unwrap();
     assert!(!summary.first_run);
@@ -444,7 +444,7 @@ fn home_summary_is_real_state_only() {
     drop(locator);
     drop(core);
     // ...and is empty on the next session.
-    let core = core_with_v10(dir.path());
+    let core = core_with_v11(dir.path());
     let locator = Locator::start(core.clone(), FakeSources::new()).expect("start");
     assert!(
         locator
@@ -459,7 +459,7 @@ fn home_summary_is_real_state_only() {
 #[test]
 fn recent_work_today_and_yesterday_come_from_the_event_log() {
     let dir = tempfile::tempdir().unwrap();
-    let core = core_with_v10(dir.path());
+    let core = core_with_v11(dir.path());
     let ws = workspace(&core, dir.path(), "atlas");
     let sources = FakeSources::new();
     let t = thread(

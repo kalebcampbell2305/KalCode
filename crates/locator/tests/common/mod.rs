@@ -1,4 +1,4 @@
-//! Shared fixtures: a real core in a temp folder (with schema v10 applied the way the lead will
+//! Shared fixtures: a real core in a temp folder (with schema v11 applied the way the lead will
 //! register it) and fake Z3/Z2 sources.
 
 #![allow(dead_code, clippy::expect_used, clippy::unwrap_used)]
@@ -16,12 +16,12 @@ use kalcode_core::flags::BuildChannel;
 use kalcode_core::{Core, CoreConfig, Paths, Result};
 use kalcode_locator::{LocatorSources, ProviderInfo, RAIL_LOCATOR_MIGRATION};
 
-/// The registered migrations, stand-ins for v7–v9 (owned by other branches until they are
-/// integrated), then v10 — the order the gap-free runner will see after integration.
-pub fn migrations_with_v10() -> Vec<Migration> {
+/// The registered migrations, stand-ins for any version not registered yet below v11, then v11 —
+/// the order the gap-free runner will see after integration.
+pub fn migrations_with_v11() -> Vec<Migration> {
     let mut all = MIGRATIONS.to_vec();
     let registered = all.len() as i64;
-    for version in (registered + 1)..10 {
+    for version in (registered + 1)..RAIL_LOCATOR_MIGRATION.version {
         all.push(Migration {
             version,
             name: "reserved",
@@ -32,8 +32,8 @@ pub fn migrations_with_v10() -> Vec<Migration> {
     all
 }
 
-pub fn core_with_v10(dir: &Path) -> Arc<Core> {
-    let all: &'static [Migration] = Box::leak(migrations_with_v10().into_boxed_slice());
+pub fn core_with_v11(dir: &Path) -> Arc<Core> {
+    let all: &'static [Migration] = Box::leak(migrations_with_v11().into_boxed_slice());
     Arc::new(
         Core::open_with_migrations(
             CoreConfig {
@@ -47,7 +47,7 @@ pub fn core_with_v10(dir: &Path) -> Arc<Core> {
     )
 }
 
-pub fn core_without_v10(dir: &Path) -> Arc<Core> {
+pub fn core_without_v11(dir: &Path) -> Arc<Core> {
     Arc::new(
         Core::open(CoreConfig {
             paths: Paths::new(dir),

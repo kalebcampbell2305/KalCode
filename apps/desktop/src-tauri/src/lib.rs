@@ -183,7 +183,7 @@ fn start(app: &tauri::App, removed_overrides: &[String]) -> AppState {
         app_version: version,
         channel,
     };
-    // Z7-W2: `open_core` is `Core::open` (plus the provisional v10 for the E2E suite only).
+    // Z7-W2: `open_core` is `Core::open` (plus the provisional v11 for the E2E suite only).
     match locator_commands::open_core(config) {
         Ok(core) => state.core = Some(Arc::new(core)),
         Err(error) => {

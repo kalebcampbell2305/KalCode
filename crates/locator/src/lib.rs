@@ -13,9 +13,9 @@
 //! Privacy (LOC-04/05): stored names pass the shared redactor; message text is indexed only for
 //! workspaces that opted in; queries are never stored, logged or put into events.
 //!
-//! Schema: migration v10 ([`RAIL_LOCATOR_MIGRATION`]) is **not** registered in
-//! `kalcode_core::db::MIGRATIONS` on this branch — the lead registers it at integration after
-//! v9. Until then [`store::Store`] keeps the same tables in memory for the session.
+//! Schema: migration v11 ([`RAIL_LOCATOR_MIGRATION`]) is **not** registered in
+//! `kalcode_core::db::MIGRATIONS` on this branch — the lead registers it at merge, after v10
+//! (notifications). Until then [`store::Store`] keeps the same tables in memory for the session.
 
 pub mod entries;
 pub mod home;
@@ -33,11 +33,11 @@ pub use entries::ProviderInfo;
 pub use service::{Locator, LocatorSources};
 pub use types::*;
 
-/// Migration v10 (Z7-W2): `workspace_groups`, `workspace_rail`, `locator_entries`,
+/// Migration v11 (Z7-W2): `workspace_groups`, `workspace_rail`, `locator_entries`,
 /// `locator_fts`. Isolated: append to `kalcode_core::db::MIGRATIONS` at integration. It has no
 /// foreign key to another campaign's tables.
 pub const RAIL_LOCATOR_MIGRATION: Migration = Migration {
-    version: 10,
+    version: 11,
     name: "rail_locator",
-    sql: include_str!("../migrations/0010_rail_locator.sql"),
+    sql: include_str!("../migrations/0011_rail_locator.sql"),
 };

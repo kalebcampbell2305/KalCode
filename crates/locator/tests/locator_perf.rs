@@ -109,7 +109,7 @@ fn p95(mut samples: Vec<f64>) -> f64 {
 #[ignore = "performance budget: run in release"]
 fn a_query_over_100k_entries_answers_within_30ms_p95() {
     let dir = tempfile::tempdir().unwrap();
-    let core = common::core_with_v10(dir.path());
+    let core = common::core_with_v11(dir.path());
     let store = Store::open(&core).unwrap();
     assert!(store.persistent());
     let now = OffsetDateTime::now_utc();

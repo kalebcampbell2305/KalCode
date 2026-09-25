@@ -208,7 +208,7 @@ pub struct LocatorIndexState {
     pub entries: u32,
     /// False until the first full index finished.
     pub ready: bool,
-    /// False when the index lives in memory for this session only (schema v10 not installed).
+    /// False when the index lives in memory for this session only (schema v11 not installed).
     pub persistent: bool,
 }
 
@@ -340,7 +340,7 @@ pub struct RailState {
     pub groups: Vec<RailGroupView>,
     pub archived: Vec<WorkspaceRailEntry>,
     pub collapsed_sections: Vec<RailSection>,
-    /// False when rail changes last only for this session (schema v10 not installed).
+    /// False when rail changes last only for this session (schema v11 not installed).
     pub persistent: bool,
 }
 

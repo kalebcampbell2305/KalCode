@@ -1,4 +1,4 @@
--- KalCode schema v10 (campaign Z7-W2): workspace rail state and the Session Locator index.
+-- KalCode schema v11 (campaign Z7-W2): workspace rail state and the Session Locator index.
 -- Append-only. Never edit after release; add a new numbered migration instead.
 --
 -- Z1 stays the only writer of `workspaces`. Rail state (pin, group, archive, order, the rail's own

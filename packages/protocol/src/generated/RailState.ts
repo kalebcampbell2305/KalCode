@@ -13,6 +13,6 @@ pinned: Array<WorkspaceRailEntry>,
  */
 recent: Array<WorkspaceRailEntry>, groups: Array<RailGroupView>, archived: Array<WorkspaceRailEntry>, collapsedSections: Array<RailSection>, 
 /**
- * False when rail changes last only for this session (schema v10 not installed).
+ * False when rail changes last only for this session (schema v11 not installed).
  */
 persistent: boolean, };

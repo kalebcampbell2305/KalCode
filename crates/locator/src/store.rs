@@ -1,9 +1,9 @@
 //! Where the rail and locator tables live.
 //!
-//! With schema v10 installed ([`crate::RAIL_LOCATOR_MIGRATION`], registered by the lead at
+//! With schema v11 installed ([`crate::RAIL_LOCATOR_MIGRATION`], registered by the lead at
 //! integration) they are tables of KalCode's database: writes go through the core's single writer
 //! ([`Core::write_with_events`], so a future `workspace.updated` event commits with the change) and
-//! reads through its read-only WAL connection ([`Core::reader`]). Before v10 is registered — this
+//! reads through its read-only WAL connection ([`Core::reader`]). Before v11 is registered — this
 //! branch's development builds — the same SQL runs in a private in-memory database, so every
 //! feature works for the session and nothing is written to the user's database under a schema
 //! version it doesn't know. [`Store::persistent`] tells the UI which case it is.
@@ -17,13 +17,13 @@ use rusqlite::{Connection, OptionalExtension, Transaction};
 use crate::RAIL_LOCATOR_MIGRATION;
 
 pub enum Store {
-    /// Tables in KalCode's database (schema v10 applied).
+    /// Tables in KalCode's database (schema v11 applied).
     Core(Arc<Core>),
     /// Tables in a private in-memory database for this session.
     Memory(Mutex<Connection>),
 }
 
-/// True when schema v10's tables exist in `conn`'s database.
+/// True when schema v11's tables exist in `conn`'s database.
 pub fn has_schema(conn: &Connection) -> Result<bool> {
     let found: Option<i64> = conn
         .query_row(
@@ -36,19 +36,19 @@ pub fn has_schema(conn: &Connection) -> Result<bool> {
 }
 
 impl Store {
-    /// Uses KalCode's database when v10 is installed, otherwise a session-only database.
+    /// Uses KalCode's database when v11 is installed, otherwise a session-only database.
     pub fn open(core: &Arc<Core>) -> Result<Self> {
         if has_schema(&core.reader())? {
             return Ok(Self::Core(Arc::clone(core)));
         }
         tracing::warn!(
             event = "locator.session_only_store",
-            "schema v10 is not installed; rail changes and the search index last for this session"
+            "schema v11 is not installed; rail changes and the search index last for this session"
         );
         Self::memory()
     }
 
-    /// A private in-memory database with the v10 tables.
+    /// A private in-memory database with the v11 tables.
     pub fn memory() -> Result<Self> {
         let conn = kalcode_core::db::open_in_memory()?;
         conn.execute_batch(RAIL_LOCATOR_MIGRATION.sql)?;
