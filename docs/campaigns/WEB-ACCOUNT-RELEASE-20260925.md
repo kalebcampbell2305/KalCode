@@ -252,3 +252,16 @@ The following is the explicit candidate list. `M`, `D`, and `??` are the current
   website mail credentials are encrypted; values were not retrieved.
 - Current public Windows preview HEAD succeeds200, version0.1.1, executable MIME.
   The catalog transition stays disabled during this website/account increment.
+
+## Production rollout checkpoint
+
+- Source612a9ba and corrective501131a are fast-forward integrated and pushed to main.
+- Remote website migrations0003/0004/0005 are now applied; corrected0005 executed
+  20 statements successfully after the failed transaction rolled back cleanly.
+- Website deployed at version3af2bc5a-4966-41a2-9ab1-380c83946b87 with checkout
+  held and legacy preview download compatibility preserved. Live browser proof is running.
+- API migration0006 is applied. Verified API uploaded privately as
+  a0c48810-09c0-42d5-8017-6b8048506b36 with website RPC binding and checkoutfalse.
+- Source now declares api.kalcoded.com custom-domain route; Wrangler trigger
+  dry-run passed. Activation and public runtime verification follow this commit.
+- Rollback remains prior Worker versions recorded above; do not down-migrate.
