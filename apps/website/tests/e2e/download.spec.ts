@@ -64,7 +64,9 @@ test.describe("download page", () => {
   });
 
   test("the release notes link resolves to the changelog entry", async ({ page }) => {
-    await page.goto("/changelog");
-    await expect(page.locator("#release-0-1-0")).toBeVisible();
+    test.skip(RELEASES.latest === null, "no published release, so there are no release notes to link");
+    const notes = new URL(RELEASES.latest?.notesUrl ?? "/", "http://local");
+    await page.goto(notes.pathname);
+    await expect(page.locator(notes.hash)).toBeVisible();
   });
 });
