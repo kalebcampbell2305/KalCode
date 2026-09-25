@@ -26,6 +26,7 @@ import {
 } from "react";
 import { type KalCodeError, toKalCodeError } from "../ipc/errors.ts";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
+import { useUiIntents } from "../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../runtime/WorkspaceProvider.tsx";
 import { useNavigation } from "../shell/navigation.tsx";
 import { usePermissions } from "../surfaces/permissions/index.ts";
@@ -122,6 +123,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   const workspaces = useWorkspaces();
   const permissions = usePermissions();
   const threadsIntent = useThreadsIntent();
+  const uiIntents = useUiIntents();
   const toast = useToast();
   const [status, setStatus] = useState<KalVoiceStatus | null>(null);
   const [statusError, setStatusError] = useState<KalCodeError | null>(null);
@@ -165,11 +167,11 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   );
 
   // The UI side of a command's result (the native side already did the work).
-  const surfaces = useRef({ workspaces, permissions, threadsIntent });
-  surfaces.current = { workspaces, permissions, threadsIntent };
+  const surfaces = useRef({ workspaces, permissions, threadsIntent, uiIntents });
+  surfaces.current = { workspaces, permissions, threadsIntent, uiIntents };
   const runDirective = useCallback(
     (directive: UiDirective | null) => {
-      const { workspaces, permissions, threadsIntent } = surfaces.current;
+      const { workspaces, permissions, threadsIntent, uiIntents: intents } = surfaces.current;
       switch (directive?.kind) {
         case "navigate":
           navigate(directive.surface);
@@ -190,6 +192,10 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           break;
         case "show_approvals":
           permissions.setPanelOpen(true);
+          break;
+        case "filter_dashboard":
+          // Z7-W3: "Show only agents that are working" and friends.
+          intents.filterDashboard(directive.chip);
           break;
         default:
           break;

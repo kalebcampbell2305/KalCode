@@ -75,7 +75,10 @@ export type CommandName =
   | "provider_pane_detach"
   | "provider_pane_write"
   | "provider_pane_resize"
-  | "provider_pane_info";
+  | "provider_pane_info"
+  // Notification center (Z7-W3)
+  | "notification_list"
+  | "notification_mark";
 
 export type Unsubscribe = () => Promise<void>;
 

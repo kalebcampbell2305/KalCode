@@ -49,8 +49,9 @@
 
 .text {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: var(--space-3);
+  gap: 0 var(--space-2);
   min-width: 0;
 }
 
@@ -72,6 +73,7 @@
 }
 
 .detail {
+  flex: 1 1 8rem;
   min-width: 0;
   overflow: hidden;
   color: var(--color-text-muted);
@@ -95,5 +97,15 @@
 @keyframes arrive {
   from {
     color: var(--color-accent-text);
+  }
+}
+
+.more {
+  padding-top: var(--space-2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion="full"]) .row:first-child .title {
+    animation: none;
   }
 }

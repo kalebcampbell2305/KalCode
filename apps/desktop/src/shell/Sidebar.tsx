@@ -1,10 +1,20 @@
 import type { SurfaceId } from "@kalcode/protocol";
 import { IconButton, Tooltip } from "@kalcode/ui/components";
-import { PanelLeftClose, PanelLeftOpen, Search, ShieldAlert, ShieldCheck, TriangleAlert } from "lucide-react";
+import {
+  Bell,
+  BellDot,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Search,
+  ShieldAlert,
+  ShieldCheck,
+  TriangleAlert,
+} from "lucide-react";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { usePermissions } from "../surfaces/permissions/PermissionsProvider.tsx";
 import { Mark, Wordmark } from "./Brand.tsx";
 import { PRIMARY_ORDER, SURFACES, useNavigation } from "./navigation.tsx";
+import { useNotifications } from "./notifications/NotificationsProvider.tsx";
 import styles from "./Sidebar.module.css";
 import { MOD_LABEL } from "./shortcuts.ts";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher.tsx";
@@ -73,6 +83,7 @@ export function Sidebar({ collapsed, onOpenPalette }: SidebarProps) {
         <BypassNotice collapsed={collapsed} />
         <ul className={styles.list}>
           <ApprovalsItem collapsed={collapsed} />
+          <NotificationsItem collapsed={collapsed} />
           {visible("settings") ? <NavItem id="settings" collapsed={collapsed} /> : null}
         </ul>
         <div className={styles.footerRow}>
@@ -137,6 +148,30 @@ function ApprovalsItem({ collapsed }: { collapsed: boolean }) {
           count > 0 ? (
             <span className={styles.countBadge} aria-hidden="true">
               {count > 99 ? "99+" : count}
+            </span>
+          ) : null
+        }
+      />
+    </li>
+  );
+}
+
+/** Z7-W3: the notification center and its unread count. */
+function NotificationsItem({ collapsed }: { collapsed: boolean }) {
+  const { unreadCount, setPanelOpen } = useNotifications();
+  return (
+    <li>
+      <SidebarButton
+        collapsed={collapsed}
+        label="Notifications"
+        accessibleLabel={unreadCount === 0 ? "Notifications, none unread" : `Notifications, ${unreadCount} unread`}
+        icon={unreadCount > 0 ? <BellDot /> : <Bell />}
+        onClick={() => setPanelOpen(true)}
+        className={styles.item}
+        badge={
+          unreadCount > 0 ? (
+            <span className={styles.countBadge} aria-hidden="true">
+              {unreadCount > 99 ? "99+" : unreadCount}
             </span>
           ) : null
         }

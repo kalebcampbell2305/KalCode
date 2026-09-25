@@ -179,3 +179,12 @@ export function useDashboardAnnouncements() {
   const { urgent, polite } = useDashboardData();
   return { urgent, polite };
 }
+
+/**
+ * Provides Dashboard data to its children unless an ancestor already does: widgets and the
+ * Dashboard pane (Z7-W1) render inside or outside the Dashboard surface.
+ */
+export function DashboardDataBoundary({ children }: { children: ReactNode }) {
+  const existing = useContext(DashboardDataContext);
+  return existing ? children : <DashboardDataProvider>{children}</DashboardDataProvider>;
+}
