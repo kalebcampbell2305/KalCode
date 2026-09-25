@@ -13,10 +13,12 @@ interface Props {
   size?: "full" | "compact";
 }
 const { size = "full" } = Astro.props;
+/** Poster sizes matching site.css: stacked below 1024 px, the split hero's orb column above. */
+const POSTER_SIZES = "(max-width: 1023px) min(88vw, 25rem, 40vh), min(32rem, 58vh)";
 ---
 {
   HeroOrb ? (
-    <HeroOrb size={size} />
+    <HeroOrb size={size} sizes={size === "full" ? POSTER_SIZES : undefined} />
   ) : (
     <div class="hero__orb-poster">
       <Globe variant="kalcode" hero alt="" sizes="(min-width: 60rem) 27rem, 60vw" />

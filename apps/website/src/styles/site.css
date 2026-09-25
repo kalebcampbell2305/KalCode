@@ -772,6 +772,12 @@ a:hover {
 .hero {
   --hero-orb-max: min(25rem, 40svh);
   --hero-orb-top: clamp(0.5rem, 0.25rem + 1vw, 1.5rem);
+  /* Stacked layout: the stream dims to a trace behind the copy and resumes faintly below it,
+     so no line of text sits on the bright core (HeroOrb's text-safe band). */
+  --hero-beam-safe-top: calc(var(--hero-orb-top) + 0.9 * var(--hero-orb-max));
+  --hero-beam-safe-inset: 2.5rem;
+  --hero-beam-safe-level: 0.12;
+  --hero-beam-safe-resume: 0.4;
   position: relative;
   isolation: isolate;
   overflow: hidden;
@@ -875,6 +881,11 @@ a:hover {
   .hero {
     --hero-orb-max: min(32rem, 58svh);
     --hero-orb-top: clamp(1.5rem, 4svh, 3rem);
+    /* Split layout: the stream has its own column, so the text-safe band is off. */
+    --hero-beam-safe-top: 0px;
+    --hero-beam-safe-inset: 0px;
+    --hero-beam-safe-level: 1;
+    --hero-beam-safe-resume: 1;
   }
 
   .hero__orb {
