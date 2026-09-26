@@ -32,6 +32,8 @@ const FAKE: &str = env!("CARGO_BIN_EXE_kalcode-fake-provider");
 const WAIT: Duration = Duration::from_secs(30);
 
 struct Rig {
+    #[cfg(target_os = "macos")]
+    _guardian: Option<kalcode_providers::guardian::GuardianRuntime>,
     dir: tempfile::TempDir,
     work: tempfile::TempDir,
     _sessions: tempfile::TempDir,
@@ -74,6 +76,14 @@ impl Rig {
             Arc::new(BridgeServer::start(ServerConfig::new(endpoint)).expect("bridge"))
         });
         let panes = Arc::new(PaneRegistry::new());
+        #[cfg(target_os = "macos")]
+        let guardian = managed.then(|| {
+            kalcode_providers::guardian::GuardianRuntime::launch(
+                std::path::Path::new(env!("CARGO_BIN_EXE_kalcode-provider-guardian")),
+                dir.path(),
+            )
+            .expect("native provider guardian")
+        });
         let mut vars: Vec<(OsString, OsString)> = vec![
             ("PATH".into(), dir.path().into()),
             ("ANTHROPIC_API_KEY".into(), "test-anthropic-value".into()),
@@ -86,6 +96,16 @@ impl Rig {
                 vars.push((name.into(), value));
             }
         }
+        #[cfg(target_os = "macos")]
+        let profiles = guardian.as_ref().map(|guardian| {
+            ManagedProfiles::for_data_dir_guarded(
+                dir.path(),
+                guardian.authority(),
+                guardian.profile_generation(),
+            )
+            .expect("guarded profiles")
+        });
+        #[cfg(not(target_os = "macos"))]
         let profiles = managed
             .then(|| ManagedProfiles::new(dir.path().join("managed")).expect("managed profiles"));
         let resolved_accounts = Arc::new(Mutex::new(Vec::new()));
@@ -118,6 +138,8 @@ impl Rig {
         }
         let provider = Arc::new(provider);
         Self {
+            #[cfg(target_os = "macos")]
+            _guardian: guardian,
             dir,
             work: tempfile::tempdir().expect("work"),
             _sessions: sessions,
