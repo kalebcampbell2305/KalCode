@@ -260,7 +260,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       if (seenTerminals.current.has(terminal.id)) continue;
       seenTerminals.current.add(terminal.id);
       if (!findContent(controller.layout, contentKey(terminalContent(terminal.id)))) {
-        controller.show(terminalContent(terminal.id), { focus: false });
+        controller.show(terminalContent(terminal.id), { focus: false, activate: false });
       }
     }
   }, [terminals, controller.ready]);

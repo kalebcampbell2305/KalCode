@@ -85,7 +85,10 @@ export interface PaneController {
   restore(): void;
   toggleCollapse(paneId: string): void;
   /** Adds (or brings forward) content in a pane (the focused pane by default). */
-  show(content: PaneContent, options?: { paneId?: string; focus?: boolean; placement?: "tab" | "split" }): void;
+  show(
+    content: PaneContent,
+    options?: { paneId?: string; focus?: boolean; activate?: boolean; placement?: "tab" | "split" },
+  ): void;
   activate(paneId: string, index: number): void;
   /** Takes a tab out of the layout (what it runs keeps running). */
   hideTab(paneId: string, index: number): void;
@@ -312,6 +315,14 @@ export function usePaneController({ scope, store, initial, titleOf }: PaneContro
       const current = latest.current;
       const key = contentKey(content);
       const where = findContent(current, key);
+      // Runtime discovery adds a background tab without changing the person's
+      // selection, maximized pane or keyboard focus. Explicit show still activates.
+      if (options.activate === false) {
+        if (where) return;
+        const target = options.paneId && findLeaf(current, options.paneId) ? options.paneId : focused();
+        if (target) apply(addTab(current, target, content, false));
+        return;
+      }
       if (where) {
         let next = activateTab(current, where.paneId, where.index);
         if (next.maximizedPaneId && next.maximizedPaneId !== where.paneId) next = setMaximized(next, null);
