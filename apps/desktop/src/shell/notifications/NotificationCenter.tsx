@@ -119,7 +119,7 @@ function CenterBody({ show }: { show: Show }) {
       </ErrorState>
     );
   }
-  if (list.length === 0) {
+  if (list.length === 0 && !hasMore) {
     return (
       <EmptyState art={<BellRing />} title={show === "unread" ? "Nothing unread" : "No notifications yet"}>
         <p>
@@ -131,6 +131,11 @@ function CenterBody({ show }: { show: Show }) {
   }
   return (
     <>
+      {list.length === 0 ? (
+        <EmptyState art={<BellRing />} title="No unread notifications loaded">
+          <p>Older notifications may still be unread.</p>
+        </EmptyState>
+      ) : null}
       <div
         ref={virtual.containerRef}
         className={styles.rows}
@@ -152,7 +157,7 @@ function CenterBody({ show }: { show: Show }) {
           );
         })}
       </div>
-      {hasMore && show === "all" ? (
+      {hasMore ? (
         <div className={styles.more}>
           <Button size="sm" variant="ghost" onClick={() => void loadMore()}>
             Show older notifications

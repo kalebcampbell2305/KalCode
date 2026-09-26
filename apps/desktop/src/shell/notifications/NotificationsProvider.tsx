@@ -1,4 +1,4 @@
-import type { Notification, NotificationMark } from "@kalcode/protocol";
+import type { Notification, NotificationMark, NotificationPage } from "@kalcode/protocol";
 import { useToast } from "@kalcode/ui/components";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { isCommandUnavailable, type KalCodeError, toKalCodeError } from "../../ipc/errors.ts";
@@ -59,15 +59,27 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   const opener = useRef<HTMLElement | null>(null);
   const generation = useRef(0);
   const loaded = useRef(PAGE);
+  const refreshing = useRef<number | null>(null);
+  const loadingMore = useRef(false);
   const unavailable = useRef(false);
 
   const refresh = useCallback(async () => {
     if (unavailable.current) return;
     const id = ++generation.current;
+    refreshing.current = id;
     try {
-      const page = await client.listNotifications({ limit: Math.min(200, loaded.current) });
-      if (id !== generation.current) return;
-      setNotifications(page.notifications);
+      // Each native page is capped at 200; retain the depth the person already opened.
+      const rows: Notification[] = [];
+      let before: string | null = null;
+      let page: NotificationPage;
+      do {
+        page = await client.listNotifications({ limit: Math.min(200, loaded.current - rows.length), before });
+        if (id !== generation.current) return;
+        rows.push(...page.notifications);
+        before = page.nextCursor;
+      } while (before && rows.length < loaded.current);
+      setNotifications(rows);
+      loaded.current = Math.max(PAGE, rows.length);
       setUnreadCount(page.unreadCount);
       setCursor(page.nextCursor);
       setState("ready");
@@ -82,6 +94,8 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
       }
       setError(failure);
       setState((current) => (current === "ready" ? current : "error"));
+    } finally {
+      if (refreshing.current === id) refreshing.current = null;
     }
   }, [client]);
 
@@ -128,9 +142,12 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   }, [notifications, state]);
 
   const loadMore = useCallback(async () => {
-    if (!cursor) return;
+    if (!cursor || loadingMore.current || refreshing.current !== null) return;
+    loadingMore.current = true;
+    const id = generation.current;
     try {
       const page = await client.listNotifications({ limit: PAGE, before: cursor });
+      if (id !== generation.current) return;
       loaded.current += page.notifications.length;
       setNotifications((current) => {
         const seen = new Set(current.map((n) => n.id));
@@ -139,16 +156,21 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
       setCursor(page.nextCursor);
       setUnreadCount(page.unreadCount);
     } catch (raw) {
+      if (id !== generation.current) return;
       toast.show({
         tone: "danger",
         title: "Couldn't load older notifications",
         description: toKalCodeError(raw).message,
       });
+    } finally {
+      loadingMore.current = false;
     }
   }, [client, cursor, toast]);
 
   const mark = useCallback(
     async (ids: readonly string[] | null, value: NotificationMark) => {
+      // Pending pages contain state from before this mutation; they must not restore it.
+      refreshing.current = ++generation.current;
       const applies = (n: Notification) => ids === null || ids.includes(n.id);
       const now = new Date().toISOString();
       // Optimistic: the list reflects the change at once; the read after it reconciles.
