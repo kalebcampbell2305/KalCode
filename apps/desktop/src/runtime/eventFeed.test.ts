@@ -99,6 +99,26 @@ describe("EventFeed", () => {
     expect(feed.reachedStart).toBe(false);
   });
 
+  it("does not grow the live-event bound for repeated older pages", () => {
+    const feed = new EventFeed(3);
+    feed.merge([10, 11, 12].map(event));
+    feed.mergeOlder([7, 8, 9].map(event));
+    const snapshot = feed.getSnapshot();
+    feed.mergeOlder([7, 8, 9].map(event));
+    expect(feed.getSnapshot()).toBe(snapshot);
+    feed.merge([event(13)]);
+    expect(seqs(feed)).toEqual([13, 12, 11, 10, 9, 8]);
+  });
+
+  it("grows history only for unique entries in overlapping pages", () => {
+    const feed = new EventFeed(3);
+    feed.merge([10, 11, 12].map(event));
+    feed.mergeOlder([8, 8, 9, 10].map(event));
+    expect(seqs(feed)).toEqual([12, 11, 10, 9, 8]);
+    feed.merge([event(13)]);
+    expect(seqs(feed)).toEqual([13, 12, 11, 10, 9]);
+  });
+
   it("retains exhausted history when new events fit or only overlap", () => {
     const feed = new EventFeed(3);
     feed.merge([event(1)]);

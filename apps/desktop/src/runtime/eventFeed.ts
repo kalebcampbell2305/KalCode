@@ -42,7 +42,9 @@ export class EventFeed {
 
   /** An older history page the user asked for: grows the bound to keep it. */
   mergeOlder(page: readonly EventEnvelope[]): void {
-    this.capacity = Math.max(this.capacity, this.snapshot.events.length + page.length);
+    const loaded = new Set(this.snapshot.events.map((event) => event.seq));
+    for (const event of page) loaded.add(event.seq);
+    this.capacity = Math.max(this.capacity, loaded.size);
     this.apply(page);
   }
 
