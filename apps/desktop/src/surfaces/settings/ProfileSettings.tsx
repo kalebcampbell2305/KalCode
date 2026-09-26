@@ -1,6 +1,6 @@
 import { Button, Panel, TextInput } from "@kalcode/ui/components";
 import { Check, UserRound } from "lucide-react";
-import { type FormEvent, useEffect, useId, useState } from "react";
+import { type FormEvent, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import styles from "./SettingsPage.module.css";
 
@@ -27,21 +27,86 @@ export function displayNameProblem(raw: string): string | null {
  * ("Welcome back.").
  */
 export function ProfileSettings() {
-  const { settings, updateSettings } = useRuntime();
+  const { client, settings, updateSettings } = useRuntime();
   const id = useId();
   const saved = settings.displayName ?? "";
-  const [value, setValue] = useState(saved);
-  const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState(false);
-  useEffect(() => setValue(saved), [saved]);
+  const lifetime = useMemo(
+    () => ({
+      client,
+      active: false,
+      epoch: 0,
+      revision: 0,
+      pending: null as symbol | null,
+      timer: null as ReturnType<typeof setTimeout> | null,
+    }),
+    [client],
+  );
+  const live = useRef(lifetime);
+  live.current = lifetime;
+  const [form, setForm] = useState({ owner: lifetime, value: saved, saved, dirty: false, done: false });
+  const value = form.owner === lifetime ? form.value : saved;
+  const busy = lifetime.pending !== null;
+  const done = form.owner === lifetime && form.done;
+  useEffect(() => {
+    lifetime.active = true;
+    lifetime.epoch += 1;
+    return () => {
+      lifetime.active = false;
+      lifetime.pending = null;
+      if (lifetime.timer) clearTimeout(lifetime.timer);
+    };
+  }, [lifetime]);
+  useEffect(() => {
+    setForm((current) => {
+      if (current.owner !== lifetime) return { owner: lifetime, value: saved, saved, dirty: false, done: false };
+      if (current.saved === saved) return current;
+      return {
+        ...current,
+        saved,
+        // External updates may replace a clean field, never an edit or a pending draft.
+        value: lifetime.pending === null && !current.dirty ? saved : current.value,
+        done: current.done && current.value.trim() === saved,
+      };
+    });
+  }, [saved, lifetime]);
   const problem = displayNameProblem(value);
   const changed = value.trim() !== saved;
   const save = async (next: string) => {
-    setBusy(true);
-    await updateSettings({ displayName: next });
-    setBusy(false);
-    setDone(true);
-    setTimeout(() => setDone(false), 2000);
+    if (live.current !== lifetime || !lifetime.active || lifetime.pending !== null) return;
+    const request = Symbol();
+    const epoch = lifetime.epoch;
+    const revision = lifetime.revision;
+    const isCurrent = () =>
+      live.current === lifetime && lifetime.active && lifetime.epoch === epoch && lifetime.pending === request;
+    lifetime.pending = request;
+    if (lifetime.timer) clearTimeout(lifetime.timer);
+    setForm((current) => ({ ...current, done: false }));
+    let succeeded = false;
+    try {
+      succeeded = await updateSettings({ displayName: next });
+    } finally {
+      if (isCurrent()) {
+        lifetime.pending = null;
+        const unchanged = revision === lifetime.revision;
+        setForm((current) =>
+          current.owner === lifetime
+            ? {
+                ...current,
+                value: succeeded && unchanged ? next.trim() : current.value,
+                dirty: succeeded && unchanged ? false : current.dirty,
+                done: succeeded && unchanged,
+              }
+            : current,
+        );
+        if (succeeded && unchanged) {
+          lifetime.timer = setTimeout(() => {
+            lifetime.timer = null;
+            if (live.current === lifetime && lifetime.active && lifetime.epoch === epoch)
+              setForm((current) => (current.owner === lifetime ? { ...current, done: false } : current));
+          }, 2000);
+        }
+      }
+    }
   };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -76,8 +141,9 @@ export function ProfileSettings() {
               aria-invalid={problem ? true : undefined}
               aria-describedby={`${id}-help${problem ? ` ${id}-error` : ""}`}
               onChange={(e) => {
-                setValue(e.target.value);
-                setDone(false);
+                lifetime.revision += 1;
+                if (lifetime.timer) clearTimeout(lifetime.timer);
+                setForm({ owner: lifetime, value: e.target.value, saved, dirty: true, done: false });
               }}
             />
             <div className={styles.profileButtons}>

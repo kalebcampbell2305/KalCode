@@ -109,6 +109,21 @@ function exposeRuntime(
 }
 
 describe("RuntimeProvider client isolation", () => {
+  it("reports persisted, failed and retired settings writes explicitly", async () => {
+    const first = await isolatedClient(100);
+    const view = exposeRuntime(first);
+    await waitFor(() => expect(view.current().eventsState).toBe("ready"));
+    vi.spyOn(first.client, "updateSettings").mockRejectedValueOnce(SAVE_ERROR);
+    await act(async () => {
+      expect(await view.current().updateSettings({ theme: "light" })).toBe(false);
+    });
+    await act(async () => {
+      expect(await view.current().updateSettings({ theme: "light" })).toBe(true);
+    });
+    const retained = view.current().updateSettings;
+    view.removeRuntime();
+    expect(await retained({ theme: "dark" })).toBe(false);
+  });
   it("exposes a fresh feed, initial settings and loading state on the first replacement render", async () => {
     const first = await isolatedClient(100);
     first.recent.mockRejectedValueOnce(SAVE_ERROR);
@@ -274,7 +289,7 @@ describe("RuntimeProvider retained actions", () => {
     const read = vi.spyOn(first.client, "getSettings");
     const view = exposeRuntime(first);
     await waitFor(() => expect(view.current().eventsState).toBe("ready"));
-    let pending!: Promise<void>;
+    let pending!: Promise<boolean>;
     act(() => {
       pending = view.current().updateSettings({ theme: "light" });
     });
@@ -293,7 +308,7 @@ describe("RuntimeProvider retained actions", () => {
     vi.spyOn(first.client, "updateSettings").mockReturnValueOnce(oldWrite.promise);
     const read = vi.spyOn(first.client, "getSettings");
     let runtime!: ReturnType<typeof useRuntime>;
-    let pending: Promise<void> | undefined;
+    let pending: Promise<boolean> | undefined;
     first.subscribe.mockImplementation(async (listener) => {
       first.callbacks.push(listener);
       // Registration follows the settings effect, before StrictMode cleanup.

@@ -24,7 +24,8 @@ interface RuntimeValue {
   client: KalCodeClient;
   info: AppInfo;
   settings: Settings;
-  updateSettings: (patch: SettingsPatch) => Promise<void>;
+  /** True only when this write succeeded and its runtime session is still current. */
+  updateSettings: (patch: SettingsPatch) => Promise<boolean>;
   feed: EventFeed;
   eventsState: LoadState;
   eventsError: KalCodeError | null;
@@ -76,7 +77,7 @@ export function RuntimeProvider({ client, info, initialSettings, children }: Run
       const session = requests.session;
       const isCurrentRequest = () =>
         requests === currentRequests.current && session === requests.session && session.active;
-      if (!isCurrentRequest()) return;
+      if (!isCurrentRequest()) return false;
       const id = ++session.seq;
       session.inFlight += 1;
       if (session.inFlight > 1) session.needsReconcile = true;
@@ -84,8 +85,10 @@ export function RuntimeProvider({ client, info, initialSettings, children }: Run
         owner: requests,
         value: { ...(current.owner === requests ? current.value : requests.initialSettings), ...patch },
       }));
+      let succeeded = false;
       try {
         const next = await requests.client.updateSettings(patch);
+        succeeded = true;
         if (isCurrentRequest() && id === session.seq && !session.needsReconcile) {
           setSettings({ owner: requests, value: next });
         }
@@ -112,6 +115,7 @@ export function RuntimeProvider({ client, info, initialSettings, children }: Run
           }
         }
       }
+      return succeeded && isCurrentRequest();
     },
     [requests, toast],
   );
