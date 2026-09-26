@@ -378,15 +378,25 @@ fn validate_thread_id(thread_id: &str) -> Result<(), IpcError> {
 
 fn provider_error(error: kalcode_contracts::agent::ProviderError) -> IpcError {
     use kalcode_contracts::agent::ProviderError;
-    match error {
+    // Backend errors may contain private paths or provider details. Only fixed,
+    // user-safe copy crosses the IPC boundary.
+    let message = match error {
         // The view can tell an ended pane from other failures (like `terminal_not_running`).
-        ProviderError::SessionEnded => KalError::validation(
-            "pane_not_running",
-            "This pane's provider has ended. Resume the thread to start it again.",
-        )
-        .to_ipc(),
-        other => KalError::validation("provider_pane_failed", other.to_string()).to_ipc(),
-    }
+        ProviderError::SessionEnded => {
+            return KalError::validation(
+                "pane_not_running",
+                "This pane's provider has ended. Resume the thread to start it again.",
+            )
+            .to_ipc();
+        }
+        ProviderError::NotInstalled => "The provider is not installed.",
+        ProviderError::NotAuthenticated => "The provider is not signed in.",
+        ProviderError::Unsupported => "The provider does not support this operation.",
+        ProviderError::Start(_) => "The provider could not start. Try resuming the thread.",
+        ProviderError::Io(_) => "KalCode could not communicate with this provider pane.",
+        ProviderError::Protocol(_) => "The provider returned an unreadable response.",
+    };
+    KalError::validation("provider_pane_failed", message).to_ipc()
 }
 
 /// Creates a thread whose provider runs interactively in a pane. Plan, Approve and Auto only at
@@ -620,6 +630,24 @@ pub fn drop_views(webview: &Webview) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pane_errors_do_not_expose_backend_details() {
+        use kalcode_contracts::agent::ProviderError;
+
+        for error in [
+            ProviderError::Io("credential=never-render".into()),
+            ProviderError::Start("credential=never-render".into()),
+            ProviderError::Protocol("credential=never-render".into()),
+        ] {
+            let ipc = provider_error(error);
+            assert_eq!(ipc.code, "provider_pane_failed");
+            assert!(!ipc.message.contains("never-render"));
+        }
+        let ended = provider_error(ProviderError::SessionEnded);
+        assert_eq!(ended.code, "pane_not_running");
+        assert!(ended.message.contains("Resume the thread"));
+    }
 
     #[test]
     fn the_hook_helper_is_looked_up_beside_the_executable() {
