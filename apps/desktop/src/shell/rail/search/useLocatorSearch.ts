@@ -36,7 +36,8 @@ export function useLocatorSearch(
       setState({ response: null, forText: "", loading: false, error: null });
       return;
     }
-    setState((s) => ({ ...s, loading: true }));
+    // Results and errors belong to the complete previous query, including filters/client.
+    setState({ response: null, forText: text, loading: true, error: null });
     const timer = setTimeout(() => {
       client
         .locatorSearch({
@@ -52,7 +53,10 @@ export function useLocatorSearch(
             setState({ response: null, forText: text, loading: false, error: toKalCodeError(cause) });
         });
     }, delayMs);
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      latest.current += 1;
+    };
   }, [client, query, kindKey, limit, delayMs, enabled]);
 
   return state;
