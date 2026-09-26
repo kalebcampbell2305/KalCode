@@ -18,6 +18,8 @@ use crate::error::{ErrorCategory, KalError, Result};
 /// Number of daily log files retained.
 pub const LOG_FILES_RETAINED: usize = 14;
 pub const LOG_FILE_PREFIX: &str = "kalcode";
+/// A single formatted record is bounded before redaction. Oversized records fail closed.
+pub const MAX_LOG_RECORD_BYTES: usize = 1024 * 1024;
 
 /// Removes credential-shaped content from a formatted log line. Delegates to the shared
 /// redactor ([`crate::redact::redact_log_line`]): plain `[REDACTED]` placeholders, high-signal
@@ -27,7 +29,9 @@ pub fn redact(input: &str) -> Cow<'_, str> {
     crate::redact::redact_log_line(input)
 }
 
-/// Writer wrapper that redacts each formatted log line before writing it.
+/// Redacts a complete formatted record, even when the formatter writes it in chunks.
+/// Each `make_writer` starts a record; `flush` or dropping that writer ends it.
+/// No unredacted bytes are forwarded to the underlying writer.
 #[derive(Clone)]
 pub struct RedactingMakeWriter<M> {
     inner: M,
@@ -39,19 +43,61 @@ impl<M> RedactingMakeWriter<M> {
     }
 }
 
-pub struct RedactingWriter<W> {
+pub struct RedactingWriter<W: Write> {
     inner: W,
+    pending: Vec<u8>,
+    failed: bool,
+}
+
+impl<W: Write> RedactingWriter<W> {
+    fn write_record(&mut self) -> io::Result<()> {
+        if self.failed {
+            return Err(io::Error::other("log record writer is unavailable"));
+        }
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+        // Remove the record before I/O: drop must not replay a partially written record
+        // if the sink fails. Lossy decoding happens only after every chunk is assembled.
+        let pending = std::mem::take(&mut self.pending);
+        let text = String::from_utf8_lossy(&pending);
+        let result = self.inner.write_all(redact(&text).as_bytes());
+        if result.is_err() {
+            self.failed = true;
+        }
+        result
+    }
 }
 
 impl<W: Write> Write for RedactingWriter<W> {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let text = String::from_utf8_lossy(buf);
-        self.inner.write_all(redact(&text).as_bytes())?;
+        if self.failed {
+            return Err(io::Error::other("log record writer is unavailable"));
+        }
+        if buf.len() > MAX_LOG_RECORD_BYTES - self.pending.len() {
+            // Flushing a prefix here could disclose a split credential. Discard this
+            // record instead; a fresh MakeWriter instance can still log the next one.
+            self.pending.clear();
+            self.failed = true;
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "log record exceeds size limit",
+            ));
+        }
+        self.pending.extend_from_slice(buf);
         Ok(buf.len())
     }
 
     fn flush(&mut self) -> io::Result<()> {
+        self.write_record()?;
         self.inner.flush()
+    }
+}
+
+impl<W: Write> Drop for RedactingWriter<W> {
+    fn drop(&mut self) {
+        // Drop has no error channel; explicit flush reports sink errors to its caller.
+        let _ = self.write_record();
     }
 }
 
@@ -61,6 +107,8 @@ impl<'a, M: MakeWriter<'a>> MakeWriter<'a> for RedactingMakeWriter<M> {
     fn make_writer(&'a self) -> Self::Writer {
         RedactingWriter {
             inner: self.inner.make_writer(),
+            pending: Vec::new(),
+            failed: false,
         }
     }
 }
@@ -310,7 +358,11 @@ MIIEtruncated",
     fn redacting_writer_scrubs_before_writing() {
         let mut out = Vec::new();
         {
-            let mut writer = RedactingWriter { inner: &mut out };
+            let mut writer = RedactingWriter {
+                inner: &mut out,
+                pending: Vec::new(),
+                failed: false,
+            };
             writer
                 .write_all(b"leaked sk-proj-ABCDEFGHIJKLMNOPQRSTUV here\n")
                 .expect("write");
