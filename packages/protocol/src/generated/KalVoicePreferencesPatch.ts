@@ -6,11 +6,11 @@ import type { PanelPlacement } from "./PanelPlacement.ts";
 /**
  * A partial update. Unknown fields are rejected.
  */
-export type KalVoicePreferencesPatch = { talkKey?: string, talkEnabled?: boolean, intelligence?: IntelligenceChoice, speechModel?: string, voiceReplies?: boolean, 
+export type KalVoicePreferencesPatch = { talkKey?: string, talkEnabled?: boolean, intelligence?: IntelligenceChoice, speechModel?: string, voiceReplies?: boolean,
 /**
  * Also forgets remembered placements, so the panel moves to the new default.
  */
-panelDefault?: PanelAnchor, panelVisible?: boolean, 
+panelDefault?: PanelAnchor, panelVisible?: boolean,
 /**
  * Saves the placement for one window size class.
  */

@@ -3,7 +3,7 @@ import type { PanelAnchor } from "./PanelAnchor.ts";
 import type { PanelView } from "./PanelView.ts";
 import type { SizeClass } from "./SizeClass.ts";
 
-export type PanelPlacement = { sizeClass: SizeClass, anchor: PanelAnchor, 
+export type PanelPlacement = { sizeClass: SizeClass, anchor: PanelAnchor,
 /**
  * Free position of the panel's top-left corner in thousandths (0–1000) of the space the
  * panel can move in, so it stays in proportion when the window is resized.

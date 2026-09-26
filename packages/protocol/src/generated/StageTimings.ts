@@ -3,7 +3,7 @@
 /**
  * One talk interaction's stage timings in milliseconds (absent stages didn't happen).
  */
-export type StageTimings = { keyDownToMic: number | null, speechToPartial: number | null, keyUpToFinal: number | null, finalToRecognized: number | null, recognizedToAction: number | null, 
+export type StageTimings = { keyDownToMic: number | null, speechToPartial: number | null, keyUpToFinal: number | null, finalToRecognized: number | null, recognizedToAction: number | null,
 /**
  * `reused_partial` when the final transcript needed no pass after release.
  */

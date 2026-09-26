@@ -3,11 +3,11 @@ import type { ActionKind } from "./ActionKind.ts";
 import type { ActionOrigin } from "./ActionOrigin.ts";
 import type { ProviderId } from "./ProviderId.ts";
 
-export type NormalizedAction = { id: string, threadId: string, workspaceId: string, providerId: ProviderId, action: ActionKind, 
+export type NormalizedAction = { id: string, threadId: string, workspaceId: string, providerId: ProviderId, action: ActionKind,
 /**
  * One-line, user-readable description ("Run npm install lodash").
  */
-summary: string, requestedAt: string, 
+summary: string, requestedAt: string,
 /**
  * Who is acting. Absent in requests stored before CA-1 and from today's adapters, meaning
  * `Thread { thread_id }` (see [`NormalizedAction::effective_origin`]). For non-thread

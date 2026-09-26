@@ -39,4 +39,3 @@ winreg = "0.55"
 
 [lints]
 workspace = true
-

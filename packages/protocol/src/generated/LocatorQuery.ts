@@ -9,35 +9,35 @@ import type { ProviderId } from "./ProviderId.ts";
 /**
  * A search. `text` is never stored, logged or put into events (LOC-05).
  */
-export type LocatorQuery = { 
+export type LocatorQuery = {
 /**
  * Free text. Words like "yesterday", "threads", "waiting", "codex" become filters.
  */
-text: string, 
+text: string,
 /**
  * Empty = every kind.
  */
-kinds: Array<LocatorEntityKind>, 
+kinds: Array<LocatorEntityKind>,
 /**
  * Empty = any status.
  */
-statuses: Array<LocatorStatusFilter>, providerId: ProviderId | null, workspaceId: string | null, 
+statuses: Array<LocatorStatusFilter>, providerId: ProviderId | null, workspaceId: string | null,
 /**
  * Only entries updated in this window (combined with `since`).
  */
-recency: LocatorRecency | null, 
+recency: LocatorRecency | null,
 /**
  * Only entries updated at or after this RFC 3339 time.
  */
-since: string | null, 
+since: string | null,
 /**
  * Only what is running or waiting now ("current activity").
  */
-activeOnly: boolean, sort: LocatorSort, 
+activeOnly: boolean, sort: LocatorSort,
 /**
  * Defaults to 20 results; at most 100.
  */
-page: PageRequest | null, 
+page: PageRequest | null,
 /**
  * The person's UTC offset in minutes, for calendar words (today, yesterday). −840..=840.
  */

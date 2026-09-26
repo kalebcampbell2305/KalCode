@@ -2,11 +2,11 @@
 import type { KalVoiceResponse } from "./KalVoiceResponse.ts";
 import type { TalkRoute } from "./TalkRoute.ts";
 
-export type TalkResponse = { route: TalkRoute, 
+export type TalkResponse = { route: TalkRoute,
 /**
  * The command or request result (none for dictation).
  */
-response: KalVoiceResponse | null, 
+response: KalVoiceResponse | null,
 /**
  * Final transcript → route decided, in milliseconds.
  */

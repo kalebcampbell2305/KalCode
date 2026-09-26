@@ -2,15 +2,15 @@
 import type { SessionUsage } from "./SessionUsage.ts";
 import type { TrackedProcess } from "./TrackedProcess.ts";
 
-export type ProcessTreeReading = { 
+export type ProcessTreeReading = {
 /**
  * Sorted by pid, capped; see `truncated`.
  */
-processes: Array<TrackedProcess>, truncated: boolean, 
+processes: Array<TrackedProcess>, truncated: boolean,
 /**
  * Sum over the tree, percent of the whole machine.
  */
-totalCpuPercent: number, totalRssBytes: number, 
+totalCpuPercent: number, totalRssBytes: number,
 /**
  * Registered provider sessions that are alive, with their subtree totals.
  */

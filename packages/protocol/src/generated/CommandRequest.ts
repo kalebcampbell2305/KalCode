@@ -4,11 +4,11 @@ import type { KalVoiceInput } from "./KalVoiceInput.ts";
 /**
  * A top-level command request from the command bar.
  */
-export type CommandRequest = { 
+export type CommandRequest = {
 /**
  * Client-generated UUID; the idempotency key for usage.
  */
-requestId: string, text: string, input: KalVoiceInput, 
+requestId: string, text: string, input: KalVoiceInput,
 /**
  * The workspace the user is looking at, if any.
  */

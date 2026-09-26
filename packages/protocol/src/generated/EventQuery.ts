@@ -5,28 +5,28 @@ import type { SeqOrder } from "./SeqOrder.ts";
 /**
  * A filtered, paged read of the event log (`events_query`). Missing fields take their defaults.
  */
-export type EventQuery = { 
+export type EventQuery = {
 /**
  * Exact types (`thread.created`) or `domain.*` prefixes (`thread.*`); at most 32;
  * empty = every type.
  */
-types: Array<string>, correlation: CorrelationFilter, 
+types: Array<string>, correlation: CorrelationFilter,
 /**
  * Only events with `seq > afterSeq`.
  */
-afterSeq: number | null, 
+afterSeq: number | null,
 /**
  * Only events with `seq < beforeSeq`.
  */
-beforeSeq: number | null, 
+beforeSeq: number | null,
 /**
  * Only events that occurred at or after this RFC 3339 UTC time.
  */
-from: string | null, 
+from: string | null,
 /**
  * Only events that occurred before this RFC 3339 UTC time.
  */
-to: string | null, order: SeqOrder, 
+to: string | null, order: SeqOrder,
 /**
  * 1..=500.
  */

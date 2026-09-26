@@ -5,31 +5,31 @@ import type { Reversibility } from "./Reversibility.ts";
 /**
  * One entry of the fixed fix catalog offered for a finding. Never a free-form command.
  */
-export type FixOption = { 
+export type FixOption = {
 /**
  * Catalog code: `file.*` fixes edit a file after approval; `show.*` only show a command.
  */
-fixCode: string, 
+fixCode: string,
 /**
  * Button label ("Add to .gitignore", "Show the command").
  */
-label: string, 
+label: string,
 /**
  * What it changes, in plain words.
  */
-description: string, 
+description: string,
 /**
  * Permission scopes the change needs (empty for show-only fixes).
  */
-scopes: Array<PermissionScope>, reversible: Reversibility, 
+scopes: Array<PermissionScope>, reversible: Reversibility,
 /**
  * DOC-04: nothing runs; KalCode shows the command for you to run yourself.
  */
-showCommandOnly: boolean, 
+showCommandOnly: boolean,
 /**
  * The command to run yourself (show-only fixes).
  */
-command: string | null, 
+command: string | null,
 /**
  * Where the command runs ("PowerShell", "An administrator PowerShell", "Your terminal").
  */

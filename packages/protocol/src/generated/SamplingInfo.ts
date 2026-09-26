@@ -2,11 +2,11 @@
 import type { CadenceReason } from "./CadenceReason.ts";
 import type { SamplingTiers } from "./SamplingTiers.ts";
 
-export type SamplingInfo = { refreshed: SamplingTiers, 
+export type SamplingInfo = { refreshed: SamplingTiers,
 /**
  * Delay chosen until the next sample, milliseconds.
  */
-nextIntervalMs: number, reason: CadenceReason, 
+nextIntervalMs: number, reason: CadenceReason,
 /**
  * Consecutive failed samples (0 when healthy).
  */

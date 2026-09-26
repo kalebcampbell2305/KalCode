@@ -4,11 +4,11 @@ import type { Notification } from "./Notification.ts";
 /**
  * `notification_list` result.
  */
-export type NotificationPage = { notifications: Array<Notification>, 
+export type NotificationPage = { notifications: Array<Notification>,
 /**
  * Pass as `before` for the next page; `null` on the last page.
  */
-nextCursor: string | null, 
+nextCursor: string | null,
 /**
  * Unread, undismissed notifications in the whole center (the badge count).
  */

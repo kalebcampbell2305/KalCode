@@ -66,6 +66,8 @@ A redacted history scan of `ad4d073..91166fa` reported 42 matches: 36 throwaway 
 
 The exact non-secret owner registration instructions are in [OAUTH-OWNER-SETUP-20260926.md](OAUTH-OWNER-SETUP-20260926.md). Production binding/live OAuth proof remains pending owner registration. A new untracked root `marketing/kalcode-product-film` directory appeared during recovery and was left untouched; it is outside this release packet.
 
+The canonical `gen-protocol-index.mjs` normalized trailing spaces in 92 already-tracked generated types; an ignore-end-of-line-whitespace comparison proves no type/content change. All 56 protocol tests passed. One redundant trailing blank line in Doctor's Cargo manifest was removed. Full candidate whitespace review deliberately preserves two existing migration SQL EOF blank lines and upstream license bytes: `native-core::db::checksum` hashes exact SQL bytes, and component notices are also hash-pinned. Reformatting those files would change durable migration or artifact identity. New repair diffs remain whitespace-clean; final comparison must report these exact preserved exceptions rather than silently editing or ignoring them without explanation.
+
 ## Rollback state
 
 No schema, dependency, credential, production-store, or public-route change is included in this packet. Before integration, discard neither the preserved original worktrees nor release evidence. Revert the bounded repair commit to undo these source changes; do not reset main or later history. Any future signed build must be regenerated from the final verified commit. Main, public release pointers, and deployed versions remain unchanged by this packet.

@@ -2,7 +2,7 @@
 import type { SurfaceId } from "./SurfaceId.ts";
 import type { SurfaceState } from "./SurfaceState.ts";
 
-export type SurfaceFlag = { id: SurfaceId, state: SurfaceState, 
+export type SurfaceFlag = { id: SurfaceId, state: SurfaceState,
 /**
  * Whether the surface appears in navigation for this channel.
  */

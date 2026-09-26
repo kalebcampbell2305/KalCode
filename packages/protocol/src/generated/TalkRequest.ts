@@ -4,7 +4,7 @@ import type { TalkTarget } from "./TalkTarget.ts";
 /**
  * One push-to-talk utterance after recognition.
  */
-export type TalkRequest = { 
+export type TalkRequest = {
 /**
  * Client-generated UUID for the request, if it becomes one.
  */
