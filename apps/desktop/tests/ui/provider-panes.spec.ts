@@ -70,7 +70,7 @@ test.describe("provider panes", () => {
     await openWorkspace(page);
     await newPane(page);
     const region = pane(page);
-    await expect(region).toHaveAttribute("aria-label", /Claude Code pane$/);
+    await expect(region).toHaveAttribute("aria-label", "New thread, Claude Code pane, account Personal (not managed)");
     await expect(region.getByText("Claude Code", { exact: true })).toBeVisible();
     await expect(region.getByText("Account default")).toBeVisible();
     await expect(region.getByText("Approve", { exact: true })).toBeVisible();
@@ -155,7 +155,7 @@ test.describe("provider panes", () => {
     await input.fill("Login flake");
     await input.press("Enter");
     await expect(region.getByRole("button", { name: "Login flake. Rename thread" })).toBeVisible();
-    await expect(region).toHaveAttribute("aria-label", "Login flake, Claude Code pane");
+    await expect(region).toHaveAttribute("aria-label", "Login flake, Claude Code pane, account Personal (not managed)");
 
     await region.getByRole("button", { name: /More actions/ }).click();
     await page.getByRole("menuitem", { name: "Stop…" }).click();
