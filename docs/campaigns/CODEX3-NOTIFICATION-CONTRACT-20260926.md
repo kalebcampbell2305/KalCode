@@ -1,0 +1,9 @@
+# Notification contract compatibility repair
+
+The recovered source at `63efef4` added required Attention fields to Rust `Notification` and `NotificationPage`, but did not implement their persistence, commands, routing, or frontend consumers. The first full Windows workspace check failed with three missing-field errors in the existing notification store. The checked-in generated TypeScript contracts and desktop callers still describe the implemented notification center.
+
+This packet restores `crates/contracts/src/notifications.rs` to the implemented `ad4d073` wire contract and adds an exact notification/page serialization roundtrip regression. Existing notification coalescing, pagination, read/dismiss behavior, and frontend fixes remain intact. It does not populate unsupported attention state with invented defaults or introduce a new migration during release repair.
+
+The unfinished expansion remains preserved verbatim in commit `63efef4:crates/contracts/src/notifications.rs` and the original `sec-harden` worktree. Its unused Attention view, source, action, resolution, snooze, and native-permission types can be reconsidered with a complete implementation. No Rust consumer outside that contract file referenced those new types; no worktree notification store implemented the new counters. No snooze/resolve commands or persistence migration were present.
+
+Validation: 9 notification contract tests passed (including exact legacy IPC roundtrip and TypeScript exports), and all 15 notification crate tests passed (including SQLite/memory parity, restart persistence, coalescing, retention, and listeners). The generated TypeScript files remained unchanged. Scoped Rust formatting and diff checks passed. Full workspace gates must run again after this repair and the independently owned KalVoice wiring are integrated.
