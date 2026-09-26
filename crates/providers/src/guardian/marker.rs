@@ -248,7 +248,9 @@ impl ProfileMarker {
             .all(|record| record.state == MarkerState::Clean)
         {
             self.state = MarkerState::Clean;
-            self.holders.clear();
+            // A job's CLEAN proof ends process custody, not the enclosing session
+            // lease. Keep account exclusion and multi-turn admission until the
+            // owner explicitly releases its lease (or seals the generation).
         }
         Ok(())
     }
@@ -386,5 +388,48 @@ mod tests {
             .expect("quiescing");
         marker.prove_clean(profile, job).expect("clean");
         assert_eq!(marker.state(), MarkerState::Clean);
+    }
+
+    #[test]
+    fn completed_job_preserves_live_session_lease_and_exclusive_account_fence() {
+        let profile = profile();
+        let mut marker = ProfileMarker::new(
+            Uuid::new_v4(),
+            DesktopGeneration::from_uuid(Uuid::new_v4()),
+            profile.clone(),
+            process(10),
+            process(20),
+        );
+        let lease = Uuid::new_v4();
+        marker
+            .acquire(lease, ProfileCapability::SharedSession)
+            .expect("session lease");
+        for turn in 0..2 {
+            let job = JobId::new();
+            marker
+                .prepare_job(lease, profile.clone(), job, format!("turn-{turn}"))
+                .expect("live lease admits next turn");
+            marker
+                .commit_root(profile.clone(), job, process(30))
+                .unwrap();
+            marker.begin_quiescence(profile.clone(), job).unwrap();
+            marker.prove_clean(profile.clone(), job).unwrap();
+            marker.retire_clean(job).unwrap();
+            assert!(
+                marker
+                    .acquire(Uuid::new_v4(), ProfileCapability::ExclusiveAuth)
+                    .is_err(),
+                "a finished process must not release its still-live session's account fence"
+            );
+        }
+        marker.release(lease);
+        assert!(
+            marker
+                .prepare_job(lease, profile.clone(), JobId::new(), "expired".into())
+                .is_err()
+        );
+        marker
+            .acquire(Uuid::new_v4(), ProfileCapability::ExclusiveAuth)
+            .expect("explicit session release permits sign-in");
     }
 }
