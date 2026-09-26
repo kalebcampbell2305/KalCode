@@ -2977,6 +2977,7 @@ dependencies = [
  "kalcode-permissions",
  "kalcode-pty",
  "kalcode-threads",
+ "libc",
  "process-wrap",
  "rusqlite",
  "serde",

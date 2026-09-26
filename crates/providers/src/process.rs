@@ -147,7 +147,11 @@ fn run_probe_inner(
         })
         .stderr(Stdio::piped());
     let (mut child, guardian_job) = match admission {
-        Some(admission) => platform::spawn_guarded(command, admission),
+        Some(admission) => platform::spawn_guarded(
+            command,
+            admission,
+            platform::GuardedStdio::Probe { capture_stdout },
+        ),
         None => platform::spawn(command).map(|child| (child, None)),
     }
     .map_err(ProcessError::Spawn)?;
@@ -339,9 +343,9 @@ impl SupervisedChild {
         Self::spawn_inner(spec, None)
     }
 
-    /// Spawns a provider through a PREPARED guardian admission. On Windows the child is created
-    /// suspended, assigned to both the external guardian's named job and the local per-child job,
-    /// and committed using PID plus creation time from that same process handle before it resumes.
+    /// Spawns a provider through a PREPARED guardian admission. Windows binds the suspended child
+    /// to its Job Objects before resume. macOS binds a gated root to a retained anchor before the
+    /// durable RUNNING transition permits activation.
     pub fn spawn_guarded(
         spec: &ProcessSpec,
         admission: RegisteredJob,
@@ -359,7 +363,9 @@ impl SupervisedChild {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let (mut child, guardian_job) = match admission {
-            Some(admission) => platform::spawn_guarded(command, admission),
+            Some(admission) => {
+                platform::spawn_guarded(command, admission, platform::GuardedStdio::Interactive)
+            }
             None => platform::spawn(command).map(|child| (child, None)),
         }
         .map_err(ProcessError::Spawn)?;
@@ -501,6 +507,11 @@ mod platform {
 
     pub type Child = Box<dyn ChildWrapper>;
 
+    pub enum GuardedStdio {
+        Probe { capture_stdout: bool },
+        Interactive,
+    }
+
     pub fn configure(_command: &mut Command) {}
 
     pub fn spawn(command: Command) -> std::io::Result<Child> {
@@ -513,7 +524,14 @@ mod platform {
     pub fn spawn_guarded(
         command: Command,
         admission: RegisteredJob,
+        stdio: GuardedStdio,
     ) -> std::io::Result<(Child, Option<GuardedJob>)> {
+        match stdio {
+            GuardedStdio::Probe { capture_stdout } => {
+                let _ = capture_stdout;
+            }
+            GuardedStdio::Interactive => {}
+        }
         let committed = Arc::new(Mutex::new(None));
         let mut command = CommandWrap::from(command);
         command.wrap(CreationFlags(CREATE_NO_WINDOW));
@@ -615,12 +633,150 @@ mod platform {
     }
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "macos")]
+mod platform {
+    #![allow(unsafe_code)]
+
+    use std::ffi::OsString;
+    use std::process::{ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
+
+    use crate::guardian::{GuardedJob, RegisteredJob, custodian::MacLaunch};
+
+    pub enum GuardedStdio {
+        Probe { capture_stdout: bool },
+        Interactive,
+    }
+
+    pub enum Child {
+        Native(std::process::Child),
+        Custodied {
+            child: std::process::Child,
+            root_pid: u32,
+        },
+    }
+
+    pub fn configure(command: &mut Command) {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+
+    pub fn spawn(mut command: Command) -> std::io::Result<Child> {
+        command.spawn().map(Child::Native)
+    }
+
+    pub fn spawn_guarded(
+        command: Command,
+        admission: RegisteredJob,
+        stdio: GuardedStdio,
+    ) -> std::io::Result<(Child, Option<GuardedJob>)> {
+        let program = command.get_program().to_owned();
+        let args = command.get_args().map(OsString::from).collect();
+        let cwd = command.get_current_dir().map(ToOwned::to_owned);
+        let env = command
+            .get_envs()
+            .map(|(key, value)| {
+                value
+                    .map(|value| (key.to_owned(), value.to_owned()))
+                    .ok_or_else(|| {
+                        std::io::Error::other(
+                            "guarded macOS launch contained an environment removal",
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let target = MacLaunch {
+            program: program.into(),
+            args,
+            cwd,
+            env,
+            pty: false,
+        };
+        let mut wrapper = admission
+            .macos_command(target)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        match stdio {
+            GuardedStdio::Probe { capture_stdout } => {
+                wrapper
+                    .stdin(Stdio::null())
+                    .stdout(if capture_stdout {
+                        Stdio::piped()
+                    } else {
+                        Stdio::null()
+                    })
+                    .stderr(Stdio::piped());
+            }
+            GuardedStdio::Interactive => {
+                wrapper
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped());
+            }
+        }
+        let (child, guarded, root_pid) = admission
+            .spawn_macos(wrapper)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        Ok((Child::Custodied { child, root_pid }, Some(guarded)))
+    }
+
+    pub fn id(child: &Child) -> u32 {
+        match child {
+            Child::Native(child) => child.id(),
+            Child::Custodied { root_pid, .. } => *root_pid,
+        }
+    }
+
+    pub fn take_stdin(child: &mut Child) -> Option<ChildStdin> {
+        match child {
+            Child::Native(child) | Child::Custodied { child, .. } => child.stdin.take(),
+        }
+    }
+
+    pub fn take_stdout(child: &mut Child) -> Option<ChildStdout> {
+        match child {
+            Child::Native(child) | Child::Custodied { child, .. } => child.stdout.take(),
+        }
+    }
+
+    pub fn take_stderr(child: &mut Child) -> Option<ChildStderr> {
+        match child {
+            Child::Native(child) | Child::Custodied { child, .. } => child.stderr.take(),
+        }
+    }
+
+    pub fn try_wait(child: &mut Child) -> std::io::Result<Option<ExitStatus>> {
+        match child {
+            Child::Native(child) | Child::Custodied { child, .. } => child.try_wait(),
+        }
+    }
+
+    pub fn kill_tree(child: &mut Child) -> std::io::Result<()> {
+        match child {
+            Child::Custodied { .. } => Ok(()),
+            Child::Native(child) => {
+                let pid = child.id();
+                // SAFETY: an unguarded child is created as its own process-group leader.
+                let group = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+                if group != 0 && child.try_wait()?.is_none() {
+                    return Err(std::io::Error::last_os_error());
+                }
+                child.kill()?;
+                child.wait().map(|_| ())
+            }
+        }
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
 mod platform {
     use std::os::unix::process::CommandExt;
     use std::process::{ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
 
     pub type Child = std::process::Child;
+
+    pub enum GuardedStdio {
+        Probe { capture_stdout: bool },
+        Interactive,
+    }
 
     /// Each provider runs in its own process group so its whole tree can be signalled.
     pub fn configure(command: &mut Command) {
@@ -634,7 +790,14 @@ mod platform {
     pub fn spawn_guarded(
         _command: Command,
         _admission: crate::guardian::RegisteredJob,
+        stdio: GuardedStdio,
     ) -> std::io::Result<(Child, Option<crate::guardian::GuardedJob>)> {
+        match stdio {
+            GuardedStdio::Probe { capture_stdout } => {
+                let _ = capture_stdout;
+            }
+            GuardedStdio::Interactive => {}
+        }
         Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
             "the provider crash guardian requires Windows Job Objects",

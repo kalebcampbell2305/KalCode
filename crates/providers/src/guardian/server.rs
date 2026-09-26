@@ -137,7 +137,7 @@ fn serve_authenticated<R: Read, W: Write>(
             }
             Request::Drain => {
                 sealed = true;
-                match drain_jobs(&jobs, DRAIN_TIMEOUT) {
+                match drain_jobs(jobs, DRAIN_TIMEOUT) {
                     Ok(()) => Response::Clean,
                     Err(_) => Response::Denied {
                         code: "quiescence_unproved".into(),
@@ -145,7 +145,7 @@ fn serve_authenticated<R: Read, W: Write>(
                 }
             }
             Request::Shutdown => {
-                let response = match drain_jobs(&jobs, DRAIN_TIMEOUT) {
+                let response = match drain_jobs(jobs, DRAIN_TIMEOUT) {
                     Ok(()) => Response::Clean,
                     Err(_) => Response::Denied {
                         code: "quiescence_unproved".into(),

@@ -1,11 +1,21 @@
+#[cfg(target_os = "macos")]
+mod macos;
 #[cfg(not(windows))]
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 mod unsupported;
 #[cfg(windows)]
 mod windows;
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub use macos::recovery_root_identity;
+#[cfg(target_os = "macos")]
+pub(crate) use macos::{
+    AnchoredDirectory, RecoveryLock, RecoveryLockRole, current_boot_identifier,
+    current_process_identity, process_info,
+};
+#[cfg(all(not(windows), not(target_os = "macos")))]
 pub use unsupported::recovery_root_identity;
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_os = "macos")))]
 pub(crate) use unsupported::{
     AnchoredDirectory, RecoveryLock, RecoveryLockRole, current_boot_identifier,
     current_process_identity,

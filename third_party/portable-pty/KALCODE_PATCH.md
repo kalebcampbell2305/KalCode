@@ -17,6 +17,12 @@ does not provide:
 - return an error when bounded quiescence cannot be proved. KalCode's PTY integration then retains
   the provider profile lease fail-closed instead of invoking the exit callback.
 
+The macOS patch adds one deliberately narrow capability: `SlavePty::try_clone_slave_file` returns
+an independently owned, close-on-exec duplicate of the native slave descriptor. KalCode transfers
+that descriptor only to its trusted custodian, which establishes the session, controlling terminal,
+reserved process group, activation barrier, and ordered cleanup. Normal Unix spawning, descriptor
+cleanup, command construction, and every Windows source file remain unchanged.
+
 The Job List attribute requires Windows 10 / Windows Server 2016 or newer. ConPTY already requires
 a supported Windows 10 release, so the patch does not widen the platform floor. Windows 8+
 supports nested Job Objects; an outer-job regression covers launchers and CI runners.

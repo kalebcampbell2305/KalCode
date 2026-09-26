@@ -338,6 +338,11 @@ impl SlavePty for UnixSlavePty {
     ) -> Result<Box<dyn Child + Send + Sync>, Error> {
         Ok(Box::new(self.fd.spawn_command(builder)?))
     }
+
+    #[cfg(target_os = "macos")]
+    fn try_clone_slave_file(&self) -> Result<std::fs::File, Error> {
+        Ok(self.fd.as_file()?)
+    }
 }
 
 impl MasterPty for UnixMasterPty {

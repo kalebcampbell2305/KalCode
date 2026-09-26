@@ -11,10 +11,14 @@ mod shells;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "macos")]
+use std::sync::Condvar;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+#[cfg(target_os = "macos")]
+use portable_pty::{Child, ExitStatus as PortableExitStatus};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 pub use scrollback::Scrollback;
@@ -114,14 +118,78 @@ pub struct PtyProcessIdentity {
     pub birth_time_100ns: u64,
 }
 
+/// Lossless target description passed to the trusted macOS custodian. The provider executable is
+/// never placed in a shell command and the complete environment is materialized before custody is
+/// established.
+#[derive(Debug)]
+pub struct MacPtyLaunch {
+    pub program: PathBuf,
+    pub args: Vec<std::ffi::OsString>,
+    pub cwd: PathBuf,
+    pub env: Vec<(std::ffi::OsString, std::ffi::OsString)>,
+}
+
+/// A custodied macOS PTY root. Construction is restricted to the guardian admission so the PTY
+/// layer cannot accidentally create an unguarded fallback.
+#[cfg(target_os = "macos")]
+pub struct MacCustodiedPty {
+    child: Box<dyn Child + Send + Sync>,
+    root_pid: u32,
+    guard: Box<dyn PtyAdmissionGuard>,
+}
+
+#[cfg(target_os = "macos")]
+impl MacCustodiedPty {
+    pub fn new(
+        child: std::process::Child,
+        root_pid: u32,
+        guard: Box<dyn PtyAdmissionGuard>,
+    ) -> Result<Self, PtyError> {
+        if root_pid == 0 {
+            return Err(PtyError::Spawn(
+                "the macOS custodian reported an invalid provider process id".into(),
+            ));
+        }
+        let completion = Arc::new(MacGuardCompletion::new(guard));
+        Ok(Self {
+            child: Box::new(MacCustodiedChild {
+                child,
+                root_pid,
+                completion: Arc::clone(&completion),
+            }),
+            root_pid,
+            guard: Box::new(MacGuardHandle { completion }),
+        })
+    }
+
+    fn into_parts(
+        self,
+    ) -> (
+        Box<dyn Child + Send + Sync>,
+        Option<u32>,
+        Box<dyn PtyAdmissionGuard>,
+    ) {
+        (self.child, Some(self.root_pid), self.guard)
+    }
+}
+
 /// One PREPARED admission. Implementations own the authority-specific registration and must
 /// return an opaque guard only after binding this exact process identity.
 pub trait PreparedPtyAdmission: Send {
+    #[cfg(windows)]
     fn raw_job_handle(&self) -> Result<usize, PtyError>;
+    #[cfg(windows)]
     fn commit(
         self: Box<Self>,
         identity: PtyProcessIdentity,
     ) -> Result<Box<dyn PtyAdmissionGuard>, PtyError>;
+
+    #[cfg(target_os = "macos")]
+    fn spawn_custodied(
+        self: Box<Self>,
+        launch: MacPtyLaunch,
+        slave: std::fs::File,
+    ) -> Result<MacCustodiedPty, PtyError>;
 }
 
 /// Opaque authority retained for one admitted PTY tree. The waiter calls `complete` only after the
@@ -156,6 +224,155 @@ struct Inner {
     next_attach: AtomicU64,
     pid: Option<u32>,
     guardian_guard: Mutex<Option<Box<dyn PtyAdmissionGuard>>>,
+    #[cfg(target_os = "macos")]
+    custodied: bool,
+}
+
+#[cfg(target_os = "macos")]
+enum MacCompletionState {
+    Ready(Option<Box<dyn PtyAdmissionGuard>>),
+    Running,
+    Done(Result<(), String>),
+}
+
+#[cfg(target_os = "macos")]
+struct MacGuardCompletion {
+    state: Mutex<MacCompletionState>,
+    changed: Condvar,
+}
+
+#[cfg(target_os = "macos")]
+impl MacGuardCompletion {
+    fn new(guard: Box<dyn PtyAdmissionGuard>) -> Self {
+        Self {
+            state: Mutex::new(MacCompletionState::Ready(Some(guard))),
+            changed: Condvar::new(),
+        }
+    }
+
+    fn complete(&self) -> Result<(), PtyError> {
+        let guard = loop {
+            let mut state = lock(&self.state);
+            match &mut *state {
+                MacCompletionState::Ready(guard) => {
+                    let guard = guard.take().ok_or_else(|| {
+                        PtyError::Io("macOS guardian completion state was empty".into())
+                    })?;
+                    *state = MacCompletionState::Running;
+                    break guard;
+                }
+                MacCompletionState::Running => {
+                    state = self
+                        .changed
+                        .wait(state)
+                        .unwrap_or_else(PoisonError::into_inner);
+                    drop(state);
+                }
+                MacCompletionState::Done(result) => {
+                    return result.clone().map_err(PtyError::Io);
+                }
+            }
+        };
+        let result = guard.complete().map_err(|error| error.to_string());
+        let mut state = lock(&self.state);
+        *state = MacCompletionState::Done(result.clone());
+        self.changed.notify_all();
+        result.map_err(PtyError::Io)
+    }
+}
+
+#[cfg(target_os = "macos")]
+struct MacGuardHandle {
+    completion: Arc<MacGuardCompletion>,
+}
+
+#[cfg(target_os = "macos")]
+impl PtyAdmissionGuard for MacGuardHandle {
+    fn complete(&self) -> Result<(), PtyError> {
+        self.completion.complete()
+    }
+}
+
+#[cfg(target_os = "macos")]
+struct MacCustodiedChild {
+    child: std::process::Child,
+    root_pid: u32,
+    completion: Arc<MacGuardCompletion>,
+}
+
+#[cfg(target_os = "macos")]
+impl std::fmt::Debug for MacCustodiedChild {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MacCustodiedChild")
+            .field("root_pid", &self.root_pid)
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl ChildKiller for MacCustodiedChild {
+    fn kill(&mut self) -> std::io::Result<()> {
+        self.completion
+            .complete()
+            .map_err(|error| std::io::Error::other(error.to_string()))
+    }
+
+    fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
+        Box::new(MacCustodyKiller {
+            root_pid: self.root_pid,
+            completion: Arc::clone(&self.completion),
+        })
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Child for MacCustodiedChild {
+    fn try_wait(&mut self) -> std::io::Result<Option<PortableExitStatus>> {
+        self.child
+            .try_wait()
+            .map(|status| status.map(PortableExitStatus::from))
+    }
+
+    fn wait(&mut self) -> std::io::Result<PortableExitStatus> {
+        self.child.wait().map(PortableExitStatus::from)
+    }
+
+    fn process_id(&self) -> Option<u32> {
+        Some(self.root_pid)
+    }
+}
+
+#[cfg(target_os = "macos")]
+struct MacCustodyKiller {
+    root_pid: u32,
+    completion: Arc<MacGuardCompletion>,
+}
+
+#[cfg(target_os = "macos")]
+impl std::fmt::Debug for MacCustodyKiller {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("MacCustodyKiller")
+            .field("root_pid", &self.root_pid)
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl ChildKiller for MacCustodyKiller {
+    fn kill(&mut self) -> std::io::Result<()> {
+        self.completion
+            .complete()
+            .map_err(|error| std::io::Error::other(error.to_string()))
+    }
+
+    fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
+        Box::new(Self {
+            root_pid: self.root_pid,
+            completion: Arc::clone(&self.completion),
+        })
+    }
 }
 
 type ExitCallback = Box<dyn FnOnce(ExitInfo) + Send + 'static>;
@@ -264,7 +481,7 @@ impl PtySession {
         on_exit: impl FnOnce(ExitInfo) + Send + 'static,
     ) -> Result<Self, PtyError> {
         preflight_program(&spec.program)?;
-        Self::start(build_command(&spec), spec.size, on_exit, None, None)
+        Self::start(build_command(&spec), spec.size, on_exit, None, None, None)
     }
 
     /// Starts a shell whose root is atomically admitted to the external guardian job on
@@ -276,9 +493,31 @@ impl PtySession {
         on_exit: impl FnOnce(ExitInfo) + Send + 'static,
     ) -> Result<Self, PtyError> {
         preflight_program(&spec.program)?;
-        let mut command = build_command(&spec);
-        configure_guardian_job(&mut command, admission.raw_job_handle()?)?;
-        Self::start(command, spec.size, on_exit, None, Some(admission))
+        #[cfg(target_os = "macos")]
+        {
+            let launch = mac_launch_from_spawn_spec(&spec);
+            Self::start(
+                build_command(&spec),
+                spec.size,
+                on_exit,
+                None,
+                Some(admission),
+                Some(launch),
+            )
+        }
+        #[cfg(windows)]
+        {
+            let mut command = build_command(&spec);
+            configure_guardian_job(&mut command, admission.raw_job_handle()?)?;
+            Self::start(command, spec.size, on_exit, None, Some(admission), None)
+        }
+        #[cfg(all(not(windows), not(target_os = "macos")))]
+        {
+            let _ = admission;
+            Err(PtyError::Spawn(
+                "the crash guardian is unsupported on this platform".into(),
+            ))
+        }
     }
 
     /// Starts a program (not a shell tab) with a cleared environment: only `spec.env` reaches
@@ -288,7 +527,14 @@ impl PtySession {
         on_exit: impl FnOnce(ExitInfo) + Send + 'static,
     ) -> Result<Self, PtyError> {
         preflight_program(&spec.program)?;
-        Self::start(build_program_command(&spec), spec.size, on_exit, None, None)
+        Self::start(
+            build_program_command(&spec),
+            spec.size,
+            on_exit,
+            None,
+            None,
+            None,
+        )
     }
 
     /// Starts a cleared-environment program atomically inside the external guardian job.
@@ -298,12 +544,39 @@ impl PtySession {
         on_exit: impl FnOnce(ExitInfo) + Send + 'static,
     ) -> Result<Self, PtyError> {
         preflight_program(&spec.program)?;
-        let mut command = build_program_command(&spec);
-        configure_guardian_job(&mut command, admission.raw_job_handle()?)?;
-        Self::start(command, spec.size, on_exit, None, Some(admission))
+        #[cfg(target_os = "macos")]
+        {
+            let launch = MacPtyLaunch {
+                program: spec.program.clone(),
+                args: spec.args.clone(),
+                cwd: spec.cwd.clone(),
+                env: spec.env.clone(),
+            };
+            Self::start(
+                build_program_command(&spec),
+                spec.size,
+                on_exit,
+                None,
+                Some(admission),
+                Some(launch),
+            )
+        }
+        #[cfg(windows)]
+        {
+            let mut command = build_program_command(&spec);
+            configure_guardian_job(&mut command, admission.raw_job_handle()?)?;
+            Self::start(command, spec.size, on_exit, None, Some(admission), None)
+        }
+        #[cfg(all(not(windows), not(target_os = "macos")))]
+        {
+            let _ = admission;
+            Err(PtyError::Spawn(
+                "the crash guardian is unsupported on this platform".into(),
+            ))
+        }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, windows))]
     fn spawn_program_with_failure(
         spec: ProgramSpec,
         stage: SetupStage,
@@ -320,6 +593,7 @@ impl PtySession {
                 before_failure: Mutex::new(Some(Box::new(before_failure))),
             })),
             None,
+            None,
         )
     }
 
@@ -329,51 +603,91 @@ impl PtySession {
         on_exit: impl FnOnce(ExitInfo) + Send + 'static,
         injection: Option<Arc<StartFailureInjection>>,
         admission: Option<Box<dyn PreparedPtyAdmission>>,
+        mac_launch: Option<MacPtyLaunch>,
     ) -> Result<Self, PtyError> {
+        #[cfg(not(target_os = "macos"))]
+        let _ = mac_launch;
         let callback = Arc::new(ExitCallbackGuard::new(on_exit));
         let system = native_pty_system();
         let pair = system
             .openpty(size.to_pty())
             .map_err(|e| PtyError::Spawn(e.to_string()))?;
 
-        let mut child = pair
-            .slave
-            .spawn_command(command)
-            .map_err(|e| PtyError::Spawn(e.to_string()))?;
-        let pid = child.process_id();
-        let guardian_guard = match admission {
-            Some(admission) => {
-                let Some(pid) = pid else {
-                    let _ = child.kill();
-                    return Err(PtyError::Spawn(
-                        "the guarded terminal process id was unavailable".into(),
-                    ));
-                };
-                #[cfg(windows)]
-                let birth_time_100ns = child.process_birth_time_100ns().map_err(|error| {
-                    let _ = child.kill();
-                    PtyError::Spawn(error.to_string())
-                })?;
-                #[cfg(not(windows))]
-                let birth_time_100ns = 0;
-                if birth_time_100ns == 0 {
-                    let _ = child.kill();
-                    return Err(PtyError::Spawn(
-                        "the guarded terminal creation identity was unavailable".into(),
-                    ));
-                }
-                match admission.commit(PtyProcessIdentity {
-                    pid,
-                    birth_time_100ns,
-                }) {
-                    Ok(guard) => Some(guard),
-                    Err(error) => {
+        #[cfg(target_os = "macos")]
+        let (mut child, pid, guardian_guard, custodied) = if let Some(launch) = mac_launch {
+            let admission = admission.ok_or_else(|| {
+                PtyError::Spawn("the macOS PTY custody admission is missing".into())
+            })?;
+            let slave = pair
+                .slave
+                .try_clone_slave_file()
+                .map_err(|error| PtyError::Spawn(error.to_string()))?;
+            let spawned = admission.spawn_custodied(launch, slave)?;
+            let (child, pid, guard) = spawned.into_parts();
+            (child, pid, Some(guard), true)
+        } else {
+            if admission.is_some() {
+                return Err(PtyError::Spawn(
+                    "the macOS guarded terminal launch was not custodied".into(),
+                ));
+            }
+            let child = pair
+                .slave
+                .spawn_command(command)
+                .map_err(|error| PtyError::Spawn(error.to_string()))?;
+            let pid = child.process_id();
+            (child, pid, None, false)
+        };
+
+        #[cfg(not(target_os = "macos"))]
+        let (mut child, pid, guardian_guard) = {
+            let mut child = pair
+                .slave
+                .spawn_command(command)
+                .map_err(|error| PtyError::Spawn(error.to_string()))?;
+            let pid = child.process_id();
+            #[cfg(windows)]
+            let guardian_guard = match admission {
+                Some(admission) => {
+                    let Some(pid) = pid else {
                         let _ = child.kill();
-                        return Err(error);
+                        return Err(PtyError::Spawn(
+                            "the guarded terminal process id was unavailable".into(),
+                        ));
+                    };
+                    let birth_time_100ns = child.process_birth_time_100ns().map_err(|error| {
+                        let _ = child.kill();
+                        PtyError::Spawn(error.to_string())
+                    })?;
+                    if birth_time_100ns == 0 {
+                        let _ = child.kill();
+                        return Err(PtyError::Spawn(
+                            "the guarded terminal creation identity was unavailable".into(),
+                        ));
+                    }
+                    match admission.commit(PtyProcessIdentity {
+                        pid,
+                        birth_time_100ns,
+                    }) {
+                        Ok(guard) => Some(guard),
+                        Err(error) => {
+                            let _ = child.kill();
+                            return Err(error);
+                        }
                     }
                 }
-            }
-            None => None,
+                None => None,
+            };
+            #[cfg(not(windows))]
+            let guardian_guard: Option<Box<dyn PtyAdmissionGuard>> = if admission.is_some() {
+                let _ = child.kill();
+                return Err(PtyError::Spawn(
+                    "the crash guardian is unsupported on this platform".into(),
+                ));
+            } else {
+                None
+            };
+            (child, pid, guardian_guard)
         };
         // Dropping the slave lets the reader see end-of-file once the shell exits.
         drop(pair.slave);
@@ -439,6 +753,8 @@ impl PtySession {
             next_attach: AtomicU64::new(1),
             pid,
             guardian_guard: Mutex::new(guardian_guard),
+            #[cfg(target_os = "macos")]
+            custodied,
         });
 
         let spawn_failed =
@@ -616,7 +932,21 @@ impl PtySession {
         lock(&self.inner.input).take();
         lock(&self.inner.master).take();
         #[cfg(unix)]
-        escalate_kill(self);
+        #[allow(clippy::needless_bool)]
+        let should_escalate = {
+            #[cfg(target_os = "macos")]
+            {
+                !self.inner.custodied
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                true
+            }
+        };
+        #[cfg(unix)]
+        if should_escalate {
+            escalate_kill(self);
+        }
         if let Err(error) = result
             && self.exit_info().is_none()
         {
@@ -636,16 +966,6 @@ fn configure_guardian_job(
     }
     command.set_guardian_job_handle(guardian_job_handle);
     Ok(())
-}
-
-#[cfg(not(windows))]
-fn configure_guardian_job(
-    _command: &mut CommandBuilder,
-    _guardian_job_handle: usize,
-) -> Result<(), PtyError> {
-    Err(PtyError::Spawn(
-        "the crash guardian requires Windows Job Objects".into(),
-    ))
 }
 
 /// Completes an abnormal waiter path without releasing `callback` until the contained process
@@ -713,6 +1033,26 @@ fn build_command(spec: &SpawnSpec) -> CommandBuilder {
         command.env("PATHEXT", pathext);
     }
     command
+}
+
+#[cfg(target_os = "macos")]
+fn mac_launch_from_spawn_spec(spec: &SpawnSpec) -> MacPtyLaunch {
+    let mut environment: std::collections::BTreeMap<_, _> = std::env::vars_os().collect();
+    for key in &spec.env_remove {
+        environment.remove(std::ffi::OsStr::new(key));
+    }
+    for (key, value) in &spec.env {
+        environment.insert(key.clone().into(), value.clone().into());
+    }
+    if !environment.contains_key(std::ffi::OsStr::new("SHELL")) {
+        environment.insert("SHELL".into(), spec.program.as_os_str().to_owned());
+    }
+    MacPtyLaunch {
+        program: spec.program.clone(),
+        args: spec.args.iter().map(std::ffi::OsString::from).collect(),
+        cwd: spec.cwd.clone(),
+        env: environment.into_iter().collect(),
+    }
 }
 
 /// The portable-pty command for a [`ProgramSpec`]: environment cleared, then exactly

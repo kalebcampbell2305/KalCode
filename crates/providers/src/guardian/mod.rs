@@ -9,6 +9,8 @@ use kalcode_contracts::agent::ProviderId;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+#[cfg(target_os = "macos")]
+pub mod custodian;
 pub mod marker;
 pub mod platform;
 pub mod protocol;
@@ -211,6 +213,8 @@ pub enum GuardianError {
     MarkerEncoding(serde_json::Error),
     #[error("provider process quiescence is not yet proved")]
     QuiescencePending,
+    #[error("the provider guardian cannot prove the prior process tree clean")]
+    BlockedUnclean,
     #[error("the provider guardian is unavailable: {0}")]
     Unavailable(String),
     #[error("the provider guardian mutex was poisoned")]
@@ -227,6 +231,20 @@ pub(crate) trait JobControl: Send + Sync {
     fn terminate(&self, job: JobId) -> Result<(), GuardianError>;
     fn active_processes(&self, job: JobId) -> Result<u32, GuardianError>;
     fn release(&self, job: JobId) -> Result<(), GuardianError>;
+    #[cfg(target_os = "macos")]
+    fn macos_command(
+        &self,
+        job: JobId,
+        launch: custodian::MacLaunch,
+    ) -> Result<std::process::Command, GuardianError>;
+    #[cfg(target_os = "macos")]
+    fn macos_spawn(
+        &self,
+        job: JobId,
+        command: std::process::Command,
+    ) -> Result<MacSpawned, GuardianError>;
+    #[cfg(target_os = "macos")]
+    fn macos_activate(&self, job: JobId) -> Result<(), GuardianError>;
     #[cfg(windows)]
     fn raw_job_handle(&self, job: JobId) -> Result<usize, GuardianError>;
     #[cfg(windows)]
@@ -242,6 +260,12 @@ pub(crate) trait JobControl: Send + Sync {
         expected: ProcessIdentity,
     ) -> Result<ProcessIdentity, GuardianError>;
     fn complete(&self) -> Result<(), GuardianError>;
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) struct MacSpawned {
+    pub child: std::process::Child,
+    pub root: ProcessIdentity,
 }
 
 #[derive(Clone)]
@@ -304,6 +328,9 @@ impl GuardianAuthority {
     ) -> Result<GuardianLease, GuardianError> {
         let lease_id = Uuid::new_v4();
         let mut state = self.lock()?;
+        if state.blocked_unclean {
+            return Err(GuardianError::BlockedUnclean);
+        }
         if state.sealed {
             return Err(GuardianError::Sealed);
         }
@@ -478,9 +505,9 @@ impl kalcode_pty::PtyGuardian for GuardianTerminalAuthority {
 
 /// Fully-owned crash guardian for one fresh desktop generation.
 ///
-/// Failed construction closes the helper pipe; the external process then drains every job it
-/// accepted before exiting. Callers must retain this value for the entire runtime epoch and use
-/// its authority when constructing `ManagedProfiles`.
+/// Platform guardians retain independent cleanup authority for every admitted job. Callers must
+/// retain this value for the entire runtime epoch and use its authority when constructing
+/// `ManagedProfiles`.
 pub struct GuardianRuntime {
     authority: GuardianAuthority,
     supervisor: Arc<GuardianSupervisor>,
@@ -609,6 +636,9 @@ impl GuardianLease {
         if state.sealed {
             return Err(GuardianError::Sealed);
         }
+        if state.blocked_unclean {
+            return Err(GuardianError::BlockedUnclean);
+        }
         let marker = state
             .profiles
             .get_mut(&self.profile)
@@ -663,6 +693,51 @@ impl RegisteredJob {
         self.inner.jobs.raw_job_handle(self.job)
     }
 
+    #[cfg(target_os = "macos")]
+    pub(crate) fn macos_command(
+        &self,
+        launch: custodian::MacLaunch,
+    ) -> Result<std::process::Command, GuardianError> {
+        self.inner.jobs.macos_command(self.job, launch)
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(crate) fn spawn_macos(
+        self,
+        command: std::process::Command,
+    ) -> Result<(std::process::Child, GuardedJob, u32), GuardianError> {
+        let spawned = match self.inner.jobs.macos_spawn(self.job, command) {
+            Ok(spawned) => spawned,
+            Err(_) => {
+                let _ = self.inner.jobs.terminate(self.job);
+                let _ = self.inner.jobs.active_processes(self.job);
+                mark_job_blocked(&self.inner, self.job);
+                return Err(GuardianError::BlockedUnclean);
+            }
+        };
+        let root_pid = spawned.root.pid();
+        let mut child = spawned.child;
+        let job = self.job;
+        let inner = Arc::clone(&self.inner);
+        let guarded = match self.commit_assigned_root(spawned.root) {
+            Ok(guarded) => guarded,
+            Err(_) => {
+                let _ = inner.jobs.terminate(job);
+                let _ = inner.jobs.active_processes(job);
+                let _ = child.wait();
+                mark_job_blocked(&inner, job);
+                return Err(GuardianError::BlockedUnclean);
+            }
+        };
+        if inner.jobs.macos_activate(job).is_err() {
+            let _ = guarded.cancel_and_prove_quiescence();
+            let _ = child.wait();
+            mark_job_blocked(&inner, job);
+            return Err(GuardianError::BlockedUnclean);
+        }
+        Ok((child, guarded, root_pid))
+    }
+
     /// Commits a process that was atomically admitted by an external launcher such as ConPTY.
     /// The PID is accepted only when a newly opened handle is a member of this exact prepared job;
     /// PID reuse therefore cannot bind an unrelated process.
@@ -714,20 +789,13 @@ impl RegisteredJob {
 }
 
 impl kalcode_pty::PreparedPtyAdmission for RegisteredJob {
+    #[cfg(windows)]
     fn raw_job_handle(&self) -> Result<usize, kalcode_pty::PtyError> {
-        #[cfg(windows)]
-        {
-            return RegisteredJob::raw_job_handle(self)
-                .map_err(|error| kalcode_pty::PtyError::Spawn(error.to_string()));
-        }
-        #[cfg(not(windows))]
-        {
-            Err(kalcode_pty::PtyError::Spawn(
-                "the provider crash guardian requires Windows Job Objects".into(),
-            ))
-        }
+        RegisteredJob::raw_job_handle(self)
+            .map_err(|error| kalcode_pty::PtyError::Spawn(error.to_string()))
     }
 
+    #[cfg(windows)]
     fn commit(
         self: Box<Self>,
         identity: kalcode_pty::PtyProcessIdentity,
@@ -737,6 +805,55 @@ impl kalcode_pty::PreparedPtyAdmission for RegisteredJob {
             .map_err(|error| kalcode_pty::PtyError::Spawn(error.to_string()))?;
         Ok(Box::new(guarded))
     }
+
+    #[cfg(target_os = "macos")]
+    fn spawn_custodied(
+        self: Box<Self>,
+        launch: kalcode_pty::MacPtyLaunch,
+        slave: std::fs::File,
+    ) -> Result<kalcode_pty::MacCustodiedPty, kalcode_pty::PtyError> {
+        use std::process::Stdio;
+
+        let target = custodian::MacLaunch {
+            program: launch.program,
+            args: launch.args,
+            cwd: Some(launch.cwd),
+            env: launch.env,
+            pty: true,
+        };
+        let mut command = self
+            .macos_command(target)
+            .map_err(|error| kalcode_pty::PtyError::Spawn(error.to_string()))?;
+        let stdout = slave
+            .try_clone()
+            .map_err(|error| kalcode_pty::PtyError::Spawn(error.to_string()))?;
+        let stderr = slave
+            .try_clone()
+            .map_err(|error| kalcode_pty::PtyError::Spawn(error.to_string()))?;
+        command
+            .stdin(Stdio::from(slave))
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(stderr));
+        let (child, guarded, root_pid) = (*self)
+            .spawn_macos(command)
+            .map_err(|error| kalcode_pty::PtyError::Spawn(error.to_string()))?;
+        kalcode_pty::MacCustodiedPty::new(child, root_pid, Box::new(guarded))
+    }
+}
+
+fn mark_job_blocked(inner: &Arc<GuardianInner>, job: JobId) {
+    let Ok(mut state) = inner.state.lock() else {
+        return;
+    };
+    for marker in state.profiles.values_mut() {
+        if marker.job_state(job).is_ok() {
+            marker.block();
+            let _ = inner.marker_store.persist(marker);
+            state.blocked_unclean = true;
+            return;
+        }
+    }
+    state.blocked_unclean = true;
 }
 
 impl kalcode_pty::PtyAdmissionGuard for GuardedJob {
@@ -763,30 +880,41 @@ impl GuardedJob {
             .profiles
             .get_mut(&self.profile)
             .ok_or(GuardianError::UnknownJob)?;
-        match marker.job_state(self.job)? {
-            MarkerState::Prepared | MarkerState::Running => {
-                marker.begin_quiescence(self.profile.clone(), self.job)?;
+        let result = (|| {
+            match marker.job_state(self.job)? {
+                MarkerState::Prepared | MarkerState::Running => {
+                    marker.begin_quiescence(self.profile.clone(), self.job)?;
+                    self.inner.marker_store.persist(marker)?;
+                }
+                MarkerState::Quiescing => {}
+                MarkerState::Clean => {}
+                MarkerState::Blocked => return Err(GuardianError::BlockedUnclean),
+            }
+            if marker.job_state(self.job)? != MarkerState::Clean {
+                self.inner.jobs.terminate(self.job)?;
+                if self.inner.jobs.active_processes(self.job)? != 0 {
+                    return Err(GuardianError::QuiescencePending);
+                }
+                marker.prove_clean(self.profile.clone(), self.job)?;
                 self.inner.marker_store.persist(marker)?;
             }
-            MarkerState::Quiescing => {}
-            MarkerState::Clean => {}
-            MarkerState::Blocked => return Err(GuardianError::InvalidTransition),
-        }
-        if marker.job_state(self.job)? != MarkerState::Clean {
-            self.inner.jobs.terminate(self.job)?;
-            if self.inner.jobs.active_processes(self.job)? != 0 {
-                return Err(GuardianError::QuiescencePending);
+            // CLEAN is durable before either trusted owner releases its handle.
+            self.inner.jobs.release(self.job)?;
+            let mut retired = marker.clone();
+            retired.retire_clean(self.job)?;
+            self.inner.marker_store.persist(&retired)?;
+            *marker = retired;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            #[cfg(target_os = "macos")]
+            {
+                marker.block();
+                let _ = self.inner.marker_store.persist(marker);
+                state.blocked_unclean = true;
             }
-            marker.prove_clean(self.profile.clone(), self.job)?;
-            self.inner.marker_store.persist(marker)?;
+            return Err(error);
         }
-        // CLEAN is durable before either trusted owner releases its handle. The helper performs an
-        // independent zero-process query before acknowledging ReleaseJob.
-        self.inner.jobs.release(self.job)?;
-        let mut retired = marker.clone();
-        retired.retire_clean(self.job)?;
-        self.inner.marker_store.persist(&retired)?;
-        *marker = retired;
         Ok(())
     }
 }
@@ -897,6 +1025,35 @@ mod tests {
         fn release(&self, job: JobId) -> Result<(), GuardianError> {
             self.active.lock().expect("jobs lock").remove(&job);
             Ok(())
+        }
+
+        #[cfg(target_os = "macos")]
+        fn macos_command(
+            &self,
+            _job: JobId,
+            _launch: custodian::MacLaunch,
+        ) -> Result<std::process::Command, GuardianError> {
+            Err(GuardianError::Unavailable(
+                "fake jobs do not launch processes".into(),
+            ))
+        }
+
+        #[cfg(target_os = "macos")]
+        fn macos_spawn(
+            &self,
+            _job: JobId,
+            _command: std::process::Command,
+        ) -> Result<MacSpawned, GuardianError> {
+            Err(GuardianError::Unavailable(
+                "fake jobs do not launch processes".into(),
+            ))
+        }
+
+        #[cfg(target_os = "macos")]
+        fn macos_activate(&self, _job: JobId) -> Result<(), GuardianError> {
+            Err(GuardianError::Unavailable(
+                "fake jobs do not launch processes".into(),
+            ))
         }
 
         #[cfg(windows)]

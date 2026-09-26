@@ -466,18 +466,347 @@ mod imp {
     }
 }
 
+#[cfg(target_os = "macos")]
+mod mac_imp {
+    use std::collections::BTreeMap;
+    use std::os::unix::net::UnixStream;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Mutex, MutexGuard};
+
+    use super::super::custodian::{self, CustodianFrame, MacLaunch};
+    use super::super::marker::JobId;
+    use super::super::platform::{current_process_identity, process_info};
+    use super::super::{DesktopGeneration, GuardianError, JobControl, MacSpawned, ProcessIdentity};
+
+    struct MacJob {
+        control: UnixStream,
+        child_control: Option<UnixStream>,
+        launch: Option<MacLaunch>,
+        root: Option<ProcessIdentity>,
+        anchor_pid: Option<u32>,
+        pty: bool,
+        spawned: bool,
+        activated: bool,
+        terminate_sent: bool,
+        clean: bool,
+        blocked: bool,
+    }
+
+    struct State {
+        jobs: BTreeMap<JobId, MacJob>,
+        sealed: bool,
+    }
+
+    /// macOS desktop-side owner for per-job custodians. Each job has an independent private
+    /// socket; closing it on desktop loss is the kernel-delivered cleanup trigger.
+    pub struct GuardianSupervisor {
+        executable: PathBuf,
+        desktop_generation: DesktopGeneration,
+        process_identity: ProcessIdentity,
+        state: Mutex<State>,
+        completed: AtomicBool,
+    }
+
+    impl GuardianSupervisor {
+        pub fn launch(
+            executable: &Path,
+            desktop_generation: DesktopGeneration,
+            _recovery_root: &Path,
+            _recovery_root_identity: &str,
+        ) -> Result<Self, GuardianError> {
+            let executable = std::fs::canonicalize(executable)
+                .map_err(|error| GuardianError::Unavailable(error.to_string()))?;
+            if !executable.is_absolute() || !executable.is_file() {
+                return Err(GuardianError::Unavailable(
+                    "the macOS guardian helper is not an ordinary absolute program".into(),
+                ));
+            }
+            Ok(Self {
+                executable,
+                desktop_generation,
+                process_identity: current_process_identity()?,
+                state: Mutex::new(State {
+                    jobs: BTreeMap::new(),
+                    sealed: false,
+                }),
+                completed: AtomicBool::new(false),
+            })
+        }
+
+        pub const fn process_identity(&self) -> ProcessIdentity {
+            self.process_identity
+        }
+
+        pub fn is_completed(&self) -> bool {
+            self.completed.load(Ordering::Acquire)
+        }
+
+        pub fn executable(&self) -> &Path {
+            &self.executable
+        }
+
+        pub const fn desktop_generation(&self) -> DesktopGeneration {
+            self.desktop_generation
+        }
+
+        pub fn retained_job_count(&self) -> Result<usize, GuardianError> {
+            Ok(self.lock()?.jobs.len())
+        }
+
+        fn lock(&self) -> Result<MutexGuard<'_, State>, GuardianError> {
+            self.state.lock().map_err(|_| GuardianError::Poisoned)
+        }
+    }
+
+    impl JobControl for GuardianSupervisor {
+        fn prepare(&self, job: JobId, label: &str) -> Result<String, GuardianError> {
+            if label.is_empty() || label.len() > 128 || label.chars().any(char::is_control) {
+                return Err(GuardianError::InvalidIdentity);
+            }
+            let mut state = self.lock()?;
+            if state.sealed || self.completed.load(Ordering::Acquire) {
+                return Err(GuardianError::Sealed);
+            }
+            if state.jobs.contains_key(&job) {
+                return Err(GuardianError::Replay);
+            }
+            let (control, child_control) = UnixStream::pair()
+                .map_err(|error| GuardianError::Unavailable(error.to_string()))?;
+            state.jobs.insert(
+                job,
+                MacJob {
+                    control,
+                    child_control: Some(child_control),
+                    launch: None,
+                    root: None,
+                    anchor_pid: None,
+                    pty: false,
+                    spawned: false,
+                    activated: false,
+                    terminate_sent: false,
+                    clean: false,
+                    blocked: false,
+                },
+            );
+            Ok(format!("guardian-job:{}:{label}", job.as_uuid()))
+        }
+
+        fn seal(&self) -> Result<(), GuardianError> {
+            self.lock()?.sealed = true;
+            Ok(())
+        }
+
+        fn terminate(&self, job: JobId) -> Result<(), GuardianError> {
+            let mut state = self.lock()?;
+            let owned = state.jobs.get_mut(&job).ok_or(GuardianError::UnknownJob)?;
+            if owned.clean {
+                return Ok(());
+            }
+            if owned.blocked {
+                return Err(GuardianError::BlockedUnclean);
+            }
+            if !owned.spawned {
+                owned.child_control.take();
+                owned.clean = true;
+                return Ok(());
+            }
+            if !owned.terminate_sent {
+                custodian::terminate(&mut owned.control, job.as_uuid())?;
+                owned.terminate_sent = true;
+            }
+            Ok(())
+        }
+
+        fn active_processes(&self, job: JobId) -> Result<u32, GuardianError> {
+            let mut state = self.lock()?;
+            let owned = state.jobs.get_mut(&job).ok_or(GuardianError::UnknownJob)?;
+            if owned.clean {
+                return Ok(0);
+            }
+            if owned.blocked {
+                return Err(GuardianError::BlockedUnclean);
+            }
+            if !owned.spawned {
+                return Ok(0);
+            }
+            match custodian::receive_clean(&mut owned.control)? {
+                CustodianFrame::Clean { job: frame_job, .. } if frame_job == job.as_uuid() => {
+                    owned.clean = true;
+                    Ok(0)
+                }
+                CustodianFrame::Blocked { job: frame_job } if frame_job == job.as_uuid() => {
+                    owned.blocked = true;
+                    Err(GuardianError::BlockedUnclean)
+                }
+                _ => {
+                    owned.blocked = true;
+                    Err(GuardianError::BlockedUnclean)
+                }
+            }
+        }
+
+        fn release(&self, job: JobId) -> Result<(), GuardianError> {
+            let mut state = self.lock()?;
+            let owned = state.jobs.get(&job).ok_or(GuardianError::UnknownJob)?;
+            if owned.blocked {
+                return Err(GuardianError::BlockedUnclean);
+            }
+            if !owned.clean {
+                return Err(GuardianError::QuiescencePending);
+            }
+            state.jobs.remove(&job);
+            Ok(())
+        }
+
+        fn macos_command(&self, job: JobId, launch: MacLaunch) -> Result<Command, GuardianError> {
+            let mut state = self.lock()?;
+            if state.sealed || self.completed.load(Ordering::Acquire) {
+                return Err(GuardianError::Sealed);
+            }
+            let owned = state.jobs.get_mut(&job).ok_or(GuardianError::UnknownJob)?;
+            if owned.launch.is_some() || owned.spawned || owned.blocked {
+                return Err(GuardianError::Replay);
+            }
+            owned.pty = launch.pty;
+            owned.launch = Some(launch);
+            let child_control = owned.child_control.take().ok_or(GuardianError::Replay)?;
+            Ok(custodian::command(&self.executable, child_control))
+        }
+
+        fn macos_spawn(
+            &self,
+            job: JobId,
+            mut command: Command,
+        ) -> Result<MacSpawned, GuardianError> {
+            let mut child = command
+                .spawn()
+                .map_err(|error| GuardianError::Unavailable(error.to_string()))?;
+            let mut state = self.lock()?;
+            let owned = state.jobs.get_mut(&job).ok_or(GuardianError::UnknownJob)?;
+            owned.spawned = true;
+            let launch = owned
+                .launch
+                .take()
+                .ok_or(GuardianError::InvalidTransition)?;
+            let handshake = (|| {
+                custodian::send_launch(&mut owned.control, job.as_uuid(), launch)?;
+                let ready = custodian::receive_ready(&mut owned.control)?;
+                let CustodianFrame::Ready {
+                    job: frame_job,
+                    custodian_pid,
+                    anchor_pid,
+                    root_pid,
+                } = ready
+                else {
+                    return Err(GuardianError::BlockedUnclean);
+                };
+                if frame_job != job.as_uuid() || custodian_pid != child.id() {
+                    return Err(GuardianError::ObjectMismatch);
+                }
+                let custodian_info = process_info(custodian_pid as libc::pid_t)?;
+                let anchor_info = process_info(anchor_pid as libc::pid_t)?;
+                let root_info = process_info(root_pid as libc::pid_t)?;
+                if custodian_info.parent_pid != self.process_identity.pid()
+                    || custodian_info.process_group == anchor_pid
+                    || custodian_info.session_id == anchor_pid
+                    || anchor_info.parent_pid != custodian_pid
+                    || anchor_info.process_group != anchor_pid
+                    || anchor_info.session_id != anchor_pid
+                    || root_info.parent_pid != anchor_pid
+                    || root_info.process_group != anchor_pid
+                    || root_info.session_id != anchor_pid
+                    || (owned.pty && root_info.foreground_group != anchor_pid)
+                {
+                    return Err(GuardianError::ObjectMismatch);
+                }
+                owned.root = Some(root_info.identity);
+                owned.anchor_pid = Some(anchor_pid);
+                Ok(root_info.identity)
+            })();
+            match handshake {
+                Ok(root) => Ok(MacSpawned { child, root }),
+                Err(error) => {
+                    owned.blocked = true;
+                    let _ = owned.control.shutdown(std::net::Shutdown::Both);
+                    drop(state);
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    Err(error)
+                }
+            }
+        }
+
+        fn macos_activate(&self, job: JobId) -> Result<(), GuardianError> {
+            let mut state = self.lock()?;
+            let owned = state.jobs.get_mut(&job).ok_or(GuardianError::UnknownJob)?;
+            if owned.blocked {
+                return Err(GuardianError::BlockedUnclean);
+            }
+            if !owned.spawned || owned.root.is_none() || owned.activated {
+                return Err(GuardianError::InvalidTransition);
+            }
+            custodian::activate(&mut owned.control, job.as_uuid())?;
+            owned.activated = true;
+            Ok(())
+        }
+
+        fn identify_process(
+            &self,
+            job: JobId,
+            expected: ProcessIdentity,
+        ) -> Result<ProcessIdentity, GuardianError> {
+            let state = self.lock()?;
+            let actual = state
+                .jobs
+                .get(&job)
+                .and_then(|owned| owned.root)
+                .ok_or(GuardianError::UnknownJob)?;
+            if actual == expected {
+                Ok(actual)
+            } else {
+                Err(GuardianError::ObjectMismatch)
+            }
+        }
+
+        fn complete(&self) -> Result<(), GuardianError> {
+            if self.completed.load(Ordering::Acquire) {
+                return Ok(());
+            }
+            let mut state = self.lock()?;
+            state.sealed = true;
+            if !state.jobs.is_empty() {
+                return Err(GuardianError::QuiescencePending);
+            }
+            self.completed.store(true, Ordering::Release);
+            Ok(())
+        }
+    }
+
+    impl Drop for GuardianSupervisor {
+        fn drop(&mut self) {
+            if let Ok(state) = self.state.get_mut() {
+                state.jobs.clear();
+            }
+        }
+    }
+}
+
 #[cfg(windows)]
 pub use imp::GuardianSupervisor;
+#[cfg(target_os = "macos")]
+pub use mac_imp::GuardianSupervisor;
 
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_os = "macos")))]
 use super::marker::JobId;
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_os = "macos")))]
 use super::{DesktopGeneration, GuardianError, JobControl, ProcessIdentity};
 
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_os = "macos")))]
 const UNSUPPORTED_GUARDIAN: &str = "the provider guardian requires Windows Job Objects";
 
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_os = "macos")))]
 fn unsupported_guardian<T>() -> Result<T, GuardianError> {
     Err(GuardianError::Unavailable(UNSUPPORTED_GUARDIAN.into()))
 }
@@ -486,13 +815,13 @@ fn unsupported_guardian<T>() -> Result<T, GuardianError> {
 ///
 /// Construction always fails. The private identity field ensures callers cannot fabricate an
 /// instance and accidentally use this type as an unguarded process-control fallback.
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_os = "macos")))]
 #[derive(Debug)]
 pub struct GuardianSupervisor {
     process_identity: ProcessIdentity,
 }
 
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_os = "macos")))]
 impl GuardianSupervisor {
     pub fn launch(
         _executable: &std::path::Path,
@@ -508,7 +837,7 @@ impl GuardianSupervisor {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(target_os = "macos")))]
 impl JobControl for GuardianSupervisor {
     fn prepare(&self, _job: JobId, _label: &str) -> Result<String, GuardianError> {
         unsupported_guardian()
@@ -543,7 +872,7 @@ impl JobControl for GuardianSupervisor {
     }
 }
 
-#[cfg(all(test, not(windows)))]
+#[cfg(all(test, not(windows), not(target_os = "macos")))]
 mod unsupported_tests {
     use super::*;
 

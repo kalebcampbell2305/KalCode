@@ -74,6 +74,7 @@ impl AnchoredDirectory {
             .read(true)
             .write(true)
             .create(true)
+            .truncate(false)
             .open(self.root.join(name))
             .map_err(|error| GuardianError::Unavailable(error.to_string()))
     }

@@ -5,6 +5,22 @@ fn main() {
     let Some(flag) = args.next() else {
         std::process::exit(2);
     };
+    #[cfg(target_os = "macos")]
+    if flag == "--custodian" {
+        let Some(fd_flag) = args.next() else {
+            std::process::exit(2);
+        };
+        let Some(fd) = args.next() else {
+            std::process::exit(2);
+        };
+        if fd_flag != "--control-fd" || fd != "3" || args.next().is_some() {
+            std::process::exit(2);
+        }
+        match kalcode_providers::guardian::custodian::run(3) {
+            Ok(code) => std::process::exit(code),
+            Err(_) => std::process::exit(125),
+        }
+    }
     let Some(recovery_root) = args.next() else {
         std::process::exit(2);
     };

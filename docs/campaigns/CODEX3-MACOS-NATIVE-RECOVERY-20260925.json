@@ -1,0 +1,133 @@
+{
+  "base": "cbe58daae4f8a6b8b7bb2c357278862262b45057",
+  "origin": "mac-integration working-tree source",
+  "files": [
+    {
+      "path": "crates/providers/Cargo.toml",
+      "sourceSha256": "1ea6080fdb433b3d877911a02903d2849e8724edae62f6d2425f39d6364091eb",
+      "copiedExactly": true,
+      "originUnchangedAtFinalCheck": true,
+      "recoveredSha256": "1ea6080fdb433b3d877911a02903d2849e8724edae62f6d2425f39d6364091eb"
+    },
+    {
+      "path": "crates/providers/src/bin/kalcode-provider-guardian.rs",
+      "sourceSha256": "f8625d5f633caa5d043cba896f83c15aef1de57db198068793655f2019435bcb",
+      "copiedExactly": true,
+      "originUnchangedAtFinalCheck": true,
+      "recoveredSha256": "f8625d5f633caa5d043cba896f83c15aef1de57db198068793655f2019435bcb"
+    },
+    {
+      "path": "crates/providers/src/guardian/custodian.rs",
+      "sourceSha256": "7ce24f60d7be06cee4176c02f157da83d72edfabfa95f9b217ec6aa8725811b3",
+      "copiedExactly": true,
+      "originUnchangedAtFinalCheck": true,
+      "recoveredSha256": "7ce24f60d7be06cee4176c02f157da83d72edfabfa95f9b217ec6aa8725811b3"
+    },
+    {
+      "path": "crates/providers/src/guardian/marker.rs",
+      "sourceSha256": "f0b24c406f8bad7719912a8c2dd012d40d1a4a72973c9d1c09e369104efd92e7",
+      "copiedExactly": true,
+      "originUnchangedAtFinalCheck": true,
+      "recoveredSha256": "f0b24c406f8bad7719912a8c2dd012d40d1a4a72973c9d1c09e369104efd92e7"
+    },
+    {
+      "path": "crates/providers/src/guardian/mod.rs",
+      "sourceSha256": "2839a781ebed6beebf505d4278b394876f2fdcf9c0f784a486d3f038e34bd4e6",
+      "copiedExactly": true,
+      "originUnchangedAtFinalCheck": true,
+      "recoveredSha256": "2839a781ebed6beebf505d4278b394876f2fdcf9c0f784a486d3f038e34bd4e6"
+    },
+    {
+      "path": "crates/providers/src/guardian/platform/macos.rs",
+      "sourceSha256": "0a39f3d8326dabe78eb7859d7c3cd96e9f8f7810c98dcae806c6846a66e4e4cd",
+      "copiedExactly": true,
+      "originUnchangedAtFinalCheck": true,
+      "recoveredSha256": "0a39f3d8326dabe78eb7859d7c3cd96e9f8f7810c98dcae806c6846a66e4e4cd"
+    },
+    {
+      "path": "crates/providers/src/guardian/platform/mod.rs",
+      "sourceSha256": "15d9519450300ca874d73596b12c91403c2d9fb8fbbad826b999fa73d093f07d",
+      "copiedExactly": true,
+      "originUnchangedAtFinalCheck": true,
+      "recoveredSha256": "15d9519450300ca874d73596b12c91403c2d9fb8fbbad826b999fa73d093f07d"
+    },
+    {
+      "path": "crates/providers/src/guardian/platform/unsupported.rs",
+      "sourceSha256": "b224d00ca5456f207698c5d7ba1f20490410a1fe5a47ba3759d4aa1a7dca3193",
+      "copiedExactly": true,
+      "originUnchangedAtFinalCheck": true,
+      "recoveredSha256": "b224d00ca5456f207698c5d7ba1f20490410a1fe5a47ba3759d4aa1a7dca3193"
+    },
+    {
+      "path": "crates/providers/src/guardian/server.rs",
+      "sourceSha256": "e72cea75f0fc1cb538cda8c025f75432dfdb590d52589199892f30f46bf22a5c",
+      "copiedExactly": true,
+      "originUnchangedAtFinalCheck": true,
+      "recoveredSha256": "e72cea75f0fc1cb538cda8c025f75432dfdb590d52589199892f30f46bf22a5c"
+    },
+    {
+      "path": "crates/providers/src/guardian/supervisor.rs",
+      "sourceSha256": "aa3ef4dfe2188478398a7186fbecd85ddd71536c14a0a15a7024fff9472fad85",
+      "copiedExactly": true,
+      "originUnchangedAtFinalCheck": true,
+      "recoveredSha256": "aa3ef4dfe2188478398a7186fbecd85ddd71536c14a0a15a7024fff9472fad85"
+    },
+    {
+      "path": "crates/providers/tests/guardian_supervisor_macos.rs",
+      "sourceSha256": "1498cfd4a1794c6418d6eb686585ae039784ca935d73913d0a3134fff31f1383",
+      "copiedExactly": true,
+      "originUnchangedAtFinalCheck": true,
+      "recoveredSha256": "1498cfd4a1794c6418d6eb686585ae039784ca935d73913d0a3134fff31f1383"
+    },
+    {
+      "path": "crates/providers/src/process.rs",
+      "sourceSha256": "6a92ec53db2317d7dee451eeedbd457c347e753b54203b40374375908710c383",
+      "copiedExactly": true,
+      "originUnchangedAtFinalCheck": true,
+      "recoveredSha256": "6a92ec53db2317d7dee451eeedbd457c347e753b54203b40374375908710c383"
+    },
+    {
+      "path": "crates/pty/src/lib.rs",
+      "sourceSha256": "ef96193b209ecced2d7d6abb5c220a18751b8c82ac84f7ca2ce141d0c5cb2ace",
+      "copiedExactly": true,
+      "originUnchangedAtFinalCheck": true,
+      "recoveredSha256": "ef96193b209ecced2d7d6abb5c220a18751b8c82ac84f7ca2ce141d0c5cb2ace"
+    },
+    {
+      "path": "third_party/portable-pty/KALCODE_PATCH.md",
+      "sourceSha256": "edf1c8862a2825da7925d1f997f77b18383b9010a8062350cdb11026ccfc89d6",
+      "copiedExactly": true,
+      "originUnchangedAtFinalCheck": true,
+      "recoveredSha256": "edf1c8862a2825da7925d1f997f77b18383b9010a8062350cdb11026ccfc89d6"
+    },
+    {
+      "path": "third_party/portable-pty/src/lib.rs",
+      "sourceSha256": "04be1ac08daeb59073ff86ff975d488c0ae2ed45cb42271497cf795a7eac6967",
+      "copiedExactly": true,
+      "originUnchangedAtFinalCheck": true,
+      "recoveredSha256": "04be1ac08daeb59073ff86ff975d488c0ae2ed45cb42271497cf795a7eac6967"
+    },
+    {
+      "path": "third_party/portable-pty/src/unix.rs",
+      "sourceSha256": "51538fd55c989fbfa0db61a415816bc63f619d8744c1c436b0102ad90873b1df",
+      "copiedExactly": true,
+      "originUnchangedAtFinalCheck": true,
+      "recoveredSha256": "51538fd55c989fbfa0db61a415816bc63f619d8744c1c436b0102ad90873b1df"
+    }
+  ],
+  "nativeTransfer": {
+    "baseArchiveSha256": "d9dbe54782f9790bdd789c10db0ea858fe36b24c0eeae08ffeea71cd5bdaeecb",
+    "overlayArchiveSha256": "61b5dc19696ce44ab1db35ac6d89b4bb702fe13af2319072c6bb673a00c46207",
+    "sourceDirectory": "~/Developer/KalCode-codex3-native-qa/source-cbe58da-guardian",
+    "targetDirectory": "~/Developer/KalCode-codex3-native-qa/target",
+    "jobs": 1,
+    "offline": true
+  },
+  "additionalChanges": [
+    "Cargo.lock: add existing libc dependency edge only to kalcode-providers; no package resolution/version change"
+  ],
+  "excludedOlderFiles": [
+    "crates/native-core/src/workspaces.rs: would remove terminal guardian epoch owner release",
+    "crates/providers/src/bin/fake_provider.rs: would remove provider-specific version fixture support"
+  ]
+}

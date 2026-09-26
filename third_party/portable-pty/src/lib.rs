@@ -167,6 +167,13 @@ impl_downcast!(ChildKiller);
 pub trait SlavePty {
     /// Spawns the command specified by the provided CommandBuilder
     fn spawn_command(&self, cmd: CommandBuilder) -> Result<Box<dyn Child + Send + Sync>, Error>;
+
+    /// Duplicates the native slave descriptor for a trusted macOS launcher that must establish
+    /// custody before the target process is allowed to execute.
+    #[cfg(target_os = "macos")]
+    fn try_clone_slave_file(&self) -> Result<std::fs::File, Error> {
+        anyhow::bail!("this pseudo-terminal backend cannot transfer its slave descriptor")
+    }
 }
 
 /// Represents the exit status of a child process.
