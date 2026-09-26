@@ -11,7 +11,7 @@ use std::cell::Cell;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
@@ -63,6 +63,41 @@ pub struct PaneRegistry {
     panes: Mutex<HashMap<String, Arc<Shared>>>,
 }
 
+/// Counts the view for exactly its PTY listener lifetime. Registration, accepted
+/// replay, and registered-listener removal all run under the PTY delivery lock.
+struct RegisteredView {
+    shared: Weak<Shared>,
+    counted: AtomicBool,
+}
+
+impl RegisteredView {
+    fn retain(&self, alive: bool) {
+        if alive {
+            if !self.counted.swap(true, Ordering::SeqCst)
+                && let Some(shared) = self.shared.upgrade()
+            {
+                shared.views.fetch_add(1, Ordering::SeqCst);
+            }
+        } else {
+            self.release();
+        }
+    }
+
+    fn release(&self) {
+        if self.counted.swap(false, Ordering::SeqCst)
+            && let Some(shared) = self.shared.upgrade()
+        {
+            shared.views.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+}
+
+impl Drop for RegisteredView {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
 impl PaneRegistry {
     pub fn new() -> Self {
         Self::default()
@@ -100,19 +135,19 @@ impl PaneRegistry {
     ) -> Option<AttachId> {
         let shared = self.get(thread_id)?;
         let pty = shared.pty()?;
-        // Counted while attached, so a pane's own output watcher (Codex OSC 9) knows whether a
-        // view is there to answer the PTY's cursor-position requests.
-        shared.views.fetch_add(1, Ordering::SeqCst);
-        let counted = Arc::downgrade(&shared);
-        let live = std::sync::atomic::AtomicBool::new(true);
+        // A pending attach is not a view yet: the Codex watcher must keep answering
+        // cursor requests until this listener accepts replay under the PTY lock.
+        let view = RegisteredView {
+            shared: Arc::downgrade(&shared),
+            counted: AtomicBool::new(false),
+        };
+        #[cfg(test)]
+        view_tests::before_attach();
         Some(pty.attach(move |bytes| {
             let alive = listener(bytes);
-            if !alive
-                && live.swap(false, Ordering::SeqCst)
-                && let Some(shared) = counted.upgrade()
-            {
-                shared.views.fetch_sub(1, Ordering::SeqCst);
-            }
+            // Release before returning false, including rejected initial replay:
+            // that unregistered closure can be dropped after the PTY lock unlocks.
+            view.retain(alive);
             alive
         }))
     }
@@ -122,9 +157,8 @@ impl PaneRegistry {
             return false;
         };
         let detached = shared.pty().is_some_and(|p| p.detach(id));
-        if detached {
-            shared.views.fetch_sub(1, Ordering::SeqCst);
-        }
+        #[cfg(test)]
+        view_tests::after_detach();
         detached
     }
 
@@ -153,6 +187,10 @@ impl PaneRegistry {
         lock(&self.panes).contains_key(thread_id)
     }
 }
+
+#[cfg(test)]
+#[path = "provider_view_tests.rs"]
+mod view_tests;
 
 /// Claude Code running interactively in a pane.
 pub struct InteractiveClaudeProvider {
