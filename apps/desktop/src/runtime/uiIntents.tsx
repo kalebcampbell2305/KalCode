@@ -49,6 +49,11 @@ export interface UiIntents {
 
 const UiIntentsContext = createContext<UiIntents | null>(null);
 
+function createSession() {
+  return { active: true, handlers: [] as FocusHandler[] };
+}
+type IntentSession = ReturnType<typeof createSession>;
+
 /**
  * Cross-surface intents (Z7-W3). Must sit inside the navigation, workspace, permission and
  * threads-intent providers, whose actions the default focus handler uses.
@@ -59,43 +64,71 @@ export function UiIntentsProvider({ children }: { children: ReactNode }) {
   const workspaces = useWorkspaces();
   const permissions = usePermissions();
   const threadsIntent = useThreadsIntent();
-  const handlers = useRef<FocusHandler[]>([]);
+  // A reused client object must not revive callbacks from an earlier visit or effect session.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: client defines the intent lifetime.
+  const lifetime = useMemo(() => ({ session: createSession() }), [client]);
+  const currentLifetime = useRef(lifetime);
+  currentLifetime.current = lifetime;
+  const session = lifetime.session;
+  const [, reconnect] = useState(0);
+  const isLive = useCallback(
+    () => currentLifetime.current === lifetime && lifetime.session === session && session.active,
+    [lifetime, session],
+  );
   const focusGeneration = useRef(0);
-  const [dashboardFilter, setDashboardFilter] = useState<DashboardFilterRequest | null>(null);
-  const [paneFocus, setPaneFocus] = useState<PaneFocusRequest | null>(null);
+  const [filterState, setFilterState] = useState<{ owner: IntentSession; request: DashboardFilterRequest } | null>(
+    null,
+  );
+  const [paneState, setPaneState] = useState<{ owner: IntentSession; request: PaneFocusRequest } | null>(null);
+  const dashboardFilter = isLive() && filterState?.owner === session ? filterState.request : null;
+  const paneFocus = isLive() && paneState?.owner === session ? paneState.request : null;
 
   // The latest context values, read by the stable callbacks below.
   const live = useRef({ navigate, workspaces, permissions, threadsIntent, client, info });
   live.current = { navigate, workspaces, permissions, threadsIntent, client, info };
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    if (!lifetime.session.active) {
+      lifetime.session = createSession();
+      reconnect((version) => version + 1);
+    }
+    const activeSession = lifetime.session;
+    return () => {
+      activeSession.active = false;
+      activeSession.handlers = [];
       focusGeneration.current += 1;
+    };
+  }, [lifetime]);
+
+  const filterDashboard = useCallback(
+    (chip: DashboardChip) => {
+      if (!isLive()) return;
+      const nonce = ++focusGeneration.current;
+      setPaneState(null);
+      live.current.navigate("dashboard");
+      setFilterState({ owner: session, request: { chip, nonce } });
     },
-    [],
+    [isLive, session],
   );
 
-  const filterDashboard = useCallback((chip: DashboardChip) => {
-    focusGeneration.current += 1;
-    setPaneFocus(null);
-    live.current.navigate("dashboard");
-    setDashboardFilter((current) => ({ chip, nonce: (current?.nonce ?? 0) + 1 }));
-  }, []);
-
-  const registerFocusHandler = useCallback((handler: FocusHandler) => {
-    handlers.current = [handler, ...handlers.current];
-    return () => {
-      handlers.current = handlers.current.filter((h) => h !== handler);
-    };
-  }, []);
+  const registerFocusHandler = useCallback(
+    (handler: FocusHandler) => {
+      if (!isLive()) return () => undefined;
+      session.handlers = [handler, ...session.handlers];
+      return () => {
+        session.handlers = session.handlers.filter((h) => h !== handler);
+      };
+    },
+    [isLive, session],
+  );
 
   const focus = useCallback(
     async (target: FocusTarget) => {
+      if (!isLive()) return;
       const generation = ++focusGeneration.current;
-      const originClient = live.current.client;
-      const isCurrent = () => generation === focusGeneration.current && originClient === live.current.client;
-      setPaneFocus(null);
-      for (const handler of handlers.current) {
+      const isCurrent = () => isLive() && generation === focusGeneration.current;
+      setPaneState(null);
+      for (const handler of session.handlers) {
         try {
           if (await handler(target)) return;
         } catch {
@@ -148,7 +181,7 @@ export function UiIntentsProvider({ children }: { children: ReactNode }) {
             if (!isCurrent()) return;
             if (ok) {
               navigate("code");
-              setPaneFocus({ threadId: target.threadId, nonce: generation });
+              setPaneState({ owner: session, request: { threadId: target.threadId, nonce: generation } });
               return;
             }
           }
@@ -158,12 +191,18 @@ export function UiIntentsProvider({ children }: { children: ReactNode }) {
         }
       }
     },
-    [filterDashboard],
+    [filterDashboard, isLive, session],
   );
 
-  const consumePaneFocus = useCallback((nonce: number) => {
-    setPaneFocus((current) => (current?.nonce === nonce ? null : current));
-  }, []);
+  const consumePaneFocus = useCallback(
+    (nonce: number) => {
+      if (!isLive()) return;
+      setPaneState((current) =>
+        isLive() && current?.owner === session && current.request.nonce === nonce ? null : current,
+      );
+    },
+    [isLive, session],
+  );
 
   const value = useMemo<UiIntents>(
     () => ({ focus, registerFocusHandler, filterDashboard, dashboardFilter, paneFocus, consumePaneFocus }),

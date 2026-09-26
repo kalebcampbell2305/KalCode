@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from "@testing-library/react";
+import { Activity, type ReactNode, useEffect, useLayoutEffect } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { UiIntentsProvider, useUiIntents } from "./uiIntents.tsx";
 
@@ -48,6 +49,118 @@ describe("UI focus intent lifecycle", () => {
     mocks.getThread.mockResolvedValue(pane);
     mocks.activate.mockResolvedValue(true);
     mocks.invoke.mockResolvedValue(null);
+  });
+
+  it("does not revive pending focus after a runtime A-to-B-to-A round trip", async () => {
+    const read = deferred<typeof pane>();
+    mocks.getThread.mockReturnValueOnce(read.promise);
+    const view = mount();
+    let pending!: Promise<void>;
+    act(() => {
+      pending = view.result.current.focus({ kind: "thread", threadId: "old" });
+    });
+    mocks.clientIndex = 1;
+    view.rerender();
+    mocks.clientIndex = 0;
+    view.rerender();
+    await act(async () => {
+      read.resolve(pane);
+      await pending;
+    });
+    expect(mocks.activate).not.toHaveBeenCalled();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    expect(view.result.current.paneFocus).toBeNull();
+  });
+
+  it("rejects retained focus and filter actions after unmount", async () => {
+    const view = mount();
+    const retained = view.result.current;
+    view.unmount();
+    await act(async () => {
+      retained.filterDashboard("waiting_for_you");
+      await retained.focus({ kind: "thread", threadId: "old" });
+    });
+    expect(mocks.getThread).not.toHaveBeenCalled();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+
+  it("rejects retained actions and handlers when the runtime is replaced", async () => {
+    const view = mount();
+    const retained = view.result.current;
+    const oldHandler = vi.fn(() => false);
+    mocks.clientIndex = 1;
+    view.rerender();
+    await act(async () => {
+      retained.registerFocusHandler(oldHandler);
+      retained.filterDashboard("waiting_for_you");
+      await retained.focus({ kind: "provider", providerId: "old" });
+    });
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    await act(async () => view.result.current.focus({ kind: "dashboard" }));
+    expect(oldHandler).not.toHaveBeenCalled();
+    expect(mocks.navigate).toHaveBeenCalledExactlyOnceWith("dashboard");
+  });
+
+  it("clears old pane and filter requests when the runtime changes", async () => {
+    const view = mount();
+    act(() => view.result.current.filterDashboard("waiting_for_you"));
+    await act(async () => view.result.current.focus({ kind: "thread", threadId: "old" }));
+    expect(view.result.current.paneFocus?.threadId).toBe("old");
+    mocks.clientIndex = 1;
+    view.rerender();
+    expect(view.result.current.paneFocus).toBeNull();
+    expect(view.result.current.dashboardFilter).toBeNull();
+  });
+
+  it("retires hidden effect sessions and reconnects current focus handlers under StrictMode", async () => {
+    let visible = true;
+    const handler = vi.fn(() => false);
+    const frames: { pane: string | null; filter: string | null }[] = [];
+    const view = renderHook(
+      () => {
+        const intents = useUiIntents();
+        useEffect(() => intents.registerFocusHandler(handler), [intents.registerFocusHandler]);
+        useLayoutEffect(() => {
+          frames.push({ pane: intents.paneFocus?.threadId ?? null, filter: intents.dashboardFilter?.chip ?? null });
+        });
+        return intents;
+      },
+      {
+        reactStrictMode: true,
+        wrapper: ({ children }: { children: ReactNode }) => (
+          <Activity mode={visible ? "visible" : "hidden"}>
+            <UiIntentsProvider>{children}</UiIntentsProvider>
+          </Activity>
+        ),
+      },
+    );
+    act(() => view.result.current.filterDashboard("waiting_for_you"));
+    await act(async () => view.result.current.focus({ kind: "thread", threadId: "old" }));
+    expect(view.result.current.paneFocus?.threadId).toBe("old");
+    const oldNonce = view.result.current.paneFocus?.nonce ?? 0;
+    const retired = view.result.current;
+    visible = false;
+    view.rerender();
+    frames.length = 0;
+    visible = true;
+    view.rerender();
+    expect(frames.length).toBeGreaterThan(0);
+    expect(frames.every((frame) => frame.pane === null && frame.filter === null)).toBe(true);
+    mocks.navigate.mockClear();
+    mocks.getThread.mockClear();
+    handler.mockClear();
+    await act(async () => {
+      retired.filterDashboard("waiting_for_you");
+      await retired.focus({ kind: "thread", threadId: "retired" });
+    });
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    expect(mocks.getThread).not.toHaveBeenCalled();
+    await act(async () => view.result.current.focus({ kind: "thread", threadId: "fresh" }));
+    expect(handler).toHaveBeenCalledExactlyOnceWith({ kind: "thread", threadId: "fresh" });
+    expect(view.result.current.paneFocus?.threadId).toBe("fresh");
+    expect(view.result.current.paneFocus?.nonce).toBeGreaterThan(oldNonce);
+    act(() => retired.consumePaneFocus(view.result.current.paneFocus?.nonce ?? 0));
+    expect(view.result.current.paneFocus?.threadId).toBe("fresh");
   });
 
   it("confirms the displayed workspace before focusing its pane while a switch may be pending", async () => {
