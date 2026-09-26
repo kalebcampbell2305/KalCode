@@ -195,6 +195,15 @@ static COMPILED: LazyLock<Vec<Compiled>> = LazyLock::new(|| {
         .collect()
 });
 
+// Locate quoted assignments independently of the first word's length. The existing
+// token detector remains in place for unquoted values and credential-format overlaps.
+static QUOTED_ASSIGNMENT: LazyLock<Option<Regex>> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?i)([\w.-]*(?:key|token|secret|password|passwd|pwd|passphrase|credential|credentials|signature|auth))\\?["']?\s*(?::=|=>|[:=])\s*"#,
+    )
+    .ok()
+});
+
 /// Number of detectors that compiled (tests compare it with the catalogue size).
 pub fn compiled_detector_count() -> (usize, usize) {
     (COMPILED.len(), DETECTORS.len())
@@ -229,7 +238,7 @@ pub fn scan(text: &str) -> Vec<Finding> {
 }
 
 pub fn scan_with(text: &str, context: ScanContext<'_>) -> Vec<Finding> {
-    let mut findings = Vec::new();
+    let mut findings = quoted_assignment_findings(text);
     for compiled in COMPILED.iter() {
         let detector = compiled.detector;
         for captures in compiled.regex.captures_iter(text) {
@@ -287,6 +296,104 @@ pub fn scan_with(text: &str, context: ScanContext<'_>) -> Vec<Finding> {
         findings.extend(entropy_findings(text));
     }
     merge(findings)
+}
+
+fn quoted_assignment_findings(text: &str) -> Vec<Finding> {
+    let Some(regex) = QUOTED_ASSIGNMENT.as_ref() else {
+        return Vec::new();
+    };
+    let mut findings = Vec::new();
+    let mut covered_until = 0;
+    for captures in regex.captures_iter(text) {
+        let (Some(assignment), Some(name)) = (captures.get(0), captures.get(1)) else {
+            continue;
+        };
+        if assignment.start() < covered_until {
+            continue;
+        }
+        let Some((start, end)) = quoted_value(text, assignment.end()) else {
+            continue;
+        };
+        // Do not repeatedly scan apparent assignments inside the same quoted value.
+        covered_until = end;
+        let value = &text[start..end];
+        if value.chars().count() < 6
+            || is_already_redacted(value)
+            || is_non_secret_quoted_value(value)
+        {
+            continue;
+        }
+        let name = name.as_str().to_ascii_lowercase();
+        let confidence = if STRONG_NAME_WORDS.iter().any(|word| name.contains(word)) {
+            Confidence::High
+        } else {
+            if is_word_list(value) {
+                continue;
+            }
+            Confidence::Medium
+        };
+        findings.push(Finding {
+            detector: "sensitive_assignment",
+            start,
+            end,
+            confidence,
+        });
+    }
+    findings
+}
+
+fn is_non_secret_quoted_value(value: &str) -> bool {
+    let value = value.trim();
+    if !value.chars().any(char::is_whitespace) {
+        return is_non_secret_value(value);
+    }
+    // Punctuation such as `(`, `::` or a leading `$` inside a multiword literal
+    // does not make the entire credential a code reference. Preserve full templates only.
+    [("${", "}"), ("{{", "}}")].iter().any(|(open, close)| {
+        value
+            .strip_prefix(open)
+            .and_then(|rest| rest.strip_suffix(close))
+            .is_some_and(|reference| !reference.contains(['{', '}']))
+    })
+}
+
+/// Reads raw or JSON-escaped quotes without consuming the surrounding delimiters.
+/// Each JSON encoding doubles existing backslashes and adds one before a quote.
+fn quoted_value(text: &str, from: usize) -> Option<(usize, usize)> {
+    let bytes = text.as_bytes();
+    let mut opening = from;
+    while bytes.get(opening) == Some(&b'\\') {
+        opening += 1;
+    }
+    let quote = *bytes.get(opening)?;
+    if !matches!(quote, b'"' | b'\'') {
+        return None;
+    }
+    let delimiter_slashes = opening - from;
+    let escape_period = delimiter_slashes.checked_add(1)?.checked_mul(2)?;
+    let start = opening + 1;
+    let mut slashes = 0;
+    for (offset, &byte) in bytes[start..].iter().enumerate() {
+        let at = start + offset;
+        if matches!(byte, b'\n' | b'\r') {
+            return Some((start, at));
+        }
+        if byte == b'\\' {
+            slashes += 1;
+            continue;
+        }
+        if byte == quote {
+            if slashes % escape_period == delimiter_slashes {
+                return Some((start, at - delimiter_slashes));
+            }
+            // A less-escaped quote closes an outer string when the inner value is truncated.
+            if slashes < delimiter_slashes {
+                return Some((start, at - slashes));
+            }
+        }
+        slashes = 0;
+    }
+    Some((start, bytes.len()))
 }
 
 /// Sorts by start and merges overlapping or touching findings. The merged finding keeps the
@@ -686,6 +793,10 @@ mod tests {
     fn every_detector_compiles() {
         let (compiled, total) = compiled_detector_count();
         assert_eq!(compiled, total, "a detector pattern failed to compile");
+        assert!(
+            QUOTED_ASSIGNMENT.is_some(),
+            "quoted assignment prefix compiles"
+        );
     }
 
     #[test]
