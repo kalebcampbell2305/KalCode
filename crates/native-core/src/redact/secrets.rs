@@ -303,19 +303,59 @@ fn quoted_assignment_findings(text: &str) -> Vec<Finding> {
     // their original encoded byte ranges. This preserves envelopes even when a logged
     // shell/code fragment contains an unterminated quote. Each recursive layer removes
     // JSON encoding; there is no fixed nesting cutoff or reserialization of the output.
-    if !QUOTED_ASSIGNMENT
-        .as_ref()
-        .is_some_and(|regex| regex.is_match(text))
-    {
+    if !needs_quoted_scan(text) {
         return Vec::new();
     }
     let strings = json_string_contents(text);
     let mut findings = quoted_assignments_in(text, &strings);
+    findings.extend(encoded_json_field_findings(text, &strings));
     for string in strings {
         for mut finding in quoted_assignment_findings(&string.decoded) {
             finding.start = string.offsets[finding.start];
             finding.end = string.offsets[finding.end];
             findings.push(finding);
+        }
+    }
+    findings
+}
+
+fn needs_quoted_scan(text: &str) -> bool {
+    // JSON can encode letters in sensitive field names, including inside nested strings.
+    text.contains("\\u")
+        || QUOTED_ASSIGNMENT
+            .as_ref()
+            .is_some_and(|regex| regex.is_match(text))
+}
+
+fn encoded_json_field_findings(text: &str, strings: &[JsonString]) -> Vec<Finding> {
+    let Some(regex) = QUOTED_ASSIGNMENT.as_ref() else {
+        return Vec::new();
+    };
+    let mut findings = Vec::new();
+    for pair in strings.windows(2) {
+        let (key, value) = (&pair[0], &pair[1]);
+        if !text[key.start..key.end].contains("\\u")
+            || text[key.end + 1..value.start - 1].trim() != ":"
+        {
+            continue;
+        }
+        let prefix = format!("{}=", key.decoded);
+        if !regex
+            .find(&prefix)
+            .is_some_and(|found| found.start() == 0 && found.end() == prefix.len())
+        {
+            continue;
+        }
+        // Reuse the quoted-value confidence and placeholder rules on the logical field.
+        // Only the original value span is replaced; key spelling and envelope stay intact.
+        let quoted = serde_json::to_string(&value.decoded).expect("string serialization");
+        let normalized = format!("{prefix}{quoted}");
+        for finding in quoted_assignments_in(&normalized, &[]) {
+            findings.push(Finding {
+                start: value.start,
+                end: value.end,
+                ..finding
+            });
         }
     }
     findings
@@ -354,16 +394,13 @@ fn json_string_contents(text: &str) -> Vec<JsonString> {
         };
         // Most log fields contain no assignment. Avoid offset tables and recursive
         // scans for those fields (including ordinary keys, timestamps and levels).
-        if !QUOTED_ASSIGNMENT
-            .as_ref()
-            .is_some_and(|regex| regex.is_match(&decoded))
-        {
+        if !needs_quoted_scan(&decoded) {
             // Keep its bounds to distinguish a JSON field value from an embedded
             // assignment, even when decoding eliminates the apparent assignment.
             strings.push(JsonString {
                 start,
                 end,
-                decoded: String::new(),
+                decoded,
                 offsets: Vec::new(),
             });
             continue;
