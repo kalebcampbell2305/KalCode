@@ -2,7 +2,7 @@ import type { Settings, ThreadSummary } from "@kalcode/protocol";
 import { ToastProvider } from "@kalcode/ui/components";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { StrictMode, useLayoutEffect } from "react";
+import { Activity, StrictMode, useLayoutEffect } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { KalCodeClient } from "../../../ipc/client.ts";
 import { createMemoryTransport, type MemoryScenario, type MemoryTransport } from "../../../ipc/memoryTransport.ts";
@@ -151,16 +151,18 @@ async function lifecycleHarness() {
     });
     return null;
   }
-  function tree(source: typeof first, shown = true) {
+  function tree(source: typeof first, shown = true, mode: "visible" | "hidden" = "visible") {
     return (
       <StrictMode>
         <ToastProvider>
           <RuntimeProvider client={source.client} info={source.boot.info} initialSettings={SETTINGS}>
-            {shown && (
-              <DashboardDataProvider>
-                <Capture />
-              </DashboardDataProvider>
-            )}
+            <Activity mode={mode}>
+              {shown && (
+                <DashboardDataProvider>
+                  <Capture />
+                </DashboardDataProvider>
+              )}
+            </Activity>
           </RuntimeProvider>
         </ToastProvider>
       </StrictMode>
@@ -183,6 +185,8 @@ async function lifecycleHarness() {
     },
     replace: (source: typeof first) => view.rerender(tree(source)),
     hide: () => view.rerender(tree(first, false)),
+    suspend: () => view.rerender(tree(first, true, "hidden")),
+    resume: () => view.rerender(tree(first)),
   };
 }
 
@@ -279,6 +283,32 @@ describe("Dashboard client and action lifetimes", () => {
     h.commits.length = 0;
     h.replace(h.second);
     expect(h.firstCommit.polite).toBeNull();
+  });
+
+  it("retires pending actions and announcements when preserved state reconnects after Activity hiding", async () => {
+    const h = await lifecycleHarness();
+    await act(() => h.current.runAction(h.first.thread, "interrupt"));
+    expect(h.current.polite).not.toBeNull();
+    const old = deferred<ThreadSummary>();
+    vi.spyOn(h.first.client, "resumeThread").mockReturnValueOnce(old.promise);
+    let running!: Promise<void>;
+    act(() => {
+      running = h.current.runAction(h.first.thread, "resume");
+    });
+    expect(h.current.pendingActions.get(h.first.thread.id)).toBe("resume");
+    h.suspend();
+    h.commits.length = 0;
+    h.resume();
+    expect(h.firstCommit.pendingActions.size).toBe(0);
+    expect(h.firstCommit.polite).toBeNull();
+    await act(async () => {
+      old.resolve(h.first.thread);
+      await running;
+    });
+    expect(h.current.pendingActions.size).toBe(0);
+    expect(h.current.polite).toBeNull();
+    await act(() => h.current.runAction(h.first.thread, "resume"));
+    expect(h.current.polite?.text).toContain("resume requested");
   });
 
   it("ignores an old client's failure while the new client's same-id action is pending", async () => {

@@ -138,12 +138,14 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
 
   const [actionState, setActionState] = useState(() => ({
     owner: lifetime,
+    session: lifetime.session,
     pending: new Map<string, ThreadAction>(),
     polite: null as Announcement | null,
   }));
   const emptyActions = useMemo(() => new Map<string, ThreadAction>(), []);
-  const pendingActions = actionState.owner === lifetime ? actionState.pending : emptyActions;
-  const polite = actionState.owner === lifetime ? actionState.polite : null;
+  const ownsState = actionState.owner === lifetime && isCurrent(actionState.session);
+  const pendingActions = ownsState ? actionState.pending : emptyActions;
+  const polite = ownsState ? actionState.polite : null;
   const urgent = null;
   const announceSeq = useRef(0);
   const actionSession = lifetime.session;
@@ -161,8 +163,12 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
         ownsAction()
           ? {
               owner: lifetime,
-              pending: new Map(state.owner === lifetime ? state.pending : []).set(thread.id, action),
-              polite: state.owner === lifetime ? state.polite : null,
+              session,
+              pending: new Map(state.owner === lifetime && state.session === session ? state.pending : []).set(
+                thread.id,
+                action,
+              ),
+              polite: state.owner === lifetime && state.session === session ? state.polite : null,
             }
           : state,
       );
