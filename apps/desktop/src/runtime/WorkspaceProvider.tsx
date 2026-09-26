@@ -72,35 +72,61 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [focusRequest, setFocusRequest] = useState({ terminalId: "", n: 0 });
   const requestFocus = useCallback((terminalId: string) => setFocusRequest((f) => ({ terminalId, n: f.n + 1 })), []);
   const lastSize = useRef<TerminalSize>({ cols: 120, rows: 30 });
-  const generation = useRef(0);
+  const lifecycle = useMemo(
+    () => ({ client, mounted: false, generation: 0, activation: 0, tail: Promise.resolve() }),
+    [client],
+  );
+  const currentLifecycle = useRef(lifecycle);
+  currentLifecycle.current = lifecycle;
+  const isCurrent = useCallback(() => lifecycle.mounted && currentLifecycle.current === lifecycle, [lifecycle]);
+
+  useEffect(() => {
+    lifecycle.mounted = true;
+    setSnapshot(EMPTY);
+    setShells([]);
+    setSelected(null);
+    setFocusRequest({ terminalId: "", n: 0 });
+    return () => {
+      lifecycle.mounted = false;
+      lifecycle.generation += 1;
+      lifecycle.activation += 1;
+    };
+  }, [lifecycle]);
 
   const load = useCallback(async (): Promise<void> => {
-    const id = ++generation.current;
+    if (!isCurrent()) return;
+    const id = ++lifecycle.generation;
     const [workspaces, active, running] = await Promise.all([
       client.listWorkspaces(),
       client.activeWorkspace(),
       client.runningTerminals(),
     ]);
+    if (!isCurrent() || id !== lifecycle.generation) return;
     const terminals = active ? await client.listTerminals(active.id) : [];
     // A slower, older refresh must never overwrite a newer one.
-    if (id !== generation.current) return;
+    if (!isCurrent() || id !== lifecycle.generation) return;
     setSnapshot({ workspaces, active, terminals, running });
-  }, [client]);
+  }, [client, lifecycle, isCurrent]);
 
   const refresh = useCallback(async () => {
     try {
       await load();
     } catch (err) {
       // A live refresh failing keeps the last good state; the next event retries.
-      if (import.meta.env.DEV) console.warn("workspace refresh failed", err);
+      if (isCurrent() && import.meta.env.DEV) console.warn("workspace refresh failed", err);
     }
-  }, [load]);
+  }, [load, isCurrent]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` re-runs the initial load on retry.
   useEffect(() => {
     let cancelled = false;
     setState("loading");
-    Promise.all([load(), client.listShells().then(setShells)])
+    Promise.all([
+      load(),
+      client.listShells().then((next) => {
+        if (!cancelled && isCurrent()) setShells(next);
+      }),
+    ])
       .then(() => {
         if (cancelled) return;
         setState("ready");
@@ -114,7 +140,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [client, load, attempt]);
+  }, [client, load, attempt, isCurrent]);
 
   // Folders can be moved or deleted while KalCode is in the background.
   useEffect(() => {
@@ -174,16 +200,30 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   const activate = useCallback(
     async (workspaceId: string) => {
-      try {
-        await client.activateWorkspace(workspaceId);
-        await refresh();
-        return true;
-      } catch (err) {
-        fail("Couldn't switch workspace", err);
-        return false;
-      }
+      if (!isCurrent()) return false;
+      const id = ++lifecycle.activation;
+      const latest = () => isCurrent() && id === lifecycle.activation;
+      // Native writes cannot be undone by a UI generation check. Finish the dispatched
+      // write before sending the latest queued intent; obsolete queued intents do no IPC.
+      const result = lifecycle.tail.then(async () => {
+        if (!latest()) return false;
+        try {
+          await client.activateWorkspace(workspaceId);
+          if (!latest()) return false;
+          await refresh();
+          return latest();
+        } catch (err) {
+          if (latest()) fail("Couldn't switch workspace", err);
+          return false;
+        }
+      });
+      lifecycle.tail = result.then(
+        () => undefined,
+        () => undefined,
+      );
+      return result;
     },
-    [client, refresh, fail],
+    [client, refresh, fail, lifecycle, isCurrent],
   );
 
   const remove = useCallback(
