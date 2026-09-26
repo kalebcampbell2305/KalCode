@@ -179,8 +179,8 @@
           "platforms": ["linux"],
           "environment": {},
           "minimumExecuted": 1258,
-          "skippedMinimum": 15,
-          "skippedMaximum": 15,
+          "skippedMinimum": 14,
+          "skippedMaximum": 14,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         }

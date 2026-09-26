@@ -27,7 +27,8 @@ test("the registered Rust release gate includes the production speech engine and
   for (const [platform, expected] of [
     ["win32", 16],
     ["darwin", 16],
-    ["linux", 15],
+    // The pinned runtime and local-reasoning probes only compile on Windows x64/Mac ARM64.
+    ["linux", 14],
   ]) {
     const profile = selectProfile(rust, platform, {});
     assert.equal(profile.skippedMinimum, expected);
