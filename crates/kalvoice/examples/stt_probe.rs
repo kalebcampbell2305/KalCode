@@ -12,8 +12,10 @@ fn read_wav(path: &std::path::Path) -> Vec<f32> {
         let len = u32::from_le_bytes(bytes[pos + 4..pos + 8].try_into().unwrap()) as usize;
         if &bytes[pos..pos + 4] == b"data" {
             return bytes[pos + 8..pos + 8 + len]
-                .chunks_exact(2)
-                .map(|c| f32::from(i16::from_le_bytes([c[0], c[1]])) / 32768.0)
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| f32::from(i16::from_le_bytes(*c)) / 32768.0)
                 .collect();
         }
         pos += 8 + len + (len % 2);

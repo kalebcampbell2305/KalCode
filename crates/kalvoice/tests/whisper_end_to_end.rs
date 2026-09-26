@@ -37,8 +37,10 @@ fn read_wav(path: &PathBuf) -> (Vec<f32>, u32) {
             assert_eq!(u16::from_le_bytes([body[14], body[15]]), 16, "16-bit");
         } else if id == b"data" {
             samples = body
-                .chunks_exact(2)
-                .map(|c| f32::from(i16::from_le_bytes([c[0], c[1]])) / 32_768.0)
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| f32::from(i16::from_le_bytes(*c)) / 32_768.0)
                 .collect();
         }
         pos += 8 + len + (len % 2);

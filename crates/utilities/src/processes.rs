@@ -35,18 +35,21 @@ pub const MAX_ROWS: usize = 1_000;
 
 /// A process object whose identity and mutation are bound to one operating-system handle.
 /// Implementations must never reopen the process by PID between these operations.
+#[cfg(any(windows, test))]
 trait VerifiedProcessHandle {
     fn creation_identity(&self) -> Result<u64>;
     fn signal(&self, signal: ProcessSignalKind) -> Result<()>;
     fn wait(&self, timeout: Duration) -> Result<bool>;
 }
 
+#[cfg(any(windows, test))]
 trait VerifiedProcessBackend {
     type Handle: VerifiedProcessHandle;
 
     fn open(&self, pid: u32) -> Result<Self::Handle>;
 }
 
+#[cfg(any(windows, test))]
 fn signal_verified_process<B: VerifiedProcessBackend>(
     backend: &B,
     pid: u32,
@@ -62,6 +65,7 @@ fn signal_verified_process<B: VerifiedProcessBackend>(
     signal_prepared_process(handle, signal, timeout)
 }
 
+#[cfg(any(windows, test))]
 fn prepare_verified_process<B: VerifiedProcessBackend>(
     backend: &B,
     pid: u32,
@@ -78,6 +82,7 @@ fn prepare_verified_process<B: VerifiedProcessBackend>(
     Ok(handle)
 }
 
+#[cfg(any(windows, test))]
 fn signal_prepared_process<H: VerifiedProcessHandle>(
     handle: H,
     signal: ProcessSignalKind,
@@ -606,7 +611,7 @@ impl ProcessSampler {
         }
         #[cfg(not(windows))]
         {
-            let _ = (pid, signal);
+            let _ = (info, pid, signal);
             Err(KalError::new(
                 ErrorCategory::Permission,
                 "process_retained_handle_unavailable",
