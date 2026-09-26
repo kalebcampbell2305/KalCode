@@ -67,7 +67,8 @@ pub struct Stored {
 /// Where rows live. Implemented by the SQLite table (inside one transaction) and by the
 /// in-memory fallback.
 pub trait Table {
-    /// The most recently raised, undismissed row with `key`.
+    /// The most recently raised unread row with `key`, or the most recent read row
+    /// when no unread match exists. Dismissed rows never participate.
     fn latest_open(&mut self, key: &Key) -> Result<Option<Notification>>;
     fn insert(&mut self, row: &Notification) -> Result<()>;
     /// Re-raises a row: new title/body/count/updated_at, unread again.
@@ -314,7 +315,7 @@ impl Table for SqlTable<'_> {
                 &format!(
                     "SELECT {COLUMNS} FROM notifications
                      WHERE kind = ?1 AND entity_kind IS ?2 AND entity_id IS ?3 AND dismissed_at IS NULL
-                     ORDER BY updated_at DESC, id DESC LIMIT 1"
+                     ORDER BY (read_at IS NULL) DESC, updated_at DESC, id DESC LIMIT 1"
                 ),
                 params![
                     key.kind.as_str(),
@@ -488,11 +489,20 @@ fn order(a: &Notification, b: &Notification) -> std::cmp::Ordering {
 impl Table for MemoryTable {
     fn latest_open(&mut self, key: &Key) -> Result<Option<Notification>> {
         Ok(self
-            .sorted_open()
-            .find(|r| {
-                r.notification.kind == key.kind
+            .rows
+            .iter()
+            .filter(|r| {
+                !r.dismissed
+                    && r.notification.kind == key.kind
                     && r.notification.entity_kind == key.entity_kind
                     && r.notification.entity_id == key.entity_id
+            })
+            .max_by(|a, b| {
+                a.notification
+                    .read_at
+                    .is_none()
+                    .cmp(&b.notification.read_at.is_none())
+                    .then_with(|| order(&a.notification, &b.notification))
             })
             .map(|r| r.notification.clone()))
     }
@@ -771,6 +781,63 @@ mod tests {
         );
     }
 
+    fn older_unread_scenario(table: &mut dyn Table, repeat_at: i64) {
+        let mut budget = Budget::default();
+        let repeated = draft(NotificationKind::ThreadCompleted, Some("repeated"));
+        let older = raise(table, &mut budget, &repeated, secs(0))
+            .expect("raise older")
+            .expect("created older");
+        mark(table, None, NotificationMark::Read, secs(1)).expect("read older");
+        let newer = raise(table, &mut budget, &repeated, secs(20))
+            .expect("raise newer")
+            .expect("created newer");
+        assert_ne!(older.id, newer.id);
+        mark(table, None, NotificationMark::Read, secs(21)).expect("read newer");
+        mark(
+            table,
+            Some(std::slice::from_ref(&older.id)),
+            NotificationMark::Unread,
+            secs(22),
+        )
+        .expect("mark older unread");
+
+        let coalesced = raise(table, &mut budget, &repeated, secs(repeat_at))
+            .expect("repeat")
+            .expect("coalesced");
+        assert_eq!(coalesced.id, older.id, "the unread match takes precedence");
+        assert_eq!(coalesced.count, 2);
+        let page = list(table, false, MAX_PAGE, None).expect("list after repeat");
+        assert_eq!(page.notifications.len(), 2);
+        assert_eq!(page.unread_count, 1);
+        assert!(
+            page.notifications
+                .iter()
+                .find(|n| n.id == newer.id)
+                .expect("newer retained")
+                .read_at
+                .is_some()
+        );
+
+        // Coalescing must not consume a new-row budget slot.
+        for i in 0..BUDGET_ROWS - 2 {
+            let other = draft(
+                NotificationKind::ThreadCompleted,
+                Some(&format!("other-{i}")),
+            );
+            assert!(
+                raise(table, &mut budget, &other, secs(41))
+                    .expect("remaining budget")
+                    .is_some()
+            );
+        }
+        let excess = draft(NotificationKind::ThreadCompleted, Some("over-budget"));
+        assert!(
+            raise(table, &mut budget, &excess, secs(41))
+                .expect("budget exhausted")
+                .is_none()
+        );
+    }
+
     fn budget_scenario(table: &mut dyn Table) {
         let mut budget = Budget::default();
         let mut created = 0;
@@ -866,6 +933,21 @@ mod tests {
         let conn = migrated();
         budget_scenario(&mut SqlTable(&conn));
         budget_scenario(&mut MemoryTable::default());
+    }
+
+    #[test]
+    fn sqlite_coalesces_an_older_unread_row_before_a_newer_read_row() {
+        for repeat_at in [25, 40] {
+            let conn = migrated();
+            older_unread_scenario(&mut SqlTable(&conn), repeat_at);
+        }
+    }
+
+    #[test]
+    fn memory_coalesces_an_older_unread_row_before_a_newer_read_row() {
+        for repeat_at in [25, 40] {
+            older_unread_scenario(&mut MemoryTable::default(), repeat_at);
+        }
     }
 
     #[test]

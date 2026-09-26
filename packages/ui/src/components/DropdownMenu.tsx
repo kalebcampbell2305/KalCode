@@ -1,5 +1,5 @@
 import { Check } from "lucide-react";
-import { DropdownMenu as Radix } from "radix-ui";
+import { DropdownMenu as Radix, Slot } from "radix-ui";
 import { type ComponentPropsWithoutRef, forwardRef, type ReactNode } from "react";
 import { cx } from "./cx.ts";
 import styles from "./DropdownMenu.module.css";
@@ -79,9 +79,13 @@ export const DropdownMenuItem = forwardRef<HTMLDivElement, DropdownMenuItemProps
 ) {
   return (
     <Radix.Item ref={ref} className={cx(styles.item, tone === "danger" && styles.danger, className)} {...rest}>
-      <Body icon={icon} description={description} shortcut={shortcut}>
-        {children}
-      </Body>
+      <Slot.Slottable child={children}>
+        {(label) => (
+          <Body icon={icon} description={description} shortcut={shortcut}>
+            {label}
+          </Body>
+        )}
+      </Slot.Slottable>
     </Radix.Item>
   );
 });
@@ -100,9 +104,13 @@ export const DropdownMenuRadioItem = forwardRef<HTMLDivElement, DropdownMenuRadi
             <Check />
           </Radix.ItemIndicator>
         </span>
-        <Body description={description} shortcut={shortcut}>
-          {children}
-        </Body>
+        <Slot.Slottable child={children}>
+          {(label) => (
+            <Body description={description} shortcut={shortcut}>
+              {label}
+            </Body>
+          )}
+        </Slot.Slottable>
       </Radix.RadioItem>
     );
   },

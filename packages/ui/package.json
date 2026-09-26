@@ -15,7 +15,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
-    "test:ui": "playwright test --config tests/diffview/playwright.config.ts"
+    "test:ui": "playwright test --config tests/diffview/playwright.config.ts",
+    "test:ui:primitives": "playwright test --config tests/primitives/playwright.config.ts"
   },
   "dependencies": {
     "@kalcode/protocol": "workspace:*",

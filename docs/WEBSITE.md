@@ -37,6 +37,11 @@ Rules the pages follow:
   each OS with the manifest's reason. With a published Windows build, the call to action becomes
   "Download for Windows" and `/download` shows version, size, SHA-256 and the SmartScreen note for
   unsigned previews. A malformed manifest fails the build.
+- **Release authority changes explicitly.** `RELEASE_CATALOG_ENABLED` defaults to `false`, so the
+  existing verified preview continues to use the legacy integrity-checked R2 manifest and object
+  routes while the immutable D1 catalog is empty. Only exact `true` switches all manifest, updater
+  and artifact selection to D1. In that state missing pointers, descriptor mismatches and catalog
+  outages fail closed; the Worker never falls back to mutable legacy pointers.
 - **One early-access form per page**, only on `/` (closing section) and `/download`; other pages
   link to `/download#early-access`.
 - **Type:** Lexend Exa 600 for display, Lexend Deca for text, JetBrains Mono only for technical
@@ -227,6 +232,15 @@ that inspect built HTML read `KALCODE_DIST` (default `dist`).
 Production: Worker `kalcode-website`, D1 `kalcode-web` (`f7b3e324-c093-4231-b768-2a4a930d2744`),
 custom domains `kalcoded.com` and `www.kalcoded.com`. First deployed 2026-09-24.
 Contact published on the site: `CONTACT_EMAIL` in `src/lib/site.ts`.
+
+Keep `RELEASE_CATALOG_ENABLED=false` until signed-release publishing has uploaded and verified every
+content-addressed descriptor and artifact, committed the immutable version row, advanced the stable
+pointer, and probed the public stable manifest and installer. Enabling the flag is the final atomic
+authority transition and belongs to that reviewed publish transaction; this website deployment does
+not enable it automatically. Before the first authoritative signed release, rollback may restore
+`false` to preserve the verified preview. After the transition, rollback must preserve catalog
+authority. Never toggle the flag to `false` automatically or in response to catalog errors, because
+that would silently downgrade release authority to mutable legacy objects.
 
 ```bash
 wrangler d1 create kalcode-web                      # once; put the id in wrangler.jsonc

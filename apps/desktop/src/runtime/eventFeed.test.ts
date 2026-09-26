@@ -72,12 +72,87 @@ describe("EventFeed", () => {
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects an exhaustion result from before eviction but accepts a fresh backfill", () => {
+    const feed = new EventFeed(3);
+    const beforeRead = feed.evictionVersion;
+    feed.merge([1, 2, 3, 4].map(event));
+    const snapshot = feed.getSnapshot();
+    feed.markReachedStart(beforeRead);
+    expect(feed.reachedStart).toBe(false);
+    expect(feed.getSnapshot()).toBe(snapshot);
+    const beforeBackfill = feed.evictionVersion;
+    feed.mergeOlder([event(1)]);
+    feed.markReachedStart(beforeBackfill);
+    expect(feed.reachedStart).toBe(true);
+    expect(seqs(feed)).toEqual([4, 3, 2, 1]);
+  });
+
+  it("accepts an exhaustion result when intervening events fit or overlap", () => {
+    const feed = new EventFeed(3);
+    const beforeRead = feed.evictionVersion;
+    feed.merge([event(10), event(11)]);
+    feed.merge([event(11)]);
+    feed.markReachedStart(beforeRead);
+    expect(feed.reachedStart).toBe(true);
+    expect(seqs(feed)).toEqual([11, 10]);
+  });
+
   it("keeps older pages the user asked for even when at capacity", () => {
     const feed = new EventFeed(3);
     feed.merge([10, 11, 12].map(event));
     feed.mergeOlder([7, 8, 9].map(event));
     expect(seqs(feed)).toEqual([12, 11, 10, 9, 8, 7]);
     expect(feed.oldestSeq).toBe(7);
+  });
+
+  it("makes evicted history loadable again after reaching the start", () => {
+    const feed = new EventFeed(3);
+    feed.merge([1, 2, 3].map(event));
+    feed.markReachedStart();
+    feed.merge([event(4)]);
+    expect(seqs(feed)).toEqual([4, 3, 2]);
+    expect(feed.reachedStart).toBe(false);
+    expect(feed.getSnapshot().reachedStart).toBe(false);
+
+    feed.mergeOlder([event(1)]);
+    feed.markReachedStart();
+    expect(seqs(feed)).toEqual([4, 3, 2, 1]);
+    expect(feed.reachedStart).toBe(true);
+
+    feed.merge([event(5)]);
+    expect(seqs(feed)).toEqual([5, 4, 3, 2]);
+    expect(feed.reachedStart).toBe(false);
+  });
+
+  it("does not grow the live-event bound for repeated older pages", () => {
+    const feed = new EventFeed(3);
+    feed.merge([10, 11, 12].map(event));
+    feed.mergeOlder([7, 8, 9].map(event));
+    const snapshot = feed.getSnapshot();
+    feed.mergeOlder([7, 8, 9].map(event));
+    expect(feed.getSnapshot()).toBe(snapshot);
+    feed.merge([event(13)]);
+    expect(seqs(feed)).toEqual([13, 12, 11, 10, 9, 8]);
+  });
+
+  it("grows history only for unique entries in overlapping pages", () => {
+    const feed = new EventFeed(3);
+    feed.merge([10, 11, 12].map(event));
+    feed.mergeOlder([8, 8, 9, 10].map(event));
+    expect(seqs(feed)).toEqual([12, 11, 10, 9, 8]);
+    feed.merge([event(13)]);
+    expect(seqs(feed)).toEqual([13, 12, 11, 10, 9]);
+  });
+
+  it("retains exhausted history when new events fit or only overlap", () => {
+    const feed = new EventFeed(3);
+    feed.merge([event(1)]);
+    feed.markReachedStart();
+    feed.merge([event(2)]);
+    expect(feed.reachedStart).toBe(true);
+    const snapshot = feed.getSnapshot();
+    feed.merge([event(1), event(2)]);
+    expect(feed.getSnapshot()).toBe(snapshot);
   });
 
   it("stops notifying after unsubscribe", () => {

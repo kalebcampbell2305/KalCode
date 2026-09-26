@@ -1,5 +1,5 @@
 import type { HealthRollup, ProviderHealth } from "@kalcode/protocol";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type KalCodeError, toKalCodeError } from "../../ipc/errors.ts";
 import { useEvents, useRuntime } from "../../runtime/RuntimeProvider.tsx";
 
@@ -17,6 +17,8 @@ export interface ProviderHealthData {
   refresh: () => void;
 }
 
+const EMPTY: Omit<ProviderHealthData, "refresh"> = { list: null, error: null, trends: {} };
+
 /**
  * Provider Health for the Providers surface. Reads cheap in-memory snapshots only (never a
  * detection). While `active`, it re-reads when a `provider.*` event is recorded and every 30 s
@@ -26,9 +28,8 @@ export function useProviderHealth(active: boolean): ProviderHealthData {
   const { client } = useRuntime();
   const { events } = useEvents();
   const latestProviderSeq = events.find((e) => e.type.startsWith("provider."))?.seq ?? 0;
-  const [list, setList] = useState<ProviderHealth[] | null>(null);
-  const [error, setError] = useState<KalCodeError | null>(null);
-  const [trends, setTrends] = useState<Record<string, HealthRollup[] | null>>({});
+  const lifecycle = useMemo(() => ({ client }), [client]);
+  const [snapshot, setSnapshot] = useState({ lifecycle, ...EMPTY });
   const [tick, setTick] = useState(0);
   const generation = useRef(0);
 
@@ -43,8 +44,8 @@ export function useProviderHealth(active: boolean): ProviderHealthData {
       try {
         const next = await client.listProviderHealth();
         if (cancelled || current !== generation.current) return;
-        setList(next);
-        setError(null);
+        // Trends belong to this observation; don't present the preceding read as current.
+        setSnapshot({ lifecycle, list: next, error: null, trends: {} });
         const read = await Promise.all(
           next.map((h) =>
             client.providerHealthTrend(h.providerId, HISTORY_HOURS).then(
@@ -53,15 +54,22 @@ export function useProviderHealth(active: boolean): ProviderHealthData {
             ),
           ),
         );
-        if (!cancelled && current === generation.current) setTrends(Object.fromEntries(read));
+        if (!cancelled && current === generation.current) {
+          setSnapshot({ lifecycle, list: next, error: null, trends: Object.fromEntries(read) });
+        }
       } catch (cause) {
-        if (!cancelled && current === generation.current) setError(toKalCodeError(cause));
+        if (!cancelled && current === generation.current)
+          setSnapshot((previous) => ({
+            ...(previous.lifecycle === lifecycle ? previous : EMPTY),
+            lifecycle,
+            error: toKalCodeError(cause),
+          }));
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [client, active, tick, latestProviderSeq]);
+  }, [client, active, tick, latestProviderSeq, lifecycle]);
 
   useEffect(() => {
     if (!active) return;
@@ -78,5 +86,6 @@ export function useProviderHealth(active: boolean): ProviderHealthData {
     };
   }, [active, refresh]);
 
-  return { list, error, trends, refresh };
+  const visible = snapshot.lifecycle === lifecycle ? snapshot : EMPTY;
+  return { list: visible.list, error: visible.error, trends: visible.trends, refresh };
 }

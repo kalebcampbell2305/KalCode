@@ -1,4 +1,4 @@
-import type { Notification, NotificationMark } from "@kalcode/protocol";
+import type { Notification, NotificationMark, NotificationPage } from "@kalcode/protocol";
 import { useToast } from "@kalcode/ui/components";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { isCommandUnavailable, type KalCodeError, toKalCodeError } from "../../ipc/errors.ts";
@@ -49,6 +49,33 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   const { events } = useEvents();
   const intents = useUiIntents();
   const toast = useToast();
+  const lifecycle = useMemo(
+    () => ({
+      client,
+      mounted: false,
+      epoch: 0,
+      generation: 0,
+      loaded: PAGE,
+      refreshing: null as number | null,
+      loadingMore: null as object | null,
+      unavailable: false,
+      seenSeq: null as number | null,
+      timer: null as ReturnType<typeof setTimeout> | null,
+      baseline: undefined as string | null | undefined,
+    }),
+    [client],
+  );
+  const currentLifecycle = useRef(lifecycle);
+  currentLifecycle.current = lifecycle;
+  const renderEpoch = lifecycle.epoch;
+  const isCurrent = useCallback(
+    (epoch = renderEpoch) => lifecycle.mounted && currentLifecycle.current === lifecycle && epoch === lifecycle.epoch,
+    [lifecycle, renderEpoch],
+  );
+  const [stateOwner, setStateOwner] = useState({ lifecycle, epoch: renderEpoch });
+  // Activity preserves state while retiring effects. Hide the retired epoch before
+  // consumers reconnect, and keep callbacks from that epoch retired as well.
+  const ownsState = stateOwner.lifecycle === lifecycle && isCurrent(stateOwner.epoch);
   const [state, setState] = useState<LoadState>("loading");
   const [error, setError] = useState<KalCodeError | null>(null);
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -57,33 +84,72 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   const [latest, setLatest] = useState<Notification | null>(null);
   const [panelOpen, setPanelOpenState] = useState(false);
   const opener = useRef<HTMLElement | null>(null);
-  const generation = useRef(0);
-  const loaded = useRef(PAGE);
-  const unavailable = useRef(false);
+  const returnFocus = useRef(true);
+
+  useEffect(() => {
+    lifecycle.mounted = true;
+    lifecycle.loaded = PAGE;
+    lifecycle.refreshing = null;
+    lifecycle.loadingMore = null;
+    lifecycle.unavailable = false;
+    lifecycle.seenSeq = null;
+    lifecycle.baseline = undefined;
+    setStateOwner({ lifecycle, epoch: lifecycle.epoch });
+    setState("loading");
+    setError(null);
+    setNotifications([]);
+    setUnreadCount(0);
+    setCursor(null);
+    setLatest(null);
+    setPanelOpenState(false);
+    opener.current = null;
+    returnFocus.current = true;
+    return () => {
+      lifecycle.mounted = false;
+      lifecycle.epoch += 1;
+      lifecycle.generation += 1;
+      if (lifecycle.timer !== null) clearTimeout(lifecycle.timer);
+      lifecycle.timer = null;
+    };
+  }, [lifecycle]);
 
   const refresh = useCallback(async () => {
-    if (unavailable.current) return;
-    const id = ++generation.current;
+    if (!isCurrent() || lifecycle.unavailable) return;
+    const epoch = lifecycle.epoch;
+    const id = ++lifecycle.generation;
+    lifecycle.refreshing = id;
+    lifecycle.loadingMore = null;
     try {
-      const page = await client.listNotifications({ limit: Math.min(200, loaded.current) });
-      if (id !== generation.current) return;
-      setNotifications(page.notifications);
+      // Each native page is capped at 200; retain the depth the person already opened.
+      const rows: Notification[] = [];
+      let before: string | null = null;
+      let page: NotificationPage;
+      do {
+        page = await client.listNotifications({ limit: Math.min(200, lifecycle.loaded - rows.length), before });
+        if (!isCurrent(epoch) || id !== lifecycle.generation) return;
+        rows.push(...page.notifications);
+        before = page.nextCursor;
+      } while (before && rows.length < lifecycle.loaded);
+      setNotifications(rows);
+      lifecycle.loaded = Math.max(PAGE, rows.length);
       setUnreadCount(page.unreadCount);
       setCursor(page.nextCursor);
       setState("ready");
       setError(null);
     } catch (raw) {
-      if (id !== generation.current) return;
+      if (!isCurrent(epoch) || id !== lifecycle.generation) return;
       const failure = toKalCodeError(raw);
       if (isCommandUnavailable(failure)) {
-        unavailable.current = true;
+        lifecycle.unavailable = true;
         setState("unavailable");
         return;
       }
       setError(failure);
       setState((current) => (current === "ready" ? current : "error"));
+    } finally {
+      if (lifecycle.refreshing === id) lifecycle.refreshing = null;
     }
-  }, [client]);
+  }, [client, lifecycle, isCurrent]);
 
   useEffect(() => {
     void refresh();
@@ -91,47 +157,45 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
 
   // Re-read after each new `notification.created` or answered approval (coalesced).
   const newestSeq = useMemo(() => events.find((e) => REFRESH_TYPES.has(e.type))?.seq ?? 0, [events]);
-  const seenSeq = useRef<number | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (seenSeq.current === null) {
-      seenSeq.current = newestSeq;
+    if (lifecycle.seenSeq === null) {
+      lifecycle.seenSeq = newestSeq;
       return;
     }
-    if (newestSeq <= seenSeq.current) return;
-    seenSeq.current = newestSeq;
-    if (timer.current) return;
-    timer.current = setTimeout(() => {
-      timer.current = null;
+    if (newestSeq <= lifecycle.seenSeq) return;
+    lifecycle.seenSeq = newestSeq;
+    if (lifecycle.timer !== null) return;
+    const epoch = lifecycle.epoch;
+    lifecycle.timer = setTimeout(() => {
+      if (!isCurrent(epoch)) return;
+      lifecycle.timer = null;
       void refresh();
     }, REFRESH_DEBOUNCE_MS);
-  }, [newestSeq, refresh]);
-  useEffect(
-    () => () => {
-      if (timer.current) clearTimeout(timer.current);
-    },
-    [],
-  );
+  }, [newestSeq, refresh, lifecycle, isCurrent]);
 
   // The newest live notification (for the announcer): the first unread one raised after load.
-  const baseline = useRef<string | null | undefined>(undefined);
   useEffect(() => {
-    if (state !== "ready") return;
+    if (!ownsState || state !== "ready") return;
     const first = notifications[0] ?? null;
-    if (baseline.current === undefined) {
-      baseline.current = first ? `${first.id}@${first.updatedAt}` : null;
+    if (lifecycle.baseline === undefined) {
+      lifecycle.baseline = first ? `${first.id}@${first.updatedAt}` : null;
       return;
     }
     const key = first ? `${first.id}@${first.updatedAt}` : null;
-    if (first && key !== baseline.current && first.readAt === null) setLatest(first);
-    baseline.current = key;
-  }, [notifications, state]);
+    if (first && key !== lifecycle.baseline && first.readAt === null) setLatest(first);
+    lifecycle.baseline = key;
+  }, [notifications, state, lifecycle, ownsState]);
 
   const loadMore = useCallback(async () => {
-    if (!cursor) return;
+    if (!isCurrent() || !cursor || lifecycle.loadingMore !== null || lifecycle.refreshing !== null) return;
+    const request = {};
+    lifecycle.loadingMore = request;
+    const epoch = lifecycle.epoch;
+    const id = lifecycle.generation;
     try {
       const page = await client.listNotifications({ limit: PAGE, before: cursor });
-      loaded.current += page.notifications.length;
+      if (!isCurrent(epoch) || id !== lifecycle.generation) return;
+      lifecycle.loaded += page.notifications.length;
       setNotifications((current) => {
         const seen = new Set(current.map((n) => n.id));
         return [...current, ...page.notifications.filter((n) => !seen.has(n.id))];
@@ -139,16 +203,23 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
       setCursor(page.nextCursor);
       setUnreadCount(page.unreadCount);
     } catch (raw) {
+      if (!isCurrent(epoch) || id !== lifecycle.generation) return;
       toast.show({
         tone: "danger",
         title: "Couldn't load older notifications",
         description: toKalCodeError(raw).message,
       });
+    } finally {
+      if (lifecycle.loadingMore === request) lifecycle.loadingMore = null;
     }
-  }, [client, cursor, toast]);
+  }, [client, cursor, toast, lifecycle, isCurrent]);
 
   const mark = useCallback(
     async (ids: readonly string[] | null, value: NotificationMark) => {
+      if (!isCurrent()) return;
+      const epoch = lifecycle.epoch;
+      // Pending pages contain state from before this mutation; they must not restore it.
+      lifecycle.refreshing = ++lifecycle.generation;
       const applies = (n: Notification) => ids === null || ids.includes(n.id);
       const now = new Date().toISOString();
       // Optimistic: the list reflects the change at once; the read after it reconciles.
@@ -160,55 +231,61 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
       try {
         await client.markNotifications(ids, value);
       } catch (raw) {
+        if (!isCurrent(epoch)) return;
         toast.show({
           tone: "danger",
           title: "Couldn't update notifications",
           description: toKalCodeError(raw).message,
         });
       }
-      await refresh();
+      if (isCurrent(epoch)) await refresh();
     },
-    [client, refresh, toast],
+    [client, refresh, toast, lifecycle, isCurrent],
   );
 
-  const setPanelOpen = useCallback((open: boolean) => {
-    if (open && document.activeElement instanceof HTMLElement) opener.current = document.activeElement;
-    setPanelOpenState(open);
-  }, []);
-  const returnFocus = useRef(true);
+  const setPanelOpen = useCallback(
+    (open: boolean) => {
+      if (!isCurrent()) return;
+      if (open && document.activeElement instanceof HTMLElement) opener.current = document.activeElement;
+      setPanelOpenState(open);
+    },
+    [isCurrent],
+  );
   const panelReturnFocus = useCallback(() => {
+    if (!isCurrent()) return;
     const target = opener.current;
     opener.current = null;
     if (returnFocus.current && target?.isConnected) target.focus();
     returnFocus.current = true;
-  }, []);
+  }, [isCurrent]);
 
   const open = useCallback(
     async (notification: Notification) => {
+      if (!isCurrent()) return;
       // Focus goes to the entity, not back to the bell.
       returnFocus.current = false;
       setPanelOpenState(false);
       if (notification.readAt === null) void mark([notification.id], "read");
       await intents.focus(targetOf(notification));
     },
-    [intents, mark],
+    [intents, mark, isCurrent],
   );
 
   const value = useMemo<NotificationsValue>(
     () => ({
-      state,
-      error,
-      notifications,
-      unreadCount,
-      hasMore: cursor !== null,
+      state: ownsState ? state : "loading",
+      error: ownsState ? error : null,
+      notifications: ownsState ? notifications : [],
+      unreadCount: ownsState ? unreadCount : 0,
+      hasMore: ownsState && cursor !== null,
       loadMore,
       refresh,
       mark,
       open,
-      panelOpen,
+      panelOpen: ownsState && panelOpen,
       setPanelOpen,
       panelReturnFocus,
-      latest,
+      latest: ownsState ? latest : null,
     }),
     [
       state,
@@ -224,6 +301,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
       setPanelOpen,
       panelReturnFocus,
       latest,
+      ownsState,
     ],
   );
   return <NotificationsContext.Provider value={value}>{children}</NotificationsContext.Provider>;

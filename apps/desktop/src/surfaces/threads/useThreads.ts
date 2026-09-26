@@ -16,13 +16,21 @@ const REFETCH_DELAY_MS = 80;
  * matches `filter`. The event log is the single source of change notifications.
  */
 function useThreadEvents(filter: (threadId: string | null) => boolean, onChange: () => void) {
+  const { client } = useRuntime();
   const { events } = useEvents();
+  const source = useRef(client);
   const lastSeq = useRef<number | null>(null);
   const latest = useRef({ filter, onChange });
   latest.current = { filter, onChange };
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    if (source.current !== client) {
+      source.current = client;
+      lastSeq.current = null;
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = null;
+    }
     const newest = events[0]?.seq ?? 0;
     if (lastSeq.current === null) {
       lastSeq.current = newest;
@@ -38,7 +46,7 @@ function useThreadEvents(filter: (threadId: string | null) => boolean, onChange:
       timer.current = null;
       latest.current.onChange();
     }, REFETCH_DELAY_MS);
-  }, [events]);
+  }, [client, events]);
 
   useEffect(
     () => () => {
@@ -149,6 +157,8 @@ export function useThreadDetail(threadId: string) {
     let cancelled = false;
     let unsubscribe: (() => Promise<void>) | null = null;
     const onEvent = (event: AgentEvent) => {
+      // Native subscription registration may resolve after this effect was replaced.
+      if (cancelled) return;
       if (event.kind === "message_delta") {
         setLive((current) => {
           const existing = current.find((m) => m.messageId === event.messageId);

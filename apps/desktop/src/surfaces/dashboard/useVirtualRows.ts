@@ -123,6 +123,17 @@ export function useVirtualRows({
 
   const refs = useRef(new Map<string, (el: HTMLElement | null) => void>());
   const elements = useRef(new Map<string, HTMLElement>());
+  useEffect(() => {
+    // Keep measurements for virtualized rows, but forget rows removed from the list. A collapsed
+    // group can return with different content; its previous height must not outlive its membership.
+    const keys = new Set(layout.rows.map((row) => row.key));
+    for (const key of sizes.current.keys()) {
+      if (!keys.has(key)) sizes.current.delete(key);
+    }
+    for (const key of refs.current.keys()) {
+      if (!keys.has(key)) refs.current.delete(key);
+    }
+  }, [layout.rows]);
   const measureRef = useCallback(
     (key: string) => {
       let ref = refs.current.get(key);

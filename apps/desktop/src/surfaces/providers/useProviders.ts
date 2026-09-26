@@ -1,8 +1,16 @@
 import type { ProviderStatus } from "@kalcode/protocol";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type KalCodeError, toKalCodeError } from "../../ipc/errors.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { needsFirstDetection } from "./providerLabels.ts";
+
+interface ProviderSnapshot {
+  statuses: ProviderStatus[] | null;
+  listError: KalCodeError | null;
+  detectError: KalCodeError | null;
+  detecting: boolean;
+}
+const EMPTY: ProviderSnapshot = { statuses: null, listError: null, detectError: null, detecting: false };
 
 /**
  * Provider statuses for the Providers surface. Loads the native cache and, on the first visit
@@ -10,53 +18,77 @@ import { needsFirstDetection } from "./providerLabels.ts";
  */
 export function useProviders() {
   const { client } = useRuntime();
-  const [statuses, setStatuses] = useState<ProviderStatus[] | null>(null);
-  const [listError, setListError] = useState<KalCodeError | null>(null);
-  const [detectError, setDetectError] = useState<KalCodeError | null>(null);
-  const [detecting, setDetecting] = useState(false);
+  const lifecycle = useMemo(() => ({ client, mounted: false, generation: 0 }), [client]);
+  const current = useRef(lifecycle);
+  current.current = lifecycle;
+  const isCurrent = useCallback(
+    (generation = lifecycle.generation) =>
+      lifecycle.mounted && current.current === lifecycle && generation === lifecycle.generation,
+    [lifecycle],
+  );
+  const [snapshot, setSnapshot] = useState({ lifecycle, ...EMPTY });
+  const update = useCallback(
+    (change: Partial<ProviderSnapshot>) => {
+      setSnapshot((previous) => ({ ...(previous.lifecycle === lifecycle ? previous : EMPTY), lifecycle, ...change }));
+    },
+    [lifecycle],
+  );
   const [attempt, setAttempt] = useState(0);
-  const mounted = useRef(true);
 
   useEffect(() => {
-    mounted.current = true;
+    lifecycle.mounted = true;
+    update(EMPTY);
     return () => {
-      mounted.current = false;
+      lifecycle.mounted = false;
+      lifecycle.generation += 1;
     };
-  }, []);
+  }, [lifecycle, update]);
 
   const detect = useCallback(async () => {
-    setDetecting(true);
-    setDetectError(null);
+    if (!isCurrent()) return;
+    const generation = ++lifecycle.generation;
+    update({ detecting: true, detectError: null });
     try {
       const next = await client.detectProviders();
-      if (mounted.current) setStatuses(next);
+      if (isCurrent(generation)) update({ statuses: next, listError: null });
     } catch (error) {
-      if (mounted.current) setDetectError(toKalCodeError(error));
+      if (isCurrent(generation)) update({ detectError: toKalCodeError(error) });
     } finally {
-      if (mounted.current) setDetecting(false);
+      if (isCurrent(generation)) update({ detecting: false });
     }
-  }, [client]);
+  }, [client, lifecycle, isCurrent, update]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` re-runs the load on retry.
   useEffect(() => {
     let cancelled = false;
-    setListError(null);
+    const generation = ++lifecycle.generation;
+    update({ listError: null, detecting: false, detectError: null });
     client
       .listProviders()
       .then((cached) => {
-        if (cancelled) return;
-        setStatuses(cached);
+        if (cancelled || !isCurrent(generation)) return;
+        update({ statuses: cached });
         if (needsFirstDetection(cached)) void detect();
       })
       .catch((error: unknown) => {
-        if (!cancelled) setListError(toKalCodeError(error));
+        if (!cancelled && isCurrent(generation)) update({ listError: toKalCodeError(error) });
       });
     return () => {
       cancelled = true;
     };
-  }, [client, detect, attempt]);
+  }, [client, detect, attempt, lifecycle, isCurrent, update]);
 
-  const retryList = useCallback(() => setAttempt((n) => n + 1), []);
+  const retryList = useCallback(() => {
+    if (isCurrent()) setAttempt((n) => n + 1);
+  }, [isCurrent]);
 
-  return { statuses, listError, retryList, detect, detecting, detectError };
+  const visible = snapshot.lifecycle === lifecycle ? snapshot : EMPTY;
+  return {
+    statuses: visible.statuses,
+    listError: visible.listError,
+    retryList,
+    detect,
+    detecting: visible.detecting,
+    detectError: visible.detectError,
+  };
 }

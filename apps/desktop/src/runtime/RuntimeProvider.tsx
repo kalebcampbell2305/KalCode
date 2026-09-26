@@ -24,7 +24,8 @@ interface RuntimeValue {
   client: KalCodeClient;
   info: AppInfo;
   settings: Settings;
-  updateSettings: (patch: SettingsPatch) => Promise<void>;
+  /** True only when this write succeeded and its runtime session is still current. */
+  updateSettings: (patch: SettingsPatch) => Promise<boolean>;
   feed: EventFeed;
   eventsState: LoadState;
   eventsError: KalCodeError | null;
@@ -41,12 +42,30 @@ interface RuntimeProviderProps {
   children: ReactNode;
 }
 
+function settingsSession() {
+  return { seq: 0, inFlight: 0, needsReconcile: false, active: false };
+}
+
 export function RuntimeProvider({ client, info, initialSettings, children }: RuntimeProviderProps) {
   const toast = useToast();
-  const [settings, setSettings] = useState(initialSettings);
-  const requestSeq = useRef(0);
-  const inFlight = useRef(0);
-  const needsReconcile = useRef(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: bootstrap settings are captured once per client lifetime.
+  const requests = useMemo(() => ({ client, initialSettings, session: settingsSession() }), [client]);
+  const currentRequests = useRef(requests);
+  currentRequests.current = requests;
+  const [settingsSnapshot, setSettings] = useState({ owner: requests, value: initialSettings });
+  // A replacement client must never render the previous client's settings, even before
+  // effects run. Returning to the same client object also starts a new lifetime.
+  const settings = settingsSnapshot.owner === requests ? settingsSnapshot.value : requests.initialSettings;
+
+  useEffect(() => {
+    // StrictMode cleanup/setup must not revive unfinished writes or their counters.
+    const session = settingsSession();
+    session.active = true;
+    requests.session = session;
+    return () => {
+      session.active = false;
+    };
+  }, [requests]);
 
   /**
    * Optimistic update. A lone request applies its own response. When requests overlap (their
@@ -55,83 +74,125 @@ export function RuntimeProvider({ client, info, initialSettings, children }: Run
    */
   const updateSettings = useCallback(
     async (patch: SettingsPatch) => {
-      const id = ++requestSeq.current;
-      inFlight.current += 1;
-      if (inFlight.current > 1) needsReconcile.current = true;
-      setSettings((current) => ({ ...current, ...patch }));
+      const session = requests.session;
+      const isCurrentRequest = () =>
+        requests === currentRequests.current && session === requests.session && session.active;
+      if (!isCurrentRequest()) return false;
+      const id = ++session.seq;
+      session.inFlight += 1;
+      if (session.inFlight > 1) session.needsReconcile = true;
+      setSettings((current) => ({
+        owner: requests,
+        value: { ...(current.owner === requests ? current.value : requests.initialSettings), ...patch },
+      }));
+      let succeeded = false;
       try {
-        const next = await client.updateSettings(patch);
-        if (id === requestSeq.current && !needsReconcile.current) setSettings(next);
+        const next = await requests.client.updateSettings(patch);
+        succeeded = true;
+        if (isCurrentRequest() && id === session.seq && !session.needsReconcile) {
+          setSettings({ owner: requests, value: next });
+        }
       } catch (error) {
-        needsReconcile.current = true;
-        toast.show({ tone: "danger", title: "Settings not saved", description: toKalCodeError(error).message });
+        session.needsReconcile = true;
+        if (isCurrentRequest()) {
+          toast.show({ tone: "danger", title: "Settings not saved", description: toKalCodeError(error).message });
+        }
       } finally {
-        inFlight.current -= 1;
-        if (inFlight.current === 0 && needsReconcile.current) {
-          needsReconcile.current = false;
+        session.inFlight -= 1;
+        if (isCurrentRequest() && session.inFlight === 0 && session.needsReconcile) {
+          session.needsReconcile = false;
+          const reconcileSeq = session.seq;
           try {
-            const saved = await client.getSettings();
-            if (inFlight.current === 0) setSettings(saved);
+            const saved = await requests.client.getSettings();
+            // A newer write can start and finish while this read is still pending.
+            if (isCurrentRequest() && reconcileSeq === session.seq) {
+              setSettings({ owner: requests, value: saved });
+            }
           } catch {
-            needsReconcile.current = true; // try again after the next update
+            if (isCurrentRequest() && reconcileSeq === session.seq) {
+              session.needsReconcile = true; // try again after the next update
+            }
           }
         }
       }
+      return succeeded && isCurrentRequest();
     },
-    [client, toast],
+    [requests, toast],
   );
 
-  const [feed] = useState(() => new EventFeed());
-  const [eventsState, setEventsState] = useState<LoadState>("loading");
-  const [eventsError, setEventsError] = useState<KalCodeError | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: each client lifetime owns a separate event log.
+  const feed = useMemo(() => new EventFeed(), [requests]);
   const [attempt, setAttempt] = useState(0);
+  const lifetime = useMemo(() => ({ feed, attempt, generation: 0, active: false }), [feed, attempt]);
+  const currentLifetime = useRef(lifetime);
+  currentLifetime.current = lifetime;
+  const [events, setEvents] = useState<{ owner: typeof lifetime; state: LoadState; error: KalCodeError | null }>({
+    owner: lifetime,
+    state: "loading",
+    error: null,
+  });
+  const eventsState = events.owner === lifetime ? events.state : "loading";
+  const eventsError = events.owner === lifetime ? events.error : null;
+  const isCurrent = useCallback(
+    (generation: number) =>
+      lifetime === currentLifetime.current && lifetime.active && lifetime.generation === generation,
+    [lifetime],
+  );
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `attempt` re-runs the subscription on retry.
   useEffect(() => {
-    let cancelled = false;
+    const generation = ++lifetime.generation;
+    lifetime.active = true;
     let unsubscribe: (() => Promise<void>) | null = null;
-    setEventsState("loading");
     (async () => {
       try {
         // Subscribe before backfilling so no event can fall between the two calls.
-        const unsub = await client.subscribeEvents((event) => feed.merge([event]));
-        if (cancelled) {
+        const unsub = await client.subscribeEvents((event) => {
+          if (isCurrent(generation)) feed.merge([event]);
+        });
+        if (!isCurrent(generation)) {
           // Cleaned up while subscribing (StrictMode, retry, unmount): release it now.
           void unsub();
           return;
         }
         unsubscribe = unsub;
+        const evictionVersion = feed.evictionVersion;
         const page = await client.recentEvents(INITIAL_PAGE);
-        if (cancelled) return;
+        if (!isCurrent(generation)) return;
         feed.merge(page);
-        if (page.length < INITIAL_PAGE) feed.markReachedStart();
-        setEventsState("ready");
-        setEventsError(null);
+        if (page.length < INITIAL_PAGE) feed.markReachedStart(evictionVersion);
+        setEvents({ owner: lifetime, state: "ready", error: null });
       } catch (error) {
-        if (cancelled) return;
-        setEventsError(toKalCodeError(error));
-        setEventsState("error");
+        if (!isCurrent(generation)) return;
+        setEvents({ owner: lifetime, state: "error", error: toKalCodeError(error) });
       }
     })();
     return () => {
-      cancelled = true;
+      lifetime.active = false;
       void unsubscribe?.();
     };
-  }, [client, feed, attempt]);
+  }, [client, feed, lifetime, isCurrent]);
 
   const loadOlderEvents = useCallback(async () => {
+    const generation = lifetime.generation;
+    if (!isCurrent(generation)) return;
     const cursor = feed.oldestSeq;
     if (cursor === undefined || feed.reachedStart) return;
+    const evictionVersion = feed.evictionVersion;
     try {
       const page = await client.recentEvents(OLDER_PAGE, cursor);
+      // Eviction moved the cursor: merging this page would skip the intervening history.
+      if (!isCurrent(generation) || evictionVersion !== feed.evictionVersion) return;
       feed.mergeOlder(page);
-      if (page.length < OLDER_PAGE) feed.markReachedStart();
+      if (page.length < OLDER_PAGE) feed.markReachedStart(evictionVersion);
     } catch (error) {
+      if (!isCurrent(generation)) return;
       toast.show({ tone: "danger", title: "Couldn't load older activity", description: toKalCodeError(error).message });
     }
-  }, [client, feed, toast]);
+  }, [client, feed, toast, lifetime, isCurrent]);
 
-  const retryEvents = useCallback(() => setAttempt((n) => n + 1), []);
+  const retryEvents = useCallback(() => {
+    if (isCurrent(lifetime.generation)) setAttempt((n) => n + 1);
+  }, [lifetime, isCurrent]);
 
   const value = useMemo<RuntimeValue>(
     () => ({ client, info, settings, updateSettings, feed, eventsState, eventsError, retryEvents, loadOlderEvents }),

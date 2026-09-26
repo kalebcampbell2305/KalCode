@@ -46,6 +46,7 @@ const NOTICE_TEXT: Record<DiffNotice, string> = {
   binary: "Binary file — contents not shown.",
   truncated: "This file's diff was cut at its size limit; later lines aren't shown.",
   no_content: "No line changes (mode, rename or empty file).",
+  content_unavailable: "Line changes are not available.",
 };
 
 const KIND_LABEL: Record<DiffLine["kind"], string> = {
@@ -116,11 +117,13 @@ export function DiffView({
   }, []);
 
   const visibleCount = Math.max(1, Math.ceil(viewportHeight / rowHeight));
-  const first = Math.max(0, Math.floor(scrollTop / rowHeight) - OVERSCAN);
+  const first = Math.min(rows.length, Math.max(0, Math.floor(scrollTop / rowHeight) - OVERSCAN));
   const last = Math.min(rows.length, Math.floor(scrollTop / rowHeight) + visibleCount + OVERSCAN);
-  // The active row must stay in the DOM for aria-activedescendant.
-  const start = Math.min(first, active);
-  const end = Math.max(last, Math.min(active + 1, rows.length));
+  // Keep the active row in the DOM for aria-activedescendant without rendering
+  // every intervening row when the user scrolls away from it.
+  const windows = first < last ? [{ start: first, end: last }] : [];
+  if (active < first) windows.unshift({ start: active, end: active + 1 });
+  else if (active >= last && active < rows.length) windows.push({ start: active, end: active + 1 });
 
   const onScroll = useCallback((event: UIEvent<HTMLDivElement>) => {
     setScrollTop(event.currentTarget.scrollTop);
@@ -220,21 +223,23 @@ export function DiffView({
               }
             }}
           >
-            <tbody className={styles.window} style={{ transform: `translateY(${start * rowHeight}px)` }}>
-              {rows.slice(start, end).map((row, offset) => {
-                const index = start + offset;
-                return (
-                  <Row
-                    key={row.key}
-                    row={row}
-                    id={rowId(index)}
-                    rowIndex={index + 1}
-                    columns={columns}
-                    active={index === active}
-                  />
-                );
-              })}
-            </tbody>
+            {windows.map(({ start, end }) => (
+              <tbody key={start} className={styles.window} style={{ transform: `translateY(${start * rowHeight}px)` }}>
+                {rows.slice(start, end).map((row, offset) => {
+                  const index = start + offset;
+                  return (
+                    <Row
+                      key={row.key}
+                      row={row}
+                      id={rowId(index)}
+                      rowIndex={index + 1}
+                      columns={columns}
+                      active={index === active}
+                    />
+                  );
+                })}
+              </tbody>
+            ))}
           </table>
         </div>
       )}

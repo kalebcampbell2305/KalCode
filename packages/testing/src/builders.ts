@@ -130,6 +130,13 @@ export function defaultScopesFor(action: ActionKind): PermissionScope[] {
       return ["automation.manage"];
     case "doctor_fix":
       return ["terminal.execute"];
+    case "utility_dns_resolve":
+    case "utility_http":
+      return ["network.other"];
+    case "utility_process_signal":
+      return ["process.control"];
+    case "utility_sqlite_write":
+      return ["filesystem.write"];
     case "create_threads":
     case "resume_threads":
       return ["thread.start"];
@@ -174,6 +181,14 @@ function summarize(action: ActionKind): string {
       return `${action.change.charAt(0).toUpperCase()}${action.change.slice(1)} an automation`;
     case "doctor_fix":
       return `Apply fix ${action.fixCode} to ${action.target}`;
+    case "utility_dns_resolve":
+      return `Resolve ${action.host}`;
+    case "utility_http":
+      return `Send ${action.method} to ${action.origin}`;
+    case "utility_process_signal":
+      return `${action.signal === "kill" ? "Kill" : "Stop"} ${action.processName} (pid ${action.pid})`;
+    case "utility_sqlite_write":
+      return `Apply ${action.statement} to ${action.databaseName}`;
     case "create_threads": {
       const provider = PROVIDER_NAMES[action.providerId] ?? action.providerId;
       return `Open ${action.count} ${provider} thread${action.count === 1 ? "" : "s"}`;
@@ -211,6 +226,35 @@ const DEFAULT_ACTIONS: { [K in ActionKindName]: ActionOf<K> } = {
     change: "enable",
   },
   doctor_fix: { kind: "doctor_fix", fixCode: "path.missing_node", target: "PATH" },
+  utility_dns_resolve: {
+    kind: "utility_dns_resolve",
+    operationId: "0192f3c4-0000-7000-8000-000000000007",
+    host: "example.com",
+  },
+  utility_http: {
+    kind: "utility_http",
+    operationId: "0192f3c4-0000-7000-8000-000000000008",
+    method: "GET",
+    origin: "https://example.com",
+    destination: "external",
+    redirectHop: 0,
+    bodyBytes: 0,
+  },
+  utility_process_signal: {
+    kind: "utility_process_signal",
+    operationId: "0192f3c4-0000-7000-8000-000000000009",
+    pid: 4242,
+    processStartTime: "2026-01-01T00:00:00Z",
+    processName: "node",
+    signal: "terminate",
+  },
+  utility_sqlite_write: {
+    kind: "utility_sqlite_write",
+    operationId: "0192f3c4-0000-7000-8000-000000000010",
+    databaseId: "0192f3c4-0000-7000-8000-000000000011",
+    databaseName: "workspace.sqlite",
+    statement: "insert",
+  },
   create_threads: { kind: "create_threads", providerId: "codex", count: 3, workspaceId: null },
   resume_threads: { kind: "resume_threads", scope: { kind: "all" } },
 };

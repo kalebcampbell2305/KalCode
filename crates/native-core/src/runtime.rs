@@ -538,21 +538,33 @@ pub fn display_path(path: &Path) -> String {
 /// path boundary, so `C:\Users\Kal` does not match `C:\Users\Kaleb`.
 fn strip_home<'a>(path: &'a str, home: &str, windows: bool) -> Option<&'a str> {
     const VERBATIM: &str = r"\\?\";
-    let (path, home) = if windows {
-        (
-            path.strip_prefix(VERBATIM).unwrap_or(path),
-            home.strip_prefix(VERBATIM).unwrap_or(home),
-        )
-    } else {
-        (path, home)
-    };
+    const VERBATIM_UNC: &str = r"\\?\UNC\";
+    let (path, home) =
+        if windows && (path.starts_with(VERBATIM_UNC) || home.starts_with(VERBATIM_UNC)) {
+            // Compare the server/share portion of both UNC forms, keeping the original suffix.
+            (
+                path.strip_prefix(VERBATIM_UNC)
+                    .or_else(|| path.strip_prefix(r"\\"))
+                    .or_else(|| path.strip_prefix("//"))?,
+                home.strip_prefix(VERBATIM_UNC)
+                    .or_else(|| home.strip_prefix(r"\\"))
+                    .or_else(|| home.strip_prefix("//"))?,
+            )
+        } else if windows {
+            (
+                path.strip_prefix(VERBATIM).unwrap_or(path),
+                home.strip_prefix(VERBATIM).unwrap_or(home),
+            )
+        } else {
+            (path, home)
+        };
     let home = home.trim_end_matches(['/', '\\']);
     if home.is_empty() || !path.is_char_boundary(home.len()) || path.len() < home.len() {
         return None;
     }
     let (head, rest) = path.split_at(home.len());
     let same = if windows {
-        head.to_lowercase() == home.to_lowercase()
+        head.replace('\\', "/").to_lowercase() == home.replace('\\', "/").to_lowercase()
     } else {
         head == home
     };
@@ -585,6 +597,136 @@ mod path_tests {
         assert_eq!(
             strip_home(r"C:\Users\Kaleb", r"C:\Users\Kaleb\", true),
             Some("")
+        );
+    }
+
+    #[test]
+    fn strips_windows_home_with_mixed_separators_without_changing_suffix() {
+        for (path, home, suffix) in [
+            (
+                "C:/Users/Kaleb/bin/tool.exe",
+                r"C:\Users\Kaleb",
+                "/bin/tool.exe",
+            ),
+            (
+                r"c:\USERS/kaleb\bin/tool.exe",
+                "C:/Users/Kaleb/",
+                r"\bin/tool.exe",
+            ),
+            (r"\\?\C:\Users\Kaleb/data", "c:/users/kaleb", "/data"),
+            ("C:/Users/Kaleb/data", r"\\?\C:\Users\Kaleb", "/data"),
+            ("C:/Users/Kaleb", r"C:\Users\Kaleb\", ""),
+            ("C:/Users/Élodie/资料", r"c:\users\élodie", "/资料"),
+        ] {
+            assert_eq!(
+                strip_home(path, home, true),
+                Some(suffix),
+                "{path:?} vs {home:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_windows_separators_still_require_the_complete_home_boundary() {
+        for path in [
+            "C:/Users/Kaleb2/data",
+            "C:/Users/Kal/data",
+            "C:/Users/Kaléb/data",
+        ] {
+            assert_eq!(strip_home(path, r"C:\Users\Kaleb", true), None, "{path:?}");
+        }
+    }
+
+    #[test]
+    fn strips_extended_unc_home_in_either_representation() {
+        for (path, home, suffix) in [
+            (
+                r"\\?\UNC\server\share\user\tool.exe",
+                r"\\server\share\user",
+                r"\tool.exe",
+            ),
+            (
+                r"\\server\share\user\tool.exe",
+                r"\\?\UNC\server\share\user",
+                r"\tool.exe",
+            ),
+            (
+                r"\\?\UNC\server\share\user\tool.exe",
+                r"\\?\UNC\server\share\user",
+                r"\tool.exe",
+            ),
+            (
+                r"\\?\UNC\SERVER\share\Élodie\tool.exe",
+                "//server/share/élodie/",
+                r"\tool.exe",
+            ),
+            (
+                "//server/share/user/bin/tool.exe",
+                r"\\?\UNC\server\share\user",
+                "/bin/tool.exe",
+            ),
+            (r"\\?\UNC\server\share\user", r"\\server\share\user\", ""),
+        ] {
+            assert_eq!(
+                strip_home(path, home, true),
+                Some(suffix),
+                "{path:?} vs {home:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn extended_unc_home_still_requires_the_same_server_share_and_user_boundary() {
+        for path in [
+            r"\\?\UNC\server2\share\user\tool.exe",
+            r"\\?\UNC\server\share2\user\tool.exe",
+            r"\\?\UNC\server\share\user2\tool.exe",
+            r"UNC\server\share\user\tool.exe",
+            r"C:\server\share\user\tool.exe",
+        ] {
+            assert_eq!(
+                strip_home(path, r"\\?\UNC\server\share\user", true),
+                None,
+                "{path:?}"
+            );
+        }
+        assert_eq!(
+            strip_home(
+                r"\\?\UNC\server\share\user\tool.exe",
+                r"UNC\server\share\user",
+                true
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn unix_home_does_not_equate_unc_namespace_spellings() {
+        assert_eq!(
+            strip_home(
+                r"\\?\UNC\server\share\user\tool.exe",
+                r"\\server\share\user",
+                false
+            ),
+            None
+        );
+        assert_eq!(
+            strip_home(
+                r"\\server\share\user\tool.exe",
+                r"\\?\UNC\server\share\user",
+                false
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn unix_home_does_not_treat_backslashes_as_prefix_separators() {
+        assert_eq!(strip_home(r"/home\kaleb/data", "/home/kaleb", false), None);
+        assert_eq!(strip_home("/home/kaleb/data", r"/home\kaleb", false), None);
+        assert_eq!(
+            strip_home("/home/élodie/资料", "/home/élodie", false),
+            Some("/资料")
         );
     }
 

@@ -19,6 +19,7 @@ interface ToastItem {
   tone: ToastTone;
   title: string;
   description: string | undefined;
+  duration: number;
 }
 
 interface ToastApi {
@@ -31,37 +32,90 @@ const ToastContext = createContext<ToastApi | null>(null);
 const ICONS = { success: CircleCheck, danger: CircleAlert, info: Info } as const;
 const MAX_VISIBLE = 4;
 
+function Toast({
+  toast,
+  dismiss,
+  setFocused,
+}: {
+  toast: ToastItem;
+  dismiss: (id: number) => void;
+  setFocused: (id: number, focused: boolean) => void;
+}) {
+  const remaining = useRef(toast.duration);
+  const started = useRef(0);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pause = useCallback(() => {
+    if (timer.current === null) return;
+    clearTimeout(timer.current);
+    timer.current = null;
+    remaining.current = Math.max(0, remaining.current - (performance.now() - started.current));
+  }, []);
+  const resume = useCallback(() => {
+    if (!(toast.duration > 0) || timer.current !== null) return;
+    started.current = performance.now();
+    timer.current = setTimeout(() => dismiss(toast.id), remaining.current);
+  }, [dismiss, toast.duration, toast.id]);
+
+  // Each toast owns its timer, so dismissal, eviction and unmount all clean it up.
+  useEffect(() => {
+    resume();
+    return pause;
+  }, [pause, resume]);
+
+  useEffect(() => () => setFocused(toast.id, false), [setFocused, toast.id]);
+
+  const Icon = ICONS[toast.tone];
+  return (
+    <li
+      className={cx(styles.toast, styles[toast.tone])}
+      onFocus={() => {
+        setFocused(toast.id, true);
+        pause();
+      }}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) {
+          setFocused(toast.id, false);
+          resume();
+        }
+      }}
+    >
+      <span className={styles.icon} aria-hidden="true">
+        <Icon />
+      </span>
+      <div>
+        <p className={styles.title}>{toast.title}</p>
+        {toast.description ? <p className={styles.description}>{toast.description}</p> : null}
+      </div>
+      <IconButton size="sm" label="Dismiss notification" icon={<X />} onClick={() => dismiss(toast.id)} />
+    </li>
+  );
+}
+
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const nextId = useRef(1);
-  const timers = useRef(new Map<number, ReturnType<typeof setTimeout>>());
+  const focusedId = useRef<number | null>(null);
+
+  const setFocused = useCallback((id: number, focused: boolean) => {
+    if (focused) focusedId.current = id;
+    else if (focusedId.current === id) focusedId.current = null;
+  }, []);
 
   const dismiss = useCallback((id: number) => {
-    const timer = timers.current.get(id);
-    if (timer) clearTimeout(timer);
-    timers.current.delete(id);
+    if (focusedId.current === id) focusedId.current = null;
     setToasts((current) => current.filter((toast) => toast.id !== id));
   }, []);
 
-  const show = useCallback(
-    ({ tone = "info", title, description, duration }: ToastInput) => {
-      const id = nextId.current++;
-      setToasts((current) => [...current.slice(-(MAX_VISIBLE - 1)), { id, tone, title, description }]);
-      const ms = duration ?? (tone === "danger" ? 0 : 4500);
-      if (ms > 0)
-        timers.current.set(
-          id,
-          setTimeout(() => dismiss(id), ms),
-        );
-    },
-    [dismiss],
-  );
-
-  useEffect(() => {
-    const pending = timers.current;
-    return () => {
-      for (const timer of pending.values()) clearTimeout(timer);
-    };
+  const show = useCallback(({ tone = "info", title, description, duration }: ToastInput) => {
+    const id = nextId.current++;
+    const protectedId = focusedId.current;
+    setToasts((current) => {
+      const evictIndex = current.length >= MAX_VISIBLE ? current.findIndex((toast) => toast.id !== protectedId) : -1;
+      return [
+        ...current.filter((_, index) => index !== evictIndex),
+        { id, tone, title, description, duration: duration ?? (tone === "danger" ? 0 : 4500) },
+      ];
+    });
   }, []);
 
   const api = useMemo(() => ({ show, dismiss }), [show, dismiss]);
@@ -71,21 +125,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {children}
       <section className={styles.region} aria-label="Notifications">
         <ol className={styles.list} role="status" aria-live="polite">
-          {toasts.map((toast) => {
-            const Icon = ICONS[toast.tone];
-            return (
-              <li key={toast.id} className={cx(styles.toast, styles[toast.tone])}>
-                <span className={styles.icon} aria-hidden="true">
-                  <Icon />
-                </span>
-                <div>
-                  <p className={styles.title}>{toast.title}</p>
-                  {toast.description ? <p className={styles.description}>{toast.description}</p> : null}
-                </div>
-                <IconButton size="sm" label="Dismiss notification" icon={<X />} onClick={() => dismiss(toast.id)} />
-              </li>
-            );
-          })}
+          {toasts.map((toast) => (
+            <Toast key={toast.id} toast={toast} dismiss={dismiss} setFocused={setFocused} />
+          ))}
         </ol>
       </section>
     </ToastContext.Provider>

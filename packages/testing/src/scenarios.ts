@@ -230,6 +230,45 @@ export function samplePayloads(fx: Fixtures = createFixtures()): {
         entityId: threadId,
       },
     },
+    "doctor.run_started": { type: "doctor.run_started", payload: { runId: requestId, checks: 3 } },
+    "doctor.run_completed": {
+      type: "doctor.run_completed",
+      payload: {
+        runId: requestId,
+        checks: 3,
+        critical: 0,
+        warning: 1,
+        info: 0,
+        couldNotCheck: 0,
+        ignored: 0,
+        cancelled: false,
+      },
+    },
+    "doctor.fix_applied": {
+      type: "doctor.fix_applied",
+      payload: { runId: requestId, findingCode: "path.missing_node", fixCode: "path.refresh" },
+    },
+    "doctor.fix_failed": {
+      type: "doctor.fix_failed",
+      payload: {
+        runId: requestId,
+        findingCode: "path.missing_node",
+        fixCode: "path.refresh",
+        code: "doctor/not_available",
+      },
+    },
+    "doctor.fix_reverted": {
+      type: "doctor.fix_reverted",
+      payload: { runId: requestId, findingCode: "path.missing_node", fixCode: "path.refresh" },
+    },
+    "doctor.finding_ignored": {
+      type: "doctor.finding_ignored",
+      payload: { findingCode: "path.missing_node", scopeKind: "global" },
+    },
+    "doctor.finding_unignored": {
+      type: "doctor.finding_unignored",
+      payload: { findingCode: "path.missing_node", scopeKind: "global" },
+    },
     unrecognized: { type: "unrecognized", payload: { originalType: "future.event", originalVersion: 2 } },
   };
 }

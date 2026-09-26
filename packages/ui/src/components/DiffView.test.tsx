@@ -145,6 +145,64 @@ describe("DiffView", () => {
     expect(rendered).toBeLessThan(120);
   });
 
+  it.each(["unified", "split"] as const)("keeps %s rows bounded when scrolling away from the active row", (mode) => {
+    const onFileActivate = vi.fn();
+    const files = bigDiff(2_000);
+    render(
+      <DiffView
+        files={files}
+        label="Scrolling"
+        mode={mode}
+        height={400}
+        rowHeight={20}
+        onFileActivate={onFileActivate}
+      />,
+    );
+    const grid = screen.getByRole("grid", { name: "Scrolling" });
+    const viewport = grid.parentElement as HTMLElement;
+    const initialActive = grid.getAttribute("aria-activedescendant") ?? "";
+
+    fireEvent.scroll(viewport, { target: { scrollTop: 30_000 } });
+    expect(grid.querySelectorAll("tr").length).toBeLessThan(80);
+    expect(within(grid).getByText("line 1500", { exact: true })).toBeInTheDocument();
+    expect(grid.getAttribute("aria-activedescendant")).toBe(initialActive);
+    expect(document.getElementById(initialActive)).toHaveTextContent("huge.txt");
+    expect(grid.querySelectorAll('[aria-rowindex="1"]')).toHaveLength(1);
+    fireEvent.keyDown(grid, { key: "Enter" });
+    expect(onFileActivate).toHaveBeenCalledWith(files[0], 0);
+
+    fireEvent.keyDown(grid, { key: "End" });
+    const lastActive = grid.getAttribute("aria-activedescendant") ?? "";
+    fireEvent.scroll(viewport, { target: { scrollTop: 0 } });
+    expect(grid.querySelectorAll("tr").length).toBeLessThan(80);
+    expect(within(grid).getByText("line 1", { exact: true })).toBeInTheDocument();
+    expect(grid.getAttribute("aria-activedescendant")).toBe(lastActive);
+    expect(document.getElementById(lastActive)).toHaveTextContent("line 2000");
+    expect(grid.querySelectorAll('[aria-rowindex="2002"]')).toHaveLength(1);
+
+    fireEvent.keyDown(grid, { key: "ArrowUp" });
+    expect(document.getElementById(grid.getAttribute("aria-activedescendant") ?? "")).toHaveTextContent("line 1999");
+    expect(viewport.scrollTop).toBeGreaterThan(30_000);
+    expect(grid.querySelectorAll("tr").length).toBeLessThan(80);
+  });
+
+  it("keeps the active row valid when a scrolled diff is replaced with fewer rows", () => {
+    const { rerender } = render(<DiffView files={bigDiff(2_000)} label="Replacing" height={400} rowHeight={20} />);
+    const grid = screen.getByRole("grid", { name: "Replacing" });
+    fireEvent.keyDown(grid, { key: "End" });
+    fireEvent.scroll(grid.parentElement as HTMLElement, { target: { scrollTop: 30_000 } });
+
+    rerender(<DiffView files={small} label="Replacing" height={400} rowHeight={20} />);
+    expect(grid).toHaveAttribute("aria-rowcount", "11");
+    expect(document.getElementById(grid.getAttribute("aria-activedescendant") ?? "")).toHaveTextContent(
+      "No line changes",
+    );
+    expect(grid.querySelectorAll("tr").length).toBeLessThanOrEqual(11);
+    fireEvent.keyDown(grid, { key: "Home" });
+    expect(document.getElementById(grid.getAttribute("aria-activedescendant") ?? "")).toHaveTextContent("src/lib.rs");
+    expect(grid.parentElement?.scrollTop).toBe(0);
+  });
+
   it("is keyboard navigable", () => {
     const onFileActivate = vi.fn();
     render(<DiffView files={small} label="Keys" onFileActivate={onFileActivate} />);

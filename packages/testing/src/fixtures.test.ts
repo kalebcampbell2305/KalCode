@@ -211,15 +211,16 @@ describe("scenarios", () => {
   });
 
   it("approval flood: pending counts match the approvals per thread", () => {
-    const scenario = approvalFlood({ count: 23, threads: 4 });
-    expect(scenario.approvals).toHaveLength(23);
+    const count = ACTION_KINDS.length + 3;
+    const scenario = approvalFlood({ count, threads: 4 });
+    expect(scenario.approvals).toHaveLength(count);
     for (const thread of scenario.threads) {
       const mine = scenario.approvals.filter((a) => a.action.threadId === thread.id);
       expect(thread.pendingApprovals).toBe(mine.length);
       expect(thread.status).toBe("waiting_for_permission");
     }
     expect(new Set(scenario.approvals.map((a) => a.action.action.kind))).toEqual(new Set(ACTION_KINDS));
-    expect(scenario.events.filter((e) => e.type === "approval.requested")).toHaveLength(23);
+    expect(scenario.events.filter((e) => e.type === "approval.requested")).toHaveLength(count);
   });
 
   it("approval flood clamps the thread count", () => {

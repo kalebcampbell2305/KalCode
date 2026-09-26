@@ -149,7 +149,7 @@ const DETECTORS: &[Detector] = &[
     // (api_key, AWS_SECRET_ACCESS_KEY, private_key, refresh_token, db_password, _authToken, ...).
     Detector {
         id: "sensitive_assignment",
-        pattern: r#"(?i)([\w.-]*(?:key|token|secret|password|passwd|pwd|passphrase|credential|credentials|signature|auth))\\?["']?\s*(?::=|=>|[:=])\s*(?:\\?["'])*([^\s"'\\,;}&<>]{6,})"#,
+        pattern: r#"(?i)([\w.-]*(?:key|token|secret|password|passwd|pwd|passphrase|credential|credentials|signature|auth))\\?["'`]?\s*(?::=|=>|[:=])\s*(?:\\?["'`])*([^\s"'`\\,;}&<>]{6,})"#,
         group: 2,
         confidence: Confidence::High,
         filter_values: true,
@@ -195,6 +195,15 @@ static COMPILED: LazyLock<Vec<Compiled>> = LazyLock::new(|| {
         .collect()
 });
 
+// Locate quoted assignments independently of the first word's length. The existing
+// token detector remains in place for unquoted values and credential-format overlaps.
+static QUOTED_ASSIGNMENT: LazyLock<Option<Regex>> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?i)([\w.-]*(?:key|token|secret|password|passwd|pwd|passphrase|credential|credentials|signature|auth))\\*["'`]?\s*(?::=|=>|[:=])\s*"#,
+    )
+    .ok()
+});
+
 /// Number of detectors that compiled (tests compare it with the catalogue size).
 pub fn compiled_detector_count() -> (usize, usize) {
     (COMPILED.len(), DETECTORS.len())
@@ -229,7 +238,7 @@ pub fn scan(text: &str) -> Vec<Finding> {
 }
 
 pub fn scan_with(text: &str, context: ScanContext<'_>) -> Vec<Finding> {
-    let mut findings = Vec::new();
+    let mut findings = quoted_assignment_findings(text);
     for compiled in COMPILED.iter() {
         let detector = compiled.detector;
         for captures in compiled.regex.captures_iter(text) {
@@ -287,6 +296,321 @@ pub fn scan_with(text: &str, context: ScanContext<'_>) -> Vec<Finding> {
         findings.extend(entropy_findings(text));
     }
     merge(findings)
+}
+
+fn quoted_assignment_findings(text: &str) -> Vec<Finding> {
+    // Work on the logical contents of actual JSON strings, then map findings back to
+    // their original encoded byte ranges. This preserves envelopes even when a logged
+    // shell/code fragment contains an unterminated quote. Each recursive layer removes
+    // JSON encoding; there is no fixed nesting cutoff or reserialization of the output.
+    if !needs_quoted_scan(text) {
+        return Vec::new();
+    }
+    let strings = json_string_contents(text);
+    let mut findings = quoted_assignments_in(text, &strings);
+    findings.extend(encoded_json_field_findings(text, &strings));
+    for string in strings {
+        for mut finding in quoted_assignment_findings(&string.decoded) {
+            finding.start = string.offsets[finding.start];
+            finding.end = string.offsets[finding.end];
+            findings.push(finding);
+        }
+    }
+    findings
+}
+
+fn needs_quoted_scan(text: &str) -> bool {
+    // JSON can encode letters in sensitive field names, including inside nested strings.
+    text.contains("\\u")
+        || QUOTED_ASSIGNMENT
+            .as_ref()
+            .is_some_and(|regex| regex.is_match(text))
+}
+
+fn encoded_json_field_findings(text: &str, strings: &[JsonString]) -> Vec<Finding> {
+    let Some(regex) = QUOTED_ASSIGNMENT.as_ref() else {
+        return Vec::new();
+    };
+    let mut findings = Vec::new();
+    for pair in strings.windows(2) {
+        let (key, value) = (&pair[0], &pair[1]);
+        if !text[key.start..key.end].contains("\\u")
+            || text[key.end + 1..value.start - 1].trim() != ":"
+        {
+            continue;
+        }
+        let prefix = format!("{}=", key.decoded);
+        if !regex
+            .find(&prefix)
+            .is_some_and(|found| found.start() == 0 && found.end() == prefix.len())
+        {
+            continue;
+        }
+        // Reuse the quoted-value confidence and placeholder rules on the logical field.
+        // Only the original value span is replaced; key spelling and envelope stay intact.
+        let quoted = serde_json::to_string(&value.decoded).expect("string serialization");
+        let normalized = format!("{prefix}{quoted}");
+        for finding in quoted_assignments_in(&normalized, &[]) {
+            findings.push(Finding {
+                start: value.start,
+                end: value.end,
+                ..finding
+            });
+        }
+    }
+    findings
+}
+
+struct JsonString {
+    start: usize,
+    end: usize,
+    decoded: String,
+    // A logical UTF-8 boundary maps to the start/end of its complete JSON escape.
+    offsets: Vec<usize>,
+}
+
+fn json_string_contents(text: &str) -> Vec<JsonString> {
+    if serde_json::from_str::<serde::de::IgnoredAny>(text).is_err() {
+        return Vec::new();
+    }
+    let bytes = text.as_bytes();
+    let mut strings = Vec::new();
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] != b'"' {
+            at += 1;
+            continue;
+        }
+        let opening = at;
+        at += 1;
+        let start = at;
+        while at < bytes.len() && bytes[at] != b'"' {
+            at += if bytes[at] == b'\\' { 2 } else { 1 };
+        }
+        let end = at;
+        at += 1;
+        let Ok(decoded) = serde_json::from_str::<String>(&text[opening..at]) else {
+            continue;
+        };
+        // Most log fields contain no assignment. Avoid offset tables and recursive
+        // scans for those fields (including ordinary keys, timestamps and levels).
+        if !needs_quoted_scan(&decoded) {
+            // Keep its bounds to distinguish a JSON field value from an embedded
+            // assignment, even when decoding eliminates the apparent assignment.
+            strings.push(JsonString {
+                start,
+                end,
+                decoded,
+                offsets: Vec::new(),
+            });
+            continue;
+        }
+        let mut offsets = Vec::with_capacity(decoded.len() + 1);
+        offsets.push(start);
+        let mut raw = start;
+        for ch in decoded.chars() {
+            let char_start = raw;
+            if bytes[raw] != b'\\' {
+                raw += ch.len_utf8();
+            } else if bytes[raw + 1] == b'u' {
+                // A non-BMP scalar is encoded as two UTF-16 surrogate escapes.
+                raw += if ch.len_utf16() == 2 { 12 } else { 6 };
+            } else {
+                raw += 2;
+            }
+            offsets.extend(std::iter::repeat_n(char_start, ch.len_utf8() - 1));
+            offsets.push(raw);
+        }
+        strings.push(JsonString {
+            start,
+            end,
+            decoded,
+            offsets,
+        });
+    }
+    strings
+}
+
+fn quoted_assignments_in(text: &str, strings: &[JsonString]) -> Vec<Finding> {
+    let Some(regex) = QUOTED_ASSIGNMENT.as_ref() else {
+        return Vec::new();
+    };
+    let mut findings = Vec::new();
+    let mut covered_until = 0;
+    for captures in regex.captures_iter(text) {
+        let (Some(assignment), Some(name)) = (captures.get(0), captures.get(1)) else {
+            continue;
+        };
+        if assignment.start() < covered_until {
+            continue;
+        }
+        let after_string = strings.partition_point(|string| string.start <= assignment.end());
+        if after_string > 0 && assignment.end() <= strings[after_string - 1].end {
+            // This assignment belongs to the decoded string's grammar, not the JSON
+            // grammar at this level. Its mapped finding is added by the caller.
+            continue;
+        }
+        let Some((start, end, escape_depth)) = quoted_value(text, assignment.end()) else {
+            continue;
+        };
+        // Do not repeatedly scan apparent assignments inside the same quoted value.
+        covered_until = end;
+        let value = &text[start..end];
+        if value.chars().count() < 6
+            || is_already_redacted(value)
+            || is_non_secret_quoted_value(value, escape_depth)
+        {
+            continue;
+        }
+        let name = name.as_str().to_ascii_lowercase();
+        let confidence = if STRONG_NAME_WORDS.iter().any(|word| name.contains(word)) {
+            Confidence::High
+        } else {
+            if is_word_list(value) {
+                continue;
+            }
+            Confidence::Medium
+        };
+        findings.push(Finding {
+            detector: "sensitive_assignment",
+            start,
+            end,
+            confidence,
+        });
+    }
+    findings
+}
+
+fn is_non_secret_quoted_value(value: &str, escape_depth: u32) -> bool {
+    let value = value.trim();
+    if !has_quoted_whitespace(value, escape_depth) {
+        return is_non_secret_value(value);
+    }
+    // Punctuation such as `(`, `::` or a leading `$` inside a multiword literal
+    // does not make the entire credential a code reference. Preserve full templates only.
+    [("${", "}"), ("{{", "}}")].iter().any(|(open, close)| {
+        value
+            .strip_prefix(open)
+            .and_then(|rest| rest.strip_suffix(close))
+            .is_some_and(|reference| !reference.contains(['{', '}']))
+    })
+}
+
+fn has_quoted_whitespace(value: &str, escape_depth: u32) -> bool {
+    let mut logical = std::borrow::Cow::Borrowed(value);
+    for _ in 0..escape_depth {
+        if logical.chars().any(char::is_whitespace) {
+            return true;
+        }
+        if !logical.contains('\\') {
+            return false;
+        }
+        let Ok(decoded) = serde_json::from_str::<String>(&format!("\"{logical}\"")) else {
+            return false;
+        };
+        logical = std::borrow::Cow::Owned(decoded);
+    }
+    if logical.chars().any(char::is_whitespace) {
+        return true;
+    }
+    // A tracing Debug string is itself a quoted, escaped value inside the JSON field.
+    // Decode that explicit wrapper only; a literal `\\n` is not a newline.
+    logical.starts_with('"')
+        && (serde_json::from_str::<String>(&logical)
+            .is_ok_and(|decoded| decoded.chars().any(char::is_whitespace))
+            || has_debug_whitespace(&logical))
+}
+
+fn has_debug_whitespace(value: &str) -> bool {
+    // Rust Debug can mix `\n` with `\0` or `\u{b}`, which are not JSON escapes.
+    let Some(inner) = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) else {
+        return false;
+    };
+    let mut chars = inner.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            continue;
+        }
+        match chars.next() {
+            Some('n' | 'r' | 't') => return true,
+            Some('u') if chars.next() == Some('{') => {}
+            _ => continue,
+        }
+        let mut point = 0;
+        let mut digits = 0;
+        for ch in chars.by_ref() {
+            if ch == '}' {
+                if digits > 0 && char::from_u32(point).is_some_and(char::is_whitespace) {
+                    return true;
+                }
+                break;
+            }
+            let Some(digit) = ch.to_digit(16) else {
+                break;
+            };
+            digits += 1;
+            if digits > 6 {
+                break;
+            }
+            point = point * 16 + digit;
+        }
+    }
+    false
+}
+
+/// Reads raw or JSON-escaped quotes without consuming the surrounding delimiters.
+/// Each JSON encoding doubles existing backslashes and adds one before a quote.
+fn quoted_value(text: &str, from: usize) -> Option<(usize, usize, u32)> {
+    let bytes = text.as_bytes();
+    let mut opening = from;
+    while bytes.get(opening) == Some(&b'\\') {
+        opening += 1;
+    }
+    let quote = *bytes.get(opening)?;
+    if !matches!(quote, b'"' | b'\'' | b'`') {
+        return None;
+    }
+    let delimiter_slashes = opening - from;
+    let escape_period = delimiter_slashes.checked_add(1)?.checked_mul(2)?;
+    let escape_depth = (delimiter_slashes + 1).ilog2() + 1;
+    let start = opening + 1;
+    let mut slashes = 0;
+    let mut at = start;
+    while let Some(&byte) = bytes.get(at) {
+        if byte == b'\\' {
+            slashes += 1;
+            at += 1;
+            continue;
+        }
+        if byte == quote {
+            // JSON doubles backslashes but does not escape apostrophes or backticks.
+            // Any slash run before these delimiters can therefore be an encoded escape.
+            // Retain it as content conservatively: mixed shell/code grammars disagree
+            // about literal backslashes, and over-redaction is safer than a leaked suffix.
+            let possibly_encoded_escape = quote != b'"' && slashes > 0;
+            if !possibly_encoded_escape && slashes % escape_period == delimiter_slashes {
+                // YAML/SQL-style doubled quotes are literal content, including when
+                // each quote is escaped by one or more surrounding JSON strings.
+                let next_quote = at + delimiter_slashes + 1;
+                if quote != b'`'
+                    && bytes.get(next_quote) == Some(&quote)
+                    && bytes[at + 1..next_quote].iter().all(|&b| b == b'\\')
+                {
+                    at = next_quote + 1;
+                    slashes = 0;
+                    continue;
+                }
+                return Some((start, at - delimiter_slashes, escape_depth));
+            }
+            // A less-escaped quote closes an outer string when the inner value is truncated.
+            if slashes < delimiter_slashes {
+                return Some((start, at - slashes, escape_depth));
+            }
+        }
+        slashes = 0;
+        at += 1;
+    }
+    Some((start, bytes.len(), escape_depth))
 }
 
 /// Sorts by start and merges overlapping or touching findings. The merged finding keeps the
@@ -686,6 +1010,10 @@ mod tests {
     fn every_detector_compiles() {
         let (compiled, total) = compiled_detector_count();
         assert_eq!(compiled, total, "a detector pattern failed to compile");
+        assert!(
+            QUOTED_ASSIGNMENT.is_some(),
+            "quoted assignment prefix compiles"
+        );
     }
 
     #[test]

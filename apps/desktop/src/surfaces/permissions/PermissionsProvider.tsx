@@ -38,42 +38,89 @@ const PermissionsContext = createContext<PermissionsValue | null>(null);
 /** Event types after which pending approvals are re-read. */
 const APPROVAL_EVENTS = new Set(["approval.requested", "approval.approved", "approval.denied", "approval.expired"]);
 
+interface PermissionSnapshot {
+  pending: ApprovalView[];
+  pendingState: LoadState;
+  pendingError: KalCodeError | null;
+  settings: PermissionSettings | null;
+  profiles: PermissionProfile[];
+  panelOpen: boolean;
+}
+
+const EMPTY: PermissionSnapshot = {
+  pending: [],
+  pendingState: "loading",
+  pendingError: null,
+  settings: null,
+  profiles: [],
+  panelOpen: false,
+};
+
 export function PermissionsProvider({ children }: { children: ReactNode }) {
   const { client } = useRuntime();
   const { events } = useEvents();
   const toast = useToast();
-  const [pending, setPending] = useState<ApprovalView[]>([]);
-  const [pendingState, setPendingState] = useState<LoadState>("loading");
-  const [pendingError, setPendingError] = useState<KalCodeError | null>(null);
-  const [settings, setSettings] = useState<PermissionSettings | null>(null);
-  const [profiles, setProfiles] = useState<PermissionProfile[]>([]);
-  const [panelOpen, setPanelOpenState] = useState(false);
+  const lifecycle = useMemo(
+    () => ({ client, mounted: false, epoch: 0, pending: 0, mode: 0, tail: Promise.resolve() }),
+    [client],
+  );
+  const current = useRef(lifecycle);
+  current.current = lifecycle;
+  const isCurrent = useCallback(
+    (epoch = lifecycle.epoch) => lifecycle.mounted && current.current === lifecycle && epoch === lifecycle.epoch,
+    [lifecycle],
+  );
+  const [snapshot, setSnapshot] = useState({ lifecycle, ...EMPTY });
+  // Hide the previous client's state during render, before effect cleanup/setup.
+  const { pending, pendingState, pendingError, settings, profiles, panelOpen } =
+    snapshot.lifecycle === lifecycle ? snapshot : EMPTY;
+  const update = useCallback(
+    (change: Partial<PermissionSnapshot>) => {
+      setSnapshot((previous) => ({ ...(previous.lifecycle === lifecycle ? previous : EMPTY), lifecycle, ...change }));
+    },
+    [lifecycle],
+  );
   const opener = useRef<HTMLElement | null>(null);
-  const setPanelOpen = useCallback((open: boolean) => {
-    if (open && document.activeElement instanceof HTMLElement) opener.current = document.activeElement;
-    setPanelOpenState(open);
-  }, []);
+  const setPanelOpen = useCallback(
+    (open: boolean) => {
+      if (!isCurrent()) return;
+      if (open && document.activeElement instanceof HTMLElement) opener.current = document.activeElement;
+      update({ panelOpen: open });
+    },
+    [isCurrent, update],
+  );
   const panelReturnFocus = useCallback(() => {
+    if (!isCurrent()) return;
     const target = opener.current;
     opener.current = null;
     if (target?.isConnected) target.focus();
-  }, []);
-  const generation = useRef(0);
+  }, [isCurrent]);
+
+  useEffect(() => {
+    lifecycle.mounted = true;
+    update(EMPTY);
+    opener.current = null;
+    return () => {
+      lifecycle.mounted = false;
+      lifecycle.epoch += 1;
+      lifecycle.pending += 1;
+      lifecycle.mode += 1;
+    };
+  }, [lifecycle, update]);
 
   const refreshPending = useCallback(async () => {
-    const id = ++generation.current;
+    if (!isCurrent()) return;
+    const epoch = lifecycle.epoch;
+    const id = ++lifecycle.pending;
     try {
       const next = await client.listApprovals("pending");
-      if (id !== generation.current) return;
-      setPending(next);
-      setPendingState("ready");
-      setPendingError(null);
+      if (!isCurrent(epoch) || id !== lifecycle.pending) return;
+      update({ pending: next, pendingState: "ready", pendingError: null });
     } catch (error) {
-      if (id !== generation.current) return;
-      setPendingError(toKalCodeError(error));
-      setPendingState("error");
+      if (!isCurrent(epoch) || id !== lifecycle.pending) return;
+      update({ pendingError: toKalCodeError(error), pendingState: "error" });
     }
-  }, [client]);
+  }, [client, lifecycle, isCurrent, update]);
 
   // Re-read whenever an approval event arrives (the event feed is ordered by seq).
   const latestApprovalSeq = useMemo(
@@ -87,14 +134,15 @@ export function PermissionsProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
+    const epoch = lifecycle.epoch;
+    const mode = lifecycle.mode;
     Promise.all([client.getPermissionSettings(), client.listPermissionProfiles()])
       .then(([nextSettings, nextProfiles]) => {
-        if (cancelled) return;
-        setSettings(nextSettings);
-        setProfiles(nextProfiles);
+        if (cancelled || !isCurrent(epoch)) return;
+        update({ profiles: nextProfiles, ...(mode === lifecycle.mode ? { settings: nextSettings } : {}) });
       })
       .catch((error) => {
-        if (!cancelled)
+        if (!cancelled && isCurrent(epoch))
           toast.show({
             tone: "danger",
             title: "Permission settings unavailable",
@@ -104,43 +152,76 @@ export function PermissionsProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [client, toast]);
+  }, [client, toast, lifecycle, isCurrent, update]);
 
   const decide = useCallback(
     async (requestId: string, decision: ApprovalDecision) => {
+      if (!isCurrent()) return null;
+      const epoch = lifecycle.epoch;
       try {
         const updated = await client.decideApproval(requestId, decision);
-        setPending((current) => current.filter((view) => view.id !== requestId));
+        if (!isCurrent(epoch)) return null;
+        // A read captured before this answer must not restore the resolved request.
+        lifecycle.pending += 1;
+        setSnapshot((previous) => ({
+          ...previous,
+          pending: previous.pending.filter((view) => view.id !== requestId),
+        }));
+        void refreshPending();
         return updated;
       } catch (error) {
+        if (!isCurrent(epoch)) return null;
         const failure = toKalCodeError(error);
         toast.show({ tone: "danger", title: "Couldn't record your answer", description: failure.message });
         void refreshPending();
         return null;
       }
     },
-    [client, toast, refreshPending],
+    [client, toast, refreshPending, lifecycle, isCurrent],
   );
 
   const setDefaultMode = useCallback(
     async (mode: PermissionMode, options: { profileId?: string | null; confirmed?: boolean } = {}) => {
-      try {
-        const next = await client.updatePermissionSettings(mode, {
-          profileId: options.profileId ?? null,
-          confirmBypass: mode === "bypass" ? options.confirmed === true : undefined,
-        });
-        setSettings(next);
-        return true;
-      } catch (error) {
-        toast.show({
-          tone: "danger",
-          title: "Permission mode not changed",
-          description: toKalCodeError(error).message,
-        });
-        return false;
-      }
+      if (!isCurrent()) return false;
+      const epoch = lifecycle.epoch;
+      const request = ++lifecycle.mode;
+      // Capture options now; callers may retain or mutate the object while queued.
+      const parameters = {
+        profileId: options.profileId ?? null,
+        confirmBypass: mode === "bypass" ? options.confirmed === true : undefined,
+      };
+      const operation = lifecycle.tail.then(async () => {
+        if (!isCurrent(epoch)) return false;
+        try {
+          const next = await client.updatePermissionSettings(mode, parameters);
+          if (!isCurrent(epoch)) return false;
+          if (request === lifecycle.mode) update({ settings: next });
+          return request === lifecycle.mode;
+        } catch (error) {
+          if (!isCurrent(epoch)) return false;
+          toast.show({
+            tone: "danger",
+            title: "Permission mode not changed",
+            description: toKalCodeError(error).message,
+          });
+          // A previous queued write may have succeeded. Re-read actual policy on failure.
+          // Do not hold the write queue while this read is in flight.
+          if (request === lifecycle.mode) {
+            update({ settings: null });
+            void client.getPermissionSettings().then(
+              (next) => {
+                if (isCurrent(epoch) && request === lifecycle.mode) update({ settings: next });
+              },
+              () => {},
+            );
+          }
+          return false;
+        }
+      });
+      lifecycle.tail = operation.then(() => {});
+      return operation;
     },
-    [client, toast],
+    [client, toast, lifecycle, isCurrent, update],
   );
 
   const value = useMemo<PermissionsValue>(

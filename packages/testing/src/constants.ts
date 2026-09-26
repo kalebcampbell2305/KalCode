@@ -112,6 +112,10 @@ export const ACTION_KINDS = [
   "restore",
   "automation_change",
   "doctor_fix",
+  "utility_dns_resolve",
+  "utility_http",
+  "utility_process_signal",
+  "utility_sqlite_write",
   "create_threads",
   "resume_threads",
 ] as const satisfies readonly ActionKind["kind"][];
