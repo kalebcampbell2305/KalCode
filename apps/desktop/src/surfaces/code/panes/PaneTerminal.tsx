@@ -201,6 +201,7 @@ export function PaneTerminal({
             if (bytes.length === 0) return;
             replaying = true;
             term.write(bytes, () => {
+              if (disposed || current !== generation) return;
               replaying = false;
               acknowledge(bytes.length);
             });

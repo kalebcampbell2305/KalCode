@@ -212,6 +212,7 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme, th
             if (bytes.length === 0) return;
             replaying = true;
             term.write(bytes, () => {
+              if (disposed || current !== generation) return;
               replaying = false;
               // The replay may show the cursor again; an ended shell has none.
               if (!runningRef.current) term.write("\x1b[?25l");
