@@ -6,12 +6,12 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 
 // Exercise the real CLI/file discovery, without writing fixtures into product source trees.
-function scan(source, extension = "rs") {
+function scan(source, extension = "rs", fileOverride) {
   const directory = mkdtempSync(join(tmpdir(), "kalcode-zero-cost-"));
   try {
     mkdirSync(join(directory, "tooling"));
     copyFileSync(new URL("./check-zero-cost.mjs", import.meta.url), join(directory, "tooling/check-zero-cost.mjs"));
-    const file = `crates/example/src/lib.${extension}`;
+    const file = fileOverride ?? `crates/example/src/lib.${extension}`;
     mkdirSync(dirname(join(directory, file)), { recursive: true });
     writeFileSync(join(directory, file), source);
     execFileSync("git", ["init", "--quiet"], { cwd: directory, windowsHide: true });
@@ -31,6 +31,20 @@ function scan(source, extension = "rs") {
 
 const forbidden = 'fn production() { let _ = "api.openai.com"; }';
 const testModule = '#[cfg(test)]\nmod tests {\n  fn fixture() { let _ = "OPENAI_API_KEY"; }\n}';
+
+test("a whole module explicitly compiled only for tests may contain credential fixtures", () => {
+  const result = scan('#![cfg(test)]\nfn fixture() { let _ = "OPENAI_API_KEY"; }');
+  assert.equal(result.status, 0, result.stderr);
+});
+
+test("the audited account-auth credential removal is allowed but reads and assignments remain forbidden", () => {
+  const file = "crates/providers/src/account_auth.rs";
+  assert.equal(scan('remove_env(&mut env, "OPENAI_API_KEY");', "rs", file).status, 0);
+  assert.equal(scan('std::env::var("OPENAI_API_KEY");', "rs", file).status, 1);
+  assert.equal(scan('env.insert("OPENAI_API_KEY", value);', "rs", file).status, 1);
+  assert.equal(scan('remove_env(&mut env, "OPENAI_API_KEY"); call("api.openai.com");', "rs", file).status, 1);
+  assert.equal(scan('remove_env(&mut env, "OPENAI_API_KEY");').status, 1);
+});
 
 test("production after an inline test module is still scanned at its original line", () => {
   const result = scan(`${testModule}\n${forbidden}\n`);

@@ -1,3 +1,5 @@
+#![cfg(test)]
+
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::net::{Ipv4Addr, SocketAddrV4};

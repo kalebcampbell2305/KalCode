@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test \"../apps/desktop/tests/perf/**/*.test.ts\" check-capabilities.test.mjs runtime-ownership.test.mjs release/release-channel.test.mjs release/signing.test.mjs release/updater-signing.test.mjs release/updater-manifest.test.mjs release/publish-plan.test.mjs release/release-build-contract.test.mjs release/windows-release-workflow.test.mjs release/macos-contract.test.mjs release/macos-verify.test.mjs release/windows-kalvoice-release.test.mjs release/publish-platforms.test.mjs release/component-signing.test.mjs release/component-contract.test.mjs release/component-curate-windows.test.mjs release/component-publish-plan.test.mjs release/component-publish.test.mjs"
+    "test": "node --test \"../apps/desktop/tests/perf/**/*.test.ts\" \"*.test.mjs\" \"release/*.test.mjs\""
   },
   "devDependencies": {
     "@resvg/resvg-js": "2.6.2",

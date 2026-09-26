@@ -45,6 +45,9 @@ const EXEMPT = /(\.test\.|\/tests?\/|\/test-support\/|__fixtures__)/;
 // This is a boundary recognizer, not a Rust parser. Only complete, explicit inline test
 // modules are exempt. Other cfg(test) items and ambiguous syntax stay scanned.
 function withoutRustTestModules(source) {
+  // A leading inner attribute applies to this entire Rust module, including all later items.
+  // Unlike an outer attribute, it cannot hide subsequent production code in the same file.
+  if (/^#!\[cfg\(test\)\](?:\r?\n|$)/.test(source)) return source.replace(/[^\r\n]/g, " ");
   const blank = (text) => text.replace(/[^\r\n]/g, " ");
   const syntax = source.split("");
   const mask = (start, end, literal = false) => {
@@ -135,6 +138,10 @@ for (const file of files) {
   }
   const lines = (file.endsWith(".rs") ? withoutRustTestModules(text) : text).split(/\r?\n/);
   lines.forEach((line, index) => {
+    // Audited selected-account authentication strips this key; it never reads or forwards it.
+    // Bind the exception to this exact file and complete statement, not a general key allowlist.
+    if (file === "crates/providers/src/account_auth.rs" && line.trim() === 'remove_env(&mut env, "OPENAI_API_KEY");')
+      return;
     for (const re of FORBIDDEN) if (re.test(line)) findings.push(`${file}:${index + 1}: ${re}`);
   });
 }

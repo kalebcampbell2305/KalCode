@@ -1,12 +1,6 @@
 #!/usr/bin/env node
 import { spawnSync } from "node:child_process";
-import {
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  statSync,
-} from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -101,17 +95,7 @@ export function validateInventory(value) {
     const label = `test suite ${index}`;
     exactKeys(
       suite,
-      [
-        "id",
-        "group",
-        "runner",
-        "package",
-        "script",
-        "command",
-        "timeoutMs",
-        "profiles",
-        "unavailableReason",
-      ],
+      ["id", "group", "runner", "package", "script", "command", "timeoutMs", "profiles", "unavailableReason"],
       label,
     );
     safeToken(suite.id, `${label}.id`);
@@ -122,7 +106,9 @@ export function validateInventory(value) {
     if (
       (isCargo && (suite.package !== null || suite.script !== null)) ||
       (!isCargo &&
-        (typeof suite.package !== "string" || !suite.package.startsWith("@kalcode/") || typeof suite.script !== "string"))
+        (typeof suite.package !== "string" ||
+          !suite.package.startsWith("@kalcode/") ||
+          typeof suite.script !== "string"))
     ) {
       throw new Error(`${label} command authority is invalid`);
     }
@@ -139,7 +125,9 @@ export function validateInventory(value) {
       throw new Error(`${label}.timeoutMs is invalid`);
     }
     if (!Array.isArray(suite.profiles) || suite.profiles.length === 0) throw new Error(`${label}.profiles is invalid`);
-    suite.profiles.forEach((profile, profileIndex) => validateProfile(profile, `${label}.profiles[${profileIndex}]`));
+    suite.profiles.forEach((profile, profileIndex) => {
+      validateProfile(profile, `${label}.profiles[${profileIndex}]`);
+    });
     if (suite.unavailableReason !== null && (typeof suite.unavailableReason !== "string" || !suite.unavailableReason)) {
       throw new Error(`${label}.unavailableReason is invalid`);
     }
@@ -190,9 +178,7 @@ function workspacePackages(root) {
 
 export function auditWorkspaceSuiteCoverage(inventory, root = ROOT) {
   const declared = new Set(
-    inventory.suites
-      .filter((suite) => suite.package !== null)
-      .map((suite) => `${suite.package}\0${suite.script}`),
+    inventory.suites.filter((suite) => suite.package !== null).map((suite) => `${suite.package}\0${suite.script}`),
   );
   const discovered = new Set();
   for (const packagePath of workspacePackages(root)) {
@@ -249,7 +235,8 @@ export function parseVitestReport(value) {
   reportObject(value, "Vitest report");
   const passed = count(value.numPassedTests, "Vitest passed count");
   const failed = count(value.numFailedTests, "Vitest failed count");
-  const skipped = count(value.numPendingTests, "Vitest skipped count") + count(value.numTodoTests ?? 0, "Vitest todo count");
+  const skipped =
+    count(value.numPendingTests, "Vitest skipped count") + count(value.numTodoTests ?? 0, "Vitest todo count");
   const total = count(value.numTotalTests, "Vitest total count");
   if (passed + failed + skipped !== total) throw new Error("Vitest report counts are inconsistent");
   return { executed: passed + failed, failed, skipped, flaky: 0, skipReasons: [] };
@@ -282,7 +269,8 @@ export function parseNodeTestReport(text) {
 
 export function parseCargoTestReport(text) {
   if (typeof text !== "string" || text.length > MAX_CAPTURE_BYTES) throw new Error("Cargo test report is invalid");
-  const expression = /test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured; (\d+) filtered out/g;
+  const expression =
+    /test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured; (\d+) filtered out/g;
   let summaries = 0;
   const result = { executed: 0, failed: 0, skipped: 0, flaky: 0, skipReasons: [] };
   for (const match of text.matchAll(expression)) {
