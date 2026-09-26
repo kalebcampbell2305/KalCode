@@ -12,7 +12,12 @@ const report = {
   metrics: { startup: { value: 100, unit: "ms", better: "lower" } },
 };
 
-function check(current: unknown, baseline: unknown, options: string[] = []) {
+function check(
+  current: unknown,
+  baseline: unknown,
+  options: string[] = [],
+  budgets: unknown = { defaults: { regressionPct: 20 }, metrics: { startup: { max: 2000 } } },
+) {
   const dir = mkdtempSync(join(tmpdir(), "kalcode-perf-gate-"));
   try {
     const resultsPath = join(dir, "results.json");
@@ -20,10 +25,7 @@ function check(current: unknown, baseline: unknown, options: string[] = []) {
     const budgetsPath = join(dir, "budgets.json");
     writeFileSync(resultsPath, JSON.stringify(current));
     if (baseline !== undefined) writeFileSync(baselinePath, JSON.stringify(baseline));
-    writeFileSync(
-      budgetsPath,
-      JSON.stringify({ defaults: { regressionPct: 20 }, metrics: { startup: { max: 2000 } } }),
-    );
+    writeFileSync(budgetsPath, JSON.stringify(budgets));
     return spawnSync(
       process.execPath,
       [
@@ -68,11 +70,34 @@ test("performance CLI refuses a baseline of a different report kind", () => {
 
 test("performance CLI does not silently ignore an explicitly missing baseline", () => {
   const result = check(report, undefined);
-  assert.equal(result.status, 2);
+  assert.equal(result.status, 2, result.stderr);
   assert.match(result.stderr, /baseline/i);
 });
 
 test("performance CLI allows explicitly disabling the baseline", () => {
   const result = check(report, undefined, ["--no-baseline"]);
   assert.equal(result.status, 0, result.stderr);
+});
+
+test("performance CLI rejects an empty budget instead of passing zero checks", () => {
+  const result = check(report, report, [], { defaults: { regressionPct: 20 }, metrics: {} });
+  assert.equal(result.status, 2);
+  assert.match(result.stderr, /budget.*at least one/i);
+  assert.doesNotMatch(result.stdout, /passed/);
+});
+
+test("performance CLI rejects invalid budget limits instead of disabling comparisons", () => {
+  for (const max of ["fast", null]) {
+    const result = check(report, report, [], { defaults: { regressionPct: 20 }, metrics: { startup: { max } } });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /budget.*finite number/i);
+  }
+});
+
+test("performance CLI refuses a supplied baseline without its measurement map", () => {
+  for (const metrics of [undefined, null, [], "missing"]) {
+    const result = check(report, { ...report, metrics });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /metrics/i);
+  }
 });

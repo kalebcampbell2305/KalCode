@@ -125,3 +125,75 @@ test("stats: interpolated percentiles and summary", () => {
   assert.deepEqual(summarize([3, 1, 2]), { n: 3, min: 1, median: 2, mean: 2, p95: 2.9, max: 3 });
   assert.throws(() => summarize([]));
 });
+
+test("invalid budget thresholds cannot disable an absolute or regression check", () => {
+  for (const field of ["min", "max", "regressionPct", "minDelta"]) {
+    for (const value of [null, "20", Number.NaN, Number.POSITIVE_INFINITY]) {
+      const invalid = {
+        defaults: { regressionPct: 20 },
+        metrics: { startup: { [field]: value } },
+      } as BudgetFile;
+      assert.throws(() => checkMetrics({ startup: ms(500) }, invalid, { startup: ms(100) }), /budget.*finite number/i);
+    }
+  }
+});
+
+test("malformed and contradictory budget definitions are rejected", () => {
+  const invalidBudgets = [
+    { defaults: { regressionPct: 20 }, metrics: {} },
+    { defaults: { regressionPct: 20 }, metrics: [] },
+    { defaults: { regressionPct: "not a number" }, metrics: { startup: { max: 2000 } } },
+    { defaults: { regressionPct: -1 }, metrics: { startup: { max: 2000 } } },
+    { defaults: { regressionPct: 20 }, metrics: { startup: { regressionPct: -1 } } },
+    { defaults: { regressionPct: 20 }, metrics: { startup: { minDelta: -1 } } },
+    { defaults: { regressionPct: 20 }, metrics: { startup: { min: 2000, max: 1000 } } },
+    { defaults: { regressionPct: 20 }, metrics: { startup: "not a budget" } },
+  ];
+  for (const invalid of invalidBudgets) {
+    assert.throws(() => checkMetrics({ startup: ms(500) }, invalid as BudgetFile, null), /budget/i);
+  }
+});
+
+test("a metric cannot pass when no absolute limit or comparable baseline is available", () => {
+  for (const budget of [{}, { regressionPct: 20 }]) {
+    const rows = checkMetrics(
+      { startup: ms(999999) },
+      { defaults: { regressionPct: 20 }, metrics: { startup: budget } },
+      null,
+    );
+    assert.equal(rows[0]?.status, "fail");
+    assert.match(rows[0]?.reasons.join(" ") ?? "", /no absolute limit or baseline/);
+  }
+  const rows = checkMetrics(
+    { startup: ms(110) },
+    { defaults: { regressionPct: 20 }, metrics: { startup: {} } },
+    { startup: ms(100) },
+  );
+  assert.equal(rows[0]?.status, "ok", "the default regression limit remains usable with a real baseline");
+});
+
+test("misspelled budget fields cannot silently disable limits", () => {
+  for (const budget of [{ mx: 2000 }, { max: 2000, regresionPct: 1 }]) {
+    assert.throws(
+      () =>
+        checkMetrics(
+          { startup: ms(115) },
+          { defaults: { regressionPct: 20 }, metrics: { startup: budget } } as BudgetFile,
+          { startup: ms(100) },
+        ),
+      /budget.*unknown/i,
+    );
+  }
+});
+
+test("a present malformed baseline measurement cannot be treated as an absent sample", () => {
+  for (const value of [null, false, 0, ""]) {
+    const rows = checkMetrics(
+      { startup: ms(1500) },
+      { defaults: { regressionPct: 20 }, metrics: { startup: { max: 2000 } } },
+      { startup: value } as unknown as Record<string, MetricValue>,
+    );
+    assert.equal(rows[0]?.status, "fail", `malformed baseline: ${String(value)}`);
+    assert.match(rows[0]?.reasons.join(" ") ?? "", /baseline.*object/i);
+  }
+});
