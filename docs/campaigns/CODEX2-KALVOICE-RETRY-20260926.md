@@ -4,6 +4,8 @@ An update could publish its verified component directory and then fail before ac
 
 Ordinary `acquire` and `status` remain fail-closed until explicit retry. This does not automatically select an older revision, weaken the signed sequence floor, or add a new provisioning architecture.
 
+Read-only desktop wiring review confirmed that invalid installed state exposes the existing Download/Resume consent path, which reaches `SignedAcquisitionService`, `ComponentAcquirer` and the repaired public install method. This was source inspection, not an additional end-to-end run. Retry fetches the current catalog: if the publisher has changed or expired the interrupted signed manifest, the exact-candidate recovery intentionally rejects it. There is no UI for selecting an older token, and "Retry local startup" alone does not repair this state.
+
 ## Integration handoff
 
 - **Scope:** recover interrupted component activation without relaxing load-time rollback checks.
