@@ -132,8 +132,13 @@ function CenterBody({ show }: { show: Show }) {
   return (
     <>
       {list.length === 0 ? (
-        <EmptyState art={<BellRing />} title="No unread notifications loaded">
-          <p>Older notifications may still be unread.</p>
+        <EmptyState
+          art={<BellRing />}
+          title={show === "unread" ? "No unread notifications loaded" : "No notifications loaded"}
+        >
+          <p>
+            {show === "unread" ? "Older notifications may still be unread." : "Load older notifications to continue."}
+          </p>
         </EmptyState>
       ) : null}
       <div
