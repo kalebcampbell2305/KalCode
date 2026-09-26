@@ -37,6 +37,7 @@ describe("D1 social OIDC authority", () => {
       rateBucket: "r".repeat(43),
       createdAt: T0,
       expiresAt: "2026-09-25T12:10:00.000Z",
+      clientKind: "desktop",
     });
     expect(await store.openIdAttempt("s".repeat(43), "microsoft")).toBeNull();
     expect(await store.openIdAttempt("s".repeat(43), "google")).toEqual({
@@ -44,6 +45,7 @@ describe("D1 social OIDC authority", () => {
       provider: "google",
       codeChallenge: "c".repeat(43),
       nonceHash: "n".repeat(43),
+      clientKind: "desktop",
       expiresAt: "2026-09-25T12:10:00.000Z",
       consumedAt: null,
     });
@@ -53,6 +55,17 @@ describe("D1 social OIDC authority", () => {
         provider: "google",
         codeChallenge: "c".repeat(43),
         nonceHash: "n".repeat(43),
+        clientKind: "website",
+        consumedAt: "2026-09-25T12:00:01.000Z",
+      }),
+    ).toBe(false);
+    expect(
+      await store.consumeOpenIdAttempt({
+        stateHash: "s".repeat(43),
+        provider: "google",
+        codeChallenge: "c".repeat(43),
+        nonceHash: "n".repeat(43),
+        clientKind: "desktop",
         consumedAt: "2026-09-25T12:00:01.000Z",
       }),
     ).toBe(true);
@@ -62,6 +75,7 @@ describe("D1 social OIDC authority", () => {
         provider: "google",
         codeChallenge: "c".repeat(43),
         nonceHash: "n".repeat(43),
+        clientKind: "desktop",
         consumedAt: "2026-09-25T12:00:02.000Z",
       }),
     ).toBe(false);
@@ -143,7 +157,7 @@ describe("D1 social OIDC authority", () => {
       accountId: "acct_google_subject",
       createdAt: T0,
       expiresAt: "2026-10-25T12:00:00.000Z",
-      clientKind: "desktop",
+      clientKind: "website",
     });
     expect(
       await store.createOrGetOpenIdAccount({
@@ -200,6 +214,7 @@ describe("D1 social OIDC authority", () => {
       rateBucket: "q".repeat(43),
       createdAt: T0,
       expiresAt: "2026-09-25T12:10:00.000Z",
+      clientKind: "website",
     });
     const exchangeIdentity = vi.fn(async () => ({
       provider: "google" as const,
@@ -223,12 +238,19 @@ describe("D1 social OIDC authority", () => {
     const request = () =>
       new Request("https://api.kalcoded.com/v1/auth/google/complete", {
         method: "POST",
-        headers: { "content-type": "application/json", "cf-connecting-ip": "203.0.113.10" },
+        headers: {
+          "content-type": "application/json",
+          "cf-connecting-ip": "203.0.113.10",
+          origin: "https://kalcoded.com",
+        },
         body: JSON.stringify({ state: STATE, code: "one-use-code", codeVerifier: VERIFIER, nonce: NONCE }),
       });
 
     const responses = await Promise.all([auth.complete(request(), "google"), auth.complete(request(), "google")]);
     expect(responses.map((response) => response.status).sort()).toEqual([200, 400]);
+    expect(responses.filter((response) => response.ok)[0]?.headers.get("set-cookie")).toContain(
+      "__Host-kalcode_session=",
+    );
     expect(exchangeIdentity).toHaveBeenCalledTimes(1);
     expect(
       await db

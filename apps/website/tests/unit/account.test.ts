@@ -8,15 +8,25 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const source = readFileSync(resolve(root, "src/pages/account.astro"), "utf8");
 
 describe("Account page", () => {
-  it("uses passwordless email and keeps the website session out of script storage", () => {
-    expect(source).toContain("Passwordless account access");
+  it("offers email and social sign-in while keeping the website session out of script storage", () => {
+    const providerTemplate = "$" + "{provider}";
+    const socialCompletePath = `/v1/auth/${providerTemplate}/complete`;
+    expect(source).toContain("Account access");
     expect(source).toContain("One account. No password to remember.");
     expect(source).toContain("HttpOnly cookie");
+    expect(source).toContain("Continue with Google");
+    expect(source).toContain("Continue with Microsoft");
+    expect(source).toContain(`/v1/auth/${providerTemplate}/start`);
+    expect(source).toContain(socialCompletePath);
     expect(source).toContain("/v1/auth/email/start");
     expect(source).toContain("/v1/auth/email/verify");
     expect(source).toContain("location.hash.slice(1)");
     expect(source).not.toContain('searchParams.get("verify")');
-    expect(source).not.toMatch(/localStorage|sessionStorage|document\.cookie/);
+    expect(source).toContain("sessionStorage.setItem");
+    expect(source).toContain("sessionStorage.removeItem");
+    expect(source).not.toMatch(/localStorage|document\.cookie/);
+    expect(source).not.toMatch(/sessionStorage\.setItem\([^\n]*(?:token|session|kcs_)/i);
+    expect(source.indexOf("sessionStorage.removeItem")).toBeLessThan(source.indexOf(socialCompletePath));
   });
 
   it("states the current billing boundaries in user language", () => {

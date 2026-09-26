@@ -76,10 +76,54 @@ describe("OpenID account auth routes", () => {
       rateBucket: expect.any(String),
       createdAt: NOW.toISOString(),
       expiresAt: "2026-09-25T12:10:00.000Z",
+      clientKind: "desktop",
     });
     const persisted = JSON.stringify(vi.mocked(store.createOpenIdAttempt).mock.calls);
     expect(persisted).not.toContain(state);
     expect(persisted).not.toContain(body.nonce);
+  });
+
+  it("binds website starts to the exact website origin and persists the client kind", async () => {
+    const store = fakeStore();
+    const auth = openIdAuthService({
+      store,
+      clients: { google: GOOGLE },
+      rateLimitKey: "r".repeat(32),
+      now: () => NOW,
+    });
+
+    const response = await auth.start(
+      post(
+        "/v1/auth/google/start",
+        { client: "website", codeChallenge: CHALLENGE },
+        { origin: "https://kalcoded.com" },
+      ),
+      "google",
+    );
+    expect(response.status).toBe(200);
+    expect(store.createOpenIdAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "google", codeChallenge: CHALLENGE, clientKind: "website" }),
+    );
+
+    const missingOrigin = await auth.start(
+      post("/v1/auth/google/start", { client: "website", codeChallenge: CHALLENGE }),
+      "google",
+    );
+    const wrongOrigin = await auth.start(
+      post(
+        "/v1/auth/google/start",
+        { client: "website", codeChallenge: CHALLENGE },
+        { origin: "https://attacker.example" },
+      ),
+      "google",
+    );
+    expect(missingOrigin.status).toBe(403);
+    expect(wrongOrigin.status).toBe(403);
+    const browserDesktopAttempt = await auth.start(
+      post("/v1/auth/google/start", { codeChallenge: CHALLENGE }, { origin: "https://kalcoded.com" }),
+      "google",
+    );
+    expect(browserDesktopAttempt.status).toBe(403);
   });
 
   it("reports unavailable when a provider has no configured client", async () => {
@@ -106,6 +150,7 @@ describe("OpenID account auth routes", () => {
         nonceHash: await sha256Base64Url(nonce),
         expiresAt: "2026-09-25T12:10:00.000Z",
         consumedAt: null,
+        clientKind: "desktop" as const,
       })),
       consumeOpenIdAttempt: consume,
     });
@@ -141,6 +186,7 @@ describe("OpenID account auth routes", () => {
         nonceHash: await sha256Base64Url(nonce),
         expiresAt: "2026-09-25T12:10:00.000Z",
         consumedAt: null,
+        clientKind: "desktop" as const,
       })),
       consumeOpenIdAttempt: vi.fn(async () => true),
       createOrGetOpenIdAccount: vi.fn(async () => "acct_google"),
@@ -180,6 +226,91 @@ describe("OpenID account auth routes", () => {
     expect(JSON.stringify(createSession.mock.calls)).not.toContain(body.token);
   });
 
+  it("issues an HttpOnly host cookie without exposing a bearer for a website attempt", async () => {
+    const nonce = "n".repeat(43);
+    const createSession = vi.fn(async () => true);
+    const store = fakeStore({
+      openIdAttempt: vi.fn(async () => ({
+        stateHash: await sha256Base64Url(STATE),
+        provider: "google" as const,
+        codeChallenge: CHALLENGE,
+        nonceHash: await sha256Base64Url(nonce),
+        expiresAt: "2026-09-25T12:10:00.000Z",
+        consumedAt: null,
+        clientKind: "website" as const,
+      })),
+      consumeOpenIdAttempt: vi.fn(async () => true),
+      createOrGetOpenIdAccount: vi.fn(async () => "acct_google"),
+      createSession,
+    });
+    const auth = openIdAuthService({
+      store,
+      clients: { google: GOOGLE },
+      rateLimitKey: "r".repeat(32),
+      now: () => NOW,
+      exchangeIdentity: vi.fn(async () => ({
+        provider: "google" as const,
+        subject: "google-web-subject",
+        email: "web@example.com",
+      })),
+    });
+
+    const response = await auth.complete(
+      post(
+        "/v1/auth/google/complete",
+        { state: STATE, code: "code", codeVerifier: VERIFIER, nonce },
+        { origin: "https://kalcoded.com" },
+      ),
+      "google",
+    );
+    expect(response.status).toBe(200);
+    const responseBody = await response.json();
+    expect(responseBody).toEqual({
+      ok: true,
+      status: "signed_in",
+      expiresAt: "2026-10-25T12:00:00.000Z",
+    });
+    expect(response.headers.get("set-cookie")).toMatch(
+      /^__Host-kalcode_session=kcs_[A-Za-z0-9_-]{43}; Path=\/; HttpOnly; Secure; SameSite=Lax; Max-Age=2592000$/,
+    );
+    expect(createSession).toHaveBeenCalledWith(expect.objectContaining({ clientKind: "website" }));
+    expect(JSON.stringify(responseBody)).not.toContain("kcs_");
+  });
+
+  it("rejects a website completion from a missing or foreign origin before consuming state", async () => {
+    const nonce = "n".repeat(43);
+    const consume = vi.fn(async () => true);
+    const exchangeIdentity = vi.fn();
+    const store = fakeStore({
+      openIdAttempt: vi.fn(async () => ({
+        stateHash: await sha256Base64Url(STATE),
+        provider: "google" as const,
+        codeChallenge: CHALLENGE,
+        nonceHash: await sha256Base64Url(nonce),
+        expiresAt: "2026-09-25T12:10:00.000Z",
+        consumedAt: null,
+        clientKind: "website" as const,
+      })),
+      consumeOpenIdAttempt: consume,
+    });
+    const auth = openIdAuthService({
+      store,
+      clients: { google: GOOGLE },
+      rateLimitKey: "r".repeat(32),
+      now: () => NOW,
+      exchangeIdentity,
+    });
+    const body = { state: STATE, code: "code", codeVerifier: VERIFIER, nonce };
+
+    expect((await auth.complete(post("/v1/auth/google/complete", body), "google")).status).toBe(403);
+    expect(
+      (await auth.complete(post("/v1/auth/google/complete", body, { origin: "https://attacker.example" }), "google"))
+        .status,
+    ).toBe(403);
+    expect(consume).not.toHaveBeenCalled();
+    expect(exchangeIdentity).not.toHaveBeenCalled();
+  });
+
   it("does not issue a session when an email collision requires explicit identity linking", async () => {
     const nonce = "n".repeat(43);
     const store = fakeStore({
@@ -190,6 +321,7 @@ describe("OpenID account auth routes", () => {
         nonceHash: await sha256Base64Url(nonce),
         expiresAt: "2026-09-25T12:10:00.000Z",
         consumedAt: null,
+        clientKind: "desktop" as const,
       })),
       consumeOpenIdAttempt: vi.fn(async () => true),
       createOrGetOpenIdAccount: vi.fn(async () => null),
@@ -218,9 +350,20 @@ describe("OpenID account auth routes", () => {
     expect(store.createSession).not.toHaveBeenCalled();
   });
 
-  it("redirects cancellation and success only to the provider-specific registered native URI", async () => {
+  it("redirects desktop cancellation and success only to the provider-specific registered native URI", async () => {
+    const store = fakeStore({
+      openIdAttempt: vi.fn(async () => ({
+        stateHash: await sha256Base64Url(STATE),
+        provider: "google" as const,
+        codeChallenge: CHALLENGE,
+        nonceHash: await sha256Base64Url("n".repeat(43)),
+        expiresAt: "2026-09-25T12:10:00.000Z",
+        consumedAt: null,
+        clientKind: "desktop" as const,
+      })),
+    });
     const auth = openIdAuthService({
-      store: fakeStore(),
+      store,
       clients: { google: GOOGLE },
       rateLimitKey: "r".repeat(32),
       now: () => NOW,
@@ -237,5 +380,62 @@ describe("OpenID account auth routes", () => {
     expect(success.headers.get("location")).toBe(
       `kalcode://auth/google?code=4%2F0AdQt8qh.opaque%7Ecode&state=${STATE}`,
     );
+  });
+
+  it("redirects only a stored website attempt to the fixed account fragment", async () => {
+    const store = fakeStore({
+      openIdAttempt: vi.fn(async () => ({
+        stateHash: await sha256Base64Url(STATE),
+        provider: "google" as const,
+        codeChallenge: CHALLENGE,
+        nonceHash: await sha256Base64Url("n".repeat(43)),
+        expiresAt: "2026-09-25T12:10:00.000Z",
+        consumedAt: null,
+        clientKind: "website" as const,
+      })),
+    });
+    const auth = openIdAuthService({
+      store,
+      clients: { google: GOOGLE },
+      rateLimitKey: "r".repeat(32),
+      now: () => NOW,
+    });
+    const success = await auth.callback(
+      new Request(`https://api.kalcoded.com/v1/auth/google/callback?code=opaque-code&state=${STATE}`),
+      "google",
+    );
+    expect(success.headers.get("location")).toBe(
+      `https://kalcoded.com/account#socialProvider=google&socialCode=opaque-code&socialState=${STATE}`,
+    );
+    expect(new URL(success.headers.get("location") as string).search).toBe("");
+
+    const canceled = await auth.callback(
+      new Request(`https://api.kalcoded.com/v1/auth/google/callback?error=access_denied&state=${STATE}`),
+      "google",
+    );
+    expect(canceled.headers.get("location")).toBe(
+      `https://kalcoded.com/account#socialProvider=google&socialError=sign_in_canceled&socialState=${STATE}`,
+    );
+  });
+
+  it("rejects duplicate or mixed callback parameters before loading an attempt", async () => {
+    const openIdAttempt = vi.fn(async () => null);
+    const auth = openIdAuthService({
+      store: fakeStore({ openIdAttempt }),
+      clients: { google: GOOGLE },
+      rateLimitKey: "r".repeat(32),
+      now: () => NOW,
+    });
+    const duplicateState = await auth.callback(
+      new Request(`https://api.kalcoded.com/v1/auth/google/callback?code=code&state=${STATE}&state=${"x".repeat(43)}`),
+      "google",
+    );
+    const mixedResult = await auth.callback(
+      new Request(`https://api.kalcoded.com/v1/auth/google/callback?code=code&error=access_denied&state=${STATE}`),
+      "google",
+    );
+    expect(duplicateState.status).toBe(400);
+    expect(mixedResult.status).toBe(400);
+    expect(openIdAttempt).not.toHaveBeenCalled();
   });
 });

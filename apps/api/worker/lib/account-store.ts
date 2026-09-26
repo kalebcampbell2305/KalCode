@@ -10,6 +10,7 @@ export type AccountIdentityProvider = "github" | "google" | "microsoft";
 export interface OpenIdAttempt extends OAuthAttempt {
   provider: Exclude<AccountIdentityProvider, "github">;
   nonceHash: string;
+  clientKind: "desktop" | "website";
 }
 
 export interface AccountProfile {
@@ -47,6 +48,7 @@ interface OAuthAttemptRow {
 interface OpenIdAttemptRow extends OAuthAttemptRow {
   provider: "google" | "microsoft";
   nonce_hash: string;
+  client_kind: "desktop" | "website";
 }
 
 export function d1AccountStore(db: D1Database) {
@@ -109,14 +111,15 @@ export function d1AccountStore(db: D1Database) {
       rateBucket: string;
       createdAt: string;
       expiresAt: string;
+      clientKind: "desktop" | "website";
     }): Promise<void> {
       await db.batch([
         db.prepare("DELETE FROM oauth_attempts WHERE expires_at <= ?1").bind(input.createdAt),
         db
           .prepare(
             `INSERT INTO oauth_attempts
-               (state_hash, code_challenge, rate_bucket, created_at, expires_at, provider, nonce_hash)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
+               (state_hash, code_challenge, rate_bucket, created_at, expires_at, provider, nonce_hash, client_kind)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
           )
           .bind(
             input.stateHash,
@@ -126,6 +129,7 @@ export function d1AccountStore(db: D1Database) {
             input.expiresAt,
             input.provider,
             input.nonceHash,
+            input.clientKind,
           ),
       ]);
     },
@@ -148,7 +152,7 @@ export function d1AccountStore(db: D1Database) {
     async openIdAttempt(stateHash: string, provider: "google" | "microsoft"): Promise<OpenIdAttempt | null> {
       const row = await db
         .prepare(
-          `SELECT state_hash, provider, code_challenge, nonce_hash, expires_at, consumed_at
+          `SELECT state_hash, provider, code_challenge, nonce_hash, client_kind, expires_at, consumed_at
            FROM oauth_attempts WHERE state_hash = ?1 AND provider = ?2`,
         )
         .bind(stateHash, provider)
@@ -159,6 +163,7 @@ export function d1AccountStore(db: D1Database) {
             provider: row.provider,
             codeChallenge: row.code_challenge,
             nonceHash: row.nonce_hash,
+            clientKind: row.client_kind,
             expiresAt: row.expires_at,
             consumedAt: row.consumed_at,
           }
@@ -187,15 +192,16 @@ export function d1AccountStore(db: D1Database) {
       provider: "google" | "microsoft";
       codeChallenge: string;
       nonceHash: string;
+      clientKind: "desktop" | "website";
       consumedAt: string;
     }): Promise<boolean> {
       const result = await db
         .prepare(
-          `UPDATE oauth_attempts SET consumed_at = ?5
+          `UPDATE oauth_attempts SET consumed_at = ?6
            WHERE state_hash = ?1 AND provider = ?2 AND code_challenge = ?3 AND nonce_hash = ?4
-             AND consumed_at IS NULL AND expires_at > ?5`,
+             AND client_kind = ?5 AND consumed_at IS NULL AND expires_at > ?6`,
         )
-        .bind(input.stateHash, input.provider, input.codeChallenge, input.nonceHash, input.consumedAt)
+        .bind(input.stateHash, input.provider, input.codeChallenge, input.nonceHash, input.clientKind, input.consumedAt)
         .run();
       return (result.meta.changes ?? 0) === 1;
     },

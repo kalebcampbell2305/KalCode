@@ -15,8 +15,8 @@ const checkoutEnabled = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
   <PageHead
     backdrop="orbital"
     title="Your KalCode account"
-    lead="Sign in with a one-time email link. Your plan, KalVoice Requests and billing stay together across the website and desktop app."
-    status="Passwordless account access"
+    lead="Sign in with Google, Microsoft or a one-time email link. Your plan, KalVoice Requests and billing stay together across the website and desktop app."
+    status="Secure account access"
     statusKind="built"
   />
 
@@ -28,16 +28,23 @@ const checkoutEnabled = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
           <span class="account-panel__eyebrow">Account access</span>
           <h2 id="account-title" class="h2 h2--sm">One account. No password to remember.</h2>
           <p>
-            KalCode sends a one-time link to verify your email. Website sessions use a secure, HttpOnly cookie; desktop sessions stay in your operating system credential store.
+            Continue with Google or Microsoft, or ask KalCode for a one-time email link. Website sessions use a secure, HttpOnly cookie; desktop sessions stay in your operating system credential store.
           </p>
         </div>
-        <form class="account-form" data-account-signin>
-          <label for="account-email">Email address</label>
-          <div class="account-form__row">
-            <input id="account-email" name="email" type="email" autocomplete="email" required maxlength="254" placeholder="you@example.com" />
-            <button class="button button--primary" type="submit">Email my sign-in link <Icon name="arrow-right" /></button>
+        <div data-account-access>
+          <div class="account-social" aria-label="Social sign in">
+            <button class="button button--secondary" type="button" data-social-provider="google">Continue with Google</button>
+            <button class="button button--secondary" type="button" data-social-provider="microsoft">Continue with Microsoft</button>
           </div>
-        </form>
+          <div class="account-divider" aria-hidden="true"><span>or use email</span></div>
+          <form class="account-form" data-account-signin>
+            <label for="account-email">Email address</label>
+            <div class="account-form__row">
+              <input id="account-email" name="email" type="email" autocomplete="email" required maxlength="254" placeholder="you@example.com" />
+              <button class="button button--primary" type="submit">Email my sign-in link <Icon name="arrow-right" /></button>
+            </div>
+          </form>
+        </div>
         <div class="account-summary" data-account-summary hidden>
           <p class="account-summary__email" data-account-email></p>
           <div class="account-summary__metrics">
@@ -145,10 +152,39 @@ const checkoutEnabled = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
     margin-top: 2rem;
   }
 
+  .account-social {
+    display: grid;
+    gap: 0.7rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-top: 2rem;
+  }
+
+  .account-social .button {
+    justify-content: center;
+  }
+
+  .account-divider {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    margin: 1.25rem 0;
+    color: var(--text-secondary, #aab8cf);
+    font-size: 0.76rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .account-divider::before,
+  .account-divider::after {
+    height: 1px;
+    flex: 1;
+    background: rgba(128, 169, 220, 0.2);
+    content: "";
+  }
+
   .account-form {
     display: grid;
     gap: 0.6rem;
-    margin-top: 2rem;
   }
 
   .account-form label,
@@ -269,6 +305,10 @@ const checkoutEnabled = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
       flex-direction: column;
     }
 
+    .account-social {
+      grid-template-columns: 1fr;
+    }
+
     .account-summary__metrics {
       grid-template-columns: 1fr;
     }
@@ -284,7 +324,22 @@ const checkoutEnabled = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
 
 <script>
   const API = "https://api.kalcoded.com";
+  const FLOW_VALUE = /^[A-Za-z0-9_-]{43}$/;
+  const AUTHORIZATION_CODE = /^[\x21-\x7e]{1,2048}$/;
+  const SOCIAL_STORAGE_PREFIX = "kalcode:oidc:";
+  type SocialProvider = "google" | "microsoft";
+  type SocialPending = {
+    provider: SocialProvider;
+    codeVerifier: string;
+    nonce: string;
+    expiresAt: string;
+  };
+  const socialAuthorizePaths: Record<SocialProvider, string> = {
+    google: "https://accounts.google.com/o/oauth2/v2/auth",
+    microsoft: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+  };
   const form = document.querySelector<HTMLFormElement>("[data-account-signin]");
+  const accessControls = document.querySelector<HTMLElement>("[data-account-access]");
   const summary = document.querySelector<HTMLElement>("[data-account-summary]");
   const status = document.querySelector<HTMLElement>("[data-account-status]");
   const emailOutput = document.querySelector<HTMLElement>("[data-account-email]");
@@ -305,11 +360,195 @@ const checkoutEnabled = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
     if (status) status.textContent = value;
   }
 
+  function base64Url(bytes: Uint8Array): string {
+    let binary = "";
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
+  }
+
+  function randomVerifier(): string {
+    return base64Url(crypto.getRandomValues(new Uint8Array(32)));
+  }
+
+  async function challengeFor(verifier: string): Promise<string> {
+    return base64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));
+  }
+
+  function pendingKey(state: string): string {
+    return `${SOCIAL_STORAGE_PREFIX}${state}`;
+  }
+
+  function parsePending(raw: string | null): SocialPending | null {
+    if (!raw) return null;
+    try {
+      const value = JSON.parse(raw) as Record<string, unknown>;
+      if (
+        Object.keys(value).length !== 4 ||
+        (value.provider !== "google" && value.provider !== "microsoft") ||
+        typeof value.codeVerifier !== "string" ||
+        !FLOW_VALUE.test(value.codeVerifier) ||
+        typeof value.nonce !== "string" ||
+        !FLOW_VALUE.test(value.nonce) ||
+        typeof value.expiresAt !== "string" ||
+        !Number.isFinite(Date.parse(value.expiresAt))
+      ) {
+        return null;
+      }
+      return value as SocialPending;
+    } catch {
+      return null;
+    }
+  }
+
+  function socialProvider(value: unknown): SocialProvider | null {
+    return value === "google" || value === "microsoft" ? value : null;
+  }
+
+  function singleParameter(url: URL, name: string): string | null {
+    const values = url.searchParams.getAll(name);
+    return values.length === 1 ? values[0] ?? null : null;
+  }
+
+  function validateAuthorizeUrl(
+    provider: SocialProvider,
+    rawUrl: unknown,
+    expectedChallenge: string,
+    expectedNonce: unknown,
+  ): { url: string; state: string; nonce: string } | null {
+    if (typeof rawUrl !== "string" || typeof expectedNonce !== "string" || !FLOW_VALUE.test(expectedNonce)) return null;
+    try {
+      const url = new URL(rawUrl);
+      const state = singleParameter(url, "state");
+      const scopes = new Set((singleParameter(url, "scope") ?? "").split(" "));
+      if (
+        `${url.origin}${url.pathname}` !== socialAuthorizePaths[provider] ||
+        url.username !== "" ||
+        url.password !== "" ||
+        !state ||
+        !FLOW_VALUE.test(state) ||
+        singleParameter(url, "nonce") !== expectedNonce ||
+        singleParameter(url, "code_challenge") !== expectedChallenge ||
+        singleParameter(url, "code_challenge_method") !== "S256" ||
+        singleParameter(url, "redirect_uri") !== `${API}/v1/auth/${provider}/callback` ||
+        singleParameter(url, "response_type") !== "code" ||
+        !singleParameter(url, "client_id") ||
+        !scopes.has("openid") ||
+        !scopes.has("email")
+      ) {
+        return null;
+      }
+      return { url: url.toString(), state, nonce: expectedNonce };
+    } catch {
+      return null;
+    }
+  }
+
+  async function startSocial(provider: SocialProvider, button: HTMLButtonElement): Promise<void> {
+    button.disabled = true;
+    message(`Opening ${provider === "google" ? "Google" : "Microsoft"} sign-in…`);
+    try {
+      const codeVerifier = randomVerifier();
+      const codeChallenge = await challengeFor(codeVerifier);
+      const response = await api(`/v1/auth/${provider}/start`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ client: "website", codeChallenge }),
+      });
+      const body = response?.ok
+        ? await response.json() as { authorizeUrl?: unknown; nonce?: unknown; expiresAt?: unknown }
+        : null;
+      const expiresAt = typeof body?.expiresAt === "string" ? Date.parse(body.expiresAt) : Number.NaN;
+      const authorization = validateAuthorizeUrl(provider, body?.authorizeUrl, codeChallenge, body?.nonce);
+      if (
+        !authorization ||
+        !Number.isFinite(expiresAt) ||
+        expiresAt <= Date.now() ||
+        expiresAt > Date.now() + 11 * 60 * 1000
+      ) {
+        throw new Error("invalid social start");
+      }
+      const pending: SocialPending = { provider, codeVerifier, nonce: authorization.nonce, expiresAt: body?.expiresAt as string };
+      sessionStorage.setItem(pendingKey(authorization.state), JSON.stringify(pending));
+      location.assign(authorization.url);
+    } catch {
+      button.disabled = false;
+      message(`${provider === "google" ? "Google" : "Microsoft"} sign-in is temporarily unavailable.`);
+    }
+  }
+
+  async function finishSocial(fragment: URLSearchParams): Promise<boolean> {
+    const providers = fragment.getAll("socialProvider");
+    const states = fragment.getAll("socialState");
+    const codes = fragment.getAll("socialCode");
+    const errors = fragment.getAll("socialError");
+    history.replaceState({}, "", "/account");
+    const provider = providers.length === 1 ? socialProvider(providers[0]) : null;
+    const state = states.length === 1 ? states[0] : null;
+    const success = codes.length === 1 && errors.length === 0 && AUTHORIZATION_CODE.test(codes[0] ?? "");
+    const failure = codes.length === 0 && errors.length === 1;
+    if (!state || !FLOW_VALUE.test(state)) {
+      message("Social sign-in could not be completed. Start again.");
+      return false;
+    }
+
+    let pending: SocialPending | null = null;
+    try {
+      pending = parsePending(sessionStorage.getItem(pendingKey(state)));
+      sessionStorage.removeItem(pendingKey(state));
+    } catch {
+      message("Social sign-in could not be completed. Start again.");
+      return false;
+    }
+    if (!provider || (!success && !failure) || !pending || pending.provider !== provider || Date.parse(pending.expiresAt) <= Date.now()) {
+      message("Social sign-in could not be completed. Start again.");
+      return false;
+    }
+    if (failure) {
+      message(errors[0] === "sign_in_canceled" ? "Sign-in was canceled." : "Social sign-in could not be completed. Start again.");
+      return false;
+    }
+
+    const response = await api(`/v1/auth/${provider}/complete`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        state,
+        code: codes[0],
+        codeVerifier: pending.codeVerifier,
+        nonce: pending.nonce,
+      }),
+    });
+    if (!response?.ok) {
+      message("Social sign-in could not be completed. Start again.");
+      return false;
+    }
+    let result: Record<string, unknown> | null = null;
+    try {
+      const value = await response.json() as unknown;
+      result = typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
+    } catch {
+      result = null;
+    }
+    if (!result || result.status !== "signed_in" || Object.hasOwn(result, "token")) {
+      message("Social sign-in could not be completed. Start again.");
+      return false;
+    }
+    message("Signed in.");
+    await loadAccount();
+    return true;
+  }
+
+  for (const button of document.querySelectorAll<HTMLButtonElement>("[data-social-provider]")) {
+    const provider = socialProvider(button.dataset.socialProvider);
+    if (provider) button.addEventListener("click", () => void startSocial(provider, button));
+  }
+
   async function loadAccount(): Promise<string | null> {
     const response = await api("/v1/account");
     if (!response?.ok) return null;
     const body = await response.json() as { account: { email: string; activatedAt: string | null } };
     if (form) form.hidden = true;
+    if (accessControls) accessControls.hidden = true;
     if (summary) summary.hidden = false;
     if (emailOutput) emailOutput.textContent = body.account.email;
     if (!body.account.activatedAt) return "pending";
@@ -408,7 +647,11 @@ const checkoutEnabled = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
     message(response?.ok ? "Check your email to confirm account deletion." : "Account deletion is unavailable while billing needs attention.");
   });
 
-  const verifyToken = new URLSearchParams(location.hash.slice(1)).get("verify");
+  const fragment = new URLSearchParams(location.hash.slice(1));
+  const hasSocialResult = ["socialProvider", "socialCode", "socialError", "socialState"].some((key) => fragment.has(key));
+  let accountLoaded = false;
+  if (hasSocialResult) accountLoaded = await finishSocial(fragment);
+  const verifyToken = hasSocialResult ? null : fragment.get("verify");
   if (verifyToken) {
     history.replaceState({}, "", "/account");
     const response = await api("/v1/auth/email/verify", {
@@ -431,7 +674,7 @@ const checkoutEnabled = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
   if (checkoutSucceeded) {
     history.replaceState({}, "", "/account");
     void confirmCheckout();
-  } else {
+  } else if (!accountLoaded) {
     await loadAccount();
   }
 </script>

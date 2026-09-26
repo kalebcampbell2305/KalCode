@@ -29,6 +29,14 @@ const BEARER = /^Bearer (kcs_[A-Za-z0-9_-]{43})$/;
 const SESSION = /^kcs_[A-Za-z0-9_-]{43}$/;
 export const SESSION_COOKIE = "__Host-kalcode_session";
 
+export function sessionCookie(token: string, maxAgeSeconds: number): string {
+  return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAgeSeconds}`;
+}
+
+export function clearSessionCookie(): string {
+  return `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
+}
+
 export function sessionToken(request: Request): string | null {
   const bearer = BEARER.exec(request.headers.get("authorization") ?? "")?.[1];
   if (bearer) return bearer;

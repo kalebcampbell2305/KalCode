@@ -1,6 +1,6 @@
 import type { AccountMailer } from "./account-mailer";
 import type { AccountStore, EmailAttempt } from "./account-store";
-import { SESSION_COOKIE, sessionToken } from "./auth";
+import { clearSessionCookie, sessionCookie, sessionToken } from "./auth";
 import { readJsonBody } from "./body";
 import { hmacSha256Base64Url, randomBase64Url, sha256Base64Url } from "./crypto";
 import { isPkceChallenge, isPkceVerifier, verifyPkce } from "./github-oauth";
@@ -49,14 +49,6 @@ async function objectBody(request: Request): Promise<Record<string, unknown> | n
   return body.ok && typeof body.value === "object" && body.value !== null && !Array.isArray(body.value)
     ? (body.value as Record<string, unknown>)
     : null;
-}
-
-function sessionCookie(token: string, maxAgeSeconds: number): string {
-  return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAgeSeconds}`;
-}
-
-function clearSessionCookie(): string {
-  return `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
 }
 
 export function emailAuthService({ store, mailer, rateLimitKey, now }: Options): EmailAuthService {

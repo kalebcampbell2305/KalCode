@@ -1,4 +1,5 @@
 import type { AccountStore } from "./account-store";
+import { clearSessionCookie, sessionCookie, sessionToken } from "./auth";
 import { readJsonBody } from "./body";
 import { constantTimeEqual, hmacSha256Base64Url, randomBase64Url, sha256Base64Url } from "./crypto";
 import { isPkceChallenge, isPkceVerifier, verifyPkce } from "./github-oauth";
@@ -17,6 +18,10 @@ const RATE_WINDOW_MS = 10 * 60 * 1000;
 const AUTHORIZATION_CODE = /^[\x21-\x7e]{1,2048}$/;
 const FLOW_VALUE = /^[A-Za-z0-9_-]{43}$/;
 const GENERIC_SIGN_IN = "Sign-in could not be completed. Start again.";
+const WEBSITE_ORIGIN = "https://kalcoded.com";
+const WEBSITE_ACCOUNT = "https://kalcoded.com/account";
+
+type AuthClientKind = "desktop" | "website";
 
 type ExchangeIdentity = (
   fetcher: typeof fetch,
@@ -43,11 +48,13 @@ interface Options {
   exchangeIdentity?: ExchangeIdentity;
 }
 
-function noBrowserWrite(request: Request): Response | null {
+function originAllowed(request: Request, clientKind: AuthClientKind): boolean {
   const origin = request.headers.get("origin");
-  return origin !== null && origin !== "https://kalcoded.com"
-    ? apiError(403, "forbidden", "This request origin is not allowed.")
-    : null;
+  return clientKind === "website" ? origin === WEBSITE_ORIGIN : origin === null;
+}
+
+function forbiddenOrigin(): Response {
+  return apiError(403, "forbidden", "This request origin is not allowed.");
 }
 
 function clientBucket(request: Request): string {
@@ -98,15 +105,17 @@ export function openIdAuthService(options: Options): OpenIdAuthService {
     async start(request, provider) {
       const config = clients[provider];
       if (!config) return unavailable();
-      const forbidden = noBrowserWrite(request);
-      if (forbidden) return forbidden;
-      if (!(await rateAllowed(request, "oauth_start", 10))) {
-        return apiError(429, "rate_limited", "Please wait before trying again.", { "retry-after": "600" });
-      }
       const body = await readInput(request);
       if (body instanceof Response) return body;
-      if (Object.keys(body).length !== 1 || !isPkceChallenge(body.codeChallenge)) {
+      const clientKind: AuthClientKind | null =
+        body.client === undefined ? "desktop" : body.client === "website" ? "website" : null;
+      const expectedKeys = clientKind === "website" ? 2 : 1;
+      if (!clientKind || Object.keys(body).length !== expectedKeys || !isPkceChallenge(body.codeChallenge)) {
         return apiError(400, "invalid_request", GENERIC_SIGN_IN);
+      }
+      if (!originAllowed(request, clientKind)) return forbiddenOrigin();
+      if (!(await rateAllowed(request, "oauth_start", 10))) {
+        return apiError(429, "rate_limited", "Please wait before trying again.", { "retry-after": "600" });
       }
 
       const state = randomBase64Url();
@@ -121,6 +130,7 @@ export function openIdAuthService(options: Options): OpenIdAuthService {
         rateBucket: await hmacSha256Base64Url(rateLimitKey, clientBucket(request)),
         createdAt: createdAt.toISOString(),
         expiresAt: expiresAt.toISOString(),
+        clientKind,
       });
       return json(
         {
@@ -134,16 +144,34 @@ export function openIdAuthService(options: Options): OpenIdAuthService {
     },
 
     async callback(request, provider) {
+      if (!clients[provider]) return unavailable();
       const url = new URL(request.url);
-      const code = url.searchParams.get("code");
-      const state = url.searchParams.get("state");
-      const error = url.searchParams.get("error");
-      const destination = new URL(`kalcode://auth/${provider}`);
-      if (error || !code || !state || !AUTHORIZATION_CODE.test(code) || !FLOW_VALUE.test(state)) {
-        destination.searchParams.set("error", error === "access_denied" ? "sign_in_canceled" : "sign_in_failed");
-        if (state && FLOW_VALUE.test(state)) destination.searchParams.set("state", state);
+      const codes = url.searchParams.getAll("code");
+      const states = url.searchParams.getAll("state");
+      const errors = url.searchParams.getAll("error");
+      const state = states.length === 1 ? states[0] : null;
+      const success = codes.length === 1 && errors.length === 0 && AUTHORIZATION_CODE.test(codes[0] ?? "");
+      const failure = codes.length === 0 && errors.length === 1;
+      if (!state || !FLOW_VALUE.test(state) || (!success && !failure)) {
+        return apiError(400, "sign_in_failed", GENERIC_SIGN_IN);
+      }
+      const attempt = await store.openIdAttempt(await sha256Base64Url(state), provider);
+      const callbackAt = now().toISOString();
+      if (!attempt || attempt.consumedAt || attempt.expiresAt <= callbackAt) {
+        return apiError(400, "sign_in_failed", GENERIC_SIGN_IN);
+      }
+      const error = failure ? (errors[0] === "access_denied" ? "sign_in_canceled" : "sign_in_failed") : null;
+      const destination =
+        attempt.clientKind === "website" ? new URL(WEBSITE_ACCOUNT) : new URL(`kalcode://auth/${provider}`);
+      if (attempt.clientKind === "website") {
+        const fragment = new URLSearchParams({ socialProvider: provider });
+        if (error) fragment.set("socialError", error);
+        else fragment.set("socialCode", codes[0] as string);
+        fragment.set("socialState", state);
+        destination.hash = fragment.toString();
       } else {
-        destination.searchParams.set("code", code);
+        if (error) destination.searchParams.set("error", error);
+        else destination.searchParams.set("code", codes[0] as string);
         destination.searchParams.set("state", state);
       }
       return new Response(null, {
@@ -159,11 +187,6 @@ export function openIdAuthService(options: Options): OpenIdAuthService {
     async complete(request, provider) {
       const config = clients[provider];
       if (!config) return unavailable();
-      const forbidden = noBrowserWrite(request);
-      if (forbidden) return forbidden;
-      if (!(await rateAllowed(request, "oauth_complete", 20))) {
-        return apiError(429, "rate_limited", "Please wait before trying again.", { "retry-after": "600" });
-      }
       const body = await readInput(request);
       if (body instanceof Response) return body;
       const { state, code, codeVerifier, nonce } = body;
@@ -179,6 +202,9 @@ export function openIdAuthService(options: Options): OpenIdAuthService {
       ) {
         return apiError(400, "invalid_request", GENERIC_SIGN_IN);
       }
+      if (!(await rateAllowed(request, "oauth_complete", 20))) {
+        return apiError(429, "rate_limited", "Please wait before trying again.", { "retry-after": "600" });
+      }
 
       const stateHash = await sha256Base64Url(state);
       const nonceHash = await sha256Base64Url(nonce);
@@ -193,12 +219,14 @@ export function openIdAuthService(options: Options): OpenIdAuthService {
       ) {
         return apiError(400, "sign_in_failed", GENERIC_SIGN_IN);
       }
+      if (!originAllowed(request, attempt.clientKind)) return forbiddenOrigin();
       if (
         !(await store.consumeOpenIdAttempt({
           stateHash,
           provider,
           codeChallenge: attempt.codeChallenge,
           nonceHash: attempt.nonceHash,
+          clientKind: attempt.clientKind,
           consumedAt: completedAt.toISOString(),
         }))
       ) {
@@ -225,23 +253,30 @@ export function openIdAuthService(options: Options): OpenIdAuthService {
             accountId: storedAccountId,
             createdAt: completedAt.toISOString(),
             expiresAt: expiresAt.toISOString(),
-            clientKind: "desktop",
+            clientKind: attempt.clientKind,
           }))
         ) {
           return apiError(400, "sign_in_failed", GENERIC_SIGN_IN);
         }
-        return json({ ok: true, token, accountId: storedAccountId, expiresAt: expiresAt.toISOString() }, 200);
+        return attempt.clientKind === "website"
+          ? json({ ok: true, status: "signed_in", expiresAt: expiresAt.toISOString() }, 200, {
+              "set-cookie": sessionCookie(token, SESSION_MS / 1000),
+            })
+          : json({ ok: true, token, accountId: storedAccountId, expiresAt: expiresAt.toISOString() }, 200);
       } catch {
         return apiError(400, "sign_in_failed", GENERIC_SIGN_IN);
       }
     },
 
     async logout(request) {
-      const forbidden = noBrowserWrite(request);
-      if (forbidden) return forbidden;
-      const match = /^Bearer (kcs_[A-Za-z0-9_-]{43})$/.exec(request.headers.get("authorization") ?? "");
-      if (match?.[1]) await store.revokeSession(await sha256Base64Url(match[1]), now().toISOString());
-      return new Response(null, { status: 204, headers: { "cache-control": "no-store" } });
+      const origin = request.headers.get("origin");
+      if (origin !== null && origin !== WEBSITE_ORIGIN) return forbiddenOrigin();
+      const token = sessionToken(request);
+      if (token) await store.revokeSession(await sha256Base64Url(token), now().toISOString());
+      return new Response(null, {
+        status: 204,
+        headers: { "cache-control": "no-store", "set-cookie": clearSessionCookie() },
+      });
     },
   };
 }
