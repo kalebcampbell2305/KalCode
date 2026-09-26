@@ -194,7 +194,11 @@ export function RailProvider({ children }: { children: ReactNode }) {
       );
       try {
         const next = await client.railSectionSet(section, collapsed);
-        if (isCurrent()) setRail(next);
+        if (isCurrent()) {
+          // The committed response supersedes reads begun while this write was pending.
+          lifetime.request += 1;
+          setRail(next);
+        }
       } catch (cause) {
         if (!isCurrent()) return;
         fail("Couldn't save that", cause);

@@ -164,6 +164,52 @@ function stubMutations(f: Awaited<ReturnType<typeof fixture>>, gate = Promise.re
 }
 
 describe("RailProvider runtime isolation", () => {
+  it.each(["setSection", "setGroupCollapsed"] as const)(
+    "retires a read started during %s when its authoritative write completes",
+    async (action) => {
+      const f = await fixture();
+      const view = await mount(f);
+      const write = deferred<void>();
+      const page = deferred<RailState>();
+      const committed: RailState =
+        action === "setSection"
+          ? { ...f.rail, collapsedSections: ["rail"] }
+          : {
+              ...f.rail,
+              groups: f.rail.groups.map((group) => ({ ...group, group: { ...group.group, collapsed: true } })),
+            };
+      vi.spyOn(f.client, "railSectionSet").mockImplementation(async () => {
+        await write.promise;
+        return committed;
+      });
+      vi.spyOn(f.client, "railGroupUpdate").mockImplementation(async () => {
+        await write.promise;
+        const group = committed.groups[0]?.group;
+        if (!group) throw new Error("Expected group");
+        return group;
+      });
+      f.read.mockReturnValueOnce(page.promise).mockResolvedValue(committed);
+      let writing!: ReturnType<typeof invoke>;
+      let reading!: Promise<void>;
+      act(() => {
+        writing = invoke(view.result.current.rail, action, f);
+      });
+      act(() => {
+        reading = view.result.current.rail.refresh();
+      });
+      await act(async () => {
+        write.resolve();
+        await writing;
+      });
+      expect(view.result.current.rail.rail).toEqual(committed);
+      await act(async () => {
+        page.resolve(f.rail);
+        await reading;
+      });
+      expect(view.result.current.rail.rail).toEqual(committed);
+    },
+  );
+
   it("masks a disconnected snapshot before the reconnect refresh resolves", async () => {
     const f = await fixture();
     const renders: RailValue[] = [];
