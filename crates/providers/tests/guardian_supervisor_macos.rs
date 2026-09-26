@@ -123,3 +123,139 @@ fn guarded_pty_uses_the_provider_root_pid_and_completes_custody() {
     drop(guardian);
     runtime.seal_and_drain().expect("clean generation proof");
 }
+
+#[test]
+fn existing_nonprivate_guardian_root_is_rejected_without_changing_its_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let (data, runtime) = runtime();
+    runtime.seal_and_drain().expect("clean initial generation");
+    drop(runtime);
+    let markers = data.path().join("provider-guardian-markers");
+    std::fs::set_permissions(&markers, std::fs::Permissions::from_mode(0o777)).unwrap();
+    assert!(GuardianRuntime::launch(&helper(), data.path()).is_err());
+    assert_eq!(
+        std::fs::metadata(markers).unwrap().permissions().mode() & 0o777,
+        0o777
+    );
+}
+
+#[test]
+fn new_guardian_root_is_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let (data, runtime) = runtime();
+    let mode = std::fs::metadata(data.path().join("provider-guardian-markers"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o700);
+    runtime.seal_and_drain().expect("clean empty generation");
+}
+
+// Exercise the actual helper boundary, including death between READY and activation.
+// The wire fixture contains no provider credentials and starts only a synthetic shell.
+#[allow(unsafe_code)]
+fn custodian_loss_drains_reserved_group(activate: bool) {
+    use std::io::{Read, Write};
+    use std::os::fd::AsRawFd;
+    use std::os::unix::net::UnixStream;
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    use std::time::Instant;
+    let data = tempfile::tempdir().unwrap();
+    let started = data.path().join("activated");
+    let (mut desktop, child_control) = UnixStream::pair().unwrap();
+    desktop
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut command = Command::new(helper());
+    command
+        .args(["--custodian", "--control-fd", "3"])
+        .env_clear()
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // SAFETY: pre_exec performs only async-signal-safe descriptor operations and
+    // retains the exclusively owned child endpoint until spawn.
+    unsafe {
+        command.pre_exec(move || {
+            let fd = child_control.as_raw_fd();
+            if fd == 3 {
+                if libc::fcntl(3, libc::F_SETFD, 0) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            } else if libc::dup2(fd, 3) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = command.spawn().expect("real custodian helper");
+    drop(command);
+    let job = Uuid::new_v4();
+    let script = "trap '' TERM; (trap '' TERM; while :; do /bin/sleep 1; done) & printf ready > \"$1\"; while :; do /bin/sleep 1; done";
+    let send = |stream: &mut UnixStream, value: serde_json::Value| {
+        let bytes = serde_json::to_vec(&value).unwrap();
+        stream
+            .write_all(&(bytes.len() as u32).to_be_bytes())
+            .unwrap();
+        stream.write_all(&bytes).unwrap();
+    };
+    send(
+        &mut desktop,
+        serde_json::json!({"Launch":{"job":job,"target":{
+            "program":b"/bin/sh".to_vec(), "args":[b"-c".to_vec(),script.as_bytes().to_vec(),b"fixture".to_vec(),started.as_os_str().as_encoded_bytes().to_vec()],
+            "cwd":null,"env":[],"pty":false
+        }}}),
+    );
+    let mut length = [0; 4];
+    desktop.read_exact(&mut length).unwrap();
+    let mut bytes = vec![0; u32::from_be_bytes(length) as usize];
+    desktop.read_exact(&mut bytes).unwrap();
+    let ready: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(
+        ready["Ready"]["custodian_pid"].as_u64().unwrap(),
+        u64::from(child.id())
+    );
+    let anchor = ready["Ready"]["anchor_pid"].as_i64().unwrap() as libc::pid_t;
+    if activate {
+        send(&mut desktop, serde_json::json!({"Activate":{"job":job}}));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !started.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            started.exists(),
+            "synthetic root activated before custodian loss"
+        );
+    }
+    desktop.shutdown(std::net::Shutdown::Both).unwrap();
+    child.kill().expect("inject immediate custodian SIGKILL");
+    child.wait().expect("reap exact custodian");
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        // SAFETY: signal 0 is a read-only absence query for the just-created group.
+        if unsafe { libc::kill(-anchor, 0) } < 0
+            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "reserved group survived custodian death"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    if !activate {
+        assert!(!started.exists(), "gated root must never execute");
+    }
+}
+
+#[test]
+fn killed_custodian_before_activation_cannot_orphan_gated_root_or_anchor() {
+    custodian_loss_drains_reserved_group(false);
+}
+
+#[test]
+fn killed_custodian_after_activation_cannot_orphan_stubborn_group() {
+    custodian_loss_drains_reserved_group(true);
+}

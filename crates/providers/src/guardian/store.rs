@@ -60,6 +60,18 @@ impl FileMarkerStore {
             ));
         }
         let root_was_new = !root.exists();
+        #[cfg(target_os = "macos")]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            // Apply owner-only mode at creation; never repair existing evidence
+            // permissions implicitly. AnchoredDirectory rejects unsafe roots.
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(&root)
+                .map_err(io_unavailable)?;
+        }
+        #[cfg(not(target_os = "macos"))]
         std::fs::create_dir_all(&root).map_err(io_unavailable)?;
         let metadata = std::fs::symlink_metadata(&root).map_err(io_unavailable)?;
         if !metadata.is_dir() || metadata.file_type().is_symlink() {
@@ -548,6 +560,12 @@ mod tests {
         let temp = tempfile::tempdir().expect("temp");
         let root = temp.path().join("markers");
         std::fs::create_dir(&root).expect("pre-existing marker root");
+        #[cfg(target_os = "macos")]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
+                .expect("private existing marker fixture");
+        }
         let store = FileMarkerStore::open(root).expect("store");
         assert!(
             store

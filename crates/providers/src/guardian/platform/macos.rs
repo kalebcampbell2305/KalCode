@@ -84,10 +84,12 @@ impl AnchoredDirectory {
         let directory = unsafe { File::from_raw_fd(fd) };
         let stat = stat_fd(directory.as_raw_fd())?;
         // SAFETY: getuid has no memory preconditions.
-        if stat.st_mode & libc::S_IFMT != libc::S_IFDIR || stat.st_uid != unsafe { libc::getuid() }
+        if stat.st_mode & libc::S_IFMT != libc::S_IFDIR
+            || stat.st_uid != unsafe { libc::getuid() }
+            || stat.st_mode & 0o077 != 0
         {
             return Err(GuardianError::Unavailable(
-                "guardian evidence root is not an owner-controlled directory".into(),
+                "guardian evidence root is not a private owner-controlled directory".into(),
             ));
         }
         Ok(Self {
