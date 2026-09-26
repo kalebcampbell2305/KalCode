@@ -18,7 +18,7 @@ export interface Resource<T> {
   state: ResourceState<T>;
   /** Re-reads the source (used by Try again and by event-driven invalidation). */
   reload: () => void;
-  /** Applies a local change to ready data (e.g. an action's returned summary) until the next read. */
+  /** Applies a local change to this source's ready data; obsolete sources' updates are ignored. */
   update: (change: (data: T) => T) => void;
 }
 
@@ -70,9 +70,14 @@ export function useResource<T>(load: () => Promise<T>, version: number): Resourc
     setAttempt((n) => n + 1);
   }, []);
 
-  const update = useCallback((change: (data: T) => T) => {
-    setState((current) => (current.status === "ready" ? { ...current, data: change(current.data) } : current));
-  }, []);
+  const update = useCallback(
+    (change: (data: T) => T) => {
+      setState((current) =>
+        source.current === load && current.status === "ready" ? { ...current, data: change(current.data) } : current,
+      );
+    },
+    [load],
+  );
 
   return useMemo(() => ({ state, reload, update }), [state, reload, update]);
 }

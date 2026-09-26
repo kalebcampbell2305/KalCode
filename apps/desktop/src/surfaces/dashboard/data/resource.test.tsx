@@ -89,6 +89,24 @@ describe("useResource", () => {
     expect(load).toHaveBeenCalledTimes(1);
   });
 
+  it("ignores an action's captured update after its client has been replaced", async () => {
+    const first = vi.fn().mockResolvedValue("first client");
+    const second = vi.fn().mockResolvedValue("second client");
+    const { result, rerender } = renderHook(({ load }) => useResource(load, 0), {
+      initialProps: { load: first as () => Promise<string> },
+    });
+    await waitFor(() => expect(result.current.state.status).toBe("ready"));
+    const oldActionUpdate = result.current.update;
+    rerender({ load: second });
+    await waitFor(() => expect(result.current.state).toEqual({ status: "ready", data: "second client", error: null }));
+    const staleChange = vi.fn(() => "first client's action result");
+    act(() => oldActionUpdate(staleChange));
+    expect(staleChange).not.toHaveBeenCalled();
+    expect(result.current.state).toEqual({ status: "ready", data: "second client", error: null });
+    act(() => result.current.update(() => "second client's action result"));
+    expect(result.current.state).toEqual({ status: "ready", data: "second client's action result", error: null });
+  });
+
   it("preserves data on a failed same-source refresh and recovers on reload", async () => {
     const load = vi.fn().mockResolvedValueOnce("loaded").mockRejectedValueOnce(failure).mockResolvedValueOnce("fresh");
     const { result, rerender } = renderHook(({ version }) => useResource(load, version), {
