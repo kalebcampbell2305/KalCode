@@ -15,8 +15,41 @@ const record = {
   file: "KalCode_1.2.3_arm64.dmg",
   size: 10,
   sha256: "a".repeat(64),
+  commit: "b".repeat(40),
   notarySubmissionId: submission,
+  signed: true,
+  signatureStatus: "Valid",
+  releaseDescriptorEligible: true,
+  releaseDescriptorBlockedReason: null,
+  requestedReleaseChannel: "stable",
+  compiledChannel: "stable",
+  compiledChannelVerification: {
+    schemaVersion: 1,
+    version: "1.2.3",
+    channel: "stable",
+    method: "build_info_probe_v1",
+    testHooks: false,
+  },
+  helpers: [
+    ["kalcode-update-helper", "com.kalcode.desktop.update-helper"],
+    ["kalcode-provider-guardian", "com.kalcode.desktop.provider-guardian"],
+    ["kalcode-hook", "com.kalcode.desktop.hook"],
+  ].map(([name, identifier], index) => ({
+    name,
+    identifier,
+    architecture: "arm64",
+    sha256: String(index + 1).repeat(64),
+    signed: true,
+    expectedTeamBound: true,
+    hardenedRuntime: true,
+    timestamped: true,
+  })),
 };
+
+function fixtureHash(path) {
+  const helper = record.helpers.find(({ name }) => path.endsWith(name));
+  return helper?.sha256 ?? record.sha256;
+}
 
 function fixture() {
   const calls = [];
@@ -28,8 +61,16 @@ function fixture() {
       calls.push(["capture", command, args, options]);
       if (command === "lipo") return "arm64";
       if (command === "codesign" && args.includes("--verbose=4")) {
+        const binary = args.at(-1);
+        const identifier = binary.endsWith("kalcode-update-helper")
+          ? "com.kalcode.desktop.update-helper"
+          : binary.endsWith("kalcode-provider-guardian")
+            ? "com.kalcode.desktop.provider-guardian"
+            : binary.endsWith("kalcode-hook")
+              ? "com.kalcode.desktop.hook"
+              : "com.kalcode.desktop";
         return [
-          "Identifier=com.kalcode.desktop",
+          `Identifier=${identifier}`,
           "CodeDirectory v=20500 size=1 flags=0x10000(runtime) hashes=1+1 location=embedded",
           "Authority=Developer ID Application: Example (A1B2C3D4E5)",
           `TeamIdentifier=${team}`,
@@ -85,11 +126,21 @@ test("production verification binds the exact DMG through app, staple, Gatekeepe
     notaryProfile: "kalcode-notary",
     runner,
     fs,
-    hashFile: async () => record.sha256,
+    hashFile: async (path) => fixtureHash(path),
     tempRoot: resolve("tmp"),
   });
   assert.equal(report.status, "passed");
+  assert.equal(report.commit, record.commit);
+  assert.equal(report.requestedReleaseChannel, "stable");
+  assert.equal(report.compiledChannel, "stable");
   assert.equal(report.exactArtifact, true);
+  assert.equal(report.updateHelperBundled, true);
+  assert.equal(report.updateHelperExpectedTeam, true);
+  assert.equal(report.updateHelperHardenedRuntime, true);
+  assert.deepEqual(
+    report.helpers.map(({ name }) => name),
+    ["kalcode-update-helper", "kalcode-provider-guardian", "kalcode-hook"],
+  );
   assert.equal(report.notaryLogIssueFree, true);
   assert.ok(
     calls.some(([, command, args]) => command === "hdiutil" && args[0] === "attach" && args.at(-1) === artifact),
@@ -97,7 +148,81 @@ test("production verification binds the exact DMG through app, staple, Gatekeepe
   assert.ok(calls.some(([, command, args]) => command === "xcrun" && args[0] === "stapler" && args[1] === "validate"));
   assert.ok(calls.some(([, command, args]) => command === "spctl" && args.includes("context:primary-signature")));
   assert.ok(calls.some(([, command, args]) => command === "xcrun" && args[0] === "notarytool" && args[1] === "log"));
+  assert.ok(
+    calls.some(
+      ([, command, args]) =>
+        command === "codesign" && args.includes("--verify") && args.at(-1).endsWith("kalcode-update-helper"),
+    ),
+  );
 });
+
+test("verification rejects unbound commit and binary-channel evidence before mounting", async () => {
+  const invalidRecords = [
+    { ...record, commit: "not-a-commit" },
+    { ...record, compiledChannel: "beta" },
+    {
+      ...record,
+      compiledChannelVerification: { ...record.compiledChannelVerification, channel: "beta" },
+    },
+    {
+      ...record,
+      compiledChannelVerification: { ...record.compiledChannelVerification, testHooks: true },
+    },
+    {
+      ...record,
+      compiledChannelVerification: { ...record.compiledChannelVerification, version: "1.2.4" },
+    },
+    { ...record, releaseDescriptorEligible: false, releaseDescriptorBlockedReason: "unsigned_build" },
+  ];
+
+  for (const invalidRecord of invalidRecords) {
+    const { calls, runner, fs } = fixture();
+    await assert.rejects(
+      verifyMacRelease({
+        artifactPath: artifact,
+        record: invalidRecord,
+        expectedTeamId: team,
+        notaryProfile: "kalcode-notary",
+        runner,
+        fs,
+        hashFile: async (path) => fixtureHash(path),
+      }),
+      /build record|compiled channel|test hooks/,
+    );
+    assert.equal(calls.length, 0);
+  }
+});
+
+for (const helper of ["kalcode-update-helper", "kalcode-provider-guardian", "kalcode-hook"]) {
+  test(`a missing or linked ${helper} blocks release verification`, async () => {
+    const { calls, runner, fs } = fixture();
+    const originalLstat = fs.lstat;
+    fs.lstat = (path) => {
+      if (path.endsWith(helper)) {
+        return { isFile: () => true, isDirectory: () => false, isSymbolicLink: () => true, size: 1 };
+      }
+      return originalLstat(path);
+    };
+    await assert.rejects(
+      verifyMacRelease({
+        artifactPath: artifact,
+        record,
+        expectedTeamId: team,
+        notaryProfile: "kalcode-notary",
+        runner,
+        fs,
+        hashFile: async (path) => fixtureHash(path),
+      }),
+      /must be a regular file/i,
+    );
+    assert.equal(
+      calls.some(
+        ([, command, args]) => command === "codesign" && args.includes("--verify") && args.at(-1).endsWith(helper),
+      ),
+      false,
+    );
+  });
+}
 
 test("digest mismatch stops before mounting untrusted bytes", async () => {
   const { calls, runner, fs } = fixture();
@@ -131,9 +256,93 @@ test("a Gatekeeper failure cannot produce passing evidence and the mounted image
       notaryProfile: "kalcode-notary",
       runner,
       fs,
-      hashFile: async () => record.sha256,
+      hashFile: async (path) => fixtureHash(path),
     }),
     /denied/,
   );
   assert.ok(calls.some(([, command, args]) => command === "hdiutil" && args[0] === "detach"));
+});
+
+test("a detach failure retains the verification workspace instead of traversing a mounted image", async () => {
+  const { runner, fs } = fixture();
+  let removed = false;
+  fs.remove = () => {
+    removed = true;
+  };
+  const originalRun = runner.run;
+  runner.run = (command, args) => {
+    originalRun(command, args);
+    if (command === "hdiutil" && args[0] === "detach") throw new Error("detach failed");
+  };
+
+  await assert.rejects(
+    verifyMacRelease({
+      artifactPath: artifact,
+      record,
+      expectedTeamId: team,
+      notaryProfile: "kalcode-notary",
+      runner,
+      fs,
+      hashFile: async (path) => fixtureHash(path),
+    }),
+    /detach failed/,
+  );
+  assert.equal(removed, false);
+});
+
+test("an attach error followed by a detach error retains the possibly mounted workspace", async () => {
+  const { calls, runner, fs } = fixture();
+  let removed = false;
+  fs.remove = () => {
+    removed = true;
+  };
+  const originalRun = runner.run;
+  runner.run = (command, args) => {
+    originalRun(command, args);
+    if (command === "hdiutil" && args[0] === "attach") throw new Error("attach failed after a possible mount");
+    if (command === "hdiutil" && args[0] === "detach") throw new Error("detach failed");
+  };
+
+  await assert.rejects(
+    verifyMacRelease({
+      artifactPath: artifact,
+      record,
+      expectedTeamId: team,
+      notaryProfile: "kalcode-notary",
+      runner,
+      fs,
+      hashFile: async (path) => fixtureHash(path),
+    }),
+    /attach failed/,
+  );
+  assert.ok(calls.some(([, command, args]) => command === "hdiutil" && args[0] === "detach"));
+  assert.equal(removed, false);
+});
+
+test("an attach error permits workspace removal only after bounded detach succeeds", async () => {
+  const { calls, runner, fs } = fixture();
+  let removed = false;
+  fs.remove = () => {
+    removed = true;
+  };
+  const originalRun = runner.run;
+  runner.run = (command, args) => {
+    originalRun(command, args);
+    if (command === "hdiutil" && args[0] === "attach") throw new Error("attach failed after a possible mount");
+  };
+
+  await assert.rejects(
+    verifyMacRelease({
+      artifactPath: artifact,
+      record,
+      expectedTeamId: team,
+      notaryProfile: "kalcode-notary",
+      runner,
+      fs,
+      hashFile: async (path) => fixtureHash(path),
+    }),
+    /attach failed/,
+  );
+  assert.ok(calls.some(([, command, args]) => command === "hdiutil" && args[0] === "detach"));
+  assert.equal(removed, true);
 });

@@ -491,9 +491,33 @@ function macFixture() {
     sha256: artifactSha256,
     commit,
     notarySubmissionId: "12345678-1234-4234-8234-123456789abc",
+    signed: true,
+    signatureStatus: "Valid",
+    releaseDescriptorEligible: true,
+    releaseDescriptorBlockedReason: null,
     requestedReleaseChannel: "stable",
     compiledChannel: "stable",
-    compiledChannelVerification: { channel: "stable", testHooks: false },
+    compiledChannelVerification: {
+      schemaVersion: 1,
+      version: "1.2.3",
+      channel: "stable",
+      method: "build_info_probe_v1",
+      testHooks: false,
+    },
+    helpers: [
+      ["kalcode-update-helper", "com.kalcode.desktop.update-helper"],
+      ["kalcode-provider-guardian", "com.kalcode.desktop.provider-guardian"],
+      ["kalcode-hook", "com.kalcode.desktop.hook"],
+    ].map(([name, identifier], index) => ({
+      name,
+      identifier,
+      architecture: "arm64",
+      sha256: String(index + 1).repeat(64),
+      signed: true,
+      expectedTeamBound: true,
+      hardenedRuntime: true,
+      timestamped: true,
+    })),
   };
   const verify = {
     ...build,
@@ -571,6 +595,18 @@ test("v2 publishes only the verified platforms without inventing parity", async 
 
 test("v2 Mac feed refuses incomplete signing, physical QA and channel evidence", async () => {
   for (const corrupt of [
+    (input) => {
+      input.build.helpers.pop();
+    },
+    (input) => {
+      input.build.helpers[0].signed = false;
+    },
+    (input) => {
+      input.build.releaseDescriptorEligible = false;
+    },
+    (input) => {
+      input.build.compiledChannelVerification.method = "unverified";
+    },
     (input) => {
       input.verify.notaryAccepted = false;
     },

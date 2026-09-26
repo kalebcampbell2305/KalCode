@@ -2,6 +2,7 @@
 // Builds one native-architecture macOS DMG, signs it with Developer ID, submits that exact staged
 // artifact to Apple, staples the ticket, and writes only redacted evidence. It never publishes.
 import {
+  chmodSync,
   constants,
   copyFileSync,
   existsSync,
@@ -10,6 +11,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -29,37 +31,32 @@ import {
 import {
   acceptedNotaryLog,
   acceptedNotarySubmission,
+  assertProductionCodesign,
   expectedMacDmgFile,
+  MACOS_HELPERS,
   MACOS_MINIMUM_VERSION,
   MacReleaseError,
   macBuildEnvironment,
+  macHelperBuildArgs,
+  macHelperBuildEnvironment,
+  macHelperSidecarName,
+  macSdkBuildEnvironment,
   macTauriBuildArgs,
   normalizeMacArchitecture,
   notaryLogArgs,
   notarySubmitArgs,
+  parseMacPackageOptions,
   rustTargetForMacArchitecture,
   validateMacReleaseEnvironment,
 } from "./macos-contract.mjs";
 import { macProcessRunner, verifyMacRelease } from "./macos-verify-lib.mjs";
+import { buildChannelContract, buildEnvironment, validateBuildInfo } from "./release-channel.mjs";
 
 function fail(error) {
   const code = error instanceof MacReleaseError ? error.code : "package_failed";
   const message = error instanceof Error ? error.message : "macOS packaging failed.";
   console.error(`macos-package [${code}]: ${message}`);
   process.exit(1);
-}
-
-function featuresFromArgs(args) {
-  if (args.length === 0) return ["kalvoice-whisper"];
-  if (args.length !== 2 || args[0] !== "--features") {
-    throw new MacReleaseError("invalid_arguments", "Usage: node tooling/release/macos-package.mjs [--features a,b]");
-  }
-  const features = args[1]
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean);
-  if (features.length === 0) throw new MacReleaseError("invalid_arguments", "--features cannot be empty.");
-  return [...new Set(["kalvoice-whisper", ...features])];
 }
 
 function assertRepositoryMacConfig() {
@@ -69,6 +66,8 @@ function assertRepositoryMacConfig() {
   if (
     config.bundle?.targets?.length !== 1 ||
     config.bundle.targets[0] !== "dmg" ||
+    JSON.stringify(config.bundle?.externalBin) !==
+      JSON.stringify(MACOS_HELPERS.map(({ name }) => `binaries/${name}`)) ||
     mac?.minimumSystemVersion !== MACOS_MINIMUM_VERSION ||
     mac?.hardenedRuntime !== true ||
     mac?.entitlements !== "entitlements.plist" ||
@@ -79,6 +78,20 @@ function assertRepositoryMacConfig() {
   }
   macProcessRunner.run("plutil", ["-lint", join(ROOT, "apps", "desktop", "src-tauri", "Info.plist")]);
   macProcessRunner.run("plutil", ["-lint", join(ROOT, "apps", "desktop", "src-tauri", "entitlements.plist")]);
+}
+
+function expectedBinaryArchitecture(arch) {
+  return arch === "arm64" ? "arm64" : "x86_64";
+}
+
+function assertPlainNativeBinary(path, label, arch) {
+  if (!existsSync(path) || !lstatSync(path).isFile() || lstatSync(path).isSymbolicLink()) {
+    throw new MacReleaseError("missing_built_helper", `${label} was not produced as a regular file.`);
+  }
+  const architectures = macProcessRunner.capture("lipo", ["-archs", path]).split(/\s+/).filter(Boolean);
+  if (architectures.length !== 1 || architectures[0] !== expectedBinaryArchitecture(arch)) {
+    throw new MacReleaseError("helper_architecture_mismatch", `${label} has the wrong architecture.`);
+  }
 }
 
 function assertToolchain(target, identity) {
@@ -101,18 +114,33 @@ function assertToolchain(target, identity) {
       "Exactly one expected Developer ID Application identity must be available.",
     );
   }
+  const sdkRoot = realpathSync(macProcessRunner.capture("xcrun", ["--show-sdk-path"]));
+  const libcxxArray = join(sdkRoot, "usr", "include", "c++", "v1", "array");
+  if (
+    !existsSync(sdkRoot) ||
+    !lstatSync(sdkRoot).isDirectory() ||
+    !existsSync(libcxxArray) ||
+    !lstatSync(libcxxArray).isFile()
+  ) {
+    throw new MacReleaseError(
+      "invalid_macos_sdk",
+      "The selected macOS SDK does not contain the required libc++ headers.",
+    );
+  }
+  return sdkRoot;
 }
 
 async function main() {
+  const options = parseMacPackageOptions(process.argv.slice(2));
   if (process.platform !== "darwin") {
     throw new MacReleaseError("wrong_platform", "The macOS package must be built and verified on macOS.");
   }
-  const features = featuresFromArgs(process.argv.slice(2));
+  const features = options.features;
   const credentials = validateMacReleaseEnvironment(process.env);
   const arch = normalizeMacArchitecture(macProcessRunner.capture("uname", ["-m"]));
   const target = rustTargetForMacArchitecture(arch);
   macTauriBuildArgs({ target, features });
-  assertToolchain(target, credentials.signingIdentity);
+  const sdkRoot = assertToolchain(target, credentials.signingIdentity);
   assertRepositoryMacConfig();
   assertCleanTree("A macOS release build");
 
@@ -131,16 +159,118 @@ async function main() {
     }
   }
   const bundleDir = join(TARGET_DIR, target, "release", "bundle", "dmg");
+  const builtApp = join(
+    TARGET_DIR,
+    target,
+    "release",
+    "bundle",
+    "macos",
+    "KalCode.app",
+    "Contents",
+    "MacOS",
+    "kalcode",
+  );
   const startedAt = Date.now();
-  const buildEnv = macBuildEnvironment(process.env, credentials.signingIdentity);
+  const buildEnv = macSdkBuildEnvironment(
+    macBuildEnvironment(buildEnvironment(process.env, options.compiledChannel), credentials.signingIdentity),
+    sdkRoot,
+  );
   buildEnv.CARGO_TARGET_DIR = TARGET_DIR;
-  macProcessRunner.run("pnpm", macTauriBuildArgs({ target, features }), {
-    cwd: ROOT,
-    env: buildEnv,
-    timeout: 3_600_000,
-  });
+  const helperDirectory = join(ROOT, "apps", "desktop", "src-tauri", "binaries");
+  const helpers = MACOS_HELPERS.map((helper) => ({
+    ...helper,
+    source: join(TARGET_DIR, target, "release", helper.name),
+    sidecar: join(helperDirectory, macHelperSidecarName(helper, target)),
+  }));
+  if (helpers.some(({ sidecar }) => existsSync(sidecar))) {
+    throw new MacReleaseError("stale_release_helper", "Remove every previous staged macOS helper before rebuilding.");
+  }
+  const createdSidecars = [];
+  try {
+    mkdirSync(helperDirectory, { recursive: true });
+    const helperDirectoryStat = lstatSync(helperDirectory);
+    if (
+      !helperDirectoryStat.isDirectory() ||
+      helperDirectoryStat.isSymbolicLink() ||
+      realpathSync(helperDirectory) !== resolve(helperDirectory)
+    ) {
+      throw new MacReleaseError("unsafe_helper_directory", "The release-helper staging directory is unsafe.");
+    }
+    for (const helper of helpers) {
+      macProcessRunner.run("cargo", macHelperBuildArgs({ helper, target, features }), {
+        cwd: ROOT,
+        env: macHelperBuildEnvironment(buildEnv),
+        timeout: 3_600_000,
+      });
+      assertPlainNativeBinary(helper.source, `The ${helper.name} helper`, arch);
+      copyFileSync(helper.source, helper.sidecar, constants.COPYFILE_EXCL);
+      createdSidecars.push(helper.sidecar);
+      chmodSync(helper.sidecar, 0o755);
+      macProcessRunner.run("codesign", [
+        "--force",
+        "--sign",
+        credentials.signingIdentity,
+        "--options",
+        "runtime",
+        "--timestamp",
+        "--identifier",
+        helper.identifier,
+        helper.sidecar,
+      ]);
+      assertProductionCodesign(
+        macProcessRunner.capture("codesign", ["--display", "--verbose=4", helper.sidecar], { output: "stderr" }),
+        credentials.teamId,
+        helper.identifier,
+      );
+    }
+    macProcessRunner.run("pnpm", macTauriBuildArgs({ target, features }), {
+      cwd: ROOT,
+      env: buildEnv,
+      timeout: 3_600_000,
+    });
+  } finally {
+    for (const sidecar of createdSidecars) rmSync(sidecar, { force: true });
+  }
   assertCleanTree("After the macOS release build, the working tree");
   if (headCommit() !== commit) throw new MacReleaseError("head_moved", "HEAD moved during the macOS build.");
+  if (!existsSync(builtApp) || !lstatSync(builtApp).isFile() || lstatSync(builtApp).isSymbolicLink()) {
+    throw new MacReleaseError("missing_built_app", "The macOS build did not produce the expected KalCode executable.");
+  }
+  const builtHelperEvidence = [];
+  for (const helper of helpers) {
+    const builtHelper = join(
+      TARGET_DIR,
+      target,
+      "release",
+      "bundle",
+      "macos",
+      "KalCode.app",
+      "Contents",
+      "MacOS",
+      helper.name,
+    );
+    assertPlainNativeBinary(builtHelper, `The bundled ${helper.name} helper`, arch);
+    macProcessRunner.run("codesign", ["--verify", "--strict", "--verbose=2", builtHelper]);
+    assertProductionCodesign(
+      macProcessRunner.capture("codesign", ["--display", "--verbose=4", builtHelper], { output: "stderr" }),
+      credentials.teamId,
+      helper.identifier,
+    );
+    builtHelperEvidence.push({
+      name: helper.name,
+      identifier: helper.identifier,
+      architecture: arch,
+      sha256: await sha256File(builtHelper),
+      signed: true,
+      expectedTeamBound: true,
+      hardenedRuntime: true,
+      timestamped: true,
+    });
+  }
+  const buildInfo = validateBuildInfo(macProcessRunner.capture(builtApp, ["--build-info"]), {
+    version,
+    requestedReleaseChannel: options.requestedReleaseChannel,
+  });
 
   const candidates = existsSync(bundleDir)
     ? readdirSync(bundleDir)
@@ -184,20 +314,38 @@ async function main() {
     createdAt: new Date().toISOString(),
     minimumSystemVersion: MACOS_MINIMUM_VERSION,
     signed: true,
+    signatureStatus: "Valid",
     hardenedRuntime: true,
     expectedTeamBound: true,
     notarized: true,
     notarySubmissionId: submission.id,
     stapled: true,
     features,
+    helpers: builtHelperEvidence,
+    requestedReleaseChannel: options.requestedReleaseChannel,
+    compiledChannel: buildInfo.channel,
+    compiledChannelVerification: {
+      schemaVersion: buildInfo.schemaVersion,
+      version: buildInfo.version,
+      channel: buildInfo.channel,
+      method: "build_info_probe_v1",
+      testHooks: buildInfo.testHooks,
+    },
+    ...buildChannelContract({
+      requestedReleaseChannel: options.requestedReleaseChannel,
+      compiledChannel: buildInfo.channel,
+      compiledChannelVerified: true,
+      signed: true,
+      signatureStatus: "Valid",
+    }),
   };
-  writeFileSync(recordPath, `${JSON.stringify(record, null, 2)}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
   const report = await verifyMacRelease({
     artifactPath,
     record,
     expectedTeamId: credentials.teamId,
     notaryProfile: credentials.notaryProfile,
   });
+  writeFileSync(recordPath, `${JSON.stringify(record, null, 2)}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
   writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
   console.log(`Verified macOS ${arch} package: ${expectedFile}`);
   console.log("No artifact was published.");

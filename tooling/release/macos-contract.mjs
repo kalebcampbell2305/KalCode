@@ -1,15 +1,43 @@
 import { basename } from "node:path";
 
+import { parseReleaseChannelArgs, validateReleaseBuildArgs } from "./release-channel.mjs";
+
 export const MACOS_MINIMUM_VERSION = "14.0";
 export const MACOS_BUNDLE_ID = "com.kalcode.desktop";
 export const MACOS_EXECUTABLE = "kalcode";
 export const MACOS_PRODUCT = "KalCode";
+export const MACOS_UPDATE_HELPER = "kalcode-update-helper";
+export const MACOS_UPDATE_HELPER_IDENTIFIER = "com.kalcode.desktop.update-helper";
+export const MACOS_HELPERS = Object.freeze([
+  Object.freeze({
+    name: MACOS_UPDATE_HELPER,
+    packageName: "kalcode-desktop",
+    identifier: MACOS_UPDATE_HELPER_IDENTIFIER,
+    includeReleaseFeatures: true,
+    noDefaultFeatures: false,
+  }),
+  Object.freeze({
+    name: "kalcode-provider-guardian",
+    packageName: "kalcode-providers",
+    identifier: "com.kalcode.desktop.provider-guardian",
+    includeReleaseFeatures: false,
+    noDefaultFeatures: false,
+  }),
+  Object.freeze({
+    name: "kalcode-hook",
+    packageName: "kalcode-hook-bridge",
+    identifier: "com.kalcode.desktop.hook",
+    includeReleaseFeatures: false,
+    noDefaultFeatures: true,
+  }),
+]);
 
 const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const TEAM_ID = /^[A-Z0-9]{10}$/;
 const PROFILE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const SUBMISSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const SHA256 = /^[0-9a-f]{64}$/;
+const COMMIT = /^[0-9a-f]{40}$/;
 
 export class MacReleaseError extends Error {
   constructor(code, message) {
@@ -33,6 +61,29 @@ export function normalizeMacArchitecture(value) {
 export function rustTargetForMacArchitecture(arch) {
   const normalized = normalizeMacArchitecture(arch);
   return normalized === "arm64" ? "aarch64-apple-darwin" : "x86_64-apple-darwin";
+}
+
+export function parseMacPackageOptions(args) {
+  validateReleaseBuildArgs(args);
+  if (args.includes("--unsigned-local")) {
+    reject("unsigned_macos_release", "A macOS production package cannot be unsigned.");
+  }
+  const channel = parseReleaseChannelArgs(args);
+  const featuresIndex = args.indexOf("--features");
+  const requestedFeatures =
+    featuresIndex === -1
+      ? []
+      : args[featuresIndex + 1]
+          .split(",")
+          .map((value) => value.trim())
+          .filter(Boolean);
+  const features = [...new Set(["kalvoice-whisper", ...requestedFeatures])];
+  for (const feature of features) {
+    if (!/^[a-z0-9-]+$/.test(feature) || feature === "e2e") {
+      reject("invalid_feature", "Release features must be safe Cargo feature names and cannot enable e2e hooks.");
+    }
+  }
+  return { ...channel, features };
 }
 
 export function expectedMacDmgFile(version, arch) {
@@ -80,7 +131,22 @@ export function macBuildEnvironment(env, signingIdentity) {
   return result;
 }
 
-export function macTauriBuildArgs({ target, features = [] }) {
+export function macSdkBuildEnvironment(env, sdkRoot) {
+  const normalized = String(sdkRoot ?? "").trim();
+  if (!normalized.startsWith("/") || /[\0\r\n]/.test(normalized)) {
+    reject("invalid_macos_sdk", "The selected macOS SDK path is invalid.");
+  }
+  return {
+    ...env,
+    SDKROOT: normalized,
+    CMAKE_OSX_SYSROOT: normalized,
+    // Some Command Line Tools releases keep libc++ in the SDK while Clang's
+    // built-in search list points only at the otherwise-empty CLT prefix.
+    CXXFLAGS: `-isystem${normalized}/usr/include/c++/v1`,
+  };
+}
+
+function validateMacBuildInputs(target, features) {
   if (!["aarch64-apple-darwin", "x86_64-apple-darwin"].includes(target)) {
     reject("invalid_target", "The macOS Rust target is not approved.");
   }
@@ -89,9 +155,45 @@ export function macTauriBuildArgs({ target, features = [] }) {
       reject("invalid_feature", "Release features must be safe Cargo feature names and cannot enable e2e hooks.");
     }
   }
+}
+
+export function macTauriBuildArgs({ target, features = [] }) {
+  validateMacBuildInputs(target, features);
   const args = ["--filter", "@kalcode/desktop", "tauri", "build", "--bundles", "dmg", "--target", target];
   if (features.length > 0) args.push("--features", features.join(","));
   return args;
+}
+
+function canonicalMacHelper(helper) {
+  const name = typeof helper === "string" ? helper : helper?.name;
+  const canonical = MACOS_HELPERS.find((candidate) => candidate.name === name);
+  if (!canonical) reject("invalid_helper", "The requested macOS helper is not part of the canonical bundle inventory.");
+  return canonical;
+}
+
+export function macHelperBuildArgs({ helper, target, features = [] }) {
+  validateMacBuildInputs(target, features);
+  const spec = canonicalMacHelper(helper);
+  const args = ["build", "-p", spec.packageName, "--bin", spec.name, "--release", "--target", target];
+  if (spec.noDefaultFeatures) args.push("--no-default-features");
+  if (spec.includeReleaseFeatures && features.length > 0) args.push("--features", features.join(","));
+  return args;
+}
+
+export function macHelperBuildEnvironment(env) {
+  return {
+    ...env,
+    // The checked-in macOS Tauri overlay bundles this binary. Disable that
+    // one packaging input while compiling the binary itself, then restore the
+    // normal overlay for the Tauri bundle step after the exact helper is
+    // staged and signed.
+    TAURI_CONFIG: JSON.stringify({ bundle: { externalBin: [] } }),
+  };
+}
+
+export function macHelperSidecarName(helper, target) {
+  validateMacBuildInputs(target, []);
+  return `${canonicalMacHelper(helper).name}-${target}`;
 }
 
 export function notarySubmitArgs(artifactPath, profile) {
@@ -139,8 +241,8 @@ export function acceptedNotaryInfo(value, expectedSubmissionId) {
 export function acceptedNotaryLog(value, expectedSubmissionId) {
   const parsed = jsonObject(value, "invalid_notary_log", "notarytool log");
   const id = parsed.jobId ?? parsed.id;
-  const issues = Array.isArray(parsed.issues) ? parsed.issues : null;
-  if (id !== expectedSubmissionId || parsed.status !== "Accepted" || !issues || issues.length !== 0) {
+  const issueFree = parsed.issues === null || (Array.isArray(parsed.issues) && parsed.issues.length === 0);
+  if (id !== expectedSubmissionId || parsed.status !== "Accepted" || !issueFree) {
     reject("notary_log_failed", "The exact notarization log is not accepted and issue-free.");
   }
   return true;
@@ -198,6 +300,58 @@ export function validateMacBuildRecord(record, artifactPath) {
   }
   if (!SUBMISSION_ID.test(String(record.notarySubmissionId ?? ""))) {
     reject("invalid_build_record", "The macOS build record has no valid notarization submission.");
+  }
+  if (!COMMIT.test(String(record.commit ?? ""))) {
+    reject("invalid_build_record", "The macOS build record has no exact source commit.");
+  }
+  if (
+    record.signed !== true ||
+    record.signatureStatus !== "Valid" ||
+    record.releaseDescriptorEligible !== true ||
+    record.releaseDescriptorBlockedReason !== null
+  ) {
+    reject("invalid_build_record", "The macOS build record is not eligible for a signed release descriptor.");
+  }
+  if (
+    !Array.isArray(record.helpers) ||
+    record.helpers.length !== MACOS_HELPERS.length ||
+    record.helpers.some((helper, index) => {
+      const expectedHelper = MACOS_HELPERS[index];
+      return (
+        helper?.name !== expectedHelper.name ||
+        helper?.identifier !== expectedHelper.identifier ||
+        helper?.architecture !== record.arch ||
+        !SHA256.test(String(helper?.sha256 ?? "")) ||
+        helper?.signed !== true ||
+        helper?.expectedTeamBound !== true ||
+        helper?.hardenedRuntime !== true ||
+        helper?.timestamped !== true
+      );
+    })
+  ) {
+    reject("invalid_build_record", "The macOS build record does not bind every required signed helper.");
+  }
+  const requested = record.requestedReleaseChannel;
+  const expectedCompiled = requested === "dev" ? "development" : requested;
+  if (!["stable", "beta", "dev"].includes(requested) || record.compiledChannel !== expectedCompiled) {
+    reject("compiled_channel_mismatch", "The macOS build record compiled channel does not match its release channel.");
+  }
+  const channelEvidence = record.compiledChannelVerification;
+  if (
+    !channelEvidence ||
+    typeof channelEvidence !== "object" ||
+    Array.isArray(channelEvidence) ||
+    Object.keys(channelEvidence).sort().join(",") !== "channel,method,schemaVersion,testHooks,version" ||
+    channelEvidence.schemaVersion !== 1 ||
+    channelEvidence.version !== record.version ||
+    channelEvidence.channel !== record.compiledChannel ||
+    channelEvidence.method !== "build_info_probe_v1" ||
+    channelEvidence.testHooks !== false
+  ) {
+    reject(
+      "invalid_compiled_channel_evidence",
+      "The macOS build record compiled channel is not bound to a production binary with test hooks disabled.",
+    );
   }
   return record;
 }

@@ -1,0 +1,101 @@
+{
+  "base": "63efef4",
+  "origin": "mac-integration working-tree snapshot",
+  "originHead": "ad4d073faea0a4800fbdd027b8f2fee87ff43752",
+  "files": [
+    {
+      "path": "apps/desktop/src-tauri/Info.plist",
+      "sourceSha256": "847f9cb692fbe055b44a72627503f44ad724639db954111a58c75bbbeca681ab",
+      "size": 312,
+      "copiedExactly": true,
+      "originUnchangedAtFinalCheck": true,
+      "recoveredSha256": "266cfe299d562d08a5a5f1082d832bb2cff844994cf4377db75d4437332e7703"
+    },
+    {
+      "path": "apps/desktop/src-tauri/entitlements.plist",
+      "sourceSha256": "c08ba169019ffff6e512c67473d8c207002f7b973be3807b7387a1d578ad3e76",
+      "size": 250,
+      "copiedExactly": true,
+      "originUnchangedAtFinalCheck": true,
+      "recoveredSha256": "48164d04a22347aeba9188068a12b8e8ee5d396e36d00aa36bc762fe224c0630"
+    },
+    {
+      "path": "apps/desktop/src-tauri/tauri.macos.conf.json",
+      "sourceSha256": "ca8775f45d9f8679c3e2d9acd39d853fd074ed135e8121be9ac5e39c3bce416a",
+      "size": 590,
+      "copiedExactly": true,
+      "originUnchangedAtFinalCheck": true,
+      "recoveredSha256": "ad7923fe3d319f8c4d0ca7b04a50718281e762ad496f703966b503fd144f6bd0"
+    },
+    {
+      "path": "tooling/bootstrap-macos.sh",
+      "sourceSha256": "8247a56156d7b1a53c2c9f68ea4eaf0857f42a59869b177563991101bb66ec5f",
+      "size": 6432,
+      "copiedExactly": true,
+      "originUnchangedAtFinalCheck": true,
+      "recoveredSha256": "8247a56156d7b1a53c2c9f68ea4eaf0857f42a59869b177563991101bb66ec5f"
+    },
+    {
+      "path": "tooling/release/macos-contract.mjs",
+      "sourceSha256": "ff5783e8b73c4a10576389602203fbda4c198438a210e2501ef2d0b2138f5849",
+      "size": 14190,
+      "copiedExactly": true,
+      "originUnchangedAtFinalCheck": true,
+      "recoveredSha256": "0069de67921e08c90eba57b0ef31114cdd2009a689e191a137ca59de79d11156"
+    },
+    {
+      "path": "tooling/release/macos-contract.test.mjs",
+      "sourceSha256": "e2cc12247bd4569150ed08b58fdb86397a84d596440a6557bcfdda498f284649",
+      "size": 11881,
+      "copiedExactly": true,
+      "originUnchangedAtFinalCheck": true,
+      "recoveredSha256": "35d1859060d8aa85ec2c51a99db06d31d7de31fe562c7e2fbfdf7c7ddeda9e9d"
+    },
+    {
+      "path": "tooling/release/macos-package.mjs",
+      "sourceSha256": "35fe3d3ff068ed5be6022a3588bcf2d50c32f3f17cf661e71993096e54bcc674",
+      "size": 13075,
+      "copiedExactly": true,
+      "originUnchangedAtFinalCheck": true,
+      "recoveredSha256": "35fe3d3ff068ed5be6022a3588bcf2d50c32f3f17cf661e71993096e54bcc674"
+    },
+    {
+      "path": "tooling/release/macos-verify-lib.mjs",
+      "sourceSha256": "18250c6046651824ab0166b3cfc44561a3e0a5b777431742201959b346746bef",
+      "size": 10226,
+      "copiedExactly": true,
+      "originUnchangedAtFinalCheck": true,
+      "recoveredSha256": "847040187265a07f8da57bf4261eb285da74b442bf85f4ef9c76e0549add95b7"
+    },
+    {
+      "path": "tooling/release/macos-verify.mjs",
+      "sourceSha256": "f0fe922adfccc6450f27c5a3b40a26931780c2f0afb515cd0214675118aed7e1",
+      "size": 2393,
+      "copiedExactly": true,
+      "originUnchangedAtFinalCheck": true,
+      "recoveredSha256": "f0fe922adfccc6450f27c5a3b40a26931780c2f0afb515cd0214675118aed7e1"
+    },
+    {
+      "path": "tooling/release/macos-verify.test.mjs",
+      "sourceSha256": "d872a0d29035013941f704686967e42a718af08366691c6142cb5360cd706ed3",
+      "size": 11590,
+      "copiedExactly": true,
+      "originUnchangedAtFinalCheck": true,
+      "recoveredSha256": "4a464b7b4b3019dc8b57c0977d41cdcd18dd7a5041787c742fd6845da9bf757b"
+    },
+    {
+      "path": "docs/MACOS.md",
+      "sourceSha256": "72e53cd5c97adf491775ebd51c1800111f21cd329fc6511f21436d1ea610e3cf",
+      "size": 11802,
+      "copiedExactly": true,
+      "originUnchangedAtFinalCheck": true,
+      "recoveredSha256": "72e53cd5c97adf491775ebd51c1800111f21cd329fc6511f21436d1ea610e3cf"
+    }
+  ],
+  "transformations": [
+    "macos-contract.mjs: accept explicit null issues with existing status/identity gates",
+    "Biome formatting and import ordering on recovered touched JS/JSON paths",
+    "Info.plist and entitlements.plist: retain identical base content without source snapshot extra trailing blank line",
+    "New notary regression file and updater-manifest fixture/negative-evidence cases are separately authored"
+  ]
+}

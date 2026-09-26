@@ -11,6 +11,7 @@ import {
   assertProductionEntitlements,
   MACOS_BUNDLE_ID,
   MACOS_EXECUTABLE,
+  MACOS_HELPERS,
   MACOS_MINIMUM_VERSION,
   MACOS_PRODUCT,
   MacReleaseError,
@@ -73,6 +74,11 @@ function verifyMountedApplication({ appPath, record, expectedTeamId, runner, fs 
   }
   const executable = join(appPath, "Contents", "MacOS", MACOS_EXECUTABLE);
   plainFile(executable, "The app executable", fs);
+  const helpers = MACOS_HELPERS.map((helper) => ({
+    ...helper,
+    path: join(appPath, "Contents", "MacOS", helper.name),
+  }));
+  for (const helper of helpers) plainFile(helper.path, `The ${helper.name} helper`, fs);
   const infoPlist = join(appPath, "Contents", "Info.plist");
   plainFile(infoPlist, "The app Info.plist", fs);
 
@@ -101,6 +107,21 @@ function verifyMountedApplication({ appPath, record, expectedTeamId, runner, fs 
     );
   }
 
+  for (const helper of helpers) {
+    const helperArchs = runner.capture("lipo", ["-archs", helper.path]).split(/\s+/).filter(Boolean).sort();
+    if (JSON.stringify(helperArchs) !== JSON.stringify(expectedArchitectures(record.arch).sort())) {
+      throw new MacReleaseError(
+        "helper_architecture_mismatch",
+        `The ${helper.name} architecture does not match the build record.`,
+      );
+    }
+    runner.run("codesign", ["--verify", "--strict", "--verbose=2", helper.path]);
+    const helperDisplay = runner.capture("codesign", ["--display", "--verbose=4", helper.path], {
+      output: "stderr",
+    });
+    assertProductionCodesign(helperDisplay, expectedTeamId, helper.identifier);
+  }
+
   runner.run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", appPath]);
   const display = runner.capture("codesign", ["--display", "--verbose=4", appPath], { output: "stderr" });
   assertProductionCodesign(display, expectedTeamId);
@@ -110,6 +131,7 @@ function verifyMountedApplication({ appPath, record, expectedTeamId, runner, fs 
   });
   assertProductionEntitlements(entitlementJson);
   runner.run("spctl", ["--assess", "--type", "execute", "--verbose=4", appPath]);
+  return helpers;
 }
 
 const defaultFs = {
@@ -151,9 +173,10 @@ export async function verifyMacRelease({
   const workspace = fs.mkdtemp(join(tempRoot, "kalcode-macos-verify-"));
   const mountPath = join(workspace, "mount");
   fs.mkdir(mountPath);
-  let attached = false;
+  let attachAttempted = false;
   let pendingError;
   try {
+    attachAttempted = true;
     runner.run("hdiutil", [
       "attach",
       "-readonly",
@@ -163,7 +186,6 @@ export async function verifyMacRelease({
       mountPath,
       absoluteArtifact,
     ]);
-    attached = true;
     const applications = fs
       .readdir(mountPath)
       .filter((entry) => entry.name.endsWith(".app"))
@@ -171,24 +193,35 @@ export async function verifyMacRelease({
     if (applications.length !== 1 || applications[0] !== `${MACOS_PRODUCT}.app`) {
       throw new MacReleaseError("invalid_dmg_contents", "The DMG must contain exactly one KalCode.app bundle.");
     }
-    verifyMountedApplication({
+    const helpers = verifyMountedApplication({
       appPath: join(mountPath, applications[0]),
       record,
       expectedTeamId,
       runner,
       fs,
     });
+    for (const helper of helpers) {
+      const evidence = record.helpers.find((candidate) => candidate.name === helper.name);
+      if (!evidence || (await hashFile(helper.path)) !== evidence.sha256) {
+        throw new MacReleaseError("helper_digest_mismatch", `The ${helper.name} bytes do not match the build record.`);
+      }
+    }
   } catch (error) {
     pendingError = error;
   } finally {
-    if (attached) {
+    let safeToRemoveWorkspace = !attachAttempted;
+    if (attachAttempted) {
       try {
         runner.run("hdiutil", ["detach", mountPath]);
+        safeToRemoveWorkspace = true;
       } catch (error) {
         pendingError ??= error;
       }
     }
-    fs.remove(workspace);
+    // Never recurse through a mountpoint after detach failed. Keeping the bounded temporary
+    // directory is safer than traversing bytes the verifier could not unmount; the release
+    // operator can inspect and detach it explicitly before removal.
+    if (safeToRemoveWorkspace) fs.remove(workspace);
   }
   if (pendingError) throw pendingError;
 
@@ -213,10 +246,24 @@ export async function verifyMacRelease({
     platform: "macos",
     version: record.version,
     arch: record.arch,
+    commit: record.commit,
+    requestedReleaseChannel: record.requestedReleaseChannel,
+    compiledChannel: record.compiledChannel,
     file: record.file,
     size: record.size,
     sha256: record.sha256,
     exactArtifact: true,
+    updateHelperBundled: true,
+    updateHelperExpectedTeam: true,
+    updateHelperHardenedRuntime: true,
+    helpers: MACOS_HELPERS.map(({ name, identifier }) => ({
+      name,
+      identifier,
+      bundled: true,
+      expectedTeam: true,
+      hardenedRuntime: true,
+      timestamped: true,
+    })),
     developerIdApplication: true,
     expectedTeam: true,
     hardenedRuntime: true,

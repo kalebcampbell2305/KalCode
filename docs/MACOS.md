@@ -4,10 +4,13 @@
 
 The repository now has a macOS Tauri overlay, least-privilege signing inputs, a read-only bootstrap
 check, a native-architecture DMG packager, and a fail-closed verifier. These pieces are
-**implemented but not authenticated or live**. An Apple silicon Mac is reachable, but Node/Rust
-bootstrap and Apple Developer signing/notarization access are not configured. No KalCode DMG has
-been produced, signed, notarized, installed, published, or product-tested on macOS, and no macOS URL
-may be added to the public release manifest yet.
+**implemented but not authenticated or live**. On 2026-09-25, the physical Apple M1 Mac built a
+native debug `KalCode.app` with bundled local Whisper and an arm64 update helper. The binary reported
+the Development channel with test hooks enabled, and its ad hoc signature correctly failed the
+production release gate. Node 24, pnpm 10.33.2, Rust 1.98.1, CMake 4.4.3, and the Command Line Tools
+are configured for development. No production KalCode DMG has been signed, notarized, installed,
+published, or product-tested on macOS, and no macOS URL may be added to the public release manifest
+yet.
 
 The direct-download target is macOS 14 or later. This is deliberate: the pinned Tauri 2.11.6 API
 documents `data_store_identifier` as the WKWebView replacement for `data_directory`, and that API is
@@ -32,7 +35,7 @@ tooling/bootstrap-macos.sh
 tooling/bootstrap-macos.sh --check
 ```
 
-It reports the safe OS/build version, native architecture, Xcode, Node, pnpm, Rust target, plist
+It reports the safe OS/build version, native architecture, Xcode, Node, pnpm, Rust target, CMake, plist
 validity, Developer ID Application identity count, and whether a notary profile name is configured.
 It does not show certificate identities, hashes, serials, credentials, or private-key data.
 
@@ -44,8 +47,20 @@ tooling/bootstrap-macos.sh --install
 
 `--install` may activate the repository's pinned pnpm through an already-installed Corepack, add the
 native Rust target through an already-installed rustup, and run the frozen-lockfile install. It does
-not install Homebrew, Xcode, Node, rustup, certificates, or Apple credentials. Install those through
-an owner-approved provider first when the check reports them missing.
+not install Homebrew, Xcode, Node, rustup, CMake, certificates, or Apple credentials. Install those
+through an owner-approved provider first when the check reports them missing. CMake is a development
+build prerequisite for bundled local KalVoice STT; customers do not need a system CMake installation.
+
+The bootstrap compiles a small C++17 probe against the selected macOS SDK. This catches Command Line
+Tools installations whose libc++ headers are present in the SDK but absent from Clang's default
+search path. The release packager binds `SDKROOT`, `CMAKE_OSX_SYSROOT`, and `CXXFLAGS` to that selected
+SDK before compiling bundled KalVoice. For an unsigned manual development build, use the same values:
+
+```bash
+export SDKROOT="$(xcrun --show-sdk-path)"
+export CMAKE_OSX_SYSROOT="$SDKROOT"
+export CXXFLAGS="-isystem$SDKROOT/usr/include/c++/v1"
+```
 
 ## Apple access
 
@@ -71,10 +86,10 @@ keychain profile and records the accepted submission before stapling.
 From a clean, immutable commit on the native Mac runner:
 
 ```bash
-node tooling/release/macos-package.mjs
+node tooling/release/macos-package.mjs --channel stable
 ```
 
-The production package always includes `kalvoice-whisper`; additional safe Cargo features can be
+The product channel is mandatory (`stable`, `beta`, or `dev`). The production package always includes `kalvoice-whisper`; additional safe Cargo features can be
 specified with `--features`. The command builds only a DMG, requires the repository's explicit 14.0
 deployment target and hardened runtime configuration, refuses `e2e`, uses the approved Developer ID
 identity, waits for Apple to accept notarization, requires an issue-free notary log, staples the
@@ -124,10 +139,10 @@ Packaging proof alone cannot make the macOS build releasable. These gates are cu
 
 | Area | Current macOS state | Required proof |
 | --- | --- | --- |
-| Provider/account isolation | `GuardianSupervisor` and its recovery authority return unavailable outside Windows. The runtime coordinator therefore stops before providers, panes, terminals, and dependent services become ready. | A macOS process-group/epoch guardian with kill-on-owner-exit, restart recovery, identity checks, race tests, and real provider-account isolation. |
+| Provider/account isolation | The isolated Mac integration packet implements the existing guardian lifecycle with a custodian, unreaped anchor, activation-gated exact root, durable state transitions, and mandatory CLEAN/Blocked proof. On the physical M1, 18 guardian regressions and three real process tests passed, including stubborn same-group descendant cleanup and a guarded PTY. The packet is not yet part of the canonical release candidate. | Canonical integration plus Windows Job Object reproof, official supported-provider version certification, real multi-account separation, crash/logout/app-loss recovery, and an explicit unsupported result for intentionally detached descendants. |
 | Browser | The canonical abstraction now uses deterministic `data_store_identifier` values on macOS 14+ and distinct values for different data roots/workspaces in unit tests. | Real WKWebView persistence, logout/deletion semantics, and cross-workspace cookie/storage isolation on a Mac. |
-| Updater | Feed generation emits only `windows-x86_64`; the native installer verifier rejects every non-Windows update because it only verifies Authenticode/NSIS. | macOS updater descriptor/platform entries, Developer ID/notary/ticket verification, atomic app replacement and rollback, restart recovery, and old-to-new clean-machine proof using the existing canonical updater key. |
-| KalVoice | macOS CoreAudio/TTS code and the microphone permission metadata exist; the packager enables the on-device Whisper feature. | Real microphone prompt, denial, capture, transcription, TTS, device loss, cancellation, sleep/wake, and privacy-retention checks on both architectures. |
+| Updater | The Mac consumer is implemented and its core policy, journal recovery, atomic `renameatx_np` swap, rollback, desktop command path, and bundled helper compile pass on the physical M1. Production package verification requires the helper at `Contents/MacOS/kalcode-update-helper`. | Developer ID/notary/ticket verification of a real old-to-new artifact, relaunch health acknowledgement, sleep/wake, clean-machine rollback proof, and canonical Windows signer handoff for the target-bound updater signature. |
+| KalVoice | macOS CoreAudio/TTS code, explicit AVAudioApplication permission state, Doctor reporting, and microphone metadata exist. The physical M1 compiled the bundled Whisper feature and passed 214 current native library tests with one intentionally ignored archive test; that archive test then passed explicitly against the exact curated development ZIP. Two release-mode local-reasoning runs each produced 64/65 exact safe actions, zero unsafe actions, no inference failures, and p95 latency of 489/492 ms. No microphone was opened. | Real microphone prompt, denial, capture, transcription, TTS, device loss, cancellation, sleep/wake, privacy-retention checks, and the separately signed/notarized production component on each advertised architecture. |
 | Secure store | The canonical secure-store crate selects macOS Keychain. | Fresh-account store/read/delete, locked-keychain denial, restart, logout, and cross-account isolation on a clean Mac. |
 | E2E/install | The existing compiled-app harness is WebView2/PowerShell/Windows specific. | A native macOS harness covering DMG open, drag/install, first launch, second launch, shortcut/Dock expectations, sign-in/out, Browser, providers, KalVoice, update, rollback, and uninstall/retained data. |
 | CI/release | The Rust matrix compiles on `macos-latest`; no signed DMG, notarization, or clean-machine lane exists. | Protected, pinned macOS build and verification jobs for each advertised architecture, artifact digest handoff, and independent clean-machine verification. |
