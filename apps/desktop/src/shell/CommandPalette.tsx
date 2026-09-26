@@ -29,7 +29,7 @@ import {
   Undo2,
   X,
 } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useOptionalKalVoice } from "../kalvoice/KalVoiceProvider.tsx";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { useWorkspaces } from "../runtime/WorkspaceProvider.tsx";
@@ -55,8 +55,8 @@ interface CommandPaletteProps {
   onOpenChange: (open: boolean) => void;
 }
 
-function namedCommand(typed: string): HTMLElement | undefined {
-  const commandItems = [...document.querySelectorAll<HTMLElement>("[cmdk-item]")].filter(
+function namedCommand(root: HTMLElement, typed: string): HTMLElement | undefined {
+  const commandItems = [...root.querySelectorAll<HTMLElement>("[cmdk-item]")].filter(
     (el) => !el.dataset.value?.startsWith("locator:"),
   );
   const normalized = (item: HTMLElement) => item.dataset.value?.toLowerCase() ?? "";
@@ -88,19 +88,28 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   // The best locator match is selected when results arrive (Enter opens it) — unless the text
   // names a command ("Open folder"), which keeps Enter.
   const [selected, setSelected] = useState("");
+  const commandRoot = useRef<HTMLDivElement>(null);
+  const navigatedQuery = useRef<string | null>(null);
   const first = current ? locator.response?.results.items[0] : undefined;
   const firstValue = first ? `locator:${first.kind}:${first.entityId}` : "";
   const typed = search.query.trim().toLowerCase();
   useEffect(() => {
-    if (!typed) return;
+    if (!open || navigatedQuery.current !== typed) navigatedQuery.current = null;
+  }, [open, typed]);
+  useEffect(() => {
+    if (!open || !typed) return;
     // cmdk fuzzy-ranks commands and registers async locator items in layout effects. Select after
     // those updates so an explicitly named command wins over a weaker fuzzy or locator match.
     const frame = window.requestAnimationFrame(() => {
-      const preferred = namedCommand(typed)?.dataset.value ?? firstValue;
-      if (preferred && selected !== preferred) setSelected(preferred);
+      const root = commandRoot.current;
+      if (!root || navigatedQuery.current === typed) return;
+      const preferred =
+        namedCommand(root, typed) ??
+        [...root.querySelectorAll<HTMLElement>("[cmdk-item]")].find((item) => item.dataset.value === firstValue);
+      if (preferred) setSelected(preferred.dataset.value ?? "");
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [firstValue, selected, typed]);
+  }, [firstValue, open, typed]);
 
   const run = (action: () => unknown) => () => {
     onOpenChange(false);
@@ -120,6 +129,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
 
   return (
     <Command.Dialog
+      ref={commandRoot}
       open={open}
       onOpenChange={onOpenChange}
       label="Command palette"
@@ -129,9 +139,19 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       loop
       value={selected}
       onValueChange={setSelected}
+      onPointerMove={(event) => {
+        if (event.isTrusted && event.target instanceof Element && event.target.closest("[cmdk-item]"))
+          navigatedQuery.current = typed;
+      }}
       onKeyDown={(event) => {
-        if (event.key !== "Enter" || event.nativeEvent.isComposing || !typed) return;
-        const preferred = namedCommand(typed);
+        if (
+          ["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) ||
+          (event.ctrlKey && ["n", "j", "p", "k"].includes(event.key))
+        )
+          navigatedQuery.current = typed;
+        if (event.key !== "Enter" || event.nativeEvent.isComposing || !typed || navigatedQuery.current === typed)
+          return;
+        const preferred = commandRoot.current ? namedCommand(commandRoot.current, typed) : undefined;
         if (!preferred || preferred.dataset.value === selected) return;
         // A quick Enter can precede the animation-frame selection correction above. Run the
         // explicitly named command now and stop cmdk from dispatching to its weaker fuzzy choice.
