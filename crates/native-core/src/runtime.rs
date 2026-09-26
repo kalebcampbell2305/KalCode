@@ -552,7 +552,7 @@ fn strip_home<'a>(path: &'a str, home: &str, windows: bool) -> Option<&'a str> {
     }
     let (head, rest) = path.split_at(home.len());
     let same = if windows {
-        head.to_lowercase() == home.to_lowercase()
+        head.replace('\\', "/").to_lowercase() == home.replace('\\', "/").to_lowercase()
     } else {
         head == home
     };
@@ -585,6 +585,53 @@ mod path_tests {
         assert_eq!(
             strip_home(r"C:\Users\Kaleb", r"C:\Users\Kaleb\", true),
             Some("")
+        );
+    }
+
+    #[test]
+    fn strips_windows_home_with_mixed_separators_without_changing_suffix() {
+        for (path, home, suffix) in [
+            (
+                "C:/Users/Kaleb/bin/tool.exe",
+                r"C:\Users\Kaleb",
+                "/bin/tool.exe",
+            ),
+            (
+                r"c:\USERS/kaleb\bin/tool.exe",
+                "C:/Users/Kaleb/",
+                r"\bin/tool.exe",
+            ),
+            (r"\\?\C:\Users\Kaleb/data", "c:/users/kaleb", "/data"),
+            ("C:/Users/Kaleb/data", r"\\?\C:\Users\Kaleb", "/data"),
+            ("C:/Users/Kaleb", r"C:\Users\Kaleb\", ""),
+            ("C:/Users/Élodie/资料", r"c:\users\élodie", "/资料"),
+        ] {
+            assert_eq!(
+                strip_home(path, home, true),
+                Some(suffix),
+                "{path:?} vs {home:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_windows_separators_still_require_the_complete_home_boundary() {
+        for path in [
+            "C:/Users/Kaleb2/data",
+            "C:/Users/Kal/data",
+            "C:/Users/Kaléb/data",
+        ] {
+            assert_eq!(strip_home(path, r"C:\Users\Kaleb", true), None, "{path:?}");
+        }
+    }
+
+    #[test]
+    fn unix_home_does_not_treat_backslashes_as_prefix_separators() {
+        assert_eq!(strip_home(r"/home\kaleb/data", "/home/kaleb", false), None);
+        assert_eq!(strip_home("/home/kaleb/data", r"/home\kaleb", false), None);
+        assert_eq!(
+            strip_home("/home/élodie/资料", "/home/élodie", false),
+            Some("/资料")
         );
     }
 
