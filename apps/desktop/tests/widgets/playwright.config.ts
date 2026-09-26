@@ -3,6 +3,7 @@ import { defineConfig, devices } from "@playwright/test";
 const port = Number(process.env.KALCODE_UI_TEST_PORT ?? 15565);
 export default defineConfig({
   testDir: ".",
+  outputDir: "../../test-results/widgets",
   forbidOnly: !!process.env.CI,
   retries: 0,
   workers: 1,
