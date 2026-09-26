@@ -16,6 +16,7 @@ import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { afterLiveResize, isLiveResizing } from "../../shell/panes/liveResize.ts";
 import { OutputScheduler } from "../../shell/panes/outputScheduler.ts";
 import styles from "./Code.module.css";
+import { suppressReplayQueries } from "./replayQueries.ts";
 import { isTerminalShortcut } from "./shortcuts.ts";
 import { MINIMUM_CONTRAST, TERMINAL_THEMES } from "./terminalTheme.ts";
 
@@ -107,6 +108,7 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme, th
     });
 
     let replaying = false;
+    const disposeReplayQueries = suppressReplayQueries(term, () => replaying);
     const input = createOrderedInputQueue(
       (data) => client.writeTerminal(terminalId, data),
       (error) => {
@@ -118,12 +120,12 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme, th
     );
     inputRef.current = input;
     term.onData((data) => {
-      if (!replaying && runningRef.current) input.send(data);
+      if (!disposed && runningRef.current) input.send(data);
     });
     term.onBinary((data) => {
       // Legacy mouse reports; only 7-bit data survives the UTF-8 input path unchanged.
       const sevenBit = [...data].every((ch) => ch.charCodeAt(0) < 0x80);
-      if (!replaying && runningRef.current && sevenBit) input.send(data);
+      if (!disposed && runningRef.current && sevenBit) input.send(data);
     });
 
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -251,6 +253,7 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme, th
       // An attach still in flight detaches itself when it resolves (see `connect`).
       if (attachment !== null) client.detachTerminal(attachment).catch(() => undefined);
       input.dispose();
+      disposeReplayQueries();
       if (inputRef.current === input) inputRef.current = null;
       termRef.current = null;
       term.dispose();

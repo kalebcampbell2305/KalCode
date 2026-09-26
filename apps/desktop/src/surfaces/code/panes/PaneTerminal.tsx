@@ -15,6 +15,7 @@ import {
 import { afterLiveResize, isLiveResizing } from "../../../shell/panes/liveResize.ts";
 import { OutputScheduler } from "../../../shell/panes/outputScheduler.ts";
 import codeStyles from "../Code.module.css";
+import { suppressReplayQueries } from "../replayQueries.ts";
 import { isTerminalShortcut } from "../shortcuts.ts";
 import { MINIMUM_CONTRAST, TERMINAL_THEMES } from "../terminalTheme.ts";
 import type { PaneChannel } from "./paneChannel.ts";
@@ -125,8 +126,9 @@ export function PaneTerminal({
     );
     inputRef.current = input;
     let replaying = false;
+    const disposeReplayQueries = suppressReplayQueries(term, () => replaying);
     const send = (data: string) => {
-      if (replaying || !runningRef.current) return;
+      if (disposed || !runningRef.current) return;
       input.send(data);
     };
     term.onData(send);
@@ -238,6 +240,7 @@ export function PaneTerminal({
       if (resizeTimer) clearTimeout(resizeTimer);
       if (attachment !== null) channel.detach(attachment).catch(() => undefined);
       input.dispose();
+      disposeReplayQueries();
       if (inputRef.current === input) inputRef.current = null;
       termRef.current = null;
       term.dispose();

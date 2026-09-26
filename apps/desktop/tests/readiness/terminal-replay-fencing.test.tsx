@@ -10,6 +10,7 @@ interface TestTerminal {
   writes: (string | Uint8Array)[];
   disposed: boolean;
   onInput: ((data: string) => void) | null;
+  queryStatus(): void;
 }
 const mocks = vi.hoisted(() => {
   const attach = vi.fn();
@@ -37,6 +38,18 @@ const mocks = vi.hoisted(() => {
 });
 vi.mock("@xterm/xterm", () => ({
   Terminal: class implements TestTerminal {
+    statusQuery: (() => boolean) | null = null;
+    parser = {
+      registerCsiHandler: (id: { final: string; prefix?: string }, handler: () => boolean) => {
+        if (id.final === "n" && !id.prefix) this.statusQuery = handler;
+        return { dispose() {} };
+      },
+      registerDcsHandler: () => ({ dispose() {} }),
+      registerOscHandler: () => ({ dispose() {} }),
+    };
+    queryStatus() {
+      if (!this.statusQuery?.()) this.onInput?.("\x1b[0n");
+    }
     options: Record<string, unknown>;
     cols = 80;
     rows = 24;
@@ -211,7 +224,7 @@ describe.each<Kind>(["shell", "provider"])("%s initial replay completion", (kind
     expect(term.writes).toHaveLength(writes);
     // A synthetic xterm device report remains suppressed while the NEW replay is pending.
     // This does not claim to repair preservation of human input received during replay.
-    await act(async () => term.onInput?.("\x1b[0n"));
+    await act(async () => term.queryStatus());
     expect(mocks.write).not.toHaveBeenCalled();
     await act(async () => complete(term, 2));
     expect(mocks.ack).toHaveBeenCalledExactlyOnceWith(18, REPLAY_BYTES);

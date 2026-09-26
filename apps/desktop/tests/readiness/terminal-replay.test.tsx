@@ -16,6 +16,11 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
+    parser = {
+      registerCsiHandler: () => ({ dispose() {} }),
+      registerDcsHandler: () => ({ dispose() {} }),
+      registerOscHandler: () => ({ dispose() {} }),
+    };
     options = {};
     cols = 80;
     rows = 24;
