@@ -201,12 +201,14 @@ pub(crate) fn empty_manager() -> FixtureResult<(tempfile::TempDir, Arc<KalVoiceC
     let (temp, manager, _, _) = fixture()?;
     Ok((temp, manager))
 }
-fn fixture() -> FixtureResult<(
+type ProvisioningFixture = (
     tempfile::TempDir,
     Arc<KalVoiceComponentManager>,
     Arc<AcquisitionSpy>,
     Arc<AtomicUsize>,
-)> {
+);
+
+fn fixture() -> FixtureResult<ProvisioningFixture> {
     let temp = private_fixture_directory()?;
     let root = TrustedComponentDirectory::open_existing(temp.path())?;
     let key = SigningKey::from_bytes(&[71; 32]);
