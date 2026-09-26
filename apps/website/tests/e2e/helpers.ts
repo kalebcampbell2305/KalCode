@@ -24,7 +24,11 @@ let ipCounter = 0;
  */
 export function uniqueIp(): string {
   ipCounter += 1;
-  return `198.51.100.${(Date.now() % 200) + ipCounter}`;
+  // Synthetic local IPv6 identities: keep both the worker PID and counter inside
+  // the /64 prefix, since the production limiter deliberately groups IPv6 hosts
+  // by network. Clock modulo arithmetic reused buckets and could overflow IPv4.
+  if (process.pid > 0xffffff || ipCounter > 0xffffffff) throw new Error("E2E IP namespace exhausted");
+  return `${(0xfd00 | (process.pid >>> 16)).toString(16)}:${(process.pid & 0xffff).toString(16)}:${(ipCounter >>> 16).toString(16)}:${(ipCounter & 0xffff).toString(16)}::1`;
 }
 
 export function uniqueEmail(label: string): string {
