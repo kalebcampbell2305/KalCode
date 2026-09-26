@@ -2,6 +2,18 @@
 
 This packet records bounded independent review, not production certification. The Primary Release Lead retains canonical main, integration, signing, publication and deployment authority. Three subagents were created and reused; the user's four-subagent lifetime limit applies.
 
+## Completed source handoffs
+
+| Commit | Branch | Scope | Required base | Evidence |
+| --- | --- | --- | --- | --- |
+| `770b66c3e3cb07c5ea6c566ba1b9f714c822af1e` | `codex2/kalvoice-interrupted-install` | Exact signed component retry after interrupted activation | `68ca2f8` | [KalVoice handoff](CODEX2-KALVOICE-RETRY-20260926.md) |
+| `50c600744962a7526333aeeb01b57486b0d03dfc` | `codex2/provider-attach-handshake` | Provider view counts follow actual PTY listener lifetime | `68ca2f8` | [Provider handoff](CODEX2-PROVIDER-ATTACH-20260926.md) |
+| `2e4aa5b3301430a07aad7070e944395fd67c6ef2` | `codex2/linux-rust-gate-count` | Correct Linux ignored-test inventory | Primary `91166fa` | [Gate handoff](CODEX2-LINUX-GATE-20260926.md) |
+
+All three source branches are clean and independently reviewed. The first two patches apply-check cleanly to primary repair `91166fa`; the third applies after it. They do not depend on each other. Optional evidence documents are on `codex2/release-deputy-20260926`. Integrated gates and final release authority remain with the Primary Lead.
+
+Subsequent review of primary `91166fa` approved its Mac updater-key injection and Unix hook fixture repair. Fourteen Mac contract tests and additional pure Node key/channel probes passed; this does not verify the embedded key inside a signed artifact. The Linux profile correction above was the review's actionable finding. No further source edits were made to primary-owned worktrees.
+
 ## Reviewed snapshot and ownership
 
 - Source: `68ca2f81e924f2b57091fec1f6c0e5ef379ba860`, `codex3/takeover-integration`.
