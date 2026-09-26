@@ -300,6 +300,8 @@ impl ThreadsState {
     ///   user answers), decisions arrive back as `approval.*` events by request id, and a
     ///   stopped thread's pending requests expire. `modes` is bound to the runtime so the
     ///   engine can read and change thread modes. Without the engine, threads don't start.
+    // Keep account-owned startup dependencies explicit at the runtime composition boundary.
+    #[allow(clippy::too_many_arguments)]
     pub fn start(
         core: Option<&Arc<Core>>,
         detection: Arc<Detection>,

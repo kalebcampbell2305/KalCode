@@ -594,6 +594,8 @@ pub async fn context_file_pick(
         .collect()
 }
 
+// Tauri injects native authority/services separately from the existing flat IPC payload.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command(async)]
 pub fn context_preview_create(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,

@@ -22,9 +22,10 @@ use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::os::windows::io::AsRawHandle;
 #[cfg(windows)]
 use windows_sys::Win32::Security::WinTrust::{
-    WINTRUST_DATA, WINTRUST_FILE_INFO, WTD_CACHE_ONLY_URL_RETRIEVAL, WTD_CHOICE_FILE,
-    WTD_DISABLE_MD2_MD4, WTD_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT, WTD_REVOKE_WHOLECHAIN,
-    WTD_STATEACTION_CLOSE, WTD_STATEACTION_VERIFY, WTD_UI_NONE, WTD_UICONTEXT_INSTALL,
+    WINTRUST_DATA, WINTRUST_DATA_0, WINTRUST_FILE_INFO, WTD_CACHE_ONLY_URL_RETRIEVAL,
+    WTD_CHOICE_FILE, WTD_DISABLE_MD2_MD4, WTD_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT,
+    WTD_REVOKE_WHOLECHAIN, WTD_STATEACTION_CLOSE, WTD_STATEACTION_VERIFY, WTD_UI_NONE,
+    WTD_UICONTEXT_INSTALL,
 };
 
 #[cfg(windows)]
@@ -451,20 +452,23 @@ fn publisher_identity_matches<T: AsRef<str>>(policy: &PublisherPolicy, observed:
 
 #[cfg(windows)]
 fn wintrust_policy(file_info: &mut WINTRUST_FILE_INFO) -> WINTRUST_DATA {
-    let mut trust = WINTRUST_DATA::default();
-    trust.cbStruct = u32::try_from(std::mem::size_of::<WINTRUST_DATA>()).unwrap_or(u32::MAX);
-    trust.dwUIChoice = WTD_UI_NONE;
-    trust.fdwRevocationChecks = WTD_REVOKE_WHOLECHAIN;
-    trust.dwUnionChoice = WTD_CHOICE_FILE;
-    trust.Anonymous.pFile = std::ptr::addr_of_mut!(*file_info);
-    trust.dwStateAction = WTD_STATEACTION_VERIFY;
-    // Cache-only retrieval keeps verification bounded. Missing or stale revocation evidence fails
-    // closed instead of allowing an unbounded network lookup on the update path.
-    trust.dwProvFlags = WTD_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT
-        | WTD_CACHE_ONLY_URL_RETRIEVAL
-        | WTD_DISABLE_MD2_MD4;
-    trust.dwUIContext = WTD_UICONTEXT_INSTALL;
-    trust
+    WINTRUST_DATA {
+        cbStruct: u32::try_from(std::mem::size_of::<WINTRUST_DATA>()).unwrap_or(u32::MAX),
+        dwUIChoice: WTD_UI_NONE,
+        fdwRevocationChecks: WTD_REVOKE_WHOLECHAIN,
+        dwUnionChoice: WTD_CHOICE_FILE,
+        Anonymous: WINTRUST_DATA_0 {
+            pFile: std::ptr::addr_of_mut!(*file_info),
+        },
+        dwStateAction: WTD_STATEACTION_VERIFY,
+        // Cache-only retrieval keeps verification bounded. Missing or stale revocation evidence
+        // fails closed instead of allowing an unbounded network lookup on the update path.
+        dwProvFlags: WTD_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT
+            | WTD_CACHE_ONLY_URL_RETRIEVAL
+            | WTD_DISABLE_MD2_MD4,
+        dwUIContext: WTD_UICONTEXT_INSTALL,
+        ..WINTRUST_DATA::default()
+    }
 }
 
 #[cfg(all(test, windows))]
@@ -604,10 +608,11 @@ fn revocation_refresh_allowed(status: i32, publisher: &PublisherCheck) -> bool {
 fn revocation_refresh_policy() -> windows_sys::Win32::Security::Cryptography::CERT_CHAIN_PARA {
     use windows_sys::Win32::Security::Cryptography::CERT_CHAIN_PARA;
 
-    let mut policy = CERT_CHAIN_PARA::default();
-    policy.cbSize = u32::try_from(std::mem::size_of::<CERT_CHAIN_PARA>()).unwrap_or(u32::MAX);
-    policy.dwUrlRetrievalTimeout = REVOCATION_REFRESH_TIMEOUT_MS;
-    policy
+    CERT_CHAIN_PARA {
+        cbSize: u32::try_from(std::mem::size_of::<CERT_CHAIN_PARA>()).unwrap_or(u32::MAX),
+        dwUrlRetrievalTimeout: REVOCATION_REFRESH_TIMEOUT_MS,
+        ..CERT_CHAIN_PARA::default()
+    }
 }
 
 #[cfg(windows)]
@@ -972,7 +977,7 @@ mod tests {
 
     #[test]
     fn native_wintrust_primitive_accepts_an_embedded_signed_binary() {
-        let path = signed_signtool_path();
+        let path = signed_signtool_path().expect("signed Windows SDK fixture");
         let file = File::open(&path).unwrap();
 
         let status = win_verify_trust(&file, &path);
@@ -982,7 +987,7 @@ mod tests {
 
     #[test]
     fn a_different_windows_trusted_publisher_fails_kalcode_identity_policy() {
-        let path = signed_signtool_path();
+        let path = signed_signtool_path().expect("signed Windows SDK fixture");
         let file = File::open(&path).unwrap();
         let policy = parse_publisher_policy(Some("1.3.6.1.4.1.311.97.4294967295")).unwrap();
 
@@ -991,24 +996,30 @@ mod tests {
         assert_eq!(result, TrustDecision::PublisherMismatch);
     }
 
-    fn signed_signtool_path() -> PathBuf {
-        let program_files = std::env::var_os("ProgramFiles(x86)")
-            .expect("Windows SDK installation root is available");
+    fn signed_signtool_path() -> std::io::Result<PathBuf> {
+        let program_files = std::env::var_os("ProgramFiles(x86)").ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Windows SDK installation root is unavailable",
+            )
+        })?;
         let bin = Path::new(&program_files)
             .join("Windows Kits")
             .join("10")
             .join("bin");
-        let mut candidates = fs::read_dir(bin)
-            .expect("Windows SDK bin directory is available")
+        let mut candidates = fs::read_dir(bin)?
             .take(128)
             .flatten()
             .map(|entry| entry.path().join("x64").join("signtool.exe"))
             .filter(|path| path.is_file())
             .collect::<Vec<_>>();
         candidates.sort();
-        candidates
-            .pop()
-            .expect("an embedded-signed Windows SDK SignTool is available")
+        candidates.pop().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "an embedded-signed Windows SDK SignTool is unavailable",
+            )
+        })
     }
 
     #[test]

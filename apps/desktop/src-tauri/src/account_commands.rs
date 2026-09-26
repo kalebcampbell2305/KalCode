@@ -229,6 +229,22 @@ fn browser_error() -> AccountRuntimeError {
     }
 }
 
+async fn blocking_mutation<T, F>(
+    runtime: Arc<AccountRuntime>,
+    admission: crate::runtime_coordinator::AccountMutation,
+    operation: F,
+) -> Result<T, AccountRuntimeError>
+where
+    T: Send + 'static,
+    F: FnOnce(&AccountRuntime) -> Result<T, AccountRuntimeError> + Send + 'static,
+{
+    blocking(runtime, move |runtime| {
+        admission.revalidate()?;
+        operation(runtime)
+    })
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,20 +261,4 @@ mod tests {
             );
         }
     }
-}
-
-async fn blocking_mutation<T, F>(
-    runtime: Arc<AccountRuntime>,
-    admission: crate::runtime_coordinator::AccountMutation,
-    operation: F,
-) -> Result<T, AccountRuntimeError>
-where
-    T: Send + 'static,
-    F: FnOnce(&AccountRuntime) -> Result<T, AccountRuntimeError> + Send + 'static,
-{
-    blocking(runtime, move |runtime| {
-        admission.revalidate()?;
-        operation(runtime)
-    })
-    .await
 }

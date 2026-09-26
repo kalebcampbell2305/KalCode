@@ -14,8 +14,10 @@ use std::sync::{Arc, Mutex};
 use kalcode_contracts::ids::is_valid_id;
 use kalcode_core::{ErrorCategory, IpcError, KalError};
 use serde::{Deserialize, Serialize};
+#[cfg(windows)]
+use tauri::Emitter;
 use tauri::webview::{NewWindowResponse, PageLoadEvent, WebviewBuilder};
-use tauri::{Emitter, LogicalPosition, LogicalSize, Manager, State, Webview, WebviewUrl};
+use tauri::{LogicalPosition, LogicalSize, Manager, State, Webview, WebviewUrl};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::AppState;
@@ -25,6 +27,7 @@ use crate::browser_policy::{
 };
 
 const MAX_BROWSER_VIEWS: usize = 8;
+#[cfg(windows)]
 const FOCUS_EVENT: &str = "kalcode://browser-focus";
 const HIDDEN_CHILD_POSITION: f64 = 16_000.0;
 #[cfg(feature = "e2e")]
@@ -191,6 +194,7 @@ pub struct BrowserState {
     debug_port: Option<u16>,
 }
 
+#[cfg(windows)]
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BrowserFocusEvent {

@@ -223,6 +223,8 @@ fn confirmation_error(code: &'static str) -> KalError {
 }
 
 impl UtilityHub {
+    // Seal the complete operation and its authority together; callers supply every binding.
+    #[allow(clippy::too_many_arguments)]
     fn seal_operation(
         &self,
         tool: UtilityTool,

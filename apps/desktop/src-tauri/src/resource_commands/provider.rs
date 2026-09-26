@@ -119,35 +119,28 @@ struct AdmissionSession {
     // Drop the provider session before this wrapper's lifecycle reference. A provider reader or
     // pane registry may still own the admitted sink while asynchronous cleanup finishes; that
     // sink retains another lifecycle reference until canonical process exit.
-    inner: Option<Box<dyn AgentSession>>,
+    // Struct fields drop in declaration order. Keep this owning session first.
+    inner: Box<dyn AgentSession>,
     _lifecycle: Arc<AdmissionLifecycle>,
-}
-
-impl AdmissionSession {
-    fn inner(&self) -> &dyn AgentSession {
-        self.inner
-            .as_deref()
-            .expect("resource admission session is unavailable during drop")
-    }
 }
 
 impl AgentSession for AdmissionSession {
     fn provider_session_id(&self) -> Option<String> {
-        self.inner().provider_session_id()
+        self.inner.provider_session_id()
     }
 
     fn send(&self, input: AgentInput) -> Result<(), ProviderError> {
-        self.inner().send(input)
+        self.inner.send(input)
     }
 
     fn interrupt(&self) -> Result<(), ProviderError> {
-        self.inner().interrupt()
+        self.inner.interrupt()
     }
 
     fn terminate(&self) -> Result<(), ProviderError> {
         // A successful request is not process-exit proof. The canonical Exited event, or dropping
         // the underlying process-owning session, releases the reservation.
-        self.inner().terminate()
+        self.inner.terminate()
     }
 
     fn respond_to_approval(
@@ -155,18 +148,12 @@ impl AgentSession for AdmissionSession {
         request_id: &str,
         decision: ApprovalDecision,
     ) -> Result<(), ProviderError> {
-        self.inner().respond_to_approval(request_id, decision)
+        self.inner.respond_to_approval(request_id, decision)
     }
 }
 
-impl Drop for AdmissionSession {
-    fn drop(&mut self) {
-        drop(self.inner.take());
-        // Do not call `release` here. Some provider session drops begin asynchronous shutdown.
-        // Normal field drop releases only when neither this wrapper nor the process-owned sink
-        // retains the lifecycle, so a still-active child continues consuming its reserved slot.
-    }
-}
+// No explicit release on drop: a process-owned sink can retain the lifecycle while its
+// provider session completes asynchronous shutdown. Field order drops the session first.
 
 impl AgentProvider for ResourceAdmissionProvider {
     fn id(&self) -> ProviderId {
@@ -199,7 +186,7 @@ impl AgentProvider for ResourceAdmissionProvider {
         });
         match self.inner.start_session(config, admitted_sink) {
             Ok(session) => Ok(Box::new(AdmissionSession {
-                inner: Some(session),
+                inner: session,
                 _lifecycle: lifecycle,
             })),
             Err(error) => {
