@@ -179,6 +179,8 @@ pub(crate) fn run_diff<'g>(
     let patches = if options.patch && !entries.is_empty() {
         let context = format!("-U{}", options.context_lines.min(1000));
         let patch_cmd = make()
+            // The parser needs the context prefix even on empty lines to preserve line counts.
+            .configs(["diff.suppressBlankEmpty=false".to_owned()])
             .arg("diff")
             .args(fixed)
             .args(["-p", "--src-prefix=a/", "--dst-prefix=b/"])
