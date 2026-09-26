@@ -282,6 +282,12 @@ function safeOutput(path) {
     throw Error("Mac component output must be new in an ordinary absolute directory");
 }
 
+export function writeMacRuntimeZip(directory, artifactPath) {
+  writeDeterministicZip(directory, MACOS_RUNTIME_POLICY.extractEntries, artifactPath, {
+    executableEntries: [MACOS_RUNTIME_POLICY.entrypoint],
+  });
+}
+
 export async function curateMacRuntime(
   { sourcePath, artifactPath, recordPath },
   { runner = macProcessRunner, env = process.env } = {},
@@ -335,7 +341,7 @@ export async function curateMacRuntime(
     });
     if (!version.includes("11146") || !version.includes("7fe450e"))
       throw Error("Signed Mac runtime does not report the pinned build identity");
-    writeDeterministicZip(staging, policy.extractEntries, artifactPath);
+    writeMacRuntimeZip(staging, artifactPath);
     const record = {
       schemaVersion: 1,
       componentId: contract.runtime.componentId,

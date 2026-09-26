@@ -1,8 +1,45 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { gzipSync } from "node:zlib";
 import * as contract from "./component-contract.mjs";
+import { writeMacRuntimeZip } from "./component-curate-macos.mjs";
+
+test("Mac ZIP records the exact consumer executable permissions", () => {
+  const root = mkdtempSync(join(tmpdir(), "kalcode-mac-zip-mode-"));
+  try {
+    const policy = contract.MACOS_RUNTIME_POLICY;
+    for (const name of policy.extractEntries) writeFileSync(join(root, name), `fixture:${name}\n`);
+    const output = join(root, "runtime.zip");
+    writeMacRuntimeZip(root, output);
+    const bytes = readFileSync(output);
+    const end = bytes.length - 22;
+    assert.equal(bytes.readUInt32LE(end), 0x06054b50);
+    assert.equal(bytes.readUInt16LE(end + 10), policy.extractEntries.length);
+    let offset = bytes.readUInt32LE(end + 16);
+    const names = [];
+    while (offset < end) {
+      assert.equal(bytes.readUInt32LE(offset), 0x02014b50);
+      assert.equal(bytes.readUInt16LE(offset + 4) >> 8, 3, "Unix creator");
+      const length = bytes.readUInt16LE(offset + 28);
+      const name = bytes.subarray(offset + 46, offset + 46 + length).toString("utf8");
+      const mode = bytes.readUInt32LE(offset + 38) >>> 16;
+      assert.equal(mode, name === policy.entrypoint ? 0o100755 : 0o100644, name);
+      names.push(name);
+      offset += 46 + length + bytes.readUInt16LE(offset + 30) + bytes.readUInt16LE(offset + 32);
+    }
+    assert.deepEqual(names.sort(), [...policy.extractEntries].sort());
+    assert.deepEqual(
+      bytes,
+      readFileSync(new URL("../../crates/kalvoice/tests/fixtures/macos-runtime-modes.zip", import.meta.url)),
+      "the Rust decoder consumes these exact producer bytes",
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("pinned Mac runtime policy matches the consumer closure and exact upstream MIT license", () => {
   const value = contract.loadComponentContract(

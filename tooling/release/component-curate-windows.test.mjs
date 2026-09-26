@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { linkSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -64,6 +65,25 @@ test("deterministic ZIP bytes are independent of caller order and timestamps", (
   writeDeterministicZip(root, ["b.dll", "a.exe"], first);
   writeDeterministicZip(root, ["a.exe", "b.dll"], second);
   assert.deepEqual(readFileSync(first), readFileSync(second));
+  assert.equal(
+    createHash("sha256").update(readFileSync(first)).digest("hex"),
+    "da64729e518b9e15722426a2839dc81153525aa17ff78d4618172337510855a3",
+    "Windows default ZIP bytes must remain unchanged",
+  );
+  assert.throws(
+    () =>
+      writeDeterministicZip(root, ["a.exe"], join(root, "missing.zip"), {
+        executableEntries: ["missing.exe"],
+      }),
+    /executable inventory/,
+  );
+  assert.throws(
+    () =>
+      writeDeterministicZip(root, ["a.exe"], join(root, "duplicate.zip"), {
+        executableEntries: ["a.exe", "a.exe"],
+      }),
+    /executable inventory/,
+  );
 });
 
 test("Windows curation signs every PE and emits only closed redacted evidence", async () => {

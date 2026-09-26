@@ -190,12 +190,20 @@ function u32(value) {
   return bytes;
 }
 
-export function writeDeterministicZip(directory, names, outputPath) {
+export function writeDeterministicZip(directory, names, outputPath, { executableEntries = [] } = {}) {
   if (existsSync(outputPath)) throw new Error("curated component ZIP already exists");
   const sorted = [...names].sort((left, right) => left.localeCompare(right, "en"));
   if (new Set(sorted).size !== sorted.length || sorted.some((name) => !safeFlatFile(name))) {
     throw new Error("curated component ZIP inventory is invalid");
   }
+  if (
+    !Array.isArray(executableEntries) ||
+    new Set(executableEntries).size !== executableEntries.length ||
+    executableEntries.some((name) => !sorted.includes(name))
+  ) {
+    throw new Error("curated component ZIP executable inventory is invalid");
+  }
+  const executables = new Set(executableEntries);
   const local = [];
   const central = [];
   let offset = 0;
@@ -241,7 +249,7 @@ export function writeDeterministicZip(directory, names, outputPath) {
         u16(0),
         u16(0),
         u16(0),
-        u32(0o100644 << 16),
+        u32((executables.has(name) ? 0o100755 : 0o100644) << 16),
         u32(offset),
         fileName,
       ]),
