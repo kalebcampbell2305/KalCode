@@ -23,7 +23,7 @@ export function useRunningTerminalCount(): number | null {
 export function TerminalsWidget() {
   const { state, reload } = useRunningTerminals();
   const threads = useThreadSummaries().state;
-  const { workspaces, active, activate, selectTerminal } = useWorkspaces();
+  const { workspaces, activate, selectTerminal } = useWorkspaces();
   const { navigate } = useNavigation();
   const now = useNow(30_000);
 
@@ -55,7 +55,8 @@ export function TerminalsWidget() {
     fallback ?? threadWorkspaceNames.get(id) ?? "Workspace";
 
   const show = async (terminal: TerminalInfo) => {
-    if (active?.id !== terminal.workspaceId && !(await activate(terminal.workspaceId))) return;
+    // The displayed workspace may still have an older native switch in flight.
+    if (!(await activate(terminal.workspaceId))) return;
     navigate("code");
     selectTerminal(terminal.id, true, terminal.workspaceId);
   };
