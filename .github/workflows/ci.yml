@@ -135,6 +135,8 @@ jobs:
         if: steps.playwright-cache.outputs.cache-hit == 'true'
         run: pnpm --filter @kalcode/desktop exec playwright install-deps chromium
       - run: pnpm --filter @kalcode/desktop test:ui --grep-invert @screenshots
+      - name: Shared UI primitive regressions
+        run: pnpm --filter @kalcode/ui test:ui:primitives
       - name: Upload Playwright traces and screenshots
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -143,6 +145,7 @@ jobs:
           path: |
             apps/desktop/test-results/
             apps/desktop/playwright-report/
+            packages/ui/test-results/
           if-no-files-found: ignore
           retention-days: 14
 
