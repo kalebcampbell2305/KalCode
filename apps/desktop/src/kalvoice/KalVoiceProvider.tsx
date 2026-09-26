@@ -177,16 +177,26 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let active = true;
     const track = () => {
-      if (active) dictationSessions.current.setFocusedTarget(resolveDictationTarget(document.activeElement));
+      if (active)
+        dictationSessions.current.setFocusedTarget(
+          document.hasFocus() ? resolveDictationTarget(document.activeElement) : null,
+        );
     };
+    // A native child webview can take focus while this document retains its activeElement.
+    // Clear only the next capture's target; existing sessions keep their frozen destination.
+    const loseFocus = () => dictationSessions.current.setFocusedTarget(null);
     const afterFocusOut = () => queueMicrotask(track);
     track();
     document.addEventListener("focusin", track, true);
     document.addEventListener("focusout", afterFocusOut, true);
+    window.addEventListener("blur", loseFocus);
+    window.addEventListener("focus", track);
     return () => {
       active = false;
       document.removeEventListener("focusin", track, true);
       document.removeEventListener("focusout", afterFocusOut, true);
+      window.removeEventListener("blur", loseFocus);
+      window.removeEventListener("focus", track);
       dictationSessions.current.reset();
     };
   }, []);
