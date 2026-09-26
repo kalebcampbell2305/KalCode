@@ -15,7 +15,7 @@ const FAKE: &str = env!("CARGO_BIN_EXE_kalcode-fake-provider");
 const WAIT: Duration = Duration::from_secs(20);
 
 struct Rig {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(windows, target_os = "macos"))]
     _guardian: kalcode_providers::guardian::GuardianRuntime,
     _temp: tempfile::TempDir,
     bin: PathBuf,
@@ -57,25 +57,25 @@ impl Rig {
         }
         std::fs::write(bin.join("fake-provider.json"), r#"{"version":"0.61.0"}"#)
             .expect("fake config");
-        #[cfg(target_os = "macos")]
+        #[cfg(any(windows, target_os = "macos"))]
         let guardian = kalcode_providers::guardian::GuardianRuntime::launch(
             Path::new(env!("CARGO_BIN_EXE_kalcode-provider-guardian")),
             temp.path(),
         )
         .expect("native provider guardian");
-        #[cfg(target_os = "macos")]
+        #[cfg(any(windows, target_os = "macos"))]
         let profiles = ManagedProfiles::for_data_dir_guarded(
             temp.path(),
             guardian.authority(),
             guardian.profile_generation(),
         )
         .expect("guarded managed profiles");
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(windows, target_os = "macos")))]
         let profiles = ManagedProfiles::new(temp.path().join("managed")).expect("managed profiles");
         let account_id = kalcode_contracts::ids::new_id();
         let thread_id = kalcode_contracts::ids::new_id();
         Self {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(windows, target_os = "macos"))]
             _guardian: guardian,
             _temp: temp,
             bin,
