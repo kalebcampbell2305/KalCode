@@ -28,38 +28,47 @@ interface DashboardDataValue {
 
 const DashboardDataContext = createContext<DashboardDataValue | null>(null);
 
-function useInvalidation(): [Record<DashboardResource, number>, (stale: Iterable<DashboardResource>) => void] {
+function createSession() {
+  return {
+    active: true,
+    tracker: null as RefreshTracker | null,
+    pending: new Set<DashboardResource>(),
+    timer: null as ReturnType<typeof setTimeout> | null,
+    actions: new Map<string, symbol>(),
+  };
+}
+
+type Session = ReturnType<typeof createSession>;
+type Lifetime = { session: Session };
+
+function useInvalidation(lifetime: Lifetime, isCurrent: (session: Session) => boolean) {
   const [versions, setVersions] = useState<Record<DashboardResource, number>>({
     threads: 0,
     approvals: 0,
     terminals: 0,
   });
-  const pending = useRef(new Set<DashboardResource>());
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(
-    () => () => {
-      if (timer.current) clearTimeout(timer.current);
+  const invalidate = useCallback(
+    (stale: Iterable<DashboardResource>, session = lifetime.session) => {
+      if (!isCurrent(session)) return;
+      for (const resource of stale) session.pending.add(resource);
+      if (session.pending.size === 0 || session.timer) return;
+      session.timer = setTimeout(() => {
+        session.timer = null;
+        if (!isCurrent(session)) return;
+        const batch = [...session.pending];
+        session.pending.clear();
+        setVersions((v) => {
+          if (!isCurrent(session)) return v;
+          const next = { ...v };
+          for (const resource of batch) next[resource] += 1;
+          return next;
+        });
+      }, REFRESH_DEBOUNCE_MS);
     },
-    [],
+    [lifetime, isCurrent],
   );
 
-  const invalidate = useCallback((stale: Iterable<DashboardResource>) => {
-    for (const resource of stale) pending.current.add(resource);
-    if (pending.current.size === 0 || timer.current) return;
-    timer.current = setTimeout(() => {
-      timer.current = null;
-      const batch = [...pending.current];
-      pending.current.clear();
-      setVersions((v) => {
-        const next = { ...v };
-        for (const resource of batch) next[resource] += 1;
-        return next;
-      });
-    }, REFRESH_DEBOUNCE_MS);
-  }, []);
-
-  return [versions, invalidate];
+  return [versions, invalidate] as const;
 }
 
 /**
@@ -73,7 +82,36 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
   const { client } = useRuntime();
   const { events, state: eventsState } = useEvents();
   const toast = useToast();
-  const [versions, invalidate] = useInvalidation();
+  // Client object equality alone cannot distinguish A -> B -> A or effect reconnection.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: client defines this resource lifetime.
+  const lifetime = useMemo<Lifetime>(() => ({ session: createSession() }), [client]);
+  const current = useRef(lifetime);
+  current.current = lifetime;
+  const [, reconnect] = useState(0);
+  const isCurrent = useCallback(
+    (session: Session) => current.current === lifetime && lifetime.session === session && session.active,
+    [lifetime],
+  );
+  useEffect(() => {
+    if (!lifetime.session.active) {
+      lifetime.session = createSession();
+      reconnect((version) => version + 1);
+    }
+    const session = lifetime.session;
+    return () => {
+      session.active = false;
+      if (session.timer) clearTimeout(session.timer);
+      session.timer = null;
+      session.pending.clear();
+      session.actions.clear();
+    };
+  }, [lifetime]);
+  const [versions, invalidate] = useInvalidation(lifetime, isCurrent);
+
+  // useResource resets its loader in an effect; hide the previous client's snapshot
+  // during the first replacement commit without remounting Dashboard consumers.
+  const [resourceOwner, setResourceOwner] = useState(lifetime);
+  useEffect(() => setResourceOwner(lifetime), [lifetime]);
 
   const threads = useResource(
     useCallback(() => client.listThreads(), [client]),
@@ -86,30 +124,48 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
 
   // Event-driven refresh: each new event invalidates the sources it can change. The tracker starts
   // once the event history has loaded, at its newest event: history is covered by the first reads.
-  const tracker = useRef<RefreshTracker | null>(null);
   useEffect(() => {
     if (eventsState !== "ready") return;
-    if (!tracker.current) {
-      tracker.current = new RefreshTracker(events[0]?.seq ?? 0);
+    const session = lifetime.session;
+    if (!isCurrent(session)) return;
+    if (!session.tracker) {
+      session.tracker = new RefreshTracker(events[0]?.seq ?? 0);
       return;
     }
-    const stale = tracker.current.observe(events);
-    if (stale.size > 0) invalidate(stale);
-  }, [events, eventsState, invalidate]);
+    const stale = session.tracker.observe(events);
+    if (stale.size > 0) invalidate(stale, session);
+  }, [events, eventsState, invalidate, lifetime, isCurrent]);
 
-  // Announcements.
-  const [urgent, setUrgent] = useState<Announcement | null>(null);
-  const [polite, setPolite] = useState<Announcement | null>(null);
+  const [actionState, setActionState] = useState(() => ({
+    owner: lifetime,
+    pending: new Map<string, ThreadAction>(),
+    polite: null as Announcement | null,
+  }));
+  const emptyActions = useMemo(() => new Map<string, ThreadAction>(), []);
+  const pendingActions = actionState.owner === lifetime ? actionState.pending : emptyActions;
+  const polite = actionState.owner === lifetime ? actionState.polite : null;
+  const urgent = null;
   const announceSeq = useRef(0);
-  const announce = useCallback((text: string, level: "urgent" | "polite") => {
-    const next = { id: ++announceSeq.current, text };
-    (level === "urgent" ? setUrgent : setPolite)(next);
-  }, []);
+  const actionSession = lifetime.session;
 
-  const [pendingActions, setPendingActions] = useState<ReadonlyMap<string, ThreadAction>>(new Map());
   const runAction = useCallback(
     async (thread: ThreadSummary, action: Exclude<ThreadAction, "open">) => {
-      setPendingActions((m) => new Map(m).set(thread.id, action));
+      const session = actionSession;
+      if (!isCurrent(session)) return;
+      // A newer explicit action (including Stop) can run immediately. Its completion
+      // owns this row; an older request cannot clear or overwrite its visible state.
+      const request = Symbol();
+      session.actions.set(thread.id, request);
+      const ownsAction = () => isCurrent(session) && session.actions.get(thread.id) === request;
+      setActionState((state) =>
+        ownsAction()
+          ? {
+              owner: lifetime,
+              pending: new Map(state.owner === lifetime ? state.pending : []).set(thread.id, action),
+              polite: state.owner === lifetime ? state.polite : null,
+            }
+          : state,
+      );
       try {
         const updated =
           action === "interrupt"
@@ -119,40 +175,57 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
               : action === "archive"
                 ? await client.archiveThread(thread.id)
                 : await client.resumeThread(thread.id); // resume and retry
+        if (!isCurrent(session)) return;
+        // Reconcile even a superseded current-client command: native effects already happened.
+        invalidate(["threads"], session);
+        if (!ownsAction()) return;
         threads.update((list) =>
           action === "archive"
             ? list.filter((t) => t.id !== updated.id)
             : list.map((t) => (t.id === updated.id ? updated : t)),
         );
-        announce(
-          action === "archive"
-            ? `${thread.name} archived`
-            : `${thread.name}: ${ACTION_LABELS[action].toLowerCase()} requested`,
-          "polite",
-        );
-        invalidate(["threads"]);
+        const announcement = {
+          id: ++announceSeq.current,
+          text:
+            action === "archive"
+              ? `${thread.name} archived`
+              : `${thread.name}: ${ACTION_LABELS[action].toLowerCase()} requested`,
+        };
+        setActionState((state) => (ownsAction() ? { ...state, polite: announcement } : state));
       } catch (raw) {
+        if (!isCurrent(session)) return;
+        invalidate(["threads"], session);
+        if (!ownsAction()) return;
         const error = toKalCodeError(raw);
         toast.show({
           tone: "danger",
           title: `Couldn't ${ACTION_LABELS[action].toLowerCase()} ${thread.name}`,
           description: error.message,
         });
-        invalidate(["threads"]);
       } finally {
-        setPendingActions((m) => {
-          const next = new Map(m);
-          next.delete(thread.id);
-          return next;
-        });
+        if (ownsAction()) {
+          setActionState((state) => {
+            if (!ownsAction() || state.owner !== lifetime) return state;
+            const next = new Map(state.pending);
+            next.delete(thread.id);
+            return { ...state, pending: next };
+          });
+        }
       }
     },
-    [client, threads.update, announce, invalidate, toast],
+    [client, threads.update, invalidate, toast, lifetime, isCurrent, actionSession],
   );
 
   const value = useMemo<DashboardDataValue>(
-    () => ({ threads, terminals, pendingActions, runAction, urgent, polite }),
-    [threads, terminals, pendingActions, runAction, urgent, polite],
+    () => ({
+      threads: resourceOwner === lifetime ? threads : { ...threads, state: { status: "loading" } },
+      terminals: resourceOwner === lifetime ? terminals : { ...terminals, state: { status: "loading" } },
+      pendingActions,
+      runAction,
+      urgent,
+      polite,
+    }),
+    [threads, terminals, pendingActions, runAction, polite, resourceOwner, lifetime],
   );
 
   return <DashboardDataContext.Provider value={value}>{children}</DashboardDataContext.Provider>;
