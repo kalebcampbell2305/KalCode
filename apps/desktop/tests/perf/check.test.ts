@@ -79,6 +79,44 @@ test("performance CLI allows explicitly disabling the baseline", () => {
   assert.equal(result.status, 0, result.stderr);
 });
 
+test("performance CLI requires a platform key even when baseline comparison is disabled", () => {
+  for (const platform of [
+    undefined,
+    null,
+    42,
+    {},
+    [],
+    "",
+    " ",
+    "windows",
+    "windows-x64\n",
+    "../windows-x64",
+    "windows/x64",
+    "windows\\x64",
+  ]) {
+    const result = check({ ...report, platform }, undefined, ["--no-baseline"]);
+    assert.equal(result.status, 2, `Accepted platform ${JSON.stringify(platform)}: ${result.stdout}`);
+    assert.match(result.stderr, /platform/i);
+    assert.doesNotMatch(result.stdout, /passed/);
+  }
+});
+
+test("performance CLI rejects matching but malformed platform keys in current and baseline reports", () => {
+  for (const platform of [undefined, null, "", "../windows-x64"]) {
+    const invalid = { ...report, platform };
+    const result = check(invalid, invalid);
+    assert.equal(result.status, 2, `Compared unidentified reports: ${result.stdout}`);
+    assert.match(result.stderr, /platform/i);
+  }
+});
+
+test("performance CLI accepts other valid platform keys without an installed baseline", () => {
+  for (const platform of ["macos-arm64", "linux-x64", "freebsd-arm64"]) {
+    const result = check({ ...report, platform }, undefined, ["--no-baseline"]);
+    assert.equal(result.status, 0, result.stderr);
+  }
+});
+
 test("performance CLI rejects an empty budget instead of passing zero checks", () => {
   const result = check(report, report, [], { defaults: { regressionPct: 20 }, metrics: {} });
   assert.equal(result.status, 2);

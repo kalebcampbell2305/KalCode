@@ -29,6 +29,10 @@ function loadResults(path: string): ResultsFile {
   if (report?.kind !== "kalcode-perf") {
     throw new Error(`${path} is not a KalCode perf results file`);
   }
+  // platformKey() emits OS-architecture keys; require one before selecting a baseline path.
+  if (typeof report.platform !== "string" || !/^[a-z0-9]+-[a-z0-9]+$/.test(report.platform)) {
+    throw new Error(`${path} must contain a platform key such as windows-x64 or macos-arm64`);
+  }
   if (!report.metrics || typeof report.metrics !== "object" || Array.isArray(report.metrics)) {
     throw new Error(`${path} must contain a metrics object`);
   }
