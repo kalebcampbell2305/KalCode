@@ -32,7 +32,7 @@ function Probe() {
 async function mount(transport: MemoryTransport) {
   const client = new KalCodeClient(transport);
   const boot = await client.boot();
-  render(
+  const view = render(
     <StrictMode>
       <ToastProvider>
         <RuntimeProvider client={client} info={boot.info} initialSettings={INITIAL}>
@@ -42,7 +42,18 @@ async function mount(transport: MemoryTransport) {
     </StrictMode>,
   );
   await waitFor(() => expect(Number(screen.getByTestId("events").textContent)).toBeGreaterThan(0));
+  return { ...view, client, boot };
 }
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+const SAVE_ERROR = { category: "database", code: "database_error", message: "Disk full.", retryable: false };
 
 describe("RuntimeProvider", () => {
   it("holds exactly one live event subscription under StrictMode", async () => {
@@ -95,6 +106,64 @@ describe("RuntimeProvider", () => {
     await user.click(screen.getByRole("button", { name: "light" }));
     await waitFor(() => expect(screen.getByTestId("theme").textContent).toBe("dark"));
     expect(await screen.findByText("Settings not saved")).toBeInTheDocument();
+  });
+
+  it("ignores an old reconciliation that finishes after a newer successful save", async () => {
+    const { client } = await mount(createMemoryTransport("default"));
+    const oldRead = deferred<Settings>();
+    vi.spyOn(client, "updateSettings").mockRejectedValueOnce(SAVE_ERROR);
+    vi.spyOn(client, "getSettings").mockImplementationOnce(() => oldRead.promise);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "compact" }));
+    expect(await screen.findByText("Settings not saved")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "light" }));
+    await waitFor(() => expect(screen.getByTestId("density")).toHaveTextContent("comfortable"));
+    expect(await client.getSettings()).toMatchObject({ theme: "light", density: "comfortable" });
+    await act(async () => oldRead.resolve(INITIAL));
+    expect(screen.getByTestId("theme")).toHaveTextContent("light");
+    expect(screen.getByTestId("density")).toHaveTextContent("comfortable");
+  });
+
+  it("still reconciles a new failed write while an older reconciliation is pending", async () => {
+    const { client } = await mount(createMemoryTransport("default"));
+    const oldRead = deferred<Settings>();
+    const write = vi.spyOn(client, "updateSettings").mockRejectedValueOnce(SAVE_ERROR);
+    vi.spyOn(client, "getSettings").mockImplementationOnce(() => oldRead.promise);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "compact" }));
+    await user.click(screen.getByRole("button", { name: "light" }));
+    await waitFor(() => expect(screen.getByTestId("density")).toHaveTextContent("comfortable"));
+    write.mockRejectedValueOnce(SAVE_ERROR);
+    await user.click(screen.getByRole("button", { name: "compact" }));
+    await waitFor(() => expect(screen.getByTestId("density")).toHaveTextContent("comfortable"));
+    expect(screen.getByTestId("theme")).toHaveTextContent("light");
+    await act(async () => oldRead.resolve(INITIAL));
+    expect(screen.getByTestId("theme")).toHaveTextContent("light");
+  });
+
+  it("reconciles the current client independently of a previous client's unfinished write", async () => {
+    const { client, rerender } = await mount(createMemoryTransport("default"));
+    const oldWrite = deferred<Settings>();
+    vi.spyOn(client, "updateSettings").mockImplementationOnce(() => oldWrite.promise);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "light" }));
+    const replacement = new KalCodeClient(createMemoryTransport("default"));
+    const boot = await replacement.boot();
+    vi.spyOn(replacement, "updateSettings").mockRejectedValueOnce(SAVE_ERROR);
+    rerender(
+      <StrictMode>
+        <ToastProvider>
+          <RuntimeProvider client={replacement} info={boot.info} initialSettings={INITIAL}>
+            <Probe />
+          </RuntimeProvider>
+        </ToastProvider>
+      </StrictMode>,
+    );
+    await user.click(screen.getByRole("button", { name: "compact" }));
+    await waitFor(() => expect(screen.getByTestId("density")).toHaveTextContent("comfortable"));
+    expect(screen.getByTestId("theme")).toHaveTextContent("dark");
+    await act(async () => oldWrite.resolve({ ...INITIAL, theme: "light" }));
+    expect(screen.getByTestId("theme")).toHaveTextContent("dark");
   });
 });
 

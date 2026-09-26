@@ -44,9 +44,9 @@ interface RuntimeProviderProps {
 export function RuntimeProvider({ client, info, initialSettings, children }: RuntimeProviderProps) {
   const toast = useToast();
   const [settings, setSettings] = useState(initialSettings);
-  const requestSeq = useRef(0);
-  const inFlight = useRef(0);
-  const needsReconcile = useRef(false);
+  const requests = useMemo(() => ({ client, seq: 0, inFlight: 0, needsReconcile: false }), [client]);
+  const currentRequests = useRef(requests);
+  currentRequests.current = requests;
 
   /**
    * Optimistic update. A lone request applies its own response. When requests overlap (their
@@ -55,30 +55,37 @@ export function RuntimeProvider({ client, info, initialSettings, children }: Run
    */
   const updateSettings = useCallback(
     async (patch: SettingsPatch) => {
-      const id = ++requestSeq.current;
-      inFlight.current += 1;
-      if (inFlight.current > 1) needsReconcile.current = true;
+      if (requests !== currentRequests.current) return;
+      const id = ++requests.seq;
+      requests.inFlight += 1;
+      if (requests.inFlight > 1) requests.needsReconcile = true;
       setSettings((current) => ({ ...current, ...patch }));
       try {
-        const next = await client.updateSettings(patch);
-        if (id === requestSeq.current && !needsReconcile.current) setSettings(next);
+        const next = await requests.client.updateSettings(patch);
+        if (requests === currentRequests.current && id === requests.seq && !requests.needsReconcile) setSettings(next);
       } catch (error) {
-        needsReconcile.current = true;
-        toast.show({ tone: "danger", title: "Settings not saved", description: toKalCodeError(error).message });
+        requests.needsReconcile = true;
+        if (requests === currentRequests.current) {
+          toast.show({ tone: "danger", title: "Settings not saved", description: toKalCodeError(error).message });
+        }
       } finally {
-        inFlight.current -= 1;
-        if (inFlight.current === 0 && needsReconcile.current) {
-          needsReconcile.current = false;
+        requests.inFlight -= 1;
+        if (requests === currentRequests.current && requests.inFlight === 0 && requests.needsReconcile) {
+          requests.needsReconcile = false;
+          const reconcileSeq = requests.seq;
           try {
-            const saved = await client.getSettings();
-            if (inFlight.current === 0) setSettings(saved);
+            const saved = await requests.client.getSettings();
+            // A newer write can start and finish while this read is still pending.
+            if (requests === currentRequests.current && reconcileSeq === requests.seq) setSettings(saved);
           } catch {
-            needsReconcile.current = true; // try again after the next update
+            if (requests === currentRequests.current && reconcileSeq === requests.seq) {
+              requests.needsReconcile = true; // try again after the next update
+            }
           }
         }
       }
     },
-    [client, toast],
+    [requests, toast],
   );
 
   const [feed] = useState(() => new EventFeed());
