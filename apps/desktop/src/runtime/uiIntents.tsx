@@ -143,7 +143,8 @@ export function UiIntentsProvider({ children }: { children: ReactNode }) {
           }
           if (!isCurrent()) return;
           if (isPane && workspaceId) {
-            const ok = workspaces.active?.id === workspaceId || (await workspaces.activate(workspaceId));
+            // Even the displayed workspace must supersede an older activation still in flight.
+            const ok = await workspaces.activate(workspaceId);
             if (!isCurrent()) return;
             if (ok) {
               navigate("code");

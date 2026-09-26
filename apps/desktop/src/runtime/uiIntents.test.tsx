@@ -50,6 +50,25 @@ describe("UI focus intent lifecycle", () => {
     mocks.invoke.mockResolvedValue(null);
   });
 
+  it("confirms the displayed workspace before focusing its pane while a switch may be pending", async () => {
+    const activation = deferred<boolean>();
+    mocks.activate.mockReturnValueOnce(activation.promise);
+    const { result } = mount();
+    let focus!: Promise<void>;
+    await act(async () => {
+      focus = result.current.focus({ kind: "thread", threadId: "current-pane" });
+    });
+    expect(mocks.activate).toHaveBeenCalledWith("workspace-a");
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    expect(result.current.paneFocus).toBeNull();
+    await act(async () => {
+      activation.resolve(true);
+      await focus;
+    });
+    expect(mocks.navigate).toHaveBeenCalledWith("code");
+    expect(result.current.paneFocus?.threadId).toBe("current-pane");
+  });
+
   it("does not navigate to an old thread after a newer focus request", async () => {
     const read = deferred<typeof pane>();
     mocks.getThread.mockReturnValueOnce(read.promise);

@@ -5,7 +5,7 @@ import { useNavigation } from "../navigation.tsx";
 import { dispatchPaneCommand, type PaneCommandResult } from "./paneCommands.ts";
 
 export interface OpenInPaneOptions {
-  /** The workspace the content belongs to (activated first when it isn't the active one). */
+  /** The workspace the content belongs to (activation is confirmed before opening). */
   workspaceId?: string | null;
   /** A new pane beside the focused one instead of a tab in it. */
   placement?: "tab" | "split";
@@ -24,7 +24,8 @@ export function useOpenInPane(): (content: PaneContent, options?: OpenInPaneOpti
   return useCallback(
     async (content, options = {}) => {
       const target = options.workspaceId ?? activeId;
-      if (target && target !== activeId && !(await activate(target))) {
+      // The displayed workspace can have an older switch pending; submit this intent too.
+      if (target && !(await activate(target))) {
         return { handled: false, message: "KalCode couldn't open that workspace." };
       }
       navigate("code");
