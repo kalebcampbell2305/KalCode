@@ -145,6 +145,7 @@ export function WidgetFrame({ widget, height, index, total, onMove, onHide, onRe
             onPointerMove={onHandleMove}
             onPointerUp={onHandleUp}
             onPointerCancel={onHandleUp}
+            onLostPointerCapture={onHandleUp}
           >
             <GripVertical aria-hidden="true" />
           </button>
@@ -193,6 +194,7 @@ export function WidgetFrame({ widget, height, index, total, onMove, onHide, onRe
         onPointerMove={onResizeMove}
         onPointerUp={onResizeUp}
         onPointerCancel={onResizeUp}
+        onLostPointerCapture={onResizeUp}
       />
     </Panel>
   );
