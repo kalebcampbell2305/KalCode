@@ -1,5 +1,5 @@
 import { RadioGroup } from "radix-ui";
-import { type ReactNode, useRef } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { cx } from "./cx.ts";
 import styles from "./SegmentedControl.module.css";
 
@@ -37,6 +37,15 @@ export function SegmentedControl<T extends string>({
   // (Radix's own selection or the arrow-key fallback below) observes it first.
   const latest = useRef(value);
   latest.current = value;
+  const pending = useRef(new Set<ReturnType<typeof setTimeout>>());
+  useEffect(() => {
+    if (disabled) return;
+    const timers = pending.current;
+    return () => {
+      for (const timer of timers) clearTimeout(timer);
+      timers.clear();
+    };
+  }, [disabled]);
   const select = (next: string) => {
     if (next === latest.current || !options.some((option) => option.value === next)) return;
     latest.current = next as T;
@@ -52,14 +61,18 @@ export function SegmentedControl<T extends string>({
       loop
       disabled={disabled}
       onKeyDown={(event) => {
-        if (!ARROW_KEYS.has(event.key)) return;
+        if (disabled || !ARROW_KEYS.has(event.key)) return;
+        const group = event.currentTarget;
         // Radix moves focus in a zero-delay timeout scheduled by the item's handler, which runs
         // before this bubbled handler; a timeout here therefore observes the new focus.
-        setTimeout(() => {
-          const focused = document.activeElement;
+        const timer = setTimeout(() => {
+          pending.current.delete(timer);
+          const focused = group.ownerDocument.activeElement;
+          if (!group.isConnected || !group.contains(focused) || focused?.hasAttribute("disabled")) return;
           const next = focused?.getAttribute("role") === "radio" ? focused.getAttribute("value") : null;
           if (next) select(next);
         }, 0);
+        pending.current.add(timer);
       }}
       {...aria}
     >
