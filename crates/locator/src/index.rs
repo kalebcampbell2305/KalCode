@@ -355,9 +355,11 @@ fn fts_phrase(text: &str) -> String {
 /// Matching is by substring, so an alternative that contains another alternative adds nothing
 /// ("authentication" when "auth" is searched) and is left out of the expression: long phrases
 /// made of common trigrams are what make broad FTS5 queries slow. Scoring still sees them.
-fn fts_expression(groups: &[TermGroup], direct_only: bool) -> Option<String> {
+fn fts_expression<'a>(
+    groups: impl Iterator<Item = &'a TermGroup>,
+    direct_only: bool,
+) -> Option<String> {
     let parts: Vec<String> = groups
-        .iter()
         .filter_map(|group| {
             let usable: Vec<&String> = group
                 .alternatives
@@ -516,7 +518,14 @@ fn candidates_with(
     let mut args: Vec<SqlValue> = Vec::new();
     let columns = "e.entity_kind, e.entity_id, e.workspace_id, e.provider_id, e.title, e.subtitle, e.status, e.updated_at";
     let mut sql;
-    let fts = fts_expression(&parsed.groups, direct_only);
+    // A mixed group needs its short alternatives ORed with its FTS matches. Keeping it in
+    // the combined MATCH expression would require a long alternative even when "db" matched.
+    let (mixed_groups, fts_groups): (Vec<_>, Vec<_>) = parsed.groups.iter().partition(|group| {
+        !direct_only
+            && group.alternatives.iter().any(|a| a.chars().count() < 3)
+            && group.alternatives.iter().any(|a| a.chars().count() >= 3)
+    });
+    let fts = fts_expression(fts_groups.into_iter(), direct_only);
     if let Some(expression) = &fts {
         // Matching rows only (no bm25: ranking happens in Rust); newest first.
         sql = format!(
@@ -526,6 +535,33 @@ fn candidates_with(
         args.push(SqlValue::Text(expression.clone()));
     } else {
         sql = format!("SELECT {columns} FROM locator_entries e WHERE 1 = 1");
+    }
+    for group in &mixed_groups {
+        let Some(expression) = fts_expression(std::iter::once(*group), false) else {
+            continue;
+        };
+        let short: Vec<&String> = group
+            .alternatives
+            .iter()
+            .filter(|a| a.chars().count() < 3)
+            .collect();
+        // UNION keeps the long alternatives on FTS (including opted-in message matches),
+        // while short aliases scan only bounded, visible title/subtitle fields. Each group
+        // remains an AND constraint, and the entire widening stays under ALIAS_BUDGET.
+        sql.push_str(&format!(
+            " AND e.id IN (SELECT rowid FROM locator_fts WHERE locator_fts MATCH ?
+             UNION SELECT id FROM locator_entries
+             WHERE id IN (SELECT id FROM locator_entries ORDER BY updated_at DESC LIMIT {SHORT_TERM_SCAN})
+             AND ({}))",
+            vec![r"(title LIKE ? ESCAPE '\' OR subtitle LIKE ? ESCAPE '\')"; short.len()]
+                .join(" OR ")
+        ));
+        args.push(SqlValue::Text(expression));
+        for alt in short {
+            let pattern = format!("%{}%", escape_like(alt));
+            args.push(SqlValue::Text(pattern.clone()));
+            args.push(SqlValue::Text(pattern));
+        }
     }
     // Groups the trigram index can't serve (every alternative shorter than 3 characters).
     for group in &parsed.groups {
@@ -554,7 +590,7 @@ fn candidates_with(
     push_filters(filters, &mut sql, &mut args);
     // Terms too short for the trigram index are matched by scanning, newest first: fewer
     // candidates keep that scan short.
-    let limit = if fts.is_some() {
+    let limit = if fts.is_some() || !mixed_groups.is_empty() {
         MAX_CANDIDATES
     } else {
         MAX_RECENT_CANDIDATES
