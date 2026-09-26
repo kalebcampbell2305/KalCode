@@ -31,6 +31,52 @@ export const WINDOWS_RUNTIME_CODE_MEMBERS = Object.freeze([
   "mtmd.dll",
 ]);
 
+export const MACOS_RUNTIME_CODE_MEMBERS = Object.freeze([
+  "libggml-base.0.dylib",
+  "libggml-blas.0.dylib",
+  "libggml-cpu.0.dylib",
+  "libggml-metal.0.dylib",
+  "libggml-rpc.0.dylib",
+  "libggml.0.dylib",
+  "libllama-common.0.dylib",
+  "libllama-server-impl.dylib",
+  "libllama.0.dylib",
+  "libmtmd.0.dylib",
+  "llama-server",
+]);
+export const MACOS_RUNTIME_POLICY = Object.freeze({
+  platform: "macos",
+  arch: "aarch64",
+  artifactFile: "runtime.zip",
+  entrypoint: "llama-server",
+  minimumSystemVersion: "14.0",
+  expectedTeamId: "JG5K9T47ZF",
+  source: {
+    id: "ggml-org/llama.cpp",
+    revision: "7fe450e19305b828c199d602c23a8337aaa1f03b",
+    url: "https://github.com/ggml-org/llama.cpp/releases/download/b11146/llama-b11146-bin-macos-arm64.tar.gz",
+    file: "llama-b11146-bin-macos-arm64.tar.gz",
+    sizeBytes: 11_189_714,
+    sha256: "1ad3f9eff80edb9dbef4259ad564d1720612ef7eea48fa4afed0e54f5f3d5711",
+  },
+  licenses: [
+    {
+      spdxId: "MIT",
+      noticeUrl:
+        "https://raw.githubusercontent.com/ggml-org/llama.cpp/7fe450e19305b828c199d602c23a8337aaa1f03b/LICENSE",
+      noticeSha256: "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+    },
+  ],
+  codeEntries: MACOS_RUNTIME_CODE_MEMBERS,
+  extractEntries: ["LICENSE", ...MACOS_RUNTIME_CODE_MEMBERS],
+  members: ["LICENSE", ...MACOS_RUNTIME_CODE_MEMBERS].map((file) => ({
+    file,
+    source: file.endsWith(".0.dylib")
+      ? file.replace(".0.dylib", file.startsWith("libggml") ? ".0.25.1.dylib" : ".0.5.0.dylib")
+      : file,
+  })),
+});
+
 const SHA256 = /^[0-9a-f]{64}$/;
 const SAFE_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const SAFE_SOURCE_ID = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
@@ -245,7 +291,12 @@ export function validateComponentContract(value) {
   if (value.schemaVersion !== 1) throw new Error("component contract schemaVersion is invalid");
   if (value.artifactOrigin !== COMPONENT_ORIGIN) throw new Error("component contract artifactOrigin is invalid");
 
-  exactKeys(value.runtime, ["componentId", "kind", "version", "runtimeAbi", "windowsX86_64"], "runtime");
+  exactKeys(
+    value.runtime,
+    ["componentId", "kind", "version", "runtimeAbi", "windowsX86_64", "macosAarch64"],
+    "runtime",
+  );
+  if (!sameJson(value.runtime.macosAarch64, MACOS_RUNTIME_POLICY)) throw new Error("Mac runtime policy is invalid");
   if (value.runtime.componentId !== REASONING_RUNTIME_ID || value.runtime.kind !== "runtime")
     throw new Error("runtime identity is invalid");
   if (value.runtime.version !== "0.5.0-b11146") throw new Error("runtime version is invalid");

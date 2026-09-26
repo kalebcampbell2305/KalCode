@@ -163,6 +163,106 @@
         "llama.exe",
         "mtmd.dll"
       ]
+    },
+    "macosAarch64": {
+      "platform": "macos",
+      "arch": "aarch64",
+      "artifactFile": "runtime.zip",
+      "entrypoint": "llama-server",
+      "minimumSystemVersion": "14.0",
+      "expectedTeamId": "JG5K9T47ZF",
+      "source": {
+        "id": "ggml-org/llama.cpp",
+        "revision": "7fe450e19305b828c199d602c23a8337aaa1f03b",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11146/llama-b11146-bin-macos-arm64.tar.gz",
+        "file": "llama-b11146-bin-macos-arm64.tar.gz",
+        "sizeBytes": 11189714,
+        "sha256": "1ad3f9eff80edb9dbef4259ad564d1720612ef7eea48fa4afed0e54f5f3d5711"
+      },
+      "licenses": [
+        {
+          "spdxId": "MIT",
+          "noticeUrl": "https://raw.githubusercontent.com/ggml-org/llama.cpp/7fe450e19305b828c199d602c23a8337aaa1f03b/LICENSE",
+          "noticeSha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d"
+        }
+      ],
+      "codeEntries": [
+        "libggml-base.0.dylib",
+        "libggml-blas.0.dylib",
+        "libggml-cpu.0.dylib",
+        "libggml-metal.0.dylib",
+        "libggml-rpc.0.dylib",
+        "libggml.0.dylib",
+        "libllama-common.0.dylib",
+        "libllama-server-impl.dylib",
+        "libllama.0.dylib",
+        "libmtmd.0.dylib",
+        "llama-server"
+      ],
+      "extractEntries": [
+        "LICENSE",
+        "libggml-base.0.dylib",
+        "libggml-blas.0.dylib",
+        "libggml-cpu.0.dylib",
+        "libggml-metal.0.dylib",
+        "libggml-rpc.0.dylib",
+        "libggml.0.dylib",
+        "libllama-common.0.dylib",
+        "libllama-server-impl.dylib",
+        "libllama.0.dylib",
+        "libmtmd.0.dylib",
+        "llama-server"
+      ],
+      "members": [
+        {
+          "file": "LICENSE",
+          "source": "LICENSE"
+        },
+        {
+          "file": "libggml-base.0.dylib",
+          "source": "libggml-base.0.25.1.dylib"
+        },
+        {
+          "file": "libggml-blas.0.dylib",
+          "source": "libggml-blas.0.25.1.dylib"
+        },
+        {
+          "file": "libggml-cpu.0.dylib",
+          "source": "libggml-cpu.0.25.1.dylib"
+        },
+        {
+          "file": "libggml-metal.0.dylib",
+          "source": "libggml-metal.0.25.1.dylib"
+        },
+        {
+          "file": "libggml-rpc.0.dylib",
+          "source": "libggml-rpc.0.25.1.dylib"
+        },
+        {
+          "file": "libggml.0.dylib",
+          "source": "libggml.0.25.1.dylib"
+        },
+        {
+          "file": "libllama-common.0.dylib",
+          "source": "libllama-common.0.5.0.dylib"
+        },
+        {
+          "file": "libllama-server-impl.dylib",
+          "source": "libllama-server-impl.dylib"
+        },
+        {
+          "file": "libllama.0.dylib",
+          "source": "libllama.0.5.0.dylib"
+        },
+        {
+          "file": "libmtmd.0.dylib",
+          "source": "libmtmd.0.5.0.dylib"
+        },
+        {
+          "file": "llama-server",
+          "source": "llama-server"
+        }
+      ]
     }
   },
   "reasoningModel": {

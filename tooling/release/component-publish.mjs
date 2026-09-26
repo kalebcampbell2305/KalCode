@@ -23,6 +23,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
 import { loadComponentContract } from "./component-contract.mjs";
+import { validateMacRuntimePublicationEvidence } from "./component-curate-macos.mjs";
 import {
   buildComponentArtifactClaimStatement,
   buildComponentArtifactsReadStatement,
@@ -213,6 +214,16 @@ function validateWindowsRuntimeEvidence(record, artifact, catalog, contract) {
 
 function validateArtifactPolicy(artifact, entry, catalog, contract) {
   if (artifact.role === "reason-runtime") {
+    if (catalog.platform === "macos" && catalog.arch === "aarch64") {
+      if (typeof entry.evidencePath !== "string") throw Error("Mac runtime curation evidence is required");
+      validateMacRuntimePublicationEvidence(
+        readSmallJson(entry.evidencePath, "Mac runtime curation evidence"),
+        artifact,
+        catalog,
+        contract,
+      );
+      return;
+    }
     if (catalog.platform !== "windows" || catalog.arch !== "x86_64") {
       throw new Error("this release packet has no approved runtime curation policy for the target");
     }
