@@ -29,10 +29,10 @@ Nothing in this report certifies a production release or customer installation.
 
 | Work | State | Required next evidence |
 | --- | --- | --- |
-| KalVoice signed runtime/model desktop wiring | Running, isolated worker | Native compilation, consent/custody tests, review and integration |
-| Browser native authority fixtures | Needs repair | Resolve recovered API/test mismatch without weakening account authority |
-| Mac guardian recovery `c800aea` | Held for follow-up | Private-root repair, multi-turn lease lifecycle repair, Windows compatibility |
-| Mac build-only/resume `22b15d9` | Reviewed, dependent | Integrate with native packet; actual signed candidate and notarization |
+| KalVoice signed runtime/model desktop wiring | Integrated `04c83a8` | Physical microphone and provisioned desktop QA |
+| Browser account authority | Integrated `b03f933` | Real WebView account-isolation QA |
+| Mac guardian recovery | Integrated with private-root and multi-turn lease fixes | Full final-source gates and real provider QA |
+| Mac build-only/resume | Integrated `e0943a9` | Actual signed candidate and notarization |
 | KalVoice server entitlement adapter | Needs repair | Replace production provisional Free source with verified account authority |
 | Windows component distribution | Locally verified | Publish only with eligible desktop and verified production routes |
 | Mac component distribution | Needs implementation closeout | Approved arm64 runtime curation/signing and platform-bound catalog |
@@ -90,3 +90,35 @@ are preserved locally. The catalog has a bounded validity window; recheck validi
 and authoritative sequence immediately before publication. Billing migration 0008
 must precede deployment of the checkout retry repair. Paid checkout remains held
 until signed desktop certification; no charge-producing test was run.
+
+## Subsequent verification and remaining repairs
+
+- Registered tooling subsequently passed 293 tests with no skips. Cargo deny passed
+  advisories, bans, licenses and sources; duplicate warnings remain reported.
+- Physical Mac provider tests: 286 passed, 9 existing intentional ignores. Windows
+  guardian tests: 23 passed. These do not prove logged-in provider interaction.
+- Windows desktop library: 180 passed after Browser authority and KalVoice wiring.
+- The exploratory full browser run finished 309 passed / 7 failed. It overlapped a
+  development-server reload and is not an immutable release gate. KalVoice dark-theme
+  accessibility passed on a fixed candidate rerun. Email onboarding's locator was
+  repaired with both account-flow tests passing. Four further focused checks passed
+  after aligning shortcut/account expectations and giving context delivery an explicit
+  enabled-feature fixture; a separate test verifies the ordinary gated state.
+- Command-palette accessibility still fails in both themes: the active descendant
+  references a removed option. A production repair is required; axe remains enabled.
+- Frozen `b03f933` Rust workspace run stopped after 1,549 passes, 7 intentional
+  ignores and 2 Gemini fixture failures. Windows guarded-fixture and strict-Clippy
+  repairs are in progress; no full Rust gate pass is claimed.
+- Environment Doctor local-runtime observation is integrated in `083c1ee`: 49
+  crate tests passed, including absent-source and changing native-state checks.
+  Desktop compilation and broader strict-Clippy verification remain pending.
+- Exact upstream notice bytes are restored in `afed16e`. Git line-ending conversion
+  had changed the hash-pinned Qwen license; no trusted checksum was changed. All four
+  notice integrity/staging tests passed.
+- Mac component signing reached the existing production identity but failed with
+  `errSecInternalComponent`. No signed Mac component archive, app, DMG, notarization,
+  installation or publication is claimed. The certificate/key was not replaced,
+  exported or printed, and keychain access controls were not changed.
+
+Canonical main remains `ad4d073`, with its original uncommitted work preserved.
+No source push, release publication or website deployment has occurred in this closeout.
