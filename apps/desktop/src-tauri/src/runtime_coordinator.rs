@@ -135,13 +135,6 @@ impl RuntimeBundle {
                 git,
                 app,
             )));
-            bundle.doctor = Some(Arc::new(crate::doctor_commands::DoctorState::start(
-                state.core.clone(),
-                providers.registry(),
-                health.monitor(),
-                permissions.service(),
-                git.0.clone(),
-            )));
         }
         check!();
         let voice = match crate::kalvoice_components::KalVoiceComponentManager::for_runtime(
@@ -170,7 +163,19 @@ impl RuntimeBundle {
                 )
             }
         };
-        bundle.voice = Some(Arc::new(voice));
+        let voice = Arc::new(voice);
+        bundle.voice = Some(voice.clone());
+        check!();
+        if let Some(git) = &bundle.git {
+            bundle.doctor = Some(Arc::new(crate::doctor_commands::DoctorState::start(
+                state.core.clone(),
+                providers.registry(),
+                health.monitor(),
+                permissions.service(),
+                git.0.clone(),
+                voice,
+            )));
+        }
         panes.bind(permissions.service().as_ref(), threads.runtime().ok());
         notifications.bind(threads.runtime_handle());
     }

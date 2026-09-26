@@ -98,6 +98,20 @@ pub trait MicrophonePermissionSource: Send + Sync {
     fn current(&self) -> MicrophonePermissionState;
 }
 
+/// Read-only observation of the desktop-owned local interpreter. Never launches or downloads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalVoiceState {
+    Ready,
+    Warming,
+    Installed,
+    NotInstalled,
+    Unavailable,
+}
+
+pub trait LocalVoiceSource: Send + Sync {
+    fn current(&self) -> LocalVoiceState;
+}
+
 /// Provider Health is authoritative for observed state; registry entries supply only the static
 /// install/sign-in recovery commands and adapter availability.
 pub struct HealthSource {
@@ -229,6 +243,7 @@ pub struct RunContext {
     pub providers: Option<Arc<dyn ProviderSource>>,
     pub git: Option<Arc<GitCore>>,
     pub microphone_permission: Option<Arc<dyn MicrophonePermissionSource>>,
+    pub local_voice: Option<Arc<dyn LocalVoiceSource>>,
     pub budget: Budget,
     resources: OnceLock<ResourceFacts>,
     index: OnceLock<Result<Arc<FileIndex>, String>>,
@@ -254,6 +269,7 @@ impl RunContext {
             providers,
             git,
             microphone_permission,
+            local_voice: None,
             budget,
             resources: OnceLock::new(),
             index: OnceLock::new(),

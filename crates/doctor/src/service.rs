@@ -9,7 +9,8 @@ use kalcode_git::GitCore;
 
 use crate::checks::{self, CheckDef};
 use crate::context::{
-    Budget, HostFacts, MicrophonePermissionSource, ProjectFacts, ProviderSource, RunContext,
+    Budget, HostFacts, LocalVoiceSource, MicrophonePermissionSource, ProjectFacts, ProviderSource,
+    RunContext,
 };
 use crate::fixes::FixExecutor;
 use crate::gate::FixGate;
@@ -27,6 +28,7 @@ pub struct DoctorConfig {
     pub providers: Option<Arc<dyn ProviderSource>>,
     pub git: Option<Arc<GitCore>>,
     pub microphone_permission: Option<Arc<dyn MicrophonePermissionSource>>,
+    pub local_voice: Option<Arc<dyn LocalVoiceSource>>,
     pub gate: Arc<dyn FixGate>,
     /// Stable/production sets this true so the capability cannot activate before v16.
     pub require_persistent: bool,
@@ -66,6 +68,7 @@ pub struct Doctor {
     providers: Option<Arc<dyn ProviderSource>>,
     git: Option<Arc<GitCore>>,
     microphone_permission: Option<Arc<dyn MicrophonePermissionSource>>,
+    local_voice: Option<Arc<dyn LocalVoiceSource>>,
     store: Arc<Store>,
     fixes: FixExecutor,
     runner: Runner,
@@ -91,6 +94,7 @@ impl Doctor {
             providers: config.providers,
             git: config.git,
             microphone_permission: config.microphone_permission,
+            local_voice: config.local_voice,
             fixes: FixExecutor::new(Arc::clone(&store), config.gate),
             store,
             runner: Runner::production(),
@@ -120,7 +124,7 @@ impl Doctor {
         };
         let id = kalcode_contracts::ids::new_id();
         let budget = Budget::new(crate::CHECK_TIMEOUT);
-        let ctx = Arc::new(RunContext::new(
+        let mut context = RunContext::new(
             Arc::clone(&self.core),
             self.host.clone(),
             project.clone(),
@@ -128,7 +132,9 @@ impl Doctor {
             self.git.clone(),
             self.microphone_permission.clone(),
             budget.clone(),
-        ));
+        );
+        context.local_voice = self.local_voice.clone();
+        let ctx = Arc::new(context);
         let mut plan = checks::plan(&ctx, &areas);
         if !request.checks.is_empty() {
             let requested: std::collections::HashSet<&str> =

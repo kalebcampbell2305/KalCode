@@ -49,12 +49,63 @@ pub fn checks() -> Vec<CheckDef> {
         ),
         def("kalcode.logs", DoctorArea::KalCode, "Logs", logs),
         def(
+            "kalcode.local_reasoning",
+            DoctorArea::KalCode,
+            "KalVoice local reasoning",
+            local_reasoning,
+        ),
+        def(
             "kalcode.webview",
             DoctorArea::KalCode,
             "WebView2 runtime",
             webview,
         ),
     ]
+}
+
+fn local_reasoning(ctx: &RunContext) -> CheckOutput {
+    use crate::context::LocalVoiceState;
+    let Some(source) = &ctx.local_voice else {
+        return CheckOutput::could_not_check(
+            "The desktop did not supply local KalVoice runtime state.",
+        );
+    };
+    let (code, severity, title, detail) = match source.current() {
+        LocalVoiceState::Ready => return CheckOutput::passed("Verified local runtime ready"),
+        LocalVoiceState::Warming => (
+            "warming",
+            FindingSeverity::Info,
+            "Local reasoning is starting",
+            "Wait for KalVoice to finish starting. Deterministic app commands remain available.",
+        ),
+        LocalVoiceState::Installed => (
+            "installed",
+            FindingSeverity::Info,
+            "Local reasoning is installed but not running",
+            "Open Settings → KalVoice to start the verified local runtime. Deterministic app commands remain available.",
+        ),
+        LocalVoiceState::NotInstalled => (
+            "not_installed",
+            FindingSeverity::Info,
+            "Local reasoning is not installed",
+            "Open Settings → KalVoice to review and download the signed runtime and reasoning model. Deterministic app commands remain available.",
+        ),
+        LocalVoiceState::Unavailable => (
+            "unavailable",
+            FindingSeverity::Warning,
+            "Local reasoning is unavailable",
+            "Open Settings → KalVoice to check the signed components and retry local runtime startup. KalVoice does not fall back to provider inference.",
+        ),
+    };
+    CheckOutput::with(
+        title,
+        vec![finding(
+            format!("kalcode.local_reasoning.{code}"),
+            severity,
+            title,
+            detail,
+        )],
+    )
 }
 
 /// `PRAGMA quick_check` on the core's read-only connection. The read connection never blocks the

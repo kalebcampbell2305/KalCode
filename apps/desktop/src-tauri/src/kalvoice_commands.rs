@@ -61,6 +61,23 @@ use reasoning::DesktopLocalInterpreter;
 /// build channel (then no shortcut is registered and every command explains why).
 pub struct KalVoiceState(pub Option<Arc<KalVoiceRuntime>>, &'static str);
 
+impl kalcode_doctor::context::LocalVoiceSource for KalVoiceState {
+    fn current(&self) -> kalcode_doctor::context::LocalVoiceState {
+        use kalcode_doctor::context::LocalVoiceState as DoctorState;
+        use kalcode_kalvoice::signals::LocalReasoningStatus;
+        let Some(runtime) = &self.0 else {
+            return DoctorState::Unavailable;
+        };
+        match runtime.reasoning.status() {
+            LocalReasoningStatus::Ready => DoctorState::Ready,
+            LocalReasoningStatus::Warming => DoctorState::Warming,
+            LocalReasoningStatus::Installed => DoctorState::Installed,
+            LocalReasoningStatus::NotInstalled => DoctorState::NotInstalled,
+            LocalReasoningStatus::Unavailable => DoctorState::Unavailable,
+        }
+    }
+}
+
 impl KalVoiceState {
     pub(crate) const fn unavailable(message: &'static str) -> Self {
         Self(None, message)

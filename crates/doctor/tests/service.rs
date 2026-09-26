@@ -16,6 +16,76 @@ use kalcode_doctor::{
 struct DenyGate;
 
 #[derive(Default)]
+struct ChangingLocalVoice(AtomicUsize);
+
+impl kalcode_doctor::context::LocalVoiceSource for ChangingLocalVoice {
+    fn current(&self) -> kalcode_doctor::context::LocalVoiceState {
+        use kalcode_doctor::context::LocalVoiceState::*;
+        [NotInstalled, Installed, Warming, Unavailable, Ready]
+            [self.0.fetch_add(1, Ordering::SeqCst)]
+    }
+}
+
+#[test]
+fn local_reasoning_reads_live_native_state_without_contacting_a_provider() {
+    let dir = tempfile::tempdir().expect("dir");
+    let source = Arc::new(ChangingLocalVoice::default());
+    let doctor = Doctor::open(DoctorConfig {
+        core: common::core(dir.path()),
+        host: HostFacts {
+            vars: Vec::new(),
+            windows: cfg!(windows),
+            webview_version: Err("not supplied".into()),
+            migrations: kalcode_core::db::MIGRATIONS,
+        },
+        providers: None,
+        git: None,
+        microphone_permission: None,
+        local_voice: Some(source.clone()),
+        gate: Arc::new(DenyGate),
+        require_persistent: false,
+    })
+    .expect("doctor");
+    for (index, code) in [
+        Some("not_installed"),
+        Some("installed"),
+        Some("warming"),
+        Some("unavailable"),
+        None,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let run = doctor
+            .run(
+                RunRequest {
+                    areas: vec![DoctorArea::KalCode],
+                    checks: vec!["kalcode.local_reasoning".into()],
+                    workspace_id: None,
+                },
+                None,
+            )
+            .expect("run");
+        assert_eq!(run.checks.len(), 1);
+        if let Some(code) = code {
+            assert_eq!(run.checks[0].status, CheckStatus::Finding);
+            assert_eq!(
+                run.findings[0].code,
+                format!("kalcode.local_reasoning.{code}")
+            );
+            assert!(
+                run.findings[0].fixes.is_empty(),
+                "diagnostics never download or execute"
+            );
+        } else {
+            assert_eq!(run.checks[0].status, CheckStatus::Passed);
+            assert!(run.findings.is_empty());
+        }
+        assert_eq!(source.0.load(Ordering::SeqCst), index + 1);
+    }
+}
+
+#[derive(Default)]
 struct ChangingMicrophonePermission {
     reads: AtomicUsize,
 }
@@ -45,6 +115,39 @@ impl FixGate for DenyGate {
 }
 
 #[test]
+fn local_reasoning_without_a_native_source_never_reports_ready() {
+    let dir = tempfile::tempdir().expect("dir");
+    let doctor = Doctor::open(DoctorConfig {
+        core: common::core(dir.path()),
+        host: HostFacts {
+            vars: Vec::new(),
+            windows: cfg!(windows),
+            webview_version: Err("not supplied".into()),
+            migrations: kalcode_core::db::MIGRATIONS,
+        },
+        providers: None,
+        git: None,
+        microphone_permission: None,
+        local_voice: None,
+        gate: Arc::new(DenyGate),
+        require_persistent: false,
+    })
+    .expect("doctor");
+    let run = doctor
+        .run(
+            RunRequest {
+                areas: vec![DoctorArea::KalCode],
+                checks: vec!["kalcode.local_reasoning".into()],
+                workspace_id: None,
+            },
+            None,
+        )
+        .expect("local reasoning check exists");
+    assert_eq!(run.checks.len(), 1);
+    assert_eq!(run.checks[0].status, CheckStatus::CouldNotCheck);
+}
+
+#[test]
 fn microphone_permission_is_read_fresh_for_each_doctor_run() {
     let dir = tempfile::tempdir().expect("dir");
     let source = Arc::new(ChangingMicrophonePermission::default());
@@ -59,6 +162,7 @@ fn microphone_permission_is_read_fresh_for_each_doctor_run() {
         providers: None,
         git: None,
         microphone_permission: Some(source.clone()),
+        local_voice: None,
         gate: Arc::new(DenyGate),
         require_persistent: false,
     })
@@ -99,6 +203,7 @@ fn missing_tools_are_truthful_and_ignores_apply_to_later_runs() {
         providers: None,
         git: None,
         microphone_permission: None,
+        local_voice: None,
         gate: Arc::new(DenyGate),
         require_persistent: false,
     })
@@ -202,6 +307,7 @@ fn production_mode_refuses_session_only_history() {
         providers: None,
         git: None,
         microphone_permission: None,
+        local_voice: None,
         gate: Arc::new(DenyGate),
         require_persistent: true,
     }) {
@@ -225,6 +331,7 @@ fn abandoned_run_releases_the_single_run_slot() {
         providers: None,
         git: None,
         microphone_permission: None,
+        local_voice: None,
         gate: Arc::new(DenyGate),
         require_persistent: false,
     })

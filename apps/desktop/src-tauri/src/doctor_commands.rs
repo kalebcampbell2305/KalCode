@@ -82,6 +82,7 @@ impl DoctorState {
         monitor: Option<Arc<HealthMonitor>>,
         permissions: Option<Arc<PermissionService>>,
         git: Arc<GitCore>,
+        local_voice: Arc<dyn kalcode_doctor::context::LocalVoiceSource>,
     ) -> Self {
         let Some(core) = core else {
             return Self::unavailable(None, "core_unavailable");
@@ -107,6 +108,7 @@ impl DoctorState {
             providers: Some(provider_source),
             git: Some(git),
             microphone_permission: microphone_permission_source(),
+            local_voice: Some(local_voice),
             gate,
             // A missing/corrupt registered v16 schema disables production Doctor state.
             require_persistent: true,
