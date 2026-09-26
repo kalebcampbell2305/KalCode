@@ -78,4 +78,31 @@ describe("OutputScheduler", () => {
     scheduler.push(bytes(3));
     expect(term.writes).toEqual([]);
   });
+
+  it("does not credit an old stream when a delayed render finishes after resync", () => {
+    const callbacks: (() => void)[] = [];
+    const acknowledge = vi.fn();
+    const scheduler = new OutputScheduler({ write: (_data, done) => done && callbacks.push(done) }, acknowledge);
+    scheduler.push(bytes(1, 2));
+    scheduler.clear();
+    scheduler.push(bytes(3, 4, 5));
+    callbacks[0]?.();
+    expect(acknowledge).not.toHaveBeenCalled();
+    callbacks[1]?.();
+    expect(acknowledge.mock.calls).toEqual([[3]]);
+  });
+
+  it("does not acknowledge a delayed batched render after disposal", () => {
+    const callbacks: (() => void)[] = [];
+    const acknowledge = vi.fn();
+    const scheduler = new OutputScheduler({ write: (_data, done) => done && callbacks.push(done) }, acknowledge);
+    scheduler.setThrottled(true);
+    scheduler.push(bytes(1));
+    scheduler.push(bytes(2));
+    vi.advanceTimersByTime(FLUSH_INTERVAL_MS);
+    expect(callbacks).toHaveLength(1);
+    scheduler.dispose();
+    callbacks[0]?.();
+    expect(acknowledge).not.toHaveBeenCalled();
+  });
 });

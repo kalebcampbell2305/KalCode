@@ -17,6 +17,7 @@ export class OutputScheduler {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private throttled = false;
   private disposed = false;
+  private generation = 0;
   /** Renders so far (for tests and diagnostics). */
   flushes = 0;
 
@@ -68,8 +69,9 @@ export class OutputScheduler {
     this.render(joined);
   }
 
-  /** Drops anything queued (a resync replaces it with the scrollback). */
+  /** Drops queued output and its pending acknowledgments (a resync replaces the stream). */
   clear() {
+    this.generation++;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     this.queue = [];
@@ -84,6 +86,9 @@ export class OutputScheduler {
   private render(bytes: Uint8Array) {
     this.flushes++;
     const size = bytes.length;
-    this.target.write(bytes, () => this.acknowledge(size));
+    const generation = this.generation;
+    this.target.write(bytes, () => {
+      if (!this.disposed && generation === this.generation) this.acknowledge(size);
+    });
   }
 }
