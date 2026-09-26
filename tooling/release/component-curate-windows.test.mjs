@@ -6,6 +6,7 @@ import test from "node:test";
 import { validateComponentContract } from "./component-contract.mjs";
 import {
   curateWindowsRuntime,
+  readWindowsZipInventory,
   validateWindowsSourceInventory,
   writeDeterministicZip,
 } from "./component-curate-windows.mjs";
@@ -14,6 +15,20 @@ const contract = validateComponentContract(
   JSON.parse(readFileSync(join(import.meta.dirname, "components", "kalvoice-local-reasoning-v1.json"), "utf8")),
 );
 const policy = contract.runtime.windowsX86_64;
+
+if (process.platform === "win32") {
+  test("Windows PowerShell reads the real deterministic runtime ZIP", () => {
+    const root = mkdtempSync(join(tmpdir(), "kalcode-component-real-zip-"));
+    writeFileSync(join(root, "llama-server.exe"), "fixture executable bytes");
+    const archive = join(root, "runtime.zip");
+    writeDeterministicZip(root, ["llama-server.exe"], archive);
+    const inventory = readWindowsZipInventory(archive);
+    assert.equal(inventory.length, 1);
+    assert.equal(inventory[0].name, "llama-server.exe");
+    assert.equal(inventory[0].size, 24);
+    assert.equal(inventory[0].directory, false);
+  });
+}
 
 function sourceInventory() {
   return policy.sourceEntries.map((name, index) => ({

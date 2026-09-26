@@ -151,7 +151,7 @@ export function validateWindowsSourceInventory(entries, policy) {
 
 export function readWindowsZipInventory(sourcePath) {
   const result = powershellJson(
-    "Add-Type -AssemblyName System.IO.Compression; " +
+    "Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem; " +
       `$archive = [System.IO.Compression.ZipFile]::OpenRead(${psQuote(sourcePath)}); ` +
       "try { @($archive.Entries | ForEach-Object { [pscustomobject]@{ name = [string]$_.FullName; size = [long]$_.Length; compressedSize = [long]$_.CompressedLength; directory = [string]$_.FullName -match '/$' } }) | ConvertTo-Json -Compress } finally { $archive.Dispose() }",
   );
@@ -161,7 +161,7 @@ export function readWindowsZipInventory(sourcePath) {
 function extractWindowsZip(sourcePath, destination, names) {
   const encodedNames = Buffer.from(JSON.stringify(names), "utf8").toString("base64");
   powershellJson(
-    "Add-Type -AssemblyName System.IO.Compression; " +
+    "Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem; " +
       `$names = ConvertFrom-Json ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedNames}'))); ` +
       `$archive = [System.IO.Compression.ZipFile]::OpenRead(${psQuote(sourcePath)}); ` +
       `try { foreach ($name in @($names)) { $entry = @($archive.Entries | Where-Object { $_.FullName -ceq $name }); if ($entry.Count -ne 1) { throw 'entry mismatch' }; $out = Join-Path ${psQuote(destination)} $name; $input = $entry[0].Open(); $output = [IO.File]::Open($out, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None); try { $input.CopyTo($output); $output.Flush() } finally { $output.Dispose(); $input.Dispose() } }; [pscustomobject]@{ extracted = @($names).Count } | ConvertTo-Json -Compress } finally { $archive.Dispose() }`,
