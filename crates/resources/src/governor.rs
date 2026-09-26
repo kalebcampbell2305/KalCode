@@ -312,12 +312,12 @@ impl GovernorHandle {
                 Duration::from_millis(5).min(timeout.saturating_sub(started.elapsed())),
             );
         }
-        if let Some(thread) = self.thread.take() {
-            if thread.join().is_err() {
-                self.shared.lock().status = GovernorStatus::Failed {
-                    reason: "the resource sampler stopped unexpectedly".into(),
-                };
-            }
+        if let Some(thread) = self.thread.take()
+            && thread.join().is_err()
+        {
+            self.shared.lock().status = GovernorStatus::Failed {
+                reason: "the resource sampler stopped unexpectedly".into(),
+            };
         }
         let mut state = self.shared.lock();
         if !matches!(state.status, GovernorStatus::Failed { .. }) {

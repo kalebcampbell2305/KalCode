@@ -19,28 +19,28 @@ use kalcode_providers::version::Version;
 use kalcode_pty::{ProgramSpec, PtySession, TerminalSize};
 use uuid::Uuid;
 
-fn profile(profile_generation: ProfileGeneration) -> ProfileIdentity {
-    ProfileIdentity::new(
+fn profile(
+    profile_generation: ProfileGeneration,
+) -> Result<ProfileIdentity, Box<dyn std::error::Error>> {
+    Ok(ProfileIdentity::new(
         ProviderId::new(ProviderId::CODEX),
-        Uuid::parse_str("0199aaaa-0000-7000-8000-000000000003").expect("account"),
+        Uuid::from_u128(0x0199aaaa_0000_7000_8000_000000000003),
         profile_generation,
-    )
-    .expect("valid profile")
+    )?)
 }
 
-fn runtime() -> (tempfile::TempDir, GuardianRuntime) {
-    let temp = tempfile::tempdir().expect("guardian data root");
+fn runtime() -> Result<(tempfile::TempDir, GuardianRuntime), Box<dyn std::error::Error>> {
+    let temp = tempfile::tempdir()?;
     let runtime = GuardianRuntime::launch(
         std::path::Path::new(env!("CARGO_BIN_EXE_kalcode-provider-guardian")),
         temp.path(),
-    )
-    .expect("production guardian runtime");
-    (temp, runtime)
+    )?;
+    Ok((temp, runtime))
 }
 
 #[test]
 fn completed_guarded_probes_retire_jobs_and_keep_runtime_state_bounded() {
-    let (_temp, runtime) = runtime();
+    let (_temp, runtime) = runtime().expect("production guardian runtime");
     let guardian = runtime.probe_guardian().expect("probe guardian");
     let spec = ProcessSpec {
         program: std::path::PathBuf::from(env!("CARGO_BIN_EXE_kalcode-fake-provider")),
@@ -69,10 +69,10 @@ fn completed_guarded_probes_retire_jobs_and_keep_runtime_state_bounded() {
 
 #[test]
 fn typed_supervisor_seals_prepared_admission_and_returns_clean_only_after_external_drain() {
-    let (_temp, runtime) = runtime();
+    let (_temp, runtime) = runtime().expect("production guardian runtime");
     let supervisor = runtime.supervisor();
     let guardian = runtime.authority();
-    let profile = profile(runtime.profile_generation());
+    let profile = profile(runtime.profile_generation()).expect("valid profile");
     let lease = guardian
         .acquire(profile.clone(), ProfileCapability::SharedSession)
         .expect("profile lease");
@@ -123,11 +123,11 @@ fn typed_supervisor_seals_prepared_admission_and_returns_clean_only_after_extern
 
 #[test]
 fn conpty_root_is_atomically_admitted_to_the_external_guardian_job() {
-    let (_temp, runtime) = runtime();
+    let (_temp, runtime) = runtime().expect("production guardian runtime");
     let guardian = runtime.authority();
     let lease = guardian
         .acquire(
-            profile(runtime.profile_generation()),
+            profile(runtime.profile_generation()).expect("valid profile"),
             ProfileCapability::SharedSession,
         )
         .expect("profile lease");
@@ -174,7 +174,7 @@ fn conpty_root_is_atomically_admitted_to_the_external_guardian_job() {
 
 #[test]
 fn production_detection_probe_uses_the_internal_guardian_namespace() {
-    let (temp, runtime) = runtime();
+    let (temp, runtime) = runtime().expect("production guardian runtime");
     let bin = temp.path().join("bin");
     std::fs::create_dir(&bin).expect("probe bin");
     let probe = bin.join("probe.exe");
@@ -221,7 +221,7 @@ fn production_detection_probe_uses_the_internal_guardian_namespace() {
 
 #[test]
 fn sealed_probe_admission_fails_closed_before_the_cli_starts() {
-    let (temp, runtime) = runtime();
+    let (temp, runtime) = runtime().expect("production guardian runtime");
     let bin = temp.path().join("denied-bin");
     std::fs::create_dir(&bin).expect("probe bin");
     let probe = bin.join("denied.exe");
@@ -262,8 +262,8 @@ fn sealed_probe_admission_fails_closed_before_the_cli_starts() {
 
 #[test]
 fn failed_process_start_remains_owned_as_a_rootless_prepared_job() {
-    let (temp, runtime) = runtime();
-    let profile = profile(runtime.profile_generation());
+    let (temp, runtime) = runtime().expect("production guardian runtime");
+    let profile = profile(runtime.profile_generation()).expect("valid profile");
     let lease = runtime
         .authority()
         .acquire(profile.clone(), ProfileCapability::SharedSession)
@@ -356,11 +356,11 @@ fn replacement_helper_waits_for_prior_helper_drain_after_desktop_loss() {
 
 #[test]
 fn helper_hard_kill_cannot_release_a_live_desktop_epoch() {
-    let (temp, first) = runtime();
+    let (temp, first) = runtime().expect("production guardian runtime");
     let lease = first
         .authority()
         .acquire(
-            profile(first.profile_generation()),
+            profile(first.profile_generation()).expect("valid profile"),
             ProfileCapability::SharedSession,
         )
         .expect("first-generation lease");
@@ -385,7 +385,8 @@ fn helper_hard_kill_cannot_release_a_live_desktop_epoch() {
         "the adversarial provider fixture must be live before the helper is killed"
     );
 
-    force_terminate_process(first.supervisor().process_identity().pid());
+    force_terminate_process(first.supervisor().process_identity().pid())
+        .expect("terminate guardian fixture");
     assert!(
         provider
             .wait_timeout(Duration::from_millis(250))
@@ -418,18 +419,20 @@ fn helper_hard_kill_cannot_release_a_live_desktop_epoch() {
     );
 }
 
-fn force_terminate_process(pid: u32) {
+fn force_terminate_process(pid: u32) -> std::io::Result<()> {
     use std::os::windows::process::CommandExt;
 
-    let taskkill =
-        std::path::Path::new(&std::env::var_os("SystemRoot").expect("SystemRoot for taskkill"))
-            .join("System32")
-            .join("taskkill.exe");
+    let system_root = std::env::var_os("SystemRoot").ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "SystemRoot for taskkill")
+    })?;
+    let taskkill = std::path::Path::new(&system_root)
+        .join("System32")
+        .join("taskkill.exe");
     let pid = pid.to_string();
     let status = std::process::Command::new(taskkill)
         .args(["/PID", &pid, "/F"])
         .creation_flags(0x0800_0000)
-        .status()
-        .expect("run taskkill");
+        .status()?;
     assert!(status.success(), "taskkill failed: {status}");
+    Ok(())
 }

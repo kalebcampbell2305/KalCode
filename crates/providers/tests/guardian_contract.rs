@@ -13,28 +13,23 @@ use kalcode_providers::guardian;
 use uuid::Uuid;
 
 fn desktop_generation() -> DesktopGeneration {
-    DesktopGeneration::from_uuid(
-        Uuid::parse_str("0199aaaa-0000-7000-8000-000000000001").expect("desktop generation"),
-    )
+    DesktopGeneration::from_uuid(Uuid::from_u128(0x0199aaaa_0000_7000_8000_000000000001))
 }
 
 fn profile_generation() -> ProfileGeneration {
-    ProfileGeneration::from_uuid(
-        Uuid::parse_str("0199aaaa-0000-7000-8000-000000000002").expect("profile generation"),
-    )
+    ProfileGeneration::from_uuid(Uuid::from_u128(0x0199aaaa_0000_7000_8000_000000000002))
 }
 
-fn profile() -> ProfileIdentity {
-    ProfileIdentity::new(
+fn profile() -> Result<ProfileIdentity, Box<dyn std::error::Error>> {
+    Ok(ProfileIdentity::new(
         ProviderId::new(ProviderId::CODEX),
-        Uuid::parse_str("0199aaaa-0000-7000-8000-000000000003").expect("account"),
+        Uuid::from_u128(0x0199aaaa_0000_7000_8000_000000000003),
         profile_generation(),
-    )
-    .expect("valid profile")
+    )?)
 }
 
-fn process(pid: u32, birth_time_100ns: u64) -> ProcessIdentity {
-    ProcessIdentity::new(pid, birth_time_100ns).expect("process identity")
+fn process(pid: u32, birth_time_100ns: u64) -> Result<ProcessIdentity, Box<dyn std::error::Error>> {
+    Ok(ProcessIdentity::new(pid, birth_time_100ns)?)
 }
 
 fn nonce() -> ChannelNonce {
@@ -46,7 +41,7 @@ fn envelope(sequence: u64) -> Envelope<Request> {
         nonce(),
         desktop_generation(),
         sequence,
-        Uuid::parse_str("0199aaaa-0000-7000-8000-000000000004").expect("request"),
+        Uuid::from_u128(0x0199aaaa_0000_7000_8000_000000000004),
         Request::Health,
     )
 }
@@ -122,9 +117,9 @@ fn marker_decoder_fails_closed_and_transitions_are_object_bound() {
     let mut marker = ProfileMarker::new(
         Uuid::parse_str("0199aaaa-0000-7000-8000-000000000005").expect("boot"),
         desktop_generation(),
-        profile(),
-        process(100, 101),
-        process(200, 201),
+        profile().expect("valid profile"),
+        process(100, 101).expect("desktop process"),
+        process(200, 201).expect("guardian process"),
     );
     let lease_id = Uuid::parse_str("0199aaaa-0000-7000-8000-000000000006").expect("lease");
     marker
@@ -133,7 +128,12 @@ fn marker_decoder_fails_closed_and_transitions_are_object_bound() {
     let job =
         JobId::from_uuid(Uuid::parse_str("0199aaaa-0000-7000-8000-000000000007").expect("job"));
     marker
-        .prepare_job(lease_id, profile(), job, "fixture-job".into())
+        .prepare_job(
+            lease_id,
+            profile().expect("valid profile"),
+            job,
+            "fixture-job".into(),
+        )
         .expect("prepared");
 
     let bytes = encode_marker(&marker).expect("encode marker");

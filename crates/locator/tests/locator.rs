@@ -147,7 +147,6 @@ fn auth_finds_authentication_refactor_first() {
 
 #[test]
 fn filters_by_kind_status_provider_workspace_and_recency() {
-    let reference = time::macros::datetime!(2026-09-25 12:00 UTC);
     let dir = tempfile::tempdir().unwrap();
     let core = core_with_v11(dir.path());
     let a = workspace(&core, dir.path(), "alpha");

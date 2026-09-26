@@ -907,16 +907,13 @@ impl GuardedJob {
             *marker = retired;
             Ok(())
         })();
-        if let Err(error) = result {
-            #[cfg(target_os = "macos")]
-            {
-                marker.block();
-                let _ = self.inner.marker_store.persist(marker);
-                state.blocked_unclean = true;
-            }
-            return Err(error);
+        #[cfg(target_os = "macos")]
+        if result.is_err() {
+            marker.block();
+            let _ = self.inner.marker_store.persist(marker);
+            state.blocked_unclean = true;
         }
-        Ok(())
+        result
     }
 }
 
