@@ -81,6 +81,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       generation: 0,
       activation: 0,
       focusIntent: 0,
+      pendingFocus: null as { intent: number; epoch: number; terminalId: string; workspaceId: string } | null,
       workspaceId: null as string | null,
       tail: Promise.resolve(),
     }),
@@ -105,6 +106,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       lifecycle.mounted = false;
       lifecycle.epoch += 1;
       lifecycle.pickers = 0;
+      lifecycle.pendingFocus = null;
       lifecycle.generation += 1;
       lifecycle.activation += 1;
     };
@@ -281,7 +283,16 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const selectTerminal = useCallback(
     (terminalId: string, focus = false, workspaceId: string | undefined = active?.id) => {
       if (!isCurrent() || !workspaceId) return;
-      lifecycle.focusIntent += 1;
+      const pending = lifecycle.pendingFocus;
+      // The canvas synchronizes its newly displayed tab before a mutation's refresh
+      // settles. That same-target, non-focusing report belongs to the pending intent.
+      const reconcilesPending =
+        !focus &&
+        pending?.intent === lifecycle.focusIntent &&
+        pending.epoch === lifecycle.epoch &&
+        pending.workspaceId === workspaceId &&
+        pending.terminalId === terminalId;
+      if (!reconcilesPending) lifecycle.focusIntent += 1;
       setSelected({ workspaceId, terminalId });
       if (focus) requestFocus(terminalId);
       // Remembered natively so the same tab is in front after a restart.
@@ -299,13 +310,19 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       try {
         const terminal = await client.createTerminal(active.id, shellId, lastSize.current);
         if (!current()) return null;
+        const pending = { intent, epoch: lifecycle.epoch, terminalId: terminal.id, workspaceId: active.id };
+        if (mayFocus()) lifecycle.pendingFocus = pending;
         // Keep the native session visible in history without overriding a newer
         // workspace or terminal choice while creation/refresh was pending.
-        await refresh();
-        if (!mayFocus()) return null;
-        setSelected({ workspaceId: active.id, terminalId: terminal.id });
-        requestFocus(terminal.id);
-        return terminal;
+        try {
+          await refresh();
+          if (!mayFocus()) return null;
+          setSelected({ workspaceId: active.id, terminalId: terminal.id });
+          requestFocus(terminal.id);
+          return terminal;
+        } finally {
+          if (lifecycle.pendingFocus === pending) lifecycle.pendingFocus = null;
+        }
       } catch (err) {
         if (mayFocus()) fail("Couldn't start a terminal", err);
         return null;
@@ -343,10 +360,16 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       try {
         const terminal = await client.restartTerminal(terminalId, lastSize.current);
         if (!current()) return null;
-        await refresh();
-        if (!mayFocus() || lifecycle.workspaceId !== terminal.workspaceId) return null;
-        requestFocus(terminal.id);
-        return terminal;
+        const pending = { intent, epoch: lifecycle.epoch, terminalId: terminal.id, workspaceId: terminal.workspaceId };
+        if (mayFocus() && lifecycle.workspaceId === terminal.workspaceId) lifecycle.pendingFocus = pending;
+        try {
+          await refresh();
+          if (!mayFocus() || lifecycle.workspaceId !== terminal.workspaceId) return null;
+          requestFocus(terminal.id);
+          return terminal;
+        } finally {
+          if (lifecycle.pendingFocus === pending) lifecycle.pendingFocus = null;
+        }
       } catch (err) {
         if (mayFocus()) fail("Couldn't restart the terminal", err);
         return null;

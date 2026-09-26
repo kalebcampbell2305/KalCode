@@ -1,7 +1,7 @@
 import type { ShellOption, TerminalInfo, Workspace } from "@kalcode/protocol";
 import { ToastProvider } from "@kalcode/ui/components";
 import { act, renderHook, screen, waitFor } from "@testing-library/react";
-import { Activity, type ReactNode, StrictMode } from "react";
+import { Activity, type ReactNode, StrictMode, useLayoutEffect } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { KalCodeClient } from "../ipc/client.ts";
 import { createMemoryTransport } from "../ipc/memoryTransport.ts";
@@ -95,7 +95,7 @@ async function fixture(id = "initial") {
   return { client, boot, native, settings };
 }
 
-async function mount(initial: Awaited<ReturnType<typeof fixture>>, ready = true) {
+async function mount(initial: Awaited<ReturnType<typeof fixture>>, ready = true, observer?: () => ReactNode) {
   let current = initial;
   let visible = true;
   const view = renderHook(useWorkspaces, {
@@ -104,7 +104,10 @@ async function mount(initial: Awaited<ReturnType<typeof fixture>>, ready = true)
         <ToastProvider>
           <RuntimeProvider client={current.client} info={current.boot.info} initialSettings={current.settings}>
             <Activity mode={visible ? "visible" : "hidden"}>
-              <WorkspaceProvider>{children}</WorkspaceProvider>
+              <WorkspaceProvider>
+                {children}
+                {observer?.()}
+              </WorkspaceProvider>
             </Activity>
           </RuntimeProvider>
         </ToastProvider>
@@ -126,6 +129,107 @@ async function mount(initial: Awaited<ReturnType<typeof fixture>>, ready = true)
 }
 
 describe("WorkspaceProvider lifecycle", () => {
+  it.each(["different terminal", "different workspace", "explicit focus"] as const)(
+    "never revives pending focus after %s followed by same-target reconciliation",
+    async (change) => {
+      const f = await fixture("old");
+      mockActions(f.client);
+      const page = deferred<TerminalInfo[]>();
+      const view = await mount(f);
+      vi.mocked(f.client.listTerminals).mockClear().mockReturnValue(page.promise);
+      let pending!: Promise<TerminalInfo | null>;
+      act(() => {
+        pending = view.result.current.createTerminal();
+      });
+      await waitFor(() => expect(f.client.listTerminals).toHaveBeenCalled());
+      act(() => view.result.current.selectTerminal(terminal.id, false, "old"));
+      act(() =>
+        view.result.current.selectTerminal(
+          change === "different terminal" ? "other" : terminal.id,
+          change === "explicit focus",
+          change === "different workspace" ? "other-workspace" : "old",
+        ),
+      );
+      act(() => view.result.current.selectTerminal(terminal.id, false, "old"));
+      const focusBefore = view.result.current.focusRequest;
+      await act(async () => {
+        page.resolve([terminal]);
+        expect(await pending).toBeNull();
+      });
+      expect(view.result.current.focusRequest).toEqual(focusBefore);
+    },
+  );
+
+  it("does not let an obsolete refresh cleanup erase a newer pending focus destination", async () => {
+    const f = await fixture("old");
+    mockActions(f.client);
+    vi.mocked(f.client.createTerminal)
+      .mockResolvedValueOnce({ ...terminal, id: "first" })
+      .mockResolvedValueOnce({ ...terminal, id: "second" });
+    const firstPage = deferred<TerminalInfo[]>();
+    const secondPage = deferred<TerminalInfo[]>();
+    const view = await mount(f);
+    vi.mocked(f.client.listTerminals)
+      .mockClear()
+      .mockReturnValueOnce(firstPage.promise)
+      .mockReturnValueOnce(secondPage.promise);
+    let first!: Promise<TerminalInfo | null>;
+    let second!: Promise<TerminalInfo | null>;
+    act(() => {
+      first = view.result.current.createTerminal();
+    });
+    await waitFor(() => expect(f.client.listTerminals).toHaveBeenCalledTimes(1));
+    act(() => {
+      second = view.result.current.createTerminal();
+    });
+    await waitFor(() => expect(f.client.listTerminals).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      firstPage.resolve([{ ...terminal, id: "first" }]);
+      expect(await first).toBeNull();
+    });
+    act(() => view.result.current.selectTerminal("second", false, "old"));
+    await act(async () => {
+      secondPage.resolve([{ ...terminal, id: "second" }]);
+      await second;
+    });
+    expect((await second)?.id).toBe("second");
+    expect(view.result.current.focusRequest.terminalId).toBe("second");
+  });
+
+  it.each(["createTerminal", "restartTerminal"] as const)(
+    "preserves %s keyboard focus through same-target child layout reconciliation",
+    async (action) => {
+      const f = await fixture("old");
+      mockActions(f.client);
+      const page = deferred<TerminalInfo[]>();
+      let reconcileId: string | null = null;
+      function Reconcile() {
+        const { selectTerminal } = useWorkspaces();
+        useLayoutEffect(() => {
+          if (reconcileId) selectTerminal(reconcileId, false, "old");
+        }, [selectTerminal]);
+        return null;
+      }
+      const view = await mount(f, true, () => (reconcileId ? <Reconcile /> : null));
+      vi.mocked(f.client.listTerminals).mockClear().mockReturnValue(page.promise);
+      let pending!: ReturnType<typeof dispatch>;
+      act(() => {
+        pending = dispatch(view.result.current, action);
+      });
+      await waitFor(() => expect(f.client.listTerminals).toHaveBeenCalled());
+      reconcileId = terminal.id;
+      view.rerender();
+      expect(f.client.setActiveTerminal).toHaveBeenCalledWith("old", terminal.id);
+      let result: unknown;
+      await act(async () => {
+        page.resolve([terminal]);
+        result = await pending;
+      });
+      expect(result).toEqual(terminal);
+      expect(view.result.current.focusRequest.terminalId).toBe(terminal.id);
+    },
+  );
+
   it("keeps the latest of two creations focused without closing the earlier native session", async () => {
     const f = await fixture("old");
     const a = deferred<TerminalInfo>();
