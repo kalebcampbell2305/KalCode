@@ -47,13 +47,291 @@ async function mount(transport: MemoryTransport) {
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
     resolve = done;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 const SAVE_ERROR = { category: "database", code: "database_error", message: "Disk full.", retryable: false };
+
+async function isolatedClient(firstSeq: number) {
+  const client = new KalCodeClient(createMemoryTransport("default"));
+  const boot = await client.boot();
+  const seed = (await client.recentEvents(1))[0];
+  if (!seed) throw new Error("Expected a fixture event");
+  const event = (seq: number): EventEnvelope => ({ ...seed, id: `event-${seq}`, seq });
+  const callbacks: ((event: EventEnvelope) => void)[] = [];
+  const subscribe = vi.spyOn(client, "subscribeEvents").mockImplementation(async (listener) => {
+    callbacks.push(listener);
+    return async () => {};
+  });
+  const page = Array.from({ length: 100 }, (_, index) => event(firstSeq + 99 - index));
+  const recent = vi.spyOn(client, "recentEvents").mockResolvedValue(page);
+  return { client, boot, event, callbacks, subscribe, recent };
+}
+
+function exposeRuntime(
+  first: Awaited<ReturnType<typeof isolatedClient>>,
+  onCapture?: (runtime: ReturnType<typeof useRuntime>) => void,
+) {
+  let current!: ReturnType<typeof useRuntime>;
+  const renders: ReturnType<typeof useRuntime>[] = [];
+  function Capture() {
+    current = useRuntime();
+    renders.push(current);
+    onCapture?.(current);
+    return null;
+  }
+  function tree(fixture: typeof first | null, settings = INITIAL) {
+    return (
+      <StrictMode>
+        <ToastProvider>
+          {fixture && (
+            <RuntimeProvider client={fixture.client} info={fixture.boot.info} initialSettings={settings}>
+              <Capture />
+            </RuntimeProvider>
+          )}
+        </ToastProvider>
+      </StrictMode>
+    );
+  }
+  const view = render(tree(first));
+  return {
+    current: () => current,
+    renders,
+    replace: (fixture: typeof first, settings = INITIAL) => view.rerender(tree(fixture, settings)),
+    // Keep the toast host alive so late errors after runtime unmount remain observable.
+    removeRuntime: () => view.rerender(tree(null)),
+  };
+}
+
+describe("RuntimeProvider client isolation", () => {
+  it("exposes a fresh feed, initial settings and loading state on the first replacement render", async () => {
+    const first = await isolatedClient(100);
+    first.recent.mockRejectedValueOnce(SAVE_ERROR);
+    const view = exposeRuntime(first);
+    await waitFor(() => expect(view.current().eventsState).toBe("error"));
+    act(() => view.current().feed.merge([first.event(900)]));
+    const oldFeed = view.current().feed;
+    const replacement = await isolatedClient(1);
+    const read = deferred<EventEnvelope[]>();
+    replacement.recent.mockReturnValue(read.promise);
+    view.replace(replacement, { ...INITIAL, theme: "light" });
+    const firstReplacement = view.renders.find((runtime) => runtime.client === replacement.client);
+    expect(firstReplacement?.feed).not.toBe(oldFeed);
+    expect(firstReplacement?.feed.getSnapshot().events).toEqual([]);
+    expect(firstReplacement?.settings.theme).toBe("light");
+    expect(firstReplacement?.eventsState).toBe("loading");
+    expect(firstReplacement?.eventsError).toBeNull();
+    await act(async () => read.resolve([replacement.event(1)]));
+    expect(
+      view
+        .current()
+        .feed.getSnapshot()
+        .events.map((event) => event.seq),
+    ).toEqual([1]);
+    // Initial settings are consumed once for this client lifetime.
+    view.replace(replacement, { ...INITIAL, theme: "dark" });
+    expect(view.current().settings.theme).toBe("light");
+  });
+
+  it("does not reuse the first lifetime when the same client is selected again", async () => {
+    const first = await isolatedClient(100);
+    const replacement = await isolatedClient(1);
+    const view = exposeRuntime(first);
+    await waitFor(() => expect(view.current().eventsState).toBe("ready"));
+    const oldFeed = view.current().feed;
+    await act(() => view.current().updateSettings({ theme: "light" }));
+    view.replace(replacement);
+    await waitFor(() => expect(view.current().eventsState).toBe("ready"));
+    first.recent.mockResolvedValue([first.event(2)]);
+    view.replace(first);
+    await waitFor(() => expect(view.current().eventsState).toBe("ready"));
+    expect(view.current().feed).not.toBe(oldFeed);
+    expect(
+      view
+        .current()
+        .feed.getSnapshot()
+        .events.map((event) => event.seq),
+    ).toEqual([2]);
+    expect(view.current().settings.theme).toBe("dark");
+  });
+
+  it("rejects discarded StrictMode subscription callbacks before registration resolves", async () => {
+    const first = await isolatedClient(100);
+    const registration = deferred<() => Promise<void>>();
+    first.subscribe.mockImplementation((listener) => {
+      first.callbacks.push(listener);
+      return registration.promise;
+    });
+    const view = exposeRuntime(first);
+    expect(first.callbacks).toHaveLength(2);
+    act(() => first.callbacks[0]?.(first.event(900)));
+    expect(view.current().feed.getSnapshot().events).toEqual([]);
+    act(() => first.callbacks[1]?.(first.event(901)));
+    expect(
+      view
+        .current()
+        .feed.getSnapshot()
+        .events.map((event) => event.seq),
+    ).toEqual([901]);
+    const oldFeed = view.current().feed;
+    const snapshot = oldFeed.getSnapshot();
+    view.replace(await isolatedClient(1));
+    act(() => first.callbacks[1]?.(first.event(902)));
+    expect(oldFeed.getSnapshot()).toBe(snapshot);
+    const unsubscribe = vi.fn(async () => {});
+    await act(async () => registration.resolve(unsubscribe));
+    expect(unsubscribe).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["replace", "retry", "unmount"] as const)("ignores live callbacks after %s", async (transition) => {
+    const first = await isolatedClient(100);
+    const view = exposeRuntime(first);
+    await waitFor(() => expect(view.current().eventsState).toBe("ready"));
+    const oldFeed = view.current().feed;
+    const listener = first.callbacks.at(-1);
+    if (transition === "replace") view.replace(await isolatedClient(1));
+    else if (transition === "retry") act(() => view.current().retryEvents());
+    else view.removeRuntime();
+    if (transition !== "unmount") await waitFor(() => expect(view.current().eventsState).toBe("ready"));
+    const snapshot = oldFeed.getSnapshot();
+    act(() => listener?.(first.event(900)));
+    expect(oldFeed.getSnapshot()).toBe(snapshot);
+  });
+
+  it.each(["replace", "retry", "unmount"] as const)("discards pending older pages after %s", async (transition) => {
+    const first = await isolatedClient(100);
+    const view = exposeRuntime(first);
+    await waitFor(() => expect(view.current().eventsState).toBe("ready"));
+    const oldFeed = view.current().feed;
+    const read = deferred<EventEnvelope[]>();
+    first.recent.mockReturnValueOnce(read.promise);
+    let pending!: Promise<void>;
+    act(() => {
+      pending = view.current().loadOlderEvents();
+    });
+    if (transition === "replace") view.replace(await isolatedClient(1000));
+    else if (transition === "retry") act(() => view.current().retryEvents());
+    else view.removeRuntime();
+    if (transition !== "unmount") await waitFor(() => expect(view.current().eventsState).toBe("ready"));
+    const snapshot = oldFeed.getSnapshot();
+    await act(async () => {
+      read.resolve([first.event(1)]);
+      await pending;
+    });
+    expect(oldFeed.getSnapshot()).toBe(snapshot);
+  });
+
+  it.each(["replace", "retry", "unmount"] as const)(
+    "suppresses obsolete history errors and callbacks after %s",
+    async (transition) => {
+      const first = await isolatedClient(100);
+      const view = exposeRuntime(first);
+      await waitFor(() => expect(view.current().eventsState).toBe("ready"));
+      const loadOlder = view.current().loadOlderEvents;
+      const read = deferred<EventEnvelope[]>();
+      first.recent.mockReturnValueOnce(read.promise);
+      let pending!: Promise<void>;
+      act(() => {
+        pending = loadOlder();
+      });
+      if (transition === "replace") view.replace(await isolatedClient(1000));
+      else if (transition === "retry") act(() => view.current().retryEvents());
+      else view.removeRuntime();
+      if (transition !== "unmount") await waitFor(() => expect(view.current().eventsState).toBe("ready"));
+      await act(async () => {
+        read.reject(SAVE_ERROR);
+        await pending;
+      });
+      expect(screen.queryByText("Couldn't load older activity")).toBeNull();
+      const calls = first.recent.mock.calls.length;
+      await act(() => loadOlder());
+      expect(first.recent).toHaveBeenCalledTimes(calls);
+    },
+  );
+});
+
+describe("RuntimeProvider retained actions", () => {
+  it("does not dispatch a retained settings updater after runtime unmount", async () => {
+    const first = await isolatedClient(100);
+    const save = vi.spyOn(first.client, "updateSettings");
+    const view = exposeRuntime(first);
+    await waitFor(() => expect(view.current().eventsState).toBe("ready"));
+    const update = view.current().updateSettings;
+    view.removeRuntime();
+    await act(() => update({ theme: "light" }));
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("does not toast or reconcile a settings failure after runtime unmount", async () => {
+    const first = await isolatedClient(100);
+    const write = deferred<Settings>();
+    vi.spyOn(first.client, "updateSettings").mockReturnValueOnce(write.promise);
+    const read = vi.spyOn(first.client, "getSettings");
+    const view = exposeRuntime(first);
+    await waitFor(() => expect(view.current().eventsState).toBe("ready"));
+    let pending!: Promise<void>;
+    act(() => {
+      pending = view.current().updateSettings({ theme: "light" });
+    });
+    view.removeRuntime();
+    await act(async () => {
+      write.reject(SAVE_ERROR);
+      await pending;
+    });
+    expect(screen.queryByText("Settings not saved")).toBeNull();
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("keeps StrictMode's discarded settings session separate from the live session", async () => {
+    const first = await isolatedClient(100);
+    const oldWrite = deferred<Settings>();
+    vi.spyOn(first.client, "updateSettings").mockReturnValueOnce(oldWrite.promise);
+    const read = vi.spyOn(first.client, "getSettings");
+    let runtime!: ReturnType<typeof useRuntime>;
+    let pending: Promise<void> | undefined;
+    first.subscribe.mockImplementation(async (listener) => {
+      first.callbacks.push(listener);
+      // Registration follows the settings effect, before StrictMode cleanup.
+      if (first.callbacks.length === 1) pending = runtime.updateSettings({ theme: "light" });
+      return async () => {};
+    });
+    const view = exposeRuntime(first, (value) => {
+      runtime = value;
+    });
+    await waitFor(() => expect(view.current().eventsState).toBe("ready"));
+    await act(() => view.current().updateSettings({ density: "compact" }));
+    expect(view.current().settings).toMatchObject({ theme: "dark", density: "compact" });
+    await act(async () => {
+      oldWrite.reject(SAVE_ERROR);
+      await pending;
+    });
+    expect(screen.queryByText("Settings not saved")).toBeNull();
+    expect(read).not.toHaveBeenCalled();
+    expect(view.current().settings).toMatchObject({ theme: "dark", density: "compact" });
+  });
+
+  it.each(["replace", "retry", "unmount"] as const)("ignores a retained retry action after %s", async (transition) => {
+    const first = await isolatedClient(100);
+    const replacement = await isolatedClient(1000);
+    const view = exposeRuntime(first);
+    await waitFor(() => expect(view.current().eventsState).toBe("ready"));
+    const retry = view.current().retryEvents;
+    if (transition === "replace") view.replace(replacement);
+    else if (transition === "retry") act(() => retry());
+    else view.removeRuntime();
+    if (transition !== "unmount") await waitFor(() => expect(view.current().eventsState).toBe("ready"));
+    const firstCalls = first.recent.mock.calls.length;
+    const replacementCalls = replacement.recent.mock.calls.length;
+    await act(async () => retry());
+    expect(first.recent).toHaveBeenCalledTimes(firstCalls);
+    expect(replacement.recent).toHaveBeenCalledTimes(replacementCalls);
+  });
+});
 
 describe("RuntimeProvider", () => {
   it.each([
