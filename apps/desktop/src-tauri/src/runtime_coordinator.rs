@@ -671,6 +671,15 @@ impl<T: RuntimeService> RuntimeState<T> {
     pub fn inner(&self) -> &T {
         &self.service
     }
+    /// Read native account identity under the same lease that admits the command. A revocation
+    /// or account switch between the snapshot and its use invalidates this request.
+    pub fn account_id(&self) -> Result<String, IpcError> {
+        self.revalidate()?;
+        let id = self.account.snapshot().account.ok_or_else(unavailable)?.id;
+        self.revalidate()?;
+        Ok(id)
+    }
+
     /// The authenticated account generation bound to this lease, never supplied by the WebView.
     pub fn generation(&self) -> u64 {
         self.authority.generation()

@@ -2,7 +2,7 @@
 //!
 //! Only the trusted `main` webview can call these commands. Remote child webviews receive no
 //! capability grants, may navigate only to credential-free HTTP(S), and cannot open popups or
-//! download files. Each workspace receives a separate WebView data directory.
+//! download files. Each authenticated account/workspace pair receives a separate WebView data directory.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -41,6 +41,7 @@ struct BrowserRecord {
     creating: bool,
     closing: bool,
     page_lease: u64,
+    account_generation: u64,
     visibility_version: u64,
     #[cfg(feature = "e2e")]
     debug_port: Option<u16>,
@@ -90,6 +91,12 @@ impl BrowserViews {
         let mut records = self.lock();
         require_current_page_lease(self, record.page_lease)?;
         if let Some(existing) = records.get(&browser_id) {
+            if existing.account_generation != record.account_generation {
+                return Err(retryable_unavailable(
+                    "browser_account_expired",
+                    "That browser pane belongs to a previous account session.",
+                ));
+            }
             if existing.workspace_id != record.workspace_id {
                 return Err(KalError::new(
                     ErrorCategory::Permission,
@@ -251,8 +258,8 @@ fn trusted(webview: &Webview) -> Result<(), IpcError> {
     }
 }
 
-fn label(browser_id: &str, page_lease: u64) -> String {
-    format!("browser-{page_lease}-{browser_id}")
+fn label(browser_id: &str, page_lease: u64, account_generation: u64) -> String {
+    format!("browser-{account_generation}-{page_lease}-{browser_id}")
 }
 
 fn set_native_view(
@@ -543,10 +550,33 @@ fn ensure_plain_directory(path: &Path) -> Result<(), IpcError> {
     }
 }
 
-fn browser_profile_dir(data_dir: &Path, workspace_id: &str) -> Result<PathBuf, IpcError> {
+fn browser_profile_dir(
+    data_dir: &Path,
+    account_id: &str,
+    workspace_id: &str,
+) -> Result<PathBuf, IpcError> {
+    use sha2::{Digest, Sha256};
+    // Only native authenticated identity reaches this helper. Hash it to avoid identifiers in
+    // profile paths; never adopt the old unowned workspace profile across account boundaries.
+    if account_id.is_empty() || !is_valid_id(workspace_id) {
+        return Err(KalError::validation(
+            "browser_profile_unsafe",
+            "That browser profile is unavailable.",
+        )
+        .to_ipc());
+    }
     let base = data_dir.join("browser-data");
     ensure_plain_directory(&base)?;
-    let profile = base.join(workspace_id);
+    let digest = Sha256::digest(
+        [
+            b"com.kalcode.desktop/browser-account/v1\0".as_slice(),
+            account_id.as_bytes(),
+        ]
+        .concat(),
+    );
+    let account = base.join(format!("account-{digest:x}"));
+    ensure_plain_directory(&account)?;
+    let profile = account.join(workspace_id);
     ensure_plain_directory(&profile)?;
     Ok(profile)
 }
@@ -619,8 +649,15 @@ pub async fn browser_attach(
     }
     validate_bounds(request.bounds).map_err(policy_error)?;
     let url = normalize_browser_url(&request.url).map_err(policy_error)?;
-    let profile_dir = browser_profile_dir(&state.paths.data_dir, &request.workspace_id)?;
-    let child_label = label(&request.browser_id, request.page_lease);
+    let account_id = _runtime_access.account_id()?;
+    let profile_dir =
+        browser_profile_dir(&state.paths.data_dir, &account_id, &request.workspace_id)?;
+    _runtime_access.revalidate()?;
+    let child_label = label(
+        &request.browser_id,
+        request.page_lease,
+        _runtime_access.generation(),
+    );
 
     if let Some(child) = webview.app_handle().get_webview(&child_label) {
         require_current_page_lease(&views, request.page_lease)?;
@@ -688,6 +725,7 @@ pub async fn browser_attach(
             creating: true,
             closing: false,
             page_lease: request.page_lease,
+            account_generation: _runtime_access.generation(),
             visibility_version: request.visibility_version,
             #[cfg(feature = "e2e")]
             debug_port: None,
@@ -843,7 +881,10 @@ pub async fn browser_attach(
         ));
     }
 
-    match require_current_page_lease(&views, request.page_lease) {
+    match _runtime_access
+        .revalidate()
+        .and_then(|()| require_current_page_lease(&views, request.page_lease))
+    {
         Ok(()) => {}
         Err(error) => {
             return Err(cleanup_failed_attach(
@@ -926,9 +967,11 @@ pub fn browser_set_view(
     trusted(&webview)?;
     validate_browser_id(&request.browser_id).map_err(policy_error)?;
     validate_bounds(request.bounds).map_err(policy_error)?;
-    let child = webview
-        .app_handle()
-        .get_webview(&label(&request.browser_id, request.page_lease));
+    let child = webview.app_handle().get_webview(&label(
+        &request.browser_id,
+        request.page_lease,
+        _runtime_access.generation(),
+    ));
     require_current_page_lease(&views, request.page_lease)?;
     let mut records = views.lock();
     let record = records
@@ -981,7 +1024,11 @@ pub fn browser_navigate(
     require_current_page_lease(&views, page_lease)?;
     let child = webview
         .app_handle()
-        .get_webview(&label(&browser_id, page_lease))
+        .get_webview(&label(
+            &browser_id,
+            page_lease,
+            _runtime_access.generation(),
+        ))
         .ok_or_else(|| unavailable("browser_not_found", "That browser pane is not open."))?;
     {
         let records = views.lock();
@@ -1027,7 +1074,11 @@ pub fn browser_action(
     require_current_page_lease(&views, page_lease)?;
     let child = webview
         .app_handle()
-        .get_webview(&label(&browser_id, page_lease))
+        .get_webview(&label(
+            &browser_id,
+            page_lease,
+            _runtime_access.generation(),
+        ))
         .ok_or_else(|| unavailable("browser_not_found", "That browser pane is not open."))?;
     {
         let records = views.lock();
@@ -1077,7 +1128,11 @@ pub fn browser_focus(
     require_current_page_lease(&views, page_lease)?;
     let child = webview
         .app_handle()
-        .get_webview(&label(&browser_id, page_lease))
+        .get_webview(&label(
+            &browser_id,
+            page_lease,
+            _runtime_access.generation(),
+        ))
         .ok_or_else(|| unavailable("browser_not_found", "That browser pane is not open."))?;
     {
         let records = views.lock();
@@ -1121,7 +1176,11 @@ pub fn browser_info(
     }
     let current_url = webview
         .app_handle()
-        .get_webview(&label(&browser_id, page_lease))
+        .get_webview(&label(
+            &browser_id,
+            page_lease,
+            _runtime_access.generation(),
+        ))
         .and_then(|child| child.url().ok())
         .filter(safe_runtime_url);
     let mut records = views.lock();
@@ -1150,10 +1209,11 @@ pub fn browser_close(
     let Some((creating, previous_visible)) =
         mark_renderer_close_started(&views, &browser_id, page_lease)?
     else {
-        if let Some(child) = webview
-            .app_handle()
-            .get_webview(&label(&browser_id, page_lease))
-        {
+        if let Some(child) = webview.app_handle().get_webview(&label(
+            &browser_id,
+            page_lease,
+            _runtime_access.generation(),
+        )) {
             child.close().map_err(|_| {
                 unavailable(
                     "browser_close_failed",
@@ -1163,10 +1223,11 @@ pub fn browser_close(
         }
         return Ok(false);
     };
-    if let Some(child) = webview
-        .app_handle()
-        .get_webview(&label(&browser_id, page_lease))
-    {
+    if let Some(child) = webview.app_handle().get_webview(&label(
+        &browser_id,
+        page_lease,
+        _runtime_access.generation(),
+    )) {
         let closed = child.close().is_ok();
         finish_attach_close(&views, &browser_id, page_lease, closed, previous_visible);
         if !closed {
@@ -1201,7 +1262,10 @@ pub fn browser_hide_all(
     let mut hidden = 0;
     let mut failed = false;
     for id in ids {
-        let child = webview.app_handle().get_webview(&label(&id, page_lease));
+        let child =
+            webview
+                .app_handle()
+                .get_webview(&label(&id, page_lease, _runtime_access.generation()));
         let mut records = views.lock();
         let Some(record) = records.get_mut(&id) else {
             continue;
@@ -1267,20 +1331,23 @@ pub fn browser_open_external(
 }
 
 pub fn close_all(app: &tauri::AppHandle, views: &BrowserViews) -> Result<usize, IpcError> {
-    let ids: Vec<(String, u64)> = views
+    // Cleanup runs after account leases drain. Invalidate the page even when the main WebView
+    // stays loaded, so callbacks/queued requests from the prior account cannot address new views.
+    views.rotate_page_lease();
+    let ids: Vec<(String, u64, u64)> = views
         .lock()
         .iter()
-        .map(|(id, record)| (id.clone(), record.page_lease))
+        .map(|(id, record)| (id.clone(), record.page_lease, record.account_generation))
         .collect();
     let mut closed = 0;
     let mut failed = false;
-    for (id, page_lease) in ids {
+    for (id, page_lease, account_generation) in ids {
         let Ok(Some((creating, previous_visible))) =
             mark_renderer_close_started(views, &id, page_lease)
         else {
             continue;
         };
-        if let Some(child) = app.get_webview(&label(&id, page_lease)) {
+        if let Some(child) = app.get_webview(&label(&id, page_lease, account_generation)) {
             let succeeded = child.close().is_ok();
             finish_attach_close(views, &id, page_lease, succeeded, previous_visible);
             if succeeded {
@@ -1325,6 +1392,7 @@ mod tests {
             creating: true,
             closing: false,
             page_lease: 1,
+            account_generation: 41,
             visibility_version: 0,
             #[cfg(feature = "e2e")]
             debug_port: None,
@@ -1355,7 +1423,7 @@ mod tests {
             Err(error) => error,
         };
         assert_eq!(stale_command.code, "browser_page_lease_expired");
-        assert_ne!(label(&id, stale_lease), label(&id, current_lease));
+        assert_ne!(label(&id, stale_lease, 41), label(&id, current_lease, 41));
         // Simulate a delayed L1 close finishing after L2 has installed the same durable ID.
         finish_attach_close(&views, &id, stale_lease, true, false);
         let current = views.lock().get(&id).cloned().unwrap();
@@ -1423,7 +1491,7 @@ mod tests {
     fn browser_profile_rejects_non_directory_ancestors() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(temp.path().join("browser-data"), b"not a directory").unwrap();
-        let error = browser_profile_authority(
+        let error = browser_profile_dir(
             temp.path(),
             "acct_synthetic_a",
             "01992ac0-e385-71a9-9548-bc0a8362133d",
@@ -1436,21 +1504,116 @@ mod tests {
     fn browser_profiles_persist_for_one_account_but_isolate_accounts_in_one_workspace() {
         let temp = tempfile::tempdir().unwrap();
         let workspace = "01992ac0-e385-71a9-9548-bc0a8362133d";
-        let first = browser_profile_authority(temp.path(), "acct_synthetic_a", workspace).unwrap();
-        let same_account =
-            browser_profile_authority(temp.path(), "acct_synthetic_a", workspace).unwrap();
+        let first = browser_profile_dir(temp.path(), "acct_synthetic_a", workspace).unwrap();
+        let same_account = browser_profile_dir(temp.path(), "acct_synthetic_a", workspace).unwrap();
         let other_account =
-            browser_profile_authority(temp.path(), "acct_synthetic_b", workspace).unwrap();
+            browser_profile_dir(temp.path(), "acct_synthetic_b", workspace).unwrap();
 
-        assert_eq!(first.path(), same_account.path());
-        assert_ne!(first.path(), other_account.path());
-        assert!(!first.path().to_string_lossy().contains("acct_synthetic_a"));
+        assert_eq!(first.as_path(), same_account.as_path());
+        assert_ne!(first.as_path(), other_account.as_path());
+        assert!(
+            !first
+                .as_path()
+                .to_string_lossy()
+                .contains("acct_synthetic_a")
+        );
         assert!(
             !other_account
-                .path()
+                .as_path()
                 .to_string_lossy()
                 .contains("acct_synthetic_b")
         );
+    }
+
+    #[test]
+    fn account_profiles_do_not_adopt_legacy_workspace_cookies() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = "01992ac0-e385-71a9-9548-bc0a8362133d";
+        let legacy = temp.path().join("browser-data").join(workspace);
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("cookies"), b"unowned cookies").unwrap();
+        let scoped = browser_profile_dir(temp.path(), "acct_synthetic_a", workspace).unwrap();
+        assert_ne!(scoped, legacy);
+        assert!(!scoped.join("cookies").exists());
+        assert_eq!(
+            std::fs::read(legacy.join("cookies")).unwrap(),
+            b"unowned cookies"
+        );
+    }
+
+    #[cfg(any(windows, unix))]
+    #[test]
+    fn account_profile_rejects_linked_workspace_without_touching_target() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = "01992ac0-e385-71a9-9548-bc0a8362133d";
+        let profile = browser_profile_dir(temp.path(), "acct_synthetic_a", workspace).unwrap();
+        std::fs::remove_dir(&profile).unwrap();
+        let outside = temp.path().join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt as _;
+            let output = std::process::Command::new("cmd.exe")
+                .args(["/C", "mklink", "/J"])
+                .arg(&profile)
+                .arg(&outside)
+                .creation_flags(0x0800_0000)
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &profile).unwrap();
+        assert_eq!(
+            browser_profile_dir(temp.path(), "acct_synthetic_a", workspace)
+                .unwrap_err()
+                .code,
+            "browser_profile_unsafe"
+        );
+        assert!(std::fs::read_dir(&outside).unwrap().next().is_none());
+        #[cfg(windows)]
+        std::fs::remove_dir(&profile).unwrap();
+        #[cfg(unix)]
+        std::fs::remove_file(&profile).unwrap();
+    }
+
+    #[test]
+    fn account_cleanup_fences_old_callbacks_and_preserves_new_account_records() {
+        let views = BrowserViews::default();
+        let id = "01992ac0-e385-71a9-9548-bc0a8362133e".to_owned();
+        let old_page = views.current_page_lease();
+        let mut old = record("https://old.example/");
+        old.creating = false;
+        views.reserve(id.clone(), old).unwrap();
+        // This rotation is the first action of close_all, even if native close must retry.
+        let next_page = views.rotate_page_lease();
+        assert!(require_current_page_lease(&views, old_page).is_err());
+        finish_attach_close(&views, &id, old_page, true, false);
+        let mut new = record("https://new.example/");
+        new.page_lease = next_page;
+        new.account_generation = 42;
+        views.reserve(id.clone(), new).unwrap();
+        finish_attach_close(&views, &id, old_page, true, false);
+        let current = views.lock().get(&id).cloned().unwrap();
+        assert_eq!(current.account_generation, 42);
+        assert_eq!(current.url, "https://new.example/");
+        assert!(require_record_page(&current, old_page).is_err());
+    }
+
+    #[test]
+    fn account_generation_cannot_overwrite_a_retained_browser_record() {
+        let views = BrowserViews::default();
+        let id = "01992ac0-e385-71a9-9548-bc0a8362133e".to_owned();
+        let mut old = record("https://old.example/");
+        old.creating = false;
+        views.reserve(id.clone(), old).unwrap();
+        let mut new = record("https://new.example/");
+        new.account_generation = 42;
+        assert_eq!(
+            views.reserve(id.clone(), new).unwrap_err().code,
+            "browser_account_expired"
+        );
+        assert_eq!(views.lock().get(&id).unwrap().account_generation, 41);
     }
 
     #[test]

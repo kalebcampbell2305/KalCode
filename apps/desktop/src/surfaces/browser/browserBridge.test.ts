@@ -62,4 +62,31 @@ describe("native Browser page authority", () => {
       expect(request.pageLease, command).toBe(42);
     }
   });
+
+  it("a remounted account gets a new lease while late old bridge work retains its old lease", async () => {
+    const oldAccount = createBrowserBridge();
+    await oldAccount.info(browserId);
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "browser_page_lease") return 43;
+      return true;
+    });
+    const newAccount = createBrowserBridge();
+    await newAccount.focus(browserId);
+    await oldAccount.close(browserId);
+    expect(invokeMock).toHaveBeenCalledWith("browser_focus", { browserId, pageLease: 43 });
+    expect(invokeMock).toHaveBeenCalledWith("browser_close", { browserId, pageLease: 42 });
+    expect(invokeMock.mock.calls.filter(([command]) => command === "browser_page_lease")).toHaveLength(2);
+  });
+
+  it("an unused old bridge cannot acquire the next account lease for delayed cleanup", async () => {
+    const oldAccount = createBrowserBridge();
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "browser_page_lease") return 43;
+      return true;
+    });
+    const newAccount = createBrowserBridge();
+    await newAccount.focus(browserId);
+    await oldAccount.close(browserId);
+    expect(invokeMock).toHaveBeenCalledWith("browser_close", { browserId, pageLease: 42 });
+  });
 });

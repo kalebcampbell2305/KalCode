@@ -77,8 +77,6 @@ import { ProviderPane } from "./panes/ProviderPane.tsx";
 import { type ProviderPanes, useProviderPanes } from "./panes/useProviderPanes.ts";
 import { TerminalView } from "./TerminalView.tsx";
 
-const browserBridge = createBrowserBridge();
-
 const terminalContent = (terminalId: string): PaneContent => ({ kind: "terminal", terminalId });
 const threadContent = (threadId: string): PaneContent => ({ kind: "thread", threadId });
 
@@ -151,6 +149,7 @@ export function CodeCanvas({ workspace, children }: CodeCanvasProps) {
 }
 
 function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & { providerPanes: ProviderPanes }) {
+  const [browserBridge] = useState(createBrowserBridge);
   const initialBrowserUrls = useRef(new Map<string, string>());
   const { client } = useRuntime();
   const { current, navigate } = useNavigation();
@@ -363,6 +362,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       if (content.kind === "browser")
         return (
           <BrowserContentPanel
+            bridge={browserBridge}
             content={content}
             workspaceId={workspace.id}
             context={context}
@@ -437,6 +437,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       threadsIntent,
       current,
       accountFor,
+      browserBridge,
     ],
   );
 
@@ -454,13 +455,13 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       }
     }
     browserIds.current = next;
-  }, [controller.layout]);
+  }, [controller.layout, browserBridge]);
   useEffect(
     () => () => {
       for (const id of browserIds.current) void browserBridge.close(id).catch(() => undefined);
       browserIds.current.clear();
     },
-    [],
+    [browserBridge],
   );
 
   const shown = useMemo(() => new Set(allContents(controller.layout).map(contentKey)), [controller.layout]);
@@ -705,7 +706,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       }
       return null;
     },
-    [paneById, providerPanes, navigate, threadsIntent, titleOf],
+    [paneById, providerPanes, navigate, threadsIntent, titleOf, browserBridge],
   );
 
   const host: PaneHost = useMemo(
@@ -877,6 +878,7 @@ function EmptyPane({
 }
 
 function BrowserContentPanel({
+  bridge,
   content,
   workspaceId,
   context,
@@ -884,6 +886,7 @@ function BrowserContentPanel({
   visible,
   initialUrl,
 }: {
+  bridge: ReturnType<typeof createBrowserBridge>;
   content: Extract<PaneContent, { kind: "browser" }>;
   workspaceId: string;
   context: PaneRenderContext;
@@ -908,7 +911,7 @@ function BrowserContentPanel({
       content={content}
       workspaceId={workspaceId}
       context={context}
-      bridge={browserBridge}
+      bridge={bridge}
       visible={visible}
       initialUrl={initialUrl}
       onRequestFocus={onRequestFocus}

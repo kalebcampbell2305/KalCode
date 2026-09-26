@@ -24,7 +24,6 @@ export interface BrowserFocusEvent {
 }
 
 let visibilitySequence = 0;
-let pageLease: Promise<number> | null = null;
 
 /** Process-wide ordering survives React pane unmount/remount and rejects stale native shows. */
 export function nextBrowserVisibilityVersion(): number {
@@ -59,10 +58,12 @@ export interface BrowserBridge {
 
 /** Native bridge for the trusted main webview. Remote browser children have no IPC capability. */
 export function createBrowserBridge(): BrowserBridge {
-  const lease = () => {
-    pageLease ??= invoke<number>("browser_page_lease");
-    return pageLease;
-  };
+  // Capture at mount, even before the first browser pane: delayed old cleanup must never
+  // bootstrap itself into the next account. A failed lease stays failed until a fresh mount.
+  const pageLease = invoke<number>("browser_page_lease");
+  // Some canvases never open Browser. Handle rejection now without changing the retained result.
+  void pageLease.catch(() => undefined);
+  const lease = () => pageLease;
   return {
     attach: async (request) =>
       invoke<BrowserState>("browser_attach", {
