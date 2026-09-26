@@ -1,0 +1,105 @@
+import assert from "node:assert/strict";
+import { execFileSync, spawnSync } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { test } from "node:test";
+
+// Exercise the real CLI/file discovery, without writing fixtures into product source trees.
+function scan(source, extension = "rs") {
+  const directory = mkdtempSync(join(tmpdir(), "kalcode-zero-cost-"));
+  try {
+    mkdirSync(join(directory, "tooling"));
+    copyFileSync(new URL("./check-zero-cost.mjs", import.meta.url), join(directory, "tooling/check-zero-cost.mjs"));
+    const file = `crates/example/src/lib.${extension}`;
+    mkdirSync(dirname(join(directory, file)), { recursive: true });
+    writeFileSync(join(directory, file), source);
+    execFileSync("git", ["init", "--quiet"], { cwd: directory, windowsHide: true });
+    const result = spawnSync(process.execPath, ["tooling/check-zero-cost.mjs"], {
+      cwd: directory,
+      encoding: "utf8",
+      windowsHide: true,
+    });
+    assert.ifError(result.error);
+    return { ...result, file };
+  } finally {
+    // This exact freshly created temporary directory is the only cleanup target.
+    assert.equal(dirname(directory), tmpdir());
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+const forbidden = 'fn production() { let _ = "api.openai.com"; }';
+const testModule = '#[cfg(test)]\nmod tests {\n  fn fixture() { let _ = "OPENAI_API_KEY"; }\n}';
+
+test("production after an inline test module is still scanned at its original line", () => {
+  const result = scan(`${testModule}\n${forbidden}\n`);
+  assert.equal(result.status, 1, result.stdout);
+  assert.match(result.stderr, /crates\/example\/src\/lib.rs:5:/);
+  assert.doesNotMatch(result.stderr, /lib.rs:3:/);
+});
+
+test("legitimate inline test fixtures remain exempt", () => {
+  assert.equal(scan(`fn safe() {}\n${testModule}`).status, 0);
+});
+
+for (const item of ["use super::fixture;", "mod external;", "fn helper() {}", "const FLAG: bool = true;"]) {
+  test(`a test-only ${item.split(" ")[0]} item cannot hide later production`, () => {
+    const result = scan(`#[cfg(test)]\n${item}\n${forbidden}`);
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, /lib.rs:3:/);
+  });
+}
+
+test("multiple test modules do not hide production between or after them", () => {
+  const result = scan(`${testModule}\n${forbidden}\n${testModule}\n${forbidden}`);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /lib.rs:5:/);
+  assert.match(result.stderr, /lib.rs:10:/);
+});
+
+test("visibility, nested blocks and comments in test module headers remain supported", () => {
+  const result = scan('#[cfg ( test )]\n// fixture\npub(crate) mod tests { if true { let _ = "OPENAI_API_KEY"; } }');
+  assert.equal(result.status, 0, result.stderr);
+});
+
+for (const literal of ['"}"', '"\\"{"', 'r###"} " {"###', "'}'", "'\\u{7b}'", "b'{'"]) {
+  test(`test-module boundaries ignore braces in ${literal}`, () => {
+    const result = scan(`#[cfg(test)]\nmod tests { let _ = ${literal}; let _ = "OPENAI_API_KEY"; }\n${forbidden}`);
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stderr, /lib.rs:3:/);
+    assert.doesNotMatch(result.stderr, /lib.rs:2:/);
+  });
+}
+
+test("nested block comments cannot extend the excluded module", () => {
+  const result = scan(`#[cfg(test)]\nmod tests { /* { /* } */ } */ let _ = "OPENAI_API_KEY"; }\n${forbidden}`);
+  assert.equal(result.status, 1, result.stdout);
+  assert.match(result.stderr, /lib.rs:3:/);
+  assert.doesNotMatch(result.stderr, /lib.rs:2:/);
+});
+
+test("lifetime apostrophes do not consume braces as character strings", () => {
+  const result = scan(
+    `#[cfg(test)]\nmod tests { fn fixture<'a>(s: &'a str) { let _ = "OPENAI_API_KEY"; } }\n${forbidden}`,
+  );
+  assert.equal(result.status, 1, result.stdout);
+  assert.match(result.stderr, /lib.rs:3:/);
+  assert.doesNotMatch(result.stderr, /lib.rs:2:/);
+});
+
+for (const wrapper of [(text) => `/*\n${text}\n*/`, (text) => `const HELP: &str = r#"\n${text}\n"#;`]) {
+  test("a cfg(test) lookalike in a comment or literal does not exempt following production", () => {
+    const result = scan(`${wrapper("#[cfg(test)]\nmod tests {")}\n${forbidden}\n}`);
+    assert.equal(result.status, 1, result.stdout);
+  });
+}
+
+test("an unclosed test module remains scanned rather than exempting the rest", () => {
+  assert.equal(scan(`#[cfg(test)]\nmod tests {\n${forbidden}`).status, 1);
+});
+
+test("production before test modules and non-Rust files remain scanned", () => {
+  assert.equal(scan(`${forbidden}\n${testModule}`).status, 1);
+  assert.equal(scan(`// #[cfg(test)]\nconst endpoint = "api.openai.com";`, "ts").status, 1);
+});

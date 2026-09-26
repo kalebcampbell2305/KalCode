@@ -42,6 +42,81 @@ const FORBIDDEN = [
 const SCOPE = /^(apps\/(desktop|website|api)\/(src|worker|src-tauri\/src)|crates\/[^/]+\/src)\//;
 const EXEMPT = /(\.test\.|\/tests?\/|\/test-support\/|__fixtures__)/;
 
+// This is a boundary recognizer, not a Rust parser. Only complete, explicit inline test
+// modules are exempt. Other cfg(test) items and ambiguous syntax stay scanned.
+function withoutRustTestModules(source) {
+  const blank = (text) => text.replace(/[^\r\n]/g, " ");
+  const syntax = source.split("");
+  const mask = (start, end, literal = false) => {
+    for (let i = start; i < end; i++) {
+      if (syntax[i] !== "\r" && syntax[i] !== "\n") syntax[i] = " ";
+    }
+    // A literal cannot turn into whitespace between an attribute and a module.
+    if (literal) syntax[start] = "~";
+  };
+  for (let i = 0; i < source.length; ) {
+    const start = i;
+    if (source.startsWith("//", i)) {
+      const newline = source.indexOf("\n", i);
+      i = newline === -1 ? source.length : newline;
+      mask(start, i);
+    } else if (source.startsWith("/*", i)) {
+      let depth = 1;
+      i += 2;
+      while (i < source.length && depth) {
+        if (source.startsWith("/*", i)) {
+          depth++;
+          i += 2;
+        } else if (source.startsWith("*/", i)) {
+          depth--;
+          i += 2;
+        } else i++;
+      }
+      mask(start, i);
+    } else if (source[i] === "r" && /^r#*"/.test(source.slice(i))) {
+      const opening = /^r(#*)"/.exec(source.slice(i))[0];
+      const closing = `"${opening.slice(1, -1)}`;
+      const end = source.indexOf(closing, i + opening.length);
+      i = end === -1 ? source.length : end + closing.length;
+      mask(start, i, true);
+    } else if (source[i] === '"') {
+      i++;
+      while (i < source.length) {
+        if (source[i] === "\\") i = Math.min(i + 2, source.length);
+        else if (source[i++] === '"') break;
+      }
+      mask(start, i, true);
+    } else if (source[i] === "'") {
+      // Match exactly one Rust character (including escapes), never a lifetime like 'a.
+      const character = /^'(?:\\(?:u\{[0-9a-fA-F_]+\}|x[0-9a-fA-F]{2}|[^\r\n])|[^'\\\r\n])'/u.exec(source.slice(i));
+      if (character) {
+        i += character[0].length;
+        mask(start, i, true);
+      } else i++;
+    } else i++;
+  }
+  const structure = syntax.join("");
+  const modules =
+    /#\s*\[\s*cfg\s*\(\s*test\s*\)\s*\]\s*(?:pub\s*(?:\([^()]*\)\s*)?)?mod\s+(?:r#)?[A-Za-z_][A-Za-z0-9_]*\s*\{/g;
+  const parts = [];
+  let copied = 0;
+  for (const match of structure.matchAll(modules)) {
+    if (match.index < copied) continue;
+    let end = match.index + match[0].length;
+    let depth = 1;
+    while (end < structure.length && depth) {
+      if (structure[end] === "{") depth++;
+      if (structure[end] === "}") depth--;
+      end++;
+    }
+    if (depth) continue;
+    parts.push(source.slice(copied, match.index), blank(source.slice(match.index, end)));
+    copied = end;
+  }
+  parts.push(source.slice(copied));
+  return parts.join("");
+}
+
 const files = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard"], {
   cwd: root,
   encoding: "utf8",
@@ -58,13 +133,7 @@ for (const file of files) {
   } catch {
     continue;
   }
-  let lines = text.split(/\r?\n/);
-  // Rust keeps unit tests in an inline `#[cfg(test)]` module at the end of the file; like other
-  // tests, it may name the variables the product code must never read.
-  if (file.endsWith(".rs")) {
-    const testModule = lines.findIndex((line) => line.trim() === "#[cfg(test)]");
-    if (testModule !== -1) lines = lines.slice(0, testModule);
-  }
+  const lines = (file.endsWith(".rs") ? withoutRustTestModules(text) : text).split(/\r?\n/);
   lines.forEach((line, index) => {
     for (const re of FORBIDDEN) if (re.test(line)) findings.push(`${file}:${index + 1}: ${re}`);
   });
