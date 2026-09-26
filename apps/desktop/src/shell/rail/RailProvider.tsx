@@ -60,10 +60,12 @@ export function RailProvider({ children }: { children: ReactNode }) {
   );
   const currentLifetime = useRef(lifetime);
   currentLifetime.current = lifetime;
+  // Retained callbacks belong to the render that exposed them; invoking one after
+  // an effect reconnect must not capture the new epoch and revive its authority.
+  const renderEpoch = lifetime.epoch;
   const captureLifetime = useCallback(() => {
-    const epoch = lifetime.epoch;
-    return () => lifetime.mounted && currentLifetime.current === lifetime && lifetime.epoch === epoch;
-  }, [lifetime]);
+    return () => lifetime.mounted && currentLifetime.current === lifetime && lifetime.epoch === renderEpoch;
+  }, [lifetime, renderEpoch]);
   const captureRailLifetime = useCallback(() => {
     const isCurrent = captureLifetime();
     return () => enabled && isCurrent();

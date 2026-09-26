@@ -164,6 +164,39 @@ function stubMutations(f: Awaited<ReturnType<typeof fixture>>, gate = Promise.re
 }
 
 describe("RailProvider runtime isolation", () => {
+  it("retires pre-disconnect read, mutation and navigation handles while fresh handles recover", async () => {
+    const f = await fixture();
+    const writes = stubMutations(f);
+    const view = await mount(f);
+    const retained = view.result.current.rail;
+    view.visibility(false);
+    view.visibility(true);
+    await waitFor(() => expect(view.result.current.rail.state).toBe("ready"));
+    f.read.mockClear();
+    await act(async () => {
+      await retained.refresh();
+      for (const action of mutations) await invoke(retained, action, f);
+      await retained.openWorkspace("old", "project");
+      await retained.openWorkspace("old", "code");
+      retained.openThread("old-thread");
+    });
+    expect(f.read).not.toHaveBeenCalled();
+    for (const write of writes) expect(write).not.toHaveBeenCalled();
+    expect(contexts.workspaces.activate).not.toHaveBeenCalled();
+    expect(contexts.intents.focus).not.toHaveBeenCalled();
+    expect(contexts.navigate).not.toHaveBeenCalled();
+    await act(async () => {
+      await view.result.current.rail.refresh();
+      expect(await view.result.current.rail.createGroup("Current")).not.toBeNull();
+      await view.result.current.rail.openWorkspace("current", "project");
+      await view.result.current.rail.openWorkspace("current", "code");
+    });
+    expect(f.read).toHaveBeenCalled();
+    expect(f.client.railGroupCreate).toHaveBeenCalledTimes(1);
+    expect(contexts.navigate).toHaveBeenCalledWith("folder");
+    expect(contexts.intents.focus).toHaveBeenCalledWith({ kind: "workspace", workspaceId: "current" });
+  });
+
   it.each(["setSection", "setGroupCollapsed"] as const)(
     "retires a read started during %s when its authoritative write completes",
     async (action) => {
