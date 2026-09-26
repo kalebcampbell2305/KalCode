@@ -96,6 +96,34 @@ describe("ToastProvider", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("retains keyboard focus during overflow, then restores FIFO after focus leaves", () => {
+    const { result } = renderHook(useToast, { wrapper });
+    act(() => {
+      for (let n = 1; n <= 4; n++) result.current.show({ title: `Notice ${n}`, duration: 20_000 });
+    });
+    const focused = screen.getAllByRole("button", { name: "Dismiss notification" })[0];
+    if (!focused) throw new Error("Expected a dismiss button");
+    act(() => focused.focus());
+    advance(0);
+    for (let n = 5; n <= 7; n++) {
+      act(() => result.current.show({ title: `Notice ${n}`, duration: 20_000 }));
+      expect(focused).toHaveFocus();
+      expect(screen.getByText("Notice 1")).toBeInTheDocument();
+      expect(screen.queryByText(`Notice ${n - 3}`)).not.toBeInTheDocument();
+      expect(screen.getAllByRole("button", { name: "Dismiss notification" })).toHaveLength(4);
+      expect(vi.getTimerCount()).toBe(3);
+    }
+    act(() => screen.getByRole("button", { name: "Outside the toast" }).focus());
+    act(() => result.current.show({ title: "Notice 8", duration: 20_000 }));
+    advance(0);
+    expect(screen.queryByText("Notice 1")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Dismiss notification" })).toHaveLength(4);
+    expect(vi.getTimerCount()).toBe(4);
+    advance(20_000);
+    expect(screen.queryAllByRole("button", { name: "Dismiss notification" })).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("clears both running and paused toast timers when unmounted", () => {
     const { result, unmount } = renderHook(useToast, { wrapper });
     act(() => result.current.show({ title: "Paused" }));
@@ -103,6 +131,32 @@ describe("ToastProvider", () => {
     act(() => result.current.show({ title: "Running" }));
     unmount();
     advance(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("protects a focused toast through a batched burst and permits its explicit dismissal", () => {
+    const { result, unmount } = renderHook(useToast, { wrapper });
+    act(() => result.current.show({ title: "Reading", duration: 20_000 }));
+    const focused = screen.getByRole("button", { name: "Dismiss notification" });
+    act(() => focused.focus());
+    advance(0);
+    act(() => {
+      for (let n = 1; n <= 10; n++) result.current.show({ title: `Burst ${n}`, duration: 20_000 });
+    });
+    expect(focused).toHaveFocus();
+    expect(screen.getAllByRole("button", { name: "Dismiss notification" })).toHaveLength(4);
+    for (const n of [8, 9, 10]) expect(screen.getByText(`Burst ${n}`)).toBeInTheDocument();
+    expect(vi.getTimerCount()).toBe(3);
+    fireEvent.click(focused);
+    expect(screen.queryByText("Reading")).not.toBeInTheDocument();
+    act(() => {
+      result.current.show({ title: "Next 1", duration: 20_000 });
+      result.current.show({ title: "Next 2", duration: 20_000 });
+    });
+    expect(screen.queryByText("Burst 8")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Dismiss notification" })).toHaveLength(4);
+    expect(vi.getTimerCount()).toBe(4);
+    unmount();
     expect(vi.getTimerCount()).toBe(0);
   });
 

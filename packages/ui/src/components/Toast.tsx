@@ -32,7 +32,15 @@ const ToastContext = createContext<ToastApi | null>(null);
 const ICONS = { success: CircleCheck, danger: CircleAlert, info: Info } as const;
 const MAX_VISIBLE = 4;
 
-function Toast({ toast, dismiss }: { toast: ToastItem; dismiss: (id: number) => void }) {
+function Toast({
+  toast,
+  dismiss,
+  setFocused,
+}: {
+  toast: ToastItem;
+  dismiss: (id: number) => void;
+  setFocused: (id: number, focused: boolean) => void;
+}) {
   const remaining = useRef(toast.duration);
   const started = useRef(0);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -54,13 +62,21 @@ function Toast({ toast, dismiss }: { toast: ToastItem; dismiss: (id: number) => 
     return pause;
   }, [pause, resume]);
 
+  useEffect(() => () => setFocused(toast.id, false), [setFocused, toast.id]);
+
   const Icon = ICONS[toast.tone];
   return (
     <li
       className={cx(styles.toast, styles[toast.tone])}
-      onFocus={pause}
+      onFocus={() => {
+        setFocused(toast.id, true);
+        pause();
+      }}
       onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget)) resume();
+        if (!event.currentTarget.contains(event.relatedTarget)) {
+          setFocused(toast.id, false);
+          resume();
+        }
       }}
     >
       <span className={styles.icon} aria-hidden="true">
@@ -78,17 +94,28 @@ function Toast({ toast, dismiss }: { toast: ToastItem; dismiss: (id: number) => 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const nextId = useRef(1);
+  const focusedId = useRef<number | null>(null);
+
+  const setFocused = useCallback((id: number, focused: boolean) => {
+    if (focused) focusedId.current = id;
+    else if (focusedId.current === id) focusedId.current = null;
+  }, []);
 
   const dismiss = useCallback((id: number) => {
+    if (focusedId.current === id) focusedId.current = null;
     setToasts((current) => current.filter((toast) => toast.id !== id));
   }, []);
 
   const show = useCallback(({ tone = "info", title, description, duration }: ToastInput) => {
     const id = nextId.current++;
-    setToasts((current) => [
-      ...current.slice(-(MAX_VISIBLE - 1)),
-      { id, tone, title, description, duration: duration ?? (tone === "danger" ? 0 : 4500) },
-    ]);
+    const protectedId = focusedId.current;
+    setToasts((current) => {
+      const evictIndex = current.length >= MAX_VISIBLE ? current.findIndex((toast) => toast.id !== protectedId) : -1;
+      return [
+        ...current.filter((_, index) => index !== evictIndex),
+        { id, tone, title, description, duration: duration ?? (tone === "danger" ? 0 : 4500) },
+      ];
+    });
   }, []);
 
   const api = useMemo(() => ({ show, dismiss }), [show, dismiss]);
@@ -99,7 +126,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       <section className={styles.region} aria-label="Notifications">
         <ol className={styles.list} role="status" aria-live="polite">
           {toasts.map((toast) => (
-            <Toast key={toast.id} toast={toast} dismiss={dismiss} />
+            <Toast key={toast.id} toast={toast} dismiss={dismiss} setFocused={setFocused} />
           ))}
         </ol>
       </section>
