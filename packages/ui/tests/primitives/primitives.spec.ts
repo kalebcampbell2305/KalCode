@@ -66,3 +66,25 @@ test("tooltip combines the existing description with its hint and restores it on
   await expect(trigger).toHaveAttribute("aria-describedby", "save-description");
   await expect(trigger).toHaveAccessibleDescription("Saves your current document.");
 });
+
+test("background toast arrivals retain keyboard focus and resume FIFO after blur", async ({ page }) => {
+  await page.goto("/toast");
+  const add = page.getByRole("button", { name: "Add notification" });
+  for (let n = 1; n <= 4; n++) await add.click();
+  const first = page.getByRole("listitem").filter({ hasText: "Notice 1" });
+  const dismiss = first.getByRole("button", { name: "Dismiss notification" });
+  await dismiss.focus();
+  for (let n = 5; n <= 7; n++) {
+    // Dispatch an arrival without moving keyboard focus, as background notifications do.
+    await add.evaluate((button: HTMLButtonElement) => button.click());
+    await expect(page.getByText(`Notice ${n}`, { exact: true })).toBeVisible();
+    await expect(dismiss).toBeFocused();
+    await expect(page.getByRole("listitem")).toHaveCount(4);
+    await expect(page.getByText(`Notice ${n - 3}`, { exact: true })).toHaveCount(0);
+  }
+  await add.focus();
+  await page.keyboard.press("Enter");
+  await expect(first).toHaveCount(0);
+  await expect(page.getByRole("listitem")).toHaveCount(4);
+  await expect(page.getByText("Notice 8", { exact: true })).toBeVisible();
+});

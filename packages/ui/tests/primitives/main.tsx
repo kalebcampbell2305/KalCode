@@ -8,6 +8,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "../../src/components/DropdownMenu.tsx";
+import { ToastProvider, useToast } from "../../src/components/Toast.tsx";
 import { Tooltip, TooltipProvider } from "../../src/components/Tooltip.tsx";
 import "../../src/styles/tokens.css";
 import "../../src/styles/base.css";
@@ -62,6 +63,30 @@ function Harness() {
   );
 }
 
+function ToastHarness() {
+  const { show } = useToast();
+  const [count, setCount] = useState(0);
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        show({ title: `Notice ${count + 1}`, duration: 20_000 });
+        setCount((current) => current + 1);
+      }}
+    >
+      Add notification
+    </button>
+  );
+}
+
 const root = document.getElementById("root");
 if (!root) throw new Error("Missing harness root");
-createRoot(root).render(<Harness />);
+createRoot(root).render(
+  window.location.pathname === "/toast" ? (
+    <ToastProvider>
+      <ToastHarness />
+    </ToastProvider>
+  ) : (
+    <Harness />
+  ),
+);
