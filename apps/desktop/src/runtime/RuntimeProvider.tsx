@@ -108,10 +108,11 @@ export function RuntimeProvider({ client, info, initialSettings, children }: Run
           return;
         }
         unsubscribe = unsub;
+        const evictionVersion = feed.evictionVersion;
         const page = await client.recentEvents(INITIAL_PAGE);
         if (cancelled) return;
         feed.merge(page);
-        if (page.length < INITIAL_PAGE) feed.markReachedStart();
+        if (page.length < INITIAL_PAGE) feed.markReachedStart(evictionVersion);
         setEventsState("ready");
         setEventsError(null);
       } catch (error) {

@@ -72,6 +72,31 @@ describe("EventFeed", () => {
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects an exhaustion result from before eviction but accepts a fresh backfill", () => {
+    const feed = new EventFeed(3);
+    const beforeRead = feed.evictionVersion;
+    feed.merge([1, 2, 3, 4].map(event));
+    const snapshot = feed.getSnapshot();
+    feed.markReachedStart(beforeRead);
+    expect(feed.reachedStart).toBe(false);
+    expect(feed.getSnapshot()).toBe(snapshot);
+    const beforeBackfill = feed.evictionVersion;
+    feed.mergeOlder([event(1)]);
+    feed.markReachedStart(beforeBackfill);
+    expect(feed.reachedStart).toBe(true);
+    expect(seqs(feed)).toEqual([4, 3, 2, 1]);
+  });
+
+  it("accepts an exhaustion result when intervening events fit or overlap", () => {
+    const feed = new EventFeed(3);
+    const beforeRead = feed.evictionVersion;
+    feed.merge([event(10), event(11)]);
+    feed.merge([event(11)]);
+    feed.markReachedStart(beforeRead);
+    expect(feed.reachedStart).toBe(true);
+    expect(seqs(feed)).toEqual([11, 10]);
+  });
+
   it("keeps older pages the user asked for even when at capacity", () => {
     const feed = new EventFeed(3);
     feed.merge([10, 11, 12].map(event));

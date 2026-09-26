@@ -16,6 +16,7 @@ export interface EventFeedSnapshot {
 export class EventFeed {
   private snapshot: EventFeedSnapshot = { events: [], reachedStart: false };
   private readonly listeners = new Set<() => void>();
+  private evictions = 0;
 
   constructor(private capacity = 500) {}
 
@@ -28,6 +29,11 @@ export class EventFeed {
 
   get reachedStart(): boolean {
     return this.snapshot.reachedStart;
+  }
+
+  /** Capture before a history read to detect rows lost while its response was pending. */
+  get evictionVersion(): number {
+    return this.evictions;
   }
 
   /** The oldest loaded `seq`, used as the cursor for loading older history. */
@@ -48,8 +54,8 @@ export class EventFeed {
     this.apply(page);
   }
 
-  markReachedStart(): void {
-    if (this.snapshot.reachedStart) return;
+  markReachedStart(expectedEvictionVersion = this.evictions): void {
+    if (expectedEvictionVersion !== this.evictions || this.snapshot.reachedStart) return;
     this.snapshot = { ...this.snapshot, reachedStart: true };
     this.emit();
   }
@@ -69,7 +75,9 @@ export class EventFeed {
     const events = [...bySeq.values()].sort((a, b) => b.seq - a.seq).slice(0, this.capacity);
     // Capacity eviction removes the start of the loaded history, so older pages must
     // become available again even if a previous read reached the beginning of the log.
-    const reachedStart = this.snapshot.reachedStart && bySeq.size <= this.capacity;
+    const evicted = bySeq.size > this.capacity;
+    if (evicted) this.evictions += 1;
+    const reachedStart = this.snapshot.reachedStart && !evicted;
     this.snapshot = { events, reachedStart };
     this.emit();
   }

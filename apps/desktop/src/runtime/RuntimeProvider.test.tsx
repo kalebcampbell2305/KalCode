@@ -1,8 +1,8 @@
-import type { Settings } from "@kalcode/protocol";
+import type { EventEnvelope, Settings } from "@kalcode/protocol";
 import { SegmentedControl, ToastProvider } from "@kalcode/ui/components";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { StrictMode, useState } from "react";
+import { type ReactNode, StrictMode, useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { KalCodeClient } from "../ipc/client.ts";
 import { createMemoryTransport, type MemoryTransport } from "../ipc/memoryTransport.ts";
@@ -56,6 +56,71 @@ function deferred<T>() {
 const SAVE_ERROR = { category: "database", code: "database_error", message: "Disk full.", retryable: false };
 
 describe("RuntimeProvider", () => {
+  it.each([
+    { name: "short page after live eviction", initial: 2, live: 501, evicted: true },
+    { name: "empty page after live eviction", initial: 0, live: 501, evicted: true },
+    { name: "short page causing eviction when merged", initial: 2, live: 499, evicted: true },
+    { name: "short page with retained live events", initial: 2, live: 20, evicted: false },
+    { name: "empty page with retained live events", initial: 0, live: 20, evicted: false },
+    { name: "short page without live events", initial: 2, live: 0, evicted: false },
+    { name: "empty page without live events", initial: 0, live: 0, evicted: false },
+  ])("keeps initial history exhaustion accurate: $name", async ({ initial, live, evicted }) => {
+    const client = new KalCodeClient(createMemoryTransport("default"));
+    const boot = await client.boot();
+    const seed = (await client.recentEvents(1))[0];
+    if (!seed) throw new Error("Expected a fixture event");
+    const event = (seq: number): EventEnvelope => ({ ...seed, id: `event-${seq}`, seq });
+    const history = Array.from({ length: initial }, (_, index) => event(100 + index));
+    const initialPage = [...history].reverse();
+    const read = deferred<EventEnvelope[]>();
+    const subscribers = new Set<(event: EventEnvelope) => void>();
+    vi.spyOn(client, "subscribeEvents").mockImplementation(async (listener) => {
+      subscribers.add(listener);
+      return async () => {
+        subscribers.delete(listener);
+      };
+    });
+    const recent = vi
+      .spyOn(client, "recentEvents")
+      .mockImplementation(async (limit, before) =>
+        [...history]
+          .reverse()
+          .filter((event) => before === undefined || event.seq < before)
+          .slice(0, limit),
+      )
+      .mockImplementationOnce(() => read.promise);
+    const { result } = renderHook(useRuntime, {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <StrictMode>
+          <ToastProvider>
+            <RuntimeProvider client={client} info={boot.info} initialSettings={INITIAL}>
+              {children}
+            </RuntimeProvider>
+          </ToastProvider>
+        </StrictMode>
+      ),
+    });
+    await waitFor(() => expect(recent).toHaveBeenCalledOnce());
+    act(() => {
+      for (let index = 0; index < live; index++) {
+        const incoming = event(200 + index);
+        history.push(incoming);
+        for (const listener of subscribers) listener(incoming);
+      }
+    });
+    await act(async () => read.resolve(initialPage));
+    expect(result.current.eventsState).toBe("ready");
+    expect(result.current.feed.reachedStart).toBe(!evicted);
+    if (evicted) {
+      expect(result.current.feed.getSnapshot().events).toHaveLength(500);
+      await act(() => result.current.loadOlderEvents());
+      expect(result.current.feed.reachedStart).toBe(true);
+    }
+    expect(result.current.feed.getSnapshot().events.map((event) => event.seq)).toEqual(
+      [...history].reverse().map((event) => event.seq),
+    );
+  });
+
   it("holds exactly one live event subscription under StrictMode", async () => {
     const transport = createMemoryTransport("default");
     await mount(transport);
