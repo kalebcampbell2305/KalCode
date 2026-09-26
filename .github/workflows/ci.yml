@@ -135,6 +135,8 @@ jobs:
         if: steps.playwright-cache.outputs.cache-hit == 'true'
         run: pnpm --filter @kalcode/desktop exec playwright install-deps chromium
       - run: pnpm --filter @kalcode/desktop test:ui --grep-invert @screenshots
+      - name: Widget pointer lifecycle regressions
+        run: pnpm --filter @kalcode/desktop test:ui:widgets
       - name: Shared UI primitive regressions
         run: pnpm --filter @kalcode/ui test:ui:primitives
       - name: Upload Playwright traces and screenshots
