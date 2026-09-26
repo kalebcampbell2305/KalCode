@@ -90,6 +90,8 @@ impl Clock for MutableClock {
 
 #[derive(Default)]
 struct FakeApi {
+    request_usage: Mutex<VecDeque<Result<account::api::RequestUsageResponse, ApiError>>>,
+    request_calls: Mutex<Vec<(String, bool)>>,
     starts: Mutex<VecDeque<Result<EmailStartResponse, ApiError>>>,
     polls: Mutex<VecDeque<Result<PollResponse, ApiError>>>,
     refreshes: Mutex<VecDeque<Result<SignedInResponse, ApiError>>>,
@@ -240,6 +242,341 @@ impl AccountApi for FakeApi {
     fn usage(&self, _: &str) -> Result<UsageResponse, ApiError> {
         Err(ApiError::Local("unexpected_test_call"))
     }
+
+    fn record_kalvoice(
+        &self,
+        _: &str,
+        request: &str,
+        offline: bool,
+    ) -> Result<account::api::RequestUsageResponse, ApiError> {
+        self.request_calls
+            .lock()
+            .expect("calls")
+            .push((request.into(), offline));
+        pop(&self.request_usage)
+    }
+}
+
+fn vector_token(section: &str, name: &str) -> String {
+    let vectors: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../../../crates/entitlements/testdata/vectors.json"
+    ))
+    .expect("vectors");
+    vectors[section]
+        .as_array()
+        .expect("cases")
+        .iter()
+        .find(|case| case["name"] == name)
+        .expect("case")["token"]
+        .as_str()
+        .expect("token")
+        .into()
+}
+
+fn metering_account(
+    api: Arc<FakeApi>,
+    tier: &str,
+    receipt: Option<&str>,
+    offline: bool,
+) -> Arc<AccountRuntime> {
+    let store = Arc::new(TestStore::default());
+    let session = SessionSecret::new(signed_in().token, 1_900_000_000).expect("session");
+    let token = vector_token("cases", tier);
+    let cached = CachedAccountSecret::new(
+        token.clone(),
+        PublicAccount {
+            id: ACCOUNT_ID.into(),
+            email: "ordinary@example.com".into(),
+            activated_at: Some("2026-09-01T12:00:00.000Z".into()),
+        },
+    )
+    .expect("cache");
+    let receipt = receipt.map(|name| {
+        account::session_store::SignedUsageReceipt::new(vector_token("receiptCases", name))
+            .expect("receipt")
+    });
+    AccountSessionStore::new(store.as_ref())
+        .expect("store")
+        .save_full(Some(&session), None, Some(&cached), receipt.as_ref())
+        .expect("seed");
+    if offline {
+        api.accounts.lock().expect("queue").extend([
+            Err(ApiError::Transport),
+            Err(ApiError::Transport),
+            Err(ApiError::Transport),
+        ]);
+    } else {
+        api.accounts
+            .lock()
+            .expect("queue")
+            .push_back(Ok(api_account(true)));
+        api.entitlements
+            .lock()
+            .expect("queue")
+            .push_back(Ok(EntitlementResponse { token }));
+    }
+    let runtime = Arc::new(runtime(api, store));
+    assert_eq!(
+        runtime.bootstrap().expect("bootstrap").phase,
+        if offline {
+            AccountPhase::OfflineGrace
+        } else {
+            AccountPhase::Ready
+        }
+    );
+    runtime
+}
+
+fn metering_core() -> (tempfile::TempDir, Arc<kalcode_core::Core>) {
+    let directory = tempfile::tempdir().expect("directory");
+    let core = Arc::new(
+        kalcode_core::Core::open(kalcode_core::CoreConfig {
+            paths: kalcode_core::Paths::new(directory.path()),
+            app_version: "test".into(),
+            channel: kalcode_core::flags::BuildChannel::Development,
+        })
+        .expect("core"),
+    );
+    (directory, core)
+}
+
+fn request_receipt(name: &str, allowed: bool) -> account::api::RequestUsageResponse {
+    let token = vector_token("receiptCases", name);
+    let receipt = Verifier::from_keys([("test-vectors-1", TEST_KEY)])
+        .expect("verifier")
+        .verify_usage_receipt(&token, NOW)
+        .expect("verified");
+    account::api::RequestUsageResponse {
+        allowed,
+        usage: UsageResponse {
+            receipt: token,
+            usage: account::model::AccountUsageSnapshot {
+                used: receipt.used,
+                allowance: receipt.allowance,
+                period_start: receipt.period_start,
+                resets_at: receipt.resets_at,
+            },
+        },
+    }
+}
+
+#[test]
+fn kalvoice_paid_owner_and_empty_offline_authority_use_signed_limits_and_exact_cycle() {
+    use kalcode_kalvoice::accounting::RequestAccounting;
+    for (tier, receipt, allowance, used) in [
+        ("pro", Some("pro-receipt"), Some(1500), 412),
+        ("owner", Some("owner-receipt"), None, 12345),
+        ("free", Some("free-receipt-exhausted"), Some(75), 75),
+    ] {
+        let api = Arc::new(FakeApi::default());
+        let account = metering_account(api.clone(), tier, receipt, true);
+        let (_directory, core) = metering_core();
+        let meter = crate::kalvoice_accounting::AccountKalVoice::new(core, account).expect("meter");
+        let before = meter.usage().expect("usage");
+        assert_eq!(before.allowance, allowance);
+        assert_eq!(before.used, used);
+        assert_eq!(before.period_start, "2026-09-10T08:00:00.000Z");
+        assert_eq!(before.resets_at, "2026-10-10T08:00:00.000Z");
+        let decision = meter
+            .authorize(&kalcode_contracts::ids::new_id())
+            .expect("offline decision");
+        assert_eq!(decision.allowed, tier != "free");
+        assert_eq!(decision.usage.used, used + u32::from(tier != "free"));
+        assert!(api.request_calls.lock().expect("calls").is_empty());
+    }
+}
+
+#[test]
+fn kalvoice_unknown_transport_persists_across_restart_and_replays_same_id_once() {
+    use kalcode_kalvoice::accounting::{self, RequestAccounting};
+    let api = Arc::new(FakeApi::default());
+    let account = metering_account(api.clone(), "pro", Some("pro-receipt"), false);
+    let (_directory, core) = metering_core();
+    let meter = crate::kalvoice_accounting::AccountKalVoice::new(core.clone(), account.clone())
+        .expect("meter");
+    api.request_usage
+        .lock()
+        .expect("queue")
+        .push_back(Err(ApiError::Transport));
+    let id = kalcode_contracts::ids::new_id();
+    let decision = meter.authorize(&id).expect("verified offline fallback");
+    assert!(decision.allowed);
+    assert_eq!(decision.usage.used, 413);
+    assert_eq!(
+        core.read(|conn| accounting::next_pending(conn, ACCOUNT_ID))
+            .expect("durable"),
+        Some((id.clone(), true))
+    );
+    drop(meter);
+    let restarted =
+        crate::kalvoice_accounting::AccountKalVoice::new(core.clone(), account).expect("restart");
+    api.request_usage
+        .lock()
+        .expect("queue")
+        .push_back(Ok(request_receipt("pro-receipt", true)));
+    restarted.synchronize();
+    restarted.synchronize();
+    assert_eq!(
+        *api.request_calls.lock().expect("calls"),
+        vec![(id.clone(), false), (id, true)]
+    );
+    assert!(
+        core.read(|conn| accounting::next_pending(conn, ACCOUNT_ID))
+            .expect("acked")
+            .is_none()
+    );
+    assert_eq!(restarted.usage().expect("usage").used, 412);
+}
+
+#[test]
+fn kalvoice_invalid_receipt_never_admits_execution_and_unknown_claim_stays_online() {
+    use kalcode_kalvoice::accounting::{self, RequestAccounting};
+    let api = Arc::new(FakeApi::default());
+    let account = metering_account(api.clone(), "pro", Some("pro-receipt"), false);
+    let (_directory, core) = metering_core();
+    let meter = crate::kalvoice_accounting::AccountKalVoice::new(core.clone(), account.clone())
+        .expect("meter");
+    let mut forged = request_receipt("pro-receipt", true);
+    forged.usage.usage.used = 0;
+    api.request_usage
+        .lock()
+        .expect("queue")
+        .push_back(Ok(forged));
+    let id = kalcode_contracts::ids::new_id();
+    assert!(meter.authorize(&id).is_err());
+    assert_eq!(
+        core.read(|conn| accounting::next_pending(conn, ACCOUNT_ID))
+            .expect("durable"),
+        Some((id.clone(), false))
+    );
+    account.logout().expect("logout");
+    assert!(meter.usage().is_err());
+    assert!(meter.authorize(&kalcode_contracts::ids::new_id()).is_err());
+    meter.synchronize();
+    assert_eq!(api.request_calls.lock().expect("calls").len(), 1);
+    // Returning to the same account cannot revive the old runtime's metering authority.
+    sign_in_unactivated(&account, &api);
+    api.accounts
+        .lock()
+        .expect("queue")
+        .push_back(Ok(api_account(true)));
+    api.entitlements
+        .lock()
+        .expect("queue")
+        .push_back(Ok(EntitlementResponse {
+            token: FREE_TOKEN.into(),
+        }));
+    account.activate_free().expect("reactivate");
+    assert_eq!(
+        meter.usage().expect_err("old generation").code,
+        "runtime_not_ready"
+    );
+    let current = crate::kalvoice_accounting::AccountKalVoice::new(core, account)
+        .expect("current generation");
+    assert!(current.usage().is_ok());
+    current.stop();
+    assert_eq!(
+        current
+            .authorize(&kalcode_contracts::ids::new_id())
+            .expect_err("sealed")
+            .code,
+        "runtime_not_ready"
+    );
+}
+
+#[test]
+fn kalvoice_last_offline_unit_is_atomic_and_unscoped_ledger_is_ignored() {
+    use kalcode_kalvoice::accounting::{self, RequestAccounting};
+    let api = Arc::new(FakeApi::default());
+    let account = metering_account(api.clone(), "free", None, true);
+    let (_directory, core) = metering_core();
+    core.transact(|conn| {
+        kalcode_kalvoice::ledger::consume(
+            conn,
+            kalcode_kalvoice::ledger::RequestClaim {
+                request_id: &kalcode_contracts::ids::new_id(),
+                input: kalcode_contracts::kalvoice::KalVoiceInput::Text,
+                intent_kind: "navigate",
+                execution_owner: &kalcode_contracts::ids::new_id(),
+            },
+            kalcode_kalvoice::ledger::ConsumptionContext {
+                now: time::OffsetDateTime::from_unix_timestamp(NOW).expect("clock"),
+                anchor_day: 1,
+                allowance: None,
+            },
+        )?;
+        for _ in 0..74 {
+            accounting::reserve(
+                conn,
+                ACCOUNT_ID,
+                &kalcode_contracts::ids::new_id(),
+                NOW,
+                true,
+            )?;
+        }
+        Ok(((), Vec::new()))
+    })
+    .expect("seed");
+    let meter = crate::kalvoice_accounting::AccountKalVoice::new(core.clone(), account.clone())
+        .expect("meter");
+    assert_eq!(meter.usage().expect("legacy count excluded").used, 74);
+    let other =
+        crate::kalvoice_accounting::AccountKalVoice::new(core, account).expect("independent lane");
+    let barrier = Arc::new(std::sync::Barrier::new(3));
+    let handles = [meter.clone(), other]
+        .into_iter()
+        .map(|meter| {
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                meter
+                    .authorize(&kalcode_contracts::ids::new_id())
+                    .expect("admit")
+                    .allowed
+            })
+        })
+        .collect::<Vec<_>>();
+    barrier.wait();
+    assert_eq!(
+        handles
+            .into_iter()
+            .map(|handle| u32::from(handle.join().expect("join")))
+            .sum::<u32>(),
+        1
+    );
+    assert_eq!(meter.usage().expect("usage").used, 75);
+    assert!(api.request_calls.lock().expect("calls").is_empty());
+}
+
+#[test]
+fn kalvoice_server_receipt_replaces_provisional_count_for_allow_and_deny() {
+    use kalcode_kalvoice::accounting::{self, RequestAccounting};
+    for (tier, receipt, allowed, used) in [
+        ("pro", "pro-receipt", true, 412),
+        ("free", "free-receipt-exhausted", false, 75),
+    ] {
+        let api = Arc::new(FakeApi::default());
+        let account = metering_account(api.clone(), tier, None, false);
+        let (_directory, core) = metering_core();
+        let meter =
+            crate::kalvoice_accounting::AccountKalVoice::new(core.clone(), account).expect("meter");
+        assert_eq!(meter.usage().expect("provisional").used, 0);
+        api.request_usage
+            .lock()
+            .expect("queue")
+            .push_back(Ok(request_receipt(receipt, allowed)));
+        let decision = meter
+            .authorize(&kalcode_contracts::ids::new_id())
+            .expect("server decision");
+        assert_eq!(decision.allowed, allowed);
+        assert_eq!(decision.usage.used, used);
+        assert_eq!(decision.usage.period_start, "2026-09-10T08:00:00.000Z");
+        assert!(
+            core.read(|conn| accounting::next_pending(conn, ACCOUNT_ID))
+                .expect("settled")
+                .is_none()
+        );
+    }
 }
 
 fn api_account(activated: bool) -> ApiAccount {
@@ -314,6 +651,15 @@ fn free_activation_uses_server_entitlement_and_never_checkout() {
     assert_eq!(runtime.authority(), AccountAuthority::Active);
     assert_eq!(api.activate_calls.load(Ordering::SeqCst), 1);
     assert_eq!(api.checkout_calls.load(Ordering::SeqCst), 0);
+    let quota = runtime
+        .kalvoice_authority(ACCOUNT_ID)
+        .expect("verified native quota");
+    assert_eq!(quota.entitlement.tier, kalcode_entitlements::Tier::Free);
+    assert_eq!(quota.entitlement.account_id, ACCOUNT_ID);
+    assert!(quota.receipt.is_none());
+    assert!(runtime.kalvoice_authority("different-account").is_err());
+    runtime.logout().expect("logout");
+    assert!(runtime.kalvoice_authority(ACCOUNT_ID).is_err());
 }
 
 #[test]
@@ -406,6 +752,11 @@ fn first_launch_offline_stays_gated_but_matching_signed_cache_gets_bounded_grace
     assert_eq!(offline.phase, AccountPhase::OfflineGrace);
     assert_eq!(offline.tier, Some(AccountTier::Free));
     assert_eq!(offline.offline_grace_until, Some(1_790_604_800));
+    let quota = cached_runtime
+        .kalvoice_authority(ACCOUNT_ID)
+        .expect("verified offline quota");
+    assert!(quota.offline);
+    assert_eq!(quota.entitlement.tier, kalcode_entitlements::Tier::Free);
 }
 
 #[test]

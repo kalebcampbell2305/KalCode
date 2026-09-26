@@ -346,7 +346,8 @@ type Clock = Arc<dyn Fn() -> OffsetDateTime + Send + Sync>;
 
 pub struct Orchestrator {
     core: Arc<Core>,
-    entitlement: Arc<dyn EntitlementSource>,
+    entitlement: Option<Arc<dyn EntitlementSource>>,
+    accounting: Option<Arc<dyn crate::accounting::RequestAccounting>>,
     executor: Arc<dyn Executor>,
     local_interpreter: Arc<dyn LocalInterpreter>,
     clock: Clock,
@@ -365,7 +366,8 @@ impl Orchestrator {
     ) -> Self {
         Self {
             core,
-            entitlement,
+            entitlement: Some(entitlement),
+            accounting: None,
             executor,
             local_interpreter: Arc::new(NoLocalInterpreter),
             clock: Arc::new(OffsetDateTime::now_utc),
@@ -374,6 +376,42 @@ impl Orchestrator {
             local_interpretation_active: Arc::new(AtomicBool::new(false)),
             local_interpretation_state: Mutex::new(LocalInterpretationState::default()),
         }
+    }
+
+    /// Production account authority replaces the provisional device-only allowance.
+    pub fn new_accounted(
+        core: Arc<Core>,
+        accounting: Arc<dyn crate::accounting::RequestAccounting>,
+        executor: Arc<dyn Executor>,
+    ) -> Self {
+        Self {
+            core,
+            entitlement: None,
+            accounting: Some(accounting),
+            executor,
+            local_interpreter: Arc::new(NoLocalInterpreter),
+            clock: Arc::new(OffsetDateTime::now_utc),
+            execution_owner: new_id(),
+            active_claims: Arc::new(Mutex::new(HashSet::new())),
+            local_interpretation_active: Arc::new(AtomicBool::new(false)),
+            local_interpretation_state: Mutex::new(LocalInterpretationState::default()),
+        }
+    }
+
+    /// Tests can combine existing execution fixtures with account accounting.
+    pub fn with_accounting(
+        mut self,
+        accounting: Arc<dyn crate::accounting::RequestAccounting>,
+    ) -> Self {
+        self.accounting = Some(accounting);
+        self
+    }
+
+    fn execution_id(&self, request_id: &str) -> String {
+        self.accounting.as_ref().map_or_else(
+            || request_id.to_owned(),
+            |accounting| crate::accounting::execution_id(accounting.account_id(), request_id),
+        )
     }
 
     /// Tests: a fixed clock.
@@ -478,14 +516,25 @@ impl Orchestrator {
     }
 
     fn allowance(&self) -> (Option<u32>, u8) {
+        // Account accounting owns quota; this ledger remains the durable execution fence.
+        if self.accounting.is_some() {
+            return (None, ledger::DEFAULT_CYCLE_ANCHOR_DAY);
+        }
         (
-            self.entitlement.tier().kalvoice_allowance(),
-            self.entitlement.cycle_anchor_day(),
+            self.entitlement.as_ref().map_or(Some(0), |entitlement| {
+                entitlement.tier().kalvoice_allowance()
+            }),
+            self.entitlement
+                .as_ref()
+                .map_or(1, |entitlement| entitlement.cycle_anchor_day()),
         )
     }
 
     /// Current usage (for "N / 75 used · remaining · renews …" on Free).
     pub fn usage(&self) -> Result<KalVoiceUsage> {
+        if let Some(accounting) = &self.accounting {
+            return accounting.usage();
+        }
         let (allowance, anchor) = self.allowance();
         let now = (self.clock)();
         self.core.read(|c| ledger::usage(c, now, anchor, allowance))
@@ -568,6 +617,12 @@ impl Orchestrator {
         let now = (self.clock)();
         // Serialize this read with request claims so a newly inserted claim is never observed
         // before its in-process owner is marked active.
+        let account_usage = self
+            .accounting
+            .as_ref()
+            .map(|accounting| accounting.usage())
+            .transpose()?;
+        let execution_id = self.execution_id(&req.request_id);
         let active = self
             .active_claims
             .lock()
@@ -575,20 +630,20 @@ impl Orchestrator {
         let (usage, recorded) = self.core.read(|c| {
             Ok((
                 ledger::usage(c, now, anchor, allowance)?,
-                ledger::recorded_request(c, &req.request_id)?,
+                ledger::recorded_request(c, &execution_id)?,
             ))
         })?;
         let replay = recorded.map(|recorded| {
             (
                 recorded.intent,
-                self.replay_state(&req.request_id, &active, recorded.execution),
+                self.replay_state(&execution_id, &active, recorded.execution),
             )
         });
         drop(active);
         let mut run = Run {
             o: self,
             req: &req,
-            usage,
+            usage: account_usage.unwrap_or(usage),
             intent: None,
             counted: false,
             on_stage,
@@ -754,6 +809,11 @@ impl Orchestrator {
                 "invalid_request_id",
                 "KalVoice received an invalid request id.",
             ));
+        }
+        // The authoritative API has no refund operation. Never remove a durable account claim
+        // or tell the renderer that a server-counted request was refunded.
+        if self.accounting.is_some() {
+            return Ok(false);
         }
         let now = (self.clock)();
         let request = request_id.to_owned();
@@ -1132,13 +1192,14 @@ impl Run<'_> {
         let now = (self.o.clock)();
         let intent = self.intent.clone().unwrap_or_else(|| "reasoning".into());
         let req = self.req;
+        let execution_id = self.o.execution_id(&req.request_id);
         let active_claims = self.o.active_claims.clone();
         let mut active = active_claims.lock().unwrap_or_else(PoisonError::into_inner);
         let (consumption, _) = self.o.core.transact(|tx| {
             let consumption = ledger::consume(
                 tx,
                 ledger::RequestClaim {
-                    request_id: &req.request_id,
+                    request_id: &execution_id,
                     input: req.input,
                     intent_kind: &intent,
                     execution_owner: &self.o.execution_owner,
@@ -1176,22 +1237,24 @@ impl Run<'_> {
             };
             Ok((consumption, events))
         })?;
-        self.usage = consumption.usage().clone();
+        if self.o.accounting.is_none() {
+            self.usage = consumption.usage().clone();
+        }
         match consumption {
             Consumption::LimitReached(_) => Ok(ClaimDecision::LimitReached),
             Consumption::Recorded(_) => {
-                self.counted = true;
-                active.insert(req.request_id.clone());
+                self.counted = self.o.accounting.is_none();
+                active.insert(execution_id.clone());
                 drop(active);
                 Ok(ClaimDecision::Execute(ActiveClaim {
-                    request_id: req.request_id.clone(),
+                    request_id: execution_id.clone(),
                     execution_owner: self.o.execution_owner.clone(),
                     active: active_claims,
                     armed: true,
                 }))
             }
             Consumption::AlreadyRecorded { execution, .. } => Ok(ClaimDecision::Replay(
-                self.o.replay_state(&req.request_id, &active, execution),
+                self.o.replay_state(&execution_id, &active, execution),
             )),
         }
     }
@@ -1226,6 +1289,34 @@ impl Run<'_> {
         ctx: &ExecContext,
         claim: ActiveClaim,
     ) -> Result<KalVoiceResponse> {
+        if let Some(accounting) = &self.o.accounting {
+            match accounting.authorize(&self.req.request_id) {
+                Ok(decision) => {
+                    self.usage = decision.usage;
+                    if !decision.allowed {
+                        claim.finish(
+                            self.o,
+                            ExecutionResult::Failed {
+                                code: "limit_reached",
+                            },
+                            vec![self.limit_event()],
+                        )?;
+                        return Ok(self.respond(KalVoiceOutcome::LimitReached {
+                            resets_at: self.usage.resets_at.clone(),
+                        }));
+                    }
+                    self.counted = true;
+                }
+                Err(error) => {
+                    claim.finish(
+                        self.o,
+                        ExecutionResult::Failed { code: error.code },
+                        Vec::new(),
+                    )?;
+                    return Ok(self.fail(error.code, error.message));
+                }
+            }
+        }
         (self.on_stage)(RequestStage::Executing);
         match self.o.executor.execute(intent, ctx) {
             Ok(done) => {

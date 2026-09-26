@@ -241,6 +241,12 @@ pub struct UsageResponse {
     pub receipt: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestUsageResponse {
+    pub allowed: bool,
+    pub usage: UsageResponse,
+}
+
 impl fmt::Debug for UsageResponse {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -312,6 +318,15 @@ pub trait AccountApi: Send + Sync {
     fn portal(&self, bearer: &str, request_id: &str) -> Result<BrowserUrlResponse, ApiError>;
     fn entitlement(&self, bearer: &str) -> Result<EntitlementResponse, ApiError>;
     fn usage(&self, bearer: &str) -> Result<UsageResponse, ApiError>;
+    fn record_kalvoice(
+        &self,
+        bearer: &str,
+        request_id: &str,
+        offline: bool,
+    ) -> Result<RequestUsageResponse, ApiError> {
+        let _ = (bearer, request_id, offline);
+        Err(ApiError::Local("kalvoice_meter_unavailable"))
+    }
 }
 
 #[derive(Clone)]
@@ -583,6 +598,63 @@ impl AccountApi for HttpAccountApi {
             receipt: wire.receipt,
         })
     }
+
+    fn record_kalvoice(
+        &self,
+        bearer: &str,
+        request_id: &str,
+        offline: bool,
+    ) -> Result<RequestUsageResponse, ApiError> {
+        // Metering must not inherit authentication's long retry budget. An unknown outcome is
+        // retained by the caller's durable outbox and reconciled with the same idempotency key.
+        let bounded = Self {
+            agent: ureq::Agent::config_builder()
+                .timeout_global(Some(Duration::from_millis(750)))
+                .timeout_connect(Some(Duration::from_millis(500)))
+                .max_redirects(0)
+                .http_status_as_error(false)
+                .build()
+                .into(),
+        };
+        let wire: RequestUsageWire = bounded
+            .post(
+                "/v1/kalvoice/requests",
+                Some(bearer),
+                Some(&serde_json::json!({
+                    "requestId": request_id, "mode": if offline { "offline" } else { "online" }
+                })),
+            )?
+            .ok_or(ApiError::InvalidResponse)?;
+        if !wire.ok
+            || !matches!(
+                (wire.allowed, wire.outcome.as_str()),
+                (true, "recorded" | "duplicate") | (false, "denied")
+            )
+        {
+            return Err(ApiError::InvalidResponse);
+        }
+        Ok(RequestUsageResponse {
+            allowed: wire.allowed,
+            usage: UsageResponse {
+                usage: AccountUsageSnapshot {
+                    used: wire.usage.used,
+                    allowance: wire.usage.allowance,
+                    period_start: wire.usage.period_start,
+                    resets_at: wire.usage.resets_at,
+                },
+                receipt: wire.receipt,
+            },
+        })
+    }
+}
+
+#[derive(Deserialize)]
+struct RequestUsageWire {
+    ok: bool,
+    allowed: bool,
+    outcome: String,
+    usage: UsageBody,
+    receipt: String,
 }
 
 fn decode_response<T: DeserializeOwned>(

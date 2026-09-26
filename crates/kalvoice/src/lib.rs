@@ -18,6 +18,7 @@
 //! device. Requests outside the deterministic grammar require an explicitly wired local runtime;
 //! this crate never falls back to an external provider.
 
+pub mod accounting;
 pub mod audio;
 pub mod component_acquisition;
 pub mod component_catalog;

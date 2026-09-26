@@ -38,7 +38,13 @@ pub struct RuntimeBundle {
 }
 
 impl RuntimeBundle {
-    fn build_into(&mut self, app: &AppHandle, state: &AppState, valid: impl Fn() -> bool) {
+    fn build_into(
+        &mut self,
+        app: &AppHandle,
+        state: &AppState,
+        account: Arc<AccountRuntime>,
+        valid: impl Fn() -> bool,
+    ) {
         let bundle = self;
         macro_rules! check {
             () => {
@@ -145,13 +151,16 @@ impl RuntimeBundle {
                 app,
                 state.core.clone(),
                 &state.info,
-                providers.registry(),
-                runtime_authority.clone(),
-                threads.runtime_handle(),
-                permissions.service(),
-                locator.handle(),
-                components,
-                resources.clone(),
+                crate::kalvoice_commands::KalVoiceServices {
+                    registry: providers.registry(),
+                    provider_runtime: runtime_authority.clone(),
+                    threads: threads.runtime_handle(),
+                    permissions: permissions.service(),
+                    locator: locator.handle(),
+                    components,
+                    resources: resources.clone(),
+                    account: account.clone(),
+                },
             ),
             Err(error) => {
                 tracing::warn!(
@@ -446,7 +455,7 @@ impl RuntimeCoordinator {
         };
         let mut partial = RuntimeBundle::default();
         let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            partial.build_into(app, &app.state::<AppState>(), || {
+            partial.build_into(app, &app.state::<AppState>(), self.account.clone(), || {
                 self.account.validate_active_lease(&authority)
                     && self.lifecycle.phase() == Phase::Starting
             });

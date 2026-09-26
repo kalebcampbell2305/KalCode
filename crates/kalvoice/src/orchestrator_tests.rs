@@ -26,6 +26,153 @@ use crate::prefs::IntelligenceChoice;
 const NOW: OffsetDateTime = datetime!(2026-09-24 18:00 UTC);
 const EXECUTION_OWNER: &str = "0192f3c4-0000-7000-8000-0000000000ef";
 
+struct AccountMeter {
+    account: &'static str,
+    core: Arc<Core>,
+    calls: AtomicUsize,
+    used: AtomicUsize,
+    allowance: u32,
+    crash: bool,
+}
+
+impl crate::accounting::RequestAccounting for AccountMeter {
+    fn account_id(&self) -> &str {
+        self.account
+    }
+    fn usage(&self) -> Result<KalVoiceUsage> {
+        Ok(KalVoiceUsage {
+            used: self.used.load(Ordering::SeqCst) as u32,
+            allowance: Some(self.allowance),
+            period_start: "2026-09-10T08:00:00.000Z".into(),
+            resets_at: "2026-10-10T08:00:00.000Z".into(),
+        })
+    }
+    fn authorize(&self, id: &str) -> Result<crate::accounting::MeterDecision> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let key = crate::accounting::execution_id(self.account, id);
+        assert!(
+            self.core
+                .read(|conn| ledger::recorded_request(conn, &key))
+                .expect("claim read")
+                .is_some(),
+            "must own execution before metering"
+        );
+        assert!(
+            !self.crash,
+            "synthetic process loss after durable execution claim"
+        );
+        let allowed = self
+            .used
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |used| {
+                (used < self.allowance as usize).then_some(used + 1)
+            })
+            .is_ok();
+        Ok(crate::accounting::MeterDecision {
+            allowed,
+            usage: self.usage()?,
+        })
+    }
+}
+
+fn account_meter(
+    h: &Harness,
+    account: &'static str,
+    allowance: u32,
+    crash: bool,
+) -> Arc<AccountMeter> {
+    Arc::new(AccountMeter {
+        account,
+        core: h.core.clone(),
+        calls: AtomicUsize::new(0),
+        used: AtomicUsize::new(0),
+        allowance,
+        crash,
+    })
+}
+
+#[test]
+fn account_claims_do_not_adopt_legacy_or_other_account_request_ids() {
+    let h = harness();
+    let req = request("open dashboard");
+    h.orchestrator.handle(req.clone()).expect("legacy");
+    for account in ["account-a", "account-b"] {
+        let meter = account_meter(&h, account, 1500, false);
+        let orchestrator =
+            Orchestrator::new_accounted(h.core.clone(), meter.clone(), h.executor.clone());
+        assert!(
+            orchestrator
+                .handle(req.clone())
+                .expect("account execute")
+                .counted
+        );
+        assert!(
+            !orchestrator
+                .handle(req.clone())
+                .expect("account retry")
+                .counted
+        );
+        assert_eq!(meter.calls.load(Ordering::SeqCst), 1);
+        assert!(
+            !orchestrator
+                .type_instead(&req.request_id)
+                .expect("no server refund")
+        );
+    }
+    assert_eq!(h.executor.executed.lock().expect("effects").len(), 3);
+}
+
+#[test]
+fn exhausted_account_does_not_charge_or_execute_but_dictation_is_unlimited() {
+    let h = harness();
+    let meter = account_meter(&h, "account-a", 0, false);
+    let orchestrator =
+        Orchestrator::new_accounted(h.core.clone(), meter.clone(), h.executor.clone());
+    assert!(matches!(
+        orchestrator
+            .handle(request("open dashboard"))
+            .expect("limit")
+            .outcome,
+        KalVoiceOutcome::LimitReached { .. }
+    ));
+    for target in [TalkTarget::Field, TalkTarget::Terminal] {
+        let talked = orchestrator
+            .talk(
+                TalkRequest {
+                    request_id: new_id(),
+                    session_id: new_id(),
+                    text: "please preserve these literal words".into(),
+                    target,
+                    duration_ms: 400,
+                    workspace_id: None,
+                },
+                &|_| {},
+            )
+            .expect("dictate");
+        assert_eq!(talked.route, TalkRoute::Dictation);
+        assert!(talked.response.is_none());
+    }
+    assert_eq!(meter.calls.load(Ordering::SeqCst), 0);
+    assert!(h.executor.executed.lock().expect("effects").is_empty());
+}
+
+#[test]
+fn metering_crash_cannot_reexecute_a_durable_account_claim() {
+    let h = harness();
+    let meter = account_meter(&h, "account-a", 75, true);
+    let req = request("open dashboard");
+    let orchestrator =
+        Orchestrator::new_accounted(h.core.clone(), meter.clone(), h.executor.clone());
+    assert!(
+        std::panic::catch_unwind(AssertUnwindSafe(|| orchestrator.handle(req.clone()))).is_err()
+    );
+    let restarted = Orchestrator::new_accounted(h.core.clone(), meter.clone(), h.executor.clone());
+    assert!(
+        matches!(restarted.handle(req).expect("recovery").outcome,KalVoiceOutcome::Failed { ref code,.. } if code=="request_indeterminate")
+    );
+    assert_eq!(meter.calls.load(Ordering::SeqCst), 1);
+    assert!(h.executor.executed.lock().expect("effects").is_empty());
+}
+
 #[derive(Default)]
 struct FakeExecutor {
     checked: Mutex<Vec<KalVoiceIntent>>,

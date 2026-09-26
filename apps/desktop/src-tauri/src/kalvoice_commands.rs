@@ -37,7 +37,6 @@ use kalcode_kalvoice::orchestrator::{
     CommandRequest, KalVoiceResponse, Orchestrator, ProviderChoice, ProviderDirectory,
     RequestStage, TalkRequest, TalkResponse, provider_display_name,
 };
-use kalcode_kalvoice::plan::ProvisionalEntitlement;
 use kalcode_kalvoice::prefs::{KalVoicePreferences, KalVoicePreferencesPatch};
 use kalcode_kalvoice::shortcuts;
 use kalcode_kalvoice::signals::{KalVoiceSignal, KalVoiceStatus, ListeningSession, ShortcutIssue};
@@ -108,6 +107,7 @@ struct Registered {
 pub struct KalVoiceRuntime {
     providers: Arc<DesktopProviders>,
     orchestrator: Orchestrator,
+    accounting: Arc<crate::kalvoice_accounting::AccountKalVoice>,
     voice: VoiceController,
     components: Arc<KalVoiceComponentManager>,
     reasoning: Arc<DesktopLocalInterpreter>,
@@ -233,6 +233,7 @@ impl KalVoiceRuntime {
         let deadline = Instant::now() + timeout;
         self.shutting_down.store(true, Ordering::SeqCst);
         self.background.stop();
+        self.accounting.stop();
         self.reasoning.seal();
         // Seal local inference immediately; retain its custody until the bounded drain below.
         let _ = self
@@ -532,20 +533,36 @@ fn speech_output() -> Arc<dyn SpeechOutput> {
     }
 }
 
+/// Native services assembled by the account-owned coordinator.
+pub struct KalVoiceServices {
+    pub registry: Arc<ProviderRegistry>,
+    pub provider_runtime: crate::provider_auth_commands::ProviderRuntimeAuthority,
+    pub threads: Option<Arc<kalcode_threads::ThreadRuntime>>,
+    pub permissions: Option<Arc<kalcode_permissions::PermissionService>>,
+    pub locator: Option<Arc<kalcode_locator::Locator>>,
+    pub components: Arc<KalVoiceComponentManager>,
+    pub resources: Arc<crate::resource_commands::ResourceGovernorState>,
+    pub account: Arc<crate::account::runtime::AccountRuntime>,
+}
+
 /// Builds the KalVoice runtime over the workspace, thread and permission runtimes and registers
 /// the push-to-talk key.
 pub fn init(
     app: &AppHandle,
     core: Option<Arc<Core>>,
     info: &AppInfo,
-    registry: Arc<ProviderRegistry>,
-    provider_runtime: crate::provider_auth_commands::ProviderRuntimeAuthority,
-    threads: Option<Arc<kalcode_threads::ThreadRuntime>>,
-    permissions: Option<Arc<kalcode_permissions::PermissionService>>,
-    locator: Option<Arc<kalcode_locator::Locator>>,
-    components: Arc<KalVoiceComponentManager>,
-    resources: Arc<crate::resource_commands::ResourceGovernorState>,
+    services: KalVoiceServices,
 ) -> KalVoiceState {
+    let KalVoiceServices {
+        registry,
+        provider_runtime,
+        threads,
+        permissions,
+        locator,
+        components,
+        resources,
+        account,
+    } = services;
     let enabled = info.flags.surfaces.iter().any(|s| {
         s.id == SurfaceId::KalVoice
             && s.visible
@@ -584,9 +601,13 @@ pub fn init(
         .filter(|s| s.visible)
         .map(|s| s.id)
         .collect();
-    let orchestrator = Orchestrator::new(
+    let Ok(accounting) = crate::kalvoice_accounting::AccountKalVoice::new(core.clone(), account)
+    else {
+        return KalVoiceState(None, "KalVoice Requests need a verified KalCode account.");
+    };
+    let orchestrator = Orchestrator::new_accounted(
         core.clone(),
-        Arc::new(ProvisionalEntitlement),
+        accounting.clone(),
         Arc::new(crate::kalvoice_executor::DesktopExecutor {
             visible,
             provider_panes_enabled: info
@@ -598,7 +619,6 @@ pub fn init(
             permissions,
             locator,
         }),
-        providers.clone(),
     )
     .with_local_interpreter(reasoning.clone());
     let voice = VoiceController::new(
@@ -613,6 +633,7 @@ pub fn init(
     let runtime = Arc::new(KalVoiceRuntime {
         providers,
         orchestrator,
+        accounting,
         voice,
         components,
         reasoning,
@@ -641,11 +662,23 @@ pub fn init(
     refresh_talk_key(app, &runtime);
     follow_focus(app, &runtime);
     keep_warm(&runtime);
+    synchronize_usage(&runtime);
     KalVoiceState(Some(runtime), "")
 }
 
 fn parse_shortcut(accelerator: &str) -> Option<Shortcut> {
     Shortcut::from_str(accelerator).ok()
+}
+
+fn synchronize_usage(runtime: &Arc<KalVoiceRuntime>) {
+    let Some(task) = runtime.background.start() else {
+        return;
+    };
+    let runtime = runtime.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _task = task;
+        runtime.accounting.synchronize();
+    });
 }
 
 /// Loads the speech model in the background so the first key press doesn't wait for it.
@@ -992,6 +1025,7 @@ pub async fn kalvoice_request(
             .handle_with_stages(request, &on_stage)
             .map_err(to_ipc("kalvoice_request"))?;
         speak_reply(&runtime, &response);
+        synchronize_usage(&runtime);
         Ok(response)
     })
     .await
@@ -1022,6 +1056,7 @@ pub async fn kalvoice_talk(
         runtime.latency.record_recognized(talked.recognized_ms);
         if let Some(response) = &talked.response {
             speak_reply(&runtime, response);
+            synchronize_usage(&runtime);
         }
         Ok(talked)
     })

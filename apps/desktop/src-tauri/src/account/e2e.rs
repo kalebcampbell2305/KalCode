@@ -373,6 +373,16 @@ impl E2eAccountApi {
 }
 
 impl AccountApi for E2eAccountApi {
+    fn record_kalvoice(
+        &self,
+        _: &str,
+        _: &str,
+        _: bool,
+    ) -> Result<super::api::RequestUsageResponse, ApiError> {
+        // This attested test-only account has no live metering service. Exercise the verified
+        // offline allowance and durable outbox rather than fabricate signed server receipts.
+        Err(ApiError::Transport)
+    }
     fn start_email(
         &self,
         email: &str,

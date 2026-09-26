@@ -436,7 +436,7 @@ impl CatalogCache {
                 Some((entry.metadata().ok()?.modified().ok()?, entry.path()))
             })
             .collect::<Vec<_>>();
-        catalogs.sort_by(|left, right| right.0.cmp(&left.0));
+        catalogs.sort_by_key(|catalog| std::cmp::Reverse(catalog.0));
         for (modified, path) in catalogs.into_iter().skip(MAX_RETAINED_CATALOGS - 1) {
             if SystemTime::now()
                 .duration_since(modified)
@@ -590,8 +590,9 @@ impl KalVoiceComponentManager {
             .unwrap_or_else(PoisonError::into_inner);
         models::CATALOG
             .iter()
-            .map(|spec| {
-                let component = speech_component(spec.id).expect("compiled speech mapping");
+            .filter_map(|spec| {
+                // Only advertise speech models with an implemented signed component mapping.
+                let component = speech_component(spec.id)?;
                 let selector = self.speech_selector(component);
                 let running = downloads.running.get(spec.id);
                 let state = if installed_allowed
@@ -609,7 +610,7 @@ impl KalVoiceComponentManager {
                 } else {
                     SpeechModelState::NotInstalled
                 };
-                SpeechModelInfo {
+                Some(SpeechModelInfo {
                     id: spec.id.to_owned(),
                     display_name: spec.display_name.to_owned(),
                     summary: spec.summary.to_owned(),
@@ -620,7 +621,7 @@ impl KalVoiceComponentManager {
                     english_only: spec.english_only,
                     state,
                     source: "KalCode signed components (official whisper.cpp models)".into(),
-                }
+                })
             })
             .collect()
     }

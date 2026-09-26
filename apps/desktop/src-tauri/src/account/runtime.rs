@@ -107,6 +107,20 @@ pub struct AuthorityLease {
     revision: u64,
 }
 
+/// Native-only verified quota authority. No bearer or signed token crosses this boundary.
+pub(crate) struct KalVoiceAuthority {
+    pub(crate) entitlement: kalcode_entitlements::Entitlement,
+    pub(crate) receipt: Option<kalcode_entitlements::UsageReceipt>,
+    pub(crate) lease: AuthorityLease,
+    pub(crate) offline: bool,
+    pub(crate) now_unix: i64,
+}
+
+pub(crate) enum KalVoiceRecord {
+    Confirmed { allowed: bool },
+    Unavailable,
+}
+
 impl AuthorityLease {
     pub fn generation(&self) -> u64 {
         self.generation
@@ -927,6 +941,91 @@ impl AccountRuntime {
         match self.retry(generation, RetryClass::Read, || self.api.usage(&token)) {
             Ok(response) => self.accept_usage(response),
             Err(error) => self.cached_usage().ok_or(error),
+        }
+    }
+
+    /// Revalidates the current account's signed entitlement on every metering decision. The
+    /// expected identity was captured by the native account-owned runtime, never by the WebView.
+    pub(crate) fn kalvoice_authority(
+        &self,
+        expected_account_id: &str,
+    ) -> Result<KalVoiceAuthority, AccountRuntimeError> {
+        let lease = self.acquire_active_lease()?;
+        let now_unix = self.clock.now_unix();
+        let state = self.lock_state();
+        let cached = state.cached.as_ref().ok_or_else(authentication_required)?;
+        let entitlement = self
+            .verifier
+            .verify(cached.entitlement_token(), now_unix)
+            .map_err(|_| invalid_entitlement())?;
+        if entitlement.account_id != expected_account_id
+            || cached.account().id != expected_account_id
+        {
+            return Err(account_identity_mismatch());
+        }
+        let receipt = state
+            .usage_receipt
+            .as_ref()
+            .and_then(|receipt| {
+                self.verifier
+                    .verify_usage_receipt(receipt.expose_receipt(), now_unix)
+                    .ok()
+            })
+            .filter(|receipt| {
+                receipt.account_id == entitlement.account_id && receipt.tier == entitlement.tier
+            });
+        let offline = state.snapshot.phase == AccountPhase::OfflineGrace;
+        drop(state);
+        if !self.validate_active_lease(&lease) {
+            return Err(authentication_required());
+        }
+        Ok(KalVoiceAuthority {
+            entitlement,
+            receipt,
+            lease,
+            offline,
+            now_unix,
+        })
+    }
+
+    /// A single bounded idempotent metering call. Unknown transport outcomes remain caller-owned
+    /// durable pending claims; invalid receipts and lost account authority never grant execution.
+    pub(crate) fn record_kalvoice(
+        &self,
+        lease: &AuthorityLease,
+        request_id: &str,
+        offline: bool,
+    ) -> Result<KalVoiceRecord, AccountRuntimeError> {
+        if !kalcode_contracts::ids::is_valid_id(request_id) || !self.validate_active_lease(lease) {
+            return Err(authentication_required());
+        }
+        let _lane = match self.request_lane.try_lock() {
+            Ok(lane) => lane,
+            Err(std::sync::TryLockError::WouldBlock) => return Ok(KalVoiceRecord::Unavailable),
+            Err(std::sync::TryLockError::Poisoned(_)) => return Err(authentication_required()),
+        };
+        if !self.validate_active_lease(lease) {
+            return Err(authentication_required());
+        }
+        let token = self.session_token()?;
+        let result = self.api.record_kalvoice(&token, request_id, offline);
+        let _effect = self.lock_generation_effect();
+        if !self.validate_active_lease(lease) {
+            return Err(authentication_required());
+        }
+        match result {
+            Ok(response) => {
+                self.accept_usage(response.usage)?;
+                Ok(KalVoiceRecord::Confirmed {
+                    allowed: response.allowed,
+                })
+            }
+            Err(ApiError::Transport) => Ok(KalVoiceRecord::Unavailable),
+            Err(ApiError::Http {
+                status: 429 | 500..=599,
+                ..
+            }) => Ok(KalVoiceRecord::Unavailable),
+            Err(error) => Err(api_error(error)),
         }
     }
 

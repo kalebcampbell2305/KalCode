@@ -67,6 +67,11 @@ pub const MIGRATIONS: &[Migration] = &[
     DOCTOR_MIGRATION,
     UTILITY_AUTHORITY_MIGRATION,
     CONTEXT_DELIVERY_MIGRATION,
+    Migration {
+        version: 19,
+        name: "kalvoice_account_usage",
+        sql: include_str!("../migrations/0019_kalvoice_account_usage.sql"),
+    },
 ];
 
 /// Migration v7 (campaign Z6a): `git_worktrees` and `checkpoints`. Owned by `crates/git`, which

@@ -605,7 +605,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
     undo.current = null;
     dispatch({
       type: "typed_instead",
-      message: refunded ? "Typed instead." : "Typed instead. The command itself can't be undone.",
+      message: refunded ? "Typed instead." : "Typed instead. Its KalVoice Request remains counted.",
     });
     if (refunded) void refreshStatus();
   }, [client, navigate, refreshStatus]);

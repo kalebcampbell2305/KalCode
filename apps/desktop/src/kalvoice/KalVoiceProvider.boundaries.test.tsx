@@ -1,5 +1,5 @@
 import type { KalVoiceSignal } from "@kalcode/protocol";
-import { act, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { registerDictationSink } from "./dictation.ts";
 import { KalVoiceProvider, useKalVoice } from "./KalVoiceProvider.tsx";
@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
     subscribeKalVoice: vi.fn(),
     kalvoiceStatus: vi.fn().mockResolvedValue(null),
     kalvoiceLatencyRecord: vi.fn().mockResolvedValue(undefined),
+    kalvoiceTypeInstead: vi.fn().mockResolvedValue(false),
   },
   toast: { show: vi.fn() },
 }));
@@ -26,11 +27,16 @@ vi.mock("../surfaces/permissions/index.ts", () => ({ usePermissions: () => ({}) 
 vi.mock("@kalcode/ui/components", () => ({ useToast: () => mocks.toast }));
 
 function Probe() {
-  const { state } = useKalVoice();
+  const { state, typeInstead } = useKalVoice();
   return (
-    <output data-testid="kalvoice-state">
-      {state.phase}: {state.message}
-    </output>
+    <div>
+      <output data-testid="kalvoice-state">
+        {state.phase}: {state.message}
+      </output>
+      <button type="button" onClick={() => void typeInstead()}>
+        Type instead
+      </button>
+    </div>
   );
 }
 
@@ -164,6 +170,32 @@ it("attributes delivery failure to its provider destination without copying prov
     await transcript("Review the implementation");
     expect(view.getByTestId("kalvoice-state")).toHaveTextContent("claude-code work couldn't accept the dictated text");
     expect(view.getByTestId("kalvoice-state")).not.toHaveTextContent("weekly limit");
+  } finally {
+    provider.dispose();
+  }
+});
+
+it("does not promise a refund when an account-counted command is typed instead", async () => {
+  const provider = destination("codex");
+  try {
+    mocks.talk.mockImplementation(async (request) => ({
+      route: "command",
+      recognizedMs: 1,
+      response: {
+        requestId: request.requestId,
+        counted: true,
+        outcome: { kind: "completed", summary: "Opened dashboard." },
+        directive: { kind: "navigate", surface: "dashboard" },
+      },
+    }));
+    const view = await start();
+    act(() => provider.element.focus());
+    capture();
+    await transcript("Open dashboard");
+    fireEvent.click(view.getByRole("button", { name: "Type instead" }));
+    await waitFor(() => expect(mocks.client.kalvoiceTypeInstead).toHaveBeenCalledOnce());
+    expect(provider.deliver).toHaveBeenCalledExactlyOnceWith("Open dashboard", expect.any(Object));
+    expect(view.getByTestId("kalvoice-state")).toHaveTextContent("Its KalVoice Request remains counted.");
   } finally {
     provider.dispose();
   }
