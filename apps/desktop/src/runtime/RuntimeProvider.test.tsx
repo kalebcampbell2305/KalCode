@@ -129,6 +129,78 @@ describe("RuntimeProvider", () => {
     expect(transport.subscriberCount()).toBe(1);
   });
 
+  it.each([
+    { name: "full", initial: 1000 },
+    { name: "short", initial: 550 },
+    { name: "empty", initial: 500 },
+  ])("discards a stale $name older page and backfills again from the current cursor", async ({ initial }) => {
+    const client = new KalCodeClient(createMemoryTransport("default"));
+    const boot = await client.boot();
+    const seed = (await client.recentEvents(1))[0];
+    if (!seed) throw new Error("Expected a fixture event");
+    const event = (seq: number): EventEnvelope => ({ ...seed, id: `event-${seq}`, seq });
+    const history = Array.from({ length: initial }, (_, index) => event(index + 1));
+    const subscribers = new Set<(event: EventEnvelope) => void>();
+    vi.spyOn(client, "subscribeEvents").mockImplementation(async (listener) => {
+      subscribers.add(listener);
+      return async () => {
+        subscribers.delete(listener);
+      };
+    });
+    const page = (limit: number, before?: number) =>
+      [...history]
+        .reverse()
+        .filter((event) => before === undefined || event.seq < before)
+        .slice(0, limit);
+    const recent = vi.spyOn(client, "recentEvents").mockImplementation(async (limit, before) => page(limit, before));
+    const { result } = renderHook(useRuntime, {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <StrictMode>
+          <ToastProvider>
+            <RuntimeProvider client={client} info={boot.info} initialSettings={INITIAL}>
+              {children}
+            </RuntimeProvider>
+          </ToastProvider>
+        </StrictMode>
+      ),
+    });
+    await waitFor(() => expect(result.current.eventsState).toBe("ready"));
+    for (let n = 0; n < 4; n++) await act(() => result.current.loadOlderEvents());
+    expect(result.current.feed.getSnapshot().events).toHaveLength(500);
+    const stalePage = page(100, result.current.feed.oldestSeq);
+    const read = deferred<EventEnvelope[]>();
+    recent.mockImplementationOnce(() => read.promise);
+    let pending!: Promise<void>;
+    act(() => {
+      pending = result.current.loadOlderEvents();
+    });
+    act(() => {
+      for (let index = 1; index <= 501; index++) {
+        const incoming = event(initial + index);
+        history.push(incoming);
+        for (const listener of subscribers) listener(incoming);
+      }
+    });
+    const currentCursor = result.current.feed.oldestSeq;
+    const currentSnapshot = result.current.feed.getSnapshot();
+    await act(async () => {
+      read.resolve(stalePage);
+      await pending;
+    });
+    expect(result.current.feed.getSnapshot()).toBe(currentSnapshot);
+    expect(result.current.feed.oldestSeq).toBe(currentCursor);
+    expect(result.current.feed.reachedStart).toBe(false);
+
+    // A later user action starts at the retained cursor and can recover the entire gap.
+    for (let n = 0; n < 20 && !result.current.feed.reachedStart; n++) {
+      await act(() => result.current.loadOlderEvents());
+    }
+    expect(result.current.feed.reachedStart).toBe(true);
+    expect(result.current.feed.getSnapshot().events.map((event) => event.seq)).toEqual(
+      [...history].reverse().map((event) => event.seq),
+    );
+  });
+
   it("converges on saved settings when responses arrive out of order", async () => {
     const transport = createMemoryTransport("default");
     // Delay the first settings_update response so the second one resolves first.

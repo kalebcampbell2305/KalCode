@@ -130,10 +130,13 @@ export function RuntimeProvider({ client, info, initialSettings, children }: Run
   const loadOlderEvents = useCallback(async () => {
     const cursor = feed.oldestSeq;
     if (cursor === undefined || feed.reachedStart) return;
+    const evictionVersion = feed.evictionVersion;
     try {
       const page = await client.recentEvents(OLDER_PAGE, cursor);
+      // Eviction moved the cursor: merging this page would skip the intervening history.
+      if (evictionVersion !== feed.evictionVersion) return;
       feed.mergeOlder(page);
-      if (page.length < OLDER_PAGE) feed.markReachedStart();
+      if (page.length < OLDER_PAGE) feed.markReachedStart(evictionVersion);
     } catch (error) {
       toast.show({ tone: "danger", title: "Couldn't load older activity", description: toKalCodeError(error).message });
     }
