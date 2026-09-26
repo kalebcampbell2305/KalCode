@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       candidate_tag:
-        description: Private draft-release tag containing build.json, the signed installer and updater signature
+        description: Private draft-release tag containing build.json, the signed installer and both updater signatures
         required: true
         type: string
       commit:
@@ -91,30 +91,33 @@ jobs:
           New-Item -ItemType Directory -Path $stage -Force | Out-Null
           $installerName = "KalCode_$env:CANDIDATE_VERSION`_x64-setup.exe"
           $updaterSignatureName = "$installerName.sig"
+          $updaterV2SignatureName = "$installerName.windows-x86_64.sig"
           $release = gh release view $env:CANDIDATE_TAG --repo $env:GITHUB_REPOSITORY --json assets,isDraft,tagName | ConvertFrom-Json
           if ($LASTEXITCODE -ne 0 -or -not $release.isDraft -or $release.tagName -ne $env:CANDIDATE_TAG) {
             throw "candidate assets must come from the exact private draft release"
           }
-          $expectedAssets = @("build.json", $installerName, $updaterSignatureName) | Sort-Object
+          $expectedAssets = @("build.json", $installerName, $updaterSignatureName, $updaterV2SignatureName) | Sort-Object
           $actualAssets = @($release.assets | ForEach-Object { $_.name }) | Sort-Object
           if (@(Compare-Object -ReferenceObject $expectedAssets -DifferenceObject $actualAssets).Count -ne 0) {
-            throw "private draft release must contain exactly the three expected candidate assets"
+            throw "private draft release must contain exactly the four expected candidate assets"
           }
-          gh release download $env:CANDIDATE_TAG --repo $env:GITHUB_REPOSITORY --pattern build.json --pattern $installerName --pattern $updaterSignatureName --dir $stage
+          gh release download $env:CANDIDATE_TAG --repo $env:GITHUB_REPOSITORY --pattern build.json --pattern $installerName --pattern $updaterSignatureName --pattern $updaterV2SignatureName --dir $stage
           if ($LASTEXITCODE -ne 0) {
             throw "failed to download the signed candidate assets"
           }
           $buildPath = Join-Path $stage "build.json"
           $installerPath = Join-Path $stage $installerName
           $updaterSignaturePath = Join-Path $stage $updaterSignatureName
+          $updaterV2SignaturePath = Join-Path $stage $updaterV2SignatureName
           if (-not (Test-Path -LiteralPath $buildPath -PathType Leaf) -or
               -not (Test-Path -LiteralPath $installerPath -PathType Leaf) -or
-              -not (Test-Path -LiteralPath $updaterSignaturePath -PathType Leaf)) {
-            throw "draft release is missing build.json, the exact installer or its updater signature"
+              -not (Test-Path -LiteralPath $updaterSignaturePath -PathType Leaf) -or
+              -not (Test-Path -LiteralPath $updaterV2SignaturePath -PathType Leaf)) {
+            throw "draft release is missing build.json, the exact installer or either updater signature"
           }
           $assets = @(Get-ChildItem -LiteralPath $stage -File)
-          if ($assets.Count -ne 3) {
-            throw "candidate staging must contain exactly build.json, one installer and one updater signature"
+          if ($assets.Count -ne 4) {
+            throw "candidate staging must contain exactly build.json, one installer and both updater signatures"
           }
           $rawBuild = Get-Content -LiteralPath $buildPath -Raw
           if ($rawBuild -match '(?i)"[^"]*(subject|thumbprint|address|signer|private|secret|token|credential)[^"]*"\s*:') {
@@ -155,6 +158,19 @@ jobs:
               $build.updater.publicKeyConfigured -ne $true) {
             throw "build.json is missing exact version-bound updater signature evidence"
           }
+          if ($build.updaterV2.schemaVersion -ne 2 -or
+              $build.updaterV2.artifactFile -ne $installerName -or
+              $build.updaterV2.signatureFile -ne $updaterV2SignatureName -or
+              $build.updaterV2.signatureStatus -ne "Valid" -or
+              $build.updaterV2.cryptographicallyVerified -ne $true -or
+              $build.updaterV2.versionBound -ne $true -or
+              $build.updaterV2.target -ne "windows-x86_64" -or
+              $build.updaterV2.targetBound -ne $true -or
+              $build.updaterV2.channel -ne "stable" -or
+              $build.updaterV2.channelBound -ne $true -or
+              $build.updaterV2.publicKeyConfigured -ne $true) {
+            throw "build.json is missing exact platform- and channel-bound updater v2 evidence"
+          }
           $actualSha256 = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actualSha256 -ne $env:CANDIDATE_SHA256) {
             throw "downloaded installer does not match the immutable SHA-256 input"
@@ -167,6 +183,10 @@ jobs:
           cargo run --quiet --locked --release --manifest-path tooling/updater-signer/Cargo.toml -- verify --artifact $installerPath --signature $updaterSignaturePath --version $env:CANDIDATE_VERSION --public-key $publicKey
           if ($LASTEXITCODE -ne 0) {
             throw "updater signature does not verify for the exact candidate bytes and version"
+          }
+          cargo run --quiet --locked --release --manifest-path tooling/updater-signer/Cargo.toml -- verify --artifact $installerPath --signature $updaterV2SignaturePath --version $env:CANDIDATE_VERSION --public-key $publicKey --target windows-x86_64 --channel stable
+          if ($LASTEXITCODE -ne 0) {
+            throw "updater v2 signature does not verify for the exact candidate bytes, version, platform and channel"
           }
 
       - name: Verify clean install, update mode, signatures and uninstall

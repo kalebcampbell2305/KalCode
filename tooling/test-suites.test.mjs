@@ -247,6 +247,19 @@ test("result policy allows increases and denies zero, reductions, failures, flak
   }
 });
 
+test("tooling profiles account exactly for Windows-only signer and workflow execution", () => {
+  const tooling = inventory.suites.find(({ id }) => id === "tooling-unit");
+  assert.equal(selectProfile(tooling, "win32", {}).skippedMaximum, 0);
+  for (const platform of ["darwin", "linux"]) {
+    const profile = selectProfile(tooling, platform, {});
+    const result = { executed: profile.minimumExecuted, failed: 0, skipped: 2, flaky: 0, skipReasons: [] };
+    assert.doesNotThrow(() => validateSuiteResult(tooling, profile, result));
+    for (const skipped of [1, 3]) {
+      assert.throws(() => validateSuiteResult(tooling, profile, { ...result, skipped }), /reviewed bounds/);
+    }
+  }
+});
+
 test("website skip profiles require reviewed counts and runtime reasons", () => {
   const website = inventory.suites.find(({ id }) => id === "website-e2e");
   const defaultProfile = selectProfile(website, "win32", {});
