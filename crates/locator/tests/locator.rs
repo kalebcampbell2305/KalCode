@@ -139,6 +139,7 @@ fn auth_finds_authentication_refactor_first() {
 
 #[test]
 fn filters_by_kind_status_provider_workspace_and_recency() {
+    let reference = time::macros::datetime!(2026-09-25 12:00 UTC);
     let dir = tempfile::tempdir().unwrap();
     let core = core_with_v11(dir.path());
     let a = workspace(&core, dir.path(), "alpha");
@@ -150,7 +151,7 @@ fn filters_by_kind_status_provider_workspace_and_recency() {
         &a.id,
         &a.name,
         ThreadStatus::WaitingForPermission,
-        &ago(1),
+        &format_rfc3339(reference - time::Duration::hours(1)),
     ));
     sources.add(thread(
         "Payments docs",
@@ -158,7 +159,7 @@ fn filters_by_kind_status_provider_workspace_and_recency() {
         &b.id,
         &b.name,
         ThreadStatus::Completed,
-        &ago(3),
+        &format_rfc3339(reference - time::Duration::hours(3)),
     ));
     sources.add(thread(
         "Payments ledger",
@@ -166,7 +167,7 @@ fn filters_by_kind_status_provider_workspace_and_recency() {
         &a.id,
         &a.name,
         ThreadStatus::RunningTool,
-        &ago(40),
+        &format_rfc3339(reference - time::Duration::hours(40)),
     ));
     let locator = Locator::start(core.clone(), sources).expect("start");
     assert!(locator.wait_ready(WAIT));
@@ -202,8 +203,8 @@ fn filters_by_kind_status_provider_workspace_and_recency() {
     let running = titles(&locator, &q("payments running now"));
     assert_eq!(running, vec!["Payments ledger"]);
 
-    // "Yesterday" relative to a clock one day ahead covers everything done "today".
-    let tomorrow = OffsetDateTime::now_utc() + time::Duration::days(1);
+    // Relative to the next day, yesterday includes the two same-day threads only.
+    let tomorrow = reference + time::Duration::days(1);
     let yesterday = locator
         .search_at(
             &LocatorQuery {
@@ -214,7 +215,14 @@ fn filters_by_kind_status_provider_workspace_and_recency() {
             tomorrow,
         )
         .unwrap();
-    assert!(!yesterday.results.items.is_empty());
+    let mut yesterday_titles: Vec<_> = yesterday
+        .results
+        .items
+        .into_iter()
+        .map(|item| item.title)
+        .collect();
+    yesterday_titles.sort();
+    assert_eq!(yesterday_titles, ["Payments docs", "Payments retry"]);
 
     // A filter word that is really part of a title: retried as plain text.
     let dir2 = tempfile::tempdir().unwrap();
