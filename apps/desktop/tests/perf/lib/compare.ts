@@ -57,6 +57,29 @@ export function checkMetrics(
       continue;
     }
     const reasons: string[] = [];
+    if (!Number.isFinite(current.value)) reasons.push("measurement must be a finite number");
+    if (typeof current.unit !== "string" || current.unit.trim().length === 0) {
+      reasons.push("measurement must have a unit");
+    }
+    if (current.better !== "lower" && current.better !== "higher") {
+      reasons.push("measurement must have a known improvement direction");
+    }
+    if (base) {
+      if (!Number.isFinite(base.value)) reasons.push("baseline measurement must be a finite number");
+      if (base.unit !== current.unit) reasons.push("baseline unit does not match measurement");
+      if (base.better !== current.better) reasons.push("baseline improvement direction does not match measurement");
+    }
+    if (reasons.length > 0) {
+      rows.push({
+        metric,
+        value: Number.isFinite(current.value) ? current.value : null,
+        baseline: base && Number.isFinite(base.value) ? base.value : null,
+        unit: typeof current.unit === "string" ? current.unit : "",
+        status: "fail",
+        reasons,
+      });
+      continue;
+    }
     const lower = current.better === "lower";
     if (budget.max !== undefined && current.value > budget.max) {
       reasons.push(`over budget ${budget.max} ${current.unit}`);

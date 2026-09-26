@@ -52,8 +52,20 @@ const baselinePath = values.baseline
   : join(here, "baselines", `${results.platform}.json`);
 let baseline: ResultsFile | null = null;
 if (!values["no-baseline"]) {
-  if (existsSync(baselinePath)) baseline = load<ResultsFile>(baselinePath);
-  else console.warn(`No baseline for ${results.platform} (${baselinePath}); checking absolute budgets only.`);
+  if (existsSync(baselinePath)) {
+    baseline = load<ResultsFile>(baselinePath);
+    if (baseline.kind !== "kalcode-perf") {
+      console.error(`${baselinePath} is not a KalCode perf results file`);
+      process.exit(2);
+    }
+    if (baseline.platform !== results.platform) {
+      console.error(`Baseline platform ${baseline.platform} does not match results platform ${results.platform}`);
+      process.exit(2);
+    }
+  } else if (values.baseline) {
+    console.error(`Explicit baseline does not exist: ${baselinePath}`);
+    process.exit(2);
+  } else console.warn(`No baseline for ${results.platform} (${baselinePath}); checking absolute budgets only.`);
 }
 
 const rows = checkMetrics(results.metrics, budgets, baseline?.metrics ?? null);

@@ -65,6 +65,47 @@ test("reports a budgeted metric that was not measured", () => {
   assert.equal(rows[0]?.status, "missing");
 });
 
+test("invalid measurements cannot pass a performance gate", () => {
+  for (const value of [null, "100", Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    const rows = checkMetrics({ "startup.cold.windowVisibleMs": { ...ms(100), value } as MetricValue }, budgets, null);
+    assert.equal(rows[0]?.status, "fail", `invalid measurement: ${String(value)}`);
+    assert.match(rows[0]?.reasons.join(" ") ?? "", /finite number/);
+  }
+});
+
+test("invalid baseline measurements cannot hide regressions", () => {
+  for (const value of [null, "100", Number.NaN, Number.POSITIVE_INFINITY]) {
+    const rows = checkMetrics({ "startup.cold.windowVisibleMs": ms(1000) }, budgets, {
+      "startup.cold.windowVisibleMs": { ...ms(100), value } as MetricValue,
+    });
+    assert.equal(rows[0]?.status, "fail", `invalid baseline: ${String(value)}`);
+    assert.match(rows[0]?.reasons.join(" ") ?? "", /baseline.*finite number/);
+  }
+});
+
+test("baseline units and improvement direction must match the current measurement", () => {
+  for (const current of [
+    { ...ms(1000), unit: "s" },
+    { ...ms(1000), better: "higher" as const },
+  ]) {
+    const rows = checkMetrics({ "startup.cold.windowVisibleMs": current }, budgets, {
+      "startup.cold.windowVisibleMs": ms(100),
+    });
+    assert.equal(rows[0]?.status, "fail");
+    assert.match(rows[0]?.reasons.join(" ") ?? "", /baseline.*(unit|direction)/);
+  }
+});
+
+test("measurements require units and a known improvement direction", () => {
+  for (const current of [
+    { ...ms(100), unit: "" },
+    { ...ms(100), better: "unknown" },
+  ]) {
+    const rows = checkMetrics({ "startup.cold.windowVisibleMs": current as MetricValue }, budgets, null);
+    assert.equal(rows[0]?.status, "fail");
+  }
+});
+
 test("improvements never fail", () => {
   const rows = checkMetrics(
     { "startup.cold.windowVisibleMs": ms(100), "events.append.perSecond": rate(4000) },
