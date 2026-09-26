@@ -29,8 +29,6 @@ import {
   TARGET_DIR,
 } from "./lib.mjs";
 import {
-  acceptedNotaryLog,
-  acceptedNotarySubmission,
   assertProductionCodesign,
   expectedMacDmgFile,
   MACOS_HELPERS,
@@ -43,14 +41,14 @@ import {
   macSdkBuildEnvironment,
   macTauriBuildArgs,
   normalizeMacArchitecture,
-  notaryLogArgs,
-  notarySubmitArgs,
   parseMacPackageOptions,
   rustTargetForMacArchitecture,
   validateMacReleaseEnvironment,
+  validateMacSigningEnvironment,
 } from "./macos-contract.mjs";
-import { macProcessRunner, verifyMacRelease } from "./macos-verify-lib.mjs";
-import { buildChannelContract, buildEnvironment, validateBuildInfo } from "./release-channel.mjs";
+import { macCandidateArtifactPath, resumeMacCandidate } from "./macos-resume.mjs";
+import { macProcessRunner, verifyMacCandidate } from "./macos-verify-lib.mjs";
+import { buildEnvironment, validateBuildInfo } from "./release-channel.mjs";
 
 function fail(error) {
   const code = error instanceof MacReleaseError ? error.code : "package_failed";
@@ -136,8 +134,27 @@ async function main() {
     throw new MacReleaseError("wrong_platform", "The macOS package must be built and verified on macOS.");
   }
   const features = options.features;
-  const credentials = validateMacReleaseEnvironment(process.env);
+  const credentials = options.buildOnly
+    ? validateMacSigningEnvironment(process.env)
+    : validateMacReleaseEnvironment(process.env);
   const arch = normalizeMacArchitecture(macProcessRunner.capture("uname", ["-m"]));
+  if (options.resume) {
+    assertCleanTree("A macOS notarization resume");
+    const result = await resumeMacCandidate({
+      candidatePath: options.resume,
+      expected: {
+        commit: headCommit(),
+        version: appVersion(),
+        arch,
+        requestedReleaseChannel: options.requestedReleaseChannel,
+        teamId: credentials.teamId,
+      },
+      notaryProfile: credentials.notaryProfile,
+    });
+    console.log(`Verified macOS ${arch} package: ${result.record.file}`);
+    console.log("No artifact was published.");
+    return;
+  }
   const target = rustTargetForMacArchitecture(arch);
   macTauriBuildArgs({ target, features });
   const sdkRoot = assertToolchain(target, credentials.signingIdentity);
@@ -150,10 +167,18 @@ async function main() {
   const commit = headCommit();
   const expectedFile = expectedMacDmgFile(version, arch);
   const outDir = stagingDir(version);
-  const artifactPath = join(outDir, expectedFile);
+  const candidatePath = join(outDir, `macos-${arch}-candidate.json`);
+  const artifactPath = macCandidateArtifactPath(candidatePath, { arch, file: expectedFile });
   const recordPath = join(outDir, `macos-${arch}-build.json`);
   const reportPath = join(outDir, `macos-${arch}-verify.json`);
-  for (const path of [artifactPath, recordPath, reportPath]) {
+  for (const path of [
+    artifactPath,
+    candidatePath,
+    join(outDir, expectedFile),
+    recordPath,
+    reportPath,
+    join(outDir, `macos-${arch}-notary.json`),
+  ]) {
     if (existsSync(path)) {
       throw new MacReleaseError("stale_release_output", "Remove the previous macOS release output before rebuilding.");
     }
@@ -290,26 +315,18 @@ async function main() {
   if (!outStat.isDirectory() || outStat.isSymbolicLink() || realpathSync(outDir) !== resolve(outDir)) {
     throw new MacReleaseError("unsafe_staging_directory", "The release staging directory is unsafe.");
   }
+  mkdirSync(join(outDir, `macos-${arch}-candidate`), { mode: 0o700 });
   copyFileSync(candidates[0], artifactPath, constants.COPYFILE_EXCL);
-  const submittedSha256 = await sha256File(artifactPath);
-  const submission = acceptedNotarySubmission(
-    macProcessRunner.capture("xcrun", notarySubmitArgs(artifactPath, credentials.notaryProfile), {
-      timeout: 3_600_000,
-    }),
-  );
-  const notaryLog = macProcessRunner.capture("xcrun", notaryLogArgs(submission.id, credentials.notaryProfile));
-  acceptedNotaryLog(notaryLog, submission.id);
-  macProcessRunner.run("xcrun", ["stapler", "staple", artifactPath]);
-
   const record = {
     schemaVersion: 1,
+    kind: "macos-signed-candidate",
     platform: "macos",
+    teamId: credentials.teamId,
     version,
     arch,
     file: expectedFile,
     size: statSync(artifactPath).size,
     sha256: await sha256File(artifactPath),
-    submittedSha256,
     commit,
     createdAt: new Date().toISOString(),
     minimumSystemVersion: MACOS_MINIMUM_VERSION,
@@ -317,9 +334,10 @@ async function main() {
     signatureStatus: "Valid",
     hardenedRuntime: true,
     expectedTeamBound: true,
-    notarized: true,
-    notarySubmissionId: submission.id,
-    stapled: true,
+    notarized: false,
+    stapled: false,
+    releaseDescriptorEligible: false,
+    releaseDescriptorBlockedReason: "notarization_pending",
     features,
     helpers: builtHelperEvidence,
     requestedReleaseChannel: options.requestedReleaseChannel,
@@ -331,22 +349,30 @@ async function main() {
       method: "build_info_probe_v1",
       testHooks: buildInfo.testHooks,
     },
-    ...buildChannelContract({
-      requestedReleaseChannel: options.requestedReleaseChannel,
-      compiledChannel: buildInfo.channel,
-      compiledChannelVerified: true,
-      signed: true,
-      signatureStatus: "Valid",
-    }),
   };
-  const report = await verifyMacRelease({
-    artifactPath,
-    record,
-    expectedTeamId: credentials.teamId,
+  await verifyMacCandidate({ artifactPath, record, expectedTeamId: credentials.teamId });
+  writeFileSync(candidatePath, `${JSON.stringify(record, null, 2)}\n`, {
+    encoding: "utf8",
+    flag: "wx",
+    mode: 0o600,
+    flush: true,
+  });
+  if (options.buildOnly) {
+    console.log(`Signed macOS candidate verified: ${candidatePath}`);
+    console.log("Notarization is pending. This candidate is not eligible for publishing.");
+    return;
+  }
+  await resumeMacCandidate({
+    candidatePath,
+    expected: {
+      commit,
+      version,
+      arch,
+      requestedReleaseChannel: options.requestedReleaseChannel,
+      teamId: credentials.teamId,
+    },
     notaryProfile: credentials.notaryProfile,
   });
-  writeFileSync(recordPath, `${JSON.stringify(record, null, 2)}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
-  writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, { encoding: "utf8", flag: "wx", mode: 0o600 });
   console.log(`Verified macOS ${arch} package: ${expectedFile}`);
   console.log("No artifact was published.");
 }

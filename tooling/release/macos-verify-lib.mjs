@@ -18,7 +18,9 @@ import {
   notaryInfoArgs,
   notaryLogArgs,
   validateMacBuildRecord,
+  validateMacCandidateRecord,
 } from "./macos-contract.mjs";
+import { validateBuildInfo } from "./release-channel.mjs";
 
 function processResult(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -67,7 +69,7 @@ function expectedArchitectures(arch) {
   throw new MacReleaseError("invalid_architecture", "The build record architecture is invalid.");
 }
 
-function verifyMountedApplication({ appPath, record, expectedTeamId, runner, fs }) {
+function verifyMountedApplication({ appPath, record, expectedTeamId, runner, fs, candidateOnly }) {
   const appStat = fs.lstat(appPath);
   if (!appStat.isDirectory() || appStat.isSymbolicLink()) {
     throw new MacReleaseError("invalid_app_bundle", "The DMG must contain one plain KalCode.app bundle.");
@@ -130,7 +132,12 @@ function verifyMountedApplication({ appPath, record, expectedTeamId, runner, fs 
     input: entitlementPlist,
   });
   assertProductionEntitlements(entitlementJson);
-  runner.run("spctl", ["--assess", "--type", "execute", "--verbose=4", appPath]);
+  if (candidateOnly) {
+    validateBuildInfo(runner.capture(executable, ["--build-info"]), {
+      version: record.version,
+      requestedReleaseChannel: record.requestedReleaseChannel,
+    });
+  } else runner.run("spctl", ["--assess", "--type", "execute", "--verbose=4", appPath]);
   return helpers;
 }
 
@@ -147,18 +154,30 @@ const defaultFs = {
  * be tested on non-macOS hosts; production callers use the real bounded process and filesystem
  * adapters above.
  */
-export async function verifyMacRelease({
-  artifactPath,
-  record,
-  expectedTeamId,
-  notaryProfile,
-  runner = macProcessRunner,
-  fs = defaultFs,
-  hashFile = sha256File,
-  tempRoot = tmpdir(),
-}) {
+export function verifyMacRelease(options) {
+  return verifyMacArtifact(options, false);
+}
+
+export function verifyMacCandidate(options) {
+  return verifyMacArtifact(options, true);
+}
+
+async function verifyMacArtifact(
+  {
+    artifactPath,
+    record,
+    expectedTeamId,
+    notaryProfile,
+    runner = macProcessRunner,
+    fs = defaultFs,
+    hashFile = sha256File,
+    tempRoot = tmpdir(),
+  },
+  candidateOnly,
+) {
   const absoluteArtifact = resolve(artifactPath);
-  validateMacBuildRecord(record, absoluteArtifact);
+  if (candidateOnly) validateMacCandidateRecord(record, absoluteArtifact);
+  else validateMacBuildRecord(record, absoluteArtifact);
   const stat = plainFile(absoluteArtifact, "The DMG", fs);
   if (stat.size !== record.size || (await hashFile(absoluteArtifact)) !== record.sha256) {
     throw new MacReleaseError("artifact_digest_mismatch", "The DMG bytes do not match the exact build record.");
@@ -166,7 +185,10 @@ export async function verifyMacRelease({
   if (!/^[A-Z0-9]{10}$/.test(expectedTeamId ?? "")) {
     throw new MacReleaseError("missing_team_id", "The expected Apple team ID is required.");
   }
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(notaryProfile ?? "")) {
+  if (candidateOnly && record.teamId !== expectedTeamId) {
+    throw new MacReleaseError("candidate_team_mismatch", "The candidate does not match the expected Apple team.");
+  }
+  if (!candidateOnly && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(notaryProfile ?? "")) {
     throw new MacReleaseError("missing_notary_profile", "A stored notarytool keychain profile is required.");
   }
 
@@ -199,6 +221,7 @@ export async function verifyMacRelease({
       expectedTeamId,
       runner,
       fs,
+      candidateOnly,
     });
     for (const helper of helpers) {
       const evidence = record.helpers.find((candidate) => candidate.name === helper.name);
@@ -224,6 +247,15 @@ export async function verifyMacRelease({
     if (safeToRemoveWorkspace) fs.remove(workspace);
   }
   if (pendingError) throw pendingError;
+
+  if (candidateOnly)
+    return {
+      schemaVersion: 1,
+      kind: "macos-signed-candidate-verification",
+      status: "signed-candidate-verified",
+      sha256: record.sha256,
+      releaseDescriptorEligible: false,
+    };
 
   runner.run("xcrun", ["stapler", "validate", absoluteArtifact]);
   runner.run("spctl", [

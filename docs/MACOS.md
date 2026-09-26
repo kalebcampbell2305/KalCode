@@ -96,6 +96,42 @@ identity, waits for Apple to accept notarization, requires an issue-free notary 
 ticket, and invokes the independent verifier. It writes architecture-specific build and verify
 records under `dist/release/<version>/`. It never uploads or publishes anything.
 
+To finish the signed app and DMG before supplying notarization credentials, use:
+
+```bash
+node tooling/release/macos-package.mjs --channel stable --build-only
+```
+
+This stage needs only `KALCODE_APPLE_TEAM_ID` and `KALCODE_APPLE_SIGNING_IDENTITY`.
+It verifies the mounted app, every required helper, Developer ID signatures, hardened runtime,
+entitlements, architecture, exact hashes, and the executable's production build-info response.
+It leaves an immutable DMG in `dist/release/<version>/macos-<arch>-candidate/` and a sibling
+`macos-<arch>-candidate.json`. The candidate is explicitly ineligible for publishing; no final
+build or verification report is written. Gatekeeper and notarization remain pending.
+
+After the owner configures `KALCODE_NOTARY_KEYCHAIN_PROFILE`, resume from the same clean source
+commit with the same channel, native architecture and Apple team:
+
+```bash
+node tooling/release/macos-package.mjs --channel stable \
+  --resume dist/release/<version>/macos-<arch>-candidate.json
+```
+
+Resume does not rebuild. It repeats candidate verification and binds the checkpoint to both the
+DMG SHA-256 and the exact candidate JSON bytes. The Apple job ID is saved before waiting; a retry
+reuses that job. Apple must report Accepted with an issue-free matching log. Stapling operates on
+a disposable copy, preserving the signed candidate for retries. Only after the complete release
+verifier passes are the final DMG and build/verify records exposed to the publisher. Repeating a
+completed resume re-verifies the final artifact and can restore a missing evidence file.
+
+A crash before Apple's returned job ID was recorded is intentionally ambiguous: reconcile that
+submission through Apple before restoring its exact job ID in the checkpoint. Do not delete the
+checkpoint to silently submit again. A process killed while running can leave a `macos-<arch>-notary.lock`
+directory; remove only that empty directory after confirming no packaging process still owns it.
+Unexpected existing artifacts, corrupt records, changed candidate bytes, or mismatched source/channel
+fail closed. Do not edit a candidate record to bypass a mismatch. No credentials or raw notary logs
+are stored in the checkpoint. The default command retains the complete build-and-notarize behavior.
+
 The verifier can be rerun against the exact files:
 
 ```bash

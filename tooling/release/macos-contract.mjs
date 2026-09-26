@@ -64,6 +64,22 @@ export function rustTargetForMacArchitecture(arch) {
 }
 
 export function parseMacPackageOptions(args) {
+  let buildOnly = false;
+  let resume;
+  const buildArgs = [];
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] === "--build-only") {
+      if (buildOnly) reject("invalid_stage", "--build-only may be specified only once.");
+      buildOnly = true;
+    } else if (args[index] === "--resume") {
+      if (resume || !args[index + 1] || args[index + 1].startsWith("--"))
+        reject("invalid_stage", "--resume requires exactly one candidate record.");
+      resume = args[++index];
+    } else buildArgs.push(args[index]);
+  }
+  if (resume && (buildOnly || buildArgs.includes("--features")))
+    reject("invalid_stage", "--resume cannot be combined with build options.");
+  args = buildArgs;
   validateReleaseBuildArgs(args);
   if (args.includes("--unsigned-local")) {
     reject("unsigned_macos_release", "A macOS production package cannot be unsigned.");
@@ -83,7 +99,7 @@ export function parseMacPackageOptions(args) {
       reject("invalid_feature", "Release features must be safe Cargo feature names and cannot enable e2e hooks.");
     }
   }
-  return { ...channel, features };
+  return { ...channel, features, ...(buildOnly ? { buildOnly } : {}), ...(resume ? { resume } : {}) };
 }
 
 export function expectedMacDmgFile(version, arch) {
@@ -91,10 +107,9 @@ export function expectedMacDmgFile(version, arch) {
   return `KalCode_${version}_${normalizeMacArchitecture(arch)}.dmg`;
 }
 
-export function validateMacReleaseEnvironment(env) {
+export function validateMacSigningEnvironment(env) {
   const teamId = String(env.KALCODE_APPLE_TEAM_ID ?? "").trim();
   const signingIdentity = String(env.KALCODE_APPLE_SIGNING_IDENTITY ?? "").trim();
-  const notaryProfile = String(env.KALCODE_NOTARY_KEYCHAIN_PROFILE ?? "").trim();
   if (!TEAM_ID.test(teamId))
     reject("missing_team_id", "KALCODE_APPLE_TEAM_ID must be the expected 10-character team ID.");
   if (
@@ -108,10 +123,22 @@ export function validateMacReleaseEnvironment(env) {
       "KALCODE_APPLE_SIGNING_IDENTITY must name the expected Developer ID Application identity for the configured team.",
     );
   }
+  return { teamId, signingIdentity };
+}
+
+export function validateMacNotaryProfile(value) {
+  const notaryProfile = String(value ?? "").trim();
   if (!PROFILE.test(notaryProfile)) {
     reject("missing_notary_profile", "KALCODE_NOTARY_KEYCHAIN_PROFILE must name a stored notarytool keychain profile.");
   }
-  return { teamId, signingIdentity, notaryProfile };
+  return notaryProfile;
+}
+
+export function validateMacReleaseEnvironment(env) {
+  return {
+    ...validateMacSigningEnvironment(env),
+    notaryProfile: validateMacNotaryProfile(env.KALCODE_NOTARY_KEYCHAIN_PROFILE),
+  };
 }
 
 export function macBuildEnvironment(env, signingIdentity) {
@@ -288,6 +315,33 @@ export function assertProductionEntitlements(value) {
 }
 
 export function validateMacBuildRecord(record, artifactPath) {
+  validateMacSignedRecord(record, artifactPath);
+  if (!SUBMISSION_ID.test(String(record.notarySubmissionId ?? ""))) {
+    reject("invalid_build_record", "The macOS build record has no valid notarization submission.");
+  }
+  if (record.releaseDescriptorEligible !== true || record.releaseDescriptorBlockedReason !== null) {
+    reject("invalid_build_record", "The macOS build record is not eligible for a signed release descriptor.");
+  }
+  return record;
+}
+
+export function validateMacCandidateRecord(record, artifactPath) {
+  validateMacSignedRecord(record, artifactPath);
+  if (
+    record.kind !== "macos-signed-candidate" ||
+    !TEAM_ID.test(record.teamId ?? "") ||
+    record.releaseDescriptorEligible !== false ||
+    record.releaseDescriptorBlockedReason !== "notarization_pending" ||
+    record.notarized !== false ||
+    record.stapled !== false ||
+    Object.hasOwn(record, "notarySubmissionId")
+  ) {
+    reject("invalid_candidate", "The signed candidate must remain explicitly non-publishable pending notarization.");
+  }
+  return record;
+}
+
+function validateMacSignedRecord(record, artifactPath) {
   if (record?.schemaVersion !== 1 || record.platform !== "macos") {
     reject("invalid_build_record", "The macOS build record schema is invalid.");
   }
@@ -298,18 +352,10 @@ export function validateMacBuildRecord(record, artifactPath) {
   if (!Number.isSafeInteger(record.size) || record.size <= 0 || !SHA256.test(String(record.sha256 ?? ""))) {
     reject("invalid_build_record", "The macOS build record size or SHA-256 is invalid.");
   }
-  if (!SUBMISSION_ID.test(String(record.notarySubmissionId ?? ""))) {
-    reject("invalid_build_record", "The macOS build record has no valid notarization submission.");
-  }
   if (!COMMIT.test(String(record.commit ?? ""))) {
     reject("invalid_build_record", "The macOS build record has no exact source commit.");
   }
-  if (
-    record.signed !== true ||
-    record.signatureStatus !== "Valid" ||
-    record.releaseDescriptorEligible !== true ||
-    record.releaseDescriptorBlockedReason !== null
-  ) {
+  if (record.signed !== true || record.signatureStatus !== "Valid") {
     reject("invalid_build_record", "The macOS build record is not eligible for a signed release descriptor.");
   }
   if (

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import test from "node:test";
 
-import { verifyMacRelease } from "./macos-verify-lib.mjs";
+import { verifyMacCandidate, verifyMacRelease } from "./macos-verify-lib.mjs";
 
 const team = "A1B2C3D4E5";
 const submission = "123e4567-e89b-42d3-a456-426614174000";
@@ -59,6 +59,8 @@ function fixture() {
     },
     capture(command, args, options = {}) {
       calls.push(["capture", command, args, options]);
+      if (args[0] === "--build-info")
+        return JSON.stringify({ schemaVersion: 1, version: "1.2.3", channel: "stable", testHooks: false });
       if (command === "lipo") return "arm64";
       if (command === "codesign" && args.includes("--verbose=4")) {
         const binary = args.at(-1);
@@ -116,6 +118,61 @@ function fixture() {
   };
   return { calls, runner, fs };
 }
+
+test("signed candidate verifies real mounted binary and helpers without claiming Apple or Gatekeeper acceptance", async () => {
+  const { notarySubmissionId: _id, ...base } = record;
+  const candidate = {
+    ...base,
+    kind: "macos-signed-candidate",
+    teamId: team,
+    releaseDescriptorEligible: false,
+    releaseDescriptorBlockedReason: "notarization_pending",
+    notarized: false,
+    stapled: false,
+  };
+  const { calls, runner, fs } = fixture();
+  const report = await verifyMacCandidate({
+    artifactPath: artifact,
+    record: candidate,
+    expectedTeamId: team,
+    runner,
+    fs,
+    hashFile: async (path) => fixtureHash(path),
+  });
+  assert.equal(report.releaseDescriptorEligible, false);
+  assert.equal(report.status, "signed-candidate-verified");
+  assert.equal(
+    calls.some(([, command]) => command === "spctl" || command === "xcrun"),
+    false,
+  );
+  assert.ok(calls.some(([, , args]) => args[0] === "--build-info"));
+  await assert.rejects(
+    verifyMacRelease({ artifactPath: artifact, record: candidate, expectedTeamId: team, runner, fs }),
+    /notarization/,
+  );
+  for (const failure of ["helper", "channel", "entitlements"]) {
+    const next = fixture();
+    const capture = next.runner.capture;
+    next.runner.capture = (command, args, options) => {
+      if (failure === "channel" && args[0] === "--build-info")
+        return JSON.stringify({ schemaVersion: 1, version: "1.2.3", channel: "beta", testHooks: false });
+      if (failure === "entitlements" && command === "plutil" && args.includes("-convert"))
+        return JSON.stringify({ "com.apple.security.get-task-allow": true });
+      return capture(command, args, options);
+    };
+    await assert.rejects(
+      verifyMacCandidate({
+        artifactPath: artifact,
+        record: candidate,
+        expectedTeamId: team,
+        runner: next.runner,
+        fs: next.fs,
+        hashFile: async (path) =>
+          failure === "helper" && path.endsWith("kalcode-hook") ? "0".repeat(64) : fixtureHash(path),
+      }),
+    );
+  }
+});
 
 test("production verification binds the exact DMG through app, staple, Gatekeeper, and Apple log checks", async () => {
   const { calls, runner, fs } = fixture();
