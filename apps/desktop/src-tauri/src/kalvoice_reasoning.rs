@@ -282,7 +282,8 @@ mod tests {
 
     #[test]
     fn missing_provisioning_and_shutdown_never_launch_or_borrow_a_provider() {
-        let (_temp, components) = crate::kalvoice_components::provisioning_tests::empty_manager();
+        let (_temp, components) =
+            crate::kalvoice_components::provisioning_tests::empty_manager().unwrap();
         let host = DesktopLocalInterpreter::new(
             components,
             Arc::new(ResourceGovernorState::start()),
@@ -302,7 +303,8 @@ mod tests {
 
     #[test]
     fn failed_cleanup_retains_capacity_and_interpreter_until_proven_retry() {
-        let (_temp, components) = crate::kalvoice_components::provisioning_tests::empty_manager();
+        let (_temp, components) =
+            crate::kalvoice_components::provisioning_tests::empty_manager().unwrap();
         let host = DesktopLocalInterpreter::new(
             components,
             Arc::new(ResourceGovernorState::start()),

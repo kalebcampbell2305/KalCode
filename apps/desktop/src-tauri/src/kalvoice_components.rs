@@ -1247,6 +1247,18 @@ fn sync_parent(_directory: &Path) -> Result<(), ComponentManagerError> {
 }
 
 #[cfg(test)]
+fn private_fixture_directory() -> std::io::Result<tempfile::TempDir> {
+    let temp = tempfile::tempdir()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        // tempfile follows the process umask; trusted component roots require owner-only access.
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(temp)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1296,7 +1308,7 @@ mod tests {
 
     #[test]
     fn cache_paths_accept_only_lowercase_sha256_identities() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = private_fixture_directory().unwrap();
         let root = TrustedComponentDirectory::open_existing(temp.path()).unwrap();
         let cache = CatalogCache::new(
             &root,
@@ -1341,7 +1353,7 @@ mod tests {
 
     #[test]
     fn catalog_cache_is_hash_addressed_and_read_back_exactly() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = private_fixture_directory().unwrap();
         let root = TrustedComponentDirectory::open_existing(temp.path()).unwrap();
         let cache = CatalogCache::new(
             &root,

@@ -10,6 +10,8 @@ use kalcode_kalvoice::component_manifest::{
 use kalcode_secure_store::{SecretKey, SecretStoreError, SecretString};
 use std::sync::atomic::AtomicUsize;
 
+type FixtureResult<T> = Result<T, Box<dyn std::error::Error>>;
+
 #[derive(Default)]
 struct MemorySecrets(Mutex<HashMap<SecretKey, SecretString>>);
 impl SecretStore for MemorySecrets {
@@ -17,14 +19,27 @@ impl SecretStore for MemorySecrets {
         "synthetic component floor"
     }
     fn get(&self, key: &SecretKey) -> Result<Option<SecretString>, SecretStoreError> {
-        Ok(self.0.lock().unwrap().get(key).cloned())
+        Ok(self
+            .0
+            .lock()
+            .map_err(|_| SecretStoreError::Unavailable("synthetic lock poisoned".into()))?
+            .get(key)
+            .cloned())
     }
     fn set(&self, key: &SecretKey, value: &SecretString) -> Result<(), SecretStoreError> {
-        self.0.lock().unwrap().insert(key.clone(), value.clone());
+        self.0
+            .lock()
+            .map_err(|_| SecretStoreError::Unavailable("synthetic lock poisoned".into()))?
+            .insert(key.clone(), value.clone());
         Ok(())
     }
     fn delete(&self, key: &SecretKey) -> Result<bool, SecretStoreError> {
-        Ok(self.0.lock().unwrap().remove(key).is_some())
+        Ok(self
+            .0
+            .lock()
+            .map_err(|_| SecretStoreError::Unavailable("synthetic lock poisoned".into()))?
+            .remove(key)
+            .is_some())
     }
 }
 struct FakeFetcher(String);
@@ -51,7 +66,10 @@ impl AcquisitionService for AcquisitionSpy {
         if cancel.load(Ordering::SeqCst) {
             return Err(ComponentAcquisitionError::Cancelled);
         }
-        self.tokens.lock().unwrap().push(token.into());
+        self.tokens
+            .lock()
+            .map_err(|_| ComponentAcquisitionError::Storage(std::io::ErrorKind::Other))?
+            .push(token.into());
         progress(1024, 1024);
         if self.cancel_first.load(Ordering::SeqCst) {
             cancel.store(true, Ordering::SeqCst);
@@ -77,22 +95,24 @@ impl ComponentAdmission for AdmissionSpy {
         Ok(Box::new(Permit(self.0.clone())))
     }
 }
-fn sign(value: &impl serde::Serialize, key: &SigningKey, token_type: &str) -> String {
-    let header = URL_SAFE_NO_PAD.encode(
-        serde_json::to_vec(
-            &serde_json::json!({"alg":"EdDSA", "typ":token_type, "kid":"synthetic-test"}),
-        )
-        .unwrap(),
-    );
-    let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(value).unwrap());
+fn sign(
+    value: &impl serde::Serialize,
+    key: &SigningKey,
+    token_type: &str,
+) -> FixtureResult<String> {
+    let header = URL_SAFE_NO_PAD.encode(serde_json::to_vec(
+        &serde_json::json!({"alg":"EdDSA", "typ":token_type, "kid":"synthetic-test"}),
+    )?);
+    let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(value)?);
     let input = format!("{header}.{payload}");
-    format!(
+    Ok(format!(
         "{input}.{}",
         URL_SAFE_NO_PAD.encode(key.sign(input.as_bytes()).to_bytes())
-    )
+    ))
 }
-fn token(key: &SigningKey, now: i64) -> String {
-    let host = host_local_reasoning_contract().unwrap();
+fn token(key: &SigningKey, now: i64) -> FixtureResult<String> {
+    let host = host_local_reasoning_contract()
+        .ok_or_else(|| std::io::Error::other("unsupported synthetic fixture host"))?;
     let make = |id: &str, kind, abi: &str| {
         sign(
             &ComponentManifest {
@@ -140,7 +160,7 @@ fn token(key: &SigningKey, now: i64) -> String {
                 LOCAL_REASONING_RUNTIME_ID,
                 ComponentKind::Runtime,
                 LOCAL_REASONING_RUNTIME_ABI,
-            ),
+            )?,
         },
         CatalogEntry {
             role: CatalogRole::ReasoningModel,
@@ -148,13 +168,15 @@ fn token(key: &SigningKey, now: i64) -> String {
                 LOCAL_REASONING_MODEL_ID,
                 ComponentKind::Model,
                 LOCAL_REASONING_RUNTIME_ABI,
-            ),
+            )?,
         },
     ];
-    entries.extend(SPEECH_COMPONENT_IDS.iter().map(|id| CatalogEntry {
-        role: CatalogRole::SpeechModel,
-        token: make(id, ComponentKind::Model, WHISPER_GGML_ABI),
-    }));
+    for id in SPEECH_COMPONENT_IDS {
+        entries.push(CatalogEntry {
+            role: CatalogRole::SpeechModel,
+            token: make(id, ComponentKind::Model, WHISPER_GGML_ABI)?,
+        });
+    }
     sign(
         &ComponentCatalog {
             schema_version: 1,
@@ -175,29 +197,30 @@ fn token(key: &SigningKey, now: i64) -> String {
     )
 }
 
-pub(crate) fn empty_manager() -> (tempfile::TempDir, Arc<KalVoiceComponentManager>) {
-    let (temp, manager, _, _) = fixture();
-    (temp, manager)
+pub(crate) fn empty_manager() -> FixtureResult<(tempfile::TempDir, Arc<KalVoiceComponentManager>)> {
+    let (temp, manager, _, _) = fixture()?;
+    Ok((temp, manager))
 }
-fn fixture() -> (
+fn fixture() -> FixtureResult<(
     tempfile::TempDir,
     Arc<KalVoiceComponentManager>,
     Arc<AcquisitionSpy>,
     Arc<AtomicUsize>,
-) {
-    let temp = tempfile::tempdir().unwrap();
-    let root = TrustedComponentDirectory::open_existing(temp.path()).unwrap();
+)> {
+    let temp = private_fixture_directory()?;
+    let root = TrustedComponentDirectory::open_existing(temp.path())?;
     let key = SigningKey::from_bytes(&[71; 32]);
     let public_key = URL_SAFE_NO_PAD.encode(key.verifying_key().as_bytes());
     let verifier =
-        ComponentVerifier::from_keys([("synthetic-test", public_key.as_str())], ["kalcoded.com"])
-            .unwrap();
-    let host = host_local_reasoning_contract().unwrap();
-    let track = CatalogFloorTrack::new("stable", host.runtime.platform, host.runtime.arch).unwrap();
-    let floor = Arc::new(
-        ComponentFloorAuthority::new(Arc::new(MemorySecrets::default()), root.clone(), track)
-            .unwrap(),
-    );
+        ComponentVerifier::from_keys([("synthetic-test", public_key.as_str())], ["kalcoded.com"])?;
+    let host = host_local_reasoning_contract()
+        .ok_or_else(|| std::io::Error::other("unsupported synthetic fixture host"))?;
+    let track = CatalogFloorTrack::new("stable", host.runtime.platform, host.runtime.arch)?;
+    let floor = Arc::new(ComponentFloorAuthority::new(
+        Arc::new(MemorySecrets::default()),
+        root.clone(),
+        track,
+    )?);
     let mut manager = KalVoiceComponentManager::new(ComponentManagerConfig {
         root,
         verifier,
@@ -206,20 +229,20 @@ fn fixture() -> (
         channel: "stable",
         platform: host.runtime.platform,
         arch: host.runtime.arch,
-    })
-    .unwrap();
+    })?;
     let acquisition = Arc::new(AcquisitionSpy::default());
     let reservations = Arc::new(AtomicUsize::new(0));
-    let inner = Arc::get_mut(&mut manager).unwrap();
-    inner.fetcher = Arc::new(FakeFetcher(token(&key, unix_seconds())));
+    let inner = Arc::get_mut(&mut manager)
+        .ok_or_else(|| std::io::Error::other("fixture unexpectedly shared"))?;
+    inner.fetcher = Arc::new(FakeFetcher(token(&key, unix_seconds())?));
     inner.acquisition = acquisition.clone();
     inner.admission = Arc::new(AdmissionSpy(reservations.clone()));
-    (temp, manager, acquisition, reservations)
+    Ok((temp, manager, acquisition, reservations))
 }
 
 #[test]
 fn reasoning_quote_only_fetches_signed_metadata_and_exact_consent_precedes_acquisition() {
-    let (_temp, manager, acquisition, reservations) = fixture();
+    let (_temp, manager, acquisition, reservations) = fixture().unwrap();
     let quote = manager.prepare_reasoning().unwrap();
     assert_eq!(quote.size_bytes, 2048);
     assert_eq!(quote.runtime_version, "2026.09.1");
@@ -273,7 +296,7 @@ fn reasoning_quote_only_fetches_signed_metadata_and_exact_consent_precedes_acqui
 
 #[test]
 fn cancelled_runtime_download_cannot_start_reasoning_model_and_releases_reservation() {
-    let (_temp, manager, acquisition, reservations) = fixture();
+    let (_temp, manager, acquisition, reservations) = fixture().unwrap();
     let quote = manager.prepare_reasoning().unwrap();
     acquisition.cancel_first.store(true, Ordering::SeqCst);
     assert_eq!(
@@ -287,7 +310,7 @@ fn cancelled_runtime_download_cannot_start_reasoning_model_and_releases_reservat
 
 #[test]
 fn shutdown_seals_downloads_before_a_queued_background_task_can_register() {
-    let (_temp, manager, acquisition, reservations) = fixture();
+    let (_temp, manager, acquisition, reservations) = fixture().unwrap();
     let quote = manager.prepare_reasoning().unwrap();
     manager.cancel_all();
     assert_eq!(
@@ -305,7 +328,7 @@ fn shutdown_seals_downloads_before_a_queued_background_task_can_register() {
 
 #[test]
 fn invalid_signed_metadata_never_opens_a_download_or_advances_the_floor() {
-    let (_temp, mut manager, acquisition, _) = fixture();
+    let (_temp, mut manager, acquisition, _) = fixture().unwrap();
     Arc::get_mut(&mut manager).unwrap().fetcher =
         Arc::new(FakeFetcher("invalid.signed.catalog".into()));
     assert_eq!(
