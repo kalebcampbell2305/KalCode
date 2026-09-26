@@ -49,7 +49,8 @@ fn migrations_are_numbered_contiguously() {
             (15, "time_machine"),
             (16, "doctor"),
             (17, "utility_authority"),
-            (18, "context_delivery")
+            (18, "context_delivery"),
+            (19, "kalvoice_account_usage")
         ]
     );
 }
@@ -78,7 +79,7 @@ fn utility_timeline_doctor_upgrade_preserves_v13_data_and_reopens() {
                 .expect("diagnostics")
                 .database
                 .schema_version,
-            18
+            MIGRATIONS.last().expect("registered migrations").version
         );
         let tables: i64 = core
             .read(|conn| {
@@ -918,7 +919,8 @@ fn upgrade_v17_to_v18_backs_up_reopens_and_preserves_context_data() {
     }
 
     for _ in 0..2 {
-        let core = Core::open(config(dir.path())).expect("upgrade or reopen");
+        let core = Core::open_with_migrations(config(dir.path()), &MIGRATIONS[..18])
+            .expect("upgrade to v18 or reopen");
         assert_eq!(core.read(db::schema_version).expect("schema version"), 18);
         let settings = core.settings().expect("settings");
         assert_eq!(settings.theme, ThemePreference::Light);

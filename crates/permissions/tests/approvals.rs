@@ -1082,7 +1082,8 @@ fn migrations_keep_permissions_at_v4() {
             (15, "time_machine"),
             (16, "doctor"),
             (17, "utility_authority"),
-            (18, "context_delivery")
+            (18, "context_delivery"),
+            (19, "kalvoice_account_usage")
         ]
     );
 }
