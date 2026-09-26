@@ -4,3 +4,5 @@
 *.ico binary
 *.icns binary
 *.woff2 binary
+# Notices are SHA-256-pinned upstream bytes, including their original line endings.
+third_party/kalvoice-notices/*.txt -text
