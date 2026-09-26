@@ -561,6 +561,178 @@ fn unsigned_pointer_cannot_select_a_retained_older_signed_revision() {
 }
 
 #[test]
+fn explicit_install_retry_recovers_a_verified_revision_after_activation_failure() {
+    let temp = TempDir::new().expect("temp");
+    let key = signing_key(7);
+    let root = temp.path().join("store");
+    let store =
+        ComponentStore::new(test_directory(&root), verifier(&key), []).expect("component store");
+    let id = "kalvoice.reasoner.test";
+    let selection = selector(id, ComponentKind::Model);
+    let artifact = temp.path().join("model.gguf");
+    let first = b"revision one";
+    let second = b"revision two";
+    write(&artifact, first);
+    store
+        .install_from_file(
+            &token(&key, id, ComponentKind::Model, "1.0.0", 1, first),
+            &artifact,
+            NOW,
+        )
+        .expect("first install");
+
+    // Reproduce the exact publication/activation boundary without a production failpoint.
+    // The current pointer remains intact after the actual activation helper fails.
+    let track = store.track_dir(&selection);
+    let original_pointer = read_pointer(&track)
+        .expect("pointer read")
+        .expect("pointer");
+    write(&artifact, second);
+    let second_token = token(&key, id, ComponentKind::Model, "2.0.0", 2, second);
+    let candidate = verifier(&key)
+        .verify(&second_token, NOW)
+        .expect("signed candidate");
+    let revision = revision_name(candidate.manifest());
+    let staging = track.join(".staging-interrupted-install");
+    fs::create_dir(&staging).expect("staging");
+    store
+        .populate_staging(&second_token, &artifact, candidate.manifest(), &staging)
+        .expect("verified staged candidate");
+    fs::rename(&staging, track.join(&revision)).expect("publish revision");
+    let blocked_backup = track.join(POINTER_BACKUP);
+    fs::create_dir(&blocked_backup).expect("block pointer replacement");
+    assert!(matches!(
+        store.activate(&track, &revision, Some(original_pointer.current.clone())),
+        Err(ComponentStoreError::Storage(_))
+    ));
+    fs::remove_dir(&blocked_backup).expect("clear transient activation failure");
+    assert!(matches!(
+        store.acquire(&selection, NOW),
+        Err(ComponentStoreError::InvalidPointer)
+    ));
+    drop(store);
+
+    let reopened = ComponentStore::new(test_directory(&root), verifier(&key), [])
+        .expect("reopen component store");
+    // Recovery cannot adopt a different signed revision or different metadata for the same bytes.
+    for (version, sequence, bytes) in [
+        ("1.0.0", 1, first.as_slice()),
+        ("3.0.0", 3, second.as_slice()),
+        ("2.0.1", 2, second.as_slice()),
+    ] {
+        write(&artifact, bytes);
+        assert!(
+            reopened
+                .install_from_file(
+                    &token(&key, id, ComponentKind::Model, version, sequence, bytes),
+                    &artifact,
+                    NOW,
+                )
+                .is_err(),
+            "only the exact interrupted candidate may recover"
+        );
+    }
+    write(&artifact, second);
+    assert!(matches!(
+        reopened.install_from_file(&second_token, &artifact, NOW + 172_800),
+        Err(ComponentStoreError::Manifest(VerifyError::Expired))
+    ));
+    let wrong_platform = if test_host_platform() == ComponentPlatform::Windows {
+        ComponentPlatform::Macos
+    } else {
+        ComponentPlatform::Windows
+    };
+    let wrong_target = token_for_target(
+        &key,
+        id,
+        ComponentKind::Model,
+        "2.0.0",
+        2,
+        second,
+        wrong_platform,
+        test_host_arch(),
+    );
+    assert!(matches!(
+        reopened.install_from_file(&wrong_target, &artifact, NOW),
+        Err(ComponentStoreError::WrongTarget)
+    ));
+    let conflicting_bytes = b"conflicting revision two";
+    let conflicting_token = token(
+        &key,
+        id,
+        ComponentKind::Model,
+        "2.0.0",
+        2,
+        conflicting_bytes,
+    );
+    let conflicting_manifest = verifier(&key)
+        .verify(&conflicting_token, NOW)
+        .expect("signed conflict");
+    let conflicting_dir = track.join(revision_name(conflicting_manifest.manifest()));
+    fs::create_dir(&conflicting_dir).expect("conflicting revision");
+    write(&artifact, conflicting_bytes);
+    reopened
+        .populate_staging(
+            &conflicting_token,
+            &artifact,
+            conflicting_manifest.manifest(),
+            &conflicting_dir,
+        )
+        .expect("valid conflicting revision bytes");
+    write(&artifact, second);
+    assert!(matches!(
+        reopened.install_from_file(&second_token, &artifact, NOW),
+        Err(ComponentStoreError::InvalidPointer)
+    ));
+    fs::remove_dir_all(&conflicting_dir).expect("remove conflicting fixture");
+    // A valid source download cannot hide corruption of the retained candidate being activated.
+    let retained_model = track.join(&revision).join("model.gguf");
+    write(&retained_model, b"tampered two");
+    assert!(
+        reopened
+            .install_from_file(&second_token, &artifact, NOW)
+            .is_err()
+    );
+    write(&retained_model, second);
+    let receipt_path = track.join(&revision).join("receipt.json");
+    let receipt_bytes = fs::read(&receipt_path).expect("receipt bytes");
+    write(&receipt_path, b"{}");
+    assert!(
+        reopened
+            .install_from_file(&second_token, &artifact, NOW)
+            .is_err()
+    );
+    write(&receipt_path, &receipt_bytes);
+    assert_eq!(
+        read_pointer(&track)
+            .expect("pointer read")
+            .expect("pointer")
+            .current,
+        original_pointer.current
+    );
+    assert_eq!(
+        reopened.status(&selection, NOW),
+        ComponentReceiptStatus::Invalid
+    );
+    reopened
+        .install_from_file(&second_token, &artifact, NOW)
+        .expect("explicit authenticated retry repairs interrupted activation");
+    let lease = reopened
+        .acquire(&selection, NOW)
+        .expect("repaired component");
+    assert_eq!(lease.manifest().sequence, 2);
+    assert!(!lease.recovered_previous());
+    assert_eq!(
+        fs::read(lease.model_path().expect("model path")).expect("model"),
+        second
+    );
+    let pointer = read_pointer(&track)
+        .expect("pointer read")
+        .expect("pointer");
+    assert_eq!(pointer.previous, Some(original_pointer.current));
+}
+
+#[test]
 fn active_lease_blocks_component_deletion() {
     let temp = TempDir::new().expect("temp");
     let key = signing_key(7);

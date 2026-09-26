@@ -690,9 +690,31 @@ impl ComponentStore {
         selector: ComponentSelector,
         track: &Path,
     ) -> Result<InstalledComponent, ComponentStoreError> {
+        let revision_id = revision_name(candidate.manifest());
+        let final_dir = track.join(&revision_id);
         let current = match read_pointer(track)? {
             Some(pointer) => {
-                self.validate_pointer_against_revisions(track, &pointer, now_unix)?;
+                if pointer.current != revision_id
+                    && pointer.previous.as_deref() != Some(revision_id.as_str())
+                    && final_dir.exists()
+                {
+                    // Publication can succeed before pointer activation fails. Only an explicit
+                    // retry of that exact signed, intact candidate may finish the transition.
+                    // Ordinary loads still reject a stale pointer; the remaining signed revision
+                    // history must match it exactly, and forward authorization below still applies.
+                    let existing = self.verify_revision(&final_dir, now_unix)?;
+                    if existing.manifest != candidate {
+                        return Err(ComponentStoreError::InvalidReceipt);
+                    }
+                    self.validate_pointer_revision_history(
+                        track,
+                        &pointer,
+                        now_unix,
+                        Some(&revision_id),
+                    )?;
+                } else {
+                    self.validate_pointer_against_revisions(track, &pointer, now_unix)?;
+                }
                 let current = self.verify_revision(&track.join(pointer.current), now_unix)?;
                 Some(current)
             }
@@ -709,8 +731,6 @@ impl ComponentStore {
             return Err(ComponentStoreError::NotEnoughSpace);
         }
 
-        let revision_id = revision_name(candidate.manifest());
-        let final_dir = track.join(&revision_id);
         if final_dir.exists() {
             let existing = self.verify_revision(&final_dir, now_unix)?;
             if existing.manifest != candidate {
@@ -876,6 +896,16 @@ impl ComponentStore {
         pointer: &Pointer,
         now_unix: i64,
     ) -> Result<(), ComponentStoreError> {
+        self.validate_pointer_revision_history(track, pointer, now_unix, None)
+    }
+
+    fn validate_pointer_revision_history(
+        &self,
+        track: &Path,
+        pointer: &Pointer,
+        now_unix: i64,
+        interrupted_candidate: Option<&str>,
+    ) -> Result<(), ComponentStoreError> {
         let mut revisions = Vec::new();
         for entry in fs::read_dir(track).map_err(storage)? {
             let entry = entry.map_err(storage)?;
@@ -887,7 +917,7 @@ impl ComponentStore {
                 .to_str()
                 .ok_or(ComponentStoreError::InvalidPointer)?
                 .to_owned();
-            if name.starts_with(".staging-") {
+            if name.starts_with(".staging-") || interrupted_candidate == Some(name.as_str()) {
                 continue;
             }
             if !valid_revision_name(&name) {
