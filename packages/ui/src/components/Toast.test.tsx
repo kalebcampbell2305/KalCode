@@ -1,0 +1,118 @@
+import { act, cleanup, fireEvent, renderHook, screen } from "@testing-library/react";
+import { type ReactNode, StrictMode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ToastProvider, useToast } from "./Toast.tsx";
+
+function wrapper({ children }: { children: ReactNode }) {
+  return (
+    <StrictMode>
+      <ToastProvider>
+        <button type="button">Outside the toast</button>
+        {children}
+      </ToastProvider>
+    </StrictMode>
+  );
+}
+
+function advance(ms: number) {
+  act(() => vi.advanceTimersByTime(ms));
+}
+
+beforeEach(() => vi.useFakeTimers());
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
+
+describe("ToastProvider", () => {
+  it("keeps a focused toast alive and resumes only its remaining duration after focus leaves", () => {
+    const { result } = renderHook(useToast, { wrapper });
+    act(() => result.current.show({ title: "Saved" }));
+    advance(1000);
+    const dismiss = screen.getByRole("button", { name: "Dismiss notification" });
+    act(() => dismiss.focus());
+    advance(10_000);
+    expect(dismiss).toHaveFocus();
+    expect(screen.getByText("Saved")).toBeInTheDocument();
+
+    act(() => screen.getByRole("button", { name: "Outside the toast" }).focus());
+    advance(3499);
+    expect(screen.getByText("Saved")).toBeInTheDocument();
+    advance(1);
+    expect(screen.queryByText("Saved")).not.toBeInTheDocument();
+  });
+
+  it.each(["info", "success"] as const)("expires an unfocused %s toast normally", (tone) => {
+    const { result } = renderHook(useToast, { wrapper });
+    act(() => result.current.show({ title: "Finished", tone }));
+    advance(4499);
+    expect(screen.getByText("Finished")).toBeInTheDocument();
+    advance(1);
+    expect(screen.queryByText("Finished")).not.toBeInTheDocument();
+  });
+
+  it("supports repeated focus pauses without extending the original remaining duration", () => {
+    const { result } = renderHook(useToast, { wrapper });
+    act(() => result.current.show({ title: "Finished", duration: 2000 }));
+    const dismiss = screen.getByRole("button", { name: "Dismiss notification" });
+    const outside = screen.getByRole("button", { name: "Outside the toast" });
+    advance(500);
+    act(() => dismiss.focus());
+    advance(3000);
+    act(() => outside.focus());
+    advance(500);
+    act(() => dismiss.focus());
+    advance(3000);
+    expect(dismiss).toHaveFocus();
+    act(() => outside.focus());
+    advance(999);
+    expect(screen.getByText("Finished")).toBeInTheDocument();
+    advance(1);
+    expect(screen.queryByText("Finished")).not.toBeInTheDocument();
+  });
+
+  it("still lets the person manually dismiss a paused toast", () => {
+    const { result } = renderHook(useToast, { wrapper });
+    act(() => result.current.show({ title: "Saved" }));
+    const dismiss = screen.getByRole("button", { name: "Dismiss notification" });
+    act(() => dismiss.focus());
+    fireEvent.click(dismiss);
+    expect(screen.queryByText("Saved")).not.toBeInTheDocument();
+    advance(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("clears an evicted toast's timer while retaining the newest four toasts", () => {
+    const { result } = renderHook(useToast, { wrapper });
+    act(() => {
+      for (let n = 1; n <= 4; n++) result.current.show({ title: `Notice ${n}`, duration: 20_000 });
+    });
+    act(() => result.current.show({ title: "Notice 5", duration: 20_000 }));
+    expect(screen.queryByText("Notice 1")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Dismiss notification" })).toHaveLength(4);
+    expect(vi.getTimerCount()).toBe(4);
+    advance(20_000);
+    expect(screen.queryByText("Notice 5")).not.toBeInTheDocument();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("clears both running and paused toast timers when unmounted", () => {
+    const { result, unmount } = renderHook(useToast, { wrapper });
+    act(() => result.current.show({ title: "Paused" }));
+    act(() => screen.getByRole("button", { name: "Dismiss notification" }).focus());
+    act(() => result.current.show({ title: "Running" }));
+    unmount();
+    advance(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps default error toasts persistent after focus leaves", () => {
+    const { result } = renderHook(useToast, { wrapper });
+    act(() => result.current.show({ title: "Save failed", tone: "danger" }));
+    act(() => screen.getByRole("button", { name: "Dismiss notification" }).focus());
+    act(() => screen.getByRole("button", { name: "Outside the toast" }).focus());
+    advance(30_000);
+    expect(screen.getByText("Save failed")).toBeInTheDocument();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
