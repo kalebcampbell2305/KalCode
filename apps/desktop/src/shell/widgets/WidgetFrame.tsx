@@ -47,6 +47,7 @@ export function WidgetFrame({ widget, height, index, total, onMove, onHide, onRe
   const Body = widget.Body;
   const Icon = widget.icon;
   const [dragging, setDragging] = useState(false);
+  const dragActive = useRef(false);
   const [resizing, setResizing] = useState(false);
   const resizeStart = useRef<{ y: number; height: number } | null>(null);
   const handleId = `${widget.anchor}-move-hint`;
@@ -75,14 +76,17 @@ export function WidgetFrame({ widget, height, index, total, onMove, onHide, onRe
   const onHandleDown = (event: PointerEvent<HTMLButtonElement>) => {
     if (event.button !== 0) return;
     event.currentTarget.setPointerCapture(event.pointerId);
+    dragActive.current = true;
     setDragging(true);
   };
   const onHandleMove = (event: PointerEvent<HTMLButtonElement>) => {
-    if (!dragging) return;
+    if (!dragActive.current) return;
     const target = indexAt(event.clientY);
     if (target !== index) onMove(target);
   };
   const onHandleUp = (event: PointerEvent<HTMLButtonElement>) => {
+    // Capture loss and the following pointer move can arrive before React commits state.
+    dragActive.current = false;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }

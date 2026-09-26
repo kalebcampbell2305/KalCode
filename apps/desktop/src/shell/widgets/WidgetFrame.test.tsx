@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { Activity } from "lucide-react";
 import { describe, expect, it, vi } from "vitest";
 import type { WidgetDefinition } from "./registry.tsx";
@@ -58,8 +58,10 @@ describe("WidgetFrame pointer lifecycle", () => {
     pointer(handle, "pointermove");
     expect(onMove).toHaveBeenCalledWith(1);
     onMove.mockClear();
-    pointer(handle, "lostpointercapture");
-    pointer(handle, "pointermove");
+    act(() => {
+      pointer(handle, "lostpointercapture");
+      pointer(handle, "pointermove");
+    });
     expect(onMove).not.toHaveBeenCalled();
     expect(frame).not.toHaveAttribute("data-dragging");
   });
