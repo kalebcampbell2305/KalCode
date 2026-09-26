@@ -1,6 +1,7 @@
 // Tests for check-capabilities.mjs: runs the checker against copies of the real desktop app's
 // build.rs, lib.rs and capability files, each mutated to one way a grant could widen.
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -140,6 +141,28 @@ test("main.json must stay on the main webview and local content", () => {
 });
 
 for (const file of ["capabilities/main.json", "test-capabilities/test-hooks.json"]) {
+  for (const value of [null, false, 0, "", true, 1, "capability", []]) {
+    test(`${file} rejects non-object JSON ${JSON.stringify(value)}`, () => {
+      const root = fixture();
+      writeJson(join(root, file), value);
+      assert.deepEqual(problemsOf(root), [`${file}: must be a JSON object`]);
+    });
+  }
+  test(`${file} preserves invalid-JSON diagnostics`, () => {
+    const root = fixture();
+    writeFileSync(join(root, file), "{broken");
+    const problems = problemsOf(root);
+    assert.equal(problems.length, 1);
+    assert.ok(problems[0].startsWith(`${file}: not valid JSON (`));
+  });
+  test(`${file} makes the CLI fail for a null capability`, () => {
+    const root = cliFixture();
+    writeJson(join(root, "apps/desktop/src-tauri", file), null);
+    const result = runCli(root);
+    assert.equal(result.status, 1);
+    assert.equal(result.stdout, "");
+    assert.equal(result.stderr.trim(), `Capability check failed:\n- ${file}: must be a JSON object`);
+  });
   test(`${file} rejects window-wide grants even with a main webview selector`, () => {
     const root = fixture();
     const path = join(root, file);
@@ -161,3 +184,34 @@ for (const file of ["capabilities/main.json", "test-capabilities/test-hooks.json
     }
   });
 }
+
+/** Exercise the real executable entry point without modifying repository inputs. */
+function cliFixture() {
+  const root = mkdtempSync(join(tmpdir(), "kalcode-capcheck-cli-"));
+  temps.push(root);
+  mkdirSync(join(root, "tooling"));
+  cpSync(
+    fileURLToPath(new URL("./check-capabilities.mjs", import.meta.url)),
+    join(root, "tooling/check-capabilities.mjs"),
+  );
+  mkdirSync(join(root, "apps/desktop"), { recursive: true });
+  cpSync(fixture(), join(root, "apps/desktop/src-tauri"), { recursive: true });
+  return root;
+}
+
+function runCli(root) {
+  const result = spawnSync(process.execPath, [join(root, "tooling/check-capabilities.mjs")], { encoding: "utf8" });
+  assert.ifError(result.error);
+  return result;
+}
+
+test("the CLI preserves successful capability counts and exit status", () => {
+  const result = runCli(cliFixture());
+  const { commands, testCommands } = checkCapabilities(real);
+  assert.equal(result.status, 0);
+  assert.equal(result.stderr, "");
+  assert.equal(
+    result.stdout.trim(),
+    `Capability check passed: ${commands.length} commands, ${testCommands.length} test hooks (debug/e2e only), 2 core permissions.`,
+  );
+});

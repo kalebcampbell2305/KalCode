@@ -42,7 +42,12 @@ function commandList(buildRs, name) {
 
 function parseJson(path, problems, label) {
   try {
-    return JSON.parse(readFileSync(path, "utf8"));
+    const capability = JSON.parse(readFileSync(path, "utf8"));
+    if (capability === null || typeof capability !== "object" || Array.isArray(capability)) {
+      problems.push(`${label}: must be a JSON object`);
+      return null;
+    }
+    return capability;
   } catch (error) {
     problems.push(`${label}: not valid JSON (${error.message})`);
     return null;
