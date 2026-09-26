@@ -73,7 +73,17 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const requestFocus = useCallback((terminalId: string) => setFocusRequest((f) => ({ terminalId, n: f.n + 1 })), []);
   const lastSize = useRef<TerminalSize>({ cols: 120, rows: 30 });
   const lifecycle = useMemo(
-    () => ({ client, mounted: false, epoch: 0, pickers: 0, generation: 0, activation: 0, tail: Promise.resolve() }),
+    () => ({
+      client,
+      mounted: false,
+      epoch: 0,
+      pickers: 0,
+      generation: 0,
+      activation: 0,
+      focusIntent: 0,
+      workspaceId: null as string | null,
+      tail: Promise.resolve(),
+    }),
     [client],
   );
   const currentLifecycle = useRef(lifecycle);
@@ -112,6 +122,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     const terminals = active ? await client.listTerminals(active.id) : [];
     // A slower, older refresh must never overwrite a newer one.
     if (!isCurrent() || id !== lifecycle.generation) return;
+    if (lifecycle.workspaceId !== (active?.id ?? null)) lifecycle.focusIntent += 1;
+    lifecycle.workspaceId = active?.id ?? null;
     setSnapshot({ workspaces, active, terminals, running });
   }, [client, lifecycle, isCurrent]);
 
@@ -215,6 +227,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const activate = useCallback(
     async (workspaceId: string) => {
       if (!isCurrent()) return false;
+      lifecycle.focusIntent += 1;
       const id = ++lifecycle.activation;
       const latest = () => isCurrent() && id === lifecycle.activation;
       // Native writes cannot be undone by a UI generation check. Finish the dispatched
@@ -268,31 +281,37 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const selectTerminal = useCallback(
     (terminalId: string, focus = false, workspaceId: string | undefined = active?.id) => {
       if (!isCurrent() || !workspaceId) return;
+      lifecycle.focusIntent += 1;
       setSelected({ workspaceId, terminalId });
       if (focus) requestFocus(terminalId);
       // Remembered natively so the same tab is in front after a restart.
       client.setActiveTerminal(workspaceId, terminalId).catch(() => undefined);
     },
-    [client, active, requestFocus, isCurrent],
+    [client, active, requestFocus, isCurrent, lifecycle],
   );
 
   const createTerminal = useCallback(
     async (shellId: string | null = null) => {
       const current = captureLifetime();
       if (!current() || !active) return null;
+      const intent = ++lifecycle.focusIntent;
+      const mayFocus = () => current() && intent === lifecycle.focusIntent && lifecycle.workspaceId === active.id;
       try {
         const terminal = await client.createTerminal(active.id, shellId, lastSize.current);
         if (!current()) return null;
+        // Keep the native session visible in history without overriding a newer
+        // workspace or terminal choice while creation/refresh was pending.
+        await refresh();
+        if (!mayFocus()) return null;
         setSelected({ workspaceId: active.id, terminalId: terminal.id });
         requestFocus(terminal.id);
-        await refresh();
-        return current() ? terminal : null;
+        return terminal;
       } catch (err) {
-        if (current()) fail("Couldn't start a terminal", err);
+        if (mayFocus()) fail("Couldn't start a terminal", err);
         return null;
       }
     },
-    [client, active, refresh, fail, requestFocus, captureLifetime],
+    [client, active, refresh, fail, requestFocus, captureLifetime, lifecycle],
   );
 
   const closeTerminal = useCallback(
@@ -301,7 +320,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       if (!current()) return;
       // The neighbouring tab comes to the front when the tab in front closes.
       const next = neighbourAfterClose(snapshot.terminals, terminalId);
-      if (active && terminalId === activeTerminalId && next) setSelected({ workspaceId: active.id, terminalId: next });
+      if (active && terminalId === activeTerminalId && next) {
+        lifecycle.focusIntent += 1;
+        setSelected({ workspaceId: active.id, terminalId: next });
+      }
       try {
         await client.closeTerminal(terminalId);
       } catch (err) {
@@ -309,25 +331,28 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       }
       if (current()) await refresh();
     },
-    [client, refresh, fail, snapshot.terminals, active, activeTerminalId, captureLifetime],
+    [client, refresh, fail, snapshot.terminals, active, activeTerminalId, captureLifetime, lifecycle],
   );
 
   const restartTerminal = useCallback(
     async (terminalId: string) => {
       const current = captureLifetime();
       if (!current()) return null;
+      const intent = ++lifecycle.focusIntent;
+      const mayFocus = () => current() && intent === lifecycle.focusIntent;
       try {
         const terminal = await client.restartTerminal(terminalId, lastSize.current);
         if (!current()) return null;
-        requestFocus(terminal.id);
         await refresh();
-        return current() ? terminal : null;
+        if (!mayFocus() || lifecycle.workspaceId !== terminal.workspaceId) return null;
+        requestFocus(terminal.id);
+        return terminal;
       } catch (err) {
-        if (current()) fail("Couldn't restart the terminal", err);
+        if (mayFocus()) fail("Couldn't restart the terminal", err);
         return null;
       }
     },
-    [client, refresh, fail, requestFocus, captureLifetime],
+    [client, refresh, fail, requestFocus, captureLifetime, lifecycle],
   );
 
   const retry = useCallback(() => {

@@ -126,6 +126,231 @@ async function mount(initial: Awaited<ReturnType<typeof fixture>>, ready = true)
 }
 
 describe("WorkspaceProvider lifecycle", () => {
+  it("keeps the latest of two creations focused without closing the earlier native session", async () => {
+    const f = await fixture("old");
+    const a = deferred<TerminalInfo>();
+    const b = deferred<TerminalInfo>();
+    const sessions: TerminalInfo[] = [];
+    mockActions(f.client);
+    vi.mocked(f.client.createTerminal)
+      .mockImplementationOnce(async () => {
+        const created = await a.promise;
+        sessions.push(created);
+        return created;
+      })
+      .mockImplementationOnce(async () => {
+        const created = await b.promise;
+        sessions.push(created);
+        return created;
+      });
+    vi.mocked(f.client.listTerminals).mockImplementation(async () => [...sessions]);
+    const view = await mount(f);
+    let first!: Promise<TerminalInfo | null>;
+    let second!: Promise<TerminalInfo | null>;
+    act(() => {
+      first = view.result.current.createTerminal();
+      second = view.result.current.createTerminal();
+    });
+    await act(async () => {
+      b.resolve({ ...terminal, id: "second" });
+      await second;
+    });
+    await act(async () => {
+      a.resolve({ ...terminal, id: "first" });
+      await first;
+    });
+    expect(await first).toBeNull();
+    expect((await second)?.id).toBe("second");
+    expect(view.result.current.activeTerminalId).toBe("second");
+    expect(view.result.current.focusRequest.terminalId).toBe("second");
+    expect(view.result.current.terminals).toHaveLength(2);
+    expect(f.client.closeTerminal).not.toHaveBeenCalled();
+  });
+
+  it("preserves explicit workspace selection while activation has not rendered", async () => {
+    const f = await fixture("old");
+    mockActions(f.client);
+    const gate = deferred<Workspace>();
+    vi.spyOn(f.client, "activateWorkspace").mockImplementation(async () => {
+      f.native.active = await gate.promise;
+      return f.native.active;
+    });
+    const view = await mount(f);
+    let pending!: Promise<boolean>;
+    act(() => {
+      pending = view.result.current.activate("next");
+    });
+    act(() => view.result.current.selectTerminal("target", true, "next"));
+    expect(f.client.setActiveTerminal).toHaveBeenCalledWith("next", "target");
+    expect(view.result.current.focusRequest.terminalId).toBe("target");
+    await act(async () => {
+      gate.resolve(workspace("next"));
+      await pending;
+    });
+    expect(view.result.current.focusRequest.terminalId).toBe("target");
+  });
+
+  it.each(["createTerminal", "restartTerminal"] as const)(
+    "does not supersede current %s focus on an ordinary refresh",
+    async (action) => {
+      const f = await fixture("old");
+      const gate = deferred<void>();
+      mockActions(f.client, gate.promise);
+      const view = await mount(f);
+      let pending!: ReturnType<typeof dispatch>;
+      act(() => {
+        pending = dispatch(view.result.current, action);
+      });
+      await act(async () => {
+        await view.result.current.refresh();
+      });
+      let result: unknown;
+      await act(async () => {
+        gate.resolve();
+        result = await pending;
+      });
+      expect(result).toEqual(terminal);
+      expect(view.result.current.focusRequest.terminalId).toBe(terminal.id);
+    },
+  );
+
+  it.each(["createTerminal", "restartTerminal"] as const)(
+    "does not leave a latent focus request after an external workspace change during %s",
+    async (action) => {
+      const f = await fixture("old");
+      const gate = deferred<void>();
+      mockActions(f.client, gate.promise);
+      const view = await mount(f);
+      let pending!: ReturnType<typeof dispatch>;
+      act(() => {
+        pending = dispatch(view.result.current, action);
+      });
+      f.native.active = workspace("next");
+      await act(async () => {
+        await view.result.current.refresh();
+      });
+      await act(async () => {
+        gate.resolve();
+        expect(await pending).toBeNull();
+      });
+      f.native.active = workspace("old");
+      await act(async () => {
+        await view.result.current.refresh();
+      });
+      expect(view.result.current.focusRequest.terminalId).toBe("");
+    },
+  );
+
+  it.each(["createTerminal", "restartTerminal"] as const)(
+    "preserves a later non-focusing pane selection during %s",
+    async (action) => {
+      const f = await fixture("old");
+      const gate = deferred<void>();
+      mockActions(f.client, gate.promise);
+      vi.mocked(f.client.listTerminals).mockResolvedValue([{ ...terminal, id: "chosen" }, terminal]);
+      const view = await mount(f);
+      let pending!: ReturnType<typeof dispatch>;
+      act(() => {
+        pending = dispatch(view.result.current, action);
+      });
+      act(() => view.result.current.selectTerminal("chosen", false));
+      await act(async () => {
+        gate.resolve();
+        expect(await pending).toBeNull();
+      });
+      expect(view.result.current.activeTerminalId).toBe("chosen");
+      expect(view.result.current.focusRequest.terminalId).toBe("");
+    },
+  );
+
+  it("preserves the neighbour selected by close while creation is pending", async () => {
+    const f = await fixture("old");
+    f.native.active.activeTerminalId = "closing";
+    const gate = deferred<void>();
+    mockActions(f.client, gate.promise);
+    vi.mocked(f.client.closeTerminal).mockResolvedValue(undefined);
+    vi.mocked(f.client.listTerminals).mockResolvedValue([
+      { ...terminal, id: "closing" },
+      { ...terminal, id: "neighbour" },
+      terminal,
+    ]);
+    const view = await mount(f);
+    let pending!: Promise<TerminalInfo | null>;
+    act(() => {
+      pending = view.result.current.createTerminal();
+    });
+    await act(async () => {
+      await view.result.current.closeTerminal("closing");
+    });
+    let result: TerminalInfo | null = terminal;
+    await act(async () => {
+      gate.resolve();
+      result = await pending;
+    });
+    expect(result).toBeNull();
+    expect(view.result.current.activeTerminalId).toBe("neighbour");
+    expect(view.result.current.focusRequest.terminalId).toBe("");
+    expect(f.client.closeTerminal).toHaveBeenCalledExactlyOnceWith("closing");
+  });
+
+  it.each(["createTerminal", "restartTerminal"] as const)(
+    "keeps a newer terminal selection when pending %s completes",
+    async (action) => {
+      const f = await fixture("old");
+      const gate = deferred<void>();
+      const calls = mockActions(f.client, gate.promise);
+      const chosen = { ...terminal, id: "chosen" };
+      vi.mocked(f.client.listTerminals).mockResolvedValue([chosen, terminal]);
+      const view = await mount(f);
+      let pending!: ReturnType<typeof dispatch>;
+      act(() => {
+        pending = dispatch(view.result.current, action);
+      });
+      act(() => view.result.current.selectTerminal("chosen", true));
+      let result: unknown;
+      await act(async () => {
+        gate.resolve();
+        result = await pending;
+      });
+      expect(result).toBeNull();
+      expect(view.result.current.activeTerminalId).toBe("chosen");
+      expect(view.result.current.focusRequest.terminalId).toBe("chosen");
+      expect(f.client.closeTerminal).not.toHaveBeenCalled();
+      expect(calls[action === "createTerminal" ? 1 : 2]).toHaveBeenCalledTimes(1);
+      expect(view.result.current.terminals).toContainEqual(terminal);
+    },
+  );
+
+  it.each(["createTerminal", "restartTerminal"] as const)(
+    "does not focus the old workspace when pending %s completes after activation",
+    async (action) => {
+      const f = await fixture("old");
+      const gate = deferred<void>();
+      mockActions(f.client, gate.promise);
+      vi.spyOn(f.client, "activateWorkspace").mockImplementation(async (id) => {
+        f.native.active = workspace(id);
+        return f.native.active;
+      });
+      const view = await mount(f);
+      let pending!: ReturnType<typeof dispatch>;
+      act(() => {
+        pending = dispatch(view.result.current, action);
+      });
+      await act(async () => {
+        expect(await view.result.current.activate("new")).toBe(true);
+      });
+      let result: unknown;
+      await act(async () => {
+        gate.resolve();
+        result = await pending;
+      });
+      expect(result).toBeNull();
+      expect(view.result.current.active?.id).toBe("new");
+      expect(view.result.current.focusRequest.terminalId).toBe("");
+      expect(f.client.closeTerminal).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not revive an old action when effects reconnect on the same client", async () => {
     const f = await fixture("old");
     const gate = deferred<void>();
