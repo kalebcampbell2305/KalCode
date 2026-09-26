@@ -50,10 +50,14 @@ export function ProfileSettings() {
   useEffect(() => {
     lifetime.active = true;
     lifetime.epoch += 1;
+    // Reconnection starts a new confirmation lifetime; the previous expiry was
+    // canceled by cleanup. Keep the draft and persisted value intact.
+    setForm((current) => (current.owner === lifetime && current.done ? { ...current, done: false } : current));
     return () => {
       lifetime.active = false;
       lifetime.pending = null;
       if (lifetime.timer) clearTimeout(lifetime.timer);
+      lifetime.timer = null;
     };
   }, [lifetime]);
   useEffect(() => {

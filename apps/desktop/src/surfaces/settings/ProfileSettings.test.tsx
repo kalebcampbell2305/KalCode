@@ -1,6 +1,7 @@
 import type { Settings } from "@kalcode/protocol";
 import { ToastProvider } from "@kalcode/ui/components";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { Activity, StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { KalCodeClient } from "../../ipc/client.ts";
 import { createMemoryTransport } from "../../ipc/memoryTransport.ts";
@@ -39,6 +40,50 @@ function edit(value: string) {
 afterEach(() => vi.useRealTimers());
 
 describe("profile persistence", () => {
+  it("retires confirmation on Activity reconnect and gives a fresh save its own expiry", async () => {
+    const runtime = await fixture();
+    const activityTree = (visible: boolean) => (
+      <StrictMode>
+        <ToastProvider>
+          <RuntimeProvider client={runtime.client} info={runtime.boot.info} initialSettings={runtime.settings}>
+            <Activity mode={visible ? "visible" : "hidden"}>
+              <ProfileSettings />
+            </Activity>
+          </RuntimeProvider>
+        </ToastProvider>
+      </StrictMode>
+    );
+    const view = render(activityTree(true));
+    vi.useFakeTimers();
+    await act(async () => {
+      edit("Bob");
+      fireEvent.click(save());
+    });
+    expect(screen.getByText("Saved")).toBeVisible();
+    view.rerender(activityTree(false));
+    view.rerender(activityTree(true));
+    expect(input()).toHaveValue("Bob");
+    act(() => vi.advanceTimersByTime(2200));
+    expect(screen.queryByText("Saved")).toBeNull();
+    await act(async () => {
+      edit("Carol");
+      fireEvent.click(save());
+    });
+    expect(screen.getByText("Saved")).toBeVisible();
+    act(() => vi.advanceTimersByTime(1999));
+    expect(screen.getByText("Saved")).toBeVisible();
+    act(() => vi.advanceTimersByTime(1));
+    expect(screen.queryByText("Saved")).toBeNull();
+    expect(input()).toHaveValue("Carol");
+    expect((await runtime.client.getSettings()).displayName).toBe("Carol");
+    edit("Unsaved draft");
+    view.rerender(activityTree(false));
+    view.rerender(activityTree(true));
+    expect(input()).toHaveValue("Unsaved draft");
+    expect(save()).toBeEnabled();
+    expect((await runtime.client.getSettings()).displayName).toBe("Carol");
+  });
+
   it("does not announce success after a failed write, and retains the draft for retry", async () => {
     const runtime = await fixture();
     vi.spyOn(runtime.client, "updateSettings").mockRejectedValueOnce(new Error("Disk full"));
