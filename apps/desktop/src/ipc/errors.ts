@@ -60,9 +60,12 @@ export const COMMAND_UNAVAILABLE = "command_unavailable";
  * "Command <name> not found" when no app manifest is present.
  */
 function isUnregisteredCommand(error: unknown, command: string): boolean {
-  if (typeof error !== "string") return false;
-  if (!error.includes(command)) return false;
-  return /not allowed|not found/i.test(error);
+  // Match the whole rejection: argument diagnostics can contain the command name and these words.
+  return (
+    error === `Command ${command} not allowed by ACL` ||
+    error === `${command} not allowed. Command not found` ||
+    error === `Command ${command} not found`
+  );
 }
 
 export function isCommandUnavailable(error: unknown): boolean {
