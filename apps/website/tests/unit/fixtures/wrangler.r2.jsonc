@@ -4,5 +4,8 @@
   // semantics (head, ranged get, httpEtag) without the rest of the site.
   "name": "kalcode-website-downloads-test",
   "compatibility_date": "2026-09-21",
-  "r2_buckets": [{ "binding": "RELEASES", "bucket_name": "kalcode-releases" }]
+  "r2_buckets": [{ "binding": "RELEASES", "bucket_name": "kalcode-releases" }],
+  "d1_databases": [
+    { "binding": "DB", "database_name": "release-test", "database_id": "00000000-0000-0000-0000-000000000000" }
+  ]
 }

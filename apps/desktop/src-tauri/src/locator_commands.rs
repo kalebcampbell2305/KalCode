@@ -166,17 +166,21 @@ impl LocatorState {
 }
 
 async fn blocking<T: Send + 'static>(
+    access: crate::runtime_coordinator::RuntimeAccess,
     command: &'static str,
     work: impl FnOnce() -> Result<T, KalError> + Send + 'static,
 ) -> Result<T, IpcError> {
-    tauri::async_runtime::spawn_blocking(work)
-        .await
-        .map_err(|e| {
-            KalError::internal("interrupted", "That was interrupted. Try again.")
-                .with_source(e)
-                .log_and_convert(command)
-        })?
-        .map_err(|e| e.log_and_convert(command))
+    tauri::async_runtime::spawn_blocking(move || {
+        access.revalidate_core()?;
+        work()
+    })
+    .await
+    .map_err(|e| {
+        KalError::internal("interrupted", "That was interrupted. Try again.")
+            .with_source(e)
+            .log_and_convert(command)
+    })?
+    .map_err(|e| e.log_and_convert(command))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -185,11 +189,16 @@ async fn blocking<T: Send + 'static>(
 
 #[tauri::command(async)]
 pub async fn locator_search(
-    locator: State<'_, LocatorState>,
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    locator: crate::runtime_coordinator::RuntimeState<LocatorState>,
     query: LocatorQuery,
 ) -> Result<LocatorResponse, IpcError> {
+    _runtime_access.revalidate()?;
     let locator = Arc::clone(locator.locator()?);
-    blocking("locator_search", move || locator.search(&query)).await
+    blocking(_runtime_access, "locator_search", move || {
+        locator.search(&query)
+    })
+    .await
 }
 
 #[derive(Debug, Deserialize)]
@@ -202,11 +211,13 @@ pub struct LocatorOpenArgs {
 
 #[tauri::command(async)]
 pub async fn locator_open(
-    locator: State<'_, LocatorState>,
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    locator: crate::runtime_coordinator::RuntimeState<LocatorState>,
     args: LocatorOpenArgs,
 ) -> Result<LocatorOpenTarget, IpcError> {
+    _runtime_access.revalidate()?;
     let locator = Arc::clone(locator.locator()?);
-    blocking("locator_open", move || {
+    blocking(_runtime_access, "locator_open", move || {
         locator.open(args.kind, &args.entity_id, args.via)
     })
     .await
@@ -217,28 +228,39 @@ pub async fn locator_open(
 // ---------------------------------------------------------------------------------------------
 
 #[tauri::command(async)]
-pub async fn rail_state(locator: State<'_, LocatorState>) -> Result<RailState, IpcError> {
+pub async fn rail_state(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    locator: crate::runtime_coordinator::RuntimeState<LocatorState>,
+) -> Result<RailState, IpcError> {
+    _runtime_access.revalidate()?;
     let locator = Arc::clone(locator.locator()?);
-    blocking("rail_state", move || locator.rail_state()).await
+    blocking(_runtime_access, "rail_state", move || locator.rail_state()).await
 }
 
 #[tauri::command(async)]
 pub async fn rail_update(
-    locator: State<'_, LocatorState>,
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    locator: crate::runtime_coordinator::RuntimeState<LocatorState>,
     update: RailUpdate,
 ) -> Result<WorkspaceRailEntry, IpcError> {
+    _runtime_access.revalidate()?;
     let locator = Arc::clone(locator.locator()?);
-    blocking("rail_update", move || locator.rail_update(&update)).await
+    blocking(_runtime_access, "rail_update", move || {
+        locator.rail_update(&update)
+    })
+    .await
 }
 
 #[tauri::command(async)]
 pub async fn rail_section_set(
-    locator: State<'_, LocatorState>,
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    locator: crate::runtime_coordinator::RuntimeState<LocatorState>,
     section: RailSection,
     collapsed: bool,
 ) -> Result<RailState, IpcError> {
+    _runtime_access.revalidate()?;
     let locator = Arc::clone(locator.locator()?);
-    blocking("rail_section_set", move || {
+    blocking(_runtime_access, "rail_section_set", move || {
         locator.set_section_collapsed(section, collapsed)
     })
     .await
@@ -246,22 +268,29 @@ pub async fn rail_section_set(
 
 #[tauri::command(async)]
 pub async fn rail_group_create(
-    locator: State<'_, LocatorState>,
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    locator: crate::runtime_coordinator::RuntimeState<LocatorState>,
     name: String,
 ) -> Result<WorkspaceGroup, IpcError> {
+    _runtime_access.revalidate()?;
     let locator = Arc::clone(locator.locator()?);
-    blocking("rail_group_create", move || locator.group_create(&name)).await
+    blocking(_runtime_access, "rail_group_create", move || {
+        locator.group_create(&name)
+    })
+    .await
 }
 
 #[tauri::command(async)]
 pub async fn rail_group_update(
-    locator: State<'_, LocatorState>,
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    locator: crate::runtime_coordinator::RuntimeState<LocatorState>,
     id: String,
     name: Option<String>,
     collapsed: Option<bool>,
 ) -> Result<WorkspaceGroup, IpcError> {
+    _runtime_access.revalidate()?;
     let locator = Arc::clone(locator.locator()?);
-    blocking("rail_group_update", move || {
+    blocking(_runtime_access, "rail_group_update", move || {
         locator.group_update(&id, name.as_deref(), collapsed)
     })
     .await
@@ -269,23 +298,33 @@ pub async fn rail_group_update(
 
 #[tauri::command(async)]
 pub async fn rail_group_delete(
-    locator: State<'_, LocatorState>,
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    locator: crate::runtime_coordinator::RuntimeState<LocatorState>,
     id: String,
 ) -> Result<(), IpcError> {
+    _runtime_access.revalidate()?;
     let locator = Arc::clone(locator.locator()?);
-    blocking("rail_group_delete", move || locator.group_delete(&id)).await
+    blocking(_runtime_access, "rail_group_delete", move || {
+        locator.group_delete(&id)
+    })
+    .await
 }
 
 #[tauri::command(async)]
 pub async fn rail_group_reorder(
-    locator: State<'_, LocatorState>,
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    locator: crate::runtime_coordinator::RuntimeState<LocatorState>,
     ids: Vec<String>,
 ) -> Result<Vec<WorkspaceGroup>, IpcError> {
+    _runtime_access.revalidate()?;
     if ids.len() > kalcode_locator::rail::MAX_GROUPS {
         return Err(KalError::validation("too_many_groups", "Too many folders.").to_ipc());
     }
     let locator = Arc::clone(locator.locator()?);
-    blocking("rail_group_reorder", move || locator.group_reorder(&ids)).await
+    blocking(_runtime_access, "rail_group_reorder", move || {
+        locator.group_reorder(&ids)
+    })
+    .await
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -294,12 +333,14 @@ pub async fn rail_group_reorder(
 
 #[tauri::command(async)]
 pub async fn home_summary(
-    locator: State<'_, LocatorState>,
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    locator: crate::runtime_coordinator::RuntimeState<LocatorState>,
     local_hour: u8,
     visit: bool,
 ) -> Result<HomeSummary, IpcError> {
+    _runtime_access.revalidate()?;
     let locator = Arc::clone(locator.locator()?);
-    blocking("home_summary", move || {
+    blocking(_runtime_access, "home_summary", move || {
         locator.home_summary(local_hour, visit)
     })
     .await
@@ -307,13 +348,15 @@ pub async fn home_summary(
 
 #[tauri::command(async)]
 pub async fn recent_work(
-    locator: State<'_, LocatorState>,
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    locator: crate::runtime_coordinator::RuntimeState<LocatorState>,
     when: RecentWorkWhen,
     tz_offset_minutes: i32,
     page: PageRequest,
 ) -> Result<Page<RecentWorkItem>, IpcError> {
+    _runtime_access.revalidate()?;
     let locator = Arc::clone(locator.locator()?);
-    blocking("recent_work", move || {
+    blocking(_runtime_access, "recent_work", move || {
         locator.recent_work(when, tz_offset_minutes, &page)
     })
     .await
@@ -339,10 +382,12 @@ fn workspace(core: &Core, workspace_id: &str) -> Result<Workspace, KalError> {
 /// its folder is resolved natively.
 #[tauri::command]
 pub fn workspace_reveal(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     window: WebviewWindow,
     state: State<'_, AppState>,
     workspace_id: String,
 ) -> Result<(), IpcError> {
+    _runtime_access.revalidate()?;
     let core = state.core()?;
     let ws = workspace(core, &workspace_id).map_err(|e| e.log_and_convert("workspace_reveal"))?;
     let root = PathBuf::from(&ws.root_path);
@@ -403,10 +448,12 @@ pub fn validate_folder_name(raw: &str) -> Result<String, KalError> {
 /// native dialog, and opens it as a workspace. Returns `None` when the picker is cancelled.
 #[tauri::command]
 pub async fn workspace_create(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     window: WebviewWindow,
     state: State<'_, AppState>,
     name: String,
 ) -> Result<Option<Workspace>, IpcError> {
+    _runtime_access.revalidate()?;
     let core = state.core()?.clone();
     let name = validate_folder_name(&name).map_err(|e| e.log_and_convert("workspace_create"))?;
     let parent: Option<PathBuf> = match crate::environment::e2e_pick_folder() {
@@ -438,9 +485,11 @@ pub async fn workspace_create(
     let Some(parent) = parent else {
         return Ok(None);
     };
-    blocking("workspace_create", move || create_in(&core, &parent, &name))
-        .await
-        .map(Some)
+    blocking(_runtime_access, "workspace_create", move || {
+        create_in(&core, &parent, &name)
+    })
+    .await
+    .map(Some)
 }
 
 fn create_in(core: &Core, parent: &Path, name: &str) -> Result<Workspace, KalError> {

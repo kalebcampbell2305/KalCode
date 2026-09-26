@@ -1,25 +1,26 @@
 # Campaign CTX/FW — Context & Context Firewall library (P0)
 
 Branch `adv/context` (worktree `adv-context`, from main `47aee0e`) · Crate `crates/context`
-(`kalcode_context`) · Schema **v8** (isolated, not registered) · Plan: `docs/campaigns/ADVANCED.md`
+(`kalcode_context`) · Schema **v8** (registered in `native-core`) · Plan: `docs/campaigns/ADVANCED.md`
 §7.8, §9, §10 · Contracts: `docs/CONTRACTS_ADVANCED.md` §3.3, §5.2, §9 · Design: `docs/CONTEXT.md`.
 
-Scope of P0 is the **library only**: no IPC, no UI, no event emission, no edits to
-`crates/contracts`, `EventPayload` or `native-core`. Criteria marked **PASS (library)** are verified
-by tests in this crate; **PENDING-INTEGRATION** means the library side is done and the remaining step
-belongs to the lead (contracts, IPC, event mapping) or to the P2 UI campaign.
+P0 produced the library. The current integration adds the first governed production path: explicit
+Context Drop from the desktop thread composer. Criteria marked **PASS (library)** remain proven by
+the crate; **PASS (composer integration)** means native IPC, the visible preview, exact-target send,
+content-free persistence and the desktop UI are wired for that path. **PENDING-INTEGRATION** still
+means another egress path or policy surface must adopt the canonical package/firewall boundary.
 
 ## Acceptance matrix — plan criteria (ADVANCED.md §7.8)
 
 | # | Criterion | Result | Evidence |
 | --- | --- | --- | --- |
-| CTX-01 | Typed items: file, file range, selection, terminal excerpt, diff, event range, memory record, thread excerpt, text; files referenced by handle | PASS (library) · PENDING-INTEGRATION (handles → paths are resolved by Z6a's handle table before items reach the library) | `ItemKind` covers the plan list plus the P0 brief (folder, image/screenshot, document, URL reference, test report, git commit, mission artifact, log/error output); `package_flow::every_item_kind_is_supported` |
-| CTX-02 | Preview shows every item, size, verdict and redactions; any item removable; nothing sent without confirming the preview | PASS (library) · PENDING-INTEGRATION (P2 composer tray) | `ContextPackage::preview` / `set_included`; `package_flow::hash_is_pinned_until_send`, `preview_log_and_events_hold_no_secrets` (wire shape) |
+| CTX-01 | Typed items: file, file range, selection, terminal excerpt, diff, event range, memory record, thread excerpt, text; files referenced by handle | PASS (library) · PASS in composer for file/text/selection/log/URL · PENDING-INTEGRATION for richer producers | Native file picker yields opaque handles; `ContextInput` exposes explicit supported composer inputs; `ItemKind` and `package_flow::every_item_kind_is_supported` cover later producer adoption |
+| CTX-02 | Preview shows every item, size, verdict and redactions; any item removable; nothing sent without confirming the preview | PASS (composer integration) | `ContextPackage::preview` / `set_included`; `context_commands`; `ContextTray`; `threads.spec.ts` Context Drop flow |
 | CTX-03 | Provider-safe translation to what the provider accepts; oversize packages trimmed or refused with an explanation | PASS (library) · PENDING-INTEGRATION (`ProviderCapabilities.contextLimits` from Z2) | `translate.rs`; `package_flow::images_translate_by_capability`, `budgets_trim_output_and_refuse_oversize_files`, `references_only_for_fully_allowed_files`, `defaults_never_assume_images_or_attachments` |
-| CTX-04 | At send time the content hash must match the previewed hash; otherwise the preview is redone | PASS (library) | `ContextPackage::check_before_send` re-reads and re-evaluates every source; `package_flow::hash_is_pinned_until_send`, `overrides_survive_refresh_only_for_unchanged_content` |
-| FW-01 | Firewall before every KalCode-originated send; user-typed prompts warn-and-confirm | PASS (library) · PENDING-INTEGRATION (callers: HS, MEM, AUT, ORG, KalVoice) | `Firewall::evaluate`, `Firewall::check_user_prompt` + `PromptCheck::log_entry`; `firewall_precedence::user_prompts_warn_but_never_block` |
+| CTX-04 | At send time the content hash must match the previewed hash; otherwise the preview is redone | PASS (composer integration) | `context_send` re-reads and re-evaluates every source through `ContextPackage::check_before_send`; stale content returns a refreshed Draft preview and never reaches the provider |
+| FW-01 | Firewall before every KalCode-originated send; user-typed prompts warn-and-confirm | PASS for Context Drop · PENDING-INTEGRATION (HS, MEM, AUT, ORG and other egress callers) | `context_send` always rebuilds the firewall and calls `check_before_send` before its one-shot provider call; remaining callers must adopt this boundary |
 | FW-02 | Blocks secrets, ignored paths, never-share globs, built-in sensitive names, out-of-scope and out-of-workspace items, binaries; *secret* never overridable, *confidential* per-item confirmation | PASS (library) | `firewall_precedence::precedence_table`, `secret_sensitivity_is_never_overridable`, `overrides_lift_only_overridable_blocks_and_keep_redactions`; `never_share_matrix` (8 tests); `firewall_props` |
-| FW-03 | Every block, redaction and override logged (`context_firewall_log`, `context.blocked`) | PASS (library) · PENDING-INTEGRATION (event mapping) | `ContextPackage::log_entries`, `confirm_override` → entry, append-only table with triggers; `store_v8::decision_log_is_append_only_and_content_free`; `ContextEvent` facts |
+| FW-03 | Every block, redaction and override logged (`context_firewall_log`, `context.blocked`) | PASS (composer integration) | Preview creation, refresh and confirmation append content-free facts transactionally; native events map `ContextEvent`; store tests prove rollback and metadata redaction |
 | FW-04 | Honest limit stated; never-share globs offered as TK deny rules for `filesystem.read` | PENDING-INTEGRATION (TK / UI) | Stated in `docs/CONTEXT.md`; `NeverShareRules::patterns()` + `never_share_for_workspace` give TK the glob list; file references are only planned for fully-allowed items and are labelled as governed by the permission rules |
 
 ## Acceptance matrix — P0 library brief
@@ -177,26 +178,25 @@ providerId, items, bytes, redactions }`, `context.discarded { packageId }` — a
 **`context.override_confirmed { packageId, position, rule }`** (new: FW-03 logs overrides). The
 crate produces these as `events::ContextEvent` (serde tag = event type) for one-to-one mapping.
 
-### Integration steps
+### Integration record and remaining adoption
 
-1. Move `crates/context/migrations/0008_context.sql` to `crates/native-core/migrations/` and
-   register `Migration { version: 8, name: "context", … }` in `MIGRATIONS` (or reference
-   `kalcode_context::MIGRATION_V8` from the desktop crate). Checksum is over the SQL text, so the file
-   must move unchanged.
-2. Extract `secrets.rs` + `redact.rs` into `kalcode_core::redact`; point `logging.rs` at
+1. **Integrated:** schema v8 is registered in `native-core`; `kalcode_context::MIGRATION_V8`
+   re-exports the canonical migration for compatibility.
+2. **Remaining consolidation:** extract `secrets.rs` + `redact.rs` into `kalcode_core::redact`; point `logging.rs` at
    `redact_log_line` (drop-in: same placeholder, borrowed when clean, all existing vectors pass) and
    re-export from this crate.
-3. IPC (`CONTRACTS_ADVANCED.md` §7): `context_package_create` → `ContextPackage::build` +
-   `store::save_preview` + `log_entries` + `created_events`; `context_package_update` →
-   `set_included` / `confirm_override` (+ log entry, `context.override_confirmed`);
-   `context_package_send` → `check_before_send(contentSha256)`; on `Stale` return the new preview;
-   on `Ready` send the `RenderedPackage`, `finish_package(Sent)`, `context.shared`;
-   `context_package_discard` → `finish_package(Discarded)`; `context_never_share_list/_set` →
-   `store::never_share_*`.
-4. Resolve Z6a file handles to workspace paths natively before building `ContextItem`s (the WebView
-   never supplies paths). Build `FirewallPolicy` from settings + `never_share_for_workspace` + the
-   TK decision for `context.share` (non-user origins) as `WorkspacePermission`.
-5. Offer never-share patterns to TK as `filesystem.read` deny rules (FW-04).
+3. **Integrated for the thread composer:** `context_preview_create`, item include/confirm,
+   `context_send` and `context_discard` map the library lifecycle to native IPC and content-free
+   events. `context_send` refreshes the preview on a stale hash, validates the exact combined
+   provider payload before its one-shot claim, persists only the typed user prompt in thread
+   history, and treats uncertain provider outcomes as non-retryable.
+4. **Integrated for workspace files:** native file picking returns opaque handles. Native code
+   resolves each handle inside the exact thread workspace; file paths never cross the WebView.
+   Workspace never-share patterns are loaded into `FirewallPolicy` for every preview and send.
+5. **Remaining adoption:** offer never-share patterns to the Trust Kernel as `filesystem.read` deny
+   rules (FW-04), and route non-user origins through an explicit `context.share` policy decision.
+   Handoff, memory, automation, organization and other provider-egress systems must use this
+   boundary before they claim Context Firewall coverage.
 
 ## Security findings and residual risks
 

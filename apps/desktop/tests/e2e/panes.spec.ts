@@ -4,7 +4,15 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, type Page, test } from "@playwright/test";
-import { closeGracefully, EXE, launch, processesMatching, removeDir, waitForExit } from "./harness.ts";
+import {
+  closeGracefully,
+  EXE,
+  launch,
+  processesMatching,
+  removeDir,
+  waitForExit,
+  writeManagedFakeProviderConfig,
+} from "./harness.ts";
 
 /**
  * Z7-W1 end to end against the real app: arrange a pane layout (real shells in real PTYs and a
@@ -38,7 +46,7 @@ async function shot(page: Page, name: string) {
 }
 
 function python(script: string, ...args: string[]): string {
-  return execFileSync("python", ["-c", script, ...args], { encoding: "utf8" }).trim();
+  return execFileSync("python", ["-c", script, ...args], { encoding: "utf8", windowsHide: true }).trim();
 }
 
 /** The stored layout row (read-only, while the app is closed). */
@@ -65,7 +73,7 @@ test("a pane layout is saved per workspace and restored after a graceful quit an
   const bin = join(root, "bin");
   mkdirSync(bin);
   copyFileSync(FAKE, join(bin, "claude.exe"));
-  writeFileSync(join(bin, "fake-provider.json"), "{}");
+  writeManagedFakeProviderConfig(bin);
   const env = {
     KALCODE_E2E_PICK_FOLDER: project,
     KALCODE_E2E_HOOK_DECISIONS: "engine",
@@ -170,7 +178,7 @@ test("a pane layout is saved per workspace and restored after a graceful quit an
     await page.keyboard.press("Control+Alt+2");
     await expect(panes(page)).toHaveCount(2);
     await page.waitForTimeout(1500);
-    execFileSync("taskkill", ["/F", "/T", "/PID", String(app.child.pid)]);
+    execFileSync("taskkill", ["/F", "/T", "/PID", String(app.child.pid)], { windowsHide: true });
     await waitForExit(app.child);
     await app.browser.close().catch(() => undefined);
     expect(storedLayout(dataDir).panes).toBe(2);

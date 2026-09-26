@@ -58,6 +58,17 @@ pub struct NewApproval<'a> {
     pub fingerprint: &'a str,
     pub grant_matcher: Option<&'a str>,
     pub grant_coverage: &'a str,
+    pub created_at: &'a str,
+}
+
+pub struct UtilityApprovalClaim<'a> {
+    pub approval_id: &'a str,
+    pub operation_id: &'a str,
+    pub runtime_generation: i64,
+    pub workspace_id: Option<&'a str>,
+    pub tool: &'a str,
+    pub effect: &'a str,
+    pub claimed_at: &'a str,
 }
 
 fn json<T: Serialize>(value: &T) -> Result<String> {
@@ -104,12 +115,47 @@ pub fn insert_approval(conn: &Connection, new: &NewApproval<'_>) -> Result<()> {
             new.grant_matcher,
             new.grant_coverage,
             enum_str(&new.mode)?,
-            now_rfc3339(),
+            new.created_at,
             origin.kind(),
             origin.id(),
         ],
     )?;
     Ok(())
+}
+
+pub fn insert_utility_claim(conn: &Connection, claim: &UtilityApprovalClaim<'_>) -> Result<()> {
+    let inserted = conn.execute(
+        "INSERT INTO utility_approval_claims (
+           approval_id, operation_id, runtime_generation, workspace_id,
+           tool, effect_kind, claimed_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            claim.approval_id,
+            claim.operation_id,
+            claim.runtime_generation,
+            claim.workspace_id,
+            claim.tool,
+            claim.effect,
+            claim.claimed_at,
+        ],
+    );
+    match inserted {
+        Ok(1) => Ok(()),
+        Ok(_) => Err(KalError::internal(
+            "utility_claim_failed",
+            "The Utility Dock approval could not be claimed.",
+        )),
+        Err(rusqlite::Error::SqliteFailure(error, _))
+            if matches!(error.extended_code, 1555 | 1811 | 2067) =>
+        {
+            Err(KalError::new(
+                kalcode_core::ErrorCategory::Permission,
+                "utility_approval_replayed",
+                "That Utility Dock approval or operation was already used.",
+            ))
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 const APPROVAL_COLUMNS: &str = "id, request, decision, permission_mode, status, resolved_decision, resolved_at,

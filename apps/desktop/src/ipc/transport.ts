@@ -1,4 +1,6 @@
 import type { AgentEvent, EventEnvelope, KalVoiceSignal } from "@kalcode/protocol";
+import type { DoctorInvoke } from "./doctor";
+import type { UtilityCommandName } from "./utilities";
 
 /** Every command the native runtime exposes (mirrors src-tauri/build.rs). */
 export type CommandName =
@@ -6,6 +8,25 @@ export type CommandName =
   | "window_ready"
   | "settings_get"
   | "settings_update"
+  | "runtime_status"
+  | "account_bootstrap"
+  | "account_status"
+  | "account_email_start"
+  | "account_social_start"
+  | "account_email_poll"
+  | "account_auth_cancel"
+  | "account_activate_free"
+  | "account_checkout"
+  | "account_portal"
+  | "account_refresh"
+  | "account_logout"
+  | "account_usage"
+  | "updater_status"
+  | "updater_set_channel"
+  | "updater_check"
+  | "updater_cancel"
+  | "updater_install"
+  | "updater_restore_previous"
   | "events_recent"
   | "events_query"
   | "events_subscribe"
@@ -16,6 +37,24 @@ export type CommandName =
   | "secure_store_check"
   | "providers_list"
   | "providers_detect"
+  // Managed provider accounts. Auth URLs, credentials and profile paths never cross IPC.
+  | "provider_accounts_list"
+  | "provider_account_create"
+  | "provider_account_rename"
+  | "provider_account_set_default"
+  | "provider_account_archive"
+  | "provider_account_bind"
+  | "provider_account_unbind"
+  | "provider_codex_account_refresh"
+  | "provider_codex_login_start"
+  | "provider_codex_login_wait"
+  | "provider_codex_login_cancel"
+  | "provider_codex_logout"
+  | "provider_claude_account_refresh"
+  | "provider_claude_login_start"
+  | "provider_claude_login_wait"
+  | "provider_claude_login_cancel"
+  | "provider_claude_logout"
   // Provider Health (PROVIDERS-2): in-memory snapshots, never a provider process
   | "provider_health_list"
   | "provider_health_get"
@@ -40,6 +79,9 @@ export type CommandName =
   | "thread_messages"
   | "thread_tool_calls"
   | "thread_options"
+  | "thread_review_create_prompt"
+  | "thread_review_prompt"
+  | "thread_cancel_prompt_review"
   | "thread_create"
   | "thread_send"
   | "thread_interrupt"
@@ -48,6 +90,13 @@ export type CommandName =
   | "thread_rename"
   | "thread_archive"
   | "thread_stream"
+  // Universal Context Drop. Native resolves file handles; no file path crosses IPC.
+  | "context_file_pick"
+  | "context_preview_create"
+  | "context_item_set"
+  | "context_item_confirm"
+  | "context_discard"
+  | "context_send"
   // Permissions (Z4)
   | "approval_list"
   | "approval_decide"
@@ -107,7 +156,9 @@ export type CommandName =
   | "layout_preset_delete"
   // Notification center (Z7-W3)
   | "notification_list"
-  | "notification_mark";
+  | "notification_mark"
+  | Parameters<DoctorInvoke>[0]
+  | UtilityCommandName;
 
 export type Unsubscribe = () => Promise<void>;
 

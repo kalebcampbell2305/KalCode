@@ -2,7 +2,8 @@
 //! default model from its official source (size and SHA-256 verified), then on-device
 //! transcription of a WAV recording, then the grammar.
 //!
-//! Ignored by default (it downloads ~148 MB). Run with the `whisper` feature and:
+//! Ignored by default (it downloads the configured default model). Run with the `whisper`
+//! feature and:
 //!   KALVOICE_E2E_DIR=<empty folder for the model> KALVOICE_E2E_WAV=<16-bit PCM mono WAV>
 //!   cargo test -p kalcode-kalvoice --features whisper --test whisper_end_to_end -- --ignored
 
@@ -46,7 +47,7 @@ fn read_wav(path: &PathBuf) -> (Vec<f32>, u32) {
 }
 
 #[test]
-#[ignore = "downloads the 148 MB speech model; run explicitly on a developer machine"]
+#[ignore = "downloads the speech model; run explicitly on a developer machine"]
 fn downloads_verifies_and_transcribes_on_device() {
     let dir = PathBuf::from(std::env::var("KALVOICE_E2E_DIR").expect("KALVOICE_E2E_DIR"));
     let wav = PathBuf::from(std::env::var("KALVOICE_E2E_WAV").expect("KALVOICE_E2E_WAV"));
@@ -54,20 +55,31 @@ fn downloads_verifies_and_transcribes_on_device() {
     let started = std::time::Instant::now();
     let path = store
         .download(models::DEFAULT_MODEL, true, |_, _| {})
-        .expect("download and verify base.en");
-    eprintln!("model ready in {:?}: {}", started.elapsed(), path.display());
-    assert_eq!(store.installed_path("base.en"), Some(path.clone()));
+        .expect("download and verify default speech model");
+    eprintln!("default model ready in {:?}", started.elapsed());
+    assert_eq!(
+        store
+            .verified_path(models::DEFAULT_MODEL)
+            .expect("verify installed default model"),
+        Some(path.clone())
+    );
 
     let (samples, rate) = read_wav(&wav);
     let audio = resample_to_16k(&samples, rate);
     assert!(heard_speech(&audio));
+    let english_only = models::find(models::DEFAULT_MODEL)
+        .expect("default model is in catalog")
+        .english_only;
     let recognizer = RecognizerCache::default()
-        .get(&path, true)
+        .get(&path, english_only)
         .expect("load model");
     let started = std::time::Instant::now();
     let text = recognizer.transcribe(&audio).expect("transcribe");
-    eprintln!("transcribed in {:?}: {text:?}", started.elapsed());
-    assert!(text.to_lowercase().contains("thread"), "{text}");
+    eprintln!("private audio transcribed in {:?}", started.elapsed());
+    assert!(
+        text.to_lowercase().contains("thread"),
+        "expected the private fixture to contain the test keyword"
+    );
 
     match understand(&text) {
         Understood::Intent {
@@ -75,12 +87,11 @@ fn downloads_verifies_and_transcribes_on_device() {
                 KalVoiceIntent::CreateThreads {
                     provider_id, count, ..
                 },
-            target,
+            target: _,
         } => {
             assert_eq!(provider_id, ProviderId::new(ProviderId::CODEX));
             assert_eq!(count, 4);
-            eprintln!("grammar: create 4 codex threads, target {target:?}");
         }
-        other => panic!("{text:?} understood as {other:?}"),
+        _ => panic!("private transcript did not produce the expected intent"),
     }
 }

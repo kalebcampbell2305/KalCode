@@ -1,12 +1,12 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
 
 /** KalVoiceDemo: one push-to-talk key, two outcomes (dictation, then a command). */
-const STAGE_URL = process.env.STAGE_URL ?? "/";
+const STAGE_URL = process.env.STAGE_URL ?? "/kalvoice";
 
 async function open(page: Page): Promise<Locator> {
   await page.goto(STAGE_URL);
   const block = page.getByTestId("kalvoice-demo");
-  test.skip((await block.count()) === 0, `KalVoiceDemo is not on ${STAGE_URL}`);
+  await expect(block).toBeAttached();
   await block.scrollIntoViewIfNeeded();
   await expect(block.locator("[data-kc-app]")).toHaveAttribute("data-kc-bound", "true");
   await expect(block).toHaveAttribute("data-kc-wired", "true");

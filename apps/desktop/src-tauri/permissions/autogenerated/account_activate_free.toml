@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-account-activate-free"
+description = "Enables the account_activate_free command without any pre-configured scope."
+commands.allow = ["account_activate_free"]
+
+[[permission]]
+identifier = "deny-account-activate-free"
+description = "Denies the account_activate_free command without any pre-configured scope."
+commands.deny = ["account_activate_free"]

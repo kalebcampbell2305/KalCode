@@ -41,7 +41,7 @@ const EVERY_FEATURE: Record<FeatureId, true> = {
   automation_kill_switch: true,
 };
 
-const PAID_PLANS: readonly EntitlementTier[] = ["free", "pro", "max"];
+const PUBLIC_PLANS: readonly EntitlementTier[] = ["free", "pro", "max", "max2x"];
 
 const included = (tier: EntitlementTier) => PRODUCT_FEATURES.filter((feature) => featureIncluded(tier, feature));
 
@@ -57,19 +57,22 @@ describe("product features", () => {
   });
 
   it("puts every safety feature on every plan", () => {
-    for (const tier of PAID_PLANS) {
+    for (const tier of PUBLIC_PLANS) {
       for (const feature of SAFETY_FEATURES) expect(featureIncluded(tier, feature)).toBe(true);
     }
   });
 
-  it("nests plans: free is within pro, pro is within max, max is within owner", () => {
-    const [free, pro, max, owner] = (["free", "pro", "max", "owner"] as const).map((tier) => new Set(included(tier)));
+  it("nests plans: free is within pro, pro is within MAX, MAX 2X keeps MAX features, and owner is unrestricted", () => {
+    const [free, pro, max, max2x, owner] = (["free", "pro", "max", "max2x", "owner"] as const).map(
+      (tier) => new Set(included(tier)),
+    );
     const within = (small: Set<FeatureId> | undefined, large: Set<FeatureId> | undefined) => {
       for (const feature of small ?? []) expect(large?.has(feature)).toBe(true);
     };
     within(free, pro);
     within(pro, max);
-    within(max, owner);
+    expect(max2x).toEqual(max);
+    within(max2x, owner);
     expect(free?.size).toBeLessThan(pro?.size ?? 0);
     expect(pro?.size).toBeLessThan(max?.size ?? 0);
   });
@@ -78,12 +81,14 @@ describe("product features", () => {
     expect(featureIncluded("free", "time_machine")).toBe(false);
     expect(featureIncluded("pro", "time_machine")).toBe(true);
     expect(featureIncluded("max", "time_machine")).toBe(true);
+    expect(featureIncluded("max2x", "time_machine")).toBe(true);
   });
 
   it("keeps benchmark_lab to MAX and OWNER", () => {
     expect(featureIncluded("free", "benchmark_lab")).toBe(false);
     expect(featureIncluded("pro", "benchmark_lab")).toBe(false);
     expect(featureIncluded("max", "benchmark_lab")).toBe(true);
+    expect(featureIncluded("max2x", "benchmark_lab")).toBe(true);
     expect(featureIncluded("owner", "benchmark_lab")).toBe(true);
   });
 

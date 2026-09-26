@@ -20,8 +20,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use kalcode_contracts::ids::{is_valid_id, new_id};
-pub use kalcode_pty::TerminalSize;
 use kalcode_pty::{AttachId, ExitInfo, PtySession, ShellInfo, SpawnSpec};
+pub use kalcode_pty::{PtyGuardian, TerminalSize};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -121,6 +121,13 @@ pub struct ShellOption {
 /// so a stale id can never detach another view (or a restarted session's view).
 pub type AttachmentId = u64;
 
+/// PID and generation captured together from one live session registry entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerminalSessionIdentity {
+    pub generation: u64,
+    pub pid: u32,
+}
+
 struct Attachment {
     session: PtySession,
     attach: AttachId,
@@ -140,6 +147,8 @@ pub struct TerminalRegistry {
     attachments: Mutex<HashMap<AttachmentId, Attachment>>,
     next_attachment: AtomicU64,
     shutting_down: AtomicBool,
+    guardian_required: AtomicBool,
+    guardian: Mutex<Option<Arc<dyn PtyGuardian>>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -203,6 +212,13 @@ impl Drop for TerminalRegistry {
 
 fn not_found(what: &'static str) -> KalError {
     KalError::validation("not_found", format!("That {what} no longer exists."))
+}
+
+fn terminal_guardian_unavailable() -> KalError {
+    KalError::validation(
+        "terminal_guardian_unavailable",
+        "The terminal guardian is not ready. Wait for KalCode to finish recovering.",
+    )
 }
 
 /// Ids crossing IPC must be canonical hyphenated UUIDs (`kalcode_contracts::ids`); anything
@@ -626,6 +642,20 @@ impl Core {
         .ok_or_else(|| not_found("terminal"))
     }
 
+    /// Returns only a current running generation; malformed ids and exited sessions have no identity.
+    pub fn terminal_session_identity(&self, id: &str) -> Option<TerminalSessionIdentity> {
+        validate_id(id).ok()?;
+        let sessions = lock(&self.terminal_registry().sessions);
+        let (generation, session) = sessions.get(id)?;
+        if session.exit_info().is_some() {
+            return None;
+        }
+        Some(TerminalSessionIdentity {
+            generation: *generation,
+            pid: session.pid()?,
+        })
+    }
+
     pub fn terminal(&self, id: &str) -> Result<TerminalInfo> {
         validate_id(id)?;
         self.terminal_in(&self.conn(), id)
@@ -757,6 +787,25 @@ impl Core {
         shell: &ShellInfo,
         size: TerminalSize,
     ) -> Result<(PtySession, u64, EventEnvelope)> {
+        if self
+            .terminal_registry()
+            .shutting_down
+            .load(Ordering::SeqCst)
+        {
+            return Err(KalError::validation(
+                "runtime_draining",
+                "KalCode is signing out or recovering. Wait before starting a terminal.",
+            ));
+        }
+        let registry = self.terminal_registry();
+        let guardian = registry
+            .guardian
+            .lock()
+            .map_err(|_| terminal_guardian_unavailable())?
+            .clone();
+        if registry.guardian_required.load(Ordering::SeqCst) && guardian.is_none() {
+            return Err(terminal_guardian_unavailable());
+        }
         let env_remove =
             shell_env_removals(std::env::vars_os().filter_map(|(key, _)| key.into_string().ok()));
         let spec = SpawnSpec {
@@ -779,11 +828,17 @@ impl Core {
             .next_generation
             .fetch_add(1, Ordering::Relaxed)
             + 1;
-        let session = PtySession::spawn(spec, move |exit| {
+        let on_exit = move |exit| {
             if let Some(core) = weak.upgrade() {
                 core.on_terminal_exit(&terminal_id, generation, exit);
             }
-        })
+        };
+        let session = match guardian {
+            Some(guardian) => guardian
+                .prepare("workspace-terminal")
+                .and_then(|admission| PtySession::spawn_guarded(spec, admission, on_exit)),
+            None => PtySession::spawn(spec, on_exit),
+        }
         .map_err(terminal_error(
             "terminal_start_failed",
             "KalCode couldn't start that shell.",
@@ -1061,6 +1116,116 @@ impl Core {
         } else {
             Ok(())
         }
+    }
+
+    /// Seal terminal admission and stop sessions without deleting tabs or closing the core.
+    /// Callers must revoke runtime command admission first. Failed sessions remain owned so
+    /// retry can prove cleanup; a failed drain never enables a replacement session.
+    pub fn drain_terminals_for_logout(&self) -> Result<()> {
+        let registry = self.terminal_registry();
+        let sessions: Vec<PtySession> = {
+            let _conn = self.conn();
+            registry.shutting_down.store(true, Ordering::SeqCst);
+            lock(&registry.sessions)
+                .values()
+                .map(|(_, session)| session.clone())
+                .collect()
+        };
+        let mut failed = false;
+        for session in &sessions {
+            failed |= session.kill().is_err();
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while sessions.iter().any(|session| session.exit_info().is_none()) {
+            if std::time::Instant::now() >= deadline {
+                failed = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        if failed {
+            return Err(KalError::validation(
+                "terminal_cleanup_unproven",
+                "A terminal has not finished stopping. KalCode will keep new sessions blocked.",
+            ));
+        }
+        mark_running_terminals_ended(&self.conn())?;
+        lock(&registry.attachments).clear();
+        // The sealed runtime bundle retains custody until its own guardian drain succeeds.
+        // Core must release this epoch's owner after terminal exit so the next runtime can
+        // acquire its recovery lock. Admission stays sealed and guardian-required.
+        registry
+            .guardian
+            .lock()
+            .map_err(|_| terminal_guardian_unavailable())?
+            .take();
+        Ok(())
+    }
+
+    /// Reopen admission only after the prior sessions have reported their verified exit.
+    pub fn resume_terminals_after_logout(&self) -> Result<()> {
+        let _conn = self.conn();
+        let registry = self.terminal_registry();
+        if registry.guardian_required.load(Ordering::SeqCst)
+            && registry
+                .guardian
+                .lock()
+                .map_err(|_| terminal_guardian_unavailable())?
+                .is_none()
+        {
+            return Err(terminal_guardian_unavailable());
+        }
+        if registry.shutting_down.load(Ordering::SeqCst)
+            && lock(&registry.sessions)
+                .values()
+                .any(|(_, session)| session.exit_info().is_none())
+        {
+            return Err(KalError::validation(
+                "terminal_cleanup_unproven",
+                "Previous terminals are still stopping.",
+            ));
+        }
+        registry.shutting_down.store(false, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// Desktop-only admission requirement is sticky for the lifetime of this Core.
+    pub fn require_terminal_guardian(&self) -> Result<()> {
+        let _conn = self.conn();
+        let registry = self.terminal_registry();
+        registry.guardian_required.store(true, Ordering::SeqCst);
+        if lock(&registry.sessions)
+            .values()
+            .any(|(_, session)| session.exit_info().is_none())
+        {
+            registry.shutting_down.store(true, Ordering::SeqCst);
+            return Err(KalError::validation(
+                "terminal_cleanup_unproven",
+                "Existing terminals must stop before guardian admission changes.",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Replaces the account epoch's terminal owner only after every previous root has exited.
+    pub fn install_terminal_guardian(&self, guardian: Arc<dyn PtyGuardian>) -> Result<()> {
+        let _conn = self.conn();
+        let registry = self.terminal_registry();
+        if lock(&registry.sessions)
+            .values()
+            .any(|(_, session)| session.exit_info().is_none())
+        {
+            return Err(KalError::validation(
+                "terminal_cleanup_unproven",
+                "Previous terminals are still stopping.",
+            ));
+        }
+        registry.guardian_required.store(true, Ordering::SeqCst);
+        *registry
+            .guardian
+            .lock()
+            .map_err(|_| terminal_guardian_unavailable())? = Some(guardian);
+        Ok(())
     }
 
     /// Ends every shell and records their tabs as ended by the app. Called from `shutdown`.

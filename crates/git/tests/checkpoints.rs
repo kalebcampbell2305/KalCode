@@ -571,7 +571,9 @@ fn pruning_deletes_refs_and_reclaims_space() {
 fn dir_link(link: &std::path::Path, target: &std::path::Path) -> bool {
     #[cfg(windows)]
     {
-        std::process::Command::new("cmd")
+        let mut command = std::process::Command::new("cmd");
+        common::hide_test_process(&mut command);
+        command
             .args(["/C", "mklink", "/J"])
             .arg(link)
             .arg(target)

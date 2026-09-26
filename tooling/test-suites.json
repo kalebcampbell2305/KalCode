@@ -1,0 +1,273 @@
+{
+  "schemaVersion": 1,
+  "suites": [
+    {
+      "id": "desktop-unit",
+      "group": "unit",
+      "runner": "vitest",
+      "package": "@kalcode/desktop",
+      "script": "test",
+      "command": null,
+      "timeoutMs": 300000,
+      "profiles": [
+        {
+          "platforms": ["win32", "darwin", "linux"],
+          "environment": {},
+          "minimumExecuted": 544,
+          "skippedMinimum": 0,
+          "skippedMaximum": 0,
+          "allowedSkipReasons": [],
+          "maximumFlaky": 0
+        }
+      ],
+      "unavailableReason": null
+    },
+    {
+      "id": "website-unit",
+      "group": "unit",
+      "runner": "vitest",
+      "package": "@kalcode/website",
+      "script": "test",
+      "command": null,
+      "timeoutMs": 300000,
+      "profiles": [
+        {
+          "platforms": ["win32", "darwin", "linux"],
+          "environment": {},
+          "minimumExecuted": 332,
+          "skippedMinimum": 0,
+          "skippedMaximum": 0,
+          "allowedSkipReasons": [],
+          "maximumFlaky": 0
+        }
+      ],
+      "unavailableReason": null
+    },
+    {
+      "id": "api-unit",
+      "group": "unit",
+      "runner": "vitest",
+      "package": "@kalcode/api",
+      "script": "test",
+      "command": null,
+      "timeoutMs": 300000,
+      "profiles": [
+        {
+          "platforms": ["win32", "darwin", "linux"],
+          "environment": {},
+          "minimumExecuted": 245,
+          "skippedMinimum": 0,
+          "skippedMaximum": 0,
+          "allowedSkipReasons": [],
+          "maximumFlaky": 0
+        }
+      ],
+      "unavailableReason": null
+    },
+    {
+      "id": "protocol-unit",
+      "group": "unit",
+      "runner": "vitest",
+      "package": "@kalcode/protocol",
+      "script": "test",
+      "command": null,
+      "timeoutMs": 180000,
+      "profiles": [
+        {
+          "platforms": ["win32", "darwin", "linux"],
+          "environment": {},
+          "minimumExecuted": 56,
+          "skippedMinimum": 0,
+          "skippedMaximum": 0,
+          "allowedSkipReasons": [],
+          "maximumFlaky": 0
+        }
+      ],
+      "unavailableReason": null
+    },
+    {
+      "id": "testing-unit",
+      "group": "unit",
+      "runner": "vitest",
+      "package": "@kalcode/testing",
+      "script": "test",
+      "command": null,
+      "timeoutMs": 180000,
+      "profiles": [
+        {
+          "platforms": ["win32", "darwin", "linux"],
+          "environment": {},
+          "minimumExecuted": 24,
+          "skippedMinimum": 0,
+          "skippedMaximum": 0,
+          "allowedSkipReasons": [],
+          "maximumFlaky": 0
+        }
+      ],
+      "unavailableReason": null
+    },
+    {
+      "id": "ui-unit",
+      "group": "unit",
+      "runner": "vitest",
+      "package": "@kalcode/ui",
+      "script": "test",
+      "command": null,
+      "timeoutMs": 180000,
+      "profiles": [
+        {
+          "platforms": ["win32", "darwin", "linux"],
+          "environment": {},
+          "minimumExecuted": 27,
+          "skippedMinimum": 0,
+          "skippedMaximum": 0,
+          "allowedSkipReasons": [],
+          "maximumFlaky": 0
+        }
+      ],
+      "unavailableReason": null
+    },
+    {
+      "id": "tooling-unit",
+      "group": "unit",
+      "runner": "node",
+      "package": "@kalcode/tooling",
+      "script": "test",
+      "command": null,
+      "timeoutMs": 600000,
+      "profiles": [
+        {
+          "platforms": ["win32"],
+          "environment": {},
+          "minimumExecuted": 172,
+          "skippedMinimum": 0,
+          "skippedMaximum": 0,
+          "allowedSkipReasons": [],
+          "maximumFlaky": 0
+        },
+        {
+          "platforms": ["darwin", "linux"],
+          "environment": {},
+          "minimumExecuted": 171,
+          "skippedMinimum": 1,
+          "skippedMaximum": 1,
+          "allowedSkipReasons": [],
+          "maximumFlaky": 0
+        }
+      ],
+      "unavailableReason": null
+    },
+    {
+      "id": "rust-workspace",
+      "group": "unit",
+      "runner": "cargo",
+      "package": null,
+      "script": null,
+      "command": ["cargo", "test", "--workspace"],
+      "timeoutMs": 1800000,
+      "profiles": [
+        {
+          "platforms": ["win32", "darwin", "linux"],
+          "environment": {},
+          "minimumExecuted": 1258,
+          "skippedMinimum": 16,
+          "skippedMaximum": 16,
+          "allowedSkipReasons": [],
+          "maximumFlaky": 0
+        }
+      ],
+      "unavailableReason": null
+    },
+    {
+      "id": "desktop-native-e2e",
+      "group": "e2e",
+      "runner": "playwright",
+      "package": "@kalcode/desktop",
+      "script": "test:e2e",
+      "command": null,
+      "timeoutMs": 1800000,
+      "profiles": [
+        {
+          "platforms": ["win32"],
+          "environment": {},
+          "minimumExecuted": 23,
+          "skippedMinimum": 0,
+          "skippedMaximum": 0,
+          "allowedSkipReasons": [],
+          "maximumFlaky": 0
+        }
+      ],
+      "unavailableReason": "Native desktop E2E currently requires the Windows WebView2 harness. macOS certification is blocked until a native Mac harness is registered."
+    },
+    {
+      "id": "website-e2e",
+      "group": "e2e",
+      "runner": "playwright",
+      "package": "@kalcode/website",
+      "script": "test:e2e",
+      "command": null,
+      "timeoutMs": 900000,
+      "profiles": [
+        {
+          "platforms": ["win32", "darwin", "linux"],
+          "environment": { "STAGE_URL": "absent" },
+          "minimumExecuted": 145,
+          "skippedMinimum": 8,
+          "skippedMaximum": 8,
+          "allowedSkipReasons": [
+            "^no published release, so there are no release notes to link$",
+            "^No stage components on .+$",
+            "^No approval cards$",
+            "^(?:BeforeAfter|ProviderSwitch|DemoCenter) is not on this page$",
+            "^TryKalCode is not on .+$",
+            "^The full PermissionModes is not on .+$",
+            "^[A-Za-z0-9-]+ is not on .+$",
+            "^KalVoiceStage is not on this page$",
+            "^No compact permissions table on this page$",
+            "^No moments on this page$"
+          ],
+          "maximumFlaky": 0
+        },
+        {
+          "platforms": ["win32", "darwin", "linux"],
+          "environment": { "STAGE_URL": "present" },
+          "minimumExecuted": 137,
+          "skippedMinimum": 0,
+          "skippedMaximum": 16,
+          "allowedSkipReasons": [
+            "^no published release, so there are no release notes to link$",
+            "^No stage components on .+$",
+            "^No approval cards$",
+            "^(?:BeforeAfter|ProviderSwitch|DemoCenter) is not on this page$",
+            "^TryKalCode is not on .+$",
+            "^The full PermissionModes is not on .+$",
+            "^[A-Za-z0-9-]+ is not on .+$",
+            "^KalVoiceStage is not on this page$",
+            "^No compact permissions table on this page$",
+            "^No moments on this page$"
+          ],
+          "maximumFlaky": 0
+        }
+      ],
+      "unavailableReason": null
+    }
+  ],
+  "rustIntentionalIgnores": [
+    { "path": "crates/context/tests/folder_budgets.rs", "reason": "performance: run in release with --ignored" },
+    { "path": "crates/git/tests/perf.rs", "reason": "writes 20,000 files; run with --ignored --nocapture for the timing table" },
+    { "path": "crates/kalvoice/src/component_floor_tests.rs", "reason": "requires KALCODE_RUN_OS_FLOOR_PROBE=1 and an interactive OS credential store" },
+    { "path": "crates/kalvoice/src/component_store_tests.rs", "reason": "requires the pinned local llama.cpp runtime archive" },
+    { "path": "crates/kalvoice/tests/local_reasoning_real.rs", "reason": "requires pinned local llama.cpp and Qwen candidate artifacts" },
+    { "path": "crates/kalvoice/tests/whisper_end_to_end.rs", "reason": "downloads the speech model; run explicitly on a developer machine" },
+    { "path": "crates/locator/tests/locator_perf.rs", "reason": "performance budget: run in release" },
+    { "path": "crates/providers/src/codex/managed_policy.rs", "reason": "run explicitly when certifying installed Codex CLI 0.157.0" },
+    { "path": "crates/providers/tests/interactive_cli_real.rs", "reason": "consumes AI quota; requires the owner's explicit approval" },
+    { "path": "crates/providers/tests/interactive_real.rs", "reason": "starts a real Claude Code session: consumes AI quota; requires the owner's explicit approval" },
+    { "path": "crates/providers/tests/pipeline.rs", "reason": "uses the real Claude Code install on this machine" },
+    { "path": "crates/providers/tests/pipeline.rs", "reason": "consumes AI quota; requires the owner's explicit approval" },
+    { "path": "crates/providers/tests/turns_real.rs", "reason": "uses the real Codex install on this machine (no prompt, no quota)" },
+    { "path": "crates/providers/tests/turns_real.rs", "reason": "uses the real Gemini CLI install on this machine (no prompt, no quota)" },
+    { "path": "crates/providers/tests/turns_real.rs", "reason": "consumes AI quota; requires the owner's explicit approval" },
+    { "path": "crates/providers/tests/turns_real.rs", "reason": "consumes AI quota; requires the owner's explicit approval" }
+  ]
+}

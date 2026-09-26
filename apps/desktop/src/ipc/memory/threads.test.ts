@@ -116,6 +116,97 @@ describe("memory thread runtime", () => {
     expect(await client.listThreads()).toEqual([]);
   });
 
+  it("requires a content-free, one-shot confirmation for a warned create prompt", async () => {
+    const { client } = await setup();
+    const secret = ["password", "=", "deterministic-Q7x-private-value"].join("");
+    const input: Parameters<KalCodeClient["createThread"]>[0] = {
+      providerId: "claude-code",
+      workspaceId: WORKSPACE,
+      model: null,
+      permissionMode: "approve",
+      prompt: `Investigate this failure: ${secret}`,
+      name: null,
+    };
+
+    const review = await client.reviewCreateThreadPrompt(input);
+    expect(review.kind).toBe("confirmation_required");
+    if (review.kind !== "confirmation_required") throw new Error("expected a warning");
+    expect(review.warning.detectors).toEqual({ password_assignment: 1 });
+    expect(JSON.stringify(review.warning)).not.toContain(secret);
+    expect(JSON.stringify(review.warning)).not.toContain("deterministic-Q7x-private-value");
+
+    expect(await code(client.createThread(input))).toBe("context_prompt_confirmation_required");
+    expect(await client.listThreads()).toEqual([]);
+    const thread = await client.createThread(input, review.warning.reviewId);
+    expect(thread.name).toBe("New thread");
+    expect(await code(client.createThread(input, review.warning.reviewId))).toBe("context_prompt_confirmation_invalid");
+  });
+
+  it("consumes a warned prompt confirmation before rejecting changed content or a changed target", async () => {
+    const { client } = await setup();
+    const first = await create(client, "open the first thread");
+    const second = await create(client, "open the second thread");
+    const prompt = "api_key=only-for-this-exact-send";
+
+    const changedTextReview = await client.reviewThreadPrompt(first.id, prompt);
+    if (changedTextReview.kind !== "confirmation_required") throw new Error("expected a warning");
+    expect(await code(client.sendToThread(first.id, `${prompt}-changed`, changedTextReview.warning.reviewId))).toBe(
+      "context_prompt_confirmation_invalid",
+    );
+    expect(await code(client.sendToThread(first.id, prompt, changedTextReview.warning.reviewId))).toBe(
+      "context_prompt_confirmation_invalid",
+    );
+
+    const changedTargetReview = await client.reviewThreadPrompt(first.id, prompt);
+    if (changedTargetReview.kind !== "confirmation_required") throw new Error("expected a warning");
+    expect(await code(client.sendToThread(second.id, prompt, changedTargetReview.warning.reviewId))).toBe(
+      "context_prompt_confirmation_invalid",
+    );
+    expect(await code(client.sendToThread(first.id, prompt, changedTargetReview.warning.reviewId))).toBe(
+      "context_prompt_confirmation_invalid",
+    );
+  });
+
+  it("cancels abandoned prompt reviews so the bounded gate never fills", async () => {
+    const { client } = await setup();
+    const thread = await create(client, "open a cancellation test thread");
+
+    for (let index = 0; index < 65; index += 1) {
+      const review = await client.reviewThreadPrompt(thread.id, `secret=cancel-${index}`);
+      if (review.kind !== "confirmation_required") throw new Error("expected a warning");
+      expect(await client.cancelPromptReview(review.warning.reviewId)).toBe(true);
+      expect(await client.cancelPromptReview(review.warning.reviewId)).toBe(false);
+    }
+
+    const usable = await client.reviewThreadPrompt(thread.id, "secret=still-usable");
+    expect(usable.kind).toBe("confirmation_required");
+  });
+
+  it("rejects a prompt confirmation when resume sends no prompt", async () => {
+    const { client } = await setup();
+    const thread = await create(client, "open a resumable thread");
+    await client.stopThread(thread.id);
+    const review = await client.reviewThreadPrompt(thread.id, "secret=resume-only");
+    if (review.kind !== "confirmation_required") throw new Error("expected a warning");
+
+    expect(await code(client.resumeThread(thread.id, undefined, review.warning.reviewId))).toBe(
+      "context_prompt_confirmation_invalid",
+    );
+  });
+
+  it("resolves an explicitly selected provider account and snapshots its public label", async () => {
+    const { client } = await setup();
+    const providerAccountId = "0192f3c4-0000-7000-8000-000000000101";
+    const thread = await create(client, "use this account", { providerAccountId });
+    expect(thread).toMatchObject({ providerAccountId, accountLabel: "Personal" });
+    expect(
+      await code(create(client, "unknown account", { providerAccountId: "0192f3c4-0000-7000-8000-0000000000aa" })),
+    ).toBe("provider_account_not_found");
+    expect(await code(create(client, "bad account", { providerAccountId: "not-an-id" }))).toBe(
+      "provider_account_id_invalid",
+    );
+  });
+
   it("interrupt, stop, resume, rename and archive follow the thread's state", async () => {
     const { client } = await setup();
     const thread = await create(client, "slow task");

@@ -1,4 +1,5 @@
-//! KalVoice's tables: schema migration v6 (`crates/native-core/migrations/0006_kalvoice.sql`).
+//! KalVoice's tables: schema migration v6 (`crates/native-core/migrations/0006_kalvoice.sql`)
+//! and durable request lifecycle migration v13.
 //!
 //! The migration is registered in `kalcode_core::db::MIGRATIONS` after the event platform's v5
 //! (like every migration: embedded, numbered, checksummed, backed up before it runs). KalVoice
@@ -9,6 +10,9 @@ use rusqlite::Connection;
 
 /// The schema version that adds KalVoice's tables.
 pub const KALVOICE_SCHEMA_VERSION: i64 = 6;
+
+/// The schema version that makes each request claim recoverably stateful.
+pub const KALVOICE_REQUEST_LIFECYCLE_SCHEMA_VERSION: i64 = 13;
 
 /// Whether this database has KalVoice's tables.
 pub fn installed(conn: &Connection) -> Result<bool> {
@@ -37,5 +41,12 @@ mod tests {
         assert_eq!((v6.version, v6.name), (KALVOICE_SCHEMA_VERSION, "kalvoice"));
         assert!(v6.sql.contains("CREATE TABLE kalvoice_requests"));
         assert!(v6.sql.contains("CREATE TABLE kalvoice_preferences"));
+
+        let lifecycle = MIGRATIONS
+            .iter()
+            .find(|migration| migration.version == KALVOICE_REQUEST_LIFECYCLE_SCHEMA_VERSION)
+            .expect("KalVoice request lifecycle migration");
+        assert_eq!(lifecycle.name, "kalvoice_request_lifecycle");
+        assert!(lifecycle.sql.contains("execution_state"));
     }
 }

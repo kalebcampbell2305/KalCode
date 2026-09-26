@@ -90,10 +90,15 @@ impl Ws {
 pub fn link_dir(link: &Path, target: &Path) -> bool {
     #[cfg(windows)]
     {
-        std::process::Command::new("cmd")
+        use std::os::windows::process::CommandExt as _;
+
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut command = std::process::Command::new("cmd");
+        command
             .args(["/C", "mklink", "/J"])
             .arg(link)
             .arg(target)
+            .creation_flags(CREATE_NO_WINDOW)
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)

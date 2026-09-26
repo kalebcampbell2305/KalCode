@@ -2,6 +2,6 @@
 import type { ProviderId } from "./ProviderId.ts";
 
 /**
- * The reasoning provider a user picks in Settings.
+ * Legacy intelligence setting retained for older clients and stored preferences.
  */
 export type IntelligenceChoice = { "kind": "automatic" } | { "kind": "provider", providerId: ProviderId, } | { "kind": "local" };

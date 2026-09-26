@@ -1,74 +1,75 @@
 //! KalVoice request orchestration (docs/KALVOICE.md, "Command pipeline").
 //!
 //! ```text
-//! request ─▶ allowance check ─▶ grammar ─▶ deterministic intent ─▶ runtime check
-//!                                   │                                  └▶ permission gate ─▶ count ─▶ execute
-//!                                   └▶ Reasoning ─▶ user's provider (or NeedsProvider) ─▶ count ─▶ run
+//! request ─▶ allowance check ─▶ grammar ─▶ deterministic intent ─▶ runtime check ─▶ count ─▶ execute
+//!                                   └▶ local interpreter ─▶ validated intent ────────┘
 //! ```
 //!
-//! - One top-level request counts once, when KalVoice acts on it (runs a command, opens an
-//!   approval request, or sends it to the user's provider). Requests refused up front — limit
-//!   reached, no provider, a workspace that doesn't exist, a command this build can't run — are
-//!   not counted. Retrying a client request id never counts twice or runs twice.
-//! - Safety asymmetry (docs/ADVANCED.md, KV-02): commands that make things safer (pause, stop)
-//!   run directly; commands that add work (creating or resuming threads) go through the
-//!   permission engine as a KalVoice-origin action ([`OriginGate`], Z4's
-//!   `PermissionService::request_for_origin`): evaluated under Approve, filed as an approval
-//!   with `origin_kind = 'kalvoice'` that only the person answers (Approve once or Deny), and
-//!   run only after the approval. KalVoice never answers approvals and never changes permission
-//!   modes (a permission-mode request only opens the thread for the person to decide).
-//! - Events carry ids and facts only; request text, transcripts and provider answers never
+//! - One top-level request counts once, when KalVoice executes a validated command. Requests
+//!   refused up front — limit reached, missing local runtime, uncertain/invalid interpretation, a
+//!   workspace that doesn't exist, a command this build can't run — are not counted. Retrying a
+//!   client request id never counts twice or runs twice.
+//! - Deterministic app-control commands run immediately through the same workspace/runtime APIs
+//!   as direct UI gestures. Provider sessions retain their own native permission prompts for
+//!   consequential work; KalVoice does not create a second approval in front of app control.
+//!   A permission-mode request still only opens the thread for the person to decide.
+//! - Events carry ids and facts only; request text, transcripts and interpreter output never
 //!   appear in them. State and events commit together and are published after commit.
 
-use std::collections::HashMap;
-use std::sync::mpsc::{self, RecvTimeoutError};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::collections::HashSet;
+use std::panic::AssertUnwindSafe;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use kalcode_contracts::agent::{AgentEvent, AgentInput, AgentProvider, ProviderId, SessionConfig};
+use kalcode_contracts::agent::{AgentProvider, ProviderId, SessionConfig};
 use kalcode_contracts::app::SurfaceId;
 use kalcode_contracts::events::{Correlation, EventPayload, EventSource, NewEvent};
 use kalcode_contracts::ids::{is_valid_id, new_id};
 pub use kalcode_contracts::kalvoice::TalkRoute;
 use kalcode_contracts::kalvoice::{
-    KalVoiceInput, KalVoiceIntelligence, KalVoiceIntent, KalVoiceOutcome, KalVoiceUsage,
+    BrowserControl, KalVoiceInput, KalVoiceIntent, KalVoiceOutcome, KalVoiceUsage, PaneControl,
     PaneDirection, RequestableMode, ThreadScope,
 };
-use kalcode_contracts::permissions::{
-    ActionKind, ActionOrigin, ApprovalDecision, NormalizedAction, PermissionMode, PolicyEffect,
-};
+use kalcode_contracts::threads::WorkspaceOption;
 use kalcode_contracts::workspace_ui::SplitAxis;
-use kalcode_core::time::now_rfc3339;
 use kalcode_core::{Core, KalError, Result};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use ts_rs::TS;
 
 use crate::grammar::{self, Confidence, NamedTarget, Understood};
-use crate::ledger::{self, Consumption};
+use crate::ledger::{self, Consumption, ExecutionResult, RequestExecution};
+use crate::local_reasoning::{
+    LOCAL_REASONING_FAILED_MESSAGE, LOCAL_REASONING_INVALID_OUTPUT_MESSAGE,
+    LOCAL_REASONING_UNAVAILABLE_MESSAGE, LOCAL_REASONING_UNCERTAIN_MESSAGE, LocalInterpretation,
+    LocalInterpretationCancellation, LocalInterpretationError, LocalInterpretationRequest,
+    LocalInterpreter, NoLocalInterpreter, bounded_workspace_snapshot, validate_action,
+};
 use crate::plan::EntitlementSource;
 use crate::prefs::{self, KalVoicePreferences, KalVoicePreferencesPatch};
 
 /// Longest request KalVoice accepts (typed or transcribed).
 pub const MAX_REQUEST_CHARS: usize = 4_000;
 
-/// How long a provider may take to answer a reasoning request.
-pub const REASONING_TIMEOUT: Duration = Duration::from_secs(120);
-
-pub const CONNECT_PROVIDER_MESSAGE: &str =
-    "Connect a supported AI provider to use KalVoice reasoning for this request.";
-
-/// Instructions sent with a reasoning request to the user's own provider.
-const REASONING_PREAMBLE: &str = "You are KalVoice, the assistant inside KalCode, answering a \
-request the user spoke or typed. Reply briefly (a few sentences), in plain text. You are in \
-read-only planning mode: do not modify files or run commands.\n\nRequest: ";
+/// Local interpretation is deliberately short: app control must remain responsive, and a late
+/// model result must never become an action after the caller has already observed a timeout.
+const LOCAL_INTERPRETATION_TIMEOUT: Duration = Duration::from_millis(1_500);
+/// Cooperative implementations settle in a few polling intervals. This separate bound prevents
+/// a broken implementation from turning request cancellation into an indefinite join.
+const LOCAL_INTERPRETATION_SETTLE_TIMEOUT: Duration = Duration::from_millis(250);
+const LOCAL_INTERPRETATION_TIMEOUT_MESSAGE: &str =
+    "The on-device KalVoice interpreter took too long to respond.";
+const LOCAL_INTERPRETATION_BUSY_MESSAGE: &str =
+    "KalVoice is already interpreting another request. Try again in a moment.";
 
 /// Where a request is in the pipeline (for the assistant's state display).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]
 pub enum RequestStage {
-    /// Understanding the request, or waiting for the user's provider to answer.
+    /// Understanding the request, including optional on-device interpretation.
     Thinking,
     /// Running a command through the runtime.
     Executing,
@@ -163,6 +164,21 @@ pub enum UiDirective {
         workspace_id: String,
         terminal_id: String,
     },
+    /// Opens genuine provider CLI sessions in the selected workspace.
+    OpenProviderPanes {
+        workspace_id: String,
+        thread_ids: Vec<String>,
+    },
+    /// Applies a deterministic layout operation to the selected workspace.
+    ControlPane {
+        workspace_id: String,
+        command: PaneControl,
+    },
+    /// Applies one bounded action to KalCode's embedded browser pane.
+    ControlBrowser {
+        workspace_id: String,
+        command: BrowserControl,
+    },
     /// Opens the approvals panel.
     ShowApprovals,
     // ---- Pane layout (Z7-W1). Layout only: nothing starts, stops or closes a process. ----
@@ -241,6 +257,11 @@ pub struct ExecContext {
 
 /// The runtime APIs KalVoice drives — the same ones the UI uses. The desktop implements this.
 pub trait Executor: Send + Sync {
+    /// Native-resolved workspaces safe to name in local interpretation. Paths never cross this
+    /// boundary. The default is empty so incomplete adapters fail closed for workspace actions.
+    fn workspace_options(&self) -> std::result::Result<Vec<WorkspaceOption>, ExecError> {
+        Ok(Vec::new())
+    }
     /// Resolves a spoken workspace name to its id.
     fn find_workspace(&self, name: &str) -> std::result::Result<Option<String>, ExecError>;
     /// Resolves a spoken thread name to its id.
@@ -266,13 +287,29 @@ pub struct ProviderChoice {
     pub available: bool,
 }
 
-/// The user's connected providers (implemented by the provider runtime).
+/// Legacy provider-directory compatibility API. KalVoice interpretation never calls it; native
+/// consumers may retain it while their constructor wiring migrates.
 pub trait ProviderDirectory: Send + Sync {
     fn connected(&self) -> Vec<ProviderChoice>;
     fn provider(&self, id: &ProviderId) -> Option<Arc<dyn AgentProvider>>;
     /// Session settings for a read-only reasoning session (native-resolved working directory).
     fn session_config(&self, request_id: &str, workspace_id: Option<&str>)
     -> Option<SessionConfig>;
+
+    /// Atomically selects the provider adapter and its account-bound configuration. Native
+    /// runtimes override this so concurrent requests cannot pair one provider/account selection
+    /// with another request's configuration. The default preserves isolated legacy test fakes.
+    fn provider_session(
+        &self,
+        id: &ProviderId,
+        request_id: &str,
+        workspace_id: Option<&str>,
+    ) -> Option<(Arc<dyn AgentProvider>, SessionConfig)> {
+        Some((
+            self.provider(id)?,
+            self.session_config(request_id, workspace_id)?,
+        ))
+    }
 }
 
 /// No providers connected (the provider runtime is not part of this build yet).
@@ -305,62 +342,18 @@ pub fn provider_display_name(id: &ProviderId) -> String {
     }
 }
 
-struct Pending {
-    request_id: String,
-    intent: KalVoiceIntent,
-    ctx: ExecContext,
-}
-
-/// What the permission engine decided about a consequential KalVoice action.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GateOutcome {
-    /// The policy allows it without asking.
-    Allowed,
-    /// The policy refuses it.
-    Denied { reason: String },
-    /// An approval request was filed; the person answers it in KalCode.
-    Asked { approval_request_id: String },
-}
-
-/// The permission engine's entry point for actions that come from KalVoice (Z4's
-/// `PermissionService::request_for_origin`): the action is evaluated under Approve (KalVoice
-/// never selects or changes a mode), standing grants and rules never apply, and an approval is
-/// filed with `origin_kind = 'kalvoice'` that only the person can answer, once.
-pub trait OriginGate: Send + Sync {
-    fn request(&self, action: NormalizedAction) -> std::result::Result<GateOutcome, String>;
-}
-
-impl OriginGate for kalcode_permissions::PermissionService {
-    fn request(&self, action: NormalizedAction) -> std::result::Result<GateOutcome, String> {
-        let outcome = self
-            .request_for_origin(action)
-            .map_err(|e| e.message.clone())?;
-        Ok(match (outcome.decision.effect, outcome.approval) {
-            (PolicyEffect::Ask, Some(approval)) => GateOutcome::Asked {
-                approval_request_id: approval.id,
-            },
-            (PolicyEffect::Ask, None) => {
-                return Err("KalCode couldn't file the approval request.".into());
-            }
-            (PolicyEffect::Allow, _) => GateOutcome::Allowed,
-            (PolicyEffect::Deny, _) => GateOutcome::Denied {
-                reason: outcome.decision.reason,
-            },
-        })
-    }
-}
-
 type Clock = Arc<dyn Fn() -> OffsetDateTime + Send + Sync>;
 
 pub struct Orchestrator {
     core: Arc<Core>,
     entitlement: Arc<dyn EntitlementSource>,
     executor: Arc<dyn Executor>,
-    gate: Arc<dyn OriginGate>,
-    providers: Arc<dyn ProviderDirectory>,
+    local_interpreter: Arc<dyn LocalInterpreter>,
     clock: Clock,
-    reasoning_timeout: Duration,
-    pending: Mutex<HashMap<String, Pending>>,
+    execution_owner: String,
+    active_claims: Arc<Mutex<HashSet<String>>>,
+    local_interpretation_active: Arc<AtomicBool>,
+    local_interpretation_state: Mutex<LocalInterpretationState>,
 }
 
 impl Orchestrator {
@@ -368,22 +361,22 @@ impl Orchestrator {
         core: Arc<Core>,
         entitlement: Arc<dyn EntitlementSource>,
         executor: Arc<dyn Executor>,
-        gate: Arc<dyn OriginGate>,
-        providers: Arc<dyn ProviderDirectory>,
+        _providers: Arc<dyn ProviderDirectory>,
     ) -> Self {
         Self {
             core,
             entitlement,
             executor,
-            gate,
-            providers,
+            local_interpreter: Arc::new(NoLocalInterpreter),
             clock: Arc::new(OffsetDateTime::now_utc),
-            reasoning_timeout: REASONING_TIMEOUT,
-            pending: Mutex::new(HashMap::new()),
+            execution_owner: new_id(),
+            active_claims: Arc::new(Mutex::new(HashSet::new())),
+            local_interpretation_active: Arc::new(AtomicBool::new(false)),
+            local_interpretation_state: Mutex::new(LocalInterpretationState::default()),
         }
     }
 
-    /// Tests: a fixed clock and a short reasoning timeout.
+    /// Tests: a fixed clock.
     pub fn with_clock(
         mut self,
         clock: impl Fn() -> OffsetDateTime + Send + Sync + 'static,
@@ -392,9 +385,96 @@ impl Orchestrator {
         self
     }
 
-    pub fn with_reasoning_timeout(mut self, timeout: Duration) -> Self {
-        self.reasoning_timeout = timeout;
+    /// Injects the supported on-device structured-action interpreter. Without one, requests that
+    /// fall outside the deterministic grammar fail honestly and remain uncounted.
+    pub fn with_local_interpreter(mut self, interpreter: Arc<dyn LocalInterpreter>) -> Self {
+        self.local_interpreter = interpreter;
         self
+    }
+
+    /// Cancels the current local inference and proves its worker thread has settled within the
+    /// caller's bound. A `false` result leaves the operation and its join handle retained so a
+    /// later drain can finish cleanup; admission remains closed in the meantime.
+    pub fn drain_local_interpretation(&self, timeout: Duration) -> bool {
+        let Some(operation) = self.current_local_interpretation() else {
+            return true;
+        };
+        operation.cancellation.cancel();
+        let deadline = Instant::now() + timeout;
+        if operation.wait_until(deadline).is_none() {
+            return false;
+        }
+        self.finish_local_interpretation(&operation, deadline)
+    }
+
+    /// Permanently seals local inference admission, cancels the admitted operation (if any), and
+    /// returns only when cleanup is proved within `timeout`. Registration and sealing share one
+    /// lock, so a request cannot publish a new worker after an empty shutdown reports success.
+    pub fn shutdown_local_interpretation(&self, timeout: Duration) -> bool {
+        let operation = {
+            let mut state = self
+                .local_interpretation_state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            state.sealed = true;
+            state.operation.clone()
+        };
+        let Some(operation) = operation else {
+            return true;
+        };
+        operation.cancellation.cancel();
+        let deadline = Instant::now() + timeout;
+        if operation.wait_until(deadline).is_none() {
+            return false;
+        }
+        self.finish_local_interpretation(&operation, deadline)
+    }
+
+    fn current_local_interpretation(&self) -> Option<Arc<LocalInterpretationOperation>> {
+        self.local_interpretation_state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .operation
+            .clone()
+    }
+
+    fn finish_local_interpretation(
+        &self,
+        operation: &Arc<LocalInterpretationOperation>,
+        deadline: Instant,
+    ) -> bool {
+        let Some(joined) = operation.join_until(deadline) else {
+            return false;
+        };
+        let mut state = self
+            .local_interpretation_state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if state
+            .operation
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, operation))
+        {
+            state.operation.take();
+        }
+        joined
+    }
+
+    /// Reaps a worker which settled after its request returned. The retained permit is dropped
+    /// before a new request attempts admission.
+    fn reap_local_interpretation(&self) -> bool {
+        let Some(operation) = self.current_local_interpretation() else {
+            return true;
+        };
+        if !operation.is_complete() {
+            return false;
+        }
+        let reaped = self.finish_local_interpretation(
+            &operation,
+            Instant::now() + LOCAL_INTERPRETATION_SETTLE_TIMEOUT,
+        );
+        drop(operation);
+        reaped
     }
 
     fn allowance(&self) -> (Option<u32>, u8) {
@@ -404,7 +484,7 @@ impl Orchestrator {
         )
     }
 
-    /// Current usage (for "Used N of 250, resets …").
+    /// Current usage (for "N / 75 used · remaining · renews …" on Free).
     pub fn usage(&self) -> Result<KalVoiceUsage> {
         let (allowance, anchor) = self.allowance();
         let now = (self.clock)();
@@ -415,8 +495,8 @@ impl Orchestrator {
         self.core.read(prefs::load)
     }
 
-    /// Validates and saves preferences; emits `settings.changed` and, when the reasoning
-    /// provider changes, `kalvoice.provider_selected`.
+    /// Validates and saves preferences; emits `settings.changed` and preserves the legacy
+    /// `kalvoice.provider_selected` event when that stored preference changes.
     pub fn update_preferences(
         &self,
         patch: &KalVoicePreferencesPatch,
@@ -453,8 +533,8 @@ impl Orchestrator {
         }
     }
 
-    /// Handles one top-level request. Blocking (a reasoning request waits for the provider);
-    /// call from a background thread.
+    /// Handles one top-level request. A configured local interpreter may block, so call from a
+    /// background thread.
     pub fn handle(&self, req: CommandRequest) -> Result<KalVoiceResponse> {
         self.handle_with_stages(req, &|_| {})
     }
@@ -486,12 +566,25 @@ impl Orchestrator {
 
         let (allowance, anchor) = self.allowance();
         let now = (self.clock)();
-        let (usage, duplicate) = self.core.read(|c| {
+        // Serialize this read with request claims so a newly inserted claim is never observed
+        // before its in-process owner is marked active.
+        let active = self
+            .active_claims
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let (usage, recorded) = self.core.read(|c| {
             Ok((
                 ledger::usage(c, now, anchor, allowance)?,
-                ledger::is_recorded(c, &req.request_id)?,
+                ledger::recorded_request(c, &req.request_id)?,
             ))
         })?;
+        let replay = recorded.map(|recorded| {
+            (
+                recorded.intent,
+                self.replay_state(&req.request_id, &active, recorded.execution),
+            )
+        });
+        drop(active);
         let mut run = Run {
             o: self,
             req: &req,
@@ -500,11 +593,9 @@ impl Orchestrator {
             counted: false,
             on_stage,
         };
-        if duplicate {
-            return Ok(run.respond(KalVoiceOutcome::Failed {
-                code: "duplicate_request".into(),
-                message: "KalVoice already handled this request.".into(),
-            }));
+        if let Some((intent, replay)) = replay {
+            run.intent = Some(intent);
+            return Ok(run.replay(replay));
         }
         // The allowance is checked before any work.
         if run.usage.exhausted() {
@@ -524,7 +615,14 @@ impl Orchestrator {
             Understood::Intent {
                 intent: KalVoiceIntent::Reasoning { request },
                 ..
-            } => run.reason(&request),
+            } => {
+                let request = if request.is_empty() {
+                    req.text.as_str()
+                } else {
+                    request.as_str()
+                };
+                run.interpret_local(request)
+            }
             Understood::Intent { intent, target } => {
                 run.intent = Some(intent.kind_name().to_owned());
                 self.emit(vec![run.event(EventPayload::KalVoiceCommandRecognized {
@@ -542,6 +640,25 @@ impl Orchestrator {
                 };
                 run.command(intent, providers)
             }
+        }
+    }
+
+    fn replay_state(
+        &self,
+        request_id: &str,
+        active: &HashSet<String>,
+        execution: RequestExecution,
+    ) -> ReplayState {
+        match execution {
+            RequestExecution::Claimed { owner }
+                if owner.as_deref() == Some(self.execution_owner.as_str())
+                    && active.contains(request_id) =>
+            {
+                ReplayState::InProgress
+            }
+            RequestExecution::Claimed { .. } => ReplayState::Indeterminate,
+            RequestExecution::Completed => ReplayState::Completed,
+            RequestExecution::Failed { code } => ReplayState::Failed(code),
         }
     }
 
@@ -661,61 +778,6 @@ impl Orchestrator {
         Ok(refunded)
     }
 
-    /// Whether `approval_request_id` is a KalVoice command waiting for the person's answer.
-    pub fn is_waiting_for(&self, approval_request_id: &str) -> bool {
-        self.pending
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .contains_key(approval_request_id)
-    }
-
-    /// Continues a command that waited for approval, once the person answered it in KalCode
-    /// (`approval.approved` / `approval.denied`) or it expired (`None`). Returns the final
-    /// response, or `None` when `approval_request_id` isn't one of KalVoice's. KalVoice never
-    /// answers the approval itself; it only reacts to the answer.
-    pub fn resolve_approval(
-        &self,
-        approval_request_id: &str,
-        decision: Option<ApprovalDecision>,
-    ) -> Option<KalVoiceResponse> {
-        let pending = self
-            .pending
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(approval_request_id)?;
-        let usage = self.usage().ok()?;
-        let req = CommandRequest {
-            request_id: pending.request_id.clone(),
-            text: String::new(),
-            input: KalVoiceInput::Text,
-            workspace_id: pending.ctx.workspace_id.clone(),
-        };
-        let mut run = Run {
-            o: self,
-            req: &req,
-            usage,
-            intent: Some(pending.intent.kind_name().to_owned()),
-            counted: true,
-            on_stage: &|_| {},
-        };
-        Some(match decision {
-            Some(ApprovalDecision::Deny) => run.fail(
-                "permission_denied",
-                "The request wasn't approved, so KalVoice didn't run it.".into(),
-            ),
-            None => run.fail(
-                "approval_expired",
-                "The approval request expired, so KalVoice didn't run it.".into(),
-            ),
-            Some(ApprovalDecision::ApproveOnce) => run.execute(&pending.intent, &pending.ctx),
-            // KalVoice requests only offer Approve once or Deny; anything else runs nothing.
-            Some(_) => run.fail(
-                "permission_denied",
-                "KalVoice runs a request only when it's approved once.".into(),
-            ),
-        })
-    }
-
     /// Records spoken-reply lifecycle events.
     pub fn record_voice_output(&self, request_id: &str, started: bool) {
         let correlation = Correlation {
@@ -743,35 +805,6 @@ fn event(payload: EventPayload, correlation: Correlation) -> NewEvent {
     }
 }
 
-/// The permission-engine action for intents that add work for agents (they wait for the
-/// person's approval). Pausing and stopping only make things safer, so they run directly
-/// (KV-02); everything else is navigation or a read.
-fn consequential_action(intent: &KalVoiceIntent, ctx: &ExecContext) -> Option<ActionKind> {
-    match intent {
-        KalVoiceIntent::CreateThreads {
-            provider_id,
-            count,
-            workspace_id,
-        } => Some(ActionKind::CreateThreads {
-            provider_id: provider_id.clone(),
-            count: u32::from(*count),
-            workspace_id: workspace_id.clone().or_else(|| ctx.workspace_id.clone()),
-        }),
-        KalVoiceIntent::ResumeThreads { scope } => Some(ActionKind::ResumeThreads {
-            scope: scope.clone(),
-        }),
-        _ => None,
-    }
-}
-
-/// True for intents that add work for agents (they wait for the person's approval).
-pub fn is_consequential(intent: &KalVoiceIntent) -> bool {
-    matches!(
-        intent,
-        KalVoiceIntent::CreateThreads { .. } | KalVoiceIntent::ResumeThreads { .. }
-    )
-}
-
 /// The person-facing name of a mode KalVoice may ask for (never Bypass: not representable).
 pub fn requestable_mode_label(mode: RequestableMode) -> &'static str {
     match mode {
@@ -782,7 +815,7 @@ pub fn requestable_mode_label(mode: RequestableMode) -> &'static str {
     }
 }
 
-/// One-line description for the approval UI and audit log.
+/// One-line description for status and audit output.
 pub fn describe(intent: &KalVoiceIntent) -> String {
     let scope_text = |scope: &ThreadScope| match scope {
         ThreadScope::All => "all threads",
@@ -809,35 +842,209 @@ pub fn describe(intent: &KalVoiceIntent) -> String {
     }
 }
 
-/// The action KalVoice asks the permission engine about, from the KalVoice origin. It has no
-/// thread or provider of its own (`""`, as the contract says for non-thread origins).
-fn normalized_action(
-    kind: ActionKind,
-    intent: &KalVoiceIntent,
-    ctx: &ExecContext,
-) -> NormalizedAction {
-    let workspace_id = match &kind {
-        ActionKind::CreateThreads { workspace_id, .. } => workspace_id.clone(),
-        ActionKind::ResumeThreads {
-            scope: ThreadScope::Workspace { workspace_id },
-        } => Some(workspace_id.clone()),
-        _ => ctx.workspace_id.clone(),
-    };
-    NormalizedAction {
-        id: new_id(),
-        thread_id: String::new(),
-        workspace_id: workspace_id.unwrap_or_default(),
-        provider_id: ProviderId::new(""),
-        action: kind,
-        summary: describe(intent),
-        requested_at: now_rfc3339(),
-        origin: Some(ActionOrigin::KalVoice {
-            request_id: ctx.request_id.clone(),
-        }),
+/// State for one request as it moves through the pipeline.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ReplayState {
+    InProgress,
+    Indeterminate,
+    Completed,
+    Failed(String),
+}
+
+enum ClaimDecision {
+    Execute(ActiveClaim),
+    Replay(ReplayState),
+    LimitReached,
+}
+
+#[derive(Default)]
+struct LocalInterpretationState {
+    sealed: bool,
+    operation: Option<Arc<LocalInterpretationOperation>>,
+}
+
+/// Owns the single local-interpreter lane until the worker has actually stopped interpreting.
+/// The request may time out first, but dropping its receiver cannot release this permit early and
+/// allow two model invocations to overlap.
+struct LocalInterpretationPermit {
+    active: Arc<AtomicBool>,
+}
+
+impl LocalInterpretationPermit {
+    fn acquire(active: Arc<AtomicBool>) -> Option<Self> {
+        active
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| Self { active })
     }
 }
 
-/// State for one request as it moves through the pipeline.
+impl Drop for LocalInterpretationPermit {
+    fn drop(&mut self) {
+        self.active.store(false, Ordering::Release);
+    }
+}
+
+#[derive(Clone)]
+struct LocalInterpretationWorkerResult {
+    completed_at: Instant,
+    interpreted: std::result::Result<LocalInterpretation, LocalInterpretationError>,
+}
+
+enum LocalInterpretationJoin {
+    Unregistered,
+    Pending(JoinHandle<()>),
+    Joining,
+    Joined(bool),
+}
+
+/// Orchestrator-owned custody for one local inference. The operation retains the single-flight
+/// permit, cancellation token and join handle even after the requesting thread times out.
+struct LocalInterpretationOperation {
+    cancellation: LocalInterpretationCancellation,
+    result: Mutex<Option<LocalInterpretationWorkerResult>>,
+    result_ready: Condvar,
+    join: Mutex<LocalInterpretationJoin>,
+    join_ready: Condvar,
+    _permit: LocalInterpretationPermit,
+}
+
+impl LocalInterpretationOperation {
+    fn new(permit: LocalInterpretationPermit) -> Self {
+        Self {
+            cancellation: LocalInterpretationCancellation::default(),
+            result: Mutex::new(None),
+            result_ready: Condvar::new(),
+            join: Mutex::new(LocalInterpretationJoin::Unregistered),
+            join_ready: Condvar::new(),
+            _permit: permit,
+        }
+    }
+
+    fn register(&self, handle: JoinHandle<()>) {
+        *self.join.lock().unwrap_or_else(PoisonError::into_inner) =
+            LocalInterpretationJoin::Pending(handle);
+    }
+
+    fn complete(
+        &self,
+        interpreted: std::result::Result<LocalInterpretation, LocalInterpretationError>,
+    ) {
+        *self.result.lock().unwrap_or_else(PoisonError::into_inner) =
+            Some(LocalInterpretationWorkerResult {
+                completed_at: Instant::now(),
+                interpreted,
+            });
+        self.result_ready.notify_all();
+    }
+
+    fn is_complete(&self) -> bool {
+        self.result
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
+    }
+
+    fn wait_until(&self, deadline: Instant) -> Option<LocalInterpretationWorkerResult> {
+        let mut result = self.result.lock().unwrap_or_else(PoisonError::into_inner);
+        loop {
+            if let Some(result) = result.as_ref() {
+                return Some(result.clone());
+            }
+            let remaining = deadline.checked_duration_since(Instant::now())?;
+            let (next, timed_out) = self
+                .result_ready
+                .wait_timeout(result, remaining)
+                .unwrap_or_else(PoisonError::into_inner);
+            result = next;
+            if timed_out.timed_out() && result.is_none() {
+                return None;
+            }
+        }
+    }
+
+    /// Joins only after completion has been observed. No interpreter-controlled code runs after
+    /// `complete`, so taking the pending handle cannot inherit an unbounded provider/model wait.
+    fn join_until(&self, deadline: Instant) -> Option<bool> {
+        let mut join = self.join.lock().unwrap_or_else(PoisonError::into_inner);
+        loop {
+            match &*join {
+                LocalInterpretationJoin::Unregistered => return Some(false),
+                LocalInterpretationJoin::Joined(joined) => return Some(*joined),
+                LocalInterpretationJoin::Joining => {
+                    let remaining = deadline.checked_duration_since(Instant::now())?;
+                    let (next, timed_out) = self
+                        .join_ready
+                        .wait_timeout(join, remaining)
+                        .unwrap_or_else(PoisonError::into_inner);
+                    join = next;
+                    if timed_out.timed_out() && matches!(*join, LocalInterpretationJoin::Joining) {
+                        return None;
+                    }
+                }
+                LocalInterpretationJoin::Pending(_) => {
+                    let LocalInterpretationJoin::Pending(handle) =
+                        std::mem::replace(&mut *join, LocalInterpretationJoin::Joining)
+                    else {
+                        unreachable!();
+                    };
+                    drop(join);
+                    let joined = handle.join().is_ok();
+                    join = self.join.lock().unwrap_or_else(PoisonError::into_inner);
+                    *join = LocalInterpretationJoin::Joined(joined);
+                    self.join_ready.notify_all();
+                    return Some(joined);
+                }
+            }
+        }
+    }
+}
+
+/// In-memory evidence that a durable `claimed` row is actively executing in this process.
+/// Unwinding removes that evidence so a retry is reported as indeterminate instead of running.
+struct ActiveClaim {
+    request_id: String,
+    execution_owner: String,
+    active: Arc<Mutex<HashSet<String>>>,
+    armed: bool,
+}
+
+impl ActiveClaim {
+    fn finish(
+        mut self,
+        orchestrator: &Orchestrator,
+        result: ExecutionResult<'_>,
+        events: Vec<NewEvent>,
+    ) -> Result<()> {
+        let finished = orchestrator.core.transact(|tx| {
+            if !ledger::finish(tx, &self.request_id, &self.execution_owner, result)? {
+                return Err(KalError::internal(
+                    "kalvoice_claim_changed",
+                    "KalVoice couldn't record the request result because its claim changed.",
+                ));
+            }
+            Ok(((), events))
+        });
+        self.active
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&self.request_id);
+        self.armed = false;
+        finished.map(|_| ())
+    }
+}
+
+impl Drop for ActiveClaim {
+    fn drop(&mut self) {
+        if self.armed {
+            self.active
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .remove(&self.request_id);
+        }
+    }
+}
+
 struct Run<'a> {
     o: &'a Orchestrator,
     req: &'a CommandRequest,
@@ -886,6 +1093,27 @@ impl Run<'_> {
         }
     }
 
+    fn replay(&self, replay: ReplayState) -> KalVoiceResponse {
+        let outcome = match replay {
+            ReplayState::InProgress => KalVoiceOutcome::Failed {
+                code: "request_in_progress".into(),
+                message: "KalVoice is already handling this request.".into(),
+            },
+            ReplayState::Indeterminate => KalVoiceOutcome::Failed {
+                code: "request_indeterminate".into(),
+                message: "KalVoice recorded this request before execution was interrupted. It will not run it again automatically.".into(),
+            },
+            ReplayState::Completed => KalVoiceOutcome::Completed {
+                summary: "KalVoice already completed this request.".into(),
+            },
+            ReplayState::Failed(code) => KalVoiceOutcome::Failed {
+                code,
+                message: "KalVoice already handled this request, and the operation failed.".into(),
+            },
+        };
+        self.respond(outcome)
+    }
+
     fn fail(&mut self, code: &str, message: String) -> KalVoiceResponse {
         self.o
             .emit(vec![self.event(EventPayload::KalVoiceRequestFailed {
@@ -898,22 +1126,28 @@ impl Run<'_> {
         })
     }
 
-    /// Counts the request (atomically with the allowance). `false` when the limit was reached;
-    /// the limit events are then already recorded.
-    fn count(&mut self) -> Result<bool> {
+    /// Atomically owns the durable usage/execution claim before any executor effect.
+    fn claim(&mut self) -> Result<ClaimDecision> {
         let (allowance, anchor) = self.o.allowance();
         let now = (self.o.clock)();
         let intent = self.intent.clone().unwrap_or_else(|| "reasoning".into());
         let req = self.req;
+        let active_claims = self.o.active_claims.clone();
+        let mut active = active_claims.lock().unwrap_or_else(PoisonError::into_inner);
         let (consumption, _) = self.o.core.transact(|tx| {
             let consumption = ledger::consume(
                 tx,
-                &req.request_id,
-                req.input,
-                &intent,
-                now,
-                anchor,
-                allowance,
+                ledger::RequestClaim {
+                    request_id: &req.request_id,
+                    input: req.input,
+                    intent_kind: &intent,
+                    execution_owner: &self.o.execution_owner,
+                },
+                ledger::ConsumptionContext {
+                    now,
+                    anchor_day: anchor,
+                    allowance,
+                },
             )?;
             let events = match &consumption {
                 Consumption::LimitReached(u) => vec![
@@ -944,11 +1178,21 @@ impl Run<'_> {
         })?;
         self.usage = consumption.usage().clone();
         match consumption {
-            Consumption::LimitReached(_) => Ok(false),
-            Consumption::Recorded(_) | Consumption::AlreadyRecorded(_) => {
+            Consumption::LimitReached(_) => Ok(ClaimDecision::LimitReached),
+            Consumption::Recorded(_) => {
                 self.counted = true;
-                Ok(true)
+                active.insert(req.request_id.clone());
+                drop(active);
+                Ok(ClaimDecision::Execute(ActiveClaim {
+                    request_id: req.request_id.clone(),
+                    execution_owner: self.o.execution_owner.clone(),
+                    active: active_claims,
+                    armed: true,
+                }))
             }
+            Consumption::AlreadyRecorded { execution, .. } => Ok(ClaimDecision::Replay(
+                self.o.replay_state(&req.request_id, &active, execution),
+            )),
         }
     }
 
@@ -965,248 +1209,221 @@ impl Run<'_> {
             workspace_id: self.req.workspace_id.clone(),
             providers,
         };
-        let mut asked = None;
-        if let Some(kind) = consequential_action(&intent, &ctx) {
-            match self.o.gate.request(normalized_action(kind, &intent, &ctx)) {
-                Err(message) => return Ok(self.fail("approval_unavailable", message)),
-                Ok(GateOutcome::Denied { reason }) => {
-                    return Ok(self.fail(
-                        "permission_denied",
-                        format!("Your permission settings don't allow this. {reason}"),
-                    ));
-                }
-                Ok(GateOutcome::Asked {
-                    approval_request_id,
-                }) => asked = Some(approval_request_id),
-                Ok(GateOutcome::Allowed) => {}
-            }
-        }
-        // Counted once KalVoice acts on it: an approval request filed, or the command run. (The
-        // allowance was checked before any work; only a concurrent request can use it up in
-        // between, and then the filed request stays unanswered here and nothing runs.)
-        if !self.count()? {
-            return Ok(self.respond(KalVoiceOutcome::LimitReached {
+        // Claim immediately before execution. The claim and allowance check are atomic, so a
+        // concurrent retry can observe but can never repeat the effect.
+        match self.claim()? {
+            ClaimDecision::LimitReached => Ok(self.respond(KalVoiceOutcome::LimitReached {
                 resets_at: self.usage.resets_at.clone(),
-            }));
+            })),
+            ClaimDecision::Replay(replay) => Ok(self.replay(replay)),
+            ClaimDecision::Execute(claim) => self.execute(&intent, &ctx, claim),
         }
-        if let Some(approval_request_id) = asked {
-            self.o
-                .pending
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .insert(
-                    approval_request_id.clone(),
-                    Pending {
-                        request_id: self.req.request_id.clone(),
-                        intent,
-                        ctx,
-                    },
-                );
-            return Ok(self.respond(KalVoiceOutcome::PermissionRequired {
-                approval_request_id,
-            }));
-        }
-        Ok(self.execute(&intent, &ctx))
     }
 
-    fn execute(&mut self, intent: &KalVoiceIntent, ctx: &ExecContext) -> KalVoiceResponse {
+    fn execute(
+        &mut self,
+        intent: &KalVoiceIntent,
+        ctx: &ExecContext,
+        claim: ActiveClaim,
+    ) -> Result<KalVoiceResponse> {
         (self.on_stage)(RequestStage::Executing);
         match self.o.executor.execute(intent, ctx) {
             Ok(done) => {
-                self.o.emit(vec![
-                    self.event(EventPayload::KalVoiceCommandExecuted {
-                        request_id: self.req.request_id.clone(),
-                        intent: intent.kind_name().to_owned(),
-                    }),
-                    self.event(EventPayload::KalVoiceRequestCompleted {
-                        request_id: self.req.request_id.clone(),
-                    }),
-                ]);
-                self.respond_with(
+                claim.finish(
+                    self.o,
+                    ExecutionResult::Completed,
+                    vec![
+                        self.event(EventPayload::KalVoiceCommandExecuted {
+                            request_id: self.req.request_id.clone(),
+                            intent: intent.kind_name().to_owned(),
+                        }),
+                        self.event(EventPayload::KalVoiceRequestCompleted {
+                            request_id: self.req.request_id.clone(),
+                        }),
+                    ],
+                )?;
+                Ok(self.respond_with(
                     KalVoiceOutcome::Completed {
                         summary: done.summary,
                     },
                     done.directive,
-                )
+                ))
             }
-            Err(e) => self.fail(&e.code, e.message),
-        }
-    }
-
-    fn select_provider(&self) -> Result<std::result::Result<ProviderChoice, String>> {
-        let prefs = self.o.core.read(prefs::load)?;
-        let connected = self.o.providers.connected();
-        Ok(match prefs.intelligence {
-            Some(KalVoiceIntelligence::Local) => Err(
-                "On-device reasoning isn't available yet. Choose a connected provider in Settings, KalVoice."
-                    .into(),
-            ),
-            Some(KalVoiceIntelligence::Provider { provider_id }) => connected
-                .into_iter()
-                .find(|p| p.id == provider_id && p.available)
-                .ok_or_else(|| {
-                    format!(
-                        "{} is currently unavailable. Choose another connected provider or retry.",
-                        provider_display_name(&provider_id)
-                    )
-                }),
-            None => {
-                let mut usable: Vec<ProviderChoice> = connected.into_iter().filter(|p| p.available).collect();
-                match usable.len() {
-                    0 => Err(CONNECT_PROVIDER_MESSAGE.into()),
-                    1 => Ok(usable.remove(0)),
-                    _ => Err(
-                        "Choose which connected provider KalVoice uses for reasoning in Settings, KalVoice."
-                            .into(),
-                    ),
-                }
-            }
-        })
-    }
-
-    fn reason(&mut self, request: &str) -> Result<KalVoiceResponse> {
-        self.intent = Some("reasoning".into());
-        let choice = match self.select_provider()? {
-            Ok(choice) => choice,
-            Err(message) => {
-                self.o
-                    .emit(vec![self.event(EventPayload::KalVoiceRequestFailed {
+            Err(e) => {
+                claim.finish(
+                    self.o,
+                    ExecutionResult::Failed { code: &e.code },
+                    vec![self.event(EventPayload::KalVoiceRequestFailed {
                         request_id: self.req.request_id.clone(),
-                        code: "needs_provider".into(),
-                    })]);
-                return Ok(self.respond(KalVoiceOutcome::NeedsProvider { message }));
+                        code: e.code.clone(),
+                    })],
+                )?;
+                Ok(self.respond(KalVoiceOutcome::Failed {
+                    code: e.code,
+                    message: e.message,
+                }))
             }
-        };
-        let unavailable = || {
-            format!(
-                "{} is currently unavailable. Choose another connected provider or retry.",
-                choice.display_name
-            )
-        };
-        let (Some(provider), Some(config)) = (
-            self.o.providers.provider(&choice.id),
-            self.o
-                .providers
-                .session_config(&self.req.request_id, self.req.workspace_id.as_deref()),
-        ) else {
-            let message = unavailable();
-            self.o
-                .emit(vec![self.event(EventPayload::KalVoiceRequestFailed {
-                    request_id: self.req.request_id.clone(),
-                    code: "needs_provider".into(),
-                })]);
-            return Ok(self.respond(KalVoiceOutcome::NeedsProvider { message }));
-        };
-        if !self.count()? {
-            return Ok(self.respond(KalVoiceOutcome::LimitReached {
-                resets_at: self.usage.resets_at.clone(),
-            }));
-        }
-        let config = SessionConfig {
-            // Reasoning is read-only whatever the session defaults are.
-            permission_mode: PermissionMode::Plan,
-            ..config
-        };
-        match run_reasoning(provider.as_ref(), config, request, self.o.reasoning_timeout) {
-            Ok(answer) => {
-                let correlation = Correlation {
-                    provider_id: Some(choice.id.to_string()),
-                    ..self.correlation()
-                };
-                self.o.emit(vec![
-                    event(
-                        EventPayload::KalVoiceCommandExecuted {
-                            request_id: self.req.request_id.clone(),
-                            intent: "reasoning".into(),
-                        },
-                        correlation.clone(),
-                    ),
-                    event(
-                        EventPayload::KalVoiceRequestCompleted {
-                            request_id: self.req.request_id.clone(),
-                        },
-                        correlation,
-                    ),
-                ]);
-                Ok(self.respond(KalVoiceOutcome::Completed { summary: answer }))
-            }
-            Err(e) => Ok(self.fail(&e.code, e.message)),
         }
     }
-}
 
-/// Runs one read-only turn on the user's provider and returns its answer.
-fn run_reasoning(
-    provider: &dyn AgentProvider,
-    config: SessionConfig,
-    request: &str,
-    timeout: Duration,
-) -> std::result::Result<String, ExecError> {
-    let name = provider.display_name().to_owned();
-    let unavailable = |_| {
-        ExecError::new(
-            "provider_unavailable",
-            format!("{name} is currently unavailable. Choose another connected provider or retry."),
-        )
-    };
-    let (tx, rx) = mpsc::channel::<AgentEvent>();
-    let sink = move |e: AgentEvent| {
-        let _ = tx.send(e);
-    };
-    let session = provider
-        .start_session(config, Box::new(sink))
-        .map_err(unavailable)?;
-    let finish = |result| {
-        let _ = session.terminate();
-        result
-    };
-    if let Err(e) = session.send(AgentInput::Text {
-        text: format!("{REASONING_PREAMBLE}{request}"),
-    }) {
-        return finish(Err(unavailable(e)));
-    }
-    let deadline = Instant::now() + timeout;
-    let mut completed: Option<String> = None;
-    let mut streamed = String::new();
-    loop {
-        let left = deadline.saturating_duration_since(Instant::now());
-        match rx.recv_timeout(left) {
-            Ok(AgentEvent::MessageCompleted { text, .. }) => completed = Some(text),
-            Ok(AgentEvent::MessageDelta { text, .. }) => streamed.push_str(&text),
-            Ok(AgentEvent::ApprovalRequired { request_id, .. }) => {
-                // Reasoning never acts; refuse anything that would.
-                let _ = session.respond_to_approval(&request_id, ApprovalDecision::Deny);
-            }
-            Ok(AgentEvent::TurnCompleted { .. } | AgentEvent::Exited { .. }) => break,
-            Ok(AgentEvent::Error {
-                recoverable: false,
-                message,
-                ..
-            }) => {
-                return finish(Err(ExecError::new(
-                    "provider_failed",
-                    format!("{name} couldn't answer: {message}"),
-                )));
-            }
-            Ok(_) => {}
-            Err(RecvTimeoutError::Timeout) => {
-                let _ = session.interrupt();
-                return finish(Err(ExecError::new(
-                    "provider_timeout",
-                    format!("{name} didn't answer in time. Try again."),
-                )));
-            }
-            Err(RecvTimeoutError::Disconnected) => break,
+    fn interpret_local(&mut self, request: &str) -> Result<KalVoiceResponse> {
+        self.intent = Some("reasoning".into());
+        if !self.o.reap_local_interpretation() {
+            return Ok(self.fail(
+                "local_reasoning_busy",
+                LOCAL_INTERPRETATION_BUSY_MESSAGE.into(),
+            ));
         }
+        let Some(permit) =
+            LocalInterpretationPermit::acquire(self.o.local_interpretation_active.clone())
+        else {
+            return Ok(self.fail(
+                "local_reasoning_busy",
+                LOCAL_INTERPRETATION_BUSY_MESSAGE.into(),
+            ));
+        };
+        let interpreter = self.o.local_interpreter.clone();
+        let workspaces = match self.o.executor.workspace_options() {
+            Ok(workspaces) => bounded_workspace_snapshot(workspaces),
+            Err(error) => return Ok(self.fail(&error.code, error.message)),
+        };
+        let workspace_id = self
+            .req
+            .workspace_id
+            .as_ref()
+            .filter(|id| workspaces.iter().any(|workspace| &workspace.id == *id))
+            .cloned();
+        let input = LocalInterpretationRequest {
+            request: request.to_owned(),
+            workspace_id,
+            workspaces: workspaces.clone(),
+        };
+        let deadline = Instant::now() + LOCAL_INTERPRETATION_TIMEOUT;
+        let operation = Arc::new(LocalInterpretationOperation::new(permit));
+        {
+            let mut state = self
+                .o
+                .local_interpretation_state
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if state.sealed {
+                return Ok(self.fail(
+                    "local_reasoning_unavailable",
+                    LOCAL_REASONING_UNAVAILABLE_MESSAGE.into(),
+                ));
+            }
+            if state.operation.is_some() {
+                return Ok(self.fail(
+                    "local_reasoning_busy",
+                    LOCAL_INTERPRETATION_BUSY_MESSAGE.into(),
+                ));
+            }
+            state.operation = Some(operation.clone());
+        }
+        let worker_operation = operation.clone();
+        let (start_tx, start_rx) = std::sync::mpsc::sync_channel(1);
+        let worker = std::thread::Builder::new()
+            .name("kalvoice-local-interpreter".into())
+            .spawn(move || {
+                if start_rx.recv().is_err() {
+                    worker_operation.complete(Err(LocalInterpretationError::Failed));
+                    return;
+                }
+                let interpreted = if worker_operation.cancellation.is_cancelled() {
+                    Err(LocalInterpretationError::Failed)
+                } else {
+                    std::panic::catch_unwind(AssertUnwindSafe(|| {
+                        interpreter.interpret(input, deadline, &worker_operation.cancellation)
+                    }))
+                    .unwrap_or(Err(LocalInterpretationError::Failed))
+                };
+                worker_operation.complete(interpreted);
+            });
+        let Ok(worker) = worker else {
+            operation.complete(Err(LocalInterpretationError::Failed));
+            let _ = self.o.finish_local_interpretation(
+                &operation,
+                Instant::now() + LOCAL_INTERPRETATION_SETTLE_TIMEOUT,
+            );
+            return Ok(self.fail(
+                "local_reasoning_failed",
+                LOCAL_REASONING_FAILED_MESSAGE.into(),
+            ));
+        };
+        operation.register(worker);
+        if start_tx.send(()).is_err() {
+            operation.complete(Err(LocalInterpretationError::Failed));
+        }
+
+        let worker_result = match operation.wait_until(deadline) {
+            Some(result) => result,
+            None => {
+                operation.cancellation.cancel();
+                let settle_deadline = Instant::now() + LOCAL_INTERPRETATION_SETTLE_TIMEOUT;
+                if operation.wait_until(settle_deadline).is_some() {
+                    let _ = self
+                        .o
+                        .finish_local_interpretation(&operation, settle_deadline);
+                }
+                return Ok(self.fail(
+                    "local_reasoning_timeout",
+                    LOCAL_INTERPRETATION_TIMEOUT_MESSAGE.into(),
+                ));
+            }
+        };
+        let joined = self.o.finish_local_interpretation(
+            &operation,
+            Instant::now() + LOCAL_INTERPRETATION_SETTLE_TIMEOUT,
+        );
+        if !joined {
+            return Ok(self.fail(
+                "local_reasoning_failed",
+                LOCAL_REASONING_FAILED_MESSAGE.into(),
+            ));
+        }
+        if worker_result.completed_at > deadline || operation.cancellation.is_cancelled() {
+            return Ok(self.fail(
+                "local_reasoning_timeout",
+                LOCAL_INTERPRETATION_TIMEOUT_MESSAGE.into(),
+            ));
+        }
+        let intent = match worker_result.interpreted {
+            Err(LocalInterpretationError::Unavailable) => {
+                return Ok(self.fail(
+                    "local_reasoning_unavailable",
+                    LOCAL_REASONING_UNAVAILABLE_MESSAGE.into(),
+                ));
+            }
+            Err(LocalInterpretationError::Failed) => {
+                return Ok(self.fail(
+                    "local_reasoning_failed",
+                    LOCAL_REASONING_FAILED_MESSAGE.into(),
+                ));
+            }
+            Ok(LocalInterpretation::Uncertain) => {
+                return Ok(self.fail(
+                    "local_reasoning_uncertain",
+                    LOCAL_REASONING_UNCERTAIN_MESSAGE.into(),
+                ));
+            }
+            Ok(LocalInterpretation::Action(intent)) => match validate_action(intent, &workspaces) {
+                Ok(action) => action.into_intent(),
+                Err(_) => {
+                    return Ok(self.fail(
+                        "local_reasoning_invalid_output",
+                        LOCAL_REASONING_INVALID_OUTPUT_MESSAGE.into(),
+                    ));
+                }
+            },
+        };
+        self.intent = Some(intent.kind_name().to_owned());
+        self.o
+            .emit(vec![self.event(EventPayload::KalVoiceCommandRecognized {
+                request_id: self.req.request_id.clone(),
+                intent: intent.kind_name().to_owned(),
+            })]);
+        self.command(intent, Vec::new())
     }
-    let answer = completed.unwrap_or(streamed).trim().to_owned();
-    if answer.is_empty() {
-        return finish(Err(ExecError::new(
-            "provider_no_answer",
-            format!("{name} finished without an answer. Try rephrasing the request."),
-        )));
-    }
-    finish(Ok(answer))
 }
 
 #[cfg(test)]

@@ -1,25 +1,49 @@
 //! KalCode desktop shell. A thin layer over `kalcode_core::Core`: it resolves platform paths,
 //! starts logging, exposes the allow-listed IPC commands, and manages the window lifecycle.
 
+mod account;
+mod account_commands;
+mod account_links;
+mod command_registry;
+mod runtime_coordinator;
+mod runtime_lifecycle;
+#[cfg(test)]
+mod startup_recovery_tests;
+use runtime_coordinator::RuntimeCoordinator;
+mod browser_commands;
+mod browser_policy;
+mod browser_profile;
 mod code_commands;
 mod commands;
+mod context_commands;
 pub mod environment;
 mod files_commands;
 // Z6a: only the read-only `git_status`, `git_log` and `git_branches` are registered (Z7-W2's
 // folder surface); the worktree and checkpoint commands wait for v7 and the lead's wiring.
+mod doctor_commands;
 #[allow(dead_code)]
 mod git_commands;
 mod kalvoice_commands;
+mod kalvoice_component_trust;
+mod kalvoice_components;
 mod kalvoice_executor;
+mod kalvoice_guardian;
 mod layout_commands;
 mod locator_commands;
 pub mod native_confirm;
 mod notification_commands;
 pub mod permission_commands;
+mod provider_account_commands;
+mod provider_auth_commands;
 mod provider_commands;
 mod provider_health_commands;
 mod provider_pane_commands;
+mod resource_commands;
+mod runtime_shutdown;
 mod thread_commands;
+mod updater_commands;
+mod utility_commands;
+use runtime_shutdown::RuntimeShutdown;
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -142,6 +166,14 @@ fn install_panic_hook(log_dir: PathBuf) {
     }));
 }
 
+fn reconcile_core_startup(core: &Arc<Core>) -> kalcode_core::Result<(usize, u64)> {
+    let recovered = context_commands::recover_deliveries(core)?;
+    core.require_terminal_guardian()?;
+    let invalidated = kalcode_providers::accounts::AccountStore::new(core.clone())
+        .invalidate_cached_auth_on_start()?;
+    Ok((recovered, invalidated))
+}
+
 fn start(app: &tauri::App, removed_overrides: &[String]) -> AppState {
     let channel = BuildChannel::current();
     let version = app.package_info().version.to_string();
@@ -186,7 +218,35 @@ fn start(app: &tauri::App, removed_overrides: &[String]) -> AppState {
     };
     // Z7-W2: `open_core` is `Core::open` (plus the provisional v11 for the E2E suite only).
     match locator_commands::open_core(config) {
-        Ok(core) => state.core = Some(Arc::new(core)),
+        Ok(core) => {
+            let core = Arc::new(core);
+            match reconcile_core_startup(&core) {
+                Ok((recovered, changed)) => {
+                    if recovered > 0 {
+                        tracing::info!(
+                            event = "context.interrupted_deliveries_recovered",
+                            count = recovered
+                        );
+                    }
+                    if changed > 0 {
+                        tracing::info!(
+                            event = "provider_accounts.cached_auth_invalidated",
+                            count = changed
+                        );
+                    }
+                    state.core = Some(core);
+                }
+                Err(error) => {
+                    tracing::error!(
+                        event = "app.startup_failed",
+                        error_code = error.code,
+                        error = %error.diagnostic()
+                    );
+                    core.shutdown();
+                    state.startup_error = Some(error.to_ipc());
+                }
+            }
+        }
         Err(error) => {
             tracing::error!(event = "app.startup_failed", error_code = error.code, error = %error.diagnostic());
             state.startup_error = Some(error.to_ipc());
@@ -199,8 +259,66 @@ fn uses_default_data_dir() -> bool {
     matches!(environment::data_dir_override(), DataDirOverride::None)
 }
 
+#[cfg(feature = "e2e")]
+fn build_e2e_main_webview(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    let data_dir = match environment::data_dir_override() {
+        DataDirOverride::Path(path) => path,
+        DataDirOverride::Invalid | DataDirOverride::None => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "E2E requires an absolute KALCODE_DATA_DIR.",
+            )
+            .into());
+        }
+    };
+    let port = std::env::var("KALCODE_E2E_CDP_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|value| *value >= 1_024)
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "E2E requires a valid KALCODE_E2E_CDP_PORT.",
+            )
+        })?;
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|config| config.label == "main")
+        .cloned()
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "E2E main window configuration is missing.",
+            )
+        })?;
+    let browser_args = format!(
+        "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --remote-debugging-port={port}"
+    );
+    tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?
+        .data_directory(data_dir.join("main-webview"))
+        .additional_browser_args(&browser_args)
+        .build()?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run(removed_overrides: Vec<String>) {
+    #[cfg(feature = "e2e")]
+    let mut context = tauri::generate_context!();
+    #[cfg(not(feature = "e2e"))]
+    let context = tauri::generate_context!();
+    #[cfg(feature = "e2e")]
+    for config in &mut context.config_mut().app.windows {
+        if config.label == "main" {
+            // Build the trusted view explicitly in setup with a per-test profile and CDP port.
+            // Browser children can then use their independent workspace profiles without a
+            // process-global WebView2 override collapsing every view into one cookie jar.
+            config.create = false;
+        }
+    }
     let mut builder = tauri::Builder::default();
     // A second launch against the default data folder focuses the running window. (Exclusive
     // use of a data folder is enforced separately by the core's lock file, in every mode.)
@@ -214,7 +332,12 @@ pub fn run(removed_overrides: Vec<String>) {
         }));
     }
     let app = builder
-        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_deep_link::init())
+        .plugin(
+            tauri_plugin_opener::Builder::new()
+                .open_js_links_on_click(false)
+                .build(),
+        )
         // Used from Rust only (the native folder picker); the WebView gets no dialog permissions.
         .plugin(tauri_plugin_dialog::init())
         // KalVoice's push-to-talk key is registered from Rust only; the WebView has no
@@ -224,8 +347,25 @@ pub fn run(removed_overrides: Vec<String>) {
                 .with_handler(kalvoice_commands::on_shortcut)
                 .build(),
         )
+        .manage(RuntimeShutdown::default())
+        .manage(runtime_shutdown::ExitControl::default())
+        .manage(browser_commands::BrowserViews::default())
         .manage(code_commands::TerminalViews::default())
         .on_page_load(|webview, payload| {
+            // Untrusted native children must never outlive the trusted page that owns them.
+            if payload.event() == PageLoadEvent::Started
+                && webview.label() == "main"
+                && let Some(views) = webview.try_state::<browser_commands::BrowserViews>()
+            {
+                browser_commands::begin_page_load(&views);
+                if browser_commands::close_all(webview.app_handle(), &views).is_err() {
+                    tracing::error!(event = "browser.reload_cleanup_failed");
+                    // Keep a failed native child from intercepting a replacement trusted UI.
+                    let _ = webview.window().hide();
+                    webview.app_handle().exit(1);
+                    return;
+                }
+            }
             // A (re)load starts a fresh page whose JS callbacks no longer exist.
             if payload.event() == PageLoadEvent::Started
                 && let Some(state) = webview.try_state::<AppState>()
@@ -233,76 +373,49 @@ pub fn run(removed_overrides: Vec<String>) {
                 state.drop_subscription(webview.label());
                 code_commands::drop_views(webview);
                 provider_pane_commands::drop_views(webview);
-                if let Some(threads) = webview.try_state::<ThreadsState>() {
+                if let Ok(threads) = runtime_coordinator::RuntimeState::<ThreadsState>::from_app(
+                    webview.app_handle(),
+                ) {
                     threads.drop_stream(webview.label());
                 }
             }
         })
         .setup(move |app| {
+            #[cfg(feature = "e2e")]
+            build_e2e_main_webview(app)?;
             // Test hooks' grant (debug and `e2e` builds only; release builds don't register the
             // commands). Kept outside `capabilities/` so it is never loaded otherwise.
             #[cfg(any(debug_assertions, feature = "e2e"))]
             app.add_capability(include_str!("../test-capabilities/test-hooks.json"))?;
+            #[cfg(feature = "e2e")]
+            let fixture_account = account::e2e::runtime_from_environment(&resolve_data_dir(app)?)?;
             let state = start(app, &removed_overrides);
-            // Z7-W3: listen before the thread runtime starts, so its crash recovery is notified.
-            let notifications =
-                notification_commands::NotificationsState::start(state.core.as_ref());
-            // Z7-W4: before the thread runtime, so Claude Code is registered with its router.
-            let panes = provider_pane_commands::ProviderPanesState::start(&state);
-            let providers = provider_commands::ProviderState::from_process();
-            // PROVIDERS-2: Provider Health, before the thread runtime registers its adapters.
-            let health = provider_health_commands::ProviderHealthState::start(
-                state.core.clone(),
-                &providers.registry(),
+            #[cfg(feature = "e2e")]
+            let account = fixture_account.unwrap_or_else(|| {
+                Arc::new(account::runtime::AccountRuntime::production(Arc::new(
+                    kalcode_secure_store::OsSecretStore::new(),
+                )))
+            });
+            #[cfg(not(feature = "e2e"))]
+            let account = Arc::new(account::runtime::AccountRuntime::production(Arc::new(
+                kalcode_secure_store::OsSecretStore::new(),
+            )));
+            let coordinator = RuntimeCoordinator::new(account.clone());
+            app.manage(account.clone());
+            app.manage(coordinator.clone());
+            let updater_app = app.handle().clone();
+            let updater = updater_commands::DesktopUpdaterState::start(
+                app.handle().clone(),
+                &state.paths.data_dir,
+                &state.info.version,
+                option_env!("KALCODE_UPDATER_PUBLIC_KEY"),
+                Arc::new(move || shutdown_runtime(&updater_app)),
             );
-            health.bind(app.handle());
-            // Z4 over Z1 (workspace roots) and Z3 (thread modes, bound once the runtime starts).
-            let modes = Arc::new(thread_commands::ThreadModes::default());
-            let permissions = permission_commands::PermissionState::new(
-                state.core.clone(),
-                state.core.clone().map_or_else(
-                    || {
-                        Arc::new(kalcode_permissions::NoWorkspaces)
-                            as Arc<dyn kalcode_permissions::WorkspaceRoots>
-                    },
-                    |core| Arc::new(kalcode_permissions::CoreWorkspaceRoots::new(core)),
-                ),
-                modes.clone(),
-            );
-            let threads = ThreadsState::start(
-                state.core.as_ref(),
-                providers.registry(),
-                permissions.service(),
-                &modes,
-            );
-            // Z7-W2: the Session Locator (search, rail, home) over Z1/Z3/Z2, off the UI thread.
-            let locator = locator_commands::LocatorState::start(
-                &state,
-                threads.runtime_handle(),
-                providers.registry(),
-            );
-            let git = git_commands::GitState::new(&state.paths.data_dir);
-            let kalvoice = kalvoice_commands::init(
-                app.handle(),
-                state.core.clone(),
-                &state.info,
-                providers.registry(),
-                threads.runtime_handle(),
-                permissions.service(),
-                locator.handle(),
-            );
-            app.manage(kalvoice);
-            panes.bind(permissions.service().as_ref(), threads.runtime().ok());
-            notifications.bind(threads.runtime_handle());
+            app.manage(updater.clone());
             app.manage(state);
-            app.manage(providers);
-            app.manage(permissions);
-            app.manage(threads);
-            app.manage(panes);
-            app.manage(locator);
-            app.manage(git);
-            app.manage(notifications);
-            app.manage(health);
+            coordinator.observe(app.handle().clone())?;
+            account_links::start(app.handle(), account, coordinator);
+            updater.check_in_background();
 
             // Safety net: the frontend shows the window after its first themed paint
             // (`window_ready`). If that never happens, show it anyway so the user is never
@@ -318,111 +431,228 @@ pub fn run(removed_overrides: Vec<String>) {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            commands::boot,
-            commands::window_ready,
-            commands::settings_get,
-            commands::settings_update,
-            commands::events_recent,
-            commands::events_query,
-            commands::events_subscribe,
-            commands::events_unsubscribe,
-            commands::diagnostics_get,
-            commands::diagnostics_open_log_dir,
-            commands::diagnostics_open_data_dir,
-            commands::secure_store_check,
-            kalvoice_commands::kalvoice_subscribe,
-            kalvoice_commands::kalvoice_status,
-            kalvoice_commands::kalvoice_request,
-            kalvoice_commands::kalvoice_preferences_update,
-            kalvoice_commands::kalvoice_listen_start,
-            kalvoice_commands::kalvoice_listen_stop,
-            kalvoice_commands::kalvoice_listen_cancel,
-            kalvoice_commands::kalvoice_model_download,
-            kalvoice_commands::kalvoice_model_cancel,
-            kalvoice_commands::kalvoice_model_delete,
-            kalvoice_commands::kalvoice_talk,
-            kalvoice_commands::kalvoice_type_instead,
-            kalvoice_commands::kalvoice_latency,
-            kalvoice_commands::kalvoice_latency_record,
-            provider_commands::providers_list,
-            provider_commands::providers_detect,
-            provider_health_commands::provider_health_list,
-            provider_health_commands::provider_health_get,
-            provider_health_commands::provider_health_trend,
-            code_commands::workspace_list,
-            code_commands::workspace_active,
-            code_commands::workspace_open_dialog,
-            code_commands::workspace_activate,
-            code_commands::workspace_remove,
-            code_commands::shells_list,
-            code_commands::terminal_list,
-            code_commands::terminal_create,
-            code_commands::terminal_restart,
-            code_commands::terminal_close,
-            code_commands::terminal_write,
-            code_commands::terminal_resize,
-            code_commands::terminal_attach,
-            code_commands::terminal_detach,
-            code_commands::terminal_ack,
-            code_commands::terminal_set_active,
-            code_commands::terminals_running,
-            thread_commands::thread_list,
-            thread_commands::thread_get,
-            thread_commands::thread_messages,
-            thread_commands::thread_tool_calls,
-            thread_commands::thread_options,
-            thread_commands::thread_create,
-            thread_commands::thread_send,
-            thread_commands::thread_interrupt,
-            thread_commands::thread_resume,
-            thread_commands::thread_stop,
-            thread_commands::thread_rename,
-            thread_commands::thread_archive,
-            thread_commands::thread_stream,
-            permission_commands::approval_list,
-            permission_commands::approval_decide,
-            permission_commands::permission_profiles_list,
-            permission_commands::thread_set_permission_mode,
-            permission_commands::permission_settings_get,
-            permission_commands::permission_settings_update,
-            provider_pane_commands::provider_pane_create,
-            provider_pane_commands::provider_pane_attach,
-            provider_pane_commands::provider_pane_ack,
-            provider_pane_commands::provider_pane_detach,
-            provider_pane_commands::provider_pane_write,
-            provider_pane_commands::provider_pane_resize,
-            provider_pane_commands::provider_pane_info,
-            // Z7-W2: Session Locator, rail, home, recent work, workspace actions.
-            locator_commands::locator_search,
-            locator_commands::locator_open,
-            locator_commands::rail_state,
-            locator_commands::rail_update,
-            locator_commands::rail_section_set,
-            locator_commands::rail_group_create,
-            locator_commands::rail_group_update,
-            locator_commands::rail_group_delete,
-            locator_commands::rail_group_reorder,
-            locator_commands::home_summary,
-            locator_commands::recent_work,
-            locator_commands::workspace_reveal,
-            locator_commands::workspace_create,
-            // Z6a read-only (folder surface).
-            files_commands::files_list,
-            git_commands::git_status,
-            git_commands::git_log,
-            git_commands::git_branches,
-            layout_commands::layout_get,
-            layout_commands::layout_save,
-            layout_commands::layout_presets,
-            layout_commands::layout_preset_save,
-            layout_commands::layout_preset_delete,
-            notification_commands::notification_list,
-            notification_commands::notification_mark,
-            #[cfg(any(debug_assertions, feature = "e2e"))]
-            permission_commands::test_permission_probe,
-        ])
-        .build(tauri::generate_context!());
+        .invoke_handler(move |invoke| {
+            let command = invoke.message.command();
+            let authority = invoke
+                .message
+                .state_ref()
+                .try_get::<Arc<account::runtime::AccountRuntime>>()
+                .map(|account| account.authority())
+                .unwrap_or(account::model::AccountAuthority::SignedOut);
+            if let account::guard::CommandAuthorization::Denied(code) =
+                account::guard::authorize_command(command, authority)
+            {
+                invoke.resolver.reject(
+                    KalError::validation(
+                        code,
+                        "Sign in to an active account before using this command.",
+                    )
+                    .to_ipc(),
+                );
+                return true;
+            }
+            let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
+                runtime_coordinator::runtime_status,
+                account_commands::account_bootstrap,
+                account_commands::account_status,
+                account_commands::account_email_start,
+                account_commands::account_social_start,
+                account_commands::account_email_poll,
+                account_commands::account_auth_cancel,
+                account_commands::account_activate_free,
+                account_commands::account_checkout,
+                account_commands::account_portal,
+                account_commands::account_refresh,
+                account_commands::account_logout,
+                account_commands::account_usage,
+                provider_auth_commands::provider_claude_account_refresh,
+                provider_auth_commands::provider_claude_login_start,
+                provider_auth_commands::provider_claude_login_wait,
+                provider_auth_commands::provider_claude_login_cancel,
+                provider_auth_commands::provider_claude_logout,
+                updater_commands::updater_status,
+                updater_commands::updater_set_channel,
+                updater_commands::updater_check,
+                updater_commands::updater_cancel,
+                updater_commands::updater_install,
+                updater_commands::updater_restore_previous,
+                browser_commands::browser_attach,
+                browser_commands::browser_page_lease,
+                context_commands::context_file_pick,
+                context_commands::context_preview_create,
+                context_commands::context_item_set,
+                context_commands::context_item_confirm,
+                context_commands::context_discard,
+                context_commands::context_send,
+                browser_commands::browser_set_view,
+                browser_commands::browser_navigate,
+                browser_commands::browser_action,
+                browser_commands::browser_focus,
+                browser_commands::browser_info,
+                browser_commands::browser_close,
+                browser_commands::browser_hide_all,
+                browser_commands::browser_open_external,
+                commands::boot,
+                commands::window_ready,
+                commands::settings_get,
+                commands::settings_update,
+                commands::events_recent,
+                commands::events_query,
+                commands::events_subscribe,
+                commands::events_unsubscribe,
+                commands::diagnostics_get,
+                commands::diagnostics_open_log_dir,
+                commands::diagnostics_open_data_dir,
+                commands::secure_store_check,
+                kalvoice_commands::kalvoice_subscribe,
+                kalvoice_commands::kalvoice_status,
+                kalvoice_commands::kalvoice_request,
+                kalvoice_commands::kalvoice_preferences_update,
+                kalvoice_commands::kalvoice_listen_start,
+                kalvoice_commands::kalvoice_listen_stop,
+                kalvoice_commands::kalvoice_listen_cancel,
+                kalvoice_commands::kalvoice_model_download,
+                kalvoice_commands::kalvoice_model_cancel,
+                kalvoice_commands::kalvoice_model_delete,
+                kalvoice_commands::kalvoice_talk,
+                kalvoice_commands::kalvoice_type_instead,
+                kalvoice_commands::kalvoice_latency,
+                kalvoice_commands::kalvoice_latency_record,
+                provider_auth_commands::provider_codex_account_refresh,
+                provider_auth_commands::provider_codex_login_start,
+                provider_auth_commands::provider_codex_login_wait,
+                provider_auth_commands::provider_codex_login_cancel,
+                provider_auth_commands::provider_codex_logout,
+                provider_account_commands::provider_accounts_list,
+                provider_account_commands::provider_account_create,
+                provider_account_commands::provider_account_rename,
+                provider_account_commands::provider_account_set_default,
+                provider_account_commands::provider_account_archive,
+                provider_account_commands::provider_account_bind,
+                provider_account_commands::provider_account_unbind,
+                provider_commands::providers_list,
+                provider_commands::providers_detect,
+                provider_health_commands::provider_health_list,
+                provider_health_commands::provider_health_get,
+                provider_health_commands::provider_health_trend,
+                code_commands::workspace_list,
+                code_commands::workspace_active,
+                code_commands::workspace_open_dialog,
+                code_commands::workspace_activate,
+                code_commands::workspace_remove,
+                code_commands::shells_list,
+                code_commands::terminal_list,
+                code_commands::terminal_create,
+                code_commands::terminal_restart,
+                code_commands::terminal_close,
+                code_commands::terminal_write,
+                code_commands::terminal_resize,
+                code_commands::terminal_attach,
+                code_commands::terminal_detach,
+                code_commands::terminal_ack,
+                code_commands::terminal_set_active,
+                code_commands::terminals_running,
+                thread_commands::thread_list,
+                thread_commands::thread_get,
+                thread_commands::thread_messages,
+                thread_commands::thread_tool_calls,
+                thread_commands::thread_options,
+                thread_commands::thread_create,
+                thread_commands::thread_review_create_prompt,
+                thread_commands::thread_review_prompt,
+                thread_commands::thread_cancel_prompt_review,
+                thread_commands::thread_send,
+                thread_commands::thread_interrupt,
+                thread_commands::thread_resume,
+                thread_commands::thread_stop,
+                thread_commands::thread_rename,
+                thread_commands::thread_archive,
+                thread_commands::thread_stream,
+                permission_commands::approval_list,
+                permission_commands::approval_decide,
+                permission_commands::permission_profiles_list,
+                permission_commands::thread_set_permission_mode,
+                permission_commands::permission_settings_get,
+                permission_commands::permission_settings_update,
+                provider_pane_commands::provider_pane_create,
+                provider_pane_commands::provider_pane_attach,
+                provider_pane_commands::provider_pane_ack,
+                provider_pane_commands::provider_pane_detach,
+                provider_pane_commands::provider_pane_write,
+                provider_pane_commands::provider_pane_resize,
+                provider_pane_commands::provider_pane_info,
+                // Z7-W2: Session Locator, rail, home, recent work, workspace actions.
+                locator_commands::locator_search,
+                locator_commands::locator_open,
+                locator_commands::rail_state,
+                locator_commands::rail_update,
+                locator_commands::rail_section_set,
+                locator_commands::rail_group_create,
+                locator_commands::rail_group_update,
+                locator_commands::rail_group_delete,
+                locator_commands::rail_group_reorder,
+                locator_commands::home_summary,
+                locator_commands::recent_work,
+                locator_commands::workspace_reveal,
+                locator_commands::workspace_create,
+                // Z6a read-only (folder surface).
+                files_commands::files_list,
+                git_commands::git_status,
+                resource_commands::resource_report,
+                resource_commands::resource_set_mode,
+                resource_commands::resource_set_view_open,
+                doctor_commands::doctor_run,
+                doctor_commands::doctor_cancel,
+                doctor_commands::doctor_last,
+                doctor_commands::doctor_fix_preview,
+                doctor_commands::doctor_fix,
+                doctor_commands::doctor_revert,
+                doctor_commands::doctor_ignore,
+                doctor_commands::doctor_ignored,
+                doctor_commands::doctor_fix_log,
+                utility_commands::utility_status,
+                utility_commands::utility_http_send,
+                utility_commands::utility_http_history,
+                utility_commands::utility_http_history_clear,
+                utility_commands::utility_http_saved_list,
+                utility_commands::utility_http_saved_save,
+                utility_commands::utility_http_saved_delete,
+                utility_commands::utility_effect_continue,
+                utility_commands::utility_processes,
+                utility_commands::utility_process_signal,
+                utility_commands::utility_process_restart,
+                utility_commands::utility_ports,
+                utility_commands::utility_port_lookup,
+                utility_commands::utility_env_list,
+                utility_commands::utility_env_reveal,
+                utility_commands::utility_sqlite_candidates,
+                utility_commands::utility_sqlite_open,
+                utility_commands::utility_sqlite_pick,
+                utility_commands::utility_sqlite_describe,
+                utility_commands::utility_sqlite_query,
+                utility_commands::utility_sqlite_write,
+                utility_commands::utility_sqlite_close,
+                utility_commands::utility_regex,
+                utility_commands::utility_file_find,
+                utility_commands::utility_file_read,
+                utility_commands::utility_scratchpad_list,
+                utility_commands::utility_scratchpad_save,
+                utility_commands::utility_scratchpad_delete,
+                git_commands::git_log,
+                git_commands::git_branches,
+                layout_commands::layout_get,
+                layout_commands::layout_save,
+                layout_commands::layout_presets,
+                layout_commands::layout_preset_save,
+                layout_commands::layout_preset_delete,
+                notification_commands::notification_list,
+                notification_commands::notification_mark,
+                #[cfg(any(debug_assertions, feature = "e2e"))]
+                permission_commands::test_permission_probe,
+            ];
+            handler(invoke)
+        })
+        .build(context);
 
     let app = match app {
         Ok(app) => app,
@@ -433,41 +663,65 @@ pub fn run(removed_overrides: Vec<String>) {
     };
 
     app.run(|handle, event| {
-        if let RunEvent::Exit = event
-            && let Some(state) = handle.try_state::<AppState>()
-        {
-            // End provider sessions (and their process trees) before the core records its
-            // shutdown; their threads become `interrupted`, resumable.
-            if let Some(threads) = handle.try_state::<ThreadsState>() {
-                threads.shutdown();
+        use std::sync::atomic::Ordering;
+        if let RunEvent::ExitRequested { api, code, .. } = event {
+            let exit = handle.state::<runtime_shutdown::ExitControl>();
+            if !exit.ready.load(Ordering::Acquire) {
+                api.prevent_exit();
+                if !exit.requested.swap(true, Ordering::AcqRel) {
+                    let handle = handle.clone();
+                    std::thread::spawn(move || {
+                        if shutdown_runtime(&handle) {
+                            handle
+                                .state::<runtime_shutdown::ExitControl>()
+                                .ready
+                                .store(true, Ordering::Release);
+                            handle.exit(code.unwrap_or(0));
+                        } else {
+                            handle
+                                .state::<runtime_shutdown::ExitControl>()
+                                .requested
+                                .store(false, Ordering::Release);
+                            tracing::error!(event = "app.exit_cleanup_incomplete");
+                        }
+                    });
+                }
             }
-            if let Some(panes) = handle.try_state::<provider_pane_commands::ProviderPanesState>() {
-                panes.shutdown();
-            }
-            if let Some(locator) = handle.try_state::<locator_commands::LocatorState>() {
-                locator.shutdown();
-            }
-            if let Some(health) =
-                handle.try_state::<provider_health_commands::ProviderHealthState>()
-            {
-                health.shutdown();
-            }
-            if let Some(notifications) =
-                handle.try_state::<notification_commands::NotificationsState>()
-            {
-                notifications.shutdown();
-            }
-            if let Some(core) = &state.core {
-                core.shutdown();
-            }
-            // Flush and stop the background log writer before the process exits.
-            drop(
-                state
-                    .log_guard
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .take(),
-            );
+        } else if let RunEvent::Exit = event {
+            shutdown_services(handle);
         }
     });
+}
+
+fn shutdown_runtime(handle: &tauri::AppHandle) -> bool {
+    handle
+        .state::<RuntimeShutdown>()
+        .run(|| shutdown_runtime_once(handle))
+}
+
+fn shutdown_runtime_once(handle: &tauri::AppHandle) -> bool {
+    if let Some(coordinator) = handle.try_state::<Arc<RuntimeCoordinator>>() {
+        coordinator.request_drain(true);
+        if !coordinator.wait_drained(Duration::from_secs(30)) {
+            return false;
+        }
+    }
+    shutdown_services(handle);
+    true
+}
+
+fn shutdown_services(handle: &tauri::AppHandle) {
+    if let Some(state) = handle.try_state::<AppState>() {
+        if let Some(core) = &state.core {
+            core.shutdown();
+        }
+        // Flush and stop the background log writer before the process exits.
+        drop(
+            state
+                .log_guard
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take(),
+        );
+    }
 }

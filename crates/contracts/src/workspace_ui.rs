@@ -166,8 +166,10 @@ pub enum PaneContent {
     Widget {
         widget_id: String,
     },
-    /// Z6b.
+    /// An isolated browser surface. Older placeholder layouts receive an identity on load.
     Browser {
+        #[serde(default = "crate::ids::new_id")]
+        browser_id: String,
         url: Option<String>,
     },
     /// Z6b.

@@ -1,5 +1,5 @@
-//! KalVoice preferences (table `kalvoice_preferences`): shortcuts, the reasoning provider
-//! ("KalVoice intelligence"), the speech model and spoken replies.
+//! KalVoice preferences (table `kalvoice_preferences`): shortcuts, legacy intelligence selection,
+//! the speech model and spoken replies.
 
 use kalcode_contracts::agent::ProviderId;
 use kalcode_contracts::kalvoice::KalVoiceIntelligence;
@@ -73,8 +73,8 @@ pub struct KalVoicePreferences {
     pub talk_key: String,
     /// Push to talk works even while the floating widget is hidden.
     pub talk_enabled: bool,
-    /// Which connected provider handles requests that need reasoning. `None` = automatic: the
-    /// only connected provider, if exactly one is connected.
+    /// Legacy selection retained for storage/wire compatibility. Current reasoning is local-only,
+    /// and provider values never authorize provider inference.
     pub intelligence: Option<KalVoiceIntelligence>,
     /// Speech model id from the catalog (`base.en` by default).
     pub speech_model: String,
@@ -137,7 +137,7 @@ pub struct KalVoicePreferencesPatch {
     pub panel_placement: Option<PanelPlacement>,
 }
 
-/// The reasoning provider a user picks in Settings.
+/// Legacy intelligence setting retained for older clients and stored preferences.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(
     tag = "kind",
@@ -146,12 +146,12 @@ pub struct KalVoicePreferencesPatch {
 )]
 #[ts(export)]
 pub enum IntelligenceChoice {
-    /// The only connected provider, if exactly one is connected.
+    /// Legacy automatic provider selection; ignored by the local-only reasoning path.
     Automatic,
     Provider {
         provider_id: ProviderId,
     },
-    /// On-device reasoning (not available yet; selecting it explains that).
+    /// On-device reasoning.
     Local,
 }
 
@@ -227,7 +227,7 @@ pub fn load(conn: &Connection) -> Result<KalVoicePreferences> {
 pub struct Changes {
     /// Setting keys, namespaced for `settings.changed` (`kalvoice.dictationShortcut`).
     pub keys: Vec<String>,
-    /// Set when the reasoning provider selection changed.
+    /// Set when the legacy intelligence selection changed.
     pub intelligence: Option<Option<KalVoiceIntelligence>>,
 }
 

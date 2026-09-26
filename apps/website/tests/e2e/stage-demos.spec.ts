@@ -1,10 +1,11 @@
 import { expect, type Page, test } from "@playwright/test";
 
 /** BeforeAfter, ProviderSwitch, DemoCenter and the phone layout of the window. */
-const STAGE_URL = process.env.STAGE_URL ?? "/";
 
 async function has(page: Page, testId: string): Promise<boolean> {
-  await page.goto(STAGE_URL);
+  const pagePath = ["before-after", "demo-center"].includes(testId) ? "/product" : "/";
+  await page.goto(process.env.STAGE_URL ?? pagePath);
+  await expect(page.getByTestId(testId).first()).toBeAttached();
   return (await page.getByTestId(testId).count()) > 0;
 }
 

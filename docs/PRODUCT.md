@@ -84,14 +84,15 @@ let go.** What happens next depends on what was said and where:
 
 - **A command** KalVoice recognizes with confidence ("Open four Codex threads", "Pause every
   active thread", "Show me anything waiting for permission") runs at once, with a "Type it
-  instead" undo. Commands are understood deterministically without any model. Each counts as
-  **one KalVoice Request**; commands that add work ask for approval first.
+  instead" undo. Commands are understood deterministically without any model. Each executed
+  command counts as **one KalVoice Request**. Provider sessions retain their native permission
+  experience; KalVoice does not add a second app-control approval layer.
 - **Dictation**: otherwise, if a text box or terminal is focused, the words are typed there
   (thread composers for Claude/Codex/Gemini, terminal input, prompts, search). Local speech
   recognition. **Unlimited on every plan; never counted.**
-- **A request**: anything else goes to the **user-selected connected provider** (Claude,
-  Codex, Gemini; local model later). If none is connected: "Connect a supported AI provider to
-  use KalVoice reasoning for this request." Counts as one KalVoice Request.
+- **A request**: anything else goes through the bounded **on-device interpreter**. Missing,
+  uncertain or invalid local interpretation fails closed and is not counted. Connected coding
+  providers are action targets; they are never KalVoice's fallback brain.
 
 KalVoice uses the same runtime as the rest of KalCode and is never above the permission model.
 
@@ -99,14 +100,14 @@ KalVoice uses the same runtime as the rest of KalCode and is never above the per
 
 Defined once in `packages/protocol/src/plans.ts`.
 
-| | Free | Pro | MAX | OWNER (private) |
-| --- | --- | --- | --- | --- |
-| Price | $0 | $10 / month | $25 / month | $0, non-billable |
-| KalVoice Requests / month | 250 | 2,500 | 10,000 | Unlimited |
-| Local KalVoice dictation | Unlimited | Unlimited | Unlimited | Unlimited |
-| Provider connections | All | All | All | All |
-| Permission modes (Plan, Approve, Auto, Bypass, Custom) | All | All | All | All |
-| Other features | Core | + agents, pair/team, automations, skills, plugins | + advanced missions, event automations, highest concurrency | Everything, current and future |
+| | Free | Pro | MAX | MAX 2X | OWNER (private) |
+| --- | --- | --- | --- | --- | --- |
+| Price | $0 | $10 / month | $25 / month | $50 / month | $0, non-billable |
+| KalVoice Requests / month | 75 | 1,500 | 5,000 | 10,000 | Unlimited |
+| Local KalVoice dictation | Unlimited | Unlimited | Unlimited | Unlimited | Unlimited |
+| Provider connections | All | All | All | All | All |
+| Permission modes (Plan, Approve, Auto, Bypass, Custom) | All | All | All | All | All |
+| Other features | Core | + agents, pair/team, automations, skills, plugins | + advanced missions, event automations, highest concurrency | MAX features + doubled KalVoice Request capacity | Everything, current and future |
 
 Rules:
 

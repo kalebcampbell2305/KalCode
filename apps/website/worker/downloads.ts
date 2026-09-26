@@ -1,12 +1,18 @@
 /**
- * Desktop release downloads, served from the RELEASES R2 bucket.
+ * Desktop release downloads served from R2, with an explicit transition to D1 publication authority.
  *
  * Object layout (written by tooling/release/publish.mjs):
- *   releases/latest.json          the release manifest (same shape as src/data/releases.json)
- *   releases/<version>/<file>     installers; a published file is never overwritten
+ *   releases/<version>/<descriptor-sha>.json     immutable download descriptor
+ *   releases/<version>/<artifact-sha>/<file>     verified publication artifact
+ *   releases/updater/<channel>/<version>/...     updater descriptor and artifact
+ * Before the first signed stable release, the verified preview uses the legacy integrity-checked R2
+ * manifest. Once RELEASE_CATALOG_ENABLED is exactly `true`, fixed manifest/feed routes resolve D1
+ * pointers and never fall back to mutable R2 pointers.
+ * Native update installation separately verifies artifact SHA-256, Minisign, and Authenticode.
  *
  * Routes:
  *   GET|HEAD /download/windows-x64          the latest Windows x64 installer
+ *   GET|HEAD /download/macos-arm64          the latest published macOS arm64 DMG
  *   GET|HEAD /download/<version>/<file>     one pinned release file
  *   GET|HEAD /releases/latest.json          the manifest
  *
@@ -16,9 +22,19 @@ import type { Release, ReleaseManifest, ReleasePlatform } from "../src/data/rele
 import { apiError, json } from "./lib/http";
 import { canonicalRedirect } from "./lib/router";
 import { IMMUTABLE_CACHE, siteCsp, withSecurityHeaders } from "./lib/security";
+import { type PublishedRelease, type ReleaseCatalog, readPublishedDescriptor, releaseCatalog } from "./release-catalog";
+import {
+  parseUpdaterDescriptor,
+  type UpdaterChannel,
+  type ValidatedUpdaterArtifact,
+  type ValidatedUpdaterDescriptor,
+} from "./updater-descriptor";
 
 export interface DownloadEnv {
+  DB: D1Database;
   ASSETS: Fetcher;
+  /** Exact `true` switches release authority from the legacy R2 manifest to immutable D1 pointers. */
+  RELEASE_CATALOG_ENABLED?: string;
   /** Optional so a deployment without the bucket still serves the site (downloads then 404). */
   RELEASES?: R2Bucket;
 }
@@ -42,6 +58,7 @@ export interface ReleaseBucket {
 }
 
 export interface DownloadDeps {
+  catalog?: ReleaseCatalog;
   bucket: ReleaseBucket | null;
   assets: { fetch(request: Request): Promise<Response> };
   log: (entry: Record<string, string>) => void;
@@ -53,6 +70,7 @@ export interface ByteRange {
 }
 
 export const WINDOWS_X64_PATH = "/download/windows-x64";
+export const MACOS_ARM64_PATH = "/download/macos-arm64";
 export const MANIFEST_PATH = "/releases/latest.json";
 export const MANIFEST_KEY = "releases/latest.json";
 
@@ -68,6 +86,8 @@ const PINNED = /^\/download\/([^/]+)\/([^/]+)$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 
 const CONTENT_TYPES: ReadonlyArray<readonly [string, string]> = [
+  [".sig", "text/plain; charset=utf-8"],
+  [".dmg", "application/x-apple-diskimage"],
   [".exe", "application/vnd.microsoft.portable-executable"],
   [".msi", "application/x-msi"],
   [".json", "application/json; charset=utf-8"],
@@ -75,6 +95,7 @@ const CONTENT_TYPES: ReadonlyArray<readonly [string, string]> = [
 
 export function downloadDepsFromEnv(env: DownloadEnv): DownloadDeps {
   return {
+    ...(env.RELEASE_CATALOG_ENABLED === "true" ? { catalog: releaseCatalog(env.DB) } : {}),
     bucket: env.RELEASES ?? null,
     assets: env.ASSETS,
     // Structured logs only. Never pass IP addresses or request headers here.
@@ -104,14 +125,45 @@ export function contentTypeFor(file: string): string {
 }
 
 type Route =
+  | { kind: "updater"; key: string; file: string; mutable: boolean }
   | { kind: "latest-installer"; os: "windows"; arch: "x64" }
+  | { kind: "latest-installer"; os: "macos"; arch: "arm64" }
   | { kind: "pinned"; version: string; file: string }
   | { kind: "manifest" }
   | { kind: "invalid-pinned" };
 
 /** Which download route, if any, a path belongs to. Other `/download…` paths are site pages. */
 export function matchDownloadRoute(pathname: string): Route | null {
+  if (pathname.startsWith("/releases/updater/")) {
+    const parts = pathname.slice("/releases/updater/".length).split("/");
+    const channel = parts[0] ?? "";
+    if (parts.length === 1 && /^(stable|beta|dev)\.json$/.test(channel)) {
+      return { kind: "updater", key: pathname.slice(1), file: channel, mutable: true };
+    }
+    if (!/^(stable|beta|dev)$/.test(channel)) return { kind: "invalid-pinned" };
+    const version = parts[1] ?? "";
+    if (parts.length === 2 && version.endsWith(".json") && isValidVersion(version.slice(0, -5))) {
+      return { kind: "updater", key: pathname.slice(1), file: version, mutable: false };
+    }
+    if (isValidVersion(version) && (parts.length === 4 || parts.length === 5)) {
+      const file = parts.at(-1) ?? "";
+      const hashes = parts.slice(2, -1);
+      if (
+        hashes.every((hash) => SHA256.test(hash)) &&
+        isValidFileName(file) &&
+        ((parts.length === 4 && /\.(exe|dmg)$/.test(file)) || (parts.length === 5 && /\.(exe|dmg)\.sig$/.test(file)))
+      ) {
+        return { kind: "updater", key: pathname.slice(1), file, mutable: false };
+      }
+    }
+    const file = parts[2] ?? "";
+    if (parts.length === 3 && isValidVersion(version) && isValidFileName(file) && /\.exe(\.sig)?$/.test(file)) {
+      return { kind: "updater", key: pathname.slice(1), file, mutable: false };
+    }
+    return { kind: "invalid-pinned" };
+  }
   if (pathname === WINDOWS_X64_PATH) return { kind: "latest-installer", os: "windows", arch: "x64" };
+  if (pathname === MACOS_ARM64_PATH) return { kind: "latest-installer", os: "macos", arch: "arm64" };
   if (pathname === MANIFEST_PATH) return { kind: "manifest" };
   const pinned = PINNED.exec(pathname);
   if (pinned) {
@@ -139,12 +191,22 @@ function isString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
+function isSitePath(value: string): boolean {
+  return (
+    value.startsWith("/") &&
+    !value.startsWith("//") &&
+    !value.includes("\\") &&
+    !Array.from(value).some((char) => char.charCodeAt(0) <= 32 || char.charCodeAt(0) === 127)
+  );
+}
+
 function parsePlatform(value: unknown, version: string): ReleasePlatform | null {
   if (!isRecord(value)) return null;
   const { os, arch, label, kind, file, url, pinnedUrl, size, sha256, signed } = value;
   if (os !== "windows" && os !== "macos" && os !== "linux") return null;
   if (arch !== "x64" && arch !== "arm64" && arch !== "universal") return null;
   if (!isString(label) || !isString(kind) || !isString(url) || !isString(pinnedUrl)) return null;
+  if (!isSitePath(url) || !url.startsWith("/download/")) return null;
   if (!["nsis", "msi", "dmg", "appimage", "deb", "rpm"].includes(kind)) return null;
   if (!isString(file) || !isValidFileName(file)) return null;
   if (pinnedUrl !== `/download/${version}/${file}`) return null;
@@ -172,7 +234,7 @@ function parseRelease(value: unknown): Release | null {
   if (channel !== "preview" && channel !== "stable") return null;
   if (!isString(publishedAt) || Number.isNaN(Date.parse(publishedAt))) return null;
   if (!isString(commit) || !/^[0-9a-f]{40}$/.test(commit)) return null;
-  if (!isString(notesUrl) || !notesUrl.startsWith("/")) return null;
+  if (!isString(notesUrl) || !isSitePath(notesUrl)) return null;
   if (!Array.isArray(platforms) || platforms.length === 0) return null;
   const parsed: ReleasePlatform[] = [];
   for (const platform of platforms) {
@@ -232,7 +294,44 @@ function etagMatches(header: string | null, etag: string): boolean {
   return header.split(",").some((tag) => bare(tag) === bare(etag));
 }
 
-async function readManifest(deps: DownloadDeps, bucket: ReleaseBucket): Promise<ReleaseManifest | null> {
+async function published(deps: DownloadDeps, channel: string, version?: string): Promise<PublishedRelease | null> {
+  if (!deps.catalog) throw new Error("Publication catalog unavailable");
+  const row = await deps.catalog.get(channel, version);
+  if (!row) return null;
+  if (
+    row.channel !== channel ||
+    !isValidVersion(row.version) ||
+    (version !== undefined && row.version !== version) ||
+    !SHA256.test(row.download_descriptor_sha256) ||
+    !SHA256.test(row.updater_descriptor_sha256) ||
+    row.download_descriptor_key !== `releases/${row.version}/${row.download_descriptor_sha256}.json` ||
+    row.updater_descriptor_key !== `releases/updater/${channel}/${row.version}/${row.updater_descriptor_sha256}.json`
+  ) {
+    throw new Error("Invalid publication record");
+  }
+  return row;
+}
+
+async function readManifest(
+  deps: DownloadDeps,
+  bucket: ReleaseBucket,
+  version?: string,
+): Promise<ReleaseManifest | null> {
+  if (deps.catalog) {
+    const row = await published(deps, "stable", version);
+    if (!row) return null;
+    const manifest = parseReleaseManifest(
+      JSON.parse(await readPublishedDescriptor(bucket, row.download_descriptor_key, row.download_descriptor_sha256)),
+    );
+    if (
+      !manifest?.latest ||
+      manifest.latest.version !== row.version ||
+      manifest.latest.channel !== "stable" ||
+      manifest.latest.platforms.some((platform) => !platform.signed)
+    )
+      throw new Error("Invalid published manifest");
+    return manifest;
+  }
   const object = await bucket.get(MANIFEST_KEY);
   if (!object) return null;
   let value: unknown;
@@ -297,12 +396,21 @@ interface ServeFile {
   file: string;
   cacheControl: string;
   extraHeaders?: Record<string, string>;
+  maxBytes?: number;
+  expectedSize?: number;
 }
 
 /** Streams one release file with download headers, conditional requests and single ranges. */
 async function serveFile(request: Request, url: URL, deps: DownloadDeps, bucket: ReleaseBucket, target: ServeFile) {
   const meta = await bucket.head(target.key);
   if (!meta) return notFound(request, url, deps);
+  if (target.expectedSize !== undefined && meta.size !== target.expectedSize) return unavailable(request);
+  if (
+    target.maxBytes !== undefined &&
+    (!Number.isSafeInteger(meta.size) || meta.size <= 0 || meta.size > target.maxBytes)
+  ) {
+    return unavailable(request);
+  }
 
   const headers = new Headers({
     "content-type": contentTypeFor(target.file),
@@ -322,7 +430,7 @@ async function serveFile(request: Request, url: URL, deps: DownloadDeps, bucket:
 
   const ifRange = request.headers.get("if-range");
   const range =
-    ifRange === null || etagMatches(ifRange, meta.httpEtag)
+    ifRange === null || (!ifRange.startsWith("W/") && ifRange === meta.httpEtag)
       ? parseRange(request.headers.get("range"), meta.size)
       : null;
   if (range === "unsatisfiable") {
@@ -341,12 +449,72 @@ async function serveFile(request: Request, url: URL, deps: DownloadDeps, bucket:
 
   const object = range ? await bucket.get(target.key, { range }) : await bucket.get(target.key);
   if (!object) return notFound(request, url, deps);
+  if (object.httpEtag !== meta.httpEtag || object.size !== meta.size) {
+    await object.body.cancel().catch(() => undefined);
+    return unavailable(request);
+  }
   return new Response(object.body, { status, headers });
 }
 
+function updaterArtifacts(descriptor: ValidatedUpdaterDescriptor): ValidatedUpdaterArtifact[] {
+  return Object.values(descriptor.artifacts).filter(
+    (artifact): artifact is ValidatedUpdaterArtifact => artifact !== undefined,
+  );
+}
+
+function signatureHashForKey(key: string, artifact: ValidatedUpdaterArtifact): string | null {
+  const directory = artifact.artifactKey.slice(0, -artifact.artifactFile.length);
+  const suffix = `/${artifact.signatureFile}`;
+  if (!key.startsWith(directory) || !key.endsWith(suffix)) return null;
+  const hash = key.slice(directory.length, -suffix.length);
+  return SHA256.test(hash) ? hash : null;
+}
+
+async function signatureObjectHash(signature: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${signature}\n`));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function serveUpdaterSignature(
+  request: Request,
+  url: URL,
+  deps: DownloadDeps,
+  bucket: ReleaseBucket,
+  key: string,
+  hash: string,
+  artifact: ValidatedUpdaterArtifact,
+): Promise<Response> {
+  if (!(await bucket.head(key))) return notFound(request, url, deps);
+  const body = await readPublishedDescriptor(bucket, key, hash);
+  if (body !== `${artifact.signature}\n`) {
+    throw new Error("Updater signature does not match the published descriptor");
+  }
+  const bytes = new TextEncoder().encode(body);
+  const etag = `"${hash}"`;
+  const headers = new Headers({
+    "content-type": "text/plain; charset=utf-8",
+    "content-disposition": `attachment; filename="${artifact.signatureFile}"`,
+    "content-length": String(bytes.byteLength),
+    "cache-control": IMMUTABLE_CACHE,
+    etag,
+  });
+  if (etagMatches(request.headers.get("if-none-match"), etag)) {
+    headers.delete("content-type");
+    headers.delete("content-disposition");
+    headers.delete("content-length");
+    return new Response(null, { status: 304, headers });
+  }
+  return new Response(request.method === "HEAD" ? null : bytes, { status: 200, headers });
+}
+
 function findPlatform(release: Release, os: string, arch: string): ReleasePlatform | undefined {
-  // The NSIS per-user installer is the primary Windows download.
   const matches = release.platforms.filter((p) => p.os === os && p.arch === arch);
+  // A Mac latest link must resolve only to the publisher's canonical DMG row. Other formats may
+  // coexist in a descriptor, but cannot make the public Mac route claim an installable release.
+  if (os === "macos" && arch === "arm64") {
+    return matches.find((platform) => platform.kind === "dmg" && platform.url === MACOS_ARM64_PATH);
+  }
+  // Preserve the established Windows behavior: prefer NSIS, then an explicitly published fallback.
   return matches.find((p) => p.kind === "nsis") ?? matches[0];
 }
 
@@ -370,7 +538,62 @@ async function route(request: Request, url: URL, deps: DownloadDeps, match: Rout
     return request.method === "HEAD" ? new Response(null, { status: 200, headers: response.headers }) : response;
   }
 
+  if (match.kind === "updater") {
+    if (deps.catalog) {
+      const parts = match.key.slice("releases/updater/".length).split("/");
+      const channel = (parts[0] ?? "").replace(/\.json$/, "");
+      const version =
+        parts.length === 1 ? undefined : match.file.endsWith(".json") ? (parts[1] ?? "").slice(0, -5) : parts[1];
+      const row = await published(deps, channel, version);
+      if (!row) return notFound(request, url, deps);
+      const body = await readPublishedDescriptor(bucket, row.updater_descriptor_key, row.updater_descriptor_sha256);
+      const descriptor = parseUpdaterDescriptor(JSON.parse(body), channel as UpdaterChannel, row.version);
+      if (!descriptor) throw new Error("Invalid updater descriptor");
+      if (!match.file.endsWith(".json")) {
+        for (const artifact of updaterArtifacts(descriptor)) {
+          if (match.key === artifact.artifactKey) {
+            return serveFile(request, url, deps, bucket, {
+              key: artifact.artifactKey,
+              file: artifact.artifactFile,
+              cacheControl: IMMUTABLE_CACHE,
+              expectedSize: artifact.size,
+              maxBytes: 512 * 1024 * 1024,
+            });
+          }
+          const signatureHash = signatureHashForKey(match.key, artifact);
+          if (signatureHash !== null && signatureHash === (await signatureObjectHash(artifact.signature))) {
+            return serveUpdaterSignature(request, url, deps, bucket, match.key, signatureHash, artifact);
+          }
+        }
+        return notFound(request, url, deps);
+      }
+      return new Response(request.method === "HEAD" ? null : body, {
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          "cache-control": match.mutable ? MANIFEST_CACHE : IMMUTABLE_CACHE,
+        },
+      });
+    }
+    return serveFile(request, url, deps, bucket, {
+      key: match.key,
+      file: match.file,
+      cacheControl: match.mutable ? MANIFEST_CACHE : IMMUTABLE_CACHE,
+      maxBytes: /\.(exe|dmg)$/.test(match.file) ? 512 * 1024 * 1024 : 64 * 1024,
+    });
+  }
+
   if (match.kind === "pinned") {
+    if (deps.catalog) {
+      const manifest = await readManifest(deps, bucket, match.version);
+      const platform = manifest?.latest?.platforms.find((platform) => platform.file === match.file);
+      if (!platform) return notFound(request, url, deps);
+      return serveFile(request, url, deps, bucket, {
+        key: `releases/${match.version}/${platform.sha256}/${platform.file}`,
+        file: platform.file,
+        cacheControl: IMMUTABLE_CACHE,
+        expectedSize: platform.size,
+      });
+    }
     return serveFile(request, url, deps, bucket, {
       key: releaseKey(match.version, match.file),
       file: match.file,
@@ -378,13 +601,19 @@ async function route(request: Request, url: URL, deps: DownloadDeps, match: Rout
     });
   }
 
+  // Mac availability is activated only by the immutable stable descriptor selected through D1.
+  // A legacy mutable R2 manifest can continue serving Windows previews but can never enable Mac.
+  if (match.os === "macos" && !deps.catalog) return notFound(request, url, deps);
   const manifest = await readManifest(deps, bucket);
   const platform = manifest?.latest ? findPlatform(manifest.latest, match.os, match.arch) : undefined;
   if (!manifest?.latest || !platform) return notFound(request, url, deps);
   return serveFile(request, url, deps, bucket, {
-    key: releaseKey(manifest.latest.version, platform.file),
+    key: deps.catalog
+      ? `releases/${manifest.latest.version}/${platform.sha256}/${platform.file}`
+      : releaseKey(manifest.latest.version, platform.file),
     file: platform.file,
     cacheControl: LATEST_CACHE,
+    expectedSize: platform.size,
     extraHeaders: { "x-kalcode-version": manifest.latest.version },
   });
 }
@@ -405,6 +634,9 @@ export async function handleDownload(request: Request, deps: DownloadDeps): Prom
   } catch (error) {
     deps.log({ level: "error", event: "download.error", error: errorName(error) });
     response = unavailable(request);
+  }
+  if (deps.catalog && (match.kind === "manifest" || (match.kind === "updater" && match.file.endsWith(".json")))) {
+    response.headers.set("X-KalCode-Release-Authority", "d1-v1");
   }
   return withSecurityHeaders(response, url.pathname, await siteCsp());
 }

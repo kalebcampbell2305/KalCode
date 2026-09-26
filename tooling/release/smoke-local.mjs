@@ -34,7 +34,12 @@ const wrangler = spawn(
     "--inspector-port",
     String(PORT + 1000),
   ],
-  { cwd: WEBSITE_DIR, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, WRANGLER_SEND_METRICS: "false" } },
+  {
+    cwd: WEBSITE_DIR,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
+    windowsHide: true,
+  },
 );
 let output = "";
 wrangler.stdout.on("data", (d) => {
@@ -137,7 +142,10 @@ try {
 } finally {
   // Kill the whole tree: wrangler starts workerd as a child that would keep the port open.
   if (process.platform === "win32")
-    spawnSync("taskkill", ["/PID", String(wrangler.pid), "/T", "/F"], { stdio: "ignore" });
+    spawnSync("taskkill", ["/PID", String(wrangler.pid), "/T", "/F"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
   else wrangler.kill();
 }
 

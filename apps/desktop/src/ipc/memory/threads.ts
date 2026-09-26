@@ -24,6 +24,7 @@ import type {
   ToolCallRecord,
   WorkspaceOption,
 } from "@kalcode/protocol";
+import type { PromptReview, PromptWarning } from "../context.ts";
 import { providerCatalog } from "../memoryProviders.ts";
 import type { CommandName } from "../transport.ts";
 
@@ -44,6 +45,13 @@ export interface ThreadsGate {
 
 export interface ThreadsMemory {
   handlers: Record<ThreadCommand, Handler>;
+  /** Test-runtime parity with native: context reaches the provider but only userText is durable. */
+  sendWithContext(
+    threadId: string,
+    userText: string,
+    providerPayload: string,
+    promptReviewId?: string | null,
+  ): ThreadSummary;
   /** The user answered request `requestId` (forwarded from `approval.*`, like native). */
   resolveApproval(requestId: string, approved: boolean): void;
   stream(threadId: string, onEvent: (event: AgentEvent) => void): () => void;
@@ -115,7 +123,10 @@ const WORKSPACES: WorkspaceOption[] = [
 const CREATE_MODES: PermissionMode[] = ["plan", "approve", "auto"];
 const MAX_PROMPT = 100_000;
 const MAX_NAME = 80;
+const MAX_PROMPT_REVIEWS = 64;
+const PROMPT_REVIEW_TTL_MS = 10 * 60_000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const PROMPT_CREDENTIAL = /\b(password|passwd|pwd|api[_-]?key|access[_-]?token|secret)\s*[:=]\s*([^\s,;]+)/gi;
 
 const LIVE: ReadonlySet<ThreadStatus> = new Set([
   "starting",
@@ -250,9 +261,12 @@ export function createThreadsMemory(
   usableProviders: () => readonly string[] = () => ["claude-code"],
   /** The permission gate (Z4). Without it, a waiting thread can only be interrupted or stopped. */
   gate: ThreadsGate | null = null,
+  /** Public active account metadata; ui-test wiring uses the managed account fixture store. */
+  accountFor: ((accountId: string, providerId: string) => { displayName: string }) | null = null,
 ): ThreadsMemory {
   const threads = new Map<string, MemThread>();
   const streams = new Map<string, Set<(event: AgentEvent) => void>>();
+  const promptReviews = new Map<string, { target: PromptTarget; prompt: string; createdAt: number }>();
   // Like native `thread_options`: only providers with a thread adapter that detection reports
   // usable (installed at a supported version, not signed out) are offered.
   const offered = (): ProviderOption[] => {
@@ -345,6 +359,80 @@ export function createThreadsMemory(
     if (!name) invalid("invalid_name", "Give the thread a name.");
     if ([...name].length > MAX_NAME) invalid("invalid_name", `Thread names can be at most ${MAX_NAME} characters.`);
     return name;
+  };
+
+  interface PromptTarget {
+    workspaceId: string;
+    threadId: string | null;
+    providerId: string;
+    providerAccountId: string | null;
+  }
+
+  const promptDetectors = (prompt: string): Record<string, number> => {
+    const detectors: Record<string, number> = {};
+    for (const match of prompt.matchAll(PROMPT_CREDENTIAL)) {
+      const detector = `${String(match[1]).toLowerCase().replaceAll("-", "_")}_assignment`;
+      detectors[detector] = (detectors[detector] ?? 0) + 1;
+    }
+    return detectors;
+  };
+
+  const samePromptTarget = (left: PromptTarget, right: PromptTarget): boolean =>
+    left.workspaceId === right.workspaceId &&
+    left.threadId === right.threadId &&
+    left.providerId === right.providerId &&
+    left.providerAccountId === right.providerAccountId;
+
+  const purgePromptReviews = () => {
+    const cutoff = Date.now() - PROMPT_REVIEW_TTL_MS;
+    for (const [id, review] of promptReviews) if (review.createdAt <= cutoff) promptReviews.delete(id);
+  };
+
+  const reviewPrompt = (target: PromptTarget, prompt: string): PromptReview => {
+    const detectors = promptDetectors(prompt);
+    if (Object.keys(detectors).length === 0) return { kind: "clean" };
+    purgePromptReviews();
+    if (promptReviews.size >= MAX_PROMPT_REVIEWS) {
+      error(
+        "validation",
+        "context_prompt_review_capacity",
+        "Too many prompt reviews are waiting. Finish or let an earlier review expire, then try again.",
+      );
+    }
+    const warning: PromptWarning = { reviewId: uuid(), detectors };
+    promptReviews.set(warning.reviewId, { target, prompt, createdAt: Date.now() });
+    return { kind: "confirmation_required", warning };
+  };
+
+  const admitPrompt = (target: PromptTarget, prompt: string, reviewId: unknown): void => {
+    const warned = Object.keys(promptDetectors(prompt)).length > 0;
+    if (reviewId == null) {
+      if (warned) {
+        error(
+          "permission",
+          "context_prompt_confirmation_required",
+          "This prompt may contain a secret. Review the warning and confirm this exact prompt before sending.",
+        );
+      }
+      return;
+    }
+    if (typeof reviewId !== "string" || !UUID.test(reviewId)) {
+      error(
+        "permission",
+        "context_prompt_confirmation_invalid",
+        "That prompt confirmation is expired, already used, or belongs to different content or a different destination.",
+      );
+    }
+    purgePromptReviews();
+    const sealed = promptReviews.get(reviewId);
+    promptReviews.delete(reviewId);
+    if (!sealed || !warned || !samePromptTarget(sealed.target, target) || sealed.prompt !== prompt) {
+      error(
+        "permission",
+        "context_prompt_confirmation_invalid",
+        "That prompt confirmation is expired, already used, or belongs to different content or a different destination.",
+      );
+    }
   };
 
   /** Runs one scripted provider turn for `prompt`. */
@@ -467,10 +555,32 @@ export function createThreadsMemory(
     else setStatus(t, "idle");
   };
 
-  const send = (t: MemThread, text: string) => {
-    addMessage(t, "user", text, "ui");
+  const send = (t: MemThread, userText: string, providerPayload = userText) => {
+    addMessage(t, "user", userText, "ui");
     setStatus(t, "active");
-    runTurn(t, text);
+    runTurn(t, providerPayload);
+  };
+
+  const sendExisting = (
+    threadId: unknown,
+    userText: unknown,
+    providerPayload: unknown,
+    promptReviewId: unknown,
+  ): ThreadSummary => {
+    const t = get({ threadId });
+    const text = validPrompt(userText);
+    const payload = validPrompt(providerPayload);
+    admitPrompt(threadTarget(t), text, promptReviewId);
+    if (t.archived) invalid("thread_archived", "This thread is archived.");
+    if (!t.live) invalid("thread_not_running", "This thread isn't running. Resume it to continue.");
+    if (t.paneStop) invalid("thread_in_pane", "This thread runs in a pane. Type in the pane instead.");
+    if (t.summary.pendingApprovals > 0)
+      invalid(
+        "thread_waiting_for_permission",
+        "This thread is waiting for a permission decision. Answer it or interrupt the turn first.",
+      );
+    send(t, text, payload);
+    return summary(t);
   };
 
   const summary = (t: MemThread): ThreadSummary => t.summary;
@@ -549,15 +659,22 @@ export function createThreadsMemory(
     setStatus(t, "interrupted", activity);
   };
 
-  /**
-   * Validates a create request exactly like native `thread_create` (and, without a prompt,
-   * `create_idle` for provider panes), then records the thread and emits `thread.created`.
-   */
-  const insertThread = (
+  interface CreationPlan {
+    provider: ProviderOption;
+    workspace: WorkspaceOption;
+    providerAccountId: string | null;
+    accountLabel: string | null;
+    model: string | null;
+    mode: PermissionMode;
+    prompt: string | null;
+    name: string;
+  }
+
+  /** Validates and resolves a create request without writing thread or provider state. */
+  const planThread = (
     args: Record<string, unknown>,
     readPrompt: ((args: Record<string, unknown>) => string) | null,
-    runtimeKind: ThreadSummary["runtimeKind"] = null,
-  ): { thread: MemThread; prompt: string | null } => {
+  ): CreationPlan => {
     requireCore();
     const providerId = args.providerId;
     if (typeof providerId !== "string" || !/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(providerId))
@@ -572,12 +689,6 @@ export function createThreadsMemory(
       );
     if (!CREATE_MODES.includes(mode)) error("internal", "ipc_rejected", "KalCode couldn't complete that request.");
     const prompt = readPrompt ? readPrompt(args) : null;
-    const name =
-      args.name == null || String(args.name).trim() === ""
-        ? prompt === null
-          ? "New thread"
-          : nameFromPrompt(prompt)
-        : validName(args.name);
     const provider = offered().find((p) => p.id === providerId);
     if (!provider)
       return error(
@@ -588,6 +699,12 @@ export function createThreadsMemory(
     const model = args.model == null || args.model === "" ? null : String(args.model);
     if (model && !provider.models.some((m) => m.id === model))
       invalid("invalid_model", `That model isn't available for ${provider.displayName}.`);
+    const providerAccountId =
+      args.providerAccountId == null || args.providerAccountId === "" ? null : String(args.providerAccountId);
+    if (providerAccountId !== null && !UUID.test(providerAccountId))
+      invalid("provider_account_id_invalid", "That provider account reference isn't valid.");
+    const selectedAccount =
+      providerAccountId === null || accountFor === null ? null : accountFor(providerAccountId, provider.id);
     const workspace = workspaces().find((w) => w.id === args.workspaceId);
     if (!workspace)
       return error(
@@ -595,6 +712,36 @@ export function createThreadsMemory(
         "workspace_not_found",
         "That workspace isn't available. It may have been removed from KalCode.",
       );
+    const accountLabel = selectedAccount?.displayName ?? (providerAccountId === null ? provider.accountLabel : null);
+    const name =
+      args.name == null || String(args.name).trim() === ""
+        ? prompt === null || Object.keys(promptDetectors(prompt)).length > 0
+          ? "New thread"
+          : nameFromPrompt(prompt)
+        : validName(args.name);
+    return { provider, workspace, providerAccountId, accountLabel, model, mode, prompt, name };
+  };
+
+  const createTarget = (plan: CreationPlan): PromptTarget => ({
+    workspaceId: plan.workspace.id,
+    threadId: null,
+    providerId: plan.provider.id,
+    providerAccountId: plan.providerAccountId,
+  });
+
+  const threadTarget = (thread: MemThread): PromptTarget => ({
+    workspaceId: thread.summary.workspaceId,
+    threadId: thread.summary.id,
+    providerId: thread.summary.providerId,
+    providerAccountId: thread.summary.providerAccountId,
+  });
+
+  /** Records one previously validated creation plan and emits `thread.created`. */
+  const insertThread = (
+    plan: CreationPlan,
+    runtimeKind: ThreadSummary["runtimeKind"] = null,
+  ): { thread: MemThread; prompt: string | null } => {
+    const { provider, workspace, providerAccountId, accountLabel, model, mode, prompt, name } = plan;
     const created = now();
     const t: MemThread = {
       summary: {
@@ -603,7 +750,10 @@ export function createThreadsMemory(
         providerId: provider.id,
         providerName: provider.displayName,
         model,
-        accountLabel: provider.accountLabel,
+        providerAccountId,
+        // Snapshot only metadata resolved by the managed-account fixture store. Direct unit
+        // construction without a resolver retains its bounded legacy provider label.
+        accountLabel,
         workspaceId: workspace.id,
         workspaceName: workspace.name,
         permissionMode: mode,
@@ -688,24 +838,27 @@ export function createThreadsMemory(
         invalid("invalid_page_size", "Page size must be between 1 and 500.");
       return t.tools.slice(-limit);
     },
+    thread_review_create_prompt: (args) => {
+      const plan = planThread(args, (a) => validPrompt(a.prompt));
+      return reviewPrompt(createTarget(plan), plan.prompt as string);
+    },
+    thread_review_prompt: (args) => {
+      const t = get(args);
+      return reviewPrompt(threadTarget(t), validPrompt(args.text));
+    },
+    thread_cancel_prompt_review: (args) => {
+      purgePromptReviews();
+      return typeof args.reviewId === "string" && promptReviews.delete(args.reviewId);
+    },
     thread_create: (args) => {
-      const { thread: t, prompt } = insertThread(args, (a) => validPrompt(a.prompt));
+      const plan = planThread(args, (a) => validPrompt(a.prompt));
+      admitPrompt(createTarget(plan), plan.prompt as string, args.promptReviewId);
+      const { thread: t, prompt } = insertThread(plan);
       startSession(t, null, prompt);
       return summary(t);
     },
     thread_send: (args) => {
-      const t = get(args);
-      const text = validPrompt(args.text);
-      if (t.archived) invalid("thread_archived", "This thread is archived.");
-      if (!t.live) invalid("thread_not_running", "This thread isn't running. Resume it to continue.");
-      if (t.paneStop) invalid("thread_in_pane", "This thread runs in a pane. Type in the pane instead.");
-      if (t.summary.pendingApprovals > 0)
-        invalid(
-          "thread_waiting_for_permission",
-          "This thread is waiting for a permission decision. Answer it or interrupt the turn first.",
-        );
-      send(t, text);
-      return summary(t);
+      return sendExisting(args.threadId, args.text, args.text, args.promptReviewId);
     },
     thread_interrupt: (args) => {
       const t = get(args);
@@ -737,6 +890,14 @@ export function createThreadsMemory(
       const t = get(args);
       if (t.archived) invalid("thread_archived", "This thread is archived.");
       const text = args.text == null || String(args.text).trim() === "" ? null : validPrompt(args.text);
+      if (text) admitPrompt(threadTarget(t), text, args.promptReviewId);
+      else if (args.promptReviewId != null) {
+        error(
+          "permission",
+          "context_prompt_confirmation_invalid",
+          "A prompt confirmation cannot be used when no prompt is being sent.",
+        );
+      }
       if (t.live) {
         if (t.summary.status !== "paused") invalid("thread_already_running", "This thread is already running.");
         setStatus(t, "idle");
@@ -779,6 +940,8 @@ export function createThreadsMemory(
 
   return {
     handlers,
+    sendWithContext: (threadId, userText, providerPayload, promptReviewId) =>
+      sendExisting(threadId, userText, providerPayload, promptReviewId),
     stream(threadId, onEvent) {
       requireCore();
       const t = threads.get(threadId);
@@ -793,7 +956,7 @@ export function createThreadsMemory(
     },
     streamCount: (threadId) => streams.get(threadId)?.size ?? 0,
     createPaneThread(args, onStop) {
-      const { thread: t } = insertThread(args, null, "interactive_pty");
+      const { thread: t } = insertThread(planThread(args, null), "interactive_pty");
       t.paneStop = onStop;
       t.live = true;
       t.providerSessionId = `session-${t.summary.id.slice(0, 8)}`;
@@ -862,6 +1025,7 @@ function seed(threads: Map<string, MemThread>) {
         providerId: provider.id,
         providerName: provider.displayName,
         model: provider.models[0]?.id ?? null,
+        providerAccountId: null,
         accountLabel: provider.accountLabel,
         workspaceId: workspace.id,
         workspaceName: workspace.name,

@@ -86,7 +86,7 @@ fn images_translate_by_capability() {
     let rendered = package.render().expect("render");
     assert!(
         rendered
-            .parts
+            .parts()
             .iter()
             .all(|p| matches!(p, RenderedPart::Text(_)))
     );
@@ -103,7 +103,7 @@ fn images_translate_by_capability() {
     let rendered = package.render().expect("render");
     assert!(
         rendered
-            .parts
+            .parts()
             .iter()
             .any(|p| matches!(p, RenderedPart::Attachment { mime, .. } if mime == "image/png"))
     );
@@ -152,7 +152,7 @@ fn budgets_trim_output_and_refuse_oversize_files() {
     assert!(text.contains("[0000] step ok"));
     assert!(text.contains("[0399] step ok"));
     assert!(text.contains("bytes omitted by KalCode"));
-    assert!(rendered.bytes_sent <= 6 * 1024);
+    assert!(rendered.bytes_sent() <= 6 * 1024);
     let preview = package.preview();
     assert_eq!(preview.max_bytes, 6 * 1024);
     assert!(
@@ -209,7 +209,7 @@ fn hash_is_pinned_until_send() {
         .expect("check")
     {
         SendCheck::Ready(rendered) => {
-            assert_eq!(rendered.content_sha256, previewed);
+            assert_eq!(rendered.content_sha256(), previewed);
             assert!(rendered.text().contains("fn a() {}"));
         }
         SendCheck::Stale(_) => panic!("unchanged content reported stale"),

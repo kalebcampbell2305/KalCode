@@ -5,6 +5,7 @@
 
 export const SCHEMA_VERSION = 1;
 export const WINDOWS_LABEL = "Windows 10 (1809) or later, 64-bit";
+export const MACOS_ARM64_LABEL = "macOS 14 or later, Apple silicon";
 export const OS_LIST = ["windows", "macos", "linux"];
 
 const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$/;
@@ -19,7 +20,7 @@ export const NOT_BUILT = [
   {
     os: "macos",
     label: "macOS",
-    reason: "Not available yet. macOS builds need a macOS build machine and Apple code signing, which are not set up.",
+    reason: "No signed, notarized, and production-verified macOS release is available yet.",
   },
   {
     os: "linux",
@@ -39,17 +40,51 @@ export function emptyManifest() {
   return { schemaVersion: SCHEMA_VERSION, latest: null, unavailable: [WINDOWS_UNPUBLISHED, ...NOT_BUILT] };
 }
 
-/** Changelog anchor for a version, matching the site's `id="release-0-1-0"` convention. */
+/** Updates-page anchor for a version, matching the site's `id="release-0-1-0"` convention. */
 export function notesAnchor(version) {
   return `release-${version.replaceAll(".", "-")}`;
 }
 
 /**
- * Builds the manifest for a published Windows release.
+ * Builds the manifest for the exact set of published desktop platforms.
  * @param {{ version: string, commit: string, publishedAt: string, channel?: "preview" | "stable",
- *   windows: { file: string, size: number, sha256: string, signed: boolean } }} input
+ *   windows?: { file: string, size: number, sha256: string, signed: boolean },
+ *   macosArm64?: { file: string, size: number, sha256: string, signed: boolean } }} input
  */
-export function buildManifest({ version, commit, publishedAt, channel = "preview", windows }) {
+export function buildManifest({ version, commit, publishedAt, channel = "preview", windows, macosArm64 }) {
+  const platforms = [];
+  if (windows) {
+    platforms.push({
+      os: "windows",
+      arch: "x64",
+      label: WINDOWS_LABEL,
+      kind: "nsis",
+      file: windows.file,
+      url: "/download/windows-x64",
+      pinnedUrl: `/download/${version}/${windows.file}`,
+      size: windows.size,
+      sha256: windows.sha256,
+      signed: windows.signed,
+    });
+  }
+  if (macosArm64) {
+    platforms.push({
+      os: "macos",
+      arch: "arm64",
+      label: MACOS_ARM64_LABEL,
+      kind: "dmg",
+      file: macosArm64.file,
+      url: "/download/macos-arm64",
+      pinnedUrl: `/download/${version}/${macosArm64.file}`,
+      size: macosArm64.size,
+      sha256: macosArm64.sha256,
+      signed: macosArm64.signed,
+    });
+  }
+  const unavailable = [];
+  if (!windows) unavailable.push(WINDOWS_UNPUBLISHED);
+  if (!macosArm64) unavailable.push(NOT_BUILT.find((entry) => entry.os === "macos"));
+  unavailable.push(NOT_BUILT.find((entry) => entry.os === "linux"));
   return {
     schemaVersion: SCHEMA_VERSION,
     latest: {
@@ -57,23 +92,10 @@ export function buildManifest({ version, commit, publishedAt, channel = "preview
       channel,
       publishedAt,
       commit,
-      notesUrl: `/changelog#${notesAnchor(version)}`,
-      platforms: [
-        {
-          os: "windows",
-          arch: "x64",
-          label: WINDOWS_LABEL,
-          kind: "nsis",
-          file: windows.file,
-          url: "/download/windows-x64",
-          pinnedUrl: `/download/${version}/${windows.file}`,
-          size: windows.size,
-          sha256: windows.sha256,
-          signed: windows.signed,
-        },
-      ],
+      notesUrl: `/updates#${notesAnchor(version)}`,
+      platforms,
     },
-    unavailable: NOT_BUILT,
+    unavailable,
   };
 }
 
@@ -115,6 +137,7 @@ export function validateManifest(manifest) {
       if (!Array.isArray(latest.platforms) || latest.platforms.length === 0) {
         errors.push("latest.platforms must list at least one build");
       } else {
+        const identities = new Set();
         latest.platforms.forEach((p, i) => {
           const at = `latest.platforms[${i}]`;
           if (!isRecord(p)) {
@@ -135,6 +158,9 @@ export function validateManifest(manifest) {
           if (!Number.isSafeInteger(p.size) || p.size <= 0) errors.push(`${at}.size must be a positive integer`);
           if (!SHA256.test(p.sha256 ?? "")) errors.push(`${at}.sha256 must be lowercase hex SHA-256`);
           if (typeof p.signed !== "boolean") errors.push(`${at}.signed must be a boolean`);
+          const identity = `${p.os}/${p.arch}`;
+          if (identities.has(identity)) errors.push(`${at} duplicates platform ${identity}`);
+          identities.add(identity);
         });
       }
     }

@@ -197,6 +197,23 @@ fn storage(e: std::io::Error) -> ModelError {
 pub struct ModelStore {
     dir: PathBuf,
     running: std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<AtomicBool>>>,
+    settled: std::sync::Condvar,
+}
+
+struct DownloadRegistration<'a> {
+    store: &'a ModelStore,
+    id: String,
+}
+
+impl Drop for DownloadRegistration<'_> {
+    fn drop(&mut self) {
+        self.store
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.id);
+        self.store.settled.notify_all();
+    }
 }
 
 impl ModelStore {
@@ -204,6 +221,7 @@ impl ModelStore {
         Self {
             dir: data_dir.join("models").join("whisper"),
             running: std::sync::Mutex::new(std::collections::HashMap::new()),
+            settled: std::sync::Condvar::new(),
         }
     }
 
@@ -219,7 +237,11 @@ impl ModelStore {
         self.dir.join(format!("{file_name}.partial"))
     }
 
-    /// The installed file for a catalog model (present with the expected size).
+    /// The apparent installed file for a catalog model (present with the expected size).
+    ///
+    /// This is intentionally a metadata-only check for status polling. It is not an integrity
+    /// boundary; callers that will load or otherwise trust the bytes must use
+    /// [`Self::verified_path`].
     pub fn installed_path(&self, id: &str) -> Option<PathBuf> {
         let spec = find(id)?;
         let path = self.final_path(spec.file_name);
@@ -227,6 +249,50 @@ impl ModelStore {
             .ok()
             .filter(|m| m.len() == spec.size_bytes)
             .map(|_| path)
+    }
+
+    /// Returns a catalog model only after its bytes match the pinned SHA-256 digest.
+    ///
+    /// A same-size file with the wrong digest is removed so subsequent status reads report the
+    /// model honestly as not installed. This performs disk I/O and belongs at a load boundary,
+    /// not in [`Self::list`] or another frequently-polled UI path.
+    pub fn verified_path(&self, id: &str) -> Result<Option<PathBuf>, ModelError> {
+        let spec = find(id).ok_or(ModelError::Unknown)?;
+        self.verified_source_path(&Source::official(spec))
+    }
+
+    fn verified_source_path(&self, source: &Source) -> Result<Option<PathBuf>, ModelError> {
+        let path = self.final_path(&source.file_name);
+        let metadata = match fs::metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(storage(error)),
+        };
+        if metadata.len() != source.size_bytes {
+            return Ok(None);
+        }
+
+        let mut file = File::open(&path).map_err(storage)?;
+        let mut hasher = Sha256::new();
+        let mut buffer = vec![0_u8; 1 << 20];
+        loop {
+            let read = file.read(&mut buffer).map_err(storage)?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+        }
+        let digest: String = hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        if digest.eq_ignore_ascii_case(&source.sha256) {
+            return Ok(Some(path));
+        }
+
+        fs::remove_file(&path).map_err(storage)?;
+        Err(ModelError::ChecksumMismatch)
     }
 
     pub fn list(&self) -> Vec<SpeechModelInfo> {
@@ -284,6 +350,44 @@ impl ModelStore {
         }
     }
 
+    /// Cancels every active model transfer without holding the registry lock over I/O.
+    /// Returns the number of transfers signalled.
+    pub fn cancel_all(&self) -> usize {
+        let running = self
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for flag in running.values() {
+            flag.store(true, Ordering::SeqCst);
+        }
+        running.len()
+    }
+
+    /// Cancels all transfers and waits a bounded time for their download loops to settle.
+    pub fn cancel_all_and_wait(&self, timeout: Duration) -> bool {
+        self.cancel_all();
+        let deadline = std::time::Instant::now() + timeout;
+        let mut running = self
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while !running.is_empty() {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            let (next, result) = self
+                .settled
+                .wait_timeout(running, remaining)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            running = next;
+            if result.timed_out() && !running.is_empty() {
+                return false;
+            }
+        }
+        true
+    }
+
     /// Downloads a catalog model from its official source. `consent` must come from an explicit
     /// user action. Blocks until done; call from a background thread.
     pub fn download(
@@ -318,12 +422,11 @@ impl ModelStore {
             }
             running.insert(id.to_owned(), cancel.clone());
         }
-        let result = self.fetch(source, &cancel, progress);
-        self.running
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(id);
-        result
+        let _registration = DownloadRegistration {
+            store: self,
+            id: id.to_owned(),
+        };
+        self.fetch(source, &cancel, progress)
     }
 
     fn fetch(
@@ -334,8 +437,10 @@ impl ModelStore {
     ) -> Result<PathBuf, ModelError> {
         fs::create_dir_all(&self.dir).map_err(storage)?;
         let final_path = self.final_path(&source.file_name);
-        if fs::metadata(&final_path).is_ok_and(|m| m.len() == source.size_bytes) {
-            return Ok(final_path);
+        match self.verified_source_path(source) {
+            Ok(Some(path)) => return Ok(path),
+            Ok(None) | Err(ModelError::ChecksumMismatch) => {}
+            Err(error) => return Err(error),
         }
         let partial = self.partial_path(&source.file_name);
 

@@ -13,7 +13,7 @@ const NOW_S = NOW.getTime() / 1000;
 const ACCOUNT = "0b6f1c1e-5a39-4d0c-9a0f-2b1f7d9e4c11";
 
 const GRANTED = "2026-09-01T00:00:00.000Z";
-const billing = (tier: "pro" | "max", expiresAt = "2026-10-24T12:00:00.000Z"): ActiveGrant => ({
+const billing = (tier: "pro" | "max" | "max2x", expiresAt = "2026-10-24T12:00:00.000Z"): ActiveGrant => ({
   tier,
   source: "billing",
   grantedAt: GRANTED,
@@ -35,7 +35,8 @@ describe("pickEntitlement precedence", () => {
     expect(pickEntitlement([owner, billing("max")]).tier).toBe("owner");
   });
 
-  it("prefers MAX over Pro, and the later end among equal tiers", () => {
+  it("prefers MAX 2X over MAX over Pro, and the later end among equal tiers", () => {
+    expect(pickEntitlement([billing("max"), billing("max2x"), billing("pro")]).tier).toBe("max2x");
     expect(pickEntitlement([billing("pro"), billing("max")]).tier).toBe("max");
     expect(
       pickEntitlement([billing("pro", "2026-10-01T00:00:00.000Z"), billing("pro", "2026-11-01T00:00:00.000Z")]),
@@ -81,6 +82,14 @@ describe("buildEntitlement", () => {
   });
 
   it("issues the catalog grants for paid and free tiers", () => {
+    const max2x = buildEntitlement(
+      ACCOUNT,
+      { tier: "max2x", grantExpiresAt: "2027-01-01T00:00:00.000Z", billingAnchor: GRANTED },
+      NOW,
+      "k1",
+    );
+    expect(limitFor(max2x, "kalvoiceRequestsPerMonth")).toBe(10_000);
+    expect(hasFeature(max2x, "advancedMissions")).toBe(true);
     const max = buildEntitlement(
       ACCOUNT,
       { tier: "max", grantExpiresAt: "2027-01-01T00:00:00.000Z", billingAnchor: GRANTED },

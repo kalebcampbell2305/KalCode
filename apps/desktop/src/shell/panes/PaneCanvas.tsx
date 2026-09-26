@@ -1,5 +1,6 @@
 import type { PaneContent, PaneNode } from "@kalcode/protocol";
 import {
+  memo,
   type PointerEvent,
   type ReactNode,
   useEffect,
@@ -9,6 +10,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import { useOptionalKalVoice } from "../../kalvoice/KalVoiceProvider.tsx";
 import { describeBuiltin, renderBuiltin } from "./builtinContent.tsx";
 import { type PaneRenderContext, registeredRenderer, subscribeRegistry, type TabInfo } from "./contentRegistry.ts";
 import {
@@ -24,10 +26,10 @@ import {
   type Rect,
 } from "./model.ts";
 import styles from "./PaneCanvas.module.css";
-import { type PaneCommand, type PaneCommandResult, listenForPaneCommands } from "./paneCommands.ts";
 import { PaneDivider } from "./PaneDivider.tsx";
 import { PaneDock } from "./PaneDock.tsx";
 import { PaneFrame, paneDomId } from "./PaneFrame.tsx";
+import { listenForPaneCommands, type PaneCommand, type PaneCommandResult } from "./paneCommands.ts";
 import { type PaneShortcut, paneShortcut } from "./paneShortcuts.ts";
 import type { PaneController } from "./usePaneController.ts";
 
@@ -153,7 +155,35 @@ const DOCK_GAP = DEFAULT_GEOMETRY.gutter;
  * Dividers resize with the pointer or the keyboard; tabs and pane headers drag onto another
  * pane's centre (as a tab) or edge (a split); every action also has a keyboard path.
  */
-export function PaneCanvas({ controller, host, label, scope }: PaneCanvasProps) {
+/** Subscribes to KalVoice, but forwards only the session fields that can change pane treatment. */
+export function PaneCanvas(props: PaneCanvasProps) {
+  const kalVoice = useOptionalKalVoice();
+  const phase = kalVoice?.state.phase;
+  return (
+    <StablePaneCanvas
+      {...props}
+      kalVoiceSessionId={kalVoice?.state.sessionId ?? null}
+      kalVoiceCapturing={phase === "listening" || phase === "transcribing"}
+      kalVoiceTarget={kalVoice?.dictationTarget ?? null}
+    />
+  );
+}
+
+interface PaneCanvasSurfaceProps extends PaneCanvasProps {
+  kalVoiceSessionId: string | null;
+  kalVoiceCapturing: boolean;
+  kalVoiceTarget: { sessionId: string; paneId: string | null } | null;
+}
+
+function PaneCanvasSurface({
+  controller,
+  host,
+  label,
+  scope,
+  kalVoiceSessionId,
+  kalVoiceCapturing,
+  kalVoiceTarget,
+}: PaneCanvasSurfaceProps) {
   const { layout } = controller;
   const ref = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
@@ -188,6 +218,11 @@ export function PaneCanvas({ controller, host, label, scope }: PaneCanvasProps) 
   const panes = useMemo(() => leaves(layout.root), [layout]);
   const items = useMemo(() => orderedItems(layout.root, geometry.dividers), [layout.root, geometry.dividers]);
   const maximized = layout.maximizedPaneId;
+
+  // Delivery and visual focus read the same immutable native-session target. This remains pinned
+  // if focus moves after push-to-talk starts and ignores stale session identities.
+  const kalVoiceTargetPaneId =
+    kalVoiceCapturing && kalVoiceTarget?.sessionId === kalVoiceSessionId ? kalVoiceTarget.paneId : null;
 
   // Plain functions: the canvas re-renders when the host or the registry (registryVersion) changes.
   void registryVersion;
@@ -346,6 +381,9 @@ export function PaneCanvas({ controller, host, label, scope }: PaneCanvasProps) 
       <p className="visually-hidden" role="status" aria-live="polite" aria-atomic="true">
         {controller.message.text}
       </p>
+      <p className="visually-hidden" role="status" aria-live="polite" aria-atomic="true">
+        {kalVoiceTargetPaneId ? `KalVoice is listening to ${titleOfPane(kalVoiceTargetPaneId)}.` : ""}
+      </p>
       {items.map((item) => {
         if (item.type === "divider") {
           if (maximized) return null;
@@ -391,6 +429,7 @@ export function PaneCanvas({ controller, host, label, scope }: PaneCanvasProps) 
             hidden={hidden}
             maximized={maximized === leaf.paneId}
             focused={controller.focusedPaneId === leaf.paneId}
+            kalVoiceTarget={kalVoiceTargetPaneId === leaf.paneId}
             focusRequest={controller.focusRequest.paneId === leaf.paneId ? controller.focusRequest.n : 0}
             canSplit={canSplitPane(layout, leaf.paneId, "horizontal") || canSplitPane(layout, leaf.paneId, "vertical")}
             canCollapse={multiple && openPanes > 1}
@@ -442,6 +481,8 @@ export function PaneCanvas({ controller, host, label, scope }: PaneCanvasProps) 
     </div>
   );
 }
+
+const StablePaneCanvas = memo(PaneCanvasSurface);
 
 let tick = 0;
 subscribeRegistry(() => {
@@ -558,7 +599,11 @@ export function runCommand(controller: PaneController, command: PaneCommand): Pa
       controller.even();
       return { handled: true };
     case "arrange-providers":
+    case "open-provider-panes":
+    case "control-pane":
       return { handled: false, message: "Provider panes aren't available here." };
+    case "browser-control":
+      return { handled: false, message: "The browser pane isn't available here." };
   }
 }
 

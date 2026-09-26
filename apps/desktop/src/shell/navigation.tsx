@@ -41,7 +41,7 @@ export const SURFACES: Record<SurfaceId, SurfaceMeta> = {
     label: "KalVoice",
     icon: AudioLines,
     summary:
-      "Dictate prompts into any input and run KalCode by voice or text. Dictation runs on your computer; reasoning uses your own connected provider.",
+      "Dictate into the focused pane and control your workspace by voice or text. Speech and command interpretation stay on your computer.",
     dependsOn: "Local speech recognition and the thread runtime",
   },
   code: {

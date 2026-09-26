@@ -1,0 +1,50 @@
+[package]
+name = "kalcode-utilities"
+description = "KalCode Developer Utility Dock (UD): native tools behind the dock — the API Inspector's gated HTTP client, the Process Monitor and Port Inspector, the Environment Viewer, the read-only SQLite Viewer, the linear-time Regex Lab, workspace text reads for the Diff Tool, and per-workspace scratchpads and saved requests (schema v14)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "kalcode_utilities"
+
+[dependencies]
+kalcode-contracts = { path = "../contracts" }
+kalcode-native-core = { path = "../native-core" }
+# One sampler model (ADVANCED.md D7): KalCode's process tree and its roles come from the
+# Resource Governor's pure `build_tree`.
+kalcode-resources = { path = "../resources" }
+# Secret detection for environment hints and API Inspector history (the Context Firewall's
+# stricter catalogue over the shared redactor).
+kalcode-context = { path = "../context" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+time.workspace = true
+# `hooks`: the SQLite Viewer's authorizer and progress-handler time limit.
+rusqlite = { workspace = true, features = ["hooks"] }
+# Same line and features as `crates/resources` (one copy compiled).
+sysinfo = { version = "0.37.2", default-features = false, features = ["system"] }
+# Same as KalVoice's model downloads: rustls with the Mozilla roots, no cookies, no gzip.
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+url = "2"
+# Linear-time matching: no catastrophic backtracking by construction.
+regex = "1"
+ts-rs = { version = "12", features = ["serde-json-impl", "uuid-impl"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

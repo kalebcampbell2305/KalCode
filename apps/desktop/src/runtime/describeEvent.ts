@@ -404,6 +404,32 @@ export function describeEvent(event: EventEnvelope): EventDescription {
       return { title: "KalVoice finished speaking", detail: null, tone: "idle" };
     case "kalvoice.talk_routed":
       return { title: TALK_ROUTE_TITLES[event.payload.outcome], detail: null, tone: "idle" };
+    case "doctor.run_started":
+      return {
+        title: "Environment check started",
+        detail: plural(event.payload.checks, "check"),
+        tone: "live",
+      };
+    case "doctor.run_completed":
+      return {
+        title: event.payload.cancelled ? "Environment check cancelled" : "Environment check completed",
+        detail: `${plural(event.payload.critical, "critical finding")}, ${plural(event.payload.warning, "warning")}, ${plural(event.payload.couldNotCheck, "check unavailable")}`,
+        tone: event.payload.critical > 0 ? "danger" : event.payload.warning > 0 ? "waiting" : "success",
+      };
+    case "doctor.fix_applied":
+      return { title: "Environment fix applied", detail: event.payload.fixCode, tone: "success" };
+    case "doctor.fix_failed":
+      return {
+        title: "Environment fix failed",
+        detail: `${event.payload.fixCode} · ${event.payload.code.replaceAll("_", " ")}`,
+        tone: "danger",
+      };
+    case "doctor.fix_reverted":
+      return { title: "Environment fix reverted", detail: event.payload.fixCode, tone: "idle" };
+    case "doctor.finding_ignored":
+      return { title: "Environment finding ignored", detail: event.payload.findingCode, tone: "idle" };
+    case "doctor.finding_unignored":
+      return { title: "Environment finding restored", detail: event.payload.findingCode, tone: "idle" };
     case "notification.created":
       return { title: NOTIFICATION_TITLES[event.payload.kind], detail: null, tone: "idle" };
     case "unrecognized":

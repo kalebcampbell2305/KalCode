@@ -89,6 +89,7 @@ impl FakeInstall {
         SessionConfig {
             thread_id: kalcode_contracts::ids::new_id(),
             workspace_id: kalcode_contracts::ids::new_id(),
+            provider_account_id: None,
             working_directory: self.work.path().display().to_string(),
             model: None,
             permission_mode: mode,
@@ -211,7 +212,9 @@ fn codex_text_turn_streams_to_done_and_the_next_turn_resumes_the_thread() {
     assert!(!args.iter().any(|a| a.contains("hello from KalCode")));
     assert_eq!(args.first().map(String::as_str), Some("exec"));
     assert_eq!(args.last().map(String::as_str), Some("-"));
-    assert_eq!(after(&args, "--sandbox"), Some("read-only"));
+    assert_eq!(after(&args, "--sandbox"), Some("workspace-write"));
+    assert!(args.iter().any(|a| a == "approval_policy='on-request'"));
+    assert!(!args.iter().any(|a| a == "approval_policy='never'"));
     assert!(!args.iter().any(|a| a == "resume"));
 
     // Credential scoping: only Codex's own variables reach Codex.
@@ -234,6 +237,9 @@ fn codex_text_turn_streams_to_done_and_the_next_turn_resumes_the_thread() {
     assert!(events.contains(&AgentEvent::TurnCompleted { ok: true }));
     let args = fake.args();
     assert_eq!(after(&args, "resume"), Some(thread_id.as_str()));
+    assert_eq!(after(&args, "--sandbox"), Some("workspace-write"));
+    assert!(args.iter().any(|a| a == "approval_policy='on-request'"));
+    assert!(!args.iter().any(|a| a == "approval_policy='never'"));
     assert_eq!(args.last().map(String::as_str), Some("-"));
 
     session.terminate().expect("terminate");
@@ -261,24 +267,42 @@ fn codex_tool_turn_reports_commands_and_file_changes() {
     let work = fake.work.path().display().to_string();
     assert!(events.iter().any(|e| matches!(e, AgentEvent::FileChanged { path, change: FileChange::Modified } if path.ends_with("notes.md") && path.starts_with(&work))));
     let args = fake.args();
-    assert_eq!(after(&args, "--sandbox"), Some("workspace-write"));
+    assert_eq!(after(&args, "--sandbox"), Some("danger-full-access"));
+    assert!(args.iter().any(|a| a == "approval_policy='never'"));
+    assert!(!args.iter().any(|a| a == "approval_policy='on-request'"));
     assert!(
-        args.iter()
-            .any(|a| a == "sandbox_workspace_write.network_access=false")
+        !args
+            .iter()
+            .any(|a| a == "--dangerously-bypass-approvals-and-sandbox")
     );
-    assert!(!args.iter().any(|a| a.contains("danger-full-access")));
 }
 
 #[test]
 fn codex_argv_is_never_broader_than_the_mode() {
     let fake = FakeInstall::new("codex", json!({}));
     let provider = CodexProvider::new(fake.env());
-    for mode in [
-        PermissionMode::Plan,
-        PermissionMode::Approve,
-        PermissionMode::Auto,
-        PermissionMode::Custom,
-        PermissionMode::Bypass,
+    for (mode, expected_sandbox, expected_approval) in [
+        (PermissionMode::Plan, "read-only", "approval_policy='never'"),
+        (
+            PermissionMode::Approve,
+            "workspace-write",
+            "approval_policy='on-request'",
+        ),
+        (
+            PermissionMode::Auto,
+            "workspace-write",
+            "approval_policy='never'",
+        ),
+        (
+            PermissionMode::Custom,
+            "workspace-write",
+            "approval_policy='on-request'",
+        ),
+        (
+            PermissionMode::Bypass,
+            "danger-full-access",
+            "approval_policy='never'",
+        ),
     ] {
         let (session, rx) = start(&provider, fake.config(mode, None));
         turn(session.as_ref(), &rx, "hello");
@@ -289,17 +313,16 @@ fn codex_argv_is_never_broader_than_the_mode() {
                 "{mode:?}: {forbidden}"
             );
         }
-        assert!(args.iter().any(|a| a == "approval_policy='never'"));
-        let sandbox = after(&args, "--sandbox");
         assert_eq!(
-            sandbox,
-            Some(if mode == PermissionMode::Bypass {
-                "workspace-write"
-            } else {
-                "read-only"
-            }),
+            after(&args, "--sandbox"),
+            Some(expected_sandbox),
             "{mode:?}"
         );
+        let approval_policies: Vec<&str> = args
+            .iter()
+            .filter_map(|arg| arg.starts_with("approval_policy=").then_some(arg.as_str()))
+            .collect();
+        assert_eq!(approval_policies, [expected_approval], "{mode:?}");
         session.terminate().unwrap();
     }
 }
@@ -403,7 +426,11 @@ fn codex_interrupt_kills_the_turn_tree_and_keeps_the_session() {
 
 #[cfg(windows)]
 fn process_alive(pid: u32) -> bool {
-    let out = std::process::Command::new("tasklist")
+    use std::os::windows::process::CommandExt;
+
+    let mut command = std::process::Command::new("tasklist");
+    command.creation_flags(0x0800_0000);
+    let out = command
         .args(["/FI", &format!("PID eq {pid}"), "/NH"])
         .output()
         .unwrap();

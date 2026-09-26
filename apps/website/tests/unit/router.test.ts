@@ -152,6 +152,14 @@ describe("handleRequest routing", () => {
     expect(h.rows.size).toBe(0);
   });
 
+  it.each(["/changelog", "/changelog/"])("permanently redirects legacy %s URLs to Updates", async (path) => {
+    const response = await handleRequest(new Request(`${ORIGIN}${path}?from=bookmark`), h.deps);
+    expect(response.status).toBe(301);
+    expect(response.headers.get("location")).toBe("/updates?from=bookmark");
+    expect(response.headers.get("content-security-policy")).toBeTruthy();
+    expect(h.assetRequests).toEqual([]);
+  });
+
   it("serves everything else from static assets with security headers", async () => {
     const response = await handleRequest(new Request(`${ORIGIN}/pricing`), h.deps);
     expect(response.status).toBe(200);

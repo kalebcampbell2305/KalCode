@@ -171,6 +171,40 @@ pub fn classify(kind: &ActionKind, workspace: &Workspace) -> Classification {
             format!("doctor:{}", clip(fix_code)),
             "Applying an Environment Doctor fix",
         ),
+        ActionKind::UtilityDnsResolve { operation_id, host } => pending_kernel_kind(
+            S::NetworkOther,
+            format!("utility.dns_resolve:{}", clip(operation_id)),
+            &format!("Resolving {} for the API Inspector", clip(host)),
+        ),
+        ActionKind::UtilityHttp {
+            operation_id,
+            method,
+            origin,
+            ..
+        } => pending_kernel_kind(
+            S::NetworkOther,
+            format!("utility.http:{}", clip(operation_id)),
+            &format!("Sending a {method:?} request to {}", clip(origin)),
+        ),
+        ActionKind::UtilityProcessSignal {
+            operation_id,
+            process_name,
+            ..
+        } => pending_kernel_kind(
+            S::ProcessControl,
+            format!("utility.process_signal:{}", clip(operation_id)),
+            &format!("Stopping {}", clip(process_name)),
+        ),
+        ActionKind::UtilitySqliteWrite {
+            operation_id,
+            database_name,
+            statement,
+            ..
+        } => pending_kernel_kind(
+            S::FilesystemWrite,
+            format!("utility.sqlite_write:{}", clip(operation_id)),
+            &format!("Applying {statement:?} to {}", clip(database_name)),
+        ),
         ActionKind::CreateThreads {
             provider_id, count, ..
         } => thread_start(

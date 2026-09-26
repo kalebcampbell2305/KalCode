@@ -86,6 +86,39 @@ fn seq(handle: &GovernorHandle) -> u64 {
 }
 
 #[test]
+fn bounded_shutdown_retains_blocked_sampler_for_retry() {
+    let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
+    let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+    let (probe, _) = probe(move |_, _| {
+        entered_tx.send(()).expect("entered");
+        release_rx.recv().expect("release probe");
+        sample(10.0)
+    });
+    let mut handle =
+        Governor::start_with(config(), probe, Arc::new(SystemClock::default())).unwrap();
+    entered_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("probe started");
+    let started = Instant::now();
+    let stopped = handle.shutdown_checked(Duration::from_millis(20));
+    // Always release the fixture before assertions so failures cannot hang Drop.
+    release_tx.send(()).expect("release");
+    assert!(
+        !stopped,
+        "an in-flight blocked probe is not termination proof"
+    );
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert!(
+        handle.thread.is_some(),
+        "retain join ownership after timeout"
+    );
+    assert!(handle.shutdown_checked(Duration::from_secs(5)));
+    assert!(handle.thread.is_none());
+    assert_eq!(handle.status(), GovernorStatus::Stopped);
+    assert!(handle.shutdown_checked(Duration::ZERO));
+}
+
+#[test]
 fn first_sample_is_immediate_and_published() {
     let (probe, _) = probe(|_, _| sample(10.0));
     let handle = Governor::start_with(config(), probe, Arc::new(SystemClock::default())).unwrap();

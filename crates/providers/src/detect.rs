@@ -19,7 +19,8 @@ use kalcode_core::time::now_rfc3339;
 use kalcode_contracts::agent::{AuthState, DetectionState, ProviderDetection, ProviderId};
 
 use crate::env::{EnvPolicy, absolute_path_entries, lookup, sanitized_env};
-use crate::process::{ProcessError, ProcessSpec, run_probe};
+use crate::guardian::ProviderProbeGuardian;
+use crate::process::{ProcessError, ProcessSpec, run_probe, run_probe_guarded};
 use crate::version::Version;
 
 /// How long `--version` may take. Node-based CLIs can be slow on a cold start.
@@ -163,6 +164,13 @@ impl DetectEnv {
     pub fn provider_env(&self, policy: &EnvPolicy) -> BTreeMap<OsString, OsString> {
         sanitized_env(self.vars.iter().cloned(), policy)
     }
+
+    /// Resolves a provider executable without starting it or reading any provider-owned state.
+    /// Account authentication uses this path-only lookup before selecting a managed profile;
+    /// the ordinary detection probes must never run against a standalone provider profile.
+    pub fn resolve_executable_only(&self, spec: &DetectionSpec) -> Option<PathBuf> {
+        resolve_executable(spec.executable, &self.search_dirs(spec), &self.extensions())
+    }
 }
 
 /// Script launchers (`.cmd`, `.bat`) run through `cmd.exe`. They are used only when no native
@@ -215,6 +223,24 @@ pub struct Detected {
 
 /// Detects one provider. Never panics; every failure becomes a typed detection result.
 pub fn detect(spec: &DetectionSpec, env: &DetectEnv) -> Detected {
+    detect_inner(spec, env, None)
+}
+
+/// Production provider detection. Every executable probe receives a PREPARED job from the
+/// runtime-owned internal probe namespace before the provider process is created.
+pub fn detect_guarded(
+    spec: &DetectionSpec,
+    env: &DetectEnv,
+    guardian: &ProviderProbeGuardian,
+) -> Detected {
+    detect_inner(spec, env, Some(guardian))
+}
+
+fn detect_inner(
+    spec: &DetectionSpec,
+    env: &DetectEnv,
+    guardian: Option<&ProviderProbeGuardian>,
+) -> Detected {
     let started = Instant::now();
     let mut detection = ProviderDetection {
         provider_id: ProviderId::new(spec.provider_id),
@@ -235,9 +261,11 @@ pub fn detect(spec: &DetectionSpec, env: &DetectEnv) -> Detected {
         detection.display_path = Some(display_path(exe));
         let provider_env = env.provider_env(&spec.env_policy);
         match probe_version(
+            spec.provider_id,
             exe,
             &provider_env,
             env.probe_timeout.unwrap_or(VERSION_TIMEOUT),
+            guardian,
         ) {
             Ok(version) => {
                 detection.version = Some(version.to_string());
@@ -253,10 +281,12 @@ pub fn detect(spec: &DetectionSpec, env: &DetectEnv) -> Detected {
                 }
                 if let Some(auth) = &spec.auth {
                     detection.auth = probe_auth(
+                        spec.provider_id,
                         exe,
                         auth,
                         &provider_env,
                         env.probe_timeout.unwrap_or(AUTH_TIMEOUT),
+                        guardian,
                     );
                 }
             }
@@ -301,23 +331,41 @@ fn spec_for(exe: &Path, args: &[&str], env: &BTreeMap<OsString, OsString>) -> Pr
 }
 
 fn probe_version(
+    provider_id: &str,
     exe: &Path,
     env: &BTreeMap<OsString, OsString>,
     timeout: Duration,
+    guardian: Option<&ProviderProbeGuardian>,
 ) -> Result<Version, (&'static str, String)> {
-    let output = run_probe(
-        &spec_for(exe, &["--version"], env),
-        timeout,
-        true,
-        MAX_PROBE_OUTPUT,
-    )
-    .map_err(|error| match error {
+    let process = spec_for(exe, &["--version"], env);
+    let output = match guardian {
+        Some(guardian) => guardian
+            .prepare_job(&format!("{provider_id}-version-probe"))
+            .map_err(|_| {
+                (
+                    "probe_guardian_unavailable",
+                    "The provider probe guardian is unavailable.".to_owned(),
+                )
+            })
+            .and_then(|job| {
+                run_probe_guarded(&process, job, timeout, true, MAX_PROBE_OUTPUT)
+                    .map_err(map_version_probe_error)
+            })?,
+        None => {
+            run_probe(&process, timeout, true, MAX_PROBE_OUTPUT).map_err(map_version_probe_error)?
+        }
+    };
+    parse_version_output(output)
+}
+
+fn map_version_probe_error(error: ProcessError) -> (&'static str, String) {
+    match error {
         ProcessError::TimedOut(_) => (
             "version_timeout",
             "The version check didn't finish in time.".to_owned(),
         ),
-        ProcessError::Spawn(e) => {
-            tracing::warn!(event = "provider.version_spawn_failed", error = %e);
+        ProcessError::Spawn(error) => {
+            tracing::warn!(event = "provider.version_spawn_failed", error = %error);
             (
                 "version_spawn_failed",
                 "The program couldn't be started.".to_owned(),
@@ -327,7 +375,12 @@ fn probe_version(
             tracing::warn!(event = "provider.version_failed", error = %other);
             ("version_failed", "The version check failed.".to_owned())
         }
-    })?;
+    }
+}
+
+fn parse_version_output(
+    output: crate::process::ProbeOutput,
+) -> Result<Version, (&'static str, String)> {
     if !output.status.success() {
         tracing::warn!(
             event = "provider.version_nonzero_exit",
@@ -352,18 +405,26 @@ fn probe_version(
 }
 
 fn probe_auth(
+    provider_id: &str,
     exe: &Path,
     probe: &AuthProbe,
     env: &BTreeMap<OsString, OsString>,
     timeout: Duration,
+    guardian: Option<&ProviderProbeGuardian>,
 ) -> AuthState {
     let capture = matches!(probe.signal, AuthSignal::StatusLine { .. });
-    let output = match run_probe(
-        &spec_for(exe, probe.args, env),
-        timeout,
-        capture,
-        MAX_PROBE_OUTPUT,
-    ) {
+    let process = spec_for(exe, probe.args, env);
+    let output = match guardian {
+        Some(guardian) => match guardian.prepare_job(&format!("{provider_id}-auth-probe")) {
+            Ok(job) => run_probe_guarded(&process, job, timeout, capture, MAX_PROBE_OUTPUT),
+            Err(error) => {
+                tracing::warn!(event = "provider.auth_guardian_unavailable", error = %error);
+                return AuthState::Unknown;
+            }
+        },
+        None => run_probe(&process, timeout, capture, MAX_PROBE_OUTPUT),
+    };
+    let output = match output {
         Ok(output) => output,
         Err(error) => {
             tracing::warn!(event = "provider.auth_check_failed", error = %error);
@@ -457,6 +518,29 @@ mod tests {
                 roaming.join("npm"),
             ]
         );
+    }
+
+    #[test]
+    fn path_only_resolution_does_not_require_a_provider_probe() {
+        let temp = tempfile::tempdir().expect("temp");
+        let executable = temp
+            .path()
+            .join(if cfg!(windows) { "tool.exe" } else { "tool" });
+        std::fs::write(&executable, b"not executable test data").expect("fixture");
+        let env = DetectEnv {
+            vars: vec![
+                ("PATH".into(), temp.path().as_os_str().to_owned()),
+                ("PATHEXT".into(), ".EXE".into()),
+            ],
+            windows: cfg!(windows),
+            probe_timeout: None,
+        };
+        let spec = DetectionSpec {
+            executable: "tool",
+            ..SPEC
+        };
+
+        assert_eq!(env.resolve_executable_only(&spec), Some(executable));
     }
 
     #[test]

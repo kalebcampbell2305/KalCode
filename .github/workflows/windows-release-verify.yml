@@ -1,0 +1,184 @@
+name: Verify signed Windows release candidate
+
+run-name: Verify Windows ${{ inputs.version }} at ${{ inputs.commit }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_tag:
+        description: Private draft-release tag containing build.json, the signed installer and updater signature
+        required: true
+        type: string
+      commit:
+        description: Full 40-character commit used to build the candidate
+        required: true
+        type: string
+      version:
+        description: Exact desktop semver, for example 0.2.0
+        required: true
+        type: string
+      sha256:
+        description: Exact lowercase SHA-256 of the signed installer
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release-verify-${{ inputs.commit }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Clean install, upgrade and uninstall
+    runs-on: windows-2022
+    timeout-minutes: 20
+    env:
+      CANDIDATE_TAG: ${{ inputs.candidate_tag }}
+      CANDIDATE_COMMIT: ${{ inputs.commit }}
+      CANDIDATE_VERSION: ${{ inputs.version }}
+      CANDIDATE_SHA256: ${{ inputs.sha256 }}
+      GH_TOKEN: ${{ github.token }}
+      WORKFLOW_COMMIT: ${{ github.sha }}
+
+    steps:
+      - name: Check out the exact candidate commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ inputs.commit }}
+
+      - name: Use the supported Node runtime
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+
+      - name: Validate immutable candidate inputs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($env:CANDIDATE_TAG -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$') {
+            throw "candidate_tag must use only a bounded release-tag character set"
+          }
+          if ($env:CANDIDATE_COMMIT -notmatch '^[0-9a-f]{40}$') {
+            throw "commit must be a full lowercase Git SHA"
+          }
+          if ($env:CANDIDATE_SHA256 -notmatch '^[0-9a-f]{64}$') {
+            throw "sha256 must be a full lowercase SHA-256"
+          }
+          if ($env:CANDIDATE_VERSION -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
+            throw "version must be a three-part numeric semver"
+          }
+          if ($env:WORKFLOW_COMMIT -ne $env:CANDIDATE_COMMIT) {
+            throw "dispatch this workflow at the exact candidate commit"
+          }
+          $checkedOut = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $checkedOut -ne $env:CANDIDATE_COMMIT) {
+            throw "checkout does not match the candidate commit"
+          }
+          $configuredVersion = node -p "require('./apps/desktop/src-tauri/tauri.conf.json').version"
+          if ($LASTEXITCODE -ne 0 -or $configuredVersion.Trim() -ne $env:CANDIDATE_VERSION) {
+            throw "candidate version does not match tauri.conf.json at the candidate commit"
+          }
+
+      - name: Download and authenticate the private draft candidate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = Join-Path $env:GITHUB_WORKSPACE "dist/release/$env:CANDIDATE_VERSION"
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          $installerName = "KalCode_$env:CANDIDATE_VERSION`_x64-setup.exe"
+          $updaterSignatureName = "$installerName.sig"
+          $release = gh release view $env:CANDIDATE_TAG --repo $env:GITHUB_REPOSITORY --json assets,isDraft,tagName | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or -not $release.isDraft -or $release.tagName -ne $env:CANDIDATE_TAG) {
+            throw "candidate assets must come from the exact private draft release"
+          }
+          $expectedAssets = @("build.json", $installerName, $updaterSignatureName) | Sort-Object
+          $actualAssets = @($release.assets | ForEach-Object { $_.name }) | Sort-Object
+          if (@(Compare-Object -ReferenceObject $expectedAssets -DifferenceObject $actualAssets).Count -ne 0) {
+            throw "private draft release must contain exactly the three expected candidate assets"
+          }
+          gh release download $env:CANDIDATE_TAG --repo $env:GITHUB_REPOSITORY --pattern build.json --pattern $installerName --pattern $updaterSignatureName --dir $stage
+          if ($LASTEXITCODE -ne 0) {
+            throw "failed to download the signed candidate assets"
+          }
+          $buildPath = Join-Path $stage "build.json"
+          $installerPath = Join-Path $stage $installerName
+          $updaterSignaturePath = Join-Path $stage $updaterSignatureName
+          if (-not (Test-Path -LiteralPath $buildPath -PathType Leaf) -or
+              -not (Test-Path -LiteralPath $installerPath -PathType Leaf) -or
+              -not (Test-Path -LiteralPath $updaterSignaturePath -PathType Leaf)) {
+            throw "draft release is missing build.json, the exact installer or its updater signature"
+          }
+          $assets = @(Get-ChildItem -LiteralPath $stage -File)
+          if ($assets.Count -ne 3) {
+            throw "candidate staging must contain exactly build.json, one installer and one updater signature"
+          }
+          $rawBuild = Get-Content -LiteralPath $buildPath -Raw
+          if ($rawBuild -match '(?i)"[^"]*(subject|thumbprint|address|signer|private|secret|token|credential)[^"]*"\s*:') {
+            throw "build evidence contains prohibited certificate identity fields"
+          }
+          $build = $rawBuild | ConvertFrom-Json
+          if ($build.version -ne $env:CANDIDATE_VERSION -or $build.commit -ne $env:CANDIDATE_COMMIT) {
+            throw "build.json version or commit does not match the immutable workflow inputs"
+          }
+          if ($build.file -ne $installerName -or $build.sha256 -ne $env:CANDIDATE_SHA256) {
+            throw "build.json file or SHA-256 does not match the immutable workflow inputs"
+          }
+          if ($build.requestedReleaseChannel -ne "stable" -or $build.compiledChannel -ne "stable") {
+            throw "the public candidate must be compiled for the stable channel"
+          }
+          if ($build.signed -ne $true -or $build.signatureStatus -ne "Valid" -or $build.releaseDescriptorEligible -ne $true) {
+            throw "build.json does not describe a valid release-eligible signature"
+          }
+          if ($null -ne $build.releaseDescriptorBlockedReason -or
+              $build.compiledChannelVerification.status -ne "verified" -or
+              $build.compiledChannelVerification.method -ne "build_info_probe_v1" -or
+              $build.compiledChannelVerification.schemaVersion -ne 1 -or
+              $build.compiledChannelVerification.testHooks -ne $false) {
+            throw "build.json does not contain an internally consistent production binary probe"
+          }
+          if ($build.signing.provider -ne "azure-artifact-signing" -or
+              $build.signing.timestamped -ne $true -or
+              $build.signing.appTimestamped -ne $true -or
+              $build.signing.applicationVerifiedDuringBundle -ne $true -or
+              $build.signing.publisherIdentityBound -ne $true) {
+            throw "build.json is missing required Azure signing and timestamp evidence"
+          }
+          if ($build.updater.artifactFile -ne $installerName -or
+              $build.updater.signatureFile -ne $updaterSignatureName -or
+              $build.updater.signatureStatus -ne "Valid" -or
+              $build.updater.cryptographicallyVerified -ne $true -or
+              $build.updater.versionBound -ne $true -or
+              $build.updater.publicKeyConfigured -ne $true) {
+            throw "build.json is missing exact version-bound updater signature evidence"
+          }
+          $actualSha256 = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $env:CANDIDATE_SHA256) {
+            throw "downloaded installer does not match the immutable SHA-256 input"
+          }
+          $publicKeyPath = Join-Path $env:GITHUB_WORKSPACE "tooling/release/updater-public-key.txt"
+          if (-not (Test-Path -LiteralPath $publicKeyPath -PathType Leaf)) {
+            throw "candidate commit is missing its updater public key"
+          }
+          $publicKey = (Get-Content -LiteralPath $publicKeyPath -Raw).TrimEnd()
+          cargo run --quiet --locked --release --manifest-path tooling/updater-signer/Cargo.toml -- verify --artifact $installerPath --signature $updaterSignaturePath --version $env:CANDIDATE_VERSION --public-key $publicKey
+          if ($LASTEXITCODE -ne 0) {
+            throw "updater signature does not verify for the exact candidate bytes and version"
+          }
+
+      - name: Verify clean install, update mode, signatures and uninstall
+        shell: pwsh
+        run: node tooling/release/verify-windows.mjs
+
+      - name: Upload redacted verification evidence
+        if: ${{ success() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-release-verification-${{ inputs.commit }}
+          path: dist/release/${{ inputs.version }}/verify.json
+          if-no-files-found: error
+          include-hidden-files: false
+          retention-days: 7

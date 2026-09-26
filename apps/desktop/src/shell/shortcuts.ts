@@ -1,9 +1,44 @@
 import { useEffect, useRef } from "react";
+import {
+  DESKTOP_PLATFORM,
+  formatShortcut,
+  hasPrimaryModifier,
+  IS_MAC,
+  type DesktopPlatform,
+} from "../platform/keyboard.ts";
 
-export const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+export { IS_MAC };
 
 /** Display label for the platform's primary modifier. */
-export const MOD_LABEL = IS_MAC ? "⌘" : "Ctrl";
+export const MOD_LABEL = formatShortcut(["Mod"]);
+
+export type GlobalShortcut = "open-palette" | "toggle-sidebar";
+
+type GlobalShortcutEvent = Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey">;
+
+/** Maps primary application chords without accepting the other platform's modifier. */
+export function globalShortcut(
+  event: GlobalShortcutEvent,
+  platform: DesktopPlatform = DESKTOP_PLATFORM,
+): GlobalShortcut | null {
+  if (!hasPrimaryModifier(event, platform) || event.altKey || event.shiftKey) return null;
+  const key = event.key.toLowerCase();
+  if (key === "k") return "open-palette";
+  if (key === "b") return "toggle-sidebar";
+  return null;
+}
+
+export function isRailToggleShortcut(
+  event: GlobalShortcutEvent,
+  platform: DesktopPlatform = DESKTOP_PLATFORM,
+): boolean {
+  return (
+    hasPrimaryModifier(event, platform) &&
+    event.shiftKey &&
+    !event.altKey &&
+    event.key.toLowerCase() === "b"
+  );
+}
 
 interface ShortcutHandlers {
   openPalette: () => void;
@@ -17,13 +52,11 @@ export function useShortcuts(handlers: ShortcutHandlers) {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const mod = IS_MAC ? event.metaKey : event.ctrlKey;
-      if (!mod || event.altKey || event.shiftKey) return;
-      const key = event.key.toLowerCase();
-      if (key === "k") {
+      const shortcut = globalShortcut(event);
+      if (shortcut === "open-palette") {
         event.preventDefault();
         latest.current.openPalette();
-      } else if (key === "b") {
+      } else if (shortcut === "toggle-sidebar") {
         event.preventDefault();
         latest.current.toggleSidebar();
       }

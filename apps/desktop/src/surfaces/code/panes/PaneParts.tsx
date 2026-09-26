@@ -1,4 +1,5 @@
-import type { StatusTone, ThreadStatus } from "@kalcode/protocol";
+import type { ProviderAccount, StatusTone, ThreadStatus, ThreadSummary } from "@kalcode/protocol";
+import { Badge, ProviderGlyph as SharedProviderGlyph } from "@kalcode/ui/components";
 import {
   Brain,
   Circle,
@@ -20,8 +21,8 @@ import {
   SquareTerminal,
   Wrench,
 } from "lucide-react";
-import { paneStatus, providerIdentity } from "./paneLabels.ts";
 import styles from "./Panes.module.css";
+import { paneStatus } from "./paneLabels.ts";
 
 const ICONS: Record<ThreadStatus, LucideIcon> = {
   starting: Play,
@@ -44,13 +45,60 @@ const ICONS: Record<ThreadStatus, LucideIcon> = {
   interrupted: CircleStop,
 };
 
-/** A neutral KalCode glyph (shape + initial) for a provider. Never a provider's own mark. */
-export function ProviderGlyph({ providerId, providerName }: { providerId: string; providerName?: string }) {
-  const identity = providerIdentity(providerId, providerName);
+/** Shared identity mark: a published mark for supported providers and a generic fallback otherwise. */
+export function ProviderGlyph({ providerId }: { providerId: string; providerName?: string }) {
+  return <SharedProviderGlyph provider={providerId} size="lg" />;
+}
+
+export type PaneAccountState = "active" | "snapshot" | "archived_or_unavailable" | "status_unavailable" | "unmanaged";
+
+export interface PaneAccountIdentity {
+  label: string;
+  state: PaneAccountState;
+}
+
+/** Resolve display metadata only. Pane routing continues to use the thread's exact account id. */
+export function resolvePaneAccount(
+  thread: Pick<ThreadSummary, "providerId" | "providerAccountId" | "accountLabel">,
+  accounts: readonly ProviderAccount[] | null,
+  loadFailed: boolean,
+): PaneAccountIdentity | null {
+  const snapshot = thread.accountLabel?.trim() || null;
+  if (!thread.providerAccountId) {
+    return snapshot ? { label: snapshot, state: "unmanaged" } : null;
+  }
+  if (loadFailed) {
+    return { label: snapshot ?? "Unknown account", state: "status_unavailable" };
+  }
+  if (accounts === null) {
+    return { label: snapshot ?? "Unknown account", state: "snapshot" };
+  }
+  const active = accounts.find(
+    (account) =>
+      account.id === thread.providerAccountId &&
+      account.providerId === thread.providerId &&
+      account.archivedAt === null,
+  );
+  return active
+    ? { label: active.displayName, state: "active" }
+    : { label: snapshot ?? "Unknown account", state: "archived_or_unavailable" };
+}
+
+export function paneAccountLabel(account: PaneAccountIdentity): string {
+  if (account.state === "snapshot") return `${account.label} (checking status)`;
+  if (account.state === "archived_or_unavailable") return `${account.label} (archived or unavailable)`;
+  if (account.state === "status_unavailable") return `${account.label} (status unavailable)`;
+  if (account.state === "unmanaged") return `${account.label} (not managed)`;
+  return account.label;
+}
+
+export function PaneAccountChip({ account }: { account: PaneAccountIdentity }) {
+  const label = paneAccountLabel(account);
   return (
-    <span className={styles.glyph} data-shape={identity.shape} aria-hidden="true">
-      {identity.initial}
-    </span>
+    <Badge tone="outline" title={`Provider account: ${label}`}>
+      <span className="visually-hidden">Provider </span>
+      Account · {label}
+    </Badge>
   );
 }
 

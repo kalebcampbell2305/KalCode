@@ -55,6 +55,18 @@ interface CommandPaletteProps {
   onOpenChange: (open: boolean) => void;
 }
 
+function namedCommand(typed: string): HTMLElement | undefined {
+  const commandItems = [...document.querySelectorAll<HTMLElement>("[cmdk-item]")].filter(
+    (el) => !el.dataset.value?.startsWith("locator:"),
+  );
+  const normalized = (item: HTMLElement) => item.dataset.value?.toLowerCase() ?? "";
+  return (
+    commandItems.find((item) => normalized(item) === typed) ??
+    commandItems.find((item) => normalized(item).startsWith(typed)) ??
+    commandItems.find((item) => normalized(item).includes(typed))
+  );
+}
+
 export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const { info, settings, updateSettings } = useRuntime();
   const { navigate } = useNavigation();
@@ -80,12 +92,15 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const firstValue = first ? `locator:${first.kind}:${first.entityId}` : "";
   const typed = search.query.trim().toLowerCase();
   useEffect(() => {
-    if (!firstValue) return;
-    const commandMatches = [...document.querySelectorAll<HTMLElement>("[cmdk-item]")].some(
-      (el) => !el.dataset.value?.startsWith("locator:") && (el.textContent ?? "").toLowerCase().includes(typed),
-    );
-    if (!commandMatches) setSelected(firstValue);
-  }, [firstValue, typed]);
+    if (!typed) return;
+    // cmdk fuzzy-ranks commands and registers async locator items in layout effects. Select after
+    // those updates so an explicitly named command wins over a weaker fuzzy or locator match.
+    const frame = window.requestAnimationFrame(() => {
+      const preferred = namedCommand(typed)?.dataset.value ?? firstValue;
+      if (preferred && selected !== preferred) setSelected(preferred);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [firstValue, selected, typed]);
 
   const run = (action: () => unknown) => () => {
     onOpenChange(false);
@@ -114,6 +129,15 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       loop
       value={selected}
       onValueChange={setSelected}
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" || event.nativeEvent.isComposing || !typed) return;
+        const preferred = namedCommand(typed);
+        if (!preferred || preferred.dataset.value === selected) return;
+        // A quick Enter can precede the animation-frame selection correction above. Run the
+        // explicitly named command now and stop cmdk from dispatching to its weaker fuzzy choice.
+        event.preventDefault();
+        preferred.click();
+      }}
     >
       <Command.Input
         className={styles.input}

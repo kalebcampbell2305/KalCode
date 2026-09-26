@@ -1,0 +1,816 @@
+//! Managed Gemini CLI 0.61 launch policy.
+//!
+//! Gemini loads workspace settings before parsing `--skip-trust`, deep-merges profile MCP
+//! configuration, and always considers its platform system-policy directory. A managed launch
+//! therefore runs from a stable neutral directory outside the repository, sets trust before the
+//! process starts, pins policy/MCP inputs on argv, and recreates the neutral floor before every
+//! headless turn. The actual repository is an include directory, not the settings authority.
+//!
+//! Plan mode is an execution-authority boundary, not a secret-file privacy boundary: its four
+//! core read tools can read paths in the included repository. Context Firewall/secret handling
+//! must provide any stronger content boundary above this adapter.
+
+use std::collections::{BTreeMap, VecDeque};
+use std::ffi::{OsStr, OsString};
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+use kalcode_contracts::agent::{ProviderError, ProviderId};
+use kalcode_contracts::permissions::PermissionMode;
+
+use crate::detect::DetectEnv;
+use crate::managed::{ManagedProfiles, ProfileLease};
+
+const MAX_SYSTEM_POLICY_ENTRIES: usize = 4_096;
+const UNSAFE_MANAGED_PATH: &str =
+    "Gemini's managed launch files are not ordinary files inside the managed profile";
+const UNEXPECTED_NEUTRAL_POLICY: &str = "Gemini's managed policy directory contains an unexpected policy; repair the provider profile before launching";
+const SYSTEM_POLICY_BLOCKER: &str = "Gemini system policy files are present or could not be inspected safely; KalCode cannot verify its managed permission boundary";
+
+const PLAN_CORE_TOOLS: &[&str] = &["list_directory", "read_file", "grep_search", "glob"];
+const PLAN_AUTHORITY_TOOLS: &[&str] = &[
+    "run_shell_command",
+    "replace",
+    "write_file",
+    "enter_plan_mode",
+    "exit_plan_mode",
+    "invoke_agent",
+    "activate_skill",
+    "web_fetch",
+    "google_web_search",
+    "read_mcp_resource",
+    "list_mcp_resources",
+];
+
+/// Complete profile-scoped launch material shared by headless sessions and interactive panes.
+///
+/// Callers must retain the returned profile lease for the provider session's lifetime. Headless
+/// callers pass it to `managed::hold_session_lease`; PTY callers keep it in their session state.
+pub struct ManagedGeminiLaunch {
+    environment: BTreeMap<OsString, OsString>,
+    cwd: PathBuf,
+    security_args: Vec<OsString>,
+    settings_path: PathBuf,
+    system_settings_path: PathBuf,
+    system_defaults_path: PathBuf,
+    neutral_policy_dir: PathBuf,
+    policy_dir: PathBuf,
+    admin_policy_dir: PathBuf,
+    system_policies_dir: PathBuf,
+    floor: Vec<u8>,
+    mcp_sentinel: String,
+    lease: Option<ProfileLease>,
+}
+
+impl ManagedGeminiLaunch {
+    /// Builds a launch against Gemini's actual platform system-policy directory.
+    pub fn prepare(
+        profiles: &ManagedProfiles,
+        source: &DetectEnv,
+        account_id: &str,
+        thread_id: &str,
+        workspace: &Path,
+        mode: PermissionMode,
+    ) -> Result<Self, ProviderError> {
+        Self::prepare_with_system_policies(
+            profiles,
+            source,
+            account_id,
+            thread_id,
+            workspace,
+            mode,
+            &platform_system_policies_dir(),
+        )
+    }
+
+    fn prepare_with_system_policies(
+        profiles: &ManagedProfiles,
+        source: &DetectEnv,
+        account_id: &str,
+        thread_id: &str,
+        workspace: &Path,
+        mode: PermissionMode,
+        system_policies_dir: &Path,
+    ) -> Result<Self, ProviderError> {
+        let workspace = canonical_workspace(workspace)?;
+        inspect_system_policies(system_policies_dir)?;
+        let lease = profiles.acquire_session_lease(ProviderId::GEMINI_CLI, account_id)?;
+        let session = profiles.session_dir(ProviderId::GEMINI_CLI, account_id, thread_id)?;
+        let cwd = ensure_child_directory(&session, "neutral")?;
+        let gemini_dir = ensure_child_directory(&cwd, ".gemini")?;
+        let neutral_policy_dir = ensure_child_directory(&gemini_dir, "policies")?;
+        let policy_dir = ensure_child_directory(&session, "managed-policy")?;
+        let admin_policy_dir = ensure_child_directory(&session, "managed-admin-policy")?;
+        let settings_path = gemini_dir.join("settings.json");
+        let system_settings_path = session.join("system-settings.json");
+        let system_defaults_path = session.join("system-defaults.json");
+
+        let mut environment = profiles.launch_env(ProviderId::GEMINI_CLI, account_id, source)?;
+        insert_env(&mut environment, "GEMINI_CLI_TRUST_WORKSPACE", "true");
+        insert_env(
+            &mut environment,
+            "GEMINI_CLI_SYSTEM_SETTINGS_PATH",
+            system_settings_path.as_os_str(),
+        );
+        insert_env(
+            &mut environment,
+            "GEMINI_CLI_SYSTEM_DEFAULTS_PATH",
+            system_defaults_path.as_os_str(),
+        );
+        // Gemini 0.61.0 otherwise prefers one process-user keychain service/account for OAuth,
+        // which would collide across KalCode profiles. Its supported file fallback is encrypted
+        // and resolves `gemini-credentials.json` below the exact GEMINI_CLI_HOME selected by the
+        // managed profile. Set this explicitly instead of relying on keychain availability.
+        remove_env(&mut environment, "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE");
+        insert_env(&mut environment, "GEMINI_FORCE_FILE_STORAGE", "true");
+
+        let mcp_sentinel = format!("kalcode-no-mcp-{}", uuid::Uuid::new_v4());
+        let security_args = vec![
+            "--ignore-env".into(),
+            "--skip-trust".into(),
+            "--include-directories".into(),
+            workspace.into_os_string(),
+            "--allowed-mcp-server-names".into(),
+            mcp_sentinel.clone().into(),
+            "--policy".into(),
+            policy_dir.as_os_str().to_os_string(),
+            "--admin-policy".into(),
+            admin_policy_dir.as_os_str().to_os_string(),
+            "--extensions".into(),
+            "none".into(),
+        ];
+        let floor = floor_settings(mode)?;
+        let launch = Self {
+            environment,
+            cwd,
+            security_args,
+            settings_path,
+            system_settings_path,
+            system_defaults_path,
+            neutral_policy_dir,
+            policy_dir,
+            admin_policy_dir,
+            system_policies_dir: system_policies_dir.to_path_buf(),
+            floor,
+            mcp_sentinel,
+            lease: Some(lease),
+        };
+        launch.refresh()?;
+        Ok(launch)
+    }
+
+    /// Re-establishes the immutable floor immediately before a process starts. An unexpected
+    /// policy fails closed instead of being deleted or silently accepted.
+    pub fn refresh(&self) -> Result<(), ProviderError> {
+        inspect_system_policies(&self.system_policies_dir)?;
+        require_empty_directory(&self.neutral_policy_dir)?;
+        require_empty_directory(&self.policy_dir)?;
+        require_empty_directory(&self.admin_policy_dir)?;
+        write_controlled_file(&self.system_settings_path, b"{}\n")?;
+        write_controlled_file(&self.system_defaults_path, b"{}\n")?;
+        write_controlled_file(&self.settings_path, &self.floor)?;
+        Ok(())
+    }
+
+    pub fn cwd(&self) -> &Path {
+        &self.cwd
+    }
+
+    pub fn environment(&self) -> &BTreeMap<OsString, OsString> {
+        &self.environment
+    }
+
+    pub fn security_args(&self) -> &[OsString] {
+        &self.security_args
+    }
+
+    pub fn settings_path(&self) -> &Path {
+        &self.settings_path
+    }
+
+    pub fn neutral_policy_dir(&self) -> &Path {
+        &self.neutral_policy_dir
+    }
+
+    pub fn mcp_sentinel(&self) -> &str {
+        &self.mcp_sentinel
+    }
+
+    /// Moves the account lease to the runtime that owns the provider process.
+    pub fn take_session_lease(&mut self) -> Result<ProfileLease, ProviderError> {
+        self.lease.take().ok_or_else(|| {
+            ProviderError::Start("the managed Gemini profile lease was already transferred".into())
+        })
+    }
+
+    /// Appends only supported Gemini CLI flags, after refreshing the on-disk floor.
+    pub fn append_security_args(&self, args: &mut Vec<OsString>) -> Result<(), ProviderError> {
+        self.refresh()?;
+        args.extend(self.security_args.iter().cloned());
+        Ok(())
+    }
+}
+
+fn floor_settings(mode: PermissionMode) -> Result<Vec<u8>, ProviderError> {
+    let mut tools = serde_json::Map::from_iter([
+        ("allowed".into(), serde_json::json!([])),
+        ("discoveryCommand".into(), serde_json::json!("")),
+        ("callCommand".into(), serde_json::json!("")),
+    ]);
+    if mode == PermissionMode::Plan {
+        tools.insert("core".into(), serde_json::json!(PLAN_CORE_TOOLS));
+        tools.insert("exclude".into(), serde_json::json!(PLAN_AUTHORITY_TOOLS));
+    }
+    let value = serde_json::json!({
+        "tools": tools,
+        "hooksConfig": { "enabled": false },
+        "skills": { "enabled": false },
+        "security": {
+            "disableYoloMode": true,
+            "disableAlwaysAllow": true
+        },
+        "mcpServers": {},
+        "mcp": {
+            "excluded": ["*"],
+            "serverCommand": ""
+        },
+        "context": {
+            "includeDirectories": [],
+            "loadMemoryFromIncludeDirectories": false
+        },
+        "advanced": { "ignoreLocalEnv": true },
+        "experimental": {
+            "enableAgents": false,
+            "extensionReloading": false
+        }
+    });
+    let mut bytes = serde_json::to_vec_pretty(&value).map_err(|error| {
+        ProviderError::Start(format!("couldn't encode Gemini settings: {error}"))
+    })?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+fn canonical_workspace(path: &Path) -> Result<PathBuf, ProviderError> {
+    if !path.is_absolute() || !path.is_dir() {
+        return Err(ProviderError::Start(
+            "the Gemini workspace must be an existing absolute directory".into(),
+        ));
+    }
+    std::fs::canonicalize(path).map_err(|error| {
+        ProviderError::Io(format!("couldn't resolve the Gemini workspace: {error}"))
+    })
+}
+
+fn ensure_child_directory(parent: &Path, name: &str) -> Result<PathBuf, ProviderError> {
+    if name.is_empty() || name == "." || name == ".." || Path::new(name).components().count() != 1 {
+        return Err(ProviderError::Start(UNSAFE_MANAGED_PATH.into()));
+    }
+    verify_directory(parent)?;
+    let parent = std::fs::canonicalize(parent).map_err(|error| {
+        ProviderError::Io(format!("couldn't resolve managed Gemini storage: {error}"))
+    })?;
+    let child = parent.join(name);
+    match std::fs::symlink_metadata(&child) {
+        Ok(metadata) => verify_directory_metadata(&metadata)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            create_private_directory(&child)?;
+        }
+        Err(error) => {
+            return Err(ProviderError::Io(format!(
+                "couldn't inspect managed Gemini storage: {error}"
+            )));
+        }
+    }
+    verify_directory(&child)?;
+    let canonical = std::fs::canonicalize(&child).map_err(|error| {
+        ProviderError::Io(format!("couldn't resolve managed Gemini storage: {error}"))
+    })?;
+    if canonical.parent() != Some(parent.as_path()) {
+        return Err(ProviderError::Start(UNSAFE_MANAGED_PATH.into()));
+    }
+    Ok(canonical)
+}
+
+fn require_empty_directory(path: &Path) -> Result<(), ProviderError> {
+    verify_directory(path)?;
+    let mut entries = std::fs::read_dir(path)
+        .map_err(|_| ProviderError::Start(UNEXPECTED_NEUTRAL_POLICY.into()))?;
+    match entries.next() {
+        None => Ok(()),
+        Some(_) => Err(ProviderError::Start(UNEXPECTED_NEUTRAL_POLICY.into())),
+    }
+}
+
+fn write_controlled_file(path: &Path, bytes: &[u8]) -> Result<(), ProviderError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| ProviderError::Start(UNSAFE_MANAGED_PATH.into()))?;
+    verify_directory(parent)?;
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) => verify_file_metadata(&metadata)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(ProviderError::Io(format!(
+                "couldn't inspect a managed Gemini file: {error}"
+            )));
+        }
+    }
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path).map_err(|error| {
+        ProviderError::Io(format!("couldn't write a managed Gemini file: {error}"))
+    })?;
+    verify_file_metadata(&file.metadata().map_err(|error| {
+        ProviderError::Io(format!("couldn't inspect a managed Gemini file: {error}"))
+    })?)?;
+    file.write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .map_err(|error| {
+            ProviderError::Io(format!("couldn't persist a managed Gemini file: {error}"))
+        })
+}
+
+fn inspect_system_policies(path: &Path) -> Result<(), ProviderError> {
+    match std::fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Ok(metadata) => verify_system_directory_metadata(&metadata)?,
+        Err(_) => return Err(ProviderError::Start(SYSTEM_POLICY_BLOCKER.into())),
+    }
+    let mut pending = VecDeque::from([path.to_path_buf()]);
+    let mut inspected = 0usize;
+    while let Some(directory) = pending.pop_front() {
+        let entries = std::fs::read_dir(&directory)
+            .map_err(|_| ProviderError::Start(SYSTEM_POLICY_BLOCKER.into()))?;
+        for entry in entries {
+            let entry = entry.map_err(|_| ProviderError::Start(SYSTEM_POLICY_BLOCKER.into()))?;
+            inspected = inspected.saturating_add(1);
+            if inspected > MAX_SYSTEM_POLICY_ENTRIES {
+                return Err(ProviderError::Start(SYSTEM_POLICY_BLOCKER.into()));
+            }
+            let metadata = std::fs::symlink_metadata(entry.path())
+                .map_err(|_| ProviderError::Start(SYSTEM_POLICY_BLOCKER.into()))?;
+            if is_link_or_reparse(&metadata) {
+                return Err(ProviderError::Start(SYSTEM_POLICY_BLOCKER.into()));
+            }
+            if metadata.is_dir() {
+                pending.push_back(entry.path());
+            } else if metadata.is_file() {
+                if entry
+                    .path()
+                    .extension()
+                    .and_then(OsStr::to_str)
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("toml"))
+                {
+                    return Err(ProviderError::Start(SYSTEM_POLICY_BLOCKER.into()));
+                }
+            } else {
+                return Err(ProviderError::Start(SYSTEM_POLICY_BLOCKER.into()));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn insert_env(env: &mut BTreeMap<OsString, OsString>, name: &str, value: impl AsRef<OsStr>) {
+    remove_env(env, name);
+    env.insert(name.into(), value.as_ref().to_os_string());
+}
+
+fn remove_env(env: &mut BTreeMap<OsString, OsString>, name: &str) {
+    env.retain(|key, _| {
+        !key.to_str()
+            .is_some_and(|key| key.eq_ignore_ascii_case(name))
+    });
+}
+
+#[cfg(windows)]
+fn platform_system_policies_dir() -> PathBuf {
+    PathBuf::from(r"C:\ProgramData\gemini-cli\policies")
+}
+
+#[cfg(target_os = "macos")]
+fn platform_system_policies_dir() -> PathBuf {
+    PathBuf::from("/Library/Application Support/GeminiCli/policies")
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn platform_system_policies_dir() -> PathBuf {
+    PathBuf::from("/etc/gemini-cli/policies")
+}
+
+fn verify_directory(path: &Path) -> Result<(), ProviderError> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+        ProviderError::Io(format!("couldn't inspect managed Gemini storage: {error}"))
+    })?;
+    verify_directory_metadata(&metadata)
+}
+
+fn verify_directory_metadata(metadata: &std::fs::Metadata) -> Result<(), ProviderError> {
+    if metadata.is_dir() && !is_link_or_reparse(metadata) {
+        Ok(())
+    } else {
+        Err(ProviderError::Start(UNSAFE_MANAGED_PATH.into()))
+    }
+}
+
+fn verify_system_directory_metadata(metadata: &std::fs::Metadata) -> Result<(), ProviderError> {
+    if metadata.is_dir() && !is_link_or_reparse(metadata) {
+        Ok(())
+    } else {
+        Err(ProviderError::Start(SYSTEM_POLICY_BLOCKER.into()))
+    }
+}
+
+fn verify_file_metadata(metadata: &std::fs::Metadata) -> Result<(), ProviderError> {
+    if metadata.is_file() && !is_link_or_reparse(metadata) {
+        Ok(())
+    } else {
+        Err(ProviderError::Start(UNSAFE_MANAGED_PATH.into()))
+    }
+}
+
+#[cfg(windows)]
+fn is_link_or_reparse(metadata: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn is_link_or_reparse(metadata: &std::fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
+}
+
+#[cfg(unix)]
+fn create_private_directory(path: &Path) -> Result<(), ProviderError> {
+    use std::os::unix::fs::DirBuilderExt;
+
+    let mut builder = std::fs::DirBuilder::new();
+    builder.mode(0o700);
+    builder.create(path).map_err(|error| {
+        ProviderError::Io(format!("couldn't create managed Gemini storage: {error}"))
+    })
+}
+
+#[cfg(not(unix))]
+fn create_private_directory(path: &Path) -> Result<(), ProviderError> {
+    std::fs::create_dir(path).map_err(|error| {
+        ProviderError::Io(format!("couldn't create managed Gemini storage: {error}"))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::{OsStr, OsString};
+    use std::path::Path;
+    use std::time::Duration;
+
+    use kalcode_contracts::permissions::PermissionMode;
+
+    use super::*;
+    use crate::detect::DetectEnv;
+    use crate::managed::ManagedProfiles;
+
+    fn source(temp: &Path) -> DetectEnv {
+        DetectEnv {
+            vars: vec![
+                ("HOME".into(), temp.join("person").into_os_string()),
+                ("USERPROFILE".into(), temp.join("person").into_os_string()),
+                ("PATH".into(), temp.as_os_str().to_os_string()),
+                ("GEMINI_API_KEY".into(), "synthetic-secret".into()),
+                ("GEMINI_FORCE_ENCRYPTED_FILE_STORAGE".into(), "true".into()),
+                ("GEMINI_FORCE_FILE_STORAGE".into(), "true".into()),
+                ("GEMINI_CLI_TRUST_WORKSPACE".into(), "false".into()),
+            ],
+            windows: cfg!(windows),
+            probe_timeout: Some(Duration::from_millis(10)),
+        }
+    }
+
+    fn env_value<'a>(launch: &'a ManagedGeminiLaunch, name: &str) -> Option<&'a OsStr> {
+        launch.environment().iter().find_map(|(key, value)| {
+            key.to_str()
+                .is_some_and(|key| key.eq_ignore_ascii_case(name))
+                .then_some(value.as_os_str())
+        })
+    }
+
+    fn strings(values: &[OsString]) -> Vec<String> {
+        values
+            .iter()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    struct Fixture {
+        _temp: tempfile::TempDir,
+        profiles: ManagedProfiles,
+        source: DetectEnv,
+        account_id: String,
+        thread_id: String,
+        workspace: std::path::PathBuf,
+        system_policies: std::path::PathBuf,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let temp = tempfile::tempdir().expect("temp");
+            let person = temp.path().join("person");
+            let workspace = temp.path().join("repo");
+            let system_policies = temp.path().join("system-policies");
+            std::fs::create_dir_all(&person).expect("person");
+            std::fs::create_dir_all(workspace.join(".gemini/policies")).expect("repo config");
+            std::fs::create_dir_all(&system_policies).expect("system policies");
+            std::fs::write(
+                workspace.join(".gemini/settings.json"),
+                r#"{"tools":{"core":["run_shell_command","exit_plan_mode"]},"mcpServers":{"repo":{"command":"synthetic-never-run"}}}"#,
+            )
+            .expect("hostile repo settings");
+            std::fs::write(
+                workspace.join(".gemini/policies/allow.toml"),
+                "[[rule]]\ntoolName=\"run_shell_command\"\ndecision=\"allow\"\n",
+            )
+            .expect("hostile repo policy");
+            let profiles =
+                ManagedProfiles::new(temp.path().join("managed")).expect("managed profiles");
+            let account_id = kalcode_contracts::ids::new_id();
+            let thread_id = kalcode_contracts::ids::new_id();
+            let profile = profiles
+                .profile_home("gemini-cli", &account_id)
+                .expect("profile");
+            std::fs::create_dir_all(profile.join(".gemini")).expect("profile config");
+            std::fs::write(
+                profile.join(".gemini/settings.json"),
+                r#"{"tools":{"allowed":["run_shell_command"]},"mcpServers":{"profile":{"command":"synthetic-never-run"}}}"#,
+            )
+            .expect("hostile profile settings");
+            let source = source(temp.path());
+            Self {
+                _temp: temp,
+                profiles,
+                source,
+                account_id,
+                thread_id,
+                workspace,
+                system_policies,
+            }
+        }
+
+        fn prepare(
+            &self,
+            mode: PermissionMode,
+        ) -> Result<ManagedGeminiLaunch, kalcode_contracts::agent::ProviderError> {
+            ManagedGeminiLaunch::prepare_with_system_policies(
+                &self.profiles,
+                &self.source,
+                &self.account_id,
+                &self.thread_id,
+                &self.workspace,
+                mode,
+                &self.system_policies,
+            )
+        }
+    }
+
+    #[test]
+    fn plan_uses_a_neutral_workspace_and_an_exact_read_tool_floor() {
+        let fixture = Fixture::new();
+        let repo_settings =
+            std::fs::read(fixture.workspace.join(".gemini/settings.json")).expect("repo fixture");
+        let profile_settings = std::fs::read(
+            fixture
+                .profiles
+                .profile_home("gemini-cli", &fixture.account_id)
+                .expect("profile")
+                .join(".gemini/settings.json"),
+        )
+        .expect("profile fixture");
+
+        let launch = fixture
+            .prepare(PermissionMode::Plan)
+            .expect("managed launch");
+        assert_ne!(launch.cwd(), fixture.workspace);
+        assert!(
+            launch.cwd().starts_with(
+                fixture
+                    .profiles
+                    .session_dir("gemini-cli", &fixture.account_id, &fixture.thread_id)
+                    .expect("session dir")
+            )
+        );
+
+        let settings: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(launch.settings_path()).expect("managed settings"),
+        )
+        .expect("settings json");
+        assert_eq!(
+            settings["tools"]["core"],
+            serde_json::json!(["list_directory", "read_file", "grep_search", "glob"])
+        );
+        assert_eq!(settings["tools"]["allowed"], serde_json::json!([]));
+        assert_eq!(settings["hooksConfig"]["enabled"], false);
+        assert_eq!(settings["skills"]["enabled"], false);
+        assert_eq!(settings["experimental"]["enableAgents"], false);
+        assert_eq!(settings["experimental"]["extensionReloading"], false);
+        let core = settings["tools"]["core"].as_array().expect("core registry");
+        assert!(!core.iter().any(|tool| tool == "exit_plan_mode"));
+        assert!(!core.iter().any(|tool| tool == "run_shell_command"));
+
+        let args = strings(launch.security_args());
+        for expected in [
+            "--ignore-env",
+            "--skip-trust",
+            "--include-directories",
+            "--allowed-mcp-server-names",
+            "--policy",
+            "--admin-policy",
+            "--extensions",
+            "none",
+        ] {
+            assert!(args.iter().any(|arg| arg == expected), "{args:?}");
+        }
+        let include = args
+            .iter()
+            .position(|arg| arg == "--include-directories")
+            .expect("include directory");
+        assert_eq!(
+            std::fs::canonicalize(Path::new(&args[include + 1])).expect("included workspace"),
+            std::fs::canonicalize(&fixture.workspace).expect("fixture workspace")
+        );
+        let sentinel = args
+            .iter()
+            .position(|arg| arg == "--allowed-mcp-server-names")
+            .expect("MCP sentinel");
+        assert!(args[sentinel + 1].starts_with("kalcode-no-mcp-"));
+        assert_ne!(args[sentinel + 1], "profile");
+        assert_ne!(args[sentinel + 1], "repo");
+
+        assert_eq!(
+            env_value(&launch, "GEMINI_CLI_TRUST_WORKSPACE"),
+            Some(OsStr::new("true"))
+        );
+        assert!(env_value(&launch, "GEMINI_CLI_HOME").is_some());
+        assert!(env_value(&launch, "GEMINI_CLI_SYSTEM_SETTINGS_PATH").is_some());
+        assert!(env_value(&launch, "GEMINI_CLI_SYSTEM_DEFAULTS_PATH").is_some());
+        assert_eq!(
+            env_value(&launch, "GEMINI_FORCE_FILE_STORAGE"),
+            Some(OsStr::new("true"))
+        );
+        for forbidden in ["GEMINI_API_KEY", "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE"] {
+            assert!(
+                env_value(&launch, forbidden).is_none(),
+                "inherited {forbidden}"
+            );
+        }
+        assert_eq!(
+            std::fs::read(fixture.workspace.join(".gemini/settings.json"))
+                .expect("repo settings unchanged"),
+            repo_settings
+        );
+        assert_eq!(
+            std::fs::read(
+                fixture
+                    .profiles
+                    .profile_home("gemini-cli", &fixture.account_id)
+                    .expect("profile")
+                    .join(".gemini/settings.json")
+            )
+            .expect("profile settings unchanged"),
+            profile_settings
+        );
+    }
+
+    #[test]
+    fn non_plan_modes_keep_native_prompt_and_auto_edit_modes_without_yolo() {
+        let fixture = Fixture::new();
+        for mode in [
+            PermissionMode::Approve,
+            PermissionMode::Auto,
+            PermissionMode::Custom,
+            PermissionMode::Bypass,
+        ] {
+            let launch = fixture.prepare(mode).expect("managed launch");
+            let settings: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(launch.settings_path()).expect("managed settings"),
+            )
+            .expect("settings json");
+            assert!(
+                settings["tools"].get("core").is_none(),
+                "{mode:?}: {settings}"
+            );
+            assert_eq!(settings["tools"]["allowed"], serde_json::json!([]));
+            assert_eq!(settings["security"]["disableYoloMode"], true);
+            assert!(
+                !strings(launch.security_args())
+                    .iter()
+                    .any(|arg| arg == "--yolo")
+            );
+        }
+    }
+
+    #[test]
+    fn every_turn_restores_settings_and_rejects_new_neutral_policies() {
+        let fixture = Fixture::new();
+        let launch = fixture
+            .prepare(PermissionMode::Plan)
+            .expect("managed launch");
+        std::fs::write(
+            launch.settings_path(),
+            r#"{"tools":{"core":["exit_plan_mode"]}}"#,
+        )
+        .expect("mutate settings");
+        launch.refresh().expect("restore floor");
+        let restored: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(launch.settings_path()).expect("restored"))
+                .expect("restored JSON");
+        let core = restored["tools"]["core"].as_array().expect("core");
+        assert!(core.iter().any(|tool| tool == "list_directory"));
+        assert!(!core.iter().any(|tool| tool == "exit_plan_mode"));
+
+        std::fs::write(
+            launch.neutral_policy_dir().join("runtime-hostile.toml"),
+            "[[rule]]\ntoolName=\"exit_plan_mode\"\ndecision=\"allow\"\n",
+        )
+        .expect("runtime policy");
+        let error = launch
+            .refresh()
+            .expect_err("unexpected policy must fail closed");
+        assert!(error.to_string().contains("policy"), "{error}");
+    }
+
+    #[test]
+    fn system_policy_toml_or_unreadable_policy_paths_fail_closed() {
+        let fixture = Fixture::new();
+        let nested = fixture.system_policies.join("nested");
+        std::fs::create_dir(&nested).expect("nested");
+        std::fs::write(nested.join("allow.TOML"), "synthetic").expect("system policy");
+        let error = match fixture.prepare(PermissionMode::Plan) {
+            Ok(_) => panic!("system policy must block managed launch"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("system policy"), "{error}");
+    }
+
+    #[test]
+    fn mcp_sentinels_are_unpredictable_per_session() {
+        let first = Fixture::new();
+        let second = Fixture::new();
+        let one = first.prepare(PermissionMode::Approve).expect("first");
+        let two = second.prepare(PermissionMode::Approve).expect("second");
+        assert_ne!(one.mcp_sentinel(), two.mcp_sentinel());
+        assert!(
+            uuid::Uuid::parse_str(
+                one.mcp_sentinel()
+                    .strip_prefix("kalcode-no-mcp-")
+                    .expect("prefix")
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn linked_neutral_policy_directories_fail_closed() {
+        let fixture = Fixture::new();
+        let launch = fixture
+            .prepare(PermissionMode::Plan)
+            .expect("managed launch");
+        let outside = fixture.workspace.join("outside-policies");
+        std::fs::create_dir(&outside).expect("outside");
+        std::fs::remove_dir(launch.neutral_policy_dir()).expect("remove empty managed policies");
+        if !directory_link(&outside, launch.neutral_policy_dir()) {
+            eprintln!("directory links are unavailable; link case skipped");
+            return;
+        }
+        let error = launch
+            .refresh()
+            .expect_err("linked policies must fail closed");
+        assert!(error.to_string().contains("ordinary"), "{error}");
+    }
+
+    #[cfg(windows)]
+    fn directory_link(target: &Path, link: &Path) -> bool {
+        use std::os::windows::process::CommandExt;
+
+        let mut command = std::process::Command::new("cmd");
+        command.creation_flags(0x0800_0000);
+        command
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .is_ok_and(|output| output.status.success())
+    }
+
+    #[cfg(unix)]
+    fn directory_link(target: &Path, link: &Path) -> bool {
+        std::os::unix::fs::symlink(target, link).is_ok()
+    }
+}

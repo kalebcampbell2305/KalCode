@@ -44,10 +44,10 @@ import {
   PRESET_PANES,
 } from "../../shell/panes/model.ts";
 import { PANE_SHORTCUT_LABELS } from "../../shell/panes/paneShortcuts.ts";
-import { type CodeCanvasApi, CodeCanvas } from "./CodeCanvas.tsx";
 import styles from "./Code.module.css";
-import { providerIdentity } from "./panes/paneLabels.ts";
+import { CodeCanvas, type CodeCanvasApi } from "./CodeCanvas.tsx";
 import { CodeEmpty } from "./CodeEmpty.tsx";
+import { providerIdentity } from "./panes/paneLabels.ts";
 import { CODE_SHORTCUT_LABELS, codeShortcut } from "./shortcuts.ts";
 import { WorkspaceMenuContent } from "./WorkspaceMenu.tsx";
 

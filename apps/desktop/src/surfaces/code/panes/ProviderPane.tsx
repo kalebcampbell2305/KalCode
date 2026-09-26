@@ -15,6 +15,15 @@ import { useRuntime } from "../../../runtime/RuntimeProvider.tsx";
 import { ApprovalPrompt } from "../../permissions/ApprovalPrompt.tsx";
 import { MODE_LABELS } from "../../permissions/labels.ts";
 import { usePermissions } from "../../permissions/PermissionsProvider.tsx";
+import {
+  type PaneAccountIdentity,
+  paneAccountLabel,
+  PaneAccountChip,
+  PaneStatusChip,
+  ProviderGlyph,
+} from "./PaneParts.tsx";
+import styles from "./Panes.module.css";
+import { PaneTerminal } from "./PaneTerminal.tsx";
 import type { PaneChannel } from "./paneChannel.ts";
 import {
   channelNote,
@@ -25,14 +34,12 @@ import {
   paneStatus,
   providerIdentity,
 } from "./paneLabels.ts";
-import { PaneStatusChip, ProviderGlyph } from "./PaneParts.tsx";
-import { PaneTerminal } from "./PaneTerminal.tsx";
-import styles from "./Panes.module.css";
 
 export interface ProviderPaneProps {
   thread: ThreadSummary;
   info: PaneInfo | null;
   channel: PaneChannel;
+  account: PaneAccountIdentity | null;
   theme: "light" | "dark";
   focusRequest: number;
   /** The thread changed (rename, stop); the host refreshes its list. */
@@ -53,6 +60,7 @@ export function ProviderPane({
   thread,
   info,
   channel,
+  account,
   theme,
   focusRequest,
   onChanged,
@@ -82,6 +90,7 @@ export function ProviderPane({
   const showOverlay = request !== undefined && overlayDismissed !== request.id;
   const providerAsking =
     !request && (thread.status === "waiting_for_permission" || isAnswerInProvider(thread.currentActivity));
+  const accountLabel = account ? paneAccountLabel(account) : null;
 
   const stop = async () => {
     setStopping(true);
@@ -117,7 +126,7 @@ export function ProviderPane({
   return (
     <section
       className={styles.pane}
-      aria-label={paneLabel(thread)}
+      aria-label={`${paneLabel(thread)}${accountLabel ? `, account ${accountLabel}` : ""}`}
       data-provider-pane={thread.id}
       data-tone={status.tone}
       onKeyDown={onKeyDown}
@@ -125,6 +134,7 @@ export function ProviderPane({
       <PaneHeader
         thread={thread}
         identityName={identity.name}
+        account={account}
         note={note}
         onRename={(renamed) => onChanged?.(renamed)}
         onStop={() => setConfirmStop(true)}
@@ -151,7 +161,11 @@ export function ProviderPane({
         <PaneTerminal
           channel={channel}
           threadId={thread.id}
-          label={`${thread.name} ${identity.name} input`}
+          providerId={thread.providerId}
+          providerAccountId={thread.providerAccountId}
+          status={thread.status}
+          providerPromptActive={providerAsking}
+          label={`${thread.name} ${identity.name}${accountLabel ? ` ${accountLabel}` : ""} input`}
           running={running}
           focusRequest={focusRequest + localFocus}
           theme={theme}
@@ -197,6 +211,7 @@ export function ProviderPane({
 interface PaneHeaderProps {
   thread: ThreadSummary;
   identityName: string;
+  account: PaneAccountIdentity | null;
   note: ReturnType<typeof channelNote>;
   onRename: (thread: ThreadSummary) => void;
   onStop: () => void;
@@ -210,6 +225,7 @@ interface PaneHeaderProps {
 function PaneHeader({
   thread,
   identityName,
+  account,
   note,
   onRename,
   onStop,
@@ -303,6 +319,7 @@ function PaneHeader({
         <span className={styles.model}>{modelLabel(thread)}</span>
       </div>
       <div className={styles.meta}>
+        {account ? <PaneAccountChip account={account} /> : null}
         {note ? (
           <span className={styles.note} data-tone={note.tone} data-pane-channel={note.tone}>
             {note.tone === "limited" ? <Unplug aria-hidden="true" /> : null}

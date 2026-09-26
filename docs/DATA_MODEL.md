@@ -251,7 +251,7 @@ accounts(
 entitlement_grants(                          -- Free = no active grant
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   account_id TEXT NOT NULL REFERENCES accounts(id),
-  tier TEXT NOT NULL CHECK (tier IN ('pro','max','owner')),
+  tier TEXT NOT NULL CHECK (tier IN ('pro','max','max2x','owner')),
   source TEXT NOT NULL CHECK (source IN ('billing','grant')),
   granted_by TEXT NOT NULL, reason TEXT NOT NULL, granted_at TEXT NOT NULL,
   expires_at TEXT,                           -- billing: end of paid period (required); owner: always NULL
@@ -281,5 +281,38 @@ kalvoice_requests(                           -- one row per counted top-level Ka
 )                                            -- append-only; index (account_id, recorded_at)
 ```
 
+Migration `0005_accounts_billing.sql` adds the cloud identity and billing records:
+
+- `oauth_attempts`: optional GitHub OAuth SHA-256 state hashes, S256 challenges and ten-minute
+  expiry; consumed once.
+- `account_identities`: GitHub numeric subject to account id. Email is verified profile data, not
+  a linking authority.
+- `account_sessions`: SHA-256 session-token hashes, client kind, expiry, revocation and atomic
+  rotation links; raw tokens are returned once and never stored. Website tokens are sent only in
+  HttpOnly cookies.
+- `accounts.activated_at`: explicit Free activation or active/trialing paid-webhook activation.
+  `accounts.deleted_at`: soft-deletion marker; deleted accounts cannot authenticate or receive a
+  grant from a delayed webhook.
+- `email_signin_attempts`: hashed one-time email proofs, separate hashed desktop poll secrets,
+  optional S256 challenge, purpose (`signin` or `delete`), ten-minute expiry and atomic consume.
+- `auth_rate_limits`: HMAC client/account buckets and bounded start/verify/poll/refresh/delete
+  counters. An expiry index supports bounded cleanup.
+- `billing_customers`: one Stripe customer per account plus a durable customer-creation
+  idempotency key.
+- `billing_action_limits`: per-account Checkout and Portal request windows.
+- `billing_checkout_intents`: one short-lived tier-bound Checkout reservation per account and
+  stable Stripe idempotency key; deletion and conflicting Checkout refuse while it is live.
+- `billing_webhook_events`: event-id/type/subject claim records without webhook payloads. Claims
+  expire and carry a monotonically increasing version so a transient failure can retry safely.
+- `billing_sync_leases`: per-subscription token and monotonically increasing fencing version; the
+  same current token/version must still be held when a grant or revocation is applied.
+- `billing_subscriptions`: the most recently retrieved current Stripe snapshot, including an
+  explicit fail-closed `invalid` quarantine state for unknown Price/quantity/customer shapes.
+- `entitlement_grants.billing_subscription_id`: links audited billing grants to one subscription;
+  legacy grants remain readable with a null link.
+- entitlement triggers reject every grant to a deleted account and atomically mark the account
+  activated when the trusted operator inserts OWNER.
+
 The ledger stores no request text, transcripts, audio, model names or provider output, and never
-provider model tokens. Stripe customer/subscription ids arrive with the Z13 billing webhook.
+provider model tokens. OAuth codes, email proof/poll values, provider access tokens, raw sessions,
+IP addresses, Stripe secrets and webhook bodies are never stored.

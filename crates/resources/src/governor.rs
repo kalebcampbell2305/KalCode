@@ -291,6 +291,41 @@ impl GovernorHandle {
         self.stop();
     }
 
+    /// Requests shutdown and proves that the sampler ended within the supplied bound.
+    /// A timeout retains the join handle so the runtime can block replacement and retry.
+    pub fn shutdown_checked(&mut self, timeout: Duration) -> bool {
+        {
+            let mut state = self.shared.lock();
+            state.pending.shutdown = true;
+            self.shared.wake.notify_all();
+        }
+        let started = Instant::now();
+        while self
+            .thread
+            .as_ref()
+            .is_some_and(|thread| !thread.is_finished())
+        {
+            if started.elapsed() >= timeout {
+                return false;
+            }
+            std::thread::sleep(
+                Duration::from_millis(5).min(timeout.saturating_sub(started.elapsed())),
+            );
+        }
+        if let Some(thread) = self.thread.take() {
+            if thread.join().is_err() {
+                self.shared.lock().status = GovernorStatus::Failed {
+                    reason: "the resource sampler stopped unexpectedly".into(),
+                };
+            }
+        }
+        let mut state = self.shared.lock();
+        if !matches!(state.status, GovernorStatus::Failed { .. }) {
+            state.status = GovernorStatus::Stopped;
+        }
+        true
+    }
+
     fn stop(&mut self) {
         {
             let mut state = self.shared.lock();

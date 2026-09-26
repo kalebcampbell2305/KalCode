@@ -30,7 +30,7 @@ use super::{ApprovalExpiry, DecisionRouting, PaneInfo, TitleSink};
 use crate::catalog;
 use crate::claude::actions::ActionContext;
 use crate::claude::argv::{SessionStart, working_directory};
-use crate::detect::{DetectEnv, detect};
+use crate::detect::{DetectEnv, detect, detect_guarded};
 use crate::launch::{LaunchKind, resolve};
 
 /// Default pane size until the view reports its own.
@@ -157,6 +157,7 @@ impl PaneRegistry {
 /// Claude Code running interactively in a pane.
 pub struct InteractiveClaudeProvider {
     env: DetectEnv,
+    managed: Option<crate::managed::ManagedProfiles>,
     bridge: Arc<BridgeServer>,
     config: InteractiveConfig,
     panes: Arc<PaneRegistry>,
@@ -173,12 +174,18 @@ impl InteractiveClaudeProvider {
     ) -> Self {
         Self {
             env,
+            managed: None,
             bridge,
             config,
             panes,
             expiry: None,
             titles: None,
         }
+    }
+
+    pub fn with_managed_profiles(mut self, profiles: crate::managed::ManagedProfiles) -> Self {
+        self.managed = Some(profiles);
+        self
     }
 
     pub fn with_expiry(mut self, expiry: Arc<dyn ApprovalExpiry>) -> Self {
@@ -202,12 +209,23 @@ impl InteractiveClaudeProvider {
         Ok(self.config.sessions_dir.join(thread_id))
     }
 
-    fn executable(&self) -> Result<PathBuf, ProviderError> {
-        let detected = detect(&catalog::claude_spec(), &self.env);
+    fn executable(
+        &self,
+        require_managed_version: bool,
+        probe_guardian: Option<&crate::guardian::ProviderProbeGuardian>,
+    ) -> Result<PathBuf, ProviderError> {
+        let spec = catalog::claude_spec();
+        let detected = match probe_guardian {
+            Some(guardian) => detect_guarded(&spec, &self.env, guardian),
+            None => detect(&spec, &self.env),
+        };
         match (detected.detection.state, detected.executable) {
             (DetectionState::Installed, Some(exe))
                 if detected.detection.auth != AuthState::NotAuthenticated =>
             {
+                if require_managed_version {
+                    crate::claude::require_managed_version(detected.detection.version.as_deref())?;
+                }
                 Ok(exe)
             }
             (DetectionState::Installed, Some(_)) => Err(ProviderError::NotAuthenticated),
@@ -225,6 +243,9 @@ impl InteractiveClaudeProvider {
         &self,
         config: SessionConfig,
         sink: Box<dyn AgentEventSink>,
+        require_managed_version: bool,
+        guardian_job: Option<crate::guardian::RegisteredJob>,
+        probe_guardian: Option<crate::guardian::ProviderProbeGuardian>,
     ) -> Result<InteractiveSession, ProviderError> {
         if config.secret_ref.is_some() {
             return Err(ProviderError::Unsupported);
@@ -237,7 +258,7 @@ impl InteractiveClaudeProvider {
                     .into(),
             ));
         }
-        let executable = self.executable()?;
+        let executable = self.executable(require_managed_version, probe_guardian.as_ref())?;
         let cwd = working_directory(&config.working_directory)
             .map_err(|e| ProviderError::Start(e.to_string()))?;
         let dir = self.session_dir(&config.thread_id)?;
@@ -319,25 +340,33 @@ impl InteractiveClaudeProvider {
         let weak: Weak<Shared> = Arc::downgrade(&shared);
         let mut argv: Vec<OsString> = launch.prefix_args.clone();
         argv.extend(args);
-        let pty = PtySession::spawn_program(
-            ProgramSpec {
-                program: launch.program,
-                args: argv,
-                cwd,
-                env: env.into_iter().collect(),
-                size: TerminalSize::new(DEFAULT_SIZE.0, DEFAULT_SIZE.1)
-                    .map_err(|e| ProviderError::Start(e.to_string()))?,
-            },
-            move |exit| {
-                if let Some(shared) = weak.upgrade() {
-                    shared.on_exit(exit.code, exit.killed);
-                }
-            },
-        )
-        .map_err(|e| {
-            tracing::warn!(event = "pane.spawn_failed", error = %e);
-            ProviderError::Start("Claude Code couldn't be started in a pane.".into())
-        })?;
+        let program = ProgramSpec {
+            program: launch.program,
+            args: argv,
+            cwd,
+            env: env.into_iter().collect(),
+            size: TerminalSize::new(DEFAULT_SIZE.0, DEFAULT_SIZE.1)
+                .map_err(|e| ProviderError::Start(e.to_string()))?,
+        };
+        let on_exit = move |exit: kalcode_pty::ExitInfo| {
+            if let Some(shared) = weak.upgrade() {
+                shared.on_exit(exit.code, exit.killed);
+            }
+        };
+        let pty = match guardian_job {
+            Some(registered) => {
+                PtySession::spawn_program_guarded(program, Box::new(registered), on_exit).map_err(
+                    |e| {
+                        tracing::warn!(event = "pane.spawn_failed", error = %e);
+                        ProviderError::Start("Claude Code couldn't be started in a pane.".into())
+                    },
+                )?
+            }
+            None => PtySession::spawn_program(program, on_exit).map_err(|e| {
+                tracing::warn!(event = "pane.spawn_failed", error = %e);
+                ProviderError::Start("Claude Code couldn't be started in a pane.".into())
+            })?,
+        };
         tracing::info!(event = "pane.started", thread_id = %config.thread_id, pid = ?pty.pid());
         let _ = shared.pty.set(pty);
 
@@ -363,7 +392,24 @@ fn marker_path(sessions_dir: &Path, thread_id: &str) -> Option<PathBuf> {
 /// Whether `thread_id` was created as a pane (it starts and resumes in one), also after a
 /// restart, when its process is gone. `sessions_dir` is KalCode's `<data>/sessions`.
 pub fn marked_interactive(sessions_dir: &Path, thread_id: &str) -> bool {
-    marker_path(sessions_dir, thread_id).is_some_and(|m| m.is_file())
+    marked_interactive_checked(sessions_dir, thread_id).unwrap_or(false)
+}
+
+/// Fallible form used by authority preflights that must never collapse marker I/O or object-type
+/// failures into a false (headless) classification.
+pub fn marked_interactive_checked(sessions_dir: &Path, thread_id: &str) -> std::io::Result<bool> {
+    let marker = marker_path(sessions_dir, thread_id).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid thread identity")
+    })?;
+    match std::fs::symlink_metadata(marker) {
+        Ok(metadata) if metadata.file_type().is_file() => Ok(true),
+        Ok(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "interactive marker is not a regular file",
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
@@ -382,7 +428,18 @@ impl AgentProvider for InteractiveClaudeProvider {
     }
 
     fn detect(&self) -> ProviderDetection {
-        detect(&catalog::claude_spec(), &self.env).detection
+        let mut spec = catalog::claude_spec();
+        if self.managed.is_some() {
+            spec.auth = None;
+        }
+        match self
+            .managed
+            .as_ref()
+            .and_then(|profiles| profiles.probe_guardian().ok())
+        {
+            Some(guardian) => detect_guarded(&spec, &self.env, &guardian).detection,
+            None => detect(&spec, &self.env).detection,
+        }
     }
 
     fn capabilities(&self) -> ProviderCapabilities {
@@ -396,7 +453,41 @@ impl AgentProvider for InteractiveClaudeProvider {
         config: SessionConfig,
         sink: Box<dyn AgentEventSink>,
     ) -> Result<Box<dyn AgentSession>, ProviderError> {
-        Ok(Box::new(self.start(config, sink)?))
+        if let Some(profiles) = &self.managed {
+            let account = config
+                .provider_account_id
+                .as_deref()
+                .ok_or(ProviderError::NotAuthenticated)?;
+            let lease = profiles.acquire_session_lease(ProviderId::CLAUDE_CODE, account)?;
+            let guardian_job = lease.prepare_guarded_job("claude-pane")?;
+            let probe_guardian = profiles.probe_guardian()?;
+            let env = profiles.prepare_env(ProviderId::CLAUDE_CODE, account, &self.env)?;
+            let provider = Self {
+                env,
+                managed: None,
+                bridge: self.bridge.clone(),
+                config: self.config.clone(),
+                panes: self.panes.clone(),
+                expiry: self.expiry.clone(),
+                titles: self.titles.clone(),
+            };
+            let mut isolated_config = config;
+            isolated_config.provider_account_id = None;
+            let session = Box::new(provider.start(
+                isolated_config,
+                sink,
+                true,
+                Some(guardian_job),
+                Some(probe_guardian),
+            )?);
+            return Ok(crate::managed::hold_session_lease(session, lease));
+        }
+        if config.provider_account_id.is_some() {
+            return Err(ProviderError::Start(
+                "A managed provider profile is required for this account.".into(),
+            ));
+        }
+        Ok(Box::new(self.start(config, sink, false, None, None)?))
     }
 }
 

@@ -13,8 +13,8 @@ talkKey: string,
  */
 talkEnabled: boolean, 
 /**
- * Which connected provider handles requests that need reasoning. `None` = automatic: the
- * only connected provider, if exactly one is connected.
+ * Legacy selection retained for storage/wire compatibility. Current reasoning is local-only,
+ * and provider values never authorize provider inference.
  */
 intelligence: KalVoiceIntelligence | null, 
 /**

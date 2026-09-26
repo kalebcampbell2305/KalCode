@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-account-social-start"
+description = "Enables the account_social_start command without any pre-configured scope."
+commands.allow = ["account_social_start"]
+
+[[permission]]
+identifier = "deny-account-social-start"
+description = "Denies the account_social_start command without any pre-configured scope."
+commands.deny = ["account_social_start"]

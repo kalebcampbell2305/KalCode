@@ -10,6 +10,7 @@ export default defineConfig({
   workers: 1,
   timeout: 120_000,
   retries: 0,
+  forbidOnly: true,
   reporter: process.env.CI ? [["github"], ["list"]] : "list",
   use: { trace: "retain-on-failure" },
 });

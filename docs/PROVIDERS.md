@@ -5,7 +5,7 @@ CLI; Claude Code adapter) · Codex and Gemini CLI adapters, their panes and Prov
 PROVIDERS-2 (`docs/campaigns/PROVIDERS-2.md`) · Code: `crates/providers` · Contract:
 `crates/contracts/src/agent.rs`, `health.rs` · Facts verified 2026-09-24/25 against official docs,
 the providers' published SDK/source type definitions and the installed CLIs (Claude Code 2.1.282,
-codex-cli 0.155.1; Gemini CLI not installed) · Launch and permission hardening: SEC-0.1.1
+codex-cli 0.157.0; Gemini CLI not installed) · Launch and permission hardening: SEC-0.1.1
 (`docs/campaigns/SEC-0.1.1.md`)
 
 ## 1. Principles
@@ -100,25 +100,31 @@ is `true` only when KalCode's adapter implements it.
 
 ## 5. Permission mapping
 
-Every mapping is **approximate (stricter)**: none is exact, and none grants more than the
-KalCode profile implies (`docs/PERMISSIONS.md` §3). The flags shown are the ones the code uses,
-and each displayed string is generated from the argv, so it cannot drift: Claude Code's from
+Every mapping is **approximate (stricter)** because each adapter adds a common capability floor
+and Custom does not yet translate provider-specific rules. The mode itself follows the owner's
+provider-native execution contract. The flags shown are the ones the code uses, and each
+displayed string is generated from the argv, so it cannot drift: Claude Code's from
 `crates/providers/src/claude/argv.rs`, Codex's from `crates/providers/src/codex/argv.rs`, Gemini
 CLI's from `crates/providers/src/gemini/mod.rs`.
 
-Why nothing is broader:
+Provider execution permissions remain provider-native. KalCode workspace and pane UI operations
+do not need a second KalCode approval. A provider prompt is answered in that provider's real TUI;
+KalCode does not synthesize or auto-answer it. Headless adapters select the same documented native
+policy, but cannot render an interactive provider prompt in KalCode.
 
-- **No host approvals yet.** Nobody can answer a provider prompt yet, so anything that would
-  prompt is denied, never left waiting and never auto-approved.
+Why the mappings remain approximate and bounded:
+
 - Claude Code's `auto` mode is never used (its classifier's decisions are not KalCode policy),
   and `bypassPermissions` / `--dangerously-skip-permissions` are never used (they would also
   allow remote-consequential actions such as `git push`).
-- Codex `danger-full-access` and Gemini CLI `yolo` are never used.
+- Codex uses `danger-full-access` only for the explicitly selected Bypass mode. The combined
+  `--dangerously-bypass-approvals-and-sandbox` switch is never used. Gemini CLI `yolo` is never
+  used.
 - **Custom** profiles run on the Approve baseline. Their rules are not applied to provider
   sessions yet (see below).
 
-Unit tests fail the build if a mapping becomes exact or uses a forbidden mode or flag, or if a
-Claude Code mode ranks above its cap.
+Unit tests fail the build if a mapping uses a forbidden mode or flag, emits a competing native
+permission pair, or if a Claude Code mode ranks above its cap.
 
 ### Claude Code
 
@@ -224,49 +230,55 @@ intercept").
 
 ### Codex (headless threads, PROVIDERS-2)
 
-Every turn passes `exec --json -c approval_policy='never' -c web_search='disabled'
--c shell_environment_policy.inherit='core' --ignore-rules` and then:
+Every turn passes `exec --json --ignore-rules --ignore-user-config`, disables connected tools and
+web search, clears inherited MCP registrations, bounds the child environment, and adds the exact
+native permission pair below:
 
 | KalCode | Codex flags | Fidelity | Notes |
 | --- | --- | --- | --- |
-| Plan | `--sandbox read-only --skip-git-repo-check` | Stricter | Reads and read-only commands in Codex's read-only sandbox (its exec default); edits, network and anything that would ask are refused. |
-| Approve | as Plan | Stricter | Edits would need an approval KalCode can't give Codex yet, so they're refused instead of asking. |
-| Auto | as Plan | Stricter | Runs like Approve. |
-| Bypass | `--sandbox workspace-write -c sandbox_workspace_write.network_access=false` | Stricter | Edits and commands inside the workspace, network off. Codex's own "is this a Git repository" check stays on because it can write. |
-| Custom | as Approve | Stricter | Approve baseline. |
+| Plan | `--sandbox read-only -c approval_policy='never' --skip-git-repo-check` | Stricter | Reads and read-only commands in Codex's native read-only sandbox; edits and approval requests are refused. |
+| Approve | `--sandbox workspace-write -c approval_policy='on-request'` | Stricter | Workspace writes use Codex's native approval policy. In a pane, the person answers Codex's prompt; a headless turn cannot surface that prompt through KalCode. |
+| Auto | `--sandbox workspace-write -c approval_policy='never'` | Stricter | Workspace writes run without provider approval prompts; the native workspace sandbox remains active. |
+| Bypass | `--sandbox danger-full-access -c approval_policy='never'` | Stricter | Codex's explicit native full-access sandbox with provider approval prompts disabled. Connected tools and Codex web search remain disabled by the common floor. |
+| Custom | as Approve | Stricter | Custom provider rules are not translated yet, so Custom uses the native Approve pair. |
 
 Why each flag (sources [5][7][13][14][18]): `codex exec` has **no** `--ask-for-approval` flag
 (installed `codex exec --help`); `approval_policy` is the documented config key, set with `-c`
-exactly as the official TypeScript SDK does. `never` returns anything that would ask to the model
-as a failure, so nothing waits for a person KalCode can't reach. `web_search='disabled'` because
-KalCode's Claude Code mapping refuses web tools too. `shell_environment_policy.inherit='core'`
+exactly as the official TypeScript SDK does. `on-request` and `never` therefore retain Codex's
+native meaning instead of introducing a KalCode approval layer. `web_search='disabled'` and an
+empty MCP map prevent connected capabilities from appearing independently of the selected mode.
+`shell_environment_policy.inherit='core'`
 keeps provider keys (`OPENAI_*`, `CODEX_*`) out of the commands Codex runs (Codex keeps variables
 named `*KEY*`/`*TOKEN*` by default). `--ignore-rules` means a repository's execpolicy `.rules`
 never grant anything (K4); it also skips the user's own rules, which is noted as a gap below.
-`--skip-git-repo-check` only where nothing can be written. The message is sent on stdin (`-`),
-never on the command line.
+`--skip-git-repo-check` appears only in Plan. The message is sent on stdin (`-`), never on the
+command line. Resume repeats the same sandbox and approval pair before `resume <thread id> -`.
 
-Never used, in any mode: `danger-full-access`, `--dangerously-bypass-approvals-and-sandbox`,
+Never used, in any mode: `--dangerously-bypass-approvals-and-sandbox`,
 `--dangerously-bypass-hook-trust`, `--approve-for-me`, `--search`, `--add-dir`, `--oss`,
-`--worktree`, `on-request` or `untrusted` approvals, network in the sandbox. A test fails if any
-appears (`codex::argv` unit tests and `turns_pipeline` against the fake).
+`--worktree`, `untrusted` approvals, live web search or an explicit workspace-network grant.
+Tests fail if a forbidden switch appears, if a mode emits another mode's pair, or if resume drops
+the selected pair (`codex::argv` unit tests and `turns_pipeline` against the fake).
 
 #### What KalCode enforces for Codex threads today, and the gaps
 
 | Enforced by | Guarantee |
 | --- | --- |
-| KalCode (launch flags) | Sandbox never broader than the mode, approvals never waited on, no web search, network off in the only writable mode, repository execpolicy rules ignored, provider keys not in model-run commands, credential scoping of the process (§3). |
-| Codex | Everything inside the sandbox: which reads and read-only commands run, and — in Bypass — which writes. |
+| KalCode (launch flags) | Exact native sandbox/approval pair for the selected mode; connected tools and web search disabled; inherited MCP registrations cleared; repository execpolicy rules and user configuration ignored; provider keys excluded from model-run commands; provider-process credential scoping (§3). |
+| Codex | Every execution decision inside its native sandbox and every native approval prompt. KalCode records status but does not answer the prompt. |
 
 Gaps (honest): Codex has **no deny-rule flag** KalCode can pass per turn, so there is no Codex
-equivalent of Claude Code's deny floor: reads of credential files the sandbox allows (`.env` in
-the workspace, `~/.ssh`) are **not** blocked by KalCode, and remote actions (`git push`, deploy
-CLIs) are stopped by the sandbox's network block rather than by a KalCode rule. Codex permission
+equivalent of Claude Code's deny floor: reads of credential files the selected sandbox allows
+(`.env` in the workspace, `~/.ssh`) are **not** blocked by KalCode. In Bypass,
+`danger-full-access` also permits native shell network access, so remote actions are governed by
+Codex's selected native mode rather than by a KalCode rule. Codex permission
 profiles support `deny` read rules [18], but they don't compose with `--sandbox` (a
 `sandbox_mode` anywhere in the loaded config silently wins), so using them safely needs a verified
 precedence and is planned with the app-server adapter (§8.8). `--ignore-rules` also drops the
 user's own `forbidden` rules. KalCode's permission engine does not judge Codex tool calls per
-action (`hostApprovals: false`), exactly as for Claude Code headless threads.
+action (`hostApprovals: false`). Approve and Custom may require a native provider decision that a
+headless process cannot display through KalCode; interactive panes are the normal surface for
+that prompt.
 
 ### Gemini CLI (headless threads, PROVIDERS-2)
 
@@ -565,10 +577,10 @@ backing off to 30 minutes). Recording an observation never delays a thread event
 | Gemini CLI | Not installed on the verification machine; detection, the adapter and panes are tested only against the fake provider and the published type definitions. Smoke script written (`gemini-headless-smoke.ps1`), not run. |
 | Claude Code deny rules and command forms | Bash/PowerShell deny rules match the command text, not the program (§5). A full path, `sh -c` or quoting escapes them; the Claude Code mode then refuses the command unless the user's own allow rules cover it. Closed by the Z7 hook bridge. |
 | Claude Code plan mode and `useAutoModeDuringPlan` | Plan mode may run classifier-approved commands when auto mode is available. Not relied on: Plan also passes `--restricted`, which removes command-running tools. |
-| Codex / Gemini CLI adapters | Built (PROVIDERS-2). Codex flags verified against the installed `codex exec --help` 0.155.1 and the official SDK; the real JSONL stream and flag acceptance are confirmed only by the owner-approved smoke (`codex-headless-smoke.ps1`, written, not run). |
+| Codex / Gemini CLI adapters | Built (PROVIDERS-2). Codex native mode flags verified against installed `codex`, `codex exec`, `codex resume`, and `codex exec resume` help 0.157.0 plus the official configuration/CLI references; no provider inference was used. The real JSONL stream and execution behavior are confirmed only by the owner-approved smoke (`codex-headless-smoke.ps1`, written, not run). |
 | Codex deny floor | None per turn (§5 gaps). Permission-profile `deny` rules exist but don't compose with `--sandbox`; planned with app-server. |
 | Claude Code panes: `--settings` hooks with `--setting-sources user`, exec-form `args`, hook environment inheritance, UserPromptSubmit field name | Documented (hooks, settings and permissions references); exercised against the fake provider. Confirmed only by the owner-approved smoke run (`tooling/smoke/claude-interactive-smoke.ps1`, not run yet). |
-| Codex panes | Hardened candidate: authenticated notify only; OSC 9 cannot change canonical status. Non-escalating scalar flags are tested, but managed-profile isolation remains a release blocker. |
+| Codex panes | Hardened candidate: authenticated notify only; OSC 9 cannot change canonical status. Exact native Plan/Approve/Auto/Bypass/Custom mappings are tested, including resume; managed-profile isolation remains a release blocker. |
 
 ## 11. Sources
 

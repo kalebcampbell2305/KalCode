@@ -2,7 +2,7 @@
  * The KalVoice widget: a small, dark glass bar that floats over the workspace. One fine lit
  * hairline, a soft shadow, the orb, KALVOICE, and the state as a dot plus words. Tones follow
  * the contract palette: listening is the icy accent, processing / executing are working green,
- * needs approval is neutral (never amber), done is high-contrast neutral, error is red.
+ * done is high-contrast neutral and error is red.
  */
 .panel {
   --phase-tone: var(--status-muted);
@@ -25,12 +25,6 @@
   --phase-tone: var(--status-working);
   --phase-text: var(--status-working-text);
   --phase-line: var(--status-working-line);
-}
-
-.panel[data-phase="waiting_for_permission"] {
-  --phase-tone: var(--status-waiting);
-  --phase-text: var(--status-waiting-text);
-  --phase-line: var(--status-waiting-line);
 }
 
 .panel[data-phase="done"] {
@@ -79,14 +73,7 @@
 }
 
 .panel[data-view="expanded"] .body,
-.panel:is(
-    [data-phase="listening"],
-    [data-phase="transcribing"],
-    [data-phase="done"],
-    [data-phase="error"],
-    [data-phase="waiting_for_permission"]
-  )
-  .body {
+.panel:is([data-phase="listening"], [data-phase="transcribing"], [data-phase="done"], [data-phase="error"]) .body {
   width: 28rem;
 }
 
@@ -126,7 +113,6 @@
   [data-phase="transcribing"],
   [data-phase="thinking"],
   [data-phase="executing"],
-  [data-phase="waiting_for_permission"],
   [data-phase="error"]
 ) .card {
   border-color: var(--phase-line);

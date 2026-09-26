@@ -170,6 +170,9 @@ pub struct ThreadSummary {
     pub provider_id: ProviderId,
     pub provider_name: String,
     pub model: Option<String>,
+    /// Stable selected provider-account metadata id; never a credential.
+    #[serde(default)]
+    pub provider_account_id: Option<String>,
     /// Account label such as "Personal"; never a credential.
     pub account_label: Option<String>,
     pub workspace_id: String,
@@ -294,6 +297,9 @@ pub struct ToolCallRecord {
 #[ts(export)]
 pub struct ThreadCreateInput {
     pub provider_id: String,
+    /// Explicit account selection. The desktop resolves and validates this id before creation.
+    #[serde(default)]
+    pub provider_account_id: Option<String>,
     pub workspace_id: String,
     pub model: Option<String>,
     pub permission_mode: PermissionMode,
@@ -419,6 +425,7 @@ mod tests {
         });
         let summary: ThreadSummary = serde_json::from_value(json).expect("decode");
         assert_eq!(summary.archived_at, None);
+        assert_eq!(summary.provider_account_id, None);
         assert!(!summary.resumable);
         assert_eq!(summary.permission_profile_id, None);
         assert_eq!(summary.runtime_kind, None);
@@ -427,6 +434,7 @@ mod tests {
             "permissionMode": "approve", "prompt": "p", "name": null
         }))
         .expect("input");
+        assert_eq!(input.provider_account_id, None);
         assert_eq!(input.confirm_bypass, None);
     }
 }

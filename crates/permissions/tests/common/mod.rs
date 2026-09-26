@@ -87,6 +87,7 @@ pub fn thread_summary(id: &str, workspace_id: &str, mode: PermissionMode) -> Thr
         provider_id: ProviderId::new(ProviderId::CLAUDE_CODE),
         provider_name: "Claude Code".into(),
         model: None,
+        provider_account_id: None,
         account_label: None,
         workspace_id: workspace_id.to_owned(),
         workspace_name: "kalcode".into(),

@@ -8,7 +8,7 @@ import { formatBytes } from "./assistantState.ts";
 import { useKalVoice, useOptionalKalVoice } from "./KalVoiceProvider.tsx";
 import styles from "./KalVoiceSettings.module.css";
 import { ANCHOR_LABELS } from "./panelGeometry.ts";
-import { checkReserved, displayKey, isModifierOnly, talkKeyFromEvent } from "./shortcutModel.ts";
+import { checkReserved, displayKey, isModifierOnly, talkKeyChoiceHint, talkKeyFromEvent } from "./shortcutModel.ts";
 
 const ANCHORS: PanelAnchor[] = [
   "bottom_right",
@@ -129,7 +129,7 @@ function TalkKeyRow() {
       <Row
         id="kalvoice-talk-key"
         label="Push-to-talk key"
-        help="Hold it, speak, release. KalVoice runs commands it recognizes, types into the box you're in, or answers with your provider. It works only while KalCode is in front, so other apps keep the key."
+        help="Hold it, speak, release. KalVoice runs local workspace commands or types into the box you're in. It works only while KalCode is in front, so other apps keep the key."
       >
         <span className={styles.keys}>
           <kbd>{displayKey(current)}</kbd>
@@ -161,8 +161,8 @@ function TalkKeyRow() {
         </p>
       ) : (
         <p className={styles.conflictNote}>
-          One key on its own: F1–F24, Pause, Scroll Lock or Insert. Fn isn't offered because it doesn't reach apps on
-          this system; Caps Lock would switch on and off while held.
+          {talkKeyChoiceHint(status.talkKeys)} Fn isn't offered because macOS and many keyboards handle it specially;
+          Caps Lock would switch on and off while held.
         </p>
       )}
     </div>
@@ -194,46 +194,13 @@ function TalkEnabledRow() {
 }
 
 function IntelligenceRow() {
-  const { status, updatePreferences } = useKalVoice();
-  if (!status) return null;
-  const selected = status.preferences.intelligence;
-  const value =
-    selected === null ? "automatic" : selected.kind === "local" ? "local" : `provider:${selected.providerId}`;
-  const connected = status.providers;
   return (
     <Row
       id="kalvoice-intelligence"
       label="KalVoice intelligence"
-      help={
-        connected.length === 0
-          ? "No provider is connected yet. Commands KalCode understands directly still work; other requests need Claude Code, Codex or Gemini CLI signed in on this computer."
-          : "Which of your connected providers answers requests that need reasoning. Uses your own account."
-      }
+      help="Workspace commands are interpreted on this computer. Requests needing a local model remain unavailable until that runtime is ready. Connected providers handle only the coding tasks you send to them."
     >
-      <select
-        className={styles.select}
-        aria-labelledby="kalvoice-intelligence-label"
-        value={value}
-        onChange={(e) => {
-          const v = e.target.value;
-          void updatePreferences({
-            intelligence: v.startsWith("provider:")
-              ? { kind: "provider", providerId: v.slice("provider:".length) }
-              : { kind: "automatic" },
-          });
-        }}
-      >
-        <option value="automatic">Automatic (the only connected provider)</option>
-        {connected.map((p) => (
-          <option key={p.id} value={`provider:${p.id}`}>
-            {p.displayName}
-            {p.available ? "" : " (signed out)"}
-          </option>
-        ))}
-        {value.startsWith("provider:") && !connected.some((p) => `provider:${p.id}` === value) ? (
-          <option value={value}>{value.slice("provider:".length)} (not connected)</option>
-        ) : null}
-      </select>
+      <span>On-device only</span>
     </Row>
   );
 }

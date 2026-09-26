@@ -6,6 +6,7 @@ import type { Mailer, OutgoingEmail, SendResult } from "../../worker/lib/mailer"
 import {
   type AddressClaim,
   type EarlyAccessStore,
+  emailAdmissionCaps,
   type Subscriber,
   type SubscriberStatus,
   type TokenRecord,
@@ -40,6 +41,7 @@ export function fakeStore(): FakeStore {
   const rows = new Map<string, FakeRow>();
   const tokens = new Map<string, TokenRecord>();
   const budget = new Map<string, number>();
+  const marketingClaims = new Map<string, { day: string; state: "claimed" | "sent" | "ambiguous" | "rejected" }>();
   let nextId = 1;
   const byId = (id: number) => [...rows.values()].find((row) => row.id === id);
   const subscriber = (row: FakeRow): Subscriber => ({ id: row.id, status: row.status });
@@ -76,6 +78,7 @@ export function fakeStore(): FakeStore {
           rows.delete(email);
       }
       for (const day of budget.keys()) if (day < utcDay(now)) budget.delete(day);
+      for (const [id, claim] of marketingClaims) if (claim.day < utcDay(now)) marketingClaims.delete(id);
     },
     async find(email) {
       check();
@@ -123,19 +126,29 @@ export function fakeStore(): FakeStore {
         row.emailDayCount = claim.previous.emailDayCount;
       }
     },
-    async claimDailySend(now, limit) {
+    async claimMarketingSend(now, limit) {
       check();
       const day = utcDay(now);
+      const caps = emailAdmissionCaps(limit);
       const sent = budget.get(day) ?? 0;
-      if (sent >= limit) return false;
+      const marketing = [...marketingClaims.values()].filter(
+        (claim) => claim.day === day && claim.state !== "rejected",
+      ).length;
+      if (sent >= caps.hard || marketing >= caps.marketing) return null;
+      const claimId = crypto.randomUUID();
       budget.set(day, sent + 1);
-      return true;
+      marketingClaims.set(claimId, { day, state: "claimed" });
+      return { claimId, day };
     },
-    async releaseDailySend(now) {
+    async finalizeMarketingSend(claim, state) {
       check();
-      const day = utcDay(now);
-      const sent = budget.get(day) ?? 0;
-      if (sent > 0) budget.set(day, sent - 1);
+      const current = marketingClaims.get(claim.claimId);
+      if (!current || current.state !== "claimed") return;
+      current.state = state;
+      if (state === "rejected") {
+        const sent = budget.get(claim.day) ?? 0;
+        if (sent > 0) budget.set(claim.day, sent - 1);
+      }
     },
     async addTokens(records) {
       check();

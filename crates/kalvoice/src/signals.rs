@@ -40,7 +40,7 @@ pub struct KalVoiceStatus {
     pub microphone_supported: bool,
     /// Whether the OS voice is available for spoken replies.
     pub voice_output_available: bool,
-    /// Connected providers that can power KalVoice reasoning.
+    /// Connected coding providers available as action targets, never as a reasoning fallback.
     pub providers: Vec<ProviderChoice>,
     pub reserved_shortcuts: Vec<ReservedShortcut>,
     /// Keys that can be the push-to-talk key on this system.

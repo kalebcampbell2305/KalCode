@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-doctor-run"
+description = "Enables the doctor_run command without any pre-configured scope."
+commands.allow = ["doctor_run"]
+
+[[permission]]
+identifier = "deny-doctor-run"
+description = "Denies the doctor_run command without any pre-configured scope."
+commands.deny = ["doctor_run"]

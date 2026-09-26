@@ -6,7 +6,7 @@
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Barrier, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use kalcode_hook_bridge::client::{self, Stream};
@@ -111,6 +111,7 @@ struct Run {
 
 fn helper(args: &[&str], key: Option<&str>, stdin: &[u8], deadline_ms: Option<u64>) -> Run {
     let mut command = Command::new(HELPER);
+    hide_test_process(&mut command);
     command
         .args(args)
         .env_remove(KEY_ENV)
@@ -137,6 +138,17 @@ fn helper(args: &[&str], key: Option<&str>, stdin: &[u8], deadline_ms: Option<u6
         took: started.elapsed(),
     }
 }
+
+#[cfg(windows)]
+fn hide_test_process(command: &mut Command) {
+    use std::os::windows::process::CommandExt as _;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn hide_test_process(_command: &mut Command) {}
 
 const BASH_LS: &[u8] =
     br#"{"session_id":"abc","hook_event_name":"PreToolUse","tool_name":"Bash","tool_use_id":"toolu_1","tool_input":{"command":"ls"}}"#;
@@ -781,10 +793,30 @@ fn a_taken_pipe_name_is_refused() {
 }
 
 #[test]
-fn shutdown_is_prompt_and_idempotent() {
-    let (_dir, server) = server();
+fn checked_shutdown_is_concurrent_idempotent_and_releases_the_endpoint() {
+    let (dir, server) = server();
+    let endpoint = server.endpoint().clone();
+    let server = Arc::new(server);
+    let ready = Arc::new(Barrier::new(9));
+    let callers: Vec<_> = (0..8)
+        .map(|_| {
+            let server = server.clone();
+            let ready = ready.clone();
+            std::thread::spawn(move || {
+                ready.wait();
+                server.shutdown_checked()
+            })
+        })
+        .collect();
     let started = Instant::now();
-    server.shutdown();
-    server.shutdown();
+    ready.wait();
+    for caller in callers {
+        caller.join().expect("shutdown caller").expect("shutdown");
+    }
+    server.shutdown_checked().expect("repeat shutdown");
     assert!(started.elapsed() < Duration::from_secs(2));
+
+    let rebound = BridgeServer::start(ServerConfig::new(endpoint)).expect("endpoint released");
+    rebound.shutdown_checked().expect("rebound shutdown");
+    drop(dir);
 }

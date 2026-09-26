@@ -1,9 +1,8 @@
 //! What KalVoice commands do in the desktop app: they call the same runtimes the rest of
 //! KalCode uses — workspaces and terminals (Z1, `kalcode_core`), threads (Z3,
 //! [`ThreadRuntime`]) and pending approvals (Z4, [`PermissionService`], read-only). KalVoice
-//! never answers approvals and never changes permission modes; commands that add work reach this
-//! executor only after the person approved their KalVoice-origin approval request (the
-//! orchestrator files it with `PermissionService::request_for_origin`).
+//! never answers provider approvals. Ordinary app-control commands reach this executor directly;
+//! the actual provider CLI retains its native execution permission experience.
 //!
 //! CA-1 intents: `focus` opens the thread (the UI shows it in its pane when it has one), and
 //! `request_permission_mode` opens the thread so the person can change its mode themselves
@@ -19,17 +18,23 @@ use std::sync::Arc;
 
 use kalcode_contracts::agent::ProviderId;
 use kalcode_contracts::app::SurfaceId;
-use kalcode_contracts::kalvoice::{KalVoiceIntent, PaneDirection};
+use kalcode_contracts::kalvoice::{
+    BrowserControl, KalVoiceIntent, PaneDirection, ProviderPaneRequest,
+};
 use kalcode_contracts::permissions::{ApprovalStatus, PermissionMode};
+use kalcode_contracts::threads::WorkspaceOption;
 use kalcode_contracts::workspace_ui::{DashboardChip, SplitAxis};
-use kalcode_core::workspaces::{TerminalSize, Workspace};
+use kalcode_core::workspaces::TerminalSize;
 use kalcode_core::{Core, KalError};
 use kalcode_kalvoice::orchestrator::{
     ExecContext, ExecError, Executed, Executor, UiDirective, provider_display_name,
     requestable_mode_label,
 };
 use kalcode_permissions::PermissionService;
-use kalcode_threads::{BulkOutcome, CreateIdleThread, ThreadRuntime};
+use kalcode_threads::{
+    BulkOutcome, CoreWorkspaces, CreateIdleThread, ResolvedWorkspace, ThreadRuntime,
+    WorkspaceResolver,
+};
 
 /// Size a terminal opened by voice starts at; the Code view resizes it when it attaches.
 const VOICE_TERMINAL_SIZE: (u16, u16) = (120, 30);
@@ -37,6 +42,7 @@ const VOICE_TERMINAL_SIZE: (u16, u16) = (120, 30);
 pub struct DesktopExecutor {
     /// Surfaces this build shows (navigation to others is refused).
     pub visible: Vec<SurfaceId>,
+    pub provider_panes_enabled: bool,
     pub core: Arc<Core>,
     /// `None` when the thread runtime didn't start (then thread commands explain why).
     pub threads: Option<Arc<ThreadRuntime>>,
@@ -175,86 +181,172 @@ impl DesktopExecutor {
         self.threads.as_ref().ok_or_else(threads_unavailable)
     }
 
-    fn workspace(&self, id: &str) -> Result<Workspace, ExecError> {
-        self.core
-            .workspaces()
-            .map_err(|e| from_core(&e))?
-            .into_iter()
-            .find(|w| w.id == id)
-            .ok_or_else(|| {
-                ExecError::new("workspace_not_found", "That workspace no longer exists.")
-            })
+    fn workspace_resolver(&self) -> CoreWorkspaces {
+        CoreWorkspaces::new(self.core.clone())
+    }
+
+    fn workspace(&self, id: &str) -> Result<ResolvedWorkspace, ExecError> {
+        self.workspace_resolver()
+            .resolve(id)
+            .map_err(|error| from_core(&error))
     }
 
     /// The named workspace, or the active one.
-    fn target_workspace(&self, id: Option<&str>) -> Result<Workspace, ExecError> {
-        match id {
-            Some(id) => self.workspace(id),
+    fn target_workspace(&self, id: Option<&str>) -> Result<ResolvedWorkspace, ExecError> {
+        let id = match id {
+            Some(id) => id.to_owned(),
             None => self
                 .core
                 .active_workspace()
                 .map_err(|e| from_core(&e))?
+                .map(|workspace| workspace.id)
                 .ok_or_else(|| {
                     ExecError::new(
                         "no_workspace",
                         "Open a workspace first (Code, Open folder), or name one: “in the website workspace”.",
                     )
-                }),
-        }
+                })?,
+        };
+        self.workspace(&id)
     }
 
-    fn create_threads(
+    fn prepare_provider_panes(
         &self,
-        provider_id: &ProviderId,
-        count: u8,
+        groups: &[ProviderPaneRequest],
         workspace_id: Option<&str>,
-    ) -> Result<Executed, ExecError> {
+    ) -> Result<(ResolvedWorkspace, Vec<(u8, CreateIdleThread)>), ExecError> {
+        if !self.provider_panes_enabled {
+            return Err(ExecError::new(
+                "provider_panes_unavailable",
+                "Provider panes are unavailable in this build.",
+            ));
+        }
+        let total: usize = groups.iter().map(|g| usize::from(g.count)).sum();
+        if total == 0 || total > 16 || groups.iter().any(|g| g.count == 0) {
+            return Err(ExecError::new(
+                "invalid_thread_count",
+                "Open between 1 and 16 provider sessions at a time.",
+            ));
+        }
         let runtime = self.threads()?;
         let workspace = self.target_workspace(workspace_id)?;
-        let request = CreateIdleThread {
-            provider_id: provider_id.as_str().to_owned(),
-            workspace_id: workspace.id.clone(),
-            model: None,
-            // KalVoice never picks a mode: new threads start in the default, Approve.
-            permission_mode: PermissionMode::Approve,
-            name: None,
-        };
-        let results = runtime
-            .create_idle_threads(&request, count)
+        let options = runtime.options().map_err(|e| from_core(&e))?;
+        // Resolve every account before starting anything: an unknown label in a later group
+        // must not silently start earlier groups under a different/default account.
+        let mut requests = Vec::new();
+        for group in groups {
+            let provider = group.provider_id.as_ref().ok_or_else(|| {
+                ExecError::new(
+                    "provider_required",
+                    "Choose Claude Code, Codex, or Gemini for these sessions.",
+                )
+            })?;
+            if ![
+                ProviderId::CLAUDE_CODE,
+                ProviderId::CODEX,
+                ProviderId::GEMINI_CLI,
+            ]
+            .contains(&provider.as_str())
+            {
+                return Err(ExecError::new(
+                    "provider_pane_unsupported",
+                    "That provider cannot run in a pane.",
+                ));
+            }
+            let available = options
+                .providers
+                .iter()
+                .find(|p| &p.id == provider)
+                .ok_or_else(|| {
+                    ExecError::new(
+                        "provider_unavailable",
+                        "That provider is not ready. Check Providers before opening sessions.",
+                    )
+                })?;
+            let model = kalcode_threads::validate::model(group.model.as_deref())
+                .map_err(|e| from_core(&e))?;
+            if model.as_ref().is_some_and(|id| {
+                !available.models.is_empty() && !available.models.iter().any(|m| &m.id == id)
+            }) {
+                return Err(ExecError::new(
+                    "invalid_model",
+                    "That model is not available for this provider.",
+                ));
+            }
+            let account = crate::thread_commands::resolve_creation_account(
+                &self.core,
+                provider.as_str(),
+                &workspace.id,
+                None,
+                group.account_query.as_deref(),
+            )
             .map_err(|e| from_core(&e))?;
-        let ok = results.iter().filter(|r| r.is_ok()).count();
-        let first_error = results.iter().find_map(|r| r.as_ref().err());
-        let provider = provider_display_name(provider_id);
-        if ok == 0 {
-            return Err(first_error.map_or_else(
-                || ExecError::new("threads_failed", "KalVoice couldn't open those threads."),
+            requests.push((
+                group.count,
+                CreateIdleThread {
+                    provider_id: provider.to_string(),
+                    provider_account_id: account.as_ref().map(|a| a.id.clone()),
+                    account_label: account.map(|a| a.display_name),
+                    workspace_id: workspace.id.clone(),
+                    model,
+                    permission_mode: PermissionMode::Approve,
+                    name: None,
+                },
+            ));
+        }
+        Ok((workspace, requests))
+    }
+
+    fn create_provider_panes(
+        &self,
+        groups: &[ProviderPaneRequest],
+        workspace_id: Option<&str>,
+    ) -> Result<Executed, ExecError> {
+        let (workspace, requests) = self.prepare_provider_panes(groups, workspace_id)?;
+        let runtime = self.threads()?;
+        let total: usize = requests.iter().map(|(n, _)| usize::from(*n)).sum();
+        let mut ids = Vec::new();
+        let mut first_error = None;
+        for (count, request) in requests {
+            for _ in 0..count {
+                match kalcode_providers::interactive::provider::RuntimeRouter::create_interactive(
+                    || runtime.create_idle(request.clone()),
+                ) {
+                    Ok(thread) => ids.push(thread.id),
+                    Err(error) => {
+                        first_error.get_or_insert(error);
+                    }
+                }
+            }
+        }
+        if ids.is_empty() {
+            return Err(first_error.as_ref().map_or_else(
+                || ExecError::new("threads_failed", "KalVoice could not open those sessions."),
                 from_core,
             ));
         }
-        let summary = if ok == results.len() {
+        let summary = if ids.len() == total {
             format!(
                 "Opened {} in {}.",
-                plural(
-                    ok,
-                    &format!("{provider} thread"),
-                    &format!("{provider} threads")
-                ),
+                plural(ids.len(), "session", "sessions"),
                 workspace.name
             )
         } else {
             format!(
-                "Opened {ok} of {} {provider} threads in {}. {}",
-                results.len(),
+                "Opened {} of {total} sessions in {}. {}",
+                ids.len(),
                 workspace.name,
-                first_error.map(|e| e.message.as_str()).unwrap_or_default()
+                first_error
+                    .as_ref()
+                    .map(|e| e.message.as_str())
+                    .unwrap_or_default()
             )
-            .trim_end()
-            .to_owned()
         };
         Ok(Executed {
             summary,
-            directive: Some(UiDirective::Navigate {
-                surface: SurfaceId::Threads,
+            directive: Some(UiDirective::OpenProviderPanes {
+                workspace_id: workspace.id,
+                thread_ids: ids,
             }),
         })
     }
@@ -383,17 +475,58 @@ impl DesktopExecutor {
 }
 
 impl Executor for DesktopExecutor {
+    fn workspace_options(&self) -> Result<Vec<WorkspaceOption>, ExecError> {
+        let resolver = self.workspace_resolver();
+        let listed = resolver.list().map_err(|error| from_core(&error))?;
+        let mut options = Vec::with_capacity(listed.len());
+        for listed_workspace in listed {
+            // Listing filters records already known to be unavailable. Resolve again here so
+            // stale folders and roots replaced by links never cross the local-model boundary.
+            let workspace = match resolver.resolve(&listed_workspace.id) {
+                Ok(workspace) => workspace,
+                Err(error)
+                    if matches!(error.code, "workspace_not_found" | "workspace_unavailable") =>
+                {
+                    continue;
+                }
+                Err(error) => return Err(from_core(&error)),
+            };
+            options.push(WorkspaceOption {
+                id: workspace.id,
+                name: workspace.name,
+            });
+        }
+        Ok(options)
+    }
+
     fn find_workspace(&self, name: &str) -> Result<Option<String>, ExecError> {
         let wanted = name.trim().to_lowercase();
-        let workspaces = self.core.workspaces().map_err(|e| from_core(&e))?;
-        let exact = workspaces.iter().find(|w| w.name.to_lowercase() == wanted);
-        let loose = || {
-            workspaces.iter().find(|w| {
-                let n = w.name.to_lowercase();
-                n.contains(&wanted) || n.replace(['-', '_', '.'], " ") == wanted
-            })
-        };
-        Ok(exact.or_else(loose).map(|w| w.id.clone()))
+        if wanted.is_empty() {
+            return Ok(None);
+        }
+        let workspaces = self.workspace_options()?;
+        // Rank exact names ahead of normalized names and partial matches, but never use
+        // recency/order to break a genuinely ambiguous project identity.
+        for rank in 0..3 {
+            let mut matches = workspaces.iter().filter(|w| {
+                let name = w.name.to_lowercase();
+                match rank {
+                    0 => name == wanted,
+                    1 => name.replace(['-', '_', '.'], " ") == wanted,
+                    _ => name.contains(&wanted),
+                }
+            });
+            if let Some(first) = matches.next() {
+                if matches.next().is_some() {
+                    return Err(ExecError::new(
+                        "workspace_ambiguous",
+                        "I found more than one matching project. Select the workspace before continuing.",
+                    ));
+                }
+                return Ok(Some(first.id.clone()));
+            }
+        }
+        Ok(None)
     }
 
     fn find_thread(&self, name: &str) -> Result<Option<String>, ExecError> {
@@ -414,8 +547,34 @@ impl Executor for DesktopExecutor {
                     "That page isn't available in this build.",
                 ))
             }
-            KalVoiceIntent::CreateThreads { .. }
-            | KalVoiceIntent::OpenThread { .. }
+            KalVoiceIntent::CreateThreads {
+                provider_id,
+                count,
+                workspace_id,
+            } => self
+                .prepare_provider_panes(
+                    &[ProviderPaneRequest {
+                        provider_id: Some(provider_id.clone()),
+                        count: *count,
+                        account_query: None,
+                        model: None,
+                    }],
+                    workspace_id.as_deref(),
+                )
+                .map(|_| ()),
+            KalVoiceIntent::CreateProviderPanes {
+                groups,
+                workspace_id,
+            } => self
+                .prepare_provider_panes(groups, workspace_id.as_deref())
+                .map(|_| ()),
+            KalVoiceIntent::ControlPane { workspace_id, .. } => {
+                self.target_workspace(workspace_id.as_deref()).map(|_| ())
+            }
+            KalVoiceIntent::ControlBrowser { workspace_id, .. } => {
+                self.target_workspace(workspace_id.as_deref()).map(|_| ())
+            }
+            KalVoiceIntent::OpenThread { .. }
             | KalVoiceIntent::Focus { .. }
             | KalVoiceIntent::PauseThreads { .. }
             | KalVoiceIntent::ResumeThreads { .. }
@@ -463,6 +622,10 @@ impl Executor for DesktopExecutor {
                         format!("KalCode has no workspace named \u{201c}{query}\u{201d}."),
                     )
                 })?;
+                // Re-resolve immediately before mutation. The local interpreter only receives
+                // an id/name snapshot, and workspace roots may change between interpretation
+                // and execution.
+                self.workspace(&id)?;
                 let workspace = self
                     .core
                     .activate_workspace(&id)
@@ -496,7 +659,45 @@ impl Executor for DesktopExecutor {
                 provider_id,
                 count,
                 workspace_id,
-            } => self.create_threads(provider_id, *count, workspace_id.as_deref()),
+            } => self.create_provider_panes(
+                &[ProviderPaneRequest {
+                    provider_id: Some(provider_id.clone()),
+                    count: *count,
+                    account_query: None,
+                    model: None,
+                }],
+                workspace_id.as_deref(),
+            ),
+            KalVoiceIntent::CreateProviderPanes {
+                groups,
+                workspace_id,
+            } => self.create_provider_panes(groups, workspace_id.as_deref()),
+            KalVoiceIntent::ControlPane {
+                command,
+                workspace_id,
+            } => {
+                let workspace = self.target_workspace(workspace_id.as_deref())?;
+                Ok(Executed {
+                    summary: "Updating the workspace layout.".into(),
+                    directive: Some(UiDirective::ControlPane {
+                        workspace_id: workspace.id,
+                        command: command.clone(),
+                    }),
+                })
+            }
+            KalVoiceIntent::ControlBrowser {
+                command,
+                workspace_id,
+            } => {
+                let workspace = self.target_workspace(workspace_id.as_deref())?;
+                Ok(Executed {
+                    summary: browser_summary(command),
+                    directive: Some(UiDirective::ControlBrowser {
+                        workspace_id: workspace.id,
+                        command: command.clone(),
+                    }),
+                })
+            }
             KalVoiceIntent::OpenThread { query } | KalVoiceIntent::Focus { query } => {
                 let thread = self.named_thread(query)?;
                 Ok(Executed {
@@ -632,6 +833,18 @@ impl Executor for DesktopExecutor {
     }
 }
 
+fn browser_summary(command: &BrowserControl) -> String {
+    match command {
+        BrowserControl::Open { new_pane: true, .. } => "Opening another browser pane.".into(),
+        BrowserControl::Open { .. } => "Opening the browser.".into(),
+        BrowserControl::Navigate { url, .. } => format!("Opening {url} in the browser."),
+        BrowserControl::Back { .. } => "Going back in the browser.".into(),
+        BrowserControl::Forward { .. } => "Going forward in the browser.".into(),
+        BrowserControl::Reload { .. } => "Reloading the browser.".into(),
+        BrowserControl::Stop { .. } => "Stopping the browser load.".into(),
+    }
+}
+
 /// "Made the pane bigger." — how a resize direction reads.
 fn resize_word(direction: PaneDirection) -> &'static str {
     match direction {
@@ -672,6 +885,7 @@ fn pane_split(axis: SplitAxis, providers: &[ProviderId]) -> Executed {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kalcode_contracts::kalvoice::BrowserControl;
 
     fn outcome(ok: bool, message: Option<&str>) -> BulkOutcome {
         BulkOutcome {
@@ -690,6 +904,7 @@ mod tests {
         .expect("core");
         DesktopExecutor {
             visible: vec![SurfaceId::Dashboard, SurfaceId::Settings, SurfaceId::Code],
+            provider_panes_enabled: false,
             core: Arc::new(core),
             threads: None,
             permissions: None,
@@ -871,6 +1086,107 @@ mod tests {
                 })
                 .map_err(|e| e.code),
             Err("search_unavailable".into())
+        );
+    }
+
+    #[test]
+    fn browser_commands_are_scoped_to_the_authoritative_workspace() {
+        let data = tempfile::tempdir().expect("data");
+        let project = tempfile::tempdir().expect("project");
+        let executor = executor(data.path());
+        let no_workspace = KalVoiceIntent::ControlBrowser {
+            command: BrowserControl::Reload { browser_id: None },
+            workspace_id: None,
+        };
+        assert_eq!(
+            executor.check(&no_workspace).map_err(|e| e.code),
+            Err("no_workspace".into())
+        );
+
+        let workspace = executor.core.open_workspace(project.path()).expect("open");
+        assert!(executor.check(&no_workspace).is_ok());
+        let done = executor
+            .execute(&no_workspace, &ctx())
+            .expect("browser control");
+        assert_eq!(done.summary, "Reloading the browser.");
+        assert_eq!(
+            done.directive,
+            Some(UiDirective::ControlBrowser {
+                workspace_id: workspace.id,
+                command: BrowserControl::Reload { browser_id: None },
+            })
+        );
+    }
+
+    #[test]
+    fn workspace_resolution_never_guesses_between_equal_or_partial_matches() {
+        let data = tempfile::tempdir().expect("data");
+        let projects = tempfile::tempdir().expect("projects");
+        let executor = executor(data.path());
+        for relative in [
+            "personal/Dashboard",
+            "work/Dashboard",
+            "api-client",
+            "api-server",
+        ] {
+            let path = projects.path().join(relative);
+            std::fs::create_dir_all(&path).expect("project directory");
+            executor.core.open_workspace(&path).expect("open");
+        }
+        for query in ["Dashboard", "api"] {
+            assert_eq!(
+                executor.find_workspace(query).map_err(|e| e.code),
+                Err("workspace_ambiguous".into())
+            );
+        }
+        assert_eq!(executor.find_workspace(" ").expect("empty"), None);
+        assert!(
+            executor
+                .find_workspace("api client")
+                .expect("normalized")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn workspace_resolution_uses_only_available_recanonicalized_records() {
+        let data = tempfile::tempdir().expect("data");
+        let executor = executor(data.path());
+        let stale_id = {
+            let removed_parent = tempfile::tempdir().expect("removed parent");
+            let removed = removed_parent.path().join("Dashboard");
+            std::fs::create_dir_all(&removed).expect("removed workspace");
+            executor
+                .core
+                .open_workspace(&removed)
+                .expect("open removed")
+                .id
+        };
+        let available_parent = tempfile::tempdir().expect("available parent");
+        let available = available_parent.path().join("Dashboard");
+        std::fs::create_dir_all(&available).expect("available workspace");
+        let available = executor
+            .core
+            .open_workspace(&available)
+            .expect("open available");
+
+        assert_eq!(
+            executor.find_workspace("Dashboard").expect("find"),
+            Some(available.id.clone()),
+            "an unavailable duplicate must not make the available workspace ambiguous"
+        );
+        assert_eq!(
+            executor.workspace_options().expect("options"),
+            vec![kalcode_contracts::threads::WorkspaceOption {
+                id: available.id,
+                name: "Dashboard".into(),
+            }]
+        );
+        assert_eq!(
+            executor
+                .target_workspace(Some(&stale_id))
+                .map_err(|error| error.code),
+            Err("workspace_unavailable".into())
         );
     }
 

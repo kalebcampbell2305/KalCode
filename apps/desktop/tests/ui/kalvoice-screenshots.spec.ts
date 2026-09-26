@@ -68,16 +68,15 @@ for (const theme of ["dark", "light"] as const) {
     await page.screenshot({ path: file(`done-${theme}-1440`) });
   });
 
-  test(`@screenshots KalVoice approval, error and orb in ${theme} theme`, async ({ page }) => {
+  test(`@screenshots KalVoice immediate app control, error and orb in ${theme} theme`, async ({ page }) => {
     await start(page, theme, "?scenario=kalvoice-approvals&transcript=open%20four%20codex%20threads");
     await page.keyboard.down("F8");
     await page.waitForTimeout(400);
     await page.keyboard.up("F8");
-    await expect(state(page, "Needs Approval")).toBeVisible();
-    await widgetShot(page, `needs-approval-${theme}`);
-    await widget(page).getByRole("button", { name: "Deny" }).click();
-    await expect(state(page, "Error")).toBeVisible();
-    await widgetShot(page, `error-${theme}`);
+    await expect(state(page, "Done")).toBeVisible();
+    await widgetShot(page, `immediate-app-control-${theme}`);
+    await expect(state(page, "Ready")).toBeVisible();
+    await widgetShot(page, `ready-after-app-control-${theme}`);
 
     await start(page, theme, "?transcript=plan%20the%20release");
     await page.keyboard.down("F8");

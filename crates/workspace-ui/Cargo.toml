@@ -17,6 +17,7 @@ serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 rusqlite.workspace = true
+url = "2"
 ts-rs = { version = "12", features = ["serde-json-impl", "uuid-impl"] }
 
 [dev-dependencies]

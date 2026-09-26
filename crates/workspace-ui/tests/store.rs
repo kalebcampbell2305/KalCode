@@ -183,10 +183,20 @@ fn invalid_layouts_are_refused_before_anything_is_written() {
             widget_id: "Bad Widget".into(),
         },
         PaneContent::Browser {
+            browser_id: new_id(),
             url: Some("file:///C:/Windows/win.ini".into()),
         },
         PaneContent::Browser {
+            browser_id: new_id(),
             url: Some(format!("https://{}", "a".repeat(2100))),
+        },
+        PaneContent::Browser {
+            browser_id: new_id(),
+            url: Some("https://example.com/callback?code=secret#access-token".into()),
+        },
+        PaneContent::Browser {
+            browser_id: new_id(),
+            url: Some("https://user:password@example.com/".into()),
         },
     ] {
         cases.push(layout(leaf("a", vec![content.clone()])));
@@ -196,6 +206,7 @@ fn invalid_layouts_are_refused_before_anything_is_written() {
     }
     // Oversized (valid structure, too many bytes).
     let big = PaneContent::Browser {
+        browser_id: new_id(),
         url: Some(format!("https://example.com/{}", "a".repeat(2000))),
     };
     let mut oversized = layout(leaf("a", vec![big.clone(); 32]));
@@ -213,15 +224,38 @@ fn invalid_layouts_are_refused_before_anything_is_written() {
                 widget_id: "dashboard-summary".into(),
             },
             PaneContent::Browser {
+                browser_id: new_id(),
                 url: Some("http://localhost:3000".into()),
             },
-            PaneContent::Browser { url: None },
+            PaneContent::Browser {
+                browser_id: new_id(),
+                url: None,
+            },
             PaneContent::Git {
                 workspace_id: new_id(),
             },
         ],
     ));
     validate_layout(&ok).expect("valid");
+
+    let duplicate_browser_id = new_id();
+    let duplicate_browser = PaneContent::Browser {
+        browser_id: duplicate_browser_id,
+        url: Some("https://example.com/preview".into()),
+    };
+    let duplicate = layout(PaneNode::Split {
+        axis: SplitAxis::Horizontal,
+        ratios: vec![500, 500],
+        children: vec![
+            leaf("a", vec![duplicate_browser.clone()]),
+            leaf("b", vec![duplicate_browser.clone()]),
+        ],
+    });
+    assert_eq!(refused(&conn, &duplicate), "invalid_layout");
+
+    let mut duplicate_in_dock = layout(leaf("a", vec![duplicate_browser.clone()]));
+    duplicate_in_dock.dock.push(duplicate_browser);
+    assert_eq!(refused(&conn, &duplicate_in_dock), "invalid_layout");
 }
 
 #[test]
@@ -243,6 +277,45 @@ fn a_stored_row_that_no_longer_validates_is_ignored() {
     )
     .expect("insert");
     assert_eq!(get_layout(&conn, &ws2).expect("get"), None);
+
+    let secret_ws = new_id();
+    let secret = layout(leaf(
+        "secret-browser",
+        vec![PaneContent::Browser {
+            browser_id: new_id(),
+            url: Some("https://example.com/callback?code=secret#access-token".into()),
+        }],
+    ));
+    conn.execute(
+        "INSERT INTO workspace_layouts VALUES (?1, 1, ?2, 'x')",
+        params![secret_ws, serde_json::to_string(&secret).expect("json")],
+    )
+    .expect("insert secret layout");
+    assert_eq!(get_layout(&conn, &secret_ws).expect("get"), None);
+
+    let duplicate_ws = new_id();
+    let browser_id = new_id();
+    let browser = PaneContent::Browser {
+        browser_id,
+        url: Some("https://example.com/preview".into()),
+    };
+    let duplicate = layout(PaneNode::Split {
+        axis: SplitAxis::Horizontal,
+        ratios: vec![500, 500],
+        children: vec![
+            leaf("left", vec![browser.clone()]),
+            leaf("right", vec![browser]),
+        ],
+    });
+    conn.execute(
+        "INSERT INTO workspace_layouts VALUES (?1, 1, ?2, 'x')",
+        params![
+            duplicate_ws,
+            serde_json::to_string(&duplicate).expect("json")
+        ],
+    )
+    .expect("insert duplicate layout");
+    assert_eq!(get_layout(&conn, &duplicate_ws).expect("get"), None);
 }
 
 #[test]
@@ -407,4 +480,36 @@ fn layouts_persist_across_restart_through_core() {
         .expect("read")
         .expect("restored");
     assert_eq!(read.layout, layout);
+}
+
+#[test]
+fn legacy_browser_layout_keeps_other_panes_and_gets_a_persistable_identity() {
+    let conn = db();
+    let ws = new_id();
+    let legacy = serde_json::json!({
+        "schemaVersion": 1,
+        "root": {"kind":"leaf", "paneId":"browser-pane", "tabs":[
+            {"kind":"browser","url":"http://localhost:3000"}, {"kind":"dashboard"}
+        ], "activeTab":0, "collapsed":false},
+        "maximizedPaneId":null, "dock":[]
+    });
+    conn.execute(
+        "INSERT INTO workspace_layouts VALUES (?1, 1, ?2, 'x')",
+        params![ws, legacy.to_string()],
+    )
+    .unwrap();
+    let restored = get_layout(&conn, &ws).unwrap().unwrap();
+    let PaneNode::Leaf { tabs, .. } = &restored.layout.root else {
+        panic!("leaf")
+    };
+    assert_eq!(tabs.len(), 2);
+    let PaneContent::Browser { browser_id, .. } = &tabs[0] else {
+        panic!("browser")
+    };
+    assert!(kalcode_contracts::ids::is_valid_id(browser_id));
+    save_layout(&conn, &ws, &restored.layout).unwrap();
+    assert_eq!(
+        get_layout(&conn, &ws).unwrap().unwrap().layout,
+        restored.layout
+    );
 }

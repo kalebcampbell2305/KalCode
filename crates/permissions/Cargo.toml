@@ -18,6 +18,8 @@ serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 ts-rs = { version = "12", features = ["serde-json-impl", "uuid-impl"] }
+time.workspace = true
+url = "2"
 
 [dev-dependencies]
 tempfile.workspace = true

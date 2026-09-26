@@ -23,7 +23,15 @@ use time::OffsetDateTime;
 const WAIT: Duration = Duration::from_secs(20);
 
 fn ago(hours: i64) -> String {
-    format_rfc3339(OffsetDateTime::now_utc() - time::Duration::hours(hours))
+    ago_at(OffsetDateTime::now_utc(), hours)
+}
+
+fn ago_at(now: OffsetDateTime, hours: i64) -> String {
+    format_rfc3339(now - time::Duration::hours(hours))
+}
+
+fn reference_noon_utc() -> OffsetDateTime {
+    OffsetDateTime::from_unix_timestamp(1_790_337_600).expect("2026-09-25T12:00:00Z")
 }
 
 fn q(text: &str) -> LocatorQuery {
@@ -144,13 +152,14 @@ fn filters_by_kind_status_provider_workspace_and_recency() {
     let a = workspace(&core, dir.path(), "alpha");
     let b = workspace(&core, dir.path(), "beta");
     let sources = FakeSources::new();
+    let reference = reference_noon_utc();
     sources.add(thread(
         "Payments retry",
         "codex",
         &a.id,
         &a.name,
         ThreadStatus::WaitingForPermission,
-        &ago(1),
+        &ago_at(reference, 1),
     ));
     sources.add(thread(
         "Payments docs",
@@ -158,7 +167,7 @@ fn filters_by_kind_status_provider_workspace_and_recency() {
         &b.id,
         &b.name,
         ThreadStatus::Completed,
-        &ago(3),
+        &ago_at(reference, 3),
     ));
     sources.add(thread(
         "Payments ledger",
@@ -166,7 +175,7 @@ fn filters_by_kind_status_provider_workspace_and_recency() {
         &a.id,
         &a.name,
         ThreadStatus::RunningTool,
-        &ago(40),
+        &ago_at(reference, 40),
     ));
     let locator = Locator::start(core.clone(), sources).expect("start");
     assert!(locator.wait_ready(WAIT));
@@ -203,8 +212,8 @@ fn filters_by_kind_status_provider_workspace_and_recency() {
     assert_eq!(running, vec!["Payments ledger"]);
 
     // "Yesterday" relative to a clock one day ahead covers everything done "today".
-    let tomorrow = OffsetDateTime::now_utc() + time::Duration::days(1);
-    let yesterday = locator
+    let tomorrow = reference + time::Duration::days(1);
+    let mut yesterday = locator
         .search_at(
             &LocatorQuery {
                 recency: Some(LocatorRecency::Yesterday),
@@ -213,8 +222,14 @@ fn filters_by_kind_status_provider_workspace_and_recency() {
             },
             tomorrow,
         )
-        .unwrap();
-    assert!(!yesterday.results.items.is_empty());
+        .unwrap()
+        .results
+        .items
+        .into_iter()
+        .map(|item| item.title)
+        .collect::<Vec<_>>();
+    yesterday.sort();
+    assert_eq!(yesterday, vec!["Payments docs", "Payments retry"]);
 
     // A filter word that is really part of a title: retried as plain text.
     let dir2 = tempfile::tempdir().unwrap();

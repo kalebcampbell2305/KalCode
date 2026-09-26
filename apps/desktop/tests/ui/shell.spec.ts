@@ -28,7 +28,7 @@ test.describe("dashboard", () => {
   test("shows runtime health and live activity from the event log", async ({ page }) => {
     await open(page);
     await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
-    await expect(page.locator("#main").getByText("No threads are open.")).toBeVisible();
+    await expect(page.getByRole("region", { name: "Agents", exact: true })).toContainText("No active sessions yet.");
     const activity = page.getByRole("region", { name: "Activity" });
     await expect(activity.getByText("KalCode started")).toBeVisible();
     await expect(activity.getByText("Local database created")).toBeVisible();
@@ -110,6 +110,22 @@ test.describe("navigation and commands", () => {
     await page.keyboard.press(`${MOD}+k`);
     await page.keyboard.press("Escape");
     await expect(palette).toBeHidden();
+  });
+
+  test("an explicitly named command outranks weaker fuzzy matches", async ({ page }) => {
+    await open(page, "threads");
+    await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Threads" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toBeVisible();
+
+    await page.keyboard.press(`${MOD}+k`);
+    await page.keyboard.type("use dark theme");
+    const darkTheme = page.locator('[cmdk-item][data-value="Use dark theme"]');
+    await expect(darkTheme).toBeVisible();
+    await expect(darkTheme).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("Enter");
+
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toBeVisible();
   });
 
   test("sidebar collapses with the keyboard and keeps accessible names", async ({ page }) => {

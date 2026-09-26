@@ -1,10 +1,12 @@
 import type { PaneContent, PaneLayout, PaneNode } from "@kalcode/protocol";
 import { describe, expect, it } from "vitest";
+import { updateBrowserUrl } from "../../surfaces/browser/browserModel.ts";
 import {
   activateTab,
   addTab,
   applyPreset,
   applyShape,
+  arrangeContents,
   canSplit,
   childSizes,
   closePane,
@@ -22,8 +24,8 @@ import {
   MAX_PANES,
   makeLeaf,
   matchingPreset,
-  moveTab,
   movePane,
+  moveTab,
   neighbourPane,
   normalizeNode,
   parseLayout,
@@ -34,6 +36,7 @@ import {
   reorderTab,
   resizeDivider,
   resizePane,
+  resizePaneRelative,
   setCollapsed,
   setMaximized,
   shapeOf,
@@ -311,6 +314,90 @@ describe("presets", () => {
     expect(leaves(applied.root)).toHaveLength(3);
     expect(leaves(applied.root)[0]?.tabs).toEqual([term("t1"), term("t2")]);
   });
+
+  it("arranges four exact provider threads as a 2 by 2 grid without duplicating an id", () => {
+    const arranged = arrangeContents(emptyLayout(), [
+      thread("codex-1"),
+      thread("codex-2"),
+      thread("claude-1"),
+      thread("claude-2"),
+      thread("codex-2"),
+    ]);
+
+    expect(arranged).not.toBeNull();
+    if (!arranged) return;
+    expectValid(arranged);
+    expect(arranged.root.kind).toBe("split");
+    if (arranged.root.kind !== "split") return;
+    expect(arranged.root.axis).toBe("vertical");
+    expect(arranged.root.children.map((row) => (row.kind === "split" ? row.axis : "leaf"))).toEqual([
+      "horizontal",
+      "horizontal",
+    ]);
+    expect(leaves(arranged.root).map((leaf) => leaf.tabs.map(contentKey))).toEqual([
+      ["thread:codex-1"],
+      ["thread:codex-2"],
+      ["thread:claude-1"],
+      ["thread:claude-2"],
+    ]);
+  });
+
+  it("retains existing pane contents and dock items while adding exact provider panes", () => {
+    const start = { ...twoPanes(), dock: [thread("background")] };
+    const arranged = arrangeContents(start, [thread("codex-1"), thread("claude-1")]);
+
+    expect(arranged).not.toBeNull();
+    if (!arranged) return;
+    expectValid(arranged);
+    expect(arranged.dock).toEqual([thread("background")]);
+    expect(leaves(arranged.root).map((leaf) => leaf.tabs.map(contentKey))).toEqual([
+      ["terminal:t1", "terminal:t2"],
+      ["terminal:t3"],
+      ["thread:codex-1"],
+      ["thread:claude-1"],
+    ]);
+  });
+
+  it("keeps four new provider panes in a 2 by 2 subgroup beside existing work", () => {
+    const arranged = arrangeContents(twoPanes(), [
+      thread("codex-1"),
+      thread("codex-2"),
+      thread("claude-1"),
+      thread("claude-2"),
+    ]);
+
+    expect(arranged).not.toBeNull();
+    if (!arranged) return;
+    const targetKeys = new Set(["thread:codex-1", "thread:codex-2", "thread:claude-1", "thread:claude-2"]);
+    const targetGrid = (node: PaneNode): PaneNode | null => {
+      const keys = leaves(node).flatMap((leaf) => leaf.tabs.map(contentKey));
+      if (keys.length === 4 && keys.every((key) => targetKeys.has(key))) return node;
+      if (node.kind === "leaf") return null;
+      return node.children.map(targetGrid).find((child) => child !== null) ?? null;
+    };
+    const grid = targetGrid(arranged.root);
+    expect(grid?.kind).toBe("split");
+    if (grid?.kind !== "split") return;
+    expect(grid.axis).toBe("vertical");
+    expect(grid.children.map((row) => (row.kind === "split" ? row.axis : "leaf"))).toEqual([
+      "horizontal",
+      "horizontal",
+    ]);
+    expect(findLeaf(arranged, "a")?.tabs).toEqual([term("t1"), term("t2")]);
+    expect(findLeaf(arranged, "b")?.tabs).toEqual([term("t3")]);
+  });
+
+  it("balances mixed provider quantities without a sparse final row", () => {
+    const arranged = arrangeContents(
+      emptyLayout(),
+      Array.from({ length: 7 }, (_, index) => thread(`provider-${index + 1}`)),
+    );
+
+    expect(arranged?.root.kind).toBe("split");
+    if (arranged?.root.kind !== "split") return;
+    expect(arranged.root.axis).toBe("vertical");
+    expect(arranged.root.children.map((row) => leaves(row).length)).toEqual([3, 2, 2]);
+  });
 });
 
 describe("geometry and resizing", () => {
@@ -361,6 +448,17 @@ describe("geometry and resizing", () => {
     expect(resizePane(layout, "a", "left", 100, 1006, 606)).toBe(layout);
   });
 
+  it("grows and shrinks a named pane relative to its nearest divider", () => {
+    const start = twoPanes();
+    const before = computeGeometry(start, 1006, 600).panes.get("b")?.width ?? 0;
+    const grown = resizePaneRelative(start, "b", true, 60, 1006, 600);
+    const grownWidth = computeGeometry(grown, 1006, 600).panes.get("b")?.width ?? 0;
+    expect(grownWidth - before).toBeCloseTo(60, 0);
+
+    const shrunk = resizePaneRelative(grown, "b", false, 60, 1006, 600);
+    expect(computeGeometry(shrunk, 1006, 600).panes.get("b")?.width).toBeCloseTo(before, 0);
+  });
+
   it("finds the neighbouring pane in each direction", () => {
     const layout = splitPane(twoPanes(), "b", "vertical", makeLeaf([], "c"));
     expect(neighbourPane(layout, "a", "right")).toBe("b");
@@ -404,4 +502,24 @@ describe("stored layouts", () => {
     expect(leaves(layout.root)[0]?.tabs).toEqual([thread("x")]);
     expectValid(layout);
   });
+});
+
+it("keeps two browser sessions at the same URL distinct and identity stable across navigation", () => {
+  const first: PaneContent = { kind: "browser", browserId: "browser-one", url: "http://localhost:3000" };
+  const second: PaneContent = { kind: "browser", browserId: "browser-two", url: "http://localhost:3000" };
+  expect(contentKey(first)).not.toBe(contentKey(second));
+  expect(contentKey({ ...first, url: "http://localhost:5173" } as PaneContent)).toBe(contentKey(first));
+  const arranged = arrangeContents(emptyLayout(), [first, second]);
+  if (!arranged) throw new Error("browser panes should fit");
+  expect(leaves(arranged.root).flatMap((pane) => pane.tabs)).toHaveLength(2);
+});
+
+it("updates only the selected browser URL across panes and dock without losing identity", () => {
+  const a: PaneContent = { kind: "browser", browserId: "a", url: null };
+  const b: PaneContent = { kind: "browser", browserId: "b", url: null };
+  const original = { ...layoutOf(makeLeaf([a, b])), dock: [a] };
+  const changed = updateBrowserUrl(original, "a", "http://localhost:3000");
+  expect(leaves(changed.root)[0]?.tabs).toEqual([{ ...a, url: "http://localhost:3000/" }, b]);
+  expect(changed.dock).toEqual([{ ...a, url: "http://localhost:3000/" }]);
+  expect(original.dock[0]).toEqual(a);
 });

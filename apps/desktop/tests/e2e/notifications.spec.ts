@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, type Page, test } from "@playwright/test";
-import { closeGracefully, EXE, launch, removeDir } from "./harness.ts";
+import { closeGracefully, EXE, launch, removeDir, writeManagedFakeProviderConfig } from "./harness.ts";
 
 /**
  * Z7-W3 end to end against the real app: a provider pane asks for permission and later finishes;
@@ -59,7 +59,7 @@ test("a pane's permission request and completion reach the notification center, 
   const bin = join(root, "bin");
   mkdirSync(bin);
   copyFileSync(FAKE, join(bin, "claude.exe"));
-  writeFileSync(join(bin, "fake-provider.json"), "{}");
+  writeManagedFakeProviderConfig(bin);
 
   const env = {
     KALCODE_E2E_PICK_FOLDER: project,

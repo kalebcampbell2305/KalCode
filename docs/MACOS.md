@@ -1,0 +1,144 @@
+# KalCode on macOS
+
+## Current truth
+
+The repository now has a macOS Tauri overlay, least-privilege signing inputs, a read-only bootstrap
+check, a native-architecture DMG packager, and a fail-closed verifier. These pieces are
+**implemented but not authenticated or live**. An Apple silicon Mac is reachable, but Node/Rust
+bootstrap and Apple Developer signing/notarization access are not configured. No KalCode DMG has
+been produced, signed, notarized, installed, published, or product-tested on macOS, and no macOS URL
+may be added to the public release manifest yet.
+
+The direct-download target is macOS 14 or later. This is deliberate: the pinned Tauri 2.11.6 API
+documents `data_store_identifier` as the WKWebView replacement for `data_directory`, and that API is
+available on macOS 14+. KalCode's Browser promises per-workspace persistent isolation. The canonical
+Browser now derives deterministic, root- and workspace-specific identifiers on macOS while retaining
+filesystem directories elsewhere. Its pure identity tests pass; actual WKWebView cookie/storage
+isolation remains a release gate. The target must not be lowered until an alternate design plus a
+real, older-OS compatibility and isolation pass proves the complete product.
+
+KalCode never guesses the runner architecture. `tooling/bootstrap-macos.sh` reads `uname -m`, and
+the packager emits either an `arm64` or `x64` DMG with a matching single-slice executable. An arm64
+artifact must be built and exercised on an Apple silicon lane; an x64 artifact must be built and
+exercised on an Intel lane. Do not call an artifact universal unless `lipo` proves both slices and
+every bundled native dependency has passed on both architectures.
+
+## Local bootstrap
+
+The default command is read-only:
+
+```bash
+tooling/bootstrap-macos.sh
+tooling/bootstrap-macos.sh --check
+```
+
+It reports the safe OS/build version, native architecture, Xcode, Node, pnpm, Rust target, plist
+validity, Developer ID Application identity count, and whether a notary profile name is configured.
+It does not show certificate identities, hashes, serials, credentials, or private-key data.
+
+The mutation path is explicit:
+
+```bash
+tooling/bootstrap-macos.sh --install
+```
+
+`--install` may activate the repository's pinned pnpm through an already-installed Corepack, add the
+native Rust target through an already-installed rustup, and run the frozen-lockfile install. It does
+not install Homebrew, Xcode, Node, rustup, certificates, or Apple credentials. Install those through
+an owner-approved provider first when the check reports them missing.
+
+## Apple access
+
+The release operator needs all of the following on an authorized Mac or protected macOS CI runner:
+
+1. An active Apple Developer Program team and a **Developer ID Application** certificate with its
+   private key in a temporary or login keychain. A development, Mac App Distribution, self-signed,
+   or ad hoc identity is rejected.
+2. A `notarytool` keychain profile backed by an App Store Connect API key with the minimum required
+   role, or another Apple-supported notarization credential. The key/profile is created outside the
+   repository.
+3. These process variables, populated without logging their values:
+   `KALCODE_APPLE_TEAM_ID`, `KALCODE_APPLE_SIGNING_IDENTITY`, and
+   `KALCODE_NOTARY_KEYCHAIN_PROFILE`.
+
+The team and identity must match exactly. The packager removes Tauri's standard notarization
+credential variables from the build environment so the build cannot perform an unobserved automatic
+submission. It signs during the Tauri build, then submits the exact staged DMG using the named
+keychain profile and records the accepted submission before stapling.
+
+## Package and verification
+
+From a clean, immutable commit on the native Mac runner:
+
+```bash
+node tooling/release/macos-package.mjs
+```
+
+The production package always includes `kalvoice-whisper`; additional safe Cargo features can be
+specified with `--features`. The command builds only a DMG, requires the repository's explicit 14.0
+deployment target and hardened runtime configuration, refuses `e2e`, uses the approved Developer ID
+identity, waits for Apple to accept notarization, requires an issue-free notary log, staples the
+ticket, and invokes the independent verifier. It writes architecture-specific build and verify
+records under `dist/release/<version>/`. It never uploads or publishes anything.
+
+The verifier can be rerun against the exact files:
+
+```bash
+node tooling/release/macos-verify.mjs \
+  --artifact dist/release/<version>/KalCode_<version>_<arm64-or-x64>.dmg \
+  --record dist/release/<version>/macos-<arm64-or-x64>-build.json \
+  --output dist/release/<version>/macos-<arm64-or-x64>-verify.json
+```
+
+Verification stops unless all of these checks pass:
+
+- the DMG is a plain file whose name, size, and SHA-256 match the exact build record;
+- a read-only mount contains exactly one plain `KalCode.app`;
+- bundle ID, version, 14.0 deployment target, microphone purpose string, and Mach-O architecture
+  match the record;
+- strict deep code-sign verification finds one timestamped Developer ID Application authority,
+  the expected team, the KalCode bundle identifier, and hardened runtime;
+- signed entitlements contain only `com.apple.security.device.audio-input=true`;
+- Gatekeeper accepts the mounted application and the exact DMG;
+- `stapler` validates the ticket on the exact DMG; and
+- `notarytool info` and the full log still identify the recorded accepted submission with no issues.
+
+Command failures are redacted. Build and verification JSON intentionally omit certificate subjects,
+private-key material, credential values, and notary logs.
+
+The macOS overlay enables hardened runtime and only Apple's audio-input entitlement. `Info.plist`
+explains KalVoice microphone use. App Sandbox is intentionally absent because KalCode opens
+owner-selected workspaces and starts owner-selected developer tools; enabling it without a complete
+capability redesign would break the product. Runtime exceptions such as `get-task-allow`, JIT,
+unsigned executable memory, DYLD variables, and disabled library validation are not granted.
+
+Apple requires Developer ID distribution builds to use hardened runtime, secure timestamps, and
+notarization, and recommends stapling and testing a fresh distribution on another Mac. See
+[Apple's notarization requirements](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution),
+[Apple's packaging guidance](https://developer.apple.com/documentation/xcode/packaging-mac-software-for-distribution),
+and [Tauri's macOS configuration](https://v2.tauri.app/distribute/macos-application-bundle/).
+
+## Product gates before publication
+
+Packaging proof alone cannot make the macOS build releasable. These gates are currently open:
+
+| Area | Current macOS state | Required proof |
+| --- | --- | --- |
+| Provider/account isolation | `GuardianSupervisor` and its recovery authority return unavailable outside Windows. The runtime coordinator therefore stops before providers, panes, terminals, and dependent services become ready. | A macOS process-group/epoch guardian with kill-on-owner-exit, restart recovery, identity checks, race tests, and real provider-account isolation. |
+| Browser | The canonical abstraction now uses deterministic `data_store_identifier` values on macOS 14+ and distinct values for different data roots/workspaces in unit tests. | Real WKWebView persistence, logout/deletion semantics, and cross-workspace cookie/storage isolation on a Mac. |
+| Updater | Feed generation emits only `windows-x86_64`; the native installer verifier rejects every non-Windows update because it only verifies Authenticode/NSIS. | macOS updater descriptor/platform entries, Developer ID/notary/ticket verification, atomic app replacement and rollback, restart recovery, and old-to-new clean-machine proof using the existing canonical updater key. |
+| KalVoice | macOS CoreAudio/TTS code and the microphone permission metadata exist; the packager enables the on-device Whisper feature. | Real microphone prompt, denial, capture, transcription, TTS, device loss, cancellation, sleep/wake, and privacy-retention checks on both architectures. |
+| Secure store | The canonical secure-store crate selects macOS Keychain. | Fresh-account store/read/delete, locked-keychain denial, restart, logout, and cross-account isolation on a clean Mac. |
+| E2E/install | The existing compiled-app harness is WebView2/PowerShell/Windows specific. | A native macOS harness covering DMG open, drag/install, first launch, second launch, shortcut/Dock expectations, sign-in/out, Browser, providers, KalVoice, update, rollback, and uninstall/retained data. |
+| CI/release | The Rust matrix compiles on `macos-latest`; no signed DMG, notarization, or clean-machine lane exists. | Protected, pinned macOS build and verification jobs for each advertised architecture, artifact digest handoff, and independent clean-machine verification. |
+| Website/feed | Manifest types understand macOS, but production builders, publisher, routes, and updater descriptors are Windows-only. | Digest-qualified immutable DMG objects, D1 release authority, friendly and pinned routes, feed entries, range/download tests, production readback, and truthful UI. |
+
+Do not publish a macOS row, stable feed entry, or download URL until every applicable row passes.
+
+## Rollback
+
+Before publication, delete the ignored `dist/release/<version>/KalCode_*.dmg` and its Mac records;
+source rollback is an ordinary revert of the Mac-scoped commit. After publication, immutable artifact
+objects and evidence remain immutable. Product rollback uses a higher version that restores the
+previous behavior. An emergency feed withdrawal or exceptional downgrade remains a separately
+authorized, audited D1 operation with an exact-current-version precondition.

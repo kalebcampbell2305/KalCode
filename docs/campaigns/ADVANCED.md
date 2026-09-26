@@ -1,5 +1,58 @@
 # Campaign plan — Advanced systems (ADV)
 
+## Active owner extension — 2026-09-25
+
+This extension governs current priorities. Historical proposals below remain design history;
+their status banners do not override implemented code, test evidence, or the takeover ledger
+(`CODEX-TAKEOVER.md`). Reuse existing owners rather than creating competing stores or routers.
+
+**P0:** provider isolation, managed profiles, official authentication, native permission behavior,
+authenticated bounded hooks, and locator privacy. Installation/publication remains held until
+security tests and independent review pass.
+
+**P1:** provider accounts, real terminal panes and quick spawn, live Dashboard, provider-native
+identity, local KalVoice reasoning, exact-session focused dictation, local workspace resolution,
+and verified Windows distribution. No external model is KalVoice's interpreter. UI control has
+no approval gate; provider execution retains native permissions. Direct execution outside a
+provider must remain unavailable unless its security model is intentionally defined.
+
+**P2 / P3 additions approved by the owner:**
+
+| Capability | Priority | Canonical owner to extend / integration gate |
+| --- | --- | --- |
+| Universal Attention Center | P2 | `crates/notifications` event-derived, persisted inbox; distinguish actionable attention from Dashboard activity. Add source navigation, snooze, resolution; no parallel notification store. |
+| Pin / snooze / settle / archive threads | P2 | `crates/threads` and existing archive state; durable lifecycle metadata with locator, Dashboard, attention and recovery parity; preserve provider history. |
+| Optional isolated worktree sessions | P2 | `crates/git` worktree operations plus thread/account launch; branch ownership, mappings and safe cleanup; never mandatory for simple work. |
+| Review Center | P2 | Existing Git diff/state, Verification, Diff Intelligence, Blast Radius and Failure Autopsy; expose actual evidence and supported provider-mediated actions, never fake commits/PRs. |
+| Workspace launch presets | P2 | Workspace Blueprints (currently planned), canonical pane persistence; Solo/Pair/Review Pair/Full Stack/Swarm/Debug and custom save/apply; unavailable panes remain explicit. |
+| Provider Setup Center | P2 | Providers, managed accounts, provider health and Environment Doctor; explicit supported install/update/repair, never silent system configuration mutation. |
+| Universal Context Drop | P2 | Existing `crates/context` package/firewall library; wire provider-capability translation and visible preview, ignore/secret/size limits; no blind folder uploads. |
+| Universal + / command palette | P2 | Existing shell CommandPalette and KalVoice routing converge on one typed command registry; palette, + menus and voice are entry points, not separate implementations. |
+| Compare Run | P3 | Threads/Missions, optional worktrees, common objective/context, side-by-side actual diffs/tests/time/evidence; no invented scores or automatic best-provider ranking. |
+| Remote-control groundwork | P3, post-core release | Portable command/event interfaces only when needed now; pairing, authentication, encrypted transport, revocation and least privilege required before any remote listener. Full companion product deferred. |
+
+**Additional owner-approved production scope (2026-09-25):** actual isolated embedded Browser
+panes in Code Mode (navigation, dev-server discovery, persistent layouts, multiple instances,
+responsive viewport, local KalVoice commands), exact active/dictation pane focus treatment,
+and premium public Updates with permanent `/changelog` redirects. Commercial allowances are
+Free 75 / Pro 1,500 / Max 5,000 / Max 2X 10,000 KalVoice Requests per month, priced at
+$0 / $10 / $25 / $50; Owner is internal unlimited. Dictation is unlimited on every tier and
+connected-provider inference remains billed by the provider. Server entitlements are authoritative.
+
+The owner now permits eight useful parallel workstreams plus one lead. The lead alone integrates,
+commits, and releases. Azure signing account/profile configuration is known; current certificate use
+is owner-authorized. Authentication, role, signature, installer, updater, desktop, website and
+production verification remain separate gates. No artifact is shipped merely because code builds.
+
+These additions are approved scope, not completion claims. Audit each existing implementation
+before designing its missing integration. Keep core navigation compact; expose secondary
+capabilities through contextual controls, the command palette, and actionable attention.
+Persist state in the canonical local database/event system with migration, restart and rollback
+proof. Do not terminate offscreen providers to save rendering work. Website claims follow actual
+shipping, never roadmap approval. Full macOS release work remains deferred.
+
+---
+
 Status: **PROPOSED plan — for lead approval** · Branch `plan/advanced-systems` (from main `5188546`)
 · Written 2026-09-24 · Companion: `docs/CONTRACTS_ADVANCED.md` (proposed contract additions).
 

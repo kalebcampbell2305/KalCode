@@ -124,8 +124,8 @@ export function KalVoicePage() {
               <p className={styles.tileTitle}>Commands</p>
               <Badge tone="success">Ready</Badge>
               <p className={styles.tileDetail}>
-                Say “Open Dashboard” or “Show approvals”: it runs the moment you let go. Otherwise your words go into
-                the box you're in, uncounted.
+                Say “Open Dashboard” or “Open four Codex terminals”: KalCode acts the moment you let go. Provider
+                sessions keep their own native permission prompts.
               </p>
               <p className={styles.tileMeta}>Dictation is never counted</p>
             </li>
@@ -159,6 +159,8 @@ export function KalVoicePage() {
                 </div>
               ) : null}
               <p className={styles.tileMeta}>{usageLine(status.usage)}</p>
+              <p className={styles.tileMeta}>Local Dictation: Unlimited</p>
+              <p className={styles.tileMeta}>Provider usage: Handled by your connected provider</p>
             </li>
           </ul>
         ) : null}
@@ -193,7 +195,7 @@ export function KalVoicePage() {
                         ? item.response.outcome.message
                         : item.response.outcome.kind === "limit_reached"
                           ? "Monthly limit reached."
-                          : "Waiting for your approval."}
+                          : "The provider session is waiting for permission in its native prompt."}
                   {item.response?.counted ? <span className={styles.counted}> · counted</span> : null}
                 </p>
               </li>

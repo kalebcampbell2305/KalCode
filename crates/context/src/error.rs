@@ -27,6 +27,8 @@ pub enum ContextError {
     Database(#[from] rusqlite::Error),
     #[error("KalCode couldn't encode the package record.")]
     Encoding(#[from] serde_json::Error),
+    #[error("That context delivery is not in the required one-shot state.")]
+    DeliveryState,
 }
 
 impl ContextError {
@@ -43,6 +45,7 @@ impl ContextError {
             Self::ChangedDuringRead => "context_changed_during_read",
             Self::Database(_) => "context_database_error",
             Self::Encoding(_) => "context_encoding_error",
+            Self::DeliveryState => "context_delivery_state_invalid",
         }
     }
 }
@@ -62,6 +65,7 @@ impl From<ContextError> for KalError {
             | ContextError::NothingToSend => ErrorCategory::Validation,
             ContextError::Database(_) => ErrorCategory::Database,
             ContextError::Encoding(_) => ErrorCategory::Internal,
+            ContextError::DeliveryState => ErrorCategory::Validation,
         };
         let code = error.code();
         let message = error.to_string();

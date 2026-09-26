@@ -15,7 +15,11 @@ const OTHER = "7a1b2c3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d";
 let persistTo: string;
 
 function tool(script: string, args: readonly string[]) {
-  const result = spawnSync(process.execPath, [script, ...args], { encoding: "utf8", env: process.env });
+  const result = spawnSync(process.execPath, [script, ...args], {
+    encoding: "utf8",
+    env: process.env,
+    windowsHide: true,
+  });
   return { status: result.status, out: `${result.stdout}${result.stderr}` };
 }
 
@@ -37,6 +41,13 @@ function audit(accountId: string) {
     action: string;
     details: string;
   }[];
+}
+
+function activatedAt(accountId: string) {
+  const row = execSql(persistTo, `SELECT activated_at FROM accounts WHERE id = '${accountId}'`)[0]?.[0] as
+    | { activated_at: string | null }
+    | undefined;
+  return row?.activated_at ?? null;
 }
 
 beforeAll(() => {
@@ -118,6 +129,8 @@ describe("grant-owner", () => {
       reason: "Owner of KalCode",
     });
     expect(ownerGrants(OTHER)).toEqual([]);
+    expect(activatedAt(ACCOUNT)).toEqual(expect.any(String));
+    expect(activatedAt(OTHER)).toBeNull();
   });
 
   it("is idempotent", () => {
@@ -126,6 +139,42 @@ describe("grant-owner", () => {
     expect(result.out).toMatch(/already holds an active OWNER grant/);
     expect(ownerGrants(ACCOUNT)).toHaveLength(1);
     expect(audit(ACCOUNT)).toHaveLength(1);
+  });
+
+  it("refuses OWNER while a paid subscription is unsettled and allows it after cancellation", () => {
+    execSql(
+      persistTo,
+      `INSERT INTO billing_customers
+         (account_id, stripe_customer_id, create_idempotency_key, created_at, updated_at)
+       VALUES
+         ('${OTHER}', 'cus_owner_guard', 'owner_guard_customer_key',
+          '2026-09-25T12:00:00.000Z', '2026-09-25T12:00:00.000Z');
+       INSERT INTO billing_subscriptions
+         (stripe_subscription_id, account_id, stripe_customer_id, tier, status,
+          period_start, period_end, reconciled_at)
+       VALUES
+         ('sub_owner_guard', '${OTHER}', 'cus_owner_guard', 'pro', 'active',
+          '2026-09-25T12:00:00.000Z', '2026-10-25T12:00:00.000Z', '2026-09-25T12:00:00.000Z');`,
+    );
+
+    expect(() =>
+      execSql(
+        persistTo,
+        `INSERT INTO entitlement_grants (account_id, tier, source, granted_by, reason, granted_at)
+         VALUES ('${OTHER}', 'owner', 'grant', 'operator:test', 'must fail', '2026-09-25T12:00:01.000Z')`,
+      ),
+    ).toThrow();
+    expect(ownerGrants(OTHER)).toEqual([]);
+    const blocked = tool(GRANT, ["--account", OTHER, "--reason", "must settle billing", "--confirm", ...local()]);
+    expect(blocked.status).toBe(64);
+    expect(blocked.out).toMatch(/paid subscription.*settled/i);
+    expect(ownerGrants(OTHER)).toEqual([]);
+    expect(audit(OTHER)).toEqual([]);
+
+    execSql(persistTo, `UPDATE billing_subscriptions SET status = 'canceled' WHERE account_id = '${OTHER}'`);
+    const allowed = tool(GRANT, ["--account", OTHER, "--reason", "billing settled", "--confirm", ...local()]);
+    expect(allowed.status, allowed.out).toBe(0);
+    expect(ownerGrants(OTHER)).toEqual([expect.objectContaining({ tier: "owner", source: "grant" })]);
   });
 });
 

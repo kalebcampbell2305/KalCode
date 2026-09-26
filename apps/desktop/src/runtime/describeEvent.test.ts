@@ -190,6 +190,43 @@ describe("describeEvent", () => {
     expect(routed("dictation").title).toBe("KalVoice heard dictation for the focused box");
     expect(routed("request").title).toBe("KalVoice heard a request");
   });
+
+  it("describes Doctor lifecycle events without finding or environment contents", () => {
+    expect(describeEvent(envelope({ type: "doctor.run_started", payload: { runId: "run-1", checks: 12 } }))).toEqual({
+      title: "Environment check started",
+      detail: "12 checks",
+      tone: "live",
+    });
+    expect(
+      describeEvent(
+        envelope({
+          type: "doctor.run_completed",
+          payload: {
+            runId: "run-1",
+            checks: 12,
+            critical: 1,
+            warning: 2,
+            info: 3,
+            couldNotCheck: 1,
+            ignored: 0,
+            cancelled: false,
+          },
+        }),
+      ),
+    ).toEqual({
+      title: "Environment check completed",
+      detail: "1 critical finding, 2 warnings, 1 check unavailable",
+      tone: "danger",
+    });
+    expect(
+      describeEvent(
+        envelope({
+          type: "doctor.fix_failed",
+          payload: { runId: "run-1", findingCode: "file.env", fixCode: "file.gitignore_env", code: "stale" },
+        }),
+      ),
+    ).toEqual({ title: "Environment fix failed", detail: "file.gitignore_env · stale", tone: "danger" });
+  });
 });
 
 describe("formatting", () => {

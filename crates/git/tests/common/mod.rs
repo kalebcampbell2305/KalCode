@@ -109,7 +109,9 @@ pub fn init_repo(path: &Path) {
 
 /// Runs git the way a user would (inherits the environment, no hardening). Panics on failure.
 pub fn run_plain(dir: &Path, args: &[&str]) -> String {
-    let out = Command::new(git_exe())
+    let mut command = Command::new(git_exe());
+    hide_test_process(&mut command);
+    let out = command
         .arg("-C")
         .arg(dir)
         .args(args)
@@ -125,13 +127,26 @@ pub fn run_plain(dir: &Path, args: &[&str]) -> String {
 
 /// Like [`run_plain`] but returns success instead of panicking.
 pub fn try_plain(dir: &Path, args: &[&str]) -> bool {
-    Command::new(git_exe())
+    let mut command = Command::new(git_exe());
+    hide_test_process(&mut command);
+    command
         .arg("-C")
         .arg(dir)
         .args(args)
         .output()
         .is_ok_and(|o| o.status.success())
 }
+
+#[cfg(windows)]
+pub fn hide_test_process(command: &mut Command) {
+    use std::os::windows::process::CommandExt as _;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+pub fn hide_test_process(_command: &mut Command) {}
 
 /// Writes an executable hook script that creates `marker` when it runs.
 pub fn install_hook(hooks_dir: &Path, name: &str, marker: &str) {

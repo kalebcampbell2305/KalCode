@@ -45,11 +45,21 @@
 }
 
 .frame[data-focused] {
-  border-color: var(--color-border-lit);
+  border-color: var(--color-border-focus);
   box-shadow:
     var(--shadow-panel),
+    inset 0 0 0 1px var(--color-border-lit-soft),
     0 0 0 1px var(--color-border-lit-soft),
-    0 0 28px -10px var(--color-glow);
+    0 0 24px -12px var(--color-glow);
+}
+
+.frame[data-kalvoice-target="listening"] {
+  border-color: var(--color-accent);
+  box-shadow:
+    var(--shadow-panel),
+    inset 0 0 0 1px var(--color-border-lit),
+    0 0 0 1px var(--color-border-lit),
+    0 0 32px -8px var(--color-glow);
 }
 
 .frame[data-drop-target] {
@@ -82,6 +92,22 @@
   background: var(--panel-sheen), var(--color-surface-2);
   cursor: grab;
   touch-action: none;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out);
+}
+
+.frame[data-focused] .header {
+  border-bottom-color: var(--color-border-lit-soft);
+  background:
+    linear-gradient(90deg, var(--color-accent-soft), transparent 42%), var(--panel-sheen), var(--color-surface-2);
+}
+
+.frame[data-kalvoice-target="listening"] .header {
+  border-bottom-color: var(--color-border-lit);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--color-accent) 18%, transparent), transparent 48%),
+    var(--panel-sheen), var(--color-surface-2);
 }
 
 .canvas[data-dragging] .header {
@@ -150,6 +176,18 @@
   border-radius: 0 0 2px 2px;
   background: var(--color-accent);
   box-shadow: 0 0 10px var(--color-glow);
+}
+
+.frame[data-kalvoice-target="listening"] .tab[aria-selected="true"]::before {
+  right: var(--space-1);
+  left: var(--space-1);
+  height: 3px;
+  box-shadow: 0 0 14px var(--color-glow);
+}
+
+.frame[data-focused] .tabGlyph,
+.frame[data-focused] .tab[aria-selected="true"] .tabLabel {
+  color: var(--color-accent-text);
 }
 
 .tab:focus-visible {

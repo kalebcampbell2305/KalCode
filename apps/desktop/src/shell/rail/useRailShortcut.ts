@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { IS_MAC } from "../shortcuts.ts";
+import { isRailToggleShortcut } from "../shortcuts.ts";
 import { useRail } from "./RailProvider.tsx";
 
 /** Mod+Shift+B shows or hides the workspace rail (like Mod+B for the sidebar). */
@@ -11,9 +11,7 @@ export function useRailShortcut() {
   useEffect(() => {
     if (!enabled) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      const mod = IS_MAC ? event.metaKey : event.ctrlKey;
-      if (!mod || !event.shiftKey || event.altKey) return;
-      if (event.key.toLowerCase() !== "b") return;
+      if (!isRailToggleShortcut(event)) return;
       event.preventDefault();
       toggle.current();
     };

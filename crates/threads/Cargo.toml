@@ -12,6 +12,7 @@ name = "kalcode_threads"
 
 [dependencies]
 kalcode-contracts = { path = "../contracts" }
+kalcode-context = { path = "../context" }
 kalcode-native-core = { path = "../native-core" }
 rusqlite.workspace = true
 serde.workspace = true

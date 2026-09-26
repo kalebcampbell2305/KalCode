@@ -1,114 +1,7 @@
-/// Every command the frontend may call. Tauri generates an `allow-<command>` permission for
-/// each; `capabilities/main.json` grants them to the main window. Anything not listed here is
-/// unreachable from the WebView.
-const COMMANDS: &[&str] = &[
-    "boot",
-    "window_ready",
-    "settings_get",
-    "settings_update",
-    "events_recent",
-    "events_query",
-    "events_subscribe",
-    "events_unsubscribe",
-    "diagnostics_get",
-    "diagnostics_open_log_dir",
-    "diagnostics_open_data_dir",
-    "secure_store_check",
-    "kalvoice_subscribe",
-    "kalvoice_status",
-    "kalvoice_request",
-    "kalvoice_preferences_update",
-    "kalvoice_listen_start",
-    "kalvoice_listen_stop",
-    "kalvoice_listen_cancel",
-    "kalvoice_model_download",
-    "kalvoice_model_cancel",
-    "kalvoice_model_delete",
-    "kalvoice_talk",
-    "kalvoice_type_instead",
-    "kalvoice_latency",
-    "kalvoice_latency_record",
-    "providers_list",
-    "providers_detect",
-    // PROVIDERS-2: Provider Health.
-    "provider_health_list",
-    "provider_health_get",
-    "provider_health_trend",
-    // Workspaces and terminals (Z1)
-    "workspace_list",
-    "workspace_active",
-    "workspace_open_dialog",
-    "workspace_activate",
-    "workspace_remove",
-    "shells_list",
-    "terminal_list",
-    "terminal_create",
-    "terminal_restart",
-    "terminal_close",
-    "terminal_write",
-    "terminal_resize",
-    "terminal_attach",
-    "terminal_detach",
-    "terminal_ack",
-    "terminal_set_active",
-    "terminals_running",
-    "thread_list",
-    "thread_get",
-    "thread_messages",
-    "thread_tool_calls",
-    "thread_options",
-    "thread_create",
-    "thread_send",
-    "thread_interrupt",
-    "thread_resume",
-    "thread_stop",
-    "thread_rename",
-    "thread_archive",
-    "thread_stream",
-    // Z4: permissions.
-    "approval_list",
-    "approval_decide",
-    "permission_profiles_list",
-    "thread_set_permission_mode",
-    "permission_settings_get",
-    "permission_settings_update",
-    // Z7-W4: provider panes (behind the provider_panes feature flag).
-    "provider_pane_create",
-    "provider_pane_attach",
-    "provider_pane_ack",
-    "provider_pane_detach",
-    "provider_pane_write",
-    "provider_pane_resize",
-    "provider_pane_info",
-    // Z7-W2: Session Locator, workspace rail, home, recent work, workspace actions.
-    "locator_search",
-    "locator_open",
-    "rail_state",
-    "rail_update",
-    "rail_section_set",
-    "rail_group_create",
-    "rail_group_update",
-    "rail_group_delete",
-    "rail_group_reorder",
-    "home_summary",
-    "recent_work",
-    "workspace_reveal",
-    "workspace_create",
-    // Z6a read-only commands used by the folder surface (Z7-W2).
-    "files_list",
-    "git_status",
-    "git_log",
-    "git_branches",
-    // Z7-W1: pane layouts.
-    "layout_get",
-    "layout_save",
-    "layout_presets",
-    "layout_preset_save",
-    "layout_preset_delete",
-    // Z7-W3: notification center.
-    "notification_list",
-    "notification_mark",
-];
+// Every command the frontend may call. Tauri generates an `allow-<command>` permission for
+// each; `capabilities/main.json` grants them to the trusted main webview. Anything not listed here is
+// unreachable from the WebView.
+include!("src/command_registry.rs");
 
 /// Test hooks. Declared (and so given an `allow-*` permission) only when the target build has
 /// test hooks compiled in: debug builds and the `e2e` feature. Release builds don't register
@@ -126,6 +19,7 @@ fn target_has_test_hooks() -> bool {
 
 fn main() {
     println!("cargo:rerun-if-changed=test-capabilities");
+    println!("cargo:rerun-if-env-changed=KALCODE_AUTHENTICODE_IDENTITY_OIDS");
     let mut commands = COMMANDS.to_vec();
     if target_has_test_hooks() {
         commands.extend_from_slice(TEST_HOOK_COMMANDS);

@@ -3,7 +3,14 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, type Page, test } from "@playwright/test";
-import { closeGracefully, EXE, launch, processesMatching, removeDir } from "./harness.ts";
+import {
+  closeGracefully,
+  EXE,
+  launch,
+  processesMatching,
+  removeDir,
+  writeManagedFakeProviderConfig,
+} from "./harness.ts";
 
 /**
  * Z7-W4 end to end against the real app: a provider pane runs a provider CLI in a real
@@ -63,7 +70,7 @@ test("a provider pane runs the CLI in a PTY and routes its tool calls through Ka
   const bin = join(root, "bin");
   mkdirSync(bin);
   copyFileSync(FAKE, join(bin, "claude.exe"));
-  writeFileSync(join(bin, "fake-provider.json"), "{}");
+  writeManagedFakeProviderConfig(bin);
 
   const env = {
     KALCODE_E2E_PICK_FOLDER: project,

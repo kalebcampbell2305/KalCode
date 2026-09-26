@@ -3,9 +3,9 @@ import { Button, Skeleton } from "@kalcode/ui/components";
 import { ShieldAlert } from "lucide-react";
 import { useState } from "react";
 import { formatAbsolute, formatRelative } from "../../../runtime/describeEvent.ts";
+import { useNow } from "../../../surfaces/dashboard/useNow.ts";
 import { DECISION_LABELS } from "../../../surfaces/permissions/labels.ts";
 import { usePermissions } from "../../../surfaces/permissions/PermissionsProvider.tsx";
-import { useNow } from "../../../surfaces/dashboard/useNow.ts";
 import styles from "./Widgets.module.css";
 
 /** Quick answers shown in the widget, in the app's order; standing grants are in the full prompt. */

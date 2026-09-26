@@ -186,7 +186,13 @@ test.describe("TryKalCode", () => {
 
   test("dock tabs follow the tabs pattern", async ({ page }) => {
     const block = await open(page);
-    await block.getByTestId("dock-tab-browser").focus();
+    const browser = block.getByTestId("dock-tab-browser");
+    // The stage and its section both use content-visibility:auto. On a cold, slower browser the
+    // stage can be wired before this nested tablist is rendered, so focus must bring the actual
+    // control into view rather than relying on the block's earlier lazy-initialisation scroll.
+    await browser.scrollIntoViewIfNeeded();
+    await browser.focus();
+    await expect(browser).toBeFocused();
     await page.keyboard.press("ArrowRight");
     await expect(block.getByTestId("dock-tab-dashboard")).toBeFocused();
     await expect(block.getByTestId("dock-tab-dashboard")).toHaveAttribute("aria-selected", "true");

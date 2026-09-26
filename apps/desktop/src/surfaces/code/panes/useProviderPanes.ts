@@ -38,7 +38,7 @@ export interface ProviderPanes {
   offered: readonly PaneProviderId[];
   error: string | null;
   /** Starts a provider (Claude Code by default) in a new pane thread (the real CLI in a PTY). */
-  create: (providerId?: PaneProviderId) => Promise<ThreadSummary | null>;
+  create: (providerId?: PaneProviderId, providerAccountId?: string | null) => Promise<ThreadSummary | null>;
   /** A thread changed (rename, stop). */
   updated: (thread: ThreadSummary) => void;
   refresh: () => Promise<void>;
@@ -148,12 +148,13 @@ export function useProviderPanes(workspace: Workspace): ProviderPanes {
   }, [waiting, codexWaiting, refresh]);
 
   const create = useCallback(
-    async (providerId: PaneProviderId = "claude-code") => {
+    async (providerId: PaneProviderId = "claude-code", providerAccountId?: string | null) => {
       setCreating(providerId);
       setError(null);
       try {
         const thread = await channel.create({
           providerId,
+          providerAccountId: providerAccountId ?? null,
           workspaceId: workspace.id,
           permissionMode: paneStartMode(settings?.defaultMode),
         });

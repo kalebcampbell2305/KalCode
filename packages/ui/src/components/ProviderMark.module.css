@@ -1,22 +1,25 @@
-/* Provider accents live in terminal.css (--provider-*); fallbacks keep the mark legible if a
-   consumer has not imported it. */
+/* Native provider assets keep their published treatment. Terminal and unknown-provider fallbacks
+   use the neutral provider token when terminal.css is present. */
 .glyph {
+  display: block;
   flex: none;
   width: 0.875rem;
   height: 0.875rem;
   color: var(--color-text-secondary);
+  vertical-align: middle;
 }
 
-.glyph[data-tone="accent"][data-glyph="claude"] {
-  color: var(--provider-claude, var(--color-text-secondary));
+.nativeImage {
+  object-fit: contain;
 }
 
-.glyph[data-tone="accent"][data-glyph="codex"] {
-  color: var(--provider-codex, var(--color-text-secondary));
+:global(:root:not([data-theme="light"])) .nativeImage[data-glyph="codex"],
+:global([data-theme="dark"]) .nativeImage[data-glyph="codex"] {
+  filter: invert(1);
 }
 
-.glyph[data-tone="accent"][data-glyph="gemini"] {
-  color: var(--provider-gemini, var(--color-text-secondary));
+:global([data-theme="light"]) .nativeImage[data-glyph="codex"] {
+  filter: none;
 }
 
 .glyph[data-tone="accent"][data-glyph="shell"],

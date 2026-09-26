@@ -1,0 +1,415 @@
+use std::io::Cursor;
+
+use guardian::marker::{JobId, ProfileMarker, decode_marker, encode_marker};
+use guardian::protocol::{
+    ChannelNonce, Envelope, InboundGuard, MAX_FRAME_BYTES, ProtocolError, Request, Response,
+    read_frame, write_frame,
+};
+use guardian::{
+    DesktopGeneration, ProcessIdentity, ProfileCapability, ProfileGeneration, ProfileIdentity,
+};
+use kalcode_contracts::agent::ProviderId;
+use kalcode_providers::guardian;
+use uuid::Uuid;
+
+fn desktop_generation() -> DesktopGeneration {
+    DesktopGeneration::from_uuid(
+        Uuid::parse_str("0199aaaa-0000-7000-8000-000000000001").expect("desktop generation"),
+    )
+}
+
+fn profile_generation() -> ProfileGeneration {
+    ProfileGeneration::from_uuid(
+        Uuid::parse_str("0199aaaa-0000-7000-8000-000000000002").expect("profile generation"),
+    )
+}
+
+fn profile() -> ProfileIdentity {
+    ProfileIdentity::new(
+        ProviderId::new(ProviderId::CODEX),
+        Uuid::parse_str("0199aaaa-0000-7000-8000-000000000003").expect("account"),
+        profile_generation(),
+    )
+    .expect("valid profile")
+}
+
+fn process(pid: u32, birth_time_100ns: u64) -> ProcessIdentity {
+    ProcessIdentity::new(pid, birth_time_100ns).expect("process identity")
+}
+
+fn nonce() -> ChannelNonce {
+    ChannelNonce::from_bytes([0x5a; 16])
+}
+
+fn envelope(sequence: u64) -> Envelope<Request> {
+    Envelope::new(
+        nonce(),
+        desktop_generation(),
+        sequence,
+        Uuid::parse_str("0199aaaa-0000-7000-8000-000000000004").expect("request"),
+        Request::Health,
+    )
+}
+
+#[test]
+fn frame_codec_bounds_allocation_and_rejects_replay() {
+    let expected = envelope(1);
+    let mut bytes = Vec::new();
+    write_frame(&mut bytes, &expected).expect("encode bounded frame");
+    let decoded: Envelope<Request> =
+        read_frame(&mut Cursor::new(bytes)).expect("decode bounded frame");
+    assert_eq!(decoded, expected);
+
+    let declared = u32::try_from(MAX_FRAME_BYTES + 1)
+        .expect("frame limit fits u32")
+        .to_le_bytes();
+    assert!(matches!(
+        read_frame::<_, Envelope<Request>>(&mut Cursor::new(declared)),
+        Err(ProtocolError::FrameTooLarge {
+            declared,
+            maximum: MAX_FRAME_BYTES
+        }) if declared == MAX_FRAME_BYTES + 1
+    ));
+
+    let mut guard = InboundGuard::new(nonce(), desktop_generation());
+    guard.accept(&envelope(1)).expect("first sequence");
+    assert!(matches!(
+        guard.accept(&envelope(1)),
+        Err(ProtocolError::SequenceMismatch {
+            expected: 2,
+            actual: 1
+        })
+    ));
+    assert!(matches!(
+        guard.accept(&envelope(3)),
+        Err(ProtocolError::SequenceMismatch {
+            expected: 2,
+            actual: 3
+        })
+    ));
+}
+
+#[test]
+fn protocol_rejects_wrong_version_nonce_and_generation() {
+    let mut guard = InboundGuard::new(nonce(), desktop_generation());
+
+    let mut wrong_version = envelope(1);
+    wrong_version.protocol_version += 1;
+    assert!(matches!(
+        guard.accept(&wrong_version),
+        Err(ProtocolError::VersionMismatch { .. })
+    ));
+
+    let mut wrong_nonce = envelope(1);
+    wrong_nonce.nonce = ChannelNonce::from_bytes([0x7c; 16]);
+    assert!(matches!(
+        guard.accept(&wrong_nonce),
+        Err(ProtocolError::AuthenticationFailed)
+    ));
+
+    let mut wrong_generation = envelope(1);
+    wrong_generation.desktop_generation = DesktopGeneration::from_uuid(Uuid::new_v4());
+    assert!(matches!(
+        guard.accept(&wrong_generation),
+        Err(ProtocolError::DesktopGenerationMismatch)
+    ));
+}
+
+#[test]
+fn marker_decoder_fails_closed_and_transitions_are_object_bound() {
+    assert!(decode_marker(b"not-json").is_err());
+
+    let mut marker = ProfileMarker::new(
+        Uuid::parse_str("0199aaaa-0000-7000-8000-000000000005").expect("boot"),
+        desktop_generation(),
+        profile(),
+        process(100, 101),
+        process(200, 201),
+    );
+    let lease_id = Uuid::parse_str("0199aaaa-0000-7000-8000-000000000006").expect("lease");
+    marker
+        .acquire(lease_id, ProfileCapability::SharedSession)
+        .expect("lease");
+    let job =
+        JobId::from_uuid(Uuid::parse_str("0199aaaa-0000-7000-8000-000000000007").expect("job"));
+    marker
+        .prepare_job(lease_id, profile(), job, "fixture-job".into())
+        .expect("prepared");
+
+    let bytes = encode_marker(&marker).expect("encode marker");
+    assert_eq!(decode_marker(&bytes).expect("decode marker"), marker);
+    let json = String::from_utf8(bytes).expect("utf8").to_ascii_lowercase();
+    for forbidden in [
+        "path",
+        "argv",
+        "command",
+        "environment",
+        "credential",
+        "token",
+        "secret",
+        "auth_material",
+    ] {
+        assert!(!json.contains(forbidden), "marker leaked {forbidden}");
+    }
+
+    let encoded = encode_marker(&marker).expect("encoded marker");
+    let mut value: serde_json::Value = serde_json::from_slice(&encoded).expect("marker value");
+    value["schema_version"] = serde_json::json!(2);
+    assert!(decode_marker(&serde_json::to_vec(&value).expect("unknown schema JSON")).is_err());
+    value["schema_version"] = serde_json::json!(1);
+    value["state"] = serde_json::json!("FUTURE_STATE");
+    assert!(decode_marker(&serde_json::to_vec(&value).expect("unknown state JSON")).is_err());
+
+    let mut value: serde_json::Value = serde_json::from_slice(&encoded).expect("marker value");
+    value["profile"]["provider_id"] = serde_json::json!("../swapped");
+    assert!(decode_marker(&serde_json::to_vec(&value).expect("invalid identity JSON")).is_err());
+
+    let mut value: serde_json::Value = serde_json::from_slice(&encoded).expect("marker value");
+    value["profile"]["subject_kind"] = serde_json::json!("future_subject");
+    assert!(decode_marker(&serde_json::to_vec(&value).expect("unknown subject JSON")).is_err());
+
+    let mut value: serde_json::Value = serde_json::from_slice(&encoded).expect("marker value");
+    value["guardian_process"]["birth_time_100ns"] = serde_json::json!(0);
+    assert!(decode_marker(&serde_json::to_vec(&value).expect("invalid process JSON")).is_err());
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_unnamed_job_survives_least_rights_handoff_and_proves_process_zero() {
+    use std::time::{Duration, Instant};
+
+    use guardian::platform::WindowsJob;
+
+    let owner = WindowsJob::create("handoff-test").expect("create private job");
+    let observer = owner
+        .duplicate_for_current_process()
+        .expect("duplicate least-rights authority");
+    let system_root = std::env::var_os("SystemRoot").expect("SystemRoot");
+    let powershell = std::path::Path::new(&system_root)
+        .join("System32")
+        .join("WindowsPowerShell")
+        .join("v1.0")
+        .join("powershell.exe");
+    let child = owner
+        .spawn_hidden_suspended_then_assign(
+            &powershell,
+            &[
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Start-Sleep -Seconds 60",
+            ],
+        )
+        .expect("spawn guarded helper");
+    assert!(child.identity().pid() > 0);
+    assert_eq!(owner.active_processes().expect("active count"), 1);
+    drop(owner);
+    assert_eq!(observer.active_processes().expect("handoff count"), 1);
+
+    observer.terminate().expect("terminate job");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while observer.active_processes().expect("poll count") != 0 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(observer.active_processes().expect("zero count"), 0);
+    child.wait(Duration::from_secs(2)).expect("reap helper");
+}
+
+#[cfg(windows)]
+#[test]
+fn external_guardian_owns_job_until_desktop_channel_loss_drains_it() {
+    use std::os::windows::io::AsHandle;
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    use guardian::platform::WindowsJob;
+
+    let recovery = tempfile::tempdir().expect("recovery root");
+    let recovery_identity = guardian::platform::recovery_root_identity(recovery.path())
+        .expect("recovery root identity");
+    let mut guardian_process = Command::new(env!("CARGO_BIN_EXE_kalcode-provider-guardian"));
+    guardian_process
+        .arg("--recovery-root")
+        .arg(recovery.path())
+        .arg("--recovery-root-id")
+        .arg(&recovery_identity)
+        .creation_flags(0x0800_0000)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut guardian_process = guardian_process.spawn().expect("guardian process");
+    let mut input = guardian_process.stdin.take().expect("guardian stdin");
+    let mut output = guardian_process.stdout.take().expect("guardian stdout");
+    let nonce = ChannelNonce::from_bytes([0x3c; 16]);
+    let generation = desktop_generation();
+
+    write_frame(
+        &mut input,
+        &Envelope::new(nonce, generation, 1, Uuid::new_v4(), Request::Health),
+    )
+    .expect("guardian handshake");
+    let response: Envelope<Response> = read_frame(&mut output).expect("handshake response");
+    assert_eq!(response.body, Response::Healthy);
+
+    let job = JobId::new();
+    let owner = WindowsJob::create("external-channel-loss").expect("create private job");
+    let handle = owner
+        .duplicate_for_helper(guardian_process.as_handle())
+        .expect("duplicate helper authority");
+    write_frame(
+        &mut input,
+        &Envelope::new(
+            nonce,
+            generation,
+            2,
+            Uuid::new_v4(),
+            Request::HoldJob { job, handle },
+        ),
+    )
+    .expect("transfer job authority");
+    let response: Envelope<Response> = read_frame(&mut output).expect("hold response");
+    assert_eq!(response.body, Response::Accepted);
+
+    let system_root = std::env::var_os("SystemRoot").expect("SystemRoot");
+    let powershell = std::path::Path::new(&system_root)
+        .join("System32")
+        .join("WindowsPowerShell")
+        .join("v1.0")
+        .join("powershell.exe");
+    let provider = owner
+        .spawn_hidden_suspended_then_assign(
+            &powershell,
+            &[
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Start-Sleep -Seconds 60",
+            ],
+        )
+        .expect("guarded provider fixture");
+    assert_eq!(owner.active_processes().expect("active provider"), 1);
+
+    drop(owner);
+    drop(input);
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = guardian_process.try_wait().expect("guardian status") {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "guardian did not drain after channel loss"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert!(status.success(), "guardian cleanup failed: {status}");
+    provider
+        .wait(Duration::from_secs(2))
+        .expect("provider tree ended before guardian exit");
+}
+
+#[cfg(windows)]
+#[test]
+fn external_guardian_drains_when_the_response_channel_breaks() {
+    use std::os::windows::io::AsHandle;
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    use guardian::platform::WindowsJob;
+
+    let recovery = tempfile::tempdir().expect("recovery root");
+    let recovery_identity = guardian::platform::recovery_root_identity(recovery.path())
+        .expect("recovery root identity");
+    let mut helper = Command::new(env!("CARGO_BIN_EXE_kalcode-provider-guardian"));
+    helper
+        .arg("--recovery-root")
+        .arg(recovery.path())
+        .arg("--recovery-root-id")
+        .arg(&recovery_identity)
+        .creation_flags(0x0800_0000)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut helper = helper.spawn().expect("guardian process");
+    let mut input = helper.stdin.take().expect("guardian stdin");
+    let mut output = helper.stdout.take().expect("guardian stdout");
+    let nonce = ChannelNonce::from_bytes([0x4d; 16]);
+    let generation = desktop_generation();
+
+    write_frame(
+        &mut input,
+        &Envelope::new(nonce, generation, 1, Uuid::new_v4(), Request::Health),
+    )
+    .expect("handshake");
+    let response: Envelope<Response> = read_frame(&mut output).expect("handshake response");
+    assert_eq!(response.body, Response::Healthy);
+
+    let job = JobId::new();
+    let owner = WindowsJob::create("external-response-loss").expect("private job owner");
+    let handle = owner
+        .duplicate_for_helper(helper.as_handle())
+        .expect("duplicate helper authority");
+    write_frame(
+        &mut input,
+        &Envelope::new(
+            nonce,
+            generation,
+            2,
+            Uuid::new_v4(),
+            Request::HoldJob { job, handle },
+        ),
+    )
+    .expect("hold request");
+    let response: Envelope<Response> = read_frame(&mut output).expect("hold response");
+    assert_eq!(response.body, Response::Accepted);
+
+    let system_root = std::env::var_os("SystemRoot").expect("SystemRoot");
+    let powershell = std::path::Path::new(&system_root)
+        .join("System32")
+        .join("WindowsPowerShell")
+        .join("v1.0")
+        .join("powershell.exe");
+    let provider = owner
+        .spawn_hidden_suspended_then_assign(
+            &powershell,
+            &[
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Start-Sleep -Seconds 60",
+            ],
+        )
+        .expect("provider fixture");
+    drop(owner);
+
+    // Keep the request side alive and break only responses. The helper's response write must
+    // still flow through its unconditional drain path.
+    drop(output);
+    write_frame(
+        &mut input,
+        &Envelope::new(nonce, generation, 3, Uuid::new_v4(), Request::Health),
+    )
+    .expect("request triggering broken response");
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = helper.try_wait().expect("guardian status") {
+            assert!(
+                !status.success(),
+                "broken response is an abnormal helper exit"
+            );
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "guardian did not exit after response loss"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    provider
+        .wait(Duration::from_secs(2))
+        .expect("provider ended before helper exit");
+}

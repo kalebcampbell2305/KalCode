@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-thread-review-prompt"
+description = "Enables the thread_review_prompt command without any pre-configured scope."
+commands.allow = ["thread_review_prompt"]
+
+[[permission]]
+identifier = "deny-thread-review-prompt"
+description = "Denies the thread_review_prompt command without any pre-configured scope."
+commands.deny = ["thread_review_prompt"]

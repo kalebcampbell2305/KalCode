@@ -157,6 +157,7 @@ async function generateVectors(): Promise<Vectors> {
   const ownerToken = await valid("owner", owner);
   const proToken = await valid("pro", issue("pro"));
   await valid("max", issue("max"));
+  await valid("max2x", issue("max2x"));
   await valid("free", issue("free"));
   await valid("owner-last-valid-second", owner, owner.expiresAt - 1);
   await valid("owner-within-clock-skew", owner, T0 - ENTITLEMENT_CLOCK_SKEW_SECONDS);
@@ -247,10 +248,11 @@ async function generateVectors(): Promise<Vectors> {
   const receiptBad = (name: string, token: string, error: VerifyError, now = T0 + 60) => {
     receiptCases.push({ name, token, now, expect: { ok: false, error } });
   };
-  const proReceipt = receipt("pro", 412, 2500);
+  const proReceipt = receipt("pro", 412, 1500);
   const proReceiptToken = await receiptOk("pro-receipt", proReceipt);
   await receiptOk("owner-receipt", receipt("owner", 12_345, null));
-  await receiptOk("free-receipt-exhausted", receipt("free", 250, 250));
+  await receiptOk("max2x-receipt", receipt("max2x", 5_500, 10_000));
+  await receiptOk("free-receipt-exhausted", receipt("free", 75, 75));
   receiptBad("pro-receipt-expired", proReceiptToken, "expired", proReceipt.expiresAt);
   receiptBad("entitlement-presented-as-receipt", ownerToken, "unsupported_header");
   cases.push({
@@ -330,7 +332,7 @@ describe("shared entitlement vectors", () => {
 
   it("cover every tier and every verification error", () => {
     const tiers = vectors.cases.flatMap((c) => (c.expect.ok ? [c.expect.entitlement.tier] : []));
-    expect(new Set(tiers)).toEqual(new Set(["free", "pro", "max", "owner"]));
+    expect(new Set(tiers)).toEqual(new Set(["free", "pro", "max", "max2x", "owner"]));
     const errors = vectors.cases.flatMap((c) => (c.expect.ok ? [] : [c.expect.error]));
     expect(new Set(errors)).toEqual(
       new Set([

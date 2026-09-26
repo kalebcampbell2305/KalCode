@@ -227,7 +227,7 @@ mod tests {
     use kalcode_contracts::permissions::PermissionMode;
 
     #[test]
-    fn every_provider_maps_every_builtin_mode_never_as_exact_without_host_approvals() {
+    fn every_provider_maps_every_builtin_mode_without_hidden_bypass_flags() {
         for status in statuses() {
             let modes: Vec<_> = status
                 .capabilities
@@ -251,7 +251,6 @@ mod tests {
                 for broad in [
                     "bypassPermissions",
                     "dangerously",
-                    "danger-full-access",
                     "yolo",
                     "--approval-mode=yolo",
                 ] {
@@ -262,6 +261,15 @@ mod tests {
                         mapping.provider_setting
                     );
                 }
+                let codex_native_bypass = status.id.as_str() == ProviderId::CODEX
+                    && mapping.mode == PermissionMode::Bypass;
+                assert_eq!(
+                    mapping.provider_setting.contains("danger-full-access"),
+                    codex_native_bypass,
+                    "danger-full-access is the documented Codex Bypass mapping only: {} {:?}",
+                    status.id,
+                    mapping.mode
+                );
             }
         }
     }

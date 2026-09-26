@@ -1,7 +1,8 @@
 //! `codex exec` argument vectors and the KalCode permission mapping for headless Codex turns.
 //!
 //! Verified 2026-09-25 against the installed `codex exec --help` and `codex exec resume --help`
-//! (codex-cli 0.155.1) and the official docs (docs/PROVIDERS.md §11 [5][7][13][14]):
+//! (codex-cli 0.157.0; the supported minimum remains 0.155.1) and the official docs
+//! (docs/PROVIDERS.md §11 [5][7][13][14]):
 //!
 //! - `--json` prints events as JSON Lines; the prompt is read from stdin when it is `-`.
 //! - `-s/--sandbox read-only|workspace-write|danger-full-access`; exec's default is read-only.
@@ -29,10 +30,11 @@ use crate::version::Version;
 /// `exec resume`, `--ignore-rules`).
 pub const MINIMUM_VERSION: Version = Version::new(0, 155, 1);
 
-/// Shared scalar floor for panes and headless turns. This does not clear inherited MCP maps;
-/// managed profile isolation is a separate required boundary.
+/// Shared scalar floor for panes and headless turns. The empty MCP table is defense in depth:
+/// Codex merges maps across layers, so managed profile reset, repository trust binding, and the
+/// cloud-eligibility gate remain required boundaries.
 pub(crate) const POLICY_CONFIG: &[&str] = &[
-    "approval_policy='never'",
+    "mcp_servers={}",
     "web_search='disabled'",
     "shell_environment_policy.inherit='core'",
     "sandbox_workspace_write.network_access=false",
@@ -44,11 +46,19 @@ pub(crate) const POLICY_CONFIG: &[&str] = &[
     "features.multi_agent=false",
     "features.multi_agent_v2=false",
     "features.skill_mcp_dependency_install=false",
+    "features.browser_use=false",
+    "features.browser_use_external=false",
+    "features.computer_use=false",
+    "features.in_app_browser=false",
+    "features.image_generation=false",
+    "features.code_mode=false",
+    "features.code_mode_host=false",
+    "features.auth_elicitation=false",
+    "features.tool_call_mcp_elicitation=false",
 ];
 
 /// Flags and values KalCode never passes to Codex, in any mode.
 pub const FORBIDDEN: &[&str] = &[
-    "danger-full-access",
     "--dangerously-bypass-approvals-and-sandbox",
     "--dangerously-bypass-hook-trust",
     "--approve-for-me",
@@ -56,8 +66,6 @@ pub const FORBIDDEN: &[&str] = &[
     "--add-dir",
     "--oss",
     "--worktree",
-    "on-request",
-    "untrusted",
     "network_access=true",
     "web_search='live'",
 ];
@@ -72,19 +80,35 @@ const COMMON: &[&str] = &[
     "--ignore-user-config",
 ];
 
-/// The sandbox part of the mapping. Only Bypass writes, and never with network access.
+/// Provider-native sandbox and approval mapping. `Custom` uses the same bounded prompt policy
+/// as `Approve` until custom provider-native controls are part of the contract.
 pub fn sandbox_args(mode: PermissionMode) -> Vec<&'static str> {
     match mode {
-        PermissionMode::Bypass => vec![
+        PermissionMode::Plan => vec![
+            "--sandbox",
+            "read-only",
+            "--skip-git-repo-check",
+            "-c",
+            "approval_policy='never'",
+        ],
+        PermissionMode::Approve | PermissionMode::Custom => vec![
             "--sandbox",
             "workspace-write",
             "-c",
-            "sandbox_workspace_write.network_access=false",
+            "approval_policy='on-request'",
         ],
-        PermissionMode::Plan
-        | PermissionMode::Approve
-        | PermissionMode::Auto
-        | PermissionMode::Custom => vec!["--sandbox", "read-only", "--skip-git-repo-check"],
+        PermissionMode::Auto => vec![
+            "--sandbox",
+            "workspace-write",
+            "-c",
+            "approval_policy='never'",
+        ],
+        PermissionMode::Bypass => vec![
+            "--sandbox",
+            "danger-full-access",
+            "-c",
+            "approval_policy='never'",
+        ],
     }
 }
 
@@ -100,8 +124,7 @@ pub fn permission_setting(mode: PermissionMode) -> String {
 }
 
 const NOT_ENFORCED: &str = "Codex has no deny-rule flag: KalCode can't stop reads of credential \
-                            files inside the workspace, and remote actions are stopped by the \
-                            sandbox's network block, not by KalCode rules.";
+                            files that its native sandbox permits.";
 
 pub fn permission_mappings() -> Vec<PermissionMapping> {
     let map = |mode, notes: String| PermissionMapping {
@@ -121,19 +144,22 @@ pub fn permission_mappings() -> Vec<PermissionMapping> {
         map(
             PermissionMode::Approve,
             format!(
-                "Runs like Plan: edits would need an approval KalCode can't give Codex yet, so \
-                 they're refused instead of asking. {NOT_ENFORCED}"
+                "Workspace writes use Codex's native on-request approval prompt; connected tools \
+                 and web search remain disabled. {NOT_ENFORCED}"
             ),
         ),
         map(
             PermissionMode::Auto,
-            format!("Runs like Approve. {NOT_ENFORCED}"),
+            format!(
+                "Workspace writes run without approval prompts inside Codex's native sandbox; \
+                 connected tools and web search remain disabled. {NOT_ENFORCED}"
+            ),
         ),
         map(
             PermissionMode::Bypass,
             format!(
-                "Edits and commands inside the workspace, with network access off. \
-                 danger-full-access is never used. {NOT_ENFORCED}"
+                "Uses Codex's explicit danger-full-access sandbox with approval prompts disabled; \
+                 connected tools and web search remain disabled. {NOT_ENFORCED}"
             ),
         ),
     ]
@@ -153,10 +179,22 @@ pub fn exec_args(
     model: Option<&str>,
     resume: Option<&str>,
 ) -> Result<Vec<OsString>, CodexExecError> {
+    exec_args_with_overrides(mode, model, resume, &[])
+}
+
+/// Managed variant with already-tokenized root CLI overrides (`-c`, value pairs). The caller is
+/// responsible for producing these through [`crate::codex::managed_policy`].
+pub(crate) fn exec_args_with_overrides(
+    mode: PermissionMode,
+    model: Option<&str>,
+    resume: Option<&str>,
+    overrides: &[OsString],
+) -> Result<Vec<OsString>, CodexExecError> {
     let mut out: Vec<OsString> = COMMON.iter().map(OsString::from).collect();
     for value in POLICY_CONFIG {
         out.extend([OsString::from("-c"), OsString::from(value)]);
     }
+    out.extend_from_slice(overrides);
     out.extend(sandbox_args(mode).into_iter().map(OsString::from));
     if let Some(model) = model {
         if !crate::claude::argv::valid_model_name(model) {
@@ -216,18 +254,26 @@ mod tests {
             }
             let sandbox = after(&args, "--sandbox");
             assert_eq!(sandbox.len(), 1, "{mode:?}");
-            let expected = if mode == PermissionMode::Bypass {
-                "workspace-write"
-            } else {
-                "read-only"
+            let expected = match mode {
+                PermissionMode::Plan => "read-only",
+                PermissionMode::Approve | PermissionMode::Auto | PermissionMode::Custom => {
+                    "workspace-write"
+                }
+                PermissionMode::Bypass => "danger-full-access",
             };
             assert_eq!(sandbox[0], expected, "{mode:?}");
             let configs = after(&args, "-c");
-            assert!(configs.contains(&"approval_policy='never'"), "{mode:?}");
+            let expected_approval = match mode {
+                PermissionMode::Approve | PermissionMode::Custom => "approval_policy='on-request'",
+                PermissionMode::Plan | PermissionMode::Auto | PermissionMode::Bypass => {
+                    "approval_policy='never'"
+                }
+            };
+            assert!(configs.contains(&expected_approval), "{mode:?}");
             assert!(configs.contains(&"web_search='disabled'"), "{mode:?}");
             assert!(configs.contains(&"shell_environment_policy.inherit='core'"));
             assert!(args.iter().any(|a| a == "--ignore-rules"));
-            if mode == PermissionMode::Bypass {
+            if mode != PermissionMode::Plan {
                 assert!(configs.contains(&"sandbox_workspace_write.network_access=false"));
                 // Codex's own "is this a Git repository" guard stays on whenever it can write.
                 assert!(!args.iter().any(|a| a == "--skip-git-repo-check"));
@@ -246,9 +292,13 @@ mod tests {
             args(PermissionMode::Custom, None),
             args(PermissionMode::Approve, None)
         );
-        assert_eq!(
+        assert_ne!(
             args(PermissionMode::Plan, None),
             args(PermissionMode::Auto, None)
+        );
+        assert_ne!(
+            args(PermissionMode::Auto, None),
+            args(PermissionMode::Bypass, None)
         );
     }
 

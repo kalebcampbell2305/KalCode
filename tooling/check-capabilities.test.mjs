@@ -21,6 +21,7 @@ function fixture() {
   temps.push(root);
   cpSync(join(real, "build.rs"), join(root, "build.rs"));
   mkdirSync(join(root, "src"));
+  cpSync(join(real, "src", "command_registry.rs"), join(root, "src", "command_registry.rs"));
   cpSync(join(real, "src", "lib.rs"), join(root, "src", "lib.rs"));
   cpSync(join(real, "capabilities"), join(root, "capabilities"), { recursive: true });
   cpSync(join(real, "test-capabilities"), join(root, "test-capabilities"), { recursive: true });
@@ -88,7 +89,7 @@ test("granting a test hook from capabilities/ fails", () => {
 
 test("a test hook listed in COMMANDS (shipped builds) fails", () => {
   const root = fixture();
-  const path = join(root, "build.rs");
+  const path = join(root, "src", "command_registry.rs");
   writeFileSync(
     path,
     readFileSync(path, "utf8").replace(
@@ -112,28 +113,51 @@ test("registering a test hook without the test-hook cfg fails", () => {
   assert.match(problemsOf(root).join("\n"), /test hook test_permission_probe is registered without/);
 });
 
-test("the test-hook capability may grant only test hooks, to the main window", () => {
+test("the test-hook capability may grant only test hooks, to the main webview", () => {
   const root = fixture();
   const path = join(root, "test-capabilities", "test-hooks.json");
   const hooks = readJson(path);
   hooks.permissions.push("allow-thread-send");
-  hooks.windows = ["*"];
+  hooks.webviews = ["*"];
   hooks.remote = { urls: ["https://example.com/*"] };
   writeJson(path, hooks);
   const problems = problemsOf(root).join("\n");
   assert.match(problems, /test-hooks\.json: unexpected permissions: allow-thread-send/);
-  assert.match(problems, /test-hooks\.json: must target only the main window/);
+  assert.match(problems, /test-hooks\.json: must target only the main webview/);
   assert.match(problems, /test-hooks\.json: must not grant remote URLs/);
 });
 
-test("main.json must stay on the main window and local content", () => {
+test("main.json must stay on the main webview and local content", () => {
   const root = fixture();
   const path = join(root, "capabilities", "main.json");
   const main = readJson(path);
-  main.windows = ["main", "other"];
+  main.webviews = ["main", "other"];
   main.remote = { urls: ["https://example.com/*"] };
   writeJson(path, main);
   const problems = problemsOf(root).join("\n");
-  assert.match(problems, /main\.json: must target only the main window/);
+  assert.match(problems, /main\.json: must target only the main webview/);
   assert.match(problems, /main\.json: must not grant remote URLs/);
 });
+
+for (const file of ["capabilities/main.json", "test-capabilities/test-hooks.json"]) {
+  test(`${file} rejects window-wide grants even with a main webview selector`, () => {
+    const root = fixture();
+    const path = join(root, file);
+    const capability = readJson(path);
+    capability.windows = ["main"];
+    capability.webviews = ["main"];
+    writeJson(path, capability);
+    assert.match(problemsOf(root).join("\n"), /must not target windows/);
+  });
+  test(`${file} rejects child and wildcard webview grants`, () => {
+    for (const webviews of [["*"], ["main", "browser-1"]]) {
+      const root = fixture();
+      const path = join(root, file);
+      const capability = readJson(path);
+      delete capability.windows;
+      capability.webviews = webviews;
+      writeJson(path, capability);
+      assert.match(problemsOf(root).join("\n"), /must target only the main webview/);
+    }
+  });
+}

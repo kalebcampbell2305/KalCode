@@ -13,6 +13,7 @@ use kalcode_providers::{DetectEnv, ProviderRegistry, ProviderStatus};
 use tauri::State;
 
 use crate::AppState;
+use crate::provider_auth_commands::ProviderRuntimeAuthority;
 use crate::thread_commands::ThreadsState;
 
 /// Managed state: the provider registry, shared with detection's blocking worker and with the
@@ -20,8 +21,14 @@ use crate::thread_commands::ThreadsState;
 pub struct ProviderState(Arc<ProviderRegistry>);
 
 impl ProviderState {
-    pub fn from_process() -> Self {
-        Self(Arc::new(ProviderRegistry::new(DetectEnv::from_process())))
+    pub fn from_process(runtime: &ProviderRuntimeAuthority) -> Result<Self, &'static str> {
+        let guardian = runtime
+            .probe_guardian()
+            .map_err(|_| "provider_guardian_unavailable")?;
+        Ok(Self(Arc::new(ProviderRegistry::installation_only_guarded(
+            DetectEnv::from_process(),
+            guardian,
+        ))))
     }
 
     pub fn registry(&self) -> Arc<ProviderRegistry> {
@@ -42,28 +49,37 @@ pub fn detect_and_record(
 
 /// The cached status of every provider (`detection` is null until the first check).
 #[tauri::command(async)]
-pub fn providers_list(providers: State<'_, ProviderState>) -> Vec<ProviderStatus> {
+pub fn providers_list(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    providers: crate::runtime_coordinator::RuntimeState<ProviderState>,
+) -> Vec<ProviderStatus> {
     providers.0.list()
 }
 
 /// Detects every provider off the main thread, records what changed, and returns the statuses.
 #[tauri::command]
 pub async fn providers_detect(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: State<'_, AppState>,
-    providers: State<'_, ProviderState>,
-    threads: State<'_, ThreadsState>,
+    providers: crate::runtime_coordinator::RuntimeState<ProviderState>,
+    threads: crate::runtime_coordinator::RuntimeState<ThreadsState>,
 ) -> Result<Vec<ProviderStatus>, IpcError> {
+    _runtime_access.revalidate()?;
     let registry = Arc::clone(&providers.0);
-    let (statuses, events) = tauri::async_runtime::spawn_blocking(move || registry.detect_all())
-        .await
-        .map_err(|e| {
-            KalError::internal(
-                "detection_interrupted",
-                "Checking providers was interrupted.",
-            )
-            .with_source(e)
-            .log_and_convert("providers_detect")
-        })?;
+    let (statuses, events) = tauri::async_runtime::spawn_blocking(move || {
+        _runtime_access.revalidate()?;
+        Ok::<_, IpcError>(registry.detect_all())
+    })
+    .await
+    .map_err(|e| {
+        KalError::internal(
+            "detection_interrupted",
+            "Checking providers was interrupted.",
+        )
+        .with_source(e)
+        .log_and_convert("providers_detect")
+    })??;
+    threads.revalidate()?;
     record(state.core.as_ref(), events);
     // Threads offer exactly the providers this detection found usable.
     threads.sync_providers();

@@ -20,6 +20,7 @@ export function wrangler(args: readonly string[]): string {
     cwd: API_DIR,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
     env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
   });
 }

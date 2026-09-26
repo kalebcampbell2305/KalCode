@@ -105,7 +105,11 @@ fn blocking_failed(
 // ---------- Workspaces ----------
 
 #[tauri::command(async)]
-pub fn workspace_list(state: State<'_, AppState>) -> Result<Vec<Workspace>, IpcError> {
+pub fn workspace_list(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    state: State<'_, AppState>,
+) -> Result<Vec<Workspace>, IpcError> {
+    _runtime_access.revalidate()?;
     state
         .core()?
         .workspaces()
@@ -113,7 +117,11 @@ pub fn workspace_list(state: State<'_, AppState>) -> Result<Vec<Workspace>, IpcE
 }
 
 #[tauri::command(async)]
-pub fn workspace_active(state: State<'_, AppState>) -> Result<Option<Workspace>, IpcError> {
+pub fn workspace_active(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    state: State<'_, AppState>,
+) -> Result<Option<Workspace>, IpcError> {
+    _runtime_access.revalidate()?;
     state
         .core()?
         .active_workspace()
@@ -124,9 +132,11 @@ pub fn workspace_active(state: State<'_, AppState>) -> Result<Option<Workspace>,
 /// Returns `None` when the user cancels. The path never comes from the WebView.
 #[tauri::command]
 pub async fn workspace_open_dialog(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     window: WebviewWindow,
     state: State<'_, AppState>,
 ) -> Result<Option<Workspace>, IpcError> {
+    _runtime_access.revalidate()?;
     let core = state.core()?.clone();
     let folder: Option<PathBuf> = match environment::e2e_pick_folder() {
         // Test builds only: the E2E suite cannot click a native dialog.
@@ -154,18 +164,23 @@ pub async fn workspace_open_dialog(
     let Some(folder) = folder else {
         return Ok(None);
     };
-    tauri::async_runtime::spawn_blocking(move || core.open_workspace(&folder))
-        .await
-        .map_err(|e| blocking_failed("workspace_open_dialog", e))?
-        .map(Some)
-        .map_err(|e| e.log_and_convert("workspace_open_dialog"))
+    tauri::async_runtime::spawn_blocking(move || {
+        _runtime_access.revalidate_core()?;
+        core.open_workspace(&folder)
+    })
+    .await
+    .map_err(|e| blocking_failed("workspace_open_dialog", e))?
+    .map(Some)
+    .map_err(|e| e.log_and_convert("workspace_open_dialog"))
 }
 
 #[tauri::command(async)]
 pub fn workspace_activate(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: State<'_, AppState>,
     workspace_id: String,
 ) -> Result<Workspace, IpcError> {
+    _runtime_access.revalidate()?;
     state
         .core()?
         .activate_workspace(&workspace_id)
@@ -175,10 +190,12 @@ pub fn workspace_activate(
 /// Removes a workspace from KalCode's list. Its folder and files are never touched.
 #[tauri::command(async)]
 pub fn workspace_remove(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: State<'_, AppState>,
-    threads: State<'_, crate::thread_commands::ThreadsState>,
+    threads: crate::runtime_coordinator::RuntimeState<crate::thread_commands::ThreadsState>,
     workspace_id: String,
 ) -> Result<(), IpcError> {
+    _runtime_access.revalidate()?;
     threads.refuse_if_threads_open(&workspace_id)?;
     state
         .core()?
@@ -189,15 +206,21 @@ pub fn workspace_remove(
 // ---------- Shells and terminals ----------
 
 #[tauri::command]
-pub fn shells_list(state: State<'_, AppState>) -> Result<Vec<ShellOption>, IpcError> {
+pub fn shells_list(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    state: State<'_, AppState>,
+) -> Result<Vec<ShellOption>, IpcError> {
+    _runtime_access.revalidate()?;
     Ok(state.core()?.shells())
 }
 
 #[tauri::command(async)]
 pub fn terminal_list(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: State<'_, AppState>,
     workspace_id: String,
 ) -> Result<Vec<TerminalInfo>, IpcError> {
+    _runtime_access.revalidate()?;
     state
         .core()?
         .terminals(&workspace_id)
@@ -205,7 +228,11 @@ pub fn terminal_list(
 }
 
 #[tauri::command(async)]
-pub fn terminals_running(state: State<'_, AppState>) -> Result<Vec<TerminalInfo>, IpcError> {
+pub fn terminals_running(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    state: State<'_, AppState>,
+) -> Result<Vec<TerminalInfo>, IpcError> {
+    _runtime_access.revalidate()?;
     state
         .core()?
         .running_terminals()
@@ -215,12 +242,14 @@ pub fn terminals_running(state: State<'_, AppState>) -> Result<Vec<TerminalInfo>
 /// Opens a new tab running a detected shell (by id; `None` = default) in the workspace folder.
 #[tauri::command(async)]
 pub fn terminal_create(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: State<'_, AppState>,
     workspace_id: String,
     shell_id: Option<String>,
     cols: u16,
     rows: u16,
 ) -> Result<TerminalInfo, IpcError> {
+    _runtime_access.revalidate()?;
     let size = size(cols, rows)?;
     state
         .core()?
@@ -230,11 +259,13 @@ pub fn terminal_create(
 
 #[tauri::command(async)]
 pub fn terminal_restart(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: State<'_, AppState>,
     terminal_id: String,
     cols: u16,
     rows: u16,
 ) -> Result<TerminalInfo, IpcError> {
+    _runtime_access.revalidate()?;
     let size = size(cols, rows)?;
     state
         .core()?
@@ -244,7 +275,12 @@ pub fn terminal_restart(
 
 /// Closes a tab, ending its shell and the programs started in it.
 #[tauri::command(async)]
-pub fn terminal_close(state: State<'_, AppState>, terminal_id: String) -> Result<(), IpcError> {
+pub fn terminal_close(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    state: State<'_, AppState>,
+    terminal_id: String,
+) -> Result<(), IpcError> {
+    _runtime_access.revalidate()?;
     state
         .core()?
         .close_terminal(&terminal_id)
@@ -254,10 +290,12 @@ pub fn terminal_close(state: State<'_, AppState>, terminal_id: String) -> Result
 /// Queues keyboard/paste input (UTF-8 text from xterm.js). At most 64 KB per call.
 #[tauri::command]
 pub fn terminal_write(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: State<'_, AppState>,
     terminal_id: String,
     data: String,
 ) -> Result<(), IpcError> {
+    _runtime_access.revalidate()?;
     state
         .core()?
         .write_terminal(&terminal_id, data.as_bytes())
@@ -266,11 +304,13 @@ pub fn terminal_write(
 
 #[tauri::command]
 pub fn terminal_resize(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: State<'_, AppState>,
     terminal_id: String,
     cols: u16,
     rows: u16,
 ) -> Result<(), IpcError> {
+    _runtime_access.revalidate()?;
     let size = size(cols, rows)?;
     state
         .core()?
@@ -284,12 +324,14 @@ pub fn terminal_resize(
 /// launch). The view acknowledges rendered bytes with `terminal_ack` and detaches by id.
 #[tauri::command]
 pub fn terminal_attach(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     webview: Webview,
     state: State<'_, AppState>,
     views: State<'_, TerminalViews>,
     terminal_id: String,
     on_output: Channel<InvokeResponseBody>,
 ) -> Result<Option<AttachmentId>, IpcError> {
+    _runtime_access.revalidate()?;
     let core = state.core()?;
     validate_id(&terminal_id).map_err(|e| e.to_ipc())?;
     let label = webview.label().to_owned();
@@ -345,6 +387,7 @@ pub fn terminal_attach(
 /// no longer receives output (it fell too far behind, or was released) and must re-attach.
 #[tauri::command]
 pub fn terminal_ack(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     webview: Webview,
     views: State<'_, TerminalViews>,
     attachment_id: AttachmentId,
@@ -369,11 +412,13 @@ pub fn terminal_ack(
 /// Stops streaming to one of the calling view's attachments. Returns whether it existed.
 #[tauri::command]
 pub fn terminal_detach(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     webview: Webview,
     state: State<'_, AppState>,
     views: State<'_, TerminalViews>,
     attachment_id: AttachmentId,
 ) -> Result<bool, IpcError> {
+    _runtime_access.revalidate()?;
     let removed = {
         let mut map = views.lock();
         // A webview may only release its own attachments.
@@ -388,10 +433,12 @@ pub fn terminal_detach(
 /// Remembers the tab in front for a workspace, restored on the next launch.
 #[tauri::command(async)]
 pub fn terminal_set_active(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: State<'_, AppState>,
     workspace_id: String,
     terminal_id: String,
 ) -> Result<(), IpcError> {
+    _runtime_access.revalidate()?;
     state
         .core()?
         .set_active_terminal(&workspace_id, &terminal_id)

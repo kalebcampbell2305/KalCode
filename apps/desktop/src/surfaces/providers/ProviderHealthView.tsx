@@ -14,10 +14,10 @@ import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
 import {
   failuresText,
   formatMs,
+  type HourSlot,
   healthStateLabel,
   historySummary,
   hourSlots,
-  type HourSlot,
   latencyText,
   processText,
   rateLimitText,

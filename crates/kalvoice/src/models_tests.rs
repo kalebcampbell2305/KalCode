@@ -135,6 +135,65 @@ fn downloads_verifies_and_installs_atomically() {
 }
 
 #[test]
+fn same_size_corrupt_install_is_not_reused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = ModelStore::new(dir.path());
+    let bytes = body();
+    let server = serve(bytes.clone(), false);
+    let src = source(&server, &bytes);
+    let path = store
+        .download_from("test", &src, true, |_, _| {})
+        .expect("initial download");
+
+    let mut corrupt = bytes.clone();
+    let midpoint = corrupt.len() / 2;
+    corrupt[midpoint] ^= 0xff;
+    std::fs::write(&path, corrupt).expect("same-size corruption");
+    let before = server.requests.load(Ordering::SeqCst);
+
+    let reused = store
+        .download_from("test", &src, true, |_, _| {})
+        .expect("repair corrupt installed model");
+
+    assert_eq!(reused, path);
+    assert_eq!(
+        sha(&std::fs::read(reused).expect("read repaired model")),
+        sha(&bytes)
+    );
+    assert_eq!(
+        server.requests.load(Ordering::SeqCst),
+        before + 1,
+        "a same-size model with the wrong digest must be downloaded again"
+    );
+}
+
+#[test]
+fn verification_rejects_and_removes_same_size_corruption() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = ModelStore::new(dir.path());
+    let bytes = body();
+    let server = serve(bytes.clone(), false);
+    let src = source(&server, &bytes);
+    std::fs::create_dir_all(store.dir()).expect("model directory");
+    let path = store.dir().join(&src.file_name);
+    std::fs::write(&path, vec![0xff; bytes.len()]).expect("corrupt installed model");
+
+    assert_eq!(
+        store.verified_source_path(&src),
+        Err(ModelError::ChecksumMismatch)
+    );
+    assert!(
+        !path.exists(),
+        "invalid model must no longer appear installed"
+    );
+    assert_eq!(
+        server.requests.load(Ordering::SeqCst),
+        0,
+        "verification is local"
+    );
+}
+
+#[test]
 fn checksum_mismatch_discards_the_download() {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = ModelStore::new(dir.path());
@@ -246,4 +305,76 @@ fn list_reports_states_and_delete_removes_files() {
     assert!(!store.dir().join("ggml-base.en.bin.partial").exists());
     assert_eq!(store.delete("nope"), Err(ModelError::Unknown));
     assert_eq!(store.installed_path("base.en"), None);
+}
+
+#[test]
+fn cancel_all_signals_every_active_download() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = ModelStore::new(dir.path());
+    let first = Arc::new(AtomicBool::new(false));
+    let second = Arc::new(AtomicBool::new(false));
+    {
+        let mut running = store
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        running.insert("first".into(), first.clone());
+        running.insert("second".into(), second.clone());
+    }
+
+    assert_eq!(store.cancel_all(), 2);
+    assert!(first.load(Ordering::SeqCst));
+    assert!(second.load(Ordering::SeqCst));
+}
+
+#[test]
+fn bounded_cancel_wait_releases_registry_lock_while_downloads_settle() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = Arc::new(ModelStore::new(dir.path()));
+    let cancelled = Arc::new(AtomicBool::new(false));
+    store
+        .running
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert("active".into(), cancelled.clone());
+
+    let waiting = store.clone();
+    let waiter = std::thread::spawn(move || waiting.cancel_all_and_wait(Duration::from_secs(1)));
+    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+    while !cancelled.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+    assert!(cancelled.load(Ordering::SeqCst));
+    store
+        .running
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .remove("active");
+    store.settled.notify_all();
+
+    assert!(waiter.join().expect("waiter"));
+}
+
+#[test]
+fn panicking_progress_callback_cannot_leave_download_registered() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = ModelStore::new(dir.path());
+    let bytes = body();
+    let server = serve(bytes.clone(), false);
+    let src = source(&server, &bytes);
+
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = store.download_from("test", &src, true, |received, _| {
+            if received > 0 {
+                panic!("synthetic progress callback failure");
+            }
+        });
+    }));
+    assert!(panic.is_err());
+    assert!(!store.is_running("test"));
+    assert!(store.cancel_all_and_wait(Duration::ZERO));
+
+    store
+        .download_from("test", &src, true, |_, _| {})
+        .expect("a callback panic must not poison future downloads");
 }

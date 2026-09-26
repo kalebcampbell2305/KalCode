@@ -15,8 +15,9 @@ surface. See "Implementation" below and `docs/campaigns/Z12.md`.
 ## Principles
 
 1. **Zero company AI cost.** Dictation uses an on-device speech model. Commands that KalCode can
-   understand deterministically run without any model. Requests that need reasoning use the
-   user's own connected provider. There is no KalCode-paid fallback, ever.
+   understand deterministically run without any model. Requests that need interpretation use the
+   explicitly configured on-device reasoning runtime. Missing local reasoning fails closed; there
+   is no connected-provider or KalCode-paid fallback.
 2. **Same systems, no duplicates.** KalVoice calls the same runtime APIs as the UI (workspaces,
    terminals, threads, approvals, navigation). It is never above the permission model and can
    never enable Bypass.
@@ -58,7 +59,7 @@ When the key goes up, KalVoice decides what the words were for:
 | --- | --- | --- | --- |
 | 1 | The words are a KalVoice command with **high confidence** ("open dashboard", "open four Codex threads", "pause every thread") | the command runs; the widget shows the result and **Type it instead** | 1 KalVoice Request |
 | 2 | Otherwise, a text box or terminal had focus when the key went down | the words are typed there at the caret (terminals: written to the PTY) | never |
-| 3 | Otherwise | a request for the user's own connected provider, or "Connect a supported AI provider to use KalVoice reasoning for this request." | 1 when sent to the provider |
+| 3 | Otherwise | local interpretation into a validated KalCode action, or an explicit unavailable/uncertain response | 1 only when executed |
 
 **Type it instead** undoes a command that was meant as text: it types the words into the box
 that had focus and, when the command is reversible (navigation), goes back and un-counts it.
@@ -104,8 +105,9 @@ KEY UP   ─▶ tail check: if the last 300 ms are silent the latest
 request (push-to-talk transcript, or typed)
   ─▶ allowance check (KalVoice Requests)            one top-level request = 1
   ─▶ deterministic grammar ─▶ KalVoiceIntent          no model for structured commands
-       └─ not understood ─▶ Reasoning via the user's selected provider (or "connect a provider")
-  ─▶ safety asymmetry: commands that make things safer run; commands that add work ask first
+       └─ not understood ─▶ bounded on-device interpretation (or unavailable/uncertain)
+  ─▶ validate the structured action against current workspace and runtime authority
+  ─▶ atomic request claim and allowance check immediately before execution
   ─▶ execute through the existing runtime APIs
   ─▶ short report (text; optional OS speech synthesis)
 ```
@@ -152,23 +154,15 @@ thread changes; the summary counts non-archived threads by `ThreadStatus::chip`)
 
 "Show what's waiting for me" still opens the Approvals panel, and "show agents" still navigates.
 
-**Safety asymmetry** (docs/ADVANCED.md, KV-02): pausing and stopping threads only make things
-safer and run immediately. Creating or resuming threads adds work, so KalVoice files it with the
-permission engine as a KalVoice-origin action (`PermissionService::request_for_origin`): it is
-evaluated under Approve, standing grants and rules never apply, and the approval request is
-stored with `origin_kind = 'kalvoice'` (no thread, `origin_id` = the KalVoice request). The widget
-shows the words it heard with **Approve once** / **Deny**, and the request is also in the
-Approvals panel; either way the person's answer goes through `approval_decide` (only the user
-can answer). KalVoice runs the command when the engine reports `approval.approved`, and drops it
-on `approval.denied` or `approval.expired` (pending requests expire when KalCode restarts);
-nothing runs before. KalVoice never answers approvals, never changes a permission mode, and can
-never enable Bypass.
+**Workspace controls** use the same local actions as the interface. Creating, opening,
+pausing and resuming workspace sessions do not add a separate KalCode approval.
+Provider execution remains governed by the selected runtime's native permission mode.
+KalVoice does not answer provider approvals or enable Bypass.
 
-**KalVoice intelligence** (which provider powers reasoning) is chosen by the user: a global
-default and optional per-workspace defaults, from the providers they have connected. If the
-chosen provider is unavailable: "Claude is currently unavailable. Choose another connected
-provider or retry." If none is connected: "Connect a supported AI provider to use KalVoice
-reasoning for this request."
+**KalVoice intelligence** is local-only: deterministic commands first, then the on-device
+interpreter when configured and ready. Missing local reasoning returns
+`local_reasoning_unavailable`, remains uncounted, and never falls back to a connected
+provider. Legacy stored provider-intelligence preferences do not authorize provider inference.
 
 ## Speech models
 
@@ -196,12 +190,12 @@ the next candidate; see the campaign doc.
 - One top-level request to the assistant counts once, however many internal steps it takes
   ("Open four Codex threads" = 1; "Have Claude implement this, Codex review it, then run the
   tests" = 1).
-- Allowances per monthly cycle: Free 250 · Pro 2,500 · MAX 10,000 · OWNER unlimited
+- Allowances per monthly cycle: Free 75 · Pro 1,500 · MAX 5,000 · MAX 2X 10,000 · OWNER unlimited
   (`packages/protocol/src/plans.ts`). Dictation is never counted. Provider tokens are never counted.
 - The server-side usage ledger is authoritative (docs/BILLING.md): idempotent per client request
-  id, reset per the account's plan cycle. The app shows "Used 412 of 2,500, resets …". Before
-  accounts exist, and briefly offline, the app keeps a provisional local count with the plan's
-  allowance and reconciles with the ledger when it can.
+  id, reset per the account's plan cycle. Before accounts exist, and briefly offline, the app keeps
+  a provisional local count with the plan's allowance and reconciles with the ledger when it can.
+  A finite plan displays, for example, "482 / 1,500 used · 1,018 remaining · renews October 1."
 - User-facing unit: **KalVoice Requests** — never "tokens".
 
 ## Speech output
@@ -216,8 +210,8 @@ Optional spoken replies use the operating system's speech synthesis. No cloud te
 
 ## Future
 
-On-device reasoning models (`KalVoiceIntelligence::Local`), never downloaded without consent and
-not a launch requirement.
+On-device reasoning runtime certification, verified component acquisition, and held-out
+command benchmarks are production release gates. Component downloads require consent.
 
 ## Implementation (Z12)
 
@@ -228,19 +222,18 @@ not a launch requirement.
 | `grammar` | Compiled deterministic text → `KalVoiceIntent` with a confidence (high / low). Whole-utterance patterns after politeness words; negations ("don't…") and compound requests ("… and then …") are never commands (→ `Reasoning`). Counts: digits or one–twenty, at most 16 threads (`thread_count_too_large`), 0 refused, anything else never guessed. Hears "codecs"/"code x" as Codex and "for"/"to" as counts where speech recognition does. |
 | `ledger` | Provisional monthly count (table `kalvoice_requests`): one row per client request id (idempotent), atomic allowance check, period from the cycle anchor day (1st, UTC) to the same day next month, refund for "Type it instead" on reversible commands within two minutes. Rows hold ids, input kind and intent name only. |
 | `schema` | Migration **v6** (`crates/native-core/migrations/0006_kalvoice.sql`), registered in `kalcode_core::db::MIGRATIONS` after the event platform's v5 (embedded, checksummed, backed up before it runs). Upgrades v4 → v6 and v5 → v6 are tested in `crates/kalvoice/tests/schema.rs` and end to end in `apps/desktop/tests/e2e/integrity.spec.ts`. |
-| `plan` | Allowance per tier (Free 250, Pro 2,500, MAX 10,000, OWNER unlimited); a test reads `packages/protocol/src/plans.ts` so the numbers can't drift. Before accounts exist every install is provisionally Free. |
-| `orchestrator` | Routing (`talk`: command / dictation / request, recorded as `kalvoice.talk_routed` with the contract's `TalkRoute`; the words never), allowance check → grammar → name resolution → runtime check → `OriginGate` for commands that add work (`PermissionService::request_for_origin`: KalVoice origin, Approve mode, Approve once or Deny; KalVoice never changes modes) → count → execute (via the `Executor` trait) or reason (via `AgentProvider`, read-only Plan mode, provider approvals denied, 120 s timeout, session terminated). Waiting commands continue from the person's answer (`resolve_approval`). Events commit with state and are published after commit. |
+| `plan` | Allowance per tier (Free 75, Pro 1,500, MAX 5,000, MAX 2X 10,000, OWNER unlimited); a test reads `packages/protocol/src/plans.ts` so the numbers can't drift. Before accounts exist every install is provisionally Free. |
+| `orchestrator` | Allowance check ? deterministic grammar or local interpretation ? validated workspace/runtime action ? atomic request ledger ? execution. Duplicate request IDs never execute or count twice. Unavailable or invalid interpretations remain uncounted. Workspace controls use no extra approval; coding sessions keep provider-native permissions. Events publish only after committed state and contain no transcript. |
 | `voice`, `streaming`, `audio`, `stt` | One take at a time. Engine and model are checked **before** the microphone opens; capture of the default input (cpal) into memory (mono, 120 s cap), windowed-sinc resampling to 16 kHz, streaming partials, tail reuse, whisper.cpp (`whisper` feature) with a persistent decoder state, then the audio is zeroed and dropped. Only a 0–1 input level leaves the capture. |
 | `latency` | Five stage timings per take, rolling p50/p95/p99. |
 | `models` | Catalog pinned to one Hugging Face revision with sizes and SHA-256; consented, resumable, verified, atomic downloads into `<data>/models/whisper/`; cancel keeps the partial file; delete removes both. |
-| `prefs` | Push-to-talk key and switch, reasoning provider, speech model, spoken replies (off), widget default position (top centre), visibility and a placement per window size class (table `kalvoice_preferences`). |
+| `prefs` | Push-to-talk key and switch, legacy intelligence preference, speech model, spoken replies (off), widget default position (top centre), visibility and a placement per window size class (table `kalvoice_preferences`). |
 | `shortcuts` | The single-key rules: allowed keys, keys KalCode reserves, and why Fn, lock keys and modifiers are refused. |
 | `speech_output` | Optional OS voice (`tts` crate; Windows speech / macOS) on its own thread. Off by default. |
 
-What counts as a KalVoice Request: a request KalVoice acts on: it runs a command, files an
-approval request for one, or sends it to your provider. Refused-up-front requests are not counted:
-limit reached, no provider connected, a workspace or thread that doesn't exist, a command this
-build can't run, or a count out of range. Dictation is never counted.
+A KalVoice Request counts when KalVoice executes a validated command. Refused requests
+(missing runtime, unavailable workspace, invalid interpretation or exceeded allowance) do
+not count. Duplicate IDs cannot execute or count twice. Local dictation never counts.
 
 ### Desktop
 
@@ -260,8 +253,8 @@ build can't run, or a count out of range. Dictation is never counted.
   (navigate, open a workspace or terminal, open a thread, open the Approvals panel, filter the
   Dashboard, and the pane directives through `dispatchPaneCommand`,
   apps/desktop/src/shell/panes/paneCommands.ts) runs in `KalVoiceProvider`.
-- Reasoning uses the provider runtime (Z2): Claude Code, when installed and signed in, runs
-  read-only in `<data>/kalvoice/reasoning`. Other providers join as their adapters land.
+- Interpretation uses the local reasoning interface. Missing runtime fails closed; connected
+  coding providers are never an interpretation fallback.
 - KalVoice's tables are schema v6, part of every build's migrations; the first start after
   the update backs up the database and adds them.
 - The voice widget: one line, `[orb] KALVOICE ● Ready`, docked top centre by default (clear of

@@ -5,11 +5,14 @@ test.describe("pricing", () => {
   test("shows every plan's price and KalVoice Requests from the plan catalog", async ({ page }) => {
     await page.goto("/pricing");
     const table = page.getByRole("table");
-    for (const plan of PLANS) {
-      const header = table.getByRole("columnheader", { name: new RegExp(plan.name) });
+    for (const [index, plan] of PLANS.entries()) {
+      const header = table.getByRole("columnheader").nth(index);
+      await expect(header).toContainText(plan.name);
       await expect(header).toContainText(`$${plan.price.amountUsd}`);
       await expect(table).toContainText(formatKalVoiceAllowance(plan.limits));
     }
+    await expect(table.getByRole("columnheader", { name: /MAX 2X/ })).toContainText("$50");
+    await expect(table.getByRole("row", { name: /KalVoice Requests a month/ })).toContainText("10,000");
     await expect(page.getByText("Every plan includes", { exact: true })).toBeVisible();
     for (const item of ["All providers", "All permission modes", "Unlimited on-device dictation"]) {
       await expect(page.getByRole("listitem").filter({ hasText: item })).toBeVisible();
@@ -37,5 +40,15 @@ test.describe("pricing", () => {
     await page.goto("/pricing");
     await expect(page.locator("main")).not.toContainText("OWNER");
     await expect(page.locator("main")).toContainText("nothing is for sale today");
+  });
+
+  test("uses KalVoice Requests and keeps dictation and connected-provider inference outside the meter", async ({
+    page,
+  }) => {
+    await page.goto("/pricing");
+    const main = page.locator("main");
+    await expect(main).not.toContainText(/\btokens?\b/i);
+    await expect(main).toContainText("Unlimited on-device dictation");
+    await expect(main).toContainText("your usage is billed by each provider");
   });
 });

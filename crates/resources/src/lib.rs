@@ -19,6 +19,7 @@
 //! is caught and the cadence backs off; if the thread cannot run, readers get `Unknown` and
 //! capacity applies count limits only. Callers never wait for a sample.
 
+pub mod admission;
 pub mod cadence;
 pub mod capacity;
 pub mod clock;
@@ -32,6 +33,10 @@ pub mod pressure;
 pub mod probe;
 pub mod tree;
 
+pub use admission::{
+    AdmissionDecision, AdmissionReason, AdmissionRequirements, AdmissionState,
+    MAX_ADMISSION_SAMPLE_AGE, MIN_ADMISSION_SAMPLE_AGE, admission_max_age, evaluate_admission,
+};
 pub use cadence::{Activity, CadenceConfig};
 pub use capacity::{
     CapacityAdvice, CapacityNote, CapacityRequest, Constraint, DataQuality, HoldReason,

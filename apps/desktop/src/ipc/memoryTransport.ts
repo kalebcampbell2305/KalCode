@@ -44,6 +44,8 @@ import type {
   Workspace,
 } from "@kalcode/protocol";
 import { PRODUCT_FEATURES } from "@kalcode/protocol";
+import { type AccountMemoryScenario, createAccountMemory } from "./accountMemory.ts";
+import { createContextMemory } from "./memory/context.ts";
 import {
   createDashboardFixtures,
   type DashboardControls,
@@ -57,8 +59,10 @@ import { createLayoutsMemory, type LayoutControls } from "./memory/layouts.ts";
 import { createNotificationsMemory, type NotificationsMemory } from "./memory/notifications.ts";
 import { createPanesMemory, type PaneControls } from "./memory/panes.ts";
 import { createPermissionMemory, type PermissionMemory } from "./memory/permissions.ts";
+import { createProviderAccountsMemory } from "./memory/providerAccounts.ts";
 import { createRailMemory } from "./memory/rail.ts";
 import { createThreadsMemory } from "./memory/threads.ts";
+import { createUpdaterMemory } from "./memory/updater.ts";
 import { createMemoryKalVoice, isKalVoiceScenario, type KalVoiceScenario } from "./memoryKalVoice.ts";
 import { detectFake, type ProviderScenario, providerCatalog } from "./memoryProviders.ts";
 import { createMemoryWorkspaces, type MemoryWorkspaces } from "./memoryWorkspaces.ts";
@@ -71,6 +75,12 @@ export type MemoryScenario =
   | "code"
   | "threads"
   | "no-providers"
+  | "provider-accounts-empty"
+  | "account-fresh"
+  | "account-unactivated"
+  | "account-ready"
+  | "account-expired"
+  | "account-offline-grace"
   | "approvals"
   | "rail"
   | "home"
@@ -372,6 +382,19 @@ export function createMemoryTransport(
     requireCore,
     workspaceIds: () => ((code.handlers.workspace_list?.({}) ?? []) as Workspace[]).map((w) => w.id),
   });
+  const providerAccounts = createProviderAccountsMemory(requireCore, scenario === "provider-accounts-empty");
+  const updater = createUpdaterMemory(info.version);
+  const accountScenario: AccountMemoryScenario =
+    scenario === "account-fresh"
+      ? "fresh"
+      : scenario === "account-unactivated"
+        ? "unactivated"
+        : scenario === "account-expired"
+          ? "expired"
+          : scenario === "account-offline-grace"
+            ? "offline_grace"
+            : "ready";
+  const account = createAccountMemory(accountScenario);
 
   const ensureDetected = async () => {
     if (providers.some((p) => p.detection !== null)) return;
@@ -416,7 +439,14 @@ export function createMemoryTransport(
         ).id,
       expireForThread: (threadId) => permissions.expireForThread(threadId),
     },
+    (accountId, providerId) => providerAccounts.resolve(accountId, providerId),
   );
+  const context = createContextMemory({
+    getThread: (threadId) => threads.handlers.thread_get?.({ threadId }) as ThreadSummary,
+    sendThread: async (threadId, userText, providerPayload, promptReviewId) =>
+      threads.sendWithContext(threadId, userText, providerPayload, promptReviewId),
+    emit: (event) => emit(event, { source: "core" }),
+  });
   // Session Locator, rail, home and the Z6a read-only commands (Z7-W2).
   const rail = createRailMemory({
     scenario,
@@ -445,12 +475,16 @@ export function createMemoryTransport(
   const handlers: DashboardHandlers = {
     ...code.handlers,
     ...threads.handlers,
+    ...context.handlers,
     ...permissions.handlers,
     ...panes.handlers,
     ...rail.handlers,
     ...layouts.handlers,
     ...notificationsMemory.handlers,
     ...health.handlers,
+    ...providerAccounts.handlers,
+    ...updater.handlers,
+    ...account.handlers,
     // Like native: the first thread operation detects providers once, so threads use exactly
     // the providers detection reports usable.
     thread_options: async (args) => {
@@ -718,6 +752,12 @@ function readScenario(): MemoryScenario {
     value === "code" ||
     value === "threads" ||
     value === "no-providers" ||
+    value === "provider-accounts-empty" ||
+    value === "account-fresh" ||
+    value === "account-unactivated" ||
+    value === "account-ready" ||
+    value === "account-expired" ||
+    value === "account-offline-grace" ||
     value === "approvals" ||
     value === "rail" ||
     value === "home" ||

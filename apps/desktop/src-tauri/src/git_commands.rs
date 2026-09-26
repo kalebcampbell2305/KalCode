@@ -111,17 +111,21 @@ fn target_root(
 
 /// Runs blocking Git work off the async runtime and converts errors for IPC.
 async fn blocking<T: Send + 'static>(
+    access: crate::runtime_coordinator::RuntimeAccess,
     command: &'static str,
     work: impl FnOnce() -> Result<T, KalError> + Send + 'static,
 ) -> Result<T, IpcError> {
-    tauri::async_runtime::spawn_blocking(work)
-        .await
-        .map_err(|e| {
-            KalError::internal("git_interrupted", "The Git operation was interrupted.")
-                .with_source(e)
-                .log_and_convert(command)
-        })?
-        .map_err(|e| e.log_and_convert(command))
+    tauri::async_runtime::spawn_blocking(move || {
+        access.revalidate_core()?;
+        work()
+    })
+    .await
+    .map_err(|e| {
+        KalError::internal("git_interrupted", "The Git operation was interrupted.")
+            .with_source(e)
+            .log_and_convert(command)
+    })?
+    .map_err(|e| e.log_and_convert(command))
 }
 
 /// Maps Git event facts to stored events. Returns nothing until CA-0 adds the variants to
@@ -159,14 +163,16 @@ pub struct GitStatusResponse {
 
 #[tauri::command(async)]
 pub async fn git_status(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: State<'_, AppState>,
-    git: State<'_, GitState>,
+    git: crate::runtime_coordinator::RuntimeState<GitState>,
     args: GitStatusArgs,
 ) -> Result<GitStatusResponse, IpcError> {
+    _runtime_access.revalidate()?;
     let root = target_root(&state, &args.workspace_id, args.worktree_id.as_deref())
         .map_err(|e| e.log_and_convert("git_status"))?;
     let core = Arc::clone(&git.0);
-    blocking("git_status", move || {
+    blocking(_runtime_access, "git_status", move || {
         let view = core.status(&root)?;
         Ok(match view {
             None => GitStatusResponse {
@@ -203,14 +209,16 @@ pub struct GitDiffArgs {
 
 #[tauri::command(async)]
 pub async fn git_diff(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: State<'_, AppState>,
-    git: State<'_, GitState>,
+    git: crate::runtime_coordinator::RuntimeState<GitState>,
     args: GitDiffArgs,
 ) -> Result<Diff, IpcError> {
+    _runtime_access.revalidate()?;
     let root = target_root(&state, &args.workspace_id, args.worktree_id.as_deref())
         .map_err(|e| e.log_and_convert("git_diff"))?;
     let core = Arc::clone(&git.0);
-    blocking("git_diff", move || {
+    blocking(_runtime_access, "git_diff", move || {
         let options = DiffOptions {
             context_lines: args.context_lines.unwrap_or(3).min(20),
             ..DiffOptions::default()
@@ -230,14 +238,16 @@ pub struct GitLogArgs {
 
 #[tauri::command(async)]
 pub async fn git_log(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: State<'_, AppState>,
-    git: State<'_, GitState>,
+    git: crate::runtime_coordinator::RuntimeState<GitState>,
     args: GitLogArgs,
 ) -> Result<Page<Commit>, IpcError> {
+    _runtime_access.revalidate()?;
     let root = target_root(&state, &args.workspace_id, args.worktree_id.as_deref())
         .map_err(|e| e.log_and_convert("git_log"))?;
     let core = Arc::clone(&git.0);
-    blocking("git_log", move || {
+    blocking(_runtime_access, "git_log", move || {
         core.log(&root, args.page.limit, args.page.cursor.as_deref())
     })
     .await
@@ -251,23 +261,30 @@ pub struct WorkspaceArgs {
 
 #[tauri::command(async)]
 pub async fn git_branches(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: State<'_, AppState>,
-    git: State<'_, GitState>,
+    git: crate::runtime_coordinator::RuntimeState<GitState>,
     args: WorkspaceArgs,
 ) -> Result<Vec<Branch>, IpcError> {
+    _runtime_access.revalidate()?;
     let root = workspace_root(&state, &args.workspace_id)
         .map_err(|e| e.log_and_convert("git_branches"))?;
     let core = Arc::clone(&git.0);
-    blocking("git_branches", move || core.branches(&root)).await
+    blocking(_runtime_access, "git_branches", move || {
+        core.branches(&root)
+    })
+    .await
 }
 
 // ---------- Worktrees ----------
 
 #[tauri::command(async)]
 pub async fn worktree_list(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: State<'_, AppState>,
     args: WorkspaceArgs,
 ) -> Result<Vec<Worktree>, IpcError> {
+    _runtime_access.revalidate()?;
     if !kalcode_contracts::ids::is_valid_id(&args.workspace_id) {
         return Err(invalid_id().to_ipc());
     }
@@ -292,10 +309,12 @@ pub struct WorktreeCreateArgs {
 /// TK-1: evaluate as origin `user`, scope git branch creation, before running.
 #[tauri::command(async)]
 pub async fn worktree_create(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: State<'_, AppState>,
-    git: State<'_, GitState>,
+    git: crate::runtime_coordinator::RuntimeState<GitState>,
     args: WorktreeCreateArgs,
 ) -> Result<Worktree, IpcError> {
+    _runtime_access.revalidate()?;
     if args.purpose != WorktreePurpose::User {
         return Err(KalError::validation(
             "worktree_purpose_not_allowed",
@@ -307,7 +326,7 @@ pub async fn worktree_create(
         .map_err(|e| e.log_and_convert("worktree_create"))?;
     let core = Arc::clone(state.core()?);
     let gitcore = Arc::clone(&git.0);
-    blocking("worktree_create", move || {
+    blocking(_runtime_access, "worktree_create", move || {
         let git = gitcore.git()?;
         let repo = gitcore.repo(&root)?.ok_or_else(|| {
             KalError::new(
@@ -357,10 +376,12 @@ pub struct WorktreeRemoveArgs {
 /// kept). Forced removal is destructive and needs TK + a native confirmation (not in Z6a).
 #[tauri::command(async)]
 pub async fn worktree_remove(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: State<'_, AppState>,
-    git: State<'_, GitState>,
+    git: crate::runtime_coordinator::RuntimeState<GitState>,
     args: WorktreeRemoveArgs,
 ) -> Result<Worktree, IpcError> {
+    _runtime_access.revalidate()?;
     if !kalcode_contracts::ids::is_valid_id(&args.worktree_id) {
         return Err(invalid_id().to_ipc());
     }
@@ -376,7 +397,7 @@ pub async fn worktree_remove(
     let root = workspace_root(&state, &row.workspace_id)
         .map_err(|e| e.log_and_convert("worktree_remove"))?;
     let gitcore = Arc::clone(&git.0);
-    blocking("worktree_remove", move || {
+    blocking(_runtime_access, "worktree_remove", move || {
         let git = gitcore.git()?;
         let repo = gitcore.repo(&root)?.ok_or_else(|| {
             KalError::new(
@@ -415,9 +436,11 @@ pub struct CheckpointListArgs {
 
 #[tauri::command(async)]
 pub async fn checkpoint_list(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: State<'_, AppState>,
     args: CheckpointListArgs,
 ) -> Result<Page<Checkpoint>, IpcError> {
+    _runtime_access.revalidate()?;
     let core = state.core()?;
     core.read(|conn| store::list_checkpoints(conn, &args.workspace_id, &args.page))
         .map_err(|e| e.log_and_convert("checkpoint_list"))
@@ -427,15 +450,17 @@ pub async fn checkpoint_list(
 /// unchanged workspace returns the latest checkpoint instead of a duplicate.
 #[tauri::command(async)]
 pub async fn checkpoint_create(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: State<'_, AppState>,
-    git: State<'_, GitState>,
+    git: crate::runtime_coordinator::RuntimeState<GitState>,
     args: WorkspaceArgs,
 ) -> Result<Checkpoint, IpcError> {
+    _runtime_access.revalidate()?;
     let root = workspace_root(&state, &args.workspace_id)
         .map_err(|e| e.log_and_convert("checkpoint_create"))?;
     let core = Arc::clone(state.core()?);
     let gitcore = Arc::clone(&git.0);
-    blocking("checkpoint_create", move || {
+    blocking(_runtime_access, "checkpoint_create", move || {
         let git = gitcore.git()?;
         let repo = gitcore.repo(&root)?;
         let latest = core.read(|conn| store::latest_checkpoint(conn, root.id()))?;
@@ -514,9 +539,11 @@ pub struct CheckpointPinArgs {
 
 #[tauri::command(async)]
 pub async fn checkpoint_pin(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: State<'_, AppState>,
     args: CheckpointPinArgs,
 ) -> Result<Checkpoint, IpcError> {
+    _runtime_access.revalidate()?;
     let core = state.core()?;
     core.write_with_events(|tx| {
         Ok((
@@ -539,10 +566,12 @@ pub struct CheckpointDiffArgs {
 /// Read-only preview of what changed since a checkpoint (for DiffView / the Time Machine).
 #[tauri::command(async)]
 pub async fn checkpoint_diff(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: State<'_, AppState>,
-    git: State<'_, GitState>,
+    git: crate::runtime_coordinator::RuntimeState<GitState>,
     args: CheckpointDiffArgs,
 ) -> Result<Diff, IpcError> {
+    _runtime_access.revalidate()?;
     let core = Arc::clone(state.core()?);
     let (from, to) = core
         .read(|conn| {
@@ -567,7 +596,7 @@ pub async fn checkpoint_diff(
     let root = workspace_root(&state, &from.workspace_id)
         .map_err(|e| e.log_and_convert("checkpoint_diff"))?;
     let gitcore = Arc::clone(&git.0);
-    blocking("checkpoint_diff", move || {
+    blocking(_runtime_access, "checkpoint_diff", move || {
         gitcore.checkpoints().diff(
             gitcore.git()?,
             &root,

@@ -122,6 +122,7 @@ impl Setup {
         SessionConfig {
             thread_id: kalcode_contracts::ids::new_id(),
             workspace_id: kalcode_contracts::ids::new_id(),
+            provider_account_id: None,
             working_directory: self.workspace.path().display().to_string(),
             model: None,
             permission_mode: PermissionMode::Approve,
@@ -272,7 +273,11 @@ fn an_unresolvable_shim_still_never_runs_workspace_programs() {
             std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into()),
         ),
     ];
-    let status = std::process::Command::new(setup.npm.join("claude.cmd"))
+    use std::os::windows::process::CommandExt;
+
+    let mut control = std::process::Command::new(setup.npm.join("claude.cmd"));
+    control.creation_flags(0x0800_0000);
+    let status = control
         .arg("--version")
         .current_dir(setup.workspace.path())
         .env_clear()

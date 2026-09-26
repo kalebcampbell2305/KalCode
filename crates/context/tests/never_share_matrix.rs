@@ -243,12 +243,17 @@ fn link_and_junction_escapes() {
 #[cfg(windows)]
 #[test]
 fn short_names_resolve_to_their_long_names() {
+    use std::os::windows::process::CommandExt as _;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
     let ws = workspace();
     let firewall = Firewall::for_root(ws.path());
     // `for %I in (.env) do @echo %~snxI` prints the 8.3 name when the volume creates them.
     let output = std::process::Command::new("cmd")
         .args(["/C", "for %I in (.env) do @echo %~snxI"])
         .current_dir(ws.path())
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .expect("cmd");
     let short = String::from_utf8_lossy(&output.stdout).trim().to_owned();

@@ -1,15 +1,15 @@
 /**
  * D1 access for the Worker.
  *
- * Entitlements are read-only here: there is no code path from an HTTP request to a tier change.
+ * This module owns entitlement reads and the authenticated caller's KalVoice Request ledger.
  * Grants are created and revoked only by trusted operator tooling (`tooling/admin/*`) and, from
- * Z13, by the verified billing webhook (Pro/MAX only — the database refuses billing OWNER).
+ * Z13, by the verified billing webhook (public paid tiers only — the database refuses billing OWNER).
  *
- * The only table the Worker writes is the KalVoice Request ledger (`kalvoice_requests`), and only
- * for the authenticated caller (tests/unit/source-invariants.test.ts pins this).
+ * Account/session mutations live in `account-store.ts`; verified live-mode Stripe reconciliation
+ * and public paid grants live in `billing-store.ts`. The database refuses billing OWNER.
  */
 
-export type GrantTier = "pro" | "max" | "owner";
+export type GrantTier = "pro" | "max" | "max2x" | "owner";
 export type GrantSource = "billing" | "grant";
 
 export interface ActiveGrant {
@@ -87,7 +87,7 @@ export function d1Store(db: D1Database): EntitlementStore & UsageStore {
   return {
     async account(accountId) {
       const row = await db
-        .prepare("SELECT id, created_at FROM accounts WHERE id = ?1")
+        .prepare("SELECT id, created_at FROM accounts WHERE id = ?1 AND deleted_at IS NULL")
         .bind(accountId)
         .first<{ id: string; created_at: string }>();
       return row ? { id: row.id, createdAt: row.created_at } : null;
@@ -102,7 +102,10 @@ export function d1Store(db: D1Database): EntitlementStore & UsageStore {
         .all<GrantRow>();
       return results.flatMap((row): ActiveGrant[] => {
         const { tier, source } = row;
-        if ((tier !== "pro" && tier !== "max" && tier !== "owner") || (source !== "billing" && source !== "grant")) {
+        if (
+          (tier !== "pro" && tier !== "max" && tier !== "max2x" && tier !== "owner") ||
+          (source !== "billing" && source !== "grant")
+        ) {
           return [];
         }
         return [{ tier, source, grantedAt: row.granted_at, expiresAt: row.expires_at }];

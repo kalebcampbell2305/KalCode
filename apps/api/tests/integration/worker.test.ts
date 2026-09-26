@@ -41,7 +41,7 @@ function operatorTool(script: "grant-owner" | "revoke-owner", accountId: string)
       persistTo,
       "--confirm",
     ],
-    { encoding: "utf8" },
+    { encoding: "utf8", windowsHide: true },
   );
   if (result.status !== 0)
     throw new Error(`${script} failed:
@@ -55,10 +55,10 @@ beforeAll(async () => {
   secret = await generateSigningSecret("dev-integration");
   execSql(
     persistTo,
-    "INSERT INTO accounts (id, email, email_verified_at, created_at) VALUES " +
-      `('${OWNER}', 'owner-e2e@example.com', '2026-09-24T00:00:00.000Z', '2026-09-24T00:00:00.000Z'), ` +
-      `('${REVOKED}', 'revoked-e2e@example.com', '2026-09-24T00:00:00.000Z', '2026-09-24T00:00:00.000Z'), ` +
-      `('${FREE}', 'free-e2e@example.com', '2026-09-24T00:00:00.000Z', '2026-09-24T00:00:00.000Z')`,
+    "INSERT INTO accounts (id, email, email_verified_at, created_at, activated_at) VALUES " +
+      `('${OWNER}', 'owner-e2e@example.com', '2026-09-24T00:00:00.000Z', '2026-09-24T00:00:00.000Z', '2026-09-24T00:00:00.000Z'), ` +
+      `('${REVOKED}', 'revoked-e2e@example.com', '2026-09-24T00:00:00.000Z', '2026-09-24T00:00:00.000Z', '2026-09-24T00:00:00.000Z'), ` +
+      `('${FREE}', 'free-e2e@example.com', '2026-09-24T00:00:00.000Z', '2026-09-24T00:00:00.000Z', '2026-09-24T00:00:00.000Z')`,
   );
   operatorTool("grant-owner", OWNER);
   operatorTool("grant-owner", REVOKED);
@@ -83,7 +83,7 @@ describe("production entry point (worker/index.ts)", () => {
     await server?.stop();
   });
 
-  it("never serves an account route: sign-in does not exist yet", async () => {
+  it("never trusts identity claims when sign-in configuration is absent", async () => {
     for (const headers of [{}, { [TEST_ACCOUNT_HEADER]: OWNER }, { authorization: `Bearer ${OWNER}` }]) {
       expect((await fetch(`${server.origin}/v1/entitlement`, { headers })).status).toBe(401);
       expect((await fetch(`${server.origin}/v1/kalvoice/usage`, { headers })).status).toBe(401);
@@ -94,6 +94,26 @@ describe("production entry point (worker/index.ts)", () => {
       });
       expect(post.status).toBe(401);
     }
+  });
+
+  it("fails closed on auth and billing routes when their external configuration is absent", async () => {
+    for (const provider of ["github", "google", "microsoft"]) {
+      const auth = await fetch(`${server.origin}/v1/auth/${provider}/start`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ codeChallenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM" }),
+      });
+      expect(auth.status).toBe(503);
+      if (provider !== "github") {
+        expect(await auth.json()).toMatchObject({ ok: false, error: "sign_in_unavailable" });
+      }
+    }
+    const webhook = await fetch(`${server.origin}/v1/billing/webhook`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(webhook.status).toBe(503);
   });
 
   it("publishes the signing key's public half", async () => {
@@ -197,11 +217,11 @@ describe("test entry point (test authenticator, otherwise production code)", () 
     });
 
     const free = await kalvoice(FREE, "req-free-e2e-1");
-    expect(free).toMatchObject({ allowed: true, outcome: "recorded", usage: { used: 1, allowance: 250 } });
+    expect(free).toMatchObject({ allowed: true, outcome: "recorded", usage: { used: 1, allowance: 75 } });
     const again = await kalvoice(FREE, "req-free-e2e-1");
     expect(again).toMatchObject({ allowed: true, outcome: "duplicate", usage: { used: 1 } });
 
     const usage = await fetch(`${server.origin}/v1/kalvoice/usage`, { headers: { [TEST_ACCOUNT_HEADER]: FREE } });
-    expect(await usage.json()).toMatchObject({ usage: { used: 1, allowance: 250 } });
+    expect(await usage.json()).toMatchObject({ usage: { used: 1, allowance: 75 } });
   });
 });

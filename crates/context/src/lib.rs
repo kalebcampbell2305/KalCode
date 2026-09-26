@@ -31,6 +31,7 @@
 pub mod content;
 mod detectors;
 pub mod diff;
+pub mod egress;
 pub mod error;
 pub mod events;
 pub mod firewall;
@@ -47,6 +48,9 @@ pub mod secrets;
 pub mod store;
 pub mod translate;
 
+pub use egress::{
+    PromptAdmission, PromptGate, PromptGateError, PromptReview, PromptTarget, PromptWarning,
+};
 pub use error::{ContextError, Result};
 pub use firewall::{
     Candidate, Content, Firewall, FirewallDecision, FirewallPolicy, MissionScope, SecretAction,

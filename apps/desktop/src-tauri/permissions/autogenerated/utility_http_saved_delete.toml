@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-utility-http-saved-delete"
+description = "Enables the utility_http_saved_delete command without any pre-configured scope."
+commands.allow = ["utility_http_saved_delete"]
+
+[[permission]]
+identifier = "deny-utility-http-saved-delete"
+description = "Denies the utility_http_saved_delete command without any pre-configured scope."
+commands.deny = ["utility_http_saved_delete"]

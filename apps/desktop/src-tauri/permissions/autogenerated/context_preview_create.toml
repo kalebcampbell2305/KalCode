@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-context-preview-create"
+description = "Enables the context_preview_create command without any pre-configured scope."
+commands.allow = ["context_preview_create"]
+
+[[permission]]
+identifier = "deny-context-preview-create"
+description = "Denies the context_preview_create command without any pre-configured scope."
+commands.deny = ["context_preview_create"]

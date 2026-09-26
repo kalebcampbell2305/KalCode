@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-utility-sqlite-describe"
+description = "Enables the utility_sqlite_describe command without any pre-configured scope."
+commands.allow = ["utility_sqlite_describe"]
+
+[[permission]]
+identifier = "deny-utility-sqlite-describe"
+description = "Denies the utility_sqlite_describe command without any pre-configured scope."
+commands.deny = ["utility_sqlite_describe"]

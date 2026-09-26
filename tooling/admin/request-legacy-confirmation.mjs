@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { execFileSync } from "node:child_process";
 // Sends the ONE-TIME confirmation request to early-access addresses that joined before double
 // opt-in existed (status 'legacy_unconfirmed' in the website's D1 database `kalcode-web`).
 //
@@ -21,7 +22,6 @@
 // --transport log (local only) prints the emails, links included, instead of sending them.
 // Requires Node 22.18+ (imports the site's TypeScript constants and email templates directly).
 import { createHash, randomBytes } from "node:crypto";
-import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -104,6 +104,7 @@ function d1(options, sql) {
       cwd: WEBSITE_DIR,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
       env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
     });
   } catch (error) {

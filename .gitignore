@@ -14,6 +14,7 @@ apps/website/.dev.vars*
 coverage/
 playwright-report/
 test-results/
+test-results-*/
 blob-report/
 /qa/screenshots/tmp/
 apps/website/.wrangler/
@@ -26,6 +27,7 @@ apps/website/test-results/
 !.env.example
 *.pem
 *.key
+*.dpapi
 
 # os / editor
 .DS_Store

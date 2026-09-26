@@ -2,20 +2,11 @@
  * The KalVoice widget's state, derived only from things that really happen: native listening
  * signals, pipeline stages and request outcomes.
  *
- * States shown to people: Ready · Listening · Processing · Executing · Needs Approval · Done ·
- * Error.
+ * States shown to people: Ready · Listening · Processing · Executing · Done · Error.
  */
 import type { KalVoiceMode, KalVoiceResponse, KalVoiceSignal, KalVoiceUsage, TalkRoute } from "@kalcode/protocol";
 
-export type AssistantPhase =
-  | "idle"
-  | "listening"
-  | "transcribing"
-  | "thinking"
-  | "executing"
-  | "waiting_for_permission"
-  | "done"
-  | "error";
+export type AssistantPhase = "idle" | "listening" | "transcribing" | "thinking" | "executing" | "done" | "error";
 
 /** The last push-to-talk utterance, for "Type it instead". Kept in this window only. */
 export interface LastTalk {
@@ -39,7 +30,6 @@ export interface AssistantState {
   code: string | null;
   lastResponse: KalVoiceResponse | null;
   lastTalk: LastTalk | null;
-  approvalRequestId: string | null;
 }
 
 export const INITIAL_STATE: AssistantState = {
@@ -52,7 +42,6 @@ export const INITIAL_STATE: AssistantState = {
   code: null,
   lastResponse: null,
   lastTalk: null,
-  approvalRequestId: null,
 };
 
 export type AssistantEvent =
@@ -75,7 +64,6 @@ function fromResponse(state: AssistantState, response: KalVoiceResponse): Assist
     mode: null,
     sessionId: null,
     partial: null,
-    approvalRequestId: null,
   };
   const outcome = response.outcome;
   switch (outcome.kind) {
@@ -84,10 +72,9 @@ function fromResponse(state: AssistantState, response: KalVoiceResponse): Assist
     case "permission_required":
       return {
         ...base,
-        phase: "waiting_for_permission",
-        message: "KalVoice asks before it adds work for your agents. Nothing runs until you approve.",
-        code: null,
-        approvalRequestId: outcome.approvalRequestId,
+        phase: "error",
+        message: "The provider session is waiting for permission. Review its native prompt.",
+        code: "provider_permission_required",
       };
     case "needs_provider":
       return { ...base, phase: "error", message: outcome.message, code: "needs_provider" };
@@ -204,7 +191,6 @@ export const STATE_LABELS: Record<AssistantPhase, string> = {
   transcribing: "Processing",
   thinking: "Processing",
   executing: "Executing",
-  waiting_for_permission: "Needs Approval",
   done: "Done",
   error: "Error",
 };
@@ -212,10 +198,7 @@ export const STATE_LABELS: Record<AssistantPhase, string> = {
 /** What screen readers hear when the state changes. */
 export function announcement(state: AssistantState): string {
   const label = STATE_LABELS[state.phase];
-  const detail =
-    (state.phase === "done" || state.phase === "error" || state.phase === "waiting_for_permission") && state.message
-      ? ` ${state.message}`
-      : "";
+  const detail = (state.phase === "done" || state.phase === "error") && state.message ? ` ${state.message}` : "";
   return `KalVoice: ${label}.${detail}`;
 }
 
@@ -226,10 +209,12 @@ export function formatDay(iso: string): string {
   return Number.isNaN(date.getTime()) ? iso : DAY.format(date);
 }
 
-/** "Used 3 of 250 · resets Oct 1" / "… · unlimited". */
+/** "482 / 1,500 used · 1,018 remaining · renews Oct 1" / "… · Unlimited". */
 export function usageLine(usage: KalVoiceUsage): string {
-  if (usage.allowance === null) return `${usage.used.toLocaleString("en-US")} KalVoice Requests this month · unlimited`;
-  return `Used ${usage.used.toLocaleString("en-US")} of ${usage.allowance.toLocaleString("en-US")} · resets ${formatDay(usage.resetsAt)}`;
+  const used = usage.used.toLocaleString("en-US");
+  if (usage.allowance === null) return `${used} KalVoice Requests used · Unlimited`;
+  const remaining = Math.max(0, usage.allowance - usage.used).toLocaleString("en-US");
+  return `${used} / ${usage.allowance.toLocaleString("en-US")} used · ${remaining} remaining · renews ${formatDay(usage.resetsAt)}`;
 }
 
 export function formatBytes(bytes: number): string {

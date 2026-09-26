@@ -31,14 +31,17 @@ pub struct FilesListArgs {
 /// flagged. The first call for a workspace builds its index (off the main thread).
 #[tauri::command(async)]
 pub async fn files_list(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: State<'_, AppState>,
-    git: State<'_, GitState>,
+    git: crate::runtime_coordinator::RuntimeState<GitState>,
     args: FilesListArgs,
 ) -> Result<Page<FileEntry>, IpcError> {
+    _runtime_access.revalidate()?;
     let root =
         workspace_root(&state, &args.workspace_id).map_err(|e| e.log_and_convert("files_list"))?;
     let core = Arc::clone(&git.0);
     tauri::async_runtime::spawn_blocking(move || {
+        _runtime_access.revalidate_core()?;
         core.list_files(&root, args.dir.as_ref(), &args.page)
     })
     .await

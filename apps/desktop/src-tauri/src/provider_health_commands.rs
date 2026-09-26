@@ -17,54 +17,127 @@ use kalcode_core::events::{Correlation, EventSource, NewEvent};
 use kalcode_core::{Core, IpcError, KalError};
 use kalcode_providers::ProviderRegistry;
 use kalcode_providers::health::{HealthListener, HealthMonitor, ROLLUP_HOURS};
-use tauri::{AppHandle, Manager, State};
+use tauri::AppHandle;
 
-use crate::thread_commands::ThreadsState;
+use crate::{provider_commands::ProviderState, thread_commands::ThreadsState};
 
-/// The app's monitor, once started. Read by `thread_commands::adapter` when it registers an
-/// adapter, so every session is observed.
-static MONITOR: OnceLock<Arc<HealthMonitor>> = OnceLock::new();
+/// Identity shared by one monitor and its registry. A detached callback must match both objects
+/// in the currently leased runtime before it can detect, emit, or synchronize anything.
+#[derive(Clone)]
+struct HealthEpoch {
+    monitor: Weak<HealthMonitor>,
+    registry: Weak<ProviderRegistry>,
+}
 
-pub fn monitor() -> Option<&'static Arc<HealthMonitor>> {
-    MONITOR.get()
+impl HealthEpoch {
+    fn new(monitor: &Arc<HealthMonitor>, registry: &Arc<ProviderRegistry>) -> Self {
+        Self {
+            monitor: Arc::downgrade(monitor),
+            registry: Arc::downgrade(registry),
+        }
+    }
+
+    fn is_current(
+        &self,
+        current: &Self,
+        current_monitor: &Arc<HealthMonitor>,
+        current_registry: &Arc<ProviderRegistry>,
+        revalidate: impl FnOnce() -> bool,
+    ) -> bool {
+        let Some(expected_monitor) = self.monitor.upgrade() else {
+            return false;
+        };
+        let Some(expected_registry) = self.registry.upgrade() else {
+            return false;
+        };
+        let Some(runtime_monitor) = current.monitor.upgrade() else {
+            return false;
+        };
+        let Some(runtime_registry) = current.registry.upgrade() else {
+            return false;
+        };
+        Arc::ptr_eq(&expected_monitor, current_monitor)
+            && Arc::ptr_eq(&expected_registry, current_registry)
+            && Arc::ptr_eq(&runtime_monitor, current_monitor)
+            && Arc::ptr_eq(&runtime_registry, current_registry)
+            && revalidate()
+    }
+
+    fn run_if_current<T>(
+        &self,
+        current: &Self,
+        current_monitor: &Arc<HealthMonitor>,
+        current_registry: &Arc<ProviderRegistry>,
+        revalidate: impl FnOnce() -> bool,
+        effect: impl FnOnce() -> T,
+    ) -> Option<T> {
+        self.is_current(current, current_monitor, current_registry, revalidate)
+            .then(effect)
+    }
 }
 
 struct Listener {
     core: Option<Arc<Core>>,
     registry: Weak<ProviderRegistry>,
+    epoch: HealthEpoch,
     app: OnceLock<AppHandle>,
+}
+
+fn record_event(core: Option<&Arc<Core>>, event: EventPayload) {
+    let Some(core) = core else {
+        return;
+    };
+    let provider_id = match &event {
+        EventPayload::ProviderHealthChanged { provider_id, .. }
+        | EventPayload::ProviderCapacityChanged { provider_id, .. }
+        | EventPayload::ProviderDetected { provider_id, .. }
+        | EventPayload::ProviderError { provider_id, .. } => Some(provider_id.as_str().to_owned()),
+        _ => None,
+    };
+    if let Err(error) = core.emit(NewEvent {
+        source: EventSource::Core,
+        correlation: Correlation {
+            provider_id,
+            ..Correlation::default()
+        },
+        event,
+    }) {
+        tracing::warn!(event = "provider.health_event_not_recorded", error_code = error.code, error = %error.diagnostic());
+    }
 }
 
 impl Listener {
     fn record(&self, event: EventPayload) {
-        let Some(core) = &self.core else {
-            return;
-        };
-        let provider_id = match &event {
-            EventPayload::ProviderHealthChanged { provider_id, .. }
-            | EventPayload::ProviderCapacityChanged { provider_id, .. }
-            | EventPayload::ProviderDetected { provider_id, .. }
-            | EventPayload::ProviderError { provider_id, .. } => {
-                Some(provider_id.as_str().to_owned())
-            }
-            _ => None,
-        };
-        if let Err(error) = core.emit(NewEvent {
-            source: EventSource::Core,
-            correlation: Correlation {
-                provider_id,
-                ..Correlation::default()
-            },
-            event,
-        }) {
-            tracing::warn!(event = "provider.health_event_not_recorded", error_code = error.code, error = %error.diagnostic());
-        }
+        record_event(self.core.as_ref(), event);
     }
 }
 
 impl HealthListener for Listener {
     fn transition(&self, event: EventPayload) {
-        self.record(event);
+        let Some(app) = self.app.get() else {
+            return;
+        };
+        let Ok(health) =
+            crate::runtime_coordinator::RuntimeState::<ProviderHealthState>::from_app(app)
+        else {
+            return;
+        };
+        let Ok(providers) =
+            crate::runtime_coordinator::RuntimeState::<ProviderState>::from_app(app)
+        else {
+            return;
+        };
+        let Some(current_monitor) = health.monitor() else {
+            return;
+        };
+        let current_registry = providers.registry();
+        let _ = self.epoch.run_if_current(
+            &health.epoch,
+            &current_monitor,
+            &current_registry,
+            || health.revalidate().is_ok() && providers.revalidate().is_ok(),
+            || self.record(event),
+        );
     }
 
     fn recheck(&self, provider: &ProviderId) {
@@ -74,26 +147,67 @@ impl HealthListener for Listener {
         let provider = provider.clone();
         let core = self.core.clone();
         let app = self.app.get().cloned();
+        let epoch = self.epoch.clone();
         // Detection runs `--version` and the documented status command: off this thread.
         let spawned = std::thread::Builder::new()
             .name("kalcode-provider-recheck".into())
             .spawn(move || {
+                let Some(app) = app else {
+                    return;
+                };
+                let Ok(health) =
+                    crate::runtime_coordinator::RuntimeState::<ProviderHealthState>::from_app(&app)
+                else {
+                    return;
+                };
+                let Ok(providers) =
+                    crate::runtime_coordinator::RuntimeState::<ProviderState>::from_app(&app)
+                else {
+                    return;
+                };
+                let Ok(threads) =
+                    crate::runtime_coordinator::RuntimeState::<ThreadsState>::from_app(&app)
+                else {
+                    return;
+                };
+                let Some(current_monitor) = health.monitor() else {
+                    return;
+                };
+                let current_registry = providers.registry();
+                let valid = || {
+                    health.revalidate().is_ok()
+                        && providers.revalidate().is_ok()
+                        && threads.revalidate().is_ok()
+                };
+                if !epoch.is_current(&health.epoch, &current_monitor, &current_registry, valid) {
+                    return;
+                }
                 tracing::info!(
                     event = "provider.health_recheck",
                     provider_id = provider.as_str()
                 );
                 let events = registry.detect_one(&provider);
-                let listener = Listener {
-                    core,
-                    registry: Weak::new(),
-                    app: OnceLock::new(),
-                };
                 for event in events {
-                    listener.record(event);
+                    if epoch
+                        .run_if_current(
+                            &health.epoch,
+                            &current_monitor,
+                            &current_registry,
+                            valid,
+                            || record_event(core.as_ref(), event),
+                        )
+                        .is_none()
+                    {
+                        return;
+                    }
                 }
-                if let Some(threads) = app.as_ref().and_then(|a| a.try_state::<ThreadsState>()) {
-                    threads.sync_providers();
-                }
+                let _ = epoch.run_if_current(
+                    &health.epoch,
+                    &current_monitor,
+                    &current_registry,
+                    valid,
+                    || threads.sync_providers(),
+                );
             });
         if let Err(error) = spawned {
             tracing::warn!(event = "provider.health_recheck_failed", error = %error);
@@ -105,16 +219,23 @@ impl HealthListener for Listener {
 pub struct ProviderHealthState {
     monitor: Option<Arc<HealthMonitor>>,
     listener: Option<Arc<Listener>>,
+    epoch: HealthEpoch,
 }
 
 impl ProviderHealthState {
+    pub fn monitor(&self) -> Option<Arc<HealthMonitor>> {
+        self.monitor.clone()
+    }
+
     /// Starts the monitor over the shared detection registry, before the thread runtime
     /// registers its adapters.
     pub fn start(core: Option<Arc<Core>>, registry: &Arc<ProviderRegistry>) -> Self {
         let monitor = Arc::new(HealthMonitor::new());
+        let epoch = HealthEpoch::new(&monitor, registry);
         let listener = Arc::new(Listener {
             core,
             registry: Arc::downgrade(registry),
+            epoch: epoch.clone(),
             app: OnceLock::new(),
         });
         monitor.set_listener(listener.clone());
@@ -123,11 +244,11 @@ impl ProviderHealthState {
             // Snapshots still work on request; only transition events and re-checks stop.
             tracing::error!(event = "provider.health_driver_failed", error = %error);
         }
-        let _ = MONITOR.set(monitor.clone());
         tracing::info!(event = "provider.health_started");
         Self {
             monitor: Some(monitor),
             listener: Some(listener),
+            epoch,
         }
     }
 
@@ -170,15 +291,20 @@ fn validate_provider(provider_id: &str) -> Result<ProviderId, IpcError> {
 
 /// Every provider's health. Cheap: an in-memory snapshot, no provider process is started.
 #[tauri::command(async)]
-pub fn provider_health_list(health: State<'_, ProviderHealthState>) -> Vec<ProviderHealth> {
+pub fn provider_health_list(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    health: crate::runtime_coordinator::RuntimeState<ProviderHealthState>,
+) -> Vec<ProviderHealth> {
     health.list()
 }
 
 #[tauri::command(async)]
 pub fn provider_health_get(
-    health: State<'_, ProviderHealthState>,
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    health: crate::runtime_coordinator::RuntimeState<ProviderHealthState>,
     provider_id: String,
 ) -> Result<ProviderHealth, IpcError> {
+    _runtime_access.revalidate()?;
     let id = validate_provider(&provider_id)?;
     health
         .list()
@@ -192,10 +318,12 @@ pub fn provider_health_get(
 /// Hourly rollups for the last `hours` hours (at most 720, 30 days).
 #[tauri::command(async)]
 pub fn provider_health_trend(
-    health: State<'_, ProviderHealthState>,
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    health: crate::runtime_coordinator::RuntimeState<ProviderHealthState>,
     provider_id: String,
     hours: u32,
 ) -> Result<Vec<HealthRollup>, IpcError> {
+    _runtime_access.revalidate()?;
     let id = validate_provider(&provider_id)?;
     if hours == 0 || hours as usize > ROLLUP_HOURS {
         return Err(
@@ -207,4 +335,80 @@ pub fn provider_health_trend(
         .as_ref()
         .map(|m| m.trend(&id, hours))
         .unwrap_or_default())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    #[test]
+    fn stale_epoch_cannot_emit_or_sync_against_a_replacement_registry() {
+        let old_registry = Arc::new(ProviderRegistry::new(
+            kalcode_providers::DetectEnv::default(),
+        ));
+        let replacement_registry = Arc::new(ProviderRegistry::new(
+            kalcode_providers::DetectEnv::default(),
+        ));
+        let old_monitor = Arc::new(HealthMonitor::new());
+        let replacement_monitor = Arc::new(HealthMonitor::new());
+        let old = HealthEpoch::new(&old_monitor, &old_registry);
+        let replacement = HealthEpoch::new(&replacement_monitor, &replacement_registry);
+        let effects = AtomicUsize::new(0);
+
+        assert_eq!(
+            old.run_if_current(
+                &replacement,
+                &replacement_monitor,
+                &replacement_registry,
+                || true,
+                || effects.fetch_add(1, Ordering::SeqCst),
+            ),
+            None
+        );
+        assert_eq!(
+            old.run_if_current(
+                &old,
+                &replacement_monitor,
+                &old_registry,
+                || true,
+                || effects.fetch_add(1, Ordering::SeqCst),
+            ),
+            None
+        );
+        assert_eq!(
+            old.run_if_current(
+                &old,
+                &old_monitor,
+                &replacement_registry,
+                || true,
+                || effects.fetch_add(1, Ordering::SeqCst),
+            ),
+            None
+        );
+        assert_eq!(
+            old.run_if_current(
+                &old,
+                &old_monitor,
+                &old_registry,
+                || false,
+                || effects.fetch_add(1, Ordering::SeqCst),
+            ),
+            None
+        );
+        assert_eq!(effects.load(Ordering::SeqCst), 0);
+
+        assert_eq!(
+            old.run_if_current(
+                &old,
+                &old_monitor,
+                &old_registry,
+                || true,
+                || effects.fetch_add(1, Ordering::SeqCst),
+            ),
+            Some(0)
+        );
+        assert_eq!(effects.load(Ordering::SeqCst), 1);
+    }
 }

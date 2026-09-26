@@ -1,13 +1,14 @@
 # Provider panes — design note
 
-Status: **BUILT for Claude Code on `z7/provider-panes`, and for Codex (read-only first) and Gemini
+Status: **BUILT for Claude Code on `z7/provider-panes`, and for Codex (provider-native modes) and Gemini
 CLI (process state only) in PROVIDERS-2 (`docs/campaigns/PROVIDERS-2.md`), behind the
 `provider_panes` feature flag.**
-Approve/deny goes through the engine (`DecisionRouting::Engine`, §9) since the classifier
-hardening merged. Campaign Z7,
+The current Claude Code hook path can route decisions through the engine
+(`DecisionRouting::Engine`, §9); Codex and Gemini keep execution permissions in the provider.
+Campaign Z7,
 writer W4 (`docs/campaigns/ADVANCED.md` §16; evidence in `docs/campaigns/Z7-W4.md`, threat model
-in `docs/campaigns/Z7-W4-THREATS.md`). Researched 2026-09-24 from official provider documentation
-and the installed `--help` output of Claude Code 2.1.282 and codex-cli 0.155.1 (Gemini CLI is not
+in `docs/campaigns/Z7-W4-THREATS.md`). Researched through 2026-09-25 from official provider documentation
+and the installed `--help` output of Claude Code 2.1.282 and codex-cli 0.157.0 (Gemini CLI is not
 installed on the verification machine). No provider session was started and no AI quota was
 used; the owner-approved smoke run is written but not run (§7).
 
@@ -120,11 +121,12 @@ dialog [3]. KalCode never passes `--dangerously-skip-permissions` or
 ### Codex
 
 ```text
-codex -C <workspace> -s <sandbox> -a never [-m <model>]
+codex -C <workspace> -s <read-only|workspace-write|danger-full-access>
+      -a <on-request|never> [-m <model>]
       -c notify=["<kalcode-hook>","codex-notify","<session>"]            # agent-turn-complete [5]
       -c tui.notifications=["agent-turn-complete","approval-requested"]   # OSC 9 in the PTY stream [5]
       -c tui.notification_method="osc9" -c tui.notification_condition="always"
-codex resume <session id>                                               # continuity
+codex resume <the same options> <session id>                            # continuity
 ```
 
 Codex hooks (`PreToolUse`, `PermissionRequest`, …) [4] require *persisted hook trust*.
@@ -155,17 +157,18 @@ the start, `Exited` on process exit; nothing else is inferred.
 
 ## 4. Permissions for interactive panes
 
-The Trust Kernel stays the only authority (`docs/TRUST_KERNEL.md`). The provider's permission
-mode is a **floor** set at launch; the KalCode hook is the **enforcement point** on every tool call
-it can see.
+The selected KalCode mode maps to the provider's supported native execution policy. Normal
+KalCode UI operations do not require approval. For Codex, the real CLI owns command decisions and
+native prompts; KalCode neither synthesizes nor answers those prompts. The Claude Code hook column
+records its existing adapter path and is owned by the separate provider-policy reconciliation.
 
 | KalCode mode | Claude Code launch | KalCode `PreToolUse` hook returns | Codex launch (until hooks are trusted) |
 | --- | --- | --- | --- |
 | Plan | `--permission-mode plan --restricted` | TK decision (deny modifying actions) | `-s read-only -a never` |
-| Approve | `--permission-mode manual` | TK: allow reads; **ask** for writes/commands (KalCode approval) | `-s read-only -a never` (writes need escalation → Codex prompt) |
-| Auto | `--permission-mode manual` | TK Auto policy: allow what it covers, ask otherwise | `-s read-only -a never` (runs like Approve: without hooks KalCode cannot stop destructive commands inside a writable sandbox) |
-| Bypass | `--permission-mode acceptEdits` | TK Bypass: allow local actions; ask for remote-consequential, opaque, outside-workspace and credentials | `-s workspace-write -a never` (network off) |
-| Custom | `--permission-mode manual` (Custom `never` rules in the deny floor: not yet) | TK profile decision | as Approve |
+| Approve | `--permission-mode manual` | TK: allow reads; **ask** for writes/commands (KalCode approval) | `-s workspace-write -a on-request` |
+| Auto | `--permission-mode manual` | TK Auto policy: allow what it covers, ask otherwise | `-s workspace-write -a never` |
+| Bypass | `--permission-mode acceptEdits` | TK Bypass: allow local actions; ask for remote-consequential, opaque, outside-workspace and credentials | `-s danger-full-access -a never` |
+| Custom | `--permission-mode manual` (Custom `never` rules in the deny floor: not yet) | TK profile decision | as Approve (`-s workspace-write -a on-request`) |
 
 Reconciled: `claude --help` 2.1.282 lists `acceptEdits, auto, bypassPermissions, manual, dontAsk,
 plan`; panes pass `manual` (the hooks reference reports that mode as `default` in payloads, and
@@ -173,9 +176,10 @@ Z2's headless argv still passes `default`). `interactive_modes_are_verified_and_
 fails if a mode outside the list is emitted.
 
 Never used, in any mode: Claude Code `bypassPermissions`, `auto` (the provider's classifier is not
-KalCode policy) and the dangerous-skip flags; Codex `danger-full-access`,
+KalCode policy) and the dangerous-skip flags; Codex
 `--dangerously-bypass-approvals-and-sandbox`, `--dangerously-bypass-hook-trust` and
-`--approve-for-me` (automatic review by the provider).
+`--approve-for-me` (automatic review by the provider). Codex `danger-full-access` is used only as
+the explicit native sandbox for Bypass; it is not the combined dangerous-bypass switch.
 
 **Why hooks are sufficient for Claude Code.** Per [2], `PreToolUse` runs before the permission
 prompt for every tool (except ending the conversation). A hook can deny, force a prompt, or allow;
@@ -240,7 +244,7 @@ provider's prompt only, and KalCode shows PERMISSION REQUIRED without an answer 
 2. Claude Code hooks guide (limits, timeouts, PermissionRequest behaviour) — https://code.claude.com/docs/en/hooks-guide · permissions and hooks — https://code.claude.com/docs/en/permissions
 3. Claude Code CLI reference — https://code.claude.com/docs/en/cli-reference · settings — https://code.claude.com/docs/en/settings · installed `claude --help` (2.1.282)
 4. Codex hooks — https://learn.chatgpt.com/docs/hooks
-5. Codex advanced configuration (`notify`, `tui.notifications`) — https://learn.chatgpt.com/docs/config-file/config-advanced · installed `codex --help` (0.155.1)
+5. Codex advanced configuration (`notify`, `tui.notifications`) — https://learn.chatgpt.com/docs/config-file/config-advanced · installed `codex --help` (0.157.0; minimum 0.155.1)
 6. Codex approvals and security — https://learn.chatgpt.com/codex/agent-approvals-security
 7. Gemini CLI hooks — https://geminicli.com/docs/hooks
 8. Gemini CLI hooks reference — https://geminicli.com/docs/hooks/reference
@@ -255,11 +259,17 @@ provider's prompt only, and KalCode shows PERMISSION REQUIRED without an answer 
 | Claude Code interactive argv, deny floor, settings file | `crates/providers/src/interactive/claude.rs` |
 | Hook → `AgentEvent` mapping, held approvals, `AgentSession` over the PTY | `crates/providers/src/interactive/session.rs` |
 | Interactive provider, per-thread runtime router, pane registry | `crates/providers/src/interactive/provider.rs` |
-| Codex read-only-first argv; terminal notification parser has no status authority | `crates/providers/src/interactive/codex.rs` |
+| Codex provider-native mode argv; terminal notification parser has no status authority | `crates/providers/src/interactive/codex.rs` |
 | Codex (authenticated notify) and Gemini CLI (process state) panes, and their runtime routers | `crates/providers/src/interactive/cli_pane.rs`; `RuntimeRouter::for_provider` |
 | `answered_in_provider` expiry | `PermissionService::expire_answered_in_provider` |
 | IPC (`provider_pane_*`) and glue (expiry, first-prompt title) | `apps/desktop/src-tauri/src/provider_pane_commands.rs` |
 | Pane UI (header, status chip, approval overlay, info panel, entry point) | `apps/desktop/src/surfaces/code/panes/**` |
+
+Provider pane headers show the managed account resolved from the thread's exact
+`providerAccountId`. An active account uses the current account-registry display name; an archived,
+missing or temporarily unreadable account keeps the thread's durable snapshot and labels that state
+explicitly. The account id remains the routing authority. Pane titles include the same owner-visible
+identity so KalVoice's focused-pane announcement distinguishes Personal, Work and other accounts.
 
 **Decision routing.** `DecisionRouting::Engine` (default since the classifier hardening merged to
 main, 65fe095): every call becomes `ApprovalRequired` for the Z3 runtime and Z4 engine. Calls whose
@@ -284,11 +294,13 @@ own prompts (needs a Z3 runtime change).
 
 ## Security hardening release gate (2026-09-25)
 
-Provider changes are not approved for installation or publication. Panes now use the same
-non-escalating Codex scalar floor as headless turns (`never`, network off, web disabled),
-but these flags do not isolate inherited MCP maps or managed configuration. Dedicated
-KalCode profiles with separate supported sign-in are being implemented; the existing CLI
-setup is preserved. See `campaigns/CODEX-TAKEOVER.md` for the current gate.
+Provider changes are not approved for installation or publication. Panes now use the same exact
+provider-native Codex mapping as headless turns (Plan `read-only/never`, Approve and Custom
+`workspace-write/on-request`, Auto `workspace-write/never`, Bypass
+`danger-full-access/never`) while connected tools and web search remain disabled. These scalar
+flags alone do not isolate inherited MCP maps or managed configuration. The dedicated KalCode
+profile candidate uses separate supported sign-in and preserves the existing CLI setup;
+certification remains pending. See `campaigns/CODEX-TAKEOVER.md` for the current gate.
 
 Terminal OSC notifications are never canonical permission or thread-state evidence.
 Authenticated hook registrations bind one provider channel; records are schema-validated,

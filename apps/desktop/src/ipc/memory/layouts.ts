@@ -47,6 +47,9 @@ const MAX_PRESETS = 50;
 const MAX_PRESET_NAME_CHARS = 60;
 // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it rejects.
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
+const NON_ASCII_OR_SPACE = /[^\u0021-\u007e]/u;
+const FORBIDDEN_PERSISTED_URL = /[?#\\"<>`]/u;
+const BAD_PERCENT_ESCAPE = /%(?![0-9a-f]{2})/iu;
 
 function fail(error: IpcError): never {
   throw error;
@@ -59,6 +62,36 @@ function invalid(code: string, message: string): never {
 function checkId(value: unknown): string {
   if (typeof value !== "string" || !UUID.test(value)) invalid("invalid_id", "Invalid identifier.");
   return value;
+}
+
+function browserUrlOk(value: string): boolean {
+  const schemeLength = value.startsWith("http://") ? 7 : value.startsWith("https://") ? 8 : 0;
+  if (
+    schemeLength === 0 ||
+    [...value].length > MAX_URL_CHARS ||
+    value.length === 0 ||
+    CONTROL.test(value) ||
+    NON_ASCII_OR_SPACE.test(value) ||
+    FORBIDDEN_PERSISTED_URL.test(value) ||
+    BAD_PERCENT_ESCAPE.test(value)
+  ) {
+    return false;
+  }
+  const authority = value.slice(schemeLength).split("/", 1)[0] ?? "";
+  if (authority.length === 0 || authority.includes("@")) return false;
+  try {
+    const parsed = new URL(value);
+    return (
+      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+      parsed.hostname.length > 0 &&
+      parsed.username.length === 0 &&
+      parsed.password.length === 0 &&
+      parsed.search.length === 0 &&
+      parsed.hash.length === 0
+    );
+  } catch {
+    return false;
+  }
 }
 
 function contentOk(content: PaneContent): boolean {
@@ -74,12 +107,8 @@ function contentOk(content: PaneContent): boolean {
     case "widget":
       return WIDGET_ID.test(content.widgetId);
     case "browser":
-      return (
-        content.url === null ||
-        ([...content.url].length <= MAX_URL_CHARS &&
-          !CONTROL.test(content.url) &&
-          (content.url.startsWith("http://") || content.url.startsWith("https://")))
-      );
+      if (!UUID.test(content.browserId)) return false;
+      return content.url === null || browserUrlOk(content.url);
     default:
       return false;
   }
@@ -87,6 +116,22 @@ function contentOk(content: PaneContent): boolean {
 
 function contents(node: PaneNode): PaneContent[] {
   return node.kind === "leaf" ? node.tabs : node.children.flatMap(contents);
+}
+
+function contentStateOk(layout: PaneLayout): boolean {
+  const browserIds = new Set<string>();
+  for (const content of [...contents(layout.root), ...layout.dock]) {
+    if (!contentOk(content)) return false;
+    if (content.kind === "browser") {
+      if (browserIds.has(content.browserId)) return false;
+      browserIds.add(content.browserId);
+    }
+  }
+  return true;
+}
+
+function encodedLayoutSize(layout: PaneLayout): number {
+  return new TextEncoder().encode(JSON.stringify(layout)).length;
 }
 
 /** Native `validate_layout`: structure, content ids, size. */
@@ -104,10 +149,10 @@ function checkLayout(value: unknown): PaneLayout {
   if (validateLayout(layout) !== null) {
     invalid("invalid_layout", "That layout isn't valid.");
   }
-  if (![...contents(layout.root), ...layout.dock].every(contentOk)) {
+  if (!contentStateOk(layout)) {
     invalid("invalid_layout", "A pane in that layout refers to something KalCode can't open.");
   }
-  if (new TextEncoder().encode(JSON.stringify(layout)).length > MAX_LAYOUT_BYTES) {
+  if (encodedLayoutSize(layout) > MAX_LAYOUT_BYTES) {
     invalid("invalid_layout", "That layout is too large to save.");
   }
   return layout;
@@ -150,7 +195,14 @@ export function createLayoutsMemory(options: {
       const workspaceId = checkId(args.workspaceId);
       const stored = layouts.get(workspaceId);
       // Like native: a stored layout that no longer validates is ignored.
-      if (!stored || validateLayout(stored.layout) !== null) return null;
+      if (
+        !stored ||
+        validateLayout(stored.layout) !== null ||
+        !contentStateOk(stored.layout) ||
+        encodedLayoutSize(stored.layout) > MAX_LAYOUT_BYTES
+      ) {
+        return null;
+      }
       return clone(stored);
     },
     layout_save: (args) => {

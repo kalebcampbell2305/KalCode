@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-utility-http-saved-save"
+description = "Enables the utility_http_saved_save command without any pre-configured scope."
+commands.allow = ["utility_http_saved_save"]
+
+[[permission]]
+identifier = "deny-utility-http-saved-save"
+description = "Denies the utility_http_saved_save command without any pre-configured scope."
+commands.deny = ["utility_http_saved_save"]

@@ -1,0 +1,24 @@
+.root { display: flex; min-width: 0; min-height: 0; height: 100%; flex-direction: column; overflow: hidden; background: var(--color-bg, #080b12); color: var(--color-text, #e8edf7); }
+.toolbar { z-index: 1; display: flex; min-height: 38px; align-items: center; gap: 5px; padding: 5px 7px; border-bottom: 1px solid color-mix(in srgb, currentColor 10%, transparent); background: color-mix(in srgb, var(--color-surface, #111723) 94%, transparent); }
+.navigation { display: flex; gap: 2px; }
+.iconButton { display: grid; width: 28px; height: 28px; place-items: center; border: 1px solid transparent; border-radius: 7px; background: transparent; color: color-mix(in srgb, currentColor 72%, transparent); cursor: pointer; }
+.iconButton:hover:not(:disabled), .iconButton:focus-visible { border-color: color-mix(in srgb, #4a9cff 38%, transparent); background: color-mix(in srgb, #2787ff 12%, transparent); color: currentColor; outline: none; }
+.iconButton:disabled { opacity: .35; cursor: default; }
+.addressForm { flex: 1; min-width: 90px; }
+.address, .preset, .customWidth { height: 28px; border: 1px solid color-mix(in srgb, currentColor 12%, transparent); border-radius: 7px; background: color-mix(in srgb, #02050b 68%, transparent); color: inherit; font: inherit; font-size: 12px; }
+.address { width: 100%; padding: 0 10px; }
+.address:focus, .preset:focus-visible, .customWidth:focus-visible { border-color: color-mix(in srgb, #318dff 70%, transparent); box-shadow: 0 0 0 2px color-mix(in srgb, #318dff 14%, transparent); outline: none; }
+.preset { max-width: 105px; padding: 0 6px; }
+.customWidth { width: 68px; padding: 0 6px; }
+.stage { display: flex; min-width: 0; min-height: 0; flex: 1; justify-content: center; overflow: hidden; background: #060811; }
+.viewport { position: relative; min-width: 1px; min-height: 1px; max-width: 100%; flex: 0 1 auto; border-inline: 1px solid color-mix(in srgb, #4698ff 16%, transparent); background: #fff; outline: none; }
+.viewport:focus-visible { box-shadow: inset 0 0 0 2px color-mix(in srgb, #3893ff 65%, transparent); }
+.fallback { position: absolute; inset: 0; display: grid; place-items: center; background: var(--color-bg, #080b12); color: color-mix(in srgb, currentColor 55%, transparent); font-size: 12px; }
+.status { z-index: 1; display: flex; min-height: 25px; align-items: center; gap: 9px; padding: 3px 9px; border-top: 1px solid color-mix(in srgb, currentColor 9%, transparent); background: color-mix(in srgb, var(--color-surface, #111723) 96%, transparent); color: color-mix(in srgb, currentColor 58%, transparent); font-size: 10px; }
+.statusTitle { display: flex; min-width: 90px; align-items: center; gap: 5px; color: color-mix(in srgb, currentColor 78%, transparent); }
+.statusUrl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spinner { animation: spin .8s linear infinite; }
+.srOnly { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+@media (max-width: 640px) { .preset, .customWidth { display: none; } .toolbar { gap: 2px; } }

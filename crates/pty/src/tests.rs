@@ -3,6 +3,154 @@ use std::time::{Duration, Instant};
 
 use super::*;
 
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+#[cfg(windows)]
+fn windows_process_is_alive(pid: u32) -> bool {
+    use std::os::windows::process::CommandExt as _;
+
+    std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map(|output| String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()))
+        .unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn powershell_literal(path: &std::path::Path) -> String {
+    path.to_string_lossy().replace('\'', "''")
+}
+
+#[cfg(windows)]
+fn root_with_long_lived_descendant(pid_file: &std::path::Path) -> ProgramSpec {
+    let system_root =
+        PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into()));
+    let powershell = system_root
+        .join("System32")
+        .join("WindowsPowerShell")
+        .join("v1.0")
+        .join("powershell.exe");
+    let ping = system_root.join("System32").join("PING.EXE");
+    let script = format!(
+        "$child = Start-Process -FilePath '{}' -ArgumentList '-n','120','127.0.0.1' -WindowStyle Hidden -PassThru; if ($child.HasExited) {{ exit 9 }}; [IO.File]::WriteAllText('{}', [string]$child.Id)",
+        powershell_literal(&ping),
+        powershell_literal(pid_file),
+    );
+    ProgramSpec {
+        program: powershell,
+        args: vec![
+            "-NoProfile".into(),
+            "-NonInteractive".into(),
+            "-WindowStyle".into(),
+            "Hidden".into(),
+            "-Command".into(),
+            script.into(),
+        ],
+        cwd: pid_file.parent().expect("pid file parent").to_path_buf(),
+        env: vec![
+            ("SystemRoot".into(), system_root.clone().into_os_string()),
+            ("WINDIR".into(), system_root.into_os_string()),
+        ],
+        size: TerminalSize::new(80, 24).expect("size"),
+    }
+}
+
+#[cfg(windows)]
+const FAILURE_HELPER_MODE: &str = "KALCODE_PTY_FAILURE_HELPER";
+#[cfg(windows)]
+const FAILURE_HELPER_PID_FILE: &str = "KALCODE_PTY_FAILURE_PID_FILE";
+
+/// This test doubles as an absolute-path, console-independent helper process for setup-failure
+/// regressions. Unlike PowerShell it does not wait for a ConPTY cursor-position response before
+/// creating its descendant, so every post-CreateProcess failure stage can be exercised.
+#[cfg(windows)]
+#[test]
+fn pty_failure_descendant_helper() {
+    if std::env::var_os(FAILURE_HELPER_MODE).is_none() {
+        return;
+    }
+
+    use std::os::windows::process::CommandExt as _;
+    use std::process::Stdio;
+
+    let pid_file =
+        PathBuf::from(std::env::var_os(FAILURE_HELPER_PID_FILE).expect("failure helper pid file"));
+    std::fs::write(pid_file.with_extension("started"), b"started")
+        .expect("record failure helper start");
+    let system_root =
+        PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into()));
+    let mut descendant = std::process::Command::new(system_root.join("System32").join("PING.EXE"))
+        .args(["-n", "120", "127.0.0.1"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .expect("spawn failure-test descendant");
+    std::fs::write(&pid_file, descendant.id().to_string()).expect("record descendant pid");
+
+    std::thread::sleep(Duration::from_secs(90));
+    let _ = descendant.kill();
+    let _ = descendant.wait();
+}
+
+#[cfg(windows)]
+fn failure_descendant_spec(pid_file: &std::path::Path) -> ProgramSpec {
+    let system_root =
+        PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into()));
+    ProgramSpec {
+        program: std::env::current_exe().expect("test binary"),
+        args: vec![
+            "--exact".into(),
+            "tests::pty_failure_descendant_helper".into(),
+            "--nocapture".into(),
+        ],
+        cwd: pid_file.parent().expect("pid file parent").to_path_buf(),
+        env: vec![
+            (FAILURE_HELPER_MODE.into(), "1".into()),
+            (
+                FAILURE_HELPER_PID_FILE.into(),
+                pid_file.as_os_str().to_os_string(),
+            ),
+            ("SystemRoot".into(), system_root.clone().into_os_string()),
+            ("WINDIR".into(), system_root.into_os_string()),
+        ],
+        size: TerminalSize::new(80, 24).expect("size"),
+    }
+}
+
+#[cfg(windows)]
+fn recorded_live_descendant(pid_file: &std::path::Path) -> Option<u32> {
+    let pid = std::fs::read_to_string(pid_file)
+        .ok()?
+        .trim()
+        .parse::<u32>()
+        .ok()?;
+    windows_process_is_alive(pid).then_some(pid)
+}
+
+#[cfg(windows)]
+struct CallbackLeaseProbe {
+    pid_file: PathBuf,
+    released_while_descendant_alive: Arc<Mutex<Option<bool>>>,
+}
+
+#[cfg(windows)]
+impl Drop for CallbackLeaseProbe {
+    fn drop(&mut self) {
+        let alive = std::fs::read_to_string(&self.pid_file)
+            .ok()
+            .and_then(|pid| pid.trim().parse::<u32>().ok())
+            .is_none_or(windows_process_is_alive);
+        *self
+            .released_while_descendant_alive
+            .lock()
+            .expect("lease probe") = Some(alive);
+    }
+}
+
 fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -119,6 +267,22 @@ fn captures_non_zero_exit_codes() {
     assert!(!exit.success);
 }
 
+/// Windows reserves 259 as the `STILL_ACTIVE` value returned by `GetExitCodeProcess` for a live
+/// process. A process may also legitimately exit with 259, so completion is established with a
+/// zero-time `WaitForSingleObject` rather than by comparing the exit code to that sentinel.
+#[cfg(windows)]
+#[test]
+fn windows_exit_code_259_is_reported_as_completed() {
+    let run = start(command_spec("exit /b 259"));
+    assert!(
+        wait_until(Duration::from_secs(15), || run.exit().is_some()),
+        "exit code 259 was mistaken for a live process"
+    );
+    let exit = run.exit().expect("exit");
+    assert_eq!(exit.code, 259);
+    assert!(!exit.success);
+}
+
 #[test]
 fn accepts_interactive_input() {
     let run = start(interactive_spec());
@@ -172,6 +336,24 @@ fn kill_ends_the_session_and_marks_it_killed() {
     run.session
         .kill()
         .expect("killing an exited session is a no-op");
+}
+
+#[test]
+fn a_quiesced_session_can_be_restarted_immediately() {
+    let first = start(interactive_spec());
+    first.session.kill().expect("kill first session tree");
+    assert!(wait_until(Duration::from_secs(15), || first
+        .exit()
+        .is_some()));
+
+    let second = start(command_spec("echo restart-ok"));
+    assert!(
+        wait_until(Duration::from_secs(15), || second.exit().is_some()
+            && second.text().contains("restart-ok")),
+        "replacement session did not complete: {:?}",
+        second.text()
+    );
+    assert!(second.exit().expect("replacement exit").success);
 }
 
 #[test]
@@ -249,6 +431,8 @@ fn scrollback_is_bounded_and_trims_at_line_starts() {
 #[cfg(windows)]
 #[test]
 fn closing_a_terminal_ends_programs_started_in_it() {
+    use std::os::windows::process::CommandExt as _;
+
     let run = start(interactive_spec());
     let shell_pid = run.session.pid().expect("pid");
     run.session
@@ -261,6 +445,7 @@ fn closing_a_terminal_ends_programs_started_in_it() {
         );
         let out = std::process::Command::new("powershell")
             .args(["-NoProfile", "-Command", &query])
+            .creation_flags(CREATE_NO_WINDOW)
             .output()
             .ok()?;
         String::from_utf8_lossy(&out.stdout)
@@ -282,17 +467,344 @@ fn closing_a_terminal_ends_programs_started_in_it() {
     let ping = ping.expect("ping pid");
 
     run.session.kill().expect("kill");
-    let alive = || {
-        std::process::Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {ping}"), "/NH"])
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).contains(&ping.to_string()))
-            .unwrap_or(false)
-    };
     assert!(
-        wait_until(Duration::from_secs(20), || !alive()),
+        wait_until(Duration::from_secs(20), || !windows_process_is_alive(ping)),
         "child {ping} outlived its terminal"
     );
+}
+
+/// The root provider process can exit while a child keeps running. The exit callback is the
+/// account-profile lease release point, so Windows must terminate and observe that child before
+/// invoking it.
+#[cfg(windows)]
+#[test]
+fn natural_root_exit_quiesces_descendants_before_callback() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let pid_file = temp.path().join("descendant.pid");
+    let observed = Arc::new(Mutex::new(None));
+    let callback_observed = Arc::clone(&observed);
+    let callback_pid_file = pid_file.clone();
+    let _session =
+        PtySession::spawn_program(root_with_long_lived_descendant(&pid_file), move |exit| {
+            let pid = std::fs::read_to_string(&callback_pid_file)
+                .expect("root recorded descendant pid")
+                .trim()
+                .parse::<u32>()
+                .expect("descendant pid");
+            *callback_observed.lock().expect("callback result") =
+                Some((exit, pid, windows_process_is_alive(pid)));
+        })
+        .expect("spawn contained root");
+
+    assert!(
+        wait_until(Duration::from_secs(20), || observed
+            .lock()
+            .expect("callback result")
+            .is_some()),
+        "natural root exit did not reach a quiescent callback"
+    );
+    let (exit, child_pid, child_alive) = observed
+        .lock()
+        .expect("callback result")
+        .expect("callback result");
+    assert!(exit.success, "root exit: {exit:?}");
+    assert!(!exit.killed, "natural exit must remain distinguishable");
+    assert!(
+        !child_alive && !windows_process_is_alive(child_pid),
+        "descendant {child_pid} was alive at lease-release callback"
+    );
+}
+
+/// `Child::try_wait` is also a lifecycle boundary used by polling callers. It must not return
+/// `Some` while a descendant from the same provider tree remains alive.
+#[cfg(windows)]
+#[test]
+fn try_wait_reports_completion_only_after_descendant_quiescence() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let pid_file = temp.path().join("try-wait-descendant.pid");
+    let spec = root_with_long_lived_descendant(&pid_file);
+    let pair = native_pty_system()
+        .openpty(spec.size.to_pty())
+        .expect("open ConPTY");
+    let mut child = pair
+        .slave
+        .spawn_command(build_program_command(&spec))
+        .expect("spawn contained root");
+    drop(pair.slave);
+    let mut reader = pair.master.try_clone_reader().expect("clone PTY reader");
+    let mut writer = pair.master.take_writer().expect("take PTY writer");
+    let responder = std::thread::spawn(move || {
+        let mut buffer = [0u8; 4096];
+        while let Ok(read) = reader.read(&mut buffer) {
+            if read == 0 {
+                break;
+            }
+            for _ in buffer[..read]
+                .windows(CURSOR_POSITION_REQUEST.len())
+                .filter(|window| *window == CURSOR_POSITION_REQUEST)
+            {
+                let _ = writer.write_all(CURSOR_POSITION_REPLY);
+                let _ = writer.flush();
+            }
+        }
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll contained tree") {
+            break status;
+        }
+        assert!(Instant::now() < deadline, "contained root did not exit");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert!(status.success());
+    let descendant = std::fs::read_to_string(&pid_file)
+        .expect("root recorded descendant pid")
+        .trim()
+        .parse::<u32>()
+        .expect("descendant pid");
+    assert!(
+        !windows_process_is_alive(descendant),
+        "try_wait returned Some while descendant {descendant} lived"
+    );
+    drop(pair.master);
+    responder.join().expect("PTY responder");
+}
+
+/// Every error after `CreateProcessW` must keep the callback-held profile lease until the Job
+/// Object proves that the root and descendant are both gone. These injected stages cover I/O
+/// setup and all three background-thread creation boundaries.
+#[cfg(windows)]
+#[test]
+fn setup_failures_quiesce_descendants_before_releasing_callback_lease() {
+    for stage in [
+        SetupStage::Io,
+        SetupStage::WriterThread,
+        SetupStage::ReaderThread,
+        SetupStage::WaiterThread,
+    ] {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let pid_file = temp.path().join("setup-failure-descendant.pid");
+        let descendant_ready = Arc::new(Mutex::new(false));
+        let hook_ready = Arc::clone(&descendant_ready);
+        let hook_pid_file = pid_file.clone();
+        let released_alive = Arc::new(Mutex::new(None));
+        let lease_probe = CallbackLeaseProbe {
+            pid_file: pid_file.clone(),
+            released_while_descendant_alive: Arc::clone(&released_alive),
+        };
+
+        let error = PtySession::spawn_program_with_failure(
+            failure_descendant_spec(&pid_file),
+            stage,
+            move || {
+                *hook_ready.lock().expect("descendant readiness") =
+                    wait_until(Duration::from_secs(20), || {
+                        recorded_live_descendant(&hook_pid_file).is_some()
+                    });
+            },
+            move |_| drop(lease_probe),
+        )
+        .expect_err("injected setup failure");
+
+        assert!(matches!(error, PtyError::Spawn(_)), "{error:?}");
+        assert!(
+            *descendant_ready.lock().expect("descendant readiness"),
+            "{stage:?} did not observe its live descendant (helper started: {})",
+            pid_file.with_extension("started").exists()
+        );
+        let descendant = std::fs::read_to_string(&pid_file)
+            .expect("descendant pid")
+            .trim()
+            .parse::<u32>()
+            .expect("descendant pid");
+        assert_eq!(
+            *released_alive.lock().expect("lease probe"),
+            Some(false),
+            "callback lease released before stage cleanup proved quiescence"
+        );
+        assert!(
+            !windows_process_is_alive(descendant),
+            "descendant {descendant} survived setup failure"
+        );
+    }
+}
+
+#[cfg(windows)]
+fn assert_backend_wait_failure_quiesces(stage: SetupStage) {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let pid_file = temp.path().join("wait-failure-descendant.pid");
+    let descendant_ready = Arc::new(Mutex::new(false));
+    let hook_ready = Arc::clone(&descendant_ready);
+    let hook_pid_file = pid_file.clone();
+    let released_alive = Arc::new(Mutex::new(None));
+    let lease_probe = CallbackLeaseProbe {
+        pid_file: pid_file.clone(),
+        released_while_descendant_alive: Arc::clone(&released_alive),
+    };
+    let exit = Arc::new(Mutex::new(None));
+    let callback_exit = Arc::clone(&exit);
+
+    let session = PtySession::spawn_program_with_failure(
+        failure_descendant_spec(&pid_file),
+        stage,
+        move || {
+            *hook_ready.lock().expect("descendant readiness") =
+                wait_until(Duration::from_secs(20), || {
+                    recorded_live_descendant(&hook_pid_file).is_some()
+                });
+        },
+        move |info| {
+            *callback_exit.lock().expect("exit") = Some(info);
+            drop(lease_probe);
+        },
+    )
+    .expect("spawn failure-injected session");
+
+    assert!(
+        wait_until(Duration::from_secs(20), || exit
+            .lock()
+            .expect("exit")
+            .is_some()),
+        "wait failure did not reach a quiescent callback"
+    );
+    assert!(
+        wait_until(Duration::from_secs(5), || released_alive
+            .lock()
+            .expect("lease probe")
+            .is_some()),
+        "quiescent callback did not release its lease capture"
+    );
+    assert!(
+        *descendant_ready.lock().expect("descendant readiness"),
+        "wait failure hook did not observe its live descendant"
+    );
+    let descendant = std::fs::read_to_string(&pid_file)
+        .expect("descendant pid")
+        .trim()
+        .parse::<u32>()
+        .expect("descendant pid");
+    assert_eq!(
+        *released_alive.lock().expect("lease probe"),
+        Some(false),
+        "callback lease released before wait cleanup proved quiescence"
+    );
+    assert!(!windows_process_is_alive(descendant));
+    let failure = exit.lock().expect("exit").expect("exit");
+    assert!(!failure.success);
+    assert_eq!(failure.code, 1);
+    assert!(session.exit_info().is_some());
+}
+
+/// A returned backend wait error is production-equivalent to handle duplication or wait API
+/// failure. It must terminate and prove the process tree before releasing the callback lease.
+#[cfg(windows)]
+#[test]
+fn backend_wait_error_quiesces_descendant_before_callback() {
+    assert_backend_wait_failure_quiesces(SetupStage::BackendWaitError);
+}
+
+/// Debug builds also prove the defensive unwind path. Production uses `panic = "abort"`, so the
+/// release invariant is that the vendored wait path is panic-free; this test is not cited as the
+/// production recovery proof.
+#[cfg(all(windows, panic = "unwind"))]
+#[test]
+fn backend_wait_panic_quiesces_descendant_before_callback() {
+    assert_backend_wait_failure_quiesces(SetupStage::BackendWaitPanic);
+}
+
+/// If cleanup cannot be proved, the callback closure (and therefore its provider-profile lease)
+/// remains retained. A later explicit kill may clean the process tree, but it cannot retroactively
+/// make the earlier lifecycle boundary safe.
+#[cfg(windows)]
+#[test]
+fn unproved_backend_wait_retains_callback_lease() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let pid_file = temp.path().join("wait-unproved-descendant.pid");
+    let hook_pid_file = pid_file.clone();
+    let released_alive = Arc::new(Mutex::new(None));
+    let lease_probe = CallbackLeaseProbe {
+        pid_file: pid_file.clone(),
+        released_while_descendant_alive: Arc::clone(&released_alive),
+    };
+
+    let session = PtySession::spawn_program_with_failure(
+        failure_descendant_spec(&pid_file),
+        SetupStage::BackendWaitUnproven,
+        move || {
+            let _ = wait_until(Duration::from_secs(20), || {
+                recorded_live_descendant(&hook_pid_file).is_some()
+            });
+        },
+        move |_| drop(lease_probe),
+    )
+    .expect("spawn unproved-wait session");
+
+    assert!(
+        wait_until(Duration::from_secs(20), || matches!(
+            session.write(b"probe"),
+            Err(PtyError::Exited)
+        )),
+        "failed waiter did not close session input"
+    );
+    let descendant = recorded_live_descendant(&pid_file).expect("live descendant before cleanup");
+    assert_eq!(
+        *released_alive.lock().expect("lease probe"),
+        None,
+        "unproved cleanup released callback-held lease"
+    );
+    assert_eq!(session.exit_info(), None);
+
+    session.kill().expect("clean up retained test process tree");
+    assert!(
+        wait_until(Duration::from_secs(20), || !windows_process_is_alive(
+            descendant
+        )),
+        "descendant {descendant} survived explicit cleanup"
+    );
+    assert_eq!(
+        *released_alive.lock().expect("lease probe"),
+        None,
+        "retained callback must not be released after an unproved boundary"
+    );
+}
+
+/// `PROC_THREAD_ATTRIBUTE_JOB_LIST` must remain compatible with the parent jobs used by test
+/// runners, app launchers and CI. A helper test process is itself placed in an outer Job Object,
+/// then creates a contained ConPTY child through the production path.
+#[cfg(windows)]
+#[test]
+fn atomic_job_assignment_works_inside_parent_job() {
+    const HELPER: &str = "KALCODE_PTY_NESTED_JOB_HELPER";
+    if std::env::var_os(HELPER).is_some() {
+        let run = start(command_spec("exit 0"));
+        assert!(wait_until(Duration::from_secs(15), || run.exit().is_some()));
+        assert!(run.exit().expect("helper exit").success);
+        return;
+    }
+
+    use process_wrap::std::{CommandWrap, CreationFlags, JobObject};
+    use std::os::windows::process::CommandExt as _;
+    use std::process::Stdio;
+    use windows::Win32::System::Threading::CREATE_NO_WINDOW as WINDOWS_CREATE_NO_WINDOW;
+
+    let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
+    command
+        .args([
+            "--exact",
+            "tests::atomic_job_assignment_works_inside_parent_job",
+            "--nocapture",
+        ])
+        .env(HELPER, "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW);
+    let mut command = CommandWrap::from(command);
+    command.wrap(CreationFlags(WINDOWS_CREATE_NO_WINDOW));
+    command.wrap(JobObject);
+    let mut child = command.spawn().expect("spawn outer-job helper");
+    assert!(child.wait().expect("wait outer-job helper").success());
 }
 
 #[test]

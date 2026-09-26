@@ -1,15 +1,21 @@
 /**
  * The complete API surface (tests/unit/router.test.ts pins this table).
  *
- * There is deliberately no endpoint that creates, changes or revokes an entitlement. The only
- * write is recording the authenticated caller's own KalVoice Requests in the usage ledger.
+ * Account/session writes stay in AccountStore, billing reconciliation writes stay in BillingStore,
+ * and KalVoice Request writes stay in UsageStore. Public paid grants can change only after a
+ * verified live-mode Stripe webhook; OWNER remains operator-only.
  */
 
+import type { AccountStore } from "./account-store";
 import type { Authenticator, AuthResult } from "./auth";
+import type { AccountAuthService } from "./auth-routes";
+import type { BillingService } from "./billing-routes";
 import { readJsonBody } from "./body";
+import type { EmailAuthService } from "./email-auth";
 import { buildEntitlement, resolveEntitlement } from "./entitlement";
 import { apiError, json } from "./http";
 import { type PublicKeyEntry, publishedKeySet } from "./keys";
+import type { OpenIdAuthService } from "./openid-auth-routes";
 import type { AccountRecord, EntitlementStore, RequestSource, UsageStore } from "./store";
 import { type EntitlementSigningKey, signEntitlement, signUsageReceipt } from "./token";
 import { buildUsageReceipt, CLIENT_REQUEST_ID, type UsageContext, usageContext, usageSummary } from "./usage";
@@ -17,6 +23,11 @@ import { buildUsageReceipt, CLIENT_REQUEST_ID, type UsageContext, usageContext, 
 export interface Deps {
   store: EntitlementStore & UsageStore;
   auth: Authenticator;
+  accountStore?: AccountStore;
+  accountAuth?: AccountAuthService | null;
+  openIdAuth?: OpenIdAuthService | null;
+  emailAuth?: EmailAuthService | null;
+  billing?: BillingService | null;
   /** The current signing key, or null when none is configured (signed documents unavailable). */
   signingKey: () => Promise<EntitlementSigningKey | null>;
   previousPublicKeys: () => readonly PublicKeyEntry[];
@@ -38,6 +49,26 @@ export const ENTITLEMENT_PATH = "/v1/entitlement";
 export const KEYS_PATH = "/v1/entitlement/keys";
 export const KALVOICE_USAGE_PATH = "/v1/kalvoice/usage";
 export const KALVOICE_REQUESTS_PATH = "/v1/kalvoice/requests";
+export const ACCOUNT_PATH = "/v1/account";
+export const AUTH_GITHUB_START_PATH = "/v1/auth/github/start";
+export const AUTH_GITHUB_CALLBACK_PATH = "/v1/auth/github/callback";
+export const AUTH_GITHUB_COMPLETE_PATH = "/v1/auth/github/complete";
+export const AUTH_GOOGLE_START_PATH = "/v1/auth/google/start";
+export const AUTH_GOOGLE_CALLBACK_PATH = "/v1/auth/google/callback";
+export const AUTH_GOOGLE_COMPLETE_PATH = "/v1/auth/google/complete";
+export const AUTH_MICROSOFT_START_PATH = "/v1/auth/microsoft/start";
+export const AUTH_MICROSOFT_CALLBACK_PATH = "/v1/auth/microsoft/callback";
+export const AUTH_MICROSOFT_COMPLETE_PATH = "/v1/auth/microsoft/complete";
+export const AUTH_LOGOUT_PATH = "/v1/auth/logout";
+export const AUTH_EMAIL_START_PATH = "/v1/auth/email/start";
+export const AUTH_EMAIL_VERIFY_PATH = "/v1/auth/email/verify";
+export const AUTH_EMAIL_POLL_PATH = "/v1/auth/email/poll";
+export const AUTH_REFRESH_PATH = "/v1/auth/session/refresh";
+export const ACCOUNT_ACTIVATE_FREE_PATH = "/v1/account/activate-free";
+export const ACCOUNT_DELETE_START_PATH = "/v1/account/delete/start";
+export const BILLING_CHECKOUT_PATH = "/v1/billing/checkout";
+export const BILLING_PORTAL_PATH = "/v1/billing/portal";
+export const BILLING_WEBHOOK_PATH = "/v1/billing/webhook";
 
 const SERVER_ERROR_MESSAGE = "Something went wrong on our side. Please try again later.";
 
@@ -63,10 +94,94 @@ async function authenticatedAccount(request: Request, deps: Deps): Promise<Accou
   return deps.store.account(auth.accountId);
 }
 
+function unavailable(): Response {
+  return apiError(503, "service_unavailable", "This service is temporarily unavailable.");
+}
+
+function signInUnavailable(): Response {
+  return apiError(503, "sign_in_unavailable", "This sign-in provider is not configured.");
+}
+
+const getAccount: Handler = async (request, deps) => {
+  const account = await authenticatedAccount(request, deps);
+  if (!account) return unauthenticated();
+  if (!deps.accountStore) return unavailable();
+  const profile = await deps.accountStore.accountProfile(account.id);
+  return profile ? json({ ok: true, account: profile }, 200) : unauthenticated();
+};
+
+const authStart: Handler = (request, deps) => deps.accountAuth?.start(request) ?? Promise.resolve(unavailable());
+const authCallback: Handler = (request, deps) => deps.accountAuth?.callback(request) ?? Promise.resolve(unavailable());
+const authComplete: Handler = (request, deps) => deps.accountAuth?.complete(request) ?? Promise.resolve(unavailable());
+const googleAuthStart: Handler = (request, deps) =>
+  deps.openIdAuth?.start(request, "google") ?? Promise.resolve(signInUnavailable());
+const googleAuthCallback: Handler = (request, deps) =>
+  deps.openIdAuth?.callback(request, "google") ?? Promise.resolve(signInUnavailable());
+const googleAuthComplete: Handler = (request, deps) =>
+  deps.openIdAuth?.complete(request, "google") ?? Promise.resolve(signInUnavailable());
+const microsoftAuthStart: Handler = (request, deps) =>
+  deps.openIdAuth?.start(request, "microsoft") ?? Promise.resolve(signInUnavailable());
+const microsoftAuthCallback: Handler = (request, deps) =>
+  deps.openIdAuth?.callback(request, "microsoft") ?? Promise.resolve(signInUnavailable());
+const microsoftAuthComplete: Handler = (request, deps) =>
+  deps.openIdAuth?.complete(request, "microsoft") ?? Promise.resolve(signInUnavailable());
+const emailStart: Handler = (request, deps) => deps.emailAuth?.start(request) ?? Promise.resolve(unavailable());
+const emailVerify: Handler = (request, deps) => deps.emailAuth?.verify(request) ?? Promise.resolve(unavailable());
+const emailPoll: Handler = (request, deps) => deps.emailAuth?.poll(request) ?? Promise.resolve(unavailable());
+const sessionRefresh: Handler = (request, deps) => deps.emailAuth?.refresh(request) ?? Promise.resolve(unavailable());
+const sessionLogout: Handler = (request, deps) =>
+  deps.emailAuth?.logout(request) ??
+  deps.accountAuth?.logout(request) ??
+  deps.openIdAuth?.logout(request) ??
+  Promise.resolve(unavailable());
+
+const activateFree: Handler = async (request, deps) => {
+  const origin = request.headers.get("origin");
+  if (origin !== null && origin !== "https://kalcoded.com") {
+    return apiError(403, "forbidden", "This request origin is not allowed.");
+  }
+  const account = await authenticatedAccount(request, deps);
+  if (!account) return unauthenticated();
+  if (!deps.accountStore) return unavailable();
+  return (await deps.accountStore.activateFree(account.id, deps.now().toISOString()))
+    ? json({ ok: true, tier: "free" }, 200)
+    : unavailable();
+};
+
+const startAccountDelete: Handler = async (request, deps) => {
+  const account = await authenticatedAccount(request, deps);
+  if (!account) return unauthenticated();
+  if (!deps.accountStore || !deps.emailAuth) return unavailable();
+  const profile = await deps.accountStore.accountProfile(account.id);
+  return profile ? deps.emailAuth.startDelete(request, account.id, profile.email) : unauthenticated();
+};
+
+async function requireActivated(accountId: string, deps: Deps): Promise<Response | null> {
+  if (!deps.accountStore) return unavailable();
+  const profile = await deps.accountStore.accountProfile(accountId);
+  return profile?.activatedAt ? null : apiError(409, "account_not_activated", "Choose a plan to finish setup.");
+}
+
+const billingCheckout: Handler = async (request, deps) => {
+  const account = await authenticatedAccount(request, deps);
+  if (!account) return unauthenticated();
+  return deps.billing?.checkout(request, account.id) ?? unavailable();
+};
+
+const billingPortal: Handler = async (request, deps) => {
+  const account = await authenticatedAccount(request, deps);
+  if (!account) return unauthenticated();
+  return deps.billing?.portal(request, account.id) ?? unavailable();
+};
+
+const billingWebhook: Handler = (request, deps) => deps.billing?.webhook(request) ?? Promise.resolve(unavailable());
+
 /** The caller's own signed entitlement. */
 const getEntitlement: Handler = async (request, deps) => {
   const account = await authenticatedAccount(request, deps);
   if (!account) return unauthenticated();
+  const activation = await requireActivated(account.id, deps);
+  if (activation) return activation;
   const key = await deps.signingKey();
   if (!key) return signingUnavailable(deps);
   const now = deps.now();
@@ -98,6 +213,8 @@ async function usageResponse(
 const getUsage: Handler = async (request, deps) => {
   const account = await authenticatedAccount(request, deps);
   if (!account) return unauthenticated();
+  const activation = await requireActivated(account.id, deps);
+  if (activation) return activation;
   const key = await deps.signingKey();
   if (!key) return signingUnavailable(deps);
   const now = deps.now();
@@ -141,6 +258,8 @@ const postRequest: Handler = async (request, deps) => {
   }
   const account = await authenticatedAccount(request, deps);
   if (!account) return unauthenticated();
+  const activation = await requireActivated(account.id, deps);
+  if (activation) return activation;
   const body = await readJsonBody(request);
   if (!body.ok) {
     const [status, message] = BODY_ERRORS[body.reason];
@@ -177,13 +296,33 @@ const postRequest: Handler = async (request, deps) => {
 };
 
 export const ROUTES: readonly Route[] = [
+  { method: "GET", path: ACCOUNT_PATH, access: "account", handler: getAccount },
+  { method: "POST", path: AUTH_GITHUB_START_PATH, access: "public", handler: authStart },
+  { method: "GET", path: AUTH_GITHUB_CALLBACK_PATH, access: "public", handler: authCallback },
+  { method: "POST", path: AUTH_GITHUB_COMPLETE_PATH, access: "public", handler: authComplete },
+  { method: "POST", path: AUTH_GOOGLE_START_PATH, access: "public", handler: googleAuthStart },
+  { method: "GET", path: AUTH_GOOGLE_CALLBACK_PATH, access: "public", handler: googleAuthCallback },
+  { method: "POST", path: AUTH_GOOGLE_COMPLETE_PATH, access: "public", handler: googleAuthComplete },
+  { method: "POST", path: AUTH_MICROSOFT_START_PATH, access: "public", handler: microsoftAuthStart },
+  { method: "GET", path: AUTH_MICROSOFT_CALLBACK_PATH, access: "public", handler: microsoftAuthCallback },
+  { method: "POST", path: AUTH_MICROSOFT_COMPLETE_PATH, access: "public", handler: microsoftAuthComplete },
+  { method: "POST", path: AUTH_EMAIL_START_PATH, access: "public", handler: emailStart },
+  { method: "POST", path: AUTH_EMAIL_VERIFY_PATH, access: "public", handler: emailVerify },
+  { method: "POST", path: AUTH_EMAIL_POLL_PATH, access: "public", handler: emailPoll },
+  { method: "POST", path: AUTH_REFRESH_PATH, access: "public", handler: sessionRefresh },
+  { method: "POST", path: AUTH_LOGOUT_PATH, access: "public", handler: sessionLogout },
+  { method: "POST", path: ACCOUNT_ACTIVATE_FREE_PATH, access: "account", handler: activateFree },
+  { method: "POST", path: ACCOUNT_DELETE_START_PATH, access: "account", handler: startAccountDelete },
+  { method: "POST", path: BILLING_CHECKOUT_PATH, access: "account", handler: billingCheckout },
+  { method: "POST", path: BILLING_PORTAL_PATH, access: "account", handler: billingPortal },
+  { method: "POST", path: BILLING_WEBHOOK_PATH, access: "public", handler: billingWebhook },
   { method: "GET", path: ENTITLEMENT_PATH, access: "account", handler: getEntitlement },
   { method: "GET", path: KEYS_PATH, access: "public", handler: getKeys },
   { method: "GET", path: KALVOICE_USAGE_PATH, access: "account", handler: getUsage },
   { method: "POST", path: KALVOICE_REQUESTS_PATH, access: "account", handler: postRequest },
 ];
 
-export async function handleRequest(request: Request, deps: Deps): Promise<Response> {
+async function dispatch(request: Request, deps: Deps): Promise<Response> {
   const { pathname } = new URL(request.url);
   const matching = ROUTES.filter((route) => route.path === pathname);
   if (matching.length === 0) {
@@ -200,4 +339,34 @@ export async function handleRequest(request: Request, deps: Deps): Promise<Respo
     deps.log({ level: "error", event: "api.unhandled", error: errorName(error) });
     return apiError(500, "server_error", SERVER_ERROR_MESSAGE);
   }
+}
+
+export async function handleRequest(request: Request, deps: Deps): Promise<Response> {
+  const origin = request.headers.get("origin");
+  if (request.method === "OPTIONS") {
+    const pathKnown = ROUTES.some((route) => route.path === new URL(request.url).pathname);
+    if (!pathKnown || origin !== "https://kalcoded.com") {
+      return apiError(403, "forbidden", "This request origin is not allowed.");
+    }
+    const methods = ROUTES.filter((route) => route.path === new URL(request.url).pathname)
+      .map((route) => route.method)
+      .join(", ");
+    return new Response(null, {
+      status: 204,
+      headers: {
+        "access-control-allow-origin": origin,
+        "access-control-allow-credentials": "true",
+        "access-control-allow-methods": methods,
+        "access-control-allow-headers": "content-type",
+        vary: "Origin",
+      },
+    });
+  }
+  const response = await dispatch(request, deps);
+  if (origin !== "https://kalcoded.com") return response;
+  const headers = new Headers(response.headers);
+  headers.set("access-control-allow-origin", origin);
+  headers.set("access-control-allow-credentials", "true");
+  headers.append("vary", "Origin");
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }

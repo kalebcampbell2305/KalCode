@@ -3,33 +3,56 @@ import type {
   ApprovalDecision,
   ApprovalView,
   BootState,
+  Branch,
+  BranchState,
   CommandRequest,
+  Commit,
+  ContextPreview,
   CorrelationFilter,
   Diagnostics,
   EventEnvelope,
   EventPage,
   EventQuery,
+  FileEntry,
+  FileHandle,
+  GitStatusSummary,
   HealthRollup,
+  HomeSummary,
   KalVoiceMode,
   KalVoicePreferencesPatch,
   KalVoiceResponse,
   KalVoiceSignal,
   KalVoiceStatus,
   LatencySnapshot,
-  PaneLayout,
+  LocatorEntityKind,
+  LocatorOpenTarget,
+  LocatorQuery,
+  LocatorResponse,
+  LocatorVia,
   NotificationMark,
   NotificationPage,
+  Page,
+  PaneLayout,
   PermissionMode,
   PermissionProfile,
   PermissionSettings,
+  ProviderAccount,
+  ProviderAccountBinding,
+  ProviderAccountBindingKind,
   ProviderHealth,
   ProviderStatus,
+  RailSection,
+  RailState,
+  RailUpdate,
+  RecentWorkItem,
+  RecentWorkWhen,
   SavedLayoutPreset,
   SecureStoreCheck,
   Settings,
   SettingsPatch,
   ShellOption,
   SpeechModelInfo,
+  StatusFile,
   TalkRequest,
   TalkResponse,
   TerminalInfo,
@@ -38,33 +61,14 @@ import type {
   ThreadSummary,
   ToolCallRecord,
   Workspace,
-  WorkspaceLayout,
-} from "@kalcode/protocol";
-import type {
-  Branch,
-  BranchState,
-  Commit,
-  FileEntry,
-  FileHandle,
-  GitStatusSummary,
-  HomeSummary,
-  LocatorEntityKind,
-  LocatorOpenTarget,
-  LocatorQuery,
-  LocatorResponse,
-  LocatorVia,
-  Page,
-  RailSection,
-  RailState,
-  RailUpdate,
-  RecentWorkItem,
-  RecentWorkWhen,
-  StatusFile,
   WorkspaceGroup,
+  WorkspaceLayout,
   WorkspaceRailEntry,
 } from "@kalcode/protocol";
+import type { ContextFileChoice, ContextInput, ContextSendResult, PromptReview } from "./context.ts";
 import { toKalCodeError } from "./errors.ts";
 import type { CommandName, NativeTheme, Transport, Unsubscribe } from "./transport.ts";
+import type { UpdateChannel, UpdateStatus } from "./updater.ts";
 
 /** Maximum page size accepted by `events_recent` (mirrors the native limit). */
 export const MAX_EVENT_PAGE = 500;
@@ -96,11 +100,19 @@ export const MAX_THREAD_PAGE = 500;
 
 export interface CreateThreadInput {
   providerId: string;
+  providerAccountId?: string | null;
   workspaceId: string;
   model: string | null;
   permissionMode: PermissionMode;
   prompt: string;
   name: string | null;
+  confirmBypass?: boolean | null;
+  profileId?: string | null;
+}
+
+/** Opaque native login operation. Provider URLs and credentials remain outside the WebView. */
+export interface ProviderLoginStart {
+  loginHandle: string;
 }
 
 /** `git_status` (Z6a): the working tree's state; `repository: false` for a plain folder. */
@@ -147,6 +159,30 @@ export class KalCodeClient {
 
   updateSettings(patch: SettingsPatch): Promise<Settings> {
     return this.call("settings_update", { patch });
+  }
+
+  updaterStatus(): Promise<UpdateStatus> {
+    return this.call("updater_status");
+  }
+
+  updaterSetChannel(channel: UpdateChannel): Promise<UpdateStatus> {
+    return this.call("updater_set_channel", { channel });
+  }
+
+  updaterCheck(): Promise<UpdateStatus> {
+    return this.call("updater_check");
+  }
+
+  updaterCancel(): Promise<UpdateStatus> {
+    return this.call("updater_cancel");
+  }
+
+  updaterInstall(): Promise<void> {
+    return this.call("updater_install");
+  }
+
+  updaterRestorePrevious(): Promise<void> {
+    return this.call("updater_restore_previous");
   }
 
   recentEvents(limit: number, beforeSeq?: number): Promise<EventEnvelope[]> {
@@ -285,6 +321,81 @@ export class KalCodeClient {
     return this.call("providers_detect");
   }
 
+  // ---- Managed provider accounts ----
+
+  listProviderAccounts(providerId?: string): Promise<ProviderAccount[]> {
+    return this.call("provider_accounts_list", { providerId: providerId ?? null });
+  }
+
+  createProviderAccount(providerId: string, displayName: string): Promise<ProviderAccount> {
+    return this.call("provider_account_create", { providerId, displayName });
+  }
+
+  renameProviderAccount(accountId: string, displayName: string): Promise<ProviderAccount> {
+    return this.call("provider_account_rename", { accountId, displayName });
+  }
+
+  setDefaultProviderAccount(accountId: string): Promise<ProviderAccount> {
+    return this.call("provider_account_set_default", { accountId });
+  }
+
+  archiveProviderAccount(accountId: string): Promise<ProviderAccount> {
+    return this.call("provider_account_archive", { accountId });
+  }
+
+  bindProviderAccount(
+    providerId: string,
+    kind: ProviderAccountBindingKind,
+    scopeId: string,
+    accountId: string,
+  ): Promise<ProviderAccountBinding> {
+    return this.call("provider_account_bind", { providerId, kind, scopeId, accountId });
+  }
+
+  unbindProviderAccount(providerId: string, kind: ProviderAccountBindingKind, scopeId: string): Promise<boolean> {
+    return this.call("provider_account_unbind", { providerId, kind, scopeId });
+  }
+
+  refreshCodexAccount(accountId: string): Promise<ProviderAccount> {
+    return this.call("provider_codex_account_refresh", { accountId });
+  }
+
+  startCodexLogin(accountId: string): Promise<ProviderLoginStart> {
+    return this.call("provider_codex_login_start", { accountId });
+  }
+
+  waitForCodexLogin(loginHandle: string): Promise<ProviderAccount> {
+    return this.call("provider_codex_login_wait", { loginHandle });
+  }
+
+  cancelCodexLogin(loginHandle: string): Promise<void> {
+    return this.call("provider_codex_login_cancel", { loginHandle });
+  }
+
+  logoutCodexAccount(accountId: string): Promise<ProviderAccount> {
+    return this.call("provider_codex_logout", { accountId });
+  }
+
+  refreshClaudeAccount(accountId: string): Promise<ProviderAccount> {
+    return this.call("provider_claude_account_refresh", { accountId });
+  }
+
+  startClaudeLogin(accountId: string): Promise<ProviderLoginStart> {
+    return this.call("provider_claude_login_start", { accountId });
+  }
+
+  waitForClaudeLogin(loginHandle: string): Promise<ProviderAccount> {
+    return this.call("provider_claude_login_wait", { loginHandle });
+  }
+
+  cancelClaudeLogin(loginHandle: string): Promise<void> {
+    return this.call("provider_claude_login_cancel", { loginHandle });
+  }
+
+  logoutClaudeAccount(accountId: string): Promise<ProviderAccount> {
+    return this.call("provider_claude_logout", { accountId });
+  }
+
   // ---- Provider Health (PROVIDERS-2) ----
   // Cheap in-memory snapshots: reading health never starts a provider process or a detection.
 
@@ -329,20 +440,79 @@ export class KalCodeClient {
     return this.call("thread_options");
   }
 
-  createThread(input: CreateThreadInput): Promise<ThreadSummary> {
-    return this.call("thread_create", { ...input });
+  reviewCreateThreadPrompt(input: CreateThreadInput): Promise<PromptReview> {
+    return this.call("thread_review_create_prompt", {
+      ...input,
+      providerAccountId: input.providerAccountId ?? null,
+      confirmBypass: input.confirmBypass ?? null,
+      profileId: input.profileId ?? null,
+    });
   }
 
-  sendToThread(threadId: string, text: string): Promise<ThreadSummary> {
-    return this.call("thread_send", { threadId, text });
+  reviewThreadPrompt(threadId: string, text: string): Promise<PromptReview> {
+    return this.call("thread_review_prompt", { threadId, text });
+  }
+
+  cancelPromptReview(reviewId: string): Promise<boolean> {
+    return this.call("thread_cancel_prompt_review", { reviewId });
+  }
+
+  createThread(input: CreateThreadInput, promptReviewId?: string | null): Promise<ThreadSummary> {
+    return this.call("thread_create", {
+      ...input,
+      providerAccountId: input.providerAccountId ?? null,
+      confirmBypass: input.confirmBypass ?? null,
+      profileId: input.profileId ?? null,
+      promptReviewId: promptReviewId ?? null,
+    });
+  }
+
+  sendToThread(threadId: string, text: string, promptReviewId?: string | null): Promise<ThreadSummary> {
+    return this.call("thread_send", { threadId, text, promptReviewId: promptReviewId ?? null });
+  }
+
+  pickContextFiles(threadId: string): Promise<ContextFileChoice[]> {
+    return this.call("context_file_pick", { threadId });
+  }
+
+  createContextPreview(threadId: string, inputs: ContextInput[]): Promise<ContextPreview> {
+    return this.call("context_preview_create", { threadId, inputs });
+  }
+
+  setContextItem(packageId: string, position: number, included: boolean): Promise<ContextPreview> {
+    return this.call("context_item_set", { packageId, position, included });
+  }
+
+  confirmContextItem(packageId: string, position: number): Promise<ContextPreview> {
+    return this.call("context_item_confirm", { packageId, position });
+  }
+
+  discardContext(packageId: string): Promise<void> {
+    return this.call("context_discard", { packageId });
+  }
+
+  sendWithContext(
+    packageId: string,
+    threadId: string,
+    previewedSha256: string,
+    text: string,
+    promptReviewId?: string | null,
+  ): Promise<ContextSendResult> {
+    return this.call("context_send", {
+      packageId,
+      threadId,
+      previewedSha256,
+      text,
+      promptReviewId: promptReviewId ?? null,
+    });
   }
 
   interruptThread(threadId: string): Promise<ThreadSummary> {
     return this.call("thread_interrupt", { threadId });
   }
 
-  resumeThread(threadId: string, text?: string): Promise<ThreadSummary> {
-    return this.call("thread_resume", { threadId, text: text ?? null });
+  resumeThread(threadId: string, text?: string, promptReviewId?: string | null): Promise<ThreadSummary> {
+    return this.call("thread_resume", { threadId, text: text ?? null, promptReviewId: promptReviewId ?? null });
   }
 
   stopThread(threadId: string): Promise<ThreadSummary> {

@@ -5,6 +5,8 @@
 //! Wire conventions: `snake_case` enums, internally tagged data-carrying enums (`kind`),
 //! `camelCase` fields. Nothing here carries secret content: excerpts are redacted and bounded.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -421,6 +423,26 @@ pub struct ContextPreview {
     pub content_sha256: String,
 }
 
+/// Content-free information safe to return when a user prompt needs owner confirmation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct PromptWarning {
+    /// Opaque, random, process-local confirmation handle.
+    pub review_id: String,
+    /// Detector identifiers and counts only. Secret values and offsets are intentionally absent.
+    pub detectors: BTreeMap<String, u32>,
+}
+
+/// Result of inspecting a prompt before a provider effect.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "kind", content = "warning", rename_all = "snake_case")]
+#[ts(export)]
+pub enum PromptReview {
+    Clean,
+    ConfirmationRequired(PromptWarning),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -479,5 +501,32 @@ mod tests {
             .expect("json"),
             serde_json::json!({"kind": "trimmed", "bytes": 1, "omittedBytes": 2})
         );
+    }
+
+    #[test]
+    fn prompt_review_wire_shape_contains_only_opaque_id_and_counts() {
+        let secret = "do-not-serialize-this-value";
+        let review = PromptReview::ConfirmationRequired(PromptWarning {
+            review_id: "018f6f65-6c6a-7f32-a21b-22600a5d8c01".into(),
+            detectors: BTreeMap::from([("assignment".into(), 2)]),
+        });
+        let json = serde_json::to_value(&review).expect("json");
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "kind": "confirmation_required",
+                "warning": {
+                    "reviewId": "018f6f65-6c6a-7f32-a21b-22600a5d8c01",
+                    "detectors": {"assignment": 2}
+                }
+            })
+        );
+        assert!(!serde_json::to_string(&json).expect("json").contains(secret));
+        assert_eq!(
+            serde_json::to_value(PromptReview::Clean).expect("clean json"),
+            serde_json::json!({"kind": "clean"})
+        );
+        let round_trip: PromptReview = serde_json::from_value(json).expect("round trip");
+        assert_eq!(round_trip, review);
     }
 }

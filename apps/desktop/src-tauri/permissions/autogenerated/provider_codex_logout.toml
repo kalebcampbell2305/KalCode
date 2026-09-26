@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-provider-codex-logout"
+description = "Enables the provider_codex_logout command without any pre-configured scope."
+commands.allow = ["provider_codex_logout"]
+
+[[permission]]
+identifier = "deny-provider-codex-logout"
+description = "Denies the provider_codex_logout command without any pre-configured scope."
+commands.deny = ["provider_codex_logout"]

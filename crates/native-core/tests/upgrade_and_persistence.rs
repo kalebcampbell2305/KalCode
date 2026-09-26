@@ -42,9 +42,78 @@ fn migrations_are_numbered_contiguously() {
             (8, "context"),
             (9, "workspace_ui"),
             (10, "notifications"),
-            (11, "rail_locator")
+            (11, "rail_locator"),
+            (12, "provider_accounts"),
+            (13, "kalvoice_request_lifecycle"),
+            (14, "utility_dock"),
+            (15, "time_machine"),
+            (16, "doctor"),
+            (17, "utility_authority"),
+            (18, "context_delivery")
         ]
     );
+}
+
+#[test]
+fn utility_timeline_doctor_upgrade_preserves_v13_data_and_reopens() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    {
+        let core =
+            Core::open_with_migrations(config(dir.path()), &MIGRATIONS[..13]).expect("v13 open");
+        core.update_settings(&SettingsPatch {
+            theme: Some(ThemePreference::Dark),
+            ..Default::default()
+        })
+        .expect("settings");
+        core.shutdown();
+    }
+    for _ in 0..2 {
+        let core = Core::open(config(dir.path())).expect("upgraded open");
+        assert_eq!(
+            core.settings().expect("settings").theme,
+            ThemePreference::Dark
+        );
+        assert_eq!(
+            core.diagnostics()
+                .expect("diagnostics")
+                .database
+                .schema_version,
+            18
+        );
+        let tables: i64 = core
+            .read(|conn| {
+                Ok(conn.query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name IN
+            ('scratchpads','http_saved_requests','restore_operations','replay_runs',
+             'doctor_ignores','doctor_runs','doctor_fix_log','doctor_approval_claims',
+             'utility_approval_claims')",
+                    [],
+                    |row| row.get(0),
+                )?)
+            })
+            .expect("feature tables");
+        assert_eq!(tables, 9);
+        core.shutdown();
+    }
+    let backups: Vec<_> = std::fs::read_dir(dir.path().join("backups"))
+        .expect("backups")
+        .map(|entry| entry.expect("backup").path())
+        .collect();
+    assert_eq!(
+        backups.len(),
+        1,
+        "restart must not repeat migration or backup"
+    );
+    let backup = db::open_read_only(&backups[0]).expect("backup read only");
+    assert_eq!(db::schema_version(&backup).expect("backup schema"), 13);
+    let theme: String = backup
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'appearance.theme'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("backup settings");
+    assert_eq!(theme, "\"dark\"");
 }
 
 /// A hypothetical migration after the current latest, to exercise refusal paths.
@@ -626,8 +695,8 @@ fn upgrade_v4_to_v5_backs_up_and_preserves_everything() {
     core.shutdown();
 }
 
-/// Tables each migration after v6 adds (v7 Z6a git core, v8 CTX/FW context, v9 Z7-W1 layouts).
-const POST_V6_TABLES: [&str; 8] = [
+/// Tables each migration after v6 adds, including credential-free provider account metadata.
+const POST_V6_TABLES: [&str; 10] = [
     "checkpoints",
     "context_firewall_log",
     "context_items",
@@ -635,6 +704,8 @@ const POST_V6_TABLES: [&str; 8] = [
     "context_packages",
     "git_worktrees",
     "layout_presets",
+    "provider_account_bindings",
+    "provider_accounts",
     "workspace_layouts",
 ];
 
@@ -758,6 +829,156 @@ fn upgrade_v6_to_latest_backs_up_once_and_keeps_everything() {
         })
         .collect();
     assert_eq!(upgrades, vec![(6, latest, true)]);
+}
+
+#[test]
+fn upgrade_v11_to_v12_preserves_threads_and_adds_account_authority() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let thread_id = "11111111-1111-4111-8111-111111111111";
+    {
+        let core = Core::open_with_migrations(config(dir.path()), &MIGRATIONS[..11]).expect("v11");
+        core.transact(|tx| {
+            tx.execute(
+                "INSERT INTO threads (
+                     id, name, provider_id, provider_name, account_label,
+                     workspace_id, workspace_name, cwd, permission_mode, status,
+                     created_at, last_activity_at
+                 ) VALUES (
+                     ?1, 'Existing thread', 'codex', 'Codex', 'Historical label',
+                     'legacy-workspace', 'Legacy workspace', 'C:/legacy', 'approve', 'idle',
+                     '2026-09-24T10:00:00.000Z', '2026-09-24T10:00:00.000Z'
+                 )",
+                [thread_id],
+            )?;
+            Ok(((), Vec::new()))
+        })
+        .expect("v11 thread");
+        core.shutdown();
+    }
+
+    let core = Core::open(config(dir.path())).expect("upgrade");
+    assert_eq!(
+        core.read(db::schema_version).expect("version"),
+        MIGRATIONS.last().expect("registered migrations").version
+    );
+    let row: (String, String, Option<String>) = core
+        .read(|conn| {
+            Ok(conn.query_row(
+                "SELECT name, account_label, provider_account_id FROM threads WHERE id = ?1",
+                [thread_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?)
+        })
+        .expect("preserved thread");
+    assert_eq!(
+        row,
+        ("Existing thread".into(), "Historical label".into(), None)
+    );
+    let tables = core
+        .read(|conn| {
+            Ok(tables_named(
+                conn,
+                &["provider_account_bindings", "provider_accounts"],
+            ))
+        })
+        .expect("provider account tables");
+    assert_eq!(
+        tables,
+        vec!["provider_account_bindings", "provider_accounts"]
+    );
+    core.shutdown();
+}
+
+#[test]
+fn upgrade_v17_to_v18_backs_up_reopens_and_preserves_context_data() {
+    const PACKAGE_ID: &str = "018f6f65-6c6a-7f32-a21b-22600a5d8a18";
+    const CREATED_AT: &str = "2026-09-25T12:00:00.000Z";
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    {
+        let core = Core::open_with_migrations(config(dir.path()), &MIGRATIONS[..17])
+            .expect("open schema v17");
+        core.update_settings(&SettingsPatch {
+            theme: Some(ThemePreference::Light),
+            density: Some(Density::Compact),
+            ..Default::default()
+        })
+        .expect("preserved settings");
+        core.transact(|tx| {
+            tx.execute(
+                "INSERT INTO context_packages
+                   (id, purpose, status, content_sha256, total_bytes, created_at)
+                 VALUES (?1, 'drop', 'previewed', ?2, 7, ?3)",
+                rusqlite::params![PACKAGE_ID, "a".repeat(64), CREATED_AT],
+            )?;
+            Ok(((), Vec::new()))
+        })
+        .expect("pre-v18 context package");
+        core.shutdown();
+    }
+
+    for _ in 0..2 {
+        let core = Core::open(config(dir.path())).expect("upgrade or reopen");
+        assert_eq!(core.read(db::schema_version).expect("schema version"), 18);
+        let settings = core.settings().expect("settings");
+        assert_eq!(settings.theme, ThemePreference::Light);
+        assert_eq!(settings.density, Density::Compact);
+        let preserved: (String, String, i64) = core
+            .read(|conn| {
+                Ok(conn.query_row(
+                    "SELECT status, content_sha256, total_bytes
+                       FROM context_packages
+                      WHERE id = ?1",
+                    [PACKAGE_ID],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )?)
+            })
+            .expect("preserved context package");
+        assert_eq!(preserved, ("previewed".into(), "a".repeat(64), 7));
+        let delivery_rows: i64 = core
+            .read(|conn| {
+                Ok(conn.query_row(
+                    "SELECT COUNT(*) FROM context_delivery_attempts",
+                    [],
+                    |row| row.get(0),
+                )?)
+            })
+            .expect("delivery table");
+        assert_eq!(
+            delivery_rows, 0,
+            "migration never fabricates delivery evidence"
+        );
+        core.shutdown();
+    }
+
+    let backups: Vec<_> = std::fs::read_dir(dir.path().join("backups"))
+        .expect("backups")
+        .map(|entry| entry.expect("backup entry").path())
+        .collect();
+    assert_eq!(
+        backups.len(),
+        1,
+        "reopen must not repeat backup or migration"
+    );
+    let backup = db::open_read_only(&backups[0]).expect("open v17 backup");
+    assert_eq!(db::schema_version(&backup).expect("backup schema"), 17);
+    let preserved: (String, i64) = backup
+        .query_row(
+            "SELECT content_sha256, total_bytes FROM context_packages WHERE id = ?1",
+            [PACKAGE_ID],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("backup context package");
+    assert_eq!(preserved, ("a".repeat(64), 7));
+    let delivery_table: i64 = backup
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master
+              WHERE type = 'table' AND name = 'context_delivery_attempts'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("backup delivery table check");
+    assert_eq!(delivery_table, 0, "backup remains an exact pre-v18 schema");
 }
 
 #[test]

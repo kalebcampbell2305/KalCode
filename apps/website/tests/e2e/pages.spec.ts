@@ -68,6 +68,8 @@ test.describe("every page", () => {
     for (const entry of PAGES) {
       expect(xml).toContain(`<loc>${new URL(entry.path, SITE_ORIGIN).href}</loc>`);
     }
+    expect(xml).toContain(`<loc>${SITE_ORIGIN}/updates</loc>`);
+    expect(xml).not.toContain(`${SITE_ORIGIN}/changelog`);
     expect(xml).not.toContain("404");
     for (const icon of [
       "/favicon.ico",
@@ -77,6 +79,48 @@ test.describe("every page", () => {
       "/assets/brand/kalcode-wordmark.png",
     ]) {
       expect((await request.get(icon)).status(), icon).toBe(200);
+    }
+  });
+
+  test("legacy Changelog URLs redirect permanently to Updates and preserve release anchors", async ({
+    page,
+    request,
+  }) => {
+    const response = await request.get("/changelog?from=bookmark", { maxRedirects: 0 });
+    expect(response.status()).toBe(301);
+    expect(response.headers().location).toBe("/updates?from=bookmark");
+
+    await page.goto("/changelog#release-kalvoice");
+    await expect(page).toHaveURL(/\/updates#release-kalvoice$/);
+    await expect(page.locator("#release-kalvoice")).toBeVisible();
+  });
+
+  test("Updates is a concise product-news page with meaningful release sections", async ({ page }) => {
+    await page.goto("/updates");
+    await expect(page.getByRole("heading", { level: 1, name: "Updates" })).toBeVisible();
+    await expect(page.locator("article")).toHaveCount(4);
+    await expect(page.locator("#release-0-1-1")).toBeVisible();
+    await expect(page.locator("#release-website-2026-09-24")).toBeVisible();
+    await expect(page.locator("#release-kalvoice")).toBeVisible();
+    await expect(page.locator("#milestone-foundation")).toBeVisible();
+    await expect(page.locator("main")).not.toContainText("commit");
+  });
+
+  test("Updates stays inside the viewport on desktop and mobile", async ({ page }) => {
+    for (const [width, height] of [
+      [1440, 900],
+      [390, 844],
+    ] as const) {
+      await page.setViewportSize({ width, height });
+      await page.goto("/updates");
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(overflow, `${width}px viewport has no horizontal overflow`).toBeLessThanOrEqual(0);
+      for (const card of await page.locator("article.update").all()) {
+        const box = await card.boundingBox();
+        expect(box && box.x >= 0 && box.x + box.width <= width, `update card fits at ${width}px`).toBe(true);
+      }
     }
   });
 

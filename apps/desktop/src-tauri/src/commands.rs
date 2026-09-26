@@ -71,10 +71,12 @@ pub fn settings_update(
 
 #[tauri::command(async)]
 pub fn events_recent(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: State<'_, AppState>,
     limit: u32,
     before_seq: Option<i64>,
 ) -> Result<Vec<EventEnvelope>, IpcError> {
+    _runtime_access.revalidate()?;
     if before_seq.is_some_and(|seq| seq < 1) {
         return Err(
             KalError::validation("invalid_cursor", "The history cursor is invalid.").to_ipc(),
@@ -91,7 +93,12 @@ pub fn events_recent(
 /// read-only connection, off the main thread. Entity ids must be KalCode ids; the provider id and
 /// the request id are free-form but bounded (validated again in the store).
 #[tauri::command(async)]
-pub fn events_query(state: State<'_, AppState>, query: EventQuery) -> Result<EventPage, IpcError> {
+pub fn events_query(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    state: State<'_, AppState>,
+    query: EventQuery,
+) -> Result<EventPage, IpcError> {
+    _runtime_access.revalidate()?;
     let c = &query.correlation;
     let ids = [
         &c.workspace_id,
@@ -117,10 +124,12 @@ pub fn events_query(state: State<'_, AppState>, query: EventQuery) -> Result<Eve
 /// subscription replaces the previous one, and a page (re)load drops it (see `lib.rs`).
 #[tauri::command]
 pub fn events_subscribe(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     webview: Webview,
     state: State<'_, AppState>,
     on_event: Channel<EventEnvelope>,
 ) -> Result<SubscriptionId, IpcError> {
+    _runtime_access.revalidate()?;
     let core = state.core()?;
     let id = core.subscribe(move |event| on_event.send(event.clone()).is_ok());
     let previous = state
@@ -136,10 +145,12 @@ pub fn events_subscribe(
 
 #[tauri::command]
 pub fn events_unsubscribe(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     webview: Webview,
     state: State<'_, AppState>,
     id: SubscriptionId,
 ) -> Result<bool, IpcError> {
+    _runtime_access.revalidate()?;
     let mut subscriptions = state
         .subscriptions
         .lock()

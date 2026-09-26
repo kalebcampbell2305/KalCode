@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-utility-http-send"
+description = "Enables the utility_http_send command without any pre-configured scope."
+commands.allow = ["utility_http_send"]
+
+[[permission]]
+identifier = "deny-utility-http-send"
+description = "Denies the utility_http_send command without any pre-configured scope."
+commands.deny = ["utility_http_send"]

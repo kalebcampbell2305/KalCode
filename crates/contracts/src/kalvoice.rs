@@ -2,12 +2,13 @@
 //!
 //! One push-to-talk gesture (**Talk**, CA-1) routes each utterance: a clear command runs as a
 //! KalCode action, words for a focused text box or terminal are dictated, and anything else is a
-//! request for the user's provider (`kalvoice.talk_routed`). Dictation is local, unlimited on
-//! every plan and never counted; each top-level command or request counts as one KalVoice
-//! Request against the plan allowance, however many internal steps it takes.
+//! request for bounded on-device interpretation (`kalvoice.talk_routed`). Dictation is local,
+//! unlimited on every plan and never counted; each top-level command that executes counts as one
+//! KalVoice Request against the plan allowance, however many internal steps it takes.
 //!
 //! Zero-cost rule: KalVoice never uses company-funded AI. Deterministic commands run locally;
-//! requests that need reasoning use the user's own connected provider, or ask them to connect one.
+//! requests outside the grammar require the configured local runtime and never fall back to a
+//! connected provider.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -39,7 +40,7 @@ pub enum TalkRoute {
     Command,
     /// Typed into the focused text box or terminal (never counted).
     Dictation,
-    /// Sent to the user's provider for reasoning, or refused asking to connect one.
+    /// Sent to the bounded on-device interpreter, or refused as unavailable/uncertain.
     Request,
 }
 
@@ -86,7 +87,8 @@ pub enum KalVoiceInput {
     Text,
 }
 
-/// Which intelligence powers KalVoice reasoning. Always the user's own; never KalCode-funded.
+/// Legacy persisted intelligence selection. Current KalVoice reasoning is local-only; the provider
+/// variant remains solely for wire/storage compatibility and never authorizes provider inference.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(
     tag = "kind",
@@ -95,9 +97,9 @@ pub enum KalVoiceInput {
 )]
 #[ts(export)]
 pub enum KalVoiceIntelligence {
-    /// A provider the user connected (their account, their usage).
+    /// Legacy provider preference; ignored by the local-only reasoning path.
     Provider { provider_id: ProviderId },
-    /// A downloadable on-device model (future; never downloaded without consent).
+    /// A consented on-device model.
     Local,
 }
 
@@ -115,8 +117,71 @@ pub enum ThreadScope {
     Thread { thread_id: String },
 }
 
+/// One group of independent provider panes requested by the user. A missing provider uses
+/// the user's selected/default provider; an account label must resolve uniquely, never guess.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ProviderPaneRequest {
+    pub provider_id: Option<ProviderId>,
+    pub count: u8,
+    pub account_query: Option<String>,
+    pub model: Option<String>,
+}
+
+/// App layout controls. These never issue provider input or stop a runtime process.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+#[ts(export)]
+pub enum PaneControl {
+    Resize { query: String, grow: bool },
+    Move { query: String, beside: String },
+    Maximize { query: Option<String> },
+    Restore { query: Option<String> },
+    Collapse { query: Option<String> },
+    Expand { query: Option<String> },
+}
+
+/// Deterministic controls for KalCode's embedded browser surface. These commands can navigate a
+/// browser but cannot evaluate script, inspect the DOM, or grant a remote page application IPC.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+#[ts(export)]
+pub enum BrowserControl {
+    /// Open or focus a browser pane. `new_pane` requests a distinct browser identity.
+    Open {
+        url: Option<String>,
+        new_pane: bool,
+    },
+    /// Navigate the explicitly selected browser, or the focused/sole browser when omitted.
+    Navigate {
+        url: String,
+        browser_id: Option<String>,
+    },
+    Back {
+        browser_id: Option<String>,
+    },
+    Forward {
+        browser_id: Option<String>,
+    },
+    Reload {
+        browser_id: Option<String>,
+    },
+    Stop {
+        browser_id: Option<String>,
+    },
+}
+
 /// A structured command. Everything except `Reasoning` executes deterministically without any
-/// model; `Reasoning` needs a connected provider.
+/// model; `Reasoning` requires the bounded on-device interpreter.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(
     tag = "kind",
@@ -137,6 +202,18 @@ pub enum KalVoiceIntent {
     CreateThreads {
         provider_id: ProviderId,
         count: u8,
+        workspace_id: Option<String>,
+    },
+    CreateProviderPanes {
+        groups: Vec<ProviderPaneRequest>,
+        workspace_id: Option<String>,
+    },
+    ControlPane {
+        command: PaneControl,
+        workspace_id: Option<String>,
+    },
+    ControlBrowser {
+        command: BrowserControl,
         workspace_id: Option<String>,
     },
     OpenThread {
@@ -206,6 +283,9 @@ impl KalVoiceIntent {
             Self::OpenWorkspace { .. } => "open_workspace",
             Self::CreateTerminal { .. } => "create_terminal",
             Self::CreateThreads { .. } => "create_threads",
+            Self::CreateProviderPanes { .. } => "create_provider_panes",
+            Self::ControlPane { .. } => "control_pane",
+            Self::ControlBrowser { .. } => "control_browser",
             Self::OpenThread { .. } => "open_thread",
             Self::PauseThreads { .. } => "pause_threads",
             Self::ResumeThreads { .. } => "resume_threads",
@@ -224,7 +304,7 @@ impl KalVoiceIntent {
         }
     }
 
-    /// True when the intent needs a model (the user's connected provider).
+    /// True when the intent needs the configured on-device reasoning model.
     pub fn needs_reasoning(&self) -> bool {
         matches!(self, Self::Reasoning { .. })
     }
@@ -245,7 +325,8 @@ pub enum KalVoiceOutcome {
     PermissionRequired {
         approval_request_id: String,
     },
-    /// Reasoning was needed and no usable provider is connected.
+    /// Legacy outcome retained for wire compatibility; the local-only orchestrator reports a
+    /// typed local-reasoning failure instead.
     NeedsProvider {
         message: String,
     },
@@ -308,11 +389,11 @@ mod tests {
     fn usage_math() {
         let usage = KalVoiceUsage {
             used: 412,
-            allowance: Some(2500),
+            allowance: Some(1500),
             period_start: String::new(),
             resets_at: String::new(),
         };
-        assert_eq!(usage.remaining(), Some(2088));
+        assert_eq!(usage.remaining(), Some(1088));
         assert!(!usage.exhausted());
         let owner = KalVoiceUsage {
             used: 99_999,
@@ -322,8 +403,8 @@ mod tests {
         assert_eq!(owner.remaining(), None);
         assert!(!owner.exhausted());
         let full = KalVoiceUsage {
-            used: 250,
-            allowance: Some(250),
+            used: 75,
+            allowance: Some(75),
             ..usage
         };
         assert!(full.exhausted());
@@ -356,6 +437,37 @@ mod tests {
                 chip: DashboardChip::WaitingForYou,
             },
         ]
+    }
+
+    #[test]
+    fn browser_controls_round_trip_without_widening_authority() {
+        let controls = [
+            BrowserControl::Open {
+                url: Some("http://localhost:3000/".into()),
+                new_pane: true,
+            },
+            BrowserControl::Navigate {
+                url: "https://example.com/docs".into(),
+                browser_id: Some("0192f3c4-0000-7000-8000-00000000000c".into()),
+            },
+            BrowserControl::Back { browser_id: None },
+            BrowserControl::Forward { browser_id: None },
+            BrowserControl::Reload { browser_id: None },
+            BrowserControl::Stop { browser_id: None },
+        ];
+        for command in controls {
+            let intent = KalVoiceIntent::ControlBrowser {
+                command,
+                workspace_id: None,
+            };
+            let json = serde_json::to_value(&intent).expect("json");
+            assert_eq!(json["kind"], "control_browser");
+            assert!(json.get("script").is_none());
+            assert_eq!(
+                serde_json::from_value::<KalVoiceIntent>(json).expect("back"),
+                intent
+            );
+        }
     }
 
     #[test]

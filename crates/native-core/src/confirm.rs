@@ -220,6 +220,24 @@ impl NativeConfirmation {
         }
     }
 
+    /// A request to a link-local endpoint. These addresses can expose cloud instance metadata,
+    /// device administration surfaces, or credentials, so their consequence is stated natively
+    /// and cannot be replaced with wording supplied by the WebView.
+    pub fn link_local_request(host: &str) -> Self {
+        Self {
+            kind: NativeConfirmationKind::NewHostRequest,
+            title: "Send a request to a link-local address?".into(),
+            message: format!(
+                "{} is reachable only through a local network link. Link-local services can expose \
+                 device controls or cloud credentials. Send this one request only if you trust \
+                 the destination.",
+                quoted(host)
+            ),
+            confirm_label: "Send once",
+            cancel_label: "Cancel",
+        }
+    }
+
     /// Identifies exactly what was shown (kind and text), for the audit trail.
     pub fn digest(&self) -> String {
         let mut hasher = Sha256::new();
@@ -490,6 +508,7 @@ mod tests {
             NativeConfirmation::disengage_kill_switch(),
             NativeConfirmation::reveal_env_value("DATABASE_URL"),
             NativeConfirmation::new_host_request("api.example.test"),
+            NativeConfirmation::link_local_request("169.254.169.254"),
         ];
         let digests: std::collections::HashSet<String> =
             dialogs.iter().map(NativeConfirmation::digest).collect();

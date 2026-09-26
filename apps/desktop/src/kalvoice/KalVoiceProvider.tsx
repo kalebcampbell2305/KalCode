@@ -28,7 +28,12 @@ import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { useUiIntents } from "../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../runtime/WorkspaceProvider.tsx";
 import { type Destination, useNavigation } from "../shell/navigation.tsx";
-import { dispatchPaneCommand, type PaneCommand, paneCanvasListening } from "../shell/panes/paneCommands.ts";
+import {
+  activateAndDispatchPaneCommand,
+  dispatchPaneCommand,
+  type PaneCommand,
+  paneCanvasListening,
+} from "../shell/panes/paneCommands.ts";
 import { useOptionalSearch } from "../shell/rail/search/SearchProvider.tsx";
 import { usePermissions } from "../surfaces/permissions/index.ts";
 import { type AssistantState, INITIAL_STATE, reduce } from "./assistantState.ts";
@@ -39,6 +44,7 @@ import {
   resolveDictationTarget,
   targetIsAlive,
 } from "./dictation.ts";
+import { type DictationSession, DictationSessions } from "./dictationSessions.ts";
 import { placementFor, sizeClassFor } from "./panelGeometry.ts";
 
 export interface HistoryItem {
@@ -59,6 +65,8 @@ interface KalVoiceValue {
   statusError: KalCodeError | null;
   refreshStatus: () => Promise<void>;
   state: AssistantState;
+  /** The immutable pane destination captured for the active native dictation session. */
+  dictationTarget: { sessionId: string; paneId: string | null } | null;
   /** Latest microphone level (0–1), for animation without re-rendering. */
   levelRef: MutableRefObject<number>;
   /** A typed request (KalVoice page, for people who can't or don't want to speak). */
@@ -70,8 +78,6 @@ interface KalVoiceValue {
   /** Undo a spoken command: type the words into the box that had focus instead. */
   typeInstead: () => Promise<void>;
   canTypeInstead: boolean;
-  /** Answers KalVoice's own confirmation ("Open 4 Codex threads?"). */
-  decideApproval: (decision: "approve_once" | "deny") => Promise<void>;
   dismiss: () => void;
   updatePreferences: (patch: KalVoicePreferencesPatch) => Promise<KalVoiceStatus>;
   downloads: Record<string, DownloadProgress>;
@@ -110,6 +116,12 @@ function targetKind(target: DictationTarget | null): TalkTarget {
   return target.kind === "sink" ? "terminal" : "field";
 }
 
+function dictationFailure(target: DictationTarget | null): string {
+  return target?.kind === "sink"
+    ? `${target.sink.label} couldn't accept the dictated text. Nothing was inserted.`
+    : "The text box couldn't accept the dictated text. Nothing was inserted.";
+}
+
 const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
 /** Runs `fn` after the browser has painted the current update (for "visible action" timing). */
@@ -143,8 +155,11 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
     view?: PanelView;
   } | null>(null);
   const levelRef = useRef(0);
-  const targets = useRef(new Map<string, DictationTarget | null>());
-  const cancelled = useRef(new Set<string>());
+  const dictationSessions = useRef(new DictationSessions<DictationTarget>());
+  const [dictationTarget, setDictationTarget] = useState<{
+    sessionId: string;
+    paneId: string | null;
+  } | null>(null);
   /** For "Type it instead": where the words would have gone and the page before a navigation. */
   const undo = useRef<{ requestId: string; target: DictationTarget | null; previous: Destination | null } | null>(null);
   const stateRef = useRef(state);
@@ -153,6 +168,25 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   currentRef.current = current;
   const width = useWindowWidth();
   const sizeClass = sizeClassFor(width);
+
+  // Track focus before native capture starts. Widget pointer-down freezes the previously focused
+  // target synchronously; native keyboard capture uses this already-tracked target.
+  useEffect(() => {
+    let active = true;
+    const track = () => {
+      if (active) dictationSessions.current.setFocusedTarget(resolveDictationTarget(document.activeElement));
+    };
+    const afterFocusOut = () => queueMicrotask(track);
+    track();
+    document.addEventListener("focusin", track, true);
+    document.addEventListener("focusout", afterFocusOut, true);
+    return () => {
+      active = false;
+      document.removeEventListener("focusin", track, true);
+      document.removeEventListener("focusout", afterFocusOut, true);
+      dictationSessions.current.reset();
+    };
+  }, []);
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -204,13 +238,27 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           }
         }, PANE_WAIT_MS);
       };
+      const scopedPane = (workspaceId: string, command: PaneCommand) => {
+        void activateAndDispatchPaneCommand(
+          workspaceId,
+          command,
+          workspaces.activate,
+          () => navigate("code"),
+          (result) => {
+            if (result.message) {
+              toast.show({ tone: result.handled ? "info" : "danger", title: "Panes", description: result.message });
+            }
+          },
+        );
+      };
       switch (directive?.kind) {
         case "navigate":
           navigate(directive.surface);
           break;
         case "open_workspace":
-          void workspaces.activate(directive.workspaceId);
-          navigate("code");
+          void workspaces.activate(directive.workspaceId).then((activated) => {
+            if (activated) navigate("code");
+          });
           break;
         case "open_terminal": {
           const { workspaceId, terminalId } = directive;
@@ -222,6 +270,15 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           // Z7-W3 focus intents: a provider pane thread is focused in its pane (Z7-W1 canvas),
           // anything else opens in Threads.
           void intents.focus({ kind: "thread", threadId: directive.threadId });
+          break;
+        case "open_provider_panes":
+          scopedPane(directive.workspaceId, { kind: "open-provider-panes", threadIds: directive.threadIds });
+          break;
+        case "control_pane":
+          scopedPane(directive.workspaceId, { kind: "control-pane", command: directive.command });
+          break;
+        case "control_browser":
+          scopedPane(directive.workspaceId, { kind: "browser-control", command: directive.command });
           break;
         case "split_pane":
           pane({ kind: "split", axis: directive.axis });
@@ -273,21 +330,22 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       setHistory((items) => [{ requestId, text: trimmed, input, response: null }, ...items].slice(0, 20));
       dispatch({ type: "submitted", requestId });
       try {
-        applyResponse(await client.kalvoiceRequest({ requestId, text: trimmed, input, workspaceId: null }));
+        applyResponse(
+          await client.kalvoiceRequest({ requestId, text: trimmed, input, workspaceId: workspaces.active?.id ?? null }),
+        );
       } catch (error) {
         const e = toKalCodeError(error);
         dispatch({ type: "request_error", requestId, message: e.message, code: e.code });
       }
     },
-    [client, applyResponse],
+    [client, applyResponse, workspaces.active?.id],
   );
 
   /** One utterance: native routing decides command, dictation or request. */
   const talk = useCallback(
-    async (sessionId: string, text: string, durationMs: number) => {
+    async (session: DictationSession<DictationTarget>, text: string, durationMs: number) => {
       const started = performance.now();
-      const target = targets.current.get(sessionId) ?? null;
-      targets.current.delete(sessionId);
+      const { sessionId, target, signal } = session;
       const requestId = crypto.randomUUID();
       dispatch({ type: "submitted", requestId });
       const recordAction = () =>
@@ -300,16 +358,21 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           text,
           target: targetKind(target),
           durationMs,
-          workspaceId: null,
+          workspaceId: workspaces.active?.id ?? null,
         });
+        if (signal.aborted) return;
         if (talked.route === "dictation") {
           if (target && targetIsAlive(target)) {
-            dispatch({ type: "dictation_inserted", characters: insertTranscript(target, text) });
+            try {
+              const characters = await insertTranscript(target, text, { signal });
+              if (signal.aborted) return;
+              dispatch({ type: "dictation_inserted", characters });
+            } catch {
+              if (signal.aborted) return;
+              dispatch({ type: "dictation_blocked", message: dictationFailure(target) });
+            }
           } else {
-            dispatch({
-              type: "dictation_blocked",
-              message: `The text box closed before your words arrived. You said: “${text}”`,
-            });
+            dispatch({ type: "dictation_blocked", message: dictationFailure(target) });
           }
           recordAction();
           return;
@@ -325,11 +388,14 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
         applyResponse(response);
         recordAction();
       } catch (error) {
+        if (signal.aborted) return;
         const e = toKalCodeError(error);
         dispatch({ type: "request_error", requestId, message: e.message, code: e.code });
+      } finally {
+        dictationSessions.current.finish(sessionId);
       }
     },
-    [client, applyResponse],
+    [client, applyResponse, workspaces.active?.id],
   );
 
   const onSignal = useCallback(
@@ -340,8 +406,12 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           return;
         case "listening_started":
           levelRef.current = 0;
-          // The target is fixed now: switching focus while speaking can't redirect the text.
-          targets.current.set(signal.sessionId, resolveDictationTarget(document.activeElement));
+          {
+            const session = dictationSessions.current.open(signal.sessionId);
+            setDictationTarget(
+              session ? { sessionId: session.sessionId, paneId: session.target?.paneId ?? null } : null,
+            );
+          }
           break;
         case "reveal":
           setStatus((s) =>
@@ -354,15 +424,22 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
         case "result": {
           const result = signal.result;
           levelRef.current = 0;
-          if (cancelled.current.delete(result.sessionId)) return;
+          const session = dictationSessions.current.claim(result.sessionId);
+          if (!session) return;
+          setDictationTarget((current) => (current?.sessionId === result.sessionId ? null : current));
           dispatch({ type: "signal", signal });
-          if (result.kind === "transcript") void talk(result.sessionId, result.text, result.durationMs);
+          if (result.kind === "transcript") void talk(session, result.text, result.durationMs);
+          else dictationSessions.current.finish(result.sessionId);
           return;
         }
         case "cancelled":
         case "listening_failed":
           levelRef.current = 0;
-          if (signal.sessionId) targets.current.delete(signal.sessionId);
+          if (signal.sessionId) dictationSessions.current.cancel(signal.sessionId);
+          else dictationSessions.current.abandonPendingCapture();
+          setDictationTarget((current) =>
+            !signal.sessionId || current?.sessionId === signal.sessionId ? null : current,
+          );
           break;
         case "model_progress":
           setDownloads((d) => ({
@@ -423,13 +500,17 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
 
   const cancel = useCallback(async () => {
     const now = stateRef.current;
-    if (now.sessionId) cancelled.current.add(now.sessionId);
+    const activeSession = now.sessionId !== null && dictationSessions.current.has(now.sessionId);
+    if (now.sessionId) dictationSessions.current.cancel(now.sessionId);
+    if (now.sessionId) {
+      setDictationTarget((current) => (current?.sessionId === now.sessionId ? null : current));
+    }
     try {
       await client.kalvoiceListenCancel();
     } catch {
       // Nothing was listening.
     }
-    if (now.phase === "transcribing" && now.sessionId) {
+    if (activeSession && now.sessionId) {
       dispatch({
         type: "signal",
         signal: { kind: "cancelled", sessionId: now.sessionId, mode: now.mode ?? "talk" },
@@ -441,8 +522,9 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      const phase = stateRef.current.phase;
-      if (phase === "listening" || phase === "transcribing") {
+      const now = stateRef.current;
+      const routing = now.sessionId !== null && dictationSessions.current.has(now.sessionId);
+      if (now.phase === "listening" || now.phase === "transcribing" || routing) {
         event.preventDefault();
         void cancel();
       }
@@ -452,9 +534,14 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   }, [cancel]);
 
   const startListening = useCallback(async () => {
+    const capture = dictationSessions.current.captureFocusedTarget();
     try {
-      await client.kalvoiceListenStart("talk");
+      const sessionId = await client.kalvoiceListenStart("talk");
+      const session = dictationSessions.current.open(sessionId, capture);
+      setDictationTarget(session ? { sessionId: session.sessionId, paneId: session.target?.paneId ?? null } : null);
     } catch {
+      dictationSessions.current.abandonCapture(capture);
+      setDictationTarget(null);
       // The native side reports why as a `listening_failed` signal.
     }
   }, [client]);
@@ -481,11 +568,16 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
     }
     const target = reconnectTarget(saved.target);
     if (!target) {
-      dispatch({ type: "dictation_blocked", message: `That text box has closed. You said: “${last.text}”` });
+      dispatch({ type: "dictation_blocked", message: dictationFailure(saved.target) });
       return;
     }
     if (target.element instanceof HTMLElement) target.element.focus();
-    insertTranscript(target, last.text);
+    try {
+      await insertTranscript(target, last.text);
+    } catch {
+      dispatch({ type: "dictation_blocked", message: dictationFailure(target) });
+      return;
+    }
     let refunded = false;
     try {
       refunded = await client.kalvoiceTypeInstead(last.requestId);
@@ -499,21 +591,6 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
     });
     if (refunded) void refreshStatus();
   }, [client, navigate, refreshStatus]);
-
-  const decideApproval = useCallback(
-    async (decision: "approve_once" | "deny") => {
-      const id = stateRef.current.approvalRequestId;
-      if (!id) return;
-      try {
-        // The person's answer goes to the permission engine like any approval (actor: user);
-        // KalVoice continues when the engine reports it (the `request_resolved` signal).
-        await client.decideApproval(id, decision);
-      } catch (error) {
-        toast.show({ tone: "danger", title: "Answer not recorded", description: toKalCodeError(error).message });
-      }
-    },
-    [client, toast],
-  );
 
   const dismiss = useCallback(() => dispatch({ type: "dismiss" }), []);
 
@@ -611,6 +688,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       statusError,
       refreshStatus,
       state,
+      dictationTarget,
       levelRef,
       submit,
       startListening,
@@ -618,7 +696,6 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       cancel,
       typeInstead,
       canTypeInstead,
-      decideApproval,
       dismiss,
       updatePreferences,
       downloads,
@@ -636,13 +713,13 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       statusError,
       refreshStatus,
       state,
+      dictationTarget,
       submit,
       startListening,
       stopListening,
       cancel,
       typeInstead,
       canTypeInstead,
-      decideApproval,
       dismiss,
       updatePreferences,
       downloads,

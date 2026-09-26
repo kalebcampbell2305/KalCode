@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-browser-page-lease"
+description = "Enables the browser_page_lease command without any pre-configured scope."
+commands.allow = ["browser_page_lease"]
+
+[[permission]]
+identifier = "deny-browser-page-lease"
+description = "Denies the browser_page_lease command without any pre-configured scope."
+commands.deny = ["browser_page_lease"]

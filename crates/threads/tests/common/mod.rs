@@ -10,7 +10,7 @@
 )]
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -57,6 +57,7 @@ pub struct FakeSession {
     interrupted: AtomicBool,
     ended: AtomicBool,
     fail_send: AtomicBool,
+    terminate_failures: AtomicUsize,
     interrupt_supported: bool,
 }
 
@@ -72,6 +73,10 @@ impl FakeSession {
 
     pub fn fail_next_sends(&self) {
         self.fail_send.store(true, Ordering::SeqCst);
+    }
+
+    pub fn fail_next_terminate(&self) {
+        self.terminate_failures.store(1, Ordering::SeqCst);
     }
 
     pub fn is_ended(&self) -> bool {
@@ -134,6 +139,16 @@ impl AgentSession for SessionHandle {
 
     fn terminate(&self) -> Result<(), ProviderError> {
         self.0.calls.lock().unwrap().push(Call::Terminate);
+        if self
+            .0
+            .terminate_failures
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .is_ok()
+        {
+            return Err(ProviderError::Io("simulated termination failure".into()));
+        }
         if !self.0.ended.swap(true, Ordering::SeqCst) {
             // A real adapter reports the process exit after killing the tree.
             self.0.emit(AgentEvent::Exited { exit_code: None });
@@ -275,6 +290,7 @@ impl AgentProvider for FakeProvider {
             interrupted: AtomicBool::new(false),
             ended: AtomicBool::new(false),
             fail_send: AtomicBool::new(false),
+            terminate_failures: AtomicUsize::new(0),
             interrupt_supported: self.interrupt,
         });
         self.sessions.lock().unwrap().push(session.clone());
@@ -465,6 +481,8 @@ impl Harness {
     pub fn request(&self, prompt: &str) -> CreateThread {
         CreateThread {
             provider_id: "fake".into(),
+            provider_account_id: None,
+            account_label: None,
             workspace_id: self.workspace_id.clone(),
             model: None,
             permission_mode: PermissionMode::Approve,

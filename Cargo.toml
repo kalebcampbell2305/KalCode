@@ -20,6 +20,9 @@ time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"
 rusqlite = { version = "0.40", features = ["bundled"] }
 tempfile = "3"
 
+[patch.crates-io]
+portable-pty = { path = "third_party/portable-pty" }
+
 [workspace.lints.rust]
 # `deny`, not `forbid`: exactly one audited call site (apps/desktop/src-tauri/src/main.rs)
 # opts in, to strip browser-runtime overrides from the environment before any thread starts.

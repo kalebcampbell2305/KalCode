@@ -139,6 +139,8 @@ impl Stack {
         self.runtime
             .create(CreateThread {
                 provider_id: provider.into(),
+                provider_account_id: None,
+                account_label: None,
                 workspace_id: self.workspace_id.clone(),
                 model: None,
                 permission_mode: PermissionMode::Approve,

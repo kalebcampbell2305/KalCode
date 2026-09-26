@@ -198,21 +198,10 @@ fn main() {
         .map(|i| (kalcode_contracts::ids::new_id(), format!("project {i}")))
         .collect();
     workspaces.push((kalcode_contracts::ids::new_id(), "authentication".into()));
-    // The real permission engine over the same database, as in the app (KalVoice-origin
-    // approvals for commands that add work).
-    let permissions = Arc::new(
-        kalcode_permissions::PermissionService::new(
-            core.clone(),
-            Arc::new(kalcode_permissions::NoWorkspaces),
-            Arc::new(kalcode_permissions::NoThreads),
-        )
-        .expect("permissions"),
-    );
     let orchestrator = Orchestrator::new(
         core,
         Arc::new(FixedEntitlement(Tier::Owner)),
         Arc::new(FixtureExecutor { workspaces }),
-        permissions,
         Arc::new(NoProviders),
     );
 

@@ -210,6 +210,8 @@ impl Stack {
         let thread = RuntimeRouter::create_interactive(|| {
             self.runtime.create_idle(CreateIdleThread {
                 provider_id: "claude-code".into(),
+                provider_account_id: None,
+                account_label: None,
                 workspace_id: self.workspace_id.clone(),
                 model: None,
                 permission_mode: mode,
@@ -386,6 +388,8 @@ fn headless_and_interactive_threads_share_one_runtime_and_status_model() {
         .runtime
         .create(CreateThread {
             provider_id: "claude-code".into(),
+            provider_account_id: None,
+            account_label: None,
             workspace_id: stack.workspace_id.clone(),
             model: None,
             permission_mode: PermissionMode::Approve,

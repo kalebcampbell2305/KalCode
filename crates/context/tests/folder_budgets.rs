@@ -348,7 +348,7 @@ fn performance_budgets_release() {
     let package = package.expect("built");
     eprintln!("PERF package build runs (ms, first is cold): {runs:.1?}");
     let build_ms = runs[1..].iter().copied().fold(f64::MAX, f64::min);
-    let sent = package.render().expect("render").bytes_sent as f64 / (1024.0 * 1024.0);
+    let sent = package.render().expect("render").bytes_sent() as f64 / (1024.0 * 1024.0);
     eprintln!(
         "PERF package build (32 files, {sent:.2} MiB sent): {build_ms:.1} ms = {:.1} ms/MiB",
         build_ms / sent

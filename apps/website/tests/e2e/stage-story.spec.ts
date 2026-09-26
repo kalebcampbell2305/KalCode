@@ -1,12 +1,12 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
 
 /** ScrollStory: pinned stage on desktop; stills on phones and with reduced motion. */
-const STAGE_URL = process.env.STAGE_URL ?? "/";
+const STAGE_URL = process.env.STAGE_URL ?? "/product";
 
 async function open(page: Page): Promise<Locator> {
   await page.goto(STAGE_URL);
   const story = page.getByTestId("scroll-story");
-  test.skip((await story.count()) === 0, `ScrollStory is not on ${STAGE_URL}`);
+  await expect(story).toBeAttached();
   return story;
 }
 

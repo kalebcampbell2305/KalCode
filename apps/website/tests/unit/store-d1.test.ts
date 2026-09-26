@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { getPlatformProxy } from "wrangler";
+import { getPlatformProxy, unstable_splitSqlQuery } from "wrangler";
 import { CONSENT_VERSION, EARLY_ACCESS_EMAIL } from "../../src/lib/site";
 import { scheduledPurge, THROTTLE } from "../../worker/lib/early-access";
 import {
@@ -33,13 +33,7 @@ const HOUR = 60 * MINUTE;
 
 function statements(file: string): string[] {
   const sql = readFileSync(fileURLToPath(new URL(`../../migrations/${file}`, import.meta.url)), "utf8");
-  return sql
-    .split("\n")
-    .filter((line) => !line.trim().startsWith("--"))
-    .join("\n")
-    .split(";")
-    .map((statement) => statement.trim())
-    .filter(Boolean);
+  return unstable_splitSqlQuery(sql);
 }
 
 async function migrate(file: string): Promise<void> {
@@ -67,6 +61,8 @@ beforeAll(async () => {
     .bind("legacy@example.com", "2026-09-20T08:00:00.000Z", "/", "2026-09-24")
     .run();
   await migrate("0002_double_opt_in.sql");
+  await migrate("0004_account_mail_dispatch.sql");
+  await migrate("0005_fair_email_admission.sql");
   store = d1Store(db);
 }, 60_000);
 
@@ -76,6 +72,8 @@ afterAll(async () => {
 
 beforeEach(async () => {
   await db.batch([
+    db.prepare("DELETE FROM marketing_email_dispatches"),
+    db.prepare("DELETE FROM account_email_dispatches"),
     db.prepare("DELETE FROM early_access_tokens"),
     db.prepare("DELETE FROM early_access WHERE email != 'legacy@example.com'"),
     db.prepare("DELETE FROM email_send_budget"),
@@ -171,13 +169,15 @@ describe("d1Store", () => {
   });
 
   it("keeps the site-wide daily budget, even under concurrency", async () => {
-    const results = await Promise.all(Array.from({ length: 6 }, () => store.claimDailySend(T0, 4)));
+    const results = await Promise.all(Array.from({ length: 6 }, () => store.claimMarketingSend(T0, 34)));
     expect(results.filter(Boolean)).toHaveLength(4);
-    await store.releaseDailySend(T0);
-    expect(await store.claimDailySend(T0, 4)).toBe(true);
-    expect(await store.claimDailySend(T0, 4)).toBe(false);
-    expect(await store.claimDailySend(new Date(T0.getTime() + 24 * HOUR), 4)).toBe(true);
-    expect(await store.claimDailySend(T0, 0)).toBe(false);
+    const claim = results.find(Boolean);
+    if (!claim) throw new Error("no marketing claim");
+    await store.finalizeMarketingSend(claim, "rejected");
+    expect(await store.claimMarketingSend(T0, 34)).not.toBeNull();
+    expect(await store.claimMarketingSend(T0, 34)).toBeNull();
+    expect(await store.claimMarketingSend(new Date(T0.getTime() + 24 * HOUR), 34)).not.toBeNull();
+    expect(await store.claimMarketingSend(T0, 0)).toBeNull();
   });
 
   it("confirms with a link once, even when used twice at the same moment", async () => {
@@ -249,8 +249,8 @@ describe("d1Store", () => {
         expiresAt: "2026-09-27T12:00:00.000Z",
       },
     ]);
-    await store.claimDailySend(new Date(T0.getTime() - 24 * HOUR), 90);
-    await store.claimDailySend(T0, 90);
+    await store.claimMarketingSend(new Date(T0.getTime() - 24 * HOUR), 90);
+    await store.claimMarketingSend(T0, 90);
     await store.purgeExpired(T0, new Date(T0.getTime() - 72 * HOUR));
     expect(await row("old-pending@example.com")).toBeNull();
     expect(await row("fresh@example.com")).not.toBeNull();

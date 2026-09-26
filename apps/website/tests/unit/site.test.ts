@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PLANS } from "@kalcode/protocol/plans";
 import { describe, expect, it } from "vitest";
-import { EMAIL_ACTION_PAGES, isKnownPagePath, PAGES, PRIMARY_NAV } from "../../src/lib/site";
+import { ACCOUNT_PAGE, EMAIL_ACTION_PAGES, FOOTER_NAV, isKnownPagePath, PAGES, PRIMARY_NAV } from "../../src/lib/site";
 import { THEME_SCRIPT } from "../../src/lib/theme-script";
 import { buildCsp, cspHash } from "../../worker/lib/security";
 
@@ -38,7 +38,9 @@ describe("site map", () => {
   });
 
   it("lists every page source (no unlisted public pages)", () => {
-    const listed = new Set([...PAGES, ...Object.values(EMAIL_ACTION_PAGES)].map((page) => pageFile(page.path)));
+    const listed = new Set(
+      [...PAGES, ...Object.values(EMAIL_ACTION_PAGES), ACCOUNT_PAGE].map((page) => pageFile(page.path)),
+    );
     const walk = (dir: string): string[] =>
       readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
         entry.isDirectory() ? walk(resolve(dir, entry.name)) : [resolve(dir, entry.name)],
@@ -82,17 +84,35 @@ describe("site map", () => {
     }
   });
 
+  it("keeps the private Account entry point out of search and the public source allow-list", () => {
+    expect(PAGES.some((page) => page.path === ACCOUNT_PAGE.path)).toBe(false);
+    expect(isKnownPagePath(ACCOUNT_PAGE.path)).toBe(false);
+    const source = readFileSync(pageFile(ACCOUNT_PAGE.path), "utf8");
+    expect(source).toMatch(/<Base[^>]*\bnoindex\b/);
+    expect(source).toContain('name="referrer" content="no-referrer"');
+  });
+
   it("has the header navigation in the agreed order", () => {
-    expect(PRIMARY_NAV.map((item) => item.label)).toEqual(["Product", "KalVoice", "Pricing", "Docs", "Changelog"]);
+    expect(PRIMARY_NAV.map((item) => item.label)).toEqual(["Product", "KalVoice", "Pricing", "Docs", "Updates"]);
+    expect(PRIMARY_NAV.at(-1)).toEqual({ href: "/updates", label: "Updates" });
+    expect(FOOTER_NAV.product.at(-1)).toEqual({ href: "/updates", label: "Updates" });
+  });
+
+  it("publishes Updates as the canonical release-news page", () => {
+    expect(PAGES.some((page) => page.path === "/updates")).toBe(true);
+    expect(PAGES.some((page) => page.path === "/changelog")).toBe(false);
+    expect(existsSync(pageFile("/updates"))).toBe(true);
+    expect(existsSync(pageFile("/changelog"))).toBe(false);
   });
 });
 
 describe("pricing source of truth", () => {
-  it("reads the three plans from @kalcode/protocol", () => {
+  it("reads the four public plans from @kalcode/protocol", () => {
     expect(PLANS.map((plan) => [plan.name, plan.price.amountUsd])).toEqual([
       ["Free", 0],
       ["Pro", 10],
       ["MAX", 25],
+      ["MAX 2X", 50],
     ]);
   });
 
@@ -100,8 +120,8 @@ describe("pricing source of truth", () => {
     const sources = ["/", "/pricing", "/kalvoice", "/product"].map((path) => readFileSync(pageFile(path), "utf8"));
     sources.push(readFileSync(resolve(root, "src/components/PlanStrip.astro"), "utf8"));
     for (const source of sources) {
-      expect(source).not.toMatch(/\$\s?(0|10|25)\b/);
-      expect(source).not.toMatch(/\b(2,500|10,000)\b/);
+      expect(source).not.toMatch(/\$\s?(0|10|25|50)\b/);
+      expect(source).not.toMatch(/\b(75|1,500|5,000|10,000)\b/);
     }
   });
 

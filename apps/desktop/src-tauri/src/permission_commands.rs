@@ -80,10 +80,12 @@ fn convert<T>(command: &'static str, result: Result<T>) -> std::result::Result<T
 /// Approval requests, newest first. `status: "pending"` lists only those awaiting an answer.
 #[tauri::command(async)]
 pub fn approval_list(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     app: State<'_, AppState>,
-    permissions: State<'_, PermissionState>,
+    permissions: crate::runtime_coordinator::RuntimeState<PermissionState>,
     status: Option<ApprovalStatus>,
 ) -> std::result::Result<Vec<ApprovalView>, IpcError> {
+    _runtime_access.revalidate()?;
     let service = permissions.get(&app)?;
     convert("approval_list", service.list_approvals(status))
 }
@@ -91,11 +93,13 @@ pub fn approval_list(
 /// Records the user's answer to a pending approval request.
 #[tauri::command(async)]
 pub fn approval_decide(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     app: State<'_, AppState>,
-    permissions: State<'_, PermissionState>,
+    permissions: crate::runtime_coordinator::RuntimeState<PermissionState>,
     request_id: String,
     decision: ApprovalDecision,
 ) -> std::result::Result<ApprovalView, IpcError> {
+    _runtime_access.revalidate()?;
     let service = permissions.get(&app)?;
     convert(
         "approval_decide",
@@ -106,9 +110,11 @@ pub fn approval_decide(
 /// Built-in and saved permission profiles.
 #[tauri::command(async)]
 pub fn permission_profiles_list(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     app: State<'_, AppState>,
-    permissions: State<'_, PermissionState>,
+    permissions: crate::runtime_coordinator::RuntimeState<PermissionState>,
 ) -> std::result::Result<Vec<PermissionProfile>, IpcError> {
+    _runtime_access.revalidate()?;
     let service = permissions.get(&app)?;
     convert("permission_profiles_list", service.profiles())
 }
@@ -116,13 +122,15 @@ pub fn permission_profiles_list(
 /// Changes a thread's permission mode. Bypass requires `confirmBypass: true`.
 #[tauri::command(async)]
 pub fn thread_set_permission_mode(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     app: State<'_, AppState>,
-    permissions: State<'_, PermissionState>,
+    permissions: crate::runtime_coordinator::RuntimeState<PermissionState>,
     thread_id: String,
     mode: PermissionMode,
     confirm_bypass: Option<bool>,
     profile_id: Option<String>,
 ) -> std::result::Result<ThreadSummary, IpcError> {
+    _runtime_access.revalidate()?;
     let service = permissions.get(&app)?;
     convert(
         "thread_set_permission_mode",
@@ -139,9 +147,11 @@ pub fn thread_set_permission_mode(
 /// The default permission mode for new threads.
 #[tauri::command(async)]
 pub fn permission_settings_get(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     app: State<'_, AppState>,
-    permissions: State<'_, PermissionState>,
+    permissions: crate::runtime_coordinator::RuntimeState<PermissionState>,
 ) -> std::result::Result<PermissionSettings, IpcError> {
+    _runtime_access.revalidate()?;
     let service = permissions.get(&app)?;
     convert("permission_settings_get", service.settings())
 }
@@ -149,12 +159,14 @@ pub fn permission_settings_get(
 /// Changes the default mode for new threads. Bypass requires `confirmBypass: true`.
 #[tauri::command(async)]
 pub fn permission_settings_update(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     app: State<'_, AppState>,
-    permissions: State<'_, PermissionState>,
+    permissions: crate::runtime_coordinator::RuntimeState<PermissionState>,
     default_mode: PermissionMode,
     profile_id: Option<String>,
     confirm_bypass: Option<bool>,
 ) -> std::result::Result<PermissionSettings, IpcError> {
+    _runtime_access.revalidate()?;
     let service = permissions.get(&app)?;
     convert(
         "permission_settings_update",
@@ -186,10 +198,12 @@ pub struct ProbeResult {
 #[cfg(any(debug_assertions, feature = "e2e"))]
 #[tauri::command(async)]
 pub fn test_permission_probe(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     app: State<'_, AppState>,
-    permissions: State<'_, PermissionState>,
+    permissions: crate::runtime_coordinator::RuntimeState<PermissionState>,
     workspace_id: String,
 ) -> std::result::Result<Vec<ProbeResult>, IpcError> {
+    _runtime_access.revalidate()?;
     use kalcode_contracts::agent::ProviderId;
     use kalcode_contracts::permissions::{ActionKind, NormalizedAction};
 

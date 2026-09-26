@@ -39,7 +39,7 @@ function invoke<T>(page: Page, command: string, args: Record<string, unknown> = 
 }
 
 function python(script: string, ...args: string[]): string {
-  return execFileSync("python", ["-c", script, ...args], { encoding: "utf8" }).trim();
+  return execFileSync("python", ["-c", script, ...args], { encoding: "utf8", windowsHide: true }).trim();
 }
 
 /** Writes `kalcode.db` exactly as schema v1 (the released app) creates it, with user data. */
@@ -73,8 +73,8 @@ interface EventLite {
   payload: Record<string, unknown>;
 }
 
-/** The schema version this build migrates to (v7 git core, v8 context, v9 workspace layouts). */
-const LATEST = 11;
+/** The schema version this build migrates to (through v18 context delivery). */
+const LATEST = 18;
 
 test("a v1 database from the released app is upgraded to the latest schema with a backup and nothing lost", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-"));

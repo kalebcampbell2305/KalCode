@@ -26,6 +26,11 @@ import {
   Wrench,
 } from "lucide-react";
 import { type FormEvent, type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useAccount } from "../../account/AccountProvider.tsx";
+import { ContextTray } from "../../context/ContextTray.tsx";
+import { PromptWarningDialog } from "../../context/PromptWarningDialog.tsx";
+import { useContextDrop } from "../../context/useContextDrop.ts";
+import { usePromptConfirmation } from "../../context/usePromptConfirmation.ts";
 import { toKalCodeError } from "../../ipc/errors.ts";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
@@ -247,11 +252,17 @@ export function ThreadDetail({ threadId, archived, onArchived }: ThreadDetailPro
         thread={thread}
         mode={actions.compose}
         busy={busy === "send" || busy === "resume"}
-        onSubmit={(text) =>
+        onSubmit={(text, promptReviewId) =>
           run(actions.compose === "resume" ? "resume" : "send", () =>
-            actions.compose === "resume" ? client.resumeThread(thread.id, text) : client.sendToThread(thread.id, text),
+            actions.compose === "resume"
+              ? client.resumeThread(thread.id, text, promptReviewId)
+              : client.sendToThread(thread.id, text, promptReviewId),
           )
         }
+        onContextSent={(next) => {
+          detail.setThread(next);
+          void detail.reload();
+        }}
       />
     </article>
   );
@@ -372,9 +383,12 @@ function Timeline({
   }, [size]);
 
   return (
-    <div
+    <section
       ref={scroller}
       className={styles.timeline}
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: this overflow region must take focus so keyboard users can scroll the transcript.
+      tabIndex={0}
+      aria-label="Conversation transcript"
       onScroll={(event) => {
         const el = event.currentTarget;
         pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
@@ -434,7 +448,7 @@ function Timeline({
           ))}
         </ol>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -443,19 +457,63 @@ function Composer({
   mode,
   busy,
   onSubmit,
+  onContextSent,
 }: {
   thread: ThreadSummary;
   mode: "send" | "resume" | "blocked";
   busy: boolean;
-  onSubmit: (text: string) => Promise<boolean>;
+  onSubmit: (text: string, promptReviewId: string | null) => Promise<boolean>;
+  onContextSent: (thread: ThreadSummary) => void;
 }) {
+  const { client } = useRuntime();
+  const account = useAccount();
+  const toast = useToast();
   const [text, setText] = useState("");
   const blocked = mode === "blocked";
+  const promptScope = [
+    account.generation,
+    account.snapshot.account?.id ?? "signed-out",
+    account.runtime.phase,
+    thread.id,
+    thread.workspaceId,
+    thread.providerId,
+    thread.providerAccountId ?? "default-account",
+  ].join(":");
+  const confirmation = usePromptConfirmation(promptScope, client);
+  const context = useContextDrop(thread, confirmation.cancel);
+  const sending = busy || context.busy || confirmation.busy;
 
   const submit = async (event?: FormEvent) => {
     event?.preventDefault();
-    if (blocked || busy || !text.trim()) return;
-    if (await onSubmit(text)) setText("");
+    if (blocked || sending || !text.trim()) return;
+    const submittedText = text;
+    const hasContext = context.preview !== null;
+    await confirmation.request({
+      review: () => client.reviewThreadPrompt(thread.id, submittedText),
+      effect: async (promptReviewId) => {
+        if (!hasContext) return { kind: "plain" as const, sent: await onSubmit(submittedText, promptReviewId) };
+        return { kind: "context" as const, result: await context.send(submittedText, promptReviewId) };
+      },
+      onComplete: (outcome) => {
+        if (outcome.kind === "plain") {
+          if (outcome.sent) setText("");
+          return;
+        }
+        if (outcome.result?.kind === "sent") {
+          onContextSent(outcome.result.thread);
+          setText("");
+        } else if (outcome.result?.kind === "stale") {
+          toast.show({
+            tone: "info",
+            title: "Context changed",
+            description: "Review the refreshed preview before sending.",
+          });
+        }
+      },
+      onError: (error) => {
+        toast.show({ tone: "danger", title: "Message not sent", description: toKalCodeError(error).message });
+      },
+    });
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -475,30 +533,53 @@ function Composer({
         : `${MOD_LABEL} Enter to send`;
 
   return (
-    <form className={styles.composer} onSubmit={submit}>
-      <label htmlFor="thread-composer" className="visually-hidden">
-        Message
-      </label>
-      <div className={styles.well} data-disabled={blocked || undefined}>
-        <TextArea
-          id="thread-composer"
-          rows={3}
-          value={text}
-          disabled={blocked}
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={onKeyDown}
-          placeholder={blocked ? "" : `Message ${thread.providerName}`}
-          aria-describedby="thread-composer-hint"
-        />
-        <div className={styles.composerFooter}>
-          <p id="thread-composer-hint" className={styles.composerHint}>
-            {hint}
-          </p>
-          <Button type="submit" variant="primary" size="sm" busy={busy} disabled={blocked || !text.trim()}>
-            {mode === "resume" ? "Resume and send" : "Send"}
-          </Button>
+    <>
+      <form className={styles.composer} onSubmit={submit}>
+        <label htmlFor="thread-composer" className="visually-hidden">
+          Message
+        </label>
+        <div className={styles.well} data-disabled={blocked || undefined}>
+          <TextArea
+            id="thread-composer"
+            rows={3}
+            value={text}
+            disabled={blocked}
+            onChange={(event) => {
+              confirmation.cancel();
+              setText(event.target.value);
+            }}
+            onKeyDown={onKeyDown}
+            placeholder={blocked ? "" : `Message ${thread.providerName}`}
+            aria-describedby="thread-composer-hint"
+          />
+          <ContextTray
+            thread={thread}
+            preview={context.preview}
+            busy={context.busy}
+            disabled={blocked || mode !== "send"}
+            onAddInput={context.addInput}
+            onAddFiles={context.addFiles}
+            onSetIncluded={context.setIncluded}
+            onConfirm={context.confirm}
+            onDiscard={context.discard}
+          />
+          <div className={styles.composerFooter}>
+            <p id="thread-composer-hint" className={styles.composerHint}>
+              {hint}
+            </p>
+            <Button type="submit" variant="primary" size="sm" busy={sending} disabled={blocked || !text.trim()}>
+              {mode === "resume" ? "Resume and send" : "Send"}
+            </Button>
+          </div>
         </div>
-      </div>
-    </form>
+      </form>
+      <PromptWarningDialog
+        warning={confirmation.warning}
+        busy={confirmation.busy}
+        confirmLabel={mode === "resume" ? "Resume and send anyway" : "Send anyway"}
+        onConfirm={() => void confirmation.confirm()}
+        onCancel={confirmation.cancel}
+      />
+    </>
   );
 }

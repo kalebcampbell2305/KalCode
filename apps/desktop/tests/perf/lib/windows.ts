@@ -173,12 +173,12 @@ export function createWindowsProbe(): ProcessProbe {
 
     requestClose(pid) {
       // Without /F, taskkill posts WM_CLOSE: the same path as clicking the window's close button.
-      execFileSync("taskkill", ["/PID", String(pid)], { stdio: "ignore" });
+      execFileSync("taskkill", ["/PID", String(pid)], { stdio: "ignore", windowsHide: true });
     },
 
     forceKill(pid) {
       try {
-        execFileSync("taskkill", ["/F", "/T", "/PID", String(pid)], { stdio: "ignore" });
+        execFileSync("taskkill", ["/F", "/T", "/PID", String(pid)], { stdio: "ignore", windowsHide: true });
       } catch {
         // Already gone.
       }

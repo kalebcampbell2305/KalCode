@@ -99,7 +99,9 @@ fn proclist(extra: usize) {
     let exe = std::env::current_exe().expect("exe");
     let mut sleepers: Vec<Child> = (0..extra)
         .map(|_| {
-            Command::new(&exe)
+            let mut command = Command::new(&exe);
+            hide_benchmark_process(&mut command);
+            command
                 .args(["sleep", "40"])
                 .spawn()
                 .expect("spawn sleeper")
@@ -144,3 +146,14 @@ fn proclist(extra: usize) {
         let _ = sleeper.wait();
     }
 }
+
+#[cfg(windows)]
+fn hide_benchmark_process(command: &mut Command) {
+    use std::os::windows::process::CommandExt as _;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn hide_benchmark_process(_command: &mut Command) {}

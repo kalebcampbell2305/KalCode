@@ -222,6 +222,7 @@ pub fn thread(
             other => other.to_owned(),
         },
         model: None,
+        provider_account_id: None,
         account_label: None,
         workspace_id: workspace_id.to_owned(),
         workspace_name: workspace_name.to_owned(),

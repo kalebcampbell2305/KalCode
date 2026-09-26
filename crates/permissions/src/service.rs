@@ -16,14 +16,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use kalcode_contracts::events::{Correlation, EventPayload, EventSource, NewEvent};
 use kalcode_contracts::ids::{is_valid_id, new_id};
 use kalcode_contracts::permissions::{
-    ActionOrigin, ApprovalDecision, ApprovalRequest, ApprovalStatus, NormalizedAction,
+    ActionKind, ActionOrigin, ApprovalDecision, ApprovalRequest, ApprovalStatus, NormalizedAction,
     PermissionGate, PermissionMode, PermissionProfile, PermissionRule, PolicyDecision,
-    PolicyEffect,
+    PolicyEffect, UtilityHttpMethod,
 };
 use kalcode_contracts::threads::ThreadSummary;
 use kalcode_core::logging::redact;
 use kalcode_core::{Core, ErrorCategory, KalError, Result};
 use serde_json::json;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use crate::classify::{Classification, classify};
 use crate::grants::{self, Grant, GrantKind, THREAD_GRANT_TTL_MS, WORKSPACE_GRANT_TTL_MS};
@@ -158,6 +160,13 @@ impl Clock for SystemClock {
 /// Most approval requests returned by one listing.
 pub const MAX_LIST: u32 = 200;
 
+/// A one-time Environment Doctor approval must be used promptly while the reviewed finding,
+/// workspace and target are still current.
+pub const DOCTOR_APPROVAL_TTL_MS: i64 = 5 * 60 * 1_000;
+/// A sealed Utility operation is short-lived and cannot be claimed after this interval.
+pub const UTILITY_APPROVAL_TTL_MS: i64 = 5 * 60 * 1_000;
+const APPROVAL_CLOCK_SKEW_MS: i64 = 30 * 1_000;
+
 fn forbidden(message: &str) -> KalError {
     KalError::new(ErrorCategory::Permission, "forbidden", message)
 }
@@ -207,6 +216,223 @@ fn clean_text(text: &str, max: usize) -> String {
         .take(max)
         .collect();
     redact(&cleaned).into_owned()
+}
+
+fn timestamp_from_ms(timestamp_ms: i64) -> String {
+    let nanos = i128::from(timestamp_ms).saturating_mul(1_000_000);
+    OffsetDateTime::from_unix_timestamp_nanos(nanos)
+        .map(kalcode_core::time::format_rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00.000Z".to_owned())
+}
+
+fn timestamp_ms(value: &str) -> Option<i64> {
+    let nanos = OffsetDateTime::parse(value, &Rfc3339)
+        .ok()?
+        .unix_timestamp_nanos();
+    i64::try_from(nanos / 1_000_000).ok()
+}
+
+fn validate_doctor_action(action: &NormalizedAction) -> Result<()> {
+    let (run_id, origin_fix_code) = match &action.origin {
+        Some(ActionOrigin::Doctor { run_id, fix_code }) => (run_id, fix_code),
+        _ => {
+            return Err(KalError::new(
+                ErrorCategory::Permission,
+                "invalid_doctor_action",
+                "That action did not come from the Environment Doctor.",
+            ));
+        }
+    };
+    let (fix_code, finding_version) = match &action.action {
+        ActionKind::DoctorFix { fix_code, target } => {
+            let Some(version) = target.strip_prefix("workspace:.gitignore@") else {
+                return Err(KalError::new(
+                    ErrorCategory::Permission,
+                    "invalid_doctor_action",
+                    "That Environment Doctor target is not in the fixed repair catalog.",
+                ));
+            };
+            (fix_code, version)
+        }
+        _ => {
+            return Err(KalError::new(
+                ErrorCategory::Permission,
+                "invalid_doctor_action",
+                "The Environment Doctor can request only a fixed-catalog repair.",
+            ));
+        }
+    };
+    if !is_valid_id(&action.id)
+        || !is_valid_id(run_id)
+        || !is_valid_id(&action.workspace_id)
+        || !is_valid_id(finding_version)
+        || !action.thread_id.is_empty()
+        || !action.provider_id.as_str().is_empty()
+        || fix_code != "file.gitignore_env"
+        || origin_fix_code != fix_code
+    {
+        return Err(KalError::new(
+            ErrorCategory::Permission,
+            "invalid_doctor_action",
+            "That Environment Doctor action is not a valid fixed-catalog repair.",
+        ));
+    }
+    Ok(())
+}
+
+struct UtilityBinding<'a> {
+    operation_id: &'a str,
+    workspace_id: Option<&'a str>,
+    tool: &'static str,
+    effect: &'static str,
+}
+
+fn invalid_utility_action(message: &'static str) -> KalError {
+    KalError::new(ErrorCategory::Permission, "invalid_utility_action", message)
+}
+
+fn safe_review_name(value: &str, max: usize) -> bool {
+    !value.is_empty()
+        && value.len() <= max
+        && value.trim() == value
+        && !value.chars().any(char::is_control)
+}
+
+fn validate_utility_action(action: &NormalizedAction) -> Result<UtilityBinding<'_>> {
+    let tool = match &action.origin {
+        Some(ActionOrigin::Utility { tool }) => tool.as_str(),
+        _ => {
+            return Err(invalid_utility_action(
+                "That action did not come from the Utility Dock.",
+            ));
+        }
+    };
+    if !action.thread_id.is_empty()
+        || !action.provider_id.as_str().is_empty()
+        || (!action.workspace_id.is_empty() && !is_valid_id(&action.workspace_id))
+        || action.summary.is_empty()
+        || action.summary.len() > 300
+        || action.summary.chars().any(char::is_control)
+    {
+        return Err(invalid_utility_action(
+            "That Utility Dock action has invalid runtime or review fields.",
+        ));
+    }
+    let workspace_id = (!action.workspace_id.is_empty()).then_some(action.workspace_id.as_str());
+    let binding = match &action.action {
+        ActionKind::UtilityDnsResolve { operation_id, host } => {
+            if tool != "api_inspector"
+                || workspace_id.is_some()
+                || crate::network::normalize_host(host).as_deref() != Some(host.as_str())
+            {
+                return Err(invalid_utility_action(
+                    "That Utility DNS action is outside the fixed catalog.",
+                ));
+            }
+            UtilityBinding {
+                operation_id,
+                workspace_id: None,
+                tool: "api_inspector",
+                effect: "http",
+            }
+        }
+        ActionKind::UtilityHttp {
+            operation_id,
+            method,
+            origin,
+            redirect_hop,
+            body_bytes,
+            ..
+        } => {
+            let parsed = url::Url::parse(origin).map_err(|_| {
+                invalid_utility_action("That Utility HTTP origin is not canonical.")
+            })?;
+            let canonical_origin = format!("{}/", parsed.origin().ascii_serialization());
+            if tool != "api_inspector"
+                || workspace_id.is_some()
+                || !matches!(parsed.scheme(), "http" | "https")
+                || parsed.host_str().is_none()
+                || !parsed.username().is_empty()
+                || parsed.password().is_some()
+                || parsed.path() != "/"
+                || parsed.query().is_some()
+                || parsed.fragment().is_some()
+                || origin != &canonical_origin
+                || *redirect_hop > 5
+                || *body_bytes > 1024 * 1024
+                || (matches!(method, UtilityHttpMethod::Get | UtilityHttpMethod::Head)
+                    && *body_bytes != 0)
+            {
+                return Err(invalid_utility_action(
+                    "That Utility HTTP action is outside the fixed catalog.",
+                ));
+            }
+            UtilityBinding {
+                operation_id,
+                workspace_id: None,
+                tool: "api_inspector",
+                effect: "http",
+            }
+        }
+        ActionKind::UtilityProcessSignal {
+            operation_id,
+            pid,
+            process_start_time,
+            process_name,
+            ..
+        } => {
+            if tool != "processes"
+                || *pid == 0
+                || process_start_time.is_empty()
+                || process_start_time.len() > 32
+                || !process_start_time.bytes().all(|byte| byte.is_ascii_digit())
+                || process_start_time.bytes().all(|byte| byte == b'0')
+                || !safe_review_name(process_name, 260)
+            {
+                return Err(invalid_utility_action(
+                    "That Utility process action is outside the fixed catalog.",
+                ));
+            }
+            UtilityBinding {
+                operation_id,
+                workspace_id,
+                tool: "processes",
+                effect: "process_signal",
+            }
+        }
+        ActionKind::UtilitySqliteWrite {
+            operation_id,
+            database_id,
+            database_name,
+            ..
+        } => {
+            if tool != "sqlite"
+                || !is_valid_id(database_id)
+                || !safe_review_name(database_name, 255)
+            {
+                return Err(invalid_utility_action(
+                    "That Utility database action is outside the fixed catalog.",
+                ));
+            }
+            UtilityBinding {
+                operation_id,
+                workspace_id,
+                tool: "sqlite",
+                effect: "sqlite_write",
+            }
+        }
+        _ => {
+            return Err(invalid_utility_action(
+                "The Utility Dock can request only a sealed fixed-catalog action.",
+            ));
+        }
+    };
+    if !is_valid_id(binding.operation_id) || action.id != binding.operation_id {
+        return Err(invalid_utility_action(
+            "That Utility operation id is invalid or changed.",
+        ));
+    }
+    Ok(binding)
 }
 
 pub struct PermissionService {
@@ -376,9 +602,9 @@ impl PermissionService {
 
     /// Evaluates an action from a **non-thread origin** and, when the policy asks, files an
     /// approval request with `origin_kind` = that origin (thread, workspace and provider may be
-    /// absent, as schema v4 allows). Today the supported origin is KalVoice
-    /// (`ActionOrigin::KalVoice { request_id }`); the Trust Kernel (TK-1) extends this to every
-    /// origin with ceilings.
+    /// absent, as schema v4 allows). The supported origins are KalVoice and the Environment
+    /// Doctor's fixed repair catalog. Every other non-thread origin remains denied until its own
+    /// authority contract lands.
     ///
     /// Rules: the action is always evaluated under **Approve** (a non-thread origin never selects
     /// or changes a mode); standing grants and "Allow via rule" rules never apply to it, and its
@@ -390,6 +616,14 @@ impl PermissionService {
                 if !is_valid_id(request_id) {
                     return Err(invalid_id("request"));
                 }
+                origin.clone()
+            }
+            Some(origin @ ActionOrigin::Doctor { .. }) => {
+                validate_doctor_action(&action)?;
+                origin.clone()
+            }
+            Some(origin @ ActionOrigin::Utility { .. }) => {
+                validate_utility_action(&action)?;
                 origin.clone()
             }
             Some(ActionOrigin::Thread { .. }) | None => {
@@ -454,6 +688,7 @@ impl PermissionService {
         let id = new_id();
         let summary = clean_text(&action.summary, 300);
         let actor = audit_actor(&origin);
+        let created_at = timestamp_from_ms(self.clock.now_ms());
         let (view, _) = self.core.transact(|tx| {
             store::insert_approval(
                 tx,
@@ -467,6 +702,7 @@ impl PermissionService {
                     fingerprint: &c.fingerprint,
                     grant_matcher: None,
                     grant_coverage: "only this request",
+                    created_at: &created_at,
                 },
             )?;
             let workspace_id =
@@ -490,7 +726,11 @@ impl PermissionService {
                 },
             )?;
             let event = NewEvent {
-                source: EventSource::KalVoice,
+                source: if matches!(origin, ActionOrigin::KalVoice { .. }) {
+                    EventSource::KalVoice
+                } else {
+                    EventSource::Core
+                },
                 correlation: correlation(
                     &action.workspace_id,
                     &action.thread_id,
@@ -513,6 +753,170 @@ impl PermissionService {
             decision,
             approval: Some(view),
         })
+    }
+
+    /// Loads one Environment Doctor approval by its exact id and proves that it still belongs to
+    /// the immutable action the Doctor prepared. This is intentionally not a general provider or
+    /// agent approval API. Replay is claimed atomically by the Doctor fix journal at the effect
+    /// boundary; this check binds the authority row, action fingerprint and short lifetime.
+    pub fn verify_doctor_approval(
+        &self,
+        approval_id: &str,
+        expected: &NormalizedAction,
+    ) -> Result<ApprovalView> {
+        if !is_valid_id(approval_id) {
+            return Err(invalid_id("approval"));
+        }
+        validate_doctor_action(expected)?;
+        let stored = self
+            .core
+            .read(|connection| store::get_approval(connection, approval_id))?
+            .ok_or_else(|| {
+                KalError::new(
+                    ErrorCategory::Validation,
+                    "approval_not_found",
+                    "That approval request isn't available.",
+                )
+            })?;
+        if stored.view.action != *expected {
+            return Err(KalError::new(
+                ErrorCategory::Permission,
+                "approval_object_changed",
+                "That approval belongs to a different Environment Doctor action.",
+            ));
+        }
+        let workspace = self.workspace(&expected.workspace_id);
+        if stored.fingerprint != classify(&expected.action, &workspace).fingerprint {
+            return Err(KalError::new(
+                ErrorCategory::Permission,
+                "approval_object_changed",
+                "That approval no longer matches the reviewed Environment Doctor action.",
+            ));
+        }
+        let created_at_ms = timestamp_ms(&stored.view.created_at).ok_or_else(|| {
+            KalError::new(
+                ErrorCategory::Permission,
+                "approval_expired",
+                "That Environment Doctor approval has expired.",
+            )
+        })?;
+        let age_ms = self.clock.now_ms().saturating_sub(created_at_ms);
+        if !(-APPROVAL_CLOCK_SKEW_MS..=DOCTOR_APPROVAL_TTL_MS).contains(&age_ms) {
+            return Err(KalError::new(
+                ErrorCategory::Permission,
+                "approval_expired",
+                "That Environment Doctor approval has expired.",
+            ));
+        }
+        if stored.view.status == ApprovalStatus::Expired {
+            return Err(KalError::new(
+                ErrorCategory::Permission,
+                "approval_expired",
+                "That Environment Doctor approval has expired.",
+            ));
+        }
+        if stored.view.status == ApprovalStatus::Approved
+            && stored.view.resolved_decision != Some(ApprovalDecision::ApproveOnce)
+        {
+            return Err(KalError::new(
+                ErrorCategory::Permission,
+                "approval_not_one_time",
+                "That approval did not authorize this one Environment Doctor action.",
+            ));
+        }
+        Ok(stored.view)
+    }
+
+    /// Atomically consumes one exact, approved Utility request before its sealed effect starts.
+    /// A retained claim is a tombstone: failures after this method returns never restore replay.
+    pub fn claim_utility_approval(
+        &self,
+        approval_id: &str,
+        expected: &NormalizedAction,
+        runtime_generation: u64,
+    ) -> Result<ApprovalView> {
+        if !is_valid_id(approval_id) {
+            return Err(invalid_id("approval"));
+        }
+        let binding = validate_utility_action(expected)?;
+        let runtime_generation = i64::try_from(runtime_generation)
+            .map_err(|_| invalid_utility_action("That Utility runtime generation is invalid."))?;
+        let now_ms = self.clock.now_ms();
+        let claimed_at = timestamp_from_ms(now_ms);
+        let workspace = self.workspace(&expected.workspace_id);
+        let fingerprint = classify(&expected.action, &workspace).fingerprint;
+        self.core
+            .transact(|tx| {
+                let stored = store::get_approval(tx, approval_id)?.ok_or_else(|| {
+                    KalError::new(
+                        ErrorCategory::Validation,
+                        "approval_not_found",
+                        "That approval request isn't available.",
+                    )
+                })?;
+                if stored.view.action != *expected || stored.fingerprint != fingerprint {
+                    return Err(KalError::new(
+                        ErrorCategory::Permission,
+                        "approval_object_changed",
+                        "That approval belongs to a different Utility Dock action.",
+                    ));
+                }
+                let created_at_ms = timestamp_ms(&stored.view.created_at).ok_or_else(|| {
+                    KalError::new(
+                        ErrorCategory::Permission,
+                        "approval_expired",
+                        "That Utility Dock approval has expired.",
+                    )
+                })?;
+                let age_ms = now_ms.saturating_sub(created_at_ms);
+                if !(-APPROVAL_CLOCK_SKEW_MS..=UTILITY_APPROVAL_TTL_MS).contains(&age_ms)
+                    || stored.view.status == ApprovalStatus::Expired
+                {
+                    return Err(KalError::new(
+                        ErrorCategory::Permission,
+                        "approval_expired",
+                        "That Utility Dock approval has expired.",
+                    ));
+                }
+                match (stored.view.status, stored.view.resolved_decision) {
+                    (ApprovalStatus::Approved, Some(ApprovalDecision::ApproveOnce)) => {}
+                    (ApprovalStatus::Pending, _) => {
+                        return Err(KalError::new(
+                            ErrorCategory::Permission,
+                            "approval_pending",
+                            "That Utility Dock action has not been approved yet.",
+                        ));
+                    }
+                    (ApprovalStatus::Denied, _) => {
+                        return Err(KalError::new(
+                            ErrorCategory::Permission,
+                            "approval_denied",
+                            "That Utility Dock action was denied.",
+                        ));
+                    }
+                    _ => {
+                        return Err(KalError::new(
+                            ErrorCategory::Permission,
+                            "approval_not_one_time",
+                            "That approval did not authorize this one Utility Dock action.",
+                        ));
+                    }
+                }
+                store::insert_utility_claim(
+                    tx,
+                    &store::UtilityApprovalClaim {
+                        approval_id,
+                        operation_id: binding.operation_id,
+                        runtime_generation,
+                        workspace_id: binding.workspace_id,
+                        tool: binding.tool,
+                        effect: binding.effect,
+                        claimed_at: &claimed_at,
+                    },
+                )?;
+                Ok((stored.view, Vec::new()))
+            })
+            .map(|(view, _)| view)
     }
 
     fn open(
@@ -541,6 +945,7 @@ impl PermissionService {
         let context = self.context_for(&action);
         let id = new_id();
         let summary = clean_text(&action.summary, 300);
+        let created_at = timestamp_from_ms(self.clock.now_ms());
         let (view, _) = self.core.transact(|tx| {
             let mut events = Vec::new();
             for expired in
@@ -560,6 +965,7 @@ impl PermissionService {
                     fingerprint: &c.fingerprint,
                     grant_matcher: matcher.as_deref(),
                     grant_coverage: &c.grant_coverage,
+                    created_at: &created_at,
                 },
             )?;
             store::audit(

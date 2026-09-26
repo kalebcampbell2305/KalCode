@@ -1,5 +1,6 @@
 import type { PaneContent, PaneLayout, PaneNode } from "@kalcode/protocol";
 import { describe, expect, it } from "vitest";
+import { arrangeContents } from "../../shell/panes/model.ts";
 import { KalCodeClient } from "../client.ts";
 import { createMemoryTransport } from "../memoryTransport.ts";
 
@@ -26,7 +27,7 @@ function twoPanes(): PaneLayout {
       ],
     },
     maximizedPaneId: "b",
-    dock: [{ kind: "browser", url: "http://localhost:3000" }],
+    dock: [{ kind: "browser", browserId: crypto.randomUUID(), url: "http://localhost:3000" }],
   };
 }
 
@@ -53,6 +54,19 @@ describe("pane layouts in the memory runtime", () => {
     expect((await client.recentEvents(100)).length).toBe(before);
   });
 
+  it("persists an exact provider-pane grid while retaining existing work", async () => {
+    const { client, first } = await setup();
+    const threadIds = Array.from({ length: 4 }, () => crypto.randomUUID());
+    const arranged = arrangeContents(
+      twoPanes(),
+      threadIds.map((threadId) => ({ kind: "thread", threadId })),
+    );
+    if (!arranged) throw new Error("the layout has room for four provider panes");
+
+    await client.layoutSave(first, arranged);
+    expect((await client.layoutGet(first))?.layout).toEqual(arranged);
+  });
+
   it("refuses invalid layouts, unknown workspaces and bad ids like native", async () => {
     const { client, first } = await setup();
     const code = (p: Promise<unknown>) =>
@@ -73,8 +87,47 @@ describe("pane layouts in the memory runtime", () => {
       },
       { ...twoPanes(), root: leaf("a", [{ kind: "terminal", terminalId: "../etc" }]), maximizedPaneId: null },
       { ...twoPanes(), root: leaf("a", [{ kind: "widget", widgetId: "Bad Widget" }]), maximizedPaneId: null },
-      { ...twoPanes(), dock: [{ kind: "browser", url: "file:///C:/Windows/win.ini" }] },
+      { ...twoPanes(), dock: [{ kind: "browser", browserId: crypto.randomUUID(), url: "file:///C:/Windows/win.ini" }] },
+      {
+        ...twoPanes(),
+        dock: [
+          {
+            kind: "browser",
+            browserId: crypto.randomUUID(),
+            url: "https://example.com/callback?code=secret#access-token",
+          },
+        ],
+      },
+      {
+        ...twoPanes(),
+        dock: [{ kind: "browser", browserId: crypto.randomUUID(), url: "https://user:password@example.com/" }],
+      },
+      {
+        ...twoPanes(),
+        dock: [{ kind: "browser", browserId: crypto.randomUUID(), url: "https://@example.com/" }],
+      },
     ];
+    const duplicateBrowserId = crypto.randomUUID();
+    bad.push({
+      ...twoPanes(),
+      root: {
+        kind: "split",
+        axis: "horizontal",
+        ratios: [500, 500],
+        children: [
+          leaf("a", [{ kind: "browser", browserId: duplicateBrowserId, url: "https://example.com/preview" }]),
+          leaf("b", [{ kind: "browser", browserId: duplicateBrowserId, url: "https://example.com/preview" }]),
+        ],
+      },
+      maximizedPaneId: null,
+      dock: [],
+    });
+    bad.push({
+      ...twoPanes(),
+      root: leaf("a", [{ kind: "browser", browserId: duplicateBrowserId, url: "https://example.com/preview" }]),
+      maximizedPaneId: null,
+      dock: [{ kind: "browser", browserId: duplicateBrowserId, url: "https://example.com/preview" }],
+    });
     for (const layout of bad) expect(await code(client.layoutSave(first, layout))).toBe("invalid_layout");
     expect(await code(client.layoutSave(crypto.randomUUID(), twoPanes()))).toBe("workspace_not_found");
     expect(await code(client.layoutSave("not-an-id", twoPanes()))).toBe("invalid_id");
@@ -91,6 +144,40 @@ describe("pane layouts in the memory runtime", () => {
     expect(transport.layouts.stored(first)?.maximizedPaneId).toBe("b");
     await client.layoutSave(first, next);
     expect(transport.layouts.stored(first)?.maximizedPaneId).toBeNull();
+  });
+
+  it("ignores legacy stored browser state that contains secrets or duplicate identities", async () => {
+    const { transport, client, first } = await setup();
+    const secret = {
+      ...twoPanes(),
+      dock: [
+        {
+          kind: "browser" as const,
+          browserId: crypto.randomUUID(),
+          url: "https://example.com/callback?code=secret#access-token",
+        },
+      ],
+    };
+    transport.layouts.seed(first, secret);
+    expect(await client.layoutGet(first)).toBeNull();
+
+    const browserId = crypto.randomUUID();
+    const duplicate: PaneLayout = {
+      ...twoPanes(),
+      root: {
+        kind: "split",
+        axis: "horizontal",
+        ratios: [500, 500],
+        children: [
+          leaf("a", [{ kind: "browser", browserId, url: "https://example.com/preview" }]),
+          leaf("b", [{ kind: "browser", browserId, url: "https://example.com/preview" }]),
+        ],
+      },
+      maximizedPaneId: null,
+      dock: [],
+    };
+    transport.layouts.seed(first, duplicate);
+    expect(await client.layoutGet(first)).toBeNull();
   });
 
   it("presets keep only their shape, names are unique, and they can be deleted", async () => {

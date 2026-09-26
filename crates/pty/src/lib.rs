@@ -107,6 +107,35 @@ pub enum PtyError {
     Busy,
 }
 
+/// Kernel-bound process identity derived from the PTY child's retained original handle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PtyProcessIdentity {
+    pub pid: u32,
+    pub birth_time_100ns: u64,
+}
+
+/// One PREPARED admission. Implementations own the authority-specific registration and must
+/// return an opaque guard only after binding this exact process identity.
+pub trait PreparedPtyAdmission: Send {
+    fn raw_job_handle(&self) -> Result<usize, PtyError>;
+    fn commit(
+        self: Box<Self>,
+        identity: PtyProcessIdentity,
+    ) -> Result<Box<dyn PtyAdmissionGuard>, PtyError>;
+}
+
+/// Opaque authority retained for one admitted PTY tree. The waiter calls `complete` only after the
+/// backend has proved its private process-tree job empty.
+pub trait PtyAdmissionGuard: Send + Sync {
+    fn complete(&self) -> Result<(), PtyError>;
+}
+
+/// Runtime-injected terminal guardian. Native Core can depend on this PTY-owned contract without
+/// depending on the provider crate that implements it.
+pub trait PtyGuardian: Send + Sync {
+    fn prepare(&self, label: &str) -> Result<Box<dyn PreparedPtyAdmission>, PtyError>;
+}
+
 pub type AttachId = u64;
 type Listener = Box<dyn Fn(&[u8]) -> bool + Send + Sync>;
 
@@ -126,6 +155,88 @@ struct Inner {
     killed: std::sync::atomic::AtomicBool,
     next_attach: AtomicU64,
     pid: Option<u32>,
+    guardian_guard: Mutex<Option<Box<dyn PtyAdmissionGuard>>>,
+}
+
+type ExitCallback = Box<dyn FnOnce(ExitInfo) + Send + 'static>;
+
+struct ExitCallbackGuard {
+    callback: Mutex<Option<ExitCallback>>,
+    retain_fail_closed: std::sync::atomic::AtomicBool,
+}
+
+impl ExitCallbackGuard {
+    fn new(callback: impl FnOnce(ExitInfo) + Send + 'static) -> Self {
+        Self {
+            callback: Mutex::new(Some(Box::new(callback))),
+            retain_fail_closed: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    fn invoke(&self, info: ExitInfo) {
+        if let Some(callback) = lock(&self.callback).take() {
+            callback(info);
+        }
+    }
+
+    fn retain(&self) {
+        self.retain_fail_closed.store(true, Ordering::Release);
+    }
+}
+
+impl Drop for ExitCallbackGuard {
+    fn drop(&mut self) {
+        if self.retain_fail_closed.load(Ordering::Acquire)
+            && let Some(callback) = lock(&self.callback).take()
+        {
+            // The callback may own the only remaining provider-profile lease. Cleanup was not
+            // proved, so intentionally retain it until process restart.
+            std::mem::forget(callback);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SetupStage {
+    Io,
+    WriterThread,
+    ReaderThread,
+    WaiterThread,
+    BackendWaitError,
+    BackendWaitPanic,
+    BackendWaitUnproven,
+}
+
+struct StartFailureInjection {
+    stage: SetupStage,
+    before_failure: Mutex<Option<Box<dyn FnOnce() + Send + 'static>>>,
+}
+
+impl StartFailureInjection {
+    fn trigger(&self, stage: SetupStage) -> bool {
+        if self.stage != stage {
+            return false;
+        }
+        let callback = lock(&self.before_failure).take();
+        if let Some(callback) = callback {
+            callback();
+        }
+        true
+    }
+
+    fn matches(&self, stage: SetupStage) -> bool {
+        self.stage == stage
+    }
+
+    fn is_setup_failure(&self) -> bool {
+        matches!(
+            self.stage,
+            SetupStage::Io
+                | SetupStage::WriterThread
+                | SetupStage::ReaderThread
+                | SetupStage::WaiterThread
+        )
+    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -153,7 +264,21 @@ impl PtySession {
         on_exit: impl FnOnce(ExitInfo) + Send + 'static,
     ) -> Result<Self, PtyError> {
         preflight_program(&spec.program)?;
-        Self::start(build_command(&spec), spec.size, on_exit)
+        Self::start(build_command(&spec), spec.size, on_exit, None, None)
+    }
+
+    /// Starts a shell whose root is atomically admitted to the external guardian job on
+    /// Windows. The job is included in `PROC_THREAD_ATTRIBUTE_JOB_LIST`, so no shell instruction
+    /// can execute outside guardian ownership.
+    pub fn spawn_guarded(
+        spec: SpawnSpec,
+        admission: Box<dyn PreparedPtyAdmission>,
+        on_exit: impl FnOnce(ExitInfo) + Send + 'static,
+    ) -> Result<Self, PtyError> {
+        preflight_program(&spec.program)?;
+        let mut command = build_command(&spec);
+        configure_guardian_job(&mut command, admission.raw_job_handle()?)?;
+        Self::start(command, spec.size, on_exit, None, Some(admission))
     }
 
     /// Starts a program (not a shell tab) with a cleared environment: only `spec.env` reaches
@@ -163,14 +288,49 @@ impl PtySession {
         on_exit: impl FnOnce(ExitInfo) + Send + 'static,
     ) -> Result<Self, PtyError> {
         preflight_program(&spec.program)?;
-        Self::start(build_program_command(&spec), spec.size, on_exit)
+        Self::start(build_program_command(&spec), spec.size, on_exit, None, None)
+    }
+
+    /// Starts a cleared-environment program atomically inside the external guardian job.
+    pub fn spawn_program_guarded(
+        spec: ProgramSpec,
+        admission: Box<dyn PreparedPtyAdmission>,
+        on_exit: impl FnOnce(ExitInfo) + Send + 'static,
+    ) -> Result<Self, PtyError> {
+        preflight_program(&spec.program)?;
+        let mut command = build_program_command(&spec);
+        configure_guardian_job(&mut command, admission.raw_job_handle()?)?;
+        Self::start(command, spec.size, on_exit, None, Some(admission))
+    }
+
+    #[cfg(test)]
+    fn spawn_program_with_failure(
+        spec: ProgramSpec,
+        stage: SetupStage,
+        before_failure: impl FnOnce() + Send + 'static,
+        on_exit: impl FnOnce(ExitInfo) + Send + 'static,
+    ) -> Result<Self, PtyError> {
+        preflight_program(&spec.program)?;
+        Self::start(
+            build_program_command(&spec),
+            spec.size,
+            on_exit,
+            Some(Arc::new(StartFailureInjection {
+                stage,
+                before_failure: Mutex::new(Some(Box::new(before_failure))),
+            })),
+            None,
+        )
     }
 
     fn start(
         command: CommandBuilder,
         size: TerminalSize,
         on_exit: impl FnOnce(ExitInfo) + Send + 'static,
+        injection: Option<Arc<StartFailureInjection>>,
+        admission: Option<Box<dyn PreparedPtyAdmission>>,
     ) -> Result<Self, PtyError> {
+        let callback = Arc::new(ExitCallbackGuard::new(on_exit));
         let system = native_pty_system();
         let pair = system
             .openpty(size.to_pty())
@@ -180,6 +340,41 @@ impl PtySession {
             .slave
             .spawn_command(command)
             .map_err(|e| PtyError::Spawn(e.to_string()))?;
+        let pid = child.process_id();
+        let guardian_guard = match admission {
+            Some(admission) => {
+                let Some(pid) = pid else {
+                    let _ = child.kill();
+                    return Err(PtyError::Spawn(
+                        "the guarded terminal process id was unavailable".into(),
+                    ));
+                };
+                #[cfg(windows)]
+                let birth_time_100ns = child.process_birth_time_100ns().map_err(|error| {
+                    let _ = child.kill();
+                    PtyError::Spawn(error.to_string())
+                })?;
+                #[cfg(not(windows))]
+                let birth_time_100ns = 0;
+                if birth_time_100ns == 0 {
+                    let _ = child.kill();
+                    return Err(PtyError::Spawn(
+                        "the guarded terminal creation identity was unavailable".into(),
+                    ));
+                }
+                match admission.commit(PtyProcessIdentity {
+                    pid,
+                    birth_time_100ns,
+                }) {
+                    Ok(guard) => Some(guard),
+                    Err(error) => {
+                        let _ = child.kill();
+                        return Err(error);
+                    }
+                }
+            }
+            None => None,
+        };
         // Dropping the slave lets the reader see end-of-file once the shell exits.
         drop(pair.slave);
 
@@ -192,13 +387,44 @@ impl PtySession {
         let (reader, writer) = match started {
             Ok(io) => io,
             Err(error) => {
-                let _ = child.kill();
+                if child.kill().is_err() {
+                    callback.retain();
+                }
                 return Err(PtyError::Spawn(error.to_string()));
             }
         };
+        let setup_injection = injection
+            .as_ref()
+            .is_some_and(|injection| injection.is_setup_failure());
+        let (reader, writer) = if setup_injection {
+            // ConPTY blocks a newly created process until its startup cursor-position query is
+            // answered. Failure injection therefore uses a disposable responder so the test can
+            // establish a real live descendant before exercising each post-spawn cleanup branch.
+            // Every such branch returns an error, so these handles are never needed by the normal
+            // session threads.
+            if let Err(error) = std::thread::Builder::new()
+                .name("kalcode-pty-failure-bootstrap".into())
+                .spawn(move || cursor_response_loop(reader, writer))
+            {
+                if child.kill().is_err() {
+                    callback.retain();
+                }
+                return Err(PtyError::Spawn(error.to_string()));
+            }
+            (None, None)
+        } else {
+            (Some(reader), Some(writer))
+        };
+        if injection
+            .as_ref()
+            .is_some_and(|injection| injection.trigger(SetupStage::Io))
+        {
+            if child.kill().is_err() {
+                callback.retain();
+            }
+            return Err(PtyError::Spawn("injected PTY I/O setup failure".into()));
+        }
         let killer = child.clone_killer();
-        let pid = child.process_id();
-
         let (input, queued) = sync_channel::<Vec<u8>>(INPUT_QUEUE);
         let inner = Arc::new(Inner {
             master: Mutex::new(Some(pair.master)),
@@ -212,48 +438,123 @@ impl PtySession {
             killed: std::sync::atomic::AtomicBool::new(false),
             next_attach: AtomicU64::new(1),
             pid,
+            guardian_guard: Mutex::new(guardian_guard),
         });
 
         let spawn_failed =
             |error: std::io::Error, killer: &mut Box<dyn ChildKiller + Send + Sync>| {
-                let _ = killer.kill();
+                if killer.kill().is_err() {
+                    callback.retain();
+                }
                 PtyError::Spawn(error.to_string())
             };
-        std::thread::Builder::new()
-            .name("kalcode-pty-writer".into())
-            .spawn(move || write_loop(writer, &queued))
-            .map_err(|e| spawn_failed(e, &mut lock(&inner.killer)))?;
+        if injection
+            .as_ref()
+            .is_some_and(|injection| injection.trigger(SetupStage::WriterThread))
+        {
+            return Err(spawn_failed(
+                std::io::Error::other("injected PTY writer-thread failure"),
+                &mut lock(&inner.killer),
+            ));
+        }
+        if let Some(writer) = writer {
+            std::thread::Builder::new()
+                .name("kalcode-pty-writer".into())
+                .spawn(move || write_loop(writer, &queued))
+                .map_err(|e| spawn_failed(e, &mut lock(&inner.killer)))?;
+        }
 
         let reader_inner = inner.clone();
-        std::thread::Builder::new()
-            .name("kalcode-pty-reader".into())
-            .spawn(move || read_loop(reader, &reader_inner))
-            .map_err(|e| spawn_failed(e, &mut lock(&inner.killer)))?;
+        if injection
+            .as_ref()
+            .is_some_and(|injection| injection.trigger(SetupStage::ReaderThread))
+        {
+            return Err(spawn_failed(
+                std::io::Error::other("injected PTY reader-thread failure"),
+                &mut lock(&inner.killer),
+            ));
+        }
+        if let Some(reader) = reader {
+            std::thread::Builder::new()
+                .name("kalcode-pty-reader".into())
+                .spawn(move || read_loop(reader, &reader_inner))
+                .map_err(|e| spawn_failed(e, &mut lock(&inner.killer)))?;
+        }
 
         let waiter_inner = inner.clone();
         let waiter_killer = &inner.killer;
+        if injection
+            .as_ref()
+            .is_some_and(|injection| injection.trigger(SetupStage::WaiterThread))
+        {
+            return Err(spawn_failed(
+                std::io::Error::other("injected PTY waiter-thread failure"),
+                &mut lock(waiter_killer),
+            ));
+        }
+        let waiter_callback = Arc::clone(&callback);
+        let waiter_injection = injection.clone();
         std::thread::Builder::new()
             .name("kalcode-pty-wait".into())
             .spawn(move || {
-                let status = child.wait();
+                let waited = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    if waiter_injection.as_ref().is_some_and(|injection| {
+                        injection.trigger(SetupStage::BackendWaitError)
+                            || injection.trigger(SetupStage::BackendWaitUnproven)
+                    }) {
+                        return Err(std::io::Error::other("injected PTY backend wait error"));
+                    }
+                    if waiter_injection
+                        .as_ref()
+                        .is_some_and(|injection| injection.trigger(SetupStage::BackendWaitPanic))
+                    {
+                        panic!("injected PTY backend wait panic");
+                    }
+                    child.wait()
+                }));
+                let status = match waited {
+                    Ok(Ok(status)) => status,
+                    Ok(Err(error)) => {
+                        tracing::error!(
+                            event = "pty.process_tree_quiescence_unproven",
+                            error = %error
+                        );
+                        let force_unproven = waiter_injection.as_ref().is_some_and(|injection| {
+                            injection.matches(SetupStage::BackendWaitUnproven)
+                        });
+                        return finish_failed_wait(&waiter_inner, &waiter_callback, force_unproven);
+                    }
+                    Err(_) => {
+                        tracing::error!(event = "pty.process_tree_wait_panicked");
+                        let force_unproven = waiter_injection.as_ref().is_some_and(|injection| {
+                            injection.matches(SetupStage::BackendWaitUnproven)
+                        });
+                        return finish_failed_wait(&waiter_inner, &waiter_callback, force_unproven);
+                    }
+                };
                 let killed = waiter_inner.killed.load(Ordering::SeqCst);
-                let info = match status {
-                    Ok(status) => ExitInfo {
-                        code: status.exit_code(),
-                        success: status.success() && !killed,
-                        killed,
-                    },
-                    Err(_) => ExitInfo {
-                        code: 1,
-                        success: false,
-                        killed,
-                    },
+                if let Some(guardian) = lock(&waiter_inner.guardian_guard).take()
+                    && let Err(error) = guardian.complete()
+                {
+                    tracing::error!(
+                        event = "pty.guardian_completion_unproved",
+                        error = %error
+                    );
+                    // The runtime authority and supervisor remain the canonical owners and the
+                    // generation-wide drain retries this exact job. Do not leak this redundant Arc:
+                    // that would retain the desktop epoch fence even after a later clean drain.
+                    drop(guardian);
+                }
+                let info = ExitInfo {
+                    code: status.exit_code(),
+                    success: status.success() && !killed,
+                    killed,
                 };
                 *lock(&waiter_inner.exit) = Some(info);
                 // Release the pseudo-terminal so the reader reaches end-of-file.
                 lock(&waiter_inner.input).take();
                 lock(&waiter_inner.master).take();
-                on_exit(info);
+                waiter_callback.invoke(info);
             })
             .map_err(|e| spawn_failed(e, &mut lock(waiter_killer)))?;
 
@@ -305,8 +606,7 @@ impl PtySession {
         lock(&self.inner.shared).listeners.remove(&id).is_some()
     }
 
-    /// Ends the shell. Closing the pseudo-terminal also ends programs started from it
-    /// (on Windows, every process attached to the console receives the close event).
+    /// Ends the shell and its contained process tree.
     pub fn kill(&self) -> Result<(), PtyError> {
         if self.exit_info().is_some() {
             return Ok(());
@@ -315,20 +615,62 @@ impl PtySession {
         let result = lock(&self.inner.killer).kill();
         lock(&self.inner.input).take();
         lock(&self.inner.master).take();
-        // On Windows, portable-pty 0.9 inverts TerminateProcess's result (success comes back as
-        // an error carrying a stale OS error), so the return value carries no information there;
-        // the exit waiter observes the real outcome. Elsewhere, a failed kill is only an error if
-        // the process is still running (it may have exited between the check and the kill).
         #[cfg(unix)]
         escalate_kill(self);
-        if cfg!(not(windows))
-            && let Err(error) = result
+        if let Err(error) = result
             && self.exit_info().is_none()
         {
             return Err(PtyError::Io(error.to_string()));
         }
         Ok(())
     }
+}
+
+#[cfg(windows)]
+fn configure_guardian_job(
+    command: &mut CommandBuilder,
+    guardian_job_handle: usize,
+) -> Result<(), PtyError> {
+    if guardian_job_handle == 0 || guardian_job_handle == usize::MAX {
+        return Err(PtyError::Spawn("invalid guardian job handle".into()));
+    }
+    command.set_guardian_job_handle(guardian_job_handle);
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn configure_guardian_job(
+    _command: &mut CommandBuilder,
+    _guardian_job_handle: usize,
+) -> Result<(), PtyError> {
+    Err(PtyError::Spawn(
+        "the crash guardian requires Windows Job Objects".into(),
+    ))
+}
+
+/// Completes an abnormal waiter path without releasing `callback` until the contained process
+/// tree is known to be gone. On Windows the vendored `ChildKiller::kill` does not return success
+/// until the Job Object reports `ActiveProcesses == 0`.
+fn finish_failed_wait(inner: &Arc<Inner>, callback: &Arc<ExitCallbackGuard>, force_unproven: bool) {
+    lock(&inner.input).take();
+    lock(&inner.master).take();
+
+    let quiesced = !force_unproven && lock(&inner.killer).kill().is_ok();
+    if !quiesced {
+        // The callback can own the only provider-profile lease. Retaining it is preferable to
+        // making an unproved profile available to another provider process.
+        callback.retain();
+        return;
+    }
+
+    let killed = inner.killed.load(Ordering::SeqCst);
+    let info = ExitInfo {
+        code: 1,
+        success: false,
+        killed,
+    };
+    *lock(&inner.exit) = Some(info);
+    callback.invoke(info);
 }
 
 /// The shell must be an absolute path to an existing regular file. Checked before anything reaches
@@ -450,6 +792,28 @@ fn write_loop(mut writer: Box<dyn Write + Send>, queued: &Receiver<Vec<u8>>) {
         if let Err(error) = writer.write_all(&data).and_then(|()| writer.flush()) {
             tracing::debug!(event = "pty.write_ended", error = %error);
             break;
+        }
+    }
+}
+
+fn cursor_response_loop(mut reader: Box<dyn Read + Send>, mut writer: Box<dyn Write + Send>) {
+    let mut buffer = [0u8; 4096];
+    while let Ok(read) = reader.read(&mut buffer) {
+        if read == 0 {
+            break;
+        }
+        let requests = buffer[..read]
+            .windows(CURSOR_POSITION_REQUEST.len())
+            .filter(|window| *window == CURSOR_POSITION_REQUEST)
+            .count();
+        for _ in 0..requests {
+            if writer
+                .write_all(CURSOR_POSITION_REPLY)
+                .and_then(|()| writer.flush())
+                .is_err()
+            {
+                return;
+            }
         }
     }
 }

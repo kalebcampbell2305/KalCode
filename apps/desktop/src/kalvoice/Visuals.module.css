@@ -26,18 +26,13 @@
 }
 
 /* Tones follow the contract palette: listening is the icy accent, processing and executing
-   are working green, needs approval is neutral (amber is reserved for paused), done is
-   high-contrast neutral, error is red. */
+   are working green, done is high-contrast neutral, and error is red. */
 .orb[data-phase="listening"] {
   --orb-tone: var(--color-accent-icy);
 }
 
 .orb:is([data-phase="transcribing"], [data-phase="thinking"], [data-phase="executing"]) {
   --orb-tone: var(--status-working);
-}
-
-.orb[data-phase="waiting_for_permission"] {
-  --orb-tone: var(--status-waiting);
 }
 
 .orb[data-phase="done"] {
@@ -94,7 +89,6 @@
   opacity: 0.5;
 }
 
-.orb[data-phase="waiting_for_permission"] .halo,
 .orb[data-phase="error"] .halo {
   animation: none;
   opacity: 0.45;
@@ -130,12 +124,6 @@
   animation: turn 6s linear infinite;
 }
 
-/* A clear, calm alert: a steady neutral ring that fades in once. No flashing. */
-.orb[data-phase="waiting_for_permission"] .ring {
-  border-color: var(--orb-tone);
-  animation: appear 600ms var(--ease-out) both;
-}
-
 .orb[data-phase="done"] .ring {
   border-color: var(--orb-tone);
   animation: complete 800ms var(--ease-out) both;
@@ -162,10 +150,6 @@
 
 .wave:is([data-phase="transcribing"], [data-phase="thinking"], [data-phase="executing"]) {
   --wave-tone: var(--status-working);
-}
-
-.wave[data-phase="waiting_for_permission"] {
-  --wave-tone: var(--status-waiting);
 }
 
 .wave[data-phase="done"] {
@@ -212,11 +196,6 @@
   transform: scaleY(0.22);
   animation: sweep 1.1s linear infinite;
   animation-delay: calc(var(--i) * 35ms);
-}
-
-.wave[data-phase="waiting_for_permission"] .bar {
-  opacity: 0.7;
-  transform: scaleY(0.2);
 }
 
 .wave[data-phase="done"] .bar {
@@ -280,12 +259,6 @@
   100% {
     opacity: 0.4;
     transform: scale(1);
-  }
-}
-
-@keyframes appear {
-  from {
-    opacity: 0;
   }
 }
 

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-context-file-pick"
+description = "Enables the context_file_pick command without any pre-configured scope."
+commands.allow = ["context_file_pick"]
+
+[[permission]]
+identifier = "deny-context-file-pick"
+description = "Denies the context_file_pick command without any pre-configured scope."
+commands.deny = ["context_file_pick"]

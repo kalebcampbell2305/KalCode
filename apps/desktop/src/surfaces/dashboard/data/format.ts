@@ -172,6 +172,30 @@ export function describeAction(action: ActionKind): ActionDetail {
       return { kind: `Automation: ${action.change}`, target: action.automationId, context: null };
     case "doctor_fix":
       return { kind: "Apply an environment fix", target: action.target, context: action.fixCode };
+    case "utility_http":
+      return {
+        kind: `${action.method} HTTP request`,
+        target: action.origin,
+        context: `${action.destination.replaceAll("_", " ")} · redirect hop ${action.redirectHop} · ${action.bodyBytes.toLocaleString()} body bytes`,
+      };
+    case "utility_dns_resolve":
+      return {
+        kind: "Resolve a network address",
+        target: action.host,
+        context: "DNS lookup only; sending the request requires a separate approval",
+      };
+    case "utility_process_signal":
+      return {
+        kind: action.signal === "kill" ? "Force-stop a process" : "Stop a process",
+        target: action.processName,
+        context: `PID ${action.pid}`,
+      };
+    case "utility_sqlite_write":
+      return {
+        kind: `${action.statement[0]?.toUpperCase()}${action.statement.slice(1)} database data`,
+        target: action.databaseName,
+        context: null,
+      };
     case "create_threads":
       return {
         kind: `Open ${action.count === 1 ? "a thread" : `${action.count} threads`}`,

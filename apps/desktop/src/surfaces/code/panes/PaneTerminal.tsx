@@ -1,8 +1,17 @@
 import "@xterm/xterm/css/xterm.css";
+import type { ThreadStatus } from "@kalcode/protocol";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { useEffect, useRef } from "react";
 import { toKalCodeError } from "../../../ipc/errors.ts";
+import {
+  createOrderedInputQueue,
+  DictationDeliveryError,
+  frameProviderPrompt,
+  providerInputReadiness,
+  registerDictationSink,
+  throwIfDictationCancelled,
+} from "../../../kalvoice/dictation.ts";
 import { afterLiveResize, isLiveResizing } from "../../../shell/panes/liveResize.ts";
 import { OutputScheduler } from "../../../shell/panes/outputScheduler.ts";
 import codeStyles from "../Code.module.css";
@@ -18,6 +27,11 @@ const ACK_EVERY_BYTES = 64 * 1024;
 interface PaneTerminalProps {
   channel: PaneChannel;
   threadId: string;
+  providerId: string;
+  providerAccountId: string | null;
+  status: ThreadStatus;
+  /** Structured provider/runtime state only; never inferred from terminal output. */
+  providerPromptActive: boolean;
   /** Accessible name of the terminal input. */
   label: string;
   /** The provider process is running (input is accepted). */
@@ -41,6 +55,10 @@ function monoFontFamily(): string {
 export function PaneTerminal({
   channel,
   threadId,
+  providerId,
+  providerAccountId,
+  status,
+  providerPromptActive,
   label,
   running,
   focusRequest,
@@ -55,6 +73,11 @@ export function PaneTerminal({
   const throttledRef = useRef(throttled);
   throttledRef.current = throttled;
   const writerRef = useRef<OutputScheduler | null>(null);
+  const labelRef = useRef(label);
+  labelRef.current = label;
+  const inputRef = useRef<ReturnType<typeof createOrderedInputQueue> | null>(null);
+  const contextRef = useRef({ threadId, providerId, providerAccountId, status, providerPromptActive });
+  contextRef.current = { threadId, providerId, providerAccountId, status, providerPromptActive };
 
   useEffect(() => {
     const host = hostRef.current;
@@ -82,6 +105,7 @@ export function PaneTerminal({
 
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== "keydown") return true;
+      if (event.defaultPrevented) return false;
       if (isTerminalShortcut(event)) return false;
       const ctrl = event.ctrlKey && !event.altKey && !event.metaKey;
       const key = event.key.toLowerCase();
@@ -91,29 +115,19 @@ export function PaneTerminal({
       return true;
     });
 
-    // Input in order, one write in flight; keystrokes typed meanwhile go in the next write.
-    let pending = "";
-    let flushing = false;
-    const flush = async () => {
-      flushing = true;
-      while (pending) {
-        const data = pending;
-        pending = "";
-        try {
-          await channel.write(threadId, data);
-        } catch (error) {
-          if (import.meta.env.DEV && toKalCodeError(error).code !== "pane_not_running") {
-            console.warn("pane input failed", error);
-          }
+    const input = createOrderedInputQueue(
+      (data) => channel.write(threadId, data),
+      (error) => {
+        if (import.meta.env.DEV && toKalCodeError(error).code !== "pane_not_running") {
+          console.warn("pane input failed", error);
         }
-      }
-      flushing = false;
-    };
+      },
+    );
+    inputRef.current = input;
     let replaying = false;
     const send = (data: string) => {
       if (replaying || !runningRef.current) return;
-      pending += data;
-      if (!flushing) void flush();
+      input.send(data);
     };
     term.onData(send);
 
@@ -222,10 +236,72 @@ export function PaneTerminal({
       writerRef.current = null;
       if (resizeTimer) clearTimeout(resizeTimer);
       if (attachment !== null) channel.detach(attachment).catch(() => undefined);
+      input.dispose();
+      if (inputRef.current === input) inputRef.current = null;
       termRef.current = null;
       term.dispose();
     };
   }, [channel, threadId]);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    return registerDictationSink(host, {
+      label: labelRef.current,
+      destination: { kind: "provider_pane", threadId, providerId, providerAccountId },
+      async deliver(transcript, options) {
+        throwIfDictationCancelled(options?.signal);
+        const current = contextRef.current;
+        if (
+          current.threadId !== threadId ||
+          current.providerId !== providerId ||
+          current.providerAccountId !== providerAccountId
+        ) {
+          throw new DictationDeliveryError("target_closed", "That provider destination changed.");
+        }
+        const readiness = providerInputReadiness({
+          running: runningRef.current,
+          status: current.status,
+          providerPromptActive: current.providerPromptActive,
+        });
+        if (readiness === "ended") {
+          throw new DictationDeliveryError("terminal_not_running", "That provider session is no longer running.");
+        }
+        if (readiness === "provider_prompt") {
+          throw new DictationDeliveryError(
+            "provider_permission_prompt",
+            "The provider is waiting for an answer to its native prompt.",
+          );
+        }
+        if (readiness === "busy") {
+          throw new DictationDeliveryError("provider_input_busy", "The provider is still working.");
+        }
+        if (readiness !== "ready") {
+          throw new DictationDeliveryError(
+            "provider_input_unverified",
+            "KalCode cannot yet confirm that the provider is ready for a prompt.",
+          );
+        }
+        const framed = frameProviderPrompt(transcript);
+        const input = inputRef.current;
+        if (!input) throw new DictationDeliveryError("target_closed", "That provider pane has closed.");
+        try {
+          await input.deliver(framed, options);
+        } catch (cause) {
+          if (cause instanceof DictationDeliveryError) throw cause;
+          const error = toKalCodeError(cause);
+          if (error.code === "pane_not_running") {
+            throw new DictationDeliveryError("terminal_not_running", "That provider session is no longer running.");
+          }
+          throw new DictationDeliveryError(
+            "provider_delivery_failed",
+            "KalCode could not write to that provider pane.",
+          );
+        }
+        return framed.length - 1;
+      },
+    });
+  }, [providerAccountId, providerId, threadId]);
 
   useEffect(() => {
     termRef.current?.textarea?.setAttribute("aria-label", label);

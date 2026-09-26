@@ -444,6 +444,9 @@ fn make_dir_link(link: &std::path::Path, target: &std::path::Path) -> bool {
     }
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt as _;
+
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         if std::os::windows::fs::symlink_dir(target, link).is_ok() {
             return true;
         }
@@ -452,6 +455,7 @@ fn make_dir_link(link: &std::path::Path, target: &std::path::Path) -> bool {
             .args(["/C", "mklink", "/J"])
             .arg(link)
             .arg(target)
+            .creation_flags(CREATE_NO_WINDOW)
             .output()
             .is_ok_and(|o| o.status.success())
     }

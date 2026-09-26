@@ -20,7 +20,7 @@ import {
   renderRemovalEmail,
 } from "./emails";
 import type { Mailer } from "./mailer";
-import type { AddressClaim, EarlyAccessStore, NewSignup, Subscriber, TokenRecord } from "./store";
+import type { AddressClaim, EarlyAccessStore, MarketingSendClaim, NewSignup, Subscriber, TokenRecord } from "./store";
 import { hashToken } from "./tokens";
 
 export interface FlowDeps {
@@ -93,12 +93,13 @@ async function sendWithLinks(deps: FlowDeps, linkOrigin: string, attempt: Attemp
   }
 
   let outcome: SendOutcome = "send_failed";
-  let dailyClaimed = false;
+  let marketingClaim: MarketingSendClaim | null = null;
+  let providerStarted = false;
   const records: TokenRecord[] = [];
   const entry: Record<string, string> = { kind: attempt.kind, transport: deps.mailer.transport };
   try {
-    dailyClaimed = await store.claimDailySend(now, deps.dailyEmailLimit);
-    if (!dailyClaimed) {
+    marketingClaim = await store.claimMarketingSend(now, deps.dailyEmailLimit);
+    if (!marketingClaim) {
       outcome = "budget_exhausted";
     } else {
       const createdAt = now.toISOString();
@@ -120,6 +121,7 @@ async function sendWithLinks(deps: FlowDeps, linkOrigin: string, attempt: Attemp
       const confirmUrl = codes.confirm
         ? actionUrl(linkOrigin, EARLY_ACCESS_EMAIL.confirmPath, codes.confirm)
         : undefined;
+      providerStarted = true;
       const result = await deps.mailer.send({
         to: attempt.to,
         ...attempt.render(confirmUrl ? { confirmUrl, removeUrl } : { removeUrl }),
@@ -127,13 +129,36 @@ async function sendWithLinks(deps: FlowDeps, linkOrigin: string, attempt: Attemp
         idempotencyKey: `early-access-${records[0]?.hash.slice(0, 32) ?? createdAt}`,
       });
       if (result.ok) {
+        try {
+          await store.finalizeMarketingSend(marketingClaim, "sent");
+        } catch (error) {
+          deps.log({ level: "error", event: "early_access.budget_finalize_failed", error: errorName(error) });
+        }
         deps.log({ level: "info", event: "early_access.email_sent", ...entry });
         return "sent";
       }
       entry.reason = result.reason;
       if (result.status !== undefined) entry.status = String(result.status);
+      if (result.reason === "network" || result.reason === "timeout") {
+        try {
+          await store.finalizeMarketingSend(marketingClaim, "ambiguous");
+        } catch (error) {
+          deps.log({ level: "error", event: "early_access.budget_finalize_failed", error: errorName(error) });
+        }
+        deps.log({ level: "warn", event: "early_access.email_failed", ...entry });
+        return "send_failed";
+      }
     }
   } catch (error) {
+    if (providerStarted && marketingClaim) {
+      try {
+        await store.finalizeMarketingSend(marketingClaim, "ambiguous");
+      } catch (finalizeError) {
+        deps.log({ level: "error", event: "early_access.budget_finalize_failed", error: errorName(finalizeError) });
+      }
+      deps.log({ level: "warn", event: "early_access.email_failed", reason: "ambiguous", error: errorName(error) });
+      return "send_failed";
+    }
     outcome = "store_failed";
     entry.reason = "store";
     entry.error = errorName(error);
@@ -142,7 +167,7 @@ async function sendWithLinks(deps: FlowDeps, linkOrigin: string, attempt: Attemp
   // Undo, so nothing half-created blocks a retry. Each step is independent and best effort.
   const undo: [string, () => Promise<void>][] = [["address_slot", () => store.releaseAddressSend(claim)]];
   if (records.length > 0) undo.push(["tokens", () => store.deleteTokens(records.map((record) => record.hash))]);
-  if (dailyClaimed) undo.push(["daily_slot", () => store.releaseDailySend(now)]);
+  if (marketingClaim) undo.push(["daily_slot", () => store.finalizeMarketingSend(marketingClaim, "rejected")]);
   if (attempt.created) undo.push(["row", () => store.deleteCreated(attempt.subscriber.id)]);
   for (const [step, run] of undo) {
     try {

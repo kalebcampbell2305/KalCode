@@ -18,28 +18,33 @@ export interface Resource<T> {
   state: ResourceState<T>;
   /** Re-reads the source (used by Try again and by event-driven invalidation). */
   reload: () => void;
-  /** Applies a local change to ready data (e.g. an action's returned summary) until the next read. */
+  /** Applies a local change to this source's ready data; obsolete sources' updates are ignored. */
   update: (change: (data: T) => T) => void;
 }
 
 /**
- * Reads a source through `load` and re-reads it whenever `version` changes. Responses that arrive
- * after a newer request started are ignored, so the state always reflects the latest read. Once a
- * source is known to be unavailable in this build it is never polled again.
+ * Reads a source through `load` and re-reads it whenever `version` changes. Keep `load` stable for
+ * the same source (e.g. useCallback keyed on the client). A new loader resets the source's state,
+ * including an unavailable result. Obsolete responses are ignored; an unavailable source is not
+ * polled again until its loader changes.
  */
 export function useResource<T>(load: () => Promise<T>, version: number): Resource<T> {
   const [state, setState] = useState<ResourceState<T>>({ status: "loading" });
   const [attempt, setAttempt] = useState(0);
   const requestId = useRef(0);
   const unavailable = useRef(false);
-  const loadRef = useRef(load);
-  loadRef.current = load;
+  const source = useRef(load);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: `version` and `attempt` are refresh triggers.
   useEffect(() => {
+    if (source.current !== load) {
+      source.current = load;
+      unavailable.current = false;
+      setState({ status: "loading" });
+    }
     if (unavailable.current) return;
     const id = ++requestId.current;
-    loadRef.current().then(
+    load().then(
       (data) => {
         if (id !== requestId.current) return;
         setState({ status: "ready", data, error: null });
@@ -55,16 +60,24 @@ export function useResource<T>(load: () => Promise<T>, version: number): Resourc
         setState((current) => (current.status === "ready" ? { ...current, error } : { status: "error", error }));
       },
     );
-  }, [version, attempt]);
+    return () => {
+      requestId.current += 1;
+    };
+  }, [load, version, attempt]);
 
   const reload = useCallback(() => {
     setState((current) => (current.status === "error" ? { status: "loading" } : current));
     setAttempt((n) => n + 1);
   }, []);
 
-  const update = useCallback((change: (data: T) => T) => {
-    setState((current) => (current.status === "ready" ? { ...current, data: change(current.data) } : current));
-  }, []);
+  const update = useCallback(
+    (change: (data: T) => T) => {
+      setState((current) =>
+        source.current === load && current.status === "ready" ? { ...current, data: change(current.data) } : current,
+      );
+    },
+    [load],
+  );
 
   return useMemo(() => ({ state, reload, update }), [state, reload, update]);
 }

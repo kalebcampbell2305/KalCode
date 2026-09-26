@@ -18,13 +18,15 @@ use std::collections::{BTreeMap, VecDeque};
 use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
+use std::process::{ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use kalcode_core::logging::redact;
+
+use crate::guardian::{GuardedJob, RegisteredJob};
 
 /// Longest stdout line accepted from a provider (a single stream-JSON event). Longer lines are
 /// discarded and reported as [`OutputLine::TooLong`] instead of growing memory without bound.
@@ -62,10 +64,14 @@ pub enum ProcessError {
     TimedOut(Duration),
     #[error("waiting for the program failed: {0}")]
     Wait(#[source] std::io::Error),
+    #[error("terminating the program tree failed: {0}")]
+    Terminate(#[source] std::io::Error),
     #[error("writing to the program failed: {0}")]
     Write(#[source] std::io::Error),
     #[error("the program's input is closed")]
     InputClosed,
+    #[error("provider guardian cleanup failed: {0}")]
+    Guardian(String),
 }
 
 /// Builds the command for a spec. The environment is [`crate::env::harden`]ed again here, and a
@@ -108,21 +114,47 @@ pub fn run_probe(
     capture_stdout: bool,
     max_output: usize,
 ) -> Result<ProbeOutput, ProcessError> {
+    run_probe_inner(spec, None, timeout, capture_stdout, max_output)
+}
+
+/// Runs a short process through a PREPARED guardian job. The typed admission remains owned until
+/// the process and its complete tree have exited.
+pub fn run_probe_guarded(
+    spec: &ProcessSpec,
+    admission: RegisteredJob,
+    timeout: Duration,
+    capture_stdout: bool,
+    max_output: usize,
+) -> Result<ProbeOutput, ProcessError> {
+    run_probe_inner(spec, Some(admission), timeout, capture_stdout, max_output)
+}
+
+fn run_probe_inner(
+    spec: &ProcessSpec,
+    admission: Option<RegisteredJob>,
+    timeout: Duration,
+    capture_stdout: bool,
+    max_output: usize,
+) -> Result<ProbeOutput, ProcessError> {
     let started = Instant::now();
-    let mut child = command(spec)
+    let mut command = command(spec);
+    command
         .stdin(Stdio::null())
         .stdout(if capture_stdout {
             Stdio::piped()
         } else {
             Stdio::null()
         })
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(ProcessError::Spawn)?;
+        .stderr(Stdio::piped());
+    let (mut child, guardian_job) = match admission {
+        Some(admission) => platform::spawn_guarded(command, admission),
+        None => platform::spawn(command).map(|child| (child, None)),
+    }
+    .map_err(ProcessError::Spawn)?;
 
     // Readers report through channels rather than being joined: a grandchild that inherited a
     // pipe could keep it open after the probe exits, and that must not hang detection.
-    let stdout = child.stdout.take().map(|pipe| {
+    let stdout = platform::take_stdout(&mut child).map(|pipe| {
         let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
             let mut buffer = Vec::new();
@@ -132,7 +164,7 @@ pub fn run_probe(
         rx
     });
     let tail = Arc::new(Mutex::new(StderrTail::default()));
-    let stderr = child.stderr.take().map(|pipe| {
+    let stderr = platform::take_stderr(&mut child).map(|pipe| {
         let (tx, rx) = mpsc::channel::<()>();
         let tail = Arc::clone(&tail);
         thread::spawn(move || {
@@ -143,16 +175,28 @@ pub fn run_probe(
     });
 
     let status = loop {
-        match child.try_wait() {
+        match platform::try_wait(&mut child) {
             Ok(Some(status)) => break status,
             Ok(None) if started.elapsed() >= timeout => {
-                kill_tree(&mut child);
+                if kill_tree(&mut child).is_ok()
+                    && let Some(guardian) = &guardian_job
+                {
+                    guardian
+                        .cancel_and_prove_quiescence()
+                        .map_err(|error| ProcessError::Guardian(error.to_string()))?;
+                }
                 // Reader threads end once the pipes close with the process.
                 return Err(ProcessError::TimedOut(timeout));
             }
             Ok(None) => thread::sleep(Duration::from_millis(15)),
             Err(error) => {
-                kill_tree(&mut child);
+                if kill_tree(&mut child).is_ok()
+                    && let Some(guardian) = &guardian_job
+                {
+                    guardian
+                        .cancel_and_prove_quiescence()
+                        .map_err(|cleanup| ProcessError::Guardian(cleanup.to_string()))?;
+                }
                 return Err(ProcessError::Wait(error));
             }
         }
@@ -165,6 +209,11 @@ pub fn run_probe(
         let _ = done.recv_timeout(DRAIN);
     }
     let stderr = lock(&tail).redacted();
+    if let Some(guardian) = &guardian_job {
+        guardian
+            .cancel_and_prove_quiescence()
+            .map_err(|error| ProcessError::Guardian(error.to_string()))?;
+    }
     Ok(ProbeOutput {
         status,
         stdout,
@@ -275,37 +324,62 @@ fn finish_line(mut line: Vec<u8>, total: usize, overflowed: bool) -> OutputLine 
 
 /// A long-lived provider process (an agent session).
 pub struct SupervisedChild {
-    child: Mutex<Child>,
+    child: Mutex<platform::Child>,
     stdin: Mutex<Option<ChildStdin>>,
     stderr: Arc<Mutex<StderrTail>>,
     pid: u32,
+    // Retains the typed admission record for this exact process tree. The generation authority
+    // remains the canonical owner; this value prevents accidental loss in adapter code.
+    guardian_job: Mutex<Option<GuardedJob>>,
 }
 
 impl SupervisedChild {
     /// Spawns the process with piped stdio. Returns the child and its stdout line stream.
     pub fn spawn(spec: &ProcessSpec) -> Result<(Self, Receiver<OutputLine>), ProcessError> {
-        let mut child = command(spec)
+        Self::spawn_inner(spec, None)
+    }
+
+    /// Spawns a provider through a PREPARED guardian admission. On Windows the child is created
+    /// suspended, assigned to both the external guardian's named job and the local per-child job,
+    /// and committed using PID plus creation time from that same process handle before it resumes.
+    pub fn spawn_guarded(
+        spec: &ProcessSpec,
+        admission: RegisteredJob,
+    ) -> Result<(Self, Receiver<OutputLine>), ProcessError> {
+        Self::spawn_inner(spec, Some(admission))
+    }
+
+    fn spawn_inner(
+        spec: &ProcessSpec,
+        admission: Option<RegisteredJob>,
+    ) -> Result<(Self, Receiver<OutputLine>), ProcessError> {
+        let mut command = command(spec);
+        command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(ProcessError::Spawn)?;
+            .stderr(Stdio::piped());
+        let (mut child, guardian_job) = match admission {
+            Some(admission) => platform::spawn_guarded(command, admission),
+            None => platform::spawn(command).map(|child| (child, None)),
+        }
+        .map_err(ProcessError::Spawn)?;
         let (tx, rx) = mpsc::channel();
-        if let Some(stdout) = child.stdout.take() {
+        if let Some(stdout) = platform::take_stdout(&mut child) {
             spawn_stdout_reader(stdout, tx);
         }
         let stderr = Arc::new(Mutex::new(StderrTail::default()));
-        if let Some(pipe) = child.stderr.take() {
+        if let Some(pipe) = platform::take_stderr(&mut child) {
             spawn_stderr_reader(pipe, Arc::clone(&stderr));
         }
-        let stdin = child.stdin.take();
-        let pid = child.id();
+        let stdin = platform::take_stdin(&mut child);
+        let pid = platform::id(&child);
         Ok((
             Self {
                 child: Mutex::new(child),
                 stdin: Mutex::new(stdin),
                 stderr,
                 pid,
+                guardian_job: Mutex::new(guardian_job),
             },
             rx,
         ))
@@ -333,7 +407,11 @@ impl SupervisedChild {
 
     /// Exit status if the process has exited.
     pub fn try_status(&self) -> Result<Option<ExitStatus>, ProcessError> {
-        lock(&self.child).try_wait().map_err(ProcessError::Wait)
+        let status = platform::try_wait(&mut lock(&self.child)).map_err(ProcessError::Wait)?;
+        if status.is_some() {
+            self.complete_guardian()?;
+        }
+        Ok(status)
     }
 
     /// Waits up to `timeout` for the process to exit on its own.
@@ -356,17 +434,36 @@ impl SupervisedChild {
         if let Some(status) = self.wait_timeout(grace)? {
             return Ok(Some(status));
         }
-        self.kill();
+        self.kill_confirmed()?;
         self.wait_timeout(Duration::from_secs(5))
     }
 
     /// Kills the process and everything it started. Idempotent.
     pub fn kill(&self) {
+        let _ = self.kill_confirmed();
+    }
+
+    fn kill_confirmed(&self) -> Result<(), ProcessError> {
         let mut child = lock(&self.child);
-        if matches!(child.try_wait(), Ok(Some(_))) {
-            return;
+        if matches!(platform::try_wait(&mut child), Ok(Some(_))) {
+            drop(child);
+            self.complete_guardian()?;
+            return Ok(());
         }
-        kill_tree(&mut child);
+        kill_tree(&mut child)?;
+        drop(child);
+        self.complete_guardian()
+    }
+
+    fn complete_guardian(&self) -> Result<(), ProcessError> {
+        let mut guarded = lock(&self.guardian_job);
+        let Some(job) = guarded.as_ref() else {
+            return Ok(());
+        };
+        job.cancel_and_prove_quiescence()
+            .map_err(|error| ProcessError::Guardian(error.to_string()))?;
+        guarded.take();
+        Ok(())
     }
 
     /// The redacted end of the child's stderr.
@@ -383,10 +480,8 @@ impl Drop for SupervisedChild {
 }
 
 /// Kills `child` and its descendants, then reaps it.
-fn kill_tree(child: &mut Child) {
-    platform::kill_descendants(child.id());
-    let _ = child.kill();
-    let _ = child.wait();
+fn kill_tree(child: &mut platform::Child) -> Result<(), ProcessError> {
+    platform::kill_tree(child).map_err(ProcessError::Terminate)
 }
 
 /// A channel receive with a deadline that tells timeouts and disconnection apart.
@@ -396,49 +491,194 @@ pub fn recv_until<T>(rx: &Receiver<T>, deadline: Instant) -> Result<T, RecvTimeo
 
 #[cfg(windows)]
 mod platform {
-    use std::os::windows::process::CommandExt;
-    use std::process::{Command, Stdio};
+    use process_wrap::std::{ChildWrapper, CommandWrap, CommandWrapper, CreationFlags, JobObject};
+    use std::fmt;
+    use std::process::{ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus};
+    use std::sync::{Arc, Mutex};
+    use windows::Win32::System::Threading::CREATE_NO_WINDOW;
 
-    /// No console window for provider processes started from the GUI app.
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    use crate::guardian::{GuardedJob, RegisteredJob};
 
-    pub fn configure(command: &mut Command) {
-        command.creation_flags(CREATE_NO_WINDOW);
+    pub type Child = Box<dyn ChildWrapper>;
+
+    pub fn configure(_command: &mut Command) {}
+
+    pub fn spawn(command: Command) -> std::io::Result<Child> {
+        let mut command = CommandWrap::from(command);
+        command.wrap(CreationFlags(CREATE_NO_WINDOW));
+        command.wrap(JobObject);
+        command.spawn()
     }
 
-    /// Ends the process tree rooted at `pid` with the system `taskkill` (argv, no shell).
-    pub fn kill_descendants(pid: u32) {
-        let system_root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
-        let taskkill = std::path::Path::new(&system_root)
-            .join("System32")
-            .join("taskkill.exe");
-        let _ = Command::new(taskkill)
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .creation_flags(CREATE_NO_WINDOW)
-            .status();
+    pub fn spawn_guarded(
+        command: Command,
+        admission: RegisteredJob,
+    ) -> std::io::Result<(Child, Option<GuardedJob>)> {
+        let committed = Arc::new(Mutex::new(None));
+        let mut command = CommandWrap::from(command);
+        command.wrap(CreationFlags(CREATE_NO_WINDOW));
+        command.wrap(GuardianAssignment {
+            admission: Some(admission),
+            committed: Arc::clone(&committed),
+        });
+        // JobObject adds CREATE_SUSPENDED during pre_spawn and resumes only after every earlier
+        // child wrapper has run. GuardianAssignment is deliberately registered first.
+        command.wrap(JobObject);
+        let child = command.spawn()?;
+        let guarded = committed
+            .lock()
+            .map_err(|_| std::io::Error::other("guardian admission result was poisoned"))?
+            .take()
+            .ok_or_else(|| std::io::Error::other("guardian admission was not committed"))?;
+        Ok((child, Some(guarded)))
+    }
+
+    struct GuardianAssignment {
+        admission: Option<RegisteredJob>,
+        committed: Arc<Mutex<Option<GuardedJob>>>,
+    }
+
+    impl fmt::Debug for GuardianAssignment {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter
+                .debug_struct("GuardianAssignment")
+                .field("prepared", &self.admission.is_some())
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl CommandWrapper for GuardianAssignment {
+        fn wrap_child(
+            &mut self,
+            mut child: Box<dyn ChildWrapper>,
+            _core: &CommandWrap,
+        ) -> std::io::Result<Box<dyn ChildWrapper>> {
+            let process = child
+                .process_handle()
+                .or_else(|| {
+                    child
+                        .try_inner_child()
+                        .and_then(|inner| inner.process_handle())
+                })
+                .ok_or_else(|| {
+                    std::io::Error::other("spawned child did not expose its process handle")
+                })?;
+            let admission = self
+                .admission
+                .take()
+                .ok_or_else(|| std::io::Error::other("guardian admission wrapper was replayed"))?;
+            let result = admission.assign_suspended_process(process, child.id());
+            match result {
+                Ok(guarded) => {
+                    *self.committed.lock().map_err(|_| {
+                        std::io::Error::other("guardian admission result was poisoned")
+                    })? = Some(guarded);
+                    Ok(child)
+                }
+                Err(error) => {
+                    let _ = child.start_kill();
+                    let _ = child.wait();
+                    Err(std::io::Error::other(error.to_string()))
+                }
+            }
+        }
+    }
+
+    pub fn id(child: &Child) -> u32 {
+        child.id()
+    }
+
+    pub fn take_stdin(child: &mut Child) -> Option<ChildStdin> {
+        child.stdin().take()
+    }
+
+    pub fn take_stdout(child: &mut Child) -> Option<ChildStdout> {
+        child.stdout().take()
+    }
+
+    pub fn take_stderr(child: &mut Child) -> Option<ChildStderr> {
+        child.stderr().take()
+    }
+
+    pub fn try_wait(child: &mut Child) -> std::io::Result<Option<ExitStatus>> {
+        let status = child.try_wait()?;
+        if status.is_some() {
+            // JobObjectChild::kill terminates any surviving descendants and its wait verifies the
+            // completion-port signal for the whole job before a profile lease may be released.
+            child.kill()?;
+        }
+        Ok(status)
+    }
+
+    pub fn kill_tree(child: &mut Child) -> std::io::Result<()> {
+        child.kill()
     }
 }
 
 #[cfg(unix)]
 mod platform {
     use std::os::unix::process::CommandExt;
-    use std::process::{Command, Stdio};
+    use std::process::{ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio};
+
+    pub type Child = std::process::Child;
 
     /// Each provider runs in its own process group so its whole tree can be signalled.
     pub fn configure(command: &mut Command) {
         command.process_group(0);
     }
 
-    pub fn kill_descendants(pid: u32) {
-        let _ = Command::new("/bin/kill")
+    pub fn spawn(mut command: Command) -> std::io::Result<Child> {
+        command.spawn()
+    }
+
+    pub fn spawn_guarded(
+        _command: Command,
+        _admission: crate::guardian::RegisteredJob,
+    ) -> std::io::Result<(Child, Option<crate::guardian::GuardedJob>)> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "the provider crash guardian requires Windows Job Objects",
+        ))
+    }
+
+    pub fn id(child: &Child) -> u32 {
+        child.id()
+    }
+
+    pub fn take_stdin(child: &mut Child) -> Option<ChildStdin> {
+        child.stdin.take()
+    }
+
+    pub fn take_stdout(child: &mut Child) -> Option<ChildStdout> {
+        child.stdout.take()
+    }
+
+    pub fn take_stderr(child: &mut Child) -> Option<ChildStderr> {
+        child.stderr.take()
+    }
+
+    pub fn try_wait(child: &mut Child) -> std::io::Result<Option<ExitStatus>> {
+        child.try_wait()
+    }
+
+    pub fn kill_tree(child: &mut Child) -> std::io::Result<()> {
+        let pid = child.id();
+        let group = Command::new("/bin/kill")
             .args(["-KILL", "--", &format!("-{pid}")])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
+        if let Ok(status) = group
+            && !status.success()
+            && child.try_wait()?.is_none()
+        {
+            return Err(std::io::Error::other(
+                "couldn't terminate provider process group",
+            ));
+        }
+        child.kill()?;
+        child.wait().map(|_| ())
     }
 }
 
@@ -454,6 +694,77 @@ mod tests {
             out.push(line);
         }
         out
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn supervised_child_waits_for_job_tree_quiescence_after_root_exit() {
+        let temp = tempfile::tempdir().expect("temp");
+        let marker = temp.path().join("descendant-pid");
+        let marker_literal = marker.to_string_lossy().replace('\'', "''");
+        let system_root = std::env::var_os("SystemRoot").expect("SystemRoot");
+        let powershell = std::path::Path::new(&system_root)
+            .join("System32")
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("powershell.exe");
+        let command = format!(
+            "$p=Start-Process -WindowStyle Hidden -FilePath '{}' -ArgumentList '-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 60' -PassThru; [IO.File]::WriteAllText('{}',[string]$p.Id)",
+            powershell.to_string_lossy().replace('\'', "''"),
+            marker_literal,
+        );
+        let env =
+            crate::detect::DetectEnv::from_process().provider_env(&crate::env::EnvPolicy::BASE);
+        let (child, _lines) = SupervisedChild::spawn(&ProcessSpec {
+            program: powershell,
+            args: vec![
+                "-NoProfile".into(),
+                "-NonInteractive".into(),
+                "-Command".into(),
+                command.into(),
+            ],
+            cwd: Some(temp.path().to_path_buf()),
+            env,
+        })
+        .expect("supervised root");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !marker.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(15));
+        }
+        let descendant_pid = std::fs::read_to_string(&marker)
+            .expect("descendant pid marker")
+            .trim()
+            .parse::<u32>()
+            .expect("descendant pid");
+
+        assert!(
+            child
+                .wait_timeout(Duration::from_secs(10))
+                .expect("job wait")
+                .is_some(),
+            "the exited root and its descendant job must quiesce"
+        );
+        let tasklist = std::path::Path::new(&system_root)
+            .join("System32")
+            .join("tasklist.exe");
+        use std::os::windows::process::CommandExt;
+        let mut tasklist_command = Command::new(tasklist);
+        tasklist_command.creation_flags(0x0800_0000);
+        let output = tasklist_command
+            .args([
+                "/FI",
+                &format!("PID eq {descendant_pid}"),
+                "/NH",
+                "/FO",
+                "CSV",
+            ])
+            .output()
+            .expect("tasklist");
+        let listing = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            !listing.contains(&format!(",\"{descendant_pid}\",")),
+            "descendant remained alive after the supervised root exited: {listing}"
+        );
     }
 
     #[test]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-thread-cancel-prompt-review"
+description = "Enables the thread_cancel_prompt_review command without any pre-configured scope."
+commands.allow = ["thread_cancel_prompt_review"]
+
+[[permission]]
+identifier = "deny-thread-cancel-prompt-review"
+description = "Denies the thread_cancel_prompt_review command without any pre-configured scope."
+commands.deny = ["thread_cancel_prompt_review"]

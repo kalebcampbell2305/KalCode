@@ -1,0 +1,26 @@
+[package]
+name = "kalcode-updater"
+description = "Fail-closed update channel, verification, and recovery policy for KalCode."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+base64 = "0.22"
+hex = "0.4"
+minisign-verify = "0.3"
+semver = "1"
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+thiserror.workspace = true
+url = "2"
+
+[dev-dependencies]
+minisign = "0.7.9"
+tempfile.workspace = true
+
+[lints]
+workspace = true

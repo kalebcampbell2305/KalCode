@@ -15,6 +15,33 @@ const EMPTY: ReleaseManifest = {
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
 
+const STABLE_DUAL: ReleaseManifest = {
+  schemaVersion: 1,
+  latest: {
+    ...(publishedManifest.latest as NonNullable<ReleaseManifest["latest"]>),
+    channel: "stable",
+    platforms: [
+      {
+        ...(publishedManifest.latest?.platforms[0] as NonNullable<ReleaseManifest["latest"]>["platforms"][number]),
+        signed: true,
+      },
+      {
+        os: "macos",
+        arch: "arm64",
+        label: "macOS 14 or later, Apple silicon",
+        kind: "dmg",
+        file: "KalCode_0.1.0_arm64.dmg",
+        url: "/download/macos-arm64",
+        pinnedUrl: "/download/0.1.0/KalCode_0.1.0_arm64.dmg",
+        size: 4_200_000,
+        sha256: "d".repeat(64),
+        signed: true,
+      },
+    ],
+  },
+  unavailable: [{ os: "linux", label: "Linux", reason: "Not available yet." }],
+};
+
 describe("download page platforms", () => {
   it("with no public build: every OS is unavailable, with its reason, and there are no links", async () => {
     const container = await AstroContainer.create();
@@ -33,7 +60,8 @@ describe("download page platforms", () => {
     if (!windows) throw new Error("fixture has no Windows build");
 
     const links = [...html.matchAll(/<a\s[^>]*href="([^"]+)"/g)].map((match) => match[1]);
-    expect(links).toEqual([windows.url, publishedManifest.latest?.notesUrl, "/terms#preview"]);
+    const notesUrl = publishedManifest.latest?.notesUrl.replace(/^\/changelog(?=#|$)/, "/updates");
+    expect(links).toEqual([windows.url, notesUrl, "/terms#preview"]);
     expect(html).toContain(`download="${windows.file}"`);
 
     const body = text(html);
@@ -42,8 +70,54 @@ describe("download page platforms", () => {
     expect(body).toContain("3.8 MB");
     expect(body).toContain("SmartScreen");
     expect(body).toContain("Not code-signed");
+    expect(body).toContain(`Get-FileHash .\\${windows.file} -Algorithm SHA256`);
+    expect(body).not.toContain("Run anyway");
     // macOS and Linux stay unavailable, with the manifest's reasons and no links.
     expect(body.match(/Not yet available/g)).toHaveLength(2);
     for (const entry of publishedManifest.unavailable) expect(body).toContain(entry.reason);
+  });
+
+  it("renders stable Windows and Mac downloads with their own checksum commands", async () => {
+    const container = await AstroContainer.create();
+    const html = await container.renderToString(DownloadPlatforms, { props: { manifest: STABLE_DUAL } });
+    const body = text(html);
+    expect(body.match(/Stable 0\.1\.0/g)).toHaveLength(2);
+    expect(body).not.toContain("Preview 0.1.0");
+    expect(body).toContain("Get-FileHash .\\KalCode_0.1.0_x64-setup.exe -Algorithm SHA256");
+    expect(html).toContain("shasum -a 256 &quot;./KalCode_0.1.0_arm64.dmg&quot;");
+    expect(html).toContain('href="/download/windows-x64"');
+    expect(html).toContain('href="/download/macos-arm64"');
+    expect(html).toContain('id="windows"');
+    expect(html).toContain('id="macos"');
+    expect(html).toContain('id="linux"');
+    expect(body).toContain("KalCode terms");
+    expect(body).not.toContain("preview terms");
+  });
+
+  it("describes an unsigned Mac preview without telling people to bypass Gatekeeper", async () => {
+    const manifest: ReleaseManifest = {
+      ...STABLE_DUAL,
+      latest: {
+        ...(STABLE_DUAL.latest as NonNullable<ReleaseManifest["latest"]>),
+        channel: "preview",
+        platforms: [
+          {
+            ...(STABLE_DUAL.latest?.platforms[1] as NonNullable<ReleaseManifest["latest"]>["platforms"][number]),
+            signed: false,
+          },
+        ],
+      },
+      unavailable: [
+        { os: "windows", label: "Windows", reason: "Not available yet." },
+        { os: "linux", label: "Linux", reason: "Not available yet." },
+      ],
+    };
+    const container = await AstroContainer.create();
+    const html = await container.renderToString(DownloadPlatforms, { props: { manifest } });
+    const body = text(html);
+    expect(body).toContain("not code-signed or notarized");
+    expect(body).toContain("does not ask you to bypass Gatekeeper");
+    expect(body).not.toContain("SmartScreen");
+    expect(body).not.toContain("Run anyway");
   });
 });

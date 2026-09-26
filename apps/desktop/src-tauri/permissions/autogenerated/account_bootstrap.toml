@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-account-bootstrap"
+description = "Enables the account_bootstrap command without any pre-configured scope."
+commands.allow = ["account_bootstrap"]
+
+[[permission]]
+identifier = "deny-account-bootstrap"
+description = "Denies the account_bootstrap command without any pre-configured scope."
+commands.deny = ["account_bootstrap"]

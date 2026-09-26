@@ -1,6 +1,12 @@
-import type { ThreadMessage, ThreadStatus, ThreadSummary, ToolCallRecord } from "@kalcode/protocol";
+import type {
+  ProviderDetection,
+  ProviderStatus,
+  ThreadMessage,
+  ThreadStatus,
+  ThreadSummary,
+  ToolCallRecord,
+} from "@kalcode/protocol";
 import { describe, expect, it } from "vitest";
-import type { ProviderDetection, ProviderStatus } from "@kalcode/protocol";
 import { providerCatalog } from "../../ipc/memoryProviders.ts";
 import {
   buildTimeline,
@@ -40,6 +46,7 @@ function summary(partial: Partial<ThreadSummary>): ThreadSummary {
     providerId: "claude-code",
     providerName: "Claude Code",
     model: null,
+    providerAccountId: null,
     accountLabel: null,
     workspaceId: "w",
     workspaceName: "kalcode",

@@ -59,7 +59,7 @@ export const SAFETY_FEATURES: readonly FeatureId[] = PRODUCT_FEATURES.filter(
   (feature) => FEATURE_PLACEMENT[feature] === "safety",
 );
 
-const PLAN_RANK: Record<Exclude<EntitlementTier, "owner">, number> = { free: 0, pro: 1, max: 2 };
+const PLAN_RANK: Record<Exclude<EntitlementTier, "owner">, number> = { free: 0, pro: 1, max: 2, max2x: 2 };
 
 /** Whether `tier` includes `feature`. OWNER is unrestricted; safety and free features are on every plan. */
 export function featureIncluded(tier: EntitlementTier, feature: FeatureId): boolean {

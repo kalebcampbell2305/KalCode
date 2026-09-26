@@ -82,7 +82,7 @@ test.describe("Push to talk (fake recognizer)", () => {
     await expect(shown(page).getByText("Opened Settings.")).toHaveCount(0);
 
     await openKalVoicePage(page);
-    await expect(page.locator("#kalvoice-status").getByText("Used 1 of 250 · resets")).toBeVisible();
+    await expect(page.locator("#kalvoice-status").getByText("1 / 75 used · 74 remaining · renews")).toBeVisible();
     await page.getByRole("button", { name: "Dashboard" }).click();
     const activity = page.getByRole("region", { name: "Activity" });
     await expect(activity.getByText("KalVoice ran a command")).toBeVisible();
@@ -99,7 +99,7 @@ test.describe("Push to talk (fake recognizer)", () => {
     await talk(page);
     await expect(box).toHaveValue("Please add a unit test for the parser");
     await expect(shown(page).getByText("Inserted 31 characters.")).toBeVisible();
-    await expect(page.locator("#kalvoice-status").getByText("Used 0 of 250 · resets")).toBeVisible();
+    await expect(page.locator("#kalvoice-status").getByText("0 / 75 used · 75 remaining · renews")).toBeVisible();
   });
 
   test("a clear command wins in a text box; Type it instead types the words and refunds", async ({ page }) => {
@@ -113,20 +113,20 @@ test.describe("Push to talk (fake recognizer)", () => {
     await expect(page.getByRole("heading", { level: 1, name: "KalVoice" })).toBeVisible();
     await expect(pageRequestBox(page)).toHaveValue("go to settings");
     await expect(shown(page).getByText("Typed instead.")).toBeVisible();
-    await expect(page.locator("#kalvoice-status").getByText("Used 0 of 250 · resets")).toBeVisible();
+    await expect(page.locator("#kalvoice-status").getByText("0 / 75 used · 75 remaining · renews")).toBeVisible();
   });
 
-  test("anything else becomes a request for the user's provider, and isn't counted without one", async ({ page }) => {
+  test("unavailable local interpretation never falls back to a provider and is not counted", async ({ page }) => {
     await open(page, "?transcript=plan%20the%20migration%20to%20postgres");
     await talk(page);
     await expectState(page, "Error");
     await expect(
-      shown(page).getByText("Connect a supported AI provider to use KalVoice reasoning for this request."),
+      shown(page).getByText("On-device KalVoice interpretation isn't available in this build."),
     ).toBeVisible();
-    await widget(page).getByRole("button", { name: "Open Providers" }).click();
-    await expect(page.getByRole("heading", { level: 1, name: "Providers" })).toBeVisible();
+    await widget(page).getByRole("button", { name: "Open KalVoice settings" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Settings" })).toBeVisible();
     await openKalVoicePage(page);
-    await expect(page.locator("#kalvoice-status").getByText("Used 0 of 250 · resets")).toBeVisible();
+    await expect(page.locator("#kalvoice-status").getByText("0 / 75 used · 75 remaining · renews")).toBeVisible();
   });
 
   test("key repeat doesn't restart listening", async ({ page }) => {
@@ -139,7 +139,7 @@ test.describe("Push to talk (fake recognizer)", () => {
     await page.keyboard.up("F8");
     await expect(page.getByRole("heading", { level: 1, name: "Settings" })).toBeVisible();
     await openKalVoicePage(page);
-    await expect(page.locator("#kalvoice-status").getByText("Used 1 of 250 · resets")).toBeVisible();
+    await expect(page.locator("#kalvoice-status").getByText("1 / 75 used · 74 remaining · renews")).toBeVisible();
   });
 
   test("losing the window mid-hold finishes the take (missed release)", async ({ page }) => {
@@ -207,26 +207,29 @@ test.describe("Push to talk (fake recognizer)", () => {
   });
 });
 
-test.describe("Approvals from the widget", () => {
-  test("a command that adds work waits for approval in the widget", async ({ page }) => {
+test.describe("Immediate app control", () => {
+  test("a command that adds work runs immediately without a KalVoice approval", async ({ page }) => {
     await open(page, "?scenario=kalvoice-approvals&transcript=open%20four%20codex%20threads");
     await talk(page);
-    await expectState(page, "Needs Approval");
-    const w = widget(page);
-    await expect(w.getByRole("button", { name: "Deny" })).toBeVisible();
-    // A KalVoice approval request: approve once or deny (no standing grants).
-    await expect(w.getByRole("button", { name: "Allow for thread" })).toHaveCount(0);
-    await expect(shown(page).getByText("“open four codex threads”")).toBeVisible();
-    await w.getByRole("button", { name: "Approve once" }).click();
     await expect(shown(page).getByText("Opened 4 Codex threads (test double).")).toBeVisible();
     await expectState(page, "Done");
+    const w = widget(page);
+    await expect(w.getByRole("button", { name: "Deny" })).toHaveCount(0);
+    await expect(w.getByRole("button", { name: "Allow for thread" })).toHaveCount(0);
+    await expect(w.getByRole("button", { name: "Approve once" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Approvals, none waiting" })).toBeVisible();
   });
 
-  test("denying stops it", async ({ page }) => {
-    await open(page, "?scenario=kalvoice-approvals&transcript=open%20four%20codex%20threads");
+  test("dictation stays free and never creates an app-control approval", async ({ page }) => {
+    await open(page, "?scenario=kalvoice-approvals&transcript=write%20the%20release%20notes");
+    await openKalVoicePage(page);
+    const box = pageRequestBox(page);
+    await box.focus();
     await talk(page);
-    await widget(page).getByRole("button", { name: "Deny" }).click();
-    await expect(shown(page).getByText("The request wasn't approved, so KalVoice didn't run it.")).toBeVisible();
+    await expect(box).toHaveValue("write the release notes");
+    await expect(page.locator("#kalvoice-status").getByText("0 / 75 used · 75 remaining · renews")).toBeVisible();
+    await expect(widget(page).getByRole("button", { name: /Approve|Deny/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Approvals, none waiting" })).toBeVisible();
   });
 
   test("making things safer runs straight away", async ({ page }) => {
@@ -354,7 +357,7 @@ test.describe("KalVoice voice widget", () => {
     await page.keyboard.press("Enter");
     await expect(w).toHaveAttribute("data-view", "expanded");
     await expect(shown(page).getByText("Hold F8 to talk to KalVoice.")).toBeVisible();
-    await expect(shown(page).getByText("Used 0 of 250 · resets", { exact: false })).toBeVisible();
+    await expect(shown(page).getByText("0 / 75 used · 75 remaining · renews", { exact: false })).toBeVisible();
     await w.getByRole("button", { name: "Show less" }).focus();
     await page.keyboard.press("Enter");
     await expect(w).toHaveAttribute("data-view", "compact");
@@ -485,10 +488,9 @@ test.describe("KalVoice accessibility", () => {
       await expectNoSeriousA11yViolations(page);
 
       await talk(page);
-      await expectState(page, "Needs Approval");
+      await expectState(page, "Done");
       await expectNoSeriousA11yViolations(page);
-      await widget(page).getByRole("button", { name: "Deny" }).click();
-      await expectState(page, "Error");
+      await expectState(page, "Ready");
       await expectNoSeriousA11yViolations(page);
 
       await openKalVoicePage(page);

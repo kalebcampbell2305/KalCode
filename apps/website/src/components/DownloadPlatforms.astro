@@ -14,6 +14,24 @@ interface Props {
 const { manifest = RELEASES } = Astro.props;
 const rows = platformRows(manifest);
 const latest = manifest.latest;
+const releaseLabel = latest?.channel === "stable" ? "Stable" : "Preview";
+const releaseNoun = latest?.channel === "stable" ? "stable build" : "preview";
+const terms = latest?.channel === "stable"
+  ? { href: "/terms", label: "KalCode terms" }
+  : { href: "/terms#preview", label: "KalCode preview terms" };
+// Release manifests published before Updates keep working, while new page links stay canonical.
+const notesUrl = latest?.notesUrl.replace(/^\/changelog(?=#|$)/, "/updates");
+
+function signatureLabel(os: (typeof rows)[number]["os"], signed: boolean): string {
+  if (signed) return "Code-signed";
+  return os === "macos" ? "Not code-signed or notarized" : "Not code-signed";
+}
+
+function checksumCommand(os: (typeof rows)[number]["os"], file: string): string {
+  if (os === "windows") return `Get-FileHash .\\${file} -Algorithm SHA256`;
+  if (os === "macos") return `shasum -a 256 "./${file}"`;
+  return `sha256sum "./${file}"`;
+}
 ---
 <ul class="platforms" role="list" data-platforms>
   {
@@ -23,7 +41,7 @@ const latest = manifest.latest;
           <h3 class="platform__name">{row.name}</h3>
           {row.state === "available" && latest ? (
             <span class="chip chip--built">
-              Preview {latest.version}
+              {releaseLabel} {latest.version}
             </span>
           ) : (
             <span class="chip">Not yet available</span>
@@ -54,26 +72,33 @@ const latest = manifest.latest;
               </div>
               <div>
                 <dt>Signature</dt>
-                <dd>{row.build.signed ? "Code-signed" : "Not code-signed (preview)"}</dd>
+                <dd>{signatureLabel(row.os, row.build.signed)}</dd>
               </div>
             </dl>
             {!row.build.signed && (
               <p class="platform__note">
-                This preview is not code-signed yet, so Windows SmartScreen will say it protected your
-                PC. Check the SHA-256 first, then choose <strong>More info</strong> and{" "}
-                <strong>Run anyway</strong>.
+                {row.os === "windows" ? (
+                  <>This {releaseNoun} is not code-signed, so Windows SmartScreen may warn you. Verify its SHA-256 before opening it.</>
+                ) : row.os === "macos" ? (
+                  <>This {releaseNoun} is not code-signed or notarized. Verify its SHA-256 before opening it. KalCode does not ask you to bypass Gatekeeper.</>
+                ) : (
+                  <>This {releaseNoun} is not code-signed. Verify its SHA-256 before opening it.</>
+                )}
               </p>
             )}
+            <p class="platform__note">
+              Verify the downloaded file with <code>{checksumCommand(row.os, row.build.file)}</code> and compare it with the SHA-256 above.
+            </p>
             <div class="platform__action button-row">
               <a class="button button--primary button--lg" href={row.build.url} download={row.build.file}>
                 <Icon name="download" />
                 Download for {row.name}
               </a>
-              <a class="text-link" href={latest.notesUrl}>Release notes</a>
+              <a class="text-link" href={notesUrl}>Release notes</a>
             </div>
             <p class="muted small">
               By downloading or using KalCode you agree to the{" "}
-              <a href="/terms#preview">KalCode preview terms</a>.
+              <a href={terms.href}>{terms.label}</a>.
             </p>
           </>
         ) : (

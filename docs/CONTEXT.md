@@ -1,12 +1,14 @@
 # Universal Context Drop and Context Firewall
 
-Status: **library built (P0) — not wired into the app yet.** The crate `crates/context`
-(`kalcode_context`) implements context packages, the Context Firewall, folder analysis,
-provider-safe translation, the decision log and schema v8. There is no IPC command, UI, or event
-emission yet: the lead wires it in at integration and the composer tray arrives in P2. Campaign
-report and evidence: `docs/campaigns/CTX.md`. Plan and acceptance criteria:
-`docs/campaigns/ADVANCED.md` §7.8; proposed contract types, events, IPC and tables:
-`docs/CONTRACTS_ADVANCED.md` (PROPOSED, pending lead approval).
+Status: **thread-composer integration implemented; broader egress adoption remains staged.** The
+crate `crates/context` (`kalcode_context`) implements context packages, the Context Firewall,
+folder analysis, provider-safe translation, the decision log and schema v8. The desktop thread
+composer now exposes an explicit Context Drop tray for workspace files, pasted text, selections,
+log excerpts and URL references. Native IPC resolves opaque file handles, shows the firewall
+preview, pins its content hash and sends only after the user submits to the exact selected thread,
+provider, account and workspace. Campaign report and evidence: `docs/campaigns/CTX.md`. Plan and
+acceptance criteria: `docs/campaigns/ADVANCED.md` §7.8; contract types, events, IPC and tables:
+`docs/CONTRACTS_ADVANCED.md`.
 
 System code **CTX / FW** · Phase **P0 (library, built) · P2 (UI)**
 
@@ -82,6 +84,25 @@ removes a redaction.
 Every block, redaction, override and prompt warning is written to an append-only log that holds
 rule codes, counts, paths and hashes — never content. Stored packages hold references and hashes,
 never content.
+
+## Desktop send lifecycle
+
+The Context Drop IPC is restricted to the main WebView. Package previews bind to the exact thread,
+provider, managed account and workspace that the user selected. The native command rechecks that
+identity, the thread's active state, every source and the pinned hash immediately before claiming a
+one-shot send. Deterministic validation failures leave the package editable. Once the provider call
+may have started, a failed, offline or interrupted result becomes `FailedUncertain`; KalCode does
+not retry or emit `context.shared` because doing so could duplicate a provider request.
+
+Context content is ephemeral provider input. Thread history and thread events persist the user's
+typed prompt, while the context store persists only package references, hashes, sizes, verdicts and
+content-free firewall facts. Provider failure follows the same rule: the provider may have seen the
+context, but the raw content is not copied into durable conversation history or event payloads.
+URL items are references only and KalCode does not fetch them.
+
+This integration governs the explicit thread-composer Context Drop path. Other provider egress
+paths must adopt the same canonical package/firewall boundary before they can claim Context
+Firewall coverage; the library's presence alone does not make those paths protected.
 
 ## Honest limit
 

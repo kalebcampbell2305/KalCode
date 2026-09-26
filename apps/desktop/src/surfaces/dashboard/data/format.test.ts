@@ -52,9 +52,50 @@ describe("describeAction", () => {
     [{ kind: "package_install", manager: "pnpm add", packages: ["zod"] }, "Install a package", "pnpm add zod"],
     [{ kind: "git", operation: "push", remote: "origin main" }, "Git push", "origin main"],
     [{ kind: "network", host: "example.com", url: null }, "Reach the network", "example.com"],
+    [
+      { kind: "utility_dns_resolve", operationId: "dns-operation", host: "api.example.test" },
+      "Resolve a network address",
+      "api.example.test",
+    ],
     [{ kind: "browser", action: "navigate", url: "https://x.dev" }, "Browser: navigate", "https://x.dev"],
     [{ kind: "deploy", target: "Production" }, "Deploy", "Production"],
     [{ kind: "tool", tool: "mcp.x", inputSummary: "" }, "Use mcp.x", null],
+    [
+      {
+        kind: "utility_http",
+        operationId: "operation-id",
+        method: "POST",
+        origin: "https://api.example.test/",
+        destination: "external",
+        redirectHop: 0,
+        bodyBytes: 128,
+      },
+      "POST HTTP request",
+      "https://api.example.test/",
+    ],
+    [
+      {
+        kind: "utility_process_signal",
+        operationId: "operation-id",
+        pid: 42,
+        processStartTime: "1337",
+        processName: "node.exe",
+        signal: "terminate",
+      },
+      "Stop a process",
+      "node.exe",
+    ],
+    [
+      {
+        kind: "utility_sqlite_write",
+        operationId: "operation-id",
+        databaseId: "database-id",
+        databaseName: "work.db",
+        statement: "update",
+      },
+      "Update database data",
+      "work.db",
+    ],
   ])("%j", (action, kind, target) => {
     const detail = describeAction(action);
     expect(detail.kind).toBe(kind);

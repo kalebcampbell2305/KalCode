@@ -232,7 +232,7 @@ fn overrides_lift_only_overridable_blocks_and_keep_redactions() {
     assert_eq!(package.items[1].decision.verdict, FINAL);
     // Not yet confirmed: only the clean file is sent.
     let before = package.render().expect("render");
-    assert_eq!(before.items_sent, 1);
+    assert_eq!(before.items_sent(), 1);
     let hash_before = package.content_sha256().to_owned();
 
     // Final blocks cannot be overridden.
@@ -251,7 +251,7 @@ fn overrides_lift_only_overridable_blocks_and_keep_redactions() {
         "an override changes the hash"
     );
     let after = package.render().expect("render");
-    assert_eq!(after.items_sent, 2);
+    assert_eq!(after.items_sent(), 2);
     let text = after.text();
     assert!(
         text.contains("deploy with [REDACTED:git_host_token]"),

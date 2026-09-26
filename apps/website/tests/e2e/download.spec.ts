@@ -23,10 +23,10 @@ test.describe("download page", () => {
       await expect(windows).toContainText(WINDOWS_BUILD.sha256);
       await expect(windows).toContainText(RELEASES.latest.version);
       if (!WINDOWS_BUILD.signed) await expect(windows).toContainText("SmartScreen");
-      await expect(windows.getByRole("link", { name: "Release notes" })).toHaveAttribute(
-        "href",
-        RELEASES.latest.notesUrl,
-      );
+      await expect(windows).toContainText(`Get-FileHash .\\${WINDOWS_BUILD.file} -Algorithm SHA256`);
+      await expect(page.locator("[data-platforms] > li")).toHaveCount(3);
+      const canonicalNotesUrl = RELEASES.latest.notesUrl.replace(/^\/changelog(?=#|$)/, "/updates");
+      await expect(windows.getByRole("link", { name: "Release notes" })).toHaveAttribute("href", canonicalNotesUrl);
     } else {
       await expect(page.locator(".page-head")).toContainText("No public build yet");
       await expect(platforms.locator("a")).toHaveCount(0);
@@ -70,9 +70,9 @@ test.describe("download page", () => {
     }
   });
 
-  test("the release notes link resolves to the changelog entry", async ({ page }) => {
+  test("the release notes link resolves to its Updates entry", async ({ page }) => {
     test.skip(RELEASES.latest === null, "no published release, so there are no release notes to link");
-    const notes = new URL(RELEASES.latest?.notesUrl ?? "/", "http://local");
+    const notes = new URL(RELEASES.latest?.notesUrl.replace(/^\/changelog(?=#|$)/, "/updates") ?? "/", "http://local");
     await page.goto(notes.pathname);
     await expect(page.locator(notes.hash)).toBeVisible();
   });

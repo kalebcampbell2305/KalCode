@@ -60,6 +60,13 @@ pub const MIGRATIONS: &[Migration] = &[
     WORKSPACE_UI_MIGRATION,
     NOTIFICATIONS_MIGRATION,
     RAIL_LOCATOR_MIGRATION,
+    PROVIDER_ACCOUNTS_MIGRATION,
+    KALVOICE_REQUEST_LIFECYCLE_MIGRATION,
+    UTILITY_MIGRATION,
+    TIME_MACHINE_MIGRATION,
+    DOCTOR_MIGRATION,
+    UTILITY_AUTHORITY_MIGRATION,
+    CONTEXT_DELIVERY_MIGRATION,
 ];
 
 /// Migration v7 (campaign Z6a): `git_worktrees` and `checkpoints`. Owned by `crates/git`, which
@@ -102,6 +109,56 @@ pub const RAIL_LOCATOR_MIGRATION: Migration = Migration {
     version: 11,
     name: "rail_locator",
     sql: include_str!("../migrations/0011_rail_locator.sql"),
+};
+
+/// Migration v12: credential-free provider account metadata and scoped account bindings.
+pub const PROVIDER_ACCOUNTS_MIGRATION: Migration = Migration {
+    version: 12,
+    name: "provider_accounts",
+    sql: include_str!("../migrations/0012_provider_accounts.sql"),
+};
+
+/// Migration v13: durable lifecycle for the canonical KalVoice request/usage claim.
+pub const KALVOICE_REQUEST_LIFECYCLE_MIGRATION: Migration = Migration {
+    version: 13,
+    name: "kalvoice_request_lifecycle",
+    sql: include_str!("../migrations/0013_kalvoice_request_lifecycle.sql"),
+};
+
+/// Utility Dock persistence, owned by the canonical single-writer database.
+pub const UTILITY_MIGRATION: Migration = Migration {
+    version: 14,
+    name: "utility_dock",
+    sql: include_str!("../migrations/0014_utility_dock.sql"),
+};
+
+/// Durable, non-replayable Time Machine operation authority and recovery evidence.
+pub const TIME_MACHINE_MIGRATION: Migration = Migration {
+    version: 15,
+    name: "time_machine",
+    sql: include_str!("../migrations/0015_time_machine.sql"),
+};
+
+/// Environment Doctor history and one-time approval claims.
+pub const DOCTOR_MIGRATION: Migration = Migration {
+    version: 16,
+    name: "doctor",
+    sql: include_str!("../migrations/0016_doctor.sql"),
+};
+
+/// Durable at-most-once claims for account-bound sealed Utility effects.
+pub const UTILITY_AUTHORITY_MIGRATION: Migration = Migration {
+    version: 17,
+    name: "utility_authority",
+    sql: include_str!("../migrations/0017_utility_authority.sql"),
+};
+
+/// Durable, one-shot Context Drop delivery authority and interrupted-send recovery evidence.
+/// Owned by `crates/context`, which re-exports this typed migration.
+pub const CONTEXT_DELIVERY_MIGRATION: Migration = Migration {
+    version: 18,
+    name: "context_delivery",
+    sql: include_str!("../migrations/0018_context_delivery.sql"),
 };
 
 /// How many pre-migration backups to keep.

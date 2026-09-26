@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 
 /** The Providers surface's views. */
-export type ProvidersTab = "setup" | "health";
+export type ProvidersTab = "setup" | "accounts" | "health";
 
 /**
  * A request to show one Providers tab (the Dashboard's "Health details"). A tiny store rather

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-doctor-cancel"
+description = "Enables the doctor_cancel command without any pre-configured scope."
+commands.allow = ["doctor_cancel"]
+
+[[permission]]
+identifier = "deny-doctor-cancel"
+description = "Denies the doctor_cancel command without any pre-configured scope."
+commands.deny = ["doctor_cancel"]

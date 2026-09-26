@@ -4,11 +4,15 @@ import type { PermissionMode } from "./PermissionMode.ts";
 /**
  * Everything an adapter needs to start a session. Paths are native-resolved, never from the UI.
  */
-export type SessionConfig = { threadId: string, workspaceId: string, workingDirectory: string, model: string | null, permissionMode: PermissionMode, 
+export type SessionConfig = { threadId: string, workspaceId: string,
+/**
+ * Stable KalCode provider-account metadata id. Credentials remain provider-managed.
+ */
+providerAccountId: string | null, workingDirectory: string, model: string | null, permissionMode: PermissionMode,
 /**
  * Provider session id to resume, when the provider supports resuming.
  */
-resumeSessionId: string | null, 
+resumeSessionId: string | null,
 /**
  * Opaque reference into the OS secure store for an API-key account; never the key itself.
  */

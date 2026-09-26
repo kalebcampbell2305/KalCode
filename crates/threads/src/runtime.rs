@@ -17,11 +17,15 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak, mpsc};
 
+use kalcode_context::{
+    Firewall, FirewallPolicy, PromptAdmission, PromptGate, PromptReview, PromptTarget,
+    RenderedPackage, WorkspaceRoot,
+};
 use kalcode_contracts::agent::{
     AgentEvent, AgentInput, AgentSession, FileChange, ProviderError, ProviderId, SessionConfig,
 };
 use kalcode_contracts::events::{Correlation, EventPayload, EventSource, NewEvent};
-use kalcode_contracts::ids::new_id;
+use kalcode_contracts::ids::{is_valid_id, new_id};
 use kalcode_contracts::kalvoice::ThreadScope;
 use kalcode_contracts::permissions::{
     ApprovalDecision, NormalizedAction, PermissionGate, PermissionMode, PolicyEffect,
@@ -188,10 +192,66 @@ impl LiveThread {
 /// Fields shared by the public create paths (validated in `Inner::create`).
 struct NewThread<'a> {
     provider_id: &'a str,
+    provider_account_id: Option<&'a str>,
+    account_label: Option<&'a str>,
     workspace_id: &'a str,
     model: Option<&'a str>,
     permission_mode: PermissionMode,
     name: String,
+}
+
+struct AdmittedPrompt {
+    text: String,
+    target: PromptTarget,
+    admission: PromptAdmission,
+}
+
+/// Opaque, runtime-generation-bound admission for one existing thread prompt.
+/// It can be obtained before a durable one-shot claim and consumed only by this runtime.
+pub struct ThreadPromptAdmission {
+    thread_id: String,
+    prompt: AdmittedPrompt,
+}
+
+fn prompt_firewall() -> Firewall {
+    Firewall::new(WorkspaceRoot::none(), FirewallPolicy::default())
+}
+
+fn create_prompt_target(request: &CreateThread) -> Result<PromptTarget> {
+    validate::provider_id(&request.provider_id)?;
+    validate::workspace_id(&request.workspace_id)?;
+    if request
+        .provider_account_id
+        .as_deref()
+        .is_some_and(|account_id| !is_valid_id(account_id))
+    {
+        return Err(KalError::validation(
+            "invalid_provider_account",
+            "That provider account reference isn't valid.",
+        ));
+    }
+    Ok(PromptTarget {
+        workspace_id: request.workspace_id.clone(),
+        thread_id: None,
+        provider_id: request.provider_id.clone(),
+        provider_account_id: request.provider_account_id.clone(),
+    })
+}
+
+fn row_prompt_target(row: &ThreadRow) -> PromptTarget {
+    PromptTarget {
+        workspace_id: row.workspace_id.clone(),
+        thread_id: Some(row.id.clone()),
+        provider_id: row.provider_id.to_string(),
+        provider_account_id: row.provider_account_id.clone(),
+    }
+}
+
+fn row_create_prompt_target(row: &ThreadRow) -> PromptTarget {
+    PromptTarget {
+        thread_id: None,
+        ..row_prompt_target(row)
+    }
 }
 
 enum EndReason {
@@ -267,6 +327,7 @@ struct Inner {
     providers: Arc<ProviderRegistry>,
     workspaces: Arc<dyn WorkspaceResolver>,
     gate: Arc<dyn PermissionGate>,
+    prompt_gate: PromptGate,
     live: Mutex<HashMap<String, Arc<LiveThread>>>,
     routes: Mutex<Routes>,
     streams: StreamHub,
@@ -300,6 +361,7 @@ impl ThreadRuntime {
             providers,
             workspaces,
             gate,
+            prompt_gate: PromptGate::default(),
             live: Mutex::new(HashMap::new()),
             routes: Mutex::new(Routes::default()),
             streams: StreamHub::default(),
@@ -483,20 +545,57 @@ impl ThreadRuntime {
     /// Creates a thread and starts its provider session with `prompt` as the first message.
     /// A provider that fails to start yields a `failed` thread (with the reason), not an error.
     pub fn create(&self, request: CreateThread) -> Result<ThreadSummary> {
+        self.create_reviewed(request, None)
+    }
+
+    /// Inspects a create prompt without starting a provider or writing thread state.
+    pub fn review_create_prompt(&self, request: &CreateThread) -> Result<PromptReview> {
         let prompt = validate::prompt(&request.prompt)?;
+        self.inner
+            .prompt_gate
+            .review(&prompt_firewall(), create_prompt_target(request)?, &prompt)
+            .map_err(Into::into)
+    }
+
+    /// Best-effort cancellation for an opaque prompt-review handle owned by this runtime.
+    /// Unknown, expired, already-consumed, and already-cancelled handles are harmless.
+    pub fn cancel_prompt_review(&self, review_id: &str) -> Result<bool> {
+        self.inner.prompt_gate.cancel(review_id).map_err(Into::into)
+    }
+
+    /// Creates a thread after consuming an exact owner confirmation when the prompt warned.
+    pub fn create_reviewed(
+        &self,
+        request: CreateThread,
+        review_id: Option<&str>,
+    ) -> Result<ThreadSummary> {
+        let prompt = validate::prompt(&request.prompt)?;
+        let target = create_prompt_target(&request)?;
+        let admission =
+            self.inner
+                .prompt_gate
+                .admit(&prompt_firewall(), &target, &prompt, review_id)?;
+        let prompt_warned = prompt_firewall().check_user_prompt(&prompt).warn;
         let name = match request.name.as_deref().filter(|n| !n.trim().is_empty()) {
             Some(name) => validate::name(name)?,
+            None if prompt_warned => naming::FALLBACK_NAME.to_owned(),
             None => naming::name_from_prompt(&prompt),
         };
         self.inner.create(
             NewThread {
                 provider_id: &request.provider_id,
+                provider_account_id: request.provider_account_id.as_deref(),
+                account_label: request.account_label.as_deref(),
                 workspace_id: &request.workspace_id,
                 model: request.model.as_deref(),
                 permission_mode: request.permission_mode,
                 name,
             },
-            Some(prompt),
+            Some(AdmittedPrompt {
+                text: prompt,
+                target,
+                admission,
+            }),
         )
     }
 
@@ -509,6 +608,8 @@ impl ThreadRuntime {
         self.inner.create(
             NewThread {
                 provider_id: &request.provider_id,
+                provider_account_id: request.provider_account_id.as_deref(),
+                account_label: request.account_label.as_deref(),
                 workspace_id: &request.workspace_id,
                 model: request.model.as_deref(),
                 permission_mode: request.permission_mode,
@@ -559,11 +660,104 @@ impl ThreadRuntime {
             .collect())
     }
 
-    pub fn send(&self, thread_id: &str, text: &str) -> Result<ThreadSummary> {
+    /// Inspects a prompt for an existing thread without sending or writing message state.
+    pub fn review_thread_prompt(&self, thread_id: &str, text: &str) -> Result<PromptReview> {
         validate::thread_id(thread_id)?;
         let text = validate::prompt(text)?;
-        self.inner.send(thread_id, text)?;
+        let row = self.inner.row(thread_id)?;
+        self.inner
+            .prompt_gate
+            .review(&prompt_firewall(), row_prompt_target(&row), &text)
+            .map_err(Into::into)
+    }
+
+    pub fn send(&self, thread_id: &str, text: &str) -> Result<ThreadSummary> {
+        self.send_reviewed(thread_id, text, None)
+    }
+
+    /// Sends after consuming an exact owner confirmation when the prompt warned.
+    pub fn send_reviewed(
+        &self,
+        thread_id: &str,
+        text: &str,
+        review_id: Option<&str>,
+    ) -> Result<ThreadSummary> {
+        let admitted = self.admit_thread_prompt(thread_id, text, review_id)?;
+        self.send_admitted(admitted)?;
         self.inner.summary(thread_id)
+    }
+
+    /// Validates and admits a thread prompt without starting a provider effect or writing it.
+    pub fn admit_thread_prompt(
+        &self,
+        thread_id: &str,
+        text: &str,
+        review_id: Option<&str>,
+    ) -> Result<ThreadPromptAdmission> {
+        validate::thread_id(thread_id)?;
+        let text = validate::prompt(text)?;
+        let row = self.inner.row(thread_id)?;
+        let admission = self.inner.prompt_gate.admit(
+            &prompt_firewall(),
+            &row_prompt_target(&row),
+            &text,
+            review_id,
+        )?;
+        Ok(ThreadPromptAdmission {
+            thread_id: thread_id.to_owned(),
+            prompt: AdmittedPrompt {
+                text,
+                target: row_prompt_target(&row),
+                admission,
+            },
+        })
+    }
+
+    fn send_admitted(&self, admitted: ThreadPromptAdmission) -> Result<()> {
+        self.inner.send(&admitted.thread_id, admitted.prompt)
+    }
+
+    /// Sends an explicitly previewed context payload while persisting only the user's own
+    /// message. Context content is ephemeral provider input; its package reference and firewall
+    /// facts are stored by the context service, never copied into thread history or events.
+    pub fn send_with_context(
+        &self,
+        thread_id: &str,
+        user_text: &str,
+        context: &RenderedPackage,
+    ) -> Result<ThreadSummary> {
+        self.send_with_context_reviewed(thread_id, user_text, context, None)
+    }
+
+    /// Sends a previewed context payload after consuming any exact prompt confirmation.
+    pub fn send_with_context_reviewed(
+        &self,
+        thread_id: &str,
+        user_text: &str,
+        context: &RenderedPackage,
+        review_id: Option<&str>,
+    ) -> Result<ThreadSummary> {
+        let admitted = self.admit_thread_prompt(thread_id, user_text, review_id)?;
+        self.send_with_context_admitted(admitted, context)?;
+        self.inner.summary(thread_id)
+    }
+
+    /// Consumes a previously admitted prompt and a non-forgeable rendered context package at the
+    /// central provider boundary.
+    pub fn send_with_context_admitted(
+        &self,
+        admitted: ThreadPromptAdmission,
+        context: &RenderedPackage,
+    ) -> Result<ThreadSummary> {
+        let thread_id = admitted.thread_id.clone();
+        let provider_payload = validate::prompt(&format!(
+            "{}\n\nContext supplied by you:\n{}",
+            admitted.prompt.text,
+            context.text()
+        ))?;
+        self.inner
+            .send_with_payload(&thread_id, admitted.prompt, provider_payload)?;
+        self.inner.summary(&thread_id)
     }
 
     /// Stops the current turn; the session stays open for more input.
@@ -592,12 +786,38 @@ impl ThreadRuntime {
     /// Continues a thread: un-pauses a live one, or starts a new session (resuming the
     /// provider's own session when it supports that). `text`, when given, is sent first.
     pub fn resume(&self, thread_id: &str, text: Option<&str>) -> Result<ThreadSummary> {
+        self.resume_reviewed(thread_id, text, None)
+    }
+
+    /// Resumes after consuming an exact owner confirmation when the optional prompt warned.
+    pub fn resume_reviewed(
+        &self,
+        thread_id: &str,
+        text: Option<&str>,
+        review_id: Option<&str>,
+    ) -> Result<ThreadSummary> {
         validate::thread_id(thread_id)?;
         let text = text
             .filter(|t| !t.trim().is_empty())
             .map(validate::prompt)
             .transpose()?;
-        self.inner.resume(thread_id, text)?;
+        let admitted = match text {
+            Some(text) => {
+                let row = self.inner.row(thread_id)?;
+                let target = row_prompt_target(&row);
+                let admission =
+                    self.inner
+                        .prompt_gate
+                        .admit(&prompt_firewall(), &target, &text, review_id)?;
+                Some(AdmittedPrompt {
+                    text,
+                    target,
+                    admission,
+                })
+            }
+            None => None,
+        };
+        self.inner.resume(thread_id, admitted)?;
         self.inner.summary(thread_id)
     }
 
@@ -756,12 +976,25 @@ impl ThreadRuntime {
         self.inner.streams.count(thread_id)
     }
 
-    /// Ends every running session (app exit). Threads become `interrupted`, resumable.
-    pub fn shutdown(&self) {
+    /// Ends every running session (app exit). `Ok` proves every provider accepted termination.
+    /// Failed sessions remain owned by this runtime so a later call can retry safely.
+    pub fn shutdown_checked(&self) -> Result<()> {
+        let mut first_error = None;
         for id in self.inner.running_ids() {
             if let Err(error) = self.inner.stop(&id, SHUTDOWN_ACTIVITY) {
                 tracing::warn!(event = "thread.shutdown_failed", thread_id = %id, error = %error.diagnostic());
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
             }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    /// Compatibility wrapper for callers that cannot surface shutdown failure yet.
+    pub fn shutdown(&self) {
+        if let Err(error) = self.shutdown_checked() {
+            tracing::error!(event = "thread.shutdown_incomplete", error = %error.diagnostic());
         }
     }
 
@@ -990,6 +1223,7 @@ impl Inner {
             provider_id: row.provider_id,
             provider_name,
             model: row.model,
+            provider_account_id: row.provider_account_id,
             account_label: row.account_label,
             workspace_id: row.workspace_id,
             workspace_name: workspace_name.unwrap_or(row.workspace_name),
@@ -1060,7 +1294,11 @@ impl Inner {
     }
 
     /// Creates a thread and starts its session; `prompt`, when given, is the first message.
-    fn create(&self, request: NewThread<'_>, prompt: Option<String>) -> Result<ThreadSummary> {
+    fn create(
+        &self,
+        request: NewThread<'_>,
+        prompt: Option<AdmittedPrompt>,
+    ) -> Result<ThreadSummary> {
         let provider_id = validate::provider_id(request.provider_id)?;
         validate::workspace_id(request.workspace_id)?;
         let model = validate::model(request.model)?;
@@ -1071,6 +1309,9 @@ impl Inner {
             .get(&provider_id)
             .ok_or_else(|| provider_unavailable(provider_id.as_str()))?;
         let provider_name = entry.provider.display_name().to_owned();
+        let account_label = request
+            .provider_account_id
+            .and(request.account_label.or(entry.account_label.as_deref()));
         if let Some(model) = &model {
             let models = entry.provider.capabilities().models;
             if !models.is_empty() && !models.iter().any(|m| &m.id == model) {
@@ -1091,7 +1332,8 @@ impl Inner {
             provider_id: &provider_id,
             provider_name: &provider_name,
             model: model.as_deref(),
-            account_label: entry.account_label.as_deref(),
+            provider_account_id: request.provider_account_id,
+            account_label,
             workspace_id: &workspace.id,
             workspace_name: &workspace.name,
             cwd: &cwd,
@@ -1127,7 +1369,7 @@ impl Inner {
         row: &ThreadRow,
         entry: &ProviderEntry,
         resume_session_id: Option<String>,
-        first_input: Option<String>,
+        first_input: Option<AdmittedPrompt>,
         notice: Option<&str>,
     ) -> Result<()> {
         let live = self.live_thread(row);
@@ -1154,11 +1396,27 @@ impl Inner {
         let config = SessionConfig {
             thread_id: row.id.clone(),
             workspace_id: row.workspace_id.clone(),
+            provider_account_id: row.provider_account_id.clone(),
             working_directory: row.cwd.clone(),
             model: row.model.clone(),
             permission_mode: row.permission_mode,
             resume_session_id,
             secret_ref: entry.secret_ref.clone(),
+        };
+        // Revalidate the opaque proof at the last in-process boundary before a provider starts.
+        // This also prevents a reviewed prompt from being swapped after validation.
+        let first_input = match first_input {
+            Some(admitted) => {
+                let target = if admitted.target.thread_id.is_none() {
+                    row_create_prompt_target(row)
+                } else {
+                    row_prompt_target(row)
+                };
+                self.prompt_gate
+                    .verify(admitted.admission, &target, &admitted.text)?;
+                Some(admitted.text)
+            }
+            None => None,
         };
         let provider_name = entry.provider.display_name().to_owned();
         let session: Arc<dyn AgentSession> = match entry
@@ -1829,6 +2087,19 @@ impl Inner {
     ) -> Result<()> {
         let ctx = &live.ctx;
         let had_pending = !state.pending.is_empty();
+        if let Some(session) = &state.session
+            && !matches!(reason, EndReason::Exited(_))
+        {
+            session.terminate().map_err(|error| {
+                KalError::new(
+                    ErrorCategory::Provider,
+                    "provider_terminate_failed",
+                    "KalCode couldn't stop the provider session. It is still tracked; try again.",
+                )
+                .retryable()
+                .with_source(error)
+            })?;
+        }
         if !matches!(reason, EndReason::Exited(_)) {
             self.deny_pending(state);
         } else {
@@ -1839,16 +2110,10 @@ impl Inner {
                 routes.by_request.remove(request_id);
             }
         }
-        let session = state.session.take();
+        let _session = state.session.take();
         state.generation += 1;
         state.tools.clear();
         state.resume_status = None;
-        if let Some(session) = &session
-            && !matches!(reason, EndReason::Exited(_))
-            && let Err(error) = session.terminate()
-        {
-            tracing::warn!(event = "thread.terminate_failed", thread_id = %ctx.thread_id, error = %error);
-        }
         self.flush_buffers(ctx, state)?;
 
         let now = now_rfc3339();
@@ -1949,10 +2214,29 @@ impl Inner {
         state: &mut LiveState,
         text: String,
     ) -> Result<()> {
+        let provider_payload = text.clone();
+        self.send_locked_with_payload(live, state, text, provider_payload)
+    }
+
+    fn send_locked_with_payload(
+        &self,
+        live: &Arc<LiveThread>,
+        state: &mut LiveState,
+        persisted_text: String,
+        provider_payload: String,
+    ) -> Result<()> {
         let ctx = &live.ctx;
         let session = state.session.clone().ok_or_else(not_running)?;
-        self.persist_message(ctx, MessageRole::User, &text, None, EventSource::Ui)?;
-        match session.send(AgentInput::Text { text }) {
+        self.persist_message(
+            ctx,
+            MessageRole::User,
+            &persisted_text,
+            None,
+            EventSource::Ui,
+        )?;
+        match session.send(AgentInput::Text {
+            text: provider_payload,
+        }) {
             Ok(()) => {
                 if state.pending.is_empty() {
                     self.transition(ctx, ThreadStatus::Active, None)?;
@@ -1968,13 +2252,36 @@ impl Inner {
         }
     }
 
-    fn send(&self, thread_id: &str, text: String) -> Result<()> {
+    fn send(&self, thread_id: &str, prompt: AdmittedPrompt) -> Result<()> {
+        let provider_payload = prompt.text.clone();
+        self.send_with_payload(thread_id, prompt, provider_payload)
+    }
+
+    fn send_with_payload(
+        &self,
+        thread_id: &str,
+        persisted_prompt: AdmittedPrompt,
+        provider_payload: String,
+    ) -> Result<()> {
         let row = self.row(thread_id)?;
         if row.archived_at.is_some() {
             return Err(archived());
         }
         let live = self.existing_live(thread_id).ok_or_else(not_running)?;
         let mut state = live.lock();
+        // Re-read status while holding the live-thread lock. `pause` takes the same lock before
+        // committing Paused, so a send admitted just before a concurrent pause cannot use a stale
+        // row to send through the still-open provider session and silently unpause the thread.
+        let row = self.row(thread_id)?;
+        if row.archived_at.is_some() {
+            return Err(archived());
+        }
+        if row.status == ThreadStatus::Paused {
+            return Err(KalError::validation(
+                "thread_paused",
+                "Resume this thread before sending another message.",
+            ));
+        }
         if state.session.is_none() {
             return Err(not_running());
         }
@@ -1984,7 +2291,12 @@ impl Inner {
                 "This thread is waiting for a permission decision. Answer it or interrupt the turn first.",
             ));
         }
-        self.send_locked(&live, &mut state, text)
+        self.prompt_gate.verify(
+            persisted_prompt.admission,
+            &row_prompt_target(&row),
+            &persisted_prompt.text,
+        )?;
+        self.send_locked_with_payload(&live, &mut state, persisted_prompt.text, provider_payload)
     }
 
     /// Interrupt (→ idle) or pause (→ paused) the current turn, keeping the session.
@@ -2058,7 +2370,7 @@ impl Inner {
         )
     }
 
-    fn resume(&self, thread_id: &str, text: Option<String>) -> Result<()> {
+    fn resume(&self, thread_id: &str, text: Option<AdmittedPrompt>) -> Result<()> {
         let row = self.row(thread_id)?;
         if row.archived_at.is_some() {
             return Err(archived());
@@ -2072,9 +2384,16 @@ impl Inner {
                         "This thread is already running.",
                     ));
                 }
-                self.transition(&live.ctx, ThreadStatus::Idle, None)?;
                 if let Some(text) = text {
-                    self.send_locked(&live, &mut state, text)?;
+                    self.prompt_gate.verify(
+                        text.admission,
+                        &row_prompt_target(&row),
+                        &text.text,
+                    )?;
+                    self.transition(&live.ctx, ThreadStatus::Idle, None)?;
+                    self.send_locked(&live, &mut state, text.text)?;
+                } else {
+                    self.transition(&live.ctx, ThreadStatus::Idle, None)?;
                 }
                 return Ok(());
             }

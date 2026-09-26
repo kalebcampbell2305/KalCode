@@ -156,7 +156,7 @@
   --kc-i: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 22h14M5 2h14'/%3E%3Cpath d='M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22'/%3E%3Cpath d='M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2'/%3E%3C/svg%3E");
 }
 
-/* Provider glyphs (drawn by KalCode, never provider logos), as masks in the provider accent. */
+/* Provider-published identity marks. They are always paired with the provider name in stage UI. */
 .kc-glyph {
   display: inline-block;
   flex: none;
@@ -167,13 +167,38 @@
   mask: var(--kc-g) center / contain no-repeat;
 }
 .kc-glyph--claude {
-  --kc-g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='8' cy='8' r='6'/%3E%3Ccircle cx='8' cy='8' r='2' fill='black' stroke='none'/%3E%3C/svg%3E");
+  background-color: transparent;
+  background-image: url("../../../../../packages/ui/src/brand/providers/claude-spark.svg");
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+  -webkit-mask: none;
+  mask: none;
 }
 .kc-glyph--codex {
-  --kc-g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='2' y='2' width='12' height='12' rx='3'/%3E%3Cpath d='M6.2 5.8 8.6 8l-2.4 2.2'/%3E%3C/svg%3E");
+  background-color: transparent;
+  background-image: url("../../../../../packages/ui/src/brand/providers/openai-blossom.svg");
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+  -webkit-mask: none;
+  mask: none;
+}
+:root:not([data-theme="light"]) .kc-glyph--codex,
+[data-theme="dark"] .kc-glyph--codex {
+  filter: invert(1);
+}
+[data-theme="light"] .kc-glyph--codex {
+  filter: none;
 }
 .kc-glyph--gemini {
-  --kc-g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 1.6 14.4 8 8 14.4 1.6 8Z'/%3E%3Ccircle cx='8' cy='8' r='1.7' fill='black' stroke='none'/%3E%3C/svg%3E");
+  background-color: transparent;
+  background-image: url("../../../../../packages/ui/src/brand/providers/gemini-cli.png");
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+  -webkit-mask: none;
+  mask: none;
 }
 .kc-glyph--shell {
   --kc-g: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='1.8' y='2.6' width='12.4' height='10.8' rx='2'/%3E%3Cpath d='m4.8 6.2 2 1.8-2 1.8M8.6 10h2.6'/%3E%3C/svg%3E");

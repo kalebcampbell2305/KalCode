@@ -2,7 +2,7 @@
 
 use kalcode_contracts::agent::ProviderId;
 use kalcode_contracts::app::SurfaceId;
-use kalcode_contracts::kalvoice::{KalVoiceIntent, ThreadScope};
+use kalcode_contracts::kalvoice::{BrowserControl, KalVoiceIntent, ThreadScope};
 
 use super::*;
 
@@ -42,6 +42,129 @@ fn create(provider: &str, count: u8) -> KalVoiceIntent {
         provider_id: ProviderId::new(provider),
         count,
         workspace_id: None,
+    }
+}
+
+#[test]
+fn provider_pane_requests_use_the_local_command_path() {
+    for text in [
+        "open 4 Codex terminals",
+        "give me four Codex panes",
+        "give me 3 Claude terminals",
+        "open 2 Claude and 2 Codex",
+        "start six coding agents",
+        "open four Codex agents using my personal account",
+        "open two Codex terminals on Work and two on Personal",
+        "make Codex 2 bigger",
+        "move Claude 1 beside Codex 1",
+    ] {
+        let (understood, confidence) = understand_with_confidence(text);
+        assert_eq!(confidence, Confidence::High, "{text}: {understood:?}");
+        assert!(
+            matches!(understood, Understood::Intent { ref intent, .. }
+            if !intent.needs_reasoning()),
+            "{text}: {understood:?}"
+        );
+    }
+}
+
+#[test]
+fn browser_commands_use_the_local_command_path() {
+    let cases = [
+        (
+            "open the browser",
+            BrowserControl::Open {
+                url: None,
+                new_pane: false,
+            },
+        ),
+        (
+            "open another browser pane",
+            BrowserControl::Open {
+                url: None,
+                new_pane: true,
+            },
+        ),
+        (
+            "open localhost 3000",
+            BrowserControl::Navigate {
+                url: "http://localhost:3000/".into(),
+                browser_id: None,
+            },
+        ),
+        (
+            "Please open localhost 8000.",
+            BrowserControl::Navigate {
+                url: "http://localhost:8000/".into(),
+                browser_id: None,
+            },
+        ),
+        (
+            "open localhost:5173/api/docs",
+            BrowserControl::Navigate {
+                url: "http://localhost:5173/api/docs".into(),
+                browser_id: None,
+            },
+        ),
+        (
+            "navigate to https://example.com/docs",
+            BrowserControl::Navigate {
+                url: "https://example.com/docs".into(),
+                browser_id: None,
+            },
+        ),
+        (
+            "open https://example.com/design-and-testing",
+            BrowserControl::Navigate {
+                url: "https://example.com/design-and-testing".into(),
+                browser_id: None,
+            },
+        ),
+        (
+            "go back in the browser",
+            BrowserControl::Back { browser_id: None },
+        ),
+        (
+            "go forward in the browser",
+            BrowserControl::Forward { browser_id: None },
+        ),
+        (
+            "reload the page",
+            BrowserControl::Reload { browser_id: None },
+        ),
+        (
+            "stop loading the browser",
+            BrowserControl::Stop { browser_id: None },
+        ),
+    ];
+    for (text, command) in cases {
+        let (understood, confidence) = understand_with_confidence(text);
+        assert_eq!(confidence, Confidence::High, "{text}: {understood:?}");
+        assert_eq!(
+            understood,
+            Understood::Intent {
+                intent: KalVoiceIntent::ControlBrowser {
+                    command,
+                    workspace_id: None,
+                },
+                target: None,
+            },
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn browser_commands_reject_unsafe_or_ambiguous_addresses() {
+    for text in [
+        "open javascript:alert(1)",
+        "open file:///c:/windows/system32",
+        "open https://user:password@example.com",
+        "open https://example.com and delete files",
+        "open browser and run this script",
+        "don't reload the page",
+    ] {
+        assert!(is_reasoning(text), "{text}: {:?}", understand(text));
     }
 }
 
@@ -320,6 +443,7 @@ fn navigation() {
         ("settings", SurfaceId::Settings),
         ("show me the code view", SurfaceId::Code),
         ("switch to code", SurfaceId::Code),
+        ("go to code mode", SurfaceId::Code),
         ("open threads", SurfaceId::Threads),
         ("take me to providers", SurfaceId::Providers),
         ("navigate to the kalvoice page", SurfaceId::KalVoice),
@@ -334,6 +458,28 @@ fn navigation() {
     ];
     for (text, surface) in cases {
         assert_eq!(intent(text), KalVoiceIntent::Navigate { surface }, "{text}");
+    }
+}
+
+#[test]
+fn switching_the_active_provider_is_a_deterministic_command() {
+    for (text, provider) in [
+        ("switch to Claude Code", ProviderId::CLAUDE_CODE),
+        ("switch to Codex", ProviderId::CODEX),
+        ("switch to Gemini CLI", ProviderId::GEMINI_CLI),
+    ] {
+        let (understood, confidence) = understand_with_confidence(text);
+        assert_eq!(confidence, Confidence::High, "{text}: {understood:?}");
+        assert_eq!(
+            understood,
+            Understood::Intent {
+                intent: KalVoiceIntent::SwitchProvider {
+                    provider_id: ProviderId::new(provider)
+                },
+                target: None,
+            },
+            "{text}"
+        );
     }
 }
 
@@ -459,6 +605,25 @@ fn partial_matches_and_nonsense_go_to_reasoning() {
         "pause all threads in the",
     ] {
         assert!(is_reasoning(text), "{text}");
+    }
+}
+
+#[test]
+fn local_reasoning_refuses_negated_and_compound_requests() {
+    for text in [
+        "don't reload the browser",
+        "Do not stop the threads.",
+        "open the browser and delete the repository",
+        "stop every thread, then remove the worktree",
+    ] {
+        assert!(local_reasoning_must_refuse(text), "{text}");
+    }
+    for text in [
+        "open the browser",
+        "plan a database migration",
+        "make the focused pane bigger",
+    ] {
+        assert!(!local_reasoning_must_refuse(text), "{text}");
     }
 }
 
@@ -721,11 +886,7 @@ fn closes_panes_without_stopping_anything() {
         intent("stop the login thread"),
         KalVoiceIntent::StopThreads { .. }
     ));
-    assert!(!is_consequential_layout("close this pane"));
-}
-
-fn is_consequential_layout(text: &str) -> bool {
-    crate::orchestrator::is_consequential(&intent(text))
+    assert!(!intent("close this pane").needs_reasoning());
 }
 
 #[test]

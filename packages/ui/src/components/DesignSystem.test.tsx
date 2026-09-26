@@ -74,11 +74,22 @@ describe("StatusIndicator", () => {
 });
 
 describe("ProviderMark", () => {
-  it("names known providers in plain text next to a KalCode glyph", () => {
+  it("names known providers in plain text next to the provider-published mark", () => {
     const { container } = render(<ProviderMark provider="claude-code" />);
     expect(screen.getByText("Claude Code")).toBeInTheDocument();
-    expect(container.querySelector("svg")).toHaveAttribute("data-glyph", "claude");
-    expect(container.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+    expect(container.querySelector('img[data-glyph="claude"]')).toHaveAttribute("data-brand-source", "anthropic");
+    expect(container.querySelector('img[data-glyph="claude"]')).toHaveAttribute("aria-hidden", "true");
+  });
+
+  it("uses the native Codex and Gemini identity assets as decorative marks", () => {
+    const { container, rerender } = render(<ProviderMark provider="codex" />);
+    expect(container.querySelector('img[data-glyph="codex"]')).toHaveAttribute("data-brand-source", "openai");
+
+    rerender(<ProviderMark provider="gemini-cli" />);
+    const gemini = container.querySelector('img[data-glyph="gemini"]');
+    expect(gemini).toHaveAttribute("data-brand-source", "google-gemini-cli");
+    expect(gemini).toHaveAttribute("alt", "");
+    expect(gemini).toHaveAttribute("aria-hidden", "true");
   });
 
   it("gives each known provider a distinct glyph and unknown ones a lettered hexagon", () => {

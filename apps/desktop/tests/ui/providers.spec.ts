@@ -95,6 +95,85 @@ test.describe("providers", () => {
     ).toHaveText("--approval-mode auto_edit");
   });
 
+  test("managed accounts support local metadata and official browser sign-in flows", async ({ page }) => {
+    await openProviders(page);
+    await page.getByRole("tab", { name: "Accounts" }).click();
+
+    const codex = page.getByRole("region", { name: /^Codex 2$/ });
+    const personal = page.getByRole("region", { name: "Codex account Personal" });
+    const work = page.getByRole("region", { name: "Codex account Work" });
+    await expect(codex).toBeVisible();
+    await expect(personal.getByText("Default", { exact: true })).toBeVisible();
+    await expect(personal.getByText("Signed in", { exact: true })).toBeVisible();
+    await expect(work.getByText("Signed out", { exact: true })).toBeVisible();
+
+    const claude = page.getByRole("region", { name: "Claude Code account Personal" });
+    await claude.getByRole("button", { name: "Sign out Personal" }).click();
+    await expect(claude.getByText("Signed out", { exact: true })).toBeVisible();
+    await claude.getByRole("button", { name: "Sign in Personal" }).click();
+    await expect(claude.getByText("Signed in", { exact: true })).toBeVisible();
+
+    await work.getByRole("button", { name: "Sign in Work" }).click();
+    await expect(work.getByText("Signed in", { exact: true })).toBeVisible();
+    await work.getByRole("button", { name: "Make Work default" }).click();
+    await expect(work.getByText("Default", { exact: true })).toBeVisible();
+
+    await work.getByRole("button", { name: "Rename Work" }).click();
+    await work.getByLabel("Account name for Work").fill("Work profile");
+    await work.getByRole("button", { name: "Save account name" }).click();
+    const renamed = page.getByRole("region", { name: "Codex account Work profile" });
+    await expect(renamed).toBeVisible();
+
+    await renamed.getByRole("button", { name: "Remove Work profile from KalCode" }).click();
+    await expect(renamed.getByText(/doesn't sign out of Codex or delete provider credentials/i)).toBeVisible();
+    await renamed.getByRole("button", { name: "Confirm remove Work profile" }).click();
+    await expect(page.getByRole("region", { name: "Codex account Work profile" })).toHaveCount(0);
+
+    const add = page.getByRole("region", { name: "Add provider account" });
+    await add.getByLabel("Provider").selectOption("gemini-cli");
+    await add.getByLabel("Account name").fill("Side project");
+    await add.getByRole("button", { name: "Add account" }).click();
+    await expect(page.getByRole("region", { name: "Gemini CLI account Side project" })).toBeVisible();
+
+    const gemini = page.getByRole("region", { name: "Gemini CLI account Personal" });
+    await expect(gemini.getByRole("button", { name: "Open Personal Gemini sign-in pane" })).toBeVisible();
+    await expect(page.getByText(/Gemini CLI authentication stays in a managed provider pane/i)).toBeVisible();
+    await expectNoSeriousA11yViolations(page);
+  });
+
+  test("Gemini sign-in keeps the exact selected account visible through pane focus and KalVoice", async ({ page }) => {
+    await openProviders(page, "code&transcript=check%20this%20account");
+    await page.getByRole("tab", { name: "Accounts" }).click();
+
+    const add = page.getByRole("region", { name: "Add provider account" });
+    await add.getByLabel("Provider").selectOption("gemini-cli");
+    await add.getByLabel("Account name").fill("Side project");
+    await add.getByRole("button", { name: "Add account" }).click();
+    const gemini = page.getByRole("region", { name: "Gemini CLI account Side project" });
+    await gemini.getByRole("button", { name: "Open Side project Gemini sign-in pane" }).click();
+
+    const frame = page.locator("[data-pane-id][data-focused]");
+    const pane = frame.locator("[data-provider-pane]");
+    await expect(page.getByRole("heading", { level: 1, name: "kalcode-site" })).toBeVisible();
+    await expect(pane).toHaveAttribute("aria-label", "Gemini sign-in, Gemini CLI pane, account Side project");
+    await expect(pane.getByLabel("Provider account: Side project")).toHaveText("Account · Side project");
+    await expect(pane.locator("[data-pane-terminal] .xterm-rows")).toContainText("/auth");
+
+    await page.keyboard.down("F8");
+    await expect(frame).toHaveAttribute("data-kalvoice-target", "listening");
+    await expect(
+      page.getByRole("status").filter({ hasText: "KalVoice is listening to Gemini sign-in · Side project." }),
+    ).toHaveCount(1);
+    await page.keyboard.press("Escape");
+    await page.keyboard.up("F8");
+
+    await page.getByRole("button", { name: "Providers" }).click();
+    await page.getByRole("tab", { name: "Accounts" }).click();
+    await expect(
+      page.getByRole("region", { name: "Gemini CLI account Side project" }).getByText("Not checked", { exact: true }),
+    ).toBeVisible();
+  });
+
   test("check again shows progress and records detection in the activity feed", async ({ page }) => {
     await openProviders(page);
     const checkAgain = page.getByRole("button", { name: "Check again" });

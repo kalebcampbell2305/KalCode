@@ -1,0 +1,42 @@
+[package]
+name = "kalcode-doctor"
+description = "KalCode Environment Doctor (DOC): parallel, cancelable, time-boxed checks of KalCode, providers, developer tools, the system and the current project; findings with Details / Fix / Ignore; a fixed catalog of reversible fixes gated by the permission engine."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "kalcode_doctor"
+
+[dependencies]
+kalcode-contracts = { path = "../contracts" }
+kalcode-native-core = { path = "../native-core" }
+# Reused, not re-implemented: the Z2 launch rules (argv only, absolute resolved executables,
+# sanitized + hardened environment, timeouts, tree kill) for every `--version` probe, and the
+# provider detection snapshots (never re-probed).
+kalcode-providers = { path = "../providers" }
+# Z6a: the located `git`, repository discovery, status and the ignore-aware file index.
+kalcode-git = { path = "../git" }
+# Z4: the permission engine every fix goes through (origin `doctor`).
+kalcode-permissions = { path = "../permissions" }
+# RG: the one resource sampler (memory, volume free space).
+kalcode-resources = { path = "../resources" }
+os_info = "3"
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+time.workspace = true
+tracing.workspace = true
+ts-rs = { version = "12", features = ["serde-json-impl", "uuid-impl"] }
+uuid.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# Read-only registry reads (long-path support). Already in the graph through tauri-build.
+winreg = "0.55"
+
+[lints]
+workspace = true
+

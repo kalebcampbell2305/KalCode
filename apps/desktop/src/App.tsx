@@ -1,6 +1,9 @@
 import type { AppInfo, IpcError, Settings } from "@kalcode/protocol";
 import { ToastProvider, TooltipProvider } from "@kalcode/ui/components";
 import { useEffect, useState } from "react";
+import { ConnectedAccountGate } from "./account/AccountGate.tsx";
+import { AccountProvider } from "./account/AccountProvider.tsx";
+import { AccountClient } from "./ipc/account.ts";
 import { KalCodeClient } from "./ipc/client.ts";
 import { toKalCodeError } from "./ipc/errors.ts";
 import { resolveTransport } from "./ipc/transport.ts";
@@ -15,7 +18,7 @@ type BootResult =
   | { kind: "booting" }
   | { kind: "no-runtime" }
   | { kind: "failed"; client: KalCodeClient | null; info: AppInfo | null; error: IpcError }
-  | { kind: "ready"; client: KalCodeClient; info: AppInfo; settings: Settings };
+  | { kind: "ready"; client: KalCodeClient; account: AccountClient; info: AppInfo; settings: Settings };
 
 async function boot(): Promise<BootResult> {
   let client: KalCodeClient | null = null;
@@ -26,7 +29,7 @@ async function boot(): Promise<BootResult> {
     const state = await client.boot();
     if (state.startupError) return { kind: "failed", client, info: state.info, error: state.startupError };
     const settings = await client.getSettings();
-    return { kind: "ready", client, info: state.info, settings };
+    return { kind: "ready", client, account: new AccountClient(transport), info: state.info, settings };
   } catch (error) {
     return { kind: "failed", client, info: null, error: toKalCodeError(error).toIpcError() };
   }
@@ -76,9 +79,13 @@ export function App() {
       return (
         <ToastProvider>
           <TooltipProvider delayDuration={350}>
-            <RuntimeProvider client={result.client} info={result.info} initialSettings={result.settings}>
-              <Shell />
-            </RuntimeProvider>
+            <AccountProvider client={result.account}>
+              <ConnectedAccountGate>
+                <RuntimeProvider client={result.client} info={result.info} initialSettings={result.settings}>
+                  <Shell />
+                </RuntimeProvider>
+              </ConnectedAccountGate>
+            </AccountProvider>
           </TooltipProvider>
         </ToastProvider>
       );

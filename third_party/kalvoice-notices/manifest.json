@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "notices": [
+    {
+      "noticeId": "llama-cpp-mit",
+      "file": "llama.cpp-MIT.txt",
+      "spdxId": "MIT",
+      "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
+      "source": {
+        "type": "https",
+        "url": "https://raw.githubusercontent.com/ggml-org/llama.cpp/7fe450e19305b828c199d602c23a8337aaa1f03b/LICENSE",
+        "revision": "7fe450e19305b828c199d602c23a8337aaa1f03b",
+        "archiveSha256": null,
+        "member": null
+      },
+      "componentIds": ["kalvoice.runtime.llama-cpp"]
+    },
+    {
+      "noticeId": "llvm-openmp-apache-2.0-with-llvm-exception",
+      "file": "llvm-openmp-Apache-2.0-WITH-LLVM-exception.txt",
+      "spdxId": "Apache-2.0-WITH-LLVM-exception",
+      "sha256": "fdad1758a9e1f9d5a81e18879b3406772115edc92c24bfa36b70c654f325e8e4",
+      "source": {
+        "type": "archive-member",
+        "url": "https://github.com/ggml-org/llama.cpp/releases/download/b11146/llama-b11146-bin-win-cpu-x64.zip",
+        "revision": "7fe450e19305b828c199d602c23a8337aaa1f03b",
+        "archiveSha256": "14cf1303ca9ac3abd94816850532f9f9a69ac66fbaca3776fc6f9061c2fac1d1",
+        "member": "LICENSE-LLVM-OpenMP"
+      },
+      "componentIds": ["kalvoice.runtime.llama-cpp"]
+    },
+    {
+      "noticeId": "openai-whisper-model-weights-mit",
+      "file": "openai-whisper-model-weights-MIT.txt",
+      "spdxId": "MIT",
+      "sha256": "b5d65a59060e68c4ff940e1eddfa6f94b2d68fdf58ed7f4dd57721c997e35e9d",
+      "source": {
+        "type": "https",
+        "url": "https://raw.githubusercontent.com/openai/whisper/86098128c0b4f24f0e2aa2994de830614b474227/LICENSE",
+        "revision": "86098128c0b4f24f0e2aa2994de830614b474227",
+        "archiveSha256": null,
+        "member": null
+      },
+      "componentIds": [
+        "kalvoice.speech.whisper.tiny-en",
+        "kalvoice.speech.whisper.base-en",
+        "kalvoice.speech.whisper.small-en",
+        "kalvoice.speech.whisper.base",
+        "kalvoice.speech.whisper.small"
+      ]
+    },
+    {
+      "noticeId": "qwen3.5-0.8b-apache-2.0",
+      "file": "qwen3.5-0.8b-Apache-2.0.txt",
+      "spdxId": "Apache-2.0",
+      "sha256": "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a",
+      "source": {
+        "type": "https",
+        "url": "https://huggingface.co/Qwen/Qwen3.5-0.8B/resolve/2fc06364715b967f1860aea9cf38778875588b17/LICENSE",
+        "revision": "2fc06364715b967f1860aea9cf38778875588b17",
+        "archiveSha256": null,
+        "member": null
+      },
+      "componentIds": ["kalvoice.reasoner.qwen3-5-0-8b-q8"]
+    }
+  ]
+}

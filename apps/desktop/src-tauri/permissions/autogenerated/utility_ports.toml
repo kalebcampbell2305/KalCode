@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-utility-ports"
+description = "Enables the utility_ports command without any pre-configured scope."
+commands.allow = ["utility_ports"]
+
+[[permission]]
+identifier = "deny-utility-ports"
+description = "Denies the utility_ports command without any pre-configured scope."
+commands.deny = ["utility_ports"]

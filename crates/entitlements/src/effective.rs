@@ -70,7 +70,7 @@ impl EffectiveEntitlement {
 }
 
 impl Verifier {
-    /// The verifier for this build's embedded production keys (currently none; see `keys`).
+    /// The verifier for this build's embedded production public keys (see `keys`).
     pub fn embedded() -> Self {
         match Self::from_trusted(PRODUCTION_KEYS) {
             Ok(verifier) => verifier,
@@ -145,7 +145,7 @@ mod tests {
         for feature in FeatureId::ALL {
             assert!(Tier::Owner.includes(feature), "{feature:?}");
             if feature.placement() == FeaturePlacement::Safety {
-                for tier in [Tier::Free, Tier::Pro, Tier::Max] {
+                for tier in [Tier::Free, Tier::Pro, Tier::Max, Tier::Max2x] {
                     assert!(tier.includes(feature), "{tier:?} {feature:?}");
                 }
             }
@@ -156,6 +156,7 @@ mod tests {
             if Tier::Pro.includes(feature) {
                 assert!(Tier::Max.includes(feature));
             }
+            assert_eq!(Tier::Max.includes(feature), Tier::Max2x.includes(feature));
         }
         assert!(!Tier::Free.includes(FeatureId::TimeMachine));
         assert!(Tier::Pro.includes(FeatureId::TimeMachine));

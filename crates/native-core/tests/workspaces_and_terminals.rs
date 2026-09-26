@@ -188,6 +188,34 @@ fn opening_a_folder_creates_one_workspace_per_canonical_path() {
 }
 
 #[test]
+fn logout_drains_shells_preserves_tabs_and_allows_a_fresh_session() {
+    let data = tempfile::tempdir().expect("data");
+    let project = tempfile::tempdir().expect("project");
+    let core = open(data.path());
+    let workspace = core.open_workspace(project.path()).expect("workspace");
+    let shell = test_shell(&core);
+    let terminal = core
+        .create_terminal(&workspace.id, Some(&shell), size())
+        .expect("terminal");
+    core.drain_terminals_for_logout().expect("drain");
+    assert!(core.running_terminals().expect("running").is_empty());
+    assert_eq!(core.terminals(&workspace.id).expect("tabs").len(), 1);
+    assert_eq!(
+        core.create_terminal(&workspace.id, Some(&shell), size())
+            .unwrap_err()
+            .code,
+        "runtime_draining"
+    );
+    core.resume_terminals_after_logout()
+        .expect("resume admission");
+    core.restart_terminal(&terminal.id, size())
+        .expect("fresh shell");
+    assert_eq!(core.running_terminals().expect("running").len(), 1);
+    core.drain_terminals_for_logout().expect("second drain");
+    core.shutdown();
+}
+
+#[test]
 fn invalid_folders_are_rejected_with_typed_errors() {
     let data = tempfile::tempdir().expect("data");
     let projects = tempfile::tempdir().expect("projects");
@@ -317,6 +345,35 @@ fn shell_detection_lists_installed_shells_only() {
         !json.contains('\\') && !json.contains('/'),
         "no executable paths cross IPC: {json}"
     );
+}
+
+#[test]
+fn terminal_identity_is_generation_bound_and_disappears_on_close() {
+    let data = tempfile::tempdir().expect("data");
+    let project = tempfile::tempdir().expect("project");
+    let core = open(data.path());
+    let workspace = core.open_workspace(project.path()).expect("workspace");
+    let shell = test_shell(&core);
+    assert!(core.terminal_session_identity("invalid").is_none());
+    let terminal = core
+        .create_terminal(&workspace.id, Some(&shell), size())
+        .expect("terminal");
+    let first = core
+        .terminal_session_identity(&terminal.id)
+        .expect("live identity");
+    assert!(first.pid > 0);
+    assert_eq!(core.terminal_session_identity(&terminal.id), Some(first));
+    core.close_terminal(&terminal.id).expect("close");
+    assert!(core.terminal_session_identity(&terminal.id).is_none());
+    let replacement = core
+        .create_terminal(&workspace.id, Some(&shell), size())
+        .expect("replacement");
+    let next = core
+        .terminal_session_identity(&replacement.id)
+        .expect("new identity");
+    assert_ne!(first.generation, next.generation);
+    core.close_terminal(&replacement.id)
+        .expect("close replacement");
 }
 
 #[test]
@@ -809,4 +866,91 @@ fn workspace_and_terminal_events_commit_atomically() {
         "no tab without its shell.started event"
     );
     assert!(core.running_terminals().expect("running").is_empty());
+}
+
+#[test]
+fn desktop_terminal_admission_never_falls_back_without_guardian() {
+    let data = tempfile::tempdir().expect("data");
+    let projects = tempfile::tempdir().expect("projects");
+    let core = open(data.path());
+    core.require_terminal_guardian().expect("require guardian");
+    let workspace = core.open_workspace(projects.path()).expect("workspace");
+    let shell = test_shell(&core);
+    assert_eq!(
+        core.create_terminal(&workspace.id, Some(&shell), size())
+            .unwrap_err()
+            .code,
+        "terminal_guardian_unavailable"
+    );
+    assert!(core.terminals(&workspace.id).unwrap().is_empty());
+    assert!(core.resume_terminals_after_logout().is_err());
+    assert!(core.running_terminals().unwrap().is_empty());
+}
+
+#[test]
+fn guardian_denial_starts_no_shell_and_commits_no_terminal() {
+    struct Deny;
+    impl kalcode_pty::PtyGuardian for Deny {
+        fn prepare(
+            &self,
+            _: &str,
+        ) -> Result<Box<dyn kalcode_pty::PreparedPtyAdmission>, kalcode_pty::PtyError> {
+            Err(kalcode_pty::PtyError::Spawn(
+                "synthetic guardian denial".into(),
+            ))
+        }
+    }
+    let data = tempfile::tempdir().expect("data");
+    let projects = tempfile::tempdir().expect("projects");
+    let core = open(data.path());
+    core.install_terminal_guardian(Arc::new(Deny))
+        .expect("install");
+    let workspace = core.open_workspace(projects.path()).expect("workspace");
+    let shell = test_shell(&core);
+    assert_eq!(
+        core.create_terminal(&workspace.id, Some(&shell), size())
+            .unwrap_err()
+            .code,
+        "terminal_start_failed"
+    );
+    assert!(core.terminals(&workspace.id).unwrap().is_empty());
+    assert!(core.running_terminals().unwrap().is_empty());
+}
+
+#[test]
+fn logout_releases_terminal_epoch_authority_before_next_account_starts() {
+    struct Deny;
+    impl kalcode_pty::PtyGuardian for Deny {
+        fn prepare(
+            &self,
+            _: &str,
+        ) -> Result<Box<dyn kalcode_pty::PreparedPtyAdmission>, kalcode_pty::PtyError> {
+            Err(kalcode_pty::PtyError::Spawn(
+                "synthetic guardian denial".into(),
+            ))
+        }
+    }
+    let data = tempfile::tempdir().expect("data");
+    let core = open(data.path());
+    let guardian = Arc::new(Deny);
+    let previous_epoch = Arc::downgrade(&guardian);
+    core.install_terminal_guardian(guardian)
+        .expect("install first epoch");
+    assert!(previous_epoch.upgrade().is_some());
+    core.drain_terminals_for_logout()
+        .expect("verified terminal drain");
+    assert!(
+        previous_epoch.upgrade().is_none(),
+        "Core must not retain the previous epoch recovery lock"
+    );
+    assert!(
+        core.resume_terminals_after_logout().is_err(),
+        "guardian requirement stays sticky after release"
+    );
+    core.install_terminal_guardian(Arc::new(Deny))
+        .expect("install next epoch");
+    core.resume_terminals_after_logout()
+        .expect("new epoch admission");
+    core.drain_terminals_for_logout()
+        .expect("second verified drain");
 }

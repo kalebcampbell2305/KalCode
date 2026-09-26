@@ -8,37 +8,41 @@ import type { ThreadStatus } from "./ThreadStatus.ts";
 /**
  * The thread fields every surface shows (Threads list, Dashboard cards, KalVoice status reports).
  */
-export type ThreadSummary = { id: string, name: string, providerId: ProviderId, providerName: string, model: string | null, 
+export type ThreadSummary = { id: string, name: string, providerId: ProviderId, providerName: string, model: string | null,
+/**
+ * Stable selected provider-account metadata id; never a credential.
+ */
+providerAccountId: string | null,
 /**
  * Account label such as "Personal"; never a credential.
  */
-accountLabel: string | null, workspaceId: string, workspaceName: string, permissionMode: PermissionMode, status: ThreadStatus, 
+accountLabel: string | null, workspaceId: string, workspaceName: string, permissionMode: PermissionMode, status: ThreadStatus,
 /**
  * What the thread is doing now, from structured tool/status events (e.g. "Running npm test").
  */
-currentActivity: string | null, createdAt: string, lastActivityAt: string, pendingApprovals: number, unreadMessages: number, filesChanged: number | null, 
+currentActivity: string | null, createdAt: string, lastActivityAt: string, pendingApprovals: number, unreadMessages: number, filesChanged: number | null,
 /**
  * The Git branch the thread works on. Not stored yet: `threads` has no branch column (the
  * worktree binding arrives with L-2, migration v12), so the runtime reports `null`.
  */
-branch: string | null, error: ThreadError | null, 
+branch: string | null, error: ThreadError | null,
 /**
  * When the thread was archived; `null` for open threads.
  */
-archivedAt: string | null, 
+archivedAt: string | null,
 /**
  * Resuming restores the provider's own conversation (the provider supports resume and a
  * provider session id is stored). `false`: resume starts a fresh provider session.
  */
-resumable: boolean, 
+resumable: boolean,
 /**
  * The Custom permission profile a Custom-mode thread uses (`threads.permission_profile_id`).
  */
-permissionProfileId: string | null, 
+permissionProfileId: string | null,
 /**
  * How the provider runs. `null` until L-2 stores it (today every thread is headless).
  */
-runtimeKind: ThreadRuntimeKind | null, 
+runtimeKind: ThreadRuntimeKind | null,
 /**
  * The PTY terminal of an interactive provider pane (L-2 / Z7-W4).
  */

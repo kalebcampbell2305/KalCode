@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-utility-port-lookup"
+description = "Enables the utility_port_lookup command without any pre-configured scope."
+commands.allow = ["utility_port_lookup"]
+
+[[permission]]
+identifier = "deny-utility-port-lookup"
+description = "Denies the utility_port_lookup command without any pre-configured scope."
+commands.deny = ["utility_port_lookup"]

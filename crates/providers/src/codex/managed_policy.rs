@@ -1,0 +1,663 @@
+//! Account-isolated Codex launch policy for the exactly certified Codex CLI releases.
+//!
+//! A launch uses a dedicated `CODEX_HOME`, resets only that profile's known `config.toml`,
+//! forces the selected working directory to be untrusted with a complete inline TOML table,
+//! and disables connected-app/plugin surfaces. Authentication uses a neutral managed directory
+//! and an exclusive profile lease; sessions use a shared lease.
+//!
+//! Codex merges maps across config layers, so `-c mcp_servers={}` is defense in depth rather
+//! than a way to erase a lower-layer map. Session launches therefore accept only accounts known
+//! to be ineligible for enterprise cloud config. Real OS administrator configuration remains
+//! administrator authority and is neither inspected nor modified here.
+
+use std::collections::BTreeMap;
+use std::ffi::OsString;
+use std::fs::{File, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+use kalcode_contracts::agent::ProviderError;
+
+use crate::claude::argv::working_directory;
+use crate::detect::DetectEnv;
+use crate::managed::{ManagedProfiles, ProfileLease};
+
+const PROVIDER: &str = "codex";
+const CONFIG_NAME: &str = "config.toml";
+const SAFE_CONFIG: &str = "# KalCode account profile. Launch policy is supplied on argv.\n";
+const UNSAFE_CONFIG: &str = "the managed Codex config path is not a regular file";
+
+/// Whether the official Codex account result permits a session without an enterprise cloud
+/// config layer. Business, Education, and Enterprise accounts are eligible; missing/unknown
+/// plan data must remain [`Unknown`](Self::Unknown).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloudConfigEligibility {
+    /// Official account data identifies a consumer Free, Plus, or Pro plan.
+    Ineligible,
+    /// Official account data identifies a Business, Education, or Enterprise plan.
+    Eligible,
+    /// No current official account result proves either state.
+    Unknown,
+}
+
+/// Inputs retained for one managed Codex session or interactive pane.
+pub struct ManagedSessionLaunch {
+    /// Detection against the dedicated account profile.
+    pub detect_env: DetectEnv,
+    /// Complete sanitized child environment with the account-specific `CODEX_HOME`.
+    pub env: BTreeMap<OsString, OsString>,
+    /// Additional root CLI arguments (`-c value` pairs) that bind repository trust.
+    pub cli_overrides: Vec<OsString>,
+    /// Must be retained until the provider process/session has been dropped.
+    pub lease: ProfileLease,
+}
+
+/// Inputs for a bounded account/read or supported sign-in app-server process.
+pub struct ManagedAuthLaunch {
+    /// Complete sanitized child environment with the account-specific `CODEX_HOME`.
+    pub env: BTreeMap<OsString, OsString>,
+    /// Stable managed non-repository directory used as the process working directory.
+    pub cwd: PathBuf,
+    /// Root CLI arguments followed by `app-server`.
+    pub args: Vec<OsString>,
+    /// Exact dedicated profile selected by `CODEX_HOME`.
+    pub profile_home: PathBuf,
+    /// Exclusive profile lease retained for the app-server process lifetime.
+    pub lease: ProfileLease,
+}
+
+/// Prepares a consumer-account session. Enterprise-eligible and unknown accounts fail closed
+/// because the certified Codex releases have no supported CLI switch that disables their cloud
+/// config bundle.
+pub fn prepare_session(
+    profiles: &ManagedProfiles,
+    source: &DetectEnv,
+    account_id: &str,
+    workspace: &Path,
+    cloud_config: CloudConfigEligibility,
+) -> Result<ManagedSessionLaunch, ProviderError> {
+    if cloud_config != CloudConfigEligibility::Ineligible {
+        return Err(ProviderError::Start(
+            "Codex managed sessions require a verified consumer account plan".into(),
+        ));
+    }
+    let workspace = working_directory(&workspace.to_string_lossy())
+        .map_err(|error| ProviderError::Start(error.to_string()))?;
+    let lease = profiles.acquire_session_lease(PROVIDER, account_id)?;
+    let profile_home = profiles.profile_home(PROVIDER, account_id)?;
+    reset_managed_config(&profile_home)?;
+    let detect_env = profiles.prepare_env(PROVIDER, account_id, source)?;
+    let env = profiles.launch_env(PROVIDER, account_id, source)?;
+    Ok(ManagedSessionLaunch {
+        detect_env,
+        env,
+        cli_overrides: config_args([repository_override(&workspace)?]),
+        lease,
+    })
+}
+
+/// Prepares the isolated Codex app-server used only for account/read and supported sign-in RPCs.
+/// It never starts a thread. The caller must terminate it before releasing `lease`, and must
+/// reject a newly reported enterprise-eligible plan before starting any provider session.
+pub fn prepare_auth(
+    profiles: &ManagedProfiles,
+    source: &DetectEnv,
+    account_id: &str,
+) -> Result<ManagedAuthLaunch, ProviderError> {
+    let lease = profiles.acquire_sign_in_lease(PROVIDER, account_id)?;
+    prepare_auth_with_lease(profiles, source, account_id, lease)
+}
+
+/// Prepares authentication using an exclusive lease already acquired by the canonical account
+/// authority. This closes the account archive/auth race without attempting to nest the same
+/// exclusive profile lock.
+pub fn prepare_auth_with_lease(
+    profiles: &ManagedProfiles,
+    source: &DetectEnv,
+    account_id: &str,
+    lease: ProfileLease,
+) -> Result<ManagedAuthLaunch, ProviderError> {
+    if !lease.is_exclusive_for(profiles, PROVIDER, account_id) {
+        return Err(ProviderError::Start(
+            "the managed Codex authentication lease does not match the selected account".into(),
+        ));
+    }
+    let profile_home = profiles.profile_home(PROVIDER, account_id)?;
+    reset_managed_config(&profile_home)?;
+    // Reuse the account id as a canonical stable directory key. This directory is outside the
+    // profile home and every repository; no thread is created by the auth process.
+    let cwd = profiles.session_dir(PROVIDER, account_id, account_id)?;
+    reject_repository_marker(&cwd)?;
+    let env = profiles.launch_env(PROVIDER, account_id, source)?;
+    let mut args = config_args(
+        crate::codex::argv::POLICY_CONFIG
+            .iter()
+            .copied()
+            .chain(["approval_policy='never'", "sandbox_mode='read-only'"])
+            .map(str::to_owned)
+            .chain([repository_override(&cwd)?]),
+    );
+    args.push("app-server".into());
+    Ok(ManagedAuthLaunch {
+        env,
+        cwd,
+        args,
+        profile_home,
+        lease,
+    })
+}
+
+fn reject_repository_marker(cwd: &Path) -> Result<(), ProviderError> {
+    let marker = cwd.join(".git");
+    match std::fs::symlink_metadata(&marker) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(_) => Err(ProviderError::Start(
+            "the managed Codex authentication directory is not neutral".into(),
+        )),
+        Err(error) => Err(io_error(
+            "couldn't inspect the managed Codex authentication directory",
+            error,
+        )),
+    }
+}
+
+fn config_args(values: impl IntoIterator<Item = String>) -> Vec<OsString> {
+    values
+        .into_iter()
+        .flat_map(|value| [OsString::from("-c"), OsString::from(value)])
+        .collect()
+}
+
+/// Serializes one complete TOML table. The certified Codex loaders split dotted overrides on dots
+/// even inside quoted keys, so `projects."C:\\repo.with.dot".trust_level=...` is unsafe.
+fn repository_override(workspace: &Path) -> Result<String, ProviderError> {
+    let path = workspace
+        .to_str()
+        .ok_or_else(|| ProviderError::Start("the Codex workspace path is not Unicode".into()))?;
+    Ok(format!(
+        "projects={{{}={{trust_level=\"untrusted\"}}}}",
+        toml_basic_string(path)
+    ))
+}
+
+fn toml_basic_string(value: &str) -> String {
+    let mut out = String::from("\"");
+    for character in value.chars() {
+        match character {
+            '\u{0008}' => out.push_str("\\b"),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\u{000C}' => out.push_str("\\f"),
+            '\r' => out.push_str("\\r"),
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            character if character.is_control() => {
+                use std::fmt::Write as _;
+                let _ = write!(&mut out, "\\u{:04X}", character as u32);
+            }
+            character => out.push(character),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn reset_managed_config(profile_home: &Path) -> Result<(), ProviderError> {
+    let target = profile_home.join(CONFIG_NAME);
+    verify_regular_or_missing(&target)?;
+    let temp = profile_home.join(format!(
+        ".{CONFIG_NAME}.kalcode-{}.tmp",
+        uuid::Uuid::new_v4().hyphenated()
+    ));
+    let result = (|| {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+            .map_err(|error| io_error("couldn't create the managed Codex config", error))?;
+        set_private_permissions(&file)?;
+        file.write_all(SAFE_CONFIG.as_bytes())
+            .and_then(|()| file.sync_all())
+            .map_err(|error| io_error("couldn't write the managed Codex config", error))?;
+        drop(file);
+        verify_regular_or_missing(&target)?;
+        match std::fs::remove_file(&target) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(io_error("couldn't replace the managed Codex config", error));
+            }
+        }
+        std::fs::rename(&temp, &target)
+            .map_err(|error| io_error("couldn't install the managed Codex config", error))?;
+        verify_regular_or_missing(&target)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result
+}
+
+fn verify_regular_or_missing(path: &Path) -> Result<(), ProviderError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() && !is_reparse_point(&metadata) => {
+            if has_multiple_links(path, &metadata)? {
+                Err(ProviderError::Start(UNSAFE_CONFIG.into()))
+            } else {
+                Ok(())
+            }
+        }
+        Ok(_) => Err(ProviderError::Start(UNSAFE_CONFIG.into())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(io_error("couldn't inspect the managed Codex config", error)),
+    }
+}
+
+fn has_multiple_links(path: &Path, metadata: &std::fs::Metadata) -> Result<bool, ProviderError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let _ = path;
+        Ok(metadata.nlink() != 1)
+    }
+    #[cfg(windows)]
+    {
+        let _ = metadata;
+        let file = File::open(path)
+            .map_err(|error| io_error("couldn't open the managed Codex config", error))?;
+        // Fail closed when Windows cannot report by-handle file information.
+        Ok(winapi_util::file::information(file)
+            .map_or(true, |information| information.number_of_links() != 1))
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (path, metadata);
+        Ok(true)
+    }
+}
+
+#[cfg(windows)]
+fn is_reparse_point(metadata: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn is_reparse_point(metadata: &std::fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
+}
+
+#[cfg(unix)]
+fn set_private_permissions(file: &File) -> Result<(), ProviderError> {
+    use std::os::unix::fs::PermissionsExt;
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))
+        .map_err(|error| io_error("couldn't protect the managed Codex config", error))
+}
+
+#[cfg(not(unix))]
+fn set_private_permissions(_file: &File) -> Result<(), ProviderError> {
+    Ok(())
+}
+
+fn io_error(context: &str, error: std::io::Error) -> ProviderError {
+    ProviderError::Start(format!("{context}: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::env::NO_CWD_EXE_SEARCH;
+    use std::ffi::{OsStr, OsString};
+    use tempfile::TempDir;
+
+    fn fixture() -> (TempDir, ManagedProfiles, DetectEnv, String, PathBuf) {
+        let temp = tempfile::tempdir().expect("temp");
+        let profiles =
+            ManagedProfiles::new(temp.path().join("profiles")).expect("managed profiles");
+        let account_id = uuid::Uuid::new_v4().hyphenated().to_string();
+        let workspace = temp.path().join("repo.with.dots");
+        std::fs::create_dir(&workspace).expect("workspace");
+        let source = DetectEnv {
+            vars: vec![
+                ("PATH".into(), std::env::var_os("PATH").unwrap_or_default()),
+                (
+                    "HOME".into(),
+                    temp.path().join("ordinary-home").into_os_string(),
+                ),
+                (
+                    "USERPROFILE".into(),
+                    temp.path().join("ordinary-user").into_os_string(),
+                ),
+                ("OPENAI_API_KEY".into(), "secret".into()),
+                ("CODEX_APP_SERVER_LOGIN_ISSUER".into(), "hostile".into()),
+                ("CODEX_APP_SERVER_LOGIN_CLIENT_ID".into(), "hostile".into()),
+                ("CODEX_APP_SERVER_DEV_OPEN_APP_URL".into(), "hostile".into()),
+                (
+                    "CODEX_HOME".into(),
+                    temp.path().join("old").into_os_string(),
+                ),
+            ],
+            windows: cfg!(windows),
+            probe_timeout: None,
+        };
+        (temp, profiles, source, account_id, workspace)
+    }
+
+    fn env_value<'a>(env: &'a BTreeMap<OsString, OsString>, name: &str) -> Option<&'a OsStr> {
+        env.iter()
+            .find(|(key, _)| {
+                key.to_str()
+                    .is_some_and(|key| key.eq_ignore_ascii_case(name))
+            })
+            .map(|(_, value)| value.as_os_str())
+    }
+
+    fn strings(args: &[OsString]) -> Vec<String> {
+        args.iter()
+            .map(|arg| arg.to_string_lossy().into())
+            .collect()
+    }
+
+    #[test]
+    fn session_requires_verified_consumer_and_binds_the_complete_repository_table() {
+        let (_temp, profiles, source, account_id, workspace) = fixture();
+        for eligibility in [
+            CloudConfigEligibility::Eligible,
+            CloudConfigEligibility::Unknown,
+        ] {
+            assert!(
+                prepare_session(&profiles, &source, &account_id, &workspace, eligibility).is_err()
+            );
+        }
+        let launch = prepare_session(
+            &profiles,
+            &source,
+            &account_id,
+            &workspace,
+            CloudConfigEligibility::Ineligible,
+        )
+        .expect("consumer launch");
+        let args = strings(&launch.cli_overrides);
+        assert_eq!(args[0], "-c");
+        assert!(args[1].starts_with("projects={\""), "{args:?}");
+        assert!(args[1].contains("repo.with.dots"), "{args:?}");
+        assert!(!args[1].starts_with("projects.\""), "{args:?}");
+    }
+
+    #[test]
+    fn auth_is_exclusive_neutral_and_strips_auth_selectors() {
+        let (_temp, profiles, source, account_id, _workspace) = fixture();
+        let launch = prepare_auth(&profiles, &source, &account_id).expect("auth launch");
+        assert_eq!(
+            env_value(&launch.env, "CODEX_HOME"),
+            Some(launch.profile_home.as_os_str())
+        );
+        for denied in [
+            "OPENAI_API_KEY",
+            "CODEX_APP_SERVER_LOGIN_ISSUER",
+            "CODEX_APP_SERVER_LOGIN_CLIENT_ID",
+            "CODEX_APP_SERVER_DEV_OPEN_APP_URL",
+        ] {
+            assert!(env_value(&launch.env, denied).is_none(), "{denied}");
+        }
+        assert_eq!(
+            env_value(&launch.env, NO_CWD_EXE_SEARCH),
+            Some(OsStr::new("1"))
+        );
+        assert!(!launch.cwd.join(".git").exists());
+        let args = strings(&launch.args);
+        assert_eq!(args.last().map(String::as_str), Some("app-server"));
+        assert!(args.iter().any(|arg| arg == "mcp_servers={}"));
+        assert!(args.iter().any(|arg| arg.starts_with("projects={\"")));
+        assert!(
+            profiles
+                .acquire_session_lease(PROVIDER, &account_id)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn auth_rejects_a_matching_account_lease_from_another_profile_root() {
+        let (temp, profiles, source, account_id, _workspace) = fixture();
+        let other_root = temp.path().join("other-profiles");
+        let other = ManagedProfiles::new(other_root).expect("other managed profiles");
+        let wrong_root_lease = other
+            .acquire_sign_in_lease(PROVIDER, &account_id)
+            .expect("other-root lease");
+
+        assert!(
+            prepare_auth_with_lease(&profiles, &source, &account_id, wrong_root_lease).is_err(),
+            "a same-provider, same-account lease from another root must not authorize this root"
+        );
+    }
+
+    #[test]
+    fn launch_resets_only_known_config_and_preserves_auth_files() {
+        let (_temp, profiles, source, account_id, workspace) = fixture();
+        let home = profiles.profile_home(PROVIDER, &account_id).expect("home");
+        let auth = home.join("auth.json");
+        std::fs::write(&auth, b"untouched-auth-fixture").expect("auth fixture");
+        std::fs::write(
+            home.join(CONFIG_NAME),
+            b"[mcp_servers.hostile]\ncommand='hostile'\n",
+        )
+        .expect("hostile config");
+        let launch = prepare_session(
+            &profiles,
+            &source,
+            &account_id,
+            &workspace,
+            CloudConfigEligibility::Ineligible,
+        )
+        .expect("launch");
+        assert_eq!(
+            std::fs::read_to_string(home.join(CONFIG_NAME)).expect("config"),
+            SAFE_CONFIG
+        );
+        assert_eq!(
+            std::fs::read(auth).expect("auth"),
+            b"untouched-auth-fixture"
+        );
+        drop(launch);
+    }
+
+    #[test]
+    fn config_hard_link_is_refused_without_touching_its_other_name() {
+        let (temp, profiles, source, account_id, workspace) = fixture();
+        let home = profiles.profile_home(PROVIDER, &account_id).expect("home");
+        let outside = temp.path().join("outside-config");
+        std::fs::write(&outside, b"outside").expect("outside");
+        std::fs::hard_link(&outside, home.join(CONFIG_NAME)).expect("hard link");
+        assert!(
+            prepare_session(
+                &profiles,
+                &source,
+                &account_id,
+                &workspace,
+                CloudConfigEligibility::Ineligible,
+            )
+            .is_err()
+        );
+        assert_eq!(std::fs::read(outside).expect("outside"), b"outside");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_symlink_is_refused_without_touching_its_target() {
+        use std::os::unix::fs::symlink;
+        let (temp, profiles, source, account_id, workspace) = fixture();
+        let home = profiles.profile_home(PROVIDER, &account_id).expect("home");
+        let outside = temp.path().join("outside");
+        std::fs::write(&outside, b"outside").expect("outside");
+        symlink(&outside, home.join(CONFIG_NAME)).expect("symlink");
+        assert!(
+            prepare_session(
+                &profiles,
+                &source,
+                &account_id,
+                &workspace,
+                CloudConfigEligibility::Ineligible,
+            )
+            .is_err()
+        );
+        assert_eq!(std::fs::read(outside).expect("outside"), b"outside");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn config_reparse_point_is_refused_when_creation_is_permitted() {
+        use std::os::windows::fs::symlink_file;
+        let (temp, profiles, source, account_id, workspace) = fixture();
+        let home = profiles.profile_home(PROVIDER, &account_id).expect("home");
+        let outside = temp.path().join("outside");
+        std::fs::write(&outside, b"outside").expect("outside");
+        if symlink_file(&outside, home.join(CONFIG_NAME)).is_err() {
+            return;
+        }
+        assert!(
+            prepare_session(
+                &profiles,
+                &source,
+                &account_id,
+                &workspace,
+                CloudConfigEligibility::Ineligible,
+            )
+            .is_err()
+        );
+        assert_eq!(std::fs::read(outside).expect("outside"), b"outside");
+    }
+
+    /// Non-inference certification for the exact installed 0.157.0 release. This exercises the
+    /// official binary with synthetic homes and repository config only: no prompt, account read,
+    /// network request, or provider credential is involved.
+    #[test]
+    #[ignore = "run explicitly when certifying installed Codex CLI 0.157.0"]
+    fn certifies_installed_codex_0_157_0_config_isolation() {
+        use crate::process::{ProcessSpec, run_probe};
+        use std::time::Duration;
+
+        let temp = tempfile::tempdir().expect("temp");
+        let profiles =
+            ManagedProfiles::new(temp.path().join("profiles")).expect("managed profiles");
+        let account_id = uuid::Uuid::new_v4().hyphenated().to_string();
+        let workspace = temp.path().join("workspace");
+        let project_config_dir = workspace.join(".codex");
+        std::fs::create_dir_all(&project_config_dir).expect("project config directory");
+        std::fs::write(
+            project_config_dir.join(CONFIG_NAME),
+            "[mcp_servers.workspace_probe]\ncommand='workspace-probe'\n[features]\napps=true\nplugins=true\n",
+        )
+        .expect("project config");
+
+        let ordinary_home = temp.path().join("ordinary-codex-home");
+        std::fs::create_dir(&ordinary_home).expect("ordinary home");
+        let ordinary_config = "[mcp_servers.ordinary_probe]\ncommand='ordinary-probe'\n";
+        std::fs::write(ordinary_home.join(CONFIG_NAME), ordinary_config).expect("ordinary config");
+        let mut source = DetectEnv::from_process();
+        source.vars.retain(|(key, _)| {
+            !key.to_str()
+                .is_some_and(|key| key.eq_ignore_ascii_case("CODEX_HOME"))
+        });
+        source
+            .vars
+            .push(("CODEX_HOME".into(), ordinary_home.clone().into_os_string()));
+        let executable = source
+            .resolve_executable_only(&crate::catalog::codex_spec())
+            .expect("installed Codex executable");
+
+        let managed_home = profiles
+            .profile_home(PROVIDER, &account_id)
+            .expect("managed home");
+        std::fs::write(
+            managed_home.join(CONFIG_NAME),
+            "[mcp_servers.profile_probe]\ncommand='profile-probe'\n",
+        )
+        .expect("contaminated managed config");
+        let prepared = prepare_session(
+            &profiles,
+            &source,
+            &account_id,
+            &workspace,
+            CloudConfigEligibility::Ineligible,
+        )
+        .expect("managed launch");
+
+        crate::codex::verify_managed_executable_version(&executable, &prepared.env, &managed_home)
+            .expect("exact installed version is certified");
+        let mut args = config_args(
+            crate::codex::argv::POLICY_CONFIG
+                .iter()
+                .copied()
+                .map(str::to_owned),
+        );
+        args.extend(prepared.cli_overrides.iter().cloned());
+        args.extend([OsString::from("mcp"), "list".into(), "--json".into()]);
+        let mcp = run_probe(
+            &ProcessSpec {
+                program: executable.clone(),
+                args,
+                cwd: Some(workspace.clone()),
+                env: prepared.env.clone(),
+            },
+            Duration::from_secs(15),
+            true,
+            64 * 1024,
+        )
+        .expect("bounded mcp config probe");
+        assert!(mcp.status.success(), "mcp probe failed: {}", mcp.stderr);
+        let configured: serde_json::Value =
+            serde_json::from_str(&mcp.stdout).expect("mcp list JSON");
+        let serialized = configured.to_string();
+        for forbidden in ["ordinary_probe", "profile_probe", "workspace_probe"] {
+            assert!(
+                !serialized.contains(forbidden),
+                "synthetic lower-layer MCP escaped isolation: {forbidden}"
+            );
+        }
+
+        let mut feature_args = config_args(
+            crate::codex::argv::POLICY_CONFIG
+                .iter()
+                .copied()
+                .map(str::to_owned),
+        );
+        feature_args.extend(prepared.cli_overrides.iter().cloned());
+        feature_args.extend([OsString::from("features"), "list".into()]);
+        let features = run_probe(
+            &ProcessSpec {
+                program: executable,
+                args: feature_args,
+                cwd: Some(workspace),
+                env: prepared.env.clone(),
+            },
+            Duration::from_secs(15),
+            true,
+            64 * 1024,
+        )
+        .expect("bounded feature config probe");
+        assert!(
+            features.status.success(),
+            "feature probe failed: {}",
+            features.stderr
+        );
+        for feature in ["apps", "plugins", "remote_plugin", "hooks"] {
+            let line = features
+                .stdout
+                .lines()
+                .find(|line| line.split_whitespace().next() == Some(feature))
+                .unwrap_or_else(|| panic!("installed CLI did not report feature {feature}"));
+            assert_eq!(line.split_whitespace().last(), Some("false"), "{line}");
+        }
+
+        assert_eq!(
+            std::fs::read_to_string(ordinary_home.join(CONFIG_NAME)).expect("ordinary config"),
+            ordinary_config,
+            "managed startup must never rewrite the standalone profile"
+        );
+        assert_eq!(
+            std::fs::read_to_string(managed_home.join(CONFIG_NAME)).expect("managed config"),
+            SAFE_CONFIG
+        );
+    }
+}

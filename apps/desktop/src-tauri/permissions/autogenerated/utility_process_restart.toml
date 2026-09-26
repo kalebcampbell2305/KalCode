@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-utility-process-restart"
+description = "Enables the utility_process_restart command without any pre-configured scope."
+commands.allow = ["utility_process_restart"]
+
+[[permission]]
+identifier = "deny-utility-process-restart"
+description = "Denies the utility_process_restart command without any pre-configured scope."
+commands.deny = ["utility_process_restart"]

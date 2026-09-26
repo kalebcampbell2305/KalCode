@@ -2,24 +2,36 @@
 //!
 //! - [`grammar`]: deterministic command grammar (text to `KalVoiceIntent`), no model.
 //! - [`ledger`]: provisional local count of KalVoice Requests (dictation is never counted).
+//! - [`local_reasoning`]: validated structured actions from an optional on-device interpreter.
 //! - [`plan`]: allowances per entitlement tier (mirrors `packages/protocol/src/plans.ts`).
-//! - [`prefs`]: shortcuts, reasoning provider, speech model, spoken replies.
+//! - [`prefs`]: shortcuts, legacy intelligence selection, speech model, spoken replies.
 //! - [`shortcuts`]: shortcut parsing and conflict detection.
 //! - [`models`]: on-device speech model catalog and consented, verified downloads.
 //! - [`audio`]: microphone capture into memory, resampled to 16 kHz.
 //! - [`stt`]: on-device speech recognition (whisper.cpp behind the `whisper` feature).
 //! - [`voice`]: listening sessions (microphone, transcription, audio dropped afterwards).
-//! - [`orchestrator`]: request pipeline (allowance, grammar, provider, permission, execute).
+//! - [`orchestrator`]: request pipeline (allowance, grammar/local interpretation, check, execute).
 //! - [`speech_output`]: optional spoken replies through the OS voice.
 //! - [`signals`]: status snapshot and live signals for the KalVoice UI.
 //!
 //! Zero company AI cost: nothing here calls a hosted AI or speech service. Speech runs on the
-//! device; reasoning runs on the user's own connected provider.
+//! device. Requests outside the deterministic grammar require an explicitly wired local runtime;
+//! this crate never falls back to an external provider.
 
 pub mod audio;
+pub mod component_acquisition;
+pub mod component_catalog;
+pub mod component_floor;
+#[cfg(test)]
+mod component_floor_tests;
+pub mod component_manifest;
+pub mod component_store;
 pub mod grammar;
+pub mod guarded_worker;
 pub mod latency;
 pub mod ledger;
+pub mod llama_worker;
+pub mod local_reasoning;
 pub mod models;
 pub mod orchestrator;
 pub mod plan;

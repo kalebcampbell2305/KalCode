@@ -67,6 +67,7 @@ function run(args, env = {}) {
     cwd: packageDir,
     env: { ...process.env, ...env },
     stdio: "inherit",
+    windowsHide: true,
     shell,
   }).status;
 }

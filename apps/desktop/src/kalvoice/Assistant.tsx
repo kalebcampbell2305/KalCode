@@ -1,5 +1,5 @@
 import { Button, IconButton } from "@kalcode/ui/components";
-import { CircleAlert, CircleCheck, Send, ShieldQuestion } from "lucide-react";
+import { CircleAlert, CircleCheck, Send } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { useNavigation } from "../shell/navigation.tsx";
 import styles from "./Assistant.module.css";
@@ -58,21 +58,19 @@ export function Examples({ onPick }: { onPick: (text: string) => void }) {
 export function ResultView() {
   const { state } = useKalVoice();
   const { navigate } = useNavigation();
-  if (state.phase !== "done" && state.phase !== "error" && state.phase !== "waiting_for_permission") {
+  if (state.phase !== "done" && state.phase !== "error") {
     return null;
   }
-  const tone = state.phase === "done" ? "success" : state.phase === "error" ? "danger" : "waiting";
-  const Icon = tone === "success" ? CircleCheck : tone === "danger" ? CircleAlert : ShieldQuestion;
+  const tone = state.phase === "done" ? "success" : "danger";
+  const Icon = tone === "success" ? CircleCheck : CircleAlert;
   const title =
     state.phase === "done"
       ? "Done"
-      : state.phase === "waiting_for_permission"
-        ? "Waiting for your approval"
-        : state.code === "needs_provider"
-          ? "Connect a provider"
-          : state.code === "limit_reached"
-            ? "Monthly limit reached"
-            : "Needs attention";
+      : state.code === "needs_provider"
+        ? "Connect a provider"
+        : state.code === "limit_reached"
+          ? "Monthly limit reached"
+          : "Needs attention";
   return (
     <div className={styles.result} data-tone={tone}>
       <Icon className={styles.resultIcon} aria-hidden="true" />
@@ -84,7 +82,9 @@ export function ResultView() {
             Open Providers
           </Button>
         ) : null}
-        {state.code === "model_not_installed" || state.code === "speech_engine_unavailable" ? (
+        {state.code === "local_reasoning_unavailable" ||
+        state.code === "model_not_installed" ||
+        state.code === "speech_engine_unavailable" ? (
           <Button size="sm" variant="secondary" onClick={() => navigate("settings")}>
             Open KalVoice settings
           </Button>

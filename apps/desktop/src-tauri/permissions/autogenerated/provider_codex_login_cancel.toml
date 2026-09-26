@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-provider-codex-login-cancel"
+description = "Enables the provider_codex_login_cancel command without any pre-configured scope."
+commands.allow = ["provider_codex_login_cancel"]
+
+[[permission]]
+identifier = "deny-provider-codex-login-cancel"
+description = "Denies the provider_codex_login_cancel command without any pre-configured scope."
+commands.deny = ["provider_codex_login_cancel"]

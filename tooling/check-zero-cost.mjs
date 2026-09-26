@@ -45,6 +45,7 @@ const EXEMPT = /(\.test\.|\/tests?\/|\/test-support\/|__fixtures__)/;
 const files = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard"], {
   cwd: root,
   encoding: "utf8",
+  windowsHide: true,
 })
   .split("\n")
   .filter((f) => SCOPE.test(f) && !EXEMPT.test(f) && /\.(ts|tsx|js|mjs|rs|astro|json|toml)$/.test(f));

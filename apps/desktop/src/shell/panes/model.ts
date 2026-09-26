@@ -89,7 +89,7 @@ export function contentKey(content: PaneContent): string {
     case "widget":
       return `widget:${content.widgetId}`;
     case "browser":
-      return `browser:${content.url ?? ""}`;
+      return `browser:${content.browserId}`;
     case "git":
       return `git:${content.workspaceId}`;
     default:
@@ -682,6 +682,80 @@ export function applyPreset(layout: PaneLayout, preset: BuiltinPreset): PaneLayo
   return applyShape(layout, presetShape(preset));
 }
 
+/**
+ * Adds each requested content exactly once in its own balanced subgroup. Existing tabs, pane
+ * geometry and dock items are retained beside it; arranging never stops their processes.
+ * Returns `null` when the complete layout would exceed the native pane limit.
+ */
+export function arrangeContents(layout: PaneLayout, requested: readonly PaneContent[]): PaneLayout | null {
+  const unique: PaneContent[] = [];
+  const requestedKeys = new Set<string>();
+  for (const content of requested) {
+    const key = contentKey(content);
+    if (requestedKeys.has(key)) continue;
+    requestedKeys.add(key);
+    unique.push(content);
+  }
+  if (unique.length === 0) return layout;
+
+  const originalLeaves = leaves(layout.root);
+  const reusableIds = originalLeaves
+    .filter((leaf) => leaf.tabs.length > 0 && leaf.tabs.every((content) => requestedKeys.has(contentKey(content))))
+    .map((leaf) => leaf.paneId);
+  let base = removeContents(layout, requestedKeys);
+  for (const paneId of reusableIds) {
+    if (paneCount(base) > 1 && findLeaf(base, paneId)?.tabs.length === 0) base = closePane(base, paneId).layout;
+  }
+  const hasExistingWork = leaves(base.root).some((leaf) => leaf.tabs.length > 0);
+  if (!hasExistingWork) {
+    for (const leaf of leaves(base.root)) {
+      if (!reusableIds.includes(leaf.paneId)) reusableIds.push(leaf.paneId);
+    }
+  }
+
+  const usedIds = new Set(hasExistingWork ? leaves(base.root).map((leaf) => leaf.paneId) : []);
+  const targets = unique.map((content) => {
+    const reusable = reusableIds.find((id) => !usedIds.has(id));
+    const pane = makeLeaf([content], reusable);
+    usedIds.add(pane.paneId);
+    return pane;
+  });
+  const existingCount = hasExistingWork ? paneCount(base) : 0;
+  if (existingCount + targets.length > MAX_PANES) return null;
+
+  const balanced = (groups: LeafNode[]): PaneNode => {
+    const makeRow = (children: LeafNode[]): PaneNode =>
+      children.length === 1
+        ? (children[0] as LeafNode)
+        : { kind: "split", axis: "horizontal", ratios: equalRatios(children.length), children };
+    const columns = Math.ceil(Math.sqrt(groups.length));
+    const rowCount = Math.ceil(groups.length / columns);
+    const shortRow = Math.floor(groups.length / rowCount);
+    const longRows = groups.length % rowCount;
+    const rows: PaneNode[] = [];
+    let start = 0;
+    for (let row = 0; row < rowCount; row++) {
+      const length = shortRow + (row < longRows ? 1 : 0);
+      rows.push(makeRow(groups.slice(start, start + length)));
+      start += length;
+    }
+    return rows.length === 1
+      ? (rows[0] as PaneNode)
+      : { kind: "split", axis: "vertical", ratios: equalRatios(rows.length), children: rows };
+  };
+  const targetRoot = balanced(targets);
+  if (!hasExistingWork) return { ...base, root: targetRoot, maximizedPaneId: null };
+
+  const combined = withRoot(
+    { ...base, maximizedPaneId: null },
+    { kind: "split", axis: "horizontal", ratios: equalRatios(2), children: [base.root, targetRoot] },
+  );
+  if (validateLayout(combined) === null) return combined;
+  // A maximum-depth existing tree cannot accept another wrapper; retain every pane in a shallow
+  // balanced layout rather than dropping any content.
+  return { ...base, root: balanced([...leaves(base.root), ...targets]), maximizedPaneId: null };
+}
+
 /** Which built-in preset a layout's shape matches, if any (for showing the current choice). */
 export function matchingPreset(layout: PaneLayout): BuiltinPreset | null {
   const signature = (node: PaneNode): string =>
@@ -934,6 +1008,40 @@ export function resizePane(
   return layout;
 }
 
+/** Grows or shrinks a pane against its nearest enclosing divider, independent of direction. */
+export function resizePaneRelative(
+  layout: PaneLayout,
+  paneId: string,
+  grow: boolean,
+  stepPx: number,
+  width: number,
+  height: number,
+  options: GeometryOptions = DEFAULT_GEOMETRY,
+): PaneLayout {
+  const path = pathOf(layout.root, paneId);
+  if (!path) return layout;
+  const geometry = computeGeometry(layout, width, height, options);
+  for (let depth = path.length - 1; depth >= 0; depth--) {
+    const splitPath = path.slice(0, depth);
+    const split = nodeAt(layout.root, splitPath);
+    const childIndex = path[depth] as number;
+    if (split?.kind !== "split") continue;
+    const hasForward = childIndex + 1 < split.children.length;
+    const dividerIndex = hasForward ? childIndex : childIndex - 1;
+    if (dividerIndex < 0) continue;
+    const divider = geometry.dividers.find(
+      (candidate) =>
+        candidate.index === dividerIndex &&
+        candidate.path.length === splitPath.length &&
+        candidate.path.every((value, index) => value === splitPath[index]),
+    );
+    if (!divider) return layout;
+    const towardPane = hasForward ? 1 : -1;
+    return resizeDivider(layout, divider, (grow ? 1 : -1) * towardPane * stepPx);
+  }
+  return layout;
+}
+
 /** The pane next to `paneId` in `direction` (by geometry), for keyboard focus traversal. */
 export function neighbourPane(
   layout: PaneLayout,
@@ -992,7 +1100,7 @@ function isContent(value: unknown): value is PaneContent {
     case "widget":
       return typeof v.widgetId === "string";
     case "browser":
-      return v.url === null || v.url === undefined || typeof v.url === "string";
+      return typeof v.browserId === "string" && (v.url === null || typeof v.url === "string");
     case "git":
       return typeof v.workspaceId === "string";
     default:

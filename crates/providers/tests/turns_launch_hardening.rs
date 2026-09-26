@@ -104,6 +104,7 @@ impl Setup {
         SessionConfig {
             thread_id: kalcode_contracts::ids::new_id(),
             workspace_id: kalcode_contracts::ids::new_id(),
+            provider_account_id: None,
             working_directory: self.workspace.path().display().to_string(),
             model: None,
             permission_mode: PermissionMode::Approve,

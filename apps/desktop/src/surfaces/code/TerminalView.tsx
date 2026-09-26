@@ -4,6 +4,13 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { useEffect, useRef } from "react";
 import { toKalCodeError } from "../../ipc/errors.ts";
+import {
+  createOrderedInputQueue,
+  DictationDeliveryError,
+  registerDictationSink,
+  sanitizeTerminalDictation,
+  throwIfDictationCancelled,
+} from "../../kalvoice/dictation.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { afterLiveResize, isLiveResizing } from "../../shell/panes/liveResize.ts";
@@ -36,35 +43,6 @@ function monoFontFamily(): string {
 }
 
 /**
- * Sends input in order, one write in flight at a time; keystrokes typed meanwhile are batched
- * into the next write.
- */
-function inputQueue(write: (data: string) => Promise<void>) {
-  let pending = "";
-  let flushing = false;
-  const flush = async () => {
-    flushing = true;
-    while (pending) {
-      const data = pending;
-      pending = "";
-      try {
-        await write(data);
-      } catch (error) {
-        // An ended terminal refuses input; its status updates through events.
-        if (import.meta.env.DEV && toKalCodeError(error).code !== "terminal_not_running") {
-          console.warn("terminal input failed", error);
-        }
-      }
-    }
-    flushing = false;
-  };
-  return (data: string) => {
-    pending += data;
-    if (!flushing) void flush();
-  };
-}
-
-/**
  * One terminal: an xterm.js view (DOM renderer, so text stays accessible and testable) attached
  * to a native session. The first output message is the scrollback replay; terminal reports
  * xterm.js generates while replaying are not sent back, because the shell already had them
@@ -80,9 +58,12 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme, th
   runningRef.current = running;
   const initialTheme = useRef(theme);
   const terminalId = terminal.id;
+  const labelRef = useRef(label);
+  labelRef.current = label;
   const throttledRef = useRef(throttled);
   throttledRef.current = throttled;
   const writerRef = useRef<OutputScheduler | null>(null);
+  const inputRef = useRef<ReturnType<typeof createOrderedInputQueue> | null>(null);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -113,6 +94,9 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme, th
     // text is selected (otherwise it interrupts), Ctrl+V and Ctrl+Shift+V paste.
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== "keydown") return true;
+      // The window-level push-to-talk handler runs in capture phase. Never encode that already
+      // consumed key (for example F8 as ESC [19~) into the PTY.
+      if (event.defaultPrevented) return false;
       if (isTerminalShortcut(event)) return false;
       const ctrl = event.ctrlKey && !event.altKey && !event.metaKey;
       const key = event.key.toLowerCase();
@@ -123,14 +107,23 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme, th
     });
 
     let replaying = false;
-    const send = inputQueue((data) => client.writeTerminal(terminalId, data));
+    const input = createOrderedInputQueue(
+      (data) => client.writeTerminal(terminalId, data),
+      (error) => {
+        // An ended terminal refuses input; its status updates through events.
+        if (import.meta.env.DEV && toKalCodeError(error).code !== "terminal_not_running") {
+          console.warn("terminal input failed", error);
+        }
+      },
+    );
+    inputRef.current = input;
     term.onData((data) => {
-      if (!replaying && runningRef.current) send(data);
+      if (!replaying && runningRef.current) input.send(data);
     });
     term.onBinary((data) => {
       // Legacy mouse reports; only 7-bit data survives the UTF-8 input path unchanged.
       const sevenBit = [...data].every((ch) => ch.charCodeAt(0) < 0x80);
-      if (!replaying && runningRef.current && sevenBit) send(data);
+      if (!replaying && runningRef.current && sevenBit) input.send(data);
     });
 
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -256,10 +249,44 @@ export function TerminalView({ terminal, label, visible, focusRequest, theme, th
       if (resizeTimer) clearTimeout(resizeTimer);
       // An attach still in flight detaches itself when it resolves (see `connect`).
       if (attachment !== null) client.detachTerminal(attachment).catch(() => undefined);
+      input.dispose();
+      if (inputRef.current === input) inputRef.current = null;
       termRef.current = null;
       term.dispose();
     };
   }, [client, terminalId, lastSize]);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    return registerDictationSink(host, {
+      label: labelRef.current,
+      destination: { kind: "raw_terminal", terminalId },
+      async deliver(transcript, options) {
+        throwIfDictationCancelled(options?.signal);
+        if (!runningRef.current) {
+          throw new DictationDeliveryError("terminal_not_running", "That terminal is no longer running.");
+        }
+        const text = sanitizeTerminalDictation(transcript);
+        if (!text) {
+          throw new DictationDeliveryError("empty_transcript", "No text remained after safe input filtering.");
+        }
+        const input = inputRef.current;
+        if (!input) throw new DictationDeliveryError("target_closed", "That terminal has closed.");
+        try {
+          await input.deliver(text, options);
+        } catch (cause) {
+          if (cause instanceof DictationDeliveryError) throw cause;
+          const error = toKalCodeError(cause);
+          if (error.code === "terminal_not_running") {
+            throw new DictationDeliveryError("terminal_not_running", "That terminal is no longer running.");
+          }
+          throw new DictationDeliveryError("terminal_delivery_failed", "KalCode could not write to that terminal.");
+        }
+        return text.length;
+      },
+    });
+  }, [terminalId]);
 
   useEffect(() => {
     // Tab labels can change (numbering) without restarting the view.

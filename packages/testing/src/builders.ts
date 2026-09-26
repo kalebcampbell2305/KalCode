@@ -286,6 +286,7 @@ export function createFixtures(options: FixtureOptions = {}) {
         providerId,
         providerName: PROVIDER_NAMES[providerId] ?? providerId,
         model: null,
+        providerAccountId: null,
         accountLabel: "Personal",
         workspaceId: ws?.id ?? "",
         workspaceName: ws?.name ?? "workspace",

@@ -21,6 +21,7 @@ use serde_json::json;
 use super::argv::{SessionArgs, SessionStart, session_args, working_directory};
 use super::normalize::Normalizer;
 use super::stream::{ClaudeLine, parse_line};
+use crate::guardian::RegisteredJob;
 use crate::process::{OutputLine, ProcessSpec, SupervisedChild};
 
 /// Documented in the Agent SDK reference (`SDKSystemMessage.capabilities`): the CLI answers the
@@ -56,6 +57,7 @@ pub struct LaunchSpec {
     pub mode: kalcode_contracts::permissions::PermissionMode,
     pub resume_session_id: Option<String>,
     pub timeouts: SessionTimeouts,
+    pub guardian_job: Option<RegisteredJob>,
 }
 
 struct Shared {
@@ -107,7 +109,11 @@ impl ClaudeSession {
             cwd: Some(cwd),
             env: spec.env,
         };
-        let (child, lines) = SupervisedChild::spawn(&process).map_err(|e| {
+        let spawned = match spec.guardian_job {
+            Some(admission) => SupervisedChild::spawn_guarded(&process, admission),
+            None => SupervisedChild::spawn(&process),
+        };
+        let (child, lines) = spawned.map_err(|e| {
             tracing::warn!(event = "provider.session_spawn_failed", provider_id = "claude-code", error = %e);
             ProviderError::Start("Claude Code couldn't be started.".into())
         })?;

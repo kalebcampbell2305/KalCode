@@ -80,6 +80,7 @@ test.describe("threads", () => {
 
     // Defaults: first provider, provider's default model, first workspace, Approve.
     await expect(form.getByLabel("Provider")).toHaveValue("claude-code");
+    await expect(form.getByLabel("Account")).toHaveValue("0192f3c4-0000-7000-8000-000000000101");
     await expect(form.getByLabel("Model")).toHaveValue("");
     await expect(form.getByRole("radio", { name: "Approve" })).toBeChecked();
     await expect(form.getByText("Edits, commands and network access wait for your approval.")).toBeVisible();
@@ -116,15 +117,13 @@ test.describe("threads", () => {
     await openThreads(page);
     await page.getByRole("button", { name: "New thread" }).first().click();
     const form = page.getByRole("region", { name: "New thread" });
-    await expect(form.getByLabel("Provider").locator("option")).toHaveText([
-      "Claude Code (Personal)",
-      "Codex",
-      "Gemini CLI",
-    ]);
+    await expect(form.getByLabel("Provider").locator("option")).toHaveText(["Claude Code", "Codex", "Gemini CLI"]);
     await expect(form.getByRole("list", { name: "Not available for threads" })).toHaveCount(0);
 
     // Codex lists no models up front: only the provider's default.
     await form.getByLabel("Provider").selectOption("codex");
+    await expect(form.getByLabel("Account").locator("option")).toHaveText(["Personal (default)", "Work (signed out)"]);
+    await expect(form.getByLabel("Account")).toHaveValue("0192f3c4-0000-7000-8000-000000000201");
     await expect(form.getByLabel("Model").locator("option")).toHaveText(["Provider default"]);
     await expect(form.getByText(/With Codex: Runs like Plan/)).toBeVisible();
 
@@ -158,7 +157,7 @@ test.describe("threads", () => {
     await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Threads" }).click();
     await page.getByRole("button", { name: "New thread" }).first().click();
     const form = page.getByRole("region", { name: "New thread" });
-    await expect(form.getByLabel("Provider").locator("option")).toHaveText(["Claude Code (Personal)"]);
+    await expect(form.getByLabel("Provider").locator("option")).toHaveText(["Claude Code"]);
     const others = form.getByRole("list", { name: "Not available for threads" });
     await expect(others.getByRole("listitem")).toHaveCount(2);
     await expect(others.getByRole("listitem").filter({ hasText: "Codex" })).toContainText(
@@ -220,6 +219,22 @@ test.describe("threads", () => {
     await expect(page.getByRole("heading", { name: "Open a project folder" })).toBeVisible();
   });
 
+  test("without a managed account, thread creation fails closed and links to Accounts", async ({ page }) => {
+    await page.goto("/?scenario=provider-accounts-empty");
+    await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    await openFolders(page, "kalcode");
+    await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Threads" }).click();
+    await page.getByRole("button", { name: "New thread" }).first().click();
+    const form = page.getByRole("region", { name: "New thread" });
+    await expect(form.getByLabel("Account")).toBeDisabled();
+    await expect(form.getByText("Add a managed account before starting this provider.")).toBeVisible();
+    await form.getByLabel("Task").fill("Do not launch without an isolated account");
+    await expect(form.getByRole("button", { name: "Start thread" })).toBeDisabled();
+    await form.getByRole("button", { name: "Manage accounts" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Providers" })).toBeVisible();
+    await expect(page.getByRole("tab", { name: "Accounts" })).toHaveAttribute("aria-selected", "true");
+  });
+
   test("interrupt stops a slow turn and keeps what was written", async ({ page }) => {
     await openThreads(page);
     await createThread(page, "slow refactor of the parser");
@@ -235,6 +250,36 @@ test.describe("threads", () => {
     await detail(page).getByRole("button", { name: "Send" }).click();
     await expect(conversation(page).getByText("carry on")).toBeVisible();
     await expect(detail(page).getByLabel("Message")).toHaveValue("");
+  });
+
+  test("context drop previews redactions and sends to the exact selected thread", async ({ page }) => {
+    await openThreads(page, "threads");
+    await list(page)
+      .getByRole("button", { name: /Write Unit Tests for Parser Module/ })
+      .click();
+
+    const thread = detail(page);
+    await thread.getByRole("button", { name: "Add context" }).click();
+    await expect(thread.getByRole("button", { name: "Add context" })).toHaveAttribute("aria-expanded", "true");
+    await expect(thread.getByRole("button", { name: "Pasted text" })).toHaveAttribute("aria-pressed", "true");
+    await thread.getByLabel("Label").fill("Failure output");
+    const secret = ["password", "=", "context-drop-regression-value"].join("");
+    await thread.getByLabel("Content").fill(`Request failed\n${secret}`);
+    await thread.getByRole("button", { name: "Preview context" }).click();
+
+    const tray = thread.getByRole("region", { name: "Context drop" });
+    await expect(tray.getByText(/1 item checked for/)).toBeVisible();
+    await expect(tray.getByText("password=[REDACTED]", { exact: false })).toBeVisible();
+    await expect(tray.getByText("context-drop-regression-value", { exact: false })).toHaveCount(0);
+    await expect(tray.getByText("Sending to")).toBeVisible();
+    await expectNoSeriousA11yViolations(page);
+
+    await thread.getByLabel("Message").fill("Investigate this failure.");
+    await thread.getByRole("button", { name: "Send" }).click();
+    await expect(conversation(page).getByText(/Investigate this failure/)).toBeVisible();
+    await expect(conversation(page).getByText(/password=\[REDACTED\]/)).toHaveCount(0);
+    await expect(conversation(page).getByText("context-drop-regression-value", { exact: false })).toHaveCount(0);
+    await expect(tray.getByText("Sending to")).toHaveCount(0);
   });
 
   test("stop, resume and archive follow the thread's state", async ({ page }) => {

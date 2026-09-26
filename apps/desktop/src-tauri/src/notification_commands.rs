@@ -112,12 +112,14 @@ impl NotificationsState {
 /// A page of notifications, most recently raised first, with the unread count.
 #[tauri::command(async)]
 pub fn notification_list(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     app: State<'_, AppState>,
-    notifications: State<'_, NotificationsState>,
+    notifications: crate::runtime_coordinator::RuntimeState<NotificationsState>,
     unread_only: bool,
     limit: u32,
     before: Option<String>,
 ) -> Result<NotificationPage, IpcError> {
+    _runtime_access.revalidate()?;
     let center = notifications.get(&app)?;
     center
         .list(unread_only, limit, before.as_deref())
@@ -128,11 +130,13 @@ pub fn notification_list(
 /// Returns how many changed.
 #[tauri::command(async)]
 pub fn notification_mark(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     app: State<'_, AppState>,
-    notifications: State<'_, NotificationsState>,
+    notifications: crate::runtime_coordinator::RuntimeState<NotificationsState>,
     ids: Option<Vec<String>>,
     mark: NotificationMark,
 ) -> Result<u32, IpcError> {
+    _runtime_access.revalidate()?;
     let center = notifications.get(&app)?;
     center
         .mark(ids.as_deref(), mark)

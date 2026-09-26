@@ -12,6 +12,7 @@ pub enum Tier {
     Free,
     Pro,
     Max,
+    Max2x,
     /// Private, non-billable tier with unlimited KalVoice Requests.
     Owner,
 }
@@ -20,9 +21,10 @@ impl Tier {
     /// Monthly KalVoice Requests; `None` means unlimited.
     pub fn kalvoice_allowance(self) -> Option<u32> {
         match self {
-            Self::Free => Some(250),
-            Self::Pro => Some(2_500),
-            Self::Max => Some(10_000),
+            Self::Free => Some(75),
+            Self::Pro => Some(1_500),
+            Self::Max => Some(5_000),
+            Self::Max2x => Some(10_000),
             Self::Owner => None,
         }
     }
@@ -63,7 +65,7 @@ mod tests {
     use super::*;
 
     /// Extracts `kalvoiceRequestsPerMonth` values from plans.ts in declaration order
-    /// (free, pro, max, then OWNER_LIMITS).
+    /// (free, pro, max, max2x, then OWNER_LIMITS).
     fn plans_ts_allowances() -> Vec<Option<u32>> {
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -93,6 +95,7 @@ mod tests {
                 Tier::Free.kalvoice_allowance(),
                 Tier::Pro.kalvoice_allowance(),
                 Tier::Max.kalvoice_allowance(),
+                Tier::Max2x.kalvoice_allowance(),
                 Tier::Owner.kalvoice_allowance(),
             ]
         );
@@ -102,6 +105,6 @@ mod tests {
     fn provisional_is_free_on_calendar_months() {
         assert_eq!(ProvisionalEntitlement.tier(), Tier::Free);
         assert_eq!(ProvisionalEntitlement.cycle_anchor_day(), 1);
-        assert_eq!(Tier::default().kalvoice_allowance(), Some(250));
+        assert_eq!(Tier::default().kalvoice_allowance(), Some(75));
     }
 }

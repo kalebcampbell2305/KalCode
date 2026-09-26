@@ -7,6 +7,7 @@
  * physical one.
  */
 import type { PaneDirection } from "@kalcode/protocol";
+import { DESKTOP_PLATFORM, formatShortcut, type DesktopPlatform } from "../../platform/keyboard.ts";
 import type { BuiltinPreset } from "./model.ts";
 
 export type PaneShortcut =
@@ -34,12 +35,19 @@ const PRESET_KEYS: Record<string, BuiltinPreset> = { "2": "two", "3": "three", "
 
 /** Maps a key event to a pane shortcut (Ctrl+Alt, never ⌘ or AltGr characters). */
 export function paneShortcut(
-  event: Pick<KeyboardEvent, "ctrlKey" | "altKey" | "metaKey" | "shiftKey" | "key">,
+  event: Pick<KeyboardEvent, "ctrlKey" | "altKey" | "metaKey" | "shiftKey" | "key" | "code">,
+  platform: DesktopPlatform = DESKTOP_PLATFORM,
 ): PaneShortcut | null {
   if (!event.ctrlKey || !event.altKey || event.metaKey) return null;
   const direction = ARROWS[event.key];
   if (direction) return event.shiftKey ? { kind: "resize", direction } : { kind: "focus", direction };
-  const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+  const codeKey =
+    platform === "macos" && /^Key[A-Z]$/.test(event.code)
+      ? event.code.slice(3).toLowerCase()
+      : platform === "macos" && /^Digit[0-9]$/.test(event.code)
+        ? event.code.slice(5)
+        : null;
+  const key = codeKey ?? (event.key.length === 1 ? event.key.toLowerCase() : event.key);
   if (event.shiftKey) {
     if (key === "d") return { kind: "split-down" };
     return null;
@@ -71,17 +79,23 @@ export function isPaneShortcut(event: KeyboardEvent): boolean {
 }
 
 /** Labels for menus, tooltips and the status bar. */
-export const PANE_SHORTCUT_LABELS = {
-  focus: "Ctrl Alt ←↑→↓",
-  resize: "Ctrl Alt Shift ←↑→↓",
-  splitRight: "Ctrl Alt D",
-  splitDown: "Ctrl Alt Shift D",
-  maximize: "Ctrl Alt Enter",
-  close: "Ctrl Alt W",
-  reopen: "Ctrl Alt R",
-  collapse: "Ctrl Alt H",
-  nextTab: "Ctrl Alt PgDn",
-  previousTab: "Ctrl Alt PgUp",
-  preset: "Ctrl Alt 2 / 3 / 4 / 6",
-  even: "Ctrl Alt 0",
-} as const;
+export function paneShortcutLabels(platform: DesktopPlatform = DESKTOP_PLATFORM) {
+  const chord = (tokens: readonly string[]) =>
+    formatShortcut(["Control", "Alt", ...tokens], platform);
+  return {
+    focus: chord(["←↑→↓"]),
+    resize: chord(["Shift", "←↑→↓"]),
+    splitRight: chord(["D"]),
+    splitDown: chord(["Shift", "D"]),
+    maximize: chord(["Enter"]),
+    close: chord(["W"]),
+    reopen: chord(["R"]),
+    collapse: chord(["H"]),
+    nextTab: chord(["PgDn"]),
+    previousTab: chord(["PgUp"]),
+    preset: chord(["2 / 3 / 4 / 6"]),
+    even: chord(["0"]),
+  } as const;
+}
+
+export const PANE_SHORTCUT_LABELS = paneShortcutLabels();

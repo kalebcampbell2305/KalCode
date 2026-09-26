@@ -21,14 +21,15 @@ use kalcode_contracts::agent::{AgentProvider, ProviderId};
 use kalcode_contracts::app::FeatureId;
 use kalcode_contracts::permissions::PermissionMode;
 use kalcode_contracts::threads::ThreadSummary;
-use kalcode_core::{IpcError, KalError};
+use kalcode_core::{ErrorCategory, IpcError, KalError};
 use kalcode_hook_bridge::Endpoint;
-use kalcode_hook_bridge::server::{BridgeServer, ServerConfig};
+use kalcode_hook_bridge::server::{BridgeServer, BridgeShutdownError, ServerConfig};
 use kalcode_permissions::PermissionService;
 use kalcode_providers::DetectEnv;
 use kalcode_providers::interactive::cli_pane::{InteractiveCliProvider, PaneCli};
 use kalcode_providers::interactive::provider::{
     InteractiveClaudeProvider, InteractiveConfig, PaneRegistry, RuntimeRouter, marked_interactive,
+    marked_interactive_checked,
 };
 use kalcode_providers::interactive::session::SessionLimits;
 use kalcode_providers::interactive::{
@@ -40,6 +41,7 @@ use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{Manager, State, Webview};
 
 use crate::AppState;
+use crate::provider_auth_commands::ProviderRuntimeAuthority;
 use crate::thread_commands::ThreadsState;
 
 /// Output a view may be behind before it is dropped (as for Z1 terminals).
@@ -52,39 +54,38 @@ const HOOK_HELPER: &str = if cfg!(windows) {
     "kalcode-hook"
 };
 
-/// The interactive provider, once panes are enabled. Read by `thread_commands::adapter` when it
-/// registers Claude Code, so the registry gets the runtime router instead of the headless
-/// adapter alone. Set once during setup, before the thread runtime starts.
-static INTERACTIVE: OnceLock<Arc<InteractiveClaudeProvider>> = OnceLock::new();
-
-/// Claude Code as the thread runtime should see it: the per-thread runtime router when panes
-/// are enabled, otherwise the headless adapter unchanged.
-pub fn route_claude(headless: Arc<dyn AgentProvider>) -> Arc<dyn AgentProvider> {
-    match INTERACTIVE.get() {
-        Some(interactive) => Arc::new(RuntimeRouter::new(headless, interactive.clone())),
-        None => headless,
-    }
+/// Routes belong to one runtime epoch; a later login receives fresh providers and bridge.
+#[derive(Clone, Default)]
+pub struct PaneRoutes {
+    claude: Option<Arc<InteractiveClaudeProvider>>,
+    codex: Option<Arc<InteractiveCliProvider>>,
+    gemini: Option<Arc<InteractiveCliProvider>>,
 }
 
-/// PROVIDERS-2: Codex and Gemini CLI panes (read-only first), registered next to Claude Code's.
-static INTERACTIVE_CODEX: OnceLock<Arc<InteractiveCliProvider>> = OnceLock::new();
-static INTERACTIVE_GEMINI: OnceLock<Arc<InteractiveCliProvider>> = OnceLock::new();
+impl PaneRoutes {
+    pub fn route_claude(&self, headless: Arc<dyn AgentProvider>) -> Arc<dyn AgentProvider> {
+        match self.claude.as_ref() {
+            Some(interactive) => Arc::new(RuntimeRouter::new(headless, interactive.clone())),
+            None => headless,
+        }
+    }
 
-/// Codex or Gemini CLI as the thread runtime should see it: the per-thread router when panes
-/// are enabled, otherwise the headless adapter unchanged.
-pub fn route_cli(id: &str, headless: Arc<dyn AgentProvider>) -> Arc<dyn AgentProvider> {
-    let interactive = match id {
-        ProviderId::CODEX => INTERACTIVE_CODEX.get(),
-        ProviderId::GEMINI_CLI => INTERACTIVE_GEMINI.get(),
-        _ => None,
-    };
-    match interactive {
-        Some(interactive) => Arc::new(RuntimeRouter::for_provider(
-            headless,
-            interactive.clone(),
-            interactive.sessions_dir(),
-        )),
-        None => headless,
+    /// Codex or Gemini CLI as the thread runtime should see it: the per-thread router when panes
+    /// are enabled, otherwise the headless adapter unchanged.
+    pub fn route_cli(&self, id: &str, headless: Arc<dyn AgentProvider>) -> Arc<dyn AgentProvider> {
+        let interactive = match id {
+            ProviderId::CODEX => self.codex.as_ref(),
+            ProviderId::GEMINI_CLI => self.gemini.as_ref(),
+            _ => None,
+        };
+        match interactive {
+            Some(interactive) => Arc::new(RuntimeRouter::for_provider(
+                headless,
+                interactive.clone(),
+                interactive.sessions_dir(),
+            )),
+            None => headless,
+        }
     }
 }
 
@@ -131,6 +132,7 @@ struct View {
 
 /// Provider pane state for the shell.
 pub struct ProviderPanesState {
+    pub routes: PaneRoutes,
     enabled: bool,
     bridge: Option<Arc<BridgeServer>>,
     panes: Arc<PaneRegistry>,
@@ -171,12 +173,32 @@ fn routing() -> DecisionRouting {
 }
 
 impl ProviderPanesState {
+    /// Returns whether `thread_id` belongs to an interactive provider pane in this runtime or
+    /// was durably marked as one by an earlier runtime. Callers use this read-only preflight
+    /// before claiming one-shot work that pane sessions cannot accept through the headless send
+    /// path.
+    pub(crate) fn is_interactive_thread(&self, thread_id: &str) -> Result<bool, KalError> {
+        if self.panes.info(thread_id).is_some() {
+            return Ok(true);
+        }
+        marked_interactive_checked(&self.sessions_dir, thread_id).map_err(|error| {
+            KalError::new(
+                ErrorCategory::Filesystem,
+                "interactive_marker_unavailable",
+                "KalCode couldn't verify whether this thread belongs to an interactive pane.",
+            )
+            .retryable()
+            .with_source(error)
+        })
+    }
+
     /// Starts the bridge when the feature is visible for this build, and registers the
-    /// interactive provider for [`route_claude`]. Must run before the thread runtime starts.
-    pub fn start(app: &AppState) -> Self {
+    /// interactive provider for [`PaneRoutes::route_claude`]. Must run before threads start.
+    pub fn start(app: &AppState, runtime: Option<ProviderRuntimeAuthority>) -> Self {
         let panes = Arc::new(PaneRegistry::new());
         let glue = Arc::new(Glue::default());
         let disabled = |reason| Self {
+            routes: PaneRoutes::default(),
             enabled: false,
             bridge: None,
             panes: panes.clone(),
@@ -195,6 +217,9 @@ impl ProviderPanesState {
         if !visible || app.core.is_none() {
             return disabled("Provider panes aren't available in this build yet.");
         }
+        let Some(runtime) = runtime else {
+            return disabled("Managed provider accounts aren't available. Restart KalCode.");
+        };
         let Some(hook_program) = hook_program() else {
             return disabled("KalCode's hook helper is missing. Reinstall KalCode.");
         };
@@ -216,20 +241,30 @@ impl ProviderPanesState {
             routing,
             limits: SessionLimits::default(),
         };
-        let _ = INTERACTIVE_CODEX.set(Arc::new(InteractiveCliProvider::new(
-            PaneCli::Codex,
-            DetectEnv::from_process(),
-            Some(bridge.clone()),
-            cli_config.clone(),
-            panes.clone(),
-        )));
-        let _ = INTERACTIVE_GEMINI.set(Arc::new(InteractiveCliProvider::new(
-            PaneCli::Gemini,
-            DetectEnv::from_process(),
-            None,
-            cli_config,
-            panes.clone(),
-        )));
+        let codex_runtime = runtime.clone();
+        let codex = Some(Arc::new(
+            InteractiveCliProvider::new(
+                PaneCli::Codex,
+                DetectEnv::from_process(),
+                Some(bridge.clone()),
+                cli_config.clone(),
+                panes.clone(),
+            )
+            .with_managed_profiles(runtime.managed_profiles())
+            .with_codex_cloud_config_resolver(move |account_id| {
+                codex_runtime.codex_cloud_config(account_id)
+            }),
+        ));
+        let gemini = Some(Arc::new(
+            InteractiveCliProvider::new(
+                PaneCli::Gemini,
+                DetectEnv::from_process(),
+                None,
+                cli_config,
+                panes.clone(),
+            )
+            .with_managed_profiles(runtime.managed_profiles()),
+        ));
         let provider = InteractiveClaudeProvider::new(
             DetectEnv::from_process(),
             bridge.clone(),
@@ -242,11 +277,17 @@ impl ProviderPanesState {
             },
             panes.clone(),
         )
+        .with_managed_profiles(runtime.managed_profiles())
         .with_expiry(glue.clone())
         .with_titles(glue.clone());
-        let _ = INTERACTIVE.set(Arc::new(provider));
+        let routes = PaneRoutes {
+            claude: Some(Arc::new(provider)),
+            codex,
+            gemini,
+        };
         tracing::info!(event = "pane.enabled", routing = ?routing);
         Self {
+            routes,
             enabled: true,
             bridge: Some(bridge),
             panes,
@@ -308,9 +349,21 @@ impl ProviderPanesState {
         }
     }
 
+    /// Detaches every retained webview stream, then proves the hook listener has exited.
+    pub fn shutdown_checked(&self) -> Result<(), BridgeShutdownError> {
+        let views: Vec<View> = self.views().drain().map(|(_, view)| view).collect();
+        for view in views {
+            self.panes.detach(&view.thread_id, view.pty_attach);
+        }
+        self.bridge
+            .as_ref()
+            .map_or(Ok(()), |bridge| bridge.shutdown_checked())
+    }
+
+    /// Compatibility wrapper for callers that cannot surface shutdown failure yet.
     pub fn shutdown(&self) {
-        if let Some(bridge) = &self.bridge {
-            bridge.shutdown();
+        if let Err(error) = self.shutdown_checked() {
+            tracing::error!(event = "provider_panes.shutdown_incomplete", error = %error);
         }
     }
 }
@@ -341,15 +394,18 @@ fn provider_error(error: kalcode_contracts::agent::ProviderError) -> IpcError {
 #[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
 pub fn provider_pane_create(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     app: State<'_, AppState>,
-    threads: State<'_, ThreadsState>,
-    panes: State<'_, ProviderPanesState>,
+    threads: crate::runtime_coordinator::RuntimeState<ThreadsState>,
+    panes: crate::runtime_coordinator::RuntimeState<ProviderPanesState>,
     provider_id: String,
+    provider_account_id: Option<String>,
     workspace_id: String,
     model: Option<String>,
     permission_mode: PermissionMode,
     name: Option<String>,
 ) -> Result<ThreadSummary, IpcError> {
+    _runtime_access.revalidate()?;
     panes.require()?;
     if ![
         ProviderId::CLAUDE_CODE,
@@ -364,11 +420,21 @@ pub fn provider_pane_create(
         )
         .to_ipc());
     }
+    let account = crate::thread_commands::resolve_creation_account(
+        app.core()?,
+        &provider_id,
+        &workspace_id,
+        provider_account_id.as_deref(),
+        None,
+    )
+    .map_err(|e| e.log_and_convert("provider_pane_create_account"))?;
     threads.ensure_providers(app.core.as_ref());
     let runtime = threads.runtime()?;
     RuntimeRouter::create_interactive(|| {
         runtime.create_idle(CreateIdleThread {
             provider_id,
+            provider_account_id: account.as_ref().map(|account| account.id.clone()),
+            account_label: account.map(|account| account.display_name),
             workspace_id,
             model,
             permission_mode,
@@ -382,11 +448,13 @@ pub fn provider_pane_create(
 /// acknowledges rendered bytes with `provider_pane_ack`.
 #[tauri::command]
 pub fn provider_pane_attach(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     webview: Webview,
-    panes: State<'_, ProviderPanesState>,
+    panes: crate::runtime_coordinator::RuntimeState<ProviderPanesState>,
     thread_id: String,
     on_output: Channel<InvokeResponseBody>,
 ) -> Result<Option<u64>, IpcError> {
+    _runtime_access.revalidate()?;
     panes.require()?;
     validate_thread_id(&thread_id)?;
     let label = webview.label().to_owned();
@@ -437,8 +505,9 @@ pub fn provider_pane_attach(
 
 #[tauri::command]
 pub fn provider_pane_ack(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     webview: Webview,
-    panes: State<'_, ProviderPanesState>,
+    panes: crate::runtime_coordinator::RuntimeState<ProviderPanesState>,
     attachment_id: u64,
     bytes: u32,
 ) -> bool {
@@ -460,8 +529,9 @@ pub fn provider_pane_ack(
 
 #[tauri::command]
 pub fn provider_pane_detach(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     webview: Webview,
-    panes: State<'_, ProviderPanesState>,
+    panes: crate::runtime_coordinator::RuntimeState<ProviderPanesState>,
     attachment_id: u64,
 ) -> bool {
     let view = {
@@ -481,10 +551,12 @@ pub fn provider_pane_detach(
 /// The person's keystrokes. Bounded like Z1 terminal writes.
 #[tauri::command]
 pub fn provider_pane_write(
-    panes: State<'_, ProviderPanesState>,
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    panes: crate::runtime_coordinator::RuntimeState<ProviderPanesState>,
     thread_id: String,
     data: String,
 ) -> Result<(), IpcError> {
+    _runtime_access.revalidate()?;
     panes.require()?;
     validate_thread_id(&thread_id)?;
     panes
@@ -495,11 +567,13 @@ pub fn provider_pane_write(
 
 #[tauri::command]
 pub fn provider_pane_resize(
-    panes: State<'_, ProviderPanesState>,
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    panes: crate::runtime_coordinator::RuntimeState<ProviderPanesState>,
     thread_id: String,
     cols: u16,
     rows: u16,
 ) -> Result<(), IpcError> {
+    _runtime_access.revalidate()?;
     panes.require()?;
     validate_thread_id(&thread_id)?;
     panes
@@ -510,9 +584,11 @@ pub fn provider_pane_resize(
 
 #[tauri::command]
 pub fn provider_pane_info(
-    panes: State<'_, ProviderPanesState>,
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    panes: crate::runtime_coordinator::RuntimeState<ProviderPanesState>,
     thread_id: String,
 ) -> Result<Option<PaneInfo>, IpcError> {
+    _runtime_access.revalidate()?;
     panes.require()?;
     validate_thread_id(&thread_id)?;
     if let Some(info) = panes.panes.info(&thread_id) {
@@ -534,7 +610,9 @@ pub fn provider_pane_info(
 
 /// Drops a reloaded page's pane views (called from the page-load hook).
 pub fn drop_views(webview: &Webview) {
-    if let Some(state) = webview.try_state::<ProviderPanesState>() {
+    if let Ok(state) = crate::runtime_coordinator::RuntimeState::<ProviderPanesState>::from_app(
+        webview.app_handle(),
+    ) {
         state.drop_views(webview.label());
     }
 }
@@ -556,8 +634,7 @@ mod tests {
     }
 
     #[test]
-    fn the_engine_decides_by_default_since_the_classifier_hardening() {
-        // SEC-LATENT merged (main 65fe095); the feature itself stays behind provider_panes.
-        assert_eq!(DEFAULT_DECISION_ROUTING, DecisionRouting::Engine);
+    fn ordinary_panes_preserve_provider_native_permissions() {
+        assert_eq!(DEFAULT_DECISION_ROUTING, DecisionRouting::ProviderPrompt);
     }
 }

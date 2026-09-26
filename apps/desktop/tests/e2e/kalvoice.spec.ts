@@ -1,8 +1,8 @@
-import { type ChildProcess, execFileSync, spawn } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { type Browser, chromium, expect, type Page, test } from "@playwright/test";
+import { join } from "node:path";
+import { expect, type Page, test } from "@playwright/test";
+import { closeGracefully, EXE, launch, removeDir } from "./harness.ts";
 
 /**
  * KalVoice in the real app (native commands, the signal channel, SQLite ledger and
@@ -12,66 +12,13 @@ import { type Browser, chromium, expect, type Page, test } from "@playwright/tes
  * released. Set KALVOICE_E2E_MODEL to an installed `ggml-tiny.en.bin` to exercise the "model
  * installed" path without downloading it again.
  *
- * Provider quota is never used unless KALVOICE_E2E_REASONING=1: otherwise the suite first sets
- * KalVoice's reasoning to "on-device" (not available yet), so a request that needs reasoning is
- * refused before any provider session could start, whatever providers this machine has.
+ * This isolated profile has no local reasoning runtime. Requests needing it fail closed,
+ * remain uncounted, and never start a connected provider session.
  */
-const EXE = process.env.KALCODE_E2E_EXE ?? resolve(import.meta.dirname, "../../../../target/e2e/release/kalcode.exe");
-const PORT = Number(process.env.KALCODE_E2E_CDP_PORT ?? 9438);
 const MODEL = process.env.KALVOICE_E2E_MODEL;
 
 test.skip(process.platform !== "win32", "Real-app E2E drives WebView2 and runs on Windows.");
 test.skip(!existsSync(EXE), `Build the app first: ${EXE}`);
-
-interface Running {
-  child: ChildProcess;
-  browser: Browser;
-  page: Page;
-}
-
-const REASONING = process.env.KALVOICE_E2E_REASONING === "1";
-
-async function launch(dataDir: string): Promise<Running> {
-  const child = spawn(EXE, [], {
-    env: {
-      ...process.env,
-      KALCODE_DATA_DIR: dataDir,
-      WEBVIEW2_USER_DATA_FOLDER: join(dataDir, "webview"),
-      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${PORT}`,
-    },
-    stdio: "ignore",
-  });
-  const deadline = Date.now() + 30_000;
-  let browser: Browser | null = null;
-  while (!browser) {
-    try {
-      browser = await chromium.connectOverCDP(`http://127.0.0.1:${PORT}`);
-    } catch (error) {
-      if (Date.now() > deadline) throw error;
-      await new Promise((r) => setTimeout(r, 250));
-    }
-  }
-  const deadlineDb = Date.now() + 10_000;
-  while (!existsSync(join(dataDir, "kalcode.db"))) {
-    if (Date.now() > deadlineDb) {
-      await browser.close();
-      execFileSync("taskkill", ["/F", "/PID", String(child.pid)]);
-      throw new Error(`${EXE} did not use the isolated data folder; build it with --features e2e`);
-    }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-  const context = browser.contexts()[0];
-  if (!context) throw new Error("No WebView2 browser context");
-  let page = context.pages().find((p) => !p.url().startsWith("devtools"));
-  while (!page) page = await context.waitForEvent("page");
-  return { child, browser, page };
-}
-
-async function close(app: Running) {
-  await app.browser.close().catch(() => undefined);
-  execFileSync("taskkill", ["/PID", String(app.child.pid)]);
-  if (app.child.exitCode === null) await new Promise<void>((r) => app.child.once("exit", () => r()));
-}
 
 const widget = (page: Page) => page.getByRole("region", { name: "KalVoice widget" });
 const shown = (page: Page) => widget(page).locator(':scope > :not([role="status"])');
@@ -134,9 +81,7 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
     await expect(page.getByRole("heading", { level: 1, name: "Settings" })).toBeVisible();
     await expect(shown(page).getByText("Opened Settings.")).toBeVisible();
 
-    if (!REASONING) {
-      await invoke(page, "kalvoice_preferences_update", { patch: { intelligence: { kind: "local" } } });
-    }
+    await invoke(page, "kalvoice_preferences_update", { patch: { intelligence: { kind: "local" } } });
 
     // Push-to-talk routing in the native core: a confident command runs and counts; words
     // spoken into a text box are dictation and never count; anything else is a request.
@@ -148,17 +93,8 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
     const request = await talk(page, "plan the migration to postgres", "none");
     expect(request.route).toBe("request");
 
-    // Needs reasoning: runs on the user's own signed-in provider (their quota), so only when
-    // explicitly allowed; otherwise reasoning is set to on-device, which isn't available yet.
-    if (REASONING) {
-      await page.getByRole("button", { name: "KalVoice", exact: true }).click();
-      await input.fill("Summarize what KalVoice can do in one sentence");
-      await input.press("Enter");
-      await expect(shown(page).getByText(/^(Done|Error)$/)).toBeVisible({ timeout: 150_000 });
-    } else {
-      expect(request.response?.outcome.kind).toBe("needs_provider");
-      expect(request.response?.counted).toBe(false);
-    }
+    expect(request.response?.outcome).toMatchObject({ kind: "failed", code: "local_reasoning_unavailable" });
+    expect(request.response?.counted).toBe(false);
 
     // Each utterance's route is recorded (ids and the route only, never the words).
     const routed = await invoke<{ events: { payload: { requestId: string; outcome: string } }[] }>(
@@ -260,7 +196,7 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
     await page.getByRole("menuitemradio", { name: "Top left" }).click();
     await expect(widget(page)).toHaveAttribute("data-anchor", "top_left");
     await page.waitForTimeout(600);
-    await close(app);
+    await closeGracefully(app);
 
     app = await launch(dataDir);
     page = app.page;
@@ -268,20 +204,18 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
     await expect(widget(page)).toHaveAttribute("data-anchor", "top_left");
     await page.getByRole("button", { name: "KalVoice", exact: true }).click();
     // The typed command, the spoken one and the approval request counted; dictation and the
-    // request without a provider didn't.
-    await expect(
-      page.locator("#kalvoice-status").getByText(REASONING ? /^Used [34] of 250 · resets/ : /^Used 3 of 250 · resets/),
-    ).toBeVisible();
+    // request without a local runtime did not.
+    await expect(page.locator("#kalvoice-status").getByText(/^3 \/ 75 used · 72 remaining · renews/)).toBeVisible();
     await page.getByRole("button", { name: "Dashboard" }).click();
     const activity = page.getByRole("region", { name: "Activity" });
     await expect(activity.getByText("KalVoice ran a command").first()).toBeVisible();
     await expect(activity.getByText("KalVoice heard a command").first()).toBeVisible();
     // Activity never shows what was said.
     await expect(activity.getByText(/unit test for the parser/i)).toHaveCount(0);
-    await close(app);
+    await closeGracefully(app);
   } finally {
     try {
-      rmSync(dataDir, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 });
+      removeDir(dataDir);
     } catch {
       // WebView2 can hold its folder briefly after exit; the OS temp cleanup removes it.
     }

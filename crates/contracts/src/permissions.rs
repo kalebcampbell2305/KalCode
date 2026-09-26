@@ -261,6 +261,38 @@ pub enum ActionKind {
         fix_code: String,
         target: String,
     },
+    /// Authorize resolving one exact, normalized API Inspector host. This authority contains no
+    /// destination claim: a fresh [`ActionKind::UtilityHttp`] approval binds the pinned result.
+    UtilityDnsResolve {
+        operation_id: String,
+        host: String,
+    },
+    /// A sealed Utility Dock HTTP hop. The URL path, query, headers and body remain only in the
+    /// authenticated native runtime; review exposes the canonical origin and bounded shape.
+    UtilityHttp {
+        operation_id: String,
+        method: UtilityHttpMethod,
+        origin: String,
+        destination: UtilityHttpDestination,
+        redirect_hop: u8,
+        body_bytes: u64,
+    },
+    /// A sealed process signal bound to the creation identity of a retained OS process handle.
+    UtilityProcessSignal {
+        operation_id: String,
+        pid: u32,
+        process_start_time: String,
+        process_name: String,
+        signal: ProcessSignalKind,
+    },
+    /// A sealed SQLite write bound to a retained database identity. Raw SQL is never persisted in
+    /// the permission request.
+    UtilitySqliteWrite {
+        operation_id: String,
+        database_id: String,
+        database_name: String,
+        statement: UtilitySqliteOperation,
+    },
     /// Open new agent threads (KalVoice "create three Codex threads"). Added in CA-1.
     CreateThreads {
         provider_id: ProviderId,
@@ -271,6 +303,42 @@ pub enum ActionKind {
     ResumeThreads {
         scope: ThreadScope,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "UPPERCASE")]
+#[ts(export)]
+pub enum UtilityHttpMethod {
+    Get,
+    Head,
+    Post,
+    Put,
+    Patch,
+    Delete,
+    Options,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum UtilityHttpDestination {
+    Loopback,
+    Private,
+    External,
+    LinkLocal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum UtilitySqliteOperation {
+    Insert,
+    Update,
+    Delete,
+    Replace,
+    Create,
+    Drop,
+    Alter,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
@@ -790,5 +858,43 @@ mod tests {
         .expect("json");
         assert_eq!(memory["scope"]["kind"], "workspace");
         assert_eq!(memory["scope"]["workspaceId"], "w");
+    }
+
+    #[test]
+    fn utility_effects_have_typed_non_secret_review_fields() {
+        let dns = serde_json::to_value(ActionKind::UtilityDnsResolve {
+            operation_id: "018f8d7c-91b2-7c3d-8e4f-1234567890ab".into(),
+            host: "api.example.test".into(),
+        })
+        .expect("dns json");
+        assert_eq!(dns["kind"], "utility_dns_resolve");
+        assert_eq!(dns["host"], "api.example.test");
+        assert!(dns.get("destination").is_none());
+
+        let http = serde_json::to_value(ActionKind::UtilityHttp {
+            operation_id: "018f8d7c-a1b2-7c3d-8e4f-1234567890ab".into(),
+            method: UtilityHttpMethod::Post,
+            origin: "https://api.example.test/".into(),
+            destination: UtilityHttpDestination::External,
+            redirect_hop: 2,
+            body_bytes: 128,
+        })
+        .expect("http json");
+        assert_eq!(http["kind"], "utility_http");
+        assert_eq!(http["method"], "POST");
+        assert_eq!(http["destination"], "external");
+        assert!(http.get("body").is_none());
+        assert!(http.get("sql").is_none());
+
+        let sqlite = serde_json::to_value(ActionKind::UtilitySqliteWrite {
+            operation_id: "018f8d7c-b1b2-7c3d-8e4f-1234567890ab".into(),
+            database_id: "018f8d7c-c1b2-7c3d-8e4f-1234567890ab".into(),
+            database_name: "work.db".into(),
+            statement: UtilitySqliteOperation::Update,
+        })
+        .expect("sqlite json");
+        assert_eq!(sqlite["kind"], "utility_sqlite_write");
+        assert_eq!(sqlite["statement"], "update");
+        assert!(sqlite.get("sql").is_none());
     }
 }

@@ -13,7 +13,8 @@ use kalcode_contracts::events::EventPayload;
 use kalcode_core::time::now_rfc3339;
 
 use crate::catalog;
-use crate::detect::{DetectEnv, Detected, DetectionSpec, detect};
+use crate::detect::{DetectEnv, Detected, DetectionSpec, detect, detect_guarded};
+use crate::guardian::ProviderProbeGuardian;
 use crate::health::HealthMonitor;
 use crate::model::ProviderStatus;
 
@@ -23,6 +24,7 @@ pub struct ProviderRegistry {
     statuses: Mutex<Vec<ProviderStatus>>,
     /// Serializes detections so two "Check again" clicks never probe the same CLI in parallel.
     detecting: Mutex<()>,
+    probe_guardian: Option<ProviderProbeGuardian>,
     /// Provider Health, told about every detection (PH). Optional: detection works without it.
     health: OnceLock<Arc<HealthMonitor>>,
 }
@@ -32,8 +34,45 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl ProviderRegistry {
+    /// Unmanaged compatibility constructor retained for isolated library tests. Desktop/runtime
+    /// factories must use [`Self::new_guarded`].
     pub fn new(env: DetectEnv) -> Self {
         Self::with_specs(env, catalog::specs())
+    }
+
+    pub fn new_guarded(env: DetectEnv, probe_guardian: ProviderProbeGuardian) -> Self {
+        Self::with_specs_guarded(env, catalog::specs(), probe_guardian)
+    }
+
+    /// Machine-level discovery is installation-only. Authentication belongs to a selected
+    /// managed account, never to whichever account the standalone CLI happens to use.
+    /// Unmanaged compatibility constructor retained for isolated library tests. Desktop/runtime
+    /// factories must use [`Self::installation_only_guarded`].
+    pub fn installation_only(mut env: DetectEnv) -> Self {
+        env.vars = env
+            .provider_env(&crate::env::EnvPolicy::BASE)
+            .into_iter()
+            .collect();
+        let mut specs = catalog::specs();
+        for spec in &mut specs {
+            spec.auth = None;
+        }
+        Self::with_specs(env, specs)
+    }
+
+    pub fn installation_only_guarded(
+        mut env: DetectEnv,
+        probe_guardian: ProviderProbeGuardian,
+    ) -> Self {
+        env.vars = env
+            .provider_env(&crate::env::EnvPolicy::BASE)
+            .into_iter()
+            .collect();
+        let mut specs = catalog::specs();
+        for spec in &mut specs {
+            spec.auth = None;
+        }
+        Self::with_specs_guarded(env, specs, probe_guardian)
     }
 
     /// For tests: a registry over custom detection specs (ids must match catalog entries).
@@ -43,7 +82,25 @@ impl ProviderRegistry {
             specs,
             statuses: Mutex::new(catalog::statuses()),
             detecting: Mutex::new(()),
+            probe_guardian: None,
             health: OnceLock::new(),
+        }
+    }
+
+    fn with_specs_guarded(
+        env: DetectEnv,
+        specs: Vec<DetectionSpec>,
+        probe_guardian: ProviderProbeGuardian,
+    ) -> Self {
+        let mut registry = Self::with_specs(env, specs);
+        registry.probe_guardian = Some(probe_guardian);
+        registry
+    }
+
+    fn detect(&self, spec: &DetectionSpec) -> Detected {
+        match &self.probe_guardian {
+            Some(guardian) => detect_guarded(spec, &self.env, guardian),
+            None => detect(spec, &self.env),
         }
     }
 
@@ -60,7 +117,7 @@ impl ProviderRegistry {
             return Vec::new();
         };
         let _serialized = lock(&self.detecting);
-        let detected = detect(spec, &self.env);
+        let detected = self.detect(spec);
         let mut statuses = lock(&self.statuses);
         let Some(status) = statuses.iter_mut().find(|s| &s.id == id) else {
             return Vec::new();
@@ -107,7 +164,14 @@ impl ProviderRegistry {
                 .iter()
                 .map(|spec| {
                     let env = &self.env;
-                    (spec, scope.spawn(move || detect(spec, env)))
+                    let guardian = self.probe_guardian.as_ref();
+                    (
+                        spec,
+                        scope.spawn(move || match guardian {
+                            Some(guardian) => detect_guarded(spec, env, guardian),
+                            None => detect(spec, env),
+                        }),
+                    )
                 })
                 .collect();
             handles
@@ -246,7 +310,7 @@ mod tests {
 
     #[test]
     fn list_starts_with_every_provider_unchecked() {
-        let registry = ProviderRegistry::new(DetectEnv::default());
+        let registry = ProviderRegistry::with_specs(DetectEnv::default(), catalog::specs());
         let ids: Vec<_> = registry
             .list()
             .into_iter()

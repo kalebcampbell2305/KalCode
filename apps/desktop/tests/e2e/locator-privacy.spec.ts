@@ -2,7 +2,14 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { closeGracefully, EXE, launch, processesMatching, removeDir } from "./harness.ts";
+import {
+  closeGracefully,
+  EXE,
+  launch,
+  processesMatching,
+  removeDir,
+  writeManagedFakeProviderConfig,
+} from "./harness.ts";
 
 // Real IPC, temporary stores and fake providers: no inference or user data.
 test.skip(process.platform !== "win32", "Real-app E2E drives WebView2 and runs on Windows.");
@@ -38,7 +45,7 @@ test("message search opt-out is immediate and survives restart", async () => {
   mkdirSync(bin);
   copyFileSync(FAKE, join(bin, "codex.exe"));
   copyFileSync(FAKE, join(bin, "gemini.exe"));
-  writeFileSync(join(bin, "fake-provider.json"), "{}");
+  writeManagedFakeProviderConfig(bin);
 
   try {
     const app = await launch(dataDir, {
@@ -58,7 +65,8 @@ test("message search opt-out is immediate and survives restart", async () => {
       expect(status?.detection?.displayPath ?? "", `${id} must be the fake`).toContain(basename(root));
     }
     const codexStatus = statuses.find((s) => s.id === "codex");
-    expect(codexStatus?.detection?.auth).toBe("authenticated");
+    // Installation discovery must not inspect the standalone provider's account.
+    expect(codexStatus?.detection?.auth).toBe("unknown");
     expect(statuses.find((s) => s.id === "gemini-cli")?.detection?.auth).toBe("unknown");
 
     const workspaces = await invoke<{ id: string }[]>(page, "workspace_list");

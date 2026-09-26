@@ -56,7 +56,7 @@ function useViewport(): Size {
 /**
  * KalVoice's voice widget, floating over the workspace. Compact by default — the orb,
  * KALVOICE, and the state beside a status dot. It opens up on its own only when there is
- * something to show (the live transcript while you talk, a result, an approval, an error) and
+ * something to show (the live transcript while you talk, a result, or an error) and
  * settles back afterwards. Draggable within the window, docks to edges and corners, collapses
  * to the orb, and hides; the push-to-talk key brings it back.
  */
@@ -103,11 +103,7 @@ export function FloatingAssistant() {
       : null;
   const compactHeight = useRef(0);
   const detailShown =
-    state.phase === "listening" ||
-    state.phase === "transcribing" ||
-    state.phase === "done" ||
-    state.phase === "error" ||
-    state.phase === "waiting_for_permission";
+    state.phase === "listening" || state.phase === "transcribing" || state.phase === "done" || state.phase === "error";
   if (panel.view !== "expanded" && !detailShown && size.height > 0) compactHeight.current = size.height;
   const reserving = panel.visible && status !== null && slotEdge !== null && slots !== null;
   const bandHeight = Math.ceil((compactHeight.current || 44) + 2 * VOICE_SLOT_GAP);
@@ -207,11 +203,15 @@ export function FloatingAssistant() {
   const growsDown = panel.anchor.startsWith("top");
   const phase = state.phase;
   const listening = phase === "listening" || phase === "transcribing";
-  const showsDetail = listening || phase === "done" || phase === "error" || phase === "waiting_for_permission";
+  const showsDetail = listening || phase === "done" || phase === "error";
   const fixAction =
     state.code === "needs_provider" ? (
       <Button size="sm" onClick={() => navigate("providers")}>
         Open Providers
+      </Button>
+    ) : state.code === "local_reasoning_unavailable" ? (
+      <Button size="sm" onClick={() => navigate("settings")}>
+        Open KalVoice settings
       </Button>
     ) : state.code === "model_not_installed" || state.code === "speech_engine_unavailable" ? (
       <Button size="sm" onClick={() => navigate("settings")}>
@@ -353,20 +353,6 @@ export function FloatingAssistant() {
                         Type it instead
                       </Button>
                     ) : null}
-                  </div>
-                ) : null}
-                {phase === "waiting_for_permission" ? (
-                  <div className={styles.result}>
-                    {state.lastTalk?.text ? <p className={styles.transcript}>“{state.lastTalk.text}”</p> : null}
-                    <p className={styles.message}>{state.message}</p>
-                    <div className={styles.actions}>
-                      <Button size="sm" variant="ghost" onClick={() => void kv.decideApproval("deny")}>
-                        Deny
-                      </Button>
-                      <Button size="sm" variant="primary" onClick={() => void kv.decideApproval("approve_once")}>
-                        Approve once
-                      </Button>
-                    </div>
                   </div>
                 ) : null}
                 {phase === "error" && state.message ? (

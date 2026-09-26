@@ -6,6 +6,7 @@
 import type { PaneContent, PaneDirection, PaneLayout, PaneNode, SplitAxis } from "@kalcode/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  activateTab,
   addTab,
   applyPreset,
   applyShape,
@@ -13,8 +14,8 @@ import {
   type ClosedPane,
   closePane,
   contentKey,
-  type DropZone,
   DEFAULT_GEOMETRY,
+  type DropZone,
   dockPane,
   evenDivider,
   evenOut,
@@ -22,8 +23,8 @@ import {
   findLeaf,
   leaves,
   makeLeaf,
-  moveTab,
   movePane,
+  moveTab,
   neighbourPane,
   paneCount,
   removeContents,
@@ -35,7 +36,6 @@ import {
   splitPane,
   swapPanes,
   undock,
-  activateTab,
   validateLayout,
 } from "./model.ts";
 

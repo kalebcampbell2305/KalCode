@@ -159,6 +159,9 @@ pub struct InteractiveSupport {
 pub struct SessionConfig {
     pub thread_id: String,
     pub workspace_id: String,
+    /// Stable KalCode provider-account metadata id. Credentials remain provider-managed.
+    #[serde(default)]
+    pub provider_account_id: Option<String>,
     pub working_directory: String,
     pub model: Option<String>,
     pub permission_mode: PermissionMode,
@@ -360,5 +363,20 @@ mod tests {
             Box::new(move |e: AgentEvent| sink_seen.lock().expect("lock").push(e));
         sink.emit(AgentEvent::TurnCompleted { ok: true });
         assert_eq!(seen.lock().expect("lock").len(), 1);
+    }
+
+    #[test]
+    fn legacy_session_config_decodes_without_an_account_selection() {
+        let config: SessionConfig = serde_json::from_value(serde_json::json!({
+            "threadId": "thread",
+            "workspaceId": "workspace",
+            "workingDirectory": "C:/work",
+            "model": null,
+            "permissionMode": "approve",
+            "resumeSessionId": null,
+            "secretRef": null
+        }))
+        .expect("legacy config");
+        assert_eq!(config.provider_account_id, None);
     }
 }

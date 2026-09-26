@@ -78,6 +78,7 @@ impl FakeInstall {
         SessionConfig {
             thread_id: kalcode_contracts::ids::new_id(),
             workspace_id: kalcode_contracts::ids::new_id(),
+            provider_account_id: None,
             working_directory: self.work.path().display().to_string(),
             model: Some("sonnet".into()),
             permission_mode: mode,
@@ -89,6 +90,104 @@ impl FakeInstall {
 
 fn provider(fake: &FakeInstall) -> ClaudeCodeProvider {
     provider_with_ack(fake, Duration::from_secs(2))
+}
+
+#[test]
+fn installation_registry_never_probes_the_standalone_account() {
+    let fake = FakeInstall::new("claude", json!({"authExit": 0}));
+    let registry = ProviderRegistry::installation_only(fake.env());
+    let (statuses, _) = registry.detect_all();
+    let claude = statuses
+        .iter()
+        .find(|s| s.id.as_str() == "claude-code")
+        .expect("Claude");
+    let detection = claude.detection.as_ref().expect("detection");
+    assert_eq!(detection.state, DetectionState::Installed);
+    assert_eq!(detection.auth, AuthState::Unknown);
+    let runs = std::fs::read_to_string(fake.dir.path().join("runs.log")).expect("runs");
+    let invocations: Vec<Value> = runs
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("run"))
+        .collect();
+    assert_eq!(invocations.len(), 1);
+    assert_eq!(invocations[0]["args"], json!(["--version"]));
+}
+
+#[test]
+fn managed_claude_requires_an_account_and_holds_its_profile_until_session_cleanup() {
+    let fake = FakeInstall::new("claude", json!({"version": "2.1.282 (Claude Code)"}));
+    let storage = tempfile::tempdir().expect("storage");
+    let profiles = kalcode_providers::managed::ManagedProfiles::new(storage.path().join("managed"))
+        .expect("profiles");
+    let adapter = provider(&fake).with_managed_profiles(profiles.clone());
+    assert!(matches!(
+        adapter.start_session(
+            fake.config(PermissionMode::Plan, None),
+            Box::new(|_: AgentEvent| {})
+        ),
+        Err(ProviderError::NotAuthenticated)
+    ));
+    let account = kalcode_contracts::ids::new_id();
+    let mut config = fake.config(PermissionMode::Plan, None);
+    config.provider_account_id = Some(account.clone());
+    assert!(
+        provider(&fake)
+            .start_session(config.clone(), Box::new(|_: AgentEvent| {}))
+            .is_err()
+    );
+    let (tx, rx) = mpsc::channel();
+    let session = adapter
+        .start_session(
+            config,
+            Box::new(move |event: AgentEvent| {
+                let _ = tx.send(event);
+            }),
+        )
+        .expect("managed session");
+    session
+        .send(AgentInput::Text {
+            text: "fixture prompt".into(),
+        })
+        .expect("send to fake provider");
+    let _ = until(&rx, |e| matches!(e, AgentEvent::SessionStarted { .. }));
+    let names: Vec<String> = serde_json::from_str(
+        &std::fs::read_to_string(fake.dir.path().join("last-env.json")).expect("env names"),
+    )
+    .expect("json");
+    assert!(names.iter().any(|n| n == "CLAUDE_CONFIG_DIR"));
+    assert!(!names.iter().any(|n| n == "ANTHROPIC_API_KEY"));
+    assert!(
+        profiles
+            .acquire_sign_in_lease("claude-code", &account)
+            .is_err()
+    );
+    session.terminate().expect("terminate");
+    drop(session);
+    let _lease = profiles
+        .acquire_sign_in_lease("claude-code", &account)
+        .expect("profile released");
+}
+
+#[test]
+fn managed_claude_rejects_an_unreviewed_version_before_session_launch() {
+    let fake = FakeInstall::new("claude", json!({"version": "2.1.300 (Claude Code)"}));
+    let storage = tempfile::tempdir().expect("storage");
+    let profiles = kalcode_providers::managed::ManagedProfiles::new(storage.path().join("managed"))
+        .expect("profiles");
+    let adapter = provider(&fake).with_managed_profiles(profiles);
+    let mut config = fake.config(PermissionMode::Plan, None);
+    config.provider_account_id = Some(kalcode_contracts::ids::new_id());
+
+    let error = match adapter.start_session(config, Box::new(|_: AgentEvent| {})) {
+        Ok(_) => panic!("an unreviewed managed Claude version must not launch"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("certified Claude Code 2.1.282"));
+    let runs = std::fs::read_to_string(fake.dir.path().join("runs.log")).expect("runs");
+    assert!(
+        !runs.lines().any(|line| line.contains("--input-format")),
+        "the session process must not start: {runs}"
+    );
 }
 
 fn provider_with_ack(fake: &FakeInstall, interrupt_ack: Duration) -> ClaudeCodeProvider {
@@ -150,19 +249,25 @@ fn text(t: &str) -> AgentInput {
     AgentInput::Text { text: t.into() }
 }
 
+#[cfg(windows)]
 fn process_alive(pid: u32) -> bool {
-    if cfg!(windows) {
-        let out = std::process::Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
-            .output()
-            .expect("tasklist");
-        String::from_utf8_lossy(&out.stdout).contains(&pid.to_string())
-    } else {
-        std::process::Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .status()
-            .is_ok_and(|s| s.success())
-    }
+    use std::os::windows::process::CommandExt;
+
+    let mut command = std::process::Command::new("tasklist");
+    command.creation_flags(0x0800_0000);
+    let out = command
+        .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+        .output()
+        .expect("tasklist");
+    String::from_utf8_lossy(&out.stdout).contains(&pid.to_string())
+}
+
+#[cfg(not(windows))]
+fn process_alive(pid: u32) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .status()
+        .is_ok_and(|s| s.success())
 }
 
 fn wait_for(condition: impl Fn() -> bool) -> bool {
@@ -717,6 +822,7 @@ fn real_claude_session_smoke() {
             SessionConfig {
                 thread_id: kalcode_contracts::ids::new_id(),
                 workspace_id: kalcode_contracts::ids::new_id(),
+                provider_account_id: None,
                 working_directory: work.path().display().to_string(),
                 model: None,
                 permission_mode: PermissionMode::Plan,

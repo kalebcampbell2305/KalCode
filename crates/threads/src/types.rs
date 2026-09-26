@@ -16,6 +16,9 @@ use ts_rs::TS;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateThread {
     pub provider_id: String,
+    pub provider_account_id: Option<String>,
+    /// Validated owner-visible label snapshot for `provider_account_id`.
+    pub account_label: Option<String>,
     pub workspace_id: String,
     pub model: Option<String>,
     pub permission_mode: PermissionMode,
@@ -28,6 +31,9 @@ pub struct CreateThread {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateIdleThread {
     pub provider_id: String,
+    pub provider_account_id: Option<String>,
+    /// Validated owner-visible label snapshot for `provider_account_id`.
+    pub account_label: Option<String>,
     pub workspace_id: String,
     pub model: Option<String>,
     pub permission_mode: PermissionMode,

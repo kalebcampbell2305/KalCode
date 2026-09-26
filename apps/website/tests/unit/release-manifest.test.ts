@@ -32,7 +32,7 @@ describe("release manifest (tooling ↔ worker)", () => {
   it("published manifests say the installer is unsigned and list macOS and Linux as unavailable", () => {
     expect(published.latest.platforms.map((p: { signed: boolean }) => p.signed)).toEqual([false]);
     expect(published.unavailable.map((u: { os: string }) => u.os)).toEqual(["macos", "linux"]);
-    expect(published.latest.notesUrl).toBe(`/changelog#${notesAnchor("0.1.0")}`);
+    expect(published.latest.notesUrl).toBe(`/updates#${notesAnchor("0.1.0")}`);
     expect(notesAnchor("0.1.0")).toBe("release-0-1-0");
   });
 

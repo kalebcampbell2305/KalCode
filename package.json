@@ -28,6 +28,8 @@
     "deny": "cargo deny check",
     "check:releases": "node tooling/release/check-manifest.mjs",
     "release:build": "node tooling/release/build-windows.mjs",
+    "release:updater-key:init": "node tooling/release/updater-key.mjs init",
+    "release:updater-key:status": "node tooling/release/updater-key.mjs status",
     "release:verify": "node tooling/release/verify-windows.mjs",
     "release:publish": "node tooling/release/publish.mjs",
     "release:publish:dry-run": "node tooling/release/publish.mjs --dry-run",

@@ -11,9 +11,10 @@ use std::sync::Arc;
 use common::{Harness, command, open_core};
 use kalcode_contracts::ids::new_id;
 use kalcode_contracts::permissions::{
-    ActionKind, ApprovalDecision as D, ApprovalStatus, GitOperation, PermissionGate,
-    PermissionMode as M, PermissionProfile, PermissionRule, PermissionScope as S, PolicyEffect,
-    RuleEffect,
+    ActionKind, ActionOrigin, ApprovalDecision as D, ApprovalStatus, GitOperation,
+    NormalizedAction, PermissionGate, PermissionMode as M, PermissionProfile, PermissionRule,
+    PermissionScope as S, PolicyEffect, ProcessSignalKind, RuleEffect, UtilityHttpDestination,
+    UtilityHttpMethod, UtilitySqliteOperation,
 };
 use kalcode_core::db;
 use kalcode_permissions::{Actor, PermissionService, profiles, store};
@@ -1074,7 +1075,14 @@ fn migrations_keep_permissions_at_v4() {
             (8, "context"),
             (9, "workspace_ui"),
             (10, "notifications"),
-            (11, "rail_locator")
+            (11, "rail_locator"),
+            (12, "provider_accounts"),
+            (13, "kalvoice_request_lifecycle"),
+            (14, "utility_dock"),
+            (15, "time_machine"),
+            (16, "doctor"),
+            (17, "utility_authority"),
+            (18, "context_delivery")
         ]
     );
 }
@@ -1155,6 +1163,25 @@ fn kalvoice_action(
         origin: Some(kalcode_contracts::permissions::ActionOrigin::KalVoice {
             request_id: new_id(),
         }),
+    }
+}
+
+fn doctor_action(h: &Harness) -> kalcode_contracts::permissions::NormalizedAction {
+    let run_id = new_id();
+    let fix_code = "file.gitignore_env".to_owned();
+    let finding_version = new_id();
+    kalcode_contracts::permissions::NormalizedAction {
+        id: new_id(),
+        thread_id: String::new(),
+        workspace_id: h.workspace_id.clone(),
+        provider_id: kalcode_contracts::agent::ProviderId::new(""),
+        action: ActionKind::DoctorFix {
+            fix_code: fix_code.clone(),
+            target: format!("workspace:.gitignore@{finding_version}"),
+        },
+        summary: "Apply the reviewed Environment Doctor .gitignore fix".into(),
+        requested_at: "2026-09-24T00:00:00.000Z".into(),
+        origin: Some(kalcode_contracts::permissions::ActionOrigin::Doctor { run_id, fix_code }),
     }
 }
 
@@ -1312,4 +1339,400 @@ fn request_for_origin_refuses_thread_and_unsupported_origins() {
         .expect("resume");
     assert_eq!(resume.decision.scopes, vec![S::ThreadStart]);
     assert!(resume.approval.is_some());
+}
+
+#[test]
+fn doctor_actions_are_approve_once_and_exactly_bound() {
+    let h = Harness::new();
+    let action = doctor_action(&h);
+    let outcome = h
+        .service
+        .request_for_origin(action.clone())
+        .expect("evaluate Doctor fix");
+    assert_eq!(outcome.decision.effect, PolicyEffect::Ask);
+    assert_eq!(outcome.decision.scopes, vec![S::TerminalExecute]);
+    let request = outcome.approval.expect("approval filed");
+    assert_eq!(request.allowed_decisions, vec![D::Deny, D::ApproveOnce]);
+    assert_eq!(request.permission_mode, M::Approve);
+    assert_eq!(request.action, action);
+
+    let pending = h
+        .service
+        .verify_doctor_approval(&request.id, &action)
+        .expect("exact pending approval");
+    assert_eq!(pending.status, ApprovalStatus::Pending);
+
+    h.service
+        .decide(&request.id, D::ApproveOnce, Actor::User)
+        .expect("user approves once");
+    let approved = h
+        .service
+        .verify_doctor_approval(&request.id, &action)
+        .expect("exact approved action");
+    assert_eq!(approved.status, ApprovalStatus::Approved);
+    assert_eq!(approved.resolved_decision, Some(D::ApproveOnce));
+
+    let mut swapped_version = action.clone();
+    if let ActionKind::DoctorFix { target, .. } = &mut swapped_version.action {
+        *target = format!("workspace:.gitignore@{}", new_id());
+    }
+    assert_eq!(
+        h.service
+            .verify_doctor_approval(&request.id, &swapped_version)
+            .expect_err("finding version is immutable")
+            .code,
+        "approval_object_changed"
+    );
+
+    let mut swapped_workspace = action.clone();
+    swapped_workspace.workspace_id = new_id();
+    assert_eq!(
+        h.service
+            .verify_doctor_approval(&request.id, &swapped_workspace)
+            .expect_err("workspace is immutable")
+            .code,
+        "approval_object_changed"
+    );
+
+    h.advance(kalcode_permissions::DOCTOR_APPROVAL_TTL_MS + 1);
+    assert_eq!(
+        h.service
+            .verify_doctor_approval(&request.id, &action)
+            .expect_err("one-time Doctor approval expires")
+            .code,
+        "approval_expired"
+    );
+}
+
+#[test]
+fn doctor_origin_rejects_non_catalog_or_mismatched_actions() {
+    let h = Harness::new();
+    let mut not_a_fix = doctor_action(&h);
+    not_a_fix.action = create_threads();
+    assert_eq!(
+        h.service
+            .request_for_origin(not_a_fix)
+            .expect_err("Doctor can request only a fixed-catalog fix")
+            .code,
+        "invalid_doctor_action"
+    );
+
+    let mut mismatched_code = doctor_action(&h);
+    if let ActionKind::DoctorFix { fix_code, .. } = &mut mismatched_code.action {
+        *fix_code = "another.fix".into();
+    }
+    assert_eq!(
+        h.service
+            .request_for_origin(mismatched_code)
+            .expect_err("origin and action must name the same fix")
+            .code,
+        "invalid_doctor_action"
+    );
+}
+
+fn utility_http_action() -> NormalizedAction {
+    let operation_id = new_id();
+    NormalizedAction {
+        id: operation_id.clone(),
+        thread_id: String::new(),
+        workspace_id: String::new(),
+        provider_id: kalcode_contracts::agent::ProviderId::new(""),
+        action: ActionKind::UtilityHttp {
+            operation_id,
+            method: UtilityHttpMethod::Post,
+            origin: "https://api.example.test/".into(),
+            destination: UtilityHttpDestination::External,
+            redirect_hop: 0,
+            body_bytes: 128,
+        },
+        summary: "POST to api.example.test".into(),
+        requested_at: "2026-09-25T18:30:00.000Z".into(),
+        origin: Some(ActionOrigin::Utility {
+            tool: "api_inspector".into(),
+        }),
+    }
+}
+
+fn utility_dns_action() -> NormalizedAction {
+    let operation_id = new_id();
+    NormalizedAction {
+        id: operation_id.clone(),
+        thread_id: String::new(),
+        workspace_id: String::new(),
+        provider_id: kalcode_contracts::agent::ProviderId::new(""),
+        action: ActionKind::UtilityDnsResolve {
+            operation_id,
+            host: "api.example.test".into(),
+        },
+        summary: "Resolve api.example.test for API Inspector".into(),
+        requested_at: "2026-09-25T18:30:00.000Z".into(),
+        origin: Some(ActionOrigin::Utility {
+            tool: "api_inspector".into(),
+        }),
+    }
+}
+
+fn utility_process_action(h: &Harness) -> NormalizedAction {
+    let operation_id = new_id();
+    NormalizedAction {
+        id: operation_id.clone(),
+        thread_id: String::new(),
+        workspace_id: h.workspace_id.clone(),
+        provider_id: kalcode_contracts::agent::ProviderId::new(""),
+        action: ActionKind::UtilityProcessSignal {
+            operation_id,
+            pid: 42,
+            process_start_time: "133713371337".into(),
+            process_name: "node.exe".into(),
+            signal: ProcessSignalKind::Terminate,
+        },
+        summary: "Stop node.exe (process 42)".into(),
+        requested_at: "2026-09-25T18:30:00.000Z".into(),
+        origin: Some(ActionOrigin::Utility {
+            tool: "processes".into(),
+        }),
+    }
+}
+
+fn utility_sqlite_action(h: &Harness) -> NormalizedAction {
+    let operation_id = new_id();
+    NormalizedAction {
+        id: operation_id.clone(),
+        thread_id: String::new(),
+        workspace_id: h.workspace_id.clone(),
+        provider_id: kalcode_contracts::agent::ProviderId::new(""),
+        action: ActionKind::UtilitySqliteWrite {
+            operation_id,
+            database_id: new_id(),
+            database_name: "work.db".into(),
+            statement: UtilitySqliteOperation::Update,
+        },
+        summary: "Update work.db".into(),
+        requested_at: "2026-09-25T18:30:00.000Z".into(),
+        origin: Some(ActionOrigin::Utility {
+            tool: "sqlite".into(),
+        }),
+    }
+}
+
+#[test]
+fn utility_fixed_catalog_requests_are_exact_and_approve_once() {
+    let h = Harness::new();
+    for action in [
+        utility_dns_action(),
+        utility_http_action(),
+        utility_process_action(&h),
+        utility_sqlite_action(&h),
+    ] {
+        let outcome = h
+            .service
+            .request_for_origin(action.clone())
+            .expect("fixed Utility action");
+        assert_eq!(outcome.decision.effect, PolicyEffect::Ask);
+        let approval = outcome.approval.expect("approval request");
+        assert_eq!(approval.allowed_decisions, vec![D::Deny, D::ApproveOnce]);
+        assert_eq!(approval.action, action);
+        assert_eq!(approval.grant_coverage, "only this request");
+    }
+}
+
+#[test]
+fn utility_catalog_rejects_tool_swaps_and_unsealed_generic_actions() {
+    let h = Harness::new();
+    let mut swapped = utility_http_action();
+    swapped.origin = Some(ActionOrigin::Utility {
+        tool: "processes".into(),
+    });
+    assert_eq!(
+        h.service
+            .request_for_origin(swapped)
+            .expect_err("tool/action mismatch")
+            .code,
+        "invalid_utility_action"
+    );
+
+    let mut noncanonical_dns = utility_dns_action();
+    if let ActionKind::UtilityDnsResolve { host, .. } = &mut noncanonical_dns.action {
+        *host = "API.Example.Test.".into();
+    }
+    assert_eq!(
+        h.service
+            .request_for_origin(noncanonical_dns)
+            .expect_err("DNS authority requires the exact normalized host")
+            .code,
+        "invalid_utility_action"
+    );
+
+    let operation_id = new_id();
+    let unsealed = NormalizedAction {
+        id: operation_id,
+        thread_id: String::new(),
+        workspace_id: String::new(),
+        provider_id: kalcode_contracts::agent::ProviderId::new(""),
+        action: ActionKind::Network {
+            host: "example.test".into(),
+            url: Some("https://example.test/".into()),
+        },
+        summary: "generic network action".into(),
+        requested_at: "2026-09-25T18:30:00.000Z".into(),
+        origin: Some(ActionOrigin::Utility {
+            tool: "api_inspector".into(),
+        }),
+    };
+    assert_eq!(
+        h.service
+            .request_for_origin(unsealed)
+            .expect_err("generic action cannot enter Utility catalog")
+            .code,
+        "invalid_utility_action"
+    );
+}
+
+#[test]
+fn utility_claim_is_exact_short_lived_and_non_replayable() {
+    let h = Harness::new();
+    let action = utility_dns_action();
+    let approval = h
+        .service
+        .request_for_origin(action.clone())
+        .expect("request")
+        .approval
+        .expect("approval");
+    h.service
+        .decide(&approval.id, D::ApproveOnce, Actor::User)
+        .expect("approve once");
+
+    let claimed = h
+        .service
+        .claim_utility_approval(&approval.id, &action, 7)
+        .expect("exact claim");
+    assert_eq!(claimed.id, approval.id);
+    assert_eq!(
+        h.service
+            .claim_utility_approval(&approval.id, &action, 7)
+            .expect_err("claim cannot replay")
+            .code,
+        "utility_approval_replayed"
+    );
+
+    let stored: (String, i64, String, String) = h
+        .core
+        .read(|connection| {
+            Ok(connection.query_row(
+                "SELECT operation_id, runtime_generation, tool, effect_kind
+                 FROM utility_approval_claims WHERE approval_id = ?1",
+                [&approval.id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )?)
+        })
+        .expect("durable claim");
+    assert_eq!(stored.0, action.id);
+    assert_eq!(stored.1, 7);
+    assert_eq!(stored.2, "api_inspector");
+    assert_eq!(stored.3, "http");
+
+    let expiring = utility_dns_action();
+    let expiring_approval = h
+        .service
+        .request_for_origin(expiring.clone())
+        .expect("request")
+        .approval
+        .expect("approval");
+    h.service
+        .decide(&expiring_approval.id, D::ApproveOnce, Actor::User)
+        .expect("approve once");
+    h.advance(kalcode_permissions::UTILITY_APPROVAL_TTL_MS + 1);
+    assert_eq!(
+        h.service
+            .claim_utility_approval(&expiring_approval.id, &expiring, 7)
+            .expect_err("short authority expires")
+            .code,
+        "approval_expired"
+    );
+}
+
+#[test]
+fn utility_claim_refuses_pending_denied_swapped_and_invalid_runtime_authority() {
+    let h = Harness::new();
+    let pending_action = utility_dns_action();
+    let pending = h
+        .service
+        .request_for_origin(pending_action.clone())
+        .expect("request")
+        .approval
+        .expect("approval");
+    assert_eq!(
+        h.service
+            .claim_utility_approval(&pending.id, &pending_action, 7)
+            .expect_err("pending is not authority")
+            .code,
+        "approval_pending"
+    );
+    h.service
+        .decide(&pending.id, D::Deny, Actor::User)
+        .expect("deny");
+    assert_eq!(
+        h.service
+            .claim_utility_approval(&pending.id, &pending_action, 7)
+            .expect_err("denied is not authority")
+            .code,
+        "approval_denied"
+    );
+
+    let action = utility_http_action();
+    let approval = h
+        .service
+        .request_for_origin(action.clone())
+        .expect("request")
+        .approval
+        .expect("approval");
+    h.service
+        .decide(&approval.id, D::ApproveOnce, Actor::User)
+        .expect("approve");
+    let mut swapped = action.clone();
+    if let ActionKind::UtilityHttp { destination, .. } = &mut swapped.action {
+        *destination = UtilityHttpDestination::Private;
+    }
+    assert_eq!(
+        h.service
+            .claim_utility_approval(&approval.id, &swapped, 7)
+            .expect_err("reviewed destination is immutable")
+            .code,
+        "approval_object_changed"
+    );
+    assert_eq!(
+        h.service
+            .claim_utility_approval(&approval.id, &action, u64::MAX)
+            .expect_err("runtime generation must fit canonical storage")
+            .code,
+        "invalid_utility_action"
+    );
+}
+
+#[test]
+fn utility_http_review_rejects_noncanonical_origin_and_body_mismatch() {
+    let h = Harness::new();
+    let mut path_origin = utility_http_action();
+    if let ActionKind::UtilityHttp { origin, .. } = &mut path_origin.action {
+        *origin = "https://api.example.test/private?token=hidden".into();
+    }
+    assert_eq!(
+        h.service
+            .request_for_origin(path_origin)
+            .expect_err("approval review stores no path or query")
+            .code,
+        "invalid_utility_action"
+    );
+
+    let mut get_with_body = utility_http_action();
+    if let ActionKind::UtilityHttp { method, .. } = &mut get_with_body.action {
+        *method = UtilityHttpMethod::Get;
+    }
+    assert_eq!(
+        h.service
+            .request_for_origin(get_with_body)
+            .expect_err("GET cannot claim a sealed body")
+            .code,
+        "invalid_utility_action"
+    );
 }

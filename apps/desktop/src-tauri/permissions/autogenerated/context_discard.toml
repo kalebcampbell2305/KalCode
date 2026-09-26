@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-context-discard"
+description = "Enables the context_discard command without any pre-configured scope."
+commands.allow = ["context_discard"]
+
+[[permission]]
+identifier = "deny-context-discard"
+description = "Denies the context_discard command without any pre-configured scope."
+commands.deny = ["context_discard"]

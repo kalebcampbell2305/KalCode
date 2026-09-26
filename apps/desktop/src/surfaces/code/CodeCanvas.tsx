@@ -1,4 +1,12 @@
-import type { PaneContent, PaneLayout, ShellOption, TerminalInfo, Workspace } from "@kalcode/protocol";
+import type {
+  PaneContent,
+  PaneLayout,
+  ProviderAccount,
+  ShellOption,
+  TerminalInfo,
+  ThreadSummary,
+  Workspace,
+} from "@kalcode/protocol";
 import {
   Badge,
   Button,
@@ -18,7 +26,7 @@ import {
   SquareTerminal,
   X,
 } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useMemo, useRef } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { usePaneFocusRequests } from "../../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
@@ -29,6 +37,7 @@ import type { PaneRenderContext, TabInfo } from "../../shell/panes/contentRegist
 import { registeredWidgets } from "../../shell/panes/contentRegistry.ts";
 import {
   allContents,
+  arrangeContents,
   contentKey,
   emptyLayout,
   findContent,
@@ -38,17 +47,37 @@ import {
   splitPane,
 } from "../../shell/panes/model.ts";
 import { PaneCanvas, type PaneHost } from "../../shell/panes/PaneCanvas.tsx";
-import type { PaneCommand, PaneCommandResult } from "../../shell/panes/paneCommands.ts";
+import {
+  applyPaneControl,
+  type PaneCommand,
+  type PaneCommandResult,
+  paneQueryCandidates,
+  providerPaneAliases,
+  selectDistinctProviderThreads,
+} from "../../shell/panes/paneCommands.ts";
 import { type PaneController, usePaneController } from "../../shell/panes/usePaneController.ts";
 import { useResolvedTheme } from "../../shell/useResolvedTheme.ts";
 import { useThreadsIntent } from "../threads/intent.tsx";
+import { UtilityDockRegistration } from "../utilities/UtilityDockPane.tsx";
 import styles from "./Code.module.css";
 import type { PaneProviderId } from "./panes/paneChannel.ts";
 import { paneStatus, providerIdentity } from "./panes/paneLabels.ts";
 import "./paneContents.tsx";
+import {
+  BrowserPane,
+  browserContent,
+  createBrowserBridge,
+  normalizeBrowserAddress,
+  persistableBrowserUrl,
+  updateBrowserUrl,
+} from "../browser/index.ts";
+import { resolveBrowserTarget } from "./browserTarget.ts";
+import { paneAccountLabel, resolvePaneAccount } from "./panes/PaneParts.tsx";
 import { ProviderPane } from "./panes/ProviderPane.tsx";
 import { type ProviderPanes, useProviderPanes } from "./panes/useProviderPanes.ts";
 import { TerminalView } from "./TerminalView.tsx";
+
+const browserBridge = createBrowserBridge();
 
 const terminalContent = (terminalId: string): PaneContent => ({ kind: "terminal", terminalId });
 const threadContent = (threadId: string): PaneContent => ({ kind: "thread", threadId });
@@ -122,10 +151,13 @@ export function CodeCanvas({ workspace, children }: CodeCanvasProps) {
 }
 
 function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & { providerPanes: ProviderPanes }) {
+  const initialBrowserUrls = useRef(new Map<string, string>());
   const { client } = useRuntime();
-  const { navigate } = useNavigation();
+  const { current, navigate } = useNavigation();
   const threadsIntent = useThreadsIntent();
   const theme = useResolvedTheme();
+  const [providerAccounts, setProviderAccounts] = useState<ProviderAccount[] | null>(null);
+  const [providerAccountsUnavailable, setProviderAccountsUnavailable] = useState(false);
   const {
     terminals,
     shells,
@@ -139,6 +171,26 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   const labels = useMemo(() => tabLabels(terminals), [terminals]);
   const terminalById = useMemo(() => new Map(terminals.map((t) => [t.id, t])), [terminals]);
   const paneById = useMemo(() => new Map(providerPanes.panes.map((p) => [p.thread.id, p])), [providerPanes.panes]);
+  useEffect(() => {
+    let cancelled = false;
+    setProviderAccounts(null);
+    setProviderAccountsUnavailable(false);
+    void client
+      .listProviderAccounts()
+      .then((accounts) => {
+        if (!cancelled) setProviderAccounts(accounts);
+      })
+      .catch(() => {
+        if (!cancelled) setProviderAccountsUnavailable(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [client]);
+  const accountFor = useCallback(
+    (thread: ThreadSummary) => resolvePaneAccount(thread, providerAccounts, providerAccountsUnavailable),
+    [providerAccounts, providerAccountsUnavailable],
+  );
 
   const titleOf = useCallback(
     (content: PaneContent): string => {
@@ -146,13 +198,18 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
         const terminal = terminalById.get(content.terminalId);
         return terminal ? (labels.get(terminal.id) ?? terminal.title) : "Terminal";
       }
-      if (content.kind === "thread") return paneById.get(content.threadId)?.thread.name ?? "Thread";
+      if (content.kind === "thread") {
+        const thread = paneById.get(content.threadId)?.thread;
+        if (!thread) return "Thread";
+        const account = accountFor(thread);
+        return account ? `${thread.name} · ${paneAccountLabel(account)}` : thread.name;
+      }
       if (content.kind === "dashboard") return "Dashboard";
       if (content.kind === "browser") return "Browser";
       if (content.kind === "git") return "Git";
       return "Widget";
     },
-    [terminalById, labels, paneById],
+    [terminalById, labels, paneById, accountFor],
   );
 
   const initialState = useRef({ terminals, activeTerminalId, panes: providerPanes.panes.map((p) => p.thread.id) });
@@ -263,6 +320,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   // ---------- Contents ----------
   const describe = useCallback(
     (content: PaneContent): TabInfo | null => {
+      if (content.kind === "browser") return { title: "Browser", glyph: <Globe />, statusText: "Web preview" };
       if (content.kind === "terminal") {
         const terminal = terminalById.get(content.terminalId);
         if (!terminal) return null;
@@ -285,22 +343,34 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
         const entry = paneById.get(content.threadId);
         if (!entry) return null;
         const status = paneStatus(entry.thread.status);
+        const account = accountFor(entry.thread);
         return {
-          title: entry.thread.name,
+          title: account ? `${entry.thread.name} · ${paneAccountLabel(account)}` : entry.thread.name,
           glyph: <ProviderGlyph provider={entry.thread.providerId} size="xs" />,
           tone: status.tone,
-          statusText: `${entry.thread.providerName} · ${status.label}`,
+          statusText: `${entry.thread.providerName}${account ? ` · ${paneAccountLabel(account)}` : ""} · ${status.label}`,
           terminal: true,
           running: entry.info.running,
         };
       }
       return null;
     },
-    [terminalById, labels, paneById, closeTerminal],
+    [terminalById, labels, paneById, closeTerminal, accountFor],
   );
 
   const render = useCallback(
     (content: PaneContent, context: PaneRenderContext): ReactNode | null => {
+      if (content.kind === "browser")
+        return (
+          <BrowserContentPanel
+            content={content}
+            workspaceId={workspace.id}
+            context={context}
+            controllerRef={controllerRef}
+            visible={current === "code"}
+            initialUrl={initialBrowserUrls.current.get(content.browserId)}
+          />
+        );
       if (content.kind === "terminal") {
         const terminal = terminalById.get(content.terminalId);
         if (!terminal) return null;
@@ -344,6 +414,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
             thread={entry.thread}
             info={entry.info}
             channel={providerPanes.channel}
+            account={accountFor(entry.thread)}
             theme={theme}
             focusRequest={context.focusRequest}
             throttled={!context.focused}
@@ -364,7 +435,32 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       providerPanes,
       navigate,
       threadsIntent,
+      current,
+      accountFor,
     ],
+  );
+
+  // Browser children are resources, unlike background provider jobs. Release children removed
+  // from the layout (tab or whole-pane close), and recreate from safe saved state on undo.
+  const browserIds = useRef(new Set<string>());
+  useEffect(() => {
+    const next = new Set(
+      allContents(controller.layout).flatMap((item) => (item.kind === "browser" ? [item.browserId] : [])),
+    );
+    for (const id of browserIds.current) {
+      if (!next.has(id)) {
+        initialBrowserUrls.current.delete(id);
+        void browserBridge.close(id).catch(() => undefined);
+      }
+    }
+    browserIds.current = next;
+  }, [controller.layout]);
+  useEffect(
+    () => () => {
+      for (const id of browserIds.current) void browserBridge.close(id).catch(() => undefined);
+      browserIds.current.clear();
+    },
+    [],
   );
 
   const shown = useMemo(() => new Set(allContents(controller.layout).map(contentKey)), [controller.layout]);
@@ -482,8 +578,11 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
           </>
         ) : null}
         <DropdownMenuSeparator />
-        <DropdownMenuItem icon={<Globe />} disabled description="Not in this build yet">
-          Browser preview
+        <DropdownMenuItem
+          icon={<Globe />}
+          onSelect={() => controllerRef.current.show(browserContent(), { paneId, focus: true })}
+        >
+          Browser
         </DropdownMenuItem>
         <DropdownMenuItem icon={<GitBranch />} disabled description="Not in this build yet">
           Git
@@ -496,32 +595,117 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   const onCommand = useCallback(
     (command: PaneCommand): PaneCommandResult | null => {
       const current = controllerRef.current;
+      if (command.kind === "browser-control") {
+        const action = command.command;
+        const target = resolveBrowserTarget(
+          current.layout,
+          current.focusedPaneId,
+          action.kind === "open" ? null : action.browserId,
+        );
+        const openNew = (url: string | null) => {
+          const runtimeUrl = url === null ? null : normalizeBrowserAddress(url);
+          const content = browserContent(undefined, runtimeUrl === null ? null : persistableBrowserUrl(runtimeUrl));
+          if (runtimeUrl !== null) initialBrowserUrls.current.set(content.browserId, runtimeUrl);
+          current.show(content, { focus: true, placement: "split" });
+          return { handled: true as const, message: "Opening Browser." };
+        };
+        try {
+          if (action.kind === "open" && (action.newPane || !target)) return openNew(action.url);
+          if (
+            action.kind === "navigate" &&
+            !target &&
+            !action.browserId &&
+            !allContents(current.layout).some((item) => item.kind === "browser")
+          )
+            return openNew(action.url);
+          if (!target) return { handled: false, message: "Focus the browser pane you want to control first." };
+          current.show(target.content, { paneId: target.paneId, focus: true });
+          if (action.kind === "open" && action.url === null) return { handled: true };
+          const operation =
+            action.kind === "open" || action.kind === "navigate"
+              ? browserBridge.navigate(target.content.browserId, normalizeBrowserAddress(action.url as string))
+              : browserBridge.action(target.content.browserId, action.kind);
+          void operation
+            .then((state) => {
+              const latest = controllerRef.current;
+              const next = updateBrowserUrl(latest.layout, state.browserId, state.url);
+              if (next !== latest.layout) latest.replace(next);
+            })
+            .catch(() =>
+              controllerRef.current.announce("That browser action did not complete. Check the browser pane."),
+            );
+          return { handled: true, message: "Browser action requested." };
+        } catch {
+          return { handled: false, message: "That address cannot be opened in Browser." };
+        }
+      }
       if (command.kind === "open" && command.content.kind === "thread" && !paneById.has(command.content.threadId)) {
         navigate("threads");
         threadsIntent.request("open", command.content.threadId);
         return { handled: true, message: "Opened the thread in Threads." };
       }
       if (command.kind === "arrange-providers") {
-        const found: PaneContent[] = [];
-        const missing: string[] = [];
-        for (const providerId of command.providerIds) {
-          const entry = [...providerPanes.panes].reverse().find((p) => p.thread.providerId === providerId);
-          if (entry) found.push(threadContent(entry.thread.id));
-          else missing.push(providerId);
-        }
+        const selected = selectDistinctProviderThreads(
+          command.providerIds,
+          providerPanes.panes.map((entry) => ({ threadId: entry.thread.id, providerId: entry.thread.providerId })),
+        );
+        const found = selected.threadIds.map(threadContent);
         if (found.length === 0) {
           return { handled: false, message: "None of those providers has a pane in this workspace yet." };
         }
         const [first, ...rest] = found;
         if (first) current.show(first, { focus: true });
-        for (const content of rest) current.show(content, { focus: false, placement: "split" });
-        return missing.length > 0
-          ? { handled: true, message: `Arranged side by side. No pane yet for ${missing.join(", ")}.` }
+        for (const content of rest) {
+          const target = current.focusedPaneId;
+          if (target) current.split(target, command.axis, content);
+        }
+        return selected.missing.length > 0
+          ? { handled: true, message: `Arranged the available panes. No pane yet for ${selected.missing.join(", ")}.` }
           : { handled: true };
+      }
+      if (command.kind === "open-provider-panes") {
+        const threadIds = [...new Set(command.threadIds.filter((threadId) => threadId.trim().length > 0))];
+        if (threadIds.length === 0) return { handled: false, message: "No provider panes were created." };
+        const next = arrangeContents(current.layout, threadIds.map(threadContent));
+        if (!next) {
+          return { handled: false, message: "There isn't room to show every new provider pane." };
+        }
+        current.replace(next, `Arranged ${threadIds.length} provider ${threadIds.length === 1 ? "pane" : "panes"}.`);
+        const first = findContent(next, contentKey(threadContent(threadIds[0] as string)));
+        if (first) current.focusPane(first.paneId);
+        // The exact ids are already authoritative; refresh fills their runtime labels and status.
+        void providerPanes.refresh();
+        return { handled: true };
+      }
+      if (command.kind === "control-pane") {
+        const aliases = providerPaneAliases(
+          providerPanes.panes.map((entry) => ({ threadId: entry.thread.id, providerId: entry.thread.providerId })),
+          (providerId) => {
+            const full = providerIdentity(providerId).name;
+            const short = providerId === "claude-code" ? "Claude" : providerId === "gemini-cli" ? "Gemini" : full;
+            return { full, short };
+          },
+        );
+        const contents = new Map(allContents(current.layout).map((content) => [contentKey(content), content]));
+        const candidates = paneQueryCandidates(current.layout, (key) => {
+          const content = contents.get(key);
+          return content ? { title: titleOf(content), aliases: aliases.get(key) ?? [] } : null;
+        });
+        const result = applyPaneControl(
+          current.layout,
+          command.command,
+          candidates,
+          current.focusedPaneId,
+          current.size.current,
+        );
+        if (!result.handled) return result;
+        current.replace(result.layout, "Updated the pane layout.");
+        if (result.paneId) current.focusPane(result.paneId);
+        return { handled: true };
       }
       return null;
     },
-    [paneById, providerPanes.panes, navigate, threadsIntent],
+    [paneById, providerPanes, navigate, threadsIntent, titleOf],
   );
 
   const host: PaneHost = useMemo(
@@ -538,7 +722,10 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   );
 
   return (
-    <>{children({ controller, background, providerPanes, shells, newTerminal, newProviderPane, titleOf }, canvas)}</>
+    <>
+      <UtilityDockRegistration />
+      {children({ controller, background, providerPanes, shells, newTerminal, newProviderPane, titleOf }, canvas)}
+    </>
   );
 }
 
@@ -644,6 +831,9 @@ function EmptyPane({
         </div>
       </div>
       <div className={styles.emptyActions}>
+        <Button size="sm" icon={<Globe />} onClick={() => onShow(browserContent())}>
+          Open Browser
+        </Button>
         <Button variant="primary" size="sm" icon={<SquareTerminal />} onClick={onTerminal} disabled={!shell}>
           {shell ? `New ${shell.name} terminal` : "No shells found"}
         </Button>
@@ -678,13 +868,51 @@ function EmptyPane({
         <h3 className={styles.emptyLabel}>Not in this build yet</h3>
         <p className={styles.emptyComing}>
           <Badge tone="outline">
-            <Globe aria-hidden="true" /> Browser preview
-          </Badge>
-          <Badge tone="outline">
             <GitBranch aria-hidden="true" /> Git
           </Badge>
         </p>
       </div>
     </div>
+  );
+}
+
+function BrowserContentPanel({
+  content,
+  workspaceId,
+  context,
+  controllerRef,
+  visible,
+  initialUrl,
+}: {
+  content: Extract<PaneContent, { kind: "browser" }>;
+  workspaceId: string;
+  context: PaneRenderContext;
+  controllerRef: { current: PaneController };
+  visible: boolean;
+  initialUrl?: string;
+}) {
+  const onRequestFocus = useCallback(
+    () => controllerRef.current.focusPane(context.paneId, false),
+    [controllerRef, context.paneId],
+  );
+  const onUrlChange = useCallback(
+    (url: string) => {
+      const controller = controllerRef.current;
+      const next = updateBrowserUrl(controller.layout, content.browserId, url);
+      if (next !== controller.layout) controller.replace(next);
+    },
+    [controllerRef, content.browserId],
+  );
+  return (
+    <BrowserPane
+      content={content}
+      workspaceId={workspaceId}
+      context={context}
+      bridge={browserBridge}
+      visible={visible}
+      initialUrl={initialUrl}
+      onRequestFocus={onRequestFocus}
+      onUrlChange={onUrlChange}
+    />
   );
 }

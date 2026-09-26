@@ -18,9 +18,11 @@ use crate::AppState;
 /// The layout saved for a workspace, or `None` when it has none (or it no longer validates).
 #[tauri::command(async)]
 pub fn layout_get(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: State<'_, AppState>,
     workspace_id: String,
 ) -> Result<Option<WorkspaceLayout>, IpcError> {
+    _runtime_access.revalidate()?;
     validate_id(&workspace_id).map_err(|e| e.log_and_convert("layout_get"))?;
     state
         .core()?
@@ -31,10 +33,12 @@ pub fn layout_get(
 /// Validates and saves a workspace's layout. Unknown workspaces are refused.
 #[tauri::command(async)]
 pub fn layout_save(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: State<'_, AppState>,
     workspace_id: String,
     layout: PaneLayout,
 ) -> Result<WorkspaceLayout, IpcError> {
+    _runtime_access.revalidate()?;
     let core = state.core()?;
     validate_id(&workspace_id).map_err(|e| e.log_and_convert("layout_save"))?;
     let known = core
@@ -56,7 +60,11 @@ pub fn layout_save(
 
 /// The user's saved layout presets (shapes only).
 #[tauri::command(async)]
-pub fn layout_presets(state: State<'_, AppState>) -> Result<Vec<SavedLayoutPreset>, IpcError> {
+pub fn layout_presets(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    state: State<'_, AppState>,
+) -> Result<Vec<SavedLayoutPreset>, IpcError> {
+    _runtime_access.revalidate()?;
     state
         .core()?
         .read(store::list_presets)
@@ -66,10 +74,12 @@ pub fn layout_presets(state: State<'_, AppState>) -> Result<Vec<SavedLayoutPrese
 /// Saves a layout's shape as a named preset.
 #[tauri::command(async)]
 pub fn layout_preset_save(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: State<'_, AppState>,
     name: String,
     layout: PaneLayout,
 ) -> Result<SavedLayoutPreset, IpcError> {
+    _runtime_access.revalidate()?;
     state
         .core()?
         .transact(|tx| Ok((store::save_preset(tx, &name, &layout)?, Vec::new())))
@@ -79,7 +89,12 @@ pub fn layout_preset_save(
 
 /// Deletes a saved preset.
 #[tauri::command(async)]
-pub fn layout_preset_delete(state: State<'_, AppState>, preset_id: String) -> Result<(), IpcError> {
+pub fn layout_preset_delete(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    state: State<'_, AppState>,
+    preset_id: String,
+) -> Result<(), IpcError> {
+    _runtime_access.revalidate()?;
     state
         .core()?
         .transact(|tx| Ok((store::delete_preset(tx, &preset_id)?, Vec::new())))

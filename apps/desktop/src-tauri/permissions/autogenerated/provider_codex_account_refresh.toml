@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-provider-codex-account-refresh"
+description = "Enables the provider_codex_account_refresh command without any pre-configured scope."
+commands.allow = ["provider_codex_account_refresh"]
+
+[[permission]]
+identifier = "deny-provider-codex-account-refresh"
+description = "Denies the provider_codex_account_refresh command without any pre-configured scope."
+commands.deny = ["provider_codex_account_refresh"]

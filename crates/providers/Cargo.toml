@@ -10,6 +10,14 @@ publish = false
 [lib]
 name = "kalcode_providers"
 
+# Required production crash-isolation helper. The release pipeline builds, signs, and installs it
+# beside the desktop executable; GuardianRuntime resolves that fixed sibling path.
+[[bin]]
+name = "kalcode-provider-guardian"
+path = "src/bin/kalcode-provider-guardian.rs"
+test = false
+doc = false
+
 # Test support only: a stand-in provider CLI that replays documented stream-JSON fixtures so the
 # spawn -> parse -> event pipeline is tested without running a real provider (no AI quota used).
 # It is not part of the desktop bundle.
@@ -26,11 +34,17 @@ kalcode-pty = { path = "../pty" }
 kalcode-hook-bridge = { path = "../hook-bridge" }
 serde.workspace = true
 serde_json.workspace = true
+rusqlite.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 time.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 ts-rs = { version = "12", features = ["serde-json-impl", "uuid-impl"] }
+
+[target.'cfg(windows)'.dependencies]
+winapi-util = "0.1"
+process-wrap = { version = "10.0.1", default-features = false, features = ["std", "job-object", "creation-flags"] }
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Win32_System_Pipes", "Win32_System_Threading"] }
 
 [dev-dependencies]
 tempfile.workspace = true

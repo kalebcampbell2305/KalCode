@@ -58,7 +58,7 @@ async function setTheme(page: Page, theme: "light" | "dark") {
 test.describe("a fresh session", () => {
   test("says so honestly and never shows sample data", async ({ page }) => {
     await open(page);
-    await expect(main(page).getByText("No threads are open.")).toBeVisible();
+    await expect(board(page).getByRole("heading", { name: "No active sessions yet." })).toBeVisible();
     await expect(chips(page)).toHaveCount(0);
     await expect(dock(page).getByText("Nothing is waiting for your approval.")).toBeVisible();
     await expect(page.getByRole("region", { name: "Terminals" }).getByText("No terminals are running.")).toBeVisible();

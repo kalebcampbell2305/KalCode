@@ -1,0 +1,137 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  min-width: 0;
+}
+
+.loading {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.safety {
+  background:
+    radial-gradient(28rem 10rem at 0% 0%, var(--color-accent-soft), transparent 72%),
+    var(--color-surface-1);
+}
+
+.note,
+.empty {
+  max-width: 76ch;
+  color: var(--color-text-secondary);
+  font-size: var(--type-ui);
+  line-height: var(--leading-normal);
+}
+
+.addForm {
+  display: grid;
+  grid-template-columns: minmax(10rem, 0.6fr) minmax(14rem, 1fr) auto;
+  align-items: end;
+  gap: var(--space-3);
+}
+
+.provider {
+  overflow: hidden;
+}
+
+.accounts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.account {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-3-5);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: linear-gradient(145deg, var(--color-surface-2), var(--color-surface-1));
+}
+
+.accountTop {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.accountIdentity {
+  min-width: 0;
+}
+
+.accountIdentity h3 {
+  overflow: hidden;
+  font-size: var(--type-title);
+  font-weight: var(--type-title-weight);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accountIdentity p {
+  margin-top: var(--space-0-5);
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: var(--type-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.badges,
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.renameForm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.loginState,
+.confirm {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border-lit-soft);
+  border-radius: var(--radius-sm);
+  background: var(--color-accent-soft);
+  color: var(--color-text-secondary);
+  font-size: var(--type-small);
+}
+
+.confirm {
+  align-items: flex-start;
+  flex-direction: column;
+  min-width: 0;
+  margin: 0;
+  border-color: var(--status-failed-line);
+  background: var(--status-failed-soft);
+}
+
+@media (max-width: 980px) {
+  .accounts,
+  .addForm {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .addForm > button {
+    justify-self: start;
+  }
+}
+
+@media (max-width: 600px) {
+  .accountTop,
+  .loginState {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

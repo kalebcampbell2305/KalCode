@@ -7,4 +7,8 @@ import type { PermissionMode } from "./PermissionMode.ts";
  * still refuses Bypass and Custom at creation (they are set afterwards through
  * `thread_set_permission_mode`) until it supports them.
  */
-export type ThreadCreateInput = { providerId: string, workspaceId: string, model: string | null, permissionMode: PermissionMode, prompt: string, name: string | null, confirmBypass: boolean | null, profileId: string | null, };
+export type ThreadCreateInput = { providerId: string,
+/**
+ * Explicit account selection. The desktop resolves and validates this id before creation.
+ */
+providerAccountId: string | null, workspaceId: string, model: string | null, permissionMode: PermissionMode, prompt: string, name: string | null, confirmBypass: boolean | null, profileId: string | null, };

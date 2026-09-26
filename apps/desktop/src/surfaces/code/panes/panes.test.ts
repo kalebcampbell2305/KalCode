@@ -1,7 +1,10 @@
-import type { ApprovalView, PaneInfo, ThreadSummary, Workspace } from "@kalcode/protocol";
+import type { ApprovalView, PaneInfo, ProviderAccount, ThreadSummary, Workspace } from "@kalcode/protocol";
+import { render, screen } from "@testing-library/react";
+import { createElement } from "react";
 import { describe, expect, it } from "vitest";
 import { KalCodeClient } from "../../../ipc/client.ts";
 import { createMemoryTransport, type MemoryTransport } from "../../../ipc/memoryTransport.ts";
+import { PaneAccountChip, paneAccountLabel, resolvePaneAccount } from "./PaneParts.tsx";
 import { PaneChannel, paneStartMode, splitInput } from "./paneChannel.ts";
 import {
   channelNote,
@@ -12,6 +15,11 @@ import {
   paneStatus,
   providerIdentity,
 } from "./paneLabels.ts";
+
+function requirePaneAccount(value: ReturnType<typeof resolvePaneAccount>) {
+  if (value === null) throw new Error("expected a pane account identity");
+  return value;
+}
 
 function info(partial: Partial<PaneInfo>): PaneInfo {
   return {
@@ -93,6 +101,41 @@ describe("pane labels", () => {
     expect(paneLabel(thread as ThreadSummary)).toBe("Fix login, Claude Code pane");
     expect(modelLabel(thread as ThreadSummary)).toBe("Account default");
     expect(modelLabel({ ...thread, providerId: "codex" } as ThreadSummary)).toBe("Provider default");
+  });
+
+  it("uses the exact managed account and marks stale account snapshots truthfully", () => {
+    const thread = {
+      providerId: "codex",
+      providerAccountId: "0192f3c4-0000-7000-8000-000000000202",
+      accountLabel: "Work",
+    } as ThreadSummary;
+    const active = {
+      id: thread.providerAccountId,
+      providerId: "codex",
+      displayName: "Work profile",
+      archivedAt: null,
+    } as ProviderAccount;
+
+    expect(resolvePaneAccount(thread, [active], false)).toEqual({ label: "Work profile", state: "active" });
+    expect(paneAccountLabel(requirePaneAccount(resolvePaneAccount(thread, null, false)))).toBe(
+      "Work (checking status)",
+    );
+    expect(paneAccountLabel(requirePaneAccount(resolvePaneAccount(thread, [], false)))).toBe(
+      "Work (archived or unavailable)",
+    );
+    expect(paneAccountLabel(requirePaneAccount(resolvePaneAccount(thread, null, true)))).toBe(
+      "Work (status unavailable)",
+    );
+    expect(
+      resolvePaneAccount(thread, [{ ...active, providerId: "claude-code" }], false),
+      "an account id from a different provider is never displayed as this pane's identity",
+    ).toEqual({ label: "Work", state: "archived_or_unavailable" });
+  });
+
+  it("exposes provider context for the visible account chip without an unsupported ARIA label", () => {
+    render(createElement(PaneAccountChip, { account: { label: "Work profile", state: "active" } }));
+    expect(screen.getByText("Provider")).toHaveClass("visually-hidden");
+    expect(screen.getByText(/Account .* Work profile/)).toBeVisible();
   });
 });
 
@@ -195,8 +238,19 @@ describe("in-memory provider panes", () => {
   it("runs Codex with approvals in its own prompt and status from notify only", async () => {
     const { transport, channel, workspace } = await setup();
     const client = new KalCodeClient(transport);
-    const thread = await channel.create({ providerId: "codex", workspaceId: workspace.id, permissionMode: "approve" });
-    expect(thread).toMatchObject({ providerId: "codex", runtimeKind: "interactive_pty" });
+    const providerAccountId = "0192f3c4-0000-7000-8000-000000000201";
+    const thread = await channel.create({
+      providerId: "codex",
+      providerAccountId,
+      workspaceId: workspace.id,
+      permissionMode: "approve",
+    });
+    expect(thread).toMatchObject({
+      providerId: "codex",
+      providerAccountId,
+      accountLabel: "Personal",
+      runtimeKind: "interactive_pty",
+    });
     const chunks: string[] = [];
     await channel.attach(thread.id, (bytes) => chunks.push(new TextDecoder().decode(bytes)));
     await settle();

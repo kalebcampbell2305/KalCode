@@ -4,23 +4,25 @@ import DownloadPlatforms from "../components/DownloadPlatforms.astro";
 import EarlyAccessForm from "../components/EarlyAccessForm.astro";
 import PageHead from "../components/PageHead.astro";
 import Base from "../layouts/Base.astro";
-import { RELEASES, buildFor, formatReleaseDate } from "../lib/releases";
+import { RELEASES, formatReleaseDate } from "../lib/releases";
 import { getPage } from "../lib/site";
 
 const page = getPage("/download");
 const latest = RELEASES.latest;
-const windows = buildFor(RELEASES, "windows");
+const releaseLabel = latest?.channel === "stable" ? "Stable" : "Preview";
 ---
 <Base title={page.title} description={page.description} path={page.path} world>
   <PageHead
     backdrop="orbital"
     title="Download KalCode"
-    status={latest ? `Preview ${latest.version} · ${formatReleaseDate(latest.publishedAt)}` : "No public build yet"}
+    status={latest ? `${releaseLabel} ${latest.version} · ${formatReleaseDate(latest.publishedAt)}` : "No public build yet"}
     statusKind={latest ? "built" : "dev"}
     lead={
-      latest
-        ? "A preview build of the KalCode desktop app. Check its SHA-256 before you run it."
-        : "KalCode is in private development. Builds appear here the moment they are published, with the version, size and SHA-256 of every file."
+      latest?.channel === "stable"
+        ? "The current stable KalCode desktop release. Verify its SHA-256 before opening it."
+        : latest
+          ? "A preview build of the KalCode desktop app. Verify its SHA-256 before opening it."
+          : "KalCode is in private development. Builds appear here the moment they are published, with the version, size and SHA-256 of every file."
     }
   />
 
@@ -29,16 +31,6 @@ const windows = buildFor(RELEASES, "windows");
     <div class="container">
       <h2 id="platforms-title" class="visually-hidden">Builds by operating system</h2>
       <DownloadPlatforms />
-      {
-        windows && (
-          <div class="prose section-foot">
-            <p>
-              To check the file in PowerShell, run <code>Get-FileHash .\{windows.file} -Algorithm SHA256</code>{" "}
-              and compare the hash with the one above.
-            </p>
-          </div>
-        )
-      }
     </div>
   </section>
 
@@ -63,8 +55,8 @@ const windows = buildFor(RELEASES, "windows");
       <ul class="expect" role="list">
         <li><strong>A desktop app.</strong> It runs your providers locally, in your own workspaces and terminals.</li>
         <li><strong>Your providers, your accounts.</strong> Claude Code, Codex and Gemini CLI connect free on every plan.</li>
-        <li><strong>Verifiable files.</strong> Every build lists its SHA-256. Code signing is planned before a stable release.</li>
-        <li><strong>Progress in the open.</strong> Milestones are in the <a class="text-link" href="/changelog">changelog</a>.</li>
+        <li><strong>Verifiable files.</strong> Every published build lists its SHA-256 and signature state.</li>
+        {latest && <li><strong>Release history.</strong> Read verified release notes in <a class="text-link" href="/updates">Updates</a>.</li>}
       </ul>
     </div>
   </section>

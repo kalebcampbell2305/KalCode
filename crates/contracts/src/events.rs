@@ -534,6 +534,50 @@ pub enum EventPayload {
         outcome: TalkRoute,
     },
 
+    // ---- Environment Doctor (DOC) ----
+    #[serde(rename = "doctor.run_started")]
+    DoctorRunStarted { run_id: String, checks: u32 },
+    #[serde(rename = "doctor.run_completed")]
+    DoctorRunCompleted {
+        run_id: String,
+        checks: u32,
+        critical: u32,
+        warning: u32,
+        info: u32,
+        could_not_check: u32,
+        ignored: u32,
+        cancelled: bool,
+    },
+    #[serde(rename = "doctor.fix_applied")]
+    DoctorFixApplied {
+        run_id: Option<String>,
+        finding_code: String,
+        fix_code: String,
+    },
+    #[serde(rename = "doctor.fix_failed")]
+    DoctorFixFailed {
+        run_id: Option<String>,
+        finding_code: String,
+        fix_code: String,
+        code: String,
+    },
+    #[serde(rename = "doctor.fix_reverted")]
+    DoctorFixReverted {
+        run_id: Option<String>,
+        finding_code: String,
+        fix_code: String,
+    },
+    #[serde(rename = "doctor.finding_ignored")]
+    DoctorFindingIgnored {
+        finding_code: String,
+        scope_kind: String,
+    },
+    #[serde(rename = "doctor.finding_unignored")]
+    DoctorFindingUnignored {
+        finding_code: String,
+        scope_kind: String,
+    },
+
     // ---- Notification center (Z7-W3) ----
     /// A notification was created, or re-raised by coalescing a repeat into it. Ids and enums
     /// only; the title and body live in the `notifications` table.
@@ -628,6 +672,13 @@ impl EventPayload {
             Self::KalVoiceVoiceOutputStarted { .. } => "kalvoice.voice_output_started",
             Self::KalVoiceVoiceOutputCompleted { .. } => "kalvoice.voice_output_completed",
             Self::KalVoiceTalkRouted { .. } => "kalvoice.talk_routed",
+            Self::DoctorRunStarted { .. } => "doctor.run_started",
+            Self::DoctorRunCompleted { .. } => "doctor.run_completed",
+            Self::DoctorFixApplied { .. } => "doctor.fix_applied",
+            Self::DoctorFixFailed { .. } => "doctor.fix_failed",
+            Self::DoctorFixReverted { .. } => "doctor.fix_reverted",
+            Self::DoctorFindingIgnored { .. } => "doctor.finding_ignored",
+            Self::DoctorFindingUnignored { .. } => "doctor.finding_unignored",
             Self::NotificationCreated { .. } => "notification.created",
             Self::Unrecognized { .. } => "unrecognized",
         }
@@ -980,7 +1031,7 @@ mod tests {
                 code: s(),
             },
             EventPayload::KalVoiceLimitReached {
-                allowance: 250,
+                allowance: 75,
                 resets_at: s(),
             },
             EventPayload::KalVoiceProviderSelected {
@@ -992,6 +1043,44 @@ mod tests {
             EventPayload::KalVoiceTalkRouted {
                 request_id: s(),
                 outcome: TalkRoute::Dictation,
+            },
+            EventPayload::DoctorRunStarted {
+                run_id: s(),
+                checks: 1,
+            },
+            EventPayload::DoctorRunCompleted {
+                run_id: s(),
+                checks: 1,
+                critical: 0,
+                warning: 0,
+                info: 0,
+                could_not_check: 0,
+                ignored: 0,
+                cancelled: false,
+            },
+            EventPayload::DoctorFixApplied {
+                run_id: Some(s()),
+                finding_code: s(),
+                fix_code: s(),
+            },
+            EventPayload::DoctorFixFailed {
+                run_id: Some(s()),
+                finding_code: s(),
+                fix_code: s(),
+                code: s(),
+            },
+            EventPayload::DoctorFixReverted {
+                run_id: Some(s()),
+                finding_code: s(),
+                fix_code: s(),
+            },
+            EventPayload::DoctorFindingIgnored {
+                finding_code: s(),
+                scope_kind: s(),
+            },
+            EventPayload::DoctorFindingUnignored {
+                finding_code: s(),
+                scope_kind: s(),
             },
             EventPayload::NotificationCreated {
                 notification_id: s(),
@@ -1024,7 +1113,48 @@ mod tests {
         }
         // Keep in step with the enum: the `type_name` match is exhaustive, so a new variant
         // compiles only once named there — and this count must be raised with a new sample.
-        assert_eq!(samples.len(), 71);
+        assert_eq!(samples.len(), 78);
+    }
+
+    #[test]
+    fn doctor_events_use_stable_tags_and_camel_case_payloads() {
+        let completed = EventPayload::DoctorRunCompleted {
+            run_id: "run".into(),
+            checks: 2,
+            critical: 1,
+            warning: 1,
+            info: 1,
+            could_not_check: 1,
+            ignored: 1,
+            cancelled: false,
+        };
+        assert_eq!(completed.type_name(), "doctor.run_completed");
+        assert_eq!(completed.version(), 1);
+        let json = serde_json::to_value(&completed).expect("serialize doctor run");
+        assert_eq!(json["type"], "doctor.run_completed");
+        assert_eq!(json["payload"]["runId"], "run");
+        assert_eq!(json["payload"]["checks"], 2);
+        assert_eq!(json["payload"]["couldNotCheck"], 1);
+        assert_eq!(json["payload"]["ignored"], 1);
+        assert_eq!(
+            serde_json::from_value::<EventPayload>(json).expect("round trip"),
+            completed
+        );
+
+        let failed = EventPayload::DoctorFixFailed {
+            run_id: Some("run".into()),
+            finding_code: "project.env.not_ignored".into(),
+            fix_code: "file.gitignore_env".into(),
+            code: "stale_target".into(),
+        };
+        let json = serde_json::to_value(&failed).expect("serialize doctor failure");
+        assert_eq!(json["type"], "doctor.fix_failed");
+        assert_eq!(json["payload"]["findingCode"], "project.env.not_ignored");
+        assert_eq!(json["payload"]["fixCode"], "file.gitignore_env");
+        assert_eq!(
+            serde_json::from_value::<EventPayload>(json).expect("round trip"),
+            failed
+        );
     }
 
     #[test]

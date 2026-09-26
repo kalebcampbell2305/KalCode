@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-utility-process-signal"
+description = "Enables the utility_process_signal command without any pre-configured scope."
+commands.allow = ["utility_process_signal"]
+
+[[permission]]
+identifier = "deny-utility-process-signal"
+description = "Denies the utility_process_signal command without any pre-configured scope."
+commands.deny = ["utility_process_signal"]

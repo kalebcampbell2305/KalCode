@@ -14,8 +14,10 @@
 //! It records what it was started with (`last-args.json`, and the *names* of its environment
 //! variables in `last-env.json`) so tests can assert on argv and environment sanitization.
 
+use std::ffi::OsStr;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 
 use serde_json::Value;
@@ -31,6 +33,18 @@ const CODEX_FAILED: &str = include_str!("../../tests/fixtures/codex/turn_failed.
 const GEMINI_TEXT: &str = include_str!("../../tests/fixtures/gemini/turn_text.jsonl");
 const GEMINI_TOOLS: &str = include_str!("../../tests/fixtures/gemini/turn_tools.jsonl");
 const GEMINI_QUOTA: &str = include_str!("../../tests/fixtures/gemini/quota.jsonl");
+
+fn hidden_command(program: impl AsRef<OsStr>) -> Command {
+    let mut command = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+}
 
 fn exe_dir() -> PathBuf {
     std::env::current_exe()
@@ -48,6 +62,19 @@ fn config() -> Value {
 
 fn get_str<'a>(config: &'a Value, key: &str, default: &'a str) -> &'a str {
     config.get(key).and_then(Value::as_str).unwrap_or(default)
+}
+
+fn provider_version<'a>(config: &'a Value, kind: &str, default: &'a str) -> &'a str {
+    config
+        .get("version")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            config
+                .get("versions")
+                .and_then(|versions| versions.get(kind))
+                .and_then(Value::as_str)
+        })
+        .unwrap_or(default)
 }
 
 fn get_i64(config: &Value, key: &str, default: i64) -> i64 {
@@ -133,7 +160,7 @@ fn main() {
             "gemini" => "0.21.0",
             _ => "2.1.300 (Claude Code)",
         };
-        println!("{}", get_str(&config, "version", default));
+        println!("{}", provider_version(&config, kind, default));
         exit(get_i64(&config, "versionExit", 0));
     }
     if kind == "codex" && args.first().map(String::as_str) == Some("exec") {
@@ -247,7 +274,7 @@ fn session(config: &Value, args: &[String]) {
         // Ignores its input entirely (even end of input) and starts a child of its own, so tests
         // can check that the whole process tree is killed.
         if let Ok(exe) = std::env::current_exe()
-            && let Ok(child) = std::process::Command::new(exe)
+            && let Ok(child) = hidden_command(exe)
                 .arg("--fake-grandchild")
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
@@ -340,7 +367,7 @@ mod turns {
 
     use serde_json::Value;
 
-    use super::{Out, exe_dir, exit, get_i64, sleep_ms};
+    use super::{Out, exe_dir, exit, get_i64, hidden_command, sleep_ms};
 
     const CODEX_FIRST: &str = r#"{"type":"thread.started","thread_id":"{SESSION_ID}"}"#;
 
@@ -371,7 +398,7 @@ mod turns {
 
     fn hang() -> ! {
         if let Ok(exe) = std::env::current_exe()
-            && let Ok(child) = std::process::Command::new(exe)
+            && let Ok(child) = hidden_command(exe)
                 .arg("--fake-grandchild")
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
@@ -521,7 +548,7 @@ mod turns {
                     "input-messages": [text],
                     "last-assistant-message": "Status: FAILED (prose, never status)",
                 });
-                let _ = std::process::Command::new(program)
+                let _ = hidden_command(program)
                     .args(rest)
                     .arg(payload.to_string())
                     .stdin(std::process::Stdio::null())
@@ -564,12 +591,12 @@ fn run_hook_helper(args: &[String]) -> ! {
 /// (`Allow …? (y/n)`) and reads the answer from the pane, as the real TUI would.
 mod interactive {
     use std::io::{BufRead, Write};
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use std::time::{Duration, Instant};
 
     use serde_json::{Value, json};
 
-    use super::{exit, get_i64};
+    use super::{exit, get_i64, hidden_command};
 
     struct Hooks {
         settings: Value,
@@ -619,7 +646,7 @@ mod interactive {
                 object.insert("cwd".into(), json!(self.cwd));
                 object.insert("transcript_path".into(), json!("/fake/transcript.jsonl"));
             }
-            let Ok(mut child) = Command::new(program)
+            let Ok(mut child) = hidden_command(program)
                 .args(&args)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())

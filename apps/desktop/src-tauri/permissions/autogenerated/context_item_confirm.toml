@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-context-item-confirm"
+description = "Enables the context_item_confirm command without any pre-configured scope."
+commands.allow = ["context_item_confirm"]
+
+[[permission]]
+identifier = "deny-context-item-confirm"
+description = "Denies the context_item_confirm command without any pre-configured scope."
+commands.deny = ["context_item_confirm"]

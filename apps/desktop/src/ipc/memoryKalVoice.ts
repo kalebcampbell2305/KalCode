@@ -10,14 +10,13 @@
  * recognizes audio.
  *
  * Scenarios (`?scenario=`): kalvoice-limit (allowance used up), kalvoice-no-model (no speech
- * model installed), kalvoice-mic-denied (microphone blocked), kalvoice-approvals (the same
- * KalVoice approval requests as every scenario, named for the tests that answer them; answered
- * through `approval_decide` like the native permission engine), kalvoice-slow
- * (stages last long enough to observe). Thread commands report fixed test-double results.
+ * model installed), kalvoice-mic-denied (microphone blocked), kalvoice-approvals (a legacy URL
+ * alias retained for app-control coverage), kalvoice-slow (stages last long enough to observe).
+ * App-control commands run immediately; provider sessions keep their own native permission
+ * prompts. Thread commands report fixed test-double results.
  * `?transcript=` sets what the fake recognizer "hears".
  */
 import type {
-  ApprovalDecision,
   CommandRequest,
   DashboardChip,
   EventPayload,
@@ -41,6 +40,9 @@ import type {
   UiDirective,
 } from "@kalcode/protocol";
 import { checkReserved, isTalkKey } from "../kalvoice/shortcutModel.ts";
+import { normalizeBrowserAddress } from "../surfaces/browser/browserModel.ts";
+
+const FREE_KALVOICE_ALLOWANCE = 75;
 
 export const KALVOICE_SCENARIOS = [
   "kalvoice-limit",
@@ -264,6 +266,46 @@ function paneCommand(t: string): Parsed | null {
   return null;
 }
 
+function browserCommand(original: string, t: string): Parsed | null {
+  const directive = (command: Extract<UiDirective, { kind: "control_browser" }>["command"]): Parsed => ({
+    kind: "control_browser",
+    high: true,
+    outcome: { kind: "completed", summary: "Updated the browser." },
+    directive: { kind: "control_browser", workspaceId: "", command },
+  });
+  if (/^open (?:the )?browser(?: pane)?$/.test(t)) {
+    return directive({ kind: "open", url: null, newPane: false });
+  }
+  if (/^(?:open (?:another|new)|new) browser(?: pane)?$/.test(t)) {
+    return directive({ kind: "open", url: null, newPane: true });
+  }
+  if (/^(?:back|go back|browser back|go back in (?:the )?browser)$/.test(t)) {
+    return directive({ kind: "back", browserId: null });
+  }
+  if (/^(?:forward|go forward|browser forward|go forward in (?:the )?browser)$/.test(t)) {
+    return directive({ kind: "forward", browserId: null });
+  }
+  if (/^(?:reload|refresh)(?: (?:the )?(?:page|browser))?$/.test(t)) {
+    return directive({ kind: "reload", browserId: null });
+  }
+  if (/^stop loading(?: (?:the )?(?:page|browser))?$/.test(t)) {
+    return directive({ kind: "stop", browserId: null });
+  }
+  const address = original
+    .trim()
+    .replace(/^please\s+/i, "")
+    .match(/^(?:open|navigate to)\s+(.+)$/i)?.[1]
+    ?.trim();
+  if (!address || !/^(?:https?:\/\/|localhost(?::|\s|$))/i.test(address)) return null;
+  const spokenLocalhost = address.match(/^localhost\s+(\d+)[.!?]?$/i);
+  try {
+    const url = normalizeBrowserAddress(spokenLocalhost ? `localhost:${spokenLocalhost[1]}` : address);
+    return directive({ kind: "navigate", url, browserId: null });
+  } catch {
+    return null;
+  }
+}
+
 const AGENTS = "(?:agents?|threads?|work|tasks|sessions)";
 const SHOW = "(?:show|display|list|filter|give)(?: me)?(?: only| just)?";
 
@@ -315,6 +357,8 @@ function understand(text: string): Parsed | null {
   const t = normalize(text);
   if (!t) return { kind: "empty", high: false };
   if (/\b(don't|dont|not|never)\b/.test(t)) return null;
+  const browser = browserCommand(text, t);
+  if (browser) return browser;
   const pane = paneCommand(t);
   if (pane) return pane;
   if (/\b(and|then)\b/.test(t)) return null;
@@ -425,10 +469,7 @@ function defaults(): KalVoicePreferences {
 export interface MemoryKalVoice {
   handlers: Record<string, (args: Record<string, unknown>) => unknown>;
   subscribe(onSignal: (signal: KalVoiceSignal) => void): void;
-  /**
-   * `approval_decide` for KalVoice's own approval requests (the person's answer, as in the
-   * native permission engine); `undefined` when the id isn't one of KalVoice's.
-   */
+  /** KalVoice does not own approval requests; always returns `undefined`. */
   decideApproval(args: Record<string, unknown>): unknown;
 }
 
@@ -439,14 +480,13 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
   const partial = new Map<string, number>();
   const downloading = new Map<string, ReturnType<typeof setInterval>>();
   const counted = new Map<string, string>();
-  let used = scenario === "kalvoice-limit" ? 250 : 0;
+  let used = scenario === "kalvoice-limit" ? FREE_KALVOICE_ALLOWANCE : 0;
   let listening: {
     sessionId: string;
     mode: KalVoiceMode;
     started: number;
     timers: ReturnType<typeof setInterval>[];
   } | null = null;
-  const pending = new Map<string, { requestId: string; kind: string }>();
   const latency: StageTimings[] = [];
   const subscribers = new Set<(signal: KalVoiceSignal) => void>();
   const transcript =
@@ -462,7 +502,7 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
     const now = new Date();
     const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
     const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
-    return { used, allowance: 250, periodStart: start.toISOString(), resetsAt: next.toISOString() };
+    return { used, allowance: FREE_KALVOICE_ALLOWANCE, periodStart: start.toISOString(), resetsAt: next.toISOString() };
   };
 
   const models = (): SpeechModelInfo[] =>
@@ -507,7 +547,7 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
     if (scenario === "kalvoice-mic-denied") {
       return failWith(
         "microphone_denied",
-        "Microphone access is blocked. Allow desktop apps to use the microphone in your system's privacy settings, then try again.",
+        "Microphone access is blocked. In system privacy settings, allow KalCode to use the microphone, then try again.",
       );
     }
     const sessionId = crypto.randomUUID();
@@ -614,7 +654,7 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
         false,
       );
     }
-    const allowance = 250;
+    const allowance = FREE_KALVOICE_ALLOWANCE;
     if (used >= allowance) {
       emit({ type: "kalvoice.limit_reached", payload: { allowance, resetsAt: usage().resetsAt } });
       return respond(requestId, null, { kind: "limit_reached", resetsAt: usage().resetsAt }, false);
@@ -632,18 +672,10 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
     };
     if (parsed?.kind === "empty") return failed("empty_request", "Say or type what you want KalVoice to do.");
     if (!parsed) {
-      emit(
-        { type: "kalvoice.request_failed", payload: { requestId, code: "needs_provider" } },
-        { correlation: { requestId } },
-      );
-      return respond(
-        requestId,
+      return failed(
+        "local_reasoning_unavailable",
+        "On-device KalVoice interpretation isn't available in this build.",
         "reasoning",
-        {
-          kind: "needs_provider",
-          message: "Connect a supported AI provider to use KalVoice reasoning for this request.",
-        },
-        false,
       );
     }
     emit(
@@ -651,24 +683,16 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
       { correlation: { requestId } },
     );
     if (parsed.consequential) {
-      used += 1;
-      counted.set(requestId, parsed.kind);
-      // Making things safer runs directly (pause, stop); anything that adds work waits for approval.
-      if (parsed.kind === "pause_threads" || parsed.kind === "stop_threads") {
-        emit({ type: "kalvoice.request_completed", payload: { requestId } }, { correlation: { requestId } });
-        return respond(
-          requestId,
-          parsed.kind,
-          { kind: "completed", summary: DONE_SUMMARY[parsed.kind] ?? "Done." },
-          true,
-        );
-      }
-      const approvalRequestId = crypto.randomUUID();
-      pending.set(approvalRequestId, { requestId, kind: parsed.kind });
-      return respond(requestId, parsed.kind, { kind: "permission_required", approvalRequestId }, true);
+      parsed.outcome = { kind: "completed", summary: DONE_SUMMARY[parsed.kind] ?? "Done." };
     }
     if (parsed.kind === "status_report") {
       parsed.outcome = { kind: "completed", summary: "No threads are open." };
+    }
+    if (parsed.directive?.kind === "control_browser") {
+      if (!request.workspaceId) {
+        return failed("no_workspace", "Open a workspace before controlling the browser.", parsed.kind);
+      }
+      parsed.directive = { ...parsed.directive, workspaceId: request.workspaceId };
     }
     if (parsed.outcome?.kind === "failed") return failed(parsed.outcome.code, parsed.outcome.message, parsed.kind);
     used += 1;
@@ -872,50 +896,7 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
     },
   };
 
-  // KalVoice's approval requests (scenario kalvoice-approvals): the person answers them with
-  // `approval_decide`, from the widget or the Approvals panel; the result arrives as a signal.
-  const decideApproval = (args: Record<string, unknown>): unknown => {
-    const id = String(args.requestId);
-    const item = pending.get(id);
-    if (!item) return undefined;
-    const decision = args.decision as ApprovalDecision;
-    if (decision !== "approve_once" && decision !== "deny") {
-      fail(
-        "decision_not_allowed",
-        "That choice isn't available for this request. You can approve it once or deny it.",
-        "permission",
-      );
-    }
-    pending.delete(id);
-    emit(
-      decision === "deny"
-        ? { type: "approval.denied", payload: { requestId: id, threadId: "" } }
-        : { type: "approval.approved", payload: { requestId: id, threadId: "", decision } },
-      { correlation: { requestId: id } },
-    );
-    signal({
-      kind: "request_resolved",
-      response:
-        decision === "deny"
-          ? respond(
-              item.requestId,
-              item.kind,
-              {
-                kind: "failed",
-                code: "permission_denied",
-                message: "The request wasn't approved, so KalVoice didn't run it.",
-              },
-              true,
-            )
-          : respond(
-              item.requestId,
-              item.kind,
-              { kind: "completed", summary: DONE_SUMMARY[item.kind] ?? "Done." },
-              true,
-            ),
-    });
-    return { id, status: decision === "deny" ? "denied" : "approved", resolvedDecision: decision };
-  };
+  const decideApproval = (_args: Record<string, unknown>): undefined => undefined;
 
   return {
     handlers,

@@ -80,8 +80,11 @@ fn next_month(year: i32, month: Month) -> (i32, Month) {
 pub enum Consumption {
     /// Newly counted.
     Recorded(KalVoiceUsage),
-    /// This client request id was already counted (a retry); not counted again.
-    AlreadyRecorded(KalVoiceUsage),
+    /// This client request id was already claimed (a retry); not counted again.
+    AlreadyRecorded {
+        usage: KalVoiceUsage,
+        execution: RequestExecution,
+    },
     /// The allowance is used up; nothing was recorded.
     LimitReached(KalVoiceUsage),
 }
@@ -89,9 +92,54 @@ pub enum Consumption {
 impl Consumption {
     pub fn usage(&self) -> &KalVoiceUsage {
         match self {
-            Self::Recorded(u) | Self::AlreadyRecorded(u) | Self::LimitReached(u) => u,
+            Self::Recorded(u) | Self::LimitReached(u) => u,
+            Self::AlreadyRecorded { usage, .. } => usage,
         }
     }
+}
+
+/// Durable state of a request that already owns its usage claim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RequestExecution {
+    /// The executor has not recorded a terminal result. The owner is absent only for malformed
+    /// legacy/manual data; callers must treat that as indeterminate and never execute it.
+    Claimed {
+        owner: Option<String>,
+    },
+    Completed,
+    Failed {
+        code: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordedRequest {
+    pub intent: String,
+    pub execution: RequestExecution,
+}
+
+/// Terminal result written after the executor returns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionResult<'a> {
+    Completed,
+    Failed { code: &'a str },
+}
+
+/// Immutable request facts bound to one durable execution claim.
+#[derive(Debug, Clone, Copy)]
+pub struct RequestClaim<'a> {
+    pub request_id: &'a str,
+    pub input: KalVoiceInput,
+    pub intent_kind: &'a str,
+    pub execution_owner: &'a str,
+}
+
+/// Usage policy and clock values evaluated atomically with a request claim.
+#[derive(Debug, Clone, Copy)]
+pub struct ConsumptionContext {
+    pub now: OffsetDateTime,
+    pub anchor_day: u8,
+    pub allowance: Option<u32>,
 }
 
 /// Usage in the period containing `now`. `allowance` is `None` for unlimited (OWNER).
@@ -127,6 +175,40 @@ pub fn is_recorded(conn: &Connection, request_id: &str) -> Result<bool> {
         .is_some())
 }
 
+/// Reads the durable execution state for a previously claimed request.
+pub fn execution(conn: &Connection, request_id: &str) -> Result<Option<RequestExecution>> {
+    Ok(recorded_request(conn, request_id)?.map(|request| request.execution))
+}
+
+/// Reads the non-content metadata needed to answer an idempotent retry truthfully.
+pub fn recorded_request(conn: &Connection, request_id: &str) -> Result<Option<RecordedRequest>> {
+    let row: Option<(String, String, Option<String>, Option<String>)> = conn
+        .query_row(
+            "SELECT intent, execution_state, execution_owner, outcome_code
+               FROM kalvoice_requests WHERE request_id = ?1",
+            [request_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()?;
+    row.map(|(intent, state, owner, code)| {
+        let execution = match state.as_str() {
+            "claimed" => RequestExecution::Claimed { owner },
+            "completed" => RequestExecution::Completed,
+            "failed" => RequestExecution::Failed {
+                code: code.unwrap_or_else(|| "execution_failed".into()),
+            },
+            _ => {
+                return Err(KalError::internal(
+                    "invalid_kalvoice_request_state",
+                    "KalVoice's request ledger contains an invalid execution state.",
+                ));
+            }
+        };
+        Ok(RecordedRequest { intent, execution })
+    })
+    .transpose()
+}
+
 /// Intents whose effect the UI can undo ("Type it instead" after a spoken command).
 pub const REVERSIBLE_INTENTS: &[&str] = &["navigate"];
 
@@ -138,20 +220,21 @@ pub fn refund(
     now: OffsetDateTime,
     max_age: time::Duration,
 ) -> Result<bool> {
-    let row: Option<(String, String)> = conn
+    let row: Option<(String, String, String)> = conn
         .query_row(
-            "SELECT intent, recorded_at FROM kalvoice_requests WHERE request_id = ?1",
+            "SELECT intent, recorded_at, execution_state
+               FROM kalvoice_requests WHERE request_id = ?1",
             [request_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()?;
-    let Some((intent, recorded_at)) = row else {
+    let Some((intent, recorded_at, execution_state)) = row else {
         return Ok(false);
     };
     let recent =
         OffsetDateTime::parse(&recorded_at, &time::format_description::well_known::Rfc3339)
             .is_ok_and(|at| now - at <= max_age);
-    if !recent || !REVERSIBLE_INTENTS.contains(&intent.as_str()) {
+    if execution_state != "completed" || !recent || !REVERSIBLE_INTENTS.contains(&intent.as_str()) {
         return Ok(false);
     }
     conn.execute(
@@ -165,51 +248,94 @@ pub fn refund(
 /// transaction that records the request's events.
 pub fn consume(
     conn: &Connection,
-    request_id: &str,
-    input: KalVoiceInput,
-    intent_kind: &str,
-    now: OffsetDateTime,
-    anchor_day: u8,
-    allowance: Option<u32>,
+    claim: RequestClaim<'_>,
+    context: ConsumptionContext,
 ) -> Result<Consumption> {
-    if !is_valid_id(request_id) {
+    if !is_valid_id(claim.request_id) {
         return Err(KalError::validation(
             "invalid_request_id",
             "KalVoice received an invalid request id.",
         ));
     }
-    let existing: Option<String> = conn
-        .query_row(
-            "SELECT period_start FROM kalvoice_requests WHERE request_id = ?1",
-            [request_id],
-            |r| r.get(0),
-        )
-        .optional()?;
-    let current = usage(conn, now, anchor_day, allowance)?;
-    if existing.is_some() {
-        return Ok(Consumption::AlreadyRecorded(current));
+    if !is_valid_id(claim.execution_owner) {
+        return Err(KalError::validation(
+            "invalid_execution_owner",
+            "KalVoice received an invalid execution owner.",
+        ));
+    }
+    let existing = execution(conn, claim.request_id)?;
+    let current = usage(conn, context.now, context.anchor_day, context.allowance)?;
+    if let Some(execution) = existing {
+        return Ok(Consumption::AlreadyRecorded {
+            usage: current,
+            execution,
+        });
     }
     if current.exhausted() {
         return Ok(Consumption::LimitReached(current));
     }
     conn.execute(
-        "INSERT INTO kalvoice_requests (request_id, period_start, recorded_at, input, intent)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO kalvoice_requests (
+             request_id, period_start, recorded_at, input, intent,
+             execution_state, execution_owner, outcome_code
+         ) VALUES (?1, ?2, ?3, ?4, ?5, 'claimed', ?6, NULL)",
         params![
-            request_id,
+            claim.request_id,
             current.period_start,
-            format_rfc3339(now),
-            match input {
+            format_rfc3339(context.now),
+            match claim.input {
                 KalVoiceInput::Voice => "voice",
                 KalVoiceInput::Text => "text",
             },
-            intent_kind,
+            claim.intent_kind,
+            claim.execution_owner,
         ],
     )?;
     Ok(Consumption::Recorded(KalVoiceUsage {
         used: current.used.saturating_add(1),
         ..current
     }))
+}
+
+/// Records the terminal executor result for a claim owned by this orchestrator instance.
+/// Returns false instead of overwriting a row whose owner/state changed.
+pub fn finish(
+    conn: &Connection,
+    request_id: &str,
+    execution_owner: &str,
+    result: ExecutionResult<'_>,
+) -> Result<bool> {
+    if !is_valid_id(request_id) || !is_valid_id(execution_owner) {
+        return Err(KalError::validation(
+            "invalid_request_claim",
+            "KalVoice received an invalid request claim.",
+        ));
+    }
+    let (state, code) = match result {
+        ExecutionResult::Completed => ("completed", None),
+        ExecutionResult::Failed { code } => (
+            "failed",
+            Some(if valid_outcome_code(code) {
+                code
+            } else {
+                "execution_failed"
+            }),
+        ),
+    };
+    Ok(conn.execute(
+        "UPDATE kalvoice_requests
+            SET execution_state = ?1, outcome_code = ?2
+          WHERE request_id = ?3 AND execution_state = 'claimed' AND execution_owner = ?4",
+        params![state, code, request_id, execution_owner],
+    )? == 1)
+}
+
+fn valid_outcome_code(code: &str) -> bool {
+    !code.is_empty()
+        && code.len() <= 128
+        && code
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
 }
 
 #[cfg(test)]
@@ -226,6 +352,7 @@ mod tests {
     }
 
     const NOW: OffsetDateTime = datetime!(2026-09-24 18:00 UTC);
+    const OWNER: &str = "0192f3c4-0000-7000-8000-0000000000ee";
 
     fn take(
         conn: &Connection,
@@ -233,7 +360,21 @@ mod tests {
         now: OffsetDateTime,
         allowance: Option<u32>,
     ) -> Consumption {
-        consume(conn, id, KalVoiceInput::Text, "navigate", now, 1, allowance).expect("consume")
+        consume(
+            conn,
+            RequestClaim {
+                request_id: id,
+                input: KalVoiceInput::Text,
+                intent_kind: "navigate",
+                execution_owner: OWNER,
+            },
+            ConsumptionContext {
+                now,
+                anchor_day: 1,
+                allowance,
+            },
+        )
+        .expect("consume")
     }
 
     #[test]
@@ -264,16 +405,66 @@ mod tests {
     fn counts_each_request_once() {
         let conn = conn();
         let id = new_id();
-        assert!(
-            matches!(take(&conn, &id, NOW, Some(250)), Consumption::Recorded(u) if u.used == 1)
-        );
-        match take(&conn, &id, NOW, Some(250)) {
-            Consumption::AlreadyRecorded(u) => assert_eq!(u.used, 1),
+        assert!(matches!(take(&conn, &id, NOW, Some(75)), Consumption::Recorded(u) if u.used == 1));
+        match take(&conn, &id, NOW, Some(75)) {
+            Consumption::AlreadyRecorded { usage, execution } => {
+                assert_eq!(usage.used, 1);
+                assert_eq!(
+                    execution,
+                    RequestExecution::Claimed {
+                        owner: Some(OWNER.into())
+                    }
+                );
+            }
             other => panic!("{other:?}"),
         }
-        let u = usage(&conn, NOW, 1, Some(250)).expect("usage");
+        let u = usage(&conn, NOW, 1, Some(75)).expect("usage");
         assert_eq!(u.used, 1);
-        assert_eq!(u.remaining(), Some(249));
+        assert_eq!(u.remaining(), Some(74));
+    }
+
+    #[test]
+    fn terminal_results_are_owner_bound_and_replayable_without_content() {
+        let conn = conn();
+        let completed = new_id();
+        assert!(matches!(
+            take(&conn, &completed, NOW, Some(75)),
+            Consumption::Recorded(_)
+        ));
+        assert!(finish(&conn, &completed, OWNER, ExecutionResult::Completed).expect("finish"));
+        assert_eq!(
+            execution(&conn, &completed).expect("state"),
+            Some(RequestExecution::Completed)
+        );
+        assert!(
+            !finish(
+                &conn,
+                &completed,
+                OWNER,
+                ExecutionResult::Failed { code: "too_late" }
+            )
+            .expect("terminal state cannot change")
+        );
+
+        let failed = new_id();
+        take(&conn, &failed, NOW, Some(75));
+        assert!(
+            finish(
+                &conn,
+                &failed,
+                OWNER,
+                ExecutionResult::Failed {
+                    code: "unsafe code with spaces"
+                }
+            )
+            .expect("finish failed")
+        );
+        assert_eq!(
+            execution(&conn, &failed).expect("state"),
+            Some(RequestExecution::Failed {
+                code: "execution_failed".into()
+            })
+        );
     }
 
     #[test]
@@ -333,12 +524,17 @@ mod tests {
         let id = new_id();
         consume(
             &conn,
-            &id,
-            KalVoiceInput::Voice,
-            "create_threads",
-            NOW,
-            1,
-            Some(250),
+            RequestClaim {
+                request_id: &id,
+                input: KalVoiceInput::Voice,
+                intent_kind: "create_threads",
+                execution_owner: OWNER,
+            },
+            ConsumptionContext {
+                now: NOW,
+                anchor_day: 1,
+                allowance: Some(75),
+            },
         )
         .expect("consume");
         let row: (String, String, String) = conn
@@ -364,38 +560,64 @@ mod tests {
         let nav = new_id();
         consume(
             &conn,
-            &nav,
-            KalVoiceInput::Voice,
-            "navigate",
-            NOW,
-            1,
-            Some(250),
+            RequestClaim {
+                request_id: &nav,
+                input: KalVoiceInput::Voice,
+                intent_kind: "navigate",
+                execution_owner: OWNER,
+            },
+            ConsumptionContext {
+                now: NOW,
+                anchor_day: 1,
+                allowance: Some(75),
+            },
         )
         .expect("nav");
+        finish(&conn, &nav, OWNER, ExecutionResult::Completed).expect("finish nav");
         let stop = new_id();
         consume(
             &conn,
-            &stop,
-            KalVoiceInput::Voice,
-            "stop_threads",
-            NOW,
-            1,
-            Some(250),
+            RequestClaim {
+                request_id: &stop,
+                input: KalVoiceInput::Voice,
+                intent_kind: "stop_threads",
+                execution_owner: OWNER,
+            },
+            ConsumptionContext {
+                now: NOW,
+                anchor_day: 1,
+                allowance: Some(75),
+            },
         )
         .expect("stop");
+        finish(&conn, &stop, OWNER, ExecutionResult::Completed).expect("finish stop");
         let later = NOW + time::Duration::minutes(10);
         assert!(!refund(&conn, &nav, later, time::Duration::minutes(2)).expect("old"));
         assert!(!refund(&conn, &stop, NOW, time::Duration::minutes(2)).expect("irreversible"));
         assert!(refund(&conn, &nav, NOW, time::Duration::minutes(2)).expect("refund"));
         assert!(!refund(&conn, &nav, NOW, time::Duration::minutes(2)).expect("twice"));
-        assert_eq!(usage(&conn, NOW, 1, Some(250)).expect("usage").used, 1);
+        assert_eq!(usage(&conn, NOW, 1, Some(75)).expect("usage").used, 1);
     }
 
     #[test]
     fn invalid_request_ids_are_refused() {
         let conn = conn();
         for bad in ["", "abc", "../../x", "'; DROP TABLE kalvoice_requests; --"] {
-            let err = consume(&conn, bad, KalVoiceInput::Text, "x", NOW, 1, None).expect_err("bad");
+            let err = consume(
+                &conn,
+                RequestClaim {
+                    request_id: bad,
+                    input: KalVoiceInput::Text,
+                    intent_kind: "x",
+                    execution_owner: OWNER,
+                },
+                ConsumptionContext {
+                    now: NOW,
+                    anchor_day: 1,
+                    allowance: None,
+                },
+            )
+            .expect_err("bad");
             assert_eq!(err.code, "invalid_request_id");
         }
     }

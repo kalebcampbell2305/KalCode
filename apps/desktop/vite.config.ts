@@ -50,7 +50,9 @@ export default defineConfig(({ mode }) => ({
     port: mode === "ui-test" ? uiTestPort : 1420,
     strictPort: true,
     host: "127.0.0.1",
-    watch: { ignored: ["**/src-tauri/**"] },
+    // Generated Playwright reports may be written while another isolated suite is running.
+    // Watching them reloads every ui-test page mid-action and resets in-memory navigation.
+    watch: { ignored: ["**/src-tauri/**", "**/test-results*/**", "**/playwright-report*/**"] },
   },
   build: {
     target: "es2022",

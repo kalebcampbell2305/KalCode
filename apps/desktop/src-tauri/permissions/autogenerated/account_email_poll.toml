@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-account-email-poll"
+description = "Enables the account_email_poll command without any pre-configured scope."
+commands.allow = ["account_email_poll"]
+
+[[permission]]
+identifier = "deny-account-email-poll"
+description = "Denies the account_email_poll command without any pre-configured scope."
+commands.deny = ["account_email_poll"]

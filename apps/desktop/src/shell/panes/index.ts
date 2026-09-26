@@ -18,7 +18,7 @@ export {
 } from "./contentRegistry.ts";
 export { afterLiveResize, isLiveResizing } from "./liveResize.ts";
 export { OutputScheduler } from "./outputScheduler.ts";
-export { type PaneCanvasProps, PaneCanvas, type PaneHost } from "./PaneCanvas.tsx";
+export { PaneCanvas, type PaneCanvasProps, type PaneHost } from "./PaneCanvas.tsx";
 export {
   dispatchPaneCommand,
   listenForPaneCommands,

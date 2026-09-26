@@ -31,7 +31,9 @@ fn page(limit: u32) -> PageRequest {
 fn dir_link(link: &Path, target: &Path) -> bool {
     #[cfg(windows)]
     {
-        std::process::Command::new("cmd")
+        let mut command = std::process::Command::new("cmd");
+        common::hide_test_process(&mut command);
+        command
             .args(["/C", "mklink", "/J"])
             .arg(link)
             .arg(target)

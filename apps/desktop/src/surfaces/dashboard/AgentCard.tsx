@@ -18,7 +18,7 @@ import {
   StatusChip,
 } from "@kalcode/ui/components";
 import { CircleCheck, FileDiff, GitBranch, MoreHorizontal, ShieldAlert } from "lucide-react";
-import { memo, type MouseEvent, useEffect, useRef, useState } from "react";
+import { type MouseEvent, memo, useEffect, useRef, useState } from "react";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
 import { MODE_LABELS } from "../permissions/labels.ts";
 import styles from "./AgentCard.module.css";

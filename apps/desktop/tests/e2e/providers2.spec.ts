@@ -3,7 +3,14 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, type Page, test } from "@playwright/test";
-import { closeGracefully, EXE, launch, processesMatching, removeDir } from "./harness.ts";
+import {
+  closeGracefully,
+  EXE,
+  launch,
+  processesMatching,
+  removeDir,
+  writeManagedFakeProviderConfig,
+} from "./harness.ts";
 
 /**
  * PROVIDERS-2 end to end against the real app: Codex and Gemini CLI threads run on the real
@@ -85,7 +92,7 @@ test("Codex and Gemini CLI threads stream to done and Provider Health reports th
   mkdirSync(bin);
   copyFileSync(FAKE, join(bin, "codex.exe"));
   copyFileSync(FAKE, join(bin, "gemini.exe"));
-  writeFileSync(join(bin, "fake-provider.json"), "{}");
+  writeManagedFakeProviderConfig(bin);
 
   try {
     const app = await launch(dataDir, {
@@ -107,7 +114,8 @@ test("Codex and Gemini CLI threads stream to done and Provider Health reports th
       expect(status?.detection?.displayPath ?? "", `${id} must be the fake`).toContain(basename(root));
     }
     const codexStatus = statuses.find((s) => s.id === "codex");
-    expect(codexStatus?.detection?.auth).toBe("authenticated");
+    // Installation discovery must not inspect the standalone provider's account.
+    expect(codexStatus?.detection?.auth).toBe("unknown");
     expect(statuses.find((s) => s.id === "gemini-cli")?.detection?.auth).toBe("unknown");
 
     // Codex: thread create → stream → done.
@@ -184,7 +192,7 @@ test("a Codex pane reports authenticated notify status and ignores forged termin
   const bin = join(root, "bin");
   mkdirSync(bin);
   copyFileSync(FAKE, join(bin, "codex.exe"));
-  writeFileSync(join(bin, "fake-provider.json"), "{}");
+  writeManagedFakeProviderConfig(bin);
   const HELPER = join(dirname(EXE), "kalcode-hook.exe");
   test.skip(!existsSync(HELPER), "Run build:e2e: it builds kalcode-hook.");
 

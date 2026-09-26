@@ -2,6 +2,7 @@
 import type { ProviderId } from "./ProviderId.ts";
 
 /**
- * Which intelligence powers KalVoice reasoning. Always the user's own; never KalCode-funded.
+ * Legacy persisted intelligence selection. Current KalVoice reasoning is local-only; the provider
+ * variant remains solely for wire/storage compatibility and never authorizes provider inference.
  */
 export type KalVoiceIntelligence = { "kind": "provider", providerId: ProviderId, } | { "kind": "local" };

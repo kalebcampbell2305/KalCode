@@ -2,6 +2,20 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    // Read-only release probe: exits before WebView, stores, providers, or any runtime starts.
+    if std::env::args_os().skip(1).collect::<Vec<_>>() == [std::ffi::OsString::from("--build-info")]
+    {
+        println!(
+            "{}",
+            serde_json::json!({
+                "schemaVersion": 1,
+                "version": env!("CARGO_PKG_VERSION"),
+                "channel": kalcode_contracts::app::BuildChannel::current(),
+                "testHooks": kalcode_desktop_lib::environment::TEST_HOOKS_ENABLED,
+            })
+        );
+        return;
+    }
     let removed = remove_webview_overrides();
     kalcode_desktop_lib::run(removed);
 }

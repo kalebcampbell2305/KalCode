@@ -368,7 +368,7 @@ describe("email throttle and budget", () => {
   });
 
   it("stops at the site-wide daily budget with a clear 503 and leaves nothing behind", async () => {
-    h = harness({ dailyLimit: 1 });
+    h = harness({ dailyLimit: 31 });
     expect((await join("first@example.com")).status).toBe(200);
     const second = await join("second@example.com");
     expect(second.status).toBe(503);
@@ -395,7 +395,6 @@ describe("email throttle and budget", () => {
 describe("when the email cannot be sent", () => {
   it.each([
     ["rejected", { ok: false, reason: "rejected", status: 500 }],
-    ["timeout", { ok: false, reason: "timeout" }],
     ["not configured", { ok: false, reason: "not_configured" }],
   ] as const)("(%s) answers 502, undoes everything and lets the person retry at once", async (_label, failure) => {
     h.mailer.failWith = failure;
@@ -418,11 +417,27 @@ describe("when the email cannot be sent", () => {
     expect(h.mailer.sent).toHaveLength(1);
   });
 
+  it.each(["network", "timeout"] as const)(
+    "retains the budget, throttle, row and usable links when %s leaves delivery ambiguous",
+    async (reason) => {
+      h.mailer.failWith = { ok: false, reason };
+      const failed = await join("ambiguous@example.com");
+      expect(failed.status).toBe(502);
+      expect(h.store.rows.has("ambiguous@example.com")).toBe(true);
+      expect(h.store.tokens.size).toBe(2);
+      expect([...h.store.budget.values()]).toEqual([1]);
+
+      h.mailer.failWith = null;
+      expect((await join("ambiguous@example.com")).status).toBe(200);
+      expect(h.mailer.sent).toHaveLength(0);
+    },
+  );
+
   it("keeps an existing row as it was, throttle included", async () => {
     await join("kept@example.com");
     const before = { ...h.store.rows.get("kept@example.com") };
     h.advance(11 * MINUTE);
-    h.mailer.failWith = { ok: false, reason: "network" };
+    h.mailer.failWith = { ok: false, reason: "rejected", status: 500 };
     expect((await join("kept@example.com")).status).toBe(502);
     expect(h.store.rows.get("kept@example.com")).toEqual(before);
     expect(h.store.tokens.size).toBe(2); // the links from the first email still work

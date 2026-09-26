@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-context-send"
+description = "Enables the context_send command without any pre-configured scope."
+commands.allow = ["context_send"]
+
+[[permission]]
+identifier = "deny-context-send"
+description = "Denies the context_send command without any pre-configured scope."
+commands.deny = ["context_send"]

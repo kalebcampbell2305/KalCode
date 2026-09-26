@@ -8,8 +8,8 @@ import { Badge, Button } from "@kalcode/ui/components";
 import { CircleSlash, GitBranch, Globe, LayoutDashboard, Puzzle } from "lucide-react";
 import type { ReactNode } from "react";
 import { useNavigation } from "../navigation.tsx";
-import styles from "./PaneCanvas.module.css";
 import type { TabInfo } from "./contentRegistry.ts";
+import styles from "./PaneCanvas.module.css";
 
 export function describeBuiltin(content: PaneContent): TabInfo {
   switch (content.kind) {

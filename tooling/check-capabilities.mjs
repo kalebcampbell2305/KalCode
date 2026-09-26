@@ -3,10 +3,10 @@
 //   today that is only main.json. A second capability file fails until it is added here and
 //   checked like main.json.
 // - main.json grants exactly the commands declared in build.rs `COMMANDS` plus an explicit
-//   allow-list of core permissions, to the main window only, with no remote URLs.
+//   allow-list of core permissions, to the main webview only, with no remote URLs.
 // - Test hooks (`TEST_HOOK_COMMANDS` in build.rs) are never granted by capabilities/. Their grant
 //   lives in test-capabilities/test-hooks.json, which the app adds at runtime only in debug and
-//   `e2e` builds; it may grant exactly the test hooks, to the main window, nothing else.
+//   `e2e` builds; it may grant exactly the test hooks, to the main webview, nothing else.
 // Usage: node tooling/check-capabilities.mjs
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
@@ -49,11 +49,12 @@ function parseJson(path, problems, label) {
   }
 }
 
-/** Checks the common shape every capability must have: main window only, local only. */
+/** Checks the common shape every capability must have: main webview only, local only. */
 function checkShape(capability, label, problems) {
-  const windows = JSON.stringify(capability.windows);
-  if (windows !== '["main"]') problems.push(`${label}: must target only the main window, got ${windows}`);
-  if (capability.webviews !== undefined) problems.push(`${label}: must not target webviews`);
+  const webviews = JSON.stringify(capability.webviews);
+  if (webviews !== '["main"]') problems.push(`${label}: must target only the main webview, got ${webviews}`);
+  // Window selectors also grant every child webview; never combine them with webview selectors.
+  if (capability.windows !== undefined) problems.push(`${label}: must not target windows`);
   if (capability.remote !== undefined) problems.push(`${label}: must not grant remote URLs`);
   if (capability.local === false) problems.push(`${label}: must apply to local content`);
   if (!Array.isArray(capability.permissions)) {
@@ -79,7 +80,10 @@ function compare(label, granted, expected, problems) {
 export function checkCapabilities(root) {
   const problems = [];
   const buildRs = readFileSync(join(root, "build.rs"), "utf8");
-  const commands = commandList(buildRs, "COMMANDS");
+  const commandSource = buildRs.includes('include!("src/command_registry.rs")')
+    ? readFileSync(join(root, "src", "command_registry.rs"), "utf8")
+    : buildRs;
+  const commands = commandList(commandSource, "COMMANDS");
   const testCommands = commandList(buildRs, "TEST_HOOK_COMMANDS") ?? [];
   if (!commands) return { problems: ["COMMANDS list not found in build.rs"], commands: [], testCommands };
 

@@ -11,8 +11,9 @@ use kalcode_context::never_share::PatternScope;
 use kalcode_context::package::{ContextItem, ContextPackage, PackageOptions};
 use kalcode_context::provider::TextOnlyDefaults;
 use kalcode_context::store::{
-    PackageStatus, SqliteDecisionLog, append_log, finish_package, log_for_package,
+    PackageStatus, SqliteDecisionLog, append_log, append_log_in, finish_package, log_for_package,
     never_share_for_workspace, never_share_list, never_share_set, package_status, save_preview,
+    save_preview_in,
 };
 use kalcode_context::{ContextPurpose, Firewall, MIGRATION_V8, Sensitivity};
 use kalcode_core::db::{MIGRATIONS, migrate, open_in_memory, schema_version};
@@ -114,7 +115,70 @@ fn packages_store_references_never_content() {
         "item source stored content: {dump}"
     );
     assert!(dump.contains("\"path\":\"src/config.rs\""));
-    assert!(dump.contains("contentSha256"));
+    assert!(!dump.contains("contentSha256"));
+}
+
+#[test]
+fn secret_shaped_labels_are_redacted_in_preview_provider_payload_and_storage() {
+    let ws = Ws::new();
+    let marker = token("ghp_", 41, 36);
+    let label = format!("password={marker}");
+    let url = format!("https://developer:{marker}@example.com/docs");
+    let file = format!("src/password={marker}.txt");
+    ws.write(&file, format!("password={marker}\n"));
+    let firewall = Firewall::for_root(ws.path());
+    let mut options = PackageOptions::new(ContextPurpose::Drop);
+    options.workspace_id = Some("ws-1".into());
+    options.target_thread_id = Some("thread-1".into());
+    let package = ContextPackage::build(
+        &firewall,
+        &TextOnlyDefaults::new("provider-x"),
+        options,
+        vec![
+            ContextItem::text(
+                kalcode_context::ItemKind::Text,
+                label,
+                kalcode_context::ItemOrigin::User,
+                format!("password={marker}"),
+            ),
+            ContextItem::url(url),
+            ContextItem::file(file),
+        ],
+    );
+    let raw_source_sha256 = package.items[0].source_sha256.clone();
+
+    let preview = serde_json::to_string(&package.preview()).expect("preview");
+    let provider_payload = package.render().expect("render").text();
+    assert!(!preview.contains(&marker));
+    assert!(!provider_payload.contains(&marker));
+    assert!(preview.contains("REDACTED"));
+    assert!(provider_payload.contains("REDACTED"));
+
+    let mut conn = db();
+    save_preview(&mut conn, &package).expect("save");
+    append_log(&mut conn, &package.log_entries()).expect("save decision facts");
+    let sources: Vec<String> = conn
+        .prepare("SELECT source FROM context_items WHERE package_id = ?1 ORDER BY position")
+        .expect("prepare")
+        .query_map([&package.id], |row| row.get(0))
+        .expect("query")
+        .collect::<Result<_, _>>()
+        .expect("sources");
+    let stored = sources.join("\n");
+    assert!(!stored.contains(&marker));
+    assert!(
+        !stored.contains(&raw_source_sha256),
+        "durable item references must not fingerprint raw source content"
+    );
+    assert!(stored.contains("REDACTED"));
+    let decision_facts =
+        serde_json::to_string(&log_for_package(&conn, &package.id).expect("decision facts"))
+            .expect("serialize decision facts");
+    assert!(!decision_facts.contains(&marker));
+    assert!(
+        !decision_facts.contains(&raw_source_sha256),
+        "durable firewall facts must not fingerprint raw source content"
+    );
 }
 
 #[test]
@@ -213,6 +277,48 @@ fn decision_log_is_append_only_and_content_free() {
     assert_eq!(
         log_for_package(&conn, &package.id).expect("rows").len(),
         entries.len() + 1
+    );
+}
+
+#[test]
+fn preview_and_decision_facts_join_an_existing_transaction() {
+    let ws = Ws::new();
+    let mut conn = db();
+    let package = package(&ws, &token("ghp_", 24, 36));
+    let entries = package.log_entries();
+
+    {
+        let tx = conn.transaction().expect("outer transaction");
+        save_preview_in(&tx, &package).expect("save in outer transaction");
+        append_log_in(&tx, &entries).expect("append in outer transaction");
+        tx.rollback().expect("rollback outer transaction");
+    }
+
+    assert_eq!(package_status(&conn, &package.id).expect("status"), None);
+    assert!(
+        log_for_package(&conn, &package.id)
+            .expect("decision facts")
+            .is_empty()
+    );
+
+    {
+        let tx = conn.transaction().expect("outer transaction");
+        save_preview_in(&tx, &package).expect("save in outer transaction");
+        append_log_in(&tx, &entries).expect("append in outer transaction");
+        tx.commit().expect("commit outer transaction");
+    }
+
+    assert_eq!(
+        package_status(&conn, &package.id)
+            .expect("status")
+            .as_deref(),
+        Some("previewed")
+    );
+    assert_eq!(
+        log_for_package(&conn, &package.id)
+            .expect("decision facts")
+            .len(),
+        entries.len()
     );
 }
 

@@ -21,6 +21,7 @@ import {
   recentAudit,
   run,
   sqlString,
+  UsageError,
 } from "./lib.mjs";
 
 const HELP = `Grant the OWNER entitlement to an existing account.
@@ -31,6 +32,15 @@ const HELP = `Grant the OWNER entitlement to an existing account.
   --remote                          production database (uses your Cloudflare login)
   --operator <name>                 recorded as granted_by (default: operator:<os user>)
   --confirm                         actually write; without it nothing changes`;
+
+function hasUnsettledSubscription(options, accountId) {
+  const [rows] = d1(
+    options,
+    "SELECT 1 AS unsettled FROM billing_subscriptions " +
+      `WHERE account_id = ${sqlString(accountId)} AND status NOT IN ('canceled', 'incomplete_expired') LIMIT 1`,
+  );
+  return rows?.length > 0;
+}
 
 run((argv) => {
   const options = parseOperatorArgs(argv, { action: "grant" });
@@ -49,6 +59,11 @@ run((argv) => {
   if (grants.some((grant) => grant.tier === "owner")) {
     console.log("This account already holds an active OWNER grant. Nothing to do.");
     return 0;
+  }
+  if (hasUnsettledSubscription(options, account.id)) {
+    throw new UsageError(
+      "This account has a paid subscription that is not settled. Cancel it in the billing portal and wait for KalCode to confirm the terminal status before granting OWNER.",
+    );
   }
   if (!options.confirm) {
     console.log(`\nWould grant OWNER (source 'grant', no expiry) as ${options.operator}: "${options.reason}".`);

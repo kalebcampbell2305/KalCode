@@ -24,7 +24,8 @@ Status: built and tested in Z0 · Canonical origin: **https://kalcoded.com**
 | `/kalvoice` | Dictation and command mode, the KalVoice demo, KalVoice Requests per plan, privacy. |
 | `/pricing` | One comparison table built from `@kalcode/protocol/plans` (never hardcoded), an "every plan includes" line, FAQ accordion. |
 | `/download` | Build status per OS from the release manifest, the early-access form, what to expect. |
-| `/docs/*`, `/changelog`, `/security`, `/privacy`, `/terms` | Content pages; docs carry a one-line "Describes the design" chip. |
+| `/updates` | Product news and release communication. `/changelog` permanently redirects here, and historic release anchors remain valid. |
+| `/docs/*`, `/security`, `/privacy`, `/terms` | Content pages; docs carry a one-line "Describes the design" chip. |
 
 Rules the pages follow:
 
@@ -53,8 +54,8 @@ Rules the pages follow:
 
 ## Round 3: the cinematic world (2026-09-24)
 
-- **World pages** (`/`, `/product`, `/kalvoice`, `/pricing`, `/download`, 404) are always dark:
-  `Base world` sets `data-theme="dark"` on `<body>`. Reading pages (docs, changelog, legal) follow
+- **World pages** (`/`, `/product`, `/kalvoice`, `/pricing`, `/download`, `/updates`, 404) are always dark:
+  `Base world` sets `data-theme="dark"` on `<body>`. Reading pages (docs and legal) follow
   the visitor's theme, and only they show the theme toggle. Space imagery is never drawn on light
   surfaces (backdrops and planets are hidden in the light theme).
 - **Environments:** `Backdrop.astro` renders the hero work's `SpaceBackdrop` (nebula, deep,
@@ -86,6 +87,7 @@ Rules the pages follow:
 | --- | --- |
 | `www.kalcoded.com/*` | 301 → `https://kalcoded.com/*` (path and query kept) |
 | Plain HTTP at the edge (`cf-visitor` scheme `http`) | 301 → HTTPS |
+| `/changelog` or `/changelog/` | 301 → `/updates` (query kept; browsers retain historic fragment anchors) |
 | `POST /api/early-access` `{email, source, website}` | Stores a pending row and emails a confirmation link (a confirmed address gets an "already on the list" email instead). 200 with the same body for new, pending, confirmed, throttled and honeypot submissions; 502 `email_failed` if the email could not be sent (nothing kept); 503 `email_unavailable` when the daily email budget is spent |
 | `POST /api/early-access/remove` `{email}` | Emails a removal link only if the address is on the list; 200 with the same body either way (502/503 as above) |
 | `POST /api/early-access/confirm` `{token}` | 200 confirmed; 410 `invalid_link` for a used, expired or unknown link; 400 for a malformed one. GET → 405 |
@@ -101,10 +103,29 @@ All responses carry: CSP with a SHA-256 hash for the single inline theme script,
 `X-Content-Type-Options: nosniff`, `Referrer-Policy`, `Permissions-Policy`, and
 `frame-ancestors 'none'`. Hashed `/_astro/*` assets are immutable-cached.
 
-Privacy: the site sets no cookies and runs no analytics. D1 stores the email, timestamp, source
+Privacy: the public marketing and early-access pages set no cookies and run no analytics. The
+private `/account` page uses one HttpOnly, Secure, SameSite=Lax host session cookie issued by
+`api.kalcoded.com`; scripts cannot read it. D1 stores the email, timestamp, source
 page, consent version, confirmation status and time, per-address throttle counters and the
 SHA-256 of each live link (docs/DATA_MODEL.md §3). Workers invocation logs are disabled so client
 IPs and user agents are not retained by us; the Worker's own logs never contain emails or links.
+
+## Account and billing
+
+`/account` is a `noindex` authenticated surface backed by the separate account API at the fixed
+origin `https://api.kalcoded.com`. Passwordless sign-in sends a high-entropy, single-use link to
+the supplied address. Its proof stays in the URL fragment, is removed before the API call, and
+never reaches website/CDN request logs. Responses are account-enumeration neutral. The website never receives or
+stores a bearer token: the API sets a secure host cookie after link verification, and every
+credentialed write must come from the exact production website origin.
+
+After sign-in, the page reads server-authoritative account, entitlement and usage state. A new
+account must explicitly activate Free, or wait for a verified active/trialing Stripe webhook after
+Checkout, before protected entitlement and usage routes unlock. Paid buttons submit only a public
+tier plus an idempotent request id; customer, Price, quantity and return URLs are server owned.
+Checkout and subscription management open on Stripe-hosted pages. Account deletion requires a
+fresh email proof and is refused while billing or a Checkout reservation is active. See
+`docs/BILLING.md` §9–10 for contracts, external setup and the threat model.
 
 ## Early access and email (double opt-in)
 
@@ -145,6 +166,13 @@ cannot cause provider failures, and the per-IP rate limit bounds probing.
 | --- | --- | --- |
 | `resend` | production (`wrangler.jsonc` vars) | `POST https://api.resend.com/emails` with `Authorization: Bearer $RESEND_API_KEY`, JSON `from`, `reply_to`, `to`, `subject`, `text`, `html`, an `Idempotency-Key`, 8 s timeout. Links always use `https://kalcoded.com`. |
 | `capture` | Playwright | POSTs the message to `EMAIL_CAPTURE_URL`, which must be a loopback `http://` URL (the suite's mail sink, `tests/e2e/mail-sink.mjs`). |
+
+The account API reuses this same Resend authority through the website Worker's internal named
+`AccountMailEntrypoint` RPC service binding. It is not an HTTP route. The method accepts only a
+validated recipient, a `signin` or `delete` purpose, and a one-time proof; it renders fixed
+templates and claims a proof hash plus the shared daily D1 budget before sending. Provider
+timeouts remain charged and cannot replay the proof because the provider may already have
+accepted the message.
 | `log` | local `pnpm preview` | Prints the message, links included, to the wrangler console (recipient redacted). |
 
 `capture` and `log` also need `EMAIL_LINK_ORIGIN`, a loopback origin such as

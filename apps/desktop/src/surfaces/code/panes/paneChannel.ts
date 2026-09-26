@@ -20,6 +20,7 @@ export function isPaneProvider(providerId: string): providerId is PaneProviderId
 export interface CreatePaneInput {
   /** Defaults to Claude Code. */
   providerId?: PaneProviderId;
+  providerAccountId?: string | null;
   workspaceId: string;
   permissionMode: PermissionMode;
   model?: string | null;
@@ -71,6 +72,7 @@ export class PaneChannel {
   create(input: CreatePaneInput): Promise<ThreadSummary> {
     return this.call("provider_pane_create", {
       providerId: input.providerId ?? "claude-code",
+      providerAccountId: input.providerAccountId ?? null,
       workspaceId: input.workspaceId,
       model: input.model ?? null,
       permissionMode: input.permissionMode,

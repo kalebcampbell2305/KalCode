@@ -351,15 +351,39 @@ pub enum RenderedPart {
 /// Exactly what goes to the provider.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderedPackage {
-    pub package_id: String,
-    pub content_sha256: String,
-    pub parts: Vec<RenderedPart>,
-    pub items_sent: u32,
-    pub bytes_sent: u64,
-    pub redactions: u32,
+    pub(crate) package_id: String,
+    pub(crate) content_sha256: String,
+    pub(crate) parts: Vec<RenderedPart>,
+    pub(crate) items_sent: u32,
+    pub(crate) bytes_sent: u64,
+    pub(crate) redactions: u32,
 }
 
 impl RenderedPackage {
+    pub fn package_id(&self) -> &str {
+        &self.package_id
+    }
+
+    pub fn content_sha256(&self) -> &str {
+        &self.content_sha256
+    }
+
+    pub fn parts(&self) -> &[RenderedPart] {
+        &self.parts
+    }
+
+    pub fn items_sent(&self) -> u32 {
+        self.items_sent
+    }
+
+    pub fn bytes_sent(&self) -> u64 {
+        self.bytes_sent
+    }
+
+    pub fn redactions(&self) -> u32 {
+        self.redactions
+    }
+
     /// All text parts joined (attachments omitted).
     pub fn text(&self) -> String {
         self.parts
@@ -488,7 +512,7 @@ impl ContextPackage {
             action: LogAction::OverriddenByUser,
             detail: serde_json::json!({
                 "rules": rules,
-                "path": item.decision.relative_path,
+                "path": item.decision.relative_path.as_deref().map(sanitize_label),
                 "kind": item.item.kind.as_str(),
                 "sensitivity": item.decision.sensitivity.as_str(),
             }),
@@ -498,12 +522,30 @@ impl ContextPackage {
     }
 
     fn replan(&mut self) {
+        let labels: Vec<String> = self
+            .items
+            .iter()
+            .map(|item| sanitize_label(&item.item.label))
+            .collect();
+        // A credential-shaped filename must not reach the provider merely because references
+        // are supported. Such an item falls back to inline/summary/refusal planning.
+        let reference_paths: Vec<Option<String>> = self
+            .items
+            .iter()
+            .map(|item| {
+                item.decision.relative_path.as_deref().and_then(|path| {
+                    let safe = sanitize_label(path);
+                    (safe == path).then_some(safe)
+                })
+            })
+            .collect();
         let inputs: Vec<PlanInput<'_>> = self
             .items
             .iter()
-            .map(|item| PlanInput {
+            .enumerate()
+            .map(|(index, item)| PlanInput {
                 kind: item.item.kind,
-                label: &item.item.label,
+                label: &labels[index],
                 included: item.included,
                 unavailable: item.unavailable.is_some(),
                 verdict: item.decision.verdict,
@@ -512,7 +554,7 @@ impl ContextPackage {
                 text_bytes: item.text_payload.as_ref().map(|t| t.len() as u64),
                 attachment_bytes: item.attachment_bytes().map(|b| b.len() as u64),
                 summary_bytes: item.summary.len() as u64,
-                reference_path: item.decision.relative_path.as_deref(),
+                reference_path: reference_paths[index].as_deref(),
             })
             .collect();
         let (budget, planned) = plan_package(
@@ -560,7 +602,7 @@ impl ContextPackage {
                     override_confirmed: item.override_confirmed,
                     translation: item.plan.clone(),
                     note: item.note.clone(),
-                    unavailable: item.unavailable.clone(),
+                    unavailable: item.unavailable.as_deref().map(sanitize_label),
                 }
             })
             .collect();
@@ -768,10 +810,9 @@ impl ContextPackage {
                     detail: serde_json::json!({
                         "rule": reason.rule,
                         "effect": reason.effect,
-                        "path": item.decision.relative_path,
+                        "path": item.decision.relative_path.as_deref().map(sanitize_label),
                         "kind": item.item.kind.as_str(),
                         "sensitivity": item.decision.sensitivity.as_str(),
-                        "sourceSha256": item.source_sha256,
                     }),
                 });
             }

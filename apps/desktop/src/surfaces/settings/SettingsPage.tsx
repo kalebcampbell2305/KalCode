@@ -10,9 +10,13 @@ import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useDiagnostics } from "../../runtime/useDiagnostics.ts";
 import { KalCodeTagline, Wordmark } from "../../shell/Brand.tsx";
 import { Page } from "../../shell/Page.tsx";
+import { DoctorSettings } from "../doctor/DoctorSettings.tsx";
 import { PermissionsSettings } from "../permissions/index.ts";
+import { ResourceGovernorSettingsGate } from "../resources/ResourceGovernorSettingsGate.tsx";
 import { ProfileSettings } from "./ProfileSettings.tsx";
+import { SettingsAccount } from "./SettingsAccount.tsx";
 import styles from "./SettingsPage.module.css";
+import { UpdaterSettings } from "./UpdaterSettings.tsx";
 import { useDiagnosticsActions } from "./useDiagnosticsActions.ts";
 
 const OS_NAMES: Record<string, string> = { windows: "Windows", macos: "macOS", linux: "Linux" };
@@ -28,8 +32,12 @@ export function SettingsPage() {
       <div className={styles.layout}>
         <div className={styles.column}>
           <ProfileSettings />
+          <SettingsAccount />
           <Appearance />
           <KalVoiceSettings />
+          <ResourceGovernorSettingsGate />
+          <DoctorSettings />
+          <UpdaterSettings />
           <DiagnosticsSection />
           <About />
         </div>

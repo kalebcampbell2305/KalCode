@@ -14,7 +14,7 @@
 
 import type { PermissionMode } from "./generated/index.ts";
 
-export type PlanId = "free" | "pro" | "max";
+export type PlanId = "free" | "pro" | "max" | "max2x";
 
 /** Every entitlement tier, including the private OWNER tier (never listed publicly). */
 export type EntitlementTier = PlanId | "owner";
@@ -70,13 +70,13 @@ export const PLANS: readonly Plan[] = [
     summary: "Everything you need to run your coding agents from one workspace.",
     highlights: [
       "Connect Claude Code, Codex and Gemini CLI",
-      "250 KalVoice Requests a month",
+      "75 KalVoice Requests a month",
       "Unlimited local KalVoice dictation",
       "Every permission mode, including Bypass and Custom",
       "Dashboard, threads, Code workspace and terminals",
     ],
     limits: {
-      kalvoiceRequestsPerMonth: 250,
+      kalvoiceRequestsPerMonth: 75,
       kalvoiceDictation: "unlimited",
       providerConnections: "unlimited",
       permissionModes: ALL_PERMISSION_MODES,
@@ -94,13 +94,13 @@ export const PLANS: readonly Plan[] = [
     summary: "For daily work across several agents and projects.",
     highlights: [
       "Everything in Free",
-      "2,500 KalVoice Requests a month",
+      "1,500 KalVoice Requests a month",
       "More threads running at once",
       "Persistent agents and pair or team workflows",
       "Scheduled automations, skills and plugins",
     ],
     limits: {
-      kalvoiceRequestsPerMonth: 2500,
+      kalvoiceRequestsPerMonth: 1500,
       kalvoiceDictation: "unlimited",
       providerConnections: "unlimited",
       permissionModes: ALL_PERMISSION_MODES,
@@ -118,8 +118,32 @@ export const PLANS: readonly Plan[] = [
     summary: "For people who hand whole objectives to KalCode.",
     highlights: [
       "Everything in Pro",
-      "10,000 KalVoice Requests a month",
+      "5,000 KalVoice Requests a month",
       "Highest concurrency",
+      "Advanced missions with verification",
+      "Event-triggered automations",
+    ],
+    limits: {
+      kalvoiceRequestsPerMonth: 5000,
+      kalvoiceDictation: "unlimited",
+      providerConnections: "unlimited",
+      permissionModes: ALL_PERMISSION_MODES,
+      concurrentThreads: 20,
+      persistentAgents: true,
+      multiAgentWorkflows: true,
+      automations: "scheduled_and_event",
+      advancedMissions: true,
+    },
+  },
+  {
+    id: "max2x",
+    name: "MAX 2X",
+    price: { amountUsd: 50, interval: "month" },
+    summary: "For sustained KalVoice use across demanding workflows.",
+    highlights: [
+      "Everything in MAX",
+      "10,000 KalVoice Requests a month",
+      "MAX workspace features and concurrency",
       "Advanced missions with verification",
       "Event-triggered automations",
     ],
@@ -166,7 +190,7 @@ export function limitsFor(tier: EntitlementTier): PlanLimits {
   return tier === "owner" ? OWNER_LIMITS : getPlan(tier).limits;
 }
 
-/** "$0", "$10", "$25" — whole-dollar display used everywhere prices are shown. */
+/** "$0", "$10", "$25", "$50" — whole-dollar display used everywhere prices are shown. */
 export function formatPrice(price: PlanPrice): string {
   return `$${price.amountUsd}`;
 }
@@ -176,7 +200,7 @@ export function formatInterval(price: PlanPrice): string {
   return `/${price.interval}`;
 }
 
-/** "250", "2,500", "Unlimited" — KalVoice Request allowance for display. */
+/** "75", "1,500", "5,000", "10,000", "Unlimited" — KalVoice Request allowance for display. */
 export function formatKalVoiceAllowance(limits: PlanLimits): string {
   return limits.kalvoiceRequestsPerMonth === null
     ? "Unlimited"

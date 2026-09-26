@@ -38,6 +38,7 @@ export function run(command, args, options = {}) {
   const result = spawnSync(cmd, argv, {
     cwd: ROOT,
     stdio: "inherit",
+    windowsHide: true,
     ...extra,
     ...options,
   });
@@ -54,6 +55,7 @@ export function capture(command, args, options = {}) {
   const result = spawnSync(cmd, argv, {
     cwd: ROOT,
     encoding: "utf8",
+    windowsHide: true,
     ...extra,
     ...options,
   });

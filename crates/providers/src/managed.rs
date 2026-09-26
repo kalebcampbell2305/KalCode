@@ -1,0 +1,1218 @@
+//! Dedicated provider profiles stored beneath KalCode's application-data directory.
+//!
+//! The caller supplies an absolute child of an existing application-data directory. KalCode
+//! creates only fixed provider/session subdirectories, rejects filesystem links and reparse
+//! points in their ancestry, and never reads, copies, or rewrites provider authentication files.
+//! Provider launch environments retain the ordinary OS/home variables used for executable
+//! discovery while selecting the dedicated profile with Claude's config and secure-storage
+//! selectors, `CODEX_HOME`, or `GEMINI_CLI_HOME`.
+
+use std::collections::BTreeMap;
+use std::ffi::OsString;
+use std::fs::File;
+#[cfg(not(windows))]
+use std::fs::OpenOptions;
+use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
+
+use kalcode_contracts::agent::{AgentInput, AgentSession, ProviderError};
+use kalcode_contracts::permissions::ApprovalDecision;
+
+use crate::detect::DetectEnv;
+use crate::env::EnvPolicy;
+use crate::guardian::{
+    GuardianAuthority, GuardianLease, ProfileCapability, ProfileGeneration, ProfileIdentity,
+    ProviderProbeGuardian, RegisteredJob,
+};
+
+#[cfg(windows)]
+#[path = "managed_lock.rs"]
+mod managed_lock;
+
+const SUPPORTED_PROVIDERS: &str =
+    "managed profiles support only claude-code, codex, and gemini-cli";
+const UNSAFE_PATH: &str = "managed profile storage must not contain filesystem links";
+const MANAGED_PROFILE_DIRECTORY: &str = "provider-profiles";
+
+/// Why an account-lifecycle operation could not exclusively lock a managed profile.
+#[derive(Debug, thiserror::Error)]
+pub enum ProfileLifecycleLeaseError {
+    #[error("the managed provider profile is in use")]
+    InUse,
+    #[error(transparent)]
+    Unavailable(ProviderError),
+}
+
+#[derive(Debug)]
+enum ProfileLeaseError {
+    InUse,
+    Unavailable(ProviderError),
+}
+
+impl ProfileLeaseError {
+    fn into_provider_error(self) -> ProviderError {
+        match self {
+            Self::InUse => {
+                ProviderError::Start("the managed provider profile is already in use".into())
+            }
+            Self::Unavailable(error) => error,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ManagedProvider {
+    Claude,
+    Codex,
+    Gemini,
+}
+
+impl ManagedProvider {
+    fn parse(provider: &str) -> Result<Self, ProviderError> {
+        match provider {
+            "claude-code" => Ok(Self::Claude),
+            "codex" => Ok(Self::Codex),
+            "gemini-cli" => Ok(Self::Gemini),
+            _ => Err(ProviderError::Start(SUPPORTED_PROVIDERS.into())),
+        }
+    }
+
+    fn id(self) -> &'static str {
+        match self {
+            Self::Claude => "claude-code",
+            Self::Codex => "codex",
+            Self::Gemini => "gemini-cli",
+        }
+    }
+
+    fn home_variable(self) -> &'static str {
+        match self {
+            Self::Claude => "CLAUDE_CONFIG_DIR",
+            Self::Codex => "CODEX_HOME",
+            // Gemini appends `.gemini` to this documented parent directory.
+            Self::Gemini => "GEMINI_CLI_HOME",
+        }
+    }
+}
+
+/// Canonical root for account-scoped provider profiles and per-thread neutral directories.
+#[derive(Clone)]
+pub struct ManagedProfiles {
+    root: PathBuf,
+    guardian: Option<GuardianBinding>,
+}
+
+#[derive(Clone)]
+struct GuardianBinding {
+    authority: GuardianAuthority,
+    profile_generation: ProfileGeneration,
+}
+
+impl std::fmt::Debug for ManagedProfiles {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ManagedProfiles")
+            .field("root", &self.root)
+            .field("guarded", &self.guardian.is_some())
+            .finish()
+    }
+}
+
+impl ManagedProfiles {
+    /// Opens the one canonical managed-profile root beneath KalCode's data directory.
+    pub fn for_data_dir(data_dir: &Path) -> Result<Self, ProviderError> {
+        Self::new(data_dir.join(MANAGED_PROFILE_DIRECTORY))
+    }
+
+    /// Opens or creates an absolute managed-profile root directly below an existing directory.
+    /// Every existing ancestor must be an ordinary directory rather than a symlink, junction, or
+    /// other Windows reparse point.
+    pub fn new(root: PathBuf) -> Result<Self, ProviderError> {
+        if !root.is_absolute()
+            || root.file_name().is_none()
+            || root
+                .components()
+                .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+        {
+            return Err(ProviderError::Start(
+                "managed profile storage must be an absolute child directory".into(),
+            ));
+        }
+        let parent = root.parent().ok_or_else(|| {
+            ProviderError::Start(
+                "managed profile storage must have an existing parent directory".into(),
+            )
+        })?;
+        verify_existing_directory(parent)?;
+        let canonical_parent = canonicalize_directory(parent)?;
+
+        match std::fs::symlink_metadata(&root) {
+            Ok(metadata) => verify_directory_metadata(&metadata)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                create_private_directory(&root)?;
+            }
+            Err(error) => return Err(io_error("couldn't inspect managed profile storage", error)),
+        }
+        verify_existing_directory(&root)?;
+        let canonical_root = canonicalize_directory(&root)?;
+        if canonical_root.parent() != Some(canonical_parent.as_path()) {
+            return Err(ProviderError::Start(UNSAFE_PATH.into()));
+        }
+        Ok(Self {
+            root: canonical_root,
+            guardian: None,
+        })
+    }
+
+    /// Opens the canonical managed-profile root and binds every acquired profile lease to the
+    /// same desktop-generation guardian authority.
+    pub fn for_data_dir_guarded(
+        data_dir: &Path,
+        authority: GuardianAuthority,
+        profile_generation: ProfileGeneration,
+    ) -> Result<Self, ProviderError> {
+        let mut profiles = Self::for_data_dir(data_dir)?;
+        profiles.guardian = Some(GuardianBinding {
+            authority,
+            profile_generation,
+        });
+        Ok(profiles)
+    }
+
+    pub fn probe_guardian(&self) -> Result<ProviderProbeGuardian, ProviderError> {
+        let binding = self.guardian.as_ref().ok_or_else(|| {
+            ProviderError::Start("provider runtime guardian is not configured".into())
+        })?;
+        binding
+            .authority
+            .probe_guardian(binding.profile_generation)
+            .map_err(|error| ProviderError::Start(error.to_string()))
+    }
+
+    /// Returns one account's dedicated provider profile, creating it without following links.
+    ///
+    /// For `gemini-cli` this is the parent exported as `GEMINI_CLI_HOME`; Gemini creates its
+    /// `.gemini` child. Claude and Codex receive the directory directly through
+    /// `CLAUDE_CONFIG_DIR` / `CLAUDE_SECURESTORAGE_CONFIG_DIR` and `CODEX_HOME` respectively.
+    pub fn profile_home(&self, provider: &str, account_id: &str) -> Result<PathBuf, ProviderError> {
+        let provider = ManagedProvider::parse(provider)?;
+        self.account_root(provider, account_id)?;
+        self.ensure_directory(&["providers", provider.id(), "accounts", account_id, "home"])
+    }
+
+    /// Returns a stable provider/account/thread directory outside every repository.
+    pub fn session_dir(
+        &self,
+        provider: &str,
+        account_id: &str,
+        thread_id: &str,
+    ) -> Result<PathBuf, ProviderError> {
+        let provider = ManagedProvider::parse(provider)?;
+        if !canonical_uuid(thread_id) {
+            return Err(ProviderError::Start(
+                "managed profile sessions require a canonical thread id".into(),
+            ));
+        }
+        self.account_root(provider, account_id)?;
+        self.ensure_directory(&[
+            "providers",
+            provider.id(),
+            "accounts",
+            account_id,
+            "sessions",
+            thread_id,
+        ])
+    }
+
+    /// Returns a cloned detection environment whose variables are also safe to launch.
+    /// `HOME` and `USERPROFILE` remain unchanged so executable discovery still uses the person's
+    /// normal installation locations; provider auth/config selectors are replaced by exactly one
+    /// dedicated managed-profile selector.
+    pub fn prepare_env(
+        &self,
+        provider: &str,
+        account_id: &str,
+        source: &DetectEnv,
+    ) -> Result<DetectEnv, ProviderError> {
+        Ok(DetectEnv {
+            vars: self
+                .launch_env(provider, account_id, source)?
+                .into_iter()
+                .collect(),
+            windows: source.windows,
+            probe_timeout: source.probe_timeout,
+        })
+    }
+
+    /// The complete sanitized environment to pass to a managed provider process.
+    pub fn launch_env(
+        &self,
+        provider: &str,
+        account_id: &str,
+        source: &DetectEnv,
+    ) -> Result<BTreeMap<OsString, OsString>, ProviderError> {
+        let provider = ManagedProvider::parse(provider)?;
+        let home = self.profile_home(provider.id(), account_id)?;
+        // BASE retains only ordinary OS/process launch variables. In particular, API keys and
+        // provider-owned selectors from either provider are absent before the managed selector
+        // is inserted.
+        let mut env = source.provider_env(&EnvPolicy::BASE);
+        remove_variable(&mut env, "CLAUDE_CONFIG_DIR");
+        remove_variable(&mut env, "CLAUDE_SECURESTORAGE_CONFIG_DIR");
+        remove_variable(&mut env, "CODEX_HOME");
+        remove_variable(&mut env, "GEMINI_CLI_HOME");
+        env.insert(
+            provider.home_variable().into(),
+            home.clone().into_os_string(),
+        );
+        if matches!(provider, ManagedProvider::Claude) {
+            // Claude Code resolves its credential store independently from general config in
+            // current native builds. Pin both selectors to the exact same canonical account
+            // directory so a managed session cannot authenticate as a standalone or different
+            // managed account while displaying this profile's cached identity.
+            env.insert(
+                "CLAUDE_SECURESTORAGE_CONFIG_DIR".into(),
+                home.into_os_string(),
+            );
+        }
+        Ok(env)
+    }
+
+    /// Acquires a shared lease held for one provider session's lifetime. Multiple sessions may
+    /// share a profile, while an exclusive sign-in lease is rejected until all sessions end.
+    pub fn acquire_session_lease(
+        &self,
+        provider: &str,
+        account_id: &str,
+    ) -> Result<ProfileLease, ProviderError> {
+        self.acquire_lease(provider, account_id, LeaseMode::SharedSession)
+            .map_err(ProfileLeaseError::into_provider_error)
+    }
+
+    /// Acquires the exclusive lease required while running the provider's supported sign-in
+    /// flow. It fails immediately when a session or another sign-in currently uses the profile.
+    pub fn acquire_sign_in_lease(
+        &self,
+        provider: &str,
+        account_id: &str,
+    ) -> Result<ProfileLease, ProviderError> {
+        self.acquire_lease(provider, account_id, LeaseMode::ExclusiveAuth)
+            .map_err(ProfileLeaseError::into_provider_error)
+    }
+
+    /// Acquires the exclusive lock used to archive account metadata. It shares the exact lock
+    /// domain used by provider sessions and supported sign-in flows.
+    pub fn acquire_account_lifecycle_lease(
+        &self,
+        provider: &str,
+        account_id: &str,
+    ) -> Result<ProfileLease, ProfileLifecycleLeaseError> {
+        self.acquire_lease(provider, account_id, LeaseMode::ExclusiveLifecycle)
+            .map_err(|error| match error {
+                ProfileLeaseError::InUse => ProfileLifecycleLeaseError::InUse,
+                ProfileLeaseError::Unavailable(error) => {
+                    ProfileLifecycleLeaseError::Unavailable(error)
+                }
+            })
+    }
+
+    fn acquire_lease(
+        &self,
+        provider: &str,
+        account_id: &str,
+        mode: LeaseMode,
+    ) -> Result<ProfileLease, ProfileLeaseError> {
+        let provider = ManagedProvider::parse(provider).map_err(ProfileLeaseError::Unavailable)?;
+        // A lease is useful only for a profile whose complete path still passes the same
+        // containment/link checks as environment preparation.
+        self.profile_home(provider.id(), account_id)
+            .map_err(ProfileLeaseError::Unavailable)?;
+        let locks = self
+            .ensure_directory(&["providers", provider.id(), "accounts", account_id, "locks"])
+            .map_err(ProfileLeaseError::Unavailable)?;
+        let path = locks.join("profile.lock");
+        verify_regular_file_or_missing(&path).map_err(ProfileLeaseError::Unavailable)?;
+        let file = open_private_lock_file(&path).map_err(ProfileLeaseError::Unavailable)?;
+        verify_regular_file_or_missing(&path).map_err(ProfileLeaseError::Unavailable)?;
+        let result = match mode {
+            LeaseMode::SharedSession => lease_file(&file).try_lock_shared(),
+            LeaseMode::ExclusiveAuth | LeaseMode::ExclusiveLifecycle => {
+                lease_file(&file).try_lock()
+            }
+        };
+        match result {
+            Ok(()) => {
+                let guardian = match &self.guardian {
+                    Some(binding) => {
+                        let account_id = uuid::Uuid::try_parse(account_id).map_err(|_| {
+                            ProfileLeaseError::Unavailable(ProviderError::Start(
+                                "managed profiles require a canonical account id".into(),
+                            ))
+                        })?;
+                        let identity = ProfileIdentity::new(
+                            kalcode_contracts::agent::ProviderId::new(provider.id()),
+                            account_id,
+                            binding.profile_generation,
+                        )
+                        .map_err(guardian_provider_error)?;
+                        Some(
+                            binding
+                                .authority
+                                .acquire(identity, mode.capability())
+                                .map_err(guardian_provider_error)?,
+                        )
+                    }
+                    None => None,
+                };
+                Ok(ProfileLease {
+                    _file: file,
+                    root: self.root.clone(),
+                    provider: provider.id(),
+                    account_id: account_id.to_owned(),
+                    exclusive: !matches!(mode, LeaseMode::SharedSession),
+                    guardian,
+                })
+            }
+            Err(std::fs::TryLockError::WouldBlock) => Err(ProfileLeaseError::InUse),
+            Err(std::fs::TryLockError::Error(error)) => Err(ProfileLeaseError::Unavailable(
+                io_error("couldn't lock the managed provider profile", error),
+            )),
+        }
+    }
+
+    fn ensure_directory(&self, components: &[&str]) -> Result<PathBuf, ProviderError> {
+        self.verify_root()?;
+        let mut current = self.root.clone();
+        for component in components {
+            if !safe_component(component) {
+                return Err(ProviderError::Start(UNSAFE_PATH.into()));
+            }
+            current.push(component);
+            match std::fs::symlink_metadata(&current) {
+                Ok(metadata) => verify_directory_metadata(&metadata)?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    create_private_directory(&current)?;
+                }
+                Err(error) => {
+                    return Err(io_error("couldn't inspect a managed directory", error));
+                }
+            }
+            verify_existing_directory(&current)?;
+            let canonical = canonicalize_directory(&current)?;
+            if !canonical.starts_with(&self.root) {
+                return Err(ProviderError::Start(UNSAFE_PATH.into()));
+            }
+            current = canonical;
+        }
+        Ok(current)
+    }
+
+    fn account_root(
+        &self,
+        provider: ManagedProvider,
+        account_id: &str,
+    ) -> Result<PathBuf, ProviderError> {
+        if !canonical_uuid(account_id) {
+            return Err(ProviderError::Start(
+                "managed profiles require a canonical account id".into(),
+            ));
+        }
+        self.ensure_directory(&["providers", provider.id(), "accounts", account_id])
+    }
+
+    fn verify_root(&self) -> Result<(), ProviderError> {
+        verify_existing_directory(&self.root)?;
+        if canonicalize_directory(&self.root)? != self.root {
+            return Err(ProviderError::Start(UNSAFE_PATH.into()));
+        }
+        Ok(())
+    }
+}
+
+/// Holds an OS file lock. Dropping this value releases the session/sign-in lease; no stale PID
+/// file or recovery heuristic is involved.
+#[must_use = "the managed-profile lease must be retained for the operation's lifetime"]
+pub struct ProfileLease {
+    _file: ProfileLockFile,
+    root: PathBuf,
+    provider: &'static str,
+    account_id: String,
+    exclusive: bool,
+    guardian: Option<GuardianLease>,
+}
+
+impl ProfileLease {
+    /// Creates a PREPARED guardian job while this exact OS profile lease is held.
+    pub fn prepare_guarded_job(&self, label: &str) -> Result<RegisteredJob, ProviderError> {
+        let guardian = self.guardian.as_ref().ok_or_else(|| {
+            ProviderError::Start("provider runtime guardian is not configured".into())
+        })?;
+        guardian
+            .prepare_job(label.to_owned())
+            .map_err(|error| ProviderError::Start(error.to_string()))
+    }
+
+    /// Confirms that a caller-supplied lease is the exclusive guard for this exact profile.
+    /// This prevents an authentication adapter from accidentally preparing one account while
+    /// retaining an unrelated account's lock.
+    pub(crate) fn is_exclusive_for(
+        &self,
+        profiles: &ManagedProfiles,
+        provider: &str,
+        account_id: &str,
+    ) -> bool {
+        self.exclusive
+            && self.root == profiles.root
+            && self.provider == provider
+            && self.account_id == account_id
+    }
+}
+
+/// A profile lease with independent owners for the session object and process-exit waiter. The
+/// underlying OS lock is released only after every owner has been dropped.
+#[derive(Clone)]
+pub struct SharedProfileLease {
+    _lease: Arc<ProfileLease>,
+}
+
+impl SharedProfileLease {
+    pub fn prepare_guarded_job(&self, label: &str) -> Result<RegisteredJob, ProviderError> {
+        self._lease.prepare_guarded_job(label)
+    }
+}
+
+/// Converts an acquired lease into a shareable lifetime guard.
+pub fn share_profile_lease(lease: ProfileLease) -> SharedProfileLease {
+    SharedProfileLease {
+        _lease: Arc::new(lease),
+    }
+}
+
+/// Retains account isolation until the underlying session has been dropped. A successful
+/// `terminate` does not unlock early: the provider may still be draining its process tree.
+pub fn hold_session_lease(
+    session: Box<dyn AgentSession>,
+    lease: ProfileLease,
+) -> Box<dyn AgentSession> {
+    hold_shared_session_lease(session, share_profile_lease(lease))
+}
+
+/// Retains one owner of a shared profile lease until the underlying session has been dropped.
+/// Another owner may be held by a process-exit waiter so a kill request cannot unlock early.
+pub fn hold_shared_session_lease(
+    session: Box<dyn AgentSession>,
+    lease: SharedProfileLease,
+) -> Box<dyn AgentSession> {
+    Box::new(LeasedSession {
+        session,
+        _lease: lease,
+    })
+}
+
+struct LeasedSession {
+    // Rust drops fields in declaration order: provider cleanup precedes unlocking its profile.
+    session: Box<dyn AgentSession>,
+    _lease: SharedProfileLease,
+}
+
+impl AgentSession for LeasedSession {
+    fn provider_session_id(&self) -> Option<String> {
+        self.session.provider_session_id()
+    }
+    fn send(&self, input: AgentInput) -> Result<(), ProviderError> {
+        self.session.send(input)
+    }
+    fn interrupt(&self) -> Result<(), ProviderError> {
+        self.session.interrupt()
+    }
+    fn terminate(&self) -> Result<(), ProviderError> {
+        self.session.terminate()
+    }
+    fn respond_to_approval(
+        &self,
+        request_id: &str,
+        decision: ApprovalDecision,
+    ) -> Result<(), ProviderError> {
+        self.session.respond_to_approval(request_id, decision)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum LeaseMode {
+    SharedSession,
+    ExclusiveAuth,
+    ExclusiveLifecycle,
+}
+
+impl LeaseMode {
+    const fn capability(self) -> ProfileCapability {
+        match self {
+            Self::SharedSession => ProfileCapability::SharedSession,
+            Self::ExclusiveAuth => ProfileCapability::ExclusiveAuth,
+            Self::ExclusiveLifecycle => ProfileCapability::ExclusiveLifecycle,
+        }
+    }
+}
+
+fn guardian_provider_error(error: crate::guardian::GuardianError) -> ProfileLeaseError {
+    ProfileLeaseError::Unavailable(ProviderError::Start(error.to_string()))
+}
+
+fn canonical_uuid(value: &str) -> bool {
+    uuid::Uuid::try_parse(value).is_ok_and(|id| id.hyphenated().to_string().as_str() == value)
+}
+
+fn safe_component(value: &str) -> bool {
+    let mut components = Path::new(value).components();
+    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
+}
+
+fn remove_variable(env: &mut BTreeMap<OsString, OsString>, name: &str) {
+    env.retain(|key, _| {
+        !key.to_str()
+            .is_some_and(|key| key.eq_ignore_ascii_case(name))
+    });
+}
+
+fn canonicalize_directory(path: &Path) -> Result<PathBuf, ProviderError> {
+    std::fs::canonicalize(path).map_err(|error| io_error("couldn't resolve managed storage", error))
+}
+
+fn verify_existing_directory(path: &Path) -> Result<(), ProviderError> {
+    for ancestor in path.ancestors() {
+        if ancestor.as_os_str().is_empty() {
+            continue;
+        }
+        let metadata = std::fs::symlink_metadata(ancestor)
+            .map_err(|error| io_error("couldn't inspect managed storage ancestry", error))?;
+        verify_directory_metadata(&metadata)?;
+    }
+    Ok(())
+}
+
+fn verify_directory_metadata(metadata: &std::fs::Metadata) -> Result<(), ProviderError> {
+    if is_link_or_reparse(metadata) || !metadata.is_dir() {
+        return Err(ProviderError::Start(UNSAFE_PATH.into()));
+    }
+    Ok(())
+}
+
+fn verify_regular_file_or_missing(path: &Path) -> Result<(), ProviderError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if !is_link_or_reparse(&metadata) && metadata.is_file() => Ok(()),
+        Ok(_) => Err(ProviderError::Start(UNSAFE_PATH.into())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(io_error("couldn't inspect a managed lock", error)),
+    }
+}
+
+#[cfg(windows)]
+fn is_link_or_reparse(metadata: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn is_link_or_reparse(metadata: &std::fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
+}
+
+#[cfg(unix)]
+fn create_private_directory(path: &Path) -> Result<(), ProviderError> {
+    use std::os::unix::fs::DirBuilderExt;
+
+    let mut builder = std::fs::DirBuilder::new();
+    builder.mode(0o700);
+    match builder.create(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(error) => Err(io_error("couldn't create managed profile storage", error)),
+    }
+}
+
+#[cfg(not(unix))]
+fn create_private_directory(path: &Path) -> Result<(), ProviderError> {
+    match std::fs::create_dir(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(error) => Err(io_error("couldn't create managed profile storage", error)),
+    }
+}
+
+#[cfg(windows)]
+type ProfileLockFile = managed_lock::ManagedProfileLock;
+
+#[cfg(not(windows))]
+type ProfileLockFile = File;
+
+#[cfg(windows)]
+fn lease_file(lock: &ProfileLockFile) -> &File {
+    lock.file()
+}
+
+#[cfg(not(windows))]
+fn lease_file(lock: &ProfileLockFile) -> &File {
+    lock
+}
+
+#[cfg(windows)]
+fn open_private_lock_file(path: &Path) -> Result<ProfileLockFile, ProviderError> {
+    let parent = path.parent().ok_or_else(|| {
+        ProviderError::Start("managed profile lock must have a parent directory".into())
+    })?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| ProviderError::Start("managed profile lock must have a file name".into()))?;
+    managed_lock::ManagedProfileLock::open(parent, name)
+        .map_err(|error| io_error("couldn't open a managed profile lease", error))
+}
+
+#[cfg(not(windows))]
+fn open_private_lock_file(path: &Path) -> Result<ProfileLockFile, ProviderError> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options
+        .open(path)
+        .map_err(|error| io_error("couldn't open a managed profile lease", error))
+}
+
+fn io_error(context: &str, error: std::io::Error) -> ProviderError {
+    ProviderError::Io(format!("{context}: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsStr;
+    use std::time::Duration;
+
+    fn source(vars: &[(&str, &OsStr)]) -> DetectEnv {
+        DetectEnv {
+            vars: vars
+                .iter()
+                .map(|(name, value)| (OsString::from(name), (*value).to_os_string()))
+                .collect(),
+            windows: cfg!(windows),
+            probe_timeout: Some(Duration::from_millis(17)),
+        }
+    }
+
+    fn value<'a>(env: &'a DetectEnv, name: &str) -> Option<&'a OsStr> {
+        env.vars
+            .iter()
+            .find(|(key, _)| {
+                key.to_str()
+                    .is_some_and(|key| key.eq_ignore_ascii_case(name))
+            })
+            .map(|(_, value)| value.as_os_str())
+    }
+
+    #[test]
+    fn root_must_be_an_absolute_child_of_an_existing_directory() {
+        assert!(ManagedProfiles::new(PathBuf::from("relative/profiles")).is_err());
+
+        let temp = tempfile::tempdir().expect("temp");
+        let root = temp.path().join("managed");
+        let profiles = ManagedProfiles::new(root.clone()).expect("managed profiles");
+        assert!(root.is_dir());
+        assert_eq!(
+            profiles.root,
+            std::fs::canonicalize(root).expect("canonical")
+        );
+
+        assert!(ManagedProfiles::new(temp.path().join("missing/child")).is_err());
+    }
+
+    #[test]
+    fn profile_and_session_paths_are_stable_and_reject_untrusted_names() {
+        let temp = tempfile::tempdir().expect("temp");
+        let profiles = ManagedProfiles::new(temp.path().join("managed")).expect("profiles");
+        let account_id = kalcode_contracts::ids::new_id();
+        let thread_id = kalcode_contracts::ids::new_id();
+
+        let codex = profiles
+            .profile_home("codex", &account_id)
+            .expect("codex home");
+        assert_eq!(
+            codex,
+            profiles
+                .profile_home("codex", &account_id)
+                .expect("stable home")
+        );
+        let claude = profiles
+            .profile_home("claude-code", &account_id)
+            .expect("claude home");
+        assert_ne!(claude, codex);
+        assert!(profiles.profile_home("unknown", &account_id).is_err());
+        for invalid in [
+            "../escape",
+            "not-a-uuid",
+            "0192f3c4-0000-7000-8000-00000000000A",
+        ] {
+            assert!(
+                profiles.profile_home("codex", invalid).is_err(),
+                "{invalid}"
+            );
+        }
+
+        let session = profiles
+            .session_dir("gemini-cli", &account_id, &thread_id)
+            .expect("session");
+        assert_eq!(
+            session,
+            profiles
+                .session_dir("gemini-cli", &account_id, &thread_id)
+                .expect("stable session")
+        );
+        assert!(
+            session.starts_with(
+                profiles
+                    .root
+                    .join("providers")
+                    .join("gemini-cli")
+                    .join("accounts")
+                    .join(&account_id)
+            )
+        );
+        for invalid in [
+            "../escape",
+            "not-a-uuid",
+            "0192f3c4-0000-7000-8000-00000000000A",
+        ] {
+            assert!(
+                profiles.session_dir("codex", &account_id, invalid).is_err(),
+                "{invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn launch_env_is_base_only_and_never_touches_original_auth_files() {
+        let temp = tempfile::tempdir().expect("temp");
+        let original = temp.path().join("person");
+        std::fs::create_dir(&original).expect("person home");
+        let codex_config = original.join(".codex");
+        let gemini_config = original.join(".gemini");
+        let claude_config = original.join(".claude");
+        std::fs::create_dir(&codex_config).expect("codex config");
+        std::fs::create_dir(&gemini_config).expect("gemini config");
+        std::fs::create_dir(&claude_config).expect("claude config");
+        let codex_auth = codex_config.join("auth.json");
+        let gemini_auth = gemini_config.join("oauth_creds.json");
+        let claude_auth = claude_config.join(".credentials.json");
+        std::fs::write(&codex_auth, b"original-codex").expect("codex fixture");
+        std::fs::write(&gemini_auth, b"original-gemini").expect("gemini fixture");
+        std::fs::write(&claude_auth, b"original-claude").expect("claude fixture");
+        let hostile_codex = temp.path().join("hostile-codex");
+        let hostile_gemini = temp.path().join("hostile-gemini");
+        let hostile_claude = temp.path().join("hostile-claude");
+        let hostile_claude_credentials = temp.path().join("hostile-claude-credentials");
+        let source = source(&[
+            ("HOME", original.as_os_str()),
+            ("USERPROFILE", original.as_os_str()),
+            ("PATH", temp.path().as_os_str()),
+            ("CODEX_HOME", hostile_codex.as_os_str()),
+            ("GEMINI_CLI_HOME", hostile_gemini.as_os_str()),
+            ("CLAUDE_CONFIG_DIR", hostile_claude.as_os_str()),
+            (
+                "CLAUDE_SECURESTORAGE_CONFIG_DIR",
+                hostile_claude_credentials.as_os_str(),
+            ),
+            ("ANTHROPIC_API_KEY", OsStr::new("fixture-anthropic")),
+            ("OPENAI_API_KEY", OsStr::new("fixture-openai")),
+            ("GEMINI_API_KEY", OsStr::new("fixture-gemini")),
+            ("GEMINI_FORCE_ENCRYPTED_FILE_STORAGE", OsStr::new("true")),
+            ("GEMINI_FORCE_FILE_STORAGE", OsStr::new("true")),
+            ("GOOGLE_APPLICATION_CREDENTIALS", OsStr::new("fixture-path")),
+            ("KALCODE_INTERNAL", OsStr::new("test-internal")),
+        ]);
+        let profiles = ManagedProfiles::new(temp.path().join("managed")).expect("profiles");
+        let account_a = kalcode_contracts::ids::new_id();
+        let account_b = kalcode_contracts::ids::new_id();
+
+        let codex = profiles
+            .prepare_env("codex", &account_a, &source)
+            .expect("codex env");
+        let gemini = profiles
+            .prepare_env("gemini-cli", &account_a, &source)
+            .expect("gemini env");
+        let claude = profiles
+            .prepare_env("claude-code", &account_a, &source)
+            .expect("claude env");
+        let codex_b = profiles
+            .prepare_env("codex", &account_b, &source)
+            .expect("second codex account");
+
+        assert_eq!(value(&codex, "HOME"), Some(original.as_os_str()));
+        assert_eq!(value(&codex, "USERPROFILE"), Some(original.as_os_str()));
+        assert_eq!(
+            value(&codex, "CODEX_HOME"),
+            Some(
+                profiles
+                    .profile_home("codex", &account_a)
+                    .expect("home")
+                    .as_os_str()
+            )
+        );
+        assert!(value(&codex, "GEMINI_CLI_HOME").is_none());
+        assert_eq!(
+            value(&gemini, "GEMINI_CLI_HOME"),
+            Some(
+                profiles
+                    .profile_home("gemini-cli", &account_a)
+                    .expect("home")
+                    .as_os_str()
+            )
+        );
+        assert!(value(&gemini, "CODEX_HOME").is_none());
+        assert_eq!(
+            value(&claude, "CLAUDE_CONFIG_DIR"),
+            Some(
+                profiles
+                    .profile_home("claude-code", &account_a)
+                    .expect("home")
+                    .as_os_str()
+            )
+        );
+        assert_eq!(
+            value(&claude, "CLAUDE_SECURESTORAGE_CONFIG_DIR"),
+            value(&claude, "CLAUDE_CONFIG_DIR"),
+            "Claude's credential store and account metadata must select the same managed profile"
+        );
+        assert!(value(&codex, "CLAUDE_SECURESTORAGE_CONFIG_DIR").is_none());
+        assert!(value(&gemini, "CLAUDE_SECURESTORAGE_CONFIG_DIR").is_none());
+        assert!(value(&claude, "CODEX_HOME").is_none());
+        assert!(value(&claude, "GEMINI_CLI_HOME").is_none());
+        assert_ne!(value(&codex, "CODEX_HOME"), value(&codex_b, "CODEX_HOME"));
+        for name in [
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+            "GEMINI_API_KEY",
+            "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE",
+            "GEMINI_FORCE_FILE_STORAGE",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            "KALCODE_INTERNAL",
+        ] {
+            assert!(value(&codex, name).is_none(), "codex inherited {name}");
+            assert!(value(&gemini, name).is_none(), "gemini inherited {name}");
+            assert!(value(&claude, name).is_none(), "claude inherited {name}");
+        }
+        assert_eq!(codex.probe_timeout, source.probe_timeout);
+        assert_eq!(gemini.windows, source.windows);
+        assert_eq!(
+            value(&source, "CODEX_HOME"),
+            Some(hostile_codex.as_os_str())
+        );
+        assert_eq!(
+            std::fs::read(codex_auth).expect("codex fixture unchanged"),
+            b"original-codex"
+        );
+        assert_eq!(
+            std::fs::read(gemini_auth).expect("gemini fixture unchanged"),
+            b"original-gemini"
+        );
+        assert_eq!(
+            std::fs::read(claude_auth).expect("claude fixture unchanged"),
+            b"original-claude"
+        );
+    }
+
+    #[test]
+    fn shared_session_leases_exclude_sign_in_and_sign_in_excludes_sessions() {
+        let temp = tempfile::tempdir().expect("temp");
+        let profiles = ManagedProfiles::new(temp.path().join("managed")).expect("profiles");
+        let account_a = kalcode_contracts::ids::new_id();
+        let account_b = kalcode_contracts::ids::new_id();
+
+        let first = profiles
+            .acquire_session_lease("codex", &account_a)
+            .expect("first session");
+        let second = profiles
+            .acquire_session_lease("codex", &account_a)
+            .expect("second session");
+        assert!(profiles.acquire_sign_in_lease("codex", &account_a).is_err());
+        let independent = profiles
+            .acquire_sign_in_lease("codex", &account_b)
+            .expect("independent account sign in");
+        drop(independent);
+        drop((first, second));
+
+        let sign_in = profiles
+            .acquire_sign_in_lease("codex", &account_a)
+            .expect("sign in");
+        assert!(profiles.acquire_session_lease("codex", &account_a).is_err());
+        assert!(profiles.acquire_sign_in_lease("codex", &account_a).is_err());
+        let other_account = profiles
+            .acquire_session_lease("codex", &account_b)
+            .expect("other account session");
+        drop(other_account);
+        drop(sign_in);
+        let _released = profiles
+            .acquire_session_lease("codex", &account_a)
+            .expect("released lease");
+    }
+
+    #[test]
+    fn canonical_data_root_and_lifecycle_lease_share_the_profile_lock() {
+        let temp = tempfile::tempdir().expect("temp");
+        let profiles = ManagedProfiles::for_data_dir(temp.path()).expect("profiles");
+        let same = ManagedProfiles::for_data_dir(temp.path()).expect("same root");
+        let account = kalcode_contracts::ids::new_id();
+        let session = profiles
+            .acquire_session_lease("codex", &account)
+            .expect("session");
+        assert!(
+            same.acquire_account_lifecycle_lease("codex", &account)
+                .is_err()
+        );
+        drop(session);
+        let exclusive = same
+            .acquire_account_lifecycle_lease("codex", &account)
+            .expect("lifecycle lease");
+        assert!(profiles.acquire_session_lease("codex", &account).is_err());
+        drop(exclusive);
+        let _released = profiles
+            .acquire_session_lease("codex", &account)
+            .expect("released");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn live_profile_lock_file_cannot_be_renamed_or_replaced() {
+        let temp = tempfile::tempdir().expect("temp");
+        let profiles = ManagedProfiles::new(temp.path().join("managed")).expect("profiles");
+        let account = kalcode_contracts::ids::new_id();
+        let session = profiles
+            .acquire_session_lease("codex", &account)
+            .expect("session");
+        let locks = profiles
+            .root
+            .join("providers")
+            .join("codex")
+            .join("accounts")
+            .join(&account)
+            .join("locks");
+        let lock = locks.join("profile.lock");
+
+        assert!(
+            std::fs::rename(&lock, locks.join("profile.lock.old")).is_err(),
+            "a live profile lock must not be renameable out of its namespace"
+        );
+        assert!(
+            profiles.acquire_sign_in_lease("codex", &account).is_err(),
+            "an exclusive lease must not acquire a replacement lock while a session is live"
+        );
+        drop(session);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn live_profile_lock_parent_cannot_be_renamed_or_replaced() {
+        let temp = tempfile::tempdir().expect("temp");
+        let profiles = ManagedProfiles::new(temp.path().join("managed")).expect("profiles");
+        let account = kalcode_contracts::ids::new_id();
+        let session = profiles
+            .acquire_session_lease("codex", &account)
+            .expect("session");
+        let account_root = profiles
+            .root
+            .join("providers")
+            .join("codex")
+            .join("accounts")
+            .join(&account);
+        let locks = account_root.join("locks");
+
+        assert!(
+            std::fs::rename(&locks, account_root.join("locks.old")).is_err(),
+            "a live profile lock parent must not be renameable"
+        );
+        assert!(
+            profiles.acquire_sign_in_lease("codex", &account).is_err(),
+            "an exclusive lease must not acquire a recreated parent while a session is live"
+        );
+        drop(session);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn multiply_linked_profile_lock_is_rejected() {
+        let temp = tempfile::tempdir().expect("temp");
+        let profiles = ManagedProfiles::new(temp.path().join("managed")).expect("profiles");
+        let account = kalcode_contracts::ids::new_id();
+        let locks = profiles
+            .ensure_directory(&["providers", "codex", "accounts", &account, "locks"])
+            .expect("locks");
+        let lock = locks.join("profile.lock");
+        std::fs::write(&lock, b"").expect("lock fixture");
+        std::fs::hard_link(&lock, temp.path().join("profile-lock-alias"))
+            .expect("hardlink fixture");
+
+        assert!(
+            profiles.acquire_session_lease("codex", &account).is_err(),
+            "a multiply linked lock must never become the account lease authority"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn shared_and_exclusive_lock_domain_fails_closed_under_contention() {
+        let temp = tempfile::tempdir().expect("temp");
+        let profiles =
+            Arc::new(ManagedProfiles::new(temp.path().join("managed")).expect("managed profiles"));
+        let account = kalcode_contracts::ids::new_id();
+        let shared = profiles
+            .acquire_session_lease("codex", &account)
+            .expect("shared lease");
+        let barrier = Arc::new(std::sync::Barrier::new(9));
+        let mut contenders = Vec::new();
+        for _ in 0..8 {
+            let profiles = Arc::clone(&profiles);
+            let account = account.clone();
+            let barrier = Arc::clone(&barrier);
+            contenders.push(std::thread::spawn(move || {
+                barrier.wait();
+                profiles.acquire_sign_in_lease("codex", &account).is_err()
+            }));
+        }
+        barrier.wait();
+        assert!(
+            contenders
+                .into_iter()
+                .all(|contender| contender.join().expect("contender")),
+            "every concurrent exclusive contender must fail while a shared lease is live"
+        );
+        drop(shared);
+        let _exclusive = profiles
+            .acquire_sign_in_lease("codex", &account)
+            .expect("exclusive after shared lease release");
+    }
+
+    #[test]
+    fn session_wrapper_retains_the_lease_through_provider_cleanup() {
+        struct Session {
+            profiles: ManagedProfiles,
+            account: String,
+            dropped: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        }
+        impl AgentSession for Session {
+            fn provider_session_id(&self) -> Option<String> {
+                Some("fixture-session".into())
+            }
+            fn send(&self, _: AgentInput) -> Result<(), ProviderError> {
+                Ok(())
+            }
+            fn interrupt(&self) -> Result<(), ProviderError> {
+                Ok(())
+            }
+            fn terminate(&self) -> Result<(), ProviderError> {
+                Ok(())
+            }
+            fn respond_to_approval(
+                &self,
+                _: &str,
+                _: ApprovalDecision,
+            ) -> Result<(), ProviderError> {
+                Err(ProviderError::Unsupported)
+            }
+        }
+        impl Drop for Session {
+            fn drop(&mut self) {
+                assert!(
+                    self.profiles
+                        .acquire_sign_in_lease("codex", &self.account)
+                        .is_err()
+                );
+                self.dropped
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        let temp = tempfile::tempdir().expect("temp");
+        let profiles = ManagedProfiles::new(temp.path().join("managed")).expect("profiles");
+        let account = kalcode_contracts::ids::new_id();
+        let lease = profiles
+            .acquire_session_lease("codex", &account)
+            .expect("lease");
+        let dropped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let session = hold_session_lease(
+            Box::new(Session {
+                profiles: profiles.clone(),
+                account: account.clone(),
+                dropped: dropped.clone(),
+            }),
+            lease,
+        );
+        assert_eq!(
+            session.provider_session_id().as_deref(),
+            Some("fixture-session")
+        );
+        session.terminate().expect("terminate");
+        assert!(profiles.acquire_sign_in_lease("codex", &account).is_err());
+        drop(session);
+        assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+        let _released = profiles
+            .acquire_sign_in_lease("codex", &account)
+            .expect("released after cleanup");
+    }
+
+    #[test]
+    fn linked_ancestry_and_linked_profile_directories_are_rejected_when_supported() {
+        let temp = tempfile::tempdir().expect("temp");
+        let outside = temp.path().join("outside");
+        std::fs::create_dir(&outside).expect("outside");
+        let linked_parent = temp.path().join("linked-parent");
+        if !directory_link(&outside, &linked_parent) {
+            eprintln!("directory links are unavailable; link cases skipped");
+            return;
+        }
+        assert!(ManagedProfiles::new(linked_parent.join("managed")).is_err());
+
+        let profiles = ManagedProfiles::new(temp.path().join("managed")).expect("profiles");
+        let account_id = kalcode_contracts::ids::new_id();
+        let profile_parent = profiles
+            .ensure_directory(&["providers"])
+            .expect("profile parent");
+        assert!(directory_link(&outside, &profile_parent.join("codex")));
+        assert!(profiles.profile_home("codex", &account_id).is_err());
+
+        let separate = ManagedProfiles::new(temp.path().join("separate")).expect("separate");
+        let account_root = separate
+            .ensure_directory(&["providers", "gemini-cli", "accounts", &account_id])
+            .expect("account root");
+        let locks = account_root.join("locks");
+        std::fs::create_dir(&locks).expect("locks");
+        std::fs::remove_dir(&locks).expect("remove ordinary locks directory");
+        assert!(directory_link(&outside, &locks));
+        assert!(
+            separate
+                .acquire_session_lease("gemini-cli", &account_id)
+                .is_err()
+        );
+    }
+
+    #[cfg(windows)]
+    fn directory_link(target: &Path, link: &Path) -> bool {
+        use std::os::windows::process::CommandExt;
+
+        // Directory junctions need no developer-mode or elevation privilege.
+        let mut command = std::process::Command::new("cmd");
+        command.creation_flags(0x0800_0000);
+        command
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .is_ok_and(|output| output.status.success())
+    }
+
+    #[cfg(unix)]
+    fn directory_link(target: &Path, link: &Path) -> bool {
+        std::os::unix::fs::symlink(target, link).is_ok()
+    }
+}

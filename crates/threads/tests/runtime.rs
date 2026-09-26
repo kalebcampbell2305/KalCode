@@ -8,7 +8,11 @@ mod common;
 use std::sync::{Arc, Mutex};
 
 use common::*;
-use kalcode_contracts::agent::{AgentEvent, FileChange, ProviderError, Usage};
+use kalcode_context::{
+    ContextItem, ContextPackage, ContextPurpose, Firewall, FirewallPolicy, ItemKind, ItemOrigin,
+    PackageOptions, PromptReview, RenderedPackage, TextOnlyDefaults, WorkspaceRoot,
+};
+use kalcode_contracts::agent::{AgentEvent, FileChange, ProviderError, ProviderId, Usage};
 use kalcode_contracts::events::EventPayload;
 use kalcode_contracts::ids::new_id;
 use kalcode_contracts::permissions::{ApprovalDecision, PermissionMode, PolicyEffect};
@@ -17,7 +21,9 @@ use kalcode_core::Core;
 use kalcode_threads::runtime::{
     INTERRUPTED_ACTIVITY, PAUSED_ACTIVITY, RECOVERED_ACTIVITY, SHUTDOWN_ACTIVITY, STOPPED_ACTIVITY,
 };
-use kalcode_threads::{CreateThread, ProviderRegistry, ThreadRuntime, ToolCallStatus};
+use kalcode_threads::{
+    CreateThread, ProviderEntry, ProviderRegistry, ThreadRuntime, ToolCallStatus,
+};
 
 fn status(h: &Harness, id: &str) -> ThreadStatus {
     h.runtime.get(id).expect("get").status
@@ -93,6 +99,141 @@ fn create_starts_a_session_and_records_the_lifecycle() {
     // Event payloads never carry message text.
     let json = serde_json::to_string(&events).expect("json");
     assert!(!json.contains("OAuth callback race"));
+}
+
+fn secret_shaped_prompt() -> String {
+    let value = ["deterministic", "Q7x", "private", "value"].join("-");
+    ["password", "=", &value].concat()
+}
+
+fn rendered_context(text: &str) -> RenderedPackage {
+    ContextPackage::build(
+        &Firewall::new(WorkspaceRoot::none(), FirewallPolicy::default()),
+        &TextOnlyDefaults::new("fake"),
+        PackageOptions::new(ContextPurpose::Drop),
+        vec![ContextItem::text(
+            ItemKind::Text,
+            "test context",
+            ItemOrigin::User,
+            text,
+        )],
+    )
+    .render()
+    .expect("rendered context")
+}
+
+#[test]
+fn create_prompt_warning_is_fail_closed_exact_and_one_shot() {
+    let h = Harness::new();
+    let request = h.request(&secret_shaped_prompt());
+
+    assert_code(
+        h.runtime.create(request.clone()),
+        "context_prompt_confirmation_required",
+    );
+    assert_eq!(h.provider.session_count(), 0, "warning starts no provider");
+    assert!(h.runtime.list(None, false).expect("threads").is_empty());
+
+    let PromptReview::ConfirmationRequired(warning) = h
+        .runtime
+        .review_create_prompt(&request)
+        .expect("review create")
+    else {
+        panic!("secret-shaped prompt must warn");
+    };
+    let thread = h
+        .runtime
+        .create_reviewed(request.clone(), Some(&warning.review_id))
+        .expect("confirmed create");
+    assert_eq!(thread.status, ThreadStatus::Active);
+    assert_eq!(thread.name, kalcode_threads::naming::FALLBACK_NAME);
+    assert!(
+        !serde_json::to_string(&h.events_for(&thread.id))
+            .expect("events")
+            .contains(&secret_shaped_prompt()),
+        "secret-shaped prompts are not copied into event metadata"
+    );
+    assert_eq!(h.provider.session_count(), 1);
+
+    assert_code(
+        h.runtime.create_reviewed(request, Some(&warning.review_id)),
+        "context_prompt_confirmation_invalid",
+    );
+    assert_eq!(h.provider.session_count(), 1, "replay starts no provider");
+
+    let invalid_target = CreateThread {
+        provider_account_id: Some("../different-account".into()),
+        ..h.request(&secret_shaped_prompt())
+    };
+    assert_code(
+        h.runtime.review_create_prompt(&invalid_target),
+        "invalid_provider_account",
+    );
+}
+
+#[test]
+fn send_and_resume_prompts_cannot_bypass_or_swap_confirmation() {
+    let h = Harness::new();
+    let id = started(&h, "start clean");
+    let secret = secret_shaped_prompt();
+    let session = h.provider.last_session();
+    let before = session.calls();
+
+    assert_code(
+        h.runtime.send(&id, &secret),
+        "context_prompt_confirmation_required",
+    );
+    assert_eq!(session.calls(), before);
+    assert_eq!(h.runtime.messages(&id, 50, None).unwrap().len(), 1);
+
+    let PromptReview::ConfirmationRequired(warning) = h
+        .runtime
+        .review_thread_prompt(&id, &secret)
+        .expect("review send")
+    else {
+        panic!("warning");
+    };
+    assert_code(
+        h.runtime
+            .send_reviewed(&id, &format!("{secret} changed"), Some(&warning.review_id)),
+        "context_prompt_confirmation_invalid",
+    );
+    assert_code(
+        h.runtime
+            .send_reviewed(&id, &secret, Some(&warning.review_id)),
+        "context_prompt_confirmation_invalid",
+    );
+    assert_eq!(session.calls(), before, "object swap consumes the review");
+
+    let PromptReview::ConfirmationRequired(warning) = h
+        .runtime
+        .review_thread_prompt(&id, &secret)
+        .expect("review send again")
+    else {
+        panic!("warning");
+    };
+    h.runtime
+        .send_reviewed(&id, &secret, Some(&warning.review_id))
+        .expect("confirmed send");
+    assert_eq!(session.calls().last(), Some(&Call::Send(secret.clone())));
+
+    h.runtime.pause(&id).expect("pause");
+    assert_code(
+        h.runtime.resume(&id, Some(&secret)),
+        "context_prompt_confirmation_required",
+    );
+    assert_eq!(status(&h, &id), ThreadStatus::Paused);
+    let PromptReview::ConfirmationRequired(warning) = h
+        .runtime
+        .review_thread_prompt(&id, &secret)
+        .expect("review resume")
+    else {
+        panic!("warning");
+    };
+    h.runtime
+        .resume_reviewed(&id, Some(&secret), Some(&warning.review_id))
+        .expect("confirmed resume");
+    assert_eq!(session.calls().last(), Some(&Call::Send(secret)));
 }
 
 #[test]
@@ -831,6 +972,71 @@ fn pause_holds_until_resumed() {
 }
 
 #[test]
+fn paused_threads_reject_direct_and_preadmitted_context_until_resumed() {
+    let direct = Harness::new();
+    let direct_id = started(&direct, "start direct");
+    let direct_session = direct.provider.last_session();
+    direct.runtime.pause(&direct_id).expect("pause direct");
+    let direct_calls = direct_session.calls();
+    let direct_messages = direct.runtime.messages(&direct_id, 50, None).unwrap().len();
+
+    assert_code(
+        direct.runtime.send(&direct_id, "must remain paused"),
+        "thread_paused",
+    );
+    assert_eq!(direct_session.calls(), direct_calls);
+    assert_eq!(
+        direct.runtime.messages(&direct_id, 50, None).unwrap().len(),
+        direct_messages,
+        "a denied paused send must not persist a user message"
+    );
+    assert_eq!(status(&direct, &direct_id), ThreadStatus::Paused);
+
+    let resumed = direct
+        .runtime
+        .resume(&direct_id, Some("explicitly resumed"))
+        .expect("resume and send");
+    assert_eq!(resumed.status, ThreadStatus::Active);
+    assert_eq!(
+        direct_session.calls().last(),
+        Some(&Call::Send("explicitly resumed".into()))
+    );
+
+    let context = Harness::new();
+    let context_id = started(&context, "start context");
+    let admission = context
+        .runtime
+        .admit_thread_prompt(&context_id, "use reviewed context", None)
+        .expect("admit while active");
+    let context_session = context.provider.last_session();
+    context.runtime.pause(&context_id).expect("pause context");
+    let context_calls = context_session.calls();
+    let context_messages = context
+        .runtime
+        .messages(&context_id, 50, None)
+        .unwrap()
+        .len();
+
+    assert_code(
+        context
+            .runtime
+            .send_with_context_admitted(admission, &rendered_context("bounded context")),
+        "thread_paused",
+    );
+    assert_eq!(context_session.calls(), context_calls);
+    assert_eq!(
+        context
+            .runtime
+            .messages(&context_id, 50, None)
+            .unwrap()
+            .len(),
+        context_messages,
+        "a denied pre-admitted context send must not persist a user message"
+    );
+    assert_eq!(status(&context, &context_id), ThreadStatus::Paused);
+}
+
+#[test]
 fn provider_exit_after_a_finished_turn_completes_the_thread() {
     let h = Harness::new();
     let id = started(&h, "x");
@@ -932,6 +1138,96 @@ fn a_failed_send_fails_the_thread() {
         .expect("send returns the thread");
     assert_eq!(thread.status, ThreadStatus::Failed);
     assert_eq!(thread.error.unwrap().code, "provider_io_failed");
+}
+
+#[test]
+fn context_payload_reaches_the_provider_but_never_durable_history() {
+    let h = Harness::new();
+    let id = started(&h, "start");
+    let marker = ["ephemeral", "context", "payload", "marker"].join("-");
+    let visible = "Investigate this failure.";
+    let rendered = rendered_context(&marker);
+    let provider_payload = format!("{visible}\n\nContext supplied by you:\n{}", rendered.text())
+        .trim_end()
+        .to_owned();
+
+    h.runtime
+        .send_with_context(&id, visible, &rendered)
+        .expect("send with context");
+
+    assert_eq!(
+        h.provider.last_session().calls().last(),
+        Some(&Call::Send(provider_payload.clone()))
+    );
+    let messages = h.runtime.messages(&id, 50, None).expect("messages");
+    assert_eq!(messages.last().expect("visible message").content, visible);
+    assert!(
+        messages
+            .iter()
+            .all(|message| !message.content.contains(&marker))
+    );
+    let events = serde_json::to_string(&h.events_for(&id)).expect("events serialize");
+    assert!(!events.contains(&marker));
+
+    let failed = Harness::new();
+    let failed_id = started(&failed, "start");
+    failed.provider.last_session().fail_next_sends();
+    let summary = failed
+        .runtime
+        .send_with_context(&failed_id, visible, &rendered)
+        .expect("provider failure returns the failed thread");
+    assert_eq!(summary.status, ThreadStatus::Failed);
+    let failed_messages = failed
+        .runtime
+        .messages(&failed_id, 50, None)
+        .expect("failed messages");
+    assert_eq!(
+        failed_messages
+            .last()
+            .expect("visible failed message")
+            .content,
+        visible
+    );
+    assert!(
+        failed_messages
+            .iter()
+            .all(|message| !message.content.contains(&marker))
+    );
+    let failed_events =
+        serde_json::to_string(&failed.events_for(&failed_id)).expect("events serialize");
+    assert!(!failed_events.contains(&marker));
+
+    let invalid = Harness::new();
+    let invalid_id = started(&invalid, "start");
+    let invalid_session = invalid.provider.last_session();
+    let before = invalid_session.calls();
+    assert_code(
+        invalid.runtime.send_with_context(
+            &invalid_id,
+            &"x".repeat(kalcode_threads::validate::MAX_PROMPT_CHARS + 1),
+            &rendered,
+        ),
+        "invalid_prompt",
+    );
+    assert_code(
+        invalid
+            .runtime
+            .send_with_context(&invalid_id, "safe\0unsafe", &rendered),
+        "invalid_prompt",
+    );
+    assert_eq!(
+        invalid_session.calls(),
+        before,
+        "invalid context never reaches the provider"
+    );
+    assert_eq!(
+        invalid
+            .runtime
+            .messages(&invalid_id, 50, None)
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -1142,6 +1438,61 @@ fn shutdown_interrupts_running_threads() {
 }
 
 #[test]
+fn failed_stop_retains_the_live_session_for_a_proven_retry() {
+    let h = Harness::new();
+    let id = started(&h, "x");
+    let session = h.provider.last_session();
+    session.fail_next_terminate();
+
+    let error = h.runtime.stop(&id).expect_err("termination must fail");
+    assert_eq!(error.code, "provider_terminate_failed");
+    assert_eq!(status(&h, &id), ThreadStatus::Active);
+    assert!(
+        !session.is_ended(),
+        "the runtime must retain live ownership"
+    );
+
+    let stopped = h.runtime.stop(&id).expect("retry termination");
+    assert_eq!(stopped.status, ThreadStatus::Interrupted);
+    assert!(session.is_ended());
+    assert_eq!(
+        session
+            .calls()
+            .iter()
+            .filter(|call| **call == Call::Terminate)
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn checked_shutdown_drains_every_session_and_reports_incomplete_termination() {
+    let h = Harness::new();
+    let failed_id = started(&h, "one");
+    let failed_session = h.provider.last_session();
+    let drained_id = started(&h, "two");
+    let drained_session = h.provider.last_session();
+    failed_session.fail_next_terminate();
+
+    let error = h
+        .runtime
+        .shutdown_checked()
+        .expect_err("one provider process is still owned");
+    assert_eq!(error.code, "provider_terminate_failed");
+    assert_eq!(status(&h, &failed_id), ThreadStatus::Active);
+    assert_eq!(status(&h, &drained_id), ThreadStatus::Interrupted);
+    assert!(!failed_session.is_ended());
+    assert!(
+        drained_session.is_ended(),
+        "shutdown must continue draining"
+    );
+
+    h.runtime.shutdown_checked().expect("retry shutdown");
+    assert_eq!(status(&h, &failed_id), ThreadStatus::Interrupted);
+    assert!(failed_session.is_ended());
+}
+
+#[test]
 fn crash_recovery_interrupts_threads_left_running() {
     let dir = tempfile::tempdir().expect("tempdir");
     let root = dir.path().join("repo");
@@ -1150,6 +1501,8 @@ fn crash_recovery_interrupts_threads_left_running() {
     let provider = FakeProvider::new("fake", "Fake Provider");
     let request = |prompt: &str| CreateThread {
         provider_id: "fake".into(),
+        provider_account_id: None,
+        account_label: None,
         workspace_id: workspace_id.clone(),
         model: None,
         permission_mode: PermissionMode::Approve,
@@ -1233,6 +1586,8 @@ fn idle_threads_start_without_a_task() {
     let h = Harness::new();
     let request = kalcode_threads::CreateIdleThread {
         provider_id: "fake".into(),
+        provider_account_id: None,
+        account_label: None,
         workspace_id: h.workspace_id.clone(),
         model: None,
         permission_mode: PermissionMode::Approve,
@@ -1269,6 +1624,127 @@ fn idle_threads_start_without_a_task() {
     assert_eq!(named.name, "Reviewer");
     h.runtime.send(&named.id, "review the diff").expect("send");
     assert_eq!(status(&h, &named.id), ThreadStatus::Active);
+}
+
+#[test]
+fn selected_provider_account_survives_runtime_restart_and_default_changes() {
+    let h = Harness::new();
+    let provider = FakeProvider::configured(ProviderId::CODEX, "Codex", true, true);
+    h.registry.register(provider.clone());
+    let personal_id = new_id();
+    let work_id = new_id();
+    h.core
+        .transact(|conn| {
+            for (id, label, is_default) in
+                [(&personal_id, "Personal", 1_i64), (&work_id, "Work", 0_i64)]
+            {
+                conn.execute(
+                    "INSERT INTO provider_accounts (
+                        id, provider_id, display_name, authentication_state, is_default, created_at
+                     ) VALUES (?1, 'codex', ?2, 'authenticated', ?3, ?4)",
+                    rusqlite::params![id, label, is_default, "2026-09-25T00:00:00Z"],
+                )?;
+            }
+            Ok(((), Vec::new()))
+        })
+        .expect("accounts");
+
+    let created = h
+        .runtime
+        .create(CreateThread {
+            provider_id: ProviderId::CODEX.into(),
+            provider_account_id: Some(personal_id.clone()),
+            account_label: Some("My Personal".into()),
+            workspace_id: h.workspace_id.clone(),
+            model: None,
+            permission_mode: PermissionMode::Approve,
+            prompt: "keep this account".into(),
+            name: None,
+        })
+        .expect("thread");
+    assert_eq!(
+        created.provider_account_id.as_deref(),
+        Some(personal_id.as_str())
+    );
+    assert_eq!(created.account_label.as_deref(), Some("My Personal"));
+    assert_eq!(
+        provider
+            .last_session()
+            .config
+            .provider_account_id
+            .as_deref(),
+        Some(personal_id.as_str())
+    );
+
+    h.core
+        .transact(|conn| {
+            conn.execute(
+                "UPDATE provider_accounts
+                 SET is_default = 0, archived_at = '2026-09-25T01:00:00Z'
+                 WHERE id = ?1",
+                [&personal_id],
+            )?;
+            conn.execute(
+                "UPDATE provider_accounts SET is_default = 1 WHERE id = ?1",
+                [&work_id],
+            )?;
+            Ok(((), Vec::new()))
+        })
+        .expect("switch default");
+    h.runtime.stop(&created.id).expect("stop");
+
+    let Harness {
+        dir,
+        core,
+        registry,
+        workspaces,
+        workspace_id,
+        gate,
+        provider: _,
+        runtime,
+    } = h;
+    drop(runtime);
+    let restarted = ThreadRuntime::new(
+        core.clone(),
+        registry.clone(),
+        workspaces.clone(),
+        gate.clone(),
+    )
+    .expect("restart");
+    restarted.resume(&created.id, None).expect("resume");
+    let resumed = restarted.get(&created.id).expect("summary");
+    assert_eq!(
+        resumed.provider_account_id.as_deref(),
+        Some(personal_id.as_str())
+    );
+    assert_eq!(resumed.account_label.as_deref(), Some("My Personal"));
+    assert_eq!(
+        provider
+            .last_session()
+            .config
+            .provider_account_id
+            .as_deref(),
+        Some(personal_id.as_str()),
+        "resume keeps the thread's archived account selection instead of using the new default"
+    );
+    drop((dir, workspace_id));
+}
+
+#[test]
+fn legacy_thread_creation_does_not_claim_the_registry_account_without_a_selected_id() {
+    let h = Harness::new();
+    h.registry.register_entry(ProviderEntry {
+        provider: h.provider.clone(),
+        account_label: Some("Standalone CLI".into()),
+        secret_ref: None,
+    });
+    let created = h
+        .runtime
+        .create(h.request("legacy thread"))
+        .expect("thread");
+    assert_eq!(created.provider_account_id, None);
+    assert_eq!(created.account_label, None);
+    assert_eq!(h.provider.last_session().config.provider_account_id, None);
 }
 
 #[test]

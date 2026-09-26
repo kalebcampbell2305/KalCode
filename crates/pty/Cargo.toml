@@ -18,5 +18,9 @@ tracing.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 
+[target.'cfg(windows)'.dev-dependencies]
+process-wrap = { version = "10.0.1", default-features = false, features = ["std", "job-object", "creation-flags"] }
+windows = { version = "0.62.2", features = ["Win32_System_Threading"] }
+
 [lints]
 workspace = true

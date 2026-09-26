@@ -77,6 +77,7 @@ fn real_claude_interactive_smoke() {
             SessionConfig {
                 thread_id: thread_id.clone(),
                 workspace_id: new_id(),
+                provider_account_id: None,
                 working_directory: work.path().display().to_string(),
                 model: None,
                 permission_mode: PermissionMode::Approve,

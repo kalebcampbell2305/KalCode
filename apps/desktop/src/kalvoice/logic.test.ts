@@ -1,9 +1,20 @@
 import type { KalVoiceResponse, ReservedShortcut } from "@kalcode/protocol";
 import { describe, expect, it } from "vitest";
 import { announcement, formatBytes, INITIAL_STATE, reduce, STATE_LABELS, usageLine } from "./assistantState.ts";
-import { insertTranscript, planInsertion, registerDictationSink, resolveDictationTarget } from "./dictation.ts";
+import {
+  createOrderedInputQueue,
+  DictationDeliveryError,
+  frameProviderPrompt,
+  insertTranscript,
+  planInsertion,
+  providerInputReadiness,
+  registerDictationSink,
+  resolveDictationTarget,
+  sanitizeTerminalDictation,
+  targetIsAlive,
+} from "./dictation.ts";
 import { nudge, placementAt, placementFor, positionFor, sizeClassFor } from "./panelGeometry.ts";
-import { checkReserved, displayKey, isTalkKey, talkKeyFromEvent } from "./shortcutModel.ts";
+import { checkReserved, displayKey, isTalkKey, talkKeyChoiceHint, talkKeyFromEvent } from "./shortcutModel.ts";
 
 const RESERVED: ReservedShortcut[] = [
   { accelerator: "F5", owner: "reloading the window" },
@@ -36,6 +47,16 @@ describe("push-to-talk key capture", () => {
     });
     expect(talkKeyFromEvent(key("KeyK", { key: "k" }), ALLOWED)).toMatchObject({ code: "talk_key_invalid" });
     expect(talkKeyFromEvent(key("Space", { key: " " }), ALLOWED)).toMatchObject({ code: "talk_key_invalid" });
+  });
+
+  it("describes only the single-key choices the native platform exposes", () => {
+    expect(talkKeyChoiceHint(ALLOWED)).toBe("Choose F1–F24, Pause, Scroll Lock or Insert.");
+    expect(talkKeyChoiceHint(["F8", "F9"])).toBe("Choose F8 or F9.");
+    expect(talkKeyChoiceHint([])).toBe("No single-key push-to-talk choices are available on this system.");
+    expect(talkKeyFromEvent(key("Insert"), ["F8", "F9"])).toMatchObject({
+      code: "talk_key_invalid",
+      message: "Choose F8 or F9.",
+    });
   });
 
   it("refuses keys KalCode uses and matches key events", () => {
@@ -81,7 +102,39 @@ describe("dictation insertion", () => {
     document.body.replaceChildren();
   });
 
-  it("inserts into a field and notifies React-style listeners", () => {
+  it("captures the owning pane identity with the exact dictation destination", () => {
+    const personalPane = document.createElement("section");
+    personalPane.dataset.paneId = "pane-codex-personal";
+    const personalTerminal = document.createElement("div");
+    const hidden = document.createElement("textarea");
+    personalTerminal.append(hidden);
+    personalPane.append(personalTerminal);
+    document.body.append(personalPane);
+    const unregister = registerDictationSink(personalTerminal, {
+      label: "Codex Personal",
+      destination: {
+        kind: "provider_pane",
+        threadId: "thread-personal",
+        providerId: "codex",
+        providerAccountId: "personal",
+      },
+      deliver: async () => undefined,
+    });
+
+    const target = resolveDictationTarget(hidden);
+
+    expect(target?.paneId).toBe("pane-codex-personal");
+    expect(target?.kind === "sink" ? target.sink.destination : null).toEqual({
+      kind: "provider_pane",
+      threadId: "thread-personal",
+      providerId: "codex",
+      providerAccountId: "personal",
+    });
+    unregister();
+    document.body.replaceChildren();
+  });
+
+  it("inserts into a field and notifies React-style listeners", async () => {
     const area = document.createElement("textarea");
     area.value = "Add";
     document.body.append(area);
@@ -92,26 +145,165 @@ describe("dictation insertion", () => {
     });
     const target = resolveDictationTarget(area);
     if (!target) throw new Error("no target");
-    expect(insertTranscript(target, "a unit test")).toBe(12);
+    await expect(insertTranscript(target, "a unit test")).resolves.toBe(12);
     expect(seen).toBe("Add a unit test");
     expect(area.selectionStart).toBe(15);
     document.body.replaceChildren();
   });
 
-  it("routes registered surfaces (terminals) to their sink", () => {
+  it("routes registered surfaces to an exact typed destination", async () => {
     const terminal = document.createElement("div");
     const hidden = document.createElement("textarea");
     terminal.append(hidden);
     document.body.append(terminal);
     const written: string[] = [];
-    const unregister = registerDictationSink(terminal, { label: "Terminal", insert: (t) => written.push(t) });
+    const unregister = registerDictationSink(terminal, {
+      label: "PowerShell",
+      destination: { kind: "raw_terminal", terminalId: "terminal-7" },
+      deliver: async (text) => {
+        written.push(text);
+      },
+    });
     const target = resolveDictationTarget(hidden);
     expect(target?.kind).toBe("sink");
-    if (target) insertTranscript(target, "npm test");
+    if (target?.kind === "sink") {
+      expect(target.sink.destination).toEqual({ kind: "raw_terminal", terminalId: "terminal-7" });
+      await expect(insertTranscript(target, "npm test")).resolves.toBe(8);
+    }
     expect(written).toEqual(["npm test"]);
     unregister();
     expect(resolveDictationTarget(hidden)?.kind).toBe("field");
     document.body.replaceChildren();
+  });
+
+  it("invalidates a captured destination when the surface unregisters or is replaced", async () => {
+    const terminal = document.createElement("div");
+    document.body.append(terminal);
+    const first = registerDictationSink(terminal, {
+      label: "First",
+      destination: { kind: "raw_terminal", terminalId: "first" },
+      deliver: async () => undefined,
+    });
+    const captured = resolveDictationTarget(terminal);
+    if (!captured) throw new Error("no target");
+    expect(targetIsAlive(captured)).toBe(true);
+
+    registerDictationSink(terminal, {
+      label: "Second",
+      destination: { kind: "raw_terminal", terminalId: "second" },
+      deliver: async () => undefined,
+    });
+    expect(targetIsAlive(captured)).toBe(false);
+    await expect(insertTranscript(captured, "do not redirect")).rejects.toMatchObject({ code: "target_closed" });
+    first();
+    document.body.replaceChildren();
+  });
+
+  it("waits for terminal delivery and reports its failure", async () => {
+    const terminal = document.createElement("div");
+    document.body.append(terminal);
+    registerDictationSink(terminal, {
+      label: "Codex Work",
+      destination: {
+        kind: "provider_pane",
+        threadId: "thread-2",
+        providerId: "codex",
+        providerAccountId: "work",
+      },
+      deliver: async () => {
+        throw new DictationDeliveryError("provider_input_busy", "Codex is working.");
+      },
+    });
+    const target = resolveDictationTarget(terminal);
+    if (!target) throw new Error("no target");
+    await expect(insertTranscript(target, "continue")).rejects.toMatchObject({ code: "provider_input_busy" });
+    document.body.replaceChildren();
+  });
+
+  it("does not begin a delivery after its dictation session is cancelled", async () => {
+    const terminal = document.createElement("div");
+    document.body.append(terminal);
+    let calls = 0;
+    registerDictationSink(terminal, {
+      label: "PowerShell",
+      destination: { kind: "raw_terminal", terminalId: "terminal-8" },
+      deliver: async () => {
+        calls += 1;
+      },
+    });
+    const target = resolveDictationTarget(terminal);
+    if (!target) throw new Error("no target");
+    const abort = new AbortController();
+    abort.abort();
+    await expect(insertTranscript(target, "never write this", { signal: abort.signal })).rejects.toMatchObject({
+      code: "dictation_cancelled",
+    });
+    expect(calls).toBe(0);
+    document.body.replaceChildren();
+  });
+
+  it("removes a cancelled dictation write while earlier terminal input is in flight", async () => {
+    let releaseFirst: (() => void) | undefined;
+    const writes: string[] = [];
+    const queue = createOrderedInputQueue(async (text) => {
+      writes.push(text);
+      if (writes.length === 1) await new Promise<void>((resolve) => (releaseFirst = resolve));
+    });
+    queue.send("typed first");
+    await Promise.resolve();
+    const abort = new AbortController();
+    const dictated = queue.deliver("never late", { signal: abort.signal });
+    abort.abort();
+    releaseFirst?.();
+    await expect(dictated).rejects.toMatchObject({ code: "dictation_cancelled" });
+    expect(writes).toEqual(["typed first"]);
+  });
+
+  it("drops queued dictation when its terminal surface closes", async () => {
+    let releaseFirst: (() => void) | undefined;
+    const writes: string[] = [];
+    const queue = createOrderedInputQueue(async (text) => {
+      writes.push(text);
+      if (writes.length === 1) await new Promise<void>((resolve) => (releaseFirst = resolve));
+    });
+    queue.send("typed first");
+    await Promise.resolve();
+    const dictated = queue.deliver("never after close");
+    queue.dispose();
+    releaseFirst?.();
+    await expect(dictated).rejects.toMatchObject({ code: "target_closed" });
+    expect(writes).toEqual(["typed first"]);
+  });
+
+  it("strips every terminal control and bracketed-paste wrapper from dictated shell text", () => {
+    expect(sanitizeTerminalDictation("echo safe\r\nwhoami\u001b[200~\u001b]9;notify\u0007\u001b[201~\t now")).toBe(
+      "echo safe whoami now",
+    );
+    expect(sanitizeTerminalDictation("\u0003\u001b[A\u2028\u2029")).toBe("");
+  });
+
+  it("frames one provider prompt with exactly one trusted submit character", () => {
+    const framed = frameProviderPrompt("first line\nsecond\r\u001b[200~third\u001b[201~");
+    expect(framed).toBe("first line second third\r");
+    expect([...framed].filter((character) => character === "\r")).toHaveLength(1);
+    expect(framed).not.toContain("\n");
+    expect(framed).not.toContain("\u001b");
+  });
+
+  it("auto-submits only at a structured ordinary provider prompt", () => {
+    expect(providerInputReadiness({ running: true, status: "waiting_for_user", providerPromptActive: false })).toBe(
+      "ready",
+    );
+    expect(providerInputReadiness({ running: true, status: "waiting_for_user", providerPromptActive: true })).toBe(
+      "provider_prompt",
+    );
+    expect(
+      providerInputReadiness({ running: true, status: "waiting_for_permission", providerPromptActive: true }),
+    ).toBe("provider_prompt");
+    expect(providerInputReadiness({ running: true, status: "active", providerPromptActive: false })).toBe("busy");
+    // Idle alone cannot prove that the CLI is at its normal prompt rather than an auth/setup menu.
+    expect(providerInputReadiness({ running: true, status: "idle", providerPromptActive: false })).toBe("unknown");
+    expect(providerInputReadiness({ running: false, status: "idle", providerPromptActive: false })).toBe("ended");
   });
 });
 
@@ -179,7 +371,7 @@ describe("assistant state", () => {
     requestId,
     intent: "navigate",
     outcome,
-    usage: { used: 3, allowance: 250, periodStart: "2026-09-01T00:00:00.000Z", resetsAt: "2026-10-01T00:00:00.000Z" },
+    usage: { used: 3, allowance: 75, periodStart: "2026-09-01T00:00:00.000Z", resetsAt: "2026-10-01T00:00:00.000Z" },
     counted: true,
     directive: null,
   });
@@ -212,14 +404,19 @@ describe("assistant state", () => {
     expect(STATE_LABELS[s.phase]).toBe("Ready");
   });
 
-  it("maps outcomes to permission and error states", () => {
+  it("attributes legacy permission outcomes to the provider session without a KalVoice approval UI", () => {
     const submitted = reduce(INITIAL_STATE, { type: "submitted", requestId: "r1" });
     const waiting = reduce(submitted, {
       type: "response",
       response: response({ kind: "permission_required", approvalRequestId: "a" }),
     });
-    expect(STATE_LABELS[waiting.phase]).toBe("Needs Approval");
-    expect(waiting.approvalRequestId).toBe("a");
+    expect(waiting).toMatchObject({ phase: "error", code: "provider_permission_required" });
+    expect("approvalRequestId" in waiting).toBe(false);
+    expect(waiting.message).toBe("The provider session is waiting for permission. Review its native prompt.");
+  });
+
+  it("maps provider and allowance failures to actionable error states", () => {
+    const submitted = reduce(INITIAL_STATE, { type: "submitted", requestId: "r1" });
     const needs = reduce(submitted, {
       type: "response",
       response: response({ kind: "needs_provider", message: "Connect a supported AI provider." }),
@@ -243,10 +440,15 @@ describe("assistant state", () => {
   });
 
   it("formats usage and sizes", () => {
-    expect(usageLine({ used: 412, allowance: 2500, periodStart: "", resetsAt: "2026-10-01T00:00:00.000Z" })).toBe(
-      "Used 412 of 2,500 · resets Oct 1",
+    expect(usageLine({ used: 482, allowance: 1500, periodStart: "", resetsAt: "2026-10-01T00:00:00.000Z" })).toBe(
+      "482 / 1,500 used · 1,018 remaining · renews Oct 1",
     );
-    expect(usageLine({ used: 9, allowance: null, periodStart: "", resetsAt: "" })).toContain("unlimited");
+    expect(usageLine({ used: 1501, allowance: 1500, periodStart: "", resetsAt: "2026-10-01T00:00:00.000Z" })).toBe(
+      "1,501 / 1,500 used · 0 remaining · renews Oct 1",
+    );
+    expect(usageLine({ used: 9, allowance: null, periodStart: "", resetsAt: "" })).toBe(
+      "9 KalVoice Requests used · Unlimited",
+    );
     expect(formatBytes(147_964_211)).toBe("148 MB");
     expect(formatBytes(1_533_763_059)).toBe("1.5 GB");
   });

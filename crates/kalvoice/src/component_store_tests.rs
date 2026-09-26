@@ -1,0 +1,843 @@
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use ed25519_dalek::{Signer as _, SigningKey};
+use tempfile::TempDir;
+use zip::ZipWriter;
+use zip::write::SimpleFileOptions;
+
+use super::*;
+use crate::component_manifest::TOKEN_TYPE;
+
+const NOW: i64 = 1_790_000_000;
+const KEY_ID: &str = "component-2026-1";
+
+#[test]
+fn production_runtime_policy_uses_a_stable_monotonic_component_track() {
+    assert_eq!(
+        LLAMA_B11146_WINDOWS_CPU_POLICY.component_id,
+        "kalvoice.runtime.llama-cpp"
+    );
+    assert!(
+        !LLAMA_B11146_WINDOWS_CPU_POLICY
+            .component_id
+            .contains("b11146")
+    );
+}
+
+#[test]
+fn host_contract_never_mixes_runtime_and_model_targets() {
+    #[cfg(any(
+        all(windows, target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    ))]
+    {
+        let contract = host_local_reasoning_contract().expect("supported host contract");
+        assert_eq!(contract.runtime.kind, ComponentKind::Runtime);
+        assert_eq!(contract.model.kind, ComponentKind::Model);
+        assert_eq!(contract.runtime.component_id, LOCAL_REASONING_RUNTIME_ID);
+        assert_eq!(contract.model.component_id, LOCAL_REASONING_MODEL_ID);
+        assert_eq!(contract.runtime.platform, contract.model.platform);
+        assert_eq!(contract.runtime.arch, contract.model.arch);
+        assert_eq!(contract.runtime.runtime_abi, LOCAL_REASONING_RUNTIME_ABI);
+        assert_eq!(contract.runtime.runtime_abi, contract.model.runtime_abi);
+        assert_eq!(
+            contract.runtime_policy.component_id,
+            contract.runtime.component_id
+        );
+    }
+    #[cfg(not(any(
+        all(windows, target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    )))]
+    assert!(host_local_reasoning_contract().is_none());
+}
+
+fn signing_key(seed: u8) -> SigningKey {
+    SigningKey::from_bytes(&[seed; 32])
+}
+
+fn verifier(key: &SigningKey) -> ComponentVerifier {
+    let encoded = URL_SAFE_NO_PAD.encode(key.verifying_key().as_bytes());
+    ComponentVerifier::from_keys([(KEY_ID, encoded.as_str())], ["models.kalcoded.com"])
+        .expect("test verifier")
+}
+
+fn token(
+    key: &SigningKey,
+    component_id: &str,
+    kind: ComponentKind,
+    version: &str,
+    sequence: u64,
+    artifact: &[u8],
+) -> String {
+    token_for_target(
+        key,
+        component_id,
+        kind,
+        version,
+        sequence,
+        artifact,
+        test_host_platform(),
+        test_host_arch(),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn token_for_target(
+    key: &SigningKey,
+    component_id: &str,
+    kind: ComponentKind,
+    version: &str,
+    sequence: u64,
+    artifact: &[u8],
+    platform: ComponentPlatform,
+    arch: ComponentArch,
+) -> String {
+    let digest = format!("{:x}", Sha256::digest(artifact));
+    let kind_segment = kind_segment(kind);
+    let file = match kind {
+        ComponentKind::Model => "reasoner.gguf",
+        ComponentKind::Runtime => "runtime.zip",
+    };
+    let payload = serde_json::json!({
+        "schemaVersion": 1,
+        "componentId": component_id,
+        "kind": kind_segment,
+        "version": version,
+        "sequence": sequence,
+        "platform": platform,
+        "arch": arch,
+        "runtimeAbi": "kalvoice-llama-cpp.v1",
+        "sizeBytes": artifact.len(),
+        "sha256": digest,
+        "artifactUrl": format!(
+            "https://models.kalcoded.com/components/v1/{kind_segment}/{component_id}/{version}/{digest}/{file}"
+        ),
+        "licenses": [{
+            "spdxId": "Apache-2.0",
+            "noticeSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }],
+        "provenance": {
+            "sourceId": "ggml-org/test",
+            "sourceRevision": "0123456789abcdef",
+            "sourceIntegritySha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "buildRecipeSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "issuedAt": NOW,
+        "expiresAt": NOW + 86_400,
+        "keyId": KEY_ID
+    });
+    let header = serde_json::json!({ "alg": "EdDSA", "kid": KEY_ID, "typ": TOKEN_TYPE });
+    let input = format!(
+        "{}.{}",
+        URL_SAFE_NO_PAD.encode(header.to_string()),
+        URL_SAFE_NO_PAD.encode(payload.to_string())
+    );
+    let signature = key.sign(input.as_bytes());
+    format!("{input}.{}", URL_SAFE_NO_PAD.encode(signature.to_bytes()))
+}
+
+#[cfg(target_os = "windows")]
+fn test_host_platform() -> ComponentPlatform {
+    ComponentPlatform::Windows
+}
+
+#[cfg(target_os = "macos")]
+fn test_host_platform() -> ComponentPlatform {
+    ComponentPlatform::Macos
+}
+
+#[cfg(target_os = "linux")]
+fn test_host_platform() -> ComponentPlatform {
+    ComponentPlatform::Linux
+}
+
+#[cfg(target_arch = "x86_64")]
+fn test_host_arch() -> ComponentArch {
+    ComponentArch::X86_64
+}
+
+#[cfg(target_arch = "aarch64")]
+fn test_host_arch() -> ComponentArch {
+    ComponentArch::Aarch64
+}
+
+fn test_directory(path: impl AsRef<Path>) -> TrustedComponentDirectory {
+    let path = path.as_ref();
+    if !path.exists() {
+        fs::create_dir(path).expect("test component directory");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+            .expect("private test component directory mode");
+    }
+    TrustedComponentDirectory::open_existing(path).expect("trusted test directory")
+}
+
+fn write(path: &Path, bytes: &[u8]) {
+    fs::write(path, bytes).expect("write fixture")
+}
+
+fn selector(component_id: &str, kind: ComponentKind) -> ComponentSelector {
+    ComponentSelector {
+        component_id: component_id.to_owned(),
+        kind,
+        platform: test_host_platform(),
+        arch: test_host_arch(),
+        runtime_abi: "kalvoice-llama-cpp.v1".into(),
+    }
+}
+
+#[test]
+fn store_rejects_a_valid_signed_component_for_another_operating_system() {
+    let temp = TempDir::new().expect("temp");
+    let key = signing_key(7);
+    let store = ComponentStore::new(
+        test_directory(temp.path().join("store")),
+        verifier(&key),
+        [],
+    )
+    .expect("component store");
+    let bytes = b"bounded model fixture";
+    let artifact = temp.path().join("model.gguf");
+    write(&artifact, bytes);
+    let other_platform = match test_host_platform() {
+        ComponentPlatform::Windows => ComponentPlatform::Macos,
+        ComponentPlatform::Macos | ComponentPlatform::Linux => ComponentPlatform::Windows,
+    };
+    let signed = token_for_target(
+        &key,
+        "kalvoice.reasoner.test",
+        ComponentKind::Model,
+        "1.0.0",
+        1,
+        bytes,
+        other_platform,
+        test_host_arch(),
+    );
+
+    assert!(matches!(
+        store.install_from_file(&signed, &artifact, NOW),
+        Err(ComponentStoreError::WrongTarget)
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn trusted_directory_rejects_a_symlink_root_without_creating_outside_state() {
+    let temp = TempDir::new().expect("temp");
+    let outside = temp.path().join("outside");
+    fs::create_dir(&outside).expect("outside directory");
+    let linked = temp.path().join("store");
+    std::os::unix::fs::symlink(&outside, &linked).expect("store symlink");
+
+    assert!(matches!(
+        TrustedComponentDirectory::open_existing(&linked),
+        Err(ComponentStoreError::UnsafeStorage)
+    ));
+    assert!(!outside.join("v1").exists());
+}
+
+#[test]
+fn installs_signed_model_and_hashes_it_only_at_load_boundary() {
+    let temp = TempDir::new().expect("temp");
+    let key = signing_key(7);
+    let store = ComponentStore::new(
+        test_directory(temp.path().join("store")),
+        verifier(&key),
+        [],
+    )
+    .expect("component store");
+    let bytes = b"bounded model fixture";
+    let artifact = temp.path().join("model.gguf");
+    write(&artifact, bytes);
+    let token = token(
+        &key,
+        "kalvoice.reasoner.test",
+        ComponentKind::Model,
+        "1.0.0",
+        1,
+        bytes,
+    );
+    let selector = selector("kalvoice.reasoner.test", ComponentKind::Model);
+
+    store
+        .install_from_file(&token, &artifact, NOW)
+        .expect("signed artifact installs");
+    assert!(matches!(
+        store.status(&selector, NOW + 86_400),
+        ComponentReceiptStatus::Present {
+            freshness: InstalledManifestFreshness::Expired,
+            ..
+        }
+    ));
+
+    let lease = store
+        .acquire(&selector, NOW + 86_400)
+        .expect("expired receipt remains valid offline");
+    assert_eq!(
+        lease.model_path().and_then(|path| fs::read(path).ok()),
+        Some(bytes.to_vec())
+    );
+    assert_eq!(lease.freshness(), InstalledManifestFreshness::Expired);
+    assert!(!lease.recovered_previous());
+}
+
+#[test]
+fn same_size_current_corruption_recovers_only_the_exact_previous_revision() {
+    let temp = TempDir::new().expect("temp");
+    let key = signing_key(7);
+    let store = ComponentStore::new(
+        test_directory(temp.path().join("store")),
+        verifier(&key),
+        [],
+    )
+    .expect("component store");
+    let id = "kalvoice.reasoner.test";
+    let first = b"model revision one";
+    let second = b"model revision two";
+    assert_eq!(first.len(), second.len());
+    let artifact = temp.path().join("model.gguf");
+    write(&artifact, first);
+    store
+        .install_from_file(
+            &token(&key, id, ComponentKind::Model, "1.0.0", 1, first),
+            &artifact,
+            NOW,
+        )
+        .expect("first install");
+    write(&artifact, second);
+    store
+        .install_from_file(
+            &token(&key, id, ComponentKind::Model, "2.0.0", 2, second),
+            &artifact,
+            NOW,
+        )
+        .expect("upgrade");
+
+    let track = store.track_dir(&selector(id, ComponentKind::Model));
+    let pointer = read_pointer(&track)
+        .expect("pointer read")
+        .expect("pointer");
+    let current_model = track.join(pointer.current).join("model.gguf");
+    write(&current_model, b"tampered revision");
+
+    let recovered = store
+        .acquire(&selector(id, ComponentKind::Model), NOW)
+        .expect("exact previous revision recovers");
+    assert!(recovered.recovered_previous());
+    assert_eq!(recovered.manifest().sequence, 1);
+    assert_eq!(
+        recovered.model_path().and_then(|path| fs::read(path).ok()),
+        Some(first.to_vec())
+    );
+}
+
+#[test]
+fn idempotent_current_reinstall_preserves_the_exact_previous_revision() {
+    let temp = TempDir::new().expect("temp");
+    let key = signing_key(7);
+    let store = ComponentStore::new(
+        test_directory(temp.path().join("store")),
+        verifier(&key),
+        [],
+    )
+    .expect("component store");
+    let id = "kalvoice.reasoner.test";
+    let first = b"model revision one";
+    let second = b"model revision two";
+    assert_eq!(first.len(), second.len());
+    let artifact = temp.path().join("model.gguf");
+    write(&artifact, first);
+    store
+        .install_from_file(
+            &token(&key, id, ComponentKind::Model, "1.0.0", 1, first),
+            &artifact,
+            NOW,
+        )
+        .expect("first install");
+    write(&artifact, second);
+    let second_token = token(&key, id, ComponentKind::Model, "2.0.0", 2, second);
+    store
+        .install_from_file(&second_token, &artifact, NOW)
+        .expect("upgrade");
+    store
+        .install_from_file(&second_token, &artifact, NOW)
+        .expect("idempotent reinstall");
+
+    let track = store.track_dir(&selector(id, ComponentKind::Model));
+    let pointer = read_pointer(&track)
+        .expect("pointer read")
+        .expect("pointer");
+    assert!(pointer.previous.is_some(), "rollback pointer must survive");
+    write(
+        &track.join(pointer.current).join("model.gguf"),
+        b"tampered revision",
+    );
+
+    let recovered = store
+        .acquire(&selector(id, ComponentKind::Model), NOW)
+        .expect("exact previous revision recovers");
+    assert!(recovered.recovered_previous());
+    assert_eq!(recovered.manifest().sequence, 1);
+}
+
+#[test]
+fn unsigned_pointer_cannot_select_a_retained_older_signed_revision() {
+    let temp = TempDir::new().expect("temp");
+    let key = signing_key(7);
+    let store = ComponentStore::new(
+        test_directory(temp.path().join("store")),
+        verifier(&key),
+        [],
+    )
+    .expect("component store");
+    let id = "kalvoice.reasoner.test";
+    let artifact = temp.path().join("model.gguf");
+    for (version, sequence, bytes) in [
+        ("1.0.0", 1, b"revision one".as_slice()),
+        ("2.0.0", 2, b"revision two".as_slice()),
+    ] {
+        write(&artifact, bytes);
+        store
+            .install_from_file(
+                &token(&key, id, ComponentKind::Model, version, sequence, bytes),
+                &artifact,
+                NOW,
+            )
+            .expect("install revision");
+    }
+    let selector = selector(id, ComponentKind::Model);
+    let track = store.track_dir(&selector);
+    let pointer = read_pointer(&track)
+        .expect("pointer read")
+        .expect("pointer");
+    let retained_previous = pointer.previous.expect("retained previous");
+    replace_pointer(
+        &track,
+        &Pointer {
+            schema_version: POINTER_SCHEMA,
+            current: retained_previous,
+            previous: None,
+        },
+    )
+    .expect("tamper pointer fixture");
+
+    assert!(matches!(
+        store.acquire(&selector, NOW),
+        Err(ComponentStoreError::InvalidPointer)
+    ));
+    assert_eq!(
+        store.status(&selector, NOW),
+        ComponentReceiptStatus::Invalid
+    );
+}
+
+#[test]
+fn active_lease_blocks_component_deletion() {
+    let temp = TempDir::new().expect("temp");
+    let key = signing_key(7);
+    let store = ComponentStore::new(
+        test_directory(temp.path().join("store")),
+        verifier(&key),
+        [],
+    )
+    .expect("component store");
+    let id = "kalvoice.reasoner.test";
+    let bytes = b"model";
+    let artifact = temp.path().join("model.gguf");
+    write(&artifact, bytes);
+    store
+        .install_from_file(
+            &token(&key, id, ComponentKind::Model, "1.0.0", 1, bytes),
+            &artifact,
+            NOW,
+        )
+        .expect("install");
+    let selector = selector(id, ComponentKind::Model);
+    let lease = store.acquire(&selector, NOW).expect("lease");
+
+    assert!(matches!(
+        store.delete(&selector),
+        Err(ComponentStoreError::InUse)
+    ));
+    drop(lease);
+    store.delete(&selector).expect("delete after lease");
+    assert_eq!(
+        store.status(&selector, NOW),
+        ComponentReceiptStatus::Missing
+    );
+}
+
+#[test]
+fn active_lease_blocks_deletion_from_an_independent_store_instance() {
+    let temp = TempDir::new().expect("temp");
+    let key = signing_key(7);
+    let root = temp.path().join("store");
+    let first =
+        ComponentStore::new(test_directory(&root), verifier(&key), []).expect("first store");
+    let second =
+        ComponentStore::new(test_directory(&root), verifier(&key), []).expect("second store");
+    let id = "kalvoice.reasoner.test";
+    let bytes = b"model";
+    let artifact = temp.path().join("model.gguf");
+    write(&artifact, bytes);
+    first
+        .install_from_file(
+            &token(&key, id, ComponentKind::Model, "1.0.0", 1, bytes),
+            &artifact,
+            NOW,
+        )
+        .expect("install");
+    let selector = selector(id, ComponentKind::Model);
+    let lease = first.acquire(&selector, NOW).expect("lease");
+
+    let deletion = second.delete(&selector);
+    assert!(
+        matches!(deletion, Err(ComponentStoreError::InUse)),
+        "unexpected deletion result: {deletion:?}"
+    );
+    drop(lease);
+    second.delete(&selector).expect("delete after lease");
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn store_lock_links_are_rejected_without_touching_their_targets() {
+    let temp = TempDir::new().expect("temp");
+    let key = signing_key(7);
+    let store = ComponentStore::new(
+        test_directory(temp.path().join("store")),
+        verifier(&key),
+        [],
+    )
+    .expect("component store");
+    let id = "kalvoice.reasoner.test";
+    let selector = selector(id, ComponentKind::Model);
+    let lock_dir = store.track_lock_dir(&selector);
+    fs::create_dir_all(&lock_dir).expect("lock directory");
+    let outside = temp.path().join("outside-lock");
+    write(&outside, b"");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&outside, lock_dir.join("track.lock"))
+        .expect("lock symlink fixture");
+    #[cfg(windows)]
+    fs::hard_link(&outside, lock_dir.join("track.lock")).expect("lock hardlink fixture");
+
+    let bytes = b"model";
+    let artifact = temp.path().join("model.gguf");
+    write(&artifact, bytes);
+    assert!(matches!(
+        store.install_from_file(
+            &token(&key, id, ComponentKind::Model, "1.0.0", 1, bytes),
+            &artifact,
+            NOW,
+        ),
+        Err(ComponentStoreError::UnsafeStorage)
+    ));
+    assert_eq!(fs::read(outside).expect("outside lock remains"), b"");
+}
+
+static TEST_RUNTIME_POLICY: RuntimeArchivePolicy = RuntimeArchivePolicy {
+    component_id: "kalvoice.runtime.test",
+    entrypoint: "llama-server.exe",
+    executable_entries: &[],
+    extract_entries: &["llama-server.exe", "llama.dll"],
+    ignore_entries: &["unused.exe"],
+};
+
+fn runtime_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    {
+        let mut writer = ZipWriter::new(&mut cursor);
+        for (name, bytes) in entries {
+            writer
+                .start_file(*name, SimpleFileOptions::default())
+                .expect("zip entry");
+            writer.write_all(bytes).expect("zip bytes");
+        }
+        writer.finish().expect("finish zip");
+    }
+    cursor.into_inner()
+}
+
+fn runtime_zip_with_modes(entries: &[(&str, &[u8], u32)]) -> Vec<u8> {
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    {
+        let mut writer = ZipWriter::new(&mut cursor);
+        for (name, bytes, mode) in entries {
+            writer
+                .start_file(*name, SimpleFileOptions::default().unix_permissions(*mode))
+                .expect("zip entry");
+            writer.write_all(bytes).expect("zip bytes");
+        }
+        writer.finish().expect("finish zip");
+    }
+    cursor.into_inner()
+}
+
+fn rewrite_zip_declared_uncompressed_size(bytes: &mut [u8], size: u32) {
+    let encoded = size.to_le_bytes();
+    let offsets = bytes
+        .windows(4)
+        .enumerate()
+        .filter_map(|(offset, signature)| match signature {
+            [0x50, 0x4b, 0x03, 0x04] => Some(offset + 22),
+            [0x50, 0x4b, 0x01, 0x02] => Some(offset + 24),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(!offsets.is_empty(), "fixture must contain ZIP headers");
+    for offset in offsets {
+        bytes[offset..offset + 4].copy_from_slice(&encoded);
+    }
+}
+
+#[test]
+fn runtime_extraction_bounds_actual_output_when_zip_size_fields_understate_it() {
+    let temp = TempDir::new().expect("temp");
+    let archive_path = temp.path().join("runtime.zip");
+    let payload = vec![b'x'; 1024 * 1024];
+    let mut archive = runtime_zip(&[("llama-server.exe", payload.as_slice())]);
+    rewrite_zip_declared_uncompressed_size(&mut archive, 1);
+    write(&archive_path, &archive);
+    let destination = temp.path().join("payload");
+    fs::create_dir(&destination).expect("payload directory");
+
+    assert!(matches!(
+        extract_runtime(&archive_path, &destination, &TEST_RUNTIME_POLICY),
+        Err(ComponentStoreError::UnsafeArchive)
+    ));
+    let written = destination.join("llama-server.exe");
+    assert!(
+        !written.exists() || fs::metadata(written).expect("written metadata").len() <= 2,
+        "extraction must stop after the signed declaration plus one detection byte"
+    );
+}
+
+#[test]
+fn macos_runtime_policy_is_a_curated_regular_file_dependency_closure() {
+    assert_eq!(
+        LLAMA_B11146_MACOS_ARM64_CPU_POLICY.component_id,
+        LLAMA_B11146_WINDOWS_CPU_POLICY.component_id
+    );
+    assert_eq!(
+        LLAMA_B11146_MACOS_ARM64_CPU_POLICY.executable_entries,
+        &["llama-server"]
+    );
+    assert_eq!(
+        LLAMA_B11146_MACOS_ARM64_CPU_POLICY.extract_entries,
+        &[
+            "LICENSE",
+            "libggml-base.0.dylib",
+            "libggml-blas.0.dylib",
+            "libggml-cpu.0.dylib",
+            "libggml-metal.0.dylib",
+            "libggml-rpc.0.dylib",
+            "libggml.0.dylib",
+            "libllama-common.0.dylib",
+            "libllama-server-impl.dylib",
+            "libllama.0.dylib",
+            "libmtmd.0.dylib",
+            "llama-server",
+        ]
+    );
+    assert!(
+        LLAMA_B11146_MACOS_ARM64_CPU_POLICY
+            .ignore_entries
+            .is_empty()
+    );
+}
+
+#[test]
+fn executable_runtime_policy_requires_exact_signed_zip_modes() {
+    static POLICY: RuntimeArchivePolicy = RuntimeArchivePolicy {
+        component_id: "kalvoice.runtime.mode-test",
+        entrypoint: "llama-server",
+        executable_entries: &["llama-server"],
+        extract_entries: &["LICENSE", "libllama.dylib", "llama-server"],
+        ignore_entries: &[],
+    };
+    let valid = runtime_zip_with_modes(&[
+        ("LICENSE", b"license", 0o644),
+        ("libllama.dylib", b"library", 0o644),
+        ("llama-server", b"server", 0o755),
+    ]);
+    let invalid = runtime_zip_with_modes(&[
+        ("LICENSE", b"license", 0o644),
+        ("libllama.dylib", b"library", 0o644),
+        ("llama-server", b"server", 0o644),
+    ]);
+    let temp = TempDir::new().expect("temp");
+    let valid_zip = temp.path().join("valid.zip");
+    let invalid_zip = temp.path().join("invalid.zip");
+    write(&valid_zip, &valid);
+    write(&invalid_zip, &invalid);
+
+    let valid_payload = temp.path().join("valid");
+    fs::create_dir(&valid_payload).expect("payload");
+    let files = extract_runtime(&valid_zip, &valid_payload, &POLICY).expect("valid modes");
+    verify_runtime(&valid_zip, &valid_payload, &POLICY, &files).expect("mode recheck");
+
+    let invalid_payload = temp.path().join("invalid");
+    fs::create_dir(&invalid_payload).expect("payload");
+    assert!(matches!(
+        extract_runtime(&invalid_zip, &invalid_payload, &POLICY),
+        Err(ComponentStoreError::UnsafeArchive)
+    ));
+}
+
+#[test]
+fn runtime_extracts_only_exactly_classified_entries_and_rechecks_archive_on_load() {
+    let temp = TempDir::new().expect("temp");
+    let key = signing_key(7);
+    let store = ComponentStore::new(
+        test_directory(temp.path().join("store")),
+        verifier(&key),
+        [TEST_RUNTIME_POLICY],
+    )
+    .expect("component store");
+    let bytes = runtime_zip(&[
+        ("llama-server.exe", b"server"),
+        ("llama.dll", b"library"),
+        ("unused.exe", b"never extracted"),
+    ]);
+    let artifact = temp.path().join("runtime.zip");
+    write(&artifact, &bytes);
+    let id = TEST_RUNTIME_POLICY.component_id;
+    store
+        .install_from_file(
+            &token(&key, id, ComponentKind::Runtime, "1.0.0", 1, &bytes),
+            &artifact,
+            NOW,
+        )
+        .expect("runtime install");
+
+    let lease = store
+        .acquire(&selector(id, ComponentKind::Runtime), NOW)
+        .expect("verified runtime lease");
+    let root = lease.runtime_root().expect("runtime root");
+    assert!(root.join("llama-server.exe").is_file());
+    assert!(root.join("llama.dll").is_file());
+    assert!(!root.join("unused.exe").exists());
+}
+
+#[test]
+fn runtime_rejects_unknown_traversal_and_case_colliding_entries() {
+    let key = signing_key(7);
+    for entries in [
+        vec![
+            ("llama-server.exe", b"server".as_slice()),
+            ("llama.dll", b"library".as_slice()),
+            ("extra.dll", b"unknown".as_slice()),
+        ],
+        vec![
+            ("llama-server.exe", b"server".as_slice()),
+            ("llama.dll", b"library".as_slice()),
+            ("../escape.dll", b"escape".as_slice()),
+        ],
+        vec![
+            ("llama-server.exe", b"server".as_slice()),
+            ("LLAMA-SERVER.EXE", b"collision".as_slice()),
+            ("llama.dll", b"library".as_slice()),
+        ],
+    ] {
+        let temp = TempDir::new().expect("temp");
+        let store = ComponentStore::new(
+            test_directory(temp.path().join("store")),
+            verifier(&key),
+            [TEST_RUNTIME_POLICY],
+        )
+        .expect("component store");
+        let bytes = runtime_zip(&entries);
+        let artifact = temp.path().join("runtime.zip");
+        write(&artifact, &bytes);
+        let result = store.install_from_file(
+            &token(
+                &key,
+                TEST_RUNTIME_POLICY.component_id,
+                ComponentKind::Runtime,
+                "1.0.0",
+                1,
+                &bytes,
+            ),
+            &artifact,
+            NOW,
+        );
+        assert!(matches!(result, Err(ComponentStoreError::UnsafeArchive)));
+        assert!(!temp.path().join("escape.dll").exists());
+    }
+}
+
+#[test]
+fn removed_trust_key_invalidates_an_installed_receipt_even_when_bytes_match() {
+    let temp = TempDir::new().expect("temp");
+    let trusted = signing_key(7);
+    let replacement = signing_key(9);
+    let root = temp.path().join("store");
+    let bytes = b"model";
+    let artifact = temp.path().join("model.gguf");
+    write(&artifact, bytes);
+    let id = "kalvoice.reasoner.test";
+    ComponentStore::new(test_directory(&root), verifier(&trusted), [])
+        .expect("store")
+        .install_from_file(
+            &token(&trusted, id, ComponentKind::Model, "1.0.0", 1, bytes),
+            &artifact,
+            NOW,
+        )
+        .expect("install");
+
+    let replacement_encoded = URL_SAFE_NO_PAD.encode(replacement.verifying_key().as_bytes());
+    let replacement_verifier = ComponentVerifier::from_keys(
+        [("component-2026-2", replacement_encoded.as_str())],
+        ["models.kalcoded.com"],
+    )
+    .expect("replacement verifier");
+    let reopened =
+        ComponentStore::new(test_directory(&root), replacement_verifier, []).expect("reopen");
+    assert_eq!(
+        reopened.status(&selector(id, ComponentKind::Model), NOW),
+        ComponentReceiptStatus::Invalid
+    );
+    assert!(matches!(
+        reopened.acquire(&selector(id, ComponentKind::Model), NOW),
+        Err(ComponentStoreError::Manifest(VerifyError::UnknownKey))
+    ));
+}
+
+#[test]
+#[ignore = "requires the pinned local llama.cpp runtime archive"]
+#[cfg(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
+fn pinned_runtime_archive_round_trips_the_exact_extraction_policy() {
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    let (expected_sha256, policy) = (
+        "14cf1303ca9ac3abd94816850532f9f9a69ac66fbaca3776fc6f9061c2fac1d1",
+        LLAMA_B11146_WINDOWS_CPU_POLICY,
+    );
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    let (expected_sha256, policy) = (
+        "0342a5523fab1ca5cbdaf1875e814fb5942011fc70a4aae191003fed3fbf2e6b",
+        LLAMA_B11146_MACOS_ARM64_CPU_POLICY,
+    );
+    let source = std::env::var_os("KALCODE_LLAMA_RUNTIME_ZIP")
+        .expect("KALCODE_LLAMA_RUNTIME_ZIP is required");
+    assert_eq!(
+        hash_file(Path::new(&source)).expect("hash pinned runtime"),
+        expected_sha256,
+        "the local fixture must be the exact attested host llama.cpp b11146 runtime archive"
+    );
+    let temp = TempDir::new().expect("temp");
+    let payload = temp.path().join("payload");
+    fs::create_dir(&payload).expect("payload");
+    let files =
+        extract_runtime(Path::new(&source), &payload, &policy).expect("exact policy extraction");
+    verify_runtime(Path::new(&source), &payload, &policy, &files)
+        .expect("extracted bytes equal the signed archive");
+}

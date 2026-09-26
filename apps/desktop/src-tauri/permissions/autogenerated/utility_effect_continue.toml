@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-utility-effect-continue"
+description = "Enables the utility_effect_continue command without any pre-configured scope."
+commands.allow = ["utility_effect_continue"]
+
+[[permission]]
+identifier = "deny-utility-effect-continue"
+description = "Denies the utility_effect_continue command without any pre-configured scope."
+commands.deny = ["utility_effect_continue"]

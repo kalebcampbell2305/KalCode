@@ -1,0 +1,377 @@
+---
+import { PLANS, formatKalVoiceAllowance } from "@kalcode/protocol/plans";
+import PageHead from "../components/PageHead.astro";
+import XLink from "../components/XLink.astro";
+import Base from "../layouts/Base.astro";
+import { getPage } from "../lib/site";
+
+const page = getPage("/updates");
+const allowances = PLANS.map((plan) => `${plan.name} ${formatKalVoiceAllowance(plan.limits)}`).join(", ");
+---
+<Base title={page.title} description={page.description} path={page.path} world>
+  <PageHead
+    eyebrow="Product news"
+    title="Updates"
+    lead="The releases, improvements, and product moments that change how you work in KalCode. Clear enough to scan. Detailed enough to matter."
+    backdrop="orbital"
+  >
+    <nav class="updates-index" aria-label="Update archive">
+      <a href="#release-0-1-1">Windows preview</a>
+      <a href="#release-website-2026-09-24">New website</a>
+      <a href="#release-kalvoice">KalVoice</a>
+      <a href="#milestone-foundation">Foundation</a>
+    </nav>
+  </PageHead>
+
+  <section class="section updates" aria-labelledby="updates-heading">
+    <div class="container">
+      <h2 class="sr-only" id="updates-heading">KalCode product updates</h2>
+      <div class="updates-feed">
+        <article class="update update--featured" id="release-0-1-1" aria-labelledby="release-0-1-1-title">
+          <div class="update__signal" aria-hidden="true"><span></span></div>
+          <header class="update__meta">
+            <p class="update__edition">KalCode 0.1.1</p>
+            <p><time datetime="2026-09-24">September 24, 2026</time></p>
+            <p class="chip chip--built">Public preview · Windows</p>
+          </header>
+          <div class="update__story">
+            <p class="update__kicker">The first Windows preview</p>
+            <h2 id="release-0-1-1-title">Your coding agents, together in one workspace.</h2>
+            <p class="update__lead">
+              KalCode 0.1.1 brings real project terminals and Claude Code threads into a persistent
+              desktop workspace, with a Dashboard that shows what is working and what needs you.
+            </p>
+            <div class="update__groups">
+              <section>
+                <h3>New</h3>
+                <ul>
+                  <li>Project workspaces with PowerShell, Command Prompt, and Git Bash terminals.</li>
+                  <li>Claude Code threads with streaming output, pause, stop, and resume.</li>
+                  <li>A live Dashboard for active, waiting, completed, and failed work.</li>
+                </ul>
+              </section>
+              <section>
+                <h3>Improved</h3>
+                <ul>
+                  <li>Workspace and terminal tabs return after a restart.</li>
+                  <li>Provider actions stay under KalCode's deny rules in every permission mode.</li>
+                </ul>
+              </section>
+              <section>
+                <h3>Fixed</h3>
+                <ul>
+                  <li>Programs planted in project folders cannot run when a thread starts.</li>
+                  <li>Drive roots and home folders cannot be opened as workspaces.</li>
+                </ul>
+              </section>
+            </div>
+            <p class="update__action"><a class="button button--primary" href="/download">Download the Windows preview</a></p>
+          </div>
+        </article>
+
+        <article class="update" id="release-website-2026-09-24" aria-labelledby="release-website-2026-09-24-title">
+          <div class="update__signal" aria-hidden="true"><span></span></div>
+          <header class="update__meta">
+            <p class="update__edition">Website</p>
+            <p><time datetime="2026-09-24">September 24, 2026</time></p>
+            <p class="chip chip--built">Live</p>
+          </header>
+          <div class="update__story">
+            <p class="update__kicker">A clearer view of the product</p>
+            <h2 id="release-website-2026-09-24-title">The new kalcoded.com shows the real workspace.</h2>
+            <p class="update__lead">
+              Product previews now show terminals, permissions, KalVoice, and the Dashboard in the
+              same visual world as the desktop app. Every preview and development feature is labelled
+              with its current state.
+            </p>
+            <div class="update__groups update__groups--compact">
+              <section>
+                <h3>New</h3>
+                <ul>
+                  <li>Focused Product, KalVoice, Pricing, Download, and Docs pages.</li>
+                  <li>Release status and verified download details from the public manifest.</li>
+                  <li>Official product news from <XLink account="official" withHandle />.</li>
+                </ul>
+              </section>
+            </div>
+          </div>
+        </article>
+
+        <article class="update" id="release-kalvoice" aria-labelledby="release-kalvoice-title">
+          <div class="update__signal" aria-hidden="true"><span></span></div>
+          <header class="update__meta">
+            <p class="update__edition">KalVoice</p>
+            <p><time datetime="2026-09-24">September 24, 2026</time></p>
+            <p class="chip chip--dev">In development</p>
+          </header>
+          <div class="update__story">
+            <p class="update__kicker">Speak to your workspace</p>
+            <h2 id="release-kalvoice-title">KalVoice puts your intent where you are working.</h2>
+            <p class="update__lead">
+              Hold one key, speak, and release. Local dictation is designed to type into the focused
+              provider thread, terminal, or search field. Structured commands control KalCode without
+              sending ordinary workspace actions to an external model.
+            </p>
+            <div class="update__groups">
+              <section>
+                <h3>Designed for every plan</h3>
+                <ul>
+                  <li>Unlimited local dictation, with audio kept on your device.</li>
+                  <li>Claude Code, Codex, and Gemini CLI use your connected provider accounts.</li>
+                  <li>Monthly KalVoice Requests: {allowances}.</li>
+                </ul>
+              </section>
+              <section>
+                <h3>Still in development</h3>
+                <ul>
+                  <li>KalVoice is not part of the current public Windows preview.</li>
+                  <li>Availability will be announced here when its release gates pass.</li>
+                </ul>
+              </section>
+            </div>
+            <p class="update__action"><a class="button button--secondary" href="/kalvoice">Explore KalVoice</a></p>
+          </div>
+        </article>
+
+        <article class="update update--quiet" id="milestone-foundation" aria-labelledby="milestone-foundation-title">
+          <div class="update__signal" aria-hidden="true"><span></span></div>
+          <header class="update__meta">
+            <p class="update__edition">Foundation</p>
+            <p><time datetime="2026-09-24">September 24, 2026</time></p>
+            <p class="chip">Development build · archive</p>
+          </header>
+          <div class="update__story">
+            <p class="update__kicker">Built for what comes next</p>
+            <h2 id="milestone-foundation-title">The local foundation beneath KalCode.</h2>
+            <p class="update__lead">
+              The first internal milestone established the desktop shell, versioned local storage,
+              typed events, redacted logs, OS keychain secrets, and the shared design system. It was
+              never distributed as a public build.
+            </p>
+          </div>
+        </article>
+      </div>
+    </div>
+  </section>
+</Base>
+
+<style>
+  .updates-index {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.55rem;
+    max-width: 48rem;
+  }
+
+  .updates-index a {
+    padding: 0.55rem 0.85rem;
+    border: 1px solid color-mix(in srgb, var(--color-border) 76%, var(--color-brand));
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--color-surface) 76%, transparent);
+    color: var(--color-text-secondary);
+    font-size: var(--site-text-small);
+    text-decoration: none;
+    backdrop-filter: blur(12px);
+  }
+
+  .updates-index a:hover,
+  .updates-index a:focus-visible {
+    border-color: var(--color-brand);
+    color: var(--color-text);
+  }
+
+  .updates {
+    overflow: clip;
+  }
+
+  .updates-feed {
+    --signal-x: 0.7rem;
+    position: relative;
+    display: grid;
+    gap: clamp(1.25rem, 2vw, 2rem);
+    padding-left: 2.5rem;
+  }
+
+  .updates-feed::before {
+    position: absolute;
+    top: 1.5rem;
+    bottom: 1.5rem;
+    left: var(--signal-x);
+    width: 1px;
+    background: linear-gradient(180deg, transparent, var(--color-brand), var(--color-border) 80%, transparent);
+    content: "";
+    opacity: 0.62;
+  }
+
+  .update {
+    position: relative;
+    display: grid;
+    gap: clamp(1.5rem, 3vw, 3rem);
+    padding: clamp(1.4rem, 2.5vw, 2.4rem);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    background:
+      linear-gradient(145deg, color-mix(in srgb, var(--color-surface) 88%, var(--color-brand) 12%), var(--color-surface) 42%),
+      var(--color-surface);
+    box-shadow: 0 1.25rem 4rem rgb(0 0 0 / 18%);
+  }
+
+  .update--featured {
+    border-color: color-mix(in srgb, var(--color-brand) 54%, var(--color-border));
+    box-shadow: 0 1.5rem 5rem rgb(0 74 173 / 16%);
+  }
+
+  .update--quiet {
+    background: color-mix(in srgb, var(--color-surface) 94%, transparent);
+  }
+
+  .update__signal {
+    position: absolute;
+    top: 2rem;
+    left: calc(-2.5rem + var(--signal-x));
+    width: 1px;
+    height: 1px;
+  }
+
+  .update__signal span {
+    position: absolute;
+    width: 0.7rem;
+    height: 0.7rem;
+    border: 2px solid var(--color-brand);
+    border-radius: 50%;
+    background: var(--color-bg);
+    box-shadow: 0 0 0 0.3rem rgb(48 137 255 / 11%), 0 0 1.5rem rgb(48 137 255 / 40%);
+    transform: translate(-50%, -50%);
+  }
+
+  .update__meta {
+    display: grid;
+    align-content: start;
+    justify-items: start;
+    gap: 0.55rem;
+    color: var(--color-text-muted);
+    font-size: var(--site-text-small);
+  }
+
+  .update__edition,
+  .update__kicker,
+  .update__groups h3 {
+    font-family: var(--font-display);
+    font-weight: var(--weight-semibold);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .update__edition {
+    color: var(--color-text);
+    font-size: 0.78rem;
+  }
+
+  .update__story {
+    min-width: 0;
+  }
+
+  .update__kicker {
+    margin-bottom: 0.7rem;
+    color: var(--color-brand);
+    font-size: 0.72rem;
+  }
+
+  .update__story > h2 {
+    max-width: 22ch;
+    font-family: var(--font-display);
+    font-size: clamp(1.75rem, 1.35rem + 1.7vw, 3.1rem);
+    line-height: 1.04;
+    letter-spacing: -0.045em;
+  }
+
+  .update__lead {
+    max-width: 62ch;
+    margin-top: 1.1rem;
+    color: var(--color-text-secondary);
+    font-size: var(--site-text-lead);
+    line-height: 1.62;
+  }
+
+  .update__groups {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+    gap: 1.5rem;
+    margin-top: clamp(1.5rem, 3vw, 2.5rem);
+  }
+
+  .update__groups--compact {
+    grid-template-columns: minmax(0, 1fr);
+    max-width: 42rem;
+  }
+
+  .update__groups section {
+    padding-top: 1rem;
+    border-top: 1px solid var(--color-border);
+  }
+
+  .update__groups h3 {
+    color: var(--color-text);
+    font-size: 0.74rem;
+  }
+
+  .update__groups ul {
+    display: grid;
+    gap: 0.55rem;
+    margin-top: 0.8rem;
+    padding-left: 1.1rem;
+    color: var(--color-text-secondary);
+    line-height: 1.55;
+  }
+
+  .update__groups li::marker {
+    color: var(--color-brand);
+  }
+
+  .update__action {
+    margin-top: clamp(1.5rem, 3vw, 2.5rem);
+  }
+
+  @media (min-width: 52rem) {
+    .updates-feed {
+      --signal-x: 1rem;
+      padding-left: 3.75rem;
+    }
+
+    .update {
+      grid-template-columns: minmax(10rem, 0.3fr) minmax(0, 1fr);
+    }
+
+    .update__signal {
+      left: calc(-3.75rem + var(--signal-x));
+    }
+  }
+
+  @media (max-width: 34rem) {
+    .updates-index {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      width: 100%;
+    }
+
+    .updates-index a {
+      text-align: center;
+    }
+
+    .updates-feed {
+      padding-left: 1.6rem;
+    }
+
+    .updates-feed::before {
+      left: 0.3rem;
+    }
+
+    .update {
+      padding: 1.25rem;
+    }
+
+    .update__signal {
+      left: -1.3rem;
+    }
+  }
+</style>

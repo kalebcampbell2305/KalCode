@@ -33,6 +33,7 @@ use kalcode_contracts::agent::{
 use kalcode_contracts::permissions::ApprovalDecision;
 use kalcode_contracts::threads::ThreadStatus;
 
+use crate::managed::SharedProfileLease;
 use crate::process::{OutputLine, ProcessSpec, SupervisedChild};
 
 /// Largest single message KalCode sends (as for Claude Code).
@@ -72,6 +73,7 @@ pub(crate) struct TurnLaunch {
     pub cwd: PathBuf,
     /// Provider session id to resume from the first turn on.
     pub resume_session_id: Option<String>,
+    pub guardian_profile: Option<SharedProfileLease>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -195,7 +197,14 @@ impl Shared {
             cwd: Some(self.launch.cwd.clone()),
             env: self.launch.env.clone(),
         };
-        let (child, lines) = SupervisedChild::spawn(&spec).map_err(|e| {
+        let spawned = match &self.launch.guardian_profile {
+            Some(profile) => {
+                let admission = profile.prepare_guarded_job("provider-turn")?;
+                SupervisedChild::spawn_guarded(&spec, admission)
+            }
+            None => SupervisedChild::spawn(&spec),
+        };
+        let (child, lines) = spawned.map_err(|e| {
             tracing::warn!(event = "provider.session_spawn_failed", provider_id = self.adapter.provider_id(), error = %e);
             ProviderError::Start(format!("{} couldn't be started.", self.name()))
         })?;

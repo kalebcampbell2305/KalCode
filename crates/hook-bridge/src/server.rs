@@ -194,9 +194,75 @@ impl Drop for Registration {
 }
 
 /// The running bridge. Dropping it stops the listener.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum BridgeShutdownError {
+    #[error("the hook bridge listener did not stop before the shutdown deadline")]
+    TimedOut,
+    #[error("the hook bridge listener thread panicked")]
+    ListenerPanicked,
+}
+
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+
+struct ListenerThreadState {
+    thread: Option<std::thread::JoinHandle<()>>,
+    result: Option<Result<(), BridgeShutdownError>>,
+}
+
+struct ListenerThread {
+    state: Mutex<ListenerThreadState>,
+}
+
+impl ListenerThread {
+    fn new(thread: std::thread::JoinHandle<()>) -> Self {
+        Self {
+            state: Mutex::new(ListenerThreadState {
+                thread: Some(thread),
+                result: None,
+            }),
+        }
+    }
+
+    /// Waits only up to `timeout`. A timeout leaves the join handle owned for a later retry.
+    fn wait(&self, timeout: Duration) -> Result<(), BridgeShutdownError> {
+        let started = Instant::now();
+        loop {
+            {
+                let mut state = self
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if let Some(result) = state.result {
+                    return result;
+                }
+                if state
+                    .thread
+                    .as_ref()
+                    .is_some_and(std::thread::JoinHandle::is_finished)
+                {
+                    let Some(thread) = state.thread.take() else {
+                        continue;
+                    };
+                    let result = thread
+                        .join()
+                        .map_err(|_| BridgeShutdownError::ListenerPanicked);
+                    state.result = Some(result);
+                    return result;
+                }
+            }
+
+            let remaining = timeout.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                return Err(BridgeShutdownError::TimedOut);
+            }
+            std::thread::sleep(remaining.min(Duration::from_millis(5)));
+        }
+    }
+}
+
 pub struct BridgeServer {
     shared: Arc<Shared>,
-    thread: Mutex<Option<std::thread::JoinHandle<()>>>,
+    thread: ListenerThread,
 }
 
 impl BridgeServer {
@@ -230,7 +296,7 @@ impl BridgeServer {
         tracing::info!(event = "hook_bridge.started");
         Ok(Self {
             shared,
-            thread: Mutex::new(Some(thread)),
+            thread: ListenerThread::new(thread),
         })
     }
 
@@ -282,21 +348,13 @@ impl BridgeServer {
         }
     }
 
-    /// Stops accepting and waits for the listener thread. Idempotent.
-    pub fn shutdown(&self) {
-        if self.shared.stopping.swap(true, Ordering::SeqCst) {
-            return;
-        }
+    /// Stops accepting and proves the listener exited within a bounded deadline. Every concurrent
+    /// caller waits for the same terminal result; a timeout retains the join handle for retry.
+    pub fn shutdown_checked(&self) -> Result<(), BridgeShutdownError> {
+        self.shared.stopping.store(true, Ordering::SeqCst);
         // Wakes the accept loop (a stored permit if it isn't waiting yet).
         self.shared.wake.notify_one();
-        let thread = self
-            .thread
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
-        if let Some(thread) = thread {
-            let _ = thread.join();
-        }
+        self.thread.wait(SHUTDOWN_TIMEOUT)?;
         #[cfg(unix)]
         {
             let path = self.shared.endpoint.path();
@@ -306,6 +364,14 @@ impl BridgeServer {
             }
         }
         tracing::info!(event = "hook_bridge.stopped");
+        Ok(())
+    }
+
+    /// Compatibility wrapper for callers that cannot surface shutdown failure yet.
+    pub fn shutdown(&self) {
+        if let Err(error) = self.shutdown_checked() {
+            tracing::error!(event = "hook_bridge.shutdown_incomplete", error = %error);
+        }
     }
 }
 
@@ -574,5 +640,42 @@ async fn serve<C: AsyncRead + AsyncWrite + Unpin>(
     };
     if write_frame(&mut conn, &response).await.is_ok() {
         stats.served.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use std::sync::mpsc;
+
+    use super::*;
+
+    #[test]
+    fn timeout_retains_listener_ownership_for_a_later_retry() {
+        let (release, held) = mpsc::channel();
+        let listener = ListenerThread::new(std::thread::spawn(move || {
+            held.recv().expect("release listener");
+        }));
+
+        assert_eq!(
+            listener.wait(Duration::ZERO),
+            Err(BridgeShutdownError::TimedOut)
+        );
+        release.send(()).expect("release");
+        assert_eq!(listener.wait(Duration::from_secs(1)), Ok(()));
+        assert_eq!(listener.wait(Duration::ZERO), Ok(()));
+    }
+
+    #[test]
+    fn listener_panic_is_typed_and_repeatable() {
+        let listener = ListenerThread::new(std::thread::spawn(|| panic!("listener failed")));
+
+        assert_eq!(
+            listener.wait(Duration::from_secs(1)),
+            Err(BridgeShutdownError::ListenerPanicked)
+        );
+        assert_eq!(
+            listener.wait(Duration::ZERO),
+            Err(BridgeShutdownError::ListenerPanicked)
+        );
     }
 }

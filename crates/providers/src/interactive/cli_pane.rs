@@ -17,24 +17,33 @@ use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 
 use kalcode_contracts::agent::{
-    AgentEventSink, AgentProvider, AgentSession, ProviderCapabilities, ProviderDetection,
-    ProviderError, ProviderId, SessionConfig,
+    AgentEventSink, AgentProvider, AgentSession, AuthState, DetectionState, ProviderCapabilities,
+    ProviderDetection, ProviderError, ProviderId, SessionConfig,
 };
 use kalcode_hook_bridge::KEY_ENV;
 use kalcode_hook_bridge::server::BridgeServer;
 use kalcode_pty::{ProgramSpec, PtySession, TerminalSize};
 
-use super::codex::{CodexArgs, interactive_args as codex_args};
+use super::codex::{CodexArgs, interactive_args_with_overrides as codex_args};
 use super::provider::{InteractiveConfig, PaneRegistry};
 use super::session::{HandlerRef, InteractiveSession, PaneProfile, SessionParts, Shared};
 use crate::catalog;
 use crate::claude::actions::ActionContext;
 use crate::claude::argv::working_directory;
-use crate::codex::usable_executable;
-use crate::detect::{DetectEnv, DetectionSpec, detect};
+use crate::codex::managed_policy::CloudConfigEligibility;
+use crate::codex::{managed_executable as managed_codex_executable, usable_executable};
+use crate::detect::{DetectEnv, DetectionSpec, detect, detect_guarded};
+use crate::gemini::managed_policy::ManagedGeminiLaunch;
 use crate::launch::{LaunchKind, resolve};
+use crate::managed::{
+    ManagedProfiles, ProfileLease, hold_shared_session_lease, share_profile_lease,
+};
+use crate::version::Version;
 
 const DEFAULT_SIZE: (u16, u16) = (120, 32);
+
+type CodexCloudConfigResolver =
+    dyn Fn(&str) -> Result<CloudConfigEligibility, ProviderError> + Send + Sync;
 
 /// Which CLI a pane runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,6 +92,8 @@ impl PaneCli {
 pub struct InteractiveCliProvider {
     cli: PaneCli,
     env: DetectEnv,
+    managed_profiles: Option<ManagedProfiles>,
+    codex_cloud_config: Option<Arc<CodexCloudConfigResolver>>,
     /// Codex `notify` reaches KalCode through the bridge; Gemini CLI panes don't use it.
     bridge: Option<Arc<BridgeServer>>,
     config: InteractiveConfig,
@@ -100,10 +111,29 @@ impl InteractiveCliProvider {
         Self {
             cli,
             env,
+            managed_profiles: None,
+            codex_cloud_config: None,
             bridge,
             config,
             panes,
         }
+    }
+
+    /// Enables account-scoped profiles. Once configured, every pane must name an account and
+    /// launches only through that provider's canonical managed policy.
+    pub fn with_managed_profiles(mut self, profiles: ManagedProfiles) -> Self {
+        self.managed_profiles = Some(profiles);
+        self
+    }
+
+    /// Supplies the authoritative account result used by Codex's managed policy. Missing or
+    /// unknown results fail closed because enterprise cloud configuration cannot be disabled.
+    pub fn with_codex_cloud_config_resolver<F>(mut self, resolver: F) -> Self
+    where
+        F: Fn(&str) -> Result<CloudConfigEligibility, ProviderError> + Send + Sync + 'static,
+    {
+        self.codex_cloud_config = Some(Arc::new(resolver));
+        self
     }
 
     pub fn sessions_dir(&self) -> PathBuf {
@@ -114,15 +144,100 @@ impl InteractiveCliProvider {
         &self,
         config: SessionConfig,
         sink: Box<dyn AgentEventSink>,
-    ) -> Result<InteractiveSession, ProviderError> {
+    ) -> Result<Box<dyn AgentSession>, ProviderError> {
+        let account_id = match (
+            self.managed_profiles.as_ref(),
+            config.provider_account_id.as_deref(),
+        ) {
+            (None, Some(_)) => {
+                return Err(ProviderError::Start(
+                    "A managed provider profile is required for this account.".into(),
+                ));
+            }
+            (Some(_), None) => {
+                return Err(ProviderError::Start(format!(
+                    "a managed {} session requires an explicit provider account",
+                    self.cli.name()
+                )));
+            }
+            (Some(_), Some(account_id)) => Some(account_id),
+            (None, None) => None,
+        };
         if config.secret_ref.is_some() {
             return Err(ProviderError::Unsupported);
         }
         let spec = self.cli.spec();
-        let executable = usable_executable(&spec, &self.env)?;
-        let cwd = working_directory(&config.working_directory)
+        let workspace = working_directory(&config.working_directory)
             .map_err(|e| ProviderError::Start(e.to_string()))?;
-        let mut env = self.env.provider_env(&spec.env_policy);
+        let mut codex_overrides = Vec::new();
+        let mut gemini_args = None;
+        let mut lease: Option<ProfileLease> = None;
+        let (executable, mut env, cwd) = match (self.managed_profiles.as_ref(), account_id) {
+            (Some(profiles), Some(account_id)) => match self.cli {
+                PaneCli::Codex => {
+                    let probe_guardian = profiles.probe_guardian()?;
+                    let resolve_cloud_config = self.codex_cloud_config.as_ref().ok_or_else(|| {
+                            ProviderError::Start(
+                                "Codex managed sessions require authoritative cloud-config eligibility"
+                                    .into(),
+                            )
+                        })?;
+                    let eligibility = resolve_cloud_config(account_id)?;
+                    let prepared = crate::codex::managed_policy::prepare_session(
+                        profiles,
+                        &self.env,
+                        account_id,
+                        &workspace,
+                        eligibility,
+                    )?;
+                    let executable =
+                        managed_codex_executable(&spec, &prepared.detect_env, &probe_guardian)?;
+                    codex_overrides = prepared.cli_overrides;
+                    lease = Some(prepared.lease);
+                    (executable, prepared.env, workspace.clone())
+                }
+                PaneCli::Gemini => {
+                    let probe_guardian = profiles.probe_guardian()?;
+                    let mut prepared = ManagedGeminiLaunch::prepare(
+                        profiles,
+                        &self.env,
+                        account_id,
+                        &config.thread_id,
+                        &workspace,
+                        config.permission_mode,
+                    )?;
+                    let detection_env = DetectEnv {
+                        vars: prepared
+                            .environment()
+                            .iter()
+                            .map(|(name, value)| (name.clone(), value.clone()))
+                            .collect(),
+                        windows: self.env.windows,
+                        probe_timeout: self.env.probe_timeout,
+                    };
+                    let executable =
+                        managed_gemini_executable(&spec, &detection_env, &probe_guardian)?;
+                    let mut args = crate::gemini::interactive_args(
+                        config.permission_mode,
+                        config.model.as_deref(),
+                        config.resume_session_id.as_deref(),
+                    )
+                    .map_err(|e| ProviderError::Start(e.to_string()))?;
+                    prepared.append_security_args(&mut args)?;
+                    let env = prepared.environment().clone();
+                    let cwd = prepared.cwd().to_path_buf();
+                    lease = Some(prepared.take_session_lease()?);
+                    gemini_args = Some(args);
+                    (executable, env, cwd)
+                }
+            },
+            (None, None) => (
+                usable_executable(&spec, &self.env)?,
+                self.env.provider_env(&spec.env_policy),
+                workspace.clone(),
+            ),
+            _ => unreachable!("managed account validation is exhaustive"),
+        };
         for (name, value) in [
             ("TERM", "xterm-256color"),
             ("COLORTERM", "truecolor"),
@@ -175,16 +290,19 @@ impl InteractiveCliProvider {
                         kalcode_hook_bridge::server::HookChannel::Codex,
                     )
                     .map_err(|e| ProviderError::Start(e.to_string()))?;
-                let args = codex_args(&CodexArgs {
-                    mode: config.permission_mode,
-                    workspace: &cwd,
-                    model: config.model.as_deref(),
-                    resume_session_id: config.resume_session_id.as_deref(),
-                    hook_program: &self.config.hook_program,
-                    hook_prefix_args: &self.config.hook_prefix_args,
-                    endpoint: bridge.endpoint().as_str(),
-                    session: registration.session_id(),
-                })
+                let args = codex_args(
+                    &CodexArgs {
+                        mode: config.permission_mode,
+                        workspace: &cwd,
+                        model: config.model.as_deref(),
+                        resume_session_id: config.resume_session_id.as_deref(),
+                        hook_program: &self.config.hook_program,
+                        hook_prefix_args: &self.config.hook_prefix_args,
+                        endpoint: bridge.endpoint().as_str(),
+                        session: registration.session_id(),
+                    },
+                    &codex_overrides,
+                )
                 .map_err(|e| ProviderError::Start(e.to_string()))?;
                 // The notify helper inherits Codex's environment, which holds the session key.
                 env.insert(KEY_ENV.into(), registration.key_hex().into());
@@ -193,40 +311,55 @@ impl InteractiveCliProvider {
             }
             PaneCli::Gemini => {
                 shared.mark_limited();
-                crate::gemini::interactive_args(
-                    config.permission_mode,
-                    config.model.as_deref(),
-                    config.resume_session_id.as_deref(),
-                )
-                .map_err(|e| ProviderError::Start(e.to_string()))?
+                match gemini_args {
+                    Some(args) => args,
+                    None => crate::gemini::interactive_args(
+                        config.permission_mode,
+                        config.model.as_deref(),
+                        config.resume_session_id.as_deref(),
+                    )
+                    .map_err(|e| ProviderError::Start(e.to_string()))?,
+                }
             }
         };
 
+        let shared_lease = lease.map(share_profile_lease);
+        let guardian_job = shared_lease
+            .as_ref()
+            .map(|lease| lease.prepare_guarded_job("provider-pane"))
+            .transpose()?;
+        let exit_lease = shared_lease.clone();
         let weak: Weak<Shared> = Arc::downgrade(&shared);
         let mut argv: Vec<OsString> = launch.prefix_args.clone();
         argv.extend(args);
-        let pty = PtySession::spawn_program(
-            ProgramSpec {
-                program: launch.program,
-                args: argv,
-                cwd,
-                env: env.into_iter().collect(),
-                size: TerminalSize::new(DEFAULT_SIZE.0, DEFAULT_SIZE.1)
-                    .map_err(|e| ProviderError::Start(e.to_string()))?,
-            },
-            move |exit| {
-                if let Some(shared) = weak.upgrade() {
-                    shared.on_exit(exit.code, exit.killed);
-                }
-            },
-        )
-        .map_err(|e| {
-            tracing::warn!(event = "pane.spawn_failed", provider_id = self.cli.id(), error = %e);
+        let program = ProgramSpec {
+            program: launch.program,
+            args: argv,
+            cwd,
+            env: env.into_iter().collect(),
+            size: TerminalSize::new(DEFAULT_SIZE.0, DEFAULT_SIZE.1)
+                .map_err(|e| ProviderError::Start(e.to_string()))?,
+        };
+        let on_exit = move |exit: kalcode_pty::ExitInfo| {
+            if let Some(shared) = weak.upgrade() {
+                shared.on_exit(exit.code, exit.killed);
+            }
+            drop(exit_lease);
+        };
+        let spawn_error = |error: kalcode_pty::PtyError| {
+            tracing::warn!(event = "pane.spawn_failed", provider_id = self.cli.id(), error = %error);
             ProviderError::Start(format!(
                 "{} couldn't be started in a pane.",
                 self.cli.name()
             ))
-        })?;
+        };
+        let pty = match guardian_job {
+            Some(registered) => {
+                PtySession::spawn_program_guarded(program, Box::new(registered), on_exit)
+                    .map_err(spawn_error)?
+            }
+            None => PtySession::spawn_program(program, on_exit).map_err(spawn_error)?,
+        };
         tracing::info!(event = "pane.started", provider_id = self.cli.id(), thread_id = %config.thread_id, pid = ?pty.pid());
 
         let _ = shared.pty.set(pty);
@@ -256,7 +389,52 @@ impl InteractiveCliProvider {
             });
         }
         self.panes.insert(&config.thread_id, shared.clone());
-        Ok(InteractiveSession { shared })
+        let session: Box<dyn AgentSession> = Box::new(InteractiveSession { shared });
+        Ok(match shared_lease {
+            Some(lease) => hold_shared_session_lease(session, lease),
+            None => session,
+        })
+    }
+}
+
+/// Managed Gemini execution is pinned to the exact reviewed version as the headless adapter.
+/// Detection runs only against the selected account's sanitized environment.
+fn managed_gemini_executable(
+    spec: &DetectionSpec,
+    env: &DetectEnv,
+    guardian: &crate::guardian::ProviderProbeGuardian,
+) -> Result<PathBuf, ProviderError> {
+    let detected = detect_guarded(spec, env, guardian);
+    match (detected.detection.state, detected.executable) {
+        (DetectionState::Installed, Some(executable))
+            if detected.detection.auth != AuthState::NotAuthenticated =>
+        {
+            let version = detected
+                .detection
+                .version
+                .as_deref()
+                .and_then(Version::parse)
+                .ok_or_else(|| {
+                    ProviderError::Start(
+                        "Gemini CLI did not report a version KalCode can verify".into(),
+                    )
+                })?;
+            if version == Version::new(0, 61, 0) {
+                Ok(executable)
+            } else {
+                Err(ProviderError::Start(format!(
+                    "managed Gemini profiles currently require certified Gemini CLI 0.61.0; found {version}"
+                )))
+            }
+        }
+        (DetectionState::Installed, Some(_)) => Err(ProviderError::NotAuthenticated),
+        (DetectionState::NotInstalled, _) => Err(ProviderError::NotInstalled),
+        _ => Err(ProviderError::Start(
+            detected
+                .detection
+                .message
+                .unwrap_or_else(|| "Gemini CLI couldn't be checked.".into()),
+        )),
     }
 }
 
@@ -270,7 +448,14 @@ impl AgentProvider for InteractiveCliProvider {
     }
 
     fn detect(&self) -> ProviderDetection {
-        detect(&self.cli.spec(), &self.env).detection
+        match self
+            .managed_profiles
+            .as_ref()
+            .and_then(|profiles| profiles.probe_guardian().ok())
+        {
+            Some(guardian) => detect_guarded(&self.cli.spec(), &self.env, &guardian).detection,
+            None => detect(&self.cli.spec(), &self.env).detection,
+        }
     }
 
     fn capabilities(&self) -> ProviderCapabilities {
@@ -285,6 +470,6 @@ impl AgentProvider for InteractiveCliProvider {
         config: SessionConfig,
         sink: Box<dyn AgentEventSink>,
     ) -> Result<Box<dyn AgentSession>, ProviderError> {
-        Ok(Box::new(self.start(config, sink)?))
+        self.start(config, sink)
     }
 }

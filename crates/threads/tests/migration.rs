@@ -96,6 +96,8 @@ fn upgrading_a_v1_database_keeps_its_data_and_adds_threads() {
     let thread = runtime
         .create(CreateThread {
             provider_id: "fake".into(),
+            provider_account_id: None,
+            account_label: None,
             workspace_id,
             model: None,
             permission_mode: PermissionMode::Approve,

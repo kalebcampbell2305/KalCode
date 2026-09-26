@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-account-email-start"
+description = "Enables the account_email_start command without any pre-configured scope."
+commands.allow = ["account_email_start"]
+
+[[permission]]
+identifier = "deny-account-email-start"
+description = "Denies the account_email_start command without any pre-configured scope."
+commands.deny = ["account_email_start"]

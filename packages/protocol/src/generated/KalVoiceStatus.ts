@@ -28,7 +28,7 @@ microphoneSupported: boolean,
  */
 voiceOutputAvailable: boolean, 
 /**
- * Connected providers that can power KalVoice reasoning.
+ * Connected coding providers available as action targets, never as a reasoning fallback.
  */
 providers: Array<ProviderChoice>, reservedShortcuts: Array<ReservedShortcut>, 
 /**

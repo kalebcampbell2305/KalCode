@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-doctor-ignored"
+description = "Enables the doctor_ignored command without any pre-configured scope."
+commands.allow = ["doctor_ignored"]
+
+[[permission]]
+identifier = "deny-doctor-ignored"
+description = "Denies the doctor_ignored command without any pre-configured scope."
+commands.deny = ["doctor_ignored"]

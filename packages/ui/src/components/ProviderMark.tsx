@@ -1,12 +1,13 @@
 import type { ReactNode } from "react";
+import claudeSpark from "../brand/providers/claude-spark.svg";
+import geminiCliIcon from "../brand/providers/gemini-cli.png";
+import openAiBlossom from "../brand/providers/openai-blossom.svg";
 import { cx } from "./cx.ts";
 import styles from "./ProviderMark.module.css";
 
 /**
- * Provider identity: a KalCode-drawn glyph plus the provider's name in plain text
- * (ADVANCED.md §17). Glyphs never imitate a provider's logo; they are distinct shapes shared
- * with the website stage (`apps/website/src/components/stage/icons.css`), tinted with the
- * provider accent from terminal.css. The accent identifies; it never carries status.
+ * Provider identity: the provider-published mark plus its name in plain text. Provider identity
+ * stays separate from runtime state: status is communicated by adjacent text and status UI.
  */
 export type ProviderGlyphKind = "claude" | "codex" | "gemini" | "shell" | "generic";
 
@@ -26,7 +27,7 @@ export function providerIdentity(provider: string): { glyph: ProviderGlyphKind; 
 export interface ProviderGlyphProps {
   provider: string;
   size?: ProviderMarkSize;
-  /** accent: the provider tint (default). neutral: text colour, for dense monochrome lists. */
+  /** Kept for API compatibility. Native provider marks retain their approved treatment. */
   tone?: "accent" | "neutral";
   className?: string;
 }
@@ -36,6 +37,22 @@ export type ProviderMarkSize = "xs" | "sm" | "md" | "lg";
 /** The glyph alone (decorative; always pair it with the name somewhere nearby). */
 export function ProviderGlyph({ provider, size = "sm", tone = "accent", className }: ProviderGlyphProps) {
   const { glyph, name } = providerIdentity(provider);
+  const nativeSource =
+    glyph === "claude" ? claudeSpark : glyph === "codex" ? openAiBlossom : glyph === "gemini" ? geminiCliIcon : null;
+  if (nativeSource) {
+    return (
+      <img
+        className={cx(styles.glyph, styles.nativeImage, styles[size], className)}
+        data-glyph={glyph}
+        data-tone={tone}
+        data-brand-source={glyph === "claude" ? "anthropic" : glyph === "codex" ? "openai" : "google-gemini-cli"}
+        src={nativeSource}
+        alt=""
+        aria-hidden="true"
+      />
+    );
+  }
+
   return (
     <svg
       className={cx(styles.glyph, styles[size], className)}
@@ -56,24 +73,9 @@ export function ProviderGlyph({ provider, size = "sm", tone = "accent", classNam
 }
 
 const GLYPHS: Record<ProviderGlyphKind, (name: string) => ReactNode> = {
-  claude: () => (
-    <>
-      <circle cx="8" cy="8" r="6" />
-      <circle cx="8" cy="8" r="2" fill="currentColor" stroke="none" />
-    </>
-  ),
-  codex: () => (
-    <>
-      <rect x="2" y="2" width="12" height="12" rx="3" />
-      <path d="M6.2 5.8 8.6 8l-2.4 2.2" />
-    </>
-  ),
-  gemini: () => (
-    <>
-      <path d="M8 1.6 14.4 8 8 14.4 1.6 8Z" />
-      <circle cx="8" cy="8" r="1.7" fill="currentColor" stroke="none" />
-    </>
-  ),
+  claude: () => null,
+  codex: () => null,
+  gemini: () => null,
   shell: () => (
     <>
       <rect x="1.8" y="2.6" width="12.4" height="10.8" rx="2" />

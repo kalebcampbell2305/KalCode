@@ -47,6 +47,8 @@ export interface PaneFrameProps {
   hidden: boolean;
   maximized: boolean;
   focused: boolean;
+  /** This pane owns the immutable destination for the current KalVoice capture. */
+  kalVoiceTarget: boolean;
   focusRequest: number;
   canSplit: boolean;
   canCollapse: boolean;
@@ -93,6 +95,7 @@ export function PaneFrame(props: PaneFrameProps) {
     hidden,
     maximized,
     focused,
+    kalVoiceTarget,
     focusRequest,
     canSplit,
     canCollapse,
@@ -190,7 +193,9 @@ export function PaneFrame(props: PaneFrameProps) {
         data-pane-id={leaf.paneId}
         data-collapsed={collapsedStrip ? "strip" : "bar"}
         data-focused={focused || undefined}
+        data-kalvoice-target={kalVoiceTarget ? "listening" : undefined}
         hidden={hidden}
+        aria-current={focused ? "true" : undefined}
         aria-label={`${label} (collapsed)`}
         style={style}
         onFocusCapture={() => onFocus(leaf.paneId)}
@@ -227,10 +232,12 @@ export function PaneFrame(props: PaneFrameProps) {
       className={styles.frame}
       data-pane-id={leaf.paneId}
       data-focused={focused || undefined}
+      data-kalvoice-target={kalVoiceTarget ? "listening" : undefined}
       data-maximized={maximized || undefined}
       data-drop-target={dropTarget || undefined}
       data-terminal={activeInfo?.terminal || undefined}
       hidden={hidden}
+      aria-current={focused ? "true" : undefined}
       aria-label={label}
       style={style}
       onFocusCapture={() => onFocus(leaf.paneId)}

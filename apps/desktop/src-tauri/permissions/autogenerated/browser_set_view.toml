@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-browser-set-view"
+description = "Enables the browser_set_view command without any pre-configured scope."
+commands.allow = ["browser_set_view"]
+
+[[permission]]
+identifier = "deny-browser-set-view"
+description = "Denies the browser_set_view command without any pre-configured scope."
+commands.deny = ["browser_set_view"]

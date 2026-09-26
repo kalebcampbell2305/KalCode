@@ -1,6 +1,9 @@
 //! Native validation of layouts and preset names. The WebView is treated as possibly
 //! compromised: nothing it sends is stored until it passes these checks.
 
+use std::collections::HashSet;
+use url::Url;
+
 use kalcode_contracts::ids::is_valid_id;
 use kalcode_contracts::workspace_ui::{LayoutError, PaneContent, PaneLayout, PaneNode};
 use kalcode_core::KalError;
@@ -45,22 +48,75 @@ pub fn is_widget_id(id: &str) -> bool {
     }
 }
 
-/// A browser pane's URL: `http://` or `https://`, at most 2048 characters, no control
-/// characters.
-pub fn is_browser_url(url: &str) -> bool {
-    url.chars().count() <= MAX_URL_CHARS
-        && !url.chars().any(char::is_control)
-        && (url.starts_with("http://") || url.starts_with("https://"))
+fn valid_persisted_path(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if !byte.is_ascii_graphic()
+            || matches!(byte, b'?' | b'#' | b'\\' | b'"' | b'<' | b'>' | b'`')
+        {
+            return false;
+        }
+        if byte == b'%' {
+            if index + 2 >= bytes.len()
+                || !bytes[index + 1].is_ascii_hexdigit()
+                || !bytes[index + 2].is_ascii_hexdigit()
+            {
+                return false;
+            }
+            index += 3;
+        } else {
+            index += 1;
+        }
+    }
+    true
 }
 
-fn check_content(content: &PaneContent) -> Result<(), KalError> {
+/// A persisted browser URL is a parsed, credential-free HTTP(S) URL. Query strings and
+/// fragments often contain OAuth codes or session secrets, so runtime navigation may use them
+/// but workspace layout state never stores them.
+pub fn is_browser_url(url: &str) -> bool {
+    if url.is_empty()
+        || url.chars().count() > MAX_URL_CHARS
+        || !url.is_ascii()
+        || url.chars().any(char::is_control)
+        || url.contains(['?', '#'])
+    {
+        return false;
+    }
+    let Some(rest) = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))
+    else {
+        return false;
+    };
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+    if authority.is_empty() || authority.contains(['@', '\\']) || !valid_persisted_path(path) {
+        return false;
+    }
+    Url::parse(url).is_ok_and(|parsed| {
+        matches!(parsed.scheme(), "http" | "https")
+            && parsed.host_str().is_some()
+            && parsed.username().is_empty()
+            && parsed.password().is_none()
+            && parsed.query().is_none()
+            && parsed.fragment().is_none()
+    })
+}
+
+fn check_content(content: &PaneContent, browser_ids: &mut HashSet<String>) -> Result<(), KalError> {
     let ok = match content {
         PaneContent::Thread { thread_id } => is_valid_id(thread_id),
         PaneContent::Terminal { terminal_id } => is_valid_id(terminal_id),
         PaneContent::Git { workspace_id } => is_valid_id(workspace_id),
         PaneContent::Dashboard => true,
         PaneContent::Widget { widget_id } => is_widget_id(widget_id),
-        PaneContent::Browser { url } => url.as_deref().is_none_or(is_browser_url),
+        PaneContent::Browser { browser_id, url } => {
+            is_valid_id(browser_id)
+                && browser_ids.insert(browser_id.clone())
+                && url.as_deref().is_none_or(is_browser_url)
+        }
     };
     if ok {
         Ok(())
@@ -71,10 +127,14 @@ fn check_content(content: &PaneContent) -> Result<(), KalError> {
     }
 }
 
-fn check_node(node: &PaneNode) -> Result<(), KalError> {
+fn check_node(node: &PaneNode, browser_ids: &mut HashSet<String>) -> Result<(), KalError> {
     match node {
-        PaneNode::Split { children, .. } => children.iter().try_for_each(check_node),
-        PaneNode::Leaf { tabs, .. } => tabs.iter().try_for_each(check_content),
+        PaneNode::Split { children, .. } => children
+            .iter()
+            .try_for_each(|child| check_node(child, browser_ids)),
+        PaneNode::Leaf { tabs, .. } => tabs
+            .iter()
+            .try_for_each(|content| check_content(content, browser_ids)),
     }
 }
 
@@ -82,8 +142,12 @@ fn check_node(node: &PaneNode) -> Result<(), KalError> {
 /// and dock item, and the stored size limit (64 KiB of JSON).
 pub fn validate_layout(layout: &PaneLayout) -> Result<(), KalError> {
     layout.validate().map_err(|e| structural(&e))?;
-    check_node(&layout.root)?;
-    layout.dock.iter().try_for_each(check_content)?;
+    let mut browser_ids = HashSet::new();
+    check_node(&layout.root, &mut browser_ids)?;
+    layout
+        .dock
+        .iter()
+        .try_for_each(|content| check_content(content, &mut browser_ids))?;
     if encoded_len(layout)? > MAX_LAYOUT_BYTES {
         return Err(invalid("That layout is too large to save."));
     }
@@ -124,12 +188,20 @@ mod tests {
             assert!(!is_widget_id(bad), "{bad}");
         }
         assert!(is_browser_url("http://localhost:3000"));
-        assert!(is_browser_url("https://example.com/a?b=c"));
+        assert!(is_browser_url("https://example.com/a/b%20c"));
         for bad in [
             "file:///c:/x",
             "javascript:alert(1)",
             "localhost:3000",
             "https://a\nb",
+            "https://user@example.com/",
+            "https://@example.com/",
+            "https://user:password@example.com/",
+            "https://example.com/callback?code=secret",
+            "https://example.com/callback#access-token",
+            "https:///missing-host",
+            "https://example.com/bad path",
+            "http://999.999.999.999/",
         ] {
             assert!(!is_browser_url(bad), "{bad}");
         }

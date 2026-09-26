@@ -21,6 +21,7 @@ import { useEffect, useRef, useState } from "react";
 import { toKalCodeError } from "../../ipc/errors.ts";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
 import { Page } from "../../shell/Page.tsx";
+import { ProviderAccountsView } from "./ProviderAccountsView.tsx";
 import { ProviderHealthView } from "./ProviderHealthView.tsx";
 import styles from "./ProvidersPage.module.css";
 import {
@@ -90,6 +91,7 @@ export function ProvidersPage() {
       <Tabs value={tab} onValueChange={(value) => setTab(value as ProvidersTab)} className={styles.tabs}>
         <TabsList aria-label="Provider views">
           <TabsTrigger value="setup">Setup</TabsTrigger>
+          <TabsTrigger value="accounts">Accounts</TabsTrigger>
           <TabsTrigger value="health">Health</TabsTrigger>
         </TabsList>
         <TabsContent value="setup" className={styles.tabPanel}>
@@ -129,6 +131,11 @@ export function ProvidersPage() {
               ))}
             </>
           )}
+        </TabsContent>
+        <TabsContent value="accounts" className={styles.tabPanel}>
+          <section aria-label="Provider accounts" className={styles.tabPanel}>
+            <ProviderAccountsView enabled={tab === "accounts"} statuses={statuses} />
+          </section>
         </TabsContent>
         <TabsContent value="health" className={styles.tabPanel}>
           <section aria-label="Provider health" className={styles.tabPanel}>

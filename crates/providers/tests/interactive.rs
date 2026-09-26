@@ -24,6 +24,7 @@ use kalcode_providers::interactive::provider::{
 };
 use kalcode_providers::interactive::session::SessionLimits;
 use kalcode_providers::interactive::{DecisionRouting, HookChannelState};
+use kalcode_providers::managed::ManagedProfiles;
 use serde_json::{Value, json};
 
 const FAKE: &str = env!("CARGO_BIN_EXE_kalcode-fake-provider");
@@ -40,6 +41,19 @@ struct Rig {
 
 impl Rig {
     fn new(routing: DecisionRouting, config: Value, limits: SessionLimits) -> Self {
+        Self::build(routing, config, limits, false)
+    }
+
+    fn new_managed(routing: DecisionRouting, config: Value, limits: SessionLimits) -> Self {
+        Self::build(routing, config, limits, true)
+    }
+
+    fn build(
+        routing: DecisionRouting,
+        config: Value,
+        limits: SessionLimits,
+        managed: bool,
+    ) -> Self {
         let dir = tempfile::tempdir().expect("dir");
         let name = if cfg!(windows) {
             "claude.exe"
@@ -52,7 +66,7 @@ impl Rig {
         let endpoint = Endpoint::generate(Some(sessions.path())).expect("endpoint");
         let bridge = Arc::new(BridgeServer::start(ServerConfig::new(endpoint)).expect("bridge"));
         let panes = Arc::new(PaneRegistry::new());
-        let provider = Arc::new(InteractiveClaudeProvider::new(
+        let mut provider = InteractiveClaudeProvider::new(
             Self::env(&dir),
             bridge.clone(),
             InteractiveConfig {
@@ -63,7 +77,13 @@ impl Rig {
                 limits,
             },
             panes.clone(),
-        ));
+        );
+        if managed {
+            provider = provider.with_managed_profiles(
+                ManagedProfiles::new(dir.path().join("managed")).expect("managed profiles"),
+            );
+        }
+        let provider = Arc::new(provider);
         Self {
             dir,
             work: tempfile::tempdir().expect("work"),
@@ -97,6 +117,7 @@ impl Rig {
         SessionConfig {
             thread_id: new_id(),
             workspace_id: new_id(),
+            provider_account_id: None,
             working_directory: self.work.path().to_string_lossy().into_owned(),
             model: None,
             permission_mode: mode,
@@ -519,6 +540,31 @@ fn stopping_a_pane_ends_its_process_and_revokes_the_session() {
             .send(kalcode_contracts::agent::AgentInput::Text { text: "x".into() }),
         Err(ProviderError::Unsupported)
     ));
+}
+
+#[test]
+fn managed_claude_pane_rejects_an_unreviewed_version_before_pty_launch() {
+    let rig = Rig::new_managed(
+        DecisionRouting::ProviderPrompt,
+        json!({"version": "2.1.300 (Claude Code)"}),
+        SessionLimits::default(),
+    );
+    let mut config = rig.config(PermissionMode::Approve);
+    config.provider_account_id = Some(new_id());
+
+    let error = match rig
+        .provider
+        .start_session(config, Box::new(|_: AgentEvent| {}))
+    {
+        Ok(_) => panic!("an unreviewed managed Claude version must not start a PTY"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("certified Claude Code 2.1.282"));
+    let runs = std::fs::read_to_string(rig.dir.path().join("runs.log")).expect("runs");
+    assert!(
+        !runs.lines().any(|line| line.contains("--settings")),
+        "the provider TUI must not start: {runs}"
+    );
 }
 
 #[test]

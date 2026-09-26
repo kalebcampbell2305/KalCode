@@ -2,8 +2,8 @@
  * Signed KalVoice Request usage receipts.
  *
  * The API's usage ledger is authoritative. Every usage response carries a receipt signed with the
- * same Ed25519 key as entitlement documents, so the desktop can show "Used 412 of 2,500, resets …"
- * and apply its offline allowance without trusting anything it computed itself
+ * same Ed25519 key as entitlement documents, so the desktop can show usage, remaining allowance
+ * and the renewal date, then apply its offline allowance without trusting client-computed limits
  * (docs/BILLING.md §7). The unit is a KalVoice Request — never provider model tokens.
  */
 

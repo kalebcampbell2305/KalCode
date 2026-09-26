@@ -1,10 +1,12 @@
-//! Codex in a pane: read-only first (docs/PROVIDER_PANES.md §3). Approvals stay in Codex's own
-//! prompt; KalCode's status comes from Codex's `notify` program (a structured JSON payload with a
-//! `type`), plus process state. Terminal escape sequences are untrusted output and cannot
-//! change canonical status. Codex hooks need persisted hook trust, and KalCode never passes
-//! `--dangerously-bypass-hook-trust`, so no Codex hook decides anything.
+//! Codex in a pane with the selected provider-native sandbox and approval policy
+//! (docs/PROVIDER_PANES.md §3). Approvals stay in Codex's own prompt; KalCode's status comes
+//! from Codex's `notify` program (a structured JSON payload with a `type`), plus process state.
+//! Terminal escape sequences are untrusted output and cannot change canonical status. Codex
+//! hooks need persisted hook trust, and KalCode never passes `--dangerously-bypass-hook-trust`,
+//! so no Codex hook decides anything.
 //!
-//! Verified on 2026-09-24 against the installed `codex --help` (codex-cli 0.155.1): `-C/--cd`,
+//! Verified on 2026-09-25 against the installed `codex --help` (codex-cli 0.157.0; supported
+//! minimum 0.155.1): `-C/--cd`,
 //! `-s/--sandbox` (`read-only`, `workspace-write`, `danger-full-access`), `-a/--ask-for-approval`
 //! (`on-request`, `never`), `-m/--model`, `-c key=value` (TOML value), `codex resume <id>`.
 //! `notify` and `tui.notifications*` keys: https://learn.chatgpt.com/docs/config-file/config-advanced
@@ -20,21 +22,23 @@ use kalcode_contracts::permissions::PermissionMode;
 
 /// Flags and values KalCode never passes to Codex.
 pub const FORBIDDEN: &[&str] = &[
-    "danger-full-access",
     "--dangerously-bypass-approvals-and-sandbox",
     "--dangerously-bypass-hook-trust",
     "--approve-for-me",
     "--search",
     "--add-dir",
-    "on-request",
 ];
 
-/// Sandbox and approval policy per KalCode mode. Without trusted hooks KalCode can't stop a
-/// destructive command inside a writable sandbox, so only Bypass writes.
+/// Sandbox and approval policy per KalCode mode. Execution decisions remain in Codex's native
+/// sandbox and prompt; KalCode does not synthesize provider approvals.
 pub fn permission_args(mode: PermissionMode) -> [&'static str; 4] {
     match mode {
-        PermissionMode::Bypass => ["-s", "workspace-write", "-a", "never"],
-        _ => ["-s", "read-only", "-a", "never"],
+        PermissionMode::Plan => ["-s", "read-only", "-a", "never"],
+        PermissionMode::Approve | PermissionMode::Custom => {
+            ["-s", "workspace-write", "-a", "on-request"]
+        }
+        PermissionMode::Auto => ["-s", "workspace-write", "-a", "never"],
+        PermissionMode::Bypass => ["-s", "danger-full-access", "-a", "never"],
     }
 }
 
@@ -77,6 +81,16 @@ pub enum CodexArgsError {
 
 /// The argv (after the program) for an interactive Codex pane.
 pub fn interactive_args(args: &CodexArgs<'_>) -> Result<Vec<OsString>, CodexArgsError> {
+    interactive_args_with_overrides(args, &[])
+}
+
+/// Managed-profile variant. `overrides` must come from
+/// [`crate::codex::managed_policy::prepare_session`], which binds the complete repository path
+/// as untrusted without relying on Codex's dotted override parser.
+pub fn interactive_args_with_overrides(
+    args: &CodexArgs<'_>,
+    overrides: &[OsString],
+) -> Result<Vec<OsString>, CodexArgsError> {
     let mut out: Vec<OsString> = Vec::new();
     if let Some(id) = args.resume_session_id {
         if !kalcode_contracts::ids::is_valid_id(id) {
@@ -90,6 +104,7 @@ pub fn interactive_args(args: &CodexArgs<'_>) -> Result<Vec<OsString>, CodexArgs
     for value in crate::codex::argv::POLICY_CONFIG {
         out.extend([OsString::from("-c"), OsString::from(value)]);
     }
+    out.extend_from_slice(overrides);
     if let Some(model) = args.model {
         if !crate::claude::argv::valid_model_name(model) {
             return Err(CodexArgsError::InvalidModel);
@@ -262,15 +277,21 @@ mod tests {
                 );
             }
             let sandbox = &args[args.iter().position(|a| a == "-s").expect("-s") + 1];
-            let expected = if mode == PermissionMode::Bypass {
-                "workspace-write"
-            } else {
-                "read-only"
+            let expected = match mode {
+                PermissionMode::Plan => "read-only",
+                PermissionMode::Approve | PermissionMode::Auto | PermissionMode::Custom => {
+                    "workspace-write"
+                }
+                PermissionMode::Bypass => "danger-full-access",
             };
             assert_eq!(sandbox, expected, "{mode:?}");
+            let expected_approval = match mode {
+                PermissionMode::Approve | PermissionMode::Custom => "on-request",
+                PermissionMode::Plan | PermissionMode::Auto | PermissionMode::Bypass => "never",
+            };
             assert_eq!(
                 args[args.iter().position(|a| a == "-a").expect("-a") + 1],
-                "never"
+                expected_approval
             );
         }
     }
@@ -338,14 +359,36 @@ mod tests {
     }
 
     #[test]
-    fn support_is_read_only_first() {
+    fn support_keeps_approval_decisions_in_codex() {
         let support = interactive_support();
         assert!(!support.kalcode_answers_approvals);
         assert!(!support.status_channels.contains(&StatusChannel::Hooks));
+        let disclosed: Vec<(PermissionMode, &str)> = support
+            .launch_mappings
+            .iter()
+            .map(|mapping| (mapping.mode, mapping.provider_setting.as_str()))
+            .collect();
+        assert_eq!(
+            disclosed,
+            [
+                (PermissionMode::Plan, "-s read-only -a never"),
+                (PermissionMode::Approve, "-s workspace-write -a on-request"),
+                (PermissionMode::Auto, "-s workspace-write -a never"),
+                (PermissionMode::Bypass, "-s danger-full-access -a never"),
+                (PermissionMode::Custom, "-s workspace-write -a on-request"),
+            ],
+            "Provider Health and the mode picker must disclose the exact native launch pair"
+        );
+        assert!(
+            support
+                .launch_mappings
+                .iter()
+                .all(|mapping| mapping.notes.contains("Codex's own prompt"))
+        );
     }
 
     #[test]
-    fn panes_cannot_request_sandbox_escalation_or_inherit_web_and_network_grants() {
+    fn panes_use_native_approval_policy_and_disable_connected_web_and_workspace_network() {
         for mode in [
             PermissionMode::Plan,
             PermissionMode::Approve,
@@ -355,7 +398,11 @@ mod tests {
         ] {
             let args = args(mode, None);
             let approval = args.iter().position(|arg| arg == "-a").expect("approval");
-            assert_eq!(args[approval + 1], "never");
+            let expected = match mode {
+                PermissionMode::Approve | PermissionMode::Custom => "on-request",
+                PermissionMode::Plan | PermissionMode::Auto | PermissionMode::Bypass => "never",
+            };
+            assert_eq!(args[approval + 1], expected);
             for required in [
                 "web_search='disabled'",
                 "sandbox_workspace_write.network_access=false",
@@ -365,5 +412,25 @@ mod tests {
                 assert!(args.iter().any(|arg| arg == required), "missing {required}");
             }
         }
+    }
+
+    #[test]
+    fn managed_repository_override_is_forwarded_without_reparsing() {
+        let base = CodexArgs {
+            mode: PermissionMode::Plan,
+            workspace: Path::new("C:/work/repo.with.dots"),
+            model: None,
+            resume_session_id: None,
+            hook_program: Path::new("C:/kalcode-hook.exe"),
+            hook_prefix_args: &[],
+            endpoint: "endpoint",
+            session: "session",
+        };
+        let overrides = [
+            OsString::from("-c"),
+            OsString::from(r#"projects={"C:\\work\\repo.with.dots"={trust_level="untrusted"}}"#),
+        ];
+        let args = interactive_args_with_overrides(&base, &overrides).expect("args");
+        assert!(args.windows(2).any(|pair| pair == overrides));
     }
 }

@@ -3,10 +3,10 @@
 //!
 //! Sources (docs/PROVIDERS.md §11 [9][10][15][16]): the headless-mode guide and CLI reference
 //! (geminicli.com), and the stream-JSON event types the CLI defines in
-//! `packages/core/src/output/types.ts` (github.com/google-gemini/gemini-cli). Gemini CLI is not
-//! installed on the verification machine: everything here is exercised against the fake
-//! provider and recorded official-format fixtures, and re-verified by the owner-approved smoke
-//! script (`tooling/smoke/gemini-headless-smoke.ps1`).
+//! `packages/core/src/output/types.ts` (github.com/google-gemini/gemini-cli). Managed launches
+//! are certified against exact official package version 0.61.0. Deterministic tests use a fake
+//! provider and recorded official-format fixtures; bounded real probes cover version detection
+//! and profile-home isolation without making an inference request.
 //!
 //! argv (the prompt is written to stdin; headless mode applies to non-TTY input):
 //!
@@ -15,53 +15,40 @@
 //!        [--model <alias>] [--resume <session uuid>]
 //! ```
 //!
-//! Never passed: `yolo` / `--yolo`, `--allowed-tools` (deprecated), `--skip-trust` (would trust
-//! the workspace and load its settings), `--sandbox` is left to the user's settings.
+//! Never passed: `yolo` / `--yolo`, `--allowed-tools` (deprecated), or ACP. Managed profiles set
+//! trust before settings load, run from a neutral directory, and include the real repository.
 
+mod argv;
+pub mod managed_policy;
 pub mod stream;
 
+pub use argv::{
+    FORBIDDEN, GeminiArgsError, approval_mode, headless_args, interactive_args, permission_setting,
+};
+
 use std::ffi::OsString;
+use std::sync::Arc;
 
 use kalcode_contracts::agent::{
-    AgentEventSink, AgentProvider, AgentSession, MappingFidelity, PermissionMapping,
-    ProviderCapabilities, ProviderDetection, ProviderError, ProviderId, SessionConfig,
+    AgentEventSink, AgentProvider, AgentSession, AuthState, DetectionState, MappingFidelity,
+    PermissionMapping, ProviderCapabilities, ProviderDetection, ProviderError, ProviderId,
+    SessionConfig,
 };
 use kalcode_contracts::permissions::PermissionMode;
 
 use crate::catalog;
 use crate::claude::argv::working_directory;
 use crate::codex::usable_executable;
-use crate::detect::{DetectEnv, detect};
+use crate::detect::{DetectEnv, DetectionSpec, detect, detect_guarded};
+use crate::managed::{
+    ManagedProfiles, ProfileLease, hold_shared_session_lease, share_profile_lease,
+};
 use crate::turns::{TurnAdapter, TurnLaunch, TurnNormalizer, TurnSession};
+use crate::version::Version;
 
-/// Flags and values KalCode never passes to Gemini CLI.
-pub const FORBIDDEN: &[&str] = &[
-    "yolo",
-    "--yolo",
-    "-y",
-    "--approval-mode=yolo",
-    "--allowed-tools",
-    "--skip-trust",
-    "--include-directories",
-    "--experimental-acp",
-];
-
-/// Gemini CLI's approval mode for a KalCode mode. Custom runs as Approve.
-pub fn approval_mode(mode: PermissionMode) -> &'static str {
-    match mode {
-        PermissionMode::Plan => "plan",
-        PermissionMode::Bypass => "auto_edit",
-        PermissionMode::Approve | PermissionMode::Auto | PermissionMode::Custom => "default",
-    }
-}
-
-pub fn permission_setting(mode: PermissionMode) -> String {
-    format!("--approval-mode {}", approval_mode(mode))
-}
-
-const NOT_ENFORCED: &str = "Gemini CLI has no deny-rule flag KalCode can pass per session: \
-                            reads of credential files aren't blocked by KalCode, and settings \
-                            of a folder you trusted in Gemini CLI still apply.";
+const NOT_ENFORCED: &str = "Gemini Plan retains core project read tools, so it is not a \
+                            secret-file privacy boundary. Managed profiles accept only the \
+                            certified Gemini CLI 0.61.0 configuration behavior.";
 
 pub fn permission_mappings() -> Vec<PermissionMapping> {
     let map = |mode, notes: &str| PermissionMapping {
@@ -86,66 +73,78 @@ pub fn permission_mappings() -> Vec<PermissionMapping> {
     ]
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum GeminiArgsError {
-    #[error("the model name is not valid")]
-    InvalidModel,
-    #[error("the session id is not valid")]
-    InvalidSessionId,
-}
-
-/// The argv (after the program) for one headless turn.
-pub fn headless_args(
-    mode: PermissionMode,
-    model: Option<&str>,
-    resume: Option<&str>,
-) -> Result<Vec<OsString>, GeminiArgsError> {
-    let mut out: Vec<OsString> = vec![
-        "--output-format".into(),
-        "stream-json".into(),
-        "--approval-mode".into(),
-        approval_mode(mode).into(),
-    ];
-    if let Some(model) = model {
-        if !crate::claude::argv::valid_model_name(model) {
-            return Err(GeminiArgsError::InvalidModel);
-        }
-        out.push("--model".into());
-        out.push(model.into());
-    }
-    if let Some(id) = resume {
-        // Only a full session UUID (never `latest` or an index, which could pick another
-        // session).
-        if !kalcode_contracts::ids::is_valid_id(id) {
-            return Err(GeminiArgsError::InvalidSessionId);
-        }
-        out.push("--resume".into());
-        out.push(id.into());
-    }
-    Ok(out)
-}
-
-/// The argv for an interactive Gemini CLI pane (process state only; approvals in Gemini CLI's
-/// own prompt).
-pub fn interactive_args(
-    mode: PermissionMode,
-    model: Option<&str>,
-    resume: Option<&str>,
-) -> Result<Vec<OsString>, GeminiArgsError> {
-    let mut out = headless_args(mode, model, resume)?;
-    // Interactive: no stream-JSON output format.
-    out.drain(0..2);
-    Ok(out)
-}
-
 /// [`AgentProvider`] for Gemini CLI.
 pub struct GeminiProvider {
     env: DetectEnv,
+    managed_profiles: Option<ManagedProfiles>,
 }
 
 impl GeminiProvider {
+    /// Unmanaged compatibility constructor retained for isolated adapter tests. Desktop/runtime
+    /// factories use [`Self::new_managed`] so they never inherit a standalone Gemini account.
     pub fn new(env: DetectEnv) -> Self {
-        Self { env }
+        Self {
+            env,
+            managed_profiles: None,
+        }
+    }
+
+    pub fn new_managed(env: DetectEnv, managed_profiles: ManagedProfiles) -> Self {
+        Self {
+            env,
+            managed_profiles: Some(managed_profiles),
+        }
+    }
+}
+
+fn managed_version_supported(version: &Version) -> bool {
+    version == &Version::new(0, 61, 0)
+}
+
+fn managed_detection_env(
+    profiles: &ManagedProfiles,
+    account_id: &str,
+    source: &DetectEnv,
+) -> Result<DetectEnv, ProviderError> {
+    profiles.prepare_env(ProviderId::GEMINI_CLI, account_id, source)
+}
+
+fn managed_executable(
+    spec: &DetectionSpec,
+    env: &DetectEnv,
+    guardian: &crate::guardian::ProviderProbeGuardian,
+) -> Result<std::path::PathBuf, ProviderError> {
+    let detected = detect_guarded(spec, env, guardian);
+    match (detected.detection.state, detected.executable) {
+        (DetectionState::Installed, Some(executable))
+            if detected.detection.auth != AuthState::NotAuthenticated =>
+        {
+            let version = detected
+                .detection
+                .version
+                .as_deref()
+                .and_then(Version::parse)
+                .ok_or_else(|| {
+                    ProviderError::Start(
+                        "Gemini CLI did not report a version KalCode can verify".into(),
+                    )
+                })?;
+            if managed_version_supported(&version) {
+                Ok(executable)
+            } else {
+                Err(ProviderError::Start(format!(
+                    "managed Gemini profiles currently require certified Gemini CLI 0.61.0; found {version}"
+                )))
+            }
+        }
+        (DetectionState::Installed, Some(_)) => Err(ProviderError::NotAuthenticated),
+        (DetectionState::NotInstalled, _) => Err(ProviderError::NotInstalled),
+        _ => Err(ProviderError::Start(
+            detected
+                .detection
+                .message
+                .unwrap_or_else(|| "Gemini CLI couldn't be checked.".into()),
+        )),
     }
 }
 
@@ -153,6 +152,7 @@ struct GeminiTurns {
     mode: PermissionMode,
     model: Option<String>,
     cwd: String,
+    managed: Option<Arc<managed_policy::ManagedGeminiLaunch>>,
 }
 
 impl TurnAdapter for GeminiTurns {
@@ -165,8 +165,12 @@ impl TurnAdapter for GeminiTurns {
     }
 
     fn turn_args(&self, resume: Option<&str>) -> Result<Vec<OsString>, ProviderError> {
-        headless_args(self.mode, self.model.as_deref(), resume)
-            .map_err(|e| ProviderError::Start(e.to_string()))
+        let mut args = headless_args(self.mode, self.model.as_deref(), resume)
+            .map_err(|e| ProviderError::Start(e.to_string()))?;
+        if let Some(managed) = &self.managed {
+            managed.append_security_args(&mut args)?;
+        }
+        Ok(args)
     }
 
     fn normalizer(&self) -> Box<dyn TurnNormalizer> {
@@ -184,7 +188,16 @@ impl AgentProvider for GeminiProvider {
     }
 
     fn detect(&self) -> ProviderDetection {
-        detect(&catalog::gemini_spec(), &self.env).detection
+        match self
+            .managed_profiles
+            .as_ref()
+            .and_then(|profiles| profiles.probe_guardian().ok())
+        {
+            Some(guardian) => {
+                detect_guarded(&catalog::gemini_spec(), &self.env, &guardian).detection
+            }
+            None => detect(&catalog::gemini_spec(), &self.env).detection,
+        }
     }
 
     fn capabilities(&self) -> ProviderCapabilities {
@@ -196,29 +209,86 @@ impl AgentProvider for GeminiProvider {
         config: SessionConfig,
         sink: Box<dyn AgentEventSink>,
     ) -> Result<Box<dyn AgentSession>, ProviderError> {
+        if self.managed_profiles.is_none() && config.provider_account_id.is_some() {
+            return Err(ProviderError::Start(
+                "A managed provider profile is required for this account.".into(),
+            ));
+        }
         if config.secret_ref.is_some() {
             return Err(ProviderError::Unsupported);
         }
+        let account_id = match &self.managed_profiles {
+            Some(_) => Some(config.provider_account_id.as_deref().ok_or_else(|| {
+                ProviderError::Start(
+                    "a managed Gemini session requires an explicit provider account".into(),
+                )
+            })?),
+            None => None,
+        };
         let spec = catalog::gemini_spec();
-        let executable = usable_executable(&spec, &self.env)?;
-        let cwd = working_directory(&config.working_directory)
+        let managed_detection = match (&self.managed_profiles, account_id) {
+            (Some(profiles), Some(account_id)) => {
+                Some(managed_detection_env(profiles, account_id, &self.env)?)
+            }
+            _ => None,
+        };
+        let executable = match (&managed_detection, &self.managed_profiles) {
+            (Some(environment), Some(profiles)) => {
+                let guardian = profiles.probe_guardian()?;
+                managed_executable(&spec, environment, &guardian)?
+            }
+            _ => usable_executable(&spec, &self.env)?,
+        };
+        let workspace = working_directory(&config.working_directory)
             .map_err(|e| ProviderError::Start(e.to_string()))?;
+        let mut managed = match (&self.managed_profiles, account_id) {
+            (Some(profiles), Some(account_id)) => {
+                Some(managed_policy::ManagedGeminiLaunch::prepare(
+                    profiles,
+                    &self.env,
+                    account_id,
+                    &config.thread_id,
+                    &workspace,
+                    config.permission_mode,
+                )?)
+            }
+            _ => None,
+        };
+        let lease: Option<ProfileLease> = managed
+            .as_mut()
+            .map(managed_policy::ManagedGeminiLaunch::take_session_lease)
+            .transpose()?;
+        let launch_env = managed.as_ref().map_or_else(
+            || self.env.provider_env(&spec.env_policy),
+            |launch| launch.environment().clone(),
+        );
+        let launch_cwd = managed
+            .as_ref()
+            .map_or_else(|| workspace.clone(), |launch| launch.cwd().to_path_buf());
+        let managed = managed.map(Arc::new);
         let adapter = GeminiTurns {
             mode: config.permission_mode,
             model: config.model,
             cwd: config.working_directory,
+            managed,
         };
         adapter.turn_args(config.resume_session_id.as_deref())?;
-        Ok(Box::new(TurnSession::start(
+        let shared_lease = lease.map(share_profile_lease);
+        let session: Box<dyn AgentSession> = Box::new(TurnSession::start(
             Box::new(adapter),
             TurnLaunch {
                 executable,
-                env: self.env.provider_env(&spec.env_policy),
-                cwd,
+                env: launch_env,
+                cwd: launch_cwd,
                 resume_session_id: config.resume_session_id,
+                guardian_profile: shared_lease.clone(),
             },
             sink,
-        )))
+        ));
+        Ok(match shared_lease {
+            Some(lease) => hold_shared_session_lease(session, lease),
+            None => session,
+        })
     }
 }
 
@@ -298,5 +368,84 @@ mod tests {
             let argv = strings(headless_args(mapping.mode, None, None).expect("args")).join(" ");
             assert!(argv.contains(&mapping.provider_setting), "{argv}");
         }
+    }
+
+    #[test]
+    fn a_managed_provider_requires_an_explicit_account_before_detection_or_launch() {
+        let temp = tempfile::tempdir().expect("temp");
+        let workspace = temp.path().join("workspace");
+        std::fs::create_dir(&workspace).expect("workspace");
+        let profiles =
+            crate::managed::ManagedProfiles::new(temp.path().join("managed")).expect("profiles");
+        let provider = GeminiProvider::new_managed(DetectEnv::default(), profiles);
+        let error = match provider.start_session(
+            SessionConfig {
+                thread_id: kalcode_contracts::ids::new_id(),
+                workspace_id: kalcode_contracts::ids::new_id(),
+                provider_account_id: None,
+                working_directory: workspace.display().to_string(),
+                model: None,
+                permission_mode: PermissionMode::Approve,
+                resume_session_id: None,
+                secret_ref: None,
+            },
+            Box::new(|_| {}),
+        ) {
+            Ok(_) => panic!("managed Gemini must not inherit a machine account"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("account"), "{error}");
+    }
+
+    #[test]
+    fn managed_policy_accepts_only_the_certified_gemini_version() {
+        let version = |value| crate::version::Version::parse(value).expect("version");
+        assert!(managed_version_supported(&version("0.61.0")));
+        assert!(!managed_version_supported(&version("0.61.9")));
+        assert!(!managed_version_supported(&version("0.60.99")));
+        assert!(!managed_version_supported(&version("0.62.0")));
+        assert!(!managed_version_supported(&version("1.61.0")));
+    }
+
+    #[test]
+    fn managed_detection_uses_only_the_selected_profile_environment() {
+        let temp = tempfile::tempdir().expect("temp");
+        let profiles =
+            crate::managed::ManagedProfiles::new(temp.path().join("managed")).expect("profiles");
+        let account_id = kalcode_contracts::ids::new_id();
+        let source = DetectEnv {
+            vars: vec![
+                (
+                    "HOME".into(),
+                    temp.path().join("standalone").into_os_string(),
+                ),
+                ("PATH".into(), temp.path().as_os_str().to_os_string()),
+                ("GEMINI_API_KEY".into(), "synthetic-secret".into()),
+                (
+                    "GEMINI_CLI_HOME".into(),
+                    temp.path().join("old").into_os_string(),
+                ),
+            ],
+            windows: false,
+            probe_timeout: None,
+        };
+
+        let isolated = managed_detection_env(&profiles, &account_id, &source).expect("environment");
+        let find = |name: &str| {
+            isolated
+                .vars
+                .iter()
+                .find_map(|(key, value)| (key == name).then_some(value.as_os_str()))
+        };
+        assert!(find("GEMINI_API_KEY").is_none());
+        assert_eq!(
+            find("GEMINI_CLI_HOME"),
+            Some(
+                profiles
+                    .profile_home("gemini-cli", &account_id)
+                    .expect("profile")
+                    .as_os_str()
+            )
+        );
     }
 }

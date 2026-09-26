@@ -45,6 +45,26 @@ function isKeyMaterial(value: unknown): value is string {
 const PROBE = new TextEncoder().encode("kalcode entitlement signing key self-check");
 
 /**
+ * Rotation entries form an identity map, not a preference list. Reusing an id for different
+ * material is ambiguous, while publishing the same material under aliases makes retirement and
+ * incident revocation depend on which alias a document happened to use. Both fail closed.
+ */
+function assertDistinctKeySet(entries: readonly PublicKeyEntry[], setting: string): void {
+  const keyIds = new Set<string>();
+  const publicKeys = new Set<string>();
+  for (const entry of entries) {
+    if (keyIds.has(entry.kid)) {
+      throw new SigningKeyError(`${setting} has a duplicate key id`);
+    }
+    if (publicKeys.has(entry.x)) {
+      throw new SigningKeyError(`${setting} aliases one public key under multiple ids`);
+    }
+    keyIds.add(entry.kid);
+    publicKeys.add(entry.x);
+  }
+}
+
+/**
  * Parses and imports the secret. Throws `SigningKeyError` (never including key material) if it
  * is malformed or if `x` is not the public half of `d` — a mismatched secret would issue
  * documents no client could verify.
@@ -104,22 +124,19 @@ export function parsePreviousPublicKeys(value: string | undefined): PublicKeyEnt
   if (!Array.isArray(parsed)) {
     throw new SigningKeyError("ENTITLEMENT_PREVIOUS_PUBLIC_KEYS must be an array");
   }
-  return parsed.map((entry) => {
+  const keys = parsed.map((entry) => {
     if (!isRecord(entry) || typeof entry.kid !== "string" || !isValidKeyId(entry.kid) || !isKeyMaterial(entry.x)) {
       throw new SigningKeyError("ENTITLEMENT_PREVIOUS_PUBLIC_KEYS has an invalid entry");
     }
     return { kid: entry.kid, x: entry.x };
   });
+  assertDistinctKeySet(keys, "ENTITLEMENT_PREVIOUS_PUBLIC_KEYS");
+  return keys;
 }
 
-/** The published key set: the current key first, then retired keys; duplicates by kid removed. */
+/** The published key set: the current key first, then unambiguous retired keys. */
 export function publishedKeySet(current: PublicKeyEntry | null, previous: readonly PublicKeyEntry[]): PublishedJwk[] {
-  const seen = new Set<string>();
-  const keys: PublishedJwk[] = [];
-  for (const entry of current ? [current, ...previous] : previous) {
-    if (seen.has(entry.kid)) continue;
-    seen.add(entry.kid);
-    keys.push({ kty: "OKP", crv: "Ed25519", alg: "EdDSA", use: "sig", kid: entry.kid, x: entry.x });
-  }
-  return keys;
+  const entries = current ? [current, ...previous] : [...previous];
+  assertDistinctKeySet(entries, "entitlement public key set");
+  return entries.map(({ kid, x }) => ({ kty: "OKP", crv: "Ed25519", alg: "EdDSA", use: "sig", kid, x }));
 }

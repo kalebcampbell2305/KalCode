@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-resource-report"
+description = "Enables the resource_report command without any pre-configured scope."
+commands.allow = ["resource_report"]
+
+[[permission]]
+identifier = "deny-resource-report"
+description = "Denies the resource_report command without any pre-configured scope."
+commands.deny = ["resource_report"]

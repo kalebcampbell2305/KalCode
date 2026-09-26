@@ -16,15 +16,20 @@
 //! Provider-specific wire types stay private to their adapter; everything that leaves this
 //! crate uses the shared contract types. See docs/PROVIDERS.md.
 
+pub mod account_auth;
+pub mod accounts;
 pub mod catalog;
 pub mod claude;
+pub mod claude_account_auth;
 pub mod codex;
 pub mod detect;
 pub mod env;
 pub mod gemini;
+pub mod guardian;
 pub mod health;
 pub mod interactive;
 pub mod launch;
+pub mod managed;
 pub mod model;
 pub mod process;
 pub mod registry;

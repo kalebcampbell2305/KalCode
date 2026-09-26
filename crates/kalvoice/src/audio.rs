@@ -17,11 +17,19 @@ pub enum CaptureError {
     #[error("No microphone was found. Connect one, then try again.")]
     NoDevice,
     #[error(
-        "Microphone access is blocked. Allow desktop apps to use the microphone in your system's privacy settings, then try again."
+        "Microphone access is blocked. In system privacy settings, allow KalCode to use the microphone, then try again."
     )]
     PermissionDenied,
+    #[error(
+        "KalCode opened the system prompt for microphone access. Respond to it, then try push to talk again."
+    )]
+    PermissionPending,
     #[error("The microphone is being used by another app.")]
     Busy,
+    #[error(
+        "The microphone changed or its audio session was interrupted. Release push to talk, then try again."
+    )]
+    Interrupted,
     #[error("Microphone capture isn't supported on this platform in this build.")]
     Unsupported,
     #[error("The microphone stopped working. Try again.")]
@@ -33,9 +41,93 @@ impl CaptureError {
         match self {
             Self::NoDevice => "microphone_unavailable",
             Self::PermissionDenied => "microphone_denied",
+            Self::PermissionPending => "microphone_permission_pending",
             Self::Busy => "microphone_busy",
+            Self::Interrupted => "microphone_interrupted",
             Self::Unsupported => "microphone_unsupported",
             Self::Failed(_) => "microphone_failed",
+        }
+    }
+}
+
+/// The operating system's current microphone authorization state.
+///
+/// `Unknown` means this platform's capture backend does not expose a side-effect-free permission
+/// query. Capture errors remain authoritative in that case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MicrophonePermission {
+    Granted,
+    Denied,
+    NotDetermined,
+    Unknown,
+    Unsupported,
+}
+
+/// Returns the current microphone authorization state without opening the microphone or prompting.
+pub fn microphone_permission() -> MicrophonePermission {
+    #[cfg(target_os = "macos")]
+    {
+        microphone_permission::current()
+    }
+    #[cfg(windows)]
+    {
+        MicrophonePermission::Unknown
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        MicrophonePermission::Unsupported
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod microphone_permission {
+    // The objc2 binding exposes Apple's AVAudioApplication methods as unsafe FFI. These call
+    // sites use the process-wide singleton, pass no pointers from untrusted input, and keep the
+    // copied completion block alive according to the Objective-C API contract.
+    #![allow(unsafe_code)]
+
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use block2::RcBlock;
+    use objc2_avf_audio::{AVAudioApplication, AVAudioApplicationRecordPermission};
+
+    use super::{CaptureError, MicrophonePermission};
+
+    static REQUEST_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+    pub(super) fn current() -> MicrophonePermission {
+        // SAFETY: macOS 14+ (KalCode's deployment target) provides the process-wide singleton and
+        // recordPermission is a read-only query with no caller-owned pointers.
+        let app = unsafe { AVAudioApplication::sharedInstance() };
+        // SAFETY: `app` is the retained framework singleton returned immediately above.
+        match unsafe { app.recordPermission() } {
+            AVAudioApplicationRecordPermission::Granted => MicrophonePermission::Granted,
+            AVAudioApplicationRecordPermission::Denied => MicrophonePermission::Denied,
+            AVAudioApplicationRecordPermission::Undetermined => MicrophonePermission::NotDetermined,
+            _ => MicrophonePermission::Unknown,
+        }
+    }
+
+    pub(super) fn authorize_for_capture() -> Result<(), CaptureError> {
+        match current() {
+            MicrophonePermission::Granted => Ok(()),
+            MicrophonePermission::Denied => Err(CaptureError::PermissionDenied),
+            MicrophonePermission::NotDetermined => {
+                if !REQUEST_IN_FLIGHT.swap(true, Ordering::SeqCst) {
+                    let response = RcBlock::new(|_granted| {
+                        REQUEST_IN_FLIGHT.store(false, Ordering::SeqCst);
+                    });
+                    // SAFETY: the block has the exact signature required by AVFAudio. Apple's
+                    // asynchronous API copies it before this call returns.
+                    unsafe {
+                        AVAudioApplication::requestRecordPermissionWithCompletionHandler(&response)
+                    };
+                }
+                Err(CaptureError::PermissionPending)
+            }
+            // A future authorization state must not silently open a protected input device.
+            MicrophonePermission::Unknown => Err(CaptureError::PermissionDenied),
+            MicrophonePermission::Unsupported => Err(CaptureError::Unsupported),
         }
     }
 }
@@ -159,7 +251,20 @@ mod mic {
         level: AtomicU32,
         rate: AtomicU32,
         full: AtomicBool,
+        interrupted: AtomicBool,
         error: Mutex<Option<CaptureError>>,
+    }
+
+    impl Shared {
+        fn fail(&self, error: CaptureError) {
+            self.interrupted.store(true, Ordering::SeqCst);
+            self.level.store(0.0f32.to_bits(), Ordering::Relaxed);
+            let mut samples = self.samples.lock().unwrap_or_else(PoisonError::into_inner);
+            samples.fill(0.0);
+            samples.clear();
+            let mut slot = self.error.lock().unwrap_or_else(PoisonError::into_inner);
+            slot.get_or_insert(error);
+        }
     }
 
     fn map_error(error: &cpal::Error) -> CaptureError {
@@ -169,7 +274,20 @@ mod mic {
             cpal::ErrorKind::DeviceNotAvailable | cpal::ErrorKind::HostUnavailable => {
                 CaptureError::NoDevice
             }
+            cpal::ErrorKind::DeviceChanged | cpal::ErrorKind::StreamInvalidated => {
+                CaptureError::Interrupted
+            }
             _ => CaptureError::Failed(error.to_string()),
+        }
+    }
+
+    /// CPAL reports xruns and refused real-time priority while a stream remains usable. Every
+    /// other runtime error invalidates this utterance so audio from two devices or across a
+    /// sleep/wake interruption is never combined into one command.
+    pub(super) fn stream_error(error: &cpal::Error) -> Option<CaptureError> {
+        match error.kind() {
+            cpal::ErrorKind::Xrun | cpal::ErrorKind::RealtimeDenied => None,
+            _ => Some(map_error(error)),
         }
     }
 
@@ -180,7 +298,7 @@ mod mic {
         max: usize,
         to_f32: fn(T) -> f32,
     ) {
-        if shared.full.load(Ordering::Relaxed) {
+        if shared.full.load(Ordering::Relaxed) || shared.interrupted.load(Ordering::SeqCst) {
             return;
         }
         let mut samples = shared
@@ -225,9 +343,8 @@ mod mic {
         let on_error = {
             let shared = shared.clone();
             move |e: cpal::Error| {
-                if e.kind() != cpal::ErrorKind::DeviceChanged && e.kind() != cpal::ErrorKind::Xrun {
-                    let mut slot = shared.error.lock().unwrap_or_else(PoisonError::into_inner);
-                    slot.get_or_insert(map_error(&e));
+                if let Some(error) = stream_error(&e) {
+                    shared.fail(error);
                 }
             }
         };
@@ -341,6 +458,9 @@ mod mic {
 
     impl AudioSource for MicrophoneSource {
         fn start(&self, max: Duration) -> Result<Box<dyn ActiveCapture>, CaptureError> {
+            #[cfg(target_os = "macos")]
+            super::microphone_permission::authorize_for_capture()?;
+
             let shared = Arc::new(Shared::default());
             let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), CaptureError>>(1);
             let (stop_tx, stop_rx) = mpsc::channel::<()>();
@@ -373,6 +493,46 @@ mod mic {
                 }
                 Err(_) => Err(CaptureError::Failed("the microphone did not start".into())),
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn fatal_stream_error_wipes_audio_and_rejects_later_frames() {
+            let shared = Shared::default();
+            push_frames(&shared, &[0.25f32, -0.5], 1, 8, |sample| sample);
+            assert_eq!(
+                shared
+                    .samples
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .len(),
+                2
+            );
+
+            shared.fail(CaptureError::Interrupted);
+            push_frames(&shared, &[0.75f32], 1, 8, |sample| sample);
+
+            assert!(shared.interrupted.load(Ordering::SeqCst));
+            assert_eq!(shared.level.load(Ordering::Relaxed), 0.0f32.to_bits());
+            assert!(
+                shared
+                    .samples
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .is_empty()
+            );
+            assert_eq!(
+                shared
+                    .error
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .as_ref(),
+                Some(&CaptureError::Interrupted)
+            );
         }
     }
 }
@@ -444,11 +604,52 @@ mod tests {
     #[test]
     fn capture_errors_have_stable_codes() {
         assert_eq!(CaptureError::PermissionDenied.code(), "microphone_denied");
+        assert_eq!(
+            CaptureError::PermissionPending.code(),
+            "microphone_permission_pending"
+        );
+        assert_eq!(CaptureError::Interrupted.code(), "microphone_interrupted");
         assert_eq!(CaptureError::NoDevice.code(), "microphone_unavailable");
         assert!(
             CaptureError::PermissionDenied
                 .to_string()
                 .contains("privacy settings")
+        );
+        assert!(
+            CaptureError::PermissionPending
+                .to_string()
+                .contains("system prompt")
+        );
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn runtime_route_changes_and_invalidations_abort_capture() {
+        for kind in [
+            cpal::ErrorKind::DeviceChanged,
+            cpal::ErrorKind::StreamInvalidated,
+        ] {
+            assert_eq!(
+                mic::stream_error(&cpal::Error::new(kind)),
+                Some(CaptureError::Interrupted)
+            );
+        }
+        assert_eq!(
+            mic::stream_error(&cpal::Error::new(cpal::ErrorKind::DeviceNotAvailable)),
+            Some(CaptureError::NoDevice)
+        );
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn recoverable_audio_quality_warnings_keep_capture_alive() {
+        assert_eq!(
+            mic::stream_error(&cpal::Error::new(cpal::ErrorKind::Xrun)),
+            None
+        );
+        assert_eq!(
+            mic::stream_error(&cpal::Error::new(cpal::ErrorKind::RealtimeDenied)),
+            None
         );
     }
 }

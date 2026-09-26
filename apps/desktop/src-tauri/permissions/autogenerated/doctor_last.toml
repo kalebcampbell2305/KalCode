@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-doctor-last"
+description = "Enables the doctor_last command without any pre-configured scope."
+commands.allow = ["doctor_last"]
+
+[[permission]]
+identifier = "deny-doctor-last"
+description = "Denies the doctor_last command without any pre-configured scope."
+commands.deny = ["doctor_last"]

@@ -3,6 +3,7 @@ import committedManifest from "../../src/data/releases.json";
 import {
   contentTypeFor,
   type DownloadDeps,
+  downloadDepsFromEnv,
   handleDownload,
   LATEST_CACHE,
   MANIFEST_KEY,
@@ -13,6 +14,7 @@ import {
   type ReleaseObjectBody,
 } from "../../worker/downloads";
 import { IMMUTABLE_CACHE } from "../../worker/lib/security";
+import { syntheticUpdaterDescriptor } from "./fixtures/updater-descriptor";
 
 const ORIGIN = "https://kalcoded.com";
 const VERSION = "0.1.0";
@@ -29,7 +31,7 @@ function manifest(overrides: Record<string, unknown> = {}) {
       channel: "preview",
       publishedAt: "2026-09-24T12:00:00.000Z",
       commit: "0123456789abcdef0123456789abcdef01234567",
-      notesUrl: "/changelog#release-0-1-0",
+      notesUrl: "/updates#release-0-1-0",
       platforms: [
         {
           os: "windows",
@@ -136,6 +138,186 @@ beforeEach(() => {
   h = harness();
 });
 
+describe("download representation integrity", () => {
+  it("uses strong comparison for If-Range", async () => {
+    publish(h);
+    const first = await download(h, "/download/windows-x64", { method: "HEAD" });
+    const response = await download(h, "/download/windows-x64", {
+      headers: { range: "bytes=0-3", "if-range": `W/${first.headers.get("etag")}` },
+    });
+    expect(response.status).toBe(200);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(INSTALLER);
+  });
+
+  it("rejects a changed representation between metadata and stream acquisition", async () => {
+    publish(h);
+    const bucket = h.deps.bucket;
+    if (!bucket) throw new Error("fixture bucket missing");
+    const original = bucket.get.bind(bucket);
+    bucket.get = async (key, options) => {
+      const object = await original(key, options);
+      return object && key === KEY ? { ...object, httpEtag: '"replacement"' } : object;
+    };
+    expect((await download(h, "/download/windows-x64")).status).toBe(503);
+  });
+});
+
+async function publishCatalog() {
+  const doc = manifest({ channel: "stable" });
+  for (const platform of doc.latest.platforms) platform.signed = true;
+  const downloadText = JSON.stringify(doc);
+  const updaterText = JSON.stringify(syntheticUpdaterDescriptor(VERSION, FILE, SHA, INSTALLER.byteLength, "stable"));
+  const digest = async (text: string) =>
+    Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))), (byte) =>
+      byte.toString(16).padStart(2, "0"),
+    ).join("");
+  const downloadHash = await digest(downloadText);
+  const updaterHash = await digest(updaterText);
+  const row = {
+    channel: "stable",
+    version: VERSION,
+    download_descriptor_key: `releases/${VERSION}/${downloadHash}.json`,
+    updater_descriptor_key: `releases/updater/stable/${VERSION}/${updaterHash}.json`,
+    download_descriptor_sha256: downloadHash,
+    updater_descriptor_sha256: updaterHash,
+  };
+  h.objects.set(row.download_descriptor_key, new TextEncoder().encode(downloadText));
+  h.objects.set(row.updater_descriptor_key, new TextEncoder().encode(updaterText));
+  h.objects.set(`releases/${VERSION}/${SHA}/${FILE}`, INSTALLER);
+  h.deps.catalog = {
+    get: async (channel, version) =>
+      channel === "stable" && (version === undefined || version === VERSION) ? row : null,
+  };
+  return row;
+}
+
+describe("D1 publication authority", () => {
+  it("keeps the verified legacy release until the catalog authority is explicitly enabled", async () => {
+    publish(h);
+    const emptyDb = {
+      prepare: () => ({ bind: () => ({ first: async () => null }) }),
+    } as unknown as D1Database;
+    const baseEnv = {
+      DB: emptyDb,
+      ASSETS: h.deps.assets as unknown as Fetcher,
+      RELEASES: h.deps.bucket as unknown as R2Bucket,
+    };
+
+    for (const value of [undefined, "false", "TRUE", "1"]) {
+      const deps = downloadDepsFromEnv({ ...baseEnv, RELEASE_CATALOG_ENABLED: value });
+      const response = await handleDownload(get("/releases/latest.json"), deps);
+      expect(response?.status).toBe(200);
+      expect((await response?.json())?.latest.version).toBe(VERSION);
+      expect(response?.headers.get("x-kalcode-release-authority")).toBeNull();
+    }
+
+    const enabled = downloadDepsFromEnv({ ...baseEnv, RELEASE_CATALOG_ENABLED: "true" });
+    const response = await handleDownload(get("/releases/latest.json"), enabled);
+    expect(response?.status).toBe(404);
+    expect(response?.headers.get("x-kalcode-release-authority")).toBe("d1-v1");
+  });
+
+  it("does not publish orphan artifacts or detached signature evidence", async () => {
+    h.deps.catalog = { get: async () => null };
+    for (const key of [
+      `releases/updater/stable/${VERSION}/${SHA}/${FILE}`,
+      `releases/updater/stable/${VERSION}/${FILE}`,
+      `releases/updater/stable/${VERSION}/${SHA}/${"b".repeat(64)}/${FILE}.sig`,
+    ]) {
+      h.objects.set(key, INSTALLER);
+      expect((await download(h, `/${key}`)).status).toBe(404);
+    }
+  });
+  it("selects immutable descriptors instead of mutable R2 pointers", async () => {
+    await publishCatalog();
+    h.objects.set(MANIFEST_KEY, new TextEncoder().encode("untrusted mutable pointer"));
+    h.objects.set("releases/updater/stable.json", new TextEncoder().encode('{"version":"99.0.0"}'));
+    for (const path of [
+      MANIFEST_PATH_FOR_TEST,
+      "/releases/updater/stable.json",
+      `/releases/updater/stable/${VERSION}.json`,
+    ]) {
+      const response = await download(h, path);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("x-kalcode-release-authority")).toBe("d1-v1");
+      const body = await response.json();
+      expect(path === MANIFEST_PATH_FOR_TEST ? body.latest.version : body.version).toBe(VERSION);
+    }
+    expect((await download(h, "/download/windows-x64")).status).toBe(200);
+  });
+
+  it("fails closed on missing publication, outage, and descriptor replacement", async () => {
+    publish(h);
+    h.deps.catalog = { get: async () => null };
+    const missing = await download(h, "/releases/latest.json");
+    expect(missing.status).toBe(404);
+    expect(missing.headers.get("x-kalcode-release-authority")).toBe("d1-v1");
+    h.deps.catalog = {
+      get: async () => {
+        throw new Error("catalog unavailable");
+      },
+    };
+    expect((await download(h, "/releases/latest.json")).status).toBe(503);
+    const row = await publishCatalog();
+    h.objects.set(row.download_descriptor_key, new TextEncoder().encode("{}"));
+    expect((await download(h, "/releases/latest.json")).status).toBe(503);
+  });
+
+  it("serves only descriptor-bound artifacts and keeps detached signature evidence private", async () => {
+    await publishCatalog();
+    const root = `releases/updater/stable/${VERSION}/${SHA}`;
+    h.objects.set(`${root}/${FILE}`, INSTALLER);
+    expect((await download(h, `/${root}/${FILE}`)).status).toBe(200);
+    h.objects.set(`${root}/${"b".repeat(64)}/${FILE}.sig`, INSTALLER);
+    expect((await download(h, `/${root}/${"b".repeat(64)}/${FILE}.sig`)).status).toBe(404);
+    h.objects.set(`${root}/unreferenced.exe`, INSTALLER);
+    expect((await download(h, `/${root}/unreferenced.exe`)).status).toBe(404);
+    h.objects.set(`${root}/${FILE}`, new Uint8Array(1));
+    expect((await download(h, `/${root}/${FILE}`)).status).toBe(503);
+    expect((await download(h, `/releases/updater/stable/${VERSION}/not-a-hash/${FILE}`)).status).toBe(404);
+  });
+});
+
+const MANIFEST_PATH_FOR_TEST = "/releases/latest.json";
+
+describe("signed updater object routes", () => {
+  it("rejects oversized feed metadata without reading the object", async () => {
+    h.objects.set("releases/updater/stable.json", new Uint8Array(65_537));
+    expect((await download(h, "/releases/updater/stable.json")).status).toBe(503);
+    expect(h.ranges).toHaveLength(0);
+  });
+  it.each(["stable", "beta", "dev"])("serves %s feed and immutable artifacts without listing", async (channel) => {
+    const pointer = `releases/updater/${channel}.json`;
+    const archive = `releases/updater/${channel}/${VERSION}.json`;
+    const artifact = `releases/updater/${channel}/${VERSION}/${FILE}`;
+    for (const key of [pointer, archive, artifact, `${artifact}.sig`]) {
+      h.objects.set(key, INSTALLER);
+      const response = await download(h, `/${key}`);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe(
+        key === pointer ? "public, max-age=60, must-revalidate" : IMMUTABLE_CACHE,
+      );
+      expect(await response.text()).toBe(new TextDecoder().decode(INSTALLER));
+      const head = await download(h, `/${key}`, { method: "HEAD" });
+      expect(head.status).toBe(200);
+      expect(await head.text()).toBe("");
+    }
+    expect((await download(h, `/releases/updater/${channel}/${VERSION}/`)).status).toBe(404);
+    expect((await download(h, `/${pointer}`, { method: "POST" })).status).toBe(405);
+  });
+
+  it.each([
+    "owner.json",
+    "stable/01.2.3.json",
+    "stable/0.1.0/file.exe%2Fsecret",
+    "stable/0.1.0/secrets.txt",
+    "stable/0.1.0/%2e%2e.exe",
+    "stable/0.1.0/file.exe.sig.extra",
+  ])("rejects invalid updater path %s", async (path) => {
+    expect((await download(h, `/releases/updater/${path}`)).status).toBe(404);
+  });
+});
+
 describe("route matching", () => {
   it("claims only the download routes and leaves site pages alone", () => {
     expect(matchDownloadRoute("/download/windows-x64")).toEqual({
@@ -154,7 +336,7 @@ describe("route matching", () => {
       version: "1.2.3-beta.1",
       file: "KalCode.msi",
     });
-    for (const path of ["/download", "/download/", "/download/macos-arm64", "/downloads/windows-x64", "/releases/"]) {
+    for (const path of ["/download", "/download/", "/downloads/windows-x64", "/releases/"]) {
       expect(matchDownloadRoute(path)).toBeNull();
     }
     // Not a version: the segment is some other page under /download/.
@@ -380,8 +562,12 @@ describe("manifest validation", () => {
     expect(parseReleaseManifest({ ...manifest(), schemaVersion: 2 })).toBeNull();
     expect(parseReleaseManifest(manifest({ commit: "abc" }))).toBeNull();
     expect(parseReleaseManifest(manifest({ notesUrl: "https://elsewhere.example" }))).toBeNull();
+    expect(parseReleaseManifest(manifest({ notesUrl: "//elsewhere.example" }))).toBeNull();
     expect(parseReleaseManifest(manifest({ platforms: [] }))).toBeNull();
     const [platform] = manifest().latest.platforms;
+    expect(
+      parseReleaseManifest(manifest({ platforms: [{ ...platform, url: "https://elsewhere.example" }] })),
+    ).toBeNull();
     expect(parseReleaseManifest(manifest({ platforms: [{ ...platform, sha256: "XYZ" }] }))).toBeNull();
     expect(parseReleaseManifest(manifest({ platforms: [{ ...platform, file: "../x.exe" }] }))).toBeNull();
     expect(parseReleaseManifest(manifest({ platforms: [{ ...platform, pinnedUrl: "/download/9/x" }] }))).toBeNull();
