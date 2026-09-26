@@ -49,7 +49,13 @@ use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, Webview};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, ShortcutState};
 
-use crate::kalvoice_components::{ComponentManagerError, KalVoiceComponentManager};
+use crate::kalvoice_components::{
+    ComponentManagerError, KalVoiceComponentManager, REASONING_DOWNLOAD_ID,
+};
+use kalcode_kalvoice::signals::LocalReasoningDownload;
+#[path = "kalvoice_reasoning.rs"]
+mod reasoning;
+use reasoning::DesktopLocalInterpreter;
 
 /// Tauri-managed state. `None` when the core failed to start or KalVoice is off in this
 /// build channel (then no shortcut is registered and every command explains why).
@@ -87,6 +93,7 @@ pub struct KalVoiceRuntime {
     orchestrator: Orchestrator,
     voice: VoiceController,
     components: Arc<KalVoiceComponentManager>,
+    reasoning: Arc<DesktopLocalInterpreter>,
     recognizers: Arc<DesktopRecognizers>,
     /// The OS voice, started on first use.
     speech: std::sync::OnceLock<Arc<dyn SpeechOutput>>,
@@ -188,6 +195,7 @@ impl KalVoiceRuntime {
             usage: self.orchestrator.usage()?,
             preferences,
             models: self.components.speech_models(),
+            local_reasoning: Some(self.reasoning.status()),
             active_model,
             speech_engine: ENGINE_AVAILABLE,
             microphone_supported: self.microphone_supported,
@@ -208,6 +216,7 @@ impl KalVoiceRuntime {
         let deadline = Instant::now() + timeout;
         self.shutting_down.store(true, Ordering::SeqCst);
         self.background.stop();
+        self.reasoning.seal();
         // Seal local inference immediately; retain its custody until the bounded drain below.
         let _ = self
             .orchestrator
@@ -238,14 +247,16 @@ impl KalVoiceRuntime {
             .orchestrator
             .shutdown_local_interpretation(deadline.saturating_duration_since(Instant::now()));
         let background_settled = self.background.wait_until(deadline);
-        if downloads_settled && background_settled && local_settled {
+        let reasoning_settled =
+            background_settled && local_settled && self.reasoning.shutdown_reasoning(deadline);
+        if downloads_settled && background_settled && local_settled && reasoning_settled {
             self.recognizers.shutdown();
         }
         self.channels
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clear();
-        downloads_settled && background_settled && local_settled
+        downloads_settled && background_settled && local_settled && reasoning_settled
     }
 }
 
@@ -516,6 +527,7 @@ pub fn init(
     permissions: Option<Arc<kalcode_permissions::PermissionService>>,
     locator: Option<Arc<kalcode_locator::Locator>>,
     components: Arc<KalVoiceComponentManager>,
+    resources: Arc<crate::resource_commands::ResourceGovernorState>,
 ) -> KalVoiceState {
     let enabled = info.flags.surfaces.iter().any(|s| {
         s.id == SurfaceId::KalVoice
@@ -531,6 +543,12 @@ pub fn init(
             "KalVoice isn't available because KalCode's runtime didn't start.",
         );
     };
+    let launcher = provider_runtime.probe_guardian().ok().map(|guardian| {
+        Arc::new(crate::kalvoice_guardian::KalVoiceGuardianLauncher::new(
+            guardian,
+        ))
+    });
+    let reasoning = DesktopLocalInterpreter::new(components.clone(), resources, launcher);
     let providers = Arc::new(DesktopProviders {
         registry,
         runtime: provider_runtime,
@@ -564,7 +582,8 @@ pub fn init(
             locator,
         }),
         providers.clone(),
-    );
+    )
+    .with_local_interpreter(reasoning.clone());
     let voice = VoiceController::new(
         core.clone(),
         Arc::new(MicrophoneSource),
@@ -579,6 +598,7 @@ pub fn init(
         orchestrator,
         voice,
         components,
+        reasoning,
         recognizers,
         speech: std::sync::OnceLock::new(),
         microphone_supported: cfg!(any(windows, target_os = "macos")),
@@ -631,6 +651,10 @@ fn keep_warm(runtime: &Arc<KalVoiceRuntime>) {
                     tracing::info!(event = "kalvoice.model_not_warm", code = error.code())
                 }
             }
+            runtime.reasoning.warm();
+            runtime.signal(&KalVoiceSignal::LocalReasoningStatus {
+                status: runtime.reasoning.status(),
+            });
         });
 }
 
@@ -1177,18 +1201,43 @@ pub fn kalvoice_listen_cancel(
     Ok(cancelled)
 }
 
-/// Downloads a speech model. `consent` must come from the consent dialog; progress and the
-/// outcome arrive as signals.
+/// Reviews signed runtime/model metadata without downloading artifacts or launching a process.
+#[tauri::command(async)]
+pub fn kalvoice_reasoning_prepare(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    state: crate::runtime_coordinator::RuntimeState<KalVoiceState>,
+) -> Result<LocalReasoningDownload, IpcError> {
+    _runtime_access.revalidate()?;
+    state
+        .runtime()?
+        .components
+        .prepare_reasoning()
+        .map_err(|error| KalError::validation(error.code(), error.to_string()).to_ipc())
+}
+
+/// Retries installed components through the same retained startup and capacity boundary.
+#[tauri::command(async)]
+pub fn kalvoice_reasoning_retry(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    state: crate::runtime_coordinator::RuntimeState<KalVoiceState>,
+) -> Result<(), IpcError> {
+    _runtime_access.revalidate()?;
+    keep_warm(state.runtime()?);
+    Ok(())
+}
+
+/// Downloads the explicitly selected speech model or the separately consented reasoning pair.
 #[tauri::command(async)]
 pub fn kalvoice_model_download(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
     state: crate::runtime_coordinator::RuntimeState<KalVoiceState>,
     model_id: String,
     consent: bool,
+    catalog_identity: Option<String>,
 ) -> Result<(), IpcError> {
     _runtime_access.revalidate()?;
     let runtime = state.runtime()?.clone();
-    if models::find(&model_id).is_none() {
+    if model_id != REASONING_DOWNLOAD_ID && models::find(&model_id).is_none() {
         return Err(KalError::validation(
             "unknown_speech_model",
             ComponentManagerError::UnknownSpeechModel.to_string(),
@@ -1214,19 +1263,27 @@ pub fn kalvoice_model_download(
         .spawn(move || {
             let _task = task;
             let mut last = Instant::now() - Duration::from_secs(1);
-            let result =
+            let progress = |received, total| {
+                if last.elapsed() >= Duration::from_millis(200) || received == total {
+                    last = Instant::now();
+                    runtime.signal(&KalVoiceSignal::ModelProgress {
+                        model_id: model_id.clone(),
+                        received_bytes: received,
+                        total_bytes: total,
+                    });
+                }
+            };
+            let result = if model_id == REASONING_DOWNLOAD_ID {
+                runtime.components.download_reasoning(
+                    consent,
+                    catalog_identity.as_deref(),
+                    progress,
+                )
+            } else {
                 runtime
                     .components
-                    .download_speech(&model_id, consent, |received, total| {
-                        if last.elapsed() >= Duration::from_millis(200) || received == total {
-                            last = Instant::now();
-                            runtime.signal(&KalVoiceSignal::ModelProgress {
-                                model_id: model_id.clone(),
-                                received_bytes: received,
-                                total_bytes: total,
-                            });
-                        }
-                    });
+                    .download_speech(&model_id, consent, progress)
+            };
             let installed = result.is_ok();
             let signal = match result {
                 Ok(_) => KalVoiceSignal::ModelInstalled { model_id },

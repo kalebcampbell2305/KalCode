@@ -67,6 +67,8 @@ export type CommandName =
   | "kalvoice_listen_stop"
   | "kalvoice_listen_cancel"
   | "kalvoice_model_download"
+  | "kalvoice_reasoning_prepare"
+  | "kalvoice_reasoning_retry"
   | "kalvoice_model_cancel"
   | "kalvoice_model_delete"
   | "kalvoice_talk"

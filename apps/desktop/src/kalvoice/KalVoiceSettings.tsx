@@ -1,4 +1,4 @@
-import type { PanelAnchor, SpeechModelInfo } from "@kalcode/protocol";
+import type { LocalReasoningDownload, PanelAnchor, SpeechModelInfo } from "@kalcode/protocol";
 import { Badge, Button, Panel, Skeleton } from "@kalcode/ui/components";
 import { AudioLines } from "lucide-react";
 import { AlertDialog } from "radix-ui";
@@ -49,7 +49,7 @@ function KalVoiceSettingsSection() {
       id="kalvoice"
       title="KalVoice"
       icon={<AudioLines />}
-      description="Speech is recognized on this computer and discarded right after. Reasoning uses a provider you connected; KalCode never pays for or sees it."
+      description="Speech recognition and command interpretation run on this computer. Providers receive only the coding tasks or dictation you send to them."
       padding="none"
     >
       {!status ? (
@@ -194,14 +194,102 @@ function TalkEnabledRow() {
 }
 
 function IntelligenceRow() {
+  const { status, prepareReasoning, retryReasoning, downloadModel, downloads, cancelDownload } = useKalVoice();
+  const [quote, setQuote] = useState<LocalReasoningDownload | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const progress = downloads["local-reasoning"];
+  const readiness = status?.localReasoning ?? "unavailable";
+  const labels = {
+    not_installed: "Not installed",
+    installed: "Installed; not running",
+    warming: "Starting",
+    ready: "Ready",
+    unavailable: "Unavailable",
+  };
+  const review = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setQuote(await prepareReasoning());
+    } catch (error) {
+      setError(toKalCodeError(error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+  const retry = async () => {
+    setError(null);
+    try {
+      await retryReasoning();
+    } catch (error) {
+      setError(toKalCodeError(error).message);
+    }
+  };
   return (
-    <Row
-      id="kalvoice-intelligence"
-      label="KalVoice intelligence"
-      help="Workspace commands are interpreted on this computer. Requests needing a local model remain unavailable until that runtime is ready. Connected providers handle only the coding tasks you send to them."
-    >
-      <span>On-device only</span>
-    </Row>
+    <div>
+      <Row
+        id="kalvoice-intelligence"
+        label="KalVoice intelligence"
+        help="Simple commands run locally immediately. The optional on-device interpreter handles supported phrasing outside the command grammar. Local dictation is unlimited on every plan and needs only a speech model."
+      >
+        <span>
+          {progress
+            ? `Downloading ${formatBytes(progress.received)} / ${formatBytes(progress.total)}`
+            : labels[readiness]}
+        </span>
+        {progress ? (
+          <Button size="sm" onClick={() => void cancelDownload("local-reasoning")}>
+            Cancel
+          </Button>
+        ) : readiness === "not_installed" ? (
+          <Button size="sm" busy={loading} onClick={() => void review()}>
+            Review download
+          </Button>
+        ) : readiness === "installed" || readiness === "unavailable" ? (
+          <Button size="sm" variant="ghost" onClick={() => void retry()}>
+            Retry local startup
+          </Button>
+        ) : null}
+      </Row>
+      {error ? (
+        <p className={styles.fieldError} role="alert">
+          {error}
+        </p>
+      ) : null}
+      <AlertDialog.Root open={quote !== null} onOpenChange={(open) => !open && setQuote(null)}>
+        <AlertDialog.Portal>
+          <AlertDialog.Overlay className={styles.overlay} />
+          <AlertDialog.Content className={styles.dialog}>
+            <AlertDialog.Title className={styles.dialogTitle}>
+              Download the local KalVoice interpreter?
+            </AlertDialog.Title>
+            <AlertDialog.Description className={styles.dialogBody}>
+              {quote ? formatBytes(quote.sizeBytes) : ""} from KalCode's signed component catalog. Runtime{" "}
+              {quote?.runtimeVersion}; model {quote?.modelVersion}. KalCode verifies signatures and checksums before
+              installation. The interpreter runs on this computer and does not use a connected provider. This download
+              is separate from your speech model.
+            </AlertDialog.Description>
+            <div className={styles.dialogActions}>
+              <AlertDialog.Cancel asChild>
+                <Button variant="ghost">Cancel</Button>
+              </AlertDialog.Cancel>
+              <AlertDialog.Action asChild>
+                <Button
+                  variant="primary"
+                  onClick={() => {
+                    if (quote) void downloadModel("local-reasoning", quote);
+                    setQuote(null);
+                  }}
+                >
+                  Download
+                </Button>
+              </AlertDialog.Action>
+            </div>
+          </AlertDialog.Content>
+        </AlertDialog.Portal>
+      </AlertDialog.Root>
+    </div>
   );
 }
 

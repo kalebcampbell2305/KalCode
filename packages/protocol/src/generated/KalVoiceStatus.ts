@@ -2,6 +2,7 @@
 import type { KalVoicePreferences } from "./KalVoicePreferences.ts";
 import type { KalVoiceUsage } from "./KalVoiceUsage.ts";
 import type { ListeningSession } from "./ListeningSession.ts";
+import type { LocalReasoningStatus } from "./LocalReasoningStatus.ts";
 import type { ProviderChoice } from "./ProviderChoice.ts";
 import type { ReservedShortcut } from "./ReservedShortcut.ts";
 import type { ShortcutIssue } from "./ShortcutIssue.ts";
@@ -10,35 +11,35 @@ import type { SpeechModelInfo } from "./SpeechModelInfo.ts";
 /**
  * Everything the KalVoice UI needs to render.
  */
-export type KalVoiceStatus = { usage: KalVoiceUsage, preferences: KalVoicePreferences, models: Array<SpeechModelInfo>, 
+export type KalVoiceStatus = { usage: KalVoiceUsage, preferences: KalVoicePreferences, models: Array<SpeechModelInfo>, localReasoning?: LocalReasoningStatus,
 /**
  * The model dictation will use (the selected one, or another installed one).
  */
-activeModel: string | null, 
+activeModel: string | null,
 /**
  * Whether this build includes the on-device speech engine.
  */
-speechEngine: boolean, 
+speechEngine: boolean,
 /**
  * Whether this platform build can capture from a microphone.
  */
-microphoneSupported: boolean, 
+microphoneSupported: boolean,
 /**
  * Whether the OS voice is available for spoken replies.
  */
-voiceOutputAvailable: boolean, 
+voiceOutputAvailable: boolean,
 /**
  * Connected coding providers available as action targets, never as a reasoning fallback.
  */
-providers: Array<ProviderChoice>, reservedShortcuts: Array<ReservedShortcut>, 
+providers: Array<ProviderChoice>, reservedShortcuts: Array<ReservedShortcut>,
 /**
  * Keys that can be the push-to-talk key on this system.
  */
-talkKeys: Array<string>, 
+talkKeys: Array<string>,
 /**
  * Whether the push-to-talk key is registered right now (only while KalCode is focused).
  */
-talkKeyActive: boolean, shortcutIssues: Array<ShortcutIssue>, 
+talkKeyActive: boolean, shortcutIssues: Array<ShortcutIssue>,
 /**
  * The session listening right now, if any.
  */

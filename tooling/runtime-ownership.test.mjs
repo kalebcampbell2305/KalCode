@@ -4,6 +4,19 @@ import { test } from "node:test";
 
 const source = (name) => readFileSync(new URL(`../apps/desktop/src-tauri/src/${name}.rs`, import.meta.url), "utf8");
 
+test("production KalVoice owns its signed components and injects the local interpreter", () => {
+  assert.match(source("runtime_coordinator"), /KalVoiceComponentManager::for_runtime/);
+  assert.match(source("kalvoice_commands"), /\.with_local_interpreter\(/);
+  assert.match(source("kalvoice_commands"), /shutdown_reasoning\(/);
+});
+
+test("reasoning download consent has a native signed-catalog metadata route", () => {
+  const command = "kalvoice_reasoning_prepare";
+  assert.ok(source("command_registry").includes(`"${command}"`));
+  assert.ok(source("lib").includes(`kalvoice_commands::${command},`));
+  assert.match(source("kalvoice_commands"), /catalog_identity: Option<String>/);
+});
+
 test("startup reconciles interrupted context delivery before exposing the core", () => {
   const startup = source("lib");
   const opened = startup.indexOf("match locator_commands::open_core(config)");

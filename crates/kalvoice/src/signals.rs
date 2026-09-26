@@ -32,6 +32,9 @@ pub struct KalVoiceStatus {
     pub usage: KalVoiceUsage,
     pub preferences: KalVoicePreferences,
     pub models: Vec<SpeechModelInfo>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub local_reasoning: Option<LocalReasoningStatus>,
     /// The model dictation will use (the selected one, or another installed one).
     pub active_model: Option<String>,
     /// Whether this build includes the on-device speech engine.
@@ -52,6 +55,29 @@ pub struct KalVoiceStatus {
     pub listening: Option<ListeningSession>,
 }
 
+/// Readiness of the separately consented on-device interpreter. Dictation is independent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum LocalReasoningStatus {
+    NotInstalled,
+    Installed,
+    Warming,
+    Ready,
+    Unavailable,
+}
+
+/// Verified catalog metadata shown before consenting to the runtime and model download.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct LocalReasoningDownload {
+    pub catalog_identity: String,
+    pub runtime_version: String,
+    pub model_version: String,
+    pub size_bytes: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
@@ -68,6 +94,9 @@ pub struct ListeningSession {
 )]
 #[ts(export)]
 pub enum KalVoiceSignal {
+    LocalReasoningStatus {
+        status: LocalReasoningStatus,
+    },
     /// The microphone is live.
     ListeningStarted {
         session_id: String,

@@ -4,6 +4,7 @@ import type {
   KalVoiceResponse,
   KalVoiceSignal,
   KalVoiceStatus,
+  LocalReasoningDownload,
   PanelAnchor,
   PanelView,
   SizeClass,
@@ -81,7 +82,9 @@ interface KalVoiceValue {
   dismiss: () => void;
   updatePreferences: (patch: KalVoicePreferencesPatch) => Promise<KalVoiceStatus>;
   downloads: Record<string, DownloadProgress>;
-  downloadModel: (modelId: string) => Promise<void>;
+  downloadModel: (modelId: string, reasoning?: LocalReasoningDownload) => Promise<void>;
+  prepareReasoning: () => Promise<LocalReasoningDownload>;
+  retryReasoning: () => Promise<void>;
   cancelDownload: (modelId: string) => Promise<void>;
   deleteModel: (modelId: string) => Promise<void>;
   history: readonly HistoryItem[];
@@ -447,15 +450,30 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
             [signal.modelId]: { received: signal.receivedBytes, total: signal.totalBytes },
           }));
           return;
+        case "local_reasoning_status":
+          setStatus((current) => (current ? { ...current, localReasoning: signal.status } : current));
+          return;
         case "model_installed":
           setDownloads(({ [signal.modelId]: _, ...rest }) => rest);
-          toast.show({ tone: "success", title: "Speech model installed", description: "Push to talk is ready." });
+          toast.show({
+            tone: "success",
+            title: signal.modelId === "local-reasoning" ? "Local interpreter installed" : "Speech model installed",
+            description:
+              signal.modelId === "local-reasoning"
+                ? "KalVoice is checking local runtime readiness."
+                : "Push to talk is ready.",
+          });
           void refreshStatus();
           return;
         case "model_failed":
           setDownloads(({ [signal.modelId]: _, ...rest }) => rest);
           if (signal.code !== "download_cancelled") {
-            toast.show({ tone: "danger", title: "Speech model not installed", description: signal.message });
+            toast.show({
+              tone: "danger",
+              title:
+                signal.modelId === "local-reasoning" ? "Local interpreter not installed" : "Speech model not installed",
+              description: signal.message,
+            });
           }
           void refreshStatus();
           return;
@@ -594,13 +612,15 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
 
   const dismiss = useCallback(() => dispatch({ type: "dismiss" }), []);
 
+  const prepareReasoning = useCallback(() => client.kalvoiceReasoningPrepare(), [client]);
+  const retryReasoning = useCallback(() => client.kalvoiceReasoningRetry(), [client]);
   const downloadModel = useCallback(
-    async (modelId: string) => {
+    async (modelId: string, reasoning?: LocalReasoningDownload) => {
       const model = status?.models.find((m) => m.id === modelId);
-      setDownloads((d) => ({ ...d, [modelId]: { received: 0, total: model?.sizeBytes ?? 0 } }));
+      setDownloads((d) => ({ ...d, [modelId]: { received: 0, total: reasoning?.sizeBytes ?? model?.sizeBytes ?? 0 } }));
       try {
         // Called only from the consent dialog's Download button.
-        await client.kalvoiceModelDownload(modelId, true);
+        await client.kalvoiceModelDownload(modelId, true, reasoning?.catalogIdentity);
       } catch (error) {
         setDownloads(({ [modelId]: _, ...rest }) => rest);
         toast.show({ tone: "danger", title: "Download didn't start", description: toKalCodeError(error).message });
@@ -700,6 +720,8 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       updatePreferences,
       downloads,
       downloadModel,
+      prepareReasoning,
+      retryReasoning,
       cancelDownload,
       deleteModel,
       history,
@@ -724,6 +746,8 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       updatePreferences,
       downloads,
       downloadModel,
+      prepareReasoning,
+      retryReasoning,
       cancelDownload,
       deleteModel,
       history,

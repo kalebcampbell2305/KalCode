@@ -1019,6 +1019,56 @@ fn legacy_provider_preference_cannot_trigger_a_provider_call() {
 }
 
 #[test]
+fn every_focus_and_legacy_provider_selection_keeps_commands_local_and_unknown_requests_offline() {
+    for provider_id in [
+        ProviderId::CLAUDE_CODE,
+        ProviderId::CODEX,
+        ProviderId::GEMINI_CLI,
+    ] {
+        let directory = Arc::new(SpyDirectory::default());
+        let h =
+            harness_with_interpreter(Tier::Free, FakeExecutor::default(), directory.clone(), None);
+        h.orchestrator
+            .update_preferences(&KalVoicePreferencesPatch {
+                intelligence: Some(IntelligenceChoice::Provider {
+                    provider_id: ProviderId::new(provider_id),
+                }),
+                ..Default::default()
+            })
+            .unwrap();
+        for target in [TalkTarget::None, TalkTarget::Field, TalkTarget::Terminal] {
+            let response = h
+                .orchestrator
+                .talk(talk("open dashboard", target), &|_| {})
+                .unwrap();
+            assert_eq!(response.route, TalkRoute::Command);
+            assert!(matches!(
+                response.response.unwrap().outcome,
+                KalVoiceOutcome::Completed { .. }
+            ));
+        }
+        let unknown = h
+            .orchestrator
+            .handle(request("plan the next release with all the context"))
+            .unwrap();
+        assert!(!unknown.counted);
+        assert!(
+            matches!(unknown.outcome, KalVoiceOutcome::Failed { ref code, .. } if code == "local_reasoning_unavailable")
+        );
+        let dictation = h
+            .orchestrator
+            .talk(
+                talk("Add a unit test for the parser", TalkTarget::Terminal),
+                &|_| {},
+            )
+            .unwrap();
+        assert_eq!(dictation.route, TalkRoute::Dictation);
+        assert!(dictation.response.is_none());
+        assert_eq!(directory.calls.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[test]
 fn uncertain_local_interpretation_never_executes_or_counts() {
     let interpreter = Arc::new(FakeLocalInterpreter::new(Ok(
         LocalInterpretation::Uncertain,

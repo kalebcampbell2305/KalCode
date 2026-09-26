@@ -144,16 +144,32 @@ impl RuntimeBundle {
             )));
         }
         check!();
-        let voice = crate::kalvoice_commands::init(
-            app,
-            state.core.clone(),
-            &state.info,
-            providers.registry(),
-            runtime_authority.clone(),
-            threads.runtime_handle(),
-            permissions.service(),
-            locator.handle(),
-        );
+        let voice = match crate::kalvoice_components::KalVoiceComponentManager::for_runtime(
+            state,
+            resources.clone(),
+        ) {
+            Ok(components) => crate::kalvoice_commands::init(
+                app,
+                state.core.clone(),
+                &state.info,
+                providers.registry(),
+                runtime_authority.clone(),
+                threads.runtime_handle(),
+                permissions.service(),
+                locator.handle(),
+                components,
+                resources.clone(),
+            ),
+            Err(error) => {
+                tracing::warn!(
+                    event = "kalvoice.components_unavailable",
+                    code = error.code()
+                );
+                KalVoiceState::unavailable(
+                    "KalVoice's signed component storage could not be initialized.",
+                )
+            }
+        };
         bundle.voice = Some(Arc::new(voice));
         panes.bind(permissions.service().as_ref(), threads.runtime().ok());
         notifications.bind(threads.runtime_handle());

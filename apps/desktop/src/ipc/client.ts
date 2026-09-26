@@ -24,6 +24,7 @@ import type {
   KalVoiceSignal,
   KalVoiceStatus,
   LatencySnapshot,
+  LocalReasoningDownload,
   LocatorEntityKind,
   LocatorOpenTarget,
   LocatorQuery,
@@ -299,8 +300,16 @@ export class KalCodeClient {
   }
 
   /** `consent` must come from the user confirming the download dialog. */
-  kalvoiceModelDownload(modelId: string, consent: boolean): Promise<void> {
-    return this.call("kalvoice_model_download", { modelId, consent });
+  kalvoiceReasoningPrepare(): Promise<LocalReasoningDownload> {
+    return this.call("kalvoice_reasoning_prepare");
+  }
+
+  kalvoiceReasoningRetry(): Promise<void> {
+    return this.call("kalvoice_reasoning_retry");
+  }
+
+  kalvoiceModelDownload(modelId: string, consent: boolean, catalogIdentity?: string): Promise<void> {
+    return this.call("kalvoice_model_download", { modelId, consent, ...(catalogIdentity ? { catalogIdentity } : {}) });
   }
 
   kalvoiceModelCancel(modelId: string): Promise<boolean> {

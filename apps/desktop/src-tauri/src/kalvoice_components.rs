@@ -16,8 +16,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use kalcode_contracts::app::BuildChannel;
 use kalcode_kalvoice::component_acquisition::{ComponentAcquirer, ComponentAcquisitionError};
 use kalcode_kalvoice::component_catalog::{
-    CatalogContract, CatalogVerifyError, MAX_CATALOG_TOKEN_LENGTH, VerifiedComponentCatalog,
-    WHISPER_GGML_ABI, verify_catalog,
+    CatalogContract, CatalogRole, CatalogVerifyError, MAX_CATALOG_TOKEN_LENGTH,
+    VerifiedComponentCatalog, WHISPER_GGML_ABI, verify_catalog,
 };
 use kalcode_kalvoice::component_floor::{CatalogFloorTrack, ComponentFloorAuthority};
 use kalcode_kalvoice::component_manifest::{
@@ -29,6 +29,7 @@ use kalcode_kalvoice::component_store::{
     TrustedComponentDirectory, host_local_reasoning_contract,
 };
 use kalcode_kalvoice::models::{self, SpeechModelInfo, SpeechModelState};
+use kalcode_kalvoice::signals::LocalReasoningDownload;
 use kalcode_secure_store::SecretStore;
 use sha2::{Digest as _, Sha256};
 
@@ -55,6 +56,7 @@ pub(crate) const SPEECH_COMPONENT_IDS: [&str; 5] = [
     "kalvoice.speech.whisper.small",
 ];
 const DEFAULT_SPEECH_COMPONENT_ID: &str = SPEECH_COMPONENT_IDS[0];
+pub(crate) const REASONING_DOWNLOAD_ID: &str = "local-reasoning";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SpeechComponent {
@@ -162,6 +164,7 @@ struct DownloadState {
 
 #[derive(Default)]
 struct Downloads {
+    stopping: bool,
     running: HashMap<String, DownloadState>,
 }
 
@@ -458,6 +461,7 @@ pub(crate) struct KalVoiceComponentManager {
     platform: ComponentPlatform,
     arch: ComponentArch,
     current_catalog: Mutex<Option<VerifiedComponentCatalog>>,
+    prepared_reasoning: Mutex<Option<String>>,
     downloads: Mutex<Downloads>,
     downloads_settled: Condvar,
 }
@@ -482,7 +486,9 @@ impl KalVoiceComponentManager {
             .map_err(|_| ComponentManagerError::CatalogInvalid)?;
         let track = CatalogFloorTrack::new(channel, platform, arch)
             .map_err(|_| ComponentManagerError::CatalogInvalid)?;
-        let store = floor_secret_store(&state.paths.data_dir)?;
+        // The monotonic catalog floor is OS-held authority, never an app-data plaintext file.
+        // Tests inject their own in-memory authority through ComponentManagerConfig.
+        let store: Arc<dyn SecretStore> = Arc::new(kalcode_secure_store::OsSecretStore::new());
         let floor = Arc::new(
             ComponentFloorAuthority::new(store, root.clone(), track)
                 .map_err(|_| ComponentManagerError::CatalogStorage)?,
@@ -529,6 +535,7 @@ impl KalVoiceComponentManager {
             platform: config.platform,
             arch: config.arch,
             current_catalog: Mutex::new(None),
+            prepared_reasoning: Mutex::new(None),
             downloads: Mutex::new(Downloads::default()),
             downloads_settled: Condvar::new(),
         });
@@ -630,6 +637,155 @@ impl KalVoiceComponentManager {
             .map_err(map_store_error)
     }
 
+    pub(crate) fn acquire_reasoning(
+        &self,
+    ) -> Result<(ComponentLease, ComponentLease), ComponentManagerError> {
+        self.installed_catalog_identity()?;
+        let contract =
+            host_local_reasoning_contract().ok_or(ComponentManagerError::CatalogUnavailable)?;
+        let runtime = self
+            .store
+            .acquire(&contract.runtime, unix_seconds())
+            .map_err(map_store_error)?;
+        let model = self
+            .store
+            .acquire(&contract.model, unix_seconds())
+            .map_err(map_store_error)?;
+        Ok((runtime, model))
+    }
+
+    pub(crate) fn reasoning_installed(&self) -> bool {
+        let Some(contract) = host_local_reasoning_contract() else {
+            return false;
+        };
+        matches!(
+            self.store.status(&contract.runtime, unix_seconds()),
+            ComponentReceiptStatus::Present { .. }
+        ) && matches!(
+            self.store.status(&contract.model, unix_seconds()),
+            ComponentReceiptStatus::Present { .. }
+        )
+    }
+
+    /// Fetches signed metadata only. No artifact, rollback-floor update or runtime launch occurs.
+    pub(crate) fn prepare_reasoning(
+        &self,
+    ) -> Result<LocalReasoningDownload, ComponentManagerError> {
+        let token = self.fetcher.fetch(
+            &catalog_url(self.channel, self.platform, self.arch)?,
+            &AtomicBool::new(false),
+        )?;
+        let catalog = verify_catalog(&self.verifier, &token, unix_seconds(), self.contract())
+            .map_err(map_catalog_error)?;
+        let quote = reasoning_quote(&catalog)?;
+        *self
+            .prepared_reasoning
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(token);
+        Ok(quote)
+    }
+
+    pub(crate) fn download_reasoning(
+        &self,
+        consent: bool,
+        catalog_identity: Option<&str>,
+        mut progress: impl FnMut(u64, u64),
+    ) -> Result<(), ComponentManagerError> {
+        if !consent {
+            return Err(ComponentManagerError::ConsentRequired);
+        }
+        let token = self
+            .prepared_reasoning
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .ok_or(ComponentManagerError::ConsentRequired)?;
+        let now = unix_seconds();
+        let catalog = verify_catalog(&self.verifier, &token, now, self.contract())
+            .map_err(map_catalog_error)?;
+        if catalog_identity != Some(catalog.token_sha256()) {
+            return Err(ComponentManagerError::ConsentRequired);
+        }
+        let quote = reasoning_quote(&catalog)?;
+        let cancel = Arc::new(AtomicBool::new(false));
+        {
+            let mut downloads = self
+                .downloads
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if downloads.stopping {
+                return Err(ComponentManagerError::Cancelled);
+            }
+            if downloads.running.contains_key(REASONING_DOWNLOAD_ID) {
+                return Err(ComponentManagerError::AlreadyDownloading);
+            }
+            downloads.running.insert(
+                REASONING_DOWNLOAD_ID.into(),
+                DownloadState {
+                    cancel: cancel.clone(),
+                    received_bytes: 0,
+                    total_bytes: quote.size_bytes,
+                },
+            );
+        }
+        let _registration = DownloadRegistration {
+            manager: self,
+            preference_id: REASONING_DOWNLOAD_ID.into(),
+        };
+        let _reservation = self.admission.reserve_acquisition(quote.size_bytes)?;
+        let retained = self.cache.retain(&token, catalog.token_sha256())?;
+        let retained_catalog = verify_catalog(&self.verifier, &retained, now, self.contract())
+            .map_err(map_catalog_error)?;
+        self.floor
+            .advance(
+                &retained_catalog,
+                now,
+                Instant::now() + FLOOR_TIMEOUT,
+                &cancel,
+            )
+            .map_err(|_| {
+                if cancel.load(Ordering::SeqCst) {
+                    ComponentManagerError::Cancelled
+                } else {
+                    ComponentManagerError::CatalogRollback
+                }
+            })?;
+        self.cache.prune(retained_catalog.token_sha256());
+        *self
+            .current_catalog
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(retained_catalog.clone());
+        let mut completed = 0;
+        for role in [CatalogRole::ReasoningRuntime, CatalogRole::ReasoningModel] {
+            let entry = retained_catalog
+                .entry(role)
+                .ok_or(ComponentManagerError::CatalogInvalid)?;
+            self.acquisition
+                .acquire(
+                    entry.token(),
+                    unix_seconds(),
+                    true,
+                    &cancel,
+                    &mut |received, _| {
+                        let received = completed + received;
+                        if let Some(running) = self
+                            .downloads
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .running
+                            .get_mut(REASONING_DOWNLOAD_ID)
+                        {
+                            running.received_bytes = received;
+                        }
+                        progress(received, quote.size_bytes);
+                    },
+                )
+                .map_err(map_acquisition_error)?;
+            completed += entry.component().manifest().size_bytes;
+        }
+        Ok(())
+    }
+
     pub(crate) fn download_speech(
         &self,
         preference_id: &str,
@@ -643,6 +799,9 @@ impl KalVoiceComponentManager {
                 .downloads
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
+            if downloads.stopping {
+                return Err(ComponentManagerError::Cancelled);
+            }
             if downloads.running.contains_key(preference_id) {
                 return Err(ComponentManagerError::AlreadyDownloading);
             }
@@ -755,10 +914,11 @@ impl KalVoiceComponentManager {
     }
 
     pub(crate) fn cancel_all(&self) -> usize {
-        let downloads = self
+        let mut downloads = self
             .downloads
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
+        downloads.stopping = true;
         for running in downloads.running.values() {
             running.cancel.store(true, Ordering::SeqCst);
         }
@@ -870,6 +1030,40 @@ impl KalVoiceComponentManager {
             .filter(|length| *length > 0)
     }
 }
+
+fn reasoning_quote(
+    catalog: &VerifiedComponentCatalog,
+) -> Result<LocalReasoningDownload, ComponentManagerError> {
+    let runtime = catalog
+        .entry(CatalogRole::ReasoningRuntime)
+        .ok_or(ComponentManagerError::CatalogInvalid)?
+        .component()
+        .manifest();
+    let model = catalog
+        .entry(CatalogRole::ReasoningModel)
+        .ok_or(ComponentManagerError::CatalogInvalid)?
+        .component()
+        .manifest();
+    Ok(LocalReasoningDownload {
+        catalog_identity: catalog.token_sha256().to_owned(),
+        runtime_version: runtime.version.clone(),
+        model_version: model.version.clone(),
+        size_bytes: runtime
+            .size_bytes
+            .checked_add(model.size_bytes)
+            .ok_or(ComponentManagerError::CatalogInvalid)?,
+    })
+}
+
+#[cfg(all(
+    test,
+    any(
+        all(windows, target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64")
+    )
+))]
+#[path = "kalvoice_provisioning_tests.rs"]
+pub(crate) mod provisioning_tests;
 
 fn speech_component(preference_id: &str) -> Option<SpeechComponent> {
     SPEECH_COMPONENTS

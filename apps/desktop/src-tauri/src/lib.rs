@@ -512,6 +512,8 @@ pub fn run(removed_overrides: Vec<String>) {
                 kalvoice_commands::kalvoice_listen_stop,
                 kalvoice_commands::kalvoice_listen_cancel,
                 kalvoice_commands::kalvoice_model_download,
+                kalvoice_commands::kalvoice_reasoning_prepare,
+                kalvoice_commands::kalvoice_reasoning_retry,
                 kalvoice_commands::kalvoice_model_cancel,
                 kalvoice_commands::kalvoice_model_delete,
                 kalvoice_commands::kalvoice_talk,

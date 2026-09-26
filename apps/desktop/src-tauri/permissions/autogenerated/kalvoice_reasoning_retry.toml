@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-kalvoice-reasoning-retry"
+description = "Enables the kalvoice_reasoning_retry command without any pre-configured scope."
+commands.allow = ["kalvoice_reasoning_retry"]
+
+[[permission]]
+identifier = "deny-kalvoice-reasoning-retry"
+description = "Denies the kalvoice_reasoning_retry command without any pre-configured scope."
+commands.deny = ["kalvoice_reasoning_retry"]

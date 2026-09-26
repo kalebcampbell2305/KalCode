@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-kalvoice-reasoning-prepare"
+description = "Enables the kalvoice_reasoning_prepare command without any pre-configured scope."
+commands.allow = ["kalvoice_reasoning_prepare"]
+
+[[permission]]
+identifier = "deny-kalvoice-reasoning-prepare"
+description = "Denies the kalvoice_reasoning_prepare command without any pre-configured scope."
+commands.deny = ["kalvoice_reasoning_prepare"]

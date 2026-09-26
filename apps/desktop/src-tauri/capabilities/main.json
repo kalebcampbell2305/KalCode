@@ -69,6 +69,8 @@
     "allow-kalvoice-listen-stop",
     "allow-kalvoice-listen-cancel",
     "allow-kalvoice-model-download",
+    "allow-kalvoice-reasoning-prepare",
+    "allow-kalvoice-reasoning-retry",
     "allow-kalvoice-model-cancel",
     "allow-kalvoice-model-delete",
     "allow-kalvoice-talk",
