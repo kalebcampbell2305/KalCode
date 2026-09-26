@@ -80,6 +80,36 @@ describe("EventFeed", () => {
     expect(feed.oldestSeq).toBe(7);
   });
 
+  it("makes evicted history loadable again after reaching the start", () => {
+    const feed = new EventFeed(3);
+    feed.merge([1, 2, 3].map(event));
+    feed.markReachedStart();
+    feed.merge([event(4)]);
+    expect(seqs(feed)).toEqual([4, 3, 2]);
+    expect(feed.reachedStart).toBe(false);
+    expect(feed.getSnapshot().reachedStart).toBe(false);
+
+    feed.mergeOlder([event(1)]);
+    feed.markReachedStart();
+    expect(seqs(feed)).toEqual([4, 3, 2, 1]);
+    expect(feed.reachedStart).toBe(true);
+
+    feed.merge([event(5)]);
+    expect(seqs(feed)).toEqual([5, 4, 3, 2]);
+    expect(feed.reachedStart).toBe(false);
+  });
+
+  it("retains exhausted history when new events fit or only overlap", () => {
+    const feed = new EventFeed(3);
+    feed.merge([event(1)]);
+    feed.markReachedStart();
+    feed.merge([event(2)]);
+    expect(feed.reachedStart).toBe(true);
+    const snapshot = feed.getSnapshot();
+    feed.merge([event(1), event(2)]);
+    expect(feed.getSnapshot()).toBe(snapshot);
+  });
+
   it("stops notifying after unsubscribe", () => {
     const feed = new EventFeed();
     const listener = vi.fn();

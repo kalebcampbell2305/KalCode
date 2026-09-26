@@ -65,7 +65,10 @@ export class EventFeed {
     }
     if (!changed) return;
     const events = [...bySeq.values()].sort((a, b) => b.seq - a.seq).slice(0, this.capacity);
-    this.snapshot = { ...this.snapshot, events };
+    // Capacity eviction removes the start of the loaded history, so older pages must
+    // become available again even if a previous read reached the beginning of the log.
+    const reachedStart = this.snapshot.reachedStart && bySeq.size <= this.capacity;
+    this.snapshot = { events, reachedStart };
     this.emit();
   }
 
