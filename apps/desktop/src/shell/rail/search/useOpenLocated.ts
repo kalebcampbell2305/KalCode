@@ -1,6 +1,6 @@
 import type { LocatorEntityKind, LocatorVia } from "@kalcode/protocol";
 import { useToast } from "@kalcode/ui/components";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { toKalCodeError } from "../../../ipc/errors.ts";
 import { useRuntime } from "../../../runtime/RuntimeProvider.tsx";
 import { useUiIntents } from "../../../runtime/uiIntents.tsx";
@@ -17,21 +17,29 @@ export function useOpenLocated() {
   const intents = useUiIntents();
   const openInPane = useOpenInPane();
   const toast = useToast();
-  const live = useRef({ client, intents, openInPane });
-  live.current = { client, intents, openInPane };
+  const lifetime = useMemo(() => ({ client, mounted: false, epoch: 0 }), [client]);
+  const live = useRef({ lifetime, intents, openInPane });
+  live.current = { lifetime, intents, openInPane };
   const generation = useRef(0);
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    lifetime.mounted = true;
+    lifetime.epoch += 1;
+    return () => {
+      lifetime.mounted = false;
       generation.current += 1;
-    },
-    [],
-  );
+    };
+  }, [lifetime]);
 
   return useCallback(
     async (kind: LocatorEntityKind, entityId: string, via: LocatorVia): Promise<boolean> => {
-      if (client !== live.current.client) return false;
+      if (lifetime !== live.current.lifetime || !lifetime.mounted) return false;
+      const epoch = lifetime.epoch;
       const request = ++generation.current;
-      const isCurrent = () => request === generation.current && client === live.current.client;
+      const isCurrent = () =>
+        request === generation.current &&
+        lifetime === live.current.lifetime &&
+        lifetime.mounted &&
+        lifetime.epoch === epoch;
       try {
         const target = await client.locatorOpen(kind, entityId, via);
         if (!isCurrent()) return false;
@@ -44,8 +52,9 @@ export function useOpenLocated() {
             { workspaceId: target.workspaceId },
           );
           if (!isCurrent()) return false;
-          if (!result.handled && result.message) {
-            toast.show({ tone: "danger", title: "Couldn't open that", description: result.message });
+          if (!result.handled) {
+            if (result.message)
+              toast.show({ tone: "danger", title: "Couldn't open that", description: result.message });
             return false;
           }
         } else if (target.workspaceId) {
@@ -61,6 +70,6 @@ export function useOpenLocated() {
         return false;
       }
     },
-    [client, toast],
+    [client, toast, lifetime],
   );
 }
