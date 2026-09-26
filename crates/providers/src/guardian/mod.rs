@@ -841,6 +841,7 @@ impl kalcode_pty::PreparedPtyAdmission for RegisteredJob {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn mark_job_blocked(inner: &Arc<GuardianInner>, job: JobId) {
     let Ok(mut state) = inner.state.lock() else {
         return;
