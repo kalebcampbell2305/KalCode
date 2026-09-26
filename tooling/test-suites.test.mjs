@@ -21,6 +21,21 @@ import {
 
 const inventory = loadTestSuiteInventory();
 
+test("the registered Rust release gate includes the production speech engine and exact target ignore counts", () => {
+  const rust = inventory.suites.find(({ id }) => id === "rust-workspace");
+  assert.deepEqual(rust.command, ["cargo", "test", "--workspace", "--features", "kalcode-desktop/kalvoice-whisper"]);
+  for (const [platform, expected] of [
+    ["win32", 16],
+    ["darwin", 16],
+    ["linux", 15],
+  ]) {
+    const profile = selectProfile(rust, platform, {});
+    assert.equal(profile.skippedMinimum, expected);
+    assert.equal(profile.skippedMaximum, expected);
+  }
+  assert.equal(inventory.rustIntentionalIgnores.length, 16);
+});
+
 test("the registered Vitest command writes and validates its real JSON report", () => {
   const environment = { ...process.env };
   delete environment.NODE_TEST_CONTEXT;

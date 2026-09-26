@@ -1,0 +1,53 @@
+# Release recovery, 2026-09-26
+
+This record continues the prior closeout. It is not release certification.
+
+## Recovered authority
+
+- Canonical main and freshly fetched private origin/main: `ad4d073faea0a4800fbdd027b8f2fee87ff43752`.
+- Recovered integration candidate: `codex3/takeover-integration`, `68ca2f81e924f2b57091fec1f6c0e5ef379ba860`.
+- Bounded repair branch: `release/recovery-20260926`, based on that candidate.
+- Read-only census found 130 worktrees, 18 dirty, two clean detached, and no staged paths before this repair worktree was created. Existing dirty work remains preserved.
+- Patch-equivalence review found no missing committed production packet. Historical continuity/Git mutation packets remain outside this release's activation scope.
+
+## Repairs
+
+### Mac updater trust
+
+The Mac packager inherited `KALCODE_UPDATER_PUBLIC_KEY` without loading the tracked trust anchor. A normal shell therefore produced a build with no updater key, while an inherited substitution could select different trust. The desktop's existing `option_env!` consumer correctly fails closed when the key is absent.
+
+The packager now reads the canonical public key before compilation. Its build-environment contract validates the explicit key and overwrites any inherited value before building helpers and the app. No private key is needed on the Mac, no trust key rotates, and notarization-only resume does not rebuild artifacts.
+
+The regression first failed with an absent resulting key. It now proves deterministic injection, substituted-environment rejection by replacement, missing/malformed input denial, caller-environment preservation, and packager wiring. Focused Mac/updater tests: 48 passed. All release-tool tests: 199 passed. Full tooling/performance unit registration: 309 passed, zero failed/skipped; the increase from 308 is the new regression. A first full-tooling attempt in the fresh repair worktree failed because dependencies were absent; frozen offline installation resolved that prerequisite without changing the lockfile.
+
+Independent review by the retained Mac verifier accepted the trust flow and compatibility. Actual signed Mac build and update execution remain required.
+
+### Preserved Unix hook fixture
+
+The uncommitted repair from `codex3-hook-shutdown-fixture` was recovered exactly from `target/codex3-mac-native-final/mac-hook-shutdown.patch`. Checked shutdown removes both the Unix socket and its private parent; the fixture previously attempted to rebind without recreating that parent. The repair asserts both removals and recreates only the fixture's directory with mode 0700 before testing endpoint reuse.
+
+The prior physical Mac workspace run proves the original ENOENT failure. The retained focused rerun passed all 16 bridge tests and strict Clippy. This patch was NOT part of commit `28fa4c3`; the earlier dirty Mac tree had that HEAD plus this unstaged change. Current-candidate Mac rerun remains required. The change is Unix test-only; production and Windows behavior are unchanged.
+
+## Fresh baseline evidence
+
+At recovered candidate `68ca2f8`, seven JavaScript suites passed: desktop 881, website 334, API 258, protocol 56, shared testing 24, UI 68, tooling 308. Total 1,929, zero skipped/flaky. Workspace typecheck passed, including 118 Astro files with zero diagnostics. Website build and E2E passed (145 executed, eight registered skips, zero flaky). Static branding/capability/zero-cost/release-manifest checks passed; the manifest still describes the older Windows release and is not new-release proof.
+
+Windows strict workspace/all-target Clippy passed. The first full Rust workspace run failed a managed Codex pane's 30-second output wait. Its exact rerun and complete 15-test subsystem passed; a fresh full workspace rerun was started. Preserve the original failure rather than classifying the first run green. Rust ts-rs tests rewrite generated TypeScript whitespace; use the canonical protocol normalizer after exporters finish, without restoring stale files.
+
+Evidence is in root `target/recovery-20260926` and the candidate's/root's `target/recovery-20260926-{js,native,browser}` directories. Historical evidence remains intact.
+
+## Production boundaries
+
+Subsequent Windows default workspace rerun passed 1,994 tests, zero failed, 15 ignored. This exposed a registry mismatch: the registered command omitted the optional production Whisper feature while expecting its sixteenth ignored opt-in test. The release gate now explicitly enables `kalcode-desktop/kalvoice-whisper`, preserving all source ignore declarations and requiring the speech engine's tests. Linux expects 15 because the separate pinned local-reasoning artifact probe compiles only on Windows x64/Mac arm64; supported release targets expect 16. The registry regression failed before the correction, then all 16 registry tests passed. The final tooling run passed 310 tests with zero skips/failures, two more than the recovered baseline. Actual production-feature workspace verification remains a separate required run; the default 1,994-pass run cannot substitute for it.
+
+The current-user updater signing key matches the tracked public key. Azure's existing account reports Enabled; a new installer signing probe is still required. GitHub visibility was independently confirmed PRIVATE.
+
+Mac SSH recovered. Fresh physical inspection reports arm64 and macOS 27.0, superseding the historical 26.2 claim. The signed runtime ZIP remains unchanged and Developer ID verified. Initial notarization could not authenticate because the login keychain was locked; its checkpoint has no submission ID. Reconcile Apple history before another submit. Never infer Accepted from an upload or a prepared script.
+
+Production API version: `a0c48810-09c0-42d5-8017-6b8048506b36`. Website version: `3af2bc5a-4966-41a2-9ab1-380c83946b87`. API migrations 0007/0008 and website component-publication migration 0006 are pending. Google/Microsoft production registrations are owner setup in progress. Checkout remains held. No deployment, migration, publication, customer installation, paid-provider call, or charge has been performed by this recovery packet.
+
+The existing website account page implements email sign-in only; the current Google/Microsoft callback completes the desktop flow. Do not claim website social login merely from registering provider credentials. Mac native customer QA and a real signed old-to-new update/rollback remain unproven.
+
+## Compatibility and rollback
+
+No schema, dependency, credential, production-store, or public-route change is included in this packet. Before integration, discard neither the preserved original worktrees nor release evidence. Revert the bounded repair commit to undo these source changes; do not reset main or later history. Any future signed build must be regenerated from the final verified commit. Main, public release pointers, and deployed versions remain unchanged by this packet.

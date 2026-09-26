@@ -4,7 +4,6 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-
 import {
   acceptedNotaryInfo,
   acceptedNotaryLog,
@@ -28,6 +27,7 @@ import {
   rustTargetForMacArchitecture,
   validateMacReleaseEnvironment,
 } from "./macos-contract.mjs";
+import { readUpdaterPublicKey } from "./updater-signing.mjs";
 
 const team = "A1B2C3D4E5";
 const identity = `Developer ID Application: Example (${team})`;
@@ -81,6 +81,7 @@ test("Tauri receives only signing identity and the explicit deployment target", 
       APPLE_TEAM_ID: "remove",
     },
     identity,
+    readUpdaterPublicKey(),
   );
   assert.equal(result.KEEP, "yes");
   assert.equal(result.APPLE_SIGNING_IDENTITY, identity);
@@ -95,6 +96,18 @@ test("Tauri receives only signing identity and the explicit deployment target", 
   ]) {
     assert.equal(result[key], undefined);
   }
+});
+
+test("Mac builds bind the tracked updater key instead of inheriting missing or substituted trust", () => {
+  const trustedKey = readUpdaterPublicKey();
+  for (const inherited of [{}, { KALCODE_UPDATER_PUBLIC_KEY: "substituted" }]) {
+    const original = { ...inherited };
+    const result = macBuildEnvironment(inherited, identity, trustedKey);
+    assert.equal(result.KALCODE_UPDATER_PUBLIC_KEY, trustedKey);
+    assert.deepEqual(inherited, original);
+  }
+  assert.throws(() => macBuildEnvironment({}, identity), /public key is missing/);
+  assert.throws(() => macBuildEnvironment({}, identity, "invalid"), /public key/);
 });
 
 test("the native build is bound to the selected SDK and its libc++ headers", () => {
@@ -302,4 +315,6 @@ test("checked-in macOS configuration is hardened and bootstrap is read-only by d
   assert.match(bootstrap, /release prerequisites are incomplete/);
   assert.match(packager, /parseMacPackageOptions\(process\.argv\.slice\(2\)\)/);
   assert.match(packager, /const features = options\.features;/);
+  assert.match(packager, /const updaterPublicKey = readUpdaterPublicKey\(\);/);
+  assert.match(packager, /macBuildEnvironment\([\s\S]*?credentials\.signingIdentity,\s*updaterPublicKey,/);
 });

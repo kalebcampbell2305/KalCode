@@ -49,6 +49,7 @@ import {
 import { macCandidateArtifactPath, resumeMacCandidate } from "./macos-resume.mjs";
 import { macProcessRunner, verifyMacCandidate } from "./macos-verify-lib.mjs";
 import { buildEnvironment, validateBuildInfo } from "./release-channel.mjs";
+import { readUpdaterPublicKey } from "./updater-signing.mjs";
 
 function fail(error) {
   const code = error instanceof MacReleaseError ? error.code : "package_failed";
@@ -156,6 +157,7 @@ async function main() {
     return;
   }
   const target = rustTargetForMacArchitecture(arch);
+  const updaterPublicKey = readUpdaterPublicKey();
   macTauriBuildArgs({ target, features });
   const sdkRoot = assertToolchain(target, credentials.signingIdentity);
   assertRepositoryMacConfig();
@@ -197,7 +199,11 @@ async function main() {
   );
   const startedAt = Date.now();
   const buildEnv = macSdkBuildEnvironment(
-    macBuildEnvironment(buildEnvironment(process.env, options.compiledChannel), credentials.signingIdentity),
+    macBuildEnvironment(
+      buildEnvironment(process.env, options.compiledChannel),
+      credentials.signingIdentity,
+      updaterPublicKey,
+    ),
     sdkRoot,
   );
   buildEnv.CARGO_TARGET_DIR = TARGET_DIR;

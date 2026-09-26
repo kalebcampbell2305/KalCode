@@ -816,6 +816,19 @@ fn checked_shutdown_is_concurrent_idempotent_and_releases_the_endpoint() {
     server.shutdown_checked().expect("repeat shutdown");
     assert!(started.elapsed() < Duration::from_secs(2));
 
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        let path = endpoint.path();
+        let parent = path.parent().expect("private socket directory");
+        assert!(!path.exists(), "shutdown removes the socket");
+        assert!(!parent.exists(), "shutdown removes its private directory");
+        // Recreate only the fixture's private directory before reusing the exact socket address.
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(parent)
+            .expect("fresh private directory for endpoint rebind");
+    }
     let rebound = BridgeServer::start(ServerConfig::new(endpoint)).expect("endpoint released");
     rebound.shutdown_checked().expect("rebound shutdown");
     drop(dir);

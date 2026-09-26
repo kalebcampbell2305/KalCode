@@ -163,15 +163,24 @@
       "runner": "cargo",
       "package": null,
       "script": null,
-      "command": ["cargo", "test", "--workspace"],
+      "command": ["cargo", "test", "--workspace", "--features", "kalcode-desktop/kalvoice-whisper"],
       "timeoutMs": 1800000,
       "profiles": [
         {
-          "platforms": ["win32", "darwin", "linux"],
+          "platforms": ["win32", "darwin"],
           "environment": {},
           "minimumExecuted": 1258,
           "skippedMinimum": 16,
           "skippedMaximum": 16,
+          "allowedSkipReasons": [],
+          "maximumFlaky": 0
+        },
+        {
+          "platforms": ["linux"],
+          "environment": {},
+          "minimumExecuted": 1258,
+          "skippedMinimum": 15,
+          "skippedMaximum": 15,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         }

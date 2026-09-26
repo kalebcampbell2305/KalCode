@@ -1,6 +1,7 @@
 import { basename } from "node:path";
 
 import { parseReleaseChannelArgs, validateReleaseBuildArgs } from "./release-channel.mjs";
+import { validateUpdaterPublicKey } from "./updater-signing.mjs";
 
 export const MACOS_MINIMUM_VERSION = "14.0";
 export const MACOS_BUNDLE_ID = "com.kalcode.desktop";
@@ -141,8 +142,9 @@ export function validateMacReleaseEnvironment(env) {
   };
 }
 
-export function macBuildEnvironment(env, signingIdentity) {
+export function macBuildEnvironment(env, signingIdentity, updaterPublicKey) {
   const result = { ...env };
+  result.KALCODE_UPDATER_PUBLIC_KEY = validateUpdaterPublicKey(updaterPublicKey);
   for (const name of [
     "APPLE_API_ISSUER",
     "APPLE_API_KEY",
