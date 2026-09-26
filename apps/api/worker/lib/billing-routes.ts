@@ -18,6 +18,8 @@ const SUBSCRIPTION_ID = /^sub_[A-Za-z0-9_]+$/;
 const MAX_WEBHOOK_BYTES = 256 * 1024;
 const RATE_WINDOW_MS = 10 * 60 * 1000;
 const CHECKOUT_LIFETIME_MS = 35 * 60 * 1000;
+// Stripe requires at least 30 minutes from creation; leave room for network transit.
+const CHECKOUT_CREATION_MARGIN_SECONDS = 30 * 60 + 30;
 const CHECKOUT_SUCCESS = "https://kalcoded.com/account?checkout=success";
 const CHECKOUT_CANCEL = "https://kalcoded.com/pricing?checkout=cancelled";
 const PORTAL_RETURN = "https://kalcoded.com/account";
@@ -156,7 +158,8 @@ export function billingService(options: Options): BillingService {
         accountId,
         tier,
         requestHash,
-        idempotencyKey: `checkout_${requestHash}`,
+        // Only an inserted/replaced reservation adopts this key. Live retries retain theirs.
+        idempotencyKey: `checkout_${randomBase64Url(32)}`,
         now: at,
         expiresAt: new Date(options.now().getTime() + CHECKOUT_LIFETIME_MS).toISOString(),
       });
@@ -171,30 +174,50 @@ export function billingService(options: Options): BillingService {
       }
       const customerId = await ensureCustomer(options, accountId, at);
       if (!customerId) return apiError(409, "billing_account_unavailable", "Billing could not be started.");
+      const binding = await options.store.bindCheckoutParameters({
+        accountId,
+        tier,
+        requestHash,
+        now: options.now().toISOString(),
+        parameters: {
+          customerId,
+          priceId: options.catalog.priceForTier[tier as BillableTier],
+          successUrl: CHECKOUT_SUCCESS,
+          cancelUrl: CHECKOUT_CANCEL,
+          expiresAt: 0, // The store replaces this with the reservation's immutable expiry.
+          idempotencyKey: reservation.idempotencyKey,
+        },
+      });
+      if (!binding) return apiError(409, "checkout_unavailable", "Checkout could not be started.");
       if (
         !(await options.store.checkoutStillReserved({
           accountId,
           tier,
           requestHash,
+          idempotencyKey: reservation.idempotencyKey,
           now: options.now().toISOString(),
         }))
       ) {
         return apiError(409, "checkout_unavailable", "Checkout could not be started.");
       }
-      const checkout = await options.stripe.createCheckout({
-        customerId,
-        priceId: options.catalog.priceForTier[tier as BillableTier],
-        successUrl: CHECKOUT_SUCCESS,
-        cancelUrl: CHECKOUT_CANCEL,
-        expiresAt: Math.floor(options.now().getTime() / 1000) + CHECKOUT_LIFETIME_MS / 1000,
-        idempotencyKey: reservation.idempotencyKey,
-      });
+      if (binding.checkoutUrl) return json({ ok: true, url: binding.checkoutUrl }, 200);
+      const remaining = binding.parameters.expiresAt - Math.floor(options.now().getTime() / 1000);
+      if (remaining < CHECKOUT_CREATION_MARGIN_SECONDS) {
+        // A lost provider response may hide a live session. Do not rotate its key or mutate
+        // its parameters to extend expiry. Known finalized URLs were safely returned above.
+        return apiError(409, "checkout_in_progress", "Please wait before starting another checkout.", {
+          "retry-after": String(Math.max(1, remaining)),
+        });
+      }
+      const checkout = await options.stripe.createCheckout(binding.parameters);
       if (
         !(await options.store.finalizeCheckout({
           accountId,
           tier,
           requestHash,
           stripeSessionId: checkout.id,
+          checkoutUrl: checkout.url,
+          idempotencyKey: reservation.idempotencyKey,
           now: options.now().toISOString(),
         }))
       ) {

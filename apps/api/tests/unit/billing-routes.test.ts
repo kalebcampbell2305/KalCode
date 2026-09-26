@@ -24,6 +24,10 @@ function fakeStore(overrides: Record<string, unknown> = {}): BillingStore {
     bindCustomer: vi.fn(async () => true),
     customerForAccount: vi.fn(async () => "cus_12345678"),
     reserveCheckout: vi.fn(async ({ idempotencyKey }) => ({ status: "reserved" as const, idempotencyKey })),
+    bindCheckoutParameters: vi.fn(async ({ parameters }) => ({
+      parameters: { ...parameters, expiresAt: Math.floor(NOW.getTime() / 1000) + 2100 },
+      checkoutUrl: null,
+    })),
     checkoutStillReserved: vi.fn(async () => true),
     finalizeCheckout: vi.fn(async () => true),
     allowAction: vi.fn(async () => true),

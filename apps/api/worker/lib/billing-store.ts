@@ -1,5 +1,7 @@
 import type { BillableTier } from "./billing-plans";
-import type { StripeSubscriptionSnapshot } from "./stripe";
+import type { StripeClient, StripeSubscriptionSnapshot } from "./stripe";
+
+type CheckoutParameters = Parameters<StripeClient["createCheckout"]>[0];
 
 export interface BillingCustomer {
   accountId: string;
@@ -96,8 +98,8 @@ export function d1BillingStore(db: D1Database) {
       await db
         .prepare(
           `INSERT INTO billing_checkout_intents
-             (account_id, tier, request_hash, idempotency_key, created_at, expires_at)
-           SELECT a.id, ?2, ?3, ?4, ?5, ?6 FROM accounts a
+             (account_id, tier, request_hash, idempotency_key, created_at, expires_at, creation_parameters)
+           SELECT a.id, ?2, ?3, ?4, ?5, ?6, '{}' FROM accounts a
            WHERE a.id = ?1 AND a.deleted_at IS NULL AND NOT EXISTS (
              SELECT 1 FROM billing_subscriptions s
              WHERE s.account_id = a.id AND s.status NOT IN ('canceled', 'incomplete_expired')
@@ -108,7 +110,8 @@ export function d1BillingStore(db: D1Database) {
              tier = excluded.tier, request_hash = excluded.request_hash,
              idempotency_key = excluded.idempotency_key, created_at = excluded.created_at,
              expires_at = excluded.expires_at,
-             stripe_checkout_session_id = NULL, finalized_at = NULL
+             stripe_checkout_session_id = NULL, finalized_at = NULL,
+             creation_parameters = '{}', checkout_url = NULL
            WHERE billing_checkout_intents.expires_at <= ?5`,
         )
         .bind(input.accountId, input.tier, input.requestHash, input.idempotencyKey, input.now, input.expiresAt)
@@ -137,17 +140,56 @@ export function d1BillingStore(db: D1Database) {
       return { status: "busy" };
     },
 
+    async bindCheckoutParameters(input: {
+      accountId: string;
+      tier: BillableTier;
+      requestHash: string;
+      now: string;
+      parameters: CheckoutParameters;
+    }): Promise<{ parameters: CheckoutParameters; checkoutUrl: string | null } | null> {
+      // One conditional write freezes concurrent callers to the same operation. The persisted
+      // reservation expiry, not the caller's clock, supplies Stripe's expiration parameter.
+      // Legacy NULL bindings are held until expiry; guessing their prior parameters is unsafe.
+      const row = await db
+        .prepare(
+          `UPDATE billing_checkout_intents AS i
+         SET creation_parameters = CASE WHEN creation_parameters = '{}'
+           THEN json_set(?6, '$.expiresAt', CAST(strftime('%s', expires_at) AS INTEGER))
+           ELSE creation_parameters END
+         WHERE account_id = ?1 AND tier = ?2 AND request_hash = ?3 AND idempotency_key = ?4
+           AND expires_at > ?5 AND creation_parameters IS NOT NULL
+           AND EXISTS (SELECT 1 FROM accounts a WHERE a.id = ?1 AND a.deleted_at IS NULL)
+           AND NOT EXISTS (SELECT 1 FROM billing_subscriptions s
+             WHERE s.account_id = ?1 AND s.status NOT IN ('canceled', 'incomplete_expired'))
+           AND NOT EXISTS (SELECT 1 FROM active_owner_accounts o WHERE o.account_id = ?1)
+         RETURNING creation_parameters, checkout_url`,
+        )
+        .bind(
+          input.accountId,
+          input.tier,
+          input.requestHash,
+          input.parameters.idempotencyKey,
+          input.now,
+          JSON.stringify(input.parameters),
+        )
+        .first<{ creation_parameters: string; checkout_url: string | null }>();
+      return row
+        ? { parameters: JSON.parse(row.creation_parameters) as CheckoutParameters, checkoutUrl: row.checkout_url }
+        : null;
+    },
+
     async checkoutStillReserved(input: {
       accountId: string;
       tier: BillableTier;
       requestHash: string;
       now: string;
+      idempotencyKey?: string;
     }): Promise<boolean> {
       const row = await db
         .prepare(
           `SELECT 1 AS reserved FROM billing_checkout_intents i JOIN accounts a ON a.id = i.account_id
            WHERE i.account_id = ?1 AND i.tier = ?2 AND i.request_hash = ?3 AND i.expires_at > ?4
-             AND a.deleted_at IS NULL
+             AND (?5 IS NULL OR i.idempotency_key = ?5) AND a.deleted_at IS NULL
              AND NOT EXISTS (
                SELECT 1 FROM billing_subscriptions s
                WHERE s.account_id = ?1 AND s.status NOT IN ('canceled', 'incomplete_expired')
@@ -156,7 +198,7 @@ export function d1BillingStore(db: D1Database) {
                SELECT 1 FROM active_owner_accounts o WHERE o.account_id = ?1
              )`,
         )
-        .bind(input.accountId, input.tier, input.requestHash, input.now)
+        .bind(input.accountId, input.tier, input.requestHash, input.now, input.idempotencyKey ?? null)
         .first<{ reserved: number }>();
       return Boolean(row);
     },
@@ -166,15 +208,19 @@ export function d1BillingStore(db: D1Database) {
       tier: BillableTier;
       requestHash: string;
       stripeSessionId: string;
+      checkoutUrl?: string;
+      idempotencyKey?: string;
       now: string;
     }): Promise<boolean> {
       const result = await db
         .prepare(
           `UPDATE billing_checkout_intents AS i
            SET stripe_checkout_session_id = COALESCE(stripe_checkout_session_id, ?4),
-               finalized_at = COALESCE(finalized_at, ?5)
+               finalized_at = COALESCE(finalized_at, ?5),
+               checkout_url = COALESCE(checkout_url, ?6)
            WHERE account_id = ?1 AND tier = ?2 AND request_hash = ?3 AND expires_at > ?5
              AND (stripe_checkout_session_id IS NULL OR stripe_checkout_session_id = ?4)
+             AND (?7 IS NULL OR idempotency_key = ?7)
              AND EXISTS (SELECT 1 FROM accounts a WHERE a.id = ?1 AND a.deleted_at IS NULL)
              AND NOT EXISTS (
                SELECT 1 FROM billing_subscriptions s
@@ -184,7 +230,15 @@ export function d1BillingStore(db: D1Database) {
                SELECT 1 FROM active_owner_accounts o WHERE o.account_id = ?1
              )`,
         )
-        .bind(input.accountId, input.tier, input.requestHash, input.stripeSessionId, input.now)
+        .bind(
+          input.accountId,
+          input.tier,
+          input.requestHash,
+          input.stripeSessionId,
+          input.now,
+          input.checkoutUrl ?? null,
+          input.idempotencyKey ?? null,
+        )
         .run();
       return (result.meta.changes ?? 0) === 1;
     },
