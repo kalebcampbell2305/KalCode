@@ -1,6 +1,6 @@
 import type { Notification, NotificationPage } from "@kalcode/protocol";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { type ReactNode, StrictMode } from "react";
+import { Activity, type ReactNode, StrictMode, useLayoutEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NotificationsProvider, useNotifications } from "./NotificationsProvider.tsx";
 
@@ -59,6 +59,42 @@ function wrapper({ children }: { children: ReactNode }) {
     </StrictMode>
   );
 }
+
+function mountActivity() {
+  let visible = true;
+  const commits: ReturnType<typeof useNotifications>[] = [];
+  const view = renderHook(
+    () => {
+      const value = useNotifications();
+      useLayoutEffect(() => {
+        commits.push(value);
+      });
+      return value;
+    },
+    {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <StrictMode>
+          <Activity mode={visible ? "visible" : "hidden"}>
+            <NotificationsProvider>{children}</NotificationsProvider>
+          </Activity>
+        </StrictMode>
+      ),
+    },
+  );
+  return {
+    ...view,
+    commits,
+    hide() {
+      visible = false;
+      view.rerender();
+    },
+    show() {
+      visible = true;
+      commits.length = 0;
+      view.rerender();
+    },
+  };
+}
 beforeEach(() => {
   runtime.client = makeClient();
   runtime.events = [];
@@ -70,6 +106,77 @@ afterEach(() => {
 });
 
 describe("notification runtime lifetime", () => {
+  it("masks the prior panel, list and live announcement in the first Activity reconnect commit", async () => {
+    const view = mountActivity();
+    await waitFor(() => expect(view.result.current.state).toBe("ready"));
+    runtime.client.listNotifications.mockResolvedValue(page("live", 50, "cursor"));
+    await act(() => view.result.current.refresh());
+    act(() => view.result.current.setPanelOpen(true));
+    expect(view.result.current.latest?.id).toBe("live-0");
+    view.hide();
+    const next = deferred<NotificationPage>();
+    runtime.client.listNotifications.mockReturnValue(next.promise);
+    view.show();
+    expect(view.commits[0]).toMatchObject({
+      state: "loading",
+      error: null,
+      notifications: [],
+      unreadCount: 0,
+      hasMore: false,
+      panelOpen: false,
+      latest: null,
+    });
+    await act(async () => {
+      next.resolve(page("history"));
+    });
+    expect(view.result.current.notifications[0]?.id).toBe("history-0");
+    expect(view.result.current.latest).toBeNull();
+    runtime.client.listNotifications.mockResolvedValue(page("fresh"));
+    await act(() => view.result.current.refresh());
+    expect(view.result.current.latest?.id).toBe("fresh-0");
+    act(() => view.result.current.setPanelOpen(true));
+    expect(view.result.current.panelOpen).toBe(true);
+  });
+
+  it("does not expose a retired read error in the first Activity reconnect commit", async () => {
+    runtime.client.listNotifications.mockRejectedValue(new Error("Retired read"));
+    const view = mountActivity();
+    await waitFor(() => expect(view.result.current.state).toBe("error"));
+    view.hide();
+    runtime.client.listNotifications.mockReturnValue(new Promise(() => {}));
+    view.show();
+    expect(view.commits[0]).toMatchObject({ state: "loading", error: null });
+  });
+
+  it("retires old callback handles across Activity reconnection while current actions still work", async () => {
+    const view = mountActivity();
+    await waitFor(() => expect(view.result.current.state).toBe("ready"));
+    const retained = view.result.current;
+    view.hide();
+    view.show();
+    await waitFor(() => expect(view.result.current.state).toBe("ready"));
+    runtime.client.listNotifications.mockClear();
+    await act(async () => {
+      await retained.refresh();
+      await retained.loadMore();
+      await retained.mark(null, "dismissed");
+      await retained.open(notice("retired"));
+      retained.setPanelOpen(true);
+      retained.panelReturnFocus();
+    });
+    expect(runtime.client.listNotifications).not.toHaveBeenCalled();
+    expect(runtime.client.markNotifications).not.toHaveBeenCalled();
+    expect(intents.focus).not.toHaveBeenCalled();
+    expect(view.result.current.panelOpen).toBe(false);
+    await act(() => view.result.current.open(notice("current")));
+    expect(runtime.client.markNotifications).toHaveBeenCalledWith(["current"], "read");
+    expect(intents.focus).toHaveBeenCalledWith({
+      kind: "thread",
+      threadId: "thread-current",
+      workspaceId: "workspace-current",
+    });
+  });
+
   it("loads a replacement runtime after the previous one lacked notification commands", async () => {
     runtime.client.listNotifications.mockRejectedValue({
       category: "internal",

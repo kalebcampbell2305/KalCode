@@ -67,12 +67,15 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
   );
   const currentLifecycle = useRef(lifecycle);
   currentLifecycle.current = lifecycle;
+  const renderEpoch = lifecycle.epoch;
   const isCurrent = useCallback(
-    (epoch = lifecycle.epoch) =>
-      lifecycle.mounted && currentLifecycle.current === lifecycle && epoch === lifecycle.epoch,
-    [lifecycle],
+    (epoch = renderEpoch) => lifecycle.mounted && currentLifecycle.current === lifecycle && epoch === lifecycle.epoch,
+    [lifecycle, renderEpoch],
   );
-  const [stateOwner, setStateOwner] = useState(lifecycle);
+  const [stateOwner, setStateOwner] = useState({ lifecycle, epoch: renderEpoch });
+  // Activity preserves state while retiring effects. Hide the retired epoch before
+  // consumers reconnect, and keep callbacks from that epoch retired as well.
+  const ownsState = stateOwner.lifecycle === lifecycle && isCurrent(stateOwner.epoch);
   const [state, setState] = useState<LoadState>("loading");
   const [error, setError] = useState<KalCodeError | null>(null);
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -91,7 +94,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
     lifecycle.unavailable = false;
     lifecycle.seenSeq = null;
     lifecycle.baseline = undefined;
-    setStateOwner(lifecycle);
+    setStateOwner({ lifecycle, epoch: lifecycle.epoch });
     setState("loading");
     setError(null);
     setNotifications([]);
@@ -172,7 +175,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
 
   // The newest live notification (for the announcer): the first unread one raised after load.
   useEffect(() => {
-    if (stateOwner !== lifecycle || state !== "ready") return;
+    if (!ownsState || state !== "ready") return;
     const first = notifications[0] ?? null;
     if (lifecycle.baseline === undefined) {
       lifecycle.baseline = first ? `${first.id}@${first.updatedAt}` : null;
@@ -181,7 +184,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
     const key = first ? `${first.id}@${first.updatedAt}` : null;
     if (first && key !== lifecycle.baseline && first.readAt === null) setLatest(first);
     lifecycle.baseline = key;
-  }, [notifications, state, lifecycle, stateOwner]);
+  }, [notifications, state, lifecycle, ownsState]);
 
   const loadMore = useCallback(async () => {
     if (!isCurrent() || !cursor || lifecycle.loadingMore !== null || lifecycle.refreshing !== null) return;
@@ -270,19 +273,19 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<NotificationsValue>(
     () => ({
-      state: stateOwner === lifecycle ? state : "loading",
-      error: stateOwner === lifecycle ? error : null,
-      notifications: stateOwner === lifecycle ? notifications : [],
-      unreadCount: stateOwner === lifecycle ? unreadCount : 0,
-      hasMore: stateOwner === lifecycle && cursor !== null,
+      state: ownsState ? state : "loading",
+      error: ownsState ? error : null,
+      notifications: ownsState ? notifications : [],
+      unreadCount: ownsState ? unreadCount : 0,
+      hasMore: ownsState && cursor !== null,
       loadMore,
       refresh,
       mark,
       open,
-      panelOpen: stateOwner === lifecycle && panelOpen,
+      panelOpen: ownsState && panelOpen,
       setPanelOpen,
       panelReturnFocus,
-      latest: stateOwner === lifecycle ? latest : null,
+      latest: ownsState ? latest : null,
     }),
     [
       state,
@@ -298,8 +301,7 @@ export function NotificationsProvider({ children }: { children: ReactNode }) {
       setPanelOpen,
       panelReturnFocus,
       latest,
-      stateOwner,
-      lifecycle,
+      ownsState,
     ],
   );
   return <NotificationsContext.Provider value={value}>{children}</NotificationsContext.Provider>;
