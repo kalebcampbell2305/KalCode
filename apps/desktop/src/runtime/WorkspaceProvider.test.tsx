@@ -68,6 +68,42 @@ async function mount(initial: Awaited<ReturnType<typeof fixture>>, ready = true)
 }
 
 describe("WorkspaceProvider lifecycle", () => {
+  it("does not hold a newer native activation behind an obsolete refresh", async () => {
+    const f = await fixture();
+    const read = deferred<Workspace | null>();
+    const activate = vi.spyOn(f.client, "activateWorkspace").mockImplementation(async (id) => {
+      f.native.active = workspace(id);
+      return f.native.active;
+    });
+    const view = await mount(f);
+    vi.mocked(f.client.activeWorkspace).mockImplementation(async () =>
+      f.native.active.id === "a" ? read.promise : f.native.active,
+    );
+    let first!: Promise<boolean>;
+    let second!: Promise<boolean>;
+    act(() => {
+      first = view.result.current.activate("a");
+    });
+    await waitFor(() => expect(activate).toHaveBeenCalledWith("a"));
+    act(() => {
+      second = view.result.current.activate("b");
+    });
+    try {
+      await waitFor(() => expect(activate).toHaveBeenCalledWith("b"));
+      await act(async () => {
+        expect(await second).toBe(true);
+      });
+      expect(view.result.current.active?.id).toBe("b");
+    } finally {
+      await act(async () => {
+        read.resolve(workspace("a"));
+        await Promise.all([first, second]);
+      });
+    }
+    expect(await first).toBe(false);
+    expect(view.result.current.active?.id).toBe("b");
+  });
+
   it("serializes native activation so a slower earlier intent cannot overwrite the latest", async () => {
     const f = await fixture();
     const a = deferred<Workspace>();

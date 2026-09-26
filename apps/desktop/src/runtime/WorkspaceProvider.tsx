@@ -209,8 +209,6 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         if (!latest()) return false;
         try {
           await client.activateWorkspace(workspaceId);
-          if (!latest()) return false;
-          await refresh();
           return latest();
         } catch (err) {
           if (latest()) fail("Couldn't switch workspace", err);
@@ -221,7 +219,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         () => undefined,
         () => undefined,
       );
-      return result;
+      // Reads are outside the write queue: a slow obsolete refresh must not delay
+      // the next workspace switch. The load generation still fences its snapshot.
+      if (!(await result) || !latest()) return false;
+      await refresh();
+      return latest();
     },
     [client, refresh, fail, lifecycle, isCurrent],
   );
