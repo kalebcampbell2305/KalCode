@@ -311,7 +311,7 @@ fn quoted_assignment_findings(text: &str) -> Vec<Finding> {
         if assignment.start() < covered_until {
             continue;
         }
-        let Some((start, end)) = quoted_value(text, assignment.end()) else {
+        let Some((start, end, escape_depth)) = quoted_value(text, assignment.end()) else {
             continue;
         };
         // Do not repeatedly scan apparent assignments inside the same quoted value.
@@ -319,7 +319,7 @@ fn quoted_assignment_findings(text: &str) -> Vec<Finding> {
         let value = &text[start..end];
         if value.chars().count() < 6
             || is_already_redacted(value)
-            || is_non_secret_quoted_value(value)
+            || is_non_secret_quoted_value(value, escape_depth)
         {
             continue;
         }
@@ -342,9 +342,9 @@ fn quoted_assignment_findings(text: &str) -> Vec<Finding> {
     findings
 }
 
-fn is_non_secret_quoted_value(value: &str) -> bool {
+fn is_non_secret_quoted_value(value: &str, escape_depth: u32) -> bool {
     let value = value.trim();
-    if !value.chars().any(char::is_whitespace) {
+    if !has_quoted_whitespace(value, escape_depth) {
         return is_non_secret_value(value);
     }
     // Punctuation such as `(`, `::` or a leading `$` inside a multiword literal
@@ -357,9 +357,71 @@ fn is_non_secret_quoted_value(value: &str) -> bool {
     })
 }
 
+fn has_quoted_whitespace(value: &str, escape_depth: u32) -> bool {
+    let mut logical = std::borrow::Cow::Borrowed(value);
+    for _ in 0..escape_depth {
+        if logical.chars().any(char::is_whitespace) {
+            return true;
+        }
+        if !logical.contains('\\') {
+            return false;
+        }
+        let Ok(decoded) = serde_json::from_str::<String>(&format!("\"{logical}\"")) else {
+            return false;
+        };
+        logical = std::borrow::Cow::Owned(decoded);
+    }
+    if logical.chars().any(char::is_whitespace) {
+        return true;
+    }
+    // A tracing Debug string is itself a quoted, escaped value inside the JSON field.
+    // Decode that explicit wrapper only; a literal `\\n` is not a newline.
+    logical.starts_with('"')
+        && (serde_json::from_str::<String>(&logical)
+            .is_ok_and(|decoded| decoded.chars().any(char::is_whitespace))
+            || has_debug_whitespace(&logical))
+}
+
+fn has_debug_whitespace(value: &str) -> bool {
+    // Rust Debug can mix `\n` with `\0` or `\u{b}`, which are not JSON escapes.
+    let Some(inner) = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) else {
+        return false;
+    };
+    let mut chars = inner.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            continue;
+        }
+        match chars.next() {
+            Some('n' | 'r' | 't') => return true,
+            Some('u') if chars.next() == Some('{') => {}
+            _ => continue,
+        }
+        let mut point = 0;
+        let mut digits = 0;
+        for ch in chars.by_ref() {
+            if ch == '}' {
+                if digits > 0 && char::from_u32(point).is_some_and(char::is_whitespace) {
+                    return true;
+                }
+                break;
+            }
+            let Some(digit) = ch.to_digit(16) else {
+                break;
+            };
+            digits += 1;
+            if digits > 6 {
+                break;
+            }
+            point = point * 16 + digit;
+        }
+    }
+    false
+}
+
 /// Reads raw or JSON-escaped quotes without consuming the surrounding delimiters.
 /// Each JSON encoding doubles existing backslashes and adds one before a quote.
-fn quoted_value(text: &str, from: usize) -> Option<(usize, usize)> {
+fn quoted_value(text: &str, from: usize) -> Option<(usize, usize, u32)> {
     let bytes = text.as_bytes();
     let mut opening = from;
     while bytes.get(opening) == Some(&b'\\') {
@@ -371,12 +433,13 @@ fn quoted_value(text: &str, from: usize) -> Option<(usize, usize)> {
     }
     let delimiter_slashes = opening - from;
     let escape_period = delimiter_slashes.checked_add(1)?.checked_mul(2)?;
+    let escape_depth = (delimiter_slashes + 1).ilog2() + 1;
     let start = opening + 1;
     let mut slashes = 0;
     for (offset, &byte) in bytes[start..].iter().enumerate() {
         let at = start + offset;
         if matches!(byte, b'\n' | b'\r') {
-            return Some((start, at));
+            return Some((start, at, escape_depth));
         }
         if byte == b'\\' {
             slashes += 1;
@@ -384,16 +447,16 @@ fn quoted_value(text: &str, from: usize) -> Option<(usize, usize)> {
         }
         if byte == quote {
             if slashes % escape_period == delimiter_slashes {
-                return Some((start, at - delimiter_slashes));
+                return Some((start, at - delimiter_slashes, escape_depth));
             }
             // A less-escaped quote closes an outer string when the inner value is truncated.
             if slashes < delimiter_slashes {
-                return Some((start, at - slashes));
+                return Some((start, at - slashes, escape_depth));
             }
         }
         slashes = 0;
     }
-    Some((start, bytes.len()))
+    Some((start, bytes.len(), escape_depth))
 }
 
 /// Sorts by start and merges overlapping or touching findings. The merged finding keeps the

@@ -88,6 +88,10 @@ fn quoted_placeholder_and_ordinary_fields_remain_unchanged() {
         r#"password="[REDACTED]" region=us"#,
         r#"message="ordinary quoted words" region=us"#,
         r#"password="short" region=us"#,
+        r#"password="env::PASSWORD" region=us"#,
+        r#"password="get_password()" region=us"#,
+        r#"password="short\\nNamespace::Tail987!" region=us"#,
+        r#"password="short\\u0020Namespace::Tail987!" region=us"#,
     ] {
         assert_eq!(redact(input), input);
     }
@@ -105,6 +109,73 @@ fn punctuation_inside_a_quoted_passphrase_is_not_a_code_reference() {
         let value: serde_json::Value = serde_json::from_str(&redact(&input)).expect("valid JSON");
         assert_eq!(value["password"], "[REDACTED]");
         assert_eq!(value["region"], "us");
+    }
+}
+
+#[test]
+fn json_encoded_whitespace_does_not_hide_quoted_credentials() {
+    for password in [
+        "short\nSuffix(987)!",
+        "short\tNamespace::Tail987!",
+        "short\rSuffix(987)!",
+        "short\u{000c}Suffix(987)!",
+        "short\u{000b}Namespace::Tail987!",
+        "短い\nSuffix(987)!",
+    ] {
+        let input = serde_json::json!({ "password": password, "region": "us" }).to_string();
+        let output = redact(&input).into_owned();
+        let value: serde_json::Value = serde_json::from_str(&output).expect("valid JSON");
+        assert_eq!(value["password"], "[REDACTED]", "input: {input}");
+        assert_eq!(value["region"], "us");
+        assert_eq!(redact(&output), output);
+    }
+    // JSON serializers can also encode non-ASCII whitespace explicitly.
+    for escape in [r"\u0020", r"\u00a0", r"\u2003", r"\u2028", r"\u2029"] {
+        let input = format!(r#"{{"password":"short{escape}Suffix(987)!","region":"us"}}"#);
+        let output = redact(&input).into_owned();
+        let value: serde_json::Value = serde_json::from_str(&output).expect("valid JSON");
+        assert_eq!(value["password"], "[REDACTED]", "input: {input}");
+        assert_eq!(value["region"], "us");
+    }
+}
+
+#[test]
+fn tracing_json_sink_redacts_encoded_whitespace_credentials() {
+    let output = Buffer::default();
+    let sink = output.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_writer(RedactingMakeWriter::new(move || sink.clone()))
+        .finish();
+    tracing::subscriber::with_default(subscriber, || {
+        for password in [
+            "short\nSuffix(987)!",
+            "short\tNamespace::Tail987!",
+            "short\u{000b}Namespace::Tail987!",
+            "short\0\nSuffix(987)!",
+            "short\u{001b}\tNamespace::Tail987!",
+        ] {
+            tracing::info!(password = %password, region = "us");
+            tracing::info!(password = ?password, region = "us");
+            let body = serde_json::json!({ "password": password, "region": "us" });
+            tracing::info!(body = %body, region = "us");
+        }
+    });
+    let bytes = output.0.lock().expect("buffer lock").clone();
+    let output = String::from_utf8(bytes).expect("UTF-8 log output");
+    assert!(!output.contains("Suffix(987)!"), "{output}");
+    assert!(!output.contains("Namespace::Tail987!"), "{output}");
+    assert!(!output.contains("short"), "{output}");
+    assert_eq!(output.lines().count(), 15);
+    for line in output.lines() {
+        let value: serde_json::Value = serde_json::from_str(line).expect("valid JSON log");
+        assert!(line.contains("[REDACTED]"));
+        assert_eq!(value["fields"]["region"], "us");
+        if let Some(body) = value["fields"]["body"].as_str() {
+            let nested: serde_json::Value = serde_json::from_str(body).expect("valid nested JSON");
+            assert_eq!(nested["password"], "[REDACTED]");
+            assert_eq!(nested["region"], "us");
+        }
     }
 }
 
