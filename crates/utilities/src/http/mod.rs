@@ -467,8 +467,8 @@ impl PreparedHttpEffect {
 }
 
 pub enum ApprovedHttpOutcome {
-    Completed(HttpResponseView),
-    Redirect(PreparedHttpResolution),
+    Completed(Box<HttpResponseView>),
+    Redirect(Box<PreparedHttpResolution>),
 }
 
 impl HttpSession {
@@ -703,14 +703,16 @@ impl HttpSession {
             effect.entry.destination = Some(hop.destination);
             effect.entry.elapsed_ms = crate::elapsed_ms(effect.started);
             self.record(effect.entry.clone());
-            return Ok(ApprovedHttpOutcome::Redirect(PreparedHttpResolution {
-                prepared: effect.prepared.clone(),
-                follow_redirects: effect.follow_redirects,
-                redirects: effect.redirects.clone(),
-                resolve_total_ms: effect.resolve_total_ms,
-                entry: effect.entry.clone(),
-                started: effect.started,
-            }));
+            return Ok(ApprovedHttpOutcome::Redirect(Box::new(
+                PreparedHttpResolution {
+                    prepared: effect.prepared.clone(),
+                    follow_redirects: effect.follow_redirects,
+                    redirects: effect.redirects.clone(),
+                    resolve_total_ms: effect.resolve_total_ms,
+                    entry: effect.entry.clone(),
+                    started: effect.started,
+                },
+            )));
         }
         let mut response = view(
             hop,
@@ -724,7 +726,7 @@ impl HttpSession {
         effect.entry.destination = Some(response.destination);
         effect.entry.elapsed_ms = crate::elapsed_ms(effect.started);
         self.record(effect.entry.clone());
-        Ok(ApprovedHttpOutcome::Completed(response))
+        Ok(ApprovedHttpOutcome::Completed(Box::new(response)))
     }
 
     /// Sends `spec` through `gate` (steps 1–5 for the request and every redirect it follows).

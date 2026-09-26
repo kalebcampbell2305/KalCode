@@ -734,10 +734,12 @@ pub async fn utility_effect_continue(
                         .execute_approved(prepared, &EngineGate { hub: &hub })?
                     {
                         ApprovedHttpOutcome::Completed(response) => {
-                            Ok(UtilityEffectOutcome::HttpCompleted { response })
+                            Ok(UtilityEffectOutcome::HttpCompleted {
+                                response: *response,
+                            })
                         }
                         ApprovedHttpOutcome::Redirect(next) => {
-                            seal_http_resolution(&hub, next, generation)
+                            seal_http_resolution(&hub, *next, generation)
                         }
                     }
                 }

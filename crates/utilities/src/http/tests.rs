@@ -359,7 +359,7 @@ fn approved_effect_contacts_only_one_pinned_hop_before_fresh_authority() {
         "a redirect must not resolve before its fresh DNS authority"
     );
     let second_effect = session
-        .resolve_approved(second_resolution)
+        .resolve_approved(*second_resolution)
         .expect("second approved resolution");
     assert_eq!(dns_calls.load(Ordering::SeqCst), 1);
     assert_eq!(

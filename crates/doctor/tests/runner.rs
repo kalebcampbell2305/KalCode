@@ -9,8 +9,8 @@ use kalcode_doctor::context::{Budget, HostFacts, RunContext};
 use kalcode_doctor::runner::Runner;
 use kalcode_doctor::{CheckStatus, DoctorArea, RunStatus};
 
-fn context(timeout: Duration) -> (tempfile::TempDir, Arc<RunContext>) {
-    let dir = tempfile::tempdir().expect("dir");
+fn context(timeout: Duration) -> std::io::Result<(tempfile::TempDir, Arc<RunContext>)> {
+    let dir = tempfile::tempdir()?;
     let core = common::core(dir.path());
     let ctx = RunContext::new(
         core,
@@ -26,12 +26,12 @@ fn context(timeout: Duration) -> (tempfile::TempDir, Arc<RunContext>) {
         None,
         Budget::new(timeout),
     );
-    (dir, Arc::new(ctx))
+    Ok((dir, Arc::new(ctx)))
 }
 
 #[test]
 fn panics_and_timeouts_are_isolated_as_could_not_check() {
-    let (_dir, ctx) = context(Duration::from_secs(1));
+    let (_dir, ctx) = context(Duration::from_secs(1)).expect("context");
     let plan = vec![
         def("test.ok", DoctorArea::System, "OK", |_| {
             CheckOutput::passed("OK")
@@ -82,7 +82,7 @@ fn panics_and_timeouts_are_isolated_as_could_not_check() {
 
 #[test]
 fn cancellation_marks_unfinished_checks_and_returns_promptly() {
-    let (_dir, ctx) = context(Duration::from_secs(5));
+    let (_dir, ctx) = context(Duration::from_secs(5)).expect("context");
     let token = ctx.budget.clone();
     let plan = vec![def("test.wait", DoctorArea::System, "Wait", |ctx| {
         while !ctx.budget.should_stop() {
@@ -100,7 +100,7 @@ fn cancellation_marks_unfinished_checks_and_returns_promptly() {
 
 #[test]
 fn runner_refuses_an_unbounded_dynamic_plan() {
-    let (_dir, ctx) = context(Duration::from_secs(1));
+    let (_dir, ctx) = context(Duration::from_secs(1)).expect("context");
     let plan = (0..9)
         .map(|n| {
             def(format!("test.{n}"), DoctorArea::System, "x", |_| {
@@ -116,7 +116,7 @@ fn runner_refuses_an_unbounded_dynamic_plan() {
 
 #[test]
 fn progress_reports_each_terminal_check_without_publishing_partial_findings() {
-    let (_dir, ctx) = context(Duration::from_secs(1));
+    let (_dir, ctx) = context(Duration::from_secs(1)).expect("context");
     let plan = vec![
         def("test.one", DoctorArea::System, "One", |_| {
             CheckOutput::passed("OK")

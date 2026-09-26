@@ -321,6 +321,7 @@ export type { TranslationPlan } from "./TranslationPlan.ts";
 export type { TransportProtocol } from "./TransportProtocol.ts";
 export type { UiDirective } from "./UiDirective.ts";
 export type { Usage } from "./Usage.ts";
+export type { UtilityEffectOutcome } from "./UtilityEffectOutcome.ts";
 export type { UtilityHttpDestination } from "./UtilityHttpDestination.ts";
 export type { UtilityHttpMethod } from "./UtilityHttpMethod.ts";
 export type { UtilitySqliteOperation } from "./UtilitySqliteOperation.ts";

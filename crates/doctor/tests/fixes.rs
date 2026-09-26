@@ -18,7 +18,10 @@ struct Gate {
 
 impl FixGate for Gate {
     fn request(&self, action: NormalizedAction) -> Result<GateDecision, String> {
-        self.requested.lock().unwrap().push(action);
+        self.requested
+            .lock()
+            .map_err(|_| "test requested-actions lock poisoned".to_owned())?
+            .push(action);
         Ok(GateDecision::Asked {
             approval_id: new_id(),
         })
@@ -29,7 +32,12 @@ impl FixGate for Gate {
         approval_id: &str,
         action: &NormalizedAction,
     ) -> Result<GateDecision, String> {
-        match self.approved.lock().unwrap().as_ref() {
+        match self
+            .approved
+            .lock()
+            .map_err(|_| "test approvals lock poisoned".to_owned())?
+            .as_ref()
+        {
             Some((id, expected)) if id == approval_id && expected == action => {
                 Ok(GateDecision::Allowed)
             }
