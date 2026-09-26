@@ -611,53 +611,79 @@ export function d1AccountStore(db: D1Database) {
         return false;
       }
       const redactedEmail = `${input.accountId}@deleted.invalid`;
-      const [account] = await db.batch([
+      // Claim fresh proof in the same transaction as every destructive write. A timestamp
+      // cannot fence concurrent attempts: two requests can have the same `now` value.
+      const [, account] = await db.batch([
         db
           .prepare(
-            `UPDATE accounts SET email = ?3, deleted_at = ?2, activated_at = NULL
-             WHERE id = ?1 AND deleted_at IS NULL
+            `UPDATE email_signin_attempts
+             SET verified_at = COALESCE(verified_at, ?3), consumed_at = ?3, consume_nonce = ?4
+             WHERE verify_hash = ?1 AND account_id = ?2 AND purpose = 'delete'
+               AND client_kind = 'website' AND consumed_at IS NULL AND expires_at > ?3
+               AND EXISTS (
+                 SELECT 1 FROM accounts
+                 WHERE id = ?2 AND deleted_at IS NULL AND email = email_signin_attempts.email
+               )
                AND NOT EXISTS (
                  SELECT 1 FROM billing_subscriptions
-                 WHERE account_id = ?1 AND status NOT IN ('canceled', 'incomplete_expired')
+                 WHERE account_id = ?2 AND status NOT IN ('canceled', 'incomplete_expired')
                )
                AND NOT EXISTS (
                  SELECT 1 FROM entitlement_grants
-                 WHERE account_id = ?1 AND tier = 'owner' AND revoked_at IS NULL
+                 WHERE account_id = ?2 AND tier = 'owner' AND revoked_at IS NULL
                )
                AND NOT EXISTS (
                  SELECT 1 FROM billing_checkout_intents
-                 WHERE account_id = ?1 AND expires_at > ?2
+                 WHERE account_id = ?2 AND expires_at > ?3
                )`,
-          )
-          .bind(input.accountId, input.now, redactedEmail),
-        db
-          .prepare(
-            `UPDATE account_sessions SET revoked_at = ?2
-             WHERE account_id = ?1 AND revoked_at IS NULL
-               AND EXISTS (SELECT 1 FROM accounts WHERE id = ?1 AND deleted_at = ?2)`,
-          )
-          .bind(input.accountId, input.now),
-        db
-          .prepare(
-            `UPDATE email_signin_attempts SET verified_at = COALESCE(verified_at, ?3), consumed_at = ?3, consume_nonce = ?4
-             WHERE verify_hash = ?1 AND account_id = ?2 AND purpose = 'delete' AND consumed_at IS NULL
-               AND EXISTS (SELECT 1 FROM accounts WHERE id = ?2 AND deleted_at = ?3)`,
           )
           .bind(input.verifyHash, input.accountId, input.now, input.consumeNonce),
         db
           .prepare(
-            `DELETE FROM email_signin_attempts
-             WHERE email = ?3
-               AND EXISTS (SELECT 1 FROM accounts WHERE id = ?1 AND deleted_at = ?2)`,
+            `UPDATE accounts SET email = ?3, deleted_at = ?2, activated_at = NULL
+             WHERE id = ?1 AND deleted_at IS NULL
+               AND EXISTS (
+                 SELECT 1 FROM email_signin_attempts
+                 WHERE verify_hash = ?4 AND account_id = ?1 AND consume_nonce = ?5
+               )`,
           )
-          .bind(input.accountId, input.now, attempt.email),
+          .bind(input.accountId, input.now, redactedEmail, input.verifyHash, input.consumeNonce),
+        db
+          .prepare(
+            `UPDATE account_sessions SET revoked_at = ?2
+             WHERE account_id = ?1 AND revoked_at IS NULL
+               AND EXISTS (
+                 SELECT 1 FROM email_signin_attempts
+                 WHERE verify_hash = ?3 AND account_id = ?1 AND consume_nonce = ?4
+               )`,
+          )
+          .bind(input.accountId, input.now, input.verifyHash, input.consumeNonce),
         db
           .prepare(
             `INSERT INTO audit_log (occurred_at, actor, action, account_id, details)
              SELECT ?2, 'account', 'account.deleted', ?1, json_object('mode', 'soft-delete')
-             WHERE EXISTS (SELECT 1 FROM accounts WHERE id = ?1 AND deleted_at = ?2)`,
+             WHERE EXISTS (
+               SELECT 1 FROM email_signin_attempts
+               WHERE verify_hash = ?3 AND account_id = ?1 AND consume_nonce = ?4
+             )`,
           )
-          .bind(input.accountId, input.now),
+          .bind(input.accountId, input.now, input.verifyHash, input.consumeNonce),
+        db
+          .prepare(
+            `DELETE FROM email_signin_attempts
+             WHERE email = ?3 AND verify_hash <> ?2
+               AND EXISTS (
+                 SELECT 1 FROM email_signin_attempts proof
+                 WHERE proof.verify_hash = ?2 AND proof.account_id = ?1 AND proof.consume_nonce = ?4
+               )`,
+          )
+          .bind(input.accountId, input.verifyHash, attempt.email, input.consumeNonce),
+        db
+          .prepare(
+            `DELETE FROM email_signin_attempts
+             WHERE verify_hash = ?1 AND account_id = ?2 AND consume_nonce = ?3`,
+          )
+          .bind(input.verifyHash, input.accountId, input.consumeNonce),
       ]);
       return (account?.meta.changes ?? 0) === 1;
     },
