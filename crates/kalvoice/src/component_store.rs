@@ -37,7 +37,6 @@ const STORAGE_ADMISSION_MARGIN: u64 = 64 * 1024 * 1024;
 const PRIVATE_COMPONENT_ROOT: &str = "kalvoice-components";
 const POINTER_PRIMARY: &str = "current.json";
 const POINTER_BACKUP: &str = "current.backup.json";
-const POINTER_PREPARED: &str = "current.next.json";
 
 pub const LOCAL_REASONING_RUNTIME_ID: &str = "kalvoice.runtime.llama-cpp";
 pub const LOCAL_REASONING_MODEL_ID: &str = "kalvoice.reasoner.qwen3-5-0-8b-q8";
@@ -282,14 +281,18 @@ impl TrustedComponentDirectory {
         if !safe_store_directory(&metadata) {
             return Err(ComponentStoreError::UnsafeStorage);
         }
+        // Anchor the caller's final path without following links before canonicalization.
+        // A final-entry replacement must not turn a rejected link into a trusted target.
+        let anchor = open_directory_anchor(path)?;
+        let identity = directory_identity(&anchor)?;
         let canonical = fs::canonicalize(path).map_err(storage)?;
         let canonical_metadata = fs::symlink_metadata(&canonical).map_err(storage)?;
         if !safe_store_directory(&canonical_metadata) {
             return Err(ComponentStoreError::UnsafeStorage);
         }
-        let anchor = open_directory_anchor(&canonical)?;
-        let identity = directory_identity(&anchor)?;
-        if !same_directory(&canonical, &anchor, identity, true)? {
+        if !same_directory(path, &anchor, identity, true)?
+            || !same_directory(&canonical, &anchor, identity, true)?
+        {
             return Err(ComponentStoreError::UnsafeStorage);
         }
         Ok(Self {
@@ -347,14 +350,16 @@ impl AppDataDirectory {
         if !safe_app_data_directory(&metadata) {
             return Err(ComponentStoreError::UnsafeStorage);
         }
+        let anchor = open_directory_anchor(path)?;
+        let identity = directory_identity(&anchor)?;
         let canonical = fs::canonicalize(path).map_err(storage)?;
         let canonical_metadata = fs::symlink_metadata(&canonical).map_err(storage)?;
         if !safe_app_data_directory(&canonical_metadata) {
             return Err(ComponentStoreError::UnsafeStorage);
         }
-        let anchor = open_directory_anchor(&canonical)?;
-        let identity = directory_identity(&anchor)?;
-        if !same_directory(&canonical, &anchor, identity, false)? {
+        if !same_directory(path, &anchor, identity, false)?
+            || !same_directory(&canonical, &anchor, identity, false)?
+        {
             return Err(ComponentStoreError::UnsafeStorage);
         }
         Ok(Self {
@@ -1187,9 +1192,170 @@ fn open_lock_file(path: &Path) -> Result<File, ComponentStoreError> {
 fn safe_store_directory(metadata: &fs::Metadata) -> bool {
     use std::os::unix::fs::PermissionsExt as _;
 
+    safe_app_data_directory(metadata) && metadata.permissions().mode() & 0o077 == 0
+}
+
+#[cfg(unix)]
+#[allow(unsafe_code)]
+fn effective_user_id() -> u32 {
+    // SAFETY: geteuid takes no arguments and has no memory safety preconditions.
+    unsafe { libc::geteuid() }
+}
+
+#[cfg(unix)]
+fn safe_app_data_directory(metadata: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
     metadata.is_dir()
         && !metadata.file_type().is_symlink()
-        && metadata.permissions().mode() & 0o077 == 0
+        && metadata.uid() == effective_user_id()
+        && metadata.mode() & 0o022 == 0
+}
+
+#[cfg(windows)]
+fn safe_app_data_directory(metadata: &fs::Metadata) -> bool {
+    // Windows ownership/privacy derives from the platform's per-user app-data ACL;
+    // std::fs metadata cannot represent ACLs. Never follow directory reparse points.
+    safe_store_directory(metadata)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn safe_app_data_directory(_metadata: &fs::Metadata) -> bool {
+    false
+}
+
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DirectoryIdentity {
+    device: u64,
+    inode: u64,
+}
+
+#[cfg(windows)]
+type DirectoryIdentity = WindowsLockIdentity;
+
+#[cfg(not(any(unix, windows)))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DirectoryIdentity;
+
+#[cfg(unix)]
+fn open_directory_anchor(path: &Path) -> Result<File, ComponentStoreError> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(storage)
+}
+
+#[cfg(windows)]
+fn open_directory_anchor(path: &Path) -> Result<File, ComponentStoreError> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+
+    OpenOptions::new()
+        .read(true)
+        // Retain this directory against deletion/renaming for the capability lifetime.
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+        .map_err(storage)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_directory_anchor(_path: &Path) -> Result<File, ComponentStoreError> {
+    Err(ComponentStoreError::UnsafeStorage)
+}
+
+#[cfg(unix)]
+fn directory_identity(file: &File) -> Result<DirectoryIdentity, ComponentStoreError> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let metadata = file.metadata().map_err(storage)?;
+    if !safe_app_data_directory(&metadata) {
+        return Err(ComponentStoreError::UnsafeStorage);
+    }
+    Ok(DirectoryIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+    })
+}
+
+#[cfg(windows)]
+fn directory_identity(file: &File) -> Result<DirectoryIdentity, ComponentStoreError> {
+    if !safe_app_data_directory(&file.metadata().map_err(storage)?) {
+        return Err(ComponentStoreError::UnsafeStorage);
+    }
+    windows_lock_identity(file)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn directory_identity(_file: &File) -> Result<DirectoryIdentity, ComponentStoreError> {
+    Err(ComponentStoreError::UnsafeStorage)
+}
+
+fn same_directory(
+    path: &Path,
+    anchor: &File,
+    identity: DirectoryIdentity,
+    private: bool,
+) -> Result<bool, ComponentStoreError> {
+    let safe = if private {
+        safe_store_directory
+    } else {
+        safe_app_data_directory
+    };
+    if !safe(&fs::symlink_metadata(path).map_err(storage)?)
+        || !safe(&anchor.metadata().map_err(storage)?)
+        || directory_identity(anchor)? != identity
+    {
+        return Ok(false);
+    }
+    let current = open_directory_anchor(path)?;
+    Ok(safe(&current.metadata().map_err(storage)?) && directory_identity(&current)? == identity)
+}
+
+#[cfg(any(unix, windows))]
+fn create_private_directory(path: &Path) -> Result<bool, ComponentStoreError> {
+    #[cfg(unix)]
+    let builder = {
+        use std::os::unix::fs::DirBuilderExt as _;
+        let mut builder = fs::DirBuilder::new();
+        builder.mode(0o700);
+        builder
+    };
+    #[cfg(windows)]
+    let builder = fs::DirBuilder::new();
+    match builder.create(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(false),
+        Err(error) => Err(storage(error)),
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn create_private_directory(_path: &Path) -> Result<bool, ComponentStoreError> {
+    Err(ComponentStoreError::UnsafeStorage)
+}
+
+#[cfg(unix)]
+fn sync_directory(path: &Path) -> Result<(), ComponentStoreError> {
+    open_directory_anchor(path)?.sync_all().map_err(storage)
+}
+
+#[cfg(windows)]
+fn sync_directory(_path: &Path) -> Result<(), ComponentStoreError> {
+    // Windows has no portable directory fsync equivalent. Artifact/receipt file handles are
+    // flushed separately; any absent or incomplete directory state is rejected on recovery.
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn sync_directory(_path: &Path) -> Result<(), ComponentStoreError> {
+    Err(ComponentStoreError::UnsafeStorage)
 }
 
 #[cfg(windows)]
@@ -1205,25 +1371,6 @@ fn safe_store_directory(metadata: &fs::Metadata) -> bool {
 #[cfg(not(any(unix, windows)))]
 fn safe_store_directory(_metadata: &fs::Metadata) -> bool {
     false
-}
-
-#[cfg(unix)]
-fn protect_store_directory(path: &Path) -> Result<(), ComponentStoreError> {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(storage)
-}
-
-#[cfg(windows)]
-fn protect_store_directory(_path: &Path) -> Result<(), ComponentStoreError> {
-    // The platform app-data initializer owns the per-user ACL. This layer rejects directory
-    // reparse points and creates only direct children of that pre-existing authority.
-    Ok(())
-}
-
-#[cfg(not(any(unix, windows)))]
-fn protect_store_directory(_path: &Path) -> Result<(), ComponentStoreError> {
-    Err(ComponentStoreError::UnsafeStorage)
 }
 
 #[cfg(unix)]
@@ -1821,8 +1968,8 @@ fn valid_revision_name(value: &str) -> bool {
 }
 
 fn read_pointer(track: &Path) -> Result<Option<Pointer>, ComponentStoreError> {
-    let primary = track.join("current.json");
-    let backup = track.join("current.backup.json");
+    let primary = track.join(POINTER_PRIMARY);
+    let backup = track.join(POINTER_BACKUP);
     let path = if primary.exists() {
         primary
     } else if backup.exists() {
@@ -1845,8 +1992,8 @@ fn read_pointer(track: &Path) -> Result<Option<Pointer>, ComponentStoreError> {
 }
 
 fn replace_pointer(track: &Path, pointer: &Pointer) -> Result<(), ComponentStoreError> {
-    let primary = track.join("current.json");
-    let backup = track.join("current.backup.json");
+    let primary = track.join(POINTER_PRIMARY);
+    let backup = track.join(POINTER_BACKUP);
     let next = track.join(format!("current.{}.next", Uuid::now_v7().simple()));
     write_json_synced(&next, pointer)?;
     if backup.exists() {

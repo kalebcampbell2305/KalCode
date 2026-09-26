@@ -12,6 +12,129 @@ const NOW: i64 = 1_790_000_000;
 const KEY_ID: &str = "component-2026-1";
 
 #[test]
+fn private_directory_creation_preserves_existing_authority() {
+    let temp = TempDir::new().expect("app data fixture");
+    let root = TrustedComponentDirectory::create_private_root_under_app_data(temp.path())
+        .expect("private root");
+    let child = root
+        .create_private_child("retained")
+        .expect("private child");
+    root.verify().expect("retained root");
+    child.verify().expect("retained child");
+    let reopened = TrustedComponentDirectory::open_existing(child.path()).expect("reopen");
+    assert_eq!(child.identity, reopened.identity);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        let metadata = fs::symlink_metadata(child.path()).expect("child metadata");
+        assert_eq!(metadata.mode() & 0o777, 0o700);
+        assert_eq!(metadata.uid(), effective_user_id());
+    }
+}
+
+#[test]
+fn retained_directory_rejects_or_prevents_path_replacement() {
+    let temp = TempDir::new().expect("fixture");
+    let original = temp.path().join("original");
+    let directory = test_directory(&original);
+    let displaced = temp.path().join("displaced");
+    match fs::rename(&original, &displaced) {
+        Ok(()) => {
+            let replacement = test_directory(&original);
+            assert_ne!(directory.identity, replacement.identity);
+            assert!(directory.verify().is_err());
+            assert!(directory.create_private_child("must-not-exist").is_err());
+            assert!(!original.join("must-not-exist").exists());
+        }
+        Err(error) => {
+            // Windows directory anchors deliberately omit FILE_SHARE_DELETE.
+            #[cfg(windows)]
+            assert!(
+                matches!(error.raw_os_error(), Some(5 | 32)),
+                "expected access denied or sharing violation, got {error}"
+            );
+            #[cfg(not(windows))]
+            panic!("directory rename fixture failed: {error}");
+            directory.verify().expect("original remains retained");
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn private_directory_validation_rejects_permission_changes_without_repairing_them() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let temp = TempDir::new().expect("fixture");
+    let root =
+        TrustedComponentDirectory::create_private_root_under_app_data(temp.path()).expect("root");
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o755)).expect("broaden mode");
+    assert!(root.verify().is_err());
+    assert!(TrustedComponentDirectory::create_private_root_under_app_data(temp.path()).is_err());
+    assert_eq!(
+        fs::metadata(root.path())
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o755
+    );
+}
+
+#[cfg(unix)]
+#[test]
+#[allow(unsafe_code)]
+fn app_data_rejects_group_write_and_foreign_ownership() {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+    let temp = TempDir::new().expect("fixture");
+    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o775)).expect("group write");
+    assert!(TrustedComponentDirectory::create_private_root_under_app_data(temp.path()).is_err());
+    assert!(!temp.path().join(PRIVATE_COMPONENT_ROOT).exists());
+    let root = fs::symlink_metadata("/").expect("root metadata");
+    if root.uid() != effective_user_id() {
+        assert!(!safe_app_data_directory(&root));
+    } else {
+        use std::os::unix::ffi::OsStrExt as _;
+        let foreign = temp.path().join("foreign");
+        fs::create_dir(&foreign).expect("foreign fixture");
+        fs::set_permissions(&foreign, fs::Permissions::from_mode(0o700)).expect("private mode");
+        let path = std::ffi::CString::new(foreign.as_os_str().as_bytes()).expect("fixture path");
+        // SAFETY: the C string is live and NUL-terminated. Only this temporary fixture changes
+        // ownership, and this branch runs with the root uid that can perform the operation.
+        assert_eq!(unsafe { libc::chown(path.as_ptr(), 1, !0) }, 0);
+        let metadata = fs::symlink_metadata(&foreign).expect("foreign metadata");
+        assert!(!safe_app_data_directory(&metadata));
+        assert!(!safe_store_directory(&metadata));
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn private_directory_rejects_junctions_without_touching_target() {
+    use std::os::windows::process::CommandExt as _;
+    let temp = TempDir::new().expect("fixture");
+    let outside = temp.path().join("outside");
+    fs::create_dir(&outside).expect("outside");
+    let linked = temp.path().join("junction");
+    let output = std::process::Command::new("cmd.exe")
+        .args(["/C", "mklink", "/J"])
+        .arg(&linked)
+        .arg(&outside)
+        .creation_flags(0x0800_0000)
+        .output()
+        .expect("headless junction fixture");
+    assert!(output.status.success(), "junction creation failed");
+    assert!(TrustedComponentDirectory::open_existing(&linked).is_err());
+    assert!(TrustedComponentDirectory::create_private_root_under_app_data(&linked).is_err());
+    assert!(
+        fs::read_dir(&outside)
+            .expect("outside entries")
+            .next()
+            .is_none()
+    );
+    fs::remove_dir(&linked).expect("remove junction only");
+}
+
+#[test]
 fn production_runtime_policy_uses_a_stable_monotonic_component_track() {
     assert_eq!(
         LLAMA_B11146_WINDOWS_CPU_POLICY.component_id,
