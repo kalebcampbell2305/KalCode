@@ -73,12 +73,16 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const requestFocus = useCallback((terminalId: string) => setFocusRequest((f) => ({ terminalId, n: f.n + 1 })), []);
   const lastSize = useRef<TerminalSize>({ cols: 120, rows: 30 });
   const lifecycle = useMemo(
-    () => ({ client, mounted: false, generation: 0, activation: 0, tail: Promise.resolve() }),
+    () => ({ client, mounted: false, epoch: 0, pickers: 0, generation: 0, activation: 0, tail: Promise.resolve() }),
     [client],
   );
   const currentLifecycle = useRef(lifecycle);
   currentLifecycle.current = lifecycle;
   const isCurrent = useCallback(() => lifecycle.mounted && currentLifecycle.current === lifecycle, [lifecycle]);
+  const captureLifetime = useCallback(() => {
+    const epoch = lifecycle.epoch;
+    return () => isCurrent() && lifecycle.epoch === epoch;
+  }, [lifecycle, isCurrent]);
 
   useEffect(() => {
     lifecycle.mounted = true;
@@ -86,8 +90,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     setShells([]);
     setSelected(null);
     setFocusRequest({ terminalId: "", n: 0 });
+    setPicking(false);
     return () => {
       lifecycle.mounted = false;
+      lifecycle.epoch += 1;
+      lifecycle.pickers = 0;
       lifecycle.generation += 1;
       lifecycle.activation += 1;
     };
@@ -185,18 +192,25 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   );
 
   const openFolder = useCallback(async () => {
+    const current = captureLifetime();
+    if (!current()) return null;
+    lifecycle.pickers += 1;
     setPicking(true);
     try {
       const workspace = await client.openWorkspaceDialog();
+      if (!current()) return null;
       if (workspace) await refresh();
-      return workspace;
+      return current() ? workspace : null;
     } catch (err) {
-      fail("Couldn't open that folder", err);
+      if (current()) fail("Couldn't open that folder", err);
       return null;
     } finally {
-      setPicking(false);
+      if (current()) {
+        lifecycle.pickers -= 1;
+        setPicking(lifecycle.pickers > 0);
+      }
     }
-  }, [client, refresh, fail]);
+  }, [client, refresh, fail, lifecycle, captureLifetime]);
 
   const activate = useCallback(
     async (workspaceId: string) => {
@@ -230,9 +244,13 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
 
   const remove = useCallback(
     async (workspace: Workspace) => {
+      const current = captureLifetime();
+      if (!current()) return false;
       try {
         await client.removeWorkspace(workspace.id);
+        if (!current()) return false;
         await refresh();
+        if (!current()) return false;
         toast.show({
           tone: "success",
           title: `${workspace.name} removed from KalCode`,
@@ -240,72 +258,81 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         });
         return true;
       } catch (err) {
-        fail("Couldn't remove workspace", err);
+        if (current()) fail("Couldn't remove workspace", err);
         return false;
       }
     },
-    [client, refresh, fail, toast],
+    [client, refresh, fail, toast, captureLifetime],
   );
 
   const selectTerminal = useCallback(
     (terminalId: string, focus = false, workspaceId: string | undefined = active?.id) => {
-      if (!workspaceId) return;
+      if (!isCurrent() || !workspaceId) return;
       setSelected({ workspaceId, terminalId });
       if (focus) requestFocus(terminalId);
       // Remembered natively so the same tab is in front after a restart.
       client.setActiveTerminal(workspaceId, terminalId).catch(() => undefined);
     },
-    [client, active, requestFocus],
+    [client, active, requestFocus, isCurrent],
   );
 
   const createTerminal = useCallback(
     async (shellId: string | null = null) => {
-      if (!active) return null;
+      const current = captureLifetime();
+      if (!current() || !active) return null;
       try {
         const terminal = await client.createTerminal(active.id, shellId, lastSize.current);
+        if (!current()) return null;
         setSelected({ workspaceId: active.id, terminalId: terminal.id });
         requestFocus(terminal.id);
         await refresh();
-        return terminal;
+        return current() ? terminal : null;
       } catch (err) {
-        fail("Couldn't start a terminal", err);
+        if (current()) fail("Couldn't start a terminal", err);
         return null;
       }
     },
-    [client, active, refresh, fail, requestFocus],
+    [client, active, refresh, fail, requestFocus, captureLifetime],
   );
 
   const closeTerminal = useCallback(
     async (terminalId: string) => {
+      const current = captureLifetime();
+      if (!current()) return;
       // The neighbouring tab comes to the front when the tab in front closes.
       const next = neighbourAfterClose(snapshot.terminals, terminalId);
       if (active && terminalId === activeTerminalId && next) setSelected({ workspaceId: active.id, terminalId: next });
       try {
         await client.closeTerminal(terminalId);
       } catch (err) {
-        fail("Couldn't close the terminal", err);
+        if (current()) fail("Couldn't close the terminal", err);
       }
-      await refresh();
+      if (current()) await refresh();
     },
-    [client, refresh, fail, snapshot.terminals, active, activeTerminalId],
+    [client, refresh, fail, snapshot.terminals, active, activeTerminalId, captureLifetime],
   );
 
   const restartTerminal = useCallback(
     async (terminalId: string) => {
+      const current = captureLifetime();
+      if (!current()) return null;
       try {
         const terminal = await client.restartTerminal(terminalId, lastSize.current);
+        if (!current()) return null;
         requestFocus(terminal.id);
         await refresh();
-        return terminal;
+        return current() ? terminal : null;
       } catch (err) {
-        fail("Couldn't restart the terminal", err);
+        if (current()) fail("Couldn't restart the terminal", err);
         return null;
       }
     },
-    [client, refresh, fail, requestFocus],
+    [client, refresh, fail, requestFocus, captureLifetime],
   );
 
-  const retry = useCallback(() => setAttempt((n) => n + 1), []);
+  const retry = useCallback(() => {
+    if (isCurrent()) setAttempt((n) => n + 1);
+  }, [isCurrent]);
 
   const value = useMemo<WorkspaceValue>(
     () => ({

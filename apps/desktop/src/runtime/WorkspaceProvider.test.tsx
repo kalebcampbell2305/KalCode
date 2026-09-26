@@ -1,12 +1,12 @@
-import type { ShellOption, Workspace } from "@kalcode/protocol";
+import type { ShellOption, TerminalInfo, Workspace } from "@kalcode/protocol";
 import { ToastProvider } from "@kalcode/ui/components";
 import { act, renderHook, screen, waitFor } from "@testing-library/react";
-import { type ReactNode, StrictMode } from "react";
+import { Activity, type ReactNode, StrictMode } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { KalCodeClient } from "../ipc/client.ts";
 import { createMemoryTransport } from "../ipc/memoryTransport.ts";
 import { RuntimeProvider } from "./RuntimeProvider.tsx";
-import { useWorkspaces, WorkspaceProvider } from "./WorkspaceProvider.tsx";
+import { useWorkspaces, WorkspaceProvider, type WorkspaceValue } from "./WorkspaceProvider.tsx";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -31,6 +31,57 @@ function workspace(id: string): Workspace {
   };
 }
 
+const terminal: TerminalInfo = {
+  id: "created",
+  workspaceId: "old",
+  shellId: "sh",
+  title: "Shell",
+  position: 0,
+  status: "running",
+  startedAt: null,
+  endedAt: null,
+  exitCode: null,
+};
+const actions = ["openFolder", "createTerminal", "restartTerminal", "remove", "closeTerminal"] as const;
+type Action = (typeof actions)[number];
+function dispatch(value: WorkspaceValue, action: Action) {
+  switch (action) {
+    case "openFolder":
+      return value.openFolder();
+    case "createTerminal":
+      return value.createTerminal();
+    case "restartTerminal":
+      return value.restartTerminal("old-terminal");
+    case "remove":
+      return value.remove(workspace("old"));
+    case "closeTerminal":
+      return value.closeTerminal("old-terminal");
+  }
+}
+function mockActions(client: KalCodeClient, gate = Promise.resolve()) {
+  return [
+    vi.spyOn(client, "openWorkspaceDialog").mockImplementation(async () => {
+      await gate;
+      return workspace("old");
+    }),
+    vi.spyOn(client, "createTerminal").mockImplementation(async () => {
+      await gate;
+      return terminal;
+    }),
+    vi.spyOn(client, "restartTerminal").mockImplementation(async () => {
+      await gate;
+      return terminal;
+    }),
+    vi.spyOn(client, "removeWorkspace").mockImplementation(async () => {
+      await gate;
+    }),
+    vi.spyOn(client, "closeTerminal").mockImplementation(async () => {
+      await gate;
+    }),
+    vi.spyOn(client, "setActiveTerminal").mockResolvedValue(undefined),
+  ];
+}
+
 async function fixture(id = "initial") {
   const client = new KalCodeClient(createMemoryTransport("default"));
   const boot = await client.boot();
@@ -46,12 +97,15 @@ async function fixture(id = "initial") {
 
 async function mount(initial: Awaited<ReturnType<typeof fixture>>, ready = true) {
   let current = initial;
+  let visible = true;
   const view = renderHook(useWorkspaces, {
     wrapper: ({ children }: { children: ReactNode }) => (
       <StrictMode>
         <ToastProvider>
           <RuntimeProvider client={current.client} info={current.boot.info} initialSettings={current.settings}>
-            <WorkspaceProvider>{children}</WorkspaceProvider>
+            <Activity mode={visible ? "visible" : "hidden"}>
+              <WorkspaceProvider>{children}</WorkspaceProvider>
+            </Activity>
           </RuntimeProvider>
         </ToastProvider>
       </StrictMode>
@@ -64,10 +118,196 @@ async function mount(initial: Awaited<ReturnType<typeof fixture>>, ready = true)
       current = next;
       view.rerender();
     },
+    setVisible(next: boolean) {
+      visible = next;
+      view.rerender();
+    },
   };
 }
 
 describe("WorkspaceProvider lifecycle", () => {
+  it("does not revive an old action when effects reconnect on the same client", async () => {
+    const f = await fixture("old");
+    const gate = deferred<void>();
+    mockActions(f.client, gate.promise);
+    const view = await mount(f);
+    let pending!: Promise<TerminalInfo | null>;
+    act(() => {
+      pending = view.result.current.createTerminal();
+    });
+    view.setVisible(false);
+    view.setVisible(true);
+    await waitFor(() => expect(view.result.current.state).toBe("ready"));
+    let result: TerminalInfo | null = terminal;
+    await act(async () => {
+      gate.resolve();
+      result = await pending;
+    });
+    expect(result).toBeNull();
+    expect(view.result.current.focusRequest.terminalId).toBe("");
+  });
+
+  it.each(actions)("keeps current-client %s behavior", async (action) => {
+    const f = await fixture("old");
+    mockActions(f.client);
+    const view = await mount(f);
+    let result: unknown;
+    await act(async () => {
+      result = await dispatch(view.result.current, action);
+    });
+    if (action === "remove") {
+      expect(result).toBe(true);
+      expect(screen.getByText("old removed from KalCode")).toBeInTheDocument();
+    } else if (action === "openFolder") expect(result).toEqual(workspace("old"));
+    else if (action === "closeTerminal") expect(result).toBeUndefined();
+    else {
+      expect(result).toEqual(terminal);
+      expect(view.result.current.focusRequest.terminalId).toBe(terminal.id);
+    }
+    expect(view.result.current.picking).toBe(false);
+    act(() => view.result.current.selectTerminal("selected", true));
+    expect(f.client.setActiveTerminal).toHaveBeenCalledWith("old", "selected");
+    expect(view.result.current.focusRequest.terminalId).toBe("selected");
+  });
+
+  it("keeps picking true until overlapping current pickers have settled", async () => {
+    const f = await fixture();
+    const first = deferred<Workspace | null>();
+    const second = deferred<Workspace | null>();
+    vi.spyOn(f.client, "openWorkspaceDialog").mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const view = await mount(f);
+    let a!: Promise<Workspace | null>;
+    let b!: Promise<Workspace | null>;
+    act(() => {
+      a = view.result.current.openFolder();
+      b = view.result.current.openFolder();
+    });
+    await act(async () => {
+      first.resolve(null);
+      await a;
+    });
+    expect(view.result.current.picking).toBe(true);
+    await act(async () => {
+      second.resolve(null);
+      await b;
+    });
+    expect(view.result.current.picking).toBe(false);
+  });
+
+  it.each(actions)("suppresses an in-flight %s result after unmount", async (action) => {
+    const f = await fixture("old");
+    const gate = deferred<void>();
+    mockActions(f.client, gate.promise);
+    const view = await mount(f);
+    let pending!: ReturnType<typeof dispatch>;
+    act(() => {
+      pending = dispatch(view.result.current, action);
+    });
+    view.unmount();
+    let result: unknown;
+    await act(async () => {
+      gate.resolve();
+      result = await pending;
+    });
+    expect(result).toBe(action === "remove" ? false : action === "closeTerminal" ? undefined : null);
+  });
+
+  it.each(["openFolder", "createTerminal", "restartTerminal", "remove"] as const)(
+    "rechecks %s lifetime after its pending refresh",
+    async (action) => {
+      const old = await fixture("old");
+      const next = await fixture("next");
+      const read = deferred<Workspace | null>();
+      mockActions(old.client);
+      const view = await mount(old);
+      vi.mocked(old.client.activeWorkspace).mockClear().mockReturnValue(read.promise);
+      let pending!: ReturnType<typeof dispatch>;
+      act(() => {
+        pending = dispatch(view.result.current, action);
+      });
+      await waitFor(() => expect(old.client.activeWorkspace).toHaveBeenCalled());
+      view.replace(next);
+      await waitFor(() => expect(view.result.current.active?.id).toBe("next"));
+      let result: unknown;
+      await act(async () => {
+        read.resolve(workspace("old"));
+        result = await pending;
+      });
+      expect(result).toBe(action === "remove" ? false : null);
+      expect(view.result.current.focusRequest.terminalId).toBe("");
+      expect(screen.queryByText("old removed from KalCode")).not.toBeInTheDocument();
+    },
+  );
+
+  it.each(["replace", "unmount"] as const)("rejects all retained mutation callbacks after %s", async (transition) => {
+    const old = await fixture("old");
+    const next = await fixture("next");
+    const calls = mockActions(old.client);
+    const view = await mount(old);
+    const retained = view.result.current;
+    if (transition === "replace") {
+      view.replace(next);
+      await waitFor(() => expect(view.result.current.active?.id).toBe("next"));
+    } else view.unmount();
+    const nextReads = vi.mocked(next.client.listWorkspaces).mock.calls.length;
+    await act(async () => {
+      for (const action of actions) await dispatch(retained, action);
+      retained.selectTerminal("old-terminal", true, "old");
+      retained.retry();
+    });
+    for (const call of calls) expect(call).not.toHaveBeenCalled();
+    expect(next.client.listWorkspaces).toHaveBeenCalledTimes(nextReads);
+    if (transition === "replace") {
+      expect(view.result.current.focusRequest.terminalId).toBe("");
+      expect(view.result.current.picking).toBe(false);
+    }
+  });
+
+  it.each(
+    actions.flatMap((action) => [
+      { action, rejects: false },
+      { action, rejects: true },
+    ]),
+  )("ignores obsolete $action completion (rejects=$rejects)", async ({ action, rejects }) => {
+    const old = await fixture("old");
+    const next = await fixture("next");
+    const gate = deferred<void>();
+    const nextPicker = deferred<Workspace | null>();
+    mockActions(old.client, gate.promise);
+    vi.spyOn(next.client, "openWorkspaceDialog").mockReturnValue(nextPicker.promise);
+    const view = await mount(old);
+    let pending!: ReturnType<typeof dispatch>;
+    act(() => {
+      pending = dispatch(view.result.current, action);
+    });
+    view.replace(next);
+    await waitFor(() => expect(view.result.current.active?.id).toBe("next"));
+    expect(view.result.current.picking).toBe(false);
+    let picking!: Promise<Workspace | null>;
+    act(() => {
+      picking = view.result.current.openFolder();
+    });
+    expect(view.result.current.picking).toBe(true);
+    let result: unknown;
+    await act(async () => {
+      if (rejects)
+        gate.reject({ category: "database", code: "database_error", message: "Old failure", retryable: false });
+      else gate.resolve();
+      result = await pending;
+    });
+    expect(result).toBe(action === "remove" ? false : action === "closeTerminal" ? undefined : null);
+    expect(view.result.current.focusRequest.terminalId).toBe("");
+    expect(view.result.current.active?.id).toBe("next");
+    expect(view.result.current.picking).toBe(true);
+    expect(screen.queryByText("Old failure")).not.toBeInTheDocument();
+    expect(screen.queryByText("old removed from KalCode")).not.toBeInTheDocument();
+    await act(async () => {
+      nextPicker.resolve(null);
+      await picking;
+    });
+    expect(view.result.current.picking).toBe(false);
+  });
+
   it("does not hold a newer native activation behind an obsolete refresh", async () => {
     const f = await fixture();
     const read = deferred<Workspace | null>();
