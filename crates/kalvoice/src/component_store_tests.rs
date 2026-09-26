@@ -55,6 +55,7 @@ fn retained_directory_rejects_or_prevents_path_replacement() {
             );
             #[cfg(not(windows))]
             panic!("directory rename fixture failed: {error}");
+            #[cfg(windows)]
             directory.verify().expect("original remains retained");
         }
     }
