@@ -29,34 +29,69 @@ const PAGE = 200;
  */
 export function FileTree({ workspaceId }: { workspaceId: string }) {
   const { client } = useRuntime();
-  const [listings, setListings] = useState<Record<string, Listing>>({});
+  const lifecycle = useMemo(() => ({ client, workspaceId, mounted: false, epoch: 0 }), [client, workspaceId]);
+  const currentLifecycle = useRef(lifecycle);
+  currentLifecycle.current = lifecycle;
+  const isCurrent = useCallback(
+    (epoch = lifecycle.epoch) =>
+      lifecycle.mounted && currentLifecycle.current === lifecycle && epoch === lifecycle.epoch,
+    [lifecycle],
+  );
+  const [listingState, setListingState] = useState({ lifecycle, listings: {} as Record<string, Listing> });
+  // Mask old handles immediately, before the new workspace's effect runs.
+  const listings = listingState.lifecycle === lifecycle ? listingState.listings : {};
+  const setListing = useCallback(
+    (key: string, listing: Listing) => {
+      setListingState((previous) => ({
+        lifecycle,
+        listings: { ...(previous.lifecycle === lifecycle ? previous.listings : {}), [key]: listing },
+      }));
+    },
+    [lifecycle],
+  );
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   const [focusKey, setFocusKey] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const rows = useRef(new Map<string, HTMLDivElement>());
+  const focusFrame = useRef<number | null>(null);
+  const focusGeneration = useRef(0);
+  const cancelFocus = useCallback(() => {
+    focusGeneration.current += 1;
+    if (focusFrame.current !== null) cancelAnimationFrame(focusFrame.current);
+    focusFrame.current = null;
+  }, []);
+
+  useEffect(() => {
+    lifecycle.mounted = true;
+    setListingState({ lifecycle, listings: {} });
+    setOpen(new Set());
+    setFocusKey(null);
+    setSelected(null);
+    return () => {
+      lifecycle.mounted = false;
+      lifecycle.epoch += 1;
+      cancelFocus();
+    };
+  }, [lifecycle, cancelFocus]);
 
   const load = useCallback(
     async (key: string, entry: FileEntry | null) => {
-      setListings((l) => ({ ...l, [key]: { state: "loading", entries: [], truncated: false } }));
+      if (!isCurrent()) return;
+      const epoch = lifecycle.epoch;
+      setListing(key, { state: "loading", entries: [], truncated: false });
       try {
         const page = await client.listFiles(workspaceId, entry ? entry.file.handle : null, PAGE);
-        setListings((l) => ({
-          ...l,
-          [key]: { state: "ready", entries: page.items, truncated: page.nextCursor !== null },
-        }));
+        if (!isCurrent(epoch)) return;
+        setListing(key, { state: "ready", entries: page.items, truncated: page.nextCursor !== null });
       } catch (cause) {
-        setListings((l) => ({
-          ...l,
-          [key]: { state: "error", entries: [], truncated: false, error: toKalCodeError(cause).message },
-        }));
+        if (!isCurrent(epoch)) return;
+        setListing(key, { state: "error", entries: [], truncated: false, error: toKalCodeError(cause).message });
       }
     },
-    [client, workspaceId],
+    [client, workspaceId, lifecycle, isCurrent, setListing],
   );
 
   useEffect(() => {
-    setListings({});
-    setOpen(new Set());
     void load("", null);
   }, [load]);
 
@@ -74,7 +109,7 @@ export function FileTree({ workspaceId }: { workspaceId: string }) {
   }, [listings, open]);
 
   const toggle = (row: Row, expand?: boolean) => {
-    if (!row.entry.isDir) return;
+    if (!isCurrent() || !row.entry.isDir) return;
     const isOpen = open.has(row.key);
     const next = expand ?? !isOpen;
     if (next === isOpen) return;
@@ -84,13 +119,20 @@ export function FileTree({ workspaceId }: { workspaceId: string }) {
       else copy.delete(row.key);
       return copy;
     });
-    if (next && !listings[row.key]) void load(row.key, row.entry);
+    if (next && (!listings[row.key] || listings[row.key]?.state === "error")) void load(row.key, row.entry);
   };
 
   const focusRow = (key: string | undefined) => {
-    if (!key) return;
+    if (!key || !isCurrent()) return;
+    cancelFocus();
+    const request = focusGeneration.current;
+    const epoch = lifecycle.epoch;
     setFocusKey(key);
-    requestAnimationFrame(() => rows.current.get(key)?.focus());
+    focusFrame.current = requestAnimationFrame(() => {
+      if (!isCurrent(epoch) || request !== focusGeneration.current) return;
+      focusFrame.current = null;
+      rows.current.get(key)?.focus();
+    });
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>, index: number) => {
@@ -116,7 +158,7 @@ export function FileTree({ workspaceId }: { workspaceId: string }) {
       case "ArrowRight":
         event.preventDefault();
         if (row.entry.isDir && !open.has(row.key)) toggle(row, true);
-        else if (row.entry.isDir) focusRow(visible[index + 1]?.key);
+        else if (row.entry.isDir && (visible[index + 1]?.level ?? 0) > row.level) focusRow(visible[index + 1]?.key);
         break;
       case "ArrowLeft": {
         event.preventDefault();
@@ -165,7 +207,14 @@ export function FileTree({ workspaceId }: { workspaceId: string }) {
   const tabKey = visible.some((r) => r.key === focusKey) ? focusKey : visible[0]?.key;
   return (
     <>
-      <div className={styles.fileTree} role="tree" aria-label="Files">
+      <div
+        className={styles.fileTree}
+        role="tree"
+        aria-label="Files"
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget)) cancelFocus();
+        }}
+      >
         {visible.map((row, index) => {
           const { entry } = row;
           const { name } = splitPath(entry.file.displayPath);
@@ -200,12 +249,16 @@ export function FileTree({ workspaceId }: { workspaceId: string }) {
               data-selected={selected === row.key || undefined}
               aria-label={`${name}${entry.isDir ? ", folder" : ""}${entry.ignored ? ", ignored" : ""}${childNote === "empty" ? ", empty" : ""}`}
               onClick={() => {
+                cancelFocus();
                 setFocusKey(row.key);
                 if (entry.isDir) toggle(row);
                 else setSelected(row.key);
               }}
               onKeyDown={(e) => onKeyDown(e, index)}
-              onFocus={() => setFocusKey(row.key)}
+              onFocus={() => {
+                cancelFocus();
+                setFocusKey(row.key);
+              }}
             >
               <span className={styles.fileCaret} data-open={isOpen || undefined} aria-hidden="true">
                 {entry.isDir ? <ChevronRight /> : null}
