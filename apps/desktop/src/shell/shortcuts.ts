@@ -1,10 +1,10 @@
 import { useEffect, useRef } from "react";
 import {
   DESKTOP_PLATFORM,
+  type DesktopPlatform,
   formatShortcut,
   hasPrimaryModifier,
   IS_MAC,
-  type DesktopPlatform,
 } from "../platform/keyboard.ts";
 
 export { IS_MAC };
@@ -32,12 +32,7 @@ export function isRailToggleShortcut(
   event: GlobalShortcutEvent,
   platform: DesktopPlatform = DESKTOP_PLATFORM,
 ): boolean {
-  return (
-    hasPrimaryModifier(event, platform) &&
-    event.shiftKey &&
-    !event.altKey &&
-    event.key.toLowerCase() === "b"
-  );
+  return hasPrimaryModifier(event, platform) && event.shiftKey && !event.altKey && event.key.toLowerCase() === "b";
 }
 
 interface ShortcutHandlers {

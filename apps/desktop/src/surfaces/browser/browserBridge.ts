@@ -19,7 +19,9 @@ export interface BrowserState {
 }
 
 export type BrowserAction = "back" | "forward" | "reload" | "stop";
-export interface BrowserFocusEvent { browserId: string }
+export interface BrowserFocusEvent {
+  browserId: string;
+}
 
 let visibilitySequence = 0;
 let pageLease: Promise<number> | null = null;
@@ -31,8 +33,20 @@ export function nextBrowserVisibilityVersion(): number {
 }
 
 export interface BrowserBridge {
-  attach(request: { browserId: string; workspaceId: string; url: string; bounds: BrowserBounds; visible: boolean; visibilityVersion: number }): Promise<BrowserState>;
-  setView(request: { browserId: string; bounds: BrowserBounds; visible: boolean; visibilityVersion: number }): Promise<BrowserState>;
+  attach(request: {
+    browserId: string;
+    workspaceId: string;
+    url: string;
+    bounds: BrowserBounds;
+    visible: boolean;
+    visibilityVersion: number;
+  }): Promise<BrowserState>;
+  setView(request: {
+    browserId: string;
+    bounds: BrowserBounds;
+    visible: boolean;
+    visibilityVersion: number;
+  }): Promise<BrowserState>;
   navigate(browserId: string, url: string): Promise<BrowserState>;
   action(browserId: string, action: BrowserAction): Promise<BrowserState>;
   focus(browserId: string): Promise<boolean>;
@@ -50,31 +64,48 @@ export function createBrowserBridge(): BrowserBridge {
     return pageLease;
   };
   return {
-    attach: async (request) => invoke<BrowserState>("browser_attach", {
-      request: { ...request, pageLease: await lease() },
-    }),
-    setView: async (request) => invoke<BrowserState>("browser_set_view", {
-      request: { ...request, pageLease: await lease() },
-    }),
-    navigate: async (browserId, url) => invoke<BrowserState>("browser_navigate", {
-      browserId, url, pageLease: await lease(),
-    }),
-    action: async (browserId, action) => invoke<BrowserState>("browser_action", {
-      browserId, action, pageLease: await lease(),
-    }),
-    focus: async (browserId) => invoke<boolean>("browser_focus", {
-      browserId, pageLease: await lease(),
-    }),
-    info: async (browserId) => invoke<BrowserState>("browser_info", {
-      browserId, pageLease: await lease(),
-    }),
-    close: async (browserId) => invoke<boolean>("browser_close", {
-      browserId, pageLease: await lease(),
-    }),
+    attach: async (request) =>
+      invoke<BrowserState>("browser_attach", {
+        request: { ...request, pageLease: await lease() },
+      }),
+    setView: async (request) =>
+      invoke<BrowserState>("browser_set_view", {
+        request: { ...request, pageLease: await lease() },
+      }),
+    navigate: async (browserId, url) =>
+      invoke<BrowserState>("browser_navigate", {
+        browserId,
+        url,
+        pageLease: await lease(),
+      }),
+    action: async (browserId, action) =>
+      invoke<BrowserState>("browser_action", {
+        browserId,
+        action,
+        pageLease: await lease(),
+      }),
+    focus: async (browserId) =>
+      invoke<boolean>("browser_focus", {
+        browserId,
+        pageLease: await lease(),
+      }),
+    info: async (browserId) =>
+      invoke<BrowserState>("browser_info", {
+        browserId,
+        pageLease: await lease(),
+      }),
+    close: async (browserId) =>
+      invoke<boolean>("browser_close", {
+        browserId,
+        pageLease: await lease(),
+      }),
     hideAll: async () => invoke<number>("browser_hide_all", { pageLease: await lease() }),
-    openExternal: async (url) => invoke<void>("browser_open_external", {
-      url, pageLease: await lease(),
-    }),
-    subscribeFocus: (listener) => listen<BrowserFocusEvent>("kalcode://browser-focus", (event) => listener(event.payload)),
+    openExternal: async (url) =>
+      invoke<void>("browser_open_external", {
+        url,
+        pageLease: await lease(),
+      }),
+    subscribeFocus: (listener) =>
+      listen<BrowserFocusEvent>("kalcode://browser-focus", (event) => listener(event.payload)),
   };
 }

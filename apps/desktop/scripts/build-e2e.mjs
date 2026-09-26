@@ -23,11 +23,7 @@ if (app.status !== 0) process.exit(app.status ?? 1);
 
 const helpers = spawnSync(
   "cargo",
-  [
-    "build",
-    "--release",
-    ...helperInventory.flatMap((helper) => ["-p", helper.package, "--bin", helper.bin]),
-  ],
+  ["build", "--release", ...helperInventory.flatMap((helper) => ["-p", helper.package, "--bin", helper.bin])],
   { cwd: fileURLToPath(new URL("../../..", import.meta.url)), env, stdio: "inherit", shell, windowsHide: true },
 );
 if (helpers.status !== 0) process.exit(helpers.status ?? 1);

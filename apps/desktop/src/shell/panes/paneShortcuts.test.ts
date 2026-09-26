@@ -35,9 +35,9 @@ describe("pane shortcuts", () => {
   });
 
   it("maps shifted Mac chords and pane preset digits from KeyboardEvent.code", () => {
-    expect(
-      paneShortcut(key("Î", { code: "KeyD", ctrlKey: true, altKey: true, shiftKey: true }), "macos"),
-    ).toEqual({ kind: "split-down" });
+    expect(paneShortcut(key("Î", { code: "KeyD", ctrlKey: true, altKey: true, shiftKey: true }), "macos")).toEqual({
+      kind: "split-down",
+    });
     expect(paneShortcut(key("™", { code: "Digit2", ctrlKey: true, altKey: true }), "macos")).toEqual({
       kind: "preset",
       preset: "two",
@@ -46,11 +46,12 @@ describe("pane shortcuts", () => {
   });
 
   it("keeps directional and tab actions available on both platforms", () => {
-    expect(
-      paneShortcut(key("ArrowLeft", { code: "ArrowLeft", ctrlKey: true, altKey: true }), "macos"),
-    ).toEqual({ kind: "focus", direction: "left" });
-    expect(
-      paneShortcut(key("PageDown", { code: "PageDown", ctrlKey: true, altKey: true }), "windows"),
-    ).toEqual({ kind: "next-tab" });
+    expect(paneShortcut(key("ArrowLeft", { code: "ArrowLeft", ctrlKey: true, altKey: true }), "macos")).toEqual({
+      kind: "focus",
+      direction: "left",
+    });
+    expect(paneShortcut(key("PageDown", { code: "PageDown", ctrlKey: true, altKey: true }), "windows")).toEqual({
+      kind: "next-tab",
+    });
   });
 });

@@ -53,18 +53,40 @@ export function SettingsAccountView({ account, usage, busy, error, onManage, onL
       padding="none"
       footer={
         <div className={styles.actions}>
-          {paid ? <Button disabled={busy} onClick={() => void onManage()}>Manage plan</Button> : null}
-          <Button variant="ghost" icon={<LogOut />} disabled={busy} onClick={() => void onLogout()}>Sign out</Button>
+          {paid ? (
+            <Button disabled={busy} onClick={() => void onManage()}>
+              Manage plan
+            </Button>
+          ) : null}
+          <Button variant="ghost" icon={<LogOut />} disabled={busy} onClick={() => void onLogout()}>
+            Sign out
+          </Button>
         </div>
       }
     >
       <dl className={styles.details}>
-        <div><dt>Email</dt><dd data-selectable>{account.account?.email ?? "Not signed in"}</dd></div>
-        <div><dt>Plan</dt><dd>{account.tier ? TIER_NAMES[account.tier] : "Not activated"}</dd></div>
-        <div><dt>KalVoice</dt><dd>{usageLabel}</dd></div>
-        <div><dt>Dictation</dt><dd>Unlimited</dd></div>
+        <div>
+          <dt>Email</dt>
+          <dd data-selectable>{account.account?.email ?? "Not signed in"}</dd>
+        </div>
+        <div>
+          <dt>Plan</dt>
+          <dd>{account.tier ? TIER_NAMES[account.tier] : "Not activated"}</dd>
+        </div>
+        <div>
+          <dt>KalVoice</dt>
+          <dd>{usageLabel}</dd>
+        </div>
+        <div>
+          <dt>Dictation</dt>
+          <dd>Unlimited</dd>
+        </div>
       </dl>
-      {error ? <p className={styles.error} role="alert">{error.message}</p> : null}
+      {error ? (
+        <p className={styles.error} role="alert">
+          {error.message}
+        </p>
+      ) : null}
     </Panel>
   );
 }

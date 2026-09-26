@@ -16,12 +16,7 @@ import type {
   PurchasableTier,
   RuntimeStatus,
 } from "../ipc/account.ts";
-import {
-  initialAccountUiState,
-  reduceAccountUi,
-  type AccountUiError,
-  type AccountUiState,
-} from "./accountState.ts";
+import { type AccountUiError, type AccountUiState, initialAccountUiState, reduceAccountUi } from "./accountState.ts";
 
 export const MAX_CONFIRMATION_POLLS = 6;
 export const MAX_RUNTIME_STATUS_POLLS = 120;
@@ -236,48 +231,54 @@ export function AccountProvider({
     (expectedGeneration: number, attempt: number) => {
       if (expectedGeneration !== generation.current) return;
       if (attempt >= MAX_SOCIAL_STATUS_POLLS) {
-        void client.cancelAuth().then(async (snapshot) => {
-          if (!mounted.current || expectedGeneration !== generation.current) return;
-          const runtime = await client.runtimeStatus();
-          if (!mounted.current || expectedGeneration !== generation.current) return;
-          dispatch({ type: "resolved", generation: expectedGeneration, snapshot, runtime });
-          dispatch({
-            type: "error",
-            generation: expectedGeneration,
-            error: {
-              code: "social_sign_in_timeout",
-              message: "The browser sign-in expired. Start again.",
-              retryable: false,
-            },
+        void client
+          .cancelAuth()
+          .then(async (snapshot) => {
+            if (!mounted.current || expectedGeneration !== generation.current) return;
+            const runtime = await client.runtimeStatus();
+            if (!mounted.current || expectedGeneration !== generation.current) return;
+            dispatch({ type: "resolved", generation: expectedGeneration, snapshot, runtime });
+            dispatch({
+              type: "error",
+              generation: expectedGeneration,
+              error: {
+                code: "social_sign_in_timeout",
+                message: "The browser sign-in expired. Start again.",
+                retryable: false,
+              },
+            });
+          })
+          .catch((error: unknown) => {
+            if (mounted.current && expectedGeneration === generation.current) {
+              dispatch({ type: "error", generation: expectedGeneration, error: safeError(error) });
+            }
           });
-        }).catch((error: unknown) => {
-          if (mounted.current && expectedGeneration === generation.current) {
-            dispatch({ type: "error", generation: expectedGeneration, error: safeError(error) });
-          }
-        });
         return;
       }
       socialTimer.current = setTimeout(() => {
         socialTimer.current = null;
         if (!mounted.current || expectedGeneration !== generation.current) return;
-        void client.status().then(async (snapshot) => {
-          if (!mounted.current || expectedGeneration !== generation.current) return;
-          if (snapshot.phase === "social_pending") {
-            dispatch({ type: "snapshot", generation: expectedGeneration, snapshot });
-            pollSocialStatus(expectedGeneration, attempt + 1);
-            return;
-          }
-          const runtime = await client.runtimeStatus();
-          if (!mounted.current || expectedGeneration !== generation.current) return;
-          dispatch({ type: "resolved", generation: expectedGeneration, snapshot, runtime });
-          if (!runtimeSettled(snapshot, runtime)) pollRuntime(expectedGeneration, snapshot, 0);
-          else void refreshUsage(expectedGeneration, snapshot, runtime);
-        }).catch((error: unknown) => {
-          if (!mounted.current || expectedGeneration !== generation.current) return;
-          const nextError = safeError(error);
-          dispatch({ type: "error", generation: expectedGeneration, error: nextError });
-          if (nextError.retryable) pollSocialStatus(expectedGeneration, attempt + 1);
-        });
+        void client
+          .status()
+          .then(async (snapshot) => {
+            if (!mounted.current || expectedGeneration !== generation.current) return;
+            if (snapshot.phase === "social_pending") {
+              dispatch({ type: "snapshot", generation: expectedGeneration, snapshot });
+              pollSocialStatus(expectedGeneration, attempt + 1);
+              return;
+            }
+            const runtime = await client.runtimeStatus();
+            if (!mounted.current || expectedGeneration !== generation.current) return;
+            dispatch({ type: "resolved", generation: expectedGeneration, snapshot, runtime });
+            if (!runtimeSettled(snapshot, runtime)) pollRuntime(expectedGeneration, snapshot, 0);
+            else void refreshUsage(expectedGeneration, snapshot, runtime);
+          })
+          .catch((error: unknown) => {
+            if (!mounted.current || expectedGeneration !== generation.current) return;
+            const nextError = safeError(error);
+            dispatch({ type: "error", generation: expectedGeneration, error: nextError });
+            if (nextError.retryable) pollSocialStatus(expectedGeneration, attempt + 1);
+          });
       }, socialStatusPollMs);
     },
     [client, pollRuntime, refreshUsage, socialStatusPollMs],
@@ -330,10 +331,11 @@ export function AccountProvider({
       cancelAuth: () => runSnapshot(() => client.cancelAuth()),
       activateFree: () => runSnapshot(() => client.activateFree()),
       checkout: (tier) => runSnapshot(() => client.checkout(tier), true),
-      portal: () => runSnapshot(async () => {
-        await client.portal();
-        return client.status();
-      }),
+      portal: () =>
+        runSnapshot(async () => {
+          await client.portal();
+          return client.status();
+        }),
       refresh: () => runSnapshot(() => client.refresh()),
       logout: () => runSnapshot(() => client.logout()),
       retry: () =>

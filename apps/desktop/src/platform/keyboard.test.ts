@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  detectDesktopPlatform,
-  formatShortcut,
-  hasPrimaryModifier,
-  type PlatformNavigator,
-} from "./keyboard.ts";
+import { detectDesktopPlatform, formatShortcut, hasPrimaryModifier, type PlatformNavigator } from "./keyboard.ts";
 
 function navigatorWith(values: Partial<PlatformNavigator>): PlatformNavigator {
   return { platform: "", userAgent: "", ...values };
@@ -12,11 +7,9 @@ function navigatorWith(values: Partial<PlatformNavigator>): PlatformNavigator {
 
 describe("desktop platform detection", () => {
   it("prefers the structured user-agent platform when the browser provides it", () => {
-    expect(
-      detectDesktopPlatform(
-        navigatorWith({ platform: "Win32", userAgentData: { platform: "macOS" } }),
-      ),
-    ).toBe("macos");
+    expect(detectDesktopPlatform(navigatorWith({ platform: "Win32", userAgentData: { platform: "macOS" } }))).toBe(
+      "macos",
+    );
   });
 
   it("recognizes legacy macOS, Windows, and Linux browser signals", () => {

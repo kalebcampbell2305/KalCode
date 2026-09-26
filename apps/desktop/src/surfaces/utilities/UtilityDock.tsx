@@ -444,8 +444,8 @@ export function UtilityDock({ api, openScratchTerminal }: UtilityDockProps) {
                 {pendingHttpApproval ? (
                   <p className={styles.notice} role="status">
                     Approve each displayed step in Permissions, then continue it here. KalCode authorizes hostname
-                    resolution first, then the pinned request to the resolved destination. Only the approval id is
-                    sent on continuation.
+                    resolution first, then the pinned request to the resolved destination. Only the approval id is sent
+                    on continuation.
                   </p>
                 ) : null}
                 {requestBusy ? (

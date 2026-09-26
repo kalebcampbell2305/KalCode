@@ -16,11 +16,11 @@ import { ApprovalPrompt } from "../../permissions/ApprovalPrompt.tsx";
 import { MODE_LABELS } from "../../permissions/labels.ts";
 import { usePermissions } from "../../permissions/PermissionsProvider.tsx";
 import {
-  type PaneAccountIdentity,
-  paneAccountLabel,
   PaneAccountChip,
+  type PaneAccountIdentity,
   PaneStatusChip,
   ProviderGlyph,
+  paneAccountLabel,
 } from "./PaneParts.tsx";
 import styles from "./Panes.module.css";
 import { PaneTerminal } from "./PaneTerminal.tsx";

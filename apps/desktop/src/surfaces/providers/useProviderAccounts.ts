@@ -2,8 +2,8 @@ import type { ProviderAccount } from "@kalcode/protocol";
 import { useToast } from "@kalcode/ui/components";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toKalCodeError } from "../../ipc/errors.ts";
-import { useUiIntents } from "../../runtime/uiIntents.tsx";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
+import { useUiIntents } from "../../runtime/uiIntents.tsx";
 import { PaneChannel } from "../code/panes/paneChannel.ts";
 
 type BrowserAuthProvider = "claude-code" | "codex";
@@ -34,7 +34,8 @@ export function useProviderAccounts(enabled: boolean) {
         // cancellation races the pending wait, so the wait rejection cannot surface as a false
         // sign-in failure toast on the next screen.
         cancelledLogins.current.add(login.handle);
-        const cancel = login.providerId === "codex" ? client.cancelCodexLogin(login.handle) : client.cancelClaudeLogin(login.handle);
+        const cancel =
+          login.providerId === "codex" ? client.cancelCodexLogin(login.handle) : client.cancelClaudeLogin(login.handle);
         void cancel.catch(() => undefined);
       }
     },
@@ -112,15 +113,25 @@ export function useProviderAccounts(enabled: boolean) {
   );
   const refreshAuth = useCallback(
     (account: ProviderAccount) =>
-      run(`refresh:${account.id}`, `${account.providerId === "codex" ? "Codex" : "Claude Code"} status couldn't be refreshed`, () =>
-        account.providerId === "codex" ? client.refreshCodexAccount(account.id) : client.refreshClaudeAccount(account.id),
+      run(
+        `refresh:${account.id}`,
+        `${account.providerId === "codex" ? "Codex" : "Claude Code"} status couldn't be refreshed`,
+        () =>
+          account.providerId === "codex"
+            ? client.refreshCodexAccount(account.id)
+            : client.refreshClaudeAccount(account.id),
       ),
     [client, run],
   );
   const logoutAuth = useCallback(
     (account: ProviderAccount) =>
-      run(`logout:${account.id}`, `${account.providerId === "codex" ? "Codex" : "Claude Code"} couldn't sign out`, () =>
-        account.providerId === "codex" ? client.logoutCodexAccount(account.id) : client.logoutClaudeAccount(account.id),
+      run(
+        `logout:${account.id}`,
+        `${account.providerId === "codex" ? "Codex" : "Claude Code"} couldn't sign out`,
+        () =>
+          account.providerId === "codex"
+            ? client.logoutCodexAccount(account.id)
+            : client.logoutClaudeAccount(account.id),
       ),
     [client, run],
   );
@@ -138,9 +149,7 @@ export function useProviderAccounts(enabled: boolean) {
         handle = started.loginHandle;
         setActiveLogin({ accountId: account.id, handle, providerId });
         setBusyKey(null);
-        replace(
-          await (providerId === "codex" ? client.waitForCodexLogin(handle) : client.waitForClaudeLogin(handle)),
-        );
+        replace(await (providerId === "codex" ? client.waitForCodexLogin(handle) : client.waitForClaudeLogin(handle)));
       } catch (error) {
         if (handle === null || !cancelledLogins.current.delete(handle)) {
           toast.show({

@@ -1,10 +1,10 @@
 import { Button } from "@kalcode/ui/components";
 import type { ReactNode } from "react";
 import type { AccountSnapshot, RuntimeStatus } from "../ipc/account.ts";
-import type { AccountUiError } from "./accountState.ts";
-import { useAccount } from "./AccountProvider.tsx";
-import { AccountOnboarding, type AccountOnboardingActions } from "./AccountOnboarding.tsx";
 import styles from "./Account.module.css";
+import { AccountOnboarding, type AccountOnboardingActions } from "./AccountOnboarding.tsx";
+import { useAccount } from "./AccountProvider.tsx";
+import type { AccountUiError } from "./accountState.ts";
 
 export interface AccountGateProps {
   snapshot: AccountSnapshot;
@@ -78,7 +78,10 @@ export function AccountGate({ snapshot, runtime, busy, error, actions, children 
       />
     );
   }
-  if (runtime.phase === "draining" || (!active && snapshot.phase !== "bootstrapping" && runtime.phase !== "signed_out")) {
+  if (
+    runtime.phase === "draining" ||
+    (!active && snapshot.phase !== "bootstrapping" && runtime.phase !== "signed_out")
+  ) {
     return (
       <RuntimeTransition
         eyebrow="Account signed out"

@@ -31,9 +31,7 @@ export const IS_MAC = DESKTOP_PLATFORM === "macos";
 
 /** True only for the platform's primary modifier; mixed Control+Command chords are rejected. */
 export function hasPrimaryModifier(event: ModifierState, platform = DESKTOP_PLATFORM): boolean {
-  return platform === "macos"
-    ? event.metaKey && !event.ctrlKey
-    : event.ctrlKey && !event.metaKey;
+  return platform === "macos" ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
 }
 
 const MAC_TOKEN_LABELS: Readonly<Record<string, string>> = {

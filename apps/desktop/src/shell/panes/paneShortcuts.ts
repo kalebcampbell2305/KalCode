@@ -7,7 +7,7 @@
  * physical one.
  */
 import type { PaneDirection } from "@kalcode/protocol";
-import { DESKTOP_PLATFORM, formatShortcut, type DesktopPlatform } from "../../platform/keyboard.ts";
+import { DESKTOP_PLATFORM, type DesktopPlatform, formatShortcut } from "../../platform/keyboard.ts";
 import type { BuiltinPreset } from "./model.ts";
 
 export type PaneShortcut =
@@ -80,8 +80,7 @@ export function isPaneShortcut(event: KeyboardEvent): boolean {
 
 /** Labels for menus, tooltips and the status bar. */
 export function paneShortcutLabels(platform: DesktopPlatform = DESKTOP_PLATFORM) {
-  const chord = (tokens: readonly string[]) =>
-    formatShortcut(["Control", "Alt", ...tokens], platform);
+  const chord = (tokens: readonly string[]) => formatShortcut(["Control", "Alt", ...tokens], platform);
   return {
     focus: chord(["←↑→↓"]),
     resize: chord(["Shift", "←↑→↓"]),

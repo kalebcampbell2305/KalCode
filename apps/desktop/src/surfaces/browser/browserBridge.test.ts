@@ -55,9 +55,10 @@ describe("native Browser page authority", () => {
     expect(invokeMock.mock.calls.filter(([command]) => command === "browser_page_lease")).toHaveLength(1);
     for (const [command, payload] of invokeMock.mock.calls) {
       if (command === "browser_page_lease") continue;
-      const request = command === "browser_attach" || command === "browser_set_view"
-        ? (payload as { request: { pageLease: number } }).request
-        : payload as { pageLease: number };
+      const request =
+        command === "browser_attach" || command === "browser_set_view"
+          ? (payload as { request: { pageLease: number } }).request
+          : (payload as { pageLease: number });
       expect(request.pageLease, command).toBe(42);
     }
   });

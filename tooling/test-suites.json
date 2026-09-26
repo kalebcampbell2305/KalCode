@@ -254,20 +254,59 @@
   ],
   "rustIntentionalIgnores": [
     { "path": "crates/context/tests/folder_budgets.rs", "reason": "performance: run in release with --ignored" },
-    { "path": "crates/git/tests/perf.rs", "reason": "writes 20,000 files; run with --ignored --nocapture for the timing table" },
-    { "path": "crates/kalvoice/src/component_floor_tests.rs", "reason": "requires KALCODE_RUN_OS_FLOOR_PROBE=1 and an interactive OS credential store" },
-    { "path": "crates/kalvoice/src/component_store_tests.rs", "reason": "requires the pinned local llama.cpp runtime archive" },
-    { "path": "crates/kalvoice/tests/local_reasoning_real.rs", "reason": "requires pinned local llama.cpp and Qwen candidate artifacts" },
-    { "path": "crates/kalvoice/tests/whisper_end_to_end.rs", "reason": "downloads the speech model; run explicitly on a developer machine" },
+    {
+      "path": "crates/git/tests/perf.rs",
+      "reason": "writes 20,000 files; run with --ignored --nocapture for the timing table"
+    },
+    {
+      "path": "crates/kalvoice/src/component_floor_tests.rs",
+      "reason": "requires KALCODE_RUN_OS_FLOOR_PROBE=1 and an interactive OS credential store"
+    },
+    {
+      "path": "crates/kalvoice/src/component_store_tests.rs",
+      "reason": "requires the pinned local llama.cpp runtime archive"
+    },
+    {
+      "path": "crates/kalvoice/tests/local_reasoning_real.rs",
+      "reason": "requires pinned local llama.cpp and Qwen candidate artifacts"
+    },
+    {
+      "path": "crates/kalvoice/tests/whisper_end_to_end.rs",
+      "reason": "downloads the speech model; run explicitly on a developer machine"
+    },
     { "path": "crates/locator/tests/locator_perf.rs", "reason": "performance budget: run in release" },
-    { "path": "crates/providers/src/codex/managed_policy.rs", "reason": "run explicitly when certifying installed Codex CLI 0.157.0" },
-    { "path": "crates/providers/tests/interactive_cli_real.rs", "reason": "consumes AI quota; requires the owner's explicit approval" },
-    { "path": "crates/providers/tests/interactive_real.rs", "reason": "starts a real Claude Code session: consumes AI quota; requires the owner's explicit approval" },
+    {
+      "path": "crates/providers/src/codex/managed_policy.rs",
+      "reason": "run explicitly when certifying installed Codex CLI 0.157.0"
+    },
+    {
+      "path": "crates/providers/tests/interactive_cli_real.rs",
+      "reason": "consumes AI quota; requires the owner's explicit approval"
+    },
+    {
+      "path": "crates/providers/tests/interactive_real.rs",
+      "reason": "starts a real Claude Code session: consumes AI quota; requires the owner's explicit approval"
+    },
     { "path": "crates/providers/tests/pipeline.rs", "reason": "uses the real Claude Code install on this machine" },
-    { "path": "crates/providers/tests/pipeline.rs", "reason": "consumes AI quota; requires the owner's explicit approval" },
-    { "path": "crates/providers/tests/turns_real.rs", "reason": "uses the real Codex install on this machine (no prompt, no quota)" },
-    { "path": "crates/providers/tests/turns_real.rs", "reason": "uses the real Gemini CLI install on this machine (no prompt, no quota)" },
-    { "path": "crates/providers/tests/turns_real.rs", "reason": "consumes AI quota; requires the owner's explicit approval" },
-    { "path": "crates/providers/tests/turns_real.rs", "reason": "consumes AI quota; requires the owner's explicit approval" }
+    {
+      "path": "crates/providers/tests/pipeline.rs",
+      "reason": "consumes AI quota; requires the owner's explicit approval"
+    },
+    {
+      "path": "crates/providers/tests/turns_real.rs",
+      "reason": "uses the real Codex install on this machine (no prompt, no quota)"
+    },
+    {
+      "path": "crates/providers/tests/turns_real.rs",
+      "reason": "uses the real Gemini CLI install on this machine (no prompt, no quota)"
+    },
+    {
+      "path": "crates/providers/tests/turns_real.rs",
+      "reason": "consumes AI quota; requires the owner's explicit approval"
+    },
+    {
+      "path": "crates/providers/tests/turns_real.rs",
+      "reason": "consumes AI quota; requires the owner's explicit approval"
+    }
   ]
 }

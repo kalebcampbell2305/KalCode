@@ -1,5 +1,5 @@
-import { createServer, type Server } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium, expect, type Page, test } from "@playwright/test";
@@ -104,7 +104,8 @@ async function fixture(): Promise<Fixture> {
     response.setHeader("cache-control", "no-store");
     if (url.pathname === "/two") response.end(page("Fixture Two", "TWO"));
     else if (url.pathname === "/bidi") response.end(page("Trusted \u202e moc.live \u2066 x", "BIDI"));
-    else if (url.pathname === "/security") response.end(`<!doctype html><html><head><title>Security Fixture</title></head><body>
+    else if (url.pathname === "/security")
+      response.end(`<!doctype html><html><head><title>Security Fixture</title></head><body>
       <a id="target-popup" target="_blank" href="/two">Target popup</a>
       <button id="script-popup" onclick="window.open('/two', '_blank')">Script popup</button>
       <a id="download-attribute" download="kalcode-browser-unsafe.txt" href="/attachment">Download attribute</a>
@@ -318,7 +319,9 @@ test("native Browser is isolated, navigates in split panes and restores safe wor
     await expect(secondFrame).toHaveAttribute("data-focused", "true");
     const beforePopupCount = remotePages().length;
     let downloadEvents = 0;
-    remote.on("download", () => { downloadEvents += 1; });
+    remote.on("download", () => {
+      downloadEvents += 1;
+    });
     await remote.locator("#target-popup").click();
     await remote.locator("#script-popup").click();
     await remote.locator("#download-attribute").click();

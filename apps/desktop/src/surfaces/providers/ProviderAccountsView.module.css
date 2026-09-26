@@ -11,9 +11,7 @@
 }
 
 .safety {
-  background:
-    radial-gradient(28rem 10rem at 0% 0%, var(--color-accent-soft), transparent 72%),
-    var(--color-surface-1);
+  background: radial-gradient(28rem 10rem at 0% 0%, var(--color-accent-soft), transparent 72%), var(--color-surface-1);
 }
 
 .note,

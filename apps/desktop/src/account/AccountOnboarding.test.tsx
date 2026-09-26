@@ -2,9 +2,9 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { AccountSnapshot, PurchasableTier, RuntimeStatus } from "../ipc/account.ts";
-import type { SocialProvider } from "./AccountProvider.tsx";
 import { AccountGate } from "./AccountGate.tsx";
 import { AccountOnboarding, type AccountOnboardingActions } from "./AccountOnboarding.tsx";
+import type { SocialProvider } from "./AccountProvider.tsx";
 
 function snapshot(phase: AccountSnapshot["phase"]): AccountSnapshot {
   const identified = ["authenticated_unactivated", "confirming_plan", "ready", "offline_grace"].includes(phase);
@@ -51,7 +51,9 @@ describe("AccountOnboarding", () => {
     await userEvent.click(screen.getByRole("button", { name: "Email me a sign-in link" }));
     expect(accountActions.startEmail).toHaveBeenCalledWith("owner@example.com");
 
-    rerender(<AccountOnboarding snapshot={snapshot("signed_out")} busy={false} error={null} actions={accountActions} />);
+    rerender(
+      <AccountOnboarding snapshot={snapshot("signed_out")} busy={false} error={null} actions={accountActions} />,
+    );
     await userEvent.click(screen.getByRole("button", { name: "Create with email" }));
     expect(screen.getByRole("button", { name: "Email me a sign-in link" })).toBeInTheDocument();
   });
@@ -92,7 +94,13 @@ describe("AccountGate", () => {
   it("opens the workspace only after both account and runtime are ready", () => {
     const accountActions = actions();
     const { rerender } = render(
-      <AccountGate snapshot={snapshot("ready")} runtime={runtime("starting")} busy={false} error={null} actions={accountActions}>
+      <AccountGate
+        snapshot={snapshot("ready")}
+        runtime={runtime("starting")}
+        busy={false}
+        error={null}
+        actions={accountActions}
+      >
         <p>Workspace</p>
       </AccountGate>,
     );
@@ -100,7 +108,13 @@ describe("AccountGate", () => {
     expect(screen.getByRole("heading", { name: "Starting your workspace" })).toBeInTheDocument();
 
     rerender(
-      <AccountGate snapshot={snapshot("ready")} runtime={runtime("ready")} busy={false} error={null} actions={accountActions}>
+      <AccountGate
+        snapshot={snapshot("ready")}
+        runtime={runtime("ready")}
+        busy={false}
+        error={null}
+        actions={accountActions}
+      >
         <p>Workspace</p>
       </AccountGate>,
     );
@@ -110,7 +124,13 @@ describe("AccountGate", () => {
   it("shows cleanup truth after logout instead of presenting a relogin form", () => {
     const accountActions = actions();
     const { rerender } = render(
-      <AccountGate snapshot={snapshot("signed_out")} runtime={runtime("draining")} busy={false} error={null} actions={accountActions}>
+      <AccountGate
+        snapshot={snapshot("signed_out")}
+        runtime={runtime("draining")}
+        busy={false}
+        error={null}
+        actions={accountActions}
+      >
         <p>Workspace</p>
       </AccountGate>,
     );
@@ -118,7 +138,13 @@ describe("AccountGate", () => {
     expect(screen.queryByRole("heading", { name: "Welcome to KalCode" })).toBeNull();
 
     rerender(
-      <AccountGate snapshot={snapshot("signed_out")} runtime={runtime("blocked_unclean")} busy={false} error={null} actions={accountActions}>
+      <AccountGate
+        snapshot={snapshot("signed_out")}
+        runtime={runtime("blocked_unclean")}
+        busy={false}
+        error={null}
+        actions={accountActions}
+      >
         <p>Workspace</p>
       </AccountGate>,
     );
@@ -128,7 +154,13 @@ describe("AccountGate", () => {
 
   it("allows signed offline authority only after the runtime reports ready", () => {
     render(
-      <AccountGate snapshot={snapshot("offline_grace")} runtime={runtime("ready")} busy={false} error={null} actions={actions()}>
+      <AccountGate
+        snapshot={snapshot("offline_grace")}
+        runtime={runtime("ready")}
+        busy={false}
+        error={null}
+        actions={actions()}
+      >
         <p>Workspace</p>
       </AccountGate>,
     );

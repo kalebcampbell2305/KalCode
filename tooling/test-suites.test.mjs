@@ -148,10 +148,7 @@ test("Node summaries are exact and ambiguous or partial output fails closed", ()
     skipReasons: [],
   });
   assert.throws(() => parseNodeTestReport("# tests 3\n# pass 3\n"), /missing or ambiguous/);
-  assert.throws(
-    () => parseNodeTestReport(`${nodeSummary({ tests: 2, pass: 2 })}\n# tests 2`),
-    /missing or ambiguous/,
-  );
+  assert.throws(() => parseNodeTestReport(`${nodeSummary({ tests: 2, pass: 2 })}\n# tests 2`), /missing or ambiguous/);
 });
 
 test("Cargo parsing aggregates harnesses and rejects filtering", () => {
@@ -245,7 +242,10 @@ test("suite selection is explicit and cannot silently omit an unknown suite", ()
   assert.equal(selectSuites(inventory, ["run", "unit"]).length, 8);
   assert.equal(selectSuites(inventory, ["run", "e2e"]).length, 2);
   assert.equal(selectSuites(inventory, ["run", "all"]).length, 10);
-  assert.deepEqual(selectSuites(inventory, ["--suite", "api-unit"]).map(({ id }) => id), ["api-unit"]);
+  assert.deepEqual(
+    selectSuites(inventory, ["--suite", "api-unit"]).map(({ id }) => id),
+    ["api-unit"],
+  );
   assert.throws(() => selectSuites(inventory, ["--suite", "missing"]), /usage/);
 });
 

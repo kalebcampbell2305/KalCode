@@ -1,11 +1,17 @@
 export { BrowserPane, type BrowserPaneProps } from "./BrowserPane.tsx";
-export { createBrowserBridge, type BrowserAction, type BrowserBounds, type BrowserBridge, type BrowserState } from "./browserBridge.ts";
 export {
+  type BrowserAction,
+  type BrowserBounds,
+  type BrowserBridge,
+  type BrowserState,
+  createBrowserBridge,
+} from "./browserBridge.ts";
+export {
+  type BrowserPaneContent,
   browserContent,
   newBrowserId,
   normalizeBrowserAddress,
   persistableBrowserUrl,
   updateBrowserUrl,
-  type BrowserPaneContent,
   type ViewportPreset,
 } from "./browserModel.ts";

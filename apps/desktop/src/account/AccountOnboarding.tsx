@@ -1,12 +1,12 @@
 import { Button, TextInput } from "@kalcode/ui/components";
 import { Check, Circle, Mail, ShieldCheck } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
-import { PLAN_CATALOG, type AccountSnapshot, type PurchasableTier } from "../ipc/account.ts";
+import { type AccountSnapshot, PLAN_CATALOG, type PurchasableTier } from "../ipc/account.ts";
 import { Mark } from "../shell/Brand.tsx";
-import type { AccountUiError } from "./accountState.ts";
-import type { SocialProvider } from "./AccountProvider.tsx";
-import { SocialAuthButtons } from "./SocialAuthButtons.tsx";
 import styles from "./Account.module.css";
+import type { SocialProvider } from "./AccountProvider.tsx";
+import type { AccountUiError } from "./accountState.ts";
+import { SocialAuthButtons } from "./SocialAuthButtons.tsx";
 
 export interface AccountOnboardingActions {
   startEmail(email: string): Promise<void>;
@@ -95,8 +95,12 @@ export function AccountOnboarding({ snapshot, busy, error, actions }: AccountOnb
             <p>Sign in securely. Your session stays in this device's credential store.</p>
             <SocialAuthButtons busy={busy} startSocial={actions.startSocial} />
             <div className={styles.actions}>
-              <Button variant="primary" size="lg" disabled={busy} onClick={() => setMode("sign_in")}>Continue with email</Button>
-              <Button size="lg" disabled={busy} onClick={() => setMode("create")}>Create with email</Button>
+              <Button variant="primary" size="lg" disabled={busy} onClick={() => setMode("sign_in")}>
+                Continue with email
+              </Button>
+              <Button size="lg" disabled={busy} onClick={() => setMode("create")}>
+                Create with email
+              </Button>
             </div>
           </div>
         ) : snapshot.phase === "signed_out" ? (
@@ -105,20 +109,38 @@ export function AccountOnboarding({ snapshot, busy, error, actions }: AccountOnb
             <h1 id="account-title">Continue with email</h1>
             <p>KalCode sends the same private, one-time link whether this email is new or returning.</p>
             <label htmlFor={emailId}>Email</label>
-            <TextInput id={emailId} type="email" value={email} autoComplete="email" required autoFocus onChange={(event) => setEmail(event.target.value)} />
+            <TextInput
+              id={emailId}
+              type="email"
+              value={email}
+              autoComplete="email"
+              required
+              autoFocus
+              onChange={(event) => setEmail(event.target.value)}
+            />
             <div className={styles.actions}>
-              <Button type="submit" variant="primary" busy={busy} icon={<Mail />}>Email me a sign-in link</Button>
-              <Button type="button" variant="ghost" disabled={busy} onClick={() => setMode(null)}>Back</Button>
+              <Button type="submit" variant="primary" busy={busy} icon={<Mail />}>
+                Email me a sign-in link
+              </Button>
+              <Button type="button" variant="ghost" disabled={busy} onClick={() => setMode(null)}>
+                Back
+              </Button>
             </div>
           </form>
         ) : snapshot.phase === "email_pending" ? (
           <div className={styles.center}>
             <p className={styles.eyebrow}>Verification</p>
             <h1 id="account-title">Check your email</h1>
-            <p>Open the one-time link sent to <strong data-selectable>{snapshot.pendingEmail}</strong>, then return here.</p>
+            <p>
+              Open the one-time link sent to <strong data-selectable>{snapshot.pendingEmail}</strong>, then return here.
+            </p>
             <div className={styles.actions}>
-              <Button variant="primary" busy={busy} onClick={() => void actions.pollEmail()}>I've verified my email</Button>
-              <Button variant="ghost" disabled={busy} onClick={() => void actions.cancelAuth()}>Cancel</Button>
+              <Button variant="primary" busy={busy} onClick={() => void actions.pollEmail()}>
+                I've verified my email
+              </Button>
+              <Button variant="ghost" disabled={busy} onClick={() => void actions.cancelAuth()}>
+                Cancel
+              </Button>
             </div>
           </div>
         ) : snapshot.phase === "social_pending" ? (
@@ -127,7 +149,9 @@ export function AccountOnboarding({ snapshot, busy, error, actions }: AccountOnb
             <p className={styles.eyebrow}>Secure sign in</p>
             <h1 id="account-title">Finish in your browser</h1>
             <p>Complete the Google or Microsoft sign-in in your system browser, then return to KalCode.</p>
-            <Button variant="ghost" disabled={busy} onClick={() => void actions.cancelAuth()}>Cancel</Button>
+            <Button variant="ghost" disabled={busy} onClick={() => void actions.cancelAuth()}>
+              Cancel
+            </Button>
           </div>
         ) : snapshot.phase === "authenticated_unactivated" ? (
           <div>
@@ -148,7 +172,9 @@ export function AccountOnboarding({ snapshot, busy, error, actions }: AccountOnb
                   <Button
                     variant={plan.tier === "pro" ? "primary" : "secondary"}
                     busy={busy}
-                    onClick={() => void (plan.action === "activate_free" ? actions.activateFree() : actions.checkout(plan.tier))}
+                    onClick={() =>
+                      void (plan.action === "activate_free" ? actions.activateFree() : actions.checkout(plan.tier))
+                    }
                   >
                     {plan.tier === "free" ? "Continue with Free" : `Choose ${plan.name}`}
                   </Button>
@@ -163,7 +189,9 @@ export function AccountOnboarding({ snapshot, busy, error, actions }: AccountOnb
             <h1 id="account-title">Confirming plan</h1>
             <p>Stay here while KalCode checks the confirmed payment and signed plan from the server.</p>
             {error?.retryable ? (
-              <Button variant="primary" busy={busy} onClick={() => void actions.retry()}>Check again</Button>
+              <Button variant="primary" busy={busy} onClick={() => void actions.retry()}>
+                Check again
+              </Button>
             ) : null}
           </div>
         ) : (
@@ -171,11 +199,17 @@ export function AccountOnboarding({ snapshot, busy, error, actions }: AccountOnb
             <p className={styles.eyebrow}>Account unavailable</p>
             <h1 id="account-title">Reconnect to continue</h1>
             <p>KalCode could not verify account authority. Your workspace remains locked.</p>
-            <Button variant="primary" busy={busy} onClick={() => void actions.retry()}>Try again</Button>
+            <Button variant="primary" busy={busy} onClick={() => void actions.retry()}>
+              Try again
+            </Button>
           </div>
         )}
 
-        {error ? <p className={styles.error} role="alert">{error.message}</p> : null}
+        {error ? (
+          <p className={styles.error} role="alert">
+            {error.message}
+          </p>
+        ) : null}
       </section>
     </main>
   );

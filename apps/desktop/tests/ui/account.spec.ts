@@ -33,9 +33,7 @@ test.describe("desktop account authority", () => {
     await page.goto("/?scenario=account-offline-grace");
     await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
     await expect(page.getByRole("status").filter({ hasText: "Using verified offline access" })).toBeVisible();
-    const results = await new AxeBuilder({ page })
-      .withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"])
-      .analyze();
+    const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze();
     expect(
       results.violations.filter((violation) => violation.impact === "serious" || violation.impact === "critical"),
     ).toEqual([]);

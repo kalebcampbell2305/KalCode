@@ -21,6 +21,8 @@ describe("contextDropAvailable", () => {
   it("does not render gated, preview, or hidden capability", () => {
     expect(contextDropAvailable([feature("context_drop", "gated"), feature("context_firewall")])).toBe(false);
     expect(contextDropAvailable([feature("context_drop", "preview"), feature("context_firewall")])).toBe(false);
-    expect(contextDropAvailable([feature("context_drop"), feature("context_firewall", "available", false)])).toBe(false);
+    expect(contextDropAvailable([feature("context_drop"), feature("context_firewall", "available", false)])).toBe(
+      false,
+    );
   });
 });
