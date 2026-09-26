@@ -40,7 +40,7 @@ export interface DiffFileData {
 
 export type DiffMode = "unified" | "split";
 
-export type DiffNotice = "binary" | "truncated" | "no_content";
+export type DiffNotice = "binary" | "truncated" | "no_content" | "content_unavailable";
 
 export type DiffRow =
   | { type: "file"; key: string; fileIndex: number; file: DiffFileData }
@@ -112,7 +112,12 @@ export function buildRows(files: readonly DiffFileData[], mode: DiffMode): DiffR
       return;
     }
     if (file.hunks.length === 0 && !file.hunksTruncated) {
-      rows.push({ type: "notice", key: `${base}:none`, fileIndex, notice: "no_content" });
+      rows.push({
+        type: "notice",
+        key: `${base}:none`,
+        fileIndex,
+        notice: file.additions > 0 || file.deletions > 0 ? "content_unavailable" : "no_content",
+      });
     }
     file.hunks.forEach((hunk, hunkIndex) => {
       rows.push({ type: "hunk", key: `${base}:h${hunkIndex}`, fileIndex, header: hunk.header });

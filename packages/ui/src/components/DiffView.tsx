@@ -46,6 +46,7 @@ const NOTICE_TEXT: Record<DiffNotice, string> = {
   binary: "Binary file — contents not shown.",
   truncated: "This file's diff was cut at its size limit; later lines aren't shown.",
   no_content: "No line changes (mode, rename or empty file).",
+  content_unavailable: "Line changes are not available.",
 };
 
 const KIND_LABEL: Record<DiffLine["kind"], string> = {
