@@ -417,7 +417,7 @@ test.describe("Settings, KalVoice", () => {
 
     await change.click();
     await page.keyboard.press("Shift+KeyK");
-    await expect(alert).toHaveText("Push to talk uses one key on its own, without Ctrl, Alt or Shift.");
+    await expect(alert).toHaveText("Push to talk uses one key on its own, without Command/Ctrl, Option/Alt or Shift.");
 
     await change.click();
     await page.keyboard.press("Shift");

@@ -156,7 +156,9 @@ test.describe("providers", () => {
     const pane = frame.locator("[data-provider-pane]");
     await expect(page.getByRole("heading", { level: 1, name: "kalcode-site" })).toBeVisible();
     await expect(pane).toHaveAttribute("aria-label", "Gemini sign-in, Gemini CLI pane, account Side project");
-    await expect(pane.getByLabel("Provider account: Side project")).toHaveText("Account · Side project");
+    await expect(pane.getByTitle("Provider account: Side project", { exact: true })).toHaveText(
+      "Provider Account · Side project",
+    );
     await expect(pane.locator("[data-pane-terminal] .xterm-rows")).toContainText("/auth");
 
     await page.keyboard.down("F8");

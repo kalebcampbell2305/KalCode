@@ -74,6 +74,7 @@ export type MemoryScenario =
   | "keychain-failure"
   | "code"
   | "threads"
+  | "threads-context"
   | "no-providers"
   | "provider-accounts-empty"
   | "account-fresh"
@@ -224,9 +225,14 @@ export function createMemoryTransport(
       })),
       // Every product feature is gated until its campaign merges (crates/native-core/src/flags.rs);
       // development builds show gated features. The pane system (Z7-W1) is available.
+      // Only the explicit context-test scenario enables both sharing and its safety authority.
       features: PRODUCT_FEATURES.map((id) => ({
         id,
-        state: id === "pane_system" ? "available" : "gated",
+        state:
+          id === "pane_system" ||
+          (scenario === "threads-context" && (id === "context_drop" || id === "context_firewall"))
+            ? "available"
+            : "gated",
         visible: true,
       })),
     },
@@ -417,7 +423,11 @@ export function createMemoryTransport(
   const threads = createThreadsMemory(
     (event, correlation = {}, source = "core") => emit(event, { correlation, source }),
     requireCore,
-    scenario === "threads" || scenario === "no-providers" ? scenario : "default",
+    scenario === "threads-context"
+      ? "threads"
+      : scenario === "threads" || scenario === "no-providers"
+        ? scenario
+        : "default",
     () =>
       ((code.handlers.workspace_list?.({}) ?? []) as Workspace[])
         .filter((w) => w.available)
@@ -751,6 +761,7 @@ function readScenario(): MemoryScenario {
     value === "keychain-failure" ||
     value === "code" ||
     value === "threads" ||
+    value === "threads-context" ||
     value === "no-providers" ||
     value === "provider-accounts-empty" ||
     value === "account-fresh" ||

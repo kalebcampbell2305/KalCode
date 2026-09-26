@@ -252,8 +252,17 @@ test.describe("threads", () => {
     await expect(detail(page).getByLabel("Message")).toHaveValue("");
   });
 
-  test("context drop previews redactions and sends to the exact selected thread", async ({ page }) => {
+  test("gated context drop stays hidden", async ({ page }) => {
     await openThreads(page, "threads");
+    await list(page)
+      .getByRole("button", { name: /Write Unit Tests for Parser Module/ })
+      .click();
+    await expect(detail(page).getByLabel("Message")).toBeVisible();
+    await expect(detail(page).getByRole("button", { name: "Add context" })).toHaveCount(0);
+  });
+
+  test("context drop previews redactions and sends to the exact selected thread", async ({ page }) => {
+    await openThreads(page, "threads-context");
     await list(page)
       .getByRole("button", { name: /Write Unit Tests for Parser Module/ })
       .click();
