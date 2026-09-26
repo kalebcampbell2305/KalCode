@@ -380,10 +380,10 @@ function commandForSuite(suite, reportPath, platform) {
   const args = ["--filter", suite.package, "run", suite.script];
   const environment = {};
   if (suite.runner === "vitest") {
-    args.push("--", "--reporter=json", `--outputFile=${reportPath}`);
+    args.push("--reporter=json", `--outputFile=${reportPath}`);
   }
   if (suite.runner === "playwright") {
-    args.push("--", "--reporter=json");
+    args.push("--reporter=json");
     environment.PLAYWRIGHT_JSON_OUTPUT_FILE = reportPath;
   }
   if (platform === "win32") {

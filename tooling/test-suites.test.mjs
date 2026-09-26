@@ -21,6 +21,17 @@ import {
 
 const inventory = loadTestSuiteInventory();
 
+test("the registered Vitest command writes and validates its real JSON report", () => {
+  const environment = { ...process.env };
+  delete environment.NODE_TEST_CONTEXT;
+  const result = runSuite(
+    inventory.suites.find(({ id }) => id === "protocol-unit"),
+    { environment },
+  );
+  assert.ok(result.executed >= 56);
+  assert.equal(result.failed, 0);
+});
+
 test("the registered runner launches a real package suite and retains its exit status", () => {
   const root = mkdtempSync(join(tmpdir(), "kalcode gate fixture "));
   const environment = { ...process.env };
