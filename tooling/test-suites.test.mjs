@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import {
@@ -17,6 +20,35 @@ import {
 } from "./test-suites.mjs";
 
 const inventory = loadTestSuiteInventory();
+
+test("the registered runner launches a real package suite and retains its exit status", () => {
+  const root = mkdtempSync(join(tmpdir(), "kalcode gate fixture "));
+  const environment = { ...process.env };
+  // Launch an independent CLI gate, rather than Node's nested-test IPC reporter.
+  delete environment.NODE_TEST_CONTEXT;
+  try {
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({
+        name: "@kalcode/gate-fixture",
+        private: true,
+        scripts: { test: "node --test fixture.test.cjs", fail: 'node -e "process.exit(2)"' },
+      }),
+    );
+    writeFileSync(
+      join(root, "fixture.test.cjs"),
+      "const test = require('node:test'); test('one', () => {}); test('two', () => {});\n",
+    );
+    const selected = suite({ package: "@kalcode/gate-fixture" });
+    assert.equal(runSuite(selected, { root, environment }).executed, 2);
+    assert.throws(
+      () => runSuite({ ...selected, script: "fail" }, { root, environment }),
+      /did not complete successfully/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 function suite(overrides = {}) {
   return {

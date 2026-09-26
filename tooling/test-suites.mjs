@@ -375,19 +375,29 @@ function readJsonReport(path, label) {
   }
 }
 
-function commandForSuite(suite, reportPath) {
+function commandForSuite(suite, reportPath, platform) {
   if (suite.runner === "cargo") return { file: suite.command[0], args: suite.command.slice(1), environment: {} };
-  const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
   const args = ["--filter", suite.package, "run", suite.script];
+  const environment = {};
   if (suite.runner === "vitest") {
     args.push("--", "--reporter=json", `--outputFile=${reportPath}`);
-    return { file: pnpm, args, environment: {} };
   }
   if (suite.runner === "playwright") {
     args.push("--", "--reporter=json");
-    return { file: pnpm, args, environment: { PLAYWRIGHT_JSON_OUTPUT_FILE: reportPath } };
+    environment.PLAYWRIGHT_JSON_OUTPUT_FILE = reportPath;
   }
-  return { file: pnpm, args, environment: {} };
+  if (platform === "win32") {
+    // Node cannot execute .cmd files directly. Pass literal arguments through a hidden,
+    // noninteractive PowerShell process, without interpolating them as shell expressions.
+    const literal = (value) => `'${value.replaceAll("'", "''")}'`;
+    const script = `& 'pnpm.cmd' ${args.map(literal).join(" ")}; exit $LASTEXITCODE`;
+    return {
+      file: "powershell.exe",
+      args: ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")],
+      environment,
+    };
+  }
+  return { file: "pnpm", args, environment };
 }
 
 export function runSuite(
@@ -404,7 +414,7 @@ export function runSuite(
   const temporaryDirectory = mkdtempSync(join(temporaryParent, "kalcode-test-suite-"));
   const reportPath = join(temporaryDirectory, "report.json");
   try {
-    const command = commandForSuite(suite, reportPath);
+    const command = commandForSuite(suite, reportPath, platform);
     const child = spawn(command.file, command.args, {
       cwd: root,
       env: { ...environment, ...command.environment, NO_COLOR: "1" },
