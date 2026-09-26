@@ -60,6 +60,7 @@ export function UiIntentsProvider({ children }: { children: ReactNode }) {
   const permissions = usePermissions();
   const threadsIntent = useThreadsIntent();
   const handlers = useRef<FocusHandler[]>([]);
+  const focusGeneration = useRef(0);
   const [dashboardFilter, setDashboardFilter] = useState<DashboardFilterRequest | null>(null);
   const [paneFocus, setPaneFocus] = useState<PaneFocusRequest | null>(null);
 
@@ -67,7 +68,16 @@ export function UiIntentsProvider({ children }: { children: ReactNode }) {
   const live = useRef({ navigate, workspaces, permissions, threadsIntent, client, info });
   live.current = { navigate, workspaces, permissions, threadsIntent, client, info };
 
+  useEffect(
+    () => () => {
+      focusGeneration.current += 1;
+    },
+    [],
+  );
+
   const filterDashboard = useCallback((chip: DashboardChip) => {
+    focusGeneration.current += 1;
+    setPaneFocus(null);
     live.current.navigate("dashboard");
     setDashboardFilter((current) => ({ chip, nonce: (current?.nonce ?? 0) + 1 }));
   }, []);
@@ -81,12 +91,17 @@ export function UiIntentsProvider({ children }: { children: ReactNode }) {
 
   const focus = useCallback(
     async (target: FocusTarget) => {
+      const generation = ++focusGeneration.current;
+      const originClient = live.current.client;
+      const isCurrent = () => generation === focusGeneration.current && originClient === live.current.client;
+      setPaneFocus(null);
       for (const handler of handlers.current) {
         try {
           if (await handler(target)) return;
         } catch {
           // A failing handler never blocks the default behaviour.
         }
+        if (!isCurrent()) return;
       }
       const { navigate, workspaces, permissions, threadsIntent, client, info } = live.current;
       switch (target.kind) {
@@ -101,7 +116,7 @@ export function UiIntentsProvider({ children }: { children: ReactNode }) {
           else navigate("dashboard");
           return;
         case "workspace":
-          if (await workspaces.activate(target.workspaceId)) navigate("code");
+          if ((await workspaces.activate(target.workspaceId)) && isCurrent()) navigate("code");
           return;
         case "thread": {
           // Interactive provider threads live in a provider pane in the Code surface (Z7-W4);
@@ -112,6 +127,7 @@ export function UiIntentsProvider({ children }: { children: ReactNode }) {
           if (panesOn) {
             try {
               const thread = await client.getThread(target.threadId);
+              if (!isCurrent()) return;
               workspaceId = thread.workspaceId;
               isPane =
                 thread.runtimeKind === "interactive_pty" ||
@@ -125,11 +141,13 @@ export function UiIntentsProvider({ children }: { children: ReactNode }) {
               isPane = false;
             }
           }
+          if (!isCurrent()) return;
           if (isPane && workspaceId) {
             const ok = workspaces.active?.id === workspaceId || (await workspaces.activate(workspaceId));
+            if (!isCurrent()) return;
             if (ok) {
               navigate("code");
-              setPaneFocus((current) => ({ threadId: target.threadId, nonce: (current?.nonce ?? 0) + 1 }));
+              setPaneFocus({ threadId: target.threadId, nonce: generation });
               return;
             }
           }
