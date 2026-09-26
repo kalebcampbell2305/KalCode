@@ -93,7 +93,10 @@ fn nested_unicode_values_remain_redacted_and_keep_neighboring_fields() {
 struct Sink(Arc<Mutex<Vec<u8>>>);
 impl Write for Sink {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().expect("lock").extend_from_slice(bytes);
+        self.0
+            .lock()
+            .map_err(|_| std::io::Error::other("test sink lock poisoned"))?
+            .extend_from_slice(bytes);
         Ok(bytes.len())
     }
     fn flush(&mut self) -> std::io::Result<()> {

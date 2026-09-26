@@ -348,7 +348,7 @@ fn encoded_json_field_findings(text: &str, strings: &[JsonString]) -> Vec<Findin
         }
         // Reuse the quoted-value confidence and placeholder rules on the logical field.
         // Only the original value span is replaced; key spelling and envelope stay intact.
-        let quoted = serde_json::to_string(&value.decoded).expect("string serialization");
+        let quoted = serde_json::Value::String(value.decoded.clone()).to_string();
         let normalized = format!("{prefix}{quoted}");
         for finding in quoted_assignments_in(&normalized, &[]) {
             findings.push(Finding {
