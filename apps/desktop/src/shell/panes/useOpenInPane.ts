@@ -1,5 +1,6 @@
 import type { PaneContent } from "@kalcode/protocol";
-import { useCallback } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { useNavigation } from "../navigation.tsx";
 import { dispatchPaneCommand, type PaneCommandResult } from "./paneCommands.ts";
@@ -18,14 +19,40 @@ export interface OpenInPaneOptions {
  * opens in Threads instead (the canvas decides).
  */
 export function useOpenInPane(): (content: PaneContent, options?: OpenInPaneOptions) => Promise<PaneCommandResult> {
+  const { client } = useRuntime();
   const { navigate } = useNavigation();
   const { active, activate } = useWorkspaces();
   const activeId = active?.id ?? null;
+  const lifetime = useMemo(() => ({ client, mounted: false, epoch: 0, request: 0 }), [client]);
+  const live = useRef(lifetime);
+  live.current = lifetime;
+  useEffect(() => {
+    lifetime.mounted = true;
+    lifetime.epoch += 1;
+    return () => {
+      lifetime.mounted = false;
+    };
+  }, [lifetime]);
   return useCallback(
     async (content, options = {}) => {
+      // Silent cancellation: an obsolete open must not navigate or raise an old error.
+      const cancelled = { handled: false, message: "" } as const;
+      if (live.current !== lifetime || !lifetime.mounted) return cancelled;
+      const epoch = lifetime.epoch;
+      const request = ++lifetime.request;
+      const isCurrent = () =>
+        live.current === lifetime && lifetime.mounted && lifetime.epoch === epoch && lifetime.request === request;
       const target = options.workspaceId ?? activeId;
       // The displayed workspace can have an older switch pending; submit this intent too.
-      if (target && !(await activate(target))) {
+      let activated: boolean;
+      try {
+        activated = target ? await activate(target) : true;
+      } catch (error) {
+        if (!isCurrent()) return cancelled;
+        throw error;
+      }
+      if (!isCurrent()) return cancelled;
+      if (!activated) {
         return { handled: false, message: "KalCode couldn't open that workspace." };
       }
       navigate("code");
@@ -34,6 +61,6 @@ export function useOpenInPane(): (content: PaneContent, options?: OpenInPaneOpti
         { queue: true, scope: target },
       );
     },
-    [activeId, activate, navigate],
+    [activeId, activate, navigate, lifetime],
   );
 }
