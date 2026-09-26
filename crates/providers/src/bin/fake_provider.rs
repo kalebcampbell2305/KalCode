@@ -35,14 +35,16 @@ const GEMINI_TOOLS: &str = include_str!("../../tests/fixtures/gemini/turn_tools.
 const GEMINI_QUOTA: &str = include_str!("../../tests/fixtures/gemini/quota.jsonl");
 
 fn hidden_command(program: impl AsRef<OsStr>) -> Command {
-    let mut command = Command::new(program);
+    let command = Command::new(program);
     #[cfg(windows)]
-    {
+    let command = {
         use std::os::windows::process::CommandExt;
 
+        let mut command = command;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         command.creation_flags(CREATE_NO_WINDOW);
-    }
+        command
+    };
     command
 }
 

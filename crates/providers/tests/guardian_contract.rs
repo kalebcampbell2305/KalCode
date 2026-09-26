@@ -1,9 +1,11 @@
 use std::io::Cursor;
 
 use guardian::marker::{JobId, ProfileMarker, decode_marker, encode_marker};
+#[cfg(windows)]
+use guardian::protocol::Response;
 use guardian::protocol::{
-    ChannelNonce, Envelope, InboundGuard, MAX_FRAME_BYTES, ProtocolError, Request, Response,
-    read_frame, write_frame,
+    ChannelNonce, Envelope, InboundGuard, MAX_FRAME_BYTES, ProtocolError, Request, read_frame,
+    write_frame,
 };
 use guardian::{
     DesktopGeneration, ProcessIdentity, ProfileCapability, ProfileGeneration, ProfileIdentity,

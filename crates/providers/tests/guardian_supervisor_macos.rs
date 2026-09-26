@@ -12,33 +12,35 @@ use kalcode_providers::process::{ProcessError, ProcessSpec, run_probe_guarded};
 use kalcode_pty::{ProgramSpec, PtySession, TerminalSize};
 use uuid::Uuid;
 
+type FixtureResult<T> = Result<T, Box<dyn std::error::Error>>;
+
 fn helper() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_kalcode-provider-guardian"))
 }
 
-fn runtime() -> (tempfile::TempDir, GuardianRuntime) {
-    let data = tempfile::tempdir().expect("temporary guardian data root");
-    let runtime = GuardianRuntime::launch(&helper(), data.path()).expect("macOS guardian runtime");
-    (data, runtime)
+fn runtime() -> FixtureResult<(tempfile::TempDir, GuardianRuntime)> {
+    let data = tempfile::tempdir()?;
+    let runtime = GuardianRuntime::launch(&helper(), data.path())?;
+    Ok((data, runtime))
 }
 
-fn probe_lease(runtime: &GuardianRuntime) -> kalcode_providers::guardian::GuardianLease {
+fn probe_lease(
+    runtime: &GuardianRuntime,
+) -> FixtureResult<kalcode_providers::guardian::GuardianLease> {
     let profile = ProfileIdentity::new(
         ProviderId::new(ProviderId::CODEX),
         Uuid::new_v4(),
         runtime.profile_generation(),
-    )
-    .expect("profile identity");
-    runtime
+    )?;
+    Ok(runtime
         .authority()
-        .acquire(profile, ProfileCapability::SharedSession)
-        .expect("guardian lease")
+        .acquire(profile, ProfileCapability::SharedSession)?)
 }
 
 #[test]
 fn guarded_probe_activates_then_proves_the_reserved_group_absent() {
-    let (_data, runtime) = runtime();
-    let lease = probe_lease(&runtime);
+    let (_data, runtime) = runtime().expect("macOS guardian runtime");
+    let lease = probe_lease(&runtime).expect("guardian lease");
     let admission = lease
         .prepare_job("mac-natural-exit".into())
         .expect("prepared admission");
@@ -59,8 +61,8 @@ fn guarded_probe_activates_then_proves_the_reserved_group_absent() {
 
 #[test]
 fn guarded_timeout_reaps_stubborn_root_before_the_anchor_and_group() {
-    let (_data, runtime) = runtime();
-    let lease = probe_lease(&runtime);
+    let (_data, runtime) = runtime().expect("macOS guardian runtime");
+    let lease = probe_lease(&runtime).expect("guardian lease");
     let admission = lease
         .prepare_job("mac-stubborn-tree".into())
         .expect("prepared admission");
@@ -85,7 +87,7 @@ fn guarded_timeout_reaps_stubborn_root_before_the_anchor_and_group() {
 
 #[test]
 fn guarded_pty_uses_the_provider_root_pid_and_completes_custody() {
-    let (_data, runtime) = runtime();
+    let (_data, runtime) = runtime().expect("macOS guardian runtime");
     let guardian = runtime.terminal_guardian().expect("terminal guardian");
     let admission = guardian.prepare("mac-pty").expect("PTY admission");
     let output = Arc::new(Mutex::new(Vec::new()));
@@ -127,7 +129,7 @@ fn guarded_pty_uses_the_provider_root_pid_and_completes_custody() {
 #[test]
 fn existing_nonprivate_guardian_root_is_rejected_without_changing_its_mode() {
     use std::os::unix::fs::PermissionsExt;
-    let (data, runtime) = runtime();
+    let (data, runtime) = runtime().expect("macOS guardian runtime");
     runtime.seal_and_drain().expect("clean initial generation");
     drop(runtime);
     let markers = data.path().join("provider-guardian-markers");
@@ -142,7 +144,7 @@ fn existing_nonprivate_guardian_root_is_rejected_without_changing_its_mode() {
 #[test]
 fn new_guardian_root_is_private() {
     use std::os::unix::fs::PermissionsExt;
-    let (data, runtime) = runtime();
+    let (data, runtime) = runtime().expect("macOS guardian runtime");
     let mode = std::fs::metadata(data.path().join("provider-guardian-markers"))
         .unwrap()
         .permissions()
@@ -154,19 +156,17 @@ fn new_guardian_root_is_private() {
 // Exercise the actual helper boundary, including death between READY and activation.
 // The wire fixture contains no provider credentials and starts only a synthetic shell.
 #[allow(unsafe_code)]
-fn custodian_loss_drains_reserved_group(activate: bool) {
+fn custodian_loss_drains_reserved_group(activate: bool) -> FixtureResult<()> {
     use std::io::{Read, Write};
     use std::os::fd::AsRawFd;
     use std::os::unix::net::UnixStream;
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
     use std::time::Instant;
-    let data = tempfile::tempdir().unwrap();
+    let data = tempfile::tempdir()?;
     let started = data.path().join("activated");
-    let (mut desktop, child_control) = UnixStream::pair().unwrap();
-    desktop
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
+    let (mut desktop, child_control) = UnixStream::pair()?;
+    desktop.set_read_timeout(Some(Duration::from_secs(5)))?;
     let mut command = Command::new(helper());
     command
         .args(["--custodian", "--control-fd", "3"])
@@ -189,16 +189,15 @@ fn custodian_loss_drains_reserved_group(activate: bool) {
             Ok(())
         });
     }
-    let mut child = command.spawn().expect("real custodian helper");
+    let mut child = command.spawn()?;
     drop(command);
     let job = Uuid::new_v4();
     let script = "trap '' TERM; (trap '' TERM; while :; do /bin/sleep 1; done) & printf ready > \"$1\"; while :; do /bin/sleep 1; done";
-    let send = |stream: &mut UnixStream, value: serde_json::Value| {
-        let bytes = serde_json::to_vec(&value).unwrap();
-        stream
-            .write_all(&(bytes.len() as u32).to_be_bytes())
-            .unwrap();
-        stream.write_all(&bytes).unwrap();
+    let send = |stream: &mut UnixStream, value: serde_json::Value| -> FixtureResult<()> {
+        let bytes = serde_json::to_vec(&value)?;
+        stream.write_all(&(bytes.len() as u32).to_be_bytes())?;
+        stream.write_all(&bytes)?;
+        Ok(())
     };
     send(
         &mut desktop,
@@ -206,19 +205,23 @@ fn custodian_loss_drains_reserved_group(activate: bool) {
             "program":b"/bin/sh".to_vec(), "args":[b"-c".to_vec(),script.as_bytes().to_vec(),b"fixture".to_vec(),started.as_os_str().as_encoded_bytes().to_vec()],
             "cwd":null,"env":[],"pty":false
         }}}),
-    );
+    )?;
     let mut length = [0; 4];
-    desktop.read_exact(&mut length).unwrap();
+    desktop.read_exact(&mut length)?;
     let mut bytes = vec![0; u32::from_be_bytes(length) as usize];
-    desktop.read_exact(&mut bytes).unwrap();
-    let ready: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    desktop.read_exact(&mut bytes)?;
+    let ready: serde_json::Value = serde_json::from_slice(&bytes)?;
     assert_eq!(
-        ready["Ready"]["custodian_pid"].as_u64().unwrap(),
+        ready["Ready"]["custodian_pid"]
+            .as_u64()
+            .ok_or("missing custodian PID")?,
         u64::from(child.id())
     );
-    let anchor = ready["Ready"]["anchor_pid"].as_i64().unwrap() as libc::pid_t;
+    let anchor = ready["Ready"]["anchor_pid"]
+        .as_i64()
+        .ok_or("missing anchor PID")? as libc::pid_t;
     if activate {
-        send(&mut desktop, serde_json::json!({"Activate":{"job":job}}));
+        send(&mut desktop, serde_json::json!({"Activate":{"job":job}}))?;
         let deadline = Instant::now() + Duration::from_secs(5);
         while !started.exists() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
@@ -228,9 +231,9 @@ fn custodian_loss_drains_reserved_group(activate: bool) {
             "synthetic root activated before custodian loss"
         );
     }
-    desktop.shutdown(std::net::Shutdown::Both).unwrap();
-    child.kill().expect("inject immediate custodian SIGKILL");
-    child.wait().expect("reap exact custodian");
+    desktop.shutdown(std::net::Shutdown::Both)?;
+    child.kill()?;
+    child.wait()?;
     let deadline = Instant::now() + Duration::from_secs(8);
     loop {
         // SAFETY: signal 0 is a read-only absence query for the just-created group.
@@ -248,14 +251,15 @@ fn custodian_loss_drains_reserved_group(activate: bool) {
     if !activate {
         assert!(!started.exists(), "gated root must never execute");
     }
+    Ok(())
 }
 
 #[test]
 fn killed_custodian_before_activation_cannot_orphan_gated_root_or_anchor() {
-    custodian_loss_drains_reserved_group(false);
+    custodian_loss_drains_reserved_group(false).expect("gated group drained after custodian loss");
 }
 
 #[test]
 fn killed_custodian_after_activation_cannot_orphan_stubborn_group() {
-    custodian_loss_drains_reserved_group(true);
+    custodian_loss_drains_reserved_group(true).expect("active group drained after custodian loss");
 }
