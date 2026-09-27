@@ -14,7 +14,9 @@ import { parseArgs } from "node:util";
 export const API_DIR = fileURLToPath(new URL("../../apps/api/", import.meta.url));
 export const DATABASE_NAME = "kalcode-api";
 
-const ACCOUNT_ID = /^[A-Za-z0-9][A-Za-z0-9-]{0,63}$/;
+// Auth routes derive ids as `acct_${base64url}`; accept that canonical alphabet without allowing
+// whitespace, quotes, path separators, or other SQL-bearing punctuation.
+const ACCOUNT_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 // Deliberately strict: no quotes, spaces or control characters can reach the SQL text.
 const EMAIL =
   /^[A-Za-z0-9.!#$%&*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
@@ -57,7 +59,7 @@ export function parseOperatorArgs(argv, { action }) {
     throw new UsageError("Pass exactly one of --account <id> or --email <verified email>.");
   }
   if (values.account !== undefined && !ACCOUNT_ID.test(values.account)) {
-    throw new UsageError("--account must be an account id (letters, digits, hyphens; at most 64).");
+    throw new UsageError("--account must be an account id (letters, digits, underscores, hyphens; at most 64).");
   }
   if (values.email !== undefined && (values.email.length > 254 || !EMAIL.test(values.email))) {
     throw new UsageError("--email is not a valid email address.");

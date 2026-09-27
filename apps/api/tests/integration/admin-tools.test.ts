@@ -11,6 +11,7 @@ const GRANT = join(REPO_ROOT, "tooling", "admin", "grant-owner.mjs");
 const REVOKE = join(REPO_ROOT, "tooling", "admin", "revoke-owner.mjs");
 const ACCOUNT = "3f0e9d5c-2b7a-4c1e-8f6d-9a0b1c2d3e4f";
 const OTHER = "7a1b2c3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d";
+const GENERATED_ACCOUNT = "acct_abCD_ef-GH0123456789abcd";
 
 let persistTo: string;
 
@@ -56,7 +57,8 @@ beforeAll(() => {
     persistTo,
     "INSERT INTO accounts (id, email, email_verified_at, created_at) VALUES " +
       `('${ACCOUNT}', 'owner-test@example.com', '2026-09-24T00:00:00.000Z', '2026-09-24T00:00:00.000Z'), ` +
-      `('${OTHER}', 'someone@example.com', '2026-09-24T00:00:00.000Z', '2026-09-24T00:00:00.000Z')`,
+      `('${OTHER}', 'someone@example.com', '2026-09-24T00:00:00.000Z', '2026-09-24T00:00:00.000Z'), ` +
+      `('${GENERATED_ACCOUNT}', 'generated@example.com', '2026-09-24T00:00:00.000Z', '2026-09-24T00:00:00.000Z')`,
   );
 });
 
@@ -80,7 +82,36 @@ describe("grant-owner", () => {
     expect(injected.status).toBe(64);
     const reason = tool(GRANT, ["--account", ACCOUNT, "--reason", "line one\nline two", ...local()]);
     expect(reason.status).toBe(64);
-    expect(execSql(persistTo, "SELECT COUNT(*) AS n FROM accounts")[0]?.[0]).toEqual({ n: 2 });
+    expect(execSql(persistTo, "SELECT COUNT(*) AS n FROM accounts")[0]?.[0]).toEqual({ n: 3 });
+  });
+
+  it("accepts the canonical acct_ base64url id used by every authentication path", () => {
+    for (const malformed of [
+      "_acct_missing_prefix",
+      "acct whitespace",
+      "acct/path",
+      "acct'quote",
+      `a${"b".repeat(64)}`,
+    ]) {
+      const rejected = tool(GRANT, ["--account", malformed, "--reason", "generated id", ...local()]);
+      expect(rejected.status, rejected.out).toBe(64);
+    }
+
+    const dryRun = tool(GRANT, ["--account", GENERATED_ACCOUNT, "--reason", "generated id", ...local()]);
+    expect(dryRun.status, dryRun.out).toBe(2);
+    expect(ownerGrants(GENERATED_ACCOUNT)).toEqual([]);
+
+    const grant = tool(GRANT, ["--account", GENERATED_ACCOUNT, "--reason", "generated id", "--confirm", ...local()]);
+    expect(grant.status, grant.out).toBe(0);
+    expect(ownerGrants(GENERATED_ACCOUNT)).toEqual([
+      expect.objectContaining({ tier: "owner", source: "grant", revoked_at: null }),
+    ]);
+
+    const revokeDryRun = tool(REVOKE, ["--account", GENERATED_ACCOUNT, "--reason", "generated id", ...local()]);
+    expect(revokeDryRun.status, revokeDryRun.out).toBe(2);
+    const revoke = tool(REVOKE, ["--account", GENERATED_ACCOUNT, "--reason", "generated id", "--confirm", ...local()]);
+    expect(revoke.status, revoke.out).toBe(0);
+    expect(ownerGrants(GENERATED_ACCOUNT)[0]).toEqual(expect.objectContaining({ revoked_at: expect.any(String) }));
   });
 
   it("refuses accounts that have not signed up", () => {
