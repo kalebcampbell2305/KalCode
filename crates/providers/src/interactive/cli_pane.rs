@@ -363,31 +363,6 @@ impl InteractiveCliProvider {
         tracing::info!(event = "pane.started", provider_id = self.cli.id(), thread_id = %config.thread_id, pid = ?pty.pid());
 
         let _ = shared.pty.set(pty);
-        if self.cli == PaneCli::Codex
-            && let Some(pty) = shared.pty()
-        {
-            // Attaching makes this a listener, so the PTY no longer answers cursor-position
-            // requests itself: answer them here while no terminal view is attached (a view
-            // answers them otherwise), or the TUI waits forever.
-            let watcher = Arc::downgrade(&shared);
-            pty.attach(move |bytes| {
-                let Some(shared) = watcher.upgrade() else {
-                    return false;
-                };
-                let requests = bytes.windows(4).filter(|w| *w == b"[6n").count();
-                if requests > 0
-                    && shared.views.load(std::sync::atomic::Ordering::SeqCst) == 0
-                    && let Some(pty) = shared.pty()
-                {
-                    for _ in 0..requests {
-                        let _ = pty.write(b"[1;1R");
-                    }
-                }
-                // PTY bytes are untrusted: tools can print OSC notifications too.
-                // Only authenticated provider messages may change canonical status.
-                true
-            });
-        }
         self.panes.insert(&config.thread_id, shared.clone());
         let session: Box<dyn AgentSession> = Box::new(InteractiveSession { shared });
         Ok(match shared_lease {

@@ -162,6 +162,47 @@ fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
     condition()
 }
 
+#[derive(Debug)]
+struct ReaderTestKiller;
+
+impl ChildKiller for ReaderTestKiller {
+    fn kill(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+
+    fn clone_killer(&self) -> Box<dyn ChildKiller + Send + Sync> {
+        Box::new(Self)
+    }
+}
+
+fn reader_fixture(listeners: Vec<Listener>) -> (Inner, std::sync::mpsc::Receiver<Vec<u8>>) {
+    let (input, queued) = sync_channel(8);
+    let listeners = listeners
+        .into_iter()
+        .enumerate()
+        .map(|(index, listener)| (index as AttachId + 1, listener))
+        .collect();
+    (
+        Inner {
+            master: Mutex::new(None),
+            input: Mutex::new(Some(input)),
+            killer: Mutex::new(Box::new(ReaderTestKiller)),
+            shared: Mutex::new(Shared {
+                scrollback: Scrollback::new(SCROLLBACK_BYTES),
+                listeners,
+            }),
+            exit: Mutex::new(None),
+            killed: std::sync::atomic::AtomicBool::new(false),
+            next_attach: AtomicU64::new(1),
+            pid: None,
+            guardian_guard: Mutex::new(None),
+            #[cfg(target_os = "macos")]
+            custodied: false,
+        },
+        queued,
+    )
+}
+
 /// A command that prints `text` and exits with `code`, run through the platform shell.
 fn command_spec(script: &str) -> SpawnSpec {
     let (program, args) = if cfg!(windows) {
@@ -401,6 +442,78 @@ fn answers_cursor_requests_when_no_view_is_attached() {
         !text.contains("\x1b[6n"),
         "answered requests are not replayed: {text:?}"
     );
+}
+
+#[test]
+fn reader_answers_once_after_the_final_listener_rejects_a_cursor_request() {
+    let deliveries = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let delivery_count = deliveries.clone();
+    let listener: Listener = Box::new(move |_| {
+        delivery_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        false
+    });
+    let (inner, replies) = reader_fixture(vec![listener]);
+
+    read_loop(
+        Box::new(std::io::Cursor::new(b"before\x1b[6nafter")),
+        &inner,
+    );
+
+    assert_eq!(deliveries.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(
+        replies
+            .recv_timeout(Duration::from_secs(1))
+            .expect("cursor fallback reply"),
+        CURSOR_POSITION_REPLY
+    );
+    assert!(matches!(
+        replies.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    let shared = lock(&inner.shared);
+    assert!(shared.listeners.is_empty());
+    assert_eq!(shared.scrollback.contents(), b"beforeafter");
+}
+
+#[test]
+fn reader_leaves_cursor_reply_to_an_accepting_listener() {
+    let listener: Listener = Box::new(|_| true);
+    let (inner, replies) = reader_fixture(vec![listener]);
+
+    read_loop(
+        Box::new(std::io::Cursor::new(CURSOR_POSITION_REQUEST)),
+        &inner,
+    );
+
+    assert!(matches!(
+        replies.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    let shared = lock(&inner.shared);
+    assert_eq!(shared.listeners.len(), 1);
+    assert!(shared.scrollback.contents().is_empty());
+}
+
+#[test]
+fn reader_answers_once_when_a_cursor_request_starts_without_listeners() {
+    let (inner, replies) = reader_fixture(vec![]);
+
+    read_loop(
+        Box::new(std::io::Cursor::new(CURSOR_POSITION_REQUEST)),
+        &inner,
+    );
+
+    assert_eq!(
+        replies
+            .recv_timeout(Duration::from_secs(1))
+            .expect("cursor fallback reply"),
+        CURSOR_POSITION_REPLY
+    );
+    assert!(matches!(
+        replies.try_recv(),
+        Err(std::sync::mpsc::TryRecvError::Empty)
+    ));
+    assert!(lock(&inner.shared).scrollback.contents().is_empty());
 }
 
 #[test]

@@ -1165,7 +1165,8 @@ fn read_loop(mut reader: Box<dyn Read + Send>, inner: &Inner) {
             Ok(0) => break,
             Ok(n) => {
                 let mut shared = lock(&inner.shared);
-                let chunk = if shared.listeners.is_empty() {
+                let had_listeners = !shared.listeners.is_empty();
+                let chunk = if !had_listeners {
                     // No terminal view is attached to answer, so answer here — otherwise the
                     // shell waits forever.
                     answer_cursor_requests(&buffer[..n], inner)
@@ -1179,6 +1180,13 @@ fn read_loop(mut reader: Box<dyn Read + Send>, inner: &Inner) {
                 // answer a request that was already answered.
                 shared.scrollback.push(&strip_cursor_requests(&chunk));
                 shared.listeners.retain(|_, deliver| deliver(&chunk));
+                if had_listeners && shared.listeners.is_empty() {
+                    // Every attached view rejected this live chunk. None can answer a cursor
+                    // query in it, so fall back exactly as if no view had been attached. Use the
+                    // original chunk: listeners receive the request once, while scrollback above
+                    // remains query-free for later replays.
+                    let _ = answer_cursor_requests(&buffer[..n], inner);
+                }
             }
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
             Err(error) => {
