@@ -535,7 +535,16 @@ impl GuardianRuntime {
         let marker_store = Arc::new(FileMarkerStore::open(marker_root.clone())?);
         let desktop_recovery =
             Arc::new(marker_store.acquire_recovery_lock(platform::RecoveryLockRole::DesktopEpoch)?);
+        // A surviving Windows guardian retains this independent lease until every admitted Job
+        // Object is empty, its handles are dropped, and the exact desktop epoch is durably CLEAN.
+        // Waiting here serializes the new epoch behind that proof. A hard-killed helper releases
+        // its lease without publishing CLEAN, so `begin_epoch` still fails closed below.
+        #[cfg(windows)]
+        let prior_helper_drain =
+            marker_store.acquire_recovery_lock(platform::RecoveryLockRole::HelperDrain)?;
         marker_store.begin_epoch(desktop_generation, &boot_identifier)?;
+        #[cfg(windows)]
+        drop(prior_helper_drain);
         let supervisor = match GuardianSupervisor::launch(
             helper,
             desktop_generation,

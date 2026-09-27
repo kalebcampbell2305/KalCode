@@ -1337,30 +1337,64 @@ mod tests {
 
     #[test]
     fn wait_timeout_requests_cancel_and_retains_lease_until_cleanup() {
-        let fixture = fixture("login_wait_for_cancel_delayed");
+        struct ReleaseOnDrop(Option<std::sync::mpsc::SyncSender<()>>);
+        impl ReleaseOnDrop {
+            fn release(&mut self) {
+                if let Some(sender) = self.0.take() {
+                    let _ = sender.send(());
+                }
+            }
+        }
+        impl Drop for ReleaseOnDrop {
+            fn drop(&mut self) {
+                self.release();
+            }
+        }
+
+        let fixture = fixture("login_wait_for_cancel");
+        let lease = fixture
+            .profiles
+            .acquire_sign_in_lease("codex", ACCOUNT_ID)
+            .expect("exclusive lease");
+        let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+        let mut release = ReleaseOnDrop(Some(release_tx));
         let mut pending = fixture
             .manager
-            .start_chatgpt_login(ACCOUNT_ID)
+            .start_chatgpt_login_with_lease_observed(ACCOUNT_ID, lease, move |_| {
+                entered_tx
+                    .send(())
+                    .map_err(|_| CodexAccountAuthError::StateUpdateFailed)?;
+                release_rx
+                    .recv_timeout(Duration::from_secs(5))
+                    .map_err(|_| CodexAccountAuthError::StateUpdateFailed)?;
+                Ok(())
+            })
             .expect("start login");
         pending.wait_timeout = Duration::from_millis(10);
 
-        assert!(matches!(
-            pending.wait(),
-            Err(CodexAccountAuthError::TimedOut)
-        ));
-        assert!(
-            fixture
-                .profiles
-                .acquire_session_lease("codex", ACCOUNT_ID)
-                .is_err(),
-            "a wait timeout must not release the auth lease"
-        );
-        pending.cancel().expect("join requested cancellation");
-        assert!(pending.is_finished());
-        let _lease = fixture
+        let wait_result = pending.wait();
+        let observer_entered = entered_rx.recv_timeout(Duration::from_secs(5));
+        let lease_remained_exclusive = fixture
             .profiles
             .acquire_session_lease("codex", ACCOUNT_ID)
-            .expect("lease releases only after delayed cleanup");
+            .is_err();
+        release.release();
+        let cancel_result = pending.cancel();
+        let cleanup_finished = pending.is_finished();
+        let session_lease_after_cleanup =
+            fixture.profiles.acquire_session_lease("codex", ACCOUNT_ID);
+
+        assert!(matches!(wait_result, Err(CodexAccountAuthError::TimedOut)));
+        observer_entered.expect("cleanup observer was not reached");
+        assert!(
+            lease_remained_exclusive,
+            "a wait timeout must retain the auth lease through final observation"
+        );
+        cancel_result.expect("join requested cancellation");
+        assert!(cleanup_finished);
+        let _lease =
+            session_lease_after_cleanup.expect("lease releases only after delayed cleanup");
     }
 
     #[test]

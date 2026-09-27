@@ -21,6 +21,7 @@ use crate::{
 
 #[derive(Default)]
 pub struct RuntimeBundle {
+    block_after_cleanup: bool,
     pub context: Option<Arc<ContextState>>,
     pub auth: Option<Arc<ProviderAuthState>>,
     pub notifications: Option<Arc<NotificationsState>>,
@@ -54,9 +55,14 @@ impl RuntimeBundle {
             };
         }
         check!();
-        let auth = Arc::new(
-            ProviderAuthState::start(state).unwrap_or_else(|_| ProviderAuthState::unavailable()),
-        );
+        let auth = Arc::new(match ProviderAuthState::start(state) {
+            Ok(auth) => auth,
+            Err(error_code) => {
+                tracing::error!(event = "runtime.bootstrap_failed", error_code = %error_code);
+                bundle.block_after_cleanup = true;
+                ProviderAuthState::unavailable()
+            }
+        });
         let authority = auth.runtime_authority();
         bundle.auth = Some(auth);
         check!();
@@ -273,6 +279,7 @@ enum RetainedBundleOutcome {
 fn reconcile_retained_bundle(
     lifecycle: &Lifecycle,
     active_generation: Option<u64>,
+    block_after_cleanup: bool,
     stop: impl FnOnce() -> bool,
 ) -> RetainedBundleOutcome {
     if active_generation.is_some_and(|generation| lifecycle.acquire(generation).is_some()) {
@@ -287,6 +294,9 @@ fn reconcile_retained_bundle(
         return RetainedBundleOutcome::WaitingForLeases;
     }
     if lifecycle.finish_drain(epoch, stop()) {
+        if block_after_cleanup {
+            lifecycle.block_unclean();
+        }
         RetainedBundleOutcome::Cleaned
     } else {
         RetainedBundleOutcome::BlockedUnclean
@@ -431,6 +441,7 @@ impl RuntimeCoordinator {
             let outcome = reconcile_retained_bundle(
                 &self.lifecycle,
                 active.as_ref().map(AuthorityLease::generation),
+                bundle.block_after_cleanup && active.is_some(),
                 || bundle.stop(app),
             );
             if outcome == RetainedBundleOutcome::Cleaned {
@@ -562,13 +573,13 @@ mod tests {
         };
 
         assert_eq!(
-            reconcile_retained_bundle(&lifecycle, Some(7), || service.stop()),
+            reconcile_retained_bundle(&lifecycle, Some(7), false, || service.stop()),
             RetainedBundleOutcome::StillValid
         );
         assert_eq!(service.attempts.load(Ordering::SeqCst), 0);
 
         assert_eq!(
-            reconcile_retained_bundle(&lifecycle, None, || service.stop()),
+            reconcile_retained_bundle(&lifecycle, None, false, || service.stop()),
             RetainedBundleOutcome::BlockedUnclean
         );
         assert_eq!(lifecycle.phase(), Phase::BlockedUnclean);
@@ -578,7 +589,7 @@ mod tests {
 
         service.can_stop.store(true, Ordering::SeqCst);
         assert_eq!(
-            reconcile_retained_bundle(&lifecycle, Some(8), || service.stop()),
+            reconcile_retained_bundle(&lifecycle, Some(8), false, || service.stop()),
             RetainedBundleOutcome::Cleaned
         );
         assert_eq!(service.attempts.load(Ordering::SeqCst), 2);
@@ -596,7 +607,7 @@ mod tests {
         let cleaned = AtomicBool::new(false);
 
         assert_eq!(
-            reconcile_retained_bundle(&lifecycle, None, || {
+            reconcile_retained_bundle(&lifecycle, None, false, || {
                 context.clear();
                 cleaned.store(true, Ordering::SeqCst);
                 true
@@ -608,7 +619,7 @@ mod tests {
 
         drop(in_flight);
         assert_eq!(
-            reconcile_retained_bundle(&lifecycle, None, || {
+            reconcile_retained_bundle(&lifecycle, None, false, || {
                 context.clear();
                 cleaned.store(true, Ordering::SeqCst);
                 true
@@ -617,6 +628,20 @@ mod tests {
         );
         assert!(cleaned.load(Ordering::SeqCst));
         assert!(lifecycle.begin_start(8).is_some());
+    }
+
+    #[test]
+    fn fatal_bootstrap_failure_cleans_partial_owners_then_stays_blocked() {
+        let lifecycle = Lifecycle::default();
+        let permit = lifecycle.begin_build(7).expect("bootstrap permit");
+        drop(permit);
+
+        assert_eq!(
+            reconcile_retained_bundle(&lifecycle, Some(7), true, || true),
+            RetainedBundleOutcome::Cleaned
+        );
+        assert_eq!(lifecycle.phase(), Phase::BlockedUnclean);
+        assert!(lifecycle.begin_start(7).is_none());
     }
 }
 

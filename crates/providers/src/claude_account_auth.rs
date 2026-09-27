@@ -915,32 +915,62 @@ mod tests {
 
     #[test]
     fn wait_timeout_requests_cancel_and_retains_lease_until_cleanup() {
+        struct ReleaseOnDrop(Option<std::sync::mpsc::SyncSender<()>>);
+        impl ReleaseOnDrop {
+            fn release(&mut self) {
+                if let Some(sender) = self.0.take() {
+                    let _ = sender.send(());
+                }
+            }
+        }
+        impl Drop for ReleaseOnDrop {
+            fn drop(&mut self) {
+                self.release();
+            }
+        }
+
         let fixture = fixture("login_hang");
         let lease = fixture
             .profiles
             .acquire_sign_in_lease("claude-code", ACCOUNT_ID)
             .expect("lease");
+        let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
+        let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+        let mut release = ReleaseOnDrop(Some(release_tx));
         let mut pending = fixture
             .manager
-            .start_login_with_lease_observed(ACCOUNT_ID, lease, |_| Ok(()))
+            .start_login_with_lease_observed(ACCOUNT_ID, lease, move |_| {
+                entered_tx
+                    .send(())
+                    .map_err(|_| ClaudeAccountAuthError::StateUpdateFailed)?;
+                release_rx
+                    .recv_timeout(Duration::from_secs(5))
+                    .map_err(|_| ClaudeAccountAuthError::StateUpdateFailed)?;
+                Ok(())
+            })
             .expect("login");
         pending.wait_timeout = Duration::from_millis(1);
-        assert!(matches!(
-            pending.wait(),
-            Err(ClaudeAccountAuthError::TimedOut)
-        ));
-        assert!(
-            fixture
-                .profiles
-                .acquire_session_lease("claude-code", ACCOUNT_ID)
-                .is_err(),
-            "wait timeout must not release the exclusive auth lease"
-        );
-        pending.cancel().expect("join requested cancellation");
-        let _lease = fixture
+        let wait_result = pending.wait();
+        let observer_entered = entered_rx.recv_timeout(Duration::from_secs(5));
+        let lease_remained_exclusive = fixture
             .profiles
             .acquire_session_lease("claude-code", ACCOUNT_ID)
-            .expect("lease releases after process-tree cleanup");
+            .is_err();
+        release.release();
+        let cancel_result = pending.cancel();
+        let session_lease_after_cleanup = fixture
+            .profiles
+            .acquire_session_lease("claude-code", ACCOUNT_ID);
+
+        assert!(matches!(wait_result, Err(ClaudeAccountAuthError::TimedOut)));
+        observer_entered.expect("cleanup observer was not reached");
+        assert!(
+            lease_remained_exclusive,
+            "wait timeout must retain the exclusive lease through final observation"
+        );
+        cancel_result.expect("join requested cancellation");
+        let _lease =
+            session_lease_after_cleanup.expect("lease releases after process-tree cleanup");
     }
 
     #[test]

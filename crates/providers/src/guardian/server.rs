@@ -2,12 +2,13 @@ use std::collections::BTreeMap;
 use std::io::{ErrorKind, Read, Write};
 use std::time::{Duration, Instant};
 
-use super::GuardianError;
 use super::marker::JobId;
 use super::platform::{RecoveryLock, RecoveryLockRole, WindowsJob};
 use super::protocol::{
     Envelope, InboundGuard, ProtocolError, Request, Response, read_frame, write_frame,
 };
+use super::store::FileMarkerStore;
+use super::{DesktopGeneration, GuardianError};
 
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 const DRAIN_POLL: Duration = Duration::from_millis(10);
@@ -41,29 +42,49 @@ pub fn serve_with_recovery_root<R: Read, W: Write>(
         recovery_root_identity,
         RecoveryLockRole::HelperDrain,
     )?;
-    serve(input, output)
+    let marker_store = FileMarkerStore::open(recovery_root.to_path_buf())?;
+    if marker_store.root_identity() != recovery_root_identity {
+        return Err(GuardianError::ObjectMismatch);
+    }
+    let boot_identifier = super::platform::current_boot_identifier()?;
+    serve_with_clean_witness(input, output, move |desktop_generation| {
+        marker_store.prove_epoch_clean(desktop_generation, &boot_identifier)
+    })
 }
 
 pub fn serve<R: Read, W: Write>(input: &mut R, output: &mut W) -> Result<(), GuardianError> {
+    serve_with_clean_witness(input, output, |_| Ok(()))
+}
+
+fn serve_with_clean_witness<R: Read, W: Write>(
+    input: &mut R,
+    output: &mut W,
+    publish_clean: impl FnOnce(DesktopGeneration) -> Result<(), GuardianError>,
+) -> Result<(), GuardianError> {
     let first: Envelope<Request> = read_frame(input).map_err(protocol_unavailable)?;
     let mut inbound = InboundGuard::new(first.nonce, first.desktop_generation);
     inbound.accept(&first).map_err(protocol_unavailable)?;
-    if first.body != Request::Health {
-        return Err(GuardianError::Unavailable(
-            "guardian channel did not begin with a health handshake".into(),
-        ));
-    }
-    respond(output, &first, Response::Healthy)?;
-
     let mut jobs = BTreeMap::<JobId, WindowsJob>::new();
-    let result = serve_authenticated(input, output, &mut inbound, &mut jobs);
+    let result = if first.body != Request::Health {
+        Err(GuardianError::Unavailable(
+            "guardian channel did not begin with a health handshake".into(),
+        ))
+    } else {
+        respond(output, &first, Response::Healthy)
+            .and_then(|()| serve_authenticated(input, output, &mut inbound, &mut jobs))
+    };
     // Every post-handshake exit, including a broken response pipe, passes through this cleanup.
     // The helper must retain its Job Object handles until termination and a zero count are proved.
     // A bounded command response may report that quiescence is still pending. Once the control
     // channel is gone, however, this helper is the surviving crash authority and must never drop
     // its job handles merely because one terminate/query attempt failed or timed out.
-    retain_jobs_until_clean(&jobs, DRAIN_TIMEOUT, DRAIN_POLL, RETAIN_RETRY_DELAY);
-    drop(jobs);
+    retain_jobs_drop_and_publish_clean(
+        jobs,
+        DRAIN_TIMEOUT,
+        DRAIN_POLL,
+        RETAIN_RETRY_DELAY,
+        || publish_clean(first.desktop_generation),
+    )?;
     result
 }
 
@@ -232,6 +253,18 @@ fn retain_jobs_until_clean<K: Ord, J: DrainJob>(
     }
 }
 
+fn retain_jobs_drop_and_publish_clean<K: Ord, J: DrainJob>(
+    jobs: BTreeMap<K, J>,
+    attempt_timeout: Duration,
+    poll: Duration,
+    retry_delay: Duration,
+    publish_clean: impl FnOnce() -> Result<(), GuardianError>,
+) -> Result<(), GuardianError> {
+    retain_jobs_until_clean(&jobs, attempt_timeout, poll, retry_delay);
+    drop(jobs);
+    publish_clean()
+}
+
 fn protocol_unavailable(error: ProtocolError) -> GuardianError {
     GuardianError::Unavailable(error.to_string())
 }
@@ -281,14 +314,22 @@ mod tests {
             },
         );
         let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let callback_dropped = Arc::clone(&dropped);
         let worker = std::thread::spawn(move || {
-            retain_jobs_until_clean(
-                &jobs,
+            retain_jobs_drop_and_publish_clean(
+                jobs,
                 Duration::from_millis(10),
                 Duration::from_millis(1),
                 Duration::from_millis(1),
-            );
-            drop(jobs);
+                || {
+                    assert!(
+                        callback_dropped.load(Ordering::Acquire),
+                        "clean witness published before job handles were dropped"
+                    );
+                    Ok(())
+                },
+            )
+            .expect("publish clean witness");
             done_tx.send(()).expect("completion signal");
         });
 

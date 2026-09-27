@@ -7,10 +7,10 @@ import { expect, type Page, test } from "@playwright/test";
 import {
   closeGracefully,
   EXE,
+  killForcibly,
   launch,
   processesMatching,
   removeDir,
-  waitForExit,
   waitForProviderAdmission,
   writeManagedFakeProviderConfig,
 } from "./harness.ts";
@@ -180,9 +180,7 @@ test("a pane layout is saved per workspace and restored after a graceful quit an
     await page.keyboard.press("Control+Alt+2");
     await expect(panes(page)).toHaveCount(2);
     await page.waitForTimeout(1500);
-    execFileSync("taskkill", ["/F", "/T", "/PID", String(app.child.pid)], { windowsHide: true });
-    await waitForExit(app.child);
-    await app.browser.close().catch(() => undefined);
+    await killForcibly(app);
     expect(storedLayout(dataDir).panes).toBe(2);
 
     app = await launch(dataDir, env);

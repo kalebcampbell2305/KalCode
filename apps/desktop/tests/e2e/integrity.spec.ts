@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFil
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { closeGracefully, EXE, launch, removeDir } from "./harness.ts";
+import { ACCOUNT_KALVOICE_FIXTURE_OPT_IN, closeGracefully, EXE, launch, removeDir } from "./harness.ts";
 
 /**
  * Data safety and permission enforcement against the real app:
@@ -358,7 +358,7 @@ test("a v5 database (the app after the L-1 update) is upgraded to the latest sch
   const projectDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-legacy-"));
   try {
     createDatabase(dataDir, projectDir, 5);
-    const app = await launch(dataDir);
+    const app = await launch(dataDir, { KALCODE_E2E_ACCOUNT_FIXTURE: ACCOUNT_KALVOICE_FIXTURE_OPT_IN });
     const page = app.page;
     await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
@@ -398,9 +398,11 @@ test("a v5 database (the app after the L-1 update) is upgraded to the latest sch
       defaultMode: "plan",
     });
 
-    // KalVoice's v6 ledger and preferences work on the upgraded database.
+    // KalVoice's v6 ledger and preferences work on the upgraded database. The signed Pro fixture
+    // provides under-limit account authority; its existing 412 requests are separate from this
+    // freshly migrated local request ledger.
     const status = await invoke<{ usage: { used: number; allowance: number | null } }>(page, "kalvoice_status");
-    expect(status.usage.used).toBe(0);
+    expect(status.usage).toMatchObject({ used: 412, allowance: 1_500 });
     const typed = await invoke<{ counted: boolean; outcome: { kind: string } }>(page, "kalvoice_request", {
       request: { requestId: crypto.randomUUID(), text: "Go to settings", input: "text", workspaceId: null },
     });

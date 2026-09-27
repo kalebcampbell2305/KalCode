@@ -6,8 +6,8 @@ import { type Browser, chromium, type Page } from "@playwright/test";
 
 /**
  * Launching and closing the real KalCode binary for end-to-end tests (see app.spec.ts for the
- * original harness). The binary must be built with the `e2e` feature so it honours
- * KALCODE_DATA_DIR and the other test hooks; the harness refuses to drive one that doesn't.
+ * original harness). The binary must be built with the `e2e` and `kalvoice-whisper` features so it
+ * honours KALCODE_DATA_DIR and the other test hooks while exercising the production STT engine.
  */
 export const EXE =
   process.env.KALCODE_E2E_EXE ?? resolve(import.meta.dirname, "../../../../target/e2e/release/kalcode.exe");
@@ -193,7 +193,7 @@ export async function closeGracefully(app: Running) {
   await app.browser.close().catch(() => undefined);
 }
 
-/** Simulates a crash/force quit and waits until the owned process tree is gone. */
+/** Simulates a desktop crash while preserving its independent process-cleanup guardian. */
 export async function killForcibly(app: Running): Promise<void> {
   await stopOwnedProcess(app.child, true);
   await app.browser.close().catch(() => undefined);
@@ -203,7 +203,7 @@ async function stopOwnedProcess(child: ChildProcess, force: boolean): Promise<vo
   if (child.exitCode !== null) return;
   if (child.pid === undefined) throw new Error("The E2E process has no pid");
   try {
-    execFileSync("taskkill", [...(force ? ["/F", "/T"] : []), "/PID", String(child.pid)], {
+    execFileSync("taskkill", [...(force ? ["/F"] : []), "/PID", String(child.pid)], {
       windowsHide: true,
     });
   } catch (error) {

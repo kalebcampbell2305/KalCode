@@ -290,6 +290,23 @@ fn failed_process_start_remains_owned_as_a_rootless_prepared_job() {
 }
 
 #[test]
+fn surviving_helper_durably_closes_an_interrupted_desktop_epoch() {
+    let temp = tempfile::tempdir().expect("data root");
+    let helper = std::path::Path::new(env!("CARGO_BIN_EXE_kalcode-provider-guardian"));
+    let interrupted = GuardianRuntime::launch(helper, temp.path()).expect("initial runtime");
+
+    // Model loss of the desktop owners without asking the runtime to seal or drain. The helper
+    // survives the broken control pipe and is the only authority allowed to make the epoch clean.
+    drop(interrupted);
+
+    let replacement = GuardianRuntime::launch(helper, temp.path())
+        .expect("replacement after the surviving helper proves cleanup");
+    replacement
+        .seal_and_drain()
+        .expect("replacement generation drains cleanly");
+}
+
+#[test]
 fn replacement_helper_waits_for_prior_helper_drain_after_desktop_loss() {
     use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
@@ -297,6 +314,7 @@ fn replacement_helper_waits_for_prior_helper_drain_after_desktop_loss() {
     let temp = tempfile::tempdir().expect("data root");
     let helper_path = std::path::PathBuf::from(env!("CARGO_BIN_EXE_kalcode-provider-guardian"));
     let initialized = GuardianRuntime::launch(&helper_path, temp.path()).expect("initial runtime");
+    let generation = initialized.desktop_generation();
     initialized
         .seal_and_drain()
         .expect("initial clean epoch evidence");
@@ -319,7 +337,6 @@ fn replacement_helper_waits_for_prior_helper_drain_after_desktop_loss() {
     let mut input = prior.stdin.take().expect("prior input");
     let mut output = prior.stdout.take().expect("prior output");
     let nonce = ChannelNonce::from_bytes([0x6e; 16]);
-    let generation = kalcode_providers::guardian::DesktopGeneration::from_uuid(Uuid::new_v4());
     write_frame(
         &mut input,
         &Envelope::new(nonce, generation, 1, Uuid::new_v4(), Request::Health),

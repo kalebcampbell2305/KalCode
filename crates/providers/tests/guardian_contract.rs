@@ -34,6 +34,71 @@ fn process(pid: u32, birth_time_100ns: u64) -> Result<ProcessIdentity, Box<dyn s
     Ok(ProcessIdentity::new(pid, birth_time_100ns)?)
 }
 
+#[cfg(windows)]
+fn initialized_running_recovery_epoch() -> Result<
+    (
+        tempfile::TempDir,
+        guardian::GuardianRuntime,
+        std::path::PathBuf,
+        DesktopGeneration,
+    ),
+    Box<dyn std::error::Error>,
+> {
+    let data_dir = tempfile::tempdir()?;
+    let helper = std::path::Path::new(env!("CARGO_BIN_EXE_kalcode-provider-guardian"));
+    let runtime = guardian::GuardianRuntime::launch(helper, data_dir.path())?;
+    let generation = runtime.desktop_generation();
+    let helper_pid = runtime.supervisor().process_identity().pid();
+    force_terminate_and_wait(helper_pid)?;
+    let recovery_root = data_dir.path().join("provider-guardian-markers");
+    Ok((data_dir, runtime, recovery_root, generation))
+}
+
+#[cfg(windows)]
+fn force_terminate_and_wait(pid: u32) -> Result<(), Box<dyn std::error::Error>> {
+    use std::os::windows::process::CommandExt;
+    use std::time::{Duration, Instant};
+
+    let system_root = std::env::var_os("SystemRoot").ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "SystemRoot for taskkill")
+    })?;
+    let taskkill = std::path::Path::new(&system_root)
+        .join("System32")
+        .join("taskkill.exe");
+    let tasklist = std::path::Path::new(&system_root)
+        .join("System32")
+        .join("tasklist.exe");
+    let pid_text = pid.to_string();
+    let status = std::process::Command::new(taskkill)
+        .args(["/PID", &pid_text, "/F"])
+        .creation_flags(0x0800_0000)
+        .status()?;
+    if !status.success() {
+        return Err(std::io::Error::other(format!("taskkill failed: {status}")).into());
+    }
+
+    let quoted_pid = format!("\"{pid}\"");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let output = std::process::Command::new(&tasklist)
+            .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+            .creation_flags(0x0800_0000)
+            .output()?;
+        if !output.status.success() {
+            return Err(
+                std::io::Error::other(format!("tasklist failed: {}", output.status)).into(),
+            );
+        }
+        if !String::from_utf8_lossy(&output.stdout).contains(&quoted_pid) {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(std::io::Error::other("initial helper did not terminate").into());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 fn nonce() -> ChannelNonce {
     ChannelNonce::from_bytes([0x5a; 16])
 }
@@ -227,13 +292,14 @@ fn external_guardian_owns_job_until_desktop_channel_loss_drains_it() {
 
     use guardian::platform::WindowsJob;
 
-    let recovery = tempfile::tempdir().expect("recovery root");
-    let recovery_identity = guardian::platform::recovery_root_identity(recovery.path())
-        .expect("recovery root identity");
+    let (_data_dir, _epoch_owner, recovery_root, generation) =
+        initialized_running_recovery_epoch().expect("initialize running recovery epoch");
+    let recovery_identity =
+        guardian::platform::recovery_root_identity(&recovery_root).expect("recovery root identity");
     let mut guardian_process = Command::new(env!("CARGO_BIN_EXE_kalcode-provider-guardian"));
     guardian_process
         .arg("--recovery-root")
-        .arg(recovery.path())
+        .arg(&recovery_root)
         .arg("--recovery-root-id")
         .arg(&recovery_identity)
         .creation_flags(0x0800_0000)
@@ -244,8 +310,6 @@ fn external_guardian_owns_job_until_desktop_channel_loss_drains_it() {
     let mut input = guardian_process.stdin.take().expect("guardian stdin");
     let mut output = guardian_process.stdout.take().expect("guardian stdout");
     let nonce = ChannelNonce::from_bytes([0x3c; 16]);
-    let generation = desktop_generation();
-
     write_frame(
         &mut input,
         &Envelope::new(nonce, generation, 1, Uuid::new_v4(), Request::Health),
@@ -322,13 +386,14 @@ fn external_guardian_drains_when_the_response_channel_breaks() {
 
     use guardian::platform::WindowsJob;
 
-    let recovery = tempfile::tempdir().expect("recovery root");
-    let recovery_identity = guardian::platform::recovery_root_identity(recovery.path())
-        .expect("recovery root identity");
+    let (_data_dir, _epoch_owner, recovery_root, generation) =
+        initialized_running_recovery_epoch().expect("initialize running recovery epoch");
+    let recovery_identity =
+        guardian::platform::recovery_root_identity(&recovery_root).expect("recovery root identity");
     let mut helper = Command::new(env!("CARGO_BIN_EXE_kalcode-provider-guardian"));
     helper
         .arg("--recovery-root")
-        .arg(recovery.path())
+        .arg(&recovery_root)
         .arg("--recovery-root-id")
         .arg(&recovery_identity)
         .creation_flags(0x0800_0000)
@@ -339,8 +404,6 @@ fn external_guardian_drains_when_the_response_channel_breaks() {
     let mut input = helper.stdin.take().expect("guardian stdin");
     let mut output = helper.stdout.take().expect("guardian stdout");
     let nonce = ChannelNonce::from_bytes([0x4d; 16]);
-    let generation = desktop_generation();
-
     write_frame(
         &mut input,
         &Envelope::new(nonce, generation, 1, Uuid::new_v4(), Request::Health),
@@ -414,4 +477,61 @@ fn external_guardian_drains_when_the_response_channel_breaks() {
     provider
         .wait(Duration::from_secs(2))
         .expect("provider ended before helper exit");
+}
+
+#[cfg(windows)]
+#[test]
+fn external_guardian_fails_closed_without_authenticated_epoch_evidence() {
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    let recovery = tempfile::tempdir().expect("recovery root");
+    let recovery_identity = guardian::platform::recovery_root_identity(recovery.path())
+        .expect("recovery root identity");
+    let mut helper = Command::new(env!("CARGO_BIN_EXE_kalcode-provider-guardian"));
+    helper
+        .arg("--recovery-root")
+        .arg(recovery.path())
+        .arg("--recovery-root-id")
+        .arg(&recovery_identity)
+        .creation_flags(0x0800_0000)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut helper = helper.spawn().expect("guardian process");
+    let mut input = helper.stdin.take().expect("guardian stdin");
+    let mut output = helper.stdout.take().expect("guardian stdout");
+    let nonce = ChannelNonce::from_bytes([0x5e; 16]);
+
+    write_frame(
+        &mut input,
+        &Envelope::new(
+            nonce,
+            desktop_generation(),
+            1,
+            Uuid::new_v4(),
+            Request::Health,
+        ),
+    )
+    .expect("handshake");
+    let response: Envelope<Response> = read_frame(&mut output).expect("handshake response");
+    assert_eq!(response.body, Response::Healthy);
+    drop(input);
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = helper.try_wait().expect("guardian status") {
+            assert!(
+                !status.success(),
+                "missing authenticated epoch evidence must fail closed"
+            );
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "guardian did not reject missing epoch evidence"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }

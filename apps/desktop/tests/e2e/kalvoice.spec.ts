@@ -1,8 +1,17 @@
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { ACCOUNT_KALVOICE_FIXTURE_OPT_IN, closeGracefully, EXE, launch, removeDir } from "./harness.ts";
+import {
+  ACCOUNT_KALVOICE_FIXTURE_OPT_IN,
+  closeGracefully,
+  EXE,
+  launch,
+  processesMatching,
+  removeDir,
+  waitForProviderAdmission,
+  writeManagedFakeProviderConfig,
+} from "./harness.ts";
 
 /**
  * KalVoice in the real app (native commands, the signal channel, SQLite ledger and
@@ -16,9 +25,11 @@ import { ACCOUNT_KALVOICE_FIXTURE_OPT_IN, closeGracefully, EXE, launch, removeDi
  * remain uncounted, and never start a connected provider session.
  */
 const MODEL = process.env.KALVOICE_E2E_MODEL;
+const FAKE = join(dirname(EXE), "kalcode-fake-provider.exe");
 
 test.skip(process.platform !== "win32", "Real-app E2E drives WebView2 and runs on Windows.");
 test.skip(!existsSync(EXE), `Build the app first: ${EXE}`);
+test.skip(!existsSync(FAKE), "Run build:e2e: it builds the fake provider.");
 
 const widget = (page: Page) => page.getByRole("region", { name: "KalVoice widget" });
 const shown = (page: Page) => widget(page).locator(':scope > :not([role="status"])');
@@ -61,14 +72,34 @@ function talk(page: Page, text: string, target: "field" | "terminal" | "none"): 
 
 test("KalVoice runs natively; routing, usage and the widget's placement survive a restart", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-kalvoice-"));
+  const root = mkdtempSync(join(tmpdir(), "kalcode-e2e-kalvoice-project-"));
+  const project = join(root, "voice-site");
+  mkdirSync(project);
+  writeFileSync(join(project, "README.md"), "# KalVoice fixture\n");
+  const bin = join(root, "bin");
+  mkdirSync(bin);
+  copyFileSync(FAKE, join(bin, "codex.exe"));
+  writeManagedFakeProviderConfig(bin);
+  const env = {
+    KALCODE_E2E_ACCOUNT_FIXTURE: ACCOUNT_KALVOICE_FIXTURE_OPT_IN,
+    KALCODE_E2E_PICK_FOLDER: project,
+    PATH: `${bin};${process.env.PATH ?? ""}`,
+  };
   if (MODEL) {
     mkdirSync(join(dataDir, "models", "whisper"), { recursive: true });
     copyFileSync(MODEL, join(dataDir, "models", "whisper", "ggml-tiny.en.bin"));
   }
+  let app: Awaited<ReturnType<typeof launch>> | null = null;
   try {
-    let app = await launch(dataDir, { KALCODE_E2E_ACCOUNT_FIXTURE: ACCOUNT_KALVOICE_FIXTURE_OPT_IN });
+    app = await launch(dataDir, env);
     let page = app.page;
     await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible({ timeout: 20_000 });
+    await page.getByRole("button", { name: "Code", exact: true }).click();
+    await page.getByRole("button", { name: /Open folder/ }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "voice-site" })).toBeVisible();
+    const workspaces = await invoke<{ id: string; name: string }[]>(page, "workspace_list");
+    expect(workspaces).toHaveLength(1);
+    const workspaceId = workspaces[0]?.id as string;
     await expect(widget(page)).toBeVisible();
     await expect(shown(page).getByText("Ready", { exact: true })).toBeVisible();
     await expect(widget(page).getByRole("textbox")).toHaveCount(0);
@@ -126,34 +157,46 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
     expect(routed.events.map((e) => e.payload.outcome)).toEqual(["command", "dictation", "request"]);
     expect(JSON.stringify(routed.events)).not.toContain("parser");
 
-    // A command that adds work is filed with the real permission engine as a KalVoice approval
-    // (origin kalvoice, no thread, Approve once or Deny) and waits; the person's Deny, given
-    // through the same approval_decide as the Approvals panel, reaches the widget.
+    // Deterministic app control has no second KalVoice approval layer. The two idle threads retain
+    // Approve mode, so provider-native tool permissions remain authoritative when a CLI starts.
+    await waitForProviderAdmission(page);
+    const providers = await invoke<
+      { id: string; detection: { state: string; displayPath: string | null; version: string | null } | null }[]
+    >(page, "providers_detect");
+    const codex = providers.find((provider) => provider.id === "codex");
+    expect(codex?.detection?.state).toBe("installed");
+    const fakePath = join(bin, "codex.exe");
+    const expectedDisplayPath = `~${fakePath.slice(homedir().length)}`;
+    expect(codex?.detection?.displayPath?.toLowerCase()).toBe(expectedDisplayPath.toLowerCase());
+    expect(codex?.detection?.version).toBe("0.155.1");
+    expect(await invoke<unknown[]>(page, "approval_list")).toEqual([]);
     const create = await talk(page, "open two codex threads", "none");
     expect(create.route).toBe("command");
-    expect(create.response?.outcome.kind).toBe("permission_required");
+    expect(create.response?.outcome.kind).toBe("completed");
     expect(create.response?.counted).toBe(true);
-    const approvalId = create.response?.outcome.approvalRequestId as string;
-    const pending = await invoke<
-      {
-        id: string;
-        permissionMode: string;
-        allowedDecisions: string[];
-        action: { threadId: string; origin: { kind: string; requestId: string } | null; summary: string };
-      }[]
-    >(page, "approval_list", { status: "pending" });
-    const filed = pending.find((a) => a.id === approvalId);
-    expect(filed).toMatchObject({
-      permissionMode: "approve",
-      allowedDecisions: ["deny", "approve_once"],
-      action: {
-        threadId: "",
-        origin: { kind: "kalvoice", requestId: create.response?.requestId },
-        summary: "Open 2 Codex threads",
-      },
-    });
-    await invoke(page, "approval_decide", { requestId: approvalId, decision: "deny" });
-    // KalVoice drops the command when the engine reports the denial (ids and codes only).
+    expect(await invoke<unknown[]>(page, "approval_list")).toEqual([]);
+    const createdThreads = () =>
+      invoke<{ providerId: string; workspaceId: string; status: string; permissionMode: string }[]>(
+        page,
+        "thread_list",
+        {
+          workspaceId: null,
+          includeArchived: false,
+        },
+      );
+    await expect
+      .poll(async () =>
+        (await createdThreads()).map(({ providerId, workspaceId: threadWorkspace, status, permissionMode }) => ({
+          providerId,
+          workspaceId: threadWorkspace,
+          status,
+          permissionMode,
+        })),
+      )
+      .toEqual([
+        { providerId: "codex", workspaceId, status: "idle", permissionMode: "approve" },
+        { providerId: "codex", workspaceId, status: "idle", permissionMode: "approve" },
+      ]);
     const byRequest = () =>
       invoke<{ events: { type: string; payload: { code?: string } }[] }>(page, "events_query", {
         query: {
@@ -177,9 +220,8 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
           limit: 20,
         },
       }).then((p) => p.events.map((e) => `${e.type}${e.payload.code ? `:${e.payload.code}` : ""}`));
-    await expect.poll(byRequest).toContain("kalvoice.request_failed:permission_denied");
-    expect(await byRequest()).not.toContain("kalvoice.command_executed");
-    expect(await invoke<unknown[]>(page, "thread_list", {})).toEqual([]);
+    await expect.poll(byRequest).toContain("kalvoice.command_executed");
+    expect((await byRequest()).some((event) => event.startsWith("kalvoice.request_failed"))).toBe(false);
 
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     const section = page.getByRole("region", { name: "KalVoice", exact: true });
@@ -196,15 +238,18 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
     await page.getByRole("menuitemradio", { name: "Top left" }).click();
     await expect(widget(page)).toHaveAttribute("data-anchor", "top_left");
     await page.waitForTimeout(600);
+    const firstRunFakePids = processesMatching(bin);
     await closeGracefully(app);
+    app = null;
+    await expect.poll(() => processesMatching(bin).filter((pid) => firstRunFakePids.includes(pid))).toEqual([]);
 
-    app = await launch(dataDir, { KALCODE_E2E_ACCOUNT_FIXTURE: ACCOUNT_KALVOICE_FIXTURE_OPT_IN });
+    app = await launch(dataDir, env);
     page = app.page;
     await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible({ timeout: 20_000 });
     await expect(widget(page)).toHaveAttribute("data-anchor", "top_left");
     await page.getByRole("button", { name: "KalVoice", exact: true }).click();
-    // The typed command, the spoken one and the approval request counted; dictation and the
-    // request without a local runtime did not.
+    // The signed baseline plus the typed local command, spoken local command and direct native
+    // app-control command counted; dictation and focused-provider handoff did not.
     await expect(
       page.locator("#kalvoice-status").getByText(/^415 \/ 1,500 used · 1,085 remaining · renews/),
     ).toBeVisible();
@@ -215,11 +260,15 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
     // Activity never shows what was said.
     await expect(activity.getByText(/unit test for the parser/i)).toHaveCount(0);
     await closeGracefully(app);
+    app = null;
+    expect(processesMatching(bin), "no provider process outlives KalCode").toEqual([]);
   } finally {
+    if (app) await closeGracefully(app).catch(() => undefined);
     try {
       removeDir(dataDir);
     } catch {
       // WebView2 can hold its folder briefly after exit; the OS temp cleanup removes it.
     }
+    removeDir(root);
   }
 });

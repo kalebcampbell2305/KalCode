@@ -357,15 +357,13 @@ pub fn run(removed_overrides: Vec<String>) {
             if payload.event() == PageLoadEvent::Started
                 && webview.label() == "main"
                 && let Some(views) = webview.try_state::<browser_commands::BrowserViews>()
+                && browser_commands::begin_page_load(webview.app_handle(), &views).is_err()
             {
-                browser_commands::begin_page_load(&views);
-                if browser_commands::close_all(webview.app_handle(), &views).is_err() {
-                    tracing::error!(event = "browser.reload_cleanup_failed");
-                    // Keep a failed native child from intercepting a replacement trusted UI.
-                    let _ = webview.window().hide();
-                    webview.app_handle().exit(1);
-                    return;
-                }
+                tracing::error!(event = "browser.reload_cleanup_failed");
+                // Keep a failed native child from intercepting a replacement trusted UI.
+                let _ = webview.window().hide();
+                webview.app_handle().exit(1);
+                return;
             }
             // A (re)load starts a fresh page whose JS callbacks no longer exist.
             if payload.event() == PageLoadEvent::Started

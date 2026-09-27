@@ -4,7 +4,7 @@
 //! capability grants, may navigate only to credential-free HTTP(S), and cannot open popups or
 //! download files. Each authenticated account/workspace pair receives a separate WebView data directory.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 #[cfg(feature = "e2e")]
 use std::sync::atomic::AtomicU16;
@@ -16,7 +16,7 @@ use kalcode_core::{ErrorCategory, IpcError, KalError};
 use serde::{Deserialize, Serialize};
 #[cfg(windows)]
 use tauri::Emitter;
-use tauri::webview::{NewWindowResponse, PageLoadEvent, WebviewBuilder};
+use tauri::webview::{DownloadEvent, NewWindowResponse, PageLoadEvent, WebviewBuilder};
 use tauri::{LogicalPosition, LogicalSize, Manager, State, Webview, WebviewUrl};
 use tauri_plugin_opener::OpenerExt;
 
@@ -32,6 +32,8 @@ const FOCUS_EVENT: &str = "kalcode://browser-focus";
 const HIDDEN_CHILD_POSITION: f64 = 16_000.0;
 #[cfg(feature = "e2e")]
 static NEXT_E2E_DEBUG_PORT: AtomicU16 = AtomicU16::new(0);
+#[cfg(feature = "e2e")]
+static E2E_DOWNLOAD_DENIALS: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone)]
 struct BrowserRecord {
@@ -50,9 +52,27 @@ struct BrowserRecord {
     debug_port: Option<u16>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct BrowserCloseTarget {
+    browser_id: String,
+    page_lease: u64,
+    account_generation: u64,
+}
+
+impl BrowserCloseTarget {
+    fn from_record(browser_id: String, record: &BrowserRecord) -> Self {
+        Self {
+            browser_id,
+            page_lease: record.page_lease,
+            account_generation: record.account_generation,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct BrowserViews {
     records: Arc<Mutex<HashMap<String, BrowserRecord>>>,
+    pending_closes: Arc<Mutex<HashSet<BrowserCloseTarget>>>,
     page_lease: Arc<AtomicU64>,
 }
 
@@ -60,6 +80,7 @@ impl Default for BrowserViews {
     fn default() -> Self {
         Self {
             records: Arc::new(Mutex::new(HashMap::new())),
+            pending_closes: Arc::new(Mutex::new(HashSet::new())),
             page_lease: Arc::new(AtomicU64::new(1)),
         }
     }
@@ -76,10 +97,17 @@ impl BrowserViews {
         self.page_lease.load(Ordering::Acquire)
     }
 
-    fn rotate_page_lease(&self) -> u64 {
-        // Native child labels include this generation, so queued work from a prior trusted page
-        // cannot address a replacement child that reuses the same durable Browser identity.
-        let _records = self.lock();
+    fn lock_pending_closes(&self) -> std::sync::MutexGuard<'_, HashSet<BrowserCloseTarget>> {
+        self.pending_closes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn rotate_page_lease_and_take_close_targets(&self) -> (u64, Vec<BrowserCloseTarget>) {
+        // Publish the replacement page's lease while holding the same lock that detaches every
+        // prior-page record. A replacement attach can read the new lease, but its reservation
+        // blocks on this lock and therefore cannot be captured by the old page's cleanup.
+        let mut records = self.lock();
         let current = self.page_lease.load(Ordering::Acquire);
         let Some(next) = current.checked_add(1) else {
             // Reusing a generation would permit an ABA visibility bypass. This limit cannot be
@@ -87,7 +115,73 @@ impl BrowserViews {
             std::process::abort();
         };
         self.page_lease.store(next, Ordering::Release);
-        next
+        let mut targets = std::mem::take(&mut *self.lock_pending_closes());
+        targets.extend(
+            records
+                .drain()
+                .map(|(id, record)| BrowserCloseTarget::from_record(id, &record)),
+        );
+        (next, targets.into_iter().collect())
+    }
+
+    fn requeue_failed_close(&self, target: BrowserCloseTarget) {
+        self.lock_pending_closes().insert(target);
+    }
+
+    fn finish_failed_attach_close(&self, target: &BrowserCloseTarget, succeeded: bool) {
+        let mut records = self.lock();
+        let matches = records.get(&target.browser_id).is_some_and(|record| {
+            record.page_lease == target.page_lease
+                && record.account_generation == target.account_generation
+        });
+        if succeeded {
+            if matches {
+                records.remove(&target.browser_id);
+            }
+        } else if let Some(record) = records.get_mut(&target.browser_id).filter(|record| {
+            record.page_lease == target.page_lease
+                && record.account_generation == target.account_generation
+        }) {
+            record.creating = false;
+            record.closing = true;
+            record.visible = false;
+        }
+        let mut pending = self.lock_pending_closes();
+        if succeeded {
+            pending.remove(target);
+        } else {
+            pending.insert(target.clone());
+        }
+    }
+
+    fn finish_renderer_close(
+        &self,
+        target: &BrowserCloseTarget,
+        succeeded: bool,
+        previous_visible: bool,
+    ) {
+        let mut records = self.lock();
+        let matches = records.get(&target.browser_id).is_some_and(|record| {
+            record.page_lease == target.page_lease
+                && record.account_generation == target.account_generation
+        });
+        if succeeded {
+            if matches {
+                records.remove(&target.browser_id);
+            }
+        } else if let Some(record) = records.get_mut(&target.browser_id).filter(|record| {
+            record.page_lease == target.page_lease
+                && record.account_generation == target.account_generation
+        }) {
+            record.closing = false;
+            record.visible = previous_visible;
+        }
+        let mut pending = self.lock_pending_closes();
+        if succeeded {
+            pending.remove(target);
+        } else {
+            pending.insert(target.clone());
+        }
     }
 
     fn reserve(&self, browser_id: String, record: BrowserRecord) -> Result<(), IpcError> {
@@ -192,6 +286,8 @@ pub struct BrowserState {
     #[cfg(feature = "e2e")]
     #[serde(skip_serializing_if = "Option::is_none")]
     debug_port: Option<u16>,
+    #[cfg(feature = "e2e")]
+    debug_download_denials: u64,
 }
 
 #[cfg(windows)]
@@ -213,6 +309,8 @@ impl BrowserState {
             bounds: record.bounds,
             #[cfg(feature = "e2e")]
             debug_port: record.debug_port,
+            #[cfg(feature = "e2e")]
+            debug_download_denials: E2E_DOWNLOAD_DENIALS.load(Ordering::Acquire),
         }
     }
 }
@@ -292,29 +390,14 @@ fn set_native_view(
 fn cleanup_failed_attach(
     child: &Webview,
     views: &BrowserViews,
-    browser_id: &str,
-    page_lease: u64,
+    target: &BrowserCloseTarget,
     primary_error: IpcError,
 ) -> IpcError {
-    if child.close().is_ok() {
-        let mut records = views.lock();
-        if records
-            .get(browser_id)
-            .is_some_and(|record| record.page_lease == page_lease)
-        {
-            records.remove(browser_id);
-        }
+    let closed = child.close().is_ok();
+    views.finish_failed_attach_close(target, closed);
+    if closed {
         primary_error
     } else {
-        if let Some(record) = views
-            .lock()
-            .get_mut(browser_id)
-            .filter(|record| record.page_lease == page_lease)
-        {
-            record.creating = false;
-            record.closing = false;
-            record.visible = false;
-        }
         unavailable(
             "browser_cleanup_failed",
             "KalCode couldn't safely clean up that browser pane.",
@@ -340,24 +423,11 @@ fn mark_renderer_close_started(
 
 fn finish_attach_close(
     views: &BrowserViews,
-    browser_id: &str,
-    page_lease: u64,
+    target: &BrowserCloseTarget,
     succeeded: bool,
     previous_visible: bool,
 ) {
-    let mut records = views.lock();
-    let matches_lease = records
-        .get(browser_id)
-        .is_some_and(|record| record.page_lease == page_lease);
-    if !matches_lease {
-        return;
-    }
-    if succeeded {
-        records.remove(browser_id);
-    } else if let Some(record) = records.get_mut(browser_id) {
-        record.closing = false;
-        record.visible = previous_visible;
-    }
+    views.finish_renderer_close(target, succeeded, previous_visible);
 }
 
 fn require_current_page_lease(views: &BrowserViews, page_lease: u64) -> Result<(), IpcError> {
@@ -380,6 +450,23 @@ fn require_record_page(record: &BrowserRecord, page_lease: u64) -> Result<(), Ip
             "That browser pane belongs to another trusted page lifecycle.",
         ))
     }
+}
+
+fn require_ready_record(record: &BrowserRecord, page_lease: u64) -> Result<(), IpcError> {
+    require_record_page(record, page_lease)?;
+    if record.closing {
+        return Err(retryable_unavailable(
+            "browser_closing",
+            "That browser pane is closing.",
+        ));
+    }
+    if record.creating {
+        return Err(retryable_unavailable(
+            "browser_starting",
+            "That browser pane is still starting.",
+        ));
+    }
+    Ok(())
 }
 
 fn apply_view_state(
@@ -493,6 +580,82 @@ async fn bind_native_focus(
 }
 
 #[cfg(windows)]
+#[allow(unsafe_code)]
+async fn bind_native_download_denial(
+    webview: &Webview,
+    download_sink: PathBuf,
+) -> Result<(), IpcError> {
+    use webview2_com::{
+        IsDefaultDownloadDialogOpenChangedEventHandler,
+        Microsoft::Web::WebView2::Win32::{ICoreWebView2_9, ICoreWebView2_13},
+    };
+    use windows_core::{HSTRING, Interface};
+
+    let (registered_tx, registered_rx) = std::sync::mpsc::sync_channel(1);
+    webview
+        .with_webview(move |platform| {
+            let controller = platform.controller();
+            // SAFETY: `controller` and its CoreWebView2 are the live COM objects supplied by
+            // Tauri on the WebView2 UI thread. WebView2 retains the owned callback after
+            // registration. Tauri's construction-time handler denies the transfer; this hook
+            // confines any unexpected write and closes WebView2's separate default-download UI.
+            let result = unsafe {
+                controller.CoreWebView2().and_then(|webview| {
+                    let profile_webview: ICoreWebView2_13 = webview.cast()?;
+                    let download_sink = HSTRING::from(download_sink.as_path());
+                    profile_webview
+                        .Profile()?
+                        .SetDefaultDownloadFolderPath(&download_sink)?;
+                    let dialog_webview: ICoreWebView2_9 = webview.cast()?;
+                    let mut dialog_token = 0;
+                    dialog_webview.add_IsDefaultDownloadDialogOpenChanged(
+                        &IsDefaultDownloadDialogOpenChangedEventHandler::create(Box::new(
+                            move |sender, _| {
+                                if let Some(sender) = sender {
+                                    let sender: ICoreWebView2_9 = sender.cast()?;
+                                    let mut open = windows_core::BOOL::default();
+                                    sender.IsDefaultDownloadDialogOpen(&mut open)?;
+                                    if open.as_bool() {
+                                        sender.CloseDefaultDownloadDialog()?;
+                                    }
+                                }
+                                Ok(())
+                            },
+                        )),
+                        &mut dialog_token,
+                    )
+                })
+            };
+            let _ = registered_tx.send(result.is_ok());
+        })
+        .map_err(|_| {
+            unavailable(
+                "browser_download_guard_failed",
+                "KalCode couldn't secure browser downloads.",
+            )
+        })?;
+    let registered = tauri::async_runtime::spawn_blocking(move || {
+        registered_rx.recv_timeout(std::time::Duration::from_secs(5))
+    })
+    .await
+    .map_err(|_| {
+        unavailable(
+            "browser_download_guard_failed",
+            "KalCode couldn't secure browser downloads.",
+        )
+    })?
+    .unwrap_or(false);
+    if registered {
+        Ok(())
+    } else {
+        Err(unavailable(
+            "browser_download_guard_failed",
+            "KalCode couldn't secure browser downloads.",
+        ))
+    }
+}
+
+#[cfg(windows)]
 fn is_reparse_point(metadata: &std::fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
@@ -595,10 +758,50 @@ async fn bind_native_focus(
     Ok(())
 }
 
-/// Begins a new trusted main-webview lifecycle. The lease is native authority,
-/// so delayed requests from an older page cannot rebind a Browser child.
-pub fn begin_page_load(views: &BrowserViews) -> u64 {
-    views.rotate_page_lease()
+#[cfg(not(windows))]
+async fn bind_native_download_denial(_webview: &Webview) -> Result<(), IpcError> {
+    Ok(())
+}
+
+fn close_detached_views(
+    app: &tauri::AppHandle,
+    views: &BrowserViews,
+    detached: Vec<BrowserCloseTarget>,
+) -> Result<usize, IpcError> {
+    let mut closed = 0;
+    let mut failed = false;
+    for target in detached {
+        if let Some(child) = app.get_webview(&label(
+            &target.browser_id,
+            target.page_lease,
+            target.account_generation,
+        )) {
+            if child.close().is_ok() {
+                closed += 1;
+            } else {
+                failed = true;
+                views.requeue_failed_close(target);
+            }
+        } else {
+            closed += 1;
+        }
+    }
+    if failed {
+        Err(unavailable(
+            "browser_close_failed",
+            "KalCode couldn't close every browser pane.",
+        ))
+    } else {
+        Ok(closed)
+    }
+}
+
+/// Begins a new trusted main-webview lifecycle and closes only the children detached from its
+/// predecessor. Lease rotation and record detachment are one transaction, so replacement JS can
+/// never create a child that this cleanup mistakes for an old one.
+pub fn begin_page_load(app: &tauri::AppHandle, views: &BrowserViews) -> Result<usize, IpcError> {
+    let (_current_page, detached) = views.rotate_page_lease_and_take_close_targets();
+    close_detached_views(app, views, detached)
 }
 
 #[tauri::command]
@@ -656,11 +859,22 @@ pub async fn browser_attach(
     let account_id = _runtime_access.account_id()?;
     let profile_dir =
         browser_profile_dir(&state.paths.data_dir, &account_id, &request.workspace_id)?;
+    #[cfg(windows)]
+    let download_sink = {
+        let path = profile_dir.join("denied-downloads");
+        ensure_plain_directory(&path)?;
+        path
+    };
     _runtime_access.revalidate()?;
+    let attach_target = BrowserCloseTarget {
+        browser_id: request.browser_id.clone(),
+        page_lease: request.page_lease,
+        account_generation: _runtime_access.generation(),
+    };
     let child_label = label(
-        &request.browser_id,
-        request.page_lease,
-        _runtime_access.generation(),
+        &attach_target.browser_id,
+        attach_target.page_lease,
+        attach_target.account_generation,
     );
 
     if let Some(child) = webview.app_handle().get_webview(&child_label) {
@@ -750,8 +964,17 @@ pub async fn browser_attach(
     let title_views = views.inner().clone();
     let title_id = request.browser_id.clone();
     let title_lease = request.page_lease;
+    #[cfg(windows)]
+    let initial_url = WebviewUrl::External(url::Url::parse("about:blank").map_err(|_| {
+        unavailable(
+            "browser_create_failed",
+            "KalCode couldn't create that browser pane.",
+        )
+    })?);
+    #[cfg(not(windows))]
+    let initial_url = WebviewUrl::External(url.clone());
     let builder = crate::browser_profile::configure(
-        WebviewBuilder::new(child_label, WebviewUrl::External(url)),
+        WebviewBuilder::new(child_label, initial_url),
         profile_dir,
     )
     .devtools(false)
@@ -773,7 +996,15 @@ pub async fn browser_attach(
         allowed
     })
     .on_new_window(|_, _| NewWindowResponse::Deny)
-    .on_download(|_, _| false)
+    .on_download(|_, event| {
+        if matches!(event, DownloadEvent::Requested { .. }) {
+            #[cfg(feature = "e2e")]
+            {
+                E2E_DOWNLOAD_DENIALS.fetch_add(1, Ordering::AcqRel);
+            }
+        }
+        false
+    })
     .on_page_load(move |_, payload| {
         if safe_runtime_url(payload.url())
             && let Some(record) = page_views.lock().get_mut(&page_id).filter(|record| {
@@ -791,6 +1022,8 @@ pub async fn browser_attach(
             record.title = clean_title(title);
         }
     });
+    // On Windows the child starts at inert `about:blank`; Tauri's construction-time denial and
+    // the additional native guards are all installed before any remote document loads.
     #[cfg(feature = "e2e")]
     let builder = if let Some(port) = debug_port {
         let args = format!(
@@ -822,20 +1055,13 @@ pub async fn browser_attach(
         }
     };
     if let Err(error) = require_current_page_lease(&views, request.page_lease) {
-        return Err(cleanup_failed_attach(
-            &child,
-            &views,
-            &request.browser_id,
-            request.page_lease,
-            error,
-        ));
+        return Err(cleanup_failed_attach(&child, &views, &attach_target, error));
     }
     if child.hide().is_err() {
         return Err(cleanup_failed_attach(
             &child,
             &views,
-            &request.browser_id,
-            request.page_lease,
+            &attach_target,
             unavailable(
                 "browser_view_failed",
                 "KalCode couldn't safely hide that browser pane while it started.",
@@ -849,13 +1075,7 @@ pub async fn browser_attach(
         .is_some_and(|record| record.closing);
     if closing {
         let closed = child.close().is_ok();
-        finish_attach_close(
-            &views,
-            &request.browser_id,
-            request.page_lease,
-            closed,
-            false,
-        );
+        finish_attach_close(&views, &attach_target, closed, false);
         return Err(if closed {
             retryable_unavailable(
                 "browser_closed_during_start",
@@ -868,6 +1088,14 @@ pub async fn browser_attach(
             )
         });
     }
+    #[cfg(windows)]
+    if let Err(error) = bind_native_download_denial(&child, download_sink).await {
+        return Err(cleanup_failed_attach(&child, &views, &attach_target, error));
+    }
+    #[cfg(not(windows))]
+    if let Err(error) = bind_native_download_denial(&child).await {
+        return Err(cleanup_failed_attach(&child, &views, &attach_target, error));
+    }
     if let Err(error) = bind_native_focus(
         &child,
         request.browser_id.clone(),
@@ -876,13 +1104,7 @@ pub async fn browser_attach(
     )
     .await
     {
-        return Err(cleanup_failed_attach(
-            &child,
-            &views,
-            &request.browser_id,
-            request.page_lease,
-            error,
-        ));
+        return Err(cleanup_failed_attach(&child, &views, &attach_target, error));
     }
 
     match _runtime_access
@@ -891,14 +1113,20 @@ pub async fn browser_attach(
     {
         Ok(()) => {}
         Err(error) => {
-            return Err(cleanup_failed_attach(
-                &child,
-                &views,
-                &request.browser_id,
-                request.page_lease,
-                error,
-            ));
+            return Err(cleanup_failed_attach(&child, &views, &attach_target, error));
         }
+    }
+    #[cfg(windows)]
+    if child.navigate(url).is_err() {
+        return Err(cleanup_failed_attach(
+            &child,
+            &views,
+            &attach_target,
+            unavailable(
+                "browser_navigation_failed",
+                "KalCode couldn't open that address.",
+            ),
+        ));
     }
     let mut records = views.lock();
     let Some(record) = records.get_mut(&request.browser_id) else {
@@ -906,8 +1134,7 @@ pub async fn browser_attach(
         return Err(cleanup_failed_attach(
             &child,
             &views,
-            &request.browser_id,
-            request.page_lease,
+            &attach_target,
             unavailable("browser_state_missing", "That browser pane is unavailable."),
         ));
     };
@@ -916,8 +1143,7 @@ pub async fn browser_attach(
         return Err(cleanup_failed_attach(
             &child,
             &views,
-            &request.browser_id,
-            request.page_lease,
+            &attach_target,
             retryable_unavailable(
                 "browser_page_lease_expired",
                 "The Browser request belongs to an expired trusted page.",
@@ -927,13 +1153,7 @@ pub async fn browser_attach(
     if record.closing {
         drop(records);
         let closed = child.close().is_ok();
-        finish_attach_close(
-            &views,
-            &request.browser_id,
-            request.page_lease,
-            closed,
-            false,
-        );
+        finish_attach_close(&views, &attach_target, closed, false);
         return Err(if closed {
             retryable_unavailable(
                 "browser_closed_during_start",
@@ -948,13 +1168,7 @@ pub async fn browser_attach(
     }
     if let Err(error) = set_native_view(&child, record.bounds, record.visible) {
         drop(records);
-        return Err(cleanup_failed_attach(
-            &child,
-            &views,
-            &request.browser_id,
-            request.page_lease,
-            error,
-        ));
+        return Err(cleanup_failed_attach(&child, &views, &attach_target, error));
     }
     record.creating = false;
     Ok(BrowserState::from_record(&request.browser_id, record))
@@ -1176,22 +1390,22 @@ pub fn browser_info(
         let record = records
             .get(&browser_id)
             .ok_or_else(|| unavailable("browser_not_found", "That browser pane is not open."))?;
-        require_record_page(record, page_lease)?;
+        require_ready_record(record, page_lease)?;
     }
-    let current_url = webview
+    let child = webview
         .app_handle()
         .get_webview(&label(
             &browser_id,
             page_lease,
             _runtime_access.generation(),
         ))
-        .and_then(|child| child.url().ok())
-        .filter(safe_runtime_url);
+        .ok_or_else(|| unavailable("browser_not_found", "That browser pane is not open."))?;
+    let current_url = child.url().ok().filter(safe_runtime_url);
     let mut records = views.lock();
     let record = records
         .get_mut(&browser_id)
         .ok_or_else(|| unavailable("browser_not_found", "That browser pane is not open."))?;
-    require_record_page(record, page_lease)?;
+    require_ready_record(record, page_lease)?;
     if let Some(url) = current_url {
         record.url = url.to_string();
     }
@@ -1210,30 +1424,37 @@ pub fn browser_close(
     trusted(&webview)?;
     validate_browser_id(&browser_id).map_err(policy_error)?;
     require_current_page_lease(&views, page_lease)?;
+    let close_target = BrowserCloseTarget {
+        browser_id: browser_id.clone(),
+        page_lease,
+        account_generation: _runtime_access.generation(),
+    };
     let Some((creating, previous_visible)) =
         mark_renderer_close_started(&views, &browser_id, page_lease)?
     else {
         if let Some(child) = webview.app_handle().get_webview(&label(
-            &browser_id,
-            page_lease,
-            _runtime_access.generation(),
+            &close_target.browser_id,
+            close_target.page_lease,
+            close_target.account_generation,
         )) {
-            child.close().map_err(|_| {
-                unavailable(
+            let closed = child.close().is_ok();
+            views.finish_renderer_close(&close_target, closed, false);
+            if !closed {
+                return Err(unavailable(
                     "browser_close_failed",
                     "KalCode couldn't close that browser pane.",
-                )
-            })?;
+                ));
+            }
         }
         return Ok(false);
     };
     if let Some(child) = webview.app_handle().get_webview(&label(
-        &browser_id,
-        page_lease,
-        _runtime_access.generation(),
+        &close_target.browser_id,
+        close_target.page_lease,
+        close_target.account_generation,
     )) {
         let closed = child.close().is_ok();
-        finish_attach_close(&views, &browser_id, page_lease, closed, previous_visible);
+        finish_attach_close(&views, &close_target, closed, previous_visible);
         if !closed {
             return Err(unavailable(
                 "browser_close_failed",
@@ -1241,7 +1462,7 @@ pub fn browser_close(
             ));
         }
     } else if !creating {
-        finish_attach_close(&views, &browser_id, page_lease, true, previous_visible);
+        finish_attach_close(&views, &close_target, true, previous_visible);
     }
     Ok(true)
 }
@@ -1335,45 +1556,10 @@ pub fn browser_open_external(
 }
 
 pub fn close_all(app: &tauri::AppHandle, views: &BrowserViews) -> Result<usize, IpcError> {
-    // Cleanup runs after account leases drain. Invalidate the page even when the main WebView
-    // stays loaded, so callbacks/queued requests from the prior account cannot address new views.
-    views.rotate_page_lease();
-    let ids: Vec<(String, u64, u64)> = views
-        .lock()
-        .iter()
-        .map(|(id, record)| (id.clone(), record.page_lease, record.account_generation))
-        .collect();
-    let mut closed = 0;
-    let mut failed = false;
-    for (id, page_lease, account_generation) in ids {
-        let Ok(Some((creating, previous_visible))) =
-            mark_renderer_close_started(views, &id, page_lease)
-        else {
-            continue;
-        };
-        if let Some(child) = app.get_webview(&label(&id, page_lease, account_generation)) {
-            let succeeded = child.close().is_ok();
-            finish_attach_close(views, &id, page_lease, succeeded, previous_visible);
-            if succeeded {
-                closed += 1;
-            } else {
-                failed = true;
-            }
-        } else if creating {
-            closed += 1;
-        } else {
-            finish_attach_close(views, &id, page_lease, true, previous_visible);
-            closed += 1;
-        }
-    }
-    if failed {
-        Err(unavailable(
-            "browser_close_failed",
-            "KalCode couldn't close every browser pane.",
-        ))
-    } else {
-        Ok(closed)
-    }
+    // Account/runtime cleanup uses the same atomic authority transition as a page reload. New
+    // account work can observe the lease but cannot reserve until every old record is detached.
+    let (_current_page, detached) = views.rotate_page_lease_and_take_close_targets();
+    close_detached_views(app, views, detached)
 }
 
 #[cfg(test)]
@@ -1403,11 +1589,24 @@ mod tests {
         }
     }
 
+    fn close_target(
+        browser_id: &str,
+        page_lease: u64,
+        account_generation: u64,
+    ) -> BrowserCloseTarget {
+        BrowserCloseTarget {
+            browser_id: browser_id.to_owned(),
+            page_lease,
+            account_generation,
+        }
+    }
+
     #[test]
     fn an_old_page_cannot_rebind_or_show_a_newer_page_record() {
         let views = BrowserViews::default();
         let stale_lease = views.current_page_lease();
-        let current_lease = views.rotate_page_lease();
+        let (current_lease, detached) = views.rotate_page_lease_and_take_close_targets();
+        assert!(detached.is_empty());
         let id = "01992ac0-e385-71a9-9548-bc0a8362133e".to_owned();
         let mut current = record("https://current.example/");
         current.page_lease = current_lease;
@@ -1429,12 +1628,112 @@ mod tests {
         assert_eq!(stale_command.code, "browser_page_lease_expired");
         assert_ne!(label(&id, stale_lease, 41), label(&id, current_lease, 41));
         // Simulate a delayed L1 close finishing after L2 has installed the same durable ID.
-        finish_attach_close(&views, &id, stale_lease, true, false);
+        finish_attach_close(&views, &close_target(&id, stale_lease, 41), true, false);
         let current = views.lock().get(&id).cloned().unwrap();
         assert_eq!(current.page_lease, current_lease);
         assert!(!current.visible);
         assert_eq!(current.url, "https://current.example/");
         assert_eq!(current.visibility_version, 50);
+    }
+
+    #[test]
+    fn in_flight_or_closing_records_are_never_reported_ready() {
+        let mut in_flight = record("https://requested.example/");
+        let error = require_ready_record(&in_flight, 1).unwrap_err();
+        assert_eq!(error.code, "browser_starting");
+        assert!(error.retryable);
+
+        in_flight.closing = true;
+        let error = require_ready_record(&in_flight, 1).unwrap_err();
+        assert_eq!(error.code, "browser_closing");
+        assert!(error.retryable);
+
+        in_flight.closing = false;
+        in_flight.creating = false;
+        require_ready_record(&in_flight, 1).unwrap();
+    }
+
+    #[test]
+    fn page_transition_detaches_old_records_before_same_id_replacement_can_reserve() {
+        let views = BrowserViews::default();
+        let old_page = views.current_page_lease();
+        let id = "01992ac0-e385-71a9-9548-bc0a8362133e".to_owned();
+        views
+            .reserve(id.clone(), record("https://old.example/"))
+            .unwrap();
+        assert!(views.lock().get(&id).unwrap().creating);
+
+        let (new_page, detached) = views.rotate_page_lease_and_take_close_targets();
+        assert_eq!(detached.len(), 1);
+        assert!(views.lock().is_empty());
+        assert_eq!(
+            require_current_page_lease(&views, old_page)
+                .unwrap_err()
+                .code,
+            "browser_page_lease_expired"
+        );
+
+        let mut replacement = record("https://new.example/");
+        replacement.page_lease = new_page;
+        replacement.creating = false;
+        views.reserve(id.clone(), replacement).unwrap();
+
+        let old_target = detached.into_iter().next().unwrap();
+        assert_eq!(old_target.browser_id, id);
+        assert_eq!(old_target.page_lease, old_page);
+        assert_ne!(
+            label(
+                &old_target.browser_id,
+                old_target.page_lease,
+                old_target.account_generation
+            ),
+            label(&id, new_page, 41),
+        );
+        // A delayed old close completion is scoped to its captured lease and cannot remove the
+        // replacement record that reused the durable Browser identity.
+        finish_attach_close(&views, &old_target, true, false);
+        let current = views.lock().get(&id).cloned().unwrap();
+        assert_eq!(current.page_lease, new_page);
+        assert_eq!(current.url, "https://new.example/");
+    }
+
+    #[test]
+    fn failed_old_close_remains_pending_alongside_a_same_id_replacement() {
+        let views = BrowserViews::default();
+        let old_page = views.current_page_lease();
+        let id = "01992ac0-e385-71a9-9548-bc0a8362133e".to_owned();
+        views
+            .reserve(id.clone(), record("https://old.example/"))
+            .unwrap();
+        assert!(views.lock().get(&id).unwrap().creating);
+
+        let (new_page, detached) = views.rotate_page_lease_and_take_close_targets();
+        let old_target = detached.into_iter().next().unwrap();
+        assert_eq!(old_target.page_lease, old_page);
+        let mut replacement = record("https://new.example/");
+        replacement.page_lease = new_page;
+        replacement.account_generation = 42;
+        replacement.creating = false;
+        views.reserve(id.clone(), replacement).unwrap();
+
+        // Requeueing is idempotent and independent from the active record map, so a failed old
+        // native close cannot overwrite or lose a same-ID replacement.
+        views.finish_failed_attach_close(&old_target, false);
+        views.finish_failed_attach_close(&old_target, false);
+        assert_eq!(views.lock_pending_closes().len(), 1);
+        assert_eq!(views.lock().get(&id).unwrap().page_lease, new_page);
+
+        let (_next_page, retry) = views.rotate_page_lease_and_take_close_targets();
+        assert_eq!(retry.len(), 2);
+        let retry: HashSet<_> = retry.into_iter().collect();
+        assert!(retry.contains(&old_target));
+        assert!(retry.contains(&BrowserCloseTarget {
+            browser_id: id,
+            page_lease: new_page,
+            account_generation: 42,
+        }));
+        assert!(views.lock_pending_closes().is_empty());
+        assert!(views.lock().is_empty());
     }
 
     #[test]
@@ -1589,15 +1888,17 @@ mod tests {
         let mut old = record("https://old.example/");
         old.creating = false;
         views.reserve(id.clone(), old).unwrap();
-        // This rotation is the first action of close_all, even if native close must retry.
-        let next_page = views.rotate_page_lease();
+        // This transaction is the first action of close_all, even if native close must retry.
+        let (next_page, detached) = views.rotate_page_lease_and_take_close_targets();
+        assert_eq!(detached.len(), 1);
+        let old_target = detached.into_iter().next().unwrap();
         assert!(require_current_page_lease(&views, old_page).is_err());
-        finish_attach_close(&views, &id, old_page, true, false);
         let mut new = record("https://new.example/");
         new.page_lease = next_page;
         new.account_generation = 42;
         views.reserve(id.clone(), new).unwrap();
-        finish_attach_close(&views, &id, old_page, true, false);
+        // The exact old native handle/label may finish later, after a new account reused the ID.
+        finish_attach_close(&views, &old_target, true, false);
         let current = views.lock().get(&id).cloned().unwrap();
         assert_eq!(current.account_generation, 42);
         assert_eq!(current.url, "https://new.example/");
@@ -1639,7 +1940,8 @@ mod tests {
         let (_, prior_visible) = mark_renderer_close_started(&views, &id, 1)
             .unwrap()
             .unwrap();
-        finish_attach_close(&views, &id, 1, false, prior_visible);
+        let target = close_target(&id, 1, 41);
+        finish_attach_close(&views, &target, false, prior_visible);
         let retained = views.lock().get(&id).cloned().unwrap();
         assert!(!retained.closing);
         assert!(retained.visible);
@@ -1647,7 +1949,7 @@ mod tests {
         let (_, prior_visible) = mark_renderer_close_started(&views, &id, 1)
             .unwrap()
             .unwrap();
-        finish_attach_close(&views, &id, 1, true, prior_visible);
+        finish_attach_close(&views, &target, true, prior_visible);
         assert!(!views.lock().contains_key(&id));
     }
 
@@ -1665,7 +1967,7 @@ mod tests {
         assert!(creating);
         assert!(views.lock().get(&id).unwrap().closing);
         // Simulates creation observing `closing` and closing the newly created native child.
-        finish_attach_close(&views, &id, 1, true, prior_visible);
+        finish_attach_close(&views, &close_target(&id, 1, 41), true, prior_visible);
         assert!(!views.lock().contains_key(&id));
     }
 
