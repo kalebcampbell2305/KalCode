@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { expect, type Page } from "@playwright/test";
@@ -49,6 +49,18 @@ function invoke<T>(page: Page, command: string, args: Record<string, unknown> = 
       ).__TAURI_INTERNALS__.invoke(cmd, a),
     [command, args] as const,
   ) as Promise<T>;
+}
+
+function displayedPath(path: string, home = process.env.USERPROFILE ?? process.env.HOME ?? homedir()): string {
+  const plain = (value: string) => (value.startsWith("\\\\?\\") ? value.slice(4) : value);
+  const comparablePath = plain(path);
+  const trimmedHome = plain(home).replace(/[\\/]+$/, "");
+  if (trimmedHome.length === 0 || comparablePath.length < trimmedHome.length) return path;
+  const head = comparablePath.slice(0, trimmedHome.length);
+  const rest = comparablePath.slice(trimmedHome.length);
+  const same = head.replaceAll("\\", "/").toLowerCase() === trimmedHome.replaceAll("\\", "/").toLowerCase();
+  const atBoundary = rest.length === 0 || rest.startsWith("\\") || rest.startsWith("/");
+  return same && atBoundary ? `~${rest}` : path;
 }
 
 /** What the app sends when the push-to-talk key is released (native routing, no audio). */
@@ -169,7 +181,8 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
     const codex = providers.find((provider) => provider.id === "codex");
     expect(codex?.detection?.state).toBe("installed");
     const fakePath = join(bin, "codex.exe");
-    const expectedDisplayPath = `~${fakePath.slice(homedir().length)}`;
+    const expectedDisplayPath = displayedPath(realpathSync.native(fakePath));
+    expect(expectedDisplayPath.startsWith("~")).toBe(true);
     expect(codex?.detection?.displayPath?.toLowerCase()).toBe(expectedDisplayPath.toLowerCase());
     expect(codex?.detection?.version).toBe("0.155.1");
     expect(await invoke<unknown[]>(page, "approval_list")).toEqual([]);

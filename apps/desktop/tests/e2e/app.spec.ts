@@ -1,5 +1,14 @@
 import { execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { expect, type Page } from "@playwright/test";
@@ -47,9 +56,16 @@ function invoke<T>(page: Page, command: string): Promise<T> {
   ) as Promise<T>;
 }
 
-function displayedPath(path: string): string {
-  const home = homedir();
-  return path.toLowerCase().startsWith(home.toLowerCase()) ? `~${path.slice(home.length)}` : path;
+function displayedPath(path: string, home = process.env.USERPROFILE ?? process.env.HOME ?? homedir()): string {
+  const plain = (value: string) => (value.startsWith("\\\\?\\") ? value.slice(4) : value);
+  const comparablePath = plain(path);
+  const trimmedHome = plain(home).replace(/[\\/]+$/, "");
+  if (trimmedHome.length === 0 || comparablePath.length < trimmedHome.length) return path;
+  const head = comparablePath.slice(0, trimmedHome.length);
+  const rest = comparablePath.slice(trimmedHome.length);
+  const same = head.replaceAll("\\", "/").toLowerCase() === trimmedHome.replaceAll("\\", "/").toLowerCase();
+  const atBoundary = rest.length === 0 || rest.startsWith("\\") || rest.startsWith("/");
+  return same && atBoundary ? `~${rest}` : path;
 }
 
 test("launch, change settings, quit, relaunch: settings and history persist", async () => {
@@ -147,10 +163,10 @@ test("the Providers page detects the installed Claude Code CLI", async () => {
       ["gemini-cli", "gemini.exe", "0.61.0"],
     ] as const) {
       const status = statuses.find((candidate) => candidate.id === id);
+      const expectedDisplayPath = displayedPath(realpathSync.native(join(bin, executable)));
       expect(status?.detection?.state, id).toBe("installed");
-      expect(status?.detection?.displayPath?.toLowerCase(), id).toBe(
-        displayedPath(join(bin, executable)).toLowerCase(),
-      );
+      expect(expectedDisplayPath.startsWith("~"), id).toBe(true);
+      expect(status?.detection?.displayPath?.toLowerCase(), id).toBe(expectedDisplayPath.toLowerCase());
       expect(status?.detection?.version, id).toBe(version);
     }
 
@@ -179,9 +195,29 @@ test("the Providers page detects the installed Claude Code CLI", async () => {
 
 test("the Threads surface runs on the native thread runtime", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-"));
+  const root = mkdtempSync(join(tmpdir(), "kalcode-e2e-thread-options-"));
   try {
-    const app = await launch(dataDir);
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    expect(existsSync(FAKE), "build:e2e must build the fake provider").toBe(true);
+    for (const name of ["claude.exe", "codex.exe", "gemini.exe"]) copyFileSync(FAKE, join(bin, name));
+    writeManagedFakeProviderConfig(bin);
+
+    const app = await launch(dataDir, { PATH: `${bin};${process.env.PATH ?? ""}` });
     await expect(app.page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+    const statuses = await invoke<ProviderStatusLite[]>(app.page, "providers_detect");
+    for (const [id, executable, version] of [
+      ["claude-code", "claude.exe", "2.1.282"],
+      ["codex", "codex.exe", "0.155.1"],
+      ["gemini-cli", "gemini.exe", "0.61.0"],
+    ] as const) {
+      const status = statuses.find((candidate) => candidate.id === id);
+      const expectedDisplayPath = displayedPath(realpathSync.native(join(bin, executable)));
+      expect(status?.detection?.state, id).toBe("installed");
+      expect(expectedDisplayPath.startsWith("~"), id).toBe(true);
+      expect(status?.detection?.displayPath?.toLowerCase(), id).toBe(expectedDisplayPath.toLowerCase());
+      expect(status?.detection?.version, id).toBe(version);
+    }
     await app.page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Threads" }).click();
     await expect(app.page.getByRole("heading", { level: 1, name: "Threads" })).toBeVisible();
 
@@ -189,12 +225,11 @@ test("the Threads surface runs on the native thread runtime", async () => {
     await expect(app.page.getByRole("heading", { name: "No threads yet" })).toBeVisible();
     await expect(app.page.getByText("Threads couldn't load")).toHaveCount(0);
 
-    // `thread_options` answered natively. A fresh data folder has no workspace yet, so the flow
-    // asks for one (or explains why no provider is ready when Claude Code isn't usable here).
+    // `thread_options` answered natively. Managed no-network providers make this independent of
+    // the host's installed CLIs; a fresh data folder must ask for a workspace.
     await app.page.getByRole("button", { name: "New thread" }).first().click();
-    await expect(
-      app.page.getByRole("heading", { name: /^(No workspaces yet|No provider is ready for threads)$/ }),
-    ).toBeVisible({ timeout: 60_000 });
+    await expect(app.page.getByRole("heading", { level: 2, name: "New thread" })).toBeVisible();
+    await expect(app.page.getByRole("heading", { name: "No workspaces yet" })).toBeVisible();
     await closeGracefully(app);
 
     // The threads schema was created in the isolated database.
@@ -206,5 +241,6 @@ test("the Threads surface runs on the native thread runtime", async () => {
     expect(tables).toBe("thread_files,thread_messages,threads,tool_calls");
   } finally {
     removeDir(dataDir);
+    removeDir(root);
   }
 });

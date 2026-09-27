@@ -527,9 +527,454 @@ fn wal_path(database: &Path) -> PathBuf {
 pub fn display_path(path: &Path) -> String {
     let full = path.display().to_string();
     let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"));
-    match home.and_then(|home| strip_home(&full, &home.to_string_lossy(), cfg!(windows))) {
-        Some(rest) => format!("~{rest}"),
-        None => full,
+    let Some(home) = home else {
+        return full;
+    };
+    let home_text = home.to_string_lossy();
+    if let Some(redacted) =
+        redact_home_candidates(&full, std::iter::once(home_text.as_ref()), cfg!(windows))
+    {
+        return redacted;
+    }
+    #[cfg(windows)]
+    if let Some(redacted) = windows_home_paths::redact_alias_or_private(&full, &home) {
+        return redacted;
+    }
+    full
+}
+
+fn redact_home_candidates<'a>(
+    full: &str,
+    homes: impl IntoIterator<Item = &'a str>,
+    windows: bool,
+) -> Option<String> {
+    homes
+        .into_iter()
+        .find_map(|home| strip_home(full, home, windows).map(|rest| format!("~{rest}")))
+}
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod windows_home_paths {
+    use std::collections::HashSet;
+    use std::ffi::OsStr;
+    use std::os::windows::ffi::OsStrExt;
+    use std::path::{Component, Path, Prefix};
+
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetDriveTypeW, GetLongPathNameW, GetShortPathNameW,
+    };
+    use windows_sys::Win32::System::WindowsProgramming::{
+        DRIVE_FIXED, DRIVE_RAMDISK, DRIVE_REMOTE, DRIVE_REMOVABLE,
+    };
+
+    use super::{redact_home_candidates, strip_home};
+
+    const MAX_WINDOWS_PATH_CHARS: usize = 32_768;
+    const PRIVATE_PATH: &str = "<private path>";
+    type PathNameFn = unsafe extern "system" fn(*const u16, *mut u16, u32) -> u32;
+
+    enum AliasLookup {
+        Ineligible,
+        Unavailable,
+        Verified(Vec<String>),
+    }
+
+    pub(super) fn redact_alias_or_private(full: &str, home: &OsStr) -> Option<String> {
+        redact_with_lookup(full, home, aliases(home))
+    }
+
+    fn redact_with_lookup(full: &str, home: &OsStr, lookup: AliasLookup) -> Option<String> {
+        match lookup {
+            AliasLookup::Verified(aliases) => {
+                redact_home_candidates(full, aliases.iter().map(String::as_str), true)
+            }
+            AliasLookup::Unavailable if plausible_dos_home_alias(full, home) => {
+                Some(PRIVATE_PATH.to_owned())
+            }
+            AliasLookup::Ineligible | AliasLookup::Unavailable => None,
+        }
+    }
+
+    fn aliases(home: &OsStr) -> AliasLookup {
+        aliases_with(
+            home,
+            |drive| {
+                let root = [u16::from(drive), u16::from(b':'), u16::from(b'\\'), 0];
+                // SAFETY: `root` is a complete, NUL-terminated local drive root and remains
+                // alive for the duration of this read-only call.
+                unsafe { GetDriveTypeW(root.as_ptr()) }
+            },
+            resolve_name,
+        )
+    }
+
+    fn aliases_with(
+        home: &OsStr,
+        drive_type: impl FnOnce(u8) -> u32,
+        mut resolve: impl FnMut(&OsStr, PathNameFn) -> Option<String>,
+    ) -> AliasLookup {
+        let Some(drive) = absolute_local_drive(home) else {
+            return AliasLookup::Ineligible;
+        };
+        match drive_type(drive) {
+            DRIVE_REMOVABLE | DRIVE_FIXED | DRIVE_RAMDISK => {}
+            DRIVE_REMOTE => return AliasLookup::Ineligible,
+            _ => return AliasLookup::Unavailable,
+        }
+        let original = home.to_string_lossy();
+        let mut resolved = Vec::with_capacity(2);
+        for call in [
+            GetLongPathNameW as PathNameFn,
+            GetShortPathNameW as PathNameFn,
+        ] {
+            let Some(alias) = resolve(home, call) else {
+                return AliasLookup::Unavailable;
+            };
+            resolved.push(alias);
+        }
+        let mut seen = HashSet::new();
+        AliasLookup::Verified(
+            resolved
+                .into_iter()
+                .filter(|alias| strip_home(alias, &original, true) != Some(""))
+                .filter(|alias| seen.insert(alias.replace('\\', "/").to_lowercase()))
+                .collect(),
+        )
+    }
+
+    fn absolute_local_drive(home: &OsStr) -> Option<u8> {
+        let mut components = Path::new(home).components();
+        let Component::Prefix(prefix) = components.next()? else {
+            return None;
+        };
+        let drive = match prefix.kind() {
+            Prefix::Disk(drive) | Prefix::VerbatimDisk(drive) => drive,
+            _ => return None,
+        };
+        matches!(components.next(), Some(Component::RootDir)).then_some(drive)
+    }
+
+    fn plausible_dos_home_alias(full: &str, home: &OsStr) -> bool {
+        let Some((full_drive, full_parts)) = absolute_windows_parts(Path::new(full)) else {
+            return false;
+        };
+        let Some((home_drive, home_parts)) = absolute_windows_parts(Path::new(home)) else {
+            return false;
+        };
+        if !full_drive.eq_ignore_ascii_case(&home_drive)
+            || home_parts.is_empty()
+            || full_parts.len() < home_parts.len()
+        {
+            return false;
+        }
+        let mut saw_alias = false;
+        for (candidate, configured) in full_parts.iter().zip(&home_parts) {
+            if candidate.eq_ignore_ascii_case(configured) {
+                continue;
+            }
+            if !plausible_dos_component(candidate) {
+                return false;
+            }
+            saw_alias = true;
+        }
+        saw_alias
+    }
+
+    fn absolute_windows_parts(path: &Path) -> Option<(u8, Vec<String>)> {
+        let mut components = path.components();
+        let Component::Prefix(prefix) = components.next()? else {
+            return None;
+        };
+        let drive = match prefix.kind() {
+            Prefix::Disk(drive) | Prefix::VerbatimDisk(drive) => drive,
+            _ => return None,
+        };
+        if !matches!(components.next(), Some(Component::RootDir)) {
+            return None;
+        }
+        let mut parts = Vec::new();
+        for component in components {
+            let Component::Normal(part) = component else {
+                return None;
+            };
+            parts.push(part.to_str()?.to_owned());
+        }
+        Some((drive, parts))
+    }
+
+    fn plausible_dos_component(component: &str) -> bool {
+        let (stem, extension) = match component.split_once('.') {
+            Some((stem, extension)) if !extension.contains('.') => (stem, Some(extension)),
+            Some(_) => return false,
+            None => (component, None),
+        };
+        let Some((base, ordinal)) = stem.rsplit_once('~') else {
+            return false;
+        };
+        let allowed = |ch: char| {
+            !ch.is_control()
+                && !matches!(
+                    ch,
+                    ' ' | '.' | '~' | '\\' | '/' | ':' | '"' | '<' | '>' | '|' | '?' | '*'
+                )
+        };
+        (1..=6).contains(&base.encode_utf16().count())
+            && base.chars().all(allowed)
+            && (1..=6).contains(&ordinal.len())
+            && ordinal.chars().all(|ch| ch.is_ascii_digit())
+            && extension.is_none_or(|extension| {
+                (1..=3).contains(&extension.encode_utf16().count())
+                    && extension.chars().all(allowed)
+            })
+    }
+
+    fn resolve_name(home: &OsStr, call: PathNameFn) -> Option<String> {
+        resolve_name_with(home, |input, output, capacity| {
+            // SAFETY: `resolve_name_with` supplies a NUL-terminated input and a writable output
+            // buffer of exactly `capacity` UTF-16 code units. The Win32 function pointer is one
+            // of GetLongPathNameW/GetShortPathNameW and is used only for the trusted home path.
+            unsafe { call(input, output, capacity) }
+        })
+    }
+
+    fn resolve_name_with(
+        home: &OsStr,
+        mut call: impl FnMut(*const u16, *mut u16, u32) -> u32,
+    ) -> Option<String> {
+        let mut input: Vec<u16> = home.encode_wide().collect();
+        if input.is_empty() || input.len() >= MAX_WINDOWS_PATH_CHARS || input.contains(&0) {
+            return None;
+        }
+        input.push(0);
+        let mut output = vec![0_u16; MAX_WINDOWS_PATH_CHARS];
+        let written = usize::try_from(call(
+            input.as_ptr(),
+            output.as_mut_ptr(),
+            u32::try_from(output.len()).ok()?,
+        ))
+        .ok()?;
+        if written == 0 || written >= output.len() {
+            return None;
+        }
+        String::from_utf16(&output[..written]).ok()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::cell::Cell;
+        use std::ffi::OsString;
+        use std::os::windows::ffi::OsStringExt;
+
+        use super::*;
+
+        #[test]
+        fn only_absolute_local_drive_homes_reach_alias_resolution() {
+            for home in [
+                OsStr::new(r"\\server\share\user"),
+                OsStr::new(r"\\?\UNC\server\share\user"),
+                OsStr::new(r"\\.\C:\Users\Kaleb"),
+                OsStr::new(r"C:Users\Kaleb"),
+            ] {
+                let calls = Cell::new(0);
+                let aliases = aliases_with(
+                    home,
+                    |_| DRIVE_FIXED,
+                    |_, _| {
+                        calls.set(calls.get() + 1);
+                        Some(String::new())
+                    },
+                );
+                assert!(matches!(aliases, AliasLookup::Ineligible));
+                assert_eq!(calls.get(), 0);
+            }
+
+            let calls = Cell::new(0);
+            let aliases = aliases_with(
+                OsStr::new(r"C:\Users\Kaleb"),
+                |_| DRIVE_REMOTE,
+                |_, _| {
+                    calls.set(calls.get() + 1);
+                    Some(String::new())
+                },
+            );
+            assert!(matches!(aliases, AliasLookup::Ineligible));
+            assert_eq!(calls.get(), 0);
+
+            let calls = Cell::new(0);
+            let lookup = aliases_with(
+                OsStr::new(r"C:\Users\runneradmin"),
+                |_| 0,
+                |_, _| {
+                    calls.set(calls.get() + 1);
+                    Some(String::new())
+                },
+            );
+            assert_eq!(calls.get(), 0);
+            assert_eq!(
+                redact_with_lookup(
+                    r"C:\Users\RUNNER~1\codex.exe",
+                    OsStr::new(r"C:\Users\runneradmin"),
+                    lookup,
+                )
+                .as_deref(),
+                Some(PRIVATE_PATH)
+            );
+        }
+
+        #[test]
+        fn alias_api_failures_and_unchanged_names_add_no_candidates() {
+            let failures =
+                aliases_with(OsStr::new(r"C:\Users\Kaleb"), |_| DRIVE_FIXED, |_, _| None);
+            assert!(matches!(failures, AliasLookup::Unavailable));
+
+            let unchanged = aliases_with(
+                OsStr::new(r"C:\Users\Kaleb"),
+                |_| DRIVE_FIXED,
+                |home, _| Some(home.to_string_lossy().into_owned()),
+            );
+            assert!(matches!(unchanged, AliasLookup::Verified(aliases) if aliases.is_empty()));
+        }
+
+        #[test]
+        fn pathname_resolver_rejects_invalid_inputs_and_outputs() {
+            let calls = Cell::new(0);
+            let embedded_nul = OsString::from_wide(&[u16::from(b'C'), u16::from(b':'), 0, 1]);
+            assert_eq!(
+                resolve_name_with(&embedded_nul, |_, _, _| {
+                    calls.set(calls.get() + 1);
+                    1
+                }),
+                None
+            );
+            let oversized = OsString::from_wide(&vec![u16::from(b'a'); MAX_WINDOWS_PATH_CHARS]);
+            assert_eq!(
+                resolve_name_with(&oversized, |_, _, _| {
+                    calls.set(calls.get() + 1);
+                    1
+                }),
+                None
+            );
+            assert_eq!(calls.get(), 0);
+
+            let home = OsStr::new(r"C:\Users\Kaleb");
+            assert_eq!(resolve_name_with(home, |_, _, _| 0), None);
+            assert_eq!(resolve_name_with(home, |_, _, capacity| capacity), None);
+            assert_eq!(
+                resolve_name_with(home, |_, output, _| {
+                    // SAFETY: `output` points to the resolver's allocated 32,768-unit buffer.
+                    unsafe { output.write(0xD800) };
+                    1
+                }),
+                None
+            );
+        }
+
+        #[test]
+        fn distinct_long_and_short_home_names_are_deduplicated() {
+            let calls = Cell::new(0);
+            let aliases = aliases_with(
+                OsStr::new(r"C:\Users\runneradmin"),
+                |_| DRIVE_FIXED,
+                |_, _| {
+                    let call = calls.get();
+                    calls.set(call + 1);
+                    Some(if call == 0 {
+                        r"C:\Users\runneradmin".to_owned()
+                    } else {
+                        r"C:\Users\RUNNER~1".to_owned()
+                    })
+                },
+            );
+            assert!(
+                matches!(aliases, AliasLookup::Verified(aliases) if aliases == [r"C:\Users\RUNNER~1"])
+            );
+        }
+
+        #[test]
+        fn unavailable_alias_lookup_hides_only_ambiguous_dos_home_paths() {
+            let home = OsStr::new(r"C:\Users\runneradmin");
+            for path in [
+                r"C:\Users\RUNNER~1\AppData\Local\Temp\codex.exe",
+                r"c:/users/RUNNE~12/AppData/codex.exe",
+                r"\\?\C:\Users\RUNNER~1\codex.exe",
+                r"C:\Users\KALEB@~1\codex.exe",
+                r"C:\Users\KAL%EB~1\codex.exe",
+                r"C:\Users\KÅLEB~1\codex.exe",
+            ] {
+                assert_eq!(
+                    redact_with_lookup(path, home, AliasLookup::Unavailable).as_deref(),
+                    Some(PRIVATE_PATH),
+                    "{path:?}"
+                );
+            }
+            assert_eq!(
+                redact_with_lookup(
+                    r"C:\DOCUME~1\RUNNER~1\codex.exe",
+                    OsStr::new(r"C:\Documents and Settings\runneradmin"),
+                    AliasLookup::Unavailable,
+                )
+                .as_deref(),
+                Some(PRIVATE_PATH)
+            );
+
+            for path in [
+                r"C:\Users\another-user\codex.exe",
+                r"C:\Other\RUNNER~1\codex.exe",
+                r"D:\Users\RUNNER~1\codex.exe",
+                r"\\server\share\RUNNER~1\codex.exe",
+            ] {
+                assert_eq!(
+                    redact_with_lookup(path, home, AliasLookup::Unavailable),
+                    None,
+                    "{path:?}"
+                );
+            }
+            for component in [r"KAL?EB~1", r"KAL|EB~1", r"KAL/EB~1", r"KAL\EB~1"] {
+                assert!(!plausible_dos_component(component), "{component:?}");
+            }
+        }
+
+        #[test]
+        fn verified_or_ineligible_lookups_never_infer_a_home_alias() {
+            let path = r"C:\Users\OTHER~1\codex.exe";
+            let home = OsStr::new(r"C:\Users\runneradmin");
+            assert_eq!(
+                redact_with_lookup(path, home, AliasLookup::Verified(Vec::new())),
+                None
+            );
+            assert_eq!(
+                redact_with_lookup(path, home, AliasLookup::Ineligible),
+                None
+            );
+        }
+
+        #[test]
+        fn windows_api_aliases_redact_an_existing_synthetic_directory_when_available() {
+            let home = std::env::var_os("USERPROFILE").expect("Windows test has USERPROFILE");
+            let directory = tempfile::Builder::new()
+                .prefix("KalCode Alias Privacy Long Name ")
+                .tempdir_in(&home)
+                .expect("create trusted-home alias fixture");
+            let aliases = match aliases(directory.path().as_os_str()) {
+                AliasLookup::Verified(aliases) => aliases,
+                AliasLookup::Ineligible | AliasLookup::Unavailable => {
+                    panic!("trusted local synthetic directory alias lookup failed")
+                }
+            };
+            for alias in &aliases {
+                let target = Path::new(alias).join("missing-child").join("codex.exe");
+                assert_eq!(
+                    super::super::redact_home_candidates(
+                        &target.display().to_string(),
+                        std::iter::once(alias.as_str()),
+                        true,
+                    )
+                    .as_deref(),
+                    Some(r"~\missing-child\codex.exe")
+                );
+            }
+        }
     }
 }
 
@@ -582,7 +1027,7 @@ impl KalError {
 
 #[cfg(test)]
 mod path_tests {
-    use super::strip_home;
+    use super::{redact_home_candidates, strip_home};
 
     #[test]
     fn strips_home_case_insensitively_on_windows() {
@@ -635,6 +1080,64 @@ mod path_tests {
         ] {
             assert_eq!(strip_home(path, r"C:\Users\Kaleb", true), None, "{path:?}");
         }
+    }
+
+    #[test]
+    fn trusted_home_aliases_redact_long_and_short_forms_with_the_original_suffix() {
+        let homes = [r"C:\Users\runneradmin", r"C:\Users\RUNNER~1"];
+        assert_eq!(
+            redact_home_candidates(
+                r"C:\Users\RUNNER~1\AppData\Local\Temp\bin\codex.exe",
+                homes,
+                true,
+            )
+            .as_deref(),
+            Some(r"~\AppData\Local\Temp\bin\codex.exe")
+        );
+        assert_eq!(
+            redact_home_candidates(
+                r"c:\users\RUNNERADMIN/AppData/Local/Temp/bin/codex.exe",
+                homes,
+                true,
+            )
+            .as_deref(),
+            Some("~/AppData/Local/Temp/bin/codex.exe")
+        );
+        assert_eq!(
+            redact_home_candidates(r"C:\Users\RUNNER~1", homes, true).as_deref(),
+            Some("~")
+        );
+    }
+
+    #[test]
+    fn aliases_never_redact_siblings_or_unrelated_paths() {
+        let homes = [r"C:\Users\runneradmin", r"C:\Users\RUNNER~1"];
+        for path in [
+            r"C:\Users\RUNNER~12\data",
+            r"C:\Users\runneradmin2\data",
+            r"C:\Users\another-user\data",
+            r"D:\Users\RUNNER~1\data",
+            r"\\server\share\RUNNER~1\data",
+        ] {
+            assert_eq!(redact_home_candidates(path, homes, true), None, "{path:?}");
+        }
+        assert_eq!(
+            redact_home_candidates(r"C:\Users\RUNNER~1\data", [], true),
+            None
+        );
+    }
+
+    #[test]
+    fn direct_home_redaction_does_not_require_the_child_to_exist() {
+        assert_eq!(
+            redact_home_candidates(
+                r"C:\Users\runneradmin\never-created\child.exe",
+                [r"C:\Users\runneradmin"],
+                true,
+            )
+            .as_deref(),
+            Some(r"~\never-created\child.exe")
+        );
     }
 
     #[test]
