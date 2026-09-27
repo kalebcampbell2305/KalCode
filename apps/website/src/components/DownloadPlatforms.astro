@@ -89,6 +89,11 @@ function checksumCommand(os: (typeof rows)[number]["os"], file: string): string 
             <p class="platform__note">
               Verify the downloaded file with <code>{checksumCommand(row.os, row.build.file)}</code> and compare it with the SHA-256 above.
             </p>
+            {row.os === "macos" && (
+              <p class="platform__note">
+                On a standard Mac account, open the DMG and copy <code>KalCode.app</code> to <code>~/Applications</code> before launching it. This per-user location supports in-app updates and rollback. The DMG&apos;s <code>Applications</code> shortcut points to the system <code>/Applications</code> folder, which requires administrator access; a standard-user install there requires an administrator to replace the app manually for later versions.
+              </p>
+            )}
             <div class="platform__action button-row">
               <a class="button button--primary button--lg" href={row.build.url} download={row.build.file}>
                 <Icon name="download" />

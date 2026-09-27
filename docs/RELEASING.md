@@ -435,6 +435,14 @@ source or command logs. A build-only checkpoint is not publishable.
 
 Transfer the immutable Mac packet through the canonical Windows updater-signature handoff, then
 require real clean-profile product QA and the baseline update/rollback/reupdate sequence on the Mac.
+For the standard-user release path, copy the direct candidate to
+`/Users/kalcodeqa/Applications/KalCode.app` and run the baseline update sequence from
+`/Users/kalcodeqa2/Applications/KalCode.app`. Do not use the DMG's `Applications` shortcut for these
+trials: it targets system `/Applications`, which requires administrator authority and manual
+replacement for later versions when the app is owned outside the standard user's writable location.
+For both paths, retain proof of the installed bundle identifier, version/build-info, Developer ID
+team and strict signature, and cross-check the exact source artifact SHA-256 plus baseline/candidate
+version and commit against the durable updater-QA staging receipt.
 The publisher supports the `darwin-aarch64` updater target and `/download/macos-arm64`; it requires
 matching build, verification and final schema-v2 QA evidence. Website support is implemented but
 must remain unavailable until the verified artifact is published. A signed runtime component does

@@ -39,6 +39,11 @@ trial.
 Use `kalcodeqa` for the direct candidate install and the separately prepared `kalcodeqa2` for the
 direct baseline install and its update/rollback/re-update sequence on each platform. Preserve both
 profiles and the owner's development session; do not clear or migrate profile data between trials.
+On macOS, copy the candidate explicitly to `/Users/kalcodeqa/Applications/KalCode.app` and the
+baseline explicitly to `/Users/kalcodeqa2/Applications/KalCode.app`. Create each `Applications`
+directory as its standard user when needed. Do not use the DMG's `Applications` shortcut for these
+trials: it targets system `/Applications`, requires administrator authority and would require an
+administrator to replace a standard user's app manually for later versions.
 
 ## Dry run and stage
 
@@ -79,6 +84,12 @@ Install the signed baseline normally from its unlisted immutable descriptor. On 
 Record the exact baseline and candidate version, commit and artifact SHA-256 in each final schema-v2
 QA record. Every outcome must bind its exact source and destination identities and pass. Cache
 seeding, authentication or TLS bypasses, test hooks and fixture-only proof are forbidden.
+Retain a separate device evidence receipt for each platform. For macOS it must record the exact
+per-user installation path, prove the installed bundle identifier, version and production
+build-info, Developer ID team and strict signature, and bind the installed copy to the source DMG
+SHA-256. Before approving the final record, cross-check its baseline and candidate identities with
+the durable staging receipt and both immutable version rows. Preserve these receipts outside the
+source and artifact staging trees with the other governed release evidence.
 
 Replace the preliminary QA records with final status `passed` records after the physical runs.
 `pnpm release:publish:dry-run` then rechecks both platform signatures and complete QA. Only

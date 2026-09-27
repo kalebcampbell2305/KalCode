@@ -87,6 +87,11 @@ describe("download page platforms", () => {
     expect(html).toContain("shasum -a 256 &quot;./KalCode_0.1.0_arm64.dmg&quot;");
     expect(html).toContain('href="/download/windows-x64"');
     expect(html).toContain('href="/download/macos-arm64"');
+    expect(body).toContain("copy KalCode.app to ~/Applications before launching it");
+    expect(body).toContain("supports in-app updates and rollback");
+    expect(body).toContain("shortcut points to the system /Applications folder");
+    expect(body).toContain("requires an administrator to replace the app manually for later versions");
+    expect(html.indexOf("On a standard Mac account")).toBeLessThan(html.indexOf('href="/download/macos-arm64"'));
     expect(html).toContain('id="windows"');
     expect(html).toContain('id="macos"');
     expect(html).toContain('id="linux"');

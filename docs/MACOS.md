@@ -100,6 +100,13 @@ the `Applications` link used for drag installation, while omitting Finder-only w
 positioning that requires GUI AppleEvents. This does not relax any signing, minimum-OS,
 notarization, stapling, Gatekeeper or independent-verifier gate.
 
+The DMG's `Applications` link points to the system `/Applications` directory. For a standard-user
+installation, create the user's `~/Applications` directory and copy `KalCode.app` there explicitly
+instead of using that link. `~/Applications/KalCode.app` is the supported standard-user location
+for in-app update and rollback. Installing in `/Applications` requires administrator authority; a
+standard user cannot rely on in-app replacement there, so an administrator must replace the app
+manually for each later version.
+
 The product channel is mandatory (`stable`, `beta`, or `dev`). The production package always includes `kalvoice-whisper`; additional safe Cargo features can be
 specified with `--features`. The command builds only a DMG, requires the repository's explicit 14.0
 deployment target and hardened runtime configuration, refuses `e2e`, uses the approved Developer ID
@@ -164,6 +171,15 @@ Verification stops unless all of these checks pass:
 - Gatekeeper accepts the mounted application and the exact DMG;
 - `stapler` validates the ticket on the exact DMG; and
 - `notarytool info` and the full log still identify the recorded accepted submission with no issues.
+
+Clean-profile product QA separately verifies the installed copy. The direct candidate trial runs
+from `/Users/kalcodeqa/Applications/KalCode.app`; the baseline update, rollback and re-update trial
+runs from `/Users/kalcodeqa2/Applications/KalCode.app`. Each path must be a plain app bundle owned by
+the corresponding standard user, not a symlink to `/Applications`. The retained device evidence
+must bind the installed bundle identifier, version and production build-info, Developer ID team and
+strict signature result to the exact source DMG SHA-256. Cross-check the baseline and candidate
+version, commit and artifact SHA-256 against the durable updater-QA staging receipt before signing
+the final platform QA record.
 
 Command failures are redacted. Build and verification JSON intentionally omit certificate subjects,
 private-key material, credential values, and notary logs.
