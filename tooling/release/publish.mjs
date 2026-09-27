@@ -28,13 +28,13 @@ import { expectedMacDmgFile } from "./macos-contract.mjs";
 import { buildManifest, validateManifest } from "./manifest.mjs";
 import {
   boundedJsonFetch,
-  completeBootstrapAuthority,
-  decideBootstrapPointerAction,
   buildInitialPointerStatement,
   buildPointerAdvanceStatement,
   buildPointerReadStatement,
   buildVersionClaimStatement,
   buildVersionReadStatement,
+  completeBootstrapAuthority,
+  decideBootstrapPointerAction,
   parseD1Rows,
   pointerAdvanceProblems,
   publicationRowProblems,

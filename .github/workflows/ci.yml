@@ -77,6 +77,32 @@ jobs:
       - name: Frontend placeholder for tauri::generate_context
         shell: bash
         run: mkdir -p apps/desktop/dist && echo '<!doctype html>' > apps/desktop/dist/index.html
+      - name: Build real macOS Tauri sidecars for Rust gates
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        env:
+          TAURI_CONFIG: '{"bundle":{"externalBin":[]}}'
+        run: |
+          set -euo pipefail
+          host_target="$(rustc -vV | awk '/^host: / { print $2 }')"
+          case "$host_target" in
+            aarch64-apple-darwin|x86_64-apple-darwin) ;;
+            *) echo "Unsupported macOS host target: $host_target" >&2; exit 1 ;;
+          esac
+
+          cargo build --locked --target "$host_target" -p kalcode-desktop --bin kalcode-update-helper
+          cargo build --locked --target "$host_target" -p kalcode-providers --bin kalcode-provider-guardian
+          cargo build --locked --target "$host_target" -p kalcode-hook-bridge --bin kalcode-hook --no-default-features
+
+          helper_dir="apps/desktop/src-tauri/binaries"
+          mkdir -p "$helper_dir"
+          for helper in kalcode-update-helper kalcode-provider-guardian kalcode-hook; do
+            source="target/$host_target/debug/$helper"
+            destination="$helper_dir/$helper-$host_target"
+            test -f "$source" && test -x "$source"
+            install -m 755 "$source" "$destination"
+            test -f "$destination" && test -x "$destination"
+          done
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
