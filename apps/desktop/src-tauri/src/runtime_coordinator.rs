@@ -328,7 +328,7 @@ impl RecoveryIssue {
             ),
             "workspace_recovery_pending" => (
                 "workspace_recovery_pending",
-                "Previous provider processes are still being checked or stopped. Wait a moment, then try again.",
+                "KalCode cannot verify that the previous provider cleanup finished. Close any remaining provider sessions, then try again. If this persists, contact KalCode support.",
             ),
             "workspace_recovery_metadata_invalid" => (
                 "workspace_recovery_metadata_invalid",
