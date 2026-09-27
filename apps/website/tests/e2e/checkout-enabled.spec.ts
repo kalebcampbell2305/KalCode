@@ -3,15 +3,21 @@ import { expect, type Page, test } from "@playwright/test";
 type Tier = "free" | "owner" | null;
 
 async function installAccountNetworkFence(page: Page, tier: Tier) {
+  const ownedOrigin = `http://127.0.0.1:${Number(process.env.KALCODE_E2E_PORT ?? 8788)}`;
+  const apiPaths = new Set(["/v1/account", "/v1/entitlement", "/v1/kalvoice/usage", "/v1/billing/checkout"]);
   const billingRequests: Array<{ method: string; path: string; origin: string }> = [];
   const mutationRequests: Array<{ method: string; path: string }> = [];
   const checkoutBodies: unknown[] = [];
   const unexpectedRequests: string[] = [];
 
-  await page.route(/^https:\/\//u, async (route) => {
+  await page.route("**/*", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
-    if (url.origin === "https://checkout.stripe.com" && url.pathname === "/c/pay/cs_test_kalcode") {
+    if (url.origin === ownedOrigin && (request.method() === "GET" || request.method() === "HEAD")) {
+      await route.continue();
+      return;
+    }
+    if (request.method() === "GET" && url.href === "https://checkout.stripe.com/c/pay/cs_test_kalcode") {
       await route.fulfill({
         status: 200,
         contentType: "text/html",
@@ -19,7 +25,7 @@ async function installAccountNetworkFence(page: Page, tier: Tier) {
       });
       return;
     }
-    if (url.origin !== "https://api.kalcoded.com") {
+    if (url.origin !== "https://api.kalcoded.com" || url.search !== "" || !apiPaths.has(url.pathname)) {
       unexpectedRequests.push(`${request.method()} ${url.origin}${url.pathname}`);
       await route.abort();
       return;
@@ -77,7 +83,7 @@ async function installAccountNetworkFence(page: Page, tier: Tier) {
     await route.fulfill({ status, contentType: "application/json", headers, body: JSON.stringify(body) });
   });
 
-  return { billingRequests, checkoutBodies, mutationRequests, unexpectedRequests };
+  return { billingRequests, checkoutBodies, mutationRequests, ownedOrigin, unexpectedRequests };
 }
 
 test.describe("Checkout-enabled account release gate", () => {
@@ -175,5 +181,28 @@ test.describe("Checkout-enabled account release gate", () => {
     expect(network.checkoutBodies).toEqual([]);
     expect(network.mutationRequests).toEqual([]);
     expect(network.unexpectedRequests).toEqual([]);
+
+    const unexpectedOwnedMutationWasBlocked = await page.evaluate(async () => {
+      try {
+        await fetch("/checkout-gate-must-block", { method: "POST" });
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    expect(unexpectedOwnedMutationWasBlocked).toBe(true);
+    expect(network.unexpectedRequests).toEqual([`POST ${network.ownedOrigin}/checkout-gate-must-block`]);
+
+    let unexpectedHttpWasBlocked = false;
+    try {
+      await page.goto("http://untrusted.invalid/checkout-gate-must-block");
+    } catch {
+      unexpectedHttpWasBlocked = true;
+    }
+    expect(unexpectedHttpWasBlocked).toBe(true);
+    expect(network.unexpectedRequests).toEqual([
+      `POST ${network.ownedOrigin}/checkout-gate-must-block`,
+      "GET http://untrusted.invalid/checkout-gate-must-block",
+    ]);
   });
 });
