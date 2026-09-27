@@ -226,6 +226,7 @@ impl LifecycleControl {
         }
     }
 
+    #[cfg(any(windows, target_os = "macos"))]
     fn wait_for_second_completion(&self) {
         self.wait_until("the second turn completion gate", |state| {
             state.second_completion_held || state.second_completion_timed_out
@@ -245,6 +246,7 @@ impl LifecycleControl {
         self.changed.notify_all();
     }
 
+    #[cfg(any(windows, target_os = "macos"))]
     fn assert_second_completion_did_not_time_out(&self) {
         let timed_out = self.lock_state().second_completion_timed_out;
         assert!(!timed_out, "second turn completion callback timed out");
@@ -349,7 +351,9 @@ fn lifecycle_sink_callback_timeout_is_bounded_and_cleanup_safe() {
     }
     worker.join().expect("callback timeout worker");
     control.wait_for_sink_drop();
-    assert!(control.lock_state().second_completion_timed_out);
+    let state = control.lock_state();
+    assert!(state.second_completion_held);
+    assert!(state.second_completion_timed_out);
 }
 
 #[cfg(any(windows, target_os = "macos"))]

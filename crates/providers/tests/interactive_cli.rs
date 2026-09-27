@@ -223,6 +223,7 @@ impl Rig {
         serde_json::from_str(&text).expect("json")
     }
 
+    #[cfg(any(windows, target_os = "macos"))]
     fn launch_cwd(&self) -> std::path::PathBuf {
         std::fs::read_to_string(self.dir.path().join("last-cwd.txt"))
             .map(std::path::PathBuf::from)
