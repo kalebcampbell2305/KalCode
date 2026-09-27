@@ -7,8 +7,10 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
 use std::ffi::OsString;
+#[cfg(any(windows, target_os = "macos"))]
+use std::sync::Condvar;
 use std::sync::mpsc::{self, Receiver};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use kalcode_contracts::agent::{
@@ -320,6 +322,29 @@ fn configured_managed_profiles_require_an_explicit_account_before_any_provider_p
     rig.assert_no_provider_process_started();
 }
 
+#[cfg(all(not(windows), not(target_os = "macos")))]
+#[test]
+fn managed_cli_panes_fail_closed_without_a_native_guardian() {
+    for (cli, eligibility) in [
+        (PaneCli::Codex, Some(CloudConfigEligibility::Ineligible)),
+        (PaneCli::Gemini, None),
+    ] {
+        let rig = Rig::new_managed(cli, eligibility);
+        assert!(rig.profiles.is_some(), "managed fixture must be configured");
+        let error = rejected_start(&rig, Some(new_id()));
+        assert_eq!(
+            error.to_string(),
+            "provider runtime guardian is not configured"
+        );
+        assert!(
+            rig.resolved_accounts.lock().unwrap().is_empty(),
+            "guardian denial must precede account-policy resolution"
+        );
+        rig.assert_no_provider_process_started();
+    }
+}
+
+#[cfg(any(windows, target_os = "macos"))]
 #[test]
 fn managed_codex_requires_authoritative_cloud_eligibility_before_any_provider_process() {
     let rig = Rig::new_managed(PaneCli::Codex, None);
@@ -328,6 +353,7 @@ fn managed_codex_requires_authoritative_cloud_eligibility_before_any_provider_pr
     rig.assert_no_provider_process_started();
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 #[test]
 fn managed_codex_rejects_non_consumer_eligibility_before_any_provider_process() {
     for eligibility in [
@@ -343,6 +369,7 @@ fn managed_codex_rejects_non_consumer_eligibility_before_any_provider_process() 
     }
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 #[test]
 fn managed_codex_panes_use_the_exact_account_policy_and_hold_the_lease_until_drop() {
     let rig = Rig::new_managed(PaneCli::Codex, Some(CloudConfigEligibility::Ineligible));
@@ -391,6 +418,7 @@ fn managed_codex_panes_use_the_exact_account_policy_and_hold_the_lease_until_dro
     drop(lease);
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 #[test]
 fn managed_gemini_panes_use_the_neutral_profile_policy_and_account_lease() {
     let rig = Rig::new_managed(PaneCli::Gemini, None);
@@ -454,6 +482,7 @@ fn managed_gemini_panes_use_the_neutral_profile_policy_and_account_lease() {
     drop(lease);
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 #[test]
 fn managed_gemini_rejects_an_unreviewed_version_before_interactive_launch() {
     let rig = Rig::new_managed(PaneCli::Gemini, None);
@@ -473,6 +502,7 @@ fn managed_gemini_rejects_an_unreviewed_version_before_interactive_launch() {
     );
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 #[test]
 fn managed_gemini_acquires_the_profile_lease_before_any_account_scoped_probe() {
     let rig = Rig::new_managed(PaneCli::Gemini, None);
@@ -489,12 +519,14 @@ fn managed_gemini_acquires_the_profile_lease_before_any_account_scoped_probe() {
     drop(sign_in);
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 #[derive(Default)]
 struct ExitGate {
     state: Mutex<(bool, bool)>,
     changed: Condvar,
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 impl ExitGate {
     fn block_on_exit(&self) {
         let mut state = self.state.lock().unwrap();
@@ -524,6 +556,7 @@ impl ExitGate {
     }
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 #[test]
 fn managed_profile_lease_survives_session_drop_until_the_exit_callback_finishes() {
     let rig = Rig::new_managed(PaneCli::Gemini, None);

@@ -570,6 +570,35 @@ fn stopping_a_pane_ends_its_process_and_revokes_the_session() {
     ));
 }
 
+#[cfg(all(not(windows), not(target_os = "macos")))]
+#[test]
+fn managed_claude_pane_fails_closed_without_a_native_guardian() {
+    let rig = Rig::new_managed(
+        DecisionRouting::ProviderPrompt,
+        json!({"version": "2.1.282 (Claude Code)"}),
+        SessionLimits::default(),
+    );
+    let mut config = rig.config(PermissionMode::Approve);
+    config.provider_account_id = Some(new_id());
+
+    let error = match rig
+        .provider
+        .start_session(config, Box::new(|_: AgentEvent| {}))
+    {
+        Ok(_) => panic!("managed Claude must not start a PTY without a native guardian"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error.to_string(),
+        "provider runtime guardian is not configured"
+    );
+    assert!(
+        !rig.dir.path().join("runs.log").exists(),
+        "guardian denial must happen before provider detection or PTY launch"
+    );
+}
+
+#[cfg(any(windows, target_os = "macos"))]
 #[test]
 fn managed_claude_pane_rejects_an_unreviewed_version_before_pty_launch() {
     let rig = Rig::new_managed(

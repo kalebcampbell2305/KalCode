@@ -1479,6 +1479,7 @@ mod tests {
     use kalcode_core::flags::BuildChannel;
     use kalcode_core::{Core, CoreConfig, Paths};
 
+    #[cfg(any(windows, target_os = "macos"))]
     struct Fixture {
         _temp: tempfile::TempDir,
         core: Arc<Core>,
@@ -1486,6 +1487,7 @@ mod tests {
         account: ProviderAccount,
     }
 
+    #[cfg(any(windows, target_os = "macos"))]
     impl Fixture {
         fn new() -> Self {
             let temp = tempfile::tempdir().expect("temp");
@@ -1528,12 +1530,14 @@ mod tests {
         }
     }
 
+    #[cfg(any(windows, target_os = "macos"))]
     impl Drop for Fixture {
         fn drop(&mut self) {
             self.core.shutdown();
         }
     }
 
+    #[cfg(any(windows, target_os = "macos"))]
     fn connected(plan: &str) -> Result<CodexAccountState, CodexAccountAuthError> {
         Ok(CodexAccountState {
             account: Some(kalcode_providers::account_auth::CodexChatGptAccount {
@@ -1544,6 +1548,43 @@ mod tests {
         })
     }
 
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    #[test]
+    fn runtime_authority_fails_closed_without_a_native_guardian() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("temp");
+        let core = Arc::new(
+            Core::open(CoreConfig {
+                paths: Paths::new(temp.path()),
+                app_version: "0.0.0-test".into(),
+                channel: BuildChannel::Development,
+            })
+            .expect("core"),
+        );
+        let helper = temp.path().join("guardian-probe");
+        let marker = temp.path().join("guardian-probe.ran");
+        std::fs::write(&helper, "#!/bin/sh\n: > \"$0.ran\"\nexit 0\n").expect("helper");
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700))
+            .expect("helper permissions");
+
+        let result =
+            ProviderRuntimeAuthority::start_with_helper(Arc::clone(&core), temp.path(), &helper);
+        let helper_started = marker.exists();
+        core.shutdown();
+
+        let error = match result {
+            Ok(_) => panic!("desktop runtime authority must reject an unsupported guardian"),
+            Err(error) => error,
+        };
+        assert_eq!(error, "provider_guardian_unavailable");
+        assert!(
+            !helper_started,
+            "unsupported-host denial must happen before the helper starts"
+        );
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn codex_truth_is_generation_bound_fresh_and_fail_closed_for_org_plans() {
         let fixture = Fixture::new();
@@ -1610,6 +1651,7 @@ mod tests {
         );
     }
 
+    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn account_operations_are_single_flight_and_stale_observers_cannot_publish() {
         let fixture = Fixture::new();
@@ -1660,6 +1702,7 @@ mod tests {
         );
     }
 
+    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn login_slots_are_reserved_atomically_before_blocking_provider_work() {
         let fixture = Fixture::new();
@@ -1684,6 +1727,7 @@ mod tests {
         drop(reservations);
     }
 
+    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn shutdown_waits_for_start_reservations_and_rejects_new_work() {
         let fixture = Fixture::new();
@@ -1776,6 +1820,7 @@ mod tests {
         );
     }
 
+    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn wrong_provider_and_browser_failure_cancel_remain_tracked_until_quiescence() {
         let fixture = Fixture::new();
@@ -1873,6 +1918,7 @@ mod tests {
             .expect("lease releases only after quiescence");
     }
 
+    #[cfg(any(windows, target_os = "macos"))]
     #[test]
     fn failed_shutdown_cancel_remains_tracked_until_a_retry_proves_quiescence() {
         let fixture = Fixture::new();

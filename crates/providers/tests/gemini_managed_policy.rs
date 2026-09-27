@@ -2,13 +2,15 @@
 //! credential, network call, or inference is involved.
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
-use std::path::{Path, PathBuf};
+#[cfg(any(windows, target_os = "macos"))]
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
-use kalcode_contracts::agent::{
-    AgentEvent, AgentEventSink, AgentInput, AgentProvider, SessionConfig,
-};
+#[cfg(any(windows, target_os = "macos"))]
+use kalcode_contracts::agent::AgentInput;
+use kalcode_contracts::agent::{AgentEvent, AgentEventSink, AgentProvider, SessionConfig};
 use kalcode_contracts::permissions::PermissionMode;
 use kalcode_providers::managed::ManagedProfiles;
 use kalcode_providers::{DetectEnv, GeminiProvider};
@@ -142,6 +144,7 @@ impl Rig {
         }
     }
 
+    #[cfg(any(windows, target_os = "macos"))]
     fn neutral(&self) -> PathBuf {
         self.profiles
             .session_dir("gemini-cli", &self.account_id, &self.thread_id)
@@ -149,11 +152,13 @@ impl Rig {
             .join("neutral")
     }
 
+    #[cfg(any(windows, target_os = "macos"))]
     fn read_json(&self, name: &str) -> serde_json::Value {
         serde_json::from_slice(&std::fs::read(self.bin.join(name)).expect(name)).expect(name)
     }
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 fn wait_for_turn(rx: &mpsc::Receiver<AgentEvent>) {
     let deadline = Instant::now() + WAIT;
     loop {
@@ -347,10 +352,31 @@ fn lifecycle_sink_callback_timeout_is_bounded_and_cleanup_safe() {
     assert!(control.lock_state().second_completion_timed_out);
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 fn canonical(path: impl AsRef<Path>) -> PathBuf {
     std::fs::canonicalize(path).expect("canonical path")
 }
 
+#[cfg(all(not(windows), not(target_os = "macos")))]
+#[test]
+fn managed_headless_launch_fails_closed_without_a_native_guardian() {
+    let rig = Rig::new();
+    let provider = GeminiProvider::new_managed(rig.env(), rig.profiles.clone());
+    let error = match provider.start_session(rig.config(), Box::new(|_| {})) {
+        Ok(_) => panic!("managed Gemini must not launch without a native guardian"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error.to_string(),
+        "provider runtime guardian is not configured"
+    );
+    assert!(
+        !rig.bin.join("runs.log").exists(),
+        "guardian denial must happen before provider detection or launch"
+    );
+}
+
+#[cfg(any(windows, target_os = "macos"))]
 #[test]
 fn managed_headless_turn_runs_from_neutral_profile_and_repairs_the_floor() {
     let rig = Rig::new();
@@ -477,6 +503,7 @@ fn managed_headless_turn_runs_from_neutral_profile_and_repairs_the_floor() {
         .expect("lease releases after session drop");
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 #[test]
 fn managed_launch_rejects_an_unreviewed_gemini_version() {
     let rig = Rig::new();

@@ -113,6 +113,7 @@ fn installation_registry_never_probes_the_standalone_account() {
     assert_eq!(invocations[0]["args"], json!(["--version"]));
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 #[test]
 fn managed_claude_requires_an_account_and_holds_its_profile_until_session_cleanup() {
     let fake = FakeInstall::new("claude", json!({"version": "2.1.282 (Claude Code)"}));
@@ -187,6 +188,7 @@ fn managed_claude_requires_an_account_and_holds_its_profile_until_session_cleanu
         .expect("profile released");
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 #[test]
 fn managed_claude_rejects_an_unreviewed_version_before_session_launch() {
     let fake = FakeInstall::new("claude", json!({"version": "2.1.300 (Claude Code)"}));
@@ -225,6 +227,31 @@ fn managed_claude_rejects_an_unreviewed_version_before_session_launch() {
     assert!(
         !runs.lines().any(|line| line.contains("--input-format")),
         "the session process must not start: {runs}"
+    );
+}
+
+#[cfg(all(not(windows), not(target_os = "macos")))]
+#[test]
+fn managed_claude_fails_closed_without_a_native_guardian() {
+    let fake = FakeInstall::new("claude", json!({"version": "2.1.282 (Claude Code)"}));
+    let storage = tempfile::tempdir().expect("storage");
+    let profiles = kalcode_providers::managed::ManagedProfiles::new(storage.path().join("managed"))
+        .expect("profiles");
+    let adapter = provider(&fake).with_managed_profiles(profiles);
+    let mut config = fake.config(PermissionMode::Plan, None);
+    config.provider_account_id = Some(kalcode_contracts::ids::new_id());
+
+    let error = match adapter.start_session(config, Box::new(|_: AgentEvent| {})) {
+        Ok(_) => panic!("managed Claude must not launch without a native guardian"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error.to_string(),
+        "provider runtime guardian is not configured"
+    );
+    assert!(
+        !fake.dir.path().join("runs.log").exists(),
+        "guardian denial must happen before provider detection or launch"
     );
 }
 
