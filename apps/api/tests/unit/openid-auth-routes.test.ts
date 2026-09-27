@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AccountStore } from "../../worker/lib/account-store";
 import { sha256Base64Url } from "../../worker/lib/crypto";
 import { openIdAuthService } from "../../worker/lib/openid-auth-routes";
+import { OpenIdExchangeError } from "../../worker/lib/openid-connect";
 
 const NOW = new Date("2026-09-25T12:00:00.000Z");
 const VERIFIER = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
@@ -421,6 +422,65 @@ describe("OpenID account auth routes", () => {
       { level: "warn", event: "api.oidc_sign_in_failed", provider: "google", stage: "token_exchange" },
     ]);
     for (const value of privateValues) expect(JSON.stringify(logs)).not.toContain(value);
+    expect(store.createOrGetOpenIdAccount).not.toHaveBeenCalled();
+    expect(store.createSession).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes a corrupted stage and keeps logger failure out of the auth result", async () => {
+    const nonce = "n".repeat(43);
+    const store = fakeStore({
+      openIdAttempt: vi.fn(async () => ({
+        stateHash: await sha256Base64Url(STATE),
+        provider: "google" as const,
+        codeChallenge: CHALLENGE,
+        nonceHash: await sha256Base64Url(nonce),
+        expiresAt: "2026-09-25T12:10:00.000Z",
+        consumedAt: null,
+        clientKind: "website" as const,
+      })),
+      consumeOpenIdAttempt: vi.fn(async () => true),
+    });
+    const body = { state: STATE, code: "code", codeVerifier: VERIFIER, nonce };
+    const headers = { origin: "https://kalcoded.com" };
+    const corrupted = Object.assign(new OpenIdExchangeError("claims"), { stage: "private-mutated-stage" });
+    const logs: Record<string, string>[] = [];
+    const sanitized = openIdAuthService({
+      store,
+      clients: { google: GOOGLE },
+      rateLimitKey: "r".repeat(32),
+      now: () => NOW,
+      exchangeIdentity: vi.fn(async () => {
+        throw corrupted;
+      }),
+      log: (entry) => logs.push(entry),
+    });
+
+    const sanitizedResponse = await sanitized.complete(post("/v1/auth/google/complete", body, headers), "google");
+    expect(sanitizedResponse.status).toBe(400);
+    expect(logs).toEqual([
+      { level: "warn", event: "api.oidc_sign_in_failed", provider: "google", stage: "token_exchange" },
+    ]);
+    expect(JSON.stringify(logs)).not.toContain("private-mutated-stage");
+
+    const throwingLogger = openIdAuthService({
+      store,
+      clients: { google: GOOGLE },
+      rateLimitKey: "r".repeat(32),
+      now: () => NOW,
+      exchangeIdentity: vi.fn(async () => {
+        throw new Error("private-provider-error");
+      }),
+      log: () => {
+        throw new Error("private-logger-error");
+      },
+    });
+    const loggerResponse = await throwingLogger.complete(post("/v1/auth/google/complete", body, headers), "google");
+    expect(loggerResponse.status).toBe(400);
+    expect(await loggerResponse.json()).toEqual({
+      ok: false,
+      error: "sign_in_failed",
+      message: "Sign-in could not be completed. Start again.",
+    });
     expect(store.createOrGetOpenIdAccount).not.toHaveBeenCalled();
     expect(store.createSession).not.toHaveBeenCalled();
   });
