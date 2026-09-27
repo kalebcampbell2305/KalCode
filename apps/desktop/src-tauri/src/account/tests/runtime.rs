@@ -1183,6 +1183,157 @@ fn provider_authorization_code_completes_to_owner_and_restores_the_session() {
 }
 
 #[test]
+fn metered_receipt_write_failure_keeps_last_unit_reserved_after_cold_offline_restore() {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use ed25519_dalek::{Signer as _, SigningKey};
+    use kalcode_kalvoice::accounting::{self, RequestAccounting};
+
+    // Test-only signing authority lets both metered tiers exercise their exact last unit.
+    let key = SigningKey::from_bytes(&[59; 32]);
+    let public_key = URL_SAFE_NO_PAD.encode(key.verifying_key().as_bytes());
+    let sign = |token: String, used: Option<u64>| {
+        let parts: Vec<_> = token.split('.').collect();
+        let mut payload: serde_json::Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(parts[1]).expect("test payload"))
+                .expect("test JSON");
+        if let Some(used) = used {
+            payload["used"] = used.into();
+        }
+        let message = format!(
+            "{}.{}",
+            parts[0],
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).expect("payload"))
+        );
+        format!(
+            "{message}.{}",
+            URL_SAFE_NO_PAD.encode(key.sign(message.as_bytes()).to_bytes())
+        )
+    };
+    for (tier, receipt_name, allowance) in [
+        ("free", "free-receipt-exhausted", 75_u64),
+        ("pro", "pro-receipt", 1500_u64),
+    ] {
+        let api = Arc::new(FakeApi::default());
+        let store = Arc::new(TestStore::default());
+        let entitlement = sign(vector_token("cases", tier), None);
+        let old_receipt = sign(
+            vector_token("receiptCases", receipt_name),
+            Some(allowance - 1),
+        );
+        let session = SessionSecret::new(signed_in().token, 1_900_000_000).expect("session");
+        let cached = CachedAccountSecret::new(
+            entitlement.clone(),
+            PublicAccount {
+                id: ACCOUNT_ID.into(),
+                email: "metered@example.com".into(),
+                activated_at: Some("2026-09-01T12:00:00.000Z".into()),
+            },
+        )
+        .expect("cache");
+        let receipt =
+            account::session_store::SignedUsageReceipt::new(old_receipt.clone()).expect("receipt");
+        AccountSessionStore::new(store.as_ref())
+            .expect("store")
+            .save_full(Some(&session), None, Some(&cached), Some(&receipt))
+            .expect("seed");
+        let new_runtime = || {
+            Arc::new(AccountRuntime::with_dependencies(
+                api.clone(),
+                store.clone(),
+                Verifier::from_keys([("test-vectors-1", public_key.as_str())])
+                    .expect("test verifier"),
+                Arc::new(FixedClock),
+            ))
+        };
+        api.accounts
+            .lock()
+            .expect("queue")
+            .push_back(Ok(api_account(true)));
+        api.entitlements
+            .lock()
+            .expect("queue")
+            .push_back(Ok(EntitlementResponse { token: entitlement }));
+        let account = new_runtime();
+        assert_eq!(
+            account.bootstrap().expect("online bootstrap").phase,
+            AccountPhase::Ready
+        );
+        let (directory, core) = metering_core();
+        let meter = crate::kalvoice_accounting::AccountKalVoice::new(core.clone(), account.clone())
+            .expect("meter");
+        assert_eq!(
+            u64::from(meter.usage().expect("before").used),
+            allowance - 1
+        );
+        let mut confirmed = request_receipt(receipt_name, true);
+        confirmed.usage.receipt = sign(vector_token("receiptCases", receipt_name), Some(allowance));
+        confirmed.usage.usage.used = allowance;
+        api.request_usage
+            .lock()
+            .expect("queue")
+            .push_back(Ok(confirmed));
+        *store.reject_set_key.lock().expect("reject set") = Some(ACCOUNT_USAGE_RECEIPT_KEY.into());
+        let request = kalcode_contracts::ids::new_id();
+        let result = meter.authorize(&request);
+        // Close every in-memory account/meter/database object before checking restored authority.
+        drop(meter);
+        drop(account);
+        drop(core);
+        api.accounts.lock().expect("queue").extend([
+            Err(ApiError::Transport),
+            Err(ApiError::Transport),
+            Err(ApiError::Transport),
+        ]);
+        let restored = new_runtime();
+        assert_eq!(
+            restored.bootstrap().expect("offline restore").phase,
+            AccountPhase::OfflineGrace
+        );
+        let core = Arc::new(
+            kalcode_core::Core::open(kalcode_core::CoreConfig {
+                paths: kalcode_core::Paths::new(directory.path()),
+                app_version: "test".into(),
+                channel: kalcode_core::flags::BuildChannel::Development,
+            })
+            .expect("reopen durable core"),
+        );
+        let meter = crate::kalvoice_accounting::AccountKalVoice::new(core.clone(), restored)
+            .expect("restored meter");
+        let next = meter
+            .authorize(&kalcode_contracts::ids::new_id())
+            .expect("offline admission decision");
+        assert!(
+            !next.allowed,
+            "{tier} must not replenish the last unit after a failed receipt write"
+        );
+        assert_eq!(u64::from(next.usage.used), allowance);
+        assert_eq!(
+            result
+                .expect_err("metered persistence must be mandatory")
+                .code,
+            "secure_store_unavailable"
+        );
+        assert_eq!(
+            core.read(|conn| accounting::next_pending(conn, ACCOUNT_ID))
+                .expect("pending claim"),
+            Some((request, false))
+        );
+        let stored = AccountSessionStore::new(store.as_ref())
+            .expect("store")
+            .load()
+            .expect("load")
+            .expect("session remains");
+        assert_eq!(
+            stored
+                .usage_receipt()
+                .expect("old durable receipt")
+                .expose_receipt(),
+            old_receipt
+        );
+    }
+}
+
+#[test]
 fn microsoft_owner_usage_stays_unlimited_when_the_receipt_cache_write_fails() {
     let api = Arc::new(FakeApi::default());
     let store = Arc::new(TestStore {

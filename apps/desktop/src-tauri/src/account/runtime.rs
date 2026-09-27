@@ -1263,10 +1263,13 @@ impl AccountRuntime {
         };
         let mut state = self.lock_state();
         state.usage_receipt = Some(signed);
-        // The persisted receipt is only a restart cache. Session and entitlement authority are
-        // unchanged here, and the verified receipt is already held in memory, so a refused OS
-        // credential write must not discard the server-authoritative usage it just proved.
-        if self.persist_locked(&state).is_err() {
+        // Only verified unlimited OWNER usage is independent of receipt durability. Metered
+        // requests must retain their pending journal claim when persistence fails, otherwise
+        // an offline restart could combine an older receipt with already-acknowledged claims.
+        if let Err(error) = self.persist_locked(&state) {
+            if receipt.tier != Tier::Owner || receipt.allowance.is_some() {
+                return Err(error);
+            }
             tracing::warn!(event = "account.usage_receipt_cache_write_failed");
         }
         Ok(usage)
