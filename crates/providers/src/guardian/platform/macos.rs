@@ -1,10 +1,10 @@
 #![allow(unsafe_code)]
 
-use std::ffi::{CStr, CString, OsStr};
+use std::ffi::{CStr, CString, OsStr, OsString};
 use std::fs::File;
 use std::mem::MaybeUninit;
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
-use std::os::unix::ffi::OsStrExt;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -66,6 +66,58 @@ pub(crate) struct AnchoredDirectory {
 }
 
 impl AnchoredDirectory {
+    pub(crate) fn entry_names(&self) -> Result<Vec<OsString>, GuardianError> {
+        // SAFETY: duplicating a live descriptor retains this exact directory authority.
+        let fd = unsafe { libc::dup(self.directory.as_raw_fd()) };
+        if fd < 0 {
+            return Err(last_error());
+        }
+        // SAFETY: ownership of the duplicate transfers to DIR on success.
+        let stream = unsafe { libc::fdopendir(fd) };
+        if stream.is_null() {
+            let error = last_error();
+            // SAFETY: fdopendir failed, so the fresh duplicate remains ours.
+            unsafe {
+                libc::close(fd);
+            }
+            return Err(error);
+        }
+        let result = (|| {
+            let mut names = Vec::new();
+            // SAFETY: stream is an exclusively borrowed valid DIR; restarting avoids shared offsets.
+            unsafe {
+                libc::rewinddir(stream);
+            }
+            loop {
+                // SAFETY: thread-local errno and a valid directory stream are used synchronously.
+                let entry = unsafe {
+                    *libc::__error() = 0;
+                    libc::readdir(stream)
+                };
+                if entry.is_null() {
+                    // SAFETY: errno is thread-local and read immediately after readdir.
+                    if unsafe { *libc::__error() } != 0 {
+                        return Err(last_error());
+                    }
+                    break;
+                }
+                // SAFETY: readdir returns a NUL-terminated name valid until the next call.
+                let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) }.to_bytes();
+                if name != b"." && name != b".." {
+                    names.push(OsString::from_vec(name.to_vec()));
+                }
+                if names.len() > 8192 {
+                    return Err(GuardianError::RecoveryPending);
+                }
+            }
+            Ok(names)
+        })();
+        // SAFETY: this function owns stream and closes it exactly once.
+        unsafe {
+            libc::closedir(stream);
+        }
+        result
+    }
     pub(crate) fn open(path: &Path) -> Result<Self, GuardianError> {
         let path = CString::new(path.as_os_str().as_bytes())
             .map_err(|_| GuardianError::InvalidIdentity)?;
@@ -144,7 +196,7 @@ impl AnchoredDirectory {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RecoveryLockRole {
     DesktopEpoch,
     HelperDrain,
@@ -162,9 +214,14 @@ impl RecoveryLockRole {
 #[derive(Debug)]
 pub(crate) struct RecoveryLock {
     file: File,
+    directory: Arc<AnchoredDirectory>,
+    role: RecoveryLockRole,
 }
 
 impl RecoveryLock {
+    pub(crate) fn protects(&self, directory: &AnchoredDirectory, role: RecoveryLockRole) -> bool {
+        self.role == role && self.directory.identity_token() == directory.identity_token()
+    }
     pub(crate) fn acquire_expected(
         root: &Path,
         expected_identity: &str,
@@ -184,11 +241,21 @@ impl RecoveryLock {
         let file = directory.open_or_create(OsStr::from_bytes(role.file_name().to_bytes()))?;
         // SAFETY: `file` owns a live descriptor; flock changes only the advisory lock state.
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-            return Err(GuardianError::Unavailable(
-                "the provider guardian recovery authority is already held".into(),
-            ));
+            let error = std::io::Error::last_os_error();
+            return Err(if error.raw_os_error() == Some(libc::EWOULDBLOCK) {
+                match role {
+                    RecoveryLockRole::DesktopEpoch => GuardianError::RecoveryOwned,
+                    RecoveryLockRole::HelperDrain => GuardianError::RecoveryPending,
+                }
+            } else {
+                unavailable(error)
+            });
         }
-        Ok(Self { file })
+        Ok(Self {
+            file,
+            directory,
+            role,
+        })
     }
 }
 
@@ -246,6 +313,20 @@ pub(crate) struct MacProcessInfo {
 pub(crate) fn current_process_identity() -> Result<ProcessIdentity, GuardianError> {
     // SAFETY: getpid has no memory preconditions.
     process_info(unsafe { libc::getpid() }).map(|info| info.identity)
+}
+
+pub(crate) fn exact_process_exited(expected: ProcessIdentity) -> Result<bool, GuardianError> {
+    let pid = libc::pid_t::try_from(expected.pid()).map_err(|_| GuardianError::InvalidIdentity)?;
+    // SAFETY: signal zero probes existence without delivering a signal or mutating the process.
+    if unsafe { libc::kill(pid, 0) } != 0 {
+        let error = std::io::Error::last_os_error();
+        return if error.raw_os_error() == Some(libc::ESRCH) {
+            Ok(true)
+        } else {
+            Err(unavailable(error))
+        };
+    }
+    process_info(pid).map(|info| info.identity != expected)
 }
 
 pub(crate) fn process_info(pid: libc::pid_t) -> Result<MacProcessInfo, GuardianError> {

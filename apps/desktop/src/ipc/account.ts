@@ -34,6 +34,7 @@ export interface AccountSnapshot {
 export interface RuntimeStatus {
   phase: RuntimePhase;
   ready: boolean;
+  recovery?: { code: string; message: string; retryable: boolean } | null;
 }
 
 export interface AccountUsageSnapshot {
@@ -59,7 +60,8 @@ export type AccountCommandName =
   | "account_refresh"
   | "account_logout"
   | "account_usage"
-  | "runtime_status";
+  | "runtime_status"
+  | "runtime_retry";
 
 export interface AccountTransport {
   invoke(command: AccountCommandName, args?: Record<string, unknown>): Promise<unknown>;
@@ -207,6 +209,7 @@ export function parseAccountSnapshot(value: unknown): AccountSnapshot {
 }
 
 export function parseRuntimeStatus(value: unknown): RuntimeStatus {
+  rejectSecretFields(value);
   const item = record(value, "runtime status");
   if (typeof item.phase !== "string" || !RUNTIME_PHASES.has(item.phase as RuntimePhase)) {
     throw new Error("Invalid native runtime phase.");
@@ -214,7 +217,20 @@ export function parseRuntimeStatus(value: unknown): RuntimeStatus {
   if (typeof item.ready !== "boolean" || item.ready !== (item.phase === "ready")) {
     throw new Error("Invalid native runtime readiness.");
   }
-  return { phase: item.phase as RuntimePhase, ready: item.ready };
+  const status: RuntimeStatus = { phase: item.phase as RuntimePhase, ready: item.ready };
+  if (item.recovery !== undefined && item.recovery !== null) {
+    const recovery = record(item.recovery, "runtime recovery");
+    if (
+      item.phase !== "blocked_unclean" ||
+      typeof recovery.code !== "string" ||
+      typeof recovery.message !== "string" ||
+      typeof recovery.retryable !== "boolean"
+    ) {
+      throw new Error("Invalid native runtime recovery.");
+    }
+    status.recovery = { code: recovery.code, message: recovery.message, retryable: recovery.retryable };
+  }
+  return status;
 }
 
 export function parseAccountUsage(value: unknown): AccountUsageSnapshot {
@@ -244,6 +260,10 @@ export class AccountClient {
 
   async runtimeStatus(): Promise<RuntimeStatus> {
     return parseRuntimeStatus(await this.transport.invoke("runtime_status"));
+  }
+
+  async retryRuntime(): Promise<void> {
+    await this.transport.invoke("runtime_retry");
   }
 
   startEmail(email: string): Promise<AccountSnapshot> {

@@ -524,6 +524,7 @@ pub fn run(removed_overrides: Vec<String>) {
             }
             let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
                 runtime_coordinator::runtime_status,
+                runtime_coordinator::runtime_retry,
                 account_commands::account_bootstrap,
                 account_commands::account_status,
                 account_commands::account_email_start,

@@ -152,12 +152,16 @@ impl Lifecycle {
     }
 
     pub fn finish_empty_drain(&self) -> bool {
-        let mut state = self.lock();
+        // A poisoned authority cannot be recovered by retrying UI startup.
+        let Ok(mut state) = self.0.lock() else {
+            return false;
+        };
         if state.current.is_none()
             && !state.building
             && state.in_flight == 0
             && state.mutations == 0
-            && state.phase == Phase::Draining
+            && !state.exiting
+            && matches!(state.phase, Phase::Draining | Phase::BlockedUnclean)
         {
             state.phase = Phase::SignedOut;
             true
@@ -273,6 +277,52 @@ impl Drop for Lease {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cleaned_failed_start_can_retry_without_a_restart() {
+        let lifecycle = Lifecycle::default();
+        let epoch = lifecycle.begin_start(7).unwrap();
+        lifecycle.begin_drain(false);
+        lifecycle.finish_start(epoch);
+        assert!(lifecycle.finish_drain(epoch, true));
+        lifecycle.block_unclean();
+        assert!(lifecycle.finish_empty_drain());
+        let replacement = lifecycle
+            .begin_start(7)
+            .expect("same restored account retries startup");
+        assert_ne!(replacement.epoch, epoch.epoch);
+        assert!(lifecycle.publish(replacement));
+    }
+
+    #[test]
+    fn empty_recovery_never_discards_build_leases_mutations_or_exit() {
+        let lifecycle = Lifecycle::default();
+        let mutation = lifecycle.acquire_mutation().unwrap();
+        lifecycle.block_unclean();
+        assert!(!lifecycle.finish_empty_drain());
+        drop(mutation);
+        assert!(lifecycle.finish_empty_drain());
+        let epoch = lifecycle.begin_start(7).unwrap();
+        lifecycle.block_unclean();
+        assert!(!lifecycle.finish_empty_drain());
+        lifecycle.finish_start(epoch);
+        assert!(
+            !lifecycle.finish_empty_drain(),
+            "unproved epoch cleanup is retained"
+        );
+        assert!(lifecycle.finish_drain(epoch, true));
+        let epoch = lifecycle.begin_start(7).unwrap();
+        assert!(lifecycle.publish(epoch));
+        let lease = lifecycle.acquire(7).unwrap();
+        lifecycle.block_unclean();
+        assert!(!lifecycle.finish_empty_drain());
+        drop(lease);
+        assert!(!lifecycle.finish_empty_drain());
+        assert!(lifecycle.finish_drain(epoch, true));
+        lifecycle.begin_drain(true);
+        assert!(!lifecycle.finish_empty_drain());
+        assert!(lifecycle.begin_start(7).is_none());
+    }
 
     #[test]
     fn signed_out_cannot_acquire_or_publish_without_start() {

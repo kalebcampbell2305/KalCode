@@ -17,6 +17,7 @@
     "allow-account-logout",
     "allow-account-usage",
     "allow-runtime-status",
+    "allow-runtime-retry",
 
     "allow-context-file-pick",
     "allow-context-preview-create",

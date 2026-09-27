@@ -30,6 +30,7 @@ export type SocialProvider = "google" | "microsoft";
 export interface AccountOperations {
   status(): Promise<AccountSnapshot>;
   runtimeStatus(): Promise<RuntimeStatus>;
+  retryRuntime(): Promise<void>;
   startEmail(email: string): Promise<AccountSnapshot>;
   startSocial(provider: SocialProvider): Promise<AccountSnapshot>;
   pollEmail(): Promise<AccountSnapshot>;
@@ -383,11 +384,16 @@ export function AccountProvider({
       refresh: () => runSnapshot(() => client.refresh()),
       logout: () => runSnapshot(() => client.logout()),
       retry: () =>
-        state.snapshot.phase === "confirming_plan"
-          ? runSnapshot(() => client.refresh(), true)
-          : runSnapshot(() => client.status()),
+        state.runtime.phase === "blocked_unclean"
+          ? runSnapshot(async () => {
+              await client.retryRuntime();
+              return client.status();
+            })
+          : state.snapshot.phase === "confirming_plan"
+            ? runSnapshot(() => client.refresh(), true)
+            : runSnapshot(() => client.status()),
     }),
-    [client, runSnapshot, state.snapshot.phase],
+    [client, runSnapshot, state.snapshot.phase, state.runtime.phase],
   );
 
   const value = useMemo<AccountContextValue>(() => ({ ...state, usage, actions }), [actions, state, usage]);

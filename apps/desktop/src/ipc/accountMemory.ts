@@ -13,7 +13,7 @@ import type {
 } from "./account.ts";
 
 export type AccountMemoryScenario = "fresh" | "unactivated" | "ready" | "expired" | "offline_grace";
-type HandlerResult = AccountSnapshot | AccountOpenResult | AccountUsageSnapshot | RuntimeStatus;
+type HandlerResult = AccountSnapshot | AccountOpenResult | AccountUsageSnapshot | RuntimeStatus | null;
 type AccountMemoryHandler = (args?: Record<string, unknown>) => Promise<HandlerResult>;
 
 const ACCOUNT_ID = "account_test_owner";
@@ -120,6 +120,9 @@ export function createAccountMemory(scenario: AccountMemoryScenario) {
     },
     async runtime_status() {
       return runtimeStatus();
+    },
+    async runtime_retry() {
+      return null;
     },
     async account_email_start(args) {
       pendingEmail = requiredEmail(args);

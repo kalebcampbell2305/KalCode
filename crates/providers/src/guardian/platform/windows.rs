@@ -1,8 +1,8 @@
 #![allow(unsafe_code)]
 
-use std::ffi::{OsStr, c_void};
+use std::ffi::{OsStr, OsString, c_void};
 use std::fs::{File, OpenOptions};
-use std::os::windows::ffi::OsStrExt;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::os::windows::io::{AsRawHandle, BorrowedHandle, FromRawHandle, OwnedHandle};
 use std::path::Path;
@@ -93,6 +93,19 @@ struct SystemBootEnvironmentInformation {
 
 #[link(name = "ntdll")]
 unsafe extern "system" {
+    fn NtQueryDirectoryFile(
+        file_handle: *mut c_void,
+        event: *mut c_void,
+        apc_routine: *mut c_void,
+        apc_context: *mut c_void,
+        io_status_block: *mut NtIoStatusBlock,
+        file_information: *mut c_void,
+        length: u32,
+        file_information_class: u32,
+        return_single_entry: u8,
+        file_name: *mut NtUnicodeString,
+        restart_scan: u8,
+    ) -> i32;
     fn NtCreateFile(
         file_handle: *mut *mut c_void,
         desired_access: u32,
@@ -111,7 +124,7 @@ unsafe extern "system" {
 }
 
 /// One of two independent kernel-file leases that fence a data root across desktop epochs.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RecoveryLockRole {
     /// Held by the desktop for its complete lifetime. A helper crash cannot release it.
     DesktopEpoch,
@@ -122,12 +135,16 @@ pub(crate) enum RecoveryLockRole {
 #[derive(Debug)]
 pub(crate) struct RecoveryLock {
     file: File,
+    role: RecoveryLockRole,
     // Retain the exact directory object for the full lease. Its handle denies delete sharing, so
     // neither the recovery file nor its parent namespace can be swapped behind this lock.
     _directory: Arc<AnchoredDirectory>,
 }
 
 impl RecoveryLock {
+    pub(crate) fn protects(&self, directory: &AnchoredDirectory, role: RecoveryLockRole) -> bool {
+        self.role == role && self._directory.identity_token() == directory.identity_token()
+    }
     #[cfg(test)]
     pub(crate) fn acquire(root: &Path, role: RecoveryLockRole) -> Result<Self, GuardianError> {
         let directory = Arc::new(AnchoredDirectory::open(root)?);
@@ -180,6 +197,7 @@ impl RecoveryLock {
                 Ok(()) => {
                     return Ok(Self {
                         file,
+                        role,
                         _directory: directory,
                     });
                 }
@@ -195,15 +213,10 @@ impl RecoveryLock {
                     if error.code()
                         == windows::core::HRESULT::from_win32(ERROR_LOCK_VIOLATION.0) =>
                 {
-                    let reason = match role {
-                        RecoveryLockRole::DesktopEpoch => {
-                            "a prior desktop generation still owns the provider data root"
-                        }
-                        RecoveryLockRole::HelperDrain => {
-                            "the prior provider guardian did not quiesce before restart"
-                        }
-                    };
-                    return Err(GuardianError::Unavailable(reason.into()));
+                    return Err(match role {
+                        RecoveryLockRole::DesktopEpoch => GuardianError::RecoveryOwned,
+                        RecoveryLockRole::HelperDrain => GuardianError::RecoveryPending,
+                    });
                 }
                 Err(error) => return Err(windows_unavailable(error)),
             }
@@ -237,6 +250,57 @@ pub(crate) struct AnchoredDirectory {
 }
 
 impl AnchoredDirectory {
+    pub(crate) fn entry_names(&self) -> Result<Vec<OsString>, GuardianError> {
+        let mut names = Vec::new();
+        let mut restart = 1;
+        loop {
+            let mut buffer = [0_u32; 1024];
+            let mut status = NtIoStatusBlock {
+                status: 0,
+                information: 0,
+            };
+            // SAFETY: the retained directory handle and aligned writable buffer remain live;
+            // FileNamesInformation returns one bounded entry relative to this exact directory.
+            let result = unsafe {
+                NtQueryDirectoryFile(
+                    self.directory.as_raw_handle(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    &raw mut status,
+                    buffer.as_mut_ptr().cast(),
+                    4096,
+                    12,
+                    1,
+                    std::ptr::null_mut(),
+                    restart,
+                )
+            };
+            restart = 0;
+            if result == 0x8000_0006_u32 as i32 {
+                break;
+            }
+            if result < 0 || status.information < 12 || status.information > 4096 {
+                return Err(GuardianError::RecoveryPending);
+            }
+            let length = buffer[2] as usize;
+            if !length.is_multiple_of(2) || length > status.information - 12 {
+                return Err(GuardianError::CorruptMarker);
+            }
+            // SAFETY: validated byte length lies inside the initialized, u32-aligned buffer.
+            let name = unsafe {
+                std::slice::from_raw_parts(buffer.as_ptr().add(3).cast::<u16>(), length / 2)
+            };
+            let name = OsString::from_wide(name);
+            if name != "." && name != ".." {
+                names.push(name);
+            }
+            if names.len() > 8192 {
+                return Err(GuardianError::RecoveryPending);
+            }
+        }
+        Ok(names)
+    }
     pub(crate) fn open(path: &Path) -> Result<Self, GuardianError> {
         let directory = OpenOptions::new()
             .read(true)
@@ -804,6 +868,38 @@ pub(crate) fn current_process_identity() -> Result<ProcessIdentity, GuardianErro
     let borrowed = unsafe { BorrowedHandle::borrow_raw(raw.0) };
     // SAFETY: GetCurrentProcessId has no memory-safety preconditions.
     process_identity_from_handle(borrowed, unsafe { GetCurrentProcessId() })
+}
+
+pub(crate) fn exact_process_exited(expected: ProcessIdentity) -> Result<bool, GuardianError> {
+    use windows::Win32::Foundation::ERROR_INVALID_PARAMETER;
+    use windows::Win32::System::Threading::PROCESS_ACCESS_RIGHTS;
+    // SAFETY: query/wait-only access; PID and creation time are validated before interpreting it.
+    let raw = match unsafe {
+        OpenProcess(
+            PROCESS_ACCESS_RIGHTS(PROCESS_QUERY_LIMITED_INFORMATION.0 | SYNCHRONIZE),
+            false,
+            expected.pid(),
+        )
+    } {
+        Ok(raw) => raw,
+        Err(error)
+            if error.code() == windows::core::HRESULT::from_win32(ERROR_INVALID_PARAMETER.0) =>
+        {
+            return Ok(true);
+        }
+        Err(error) => return Err(windows_unavailable(error)),
+    };
+    // SAFETY: OpenProcess returned this newly owned handle.
+    let process = unsafe { OwnedHandle::from_raw_handle(raw.0) };
+    if process_identity(&process, expected.pid())? != expected {
+        return Ok(true);
+    }
+    // SAFETY: live owned handle has SYNCHRONIZE access; this query never terminates a process.
+    match unsafe { WaitForSingleObject(as_win_handle(&process), 0) } {
+        WAIT_OBJECT_0 => Ok(true),
+        WAIT_TIMEOUT => Ok(false),
+        _ => Err(windows_unavailable(windows::core::Error::from_thread())),
+    }
 }
 
 fn terminate_process_and_wait(process: &OwnedHandle) {

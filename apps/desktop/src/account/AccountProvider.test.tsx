@@ -40,6 +40,7 @@ function operations(overrides: Partial<AccountOperations> = {}): AccountOperatio
   return {
     status: vi.fn(async () => snapshot("signed_out")),
     runtimeStatus: vi.fn<() => Promise<RuntimeStatus>>(async () => ({ phase: "signed_out", ready: false })),
+    retryRuntime: vi.fn(async () => undefined),
     startEmail: vi.fn(async () => snapshot("email_pending")),
     startSocial: vi.fn<(provider: SocialProvider) => Promise<AccountSnapshot>>(async () => snapshot("social_pending")),
     pollEmail: vi.fn(async () => snapshot("authenticated_unactivated")),

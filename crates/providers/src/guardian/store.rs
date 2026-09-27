@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
@@ -5,7 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 
-use super::marker::{ProfileMarker, encode_marker};
+use super::marker::{MarkerState, ProfileMarker, encode_marker};
 use super::platform::{AnchoredDirectory, RecoveryLock, RecoveryLockRole};
 use super::{GuardianError, MarkerStore, ProfileIdentity};
 
@@ -104,17 +105,49 @@ impl FileMarkerStore {
         RecoveryLock::acquire_anchored(Arc::clone(&self.directory), role)
     }
 
-    /// Durably fences one desktop generation before any helper or provider process is admitted.
-    /// A RUNNING record from the same Windows boot blocks. A different boot identifier is the only
-    /// automatic recovery witness because processes cannot survive an operating-system restart.
+    /// Without held recovery authority, same-boot RUNNING evidence remains fail-closed.
+    #[cfg(test)]
     pub(crate) fn begin_epoch(
         &self,
         desktop_generation: super::DesktopGeneration,
         boot_identifier: &str,
     ) -> Result<(), GuardianError> {
+        self.begin_epoch_checked(desktop_generation, boot_identifier, false)
+    }
+
+    pub(crate) fn begin_epoch_with_recovery(
+        &self,
+        desktop_generation: super::DesktopGeneration,
+        boot_identifier: &str,
+        desktop: &RecoveryLock,
+        helper: &RecoveryLock,
+    ) -> Result<(), GuardianError> {
+        if !desktop.protects(&self.directory, RecoveryLockRole::DesktopEpoch)
+            || !helper.protects(&self.directory, RecoveryLockRole::HelperDrain)
+        {
+            return Err(GuardianError::ObjectMismatch);
+        }
+        self.begin_epoch_checked(desktop_generation, boot_identifier, true)
+    }
+
+    fn begin_epoch_checked(
+        &self,
+        desktop_generation: super::DesktopGeneration,
+        boot_identifier: &str,
+        recovery_locked: bool,
+    ) -> Result<(), GuardianError> {
         validate_boot_identifier(boot_identifier)?;
         let _guard = self.lock()?;
         let slots = self.load_epoch_slots()?;
+        if recovery_locked {
+            let mut sequences: Vec<_> = slots.iter().flatten().map(|slot| slot.sequence).collect();
+            sequences.sort_unstable();
+            if sequences.last().is_some_and(|sequence| *sequence > 1)
+                && (sequences.len() != 2 || sequences[0] + 1 != sequences[1])
+            {
+                return Err(GuardianError::CorruptMarker);
+            }
+        }
         let newest = slots.into_iter().flatten().max_by_key(|slot| slot.sequence);
         let mut sequence = newest.as_ref().map_or(0, |slot| slot.sequence);
         match newest {
@@ -125,10 +158,10 @@ impl FileMarkerStore {
             }
             Some(slot) if slot.record.state == EpochState::Running => {
                 if slot.record.boot_identifier == boot_identifier {
-                    return Err(GuardianError::Unavailable(
-                        "a prior provider runtime is unclean on this Windows boot; restart Windows before retrying"
-                            .into(),
-                    ));
+                    if !recovery_locked {
+                        return Err(GuardianError::RecoveryPending);
+                    }
+                    self.prove_prior_inventory_clean(&slot.record)?;
                 }
                 sequence = sequence
                     .checked_add(1)
@@ -136,7 +169,11 @@ impl FileMarkerStore {
                 self.write_epoch_slot(
                     sequence,
                     &EpochRecord {
-                        state: EpochState::RebootRecovered,
+                        state: if slot.record.boot_identifier == boot_identifier {
+                            EpochState::Clean
+                        } else {
+                            EpochState::RebootRecovered
+                        },
                         ..slot.record
                     },
                 )?;
@@ -154,6 +191,77 @@ impl FileMarkerStore {
                 state: EpochState::Running,
             },
         )
+    }
+
+    /// Enumeration and every open are relative to the retained directory handle. Both kernel
+    /// leases remain held by the caller, so no old/new runtime can admit a process during proof.
+    /// Legacy recovery relies on PREPARED being durably written before RegisteredJob is returned
+    /// to any launcher. It handles normal crash residue, never missing/corrupt known evidence.
+    fn prove_prior_inventory_clean(&self, epoch: &EpochRecord) -> Result<(), GuardianError> {
+        let mut profiles: BTreeMap<ProfileIdentity, Vec<SlotEnvelope>> = BTreeMap::new();
+        for name in self.directory.entry_names()? {
+            if EPOCH_SLOT_NAMES.iter().any(|expected| name == *expected)
+                || matches!(
+                    name.to_str(),
+                    Some(
+                        "desktop-epoch.v1.lock"
+                            | "helper-drain.v1.lock"
+                            | "desktop-epoch.lock"
+                            | "helper-drain.lock"
+                    )
+                )
+            {
+                continue;
+            }
+            let mut file = self
+                .directory
+                .open_existing(&name)?
+                .ok_or(GuardianError::CorruptMarker)?;
+            if file.metadata().map_err(io_unavailable)?.len() > MAX_MARKER_BYTES {
+                return Err(GuardianError::CorruptMarker);
+            }
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes).map_err(io_unavailable)?;
+            let slot: SlotEnvelope =
+                serde_json::from_slice(&bytes).map_err(|_| GuardianError::CorruptMarker)?;
+            let marker_bytes = encode_marker(&slot.marker)?;
+            if slot.schema_version != SLOT_SCHEMA_VERSION
+                || slot.sequence == 0
+                || checksum(slot.sequence, &marker_bytes) != slot.checksum
+                || name != self.slot_name(slot.marker.profile(), slot.sequence)?
+            {
+                return Err(GuardianError::CorruptMarker);
+            }
+            profiles
+                .entry(slot.marker.profile().clone())
+                .or_default()
+                .push(slot);
+        }
+        for mut slots in profiles.into_values() {
+            slots.sort_by_key(|slot| slot.sequence);
+            let newest = slots.last().ok_or(GuardianError::CorruptMarker)?;
+            if newest.sequence > 1 && (slots.len() != 2 || slots[0].sequence + 1 != newest.sequence)
+            {
+                return Err(GuardianError::CorruptMarker);
+            }
+            if newest.marker.desktop_generation() != epoch.desktop_generation {
+                continue;
+            }
+            if newest.marker.state() != MarkerState::Clean
+                || newest
+                    .marker
+                    .jobs()
+                    .any(|job| job.state() != MarkerState::Clean)
+            {
+                return Err(GuardianError::RecoveryPending);
+            }
+            for owner in newest.marker.owner_processes() {
+                if !super::platform::exact_process_exited(owner)? {
+                    return Err(GuardianError::RecoveryOwned);
+                }
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn prove_epoch_clean(
@@ -414,6 +522,301 @@ mod tests {
     use crate::guardian::{
         DesktopGeneration, ProcessIdentity, ProfileCapability, ProfileGeneration,
     };
+
+    #[cfg(any(windows, target_os = "macos"))]
+    mod recovery {
+        use super::*;
+
+        fn fixture(
+            live_owner: bool,
+        ) -> (
+            tempfile::TempDir,
+            FileMarkerStore,
+            EpochRecord,
+            ProfileMarker,
+        ) {
+            let temp = tempfile::tempdir().expect("temp");
+            let store = FileMarkerStore::open(temp.path().join("markers")).expect("store");
+            let generation = DesktopGeneration::from_uuid(
+                Uuid::parse_str("f8ad02e7-9108-489c-81cf-2f41f5b934a2").unwrap(),
+            );
+            let observed =
+                super::super::super::platform::current_process_identity().expect("identity");
+            let owner = if live_owner {
+                observed
+            } else {
+                // A real live PID with a different birth identity must not become a false owner.
+                ProcessIdentity::new(observed.pid(), observed.birth_time_100ns + 1)
+                    .expect("reused PID")
+            };
+            let marker = ProfileMarker::new(Uuid::new_v4(), generation, profile(), owner, owner);
+            let epoch = EpochRecord {
+                desktop_generation: generation,
+                boot_identifier: boot("35"),
+                state: EpochState::Running,
+            };
+            store
+                .write_epoch_slot(
+                    2,
+                    &EpochRecord {
+                        state: EpochState::Clean,
+                        ..epoch.clone()
+                    },
+                )
+                .expect("prior clean");
+            store
+                .write_epoch_slot(3, &epoch)
+                .expect("running legacy shape");
+            store
+                .write_slot(marker.profile(), 1, &marker)
+                .expect("clean empty legacy profile");
+            (temp, store, epoch, marker)
+        }
+
+        fn recover(store: &FileMarkerStore, boot: &str) -> Result<(), GuardianError> {
+            let desktop = store.acquire_recovery_lock(RecoveryLockRole::DesktopEpoch)?;
+            let helper = store.acquire_recovery_lock(RecoveryLockRole::HelperDrain)?;
+            store.begin_epoch_with_recovery(
+                DesktopGeneration::from_uuid(Uuid::new_v4()),
+                boot,
+                &desktop,
+                &helper,
+            )
+        }
+
+        #[test]
+        fn legacy_installed_running_epoch_with_clean_empty_profile_recovers_and_keeps_marker() {
+            let (_temp, store, epoch, marker) = fixture(false);
+            let before = std::fs::read(
+                store
+                    .root
+                    .join(store.slot_name(marker.profile(), 1).unwrap()),
+            )
+            .unwrap();
+            recover(&store, &epoch.boot_identifier).expect("legacy crash recovery");
+            let after = std::fs::read(
+                store
+                    .root
+                    .join(store.slot_name(marker.profile(), 1).unwrap()),
+            )
+            .unwrap();
+            assert_eq!(
+                before, after,
+                "old profile evidence must not be deleted or rewritten"
+            );
+            let slots = store.load_epoch_slots().unwrap();
+            assert!(
+                slots
+                    .iter()
+                    .flatten()
+                    .any(|slot| slot.record.state == EpochState::Clean)
+            );
+            assert!(
+                slots
+                    .iter()
+                    .flatten()
+                    .any(|slot| slot.record.state == EpochState::Running
+                        && slot.record.desktop_generation != epoch.desktop_generation)
+            );
+        }
+
+        #[test]
+        fn exact_live_owner_and_live_kernel_lease_are_both_protected() {
+            let (_temp, store, epoch, _) = fixture(true);
+            assert!(matches!(
+                recover(&store, &epoch.boot_identifier),
+                Err(GuardianError::RecoveryOwned)
+            ));
+            let _desktop = store
+                .acquire_recovery_lock(RecoveryLockRole::DesktopEpoch)
+                .unwrap();
+            assert!(matches!(
+                recover(&store, &epoch.boot_identifier),
+                Err(GuardianError::RecoveryOwned)
+            ));
+        }
+
+        #[test]
+        fn missing_known_slot_of_profile_pair_fails_closed() {
+            let (_temp, store, epoch, marker) = fixture(false);
+            let name = store.slot_name(marker.profile(), 1).unwrap();
+            std::fs::remove_file(store.root.join(&name)).unwrap();
+            store.write_slot(marker.profile(), 2, &marker).unwrap();
+            assert!(matches!(
+                recover(&store, &epoch.boot_identifier),
+                Err(GuardianError::CorruptMarker)
+            ));
+        }
+
+        #[test]
+        fn corrupt_or_misnamed_marker_is_never_treated_as_empty_inventory() {
+            let (_temp, store, epoch, marker) = fixture(false);
+            let name = store.slot_name(marker.profile(), 1).unwrap();
+            std::fs::write(store.root.join(&name), b"{").unwrap();
+            assert!(matches!(
+                recover(&store, &epoch.boot_identifier),
+                Err(GuardianError::CorruptMarker)
+            ));
+            store.write_slot(marker.profile(), 1, &marker).unwrap();
+            std::fs::rename(store.root.join(name), store.root.join("unbound.json")).unwrap();
+            assert!(matches!(
+                recover(&store, &epoch.boot_identifier),
+                Err(GuardianError::CorruptMarker)
+            ));
+        }
+
+        #[test]
+        fn prior_active_job_stays_blocked_even_when_owner_pid_is_reused() {
+            let (_temp, store, epoch, mut marker) = fixture(false);
+            let lease = Uuid::new_v4();
+            marker
+                .acquire(lease, ProfileCapability::SharedSession)
+                .unwrap();
+            marker
+                .prepare_job(
+                    lease,
+                    marker.profile().clone(),
+                    JobId::new(),
+                    "prior-job".into(),
+                )
+                .unwrap();
+            store.write_slot(marker.profile(), 2, &marker).unwrap();
+            assert!(matches!(
+                recover(&store, &epoch.boot_identifier),
+                Err(GuardianError::RecoveryPending)
+            ));
+        }
+
+        #[test]
+        fn recovery_commit_survives_interruption_before_new_epoch() {
+            let (_temp, store, epoch, _) = fixture(false);
+            store
+                .write_epoch_slot(
+                    4,
+                    &EpochRecord {
+                        state: EpochState::Clean,
+                        ..epoch.clone()
+                    },
+                )
+                .unwrap();
+            recover(&store, &epoch.boot_identifier).expect("resume durable recovery witness");
+        }
+
+        #[test]
+        fn fully_clean_job_inventory_recovers_and_changed_boot_recovers_live_old_identity() {
+            let (_temp, store, epoch, mut marker) = fixture(false);
+            let lease = Uuid::new_v4();
+            let job = JobId::new();
+            marker
+                .acquire(lease, ProfileCapability::SharedSession)
+                .unwrap();
+            marker
+                .prepare_job(lease, marker.profile().clone(), job, "completed-job".into())
+                .unwrap();
+            marker
+                .begin_quiescence(marker.profile().clone(), job)
+                .unwrap();
+            marker.prove_clean(marker.profile().clone(), job).unwrap();
+            store.write_slot(marker.profile(), 2, &marker).unwrap();
+            recover(&store, &epoch.boot_identifier).expect("completed jobs");
+            let (_temp, store, _, _) = fixture(true);
+            recover(&store, &boot("77")).expect("different kernel boot proves prior owner exited");
+        }
+
+        #[test]
+        fn lock_witness_cannot_be_borrowed_from_another_data_root() {
+            let (_temp, store, epoch, _) = fixture(false);
+            let other_temp = tempfile::tempdir().unwrap();
+            let other = FileMarkerStore::open(other_temp.path().join("markers")).unwrap();
+            let desktop = other
+                .acquire_recovery_lock(RecoveryLockRole::DesktopEpoch)
+                .unwrap();
+            let helper = other
+                .acquire_recovery_lock(RecoveryLockRole::HelperDrain)
+                .unwrap();
+            assert!(matches!(
+                store.begin_epoch_with_recovery(
+                    DesktopGeneration::from_uuid(Uuid::new_v4()),
+                    &epoch.boot_identifier,
+                    &desktop,
+                    &helper
+                ),
+                Err(GuardianError::ObjectMismatch)
+            ));
+        }
+
+        #[test]
+        fn recovered_epoch_remains_readable_by_stable_baseline_v1_reader() {
+            // This deliberately mirrors the old release's closed enum, field set/order, and
+            // recomputed checksum. New fields/states in v1 would strand an installed rollback.
+            #[derive(Serialize, Deserialize)]
+            #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+            enum BaselineState {
+                Running,
+                Clean,
+                RebootRecovered,
+            }
+            #[derive(Serialize, Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct BaselineRecord {
+                desktop_generation: DesktopGeneration,
+                boot_identifier: String,
+                state: BaselineState,
+            }
+            #[derive(Deserialize)]
+            #[serde(deny_unknown_fields)]
+            struct BaselineEnvelope {
+                schema_version: u16,
+                sequence: u64,
+                record: BaselineRecord,
+                checksum: u64,
+            }
+            let (_temp, store, epoch, _) = fixture(false);
+            recover(&store, &epoch.boot_identifier).expect("upgrade recovery");
+            let newest = store
+                .load_epoch_slots()
+                .unwrap()
+                .into_iter()
+                .flatten()
+                .max_by_key(|slot| slot.sequence)
+                .unwrap();
+            for clean_shutdown in [false, true] {
+                if clean_shutdown {
+                    store
+                        .prove_epoch_clean(newest.record.desktop_generation, &epoch.boot_identifier)
+                        .unwrap();
+                }
+                for name in EPOCH_SLOT_NAMES {
+                    let bytes = std::fs::read(store.root.join(name)).unwrap();
+                    let old: BaselineEnvelope = serde_json::from_slice(&bytes)
+                        .expect("baseline reader accepts recovery and final CLEAN slots");
+                    assert_eq!(old.schema_version, 1);
+                    assert_eq!(
+                        old.checksum,
+                        checksum(old.sequence, &serde_json::to_vec(&old.record).unwrap())
+                    );
+                }
+            }
+            recover(&store, &epoch.boot_identifier)
+                .expect("re-upgrade after baseline-compatible clean shutdown");
+        }
+
+        #[test]
+        fn no_profile_was_admitted_and_interrupted_epoch_pair_are_distinct() {
+            let temp = tempfile::tempdir().unwrap();
+            let store = FileMarkerStore::open(temp.path().join("markers")).unwrap();
+            store
+                .begin_epoch(DesktopGeneration::from_uuid(Uuid::new_v4()), &boot("88"))
+                .unwrap();
+            recover(&store, &boot("88")).expect("write-before-admission empty namespace");
+            let missing = store.root.join(EPOCH_SLOT_NAMES[0]);
+            std::fs::remove_file(missing).unwrap();
+            assert!(matches!(
+                recover(&store, &boot("88")),
+                Err(GuardianError::CorruptMarker)
+            ));
+        }
+    }
 
     fn profile() -> ProfileIdentity {
         ProfileIdentity::new(

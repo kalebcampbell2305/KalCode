@@ -22,6 +22,7 @@ function RuntimeTransition({
   busy,
   error,
   onRetry,
+  retryable,
 }: {
   eyebrow: string;
   title: string;
@@ -29,6 +30,7 @@ function RuntimeTransition({
   busy: boolean;
   error: AccountUiError | null;
   onRetry?: () => Promise<void>;
+  retryable?: boolean;
 }) {
   return (
     <main className={styles.screen} aria-labelledby="account-runtime-title">
@@ -37,7 +39,7 @@ function RuntimeTransition({
           <p className={styles.eyebrow}>{eyebrow}</p>
           <h1 id="account-runtime-title">{title}</h1>
           <p>{description}</p>
-          {onRetry && error?.retryable ? (
+          {onRetry && (retryable ?? error?.retryable) ? (
             <Button variant="primary" busy={busy} onClick={() => void onRetry()}>
               Try again
             </Button>
@@ -60,10 +62,15 @@ export function AccountGate({ snapshot, runtime, busy, error, actions, children 
     return (
       <RuntimeTransition
         eyebrow="Cleanup incomplete"
-        title="Workspace cleanup needs a restart"
-        description="KalCode kept the workspace locked because a previous session did not close cleanly. Restart KalCode before signing in again."
-        busy={false}
+        title="Workspace recovery paused"
+        description={
+          runtime.recovery?.message ??
+          "KalCode has not yet verified that previous workspace resources are closed. Wait a moment, then retry the safety check."
+        }
+        busy={busy}
         error={error}
+        onRetry={actions.retry}
+        retryable={runtime.recovery?.retryable ?? true}
       />
     );
   }

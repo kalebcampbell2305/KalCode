@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-runtime-retry"
+description = "Enables the runtime_retry command without any pre-configured scope."
+commands.allow = ["runtime_retry"]
+
+[[permission]]
+identifier = "deny-runtime-retry"
+description = "Denies the runtime_retry command without any pre-configured scope."
+commands.deny = ["runtime_retry"]

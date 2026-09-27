@@ -9,6 +9,7 @@ export type CommandName =
   | "settings_get"
   | "settings_update"
   | "runtime_status"
+  | "runtime_retry"
   | "account_bootstrap"
   | "account_status"
   | "account_email_start"

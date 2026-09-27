@@ -1,4 +1,4 @@
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -16,6 +16,9 @@ pub(crate) enum RecoveryLockRole {
 }
 
 impl RecoveryLock {
+    pub(crate) fn protects(&self, _directory: &AnchoredDirectory, _role: RecoveryLockRole) -> bool {
+        false
+    }
     pub(crate) fn acquire_expected(
         _root: &Path,
         _expected_identity: &str,
@@ -43,6 +46,9 @@ pub(crate) struct AnchoredDirectory {
 }
 
 impl AnchoredDirectory {
+    pub(crate) fn entry_names(&self) -> Result<Vec<OsString>, GuardianError> {
+        Err(GuardianError::RecoveryPending)
+    }
     pub(crate) fn open(path: &Path) -> Result<Self, GuardianError> {
         Ok(Self {
             root: path.to_path_buf(),
@@ -71,6 +77,10 @@ impl AnchoredDirectory {
             .open(self.root.join(name))
             .map_err(|error| GuardianError::Unavailable(error.to_string()))
     }
+}
+
+pub(crate) fn exact_process_exited(_expected: ProcessIdentity) -> Result<bool, GuardianError> {
+    Err(GuardianError::RecoveryPending)
 }
 
 pub fn recovery_root_identity(_path: &Path) -> Result<String, GuardianError> {

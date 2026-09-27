@@ -372,6 +372,59 @@ fn replacement_helper_waits_for_prior_helper_drain_after_desktop_loss() {
 }
 
 #[test]
+fn dead_helper_with_no_admitted_jobs_recovers_without_reboot() {
+    let temp = tempfile::tempdir().expect("temp");
+    let status = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        .args(["--exact", "empty_epoch_owner_crash_fixture", "--nocapture"])
+        .env("KALCODE_EMPTY_EPOCH_CRASH_FIXTURE", temp.path())
+        .status()
+        .expect("fixture subprocess");
+    assert!(
+        status.success(),
+        "fixture must exit after creating crash residue"
+    );
+    let recovered = GuardianRuntime::launch(
+        std::path::Path::new(env!("CARGO_BIN_EXE_kalcode-provider-guardian")),
+        temp.path(),
+    )
+    .expect("both owners exited and durable inventory proves no admitted jobs");
+    recovered
+        .seal_and_drain()
+        .expect("recovered runtime drains");
+}
+
+#[test]
+fn empty_epoch_owner_crash_fixture() {
+    let Some(root) = std::env::var_os("KALCODE_EMPTY_EPOCH_CRASH_FIXTURE") else {
+        return;
+    };
+    let first = GuardianRuntime::launch(
+        std::path::Path::new(env!("CARGO_BIN_EXE_kalcode-provider-guardian")),
+        std::path::Path::new(&root),
+    )
+    .expect("fixture runtime");
+    let _lease = first
+        .authority()
+        .acquire(
+            profile(first.profile_generation()).expect("valid profile"),
+            ProfileCapability::SharedSession,
+        )
+        .expect("empty profile lease");
+    force_terminate_process(first.supervisor().process_identity().pid())
+        .expect("terminate guardian fixture");
+    assert!(
+        GuardianRuntime::launch(
+            std::path::Path::new(env!("CARGO_BIN_EXE_kalcode-provider-guardian")),
+            std::path::Path::new(&root),
+        )
+        .is_err(),
+        "a live desktop lease must still prevent replacement"
+    );
+    // Exit without Rust Drop: leave the exact RUNNING epoch and CLEAN empty profile on disk.
+    std::process::exit(0);
+}
+
+#[test]
 fn helper_hard_kill_cannot_release_a_live_desktop_epoch() {
     let (temp, first) = runtime().expect("production guardian runtime");
     let lease = first

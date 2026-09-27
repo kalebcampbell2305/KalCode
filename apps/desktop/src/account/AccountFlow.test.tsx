@@ -1,4 +1,4 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AccountClient, type AccountSnapshot, type RuntimeStatus } from "../ipc/account.ts";
@@ -52,6 +52,90 @@ async function completeFreeOnboarding(user: ReturnType<typeof userEvent.setup>) 
 afterEach(() => vi.useRealTimers());
 
 describe("account onboarding integration", () => {
+  it("keeps a genuinely owned workspace blocked after retry and shows the safe reason", async () => {
+    const client = new AccountClient({
+      invoke: async (command) => {
+        if (command === "account_status") return snapshot("ready");
+        if (command === "runtime_status")
+          return {
+            phase: "blocked_unclean",
+            ready: false,
+            recovery: {
+              code: "workspace_owned",
+              message: "Another KalCode instance owns this workspace. Close that instance, then try again.",
+              retryable: true,
+            },
+          };
+        if (command === "runtime_retry")
+          throw {
+            code: "workspace_retry_unavailable",
+            message: "Workspace recovery is still protecting active resources.",
+            retryable: true,
+          };
+        throw new Error(`Unexpected account mutation: ${command}`);
+      },
+    });
+    render(
+      <AccountProvider client={client}>
+        <ConnectedAccountGate>
+          <Workspace />
+        </ConnectedAccountGate>
+      </AccountProvider>,
+    );
+    await userEvent.click(await screen.findByRole("button", { name: "Try again" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Workspace recovery is still protecting active resources.",
+    );
+    expect(screen.getByText(/Another KalCode instance owns/)).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Workspace" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeEnabled();
+  });
+
+  it("retries authoritative recovery and resumes the restored OWNER account without signing in again", async () => {
+    const owner: AccountSnapshot = { ...snapshot("ready"), tier: "owner" };
+    let recovered = false;
+    const invoke = async (command: string) => {
+      switch (command) {
+        case "account_status":
+          return owner;
+        case "runtime_status":
+          return recovered
+            ? runtime("ready")
+            : {
+                phase: "blocked_unclean",
+                ready: false,
+                recovery: {
+                  code: "workspace_owned",
+                  message: "Another KalCode instance owns this workspace. Close that instance, then try again.",
+                  retryable: true,
+                },
+              };
+        case "runtime_retry":
+          recovered = true;
+          return null;
+        case "account_usage":
+          return { used: 4, allowance: null, periodStart: "2026-09-01T00:00:00Z", resetsAt: "2026-10-01T00:00:00Z" };
+        default:
+          throw new Error(`Unexpected account mutation: ${command}`);
+      }
+    };
+    render(
+      <AccountProvider client={new AccountClient({ invoke })}>
+        <ConnectedAccountGate>
+          <Workspace />
+          <SettingsAccount />
+        </ConnectedAccountGate>
+      </AccountProvider>,
+    );
+    expect(await screen.findByText(/Another KalCode instance owns/)).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Workspace" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByRole("heading", { name: "Workspace ready" })).toBeInTheDocument();
+    expect(screen.getByText("Owner")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("Unlimited requests")).toBeInTheDocument());
+    expect(screen.getByText("Dictation").parentElement).toHaveTextContent("DictationUnlimited");
+  });
+
   it.each(["Google browser return", "cold session restoration"])(
     "shows server-authoritative OWNER usage after %s without plan selection",
     async (entry) => {
@@ -66,9 +150,7 @@ describe("account onboarding integration", () => {
           case "account_status":
             return current;
           case "runtime_status":
-            return current.phase === "ready"
-              ? runtime("ready")
-              : { phase: "signed_out", ready: false };
+            return current.phase === "ready" ? runtime("ready") : { phase: "signed_out", ready: false };
           case "account_social_start":
             if (args?.provider !== "google") throw new Error("Expected the Google browser handoff");
             current = {
@@ -201,6 +283,7 @@ describe("account onboarding integration", () => {
     const client: AccountOperations = {
       status: vi.fn(async () => signedOut),
       runtimeStatus: vi.fn<() => Promise<RuntimeStatus>>(async () => ({ phase: "signed_out", ready: false })),
+      retryRuntime: vi.fn(async () => undefined),
       startEmail: vi.fn(async () => {
         throw { code: "service_unavailable", message: "Account service is unavailable.", retryable: true };
       }),

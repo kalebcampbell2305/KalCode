@@ -115,6 +115,14 @@ impl ProfileMarker {
         &self.profile
     }
 
+    pub(crate) const fn desktop_generation(&self) -> DesktopGeneration {
+        self.desktop_generation
+    }
+
+    pub(crate) const fn owner_processes(&self) -> [ProcessIdentity; 2] {
+        [self.desktop_process, self.guardian_process]
+    }
+
     pub fn jobs(&self) -> impl Iterator<Item = &JobRecord> {
         self.jobs.values()
     }

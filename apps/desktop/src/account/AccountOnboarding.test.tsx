@@ -170,7 +170,8 @@ describe("AccountGate", () => {
         <p>Workspace</p>
       </AccountGate>,
     );
-    expect(screen.getByRole("heading", { name: "Workspace cleanup needs a restart" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Workspace recovery paused" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeEnabled();
     expect(screen.queryByRole("heading", { name: "Welcome to KalCode" })).toBeNull();
   });
 

@@ -13,6 +13,7 @@ pub(crate) const COMMANDS: &[&str] = &[
     "account_logout",
     "account_usage",
     "runtime_status",
+    "runtime_retry",
     "context_file_pick",
     "context_preview_create",
     "context_item_set",

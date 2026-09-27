@@ -63,6 +63,19 @@ describe("account IPC validation", () => {
     expect(() => parseAccountSnapshot({ ...signedOut, phase: "ready" })).toThrow(/ready/i);
     expect(() => parseAccountSnapshot({ ...ready, tier: "enterprise" })).toThrow(/tier/i);
   });
+
+  it("preserves public recovery reasons and rejects secret-bearing or inconsistent recovery", () => {
+    const recovery = {
+      code: "workspace_owned",
+      message: "Close the other KalCode instance, then try again.",
+      retryable: true,
+    };
+    expect(parseRuntimeStatus({ phase: "blocked_unclean", ready: false, recovery }).recovery).toEqual(recovery);
+    expect(() => parseRuntimeStatus({ phase: "ready", ready: true, recovery })).toThrow(/recovery/i);
+    expect(() =>
+      parseRuntimeStatus({ phase: "blocked_unclean", ready: false, recovery: { ...recovery, token: "private" } }),
+    ).toThrow(/secret/i);
+  });
 });
 
 describe("AccountClient", () => {

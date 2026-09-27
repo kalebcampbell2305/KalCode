@@ -22,6 +22,7 @@ use crate::{
 #[derive(Default)]
 pub struct RuntimeBundle {
     block_after_cleanup: bool,
+    startup_issue: Option<RecoveryIssue>,
     pub context: Option<Arc<ContextState>>,
     pub auth: Option<Arc<ProviderAuthState>>,
     pub notifications: Option<Arc<NotificationsState>>,
@@ -60,6 +61,7 @@ impl RuntimeBundle {
             Err(error_code) => {
                 tracing::error!(event = "runtime.bootstrap_failed", error_code = %error_code);
                 bundle.block_after_cleanup = true;
+                bundle.startup_issue = Some(RecoveryIssue::from_startup_code(&error_code));
                 ProviderAuthState::unavailable()
             }
         });
@@ -307,6 +309,46 @@ pub struct RuntimeCoordinator {
     pub lifecycle: Lifecycle,
     account: Arc<AccountRuntime>,
     bundle: Mutex<Option<Arc<RuntimeBundle>>>,
+    startup_issue: Mutex<Option<RecoveryIssue>>,
+}
+
+#[derive(Clone, Copy, Debug, serde::Serialize)]
+pub struct RecoveryIssue {
+    code: &'static str,
+    message: &'static str,
+    retryable: bool,
+}
+
+impl RecoveryIssue {
+    fn from_startup_code(code: &str) -> Self {
+        let (code, message) = match code {
+            "workspace_owned" => (
+                "workspace_owned",
+                "Another KalCode instance owns this workspace. Close that instance, then try again.",
+            ),
+            "workspace_recovery_pending" => (
+                "workspace_recovery_pending",
+                "Previous provider processes are still being checked or stopped. Wait a moment, then try again.",
+            ),
+            "workspace_recovery_metadata_invalid" => (
+                "workspace_recovery_metadata_invalid",
+                "Workspace recovery metadata could not be validated. Retry the safety check; if this persists, contact KalCode support.",
+            ),
+            "provider_guardian_unavailable" => (
+                "provider_guardian_unavailable",
+                "The workspace safety helper could not start. Try again; if this persists, repair the KalCode installation.",
+            ),
+            _ => (
+                "workspace_startup_failed",
+                "A required workspace service could not start. Try again; if this persists, contact KalCode support.",
+            ),
+        };
+        Self {
+            code,
+            message,
+            retryable: true,
+        }
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -314,6 +356,8 @@ pub struct RuntimeCoordinator {
 pub struct RuntimeStatus {
     phase: &'static str,
     ready: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recovery: Option<RecoveryIssue>,
 }
 
 #[tauri::command]
@@ -343,7 +387,35 @@ pub fn runtime_status(coordinator: tauri::State<'_, Arc<RuntimeCoordinator>>) ->
             Phase::AppExiting => "app_exiting",
         },
         ready: phase == Phase::Ready,
+        recovery: if phase == Phase::BlockedUnclean {
+            Some(
+                if coordinator.bundle.is_poisoned() || coordinator.startup_issue.is_poisoned() {
+                    RecoveryIssue {
+                        code: "workspace_authority_unavailable",
+                        message: "Workspace safety state could not be validated. Close KalCode and contact support if this persists.",
+                        retryable: false,
+                    }
+                } else {
+                    coordinator.startup_issue.lock().ok().and_then(|issue| *issue).unwrap_or(RecoveryIssue {
+                    code: "workspace_cleanup_pending", message: "Active workspace resources have not finished closing. Wait a moment, then try again.", retryable: true,
+                })
+                },
+            )
+        } else {
+            None
+        },
     }
+}
+
+#[tauri::command]
+pub fn runtime_retry(
+    coordinator: tauri::State<'_, Arc<RuntimeCoordinator>>,
+) -> Result<(), crate::account::runtime::AccountRuntimeError> {
+    coordinator.retry_startup().map_err(|_| crate::account::runtime::AccountRuntimeError {
+        code: "workspace_retry_unavailable",
+        message: "Workspace recovery is still protecting active or unverified resources. Wait a moment, then try again.",
+        retryable: true,
+    })
 }
 
 pub struct AccountMutation(crate::runtime_lifecycle::MutationLease);
@@ -399,7 +471,24 @@ impl RuntimeCoordinator {
             lifecycle: Lifecycle::default(),
             account,
             bundle: Mutex::new(None),
+            startup_issue: Mutex::new(None),
         })
+    }
+
+    /// Retry only after actual cleanup released every local owner. The observer then runs
+    /// ordinary guardian startup, which remains the authority for external workspace custody.
+    fn retry_startup(&self) -> Result<(), IpcError> {
+        let bundle = self.bundle.lock().map_err(|_| unavailable())?;
+        if bundle.is_some() || self.startup_issue.is_poisoned() {
+            return Err(unavailable());
+        }
+        if self.lifecycle.phase() == Phase::SignedOut {
+            return Ok(());
+        }
+        if self.lifecycle.phase() != Phase::BlockedUnclean || !self.lifecycle.finish_empty_drain() {
+            return Err(unavailable());
+        }
+        Ok(())
     }
 
     pub fn observe(self: &Arc<Self>, app: AppHandle) -> std::io::Result<()> {
@@ -472,6 +561,10 @@ impl RuntimeCoordinator {
             });
         }));
         let complete = built.is_ok() && partial.complete();
+        *self
+            .startup_issue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = partial.startup_issue;
         let bundle = Arc::new(partial);
         *self
             .bundle
@@ -549,6 +642,100 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use super::*;
+
+    struct UntouchedStore;
+    impl kalcode_secure_store::SecretStore for UntouchedStore {
+        fn backend(&self) -> &'static str {
+            "untouched-test-store"
+        }
+        fn set(
+            &self,
+            _: &kalcode_secure_store::SecretKey,
+            _: &kalcode_secure_store::SecretString,
+        ) -> Result<(), kalcode_secure_store::SecretStoreError> {
+            panic!("runtime recovery must not mutate account credentials")
+        }
+        fn get(
+            &self,
+            _: &kalcode_secure_store::SecretKey,
+        ) -> Result<
+            Option<kalcode_secure_store::SecretString>,
+            kalcode_secure_store::SecretStoreError,
+        > {
+            panic!("runtime recovery must not read account credentials")
+        }
+        fn delete(
+            &self,
+            _: &kalcode_secure_store::SecretKey,
+        ) -> Result<bool, kalcode_secure_store::SecretStoreError> {
+            panic!("runtime recovery must not delete account credentials")
+        }
+    }
+
+    fn test_coordinator() -> Arc<RuntimeCoordinator> {
+        RuntimeCoordinator::new(Arc::new(AccountRuntime::production(Arc::new(
+            UntouchedStore,
+        ))))
+    }
+
+    #[test]
+    fn retry_after_failed_start_cleanup_reenters_authoritative_startup() {
+        let coordinator = test_coordinator();
+        let permit = coordinator.lifecycle.begin_build(7).unwrap();
+        drop(permit);
+        assert_eq!(
+            reconcile_retained_bundle(&coordinator.lifecycle, Some(7), true, || true),
+            RetainedBundleOutcome::Cleaned
+        );
+        assert_eq!(coordinator.lifecycle.phase(), Phase::BlockedUnclean);
+        assert!(coordinator.retry_startup().is_ok());
+        assert!(coordinator.lifecycle.begin_build(7).is_some());
+    }
+
+    #[test]
+    fn retry_never_drops_a_retained_bundle_or_reopens_exit() {
+        let coordinator = test_coordinator();
+        coordinator.lifecycle.block_unclean();
+        let retained = Arc::new(RuntimeBundle::default());
+        *coordinator.bundle.lock().unwrap() = Some(retained.clone());
+        assert!(coordinator.retry_startup().is_err());
+        assert!(Arc::ptr_eq(
+            coordinator.bundle.lock().unwrap().as_ref().unwrap(),
+            &retained
+        ));
+        assert_eq!(coordinator.lifecycle.phase(), Phase::BlockedUnclean);
+        coordinator.bundle.lock().unwrap().take();
+        coordinator.request_drain(true);
+        assert!(coordinator.retry_startup().is_err());
+        assert_eq!(coordinator.lifecycle.phase(), Phase::AppExiting);
+    }
+
+    #[test]
+    fn recovery_status_never_serializes_untrusted_startup_details() {
+        let issue = RecoveryIssue::from_startup_code("private-file-or-token-details");
+        let status = RuntimeStatus {
+            phase: "blocked_unclean",
+            ready: false,
+            recovery: Some(issue),
+        };
+        let serialized = serde_json::to_value(status).unwrap();
+        assert_eq!(serialized["recovery"]["code"], "workspace_startup_failed");
+        assert!(
+            !serialized
+                .to_string()
+                .contains("private-file-or-token-details")
+        );
+        for code in [
+            "workspace_owned",
+            "workspace_recovery_pending",
+            "workspace_recovery_metadata_invalid",
+            "provider_guardian_unavailable",
+        ] {
+            let issue = RecoveryIssue::from_startup_code(code);
+            assert_eq!(issue.code, code);
+            assert!(issue.retryable);
+        }
+    }
 
     struct RetryableService {
         can_stop: AtomicBool,

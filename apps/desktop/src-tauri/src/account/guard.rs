@@ -28,6 +28,7 @@ fn is_bootstrap_command(command: &str) -> bool {
         command,
         "account_bootstrap"
             | "runtime_status"
+            | "runtime_retry"
             | "updater_status"
             | "boot"
             | "window_ready"
