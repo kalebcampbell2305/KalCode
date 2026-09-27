@@ -245,10 +245,12 @@ fn managed_claude_fails_closed_without_a_native_guardian() {
         Ok(_) => panic!("managed Claude must not launch without a native guardian"),
         Err(error) => error,
     };
-    assert_eq!(
-        error.to_string(),
-        "provider runtime guardian is not configured"
-    );
+    match error {
+        ProviderError::Start(message) => {
+            assert_eq!(message, "provider runtime guardian is not configured");
+        }
+        other => panic!("expected a provider start denial, got {other:?}"),
+    }
     assert!(
         !fake.dir.path().join("runs.log").exists(),
         "guardian denial must happen before provider detection or launch"

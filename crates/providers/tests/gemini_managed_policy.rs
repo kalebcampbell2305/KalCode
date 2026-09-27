@@ -10,6 +10,8 @@ use std::time::{Duration, Instant};
 
 #[cfg(any(windows, target_os = "macos"))]
 use kalcode_contracts::agent::AgentInput;
+#[cfg(all(not(windows), not(target_os = "macos")))]
+use kalcode_contracts::agent::ProviderError;
 use kalcode_contracts::agent::{AgentEvent, AgentEventSink, AgentProvider, SessionConfig};
 use kalcode_contracts::permissions::PermissionMode;
 use kalcode_providers::managed::ManagedProfiles;
@@ -370,10 +372,12 @@ fn managed_headless_launch_fails_closed_without_a_native_guardian() {
         Ok(_) => panic!("managed Gemini must not launch without a native guardian"),
         Err(error) => error,
     };
-    assert_eq!(
-        error.to_string(),
-        "provider runtime guardian is not configured"
-    );
+    match error {
+        ProviderError::Start(message) => {
+            assert_eq!(message, "provider runtime guardian is not configured");
+        }
+        other => panic!("expected a provider start denial, got {other:?}"),
+    }
     assert!(
         !rig.bin.join("runs.log").exists(),
         "guardian denial must happen before provider detection or launch"

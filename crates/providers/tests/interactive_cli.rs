@@ -333,10 +333,12 @@ fn managed_cli_panes_fail_closed_without_a_native_guardian() {
         let rig = Rig::new_managed(cli, eligibility);
         assert!(rig.profiles.is_some(), "managed fixture must be configured");
         let error = rejected_start(&rig, Some(new_id()));
-        assert_eq!(
-            error.to_string(),
-            "provider runtime guardian is not configured"
-        );
+        match error {
+            ProviderError::Start(message) => {
+                assert_eq!(message, "provider runtime guardian is not configured");
+            }
+            other => panic!("expected a provider start denial, got {other:?}"),
+        }
         assert!(
             rig.resolved_accounts.lock().unwrap().is_empty(),
             "guardian denial must precede account-policy resolution"
