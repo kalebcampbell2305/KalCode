@@ -3,6 +3,7 @@ use std::fs::OpenOptions;
 use std::fs::{self, File};
 #[cfg(windows)]
 use std::io::Write;
+#[cfg(any(windows, target_os = "macos"))]
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
@@ -11,6 +12,7 @@ use std::process::Command;
 use kalcode_updater::{FeedMetadata, InstallBinding, MacSwapAttempt, UpdateError};
 #[cfg(windows)]
 use kalcode_updater::{UpdateTarget, verify_download_reader};
+#[cfg(any(windows, target_os = "macos"))]
 use sha2::{Digest, Sha256};
 
 #[cfg(target_os = "macos")]
@@ -223,6 +225,7 @@ fn installation_binding() -> Result<InstallBinding, UpdateError> {
     })
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 fn digest_reader(reader: &mut File) -> Result<String, UpdateError> {
     reader
         .seek(SeekFrom::Start(0))
@@ -242,6 +245,7 @@ fn digest_reader(reader: &mut File) -> Result<String, UpdateError> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 fn ensure_prepared_directory(root: &Path) -> Result<(), UpdateError> {
     if !root.is_absolute() {
         return Err(installer_storage_failed());
@@ -253,6 +257,7 @@ fn ensure_prepared_directory(root: &Path) -> Result<(), UpdateError> {
     ensure_one_plain_child(root)
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 fn ensure_existing_plain_directory(path: &Path) -> Result<(), UpdateError> {
     let metadata = fs::symlink_metadata(path).map_err(|_| installer_storage_failed())?;
     if !metadata.is_dir() {
@@ -261,6 +266,7 @@ fn ensure_existing_plain_directory(path: &Path) -> Result<(), UpdateError> {
     reject_reparse(path)
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 fn ensure_one_plain_child(path: &Path) -> Result<(), UpdateError> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -283,6 +289,7 @@ impl Drop for PreparedInstaller {
     }
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 fn is_safe_name(name: &str) -> bool {
     name.starts_with("prepared-")
         && (name.ends_with(".exe") || name.ends_with(".dmg"))
@@ -292,6 +299,7 @@ fn is_safe_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 fn cleanup_prepared(root: &Path) {
     let Ok(entries) = fs::read_dir(root) else {
         return;
@@ -311,6 +319,7 @@ fn cleanup_prepared(root: &Path) {
     }
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 fn reject_reparse(path: &Path) -> Result<(), UpdateError> {
     let metadata = fs::symlink_metadata(path).map_err(|_| installer_storage_failed())?;
     #[cfg(windows)]
@@ -835,6 +844,7 @@ fn installer_invalid() -> UpdateError {
     )
 }
 
+#[cfg(any(windows, target_os = "macos"))]
 fn installer_storage_failed() -> UpdateError {
     UpdateError::new(
         "update_installer_storage_failed",
