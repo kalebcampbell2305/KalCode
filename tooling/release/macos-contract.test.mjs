@@ -321,3 +321,30 @@ test("checked-in macOS configuration is hardened and bootstrap is read-only by d
   assert.match(packager, /const updaterPublicKey = readUpdaterPublicKey\(\);/);
   assert.match(packager, /macBuildEnvironment\([\s\S]*?credentials\.signingIdentity,\s*updaterPublicKey,/);
 });
+
+test("successful DMG cleanup cannot erase the package evidence authority", () => {
+  const root = join(import.meta.dirname, "..", "..");
+  const source = readFileSync(join(root, "tooling", "release", "macos-package.mjs"), "utf8");
+
+  assert.match(
+    source,
+    /const builtExecutable = join\(TARGET_DIR, target, "release", MACOS_EXECUTABLE\);/,
+    "build-info evidence must come from the durable release executable",
+  );
+  assert.match(
+    source,
+    /sha256: await sha256File\(helper\.sidecar\)/,
+    "signed helper evidence must be captured before Tauri cleans its temporary bundle inputs",
+  );
+  assert.doesNotMatch(
+    source,
+    /"bundle",\s*"macos",\s*"KalCode\.app"/,
+    "packaging must not depend on Tauri retaining its transient bundle/macos app",
+  );
+  assert.doesNotMatch(source, /missing_built_app/);
+  assert.match(
+    source,
+    /copyFileSync\(candidates\[0\], artifactPath, constants\.COPYFILE_EXCL\);[\s\S]*?await verifyMacCandidate\(\{ artifactPath, record, expectedTeamId: credentials\.teamId \}\);/,
+    "the exact staged DMG must remain the post-build verification authority",
+  );
+});

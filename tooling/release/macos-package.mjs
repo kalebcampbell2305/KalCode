@@ -31,6 +31,7 @@ import {
 import {
   assertProductionCodesign,
   expectedMacDmgFile,
+  MACOS_EXECUTABLE,
   MACOS_HELPERS,
   MACOS_MINIMUM_VERSION,
   MacReleaseError,
@@ -186,17 +187,7 @@ async function main() {
     }
   }
   const bundleDir = join(TARGET_DIR, target, "release", "bundle", "dmg");
-  const builtApp = join(
-    TARGET_DIR,
-    target,
-    "release",
-    "bundle",
-    "macos",
-    "KalCode.app",
-    "Contents",
-    "MacOS",
-    "kalcode",
-  );
+  const builtExecutable = join(TARGET_DIR, target, "release", MACOS_EXECUTABLE);
   const startedAt = Date.now();
   const buildEnv = macSdkBuildEnvironment(
     macBuildEnvironment(
@@ -217,6 +208,7 @@ async function main() {
     throw new MacReleaseError("stale_release_helper", "Remove every previous staged macOS helper before rebuilding.");
   }
   const createdSidecars = [];
+  const builtHelperEvidence = [];
   try {
     mkdirSync(helperDirectory, { recursive: true });
     const helperDirectoryStat = lstatSync(helperDirectory);
@@ -253,6 +245,16 @@ async function main() {
         credentials.teamId,
         helper.identifier,
       );
+      builtHelperEvidence.push({
+        name: helper.name,
+        identifier: helper.identifier,
+        architecture: arch,
+        sha256: await sha256File(helper.sidecar),
+        signed: true,
+        expectedTeamBound: true,
+        hardenedRuntime: true,
+        timestamped: true,
+      });
     }
     macProcessRunner.run("pnpm", macTauriBuildArgs({ target, features }), {
       cwd: ROOT,
@@ -264,41 +266,8 @@ async function main() {
   }
   assertCleanTree("After the macOS release build, the working tree");
   if (headCommit() !== commit) throw new MacReleaseError("head_moved", "HEAD moved during the macOS build.");
-  if (!existsSync(builtApp) || !lstatSync(builtApp).isFile() || lstatSync(builtApp).isSymbolicLink()) {
-    throw new MacReleaseError("missing_built_app", "The macOS build did not produce the expected KalCode executable.");
-  }
-  const builtHelperEvidence = [];
-  for (const helper of helpers) {
-    const builtHelper = join(
-      TARGET_DIR,
-      target,
-      "release",
-      "bundle",
-      "macos",
-      "KalCode.app",
-      "Contents",
-      "MacOS",
-      helper.name,
-    );
-    assertPlainNativeBinary(builtHelper, `The bundled ${helper.name} helper`, arch);
-    macProcessRunner.run("codesign", ["--verify", "--strict", "--verbose=2", builtHelper]);
-    assertProductionCodesign(
-      macProcessRunner.capture("codesign", ["--display", "--verbose=4", builtHelper], { output: "stderr" }),
-      credentials.teamId,
-      helper.identifier,
-    );
-    builtHelperEvidence.push({
-      name: helper.name,
-      identifier: helper.identifier,
-      architecture: arch,
-      sha256: await sha256File(builtHelper),
-      signed: true,
-      expectedTeamBound: true,
-      hardenedRuntime: true,
-      timestamped: true,
-    });
-  }
-  const buildInfo = validateBuildInfo(macProcessRunner.capture(builtApp, ["--build-info"]), {
+  assertPlainNativeBinary(builtExecutable, "The KalCode release executable", arch);
+  const buildInfo = validateBuildInfo(macProcessRunner.capture(builtExecutable, ["--build-info"]), {
     version,
     requestedReleaseChannel: options.requestedReleaseChannel,
   });
