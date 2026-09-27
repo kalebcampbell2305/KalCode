@@ -86,14 +86,20 @@ struct Shared {
     sink: Box<dyn AgentEventSink>,
     provider_session_id: Mutex<Option<String>>,
     /// The running turn, if any.
-    current: Mutex<Option<(u64, Arc<SupervisedChild>)>>,
+    current: Mutex<Option<CurrentTurn>>,
     turns: AtomicU64,
-    /// The turn KalCode interrupted (its exit is not a failure).
-    interrupted: AtomicU64,
     /// The last turn whose end the provider reported (its process may still be exiting).
     reported_end: AtomicU64,
     parse_errors: Mutex<u32>,
     ended: AtomicBool,
+}
+
+#[derive(Clone)]
+struct CurrentTurn {
+    id: u64,
+    child: Arc<SupervisedChild>,
+    /// Bound to this exact reader so a later interrupt cannot change its exit classification.
+    interrupted: Arc<AtomicBool>,
 }
 
 /// A provider session made of turn processes. Implements the shared `AgentSession` contract.
@@ -115,7 +121,6 @@ impl TurnSession {
             provider_session_id: Mutex::new(resume.clone()),
             current: Mutex::new(None),
             turns: AtomicU64::new(0),
-            interrupted: AtomicU64::new(0),
             reported_end: AtomicU64::new(0),
             parse_errors: Mutex::new(0),
             ended: AtomicBool::new(false),
@@ -170,15 +175,19 @@ impl Shared {
     fn run_turn(self: &Arc<Self>, text: &str) -> Result<(), ProviderError> {
         // The previous turn may have reported its end while its process is still exiting:
         // give it a moment (then stop it) instead of refusing the next message.
-        let finishing = lock(&self.current)
-            .clone()
-            .filter(|(turn, _)| self.reported_end.load(Ordering::SeqCst) == *turn);
-        if let Some((turn, child)) = finishing {
+        let finishing = lock(&self.current).clone().filter(|current| {
+            self.reported_end.load(Ordering::SeqCst) == current.id
+                || current.interrupted.load(Ordering::SeqCst)
+        });
+        if let Some(CurrentTurn {
+            id: turn, child, ..
+        }) = finishing
+        {
             if !matches!(child.wait_timeout(LINGER), Ok(Some(_))) {
                 child.kill();
             }
             let mut current = lock(&self.current);
-            if current.as_ref().is_some_and(|(t, _)| *t == turn) {
+            if current.as_ref().is_some_and(|current| current.id == turn) {
                 current.take();
             }
         }
@@ -221,7 +230,12 @@ impl Shared {
             )));
         }
         let turn = self.turns.fetch_add(1, Ordering::SeqCst) + 1;
-        *current = Some((turn, Arc::clone(&child)));
+        let interrupted = Arc::new(AtomicBool::new(false));
+        *current = Some(CurrentTurn {
+            id: turn,
+            child: Arc::clone(&child),
+            interrupted: Arc::clone(&interrupted),
+        });
         drop(current);
         tracing::info!(
             event = "provider.turn_started",
@@ -275,11 +289,19 @@ impl Shared {
                         OutputLine::Closed => break,
                     }
                 }
-                shared.finish_turn(turn, &child, normalizer.as_mut());
+                shared.finish_turn(turn, &child, &interrupted, normalizer.as_mut());
             });
         if spawned.is_err() {
-            if let Some((_, child)) = lock(&self.current).take() {
-                child.kill();
+            let failed = {
+                let mut current = lock(&self.current);
+                if current.as_ref().is_some_and(|current| current.id == turn) {
+                    current.take()
+                } else {
+                    None
+                }
+            };
+            if let Some(failed) = failed {
+                failed.child.kill();
             }
             return Err(ProviderError::Start(format!(
                 "KalCode couldn't follow {}'s output.",
@@ -290,7 +312,13 @@ impl Shared {
     }
 
     /// The turn's output closed: collect its exit and report how it ended.
-    fn finish_turn(&self, turn: u64, child: &SupervisedChild, normalizer: &mut dyn TurnNormalizer) {
+    fn finish_turn(
+        &self,
+        turn: u64,
+        child: &SupervisedChild,
+        interrupted: &AtomicBool,
+        normalizer: &mut dyn TurnNormalizer,
+    ) {
         let status = match child.wait_timeout(LINGER) {
             Ok(Some(status)) => Some(status),
             _ => {
@@ -300,12 +328,12 @@ impl Shared {
         };
         {
             let mut current = lock(&self.current);
-            if current.as_ref().is_some_and(|(t, _)| *t == turn) {
+            if current.as_ref().is_some_and(|current| current.id == turn) {
                 current.take();
             }
         }
         let exit_code = status.and_then(|s| s.code());
-        let interrupted = self.interrupted.load(Ordering::SeqCst) == turn;
+        let interrupted = interrupted.load(Ordering::SeqCst);
         let ended = self.ended.load(Ordering::SeqCst);
         tracing::info!(event = "provider.turn_exited", provider_id = self.adapter.provider_id(), turn, exit_code = ?exit_code, interrupted, ended);
         if interrupted || ended {
@@ -350,9 +378,14 @@ impl Shared {
     }
 
     fn kill_current(&self) -> Option<u64> {
-        let current = lock(&self.current).clone();
+        let current = {
+            let current = lock(&self.current);
+            current.as_ref().map(|current| {
+                current.interrupted.store(true, Ordering::SeqCst);
+                (current.id, Arc::clone(&current.child))
+            })
+        };
         current.map(|(turn, child)| {
-            self.interrupted.store(turn, Ordering::SeqCst);
             child.kill();
             turn
         })
@@ -452,6 +485,178 @@ pub(crate) fn provider_message(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
+    use std::time::Instant;
+
+    struct TestAdapter;
+
+    impl TurnAdapter for TestAdapter {
+        fn provider_id(&self) -> &'static str {
+            "test-turns"
+        }
+
+        fn display_name(&self) -> &'static str {
+            "Test Turns"
+        }
+
+        fn turn_args(&self, _resume: Option<&str>) -> Result<Vec<OsString>, ProviderError> {
+            #[cfg(windows)]
+            {
+                Ok(["/D", "/S", "/C", "more >NUL & ping -t 127.0.0.1 >NUL"]
+                    .into_iter()
+                    .map(OsString::from)
+                    .collect())
+            }
+            #[cfg(not(windows))]
+            {
+                Ok([
+                    "-c",
+                    "while IFS= read -r line; do :; done; while :; do sleep 1; done",
+                ]
+                .into_iter()
+                .map(OsString::from)
+                .collect())
+            }
+        }
+
+        fn normalizer(&self) -> Box<dyn TurnNormalizer> {
+            Box::new(EmptyNormalizer)
+        }
+    }
+
+    struct EmptyNormalizer;
+
+    impl TurnNormalizer for EmptyNormalizer {
+        fn line(&mut self, _text: &str) -> Result<Vec<AgentEvent>, String> {
+            Ok(Vec::new())
+        }
+
+        fn session_id(&self) -> Option<&str> {
+            None
+        }
+
+        fn turn_ended(&self) -> bool {
+            false
+        }
+
+        fn close(&mut self) -> Vec<AgentEvent> {
+            Vec::new()
+        }
+    }
+
+    fn test_launch() -> Result<TurnLaunch, io::Error> {
+        #[cfg(windows)]
+        let executable = std::env::var_os("SystemRoot")
+            .map(PathBuf::from)
+            .map(|root| root.join("System32").join("cmd.exe"))
+            .ok_or_else(|| io::Error::other("SystemRoot is unavailable"))?;
+        #[cfg(not(windows))]
+        let executable = PathBuf::from("/bin/sh");
+
+        Ok(TurnLaunch {
+            executable,
+            env: std::env::vars_os().collect(),
+            cwd: std::env::current_dir()?,
+            resume_session_id: None,
+            guardian_profile: None,
+        })
+    }
+
+    fn quiesced_child(shared: &Shared) -> Result<Arc<SupervisedChild>, ProviderError> {
+        #[cfg(windows)]
+        let args = ["/D", "/S", "/C", "exit 7"]
+            .into_iter()
+            .map(OsString::from)
+            .collect();
+        #[cfg(not(windows))]
+        let args = ["-c", "exit 7"].into_iter().map(OsString::from).collect();
+        let spec = ProcessSpec {
+            program: shared.launch.executable.clone(),
+            args,
+            cwd: Some(shared.launch.cwd.clone()),
+            env: shared.launch.env.clone(),
+        };
+        let (child, lines) = SupervisedChild::spawn(&spec)
+            .map_err(|error| ProviderError::Start(error.to_string()))?;
+        drop(lines);
+        child.close_stdin();
+        let status = child
+            .wait_timeout(Duration::from_secs(5))
+            .map_err(|error| ProviderError::Start(error.to_string()))?
+            .ok_or_else(|| ProviderError::Start("test child did not exit".into()))?;
+        let _ = status;
+        Ok(Arc::new(child))
+    }
+
+    #[test]
+    fn an_interrupted_quiesced_turn_is_reaped_before_the_next_turn() -> Result<(), ProviderError> {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&events);
+        let session = TurnSession::start(
+            Box::new(TestAdapter),
+            test_launch().map_err(|error| ProviderError::Start(error.to_string()))?,
+            Box::new(move |event: AgentEvent| lock(&captured).push(event)),
+        );
+
+        // Model the exact production boundary: tree termination has completed, while the output
+        // worker has not yet removed the interrupted turn from `current`.
+        let interrupted = quiesced_child(&session.shared)?;
+        let first_interrupted = Arc::new(AtomicBool::new(true));
+        session.shared.turns.store(1, Ordering::SeqCst);
+        *lock(&session.shared.current) = Some(CurrentTurn {
+            id: 1,
+            child: Arc::clone(&interrupted),
+            interrupted: Arc::clone(&first_interrupted),
+        });
+
+        session.send(AgentInput::Text {
+            text: "next turn".into(),
+        })?;
+
+        // Interrupting the new turn must not overwrite the old reader's classification.
+        assert_eq!(session.shared.kill_current(), Some(2));
+        let mut old_normalizer = EmptyNormalizer;
+        let before_old_reader = lock(&events).len();
+        session
+            .shared
+            .finish_turn(1, &interrupted, &first_interrupted, &mut old_normalizer);
+        assert_eq!(
+            lock(&events).len(),
+            before_old_reader,
+            "the old interrupted reader must not emit a stale failure"
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while lock(&session.shared.current).is_some() {
+            if Instant::now() >= deadline {
+                return Err(ProviderError::Start("next test turn did not finish".into()));
+            }
+            thread::yield_now();
+        }
+        assert!(!lock(&events).iter().any(|event| matches!(
+            event,
+            AgentEvent::Error { .. } | AgentEvent::TurnCompleted { ok: false }
+        )));
+
+        // A retained current turn without either completion authority remains busy.
+        let active = quiesced_child(&session.shared)?;
+        session.shared.turns.store(3, Ordering::SeqCst);
+        session.shared.reported_end.store(0, Ordering::SeqCst);
+        *lock(&session.shared.current) = Some(CurrentTurn {
+            id: 3,
+            child: active,
+            interrupted: Arc::new(AtomicBool::new(false)),
+        });
+        let result = session.send(AgentInput::Text {
+            text: "must stay blocked".into(),
+        });
+        assert!(
+            matches!(result, Err(ProviderError::Io(message)) if message == "Test Turns is still working on the previous message.")
+        );
+        lock(&session.shared.current).take();
+        session.terminate()?;
+        Ok(())
+    }
 
     #[test]
     fn provider_messages_are_single_line_clipped_and_redacted() {
