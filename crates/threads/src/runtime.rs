@@ -2120,10 +2120,14 @@ impl Inner {
         state.generation += 1;
         state.tools.clear();
         state.resume_status = None;
+        let id = ctx.thread_id.as_str();
+        // Do not publish a terminal thread state while an approval for that thread can still be
+        // resolved. This external gate call remains outside the database transaction and after
+        // the provider session/routes are irreversibly detached.
+        self.gate.expire_for_thread(id);
         self.flush_buffers(ctx, state)?;
 
         let now = now_rfc3339();
-        let id = ctx.thread_id.as_str();
         let (to, _) = self.core.write_with_events(|tx| {
             store::cancel_open_tool_calls(tx, id, &now)?;
             store::set_pending_approvals(tx, id, 0)?;
@@ -2187,7 +2191,6 @@ impl Inner {
             }
             Ok((to, events))
         })?;
-        self.gate.expire_for_thread(id);
         tracing::info!(event = "thread.session_ended", thread_id = %id, status = ?to);
         Ok(())
     }

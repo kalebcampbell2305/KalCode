@@ -48,6 +48,7 @@ pub enum Step {
 }
 
 type Script = Arc<dyn Fn(&str) -> Vec<Step> + Send + Sync>;
+type ExpireObserver = Arc<dyn Fn(&str) + Send + Sync>;
 
 pub struct FakeSession {
     pub config: SessionConfig,
@@ -307,6 +308,7 @@ pub struct TestGate {
     pub opened: Mutex<Vec<ApprovalRequest>>,
     pub expired: Mutex<Vec<String>>,
     pub fail_open: AtomicBool,
+    expire_observer: Mutex<Option<ExpireObserver>>,
     /// Id the next opened request gets (to simulate decisions that race registration).
     pub next_request_id: Mutex<Option<String>>,
 }
@@ -319,6 +321,7 @@ impl TestGate {
             opened: Mutex::new(Vec::new()),
             expired: Mutex::new(Vec::new()),
             fail_open: AtomicBool::new(false),
+            expire_observer: Mutex::new(None),
             next_request_id: Mutex::new(None),
         })
     }
@@ -333,6 +336,10 @@ impl TestGate {
 
     pub fn expired(&self) -> Vec<String> {
         self.expired.lock().unwrap().clone()
+    }
+
+    pub fn set_expire_observer(&self, observer: Arc<dyn Fn(&str) + Send + Sync>) {
+        *self.expire_observer.lock().unwrap() = Some(observer);
     }
 }
 
@@ -380,6 +387,10 @@ impl PermissionGate for TestGate {
     }
 
     fn expire_for_thread(&self, thread_id: &str) {
+        let observer = self.expire_observer.lock().unwrap().clone();
+        if let Some(observer) = observer {
+            observer(thread_id);
+        }
         self.expired.lock().unwrap().push(thread_id.to_owned());
     }
 }

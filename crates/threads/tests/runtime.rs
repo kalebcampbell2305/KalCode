@@ -5,7 +5,9 @@
 
 mod common;
 
+use std::sync::mpsc::{SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use common::*;
 use kalcode_context::{
@@ -33,6 +35,22 @@ fn wait_status(h: &Harness, id: &str, expected: ThreadStatus) {
     wait_until(&format!("status {expected:?}"), || {
         status(h, id) == expected
     });
+}
+
+struct ReleaseOnDrop(Option<SyncSender<()>>);
+
+impl ReleaseOnDrop {
+    fn release(&mut self) {
+        if let Some(sender) = self.0.take() {
+            let _ = sender.send(());
+        }
+    }
+}
+
+impl Drop for ReleaseOnDrop {
+    fn drop(&mut self) {
+        self.release();
+    }
 }
 
 /// Creates a thread and waits until its first prompt reached the session.
@@ -1104,6 +1122,70 @@ fn provider_crash_fails_only_its_own_threads() {
 }
 
 #[test]
+fn provider_crash_expires_permissions_before_publishing_terminal_status() {
+    let h = Harness::new();
+    let other = FakeProvider::new("other", "Other Provider");
+    h.registry.register(other.clone());
+    let a = started(&h, "one");
+    let b = h
+        .runtime
+        .create(CreateThread {
+            provider_id: "other".into(),
+            ..h.request("two")
+        })
+        .expect("create b")
+        .id;
+    let crashed_session = h.provider.last_session();
+    crashed_session.emit(AgentEvent::ApprovalRequired {
+        request_id: "crash-approval".into(),
+        action: command_action("make deploy"),
+    });
+    wait_status(&h, &a, ThreadStatus::WaitingForPermission);
+    assert_eq!(h.gate.opened().len(), 1);
+
+    let (entered_tx, entered_rx) = sync_channel(1);
+    let (release_tx, release_rx) = sync_channel(1);
+    let release_rx = Mutex::new(release_rx);
+    h.gate.set_expire_observer(Arc::new(move |thread_id| {
+        let _ = entered_tx.send(thread_id.to_owned());
+        let _ = release_rx
+            .lock()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(5));
+    }));
+    let mut release = ReleaseOnDrop(Some(release_tx));
+
+    crashed_session.crash(Some(137));
+    let entered = entered_rx.recv_timeout(Duration::from_secs(5));
+    let a_while_expiring = status(&h, &a);
+    let b_while_expiring = status(&h, &b);
+    let expired_while_blocked = h.gate.expired().contains(&a);
+    let b_send = h.runtime.send(&b, "still there?");
+    let b_calls = other.last_session().calls();
+    release.release();
+
+    assert_eq!(entered.expect("expiry entered"), a);
+    assert_ne!(a_while_expiring, ThreadStatus::Failed);
+    assert_eq!(b_while_expiring, ThreadStatus::Active);
+    assert!(!expired_while_blocked);
+    b_send.expect("send b");
+    assert_eq!(b_calls.last(), Some(&Call::Send("still there?".into())));
+    wait_status(&h, &a, ThreadStatus::Failed);
+    assert!(h.gate.expired().contains(&a));
+    assert_eq!(
+        h.runtime.get(&a).expect("failed thread").pending_approvals,
+        0
+    );
+    assert!(
+        !crashed_session
+            .calls()
+            .iter()
+            .any(|call| matches!(call, Call::Respond(_, _))),
+        "a dead provider cannot receive an approval response"
+    );
+}
+
+#[test]
 fn provider_errors_are_recorded() {
     let h = Harness::new();
     let id = started(&h, "x");
@@ -1457,10 +1539,15 @@ fn failed_stop_retains_the_live_session_for_a_proven_retry() {
         !session.is_ended(),
         "the runtime must retain live ownership"
     );
+    assert!(
+        !h.gate.expired().contains(&id),
+        "a failed termination must retain approval authority for the live retry"
+    );
 
     let stopped = h.runtime.stop(&id).expect("retry termination");
     assert_eq!(stopped.status, ThreadStatus::Interrupted);
     assert!(session.is_ended());
+    assert!(h.gate.expired().contains(&id));
     assert_eq!(
         session
             .calls()
