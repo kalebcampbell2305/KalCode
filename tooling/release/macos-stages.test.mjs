@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -91,7 +91,7 @@ test("candidate has a distinct non-publishable contract binding helpers, commit,
 
 async function fixture(t, options = {}) {
   const { resumeMacCandidate } = await import("./macos-resume.mjs");
-  const dir = mkdtempSync(join(tmpdir(), "kalcode-stage-test-"));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "kalcode-stage-test-")));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const record = candidate();
   mkdirSync(join(dir, "macos-arm64-candidate"));

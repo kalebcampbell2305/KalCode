@@ -339,7 +339,7 @@ export async function prepareComponentPublication(
   if (!samePath(packet.publicKeyPath, trustedPublicKeyPath)) {
     throw new Error("component publication packet does not use the tracked component public key");
   }
-  const temporaryDirectory = mkdtempSync(join(tmpdir(), "kalcode-component-publication-"));
+  const temporaryDirectory = realpathSync(mkdtempSync(join(tmpdir(), "kalcode-component-publication-")));
   try {
     const publicKeyText = readBoundedFile(
       packet.publicKeyPath,

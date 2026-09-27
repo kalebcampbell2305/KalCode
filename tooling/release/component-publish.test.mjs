@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
@@ -64,7 +64,7 @@ function manifest({ componentId, kind, version, runtimeAbi, file, bytes, sourceI
 }
 
 function fixture() {
-  const directory = mkdtempSync(join(tmpdir(), "kalcode-component-publisher-test-"));
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), "kalcode-component-publisher-test-")));
   const items = [
     {
       role: "reason-runtime",
@@ -267,6 +267,8 @@ test("the publisher uses both real verification boundaries before it creates a p
   assert.equal(publication.uploads.length, 8);
   assert.equal(publication.publishedAt, new Date(ISSUED * 1000).toISOString());
   assert.ok(publication.uploads.every(({ key }) => key.startsWith("components/v1/")));
+  assert.equal(publication.temporaryDirectory, realpathSync(publication.temporaryDirectory));
+  assert.ok(publication.uploads.every(({ path }) => resolve(path) === resolve(realpathSync(path))));
   const packet = JSON.parse(readFileSync(value.packetPath, "utf8"));
   assert.notEqual(publication.catalogPath, packet.catalogPath);
   assert.notEqual(publication.artifacts[0].path, packet.artifacts[0].path);
@@ -276,6 +278,26 @@ test("the publisher uses both real verification boundaries before it creates a p
   writeFileSync(packet.artifacts[0].path, "changed-after-verification");
   assert.equal(readFileSync(publication.catalogPath, "utf8"), value.catalogToken);
   assert.deepEqual(readFileSync(publication.artifacts[0].path), artifactSnapshot);
+});
+
+test("the publisher rejects an externally supplied artifact path that traverses a directory link", async (t) => {
+  const value = fixture();
+  const targetDirectory = realpathSync(mkdtempSync(join(tmpdir(), "kalcode-component-publisher-link-target-")));
+  t.after(() => rmSync(value.directory, { recursive: true, force: true }));
+  t.after(() => rmSync(targetDirectory, { recursive: true, force: true }));
+  const packet = JSON.parse(readFileSync(value.packetPath, "utf8"));
+  const artifact = value.items[0];
+  const targetPath = join(targetDirectory, artifact.file);
+  const aliasDirectory = join(value.directory, "linked-artifact");
+  writeFileSync(targetPath, artifact.bytes);
+  symlinkSync(targetDirectory, aliasDirectory, process.platform === "win32" ? "junction" : "dir");
+  packet.artifacts[0].path = join(aliasDirectory, artifact.file);
+  writeFileSync(value.packetPath, JSON.stringify(packet));
+
+  await assert.rejects(
+    prepareComponentPublication(value.packetPath, verification(value)),
+    /component artifact .* must not traverse a link/,
+  );
 });
 
 test("a production catalog missing one approved speech model fails before remote publication", async (t) => {

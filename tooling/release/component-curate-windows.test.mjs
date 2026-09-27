@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { linkSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { linkSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -19,7 +19,7 @@ const policy = contract.runtime.windowsX86_64;
 
 if (process.platform === "win32") {
   test("Windows PowerShell reads the real deterministic runtime ZIP", () => {
-    const root = mkdtempSync(join(tmpdir(), "kalcode-component-real-zip-"));
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "kalcode-component-real-zip-")));
     writeFileSync(join(root, "llama-server.exe"), "fixture executable bytes");
     const archive = join(root, "runtime.zip");
     writeDeterministicZip(root, ["llama-server.exe"], archive);
@@ -57,7 +57,7 @@ test("Windows source inventory must match all 51 pinned flat entries exactly", (
 });
 
 test("deterministic ZIP bytes are independent of caller order and timestamps", () => {
-  const root = mkdtempSync(join(tmpdir(), "kalcode-component-zip-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kalcode-component-zip-")));
   writeFileSync(join(root, "b.dll"), "BBBB");
   writeFileSync(join(root, "a.exe"), "AAAA");
   const first = join(root, "first.zip");
@@ -87,7 +87,7 @@ test("deterministic ZIP bytes are independent of caller order and timestamps", (
 });
 
 test("Windows curation signs every PE and emits only closed redacted evidence", async () => {
-  const root = mkdtempSync(join(tmpdir(), "kalcode-component-curate-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kalcode-component-curate-")));
   const source = join(root, policy.source.file);
   const artifact = join(root, "runtime.zip");
   const record = join(root, "windows-x86_64-component-build.json");
@@ -152,7 +152,7 @@ test("Windows curation signs every PE and emits only closed redacted evidence", 
 });
 
 test("Windows curation fails before signing on source or pre-signature substitution", async () => {
-  const root = mkdtempSync(join(tmpdir(), "kalcode-component-curate-fail-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kalcode-component-curate-fail-")));
   const source = join(root, policy.source.file);
   const metadata = join(root, "metadata.json");
   writeFileSync(source, "source bytes");
@@ -204,7 +204,7 @@ test("Windows curation fails before signing on source or pre-signature substitut
 });
 
 test("Windows curation rejects output and hardlink aliases before the first signing effect", async () => {
-  const root = mkdtempSync(join(tmpdir(), "kalcode-component-curate-alias-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kalcode-component-curate-alias-")));
   const source = join(root, policy.source.file);
   const metadata = join(root, "metadata.json");
   const artifact = join(root, "runtime.zip");

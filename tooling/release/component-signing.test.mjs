@@ -13,6 +13,9 @@ import {
   signComponentManifest,
 } from "./component-signing.mjs";
 
+const fixturePath = (...parts) => join(process.platform === "win32" ? "C:\\" : "/", ...parts);
+const signerName = process.platform === "win32" ? "kalcode-component-signer.exe" : "kalcode-component-signer";
+
 test("component public-key export is a closed Ed25519 document", () => {
   const value = { schemaVersion: 1, alg: "EdDSA", kid: "component-2026-1", x: "A".repeat(43) };
   assert.deepEqual(parseComponentPublicKey(JSON.stringify(value)), value);
@@ -30,14 +33,14 @@ test("component public-key export is a closed Ed25519 document", () => {
 test("component key status is closed and represents configured or absent custody", () => {
   assert.deepEqual(
     componentKeyStatus(
-      { storePath: "C:\\keys\\component.dpapi" },
+      { storePath: fixturePath("keys", "component.dpapi") },
       { runSigner: () => JSON.stringify({ configured: true, kid: "component-2026-1" }) },
     ),
     { configured: true, kid: "component-2026-1" },
   );
   assert.deepEqual(
     componentKeyStatus(
-      { storePath: "C:\\keys\\component.dpapi" },
+      { storePath: fixturePath("keys", "component.dpapi") },
       { runSigner: () => JSON.stringify({ configured: false, kid: null }) },
     ),
     { configured: false, kid: null },
@@ -45,7 +48,7 @@ test("component key status is closed and represents configured or absent custody
   assert.throws(
     () =>
       componentKeyStatus(
-        { storePath: "C:\\keys\\component.dpapi" },
+        { storePath: fixturePath("keys", "component.dpapi") },
         { runSigner: () => JSON.stringify({ configured: false, kid: "leaked-state" }) },
       ),
     /status/,
@@ -53,31 +56,28 @@ test("component key status is closed and represents configured or absent custody
 });
 
 test("component signer invocations use only the separate component signer and exact command options", () => {
-  const root = "C:\\repo";
+  const root = fixturePath("repo");
   const invocation = componentSignerInvocation({
     root,
     command: "sign-manifest",
     options: {
-      "--store": "C:\\keys\\component.dpapi",
-      "--input": "C:\\stage\\manifest.json",
-      "--artifact": "C:\\stage\\runtime.zip",
-      "--output": "C:\\stage\\runtime.jws",
+      "--store": fixturePath("keys", "component.dpapi"),
+      "--input": fixturePath("stage", "manifest.json"),
+      "--artifact": fixturePath("stage", "runtime.zip"),
+      "--output": fixturePath("stage", "runtime.jws"),
     },
   });
-  assert.equal(
-    invocation.command,
-    join(root, "tooling", "component-signer", "target", "release", "kalcode-component-signer.exe"),
-  );
+  assert.equal(invocation.command, join(root, "tooling", "component-signer", "target", "release", signerName));
   assert.deepEqual(invocation.args, [
     "sign-manifest",
     "--artifact",
-    "C:\\stage\\runtime.zip",
+    fixturePath("stage", "runtime.zip"),
     "--input",
-    "C:\\stage\\manifest.json",
+    fixturePath("stage", "manifest.json"),
     "--output",
-    "C:\\stage\\runtime.jws",
+    fixturePath("stage", "runtime.jws"),
     "--store",
-    "C:\\keys\\component.dpapi",
+    fixturePath("keys", "component.dpapi"),
   ]);
   assert.equal(COMPONENT_MANIFEST_TYPE, "kalcode-local-component.v1");
   assert.equal(COMPONENT_CATALOG_TYPE, "kalcode-local-component-catalog.v1");
@@ -94,17 +94,23 @@ test("the wrapper always performs a locked release build before invoking an exis
   assert.equal(
     runComponentSigner(
       "status",
-      { "--store": "C:\\keys\\component.dpapi" },
-      { root: "C:\\repo", spawn, exists: () => true },
+      { "--store": fixturePath("keys", "component.dpapi") },
+      { root: fixturePath("repo"), spawn, exists: () => true },
     ),
     '{"configured":false,"kid":null}',
   );
   assert.equal(calls.length, 2);
   assert.deepEqual(calls[0], {
     command: "cargo",
-    args: ["build", "--locked", "--release", "--manifest-path", "C:\\repo\\tooling\\component-signer\\Cargo.toml"],
+    args: [
+      "build",
+      "--locked",
+      "--release",
+      "--manifest-path",
+      fixturePath("repo", "tooling", "component-signer", "Cargo.toml"),
+    ],
   });
-  assert.equal(calls[1].command, "C:\\repo\\tooling\\component-signer\\target\\release\\kalcode-component-signer.exe");
+  assert.equal(calls[1].command, fixturePath("repo", "tooling", "component-signer", "target", "release", signerName));
 });
 
 test("manifest and catalog signing wrappers preserve exact paths and never expose child output", () => {
@@ -116,10 +122,10 @@ test("manifest and catalog signing wrappers preserve exact paths and never expos
   assert.equal(
     signComponentManifest(
       {
-        storePath: "C:\\keys\\component.dpapi",
-        inputPath: "C:\\stage\\manifest.json",
-        artifactPath: "C:\\stage\\runtime.zip",
-        outputPath: "C:\\stage\\runtime.jws",
+        storePath: fixturePath("keys", "component.dpapi"),
+        inputPath: fixturePath("stage", "manifest.json"),
+        artifactPath: fixturePath("stage", "runtime.zip"),
+        outputPath: fixturePath("stage", "runtime.jws"),
       },
       { runSigner },
     ),
@@ -128,9 +134,9 @@ test("manifest and catalog signing wrappers preserve exact paths and never expos
   assert.equal(
     signComponentCatalog(
       {
-        storePath: "C:\\keys\\component.dpapi",
-        inputPath: "C:\\stage\\catalog.json",
-        outputPath: "C:\\stage\\catalog.jws",
+        storePath: fixturePath("keys", "component.dpapi"),
+        inputPath: fixturePath("stage", "catalog.json"),
+        outputPath: fixturePath("stage", "catalog.jws"),
       },
       { runSigner },
     ),
@@ -140,18 +146,18 @@ test("manifest and catalog signing wrappers preserve exact paths and never expos
     {
       command: "sign-manifest",
       options: {
-        "--artifact": "C:\\stage\\runtime.zip",
-        "--input": "C:\\stage\\manifest.json",
-        "--output": "C:\\stage\\runtime.jws",
-        "--store": "C:\\keys\\component.dpapi",
+        "--artifact": fixturePath("stage", "runtime.zip"),
+        "--input": fixturePath("stage", "manifest.json"),
+        "--output": fixturePath("stage", "runtime.jws"),
+        "--store": fixturePath("keys", "component.dpapi"),
       },
     },
     {
       command: "sign-catalog",
       options: {
-        "--input": "C:\\stage\\catalog.json",
-        "--output": "C:\\stage\\catalog.jws",
-        "--store": "C:\\keys\\component.dpapi",
+        "--input": fixturePath("stage", "catalog.json"),
+        "--output": fixturePath("stage", "catalog.jws"),
+        "--store": fixturePath("keys", "component.dpapi"),
       },
     },
   ]);
@@ -166,10 +172,10 @@ test("signing wrappers reject path aliasing before invoking the signer", () => {
     () =>
       signComponentManifest(
         {
-          storePath: "C:\\keys\\component.dpapi",
-          inputPath: "C:\\stage\\manifest.json",
-          artifactPath: "C:\\stage\\runtime.zip",
-          outputPath: "C:\\stage\\runtime.zip",
+          storePath: fixturePath("keys", "component.dpapi"),
+          inputPath: fixturePath("stage", "manifest.json"),
+          artifactPath: fixturePath("stage", "runtime.zip"),
+          outputPath: fixturePath("stage", "runtime.zip"),
         },
         { runSigner },
       ),

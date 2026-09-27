@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { cpSync, linkSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, linkSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -24,7 +24,7 @@ test("the checked-in KalVoice notice corpus matches every pinned component", asy
 });
 
 test("notice verification rejects changed bytes and closed-manifest substitutions", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "kalcode-notices-tamper-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kalcode-notices-tamper-")));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   cpSync(noticeDirectory, root, { recursive: true });
   writeFileSync(join(root, "llama.cpp-MIT.txt"), "changed notice");
@@ -39,7 +39,7 @@ test("notice verification rejects changed bytes and closed-manifest substitution
 });
 
 test("notice staging creates one exact non-overwriting bundle resource", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "kalcode-notices-stage-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kalcode-notices-stage-")));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const destination = join(root, "notices");
   const evidence = await stageComponentNotices({ destination, noticeDirectory });
@@ -49,7 +49,7 @@ test("notice staging creates one exact non-overwriting bundle resource", async (
 });
 
 test("notice verification rejects a hard-linked source corpus", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "kalcode-notices-hardlink-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kalcode-notices-hardlink-")));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const corpus = join(root, "corpus");
   cpSync(noticeDirectory, corpus, { recursive: true });

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, statSync, truncateSync, writeFileSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync, statSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -252,7 +252,7 @@ test("part and completed-object mismatches fail closed and attempt abort", async
 });
 
 test("file size mismatch fails before a multipart upload is created", async (t) => {
-  const directory = mkdtempSync(join(tmpdir(), "kalcode-r2-multipart-test-"));
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), "kalcode-r2-multipart-test-")));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const path = join(directory, "object.bin");
   writeFileSync(path, "four");
@@ -274,7 +274,7 @@ test("file size mismatch fails before a multipart upload is created", async (t) 
 });
 
 test("remote proxy setup is secret-minimized and always disposed after upload failure", async (t) => {
-  const directory = mkdtempSync(join(tmpdir(), "kalcode-r2-remote-test-"));
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), "kalcode-r2-remote-test-")));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const path = join(directory, "object.bin");
   writeFileSync(path, "four");
@@ -324,7 +324,7 @@ test("remote proxy setup is secret-minimized and always disposed after upload fa
 });
 
 test("remote proxy setup and disposal have independent hard deadlines", async (t) => {
-  const directory = mkdtempSync(join(tmpdir(), "kalcode-r2-timeout-test-"));
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), "kalcode-r2-timeout-test-")));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const path = join(directory, "object.bin");
   writeFileSync(path, "four");
@@ -493,7 +493,7 @@ test("setup retries consume one shared supervisor deadline", async () => {
 });
 
 test("multipart failure diagnostics are static and reject forged stages", async (t) => {
-  const directory = mkdtempSync(join(tmpdir(), "kalcode-r2-diagnostic-test-"));
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), "kalcode-r2-diagnostic-test-")));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const path = join(directory, "object.bin");
   writeFileSync(path, "four");
@@ -524,7 +524,7 @@ test("multipart failure diagnostics are static and reject forged stages", async 
 });
 
 test("remote arguments and publisher selection are closed at the Wrangler single-put boundary", (t) => {
-  const directory = mkdtempSync(join(tmpdir(), "kalcode-r2-args-test-"));
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), "kalcode-r2-args-test-")));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const path = join(directory, "object.bin");
   writeFileSync(path, "four");
@@ -573,7 +573,7 @@ test("remote arguments and publisher selection are closed at the Wrangler single
 });
 
 test("a sparse size mismatch fixture does not allocate its declared bytes", () => {
-  const directory = mkdtempSync(join(tmpdir(), "kalcode-r2-sparse-test-"));
+  const directory = realpathSync(mkdtempSync(join(tmpdir(), "kalcode-r2-sparse-test-")));
   try {
     const path = join(directory, "large.bin");
     writeFileSync(path, "");

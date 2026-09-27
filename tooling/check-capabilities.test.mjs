@@ -2,7 +2,7 @@
 // build.rs, lib.rs and capability files, each mutated to one way a grant could widen.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
@@ -18,7 +18,7 @@ after(() => {
 
 /** A fixture copy of the app's capability inputs. */
 function fixture() {
-  const root = mkdtempSync(join(tmpdir(), "kalcode-capcheck-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kalcode-capcheck-")));
   temps.push(root);
   cpSync(join(real, "build.rs"), join(root, "build.rs"));
   mkdirSync(join(root, "src"));
@@ -187,7 +187,7 @@ for (const file of ["capabilities/main.json", "test-capabilities/test-hooks.json
 
 /** Exercise the real executable entry point without modifying repository inputs. */
 function cliFixture() {
-  const root = mkdtempSync(join(tmpdir(), "kalcode-capcheck-cli-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "kalcode-capcheck-cli-")));
   temps.push(root);
   mkdirSync(join(root, "tooling"));
   cpSync(

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import test from "node:test";
@@ -13,7 +13,7 @@ const policy = contract.runtime.macosAarch64;
 const id = "123e4567-e89b-42d3-a456-426614174000";
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 function fixture(t, options = {}) {
-  const dir = mkdtempSync(join(tmpdir(), "kalcode-mac-notary-test-"));
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), "kalcode-mac-notary-test-")));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const artifactPath = join(dir, "runtime.zip"),
     recordPath = join(dir, "runtime.json");

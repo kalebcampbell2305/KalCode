@@ -27,6 +27,8 @@ import {
   validateSigningTarget,
 } from "./signing.mjs";
 
+const fixturePath = (...parts) => join(process.platform === "win32" ? "C:\\" : "/", ...parts);
+
 const subscriberIdentityOid = "1.3.6.1.4.1.311.97.990309390.766961637.194916062.941502583";
 const genericArtifactSigningOid = "1.3.6.1.4.1.311.97.1.0";
 const guardianEvidence = {
@@ -97,17 +99,19 @@ test("clean-machine verification accepts only the pinned Artifact Signing subscr
 });
 
 test("the Tauri release overlay routes every binary through the privacy-preserving signer", () => {
+  const nodePath = fixturePath("Program Files", "nodejs", "node.exe");
+  const signerPath = fixturePath("repo", "sign.mjs");
   const overlay = buildSigningOverlay({
-    nodePath: "C:\\Program Files\\nodejs\\node.exe",
-    signerPath: "D:\\repo\\sign.mjs",
+    nodePath,
+    signerPath,
   });
   assert.deepEqual(overlay, {
     bundle: {
       windows: {
         digestAlgorithm: "sha256",
         signCommand: {
-          cmd: "C:\\Program Files\\nodejs\\node.exe",
-          args: ["D:\\repo\\sign.mjs", "%1"],
+          cmd: nodePath,
+          args: [signerPath, "%1"],
         },
       },
     },
@@ -139,11 +143,12 @@ test("SignTool receives SHA-256, the Microsoft timestamp authority, dlib, metada
 });
 
 test("tool discovery accepts only an existing x64 SignTool and matching Artifact Signing dlib", () => {
-  const root = "C:\\Program Files (x86)\\Microsoft\\ArtifactSigningClientTools\\bin";
+  const programFilesX86 = fixturePath("Program Files (x86)");
+  const root = join(programFilesX86, "Microsoft", "ArtifactSigningClientTools", "bin");
   const existing = new Set([join(root, "signtool.exe"), join(root, "Azure.CodeSigning.Dlib.dll")]);
   const tools = findArtifactSigningTools({
     env: {},
-    programFilesX86: "C:\\Program Files (x86)",
+    programFilesX86,
     exists: (path) => existing.has(path),
     stat: () => ({ isFile: () => true }),
   });
@@ -153,15 +158,15 @@ test("tool discovery accepts only an existing x64 SignTool and matching Artifact
   });
 
   assert.throws(
-    () => findArtifactSigningTools({ env: {}, programFilesX86: "C:\\missing", exists: () => false }),
+    () => findArtifactSigningTools({ env: {}, programFilesX86: fixturePath("missing"), exists: () => false }),
     /Artifact Signing Client Tools/,
   );
   assert.throws(
     () =>
       findArtifactSigningTools({
         env: {
-          KALCODE_SIGNTOOL_PATH: "C:\\tools\\signtool.exe",
-          KALCODE_ARTIFACT_SIGNING_DLIB_PATH: "C:\\tools\\Azure.CodeSigning.Dlib.dll",
+          KALCODE_SIGNTOOL_PATH: fixturePath("tools", "signtool.exe"),
+          KALCODE_ARTIFACT_SIGNING_DLIB_PATH: fixturePath("tools", "Azure.CodeSigning.Dlib.dll"),
         },
         exists: () => true,
         stat: () => ({ isFile: () => false }),
@@ -189,7 +194,7 @@ test("tool discovery finds the WinGet per-user dlib and Windows SDK SignTool", (
 });
 
 test("signing target validation is absolute, existing, regular, and executable", () => {
-  const target = "C:\\build\\KalCode.exe";
+  const target = fixturePath("build", "KalCode.exe");
   assert.equal(
     validateSigningTarget(target, {
       exists: () => true,
@@ -198,7 +203,7 @@ test("signing target validation is absolute, existing, regular, and executable",
     target,
   );
   assert.throws(() => validateSigningTarget("relative.exe", { exists: () => true }), /absolute/);
-  assert.throws(() => validateSigningTarget("C:\\build\\notes.txt", { exists: () => true }), /file type/);
+  assert.throws(() => validateSigningTarget(fixturePath("build", "notes.txt"), { exists: () => true }), /file type/);
   assert.throws(() => validateSigningTarget(target, { exists: () => false }), /does not exist/);
 });
 
@@ -321,10 +326,10 @@ test("signature evidence drops certificate identity details", () => {
 });
 
 test("signing failures never echo SignTool output that can contain certificate identity data", () => {
-  const target = "C:\\build\\KalCode.exe";
-  const metadata = "C:\\temp\\metadata.json";
-  const signTool = "C:\\tools\\signtool.exe";
-  const dlib = "C:\\tools\\Azure.CodeSigning.Dlib.dll";
+  const target = fixturePath("build", "KalCode.exe");
+  const metadata = fixturePath("temp", "metadata.json");
+  const signTool = fixturePath("tools", "signtool.exe");
+  const dlib = fixturePath("tools", "Azure.CodeSigning.Dlib.dll");
   const exists = (path) => [target, metadata, signTool, dlib].includes(path);
   let spawnOptions;
   assert.throws(
