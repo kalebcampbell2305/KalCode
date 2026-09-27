@@ -1014,6 +1014,8 @@ mod tests {
         )
         .expect("seed");
         drop(conn);
+        #[cfg(target_os = "macos")]
+        let path = path.canonicalize().expect("canonical fixture database");
         (dir, path)
     }
 
