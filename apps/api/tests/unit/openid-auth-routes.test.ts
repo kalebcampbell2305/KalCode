@@ -442,6 +442,32 @@ describe("OpenID account auth routes", () => {
     });
     const body = { state: STATE, code: "code", codeVerifier: VERIFIER, nonce };
     const headers = { origin: "https://kalcoded.com" };
+    for (const stage of [
+      "claims_email",
+      "claims_email_verification_missing",
+      "claims_email_verification_type",
+      "claims_email_verification_denied",
+    ] as const) {
+      const safeLogs: Record<string, string>[] = [];
+      const classified = openIdAuthService({
+        store,
+        clients: { google: GOOGLE },
+        rateLimitKey: "r".repeat(32),
+        now: () => NOW,
+        exchangeIdentity: vi.fn(async () => {
+          throw new OpenIdExchangeError(stage);
+        }),
+        log: (entry) => safeLogs.push(entry),
+      });
+      const result = await classified.complete(post("/v1/auth/google/complete", body, headers), "google");
+      expect(result.status).toBe(400);
+      expect(await result.json()).toEqual({
+        ok: false,
+        error: "sign_in_failed",
+        message: "Sign-in could not be completed. Start again.",
+      });
+      expect(safeLogs).toEqual([{ level: "warn", event: "api.oidc_sign_in_failed", provider: "google", stage }]);
+    }
     const corrupted = Object.assign(new OpenIdExchangeError("claims"), { stage: "private-mutated-stage" });
     const logs: Record<string, string>[] = [];
     const sanitized = openIdAuthService({
