@@ -760,11 +760,10 @@ fn interrupt_stops_a_slow_turn_and_keeps_partial_output() {
             })
             .unwrap();
         h.runtime.unsubscribe_stream(sid);
-        let buffered = seen.lock().unwrap().contains(&AgentEvent::MessageDelta {
+        seen.lock().unwrap().contains(&AgentEvent::MessageDelta {
             message_id: "m".into(),
             text: "Working on it".into(),
-        });
-        buffered
+        })
     });
 
     let streamed = Arc::new(Mutex::new(Vec::new()));
