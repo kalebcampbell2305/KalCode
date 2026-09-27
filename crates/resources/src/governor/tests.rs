@@ -81,6 +81,25 @@ fn wait_until(what: &str, timeout: Duration, mut ok: impl FnMut() -> bool) {
     }
 }
 
+struct ProbeRelease(Option<std::sync::mpsc::SyncSender<()>>);
+
+impl ProbeRelease {
+    fn release(&mut self) -> Result<(), std::sync::mpsc::TrySendError<()>> {
+        self.0
+            .take()
+            .expect("probe release is one-shot")
+            .try_send(())
+    }
+}
+
+impl Drop for ProbeRelease {
+    fn drop(&mut self) {
+        if let Some(sender) = self.0.take() {
+            let _ = sender.try_send(());
+        }
+    }
+}
+
 fn seq(handle: &GovernorHandle) -> u64 {
     handle.latest().map_or(0, |s| s.seq)
 }
@@ -191,9 +210,29 @@ fn activity_change_wakes_an_idle_sampler() {
 
 #[test]
 fn mode_change_resamples_at_once_and_notifies_subscribers() {
-    let (probe, _) = probe(|_, _| sample(72.0));
+    let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
+    let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+    let (probe, _) = probe(move |call, _| {
+        if call == 1 {
+            entered_tx.send(()).expect("first probe entered");
+            release_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("release first probe");
+        }
+        sample(72.0)
+    });
     let handle = Governor::start_with(config(), probe, Arc::new(SystemClock::default())).unwrap();
+    let mut release = ProbeRelease(Some(release_tx));
+    let entered = entered_rx.recv_timeout(Duration::from_secs(5));
+    // Subscribe while the first probe is held so its first publication cannot
+    // race ahead of this future-only stream.
     let updates = handle.subscribe(64);
+    let released = release.release();
+    assert!(entered.is_ok(), "first probe did not enter: {entered:?}");
+    assert!(
+        released.is_ok(),
+        "first probe was not released: {released:?}"
+    );
     wait_until("first sample", Duration::from_secs(5), || seq(&handle) == 1);
     handle.set_mode(ResourceMode::Conservative).unwrap();
     assert_eq!(
