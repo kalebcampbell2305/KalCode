@@ -5,8 +5,8 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Sender};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 use std::time::Duration;
@@ -65,8 +65,10 @@ struct Shared {
     sink: Box<dyn AgentEventSink>,
     provider_session_id: Mutex<Option<String>>,
     interrupt_supported: AtomicBool,
-    /// The interrupt awaiting its control response: (request id, reply channel).
-    pending_interrupt: Mutex<Option<(String, Sender<bool>)>>,
+    /// Serializes the full interrupt attempt through either acknowledgement or fallback stop.
+    interrupt_in_flight: AtomicBool,
+    /// The one interrupt request whose exact response may still affect session state.
+    pending_interrupt: Mutex<Option<PendingInterrupt>>,
     /// Set when KalCode ends the session on purpose, so the exit isn't reported as a crash.
     stopping: AtomicBool,
     ended: AtomicBool,
@@ -75,6 +77,232 @@ struct Shared {
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
+enum InterruptResolution {
+    Awaiting = 0,
+    ClaimedTrue = 1,
+    ClaimedFalse = 2,
+    Cancelled = 3,
+}
+
+impl InterruptResolution {
+    fn load(value: &AtomicU8) -> Self {
+        match value.load(Ordering::SeqCst) {
+            0 => Self::Awaiting,
+            1 => Self::ClaimedTrue,
+            2 => Self::ClaimedFalse,
+            _ => Self::Cancelled,
+        }
+    }
+}
+
+struct PendingInterrupt {
+    request_id: String,
+    reply: Option<Sender<bool>>,
+    resolution: Arc<AtomicU8>,
+}
+
+struct InterruptWait {
+    request_id: String,
+    reply: Receiver<bool>,
+    resolution: Arc<AtomicU8>,
+}
+
+enum BeginInterrupt {
+    Started(InterruptWait),
+    WriteFailed,
+}
+
+struct InterruptClaim {
+    request_id: String,
+    outcome: bool,
+    reply: Sender<bool>,
+    resolution: Arc<AtomicU8>,
+}
+
+struct InterruptClaimCleanup<'a> {
+    pending: &'a Mutex<Option<PendingInterrupt>>,
+    request_id: &'a str,
+    resolution: &'a Arc<AtomicU8>,
+}
+
+impl Drop for InterruptClaimCleanup<'_> {
+    fn drop(&mut self) {
+        clear_interrupt_claim(self.pending, self.request_id, self.resolution);
+    }
+}
+
+struct InterruptInFlight<'a>(&'a AtomicBool);
+
+impl<'a> InterruptInFlight<'a> {
+    fn acquire(flag: &'a AtomicBool) -> Result<Self, ProviderError> {
+        flag.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .map_err(|_| ProviderError::Io("An interrupt is already in progress.".into()))?;
+        Ok(Self(flag))
+    }
+}
+
+impl Drop for InterruptInFlight<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
+fn begin_interrupt_request(
+    pending: &Mutex<Option<PendingInterrupt>>,
+    request_id: String,
+    write: impl FnOnce() -> Result<(), ProviderError>,
+) -> Result<BeginInterrupt, ProviderError> {
+    let (reply_tx, reply_rx) = mpsc::channel();
+    let resolution = Arc::new(AtomicU8::new(InterruptResolution::Awaiting as u8));
+    let mut pending = lock(pending);
+    if pending.is_some() {
+        return Err(ProviderError::Io(
+            "An interrupt is already in progress.".into(),
+        ));
+    }
+    *pending = Some(PendingInterrupt {
+        request_id: request_id.clone(),
+        reply: Some(reply_tx),
+        resolution: Arc::clone(&resolution),
+    });
+    if write().is_err() {
+        resolution.store(InterruptResolution::Cancelled as u8, Ordering::SeqCst);
+        if pending
+            .as_ref()
+            .is_some_and(|current| current.request_id == request_id)
+        {
+            pending.take();
+        }
+        return Ok(BeginInterrupt::WriteFailed);
+    }
+    drop(pending);
+    Ok(BeginInterrupt::Started(InterruptWait {
+        request_id,
+        reply: reply_rx,
+        resolution,
+    }))
+}
+
+fn claim_interrupt_response(
+    pending: &Mutex<Option<PendingInterrupt>>,
+    request_id: Option<&str>,
+    outcome: bool,
+) -> Option<InterruptClaim> {
+    let mut pending = lock(pending);
+    let current = pending.as_mut()?;
+    if request_id != Some(current.request_id.as_str())
+        || InterruptResolution::load(&current.resolution) != InterruptResolution::Awaiting
+    {
+        return None;
+    }
+    let reply = current.reply.take()?;
+    current.resolution.store(
+        if outcome {
+            InterruptResolution::ClaimedTrue
+        } else {
+            InterruptResolution::ClaimedFalse
+        } as u8,
+        Ordering::SeqCst,
+    );
+    Some(InterruptClaim {
+        request_id: current.request_id.clone(),
+        outcome,
+        reply,
+        resolution: Arc::clone(&current.resolution),
+    })
+}
+
+fn clear_interrupt_claim(
+    pending: &Mutex<Option<PendingInterrupt>>,
+    request_id: &str,
+    resolution: &Arc<AtomicU8>,
+) {
+    let mut pending = lock(pending);
+    if pending.as_ref().is_some_and(|current| {
+        current.request_id == request_id && Arc::ptr_eq(&current.resolution, resolution)
+    }) {
+        pending.take();
+    }
+}
+
+fn deliver_interrupt_response(
+    pending: &Mutex<Option<PendingInterrupt>>,
+    sink: &dyn AgentEventSink,
+    request_id: Option<&str>,
+    ok: bool,
+) -> bool {
+    let Some(claim) = claim_interrupt_response(pending, request_id, ok) else {
+        return false;
+    };
+    let _cleanup = InterruptClaimCleanup {
+        pending,
+        request_id: &claim.request_id,
+        resolution: &claim.resolution,
+    };
+    if claim.outcome {
+        sink.emit(AgentEvent::Status {
+            status: ThreadStatus::Interrupted,
+            detail: None,
+        });
+    }
+    let _ = claim.reply.send(claim.outcome);
+    true
+}
+
+fn finish_pending_interrupt(pending: &Mutex<Option<PendingInterrupt>>) {
+    let claim = {
+        let mut pending = lock(pending);
+        let Some(current) = pending.as_mut() else {
+            return;
+        };
+        if InterruptResolution::load(&current.resolution) != InterruptResolution::Awaiting {
+            return;
+        }
+        current
+            .resolution
+            .store(InterruptResolution::ClaimedFalse as u8, Ordering::SeqCst);
+        current.reply.take().map(|reply| InterruptClaim {
+            request_id: current.request_id.clone(),
+            outcome: false,
+            reply,
+            resolution: Arc::clone(&current.resolution),
+        })
+    };
+    if let Some(claim) = claim {
+        let _ = claim.reply.send(false);
+        clear_interrupt_claim(pending, &claim.request_id, &claim.resolution);
+    }
+}
+
+fn interrupt_confirmed(
+    pending: &Mutex<Option<PendingInterrupt>>,
+    wait: InterruptWait,
+    timeout: Duration,
+) -> bool {
+    match wait.reply.recv_timeout(timeout) {
+        Ok(outcome) => outcome,
+        Err(RecvTimeoutError::Disconnected) => false,
+        Err(RecvTimeoutError::Timeout) => {
+            let mut pending = lock(pending);
+            let exact = pending.as_ref().is_some_and(|current| {
+                current.request_id == wait.request_id
+                    && Arc::ptr_eq(&current.resolution, &wait.resolution)
+            });
+            let resolution = InterruptResolution::load(&wait.resolution);
+            if exact && resolution == InterruptResolution::Awaiting {
+                wait.resolution
+                    .store(InterruptResolution::Cancelled as u8, Ordering::SeqCst);
+                pending.take();
+                false
+            } else {
+                resolution == InterruptResolution::ClaimedTrue
+            }
+        }
+    }
 }
 
 pub struct ClaudeSession {
@@ -128,6 +356,7 @@ impl ClaudeSession {
             sink,
             provider_session_id: Mutex::new(Some(known_id)),
             interrupt_supported: AtomicBool::new(false),
+            interrupt_in_flight: AtomicBool::new(false),
             pending_interrupt: Mutex::new(None),
             stopping: AtomicBool::new(false),
             ended: AtomicBool::new(false),
@@ -172,14 +401,12 @@ impl Shared {
         };
         match &line {
             ClaudeLine::ControlResponse { request_id, ok } => {
-                let mut pending = lock(&self.pending_interrupt);
-                let matches = match (pending.as_ref(), request_id) {
-                    (Some((expected, _)), Some(id)) => expected == id,
-                    _ => false,
-                };
-                if matches && let Some((_, reply)) = pending.take() {
-                    let _ = reply.send(*ok);
-                }
+                deliver_interrupt_response(
+                    &self.pending_interrupt,
+                    self.sink.as_ref(),
+                    request_id.as_deref(),
+                    *ok,
+                );
                 return;
             }
             ClaudeLine::ControlRequest { subtype, .. } => {
@@ -228,9 +455,7 @@ impl Shared {
         };
         self.ended.store(true, Ordering::SeqCst);
         // Any interrupt still waiting gets its answer now.
-        if let Some((_, reply)) = lock(&self.pending_interrupt).take() {
-            let _ = reply.send(false);
-        }
+        finish_pending_interrupt(&self.pending_interrupt);
         let exit_code = status.and_then(|s| s.code());
         let deliberate = self.stopping.load(Ordering::SeqCst);
         if !deliberate && exit_code != Some(0) {
@@ -305,26 +530,31 @@ impl AgentSession for ClaudeSession {
 
     fn interrupt(&self) -> Result<(), ProviderError> {
         self.shared.ensure_running()?;
+        let _in_flight = InterruptInFlight::acquire(&self.shared.interrupt_in_flight)?;
         let supported = self.shared.interrupt_supported.load(Ordering::SeqCst);
         if supported {
             let request_id = uuid::Uuid::new_v4().to_string();
-            let (tx, rx) = mpsc::channel();
-            *lock(&self.shared.pending_interrupt) = Some((request_id.clone(), tx));
             // The `control_request` envelope is documented in the Agent SDK reference; the CLI
             // advertises `interrupt_receipt_v1` when it answers the `interrupt` request.
-            let sent = self.shared.write(&json!({
+            let message = json!({
                 "type": "control_request",
-                "request_id": request_id,
+                "request_id": request_id.clone(),
                 "request": { "subtype": "interrupt" },
-            }));
-            if sent.is_ok() && rx.recv_timeout(self.shared.timeouts.interrupt_ack) == Ok(true) {
-                self.shared.sink.emit(AgentEvent::Status {
-                    status: ThreadStatus::Interrupted,
-                    detail: None,
-                });
-                return Ok(());
+            });
+            match begin_interrupt_request(&self.shared.pending_interrupt, request_id, || {
+                self.shared.write(&message)
+            })? {
+                BeginInterrupt::Started(wait) => {
+                    if interrupt_confirmed(
+                        &self.shared.pending_interrupt,
+                        wait,
+                        self.shared.timeouts.interrupt_ack,
+                    ) {
+                        return Ok(());
+                    }
+                }
+                BeginInterrupt::WriteFailed => {}
             }
-            lock(&self.shared.pending_interrupt).take();
         }
         // Not confirmed (or not supported by this CLI): stop the process instead. Stricter, and
         // the conversation can be resumed by its session id.
@@ -368,5 +598,232 @@ impl Drop for ClaudeSession {
         }
         let shared = Arc::clone(&self.shared);
         thread::spawn(move || shared.stop());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn begin(pending: &Mutex<Option<PendingInterrupt>>, request_id: &str) -> InterruptWait {
+        match begin_interrupt_request(pending, request_id.to_owned(), || Ok(()))
+            .expect("begin interrupt")
+        {
+            BeginInterrupt::Started(wait) => wait,
+            BeginInterrupt::WriteFailed => panic!("fixture write must succeed"),
+        }
+    }
+
+    #[test]
+    fn positive_response_delivery_orders_interrupted_before_ack_consumer_completion() {
+        let pending = Mutex::new(None);
+        let wait = begin(&pending, "request");
+        let events = Arc::new(Mutex::new(Vec::new()));
+
+        let worker_events = Arc::clone(&events);
+        let worker = thread::spawn(move || {
+            assert_eq!(wait.reply.recv(), Ok(true));
+            lock(&worker_events).push("completion");
+        });
+
+        let sink_events = Arc::clone(&events);
+        let sink = move |event| {
+            assert!(matches!(
+                event,
+                AgentEvent::Status {
+                    status: ThreadStatus::Interrupted,
+                    detail: None,
+                }
+            ));
+            lock(&sink_events).push("interrupted");
+        };
+
+        assert!(deliver_interrupt_response(
+            &pending,
+            &sink,
+            Some("request"),
+            true
+        ));
+        worker.join().expect("completion worker");
+        assert_eq!(*lock(&events), ["interrupted", "completion"]);
+        assert!(lock(&pending).is_none());
+    }
+
+    #[test]
+    fn wrong_negative_unsolicited_and_duplicate_responses_never_emit_interrupted() {
+        let pending = Mutex::new(None);
+        let wait = begin(&pending, "expected");
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink_events = Arc::clone(&events);
+        let sink = move |event| lock(&sink_events).push(event);
+
+        assert!(!deliver_interrupt_response(
+            &pending,
+            &sink,
+            Some("wrong"),
+            true
+        ));
+        assert_eq!(
+            InterruptResolution::load(&wait.resolution),
+            InterruptResolution::Awaiting
+        );
+        assert!(deliver_interrupt_response(
+            &pending,
+            &sink,
+            Some("expected"),
+            false
+        ));
+        assert!(!interrupt_confirmed(&pending, wait, Duration::from_secs(1)));
+        assert!(!deliver_interrupt_response(
+            &pending,
+            &sink,
+            Some("expected"),
+            true
+        ));
+        assert!(!deliver_interrupt_response(&pending, &sink, None, true));
+        assert!(lock(&events).is_empty());
+    }
+
+    #[test]
+    fn timeout_wins_exact_request_and_late_positive_response_is_unsolicited() {
+        let pending = Mutex::new(None);
+        let in_flight = AtomicBool::new(false);
+        let attempt = InterruptInFlight::acquire(&in_flight).expect("first interrupt attempt");
+        let wait = begin(&pending, "request");
+        let resolution = Arc::clone(&wait.resolution);
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink_events = Arc::clone(&events);
+        let sink = move |event| lock(&sink_events).push(event);
+
+        assert!(!interrupt_confirmed(&pending, wait, Duration::ZERO));
+        assert_eq!(
+            InterruptResolution::load(&resolution),
+            InterruptResolution::Cancelled
+        );
+        assert!(lock(&pending).is_none());
+        assert!(matches!(
+            InterruptInFlight::acquire(&in_flight),
+            Err(ProviderError::Io(message)) if message == "An interrupt is already in progress."
+        ));
+        assert!(!deliver_interrupt_response(
+            &pending,
+            &sink,
+            Some("request"),
+            true
+        ));
+        assert!(lock(&events).is_empty());
+        drop(attempt);
+        let later_attempt =
+            InterruptInFlight::acquire(&in_flight).expect("fallback completion releases attempt");
+        drop(later_attempt);
+    }
+
+    #[test]
+    fn claimed_response_wins_timeout_and_rejects_concurrent_interrupt_until_delivery() {
+        let pending = Arc::new(Mutex::new(None));
+        let wait = begin(&pending, "first");
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let release_rx = Mutex::new(release_rx);
+        let reader_pending = Arc::clone(&pending);
+        let reader_events = Arc::clone(&events);
+        let reader = thread::spawn(move || {
+            let sink = move |event| {
+                entered_tx.send(()).expect("sink entered");
+                lock(&release_rx).recv().expect("sink released");
+                lock(&reader_events).push(event);
+            };
+            deliver_interrupt_response(&reader_pending, &sink, Some("first"), true)
+        });
+
+        entered_rx.recv().expect("reader claimed response");
+        assert!(matches!(
+            wait.reply.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert!(interrupt_confirmed(&pending, wait, Duration::ZERO));
+        assert!(matches!(
+            begin_interrupt_request(&pending, "second".into(), || {
+                panic!("a concurrent interrupt must not write")
+            }),
+            Err(ProviderError::Io(message)) if message == "An interrupt is already in progress."
+        ));
+        release_tx.send(()).expect("release ordered delivery");
+        assert!(reader.join().expect("reader"));
+        assert_eq!(
+            *lock(&events),
+            [AgentEvent::Status {
+                status: ThreadStatus::Interrupted,
+                detail: None,
+            }]
+        );
+        assert!(lock(&pending).is_none());
+
+        let later = begin(&pending, "later");
+        assert!(!interrupt_confirmed(&pending, later, Duration::ZERO));
+    }
+
+    #[test]
+    fn write_failure_cancels_exact_slot_before_a_queued_response_can_claim_it() {
+        let pending = Arc::new(Mutex::new(None));
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let (started_tx, started_rx) = mpsc::channel();
+        let worker = Mutex::new(None);
+
+        let result = begin_interrupt_request(&pending, "request".into(), || {
+            let worker_pending = Arc::clone(&pending);
+            let worker_events = Arc::clone(&events);
+            let handle = thread::spawn(move || {
+                started_tx.send(()).expect("response started");
+                let sink = move |event| lock(&worker_events).push(event);
+                deliver_interrupt_response(&worker_pending, &sink, Some("request"), true)
+            });
+            *lock(&worker) = Some(handle);
+            started_rx.recv().expect("response waiting on slot");
+            Err(ProviderError::Io("fixture write failed".into()))
+        })
+        .expect("write failure falls back");
+
+        assert!(matches!(result, BeginInterrupt::WriteFailed));
+        assert!(
+            !lock(&worker)
+                .take()
+                .expect("worker")
+                .join()
+                .expect("worker")
+        );
+        assert!(lock(&pending).is_none());
+        assert!(lock(&events).is_empty());
+
+        let later = begin(&pending, "later");
+        assert!(!interrupt_confirmed(&pending, later, Duration::ZERO));
+    }
+
+    #[test]
+    fn panicking_sink_clears_exact_claim_and_disconnects_the_waiter() {
+        let pending = Mutex::new(None);
+        let wait = begin(&pending, "request");
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let sink = |_event| panic!("fixture sink panic");
+            deliver_interrupt_response(&pending, &sink, Some("request"), true)
+        }));
+
+        assert!(result.is_err());
+        assert!(lock(&pending).is_none());
+        assert!(!interrupt_confirmed(&pending, wait, Duration::from_secs(1)));
+
+        let later = begin(&pending, "later");
+        assert!(!interrupt_confirmed(&pending, later, Duration::ZERO));
+    }
+
+    #[test]
+    fn session_finish_resolves_only_the_current_pending_interrupt_as_false() {
+        let pending = Mutex::new(None);
+        let wait = begin(&pending, "request");
+        finish_pending_interrupt(&pending);
+        assert!(!interrupt_confirmed(&pending, wait, Duration::from_secs(1)));
+        assert!(lock(&pending).is_none());
     }
 }
