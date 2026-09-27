@@ -50,6 +50,7 @@ import {
   sameAuthenticodeSigner,
 } from "./signing.mjs";
 import { verifyUpdaterArtifact } from "./updater-signing.mjs";
+import { windowsProtocolProblems } from "./windows-protocol.mjs";
 
 if (process.platform !== "win32") fail("The Windows installer can only be verified on Windows.");
 
@@ -59,6 +60,7 @@ const UNINSTALL_KEY = `HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Unin
 const PRODUCT_KEY = `HKCU:\\Software\\${PRODUCT}\\${PRODUCT}`;
 const MANUFACTURER_KEY = `HKCU:\\Software\\${PRODUCT}`;
 const RUN_KEY = "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+const PROTOCOL_KEY = "HKCU:\\Software\\Classes\\kalcode";
 const QUIET_PROCESS_OPTIONS = releaseProcessOptions({ stdio: "ignore" });
 const WINDOWS_KALVOICE_FEATURE = "kalvoice-whisper";
 const WINDOWS_NOTICE_RESOURCE_PATH = "third_party/kalvoice-notices";
@@ -207,6 +209,8 @@ function existingInstall() {
   const localAppData = process.env.LOCALAPPDATA ?? "";
   const problems = [...(found.uninstallEntries ?? [])].map((key) => `uninstall entry ${key}`);
   if (found.productKey) problems.push(`registry key ${PRODUCT_KEY}`);
+  // Preserve an existing handler even if an unrelated/stale installation owns it.
+  if (protocolRegistration().exists) problems.push(`registry key ${PROTOCOL_KEY}`);
   for (const dir of [join(localAppData, PRODUCT), join(localAppData, "Programs", PRODUCT)]) {
     if (existsSync(dir)) problems.push(`install folder ${dir}`);
   }
@@ -239,6 +243,17 @@ function registry(key) {
   return powershellJson(
     `if (Test-Path ${psQuote(key)}) { Get-ItemProperty ${psQuote(key)} | Select-Object * -ExcludeProperty PS* | ConvertTo-Json -Compress }`,
   );
+}
+
+function protocolRegistration() {
+  return powershellJson(`
+    $key = Get-Item -LiteralPath ${psQuote(PROTOCOL_KEY)} -ErrorAction SilentlyContinue
+    $command = Get-Item -LiteralPath ${psQuote(`${PROTOCOL_KEY}\\shell\\open\\command`)} -ErrorAction SilentlyContinue
+    [pscustomobject]@{
+      exists = ($null -ne $key)
+      urlProtocol = ($null -ne $key -and $key.GetValueNames() -contains 'URL Protocol')
+      command = $(if ($null -ne $command) { $command.GetValue('') } else { $null })
+    } | ConvertTo-Json -Compress`);
 }
 
 function listFiles(dir) {
@@ -342,6 +357,13 @@ async function pass(name, extraArgs, expectShortcuts, { rehearseUpdate = false }
     );
 
     const exe = join(installDir, "kalcode.exe");
+    result.protocolRegistration = protocolRegistration();
+    const protocolProblems = windowsProtocolProblems(result.protocolRegistration, exe);
+    check(
+      `${name}: per-user kalcode protocol targets the exact installed app with a quoted URL argument`,
+      protocolProblems.length === 0,
+      protocolProblems.join("; "),
+    );
     result.installedAppSignature = authenticodeStatus(exe, powershellJson);
     check(
       `${name}: installed kalcode.exe has a valid Authenticode signature`,
@@ -416,6 +438,7 @@ async function pass(name, extraArgs, expectShortcuts, { rehearseUpdate = false }
     rmSync(updateSentinel, { force: true });
     await uninstall(installDir);
     after = {
+      protocolRegistration: protocolRegistration().exists,
       uninstallEntry: registry(UNINSTALL_KEY) !== null,
       installFolder: existsSync(installDir),
       desktopShortcut: existsSync(shortcuts.desktop),
@@ -437,6 +460,7 @@ async function pass(name, extraArgs, expectShortcuts, { rehearseUpdate = false }
 
   result.afterUninstall = after;
   check(`${name}: uninstall entry removed`, !after.uninstallEntry);
+  check(`${name}: kalcode protocol registration removed`, !after.protocolRegistration);
   check(`${name}: install folder removed`, !after.installFolder);
   check(
     `${name}: no shortcuts left`,
