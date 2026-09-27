@@ -209,6 +209,48 @@
       "unavailableReason": "Native desktop E2E currently requires the Windows WebView2 harness. macOS certification is blocked until a native Mac harness is registered."
     },
     {
+      "id": "desktop-ui-functional-e2e",
+      "group": "e2e",
+      "runner": "playwright",
+      "package": "@kalcode/desktop",
+      "script": "test:ui:functional",
+      "command": null,
+      "timeoutMs": 1200000,
+      "profiles": [
+        {
+          "platforms": ["win32", "darwin", "linux"],
+          "environment": {},
+          "minimumExecuted": 245,
+          "skippedMinimum": 0,
+          "skippedMaximum": 0,
+          "allowedSkipReasons": [],
+          "maximumFlaky": 0
+        }
+      ],
+      "unavailableReason": null
+    },
+    {
+      "id": "desktop-ui-visual-e2e",
+      "group": "e2e",
+      "runner": "playwright",
+      "package": "@kalcode/desktop",
+      "script": "test:ui:visual-ci",
+      "command": null,
+      "timeoutMs": 1200000,
+      "profiles": [
+        {
+          "platforms": ["win32", "darwin", "linux"],
+          "environment": {},
+          "minimumExecuted": 56,
+          "skippedMinimum": 0,
+          "skippedMaximum": 0,
+          "allowedSkipReasons": [],
+          "maximumFlaky": 0
+        }
+      ],
+      "unavailableReason": null
+    },
+    {
       "id": "website-e2e",
       "group": "e2e",
       "runner": "playwright",

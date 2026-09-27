@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -134,7 +135,7 @@ function playwrightReport({ expected = 2, unexpected = 0, flaky = 0, skipped = [
 }
 
 test("the reviewed inventory covers every required workspace suite and Rust ignore", () => {
-  assert.equal(inventory.suites.length, 11);
+  assert.equal(inventory.suites.length, 13);
   assert.deepEqual(
     inventory.suites.map(({ id }) => id),
     [
@@ -147,6 +148,8 @@ test("the reviewed inventory covers every required workspace suite and Rust igno
       "tooling-unit",
       "rust-workspace",
       "desktop-native-e2e",
+      "desktop-ui-functional-e2e",
+      "desktop-ui-visual-e2e",
       "website-e2e",
       "website-checkout-enabled-e2e",
     ],
@@ -163,6 +166,78 @@ test("a removed package suite or registered script requires inventory review", (
   const stale = structuredClone(inventory);
   stale.suites.find(({ id }) => id === "protocol-unit").script = "missing-test";
   assert.throws(() => auditWorkspaceSuiteCoverage(stale), /does not match workspace scripts/);
+
+  const explicitUi = inventory.suites.filter(({ id }) => id.startsWith("desktop-ui-"));
+  assert.deepEqual(
+    explicitUi.map(({ script }) => script),
+    ["test:ui:functional", "test:ui:visual-ci"],
+  );
+  assert.doesNotThrow(() => auditWorkspaceSuiteCoverage(inventory));
+});
+
+function listedDesktopUiTests(script, args = []) {
+  const root = join(import.meta.dirname, "..");
+  const commandArgs = ["--filter", "@kalcode/desktop", script, "--list", ...args];
+  let file = "pnpm";
+  let spawnArgs = commandArgs;
+  if (process.platform === "win32") {
+    const literal = (value) => `'${value.replaceAll("'", "''")}'`;
+    const script = `& 'pnpm.cmd' ${commandArgs.map(literal).join(" ")}; exit $LASTEXITCODE`;
+    file = "powershell.exe";
+    spawnArgs = ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")];
+  }
+  const child = spawnSync(file, spawnArgs, {
+    cwd: root,
+    env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
+    encoding: "utf8",
+    maxBuffer: 4 * 1024 * 1024,
+    timeout: 60_000,
+    windowsHide: true,
+  });
+  assert.equal(child.error, undefined, "Playwright list command must complete within its bound");
+  assert.equal(child.status, 0, "Playwright must list the desktop UI partition");
+  return new Set(
+    child.stdout
+      .replaceAll("\r", "")
+      .split("\n")
+      .map((line) => /^\s*\[chromium\] › (.+)$/u.exec(line)?.[1])
+      .filter(Boolean),
+  );
+}
+
+test("desktop UI functional and CI-visual gates exactly partition the established automated suite", () => {
+  const functionalSuite = inventory.suites.find(({ id }) => id === "desktop-ui-functional-e2e");
+  const visualSuite = inventory.suites.find(({ id }) => id === "desktop-ui-visual-e2e");
+  assert.equal(selectProfile(functionalSuite, "win32", {}).minimumExecuted, 245);
+  assert.equal(selectProfile(functionalSuite, "linux", {}).minimumExecuted, 245);
+  assert.equal(selectProfile(visualSuite, "win32", {}).minimumExecuted, 56);
+  assert.equal(selectProfile(visualSuite, "linux", {}).minimumExecuted, 56);
+
+  const functional = listedDesktopUiTests("test:ui:functional");
+  const visual = listedDesktopUiTests("test:ui:visual-ci");
+  const established = listedDesktopUiTests("test:ui", ["--grep-invert", "@screenshots"]);
+
+  assert.equal(functional.size, 245);
+  assert.equal(visual.size, 56);
+  assert.equal(established.size, 301);
+  assert.deepEqual(
+    [...functional].filter((id) => visual.has(id)),
+    [],
+  );
+  assert.deepEqual([...new Set([...functional, ...visual])].sort(), [...established].sort());
+
+  const workflow = readFileSync(join(import.meta.dirname, "..", ".github", "workflows", "ci.yml"), "utf8").replaceAll(
+    "\r",
+    "",
+  );
+  const functionalJob = workflow.split("\n  desktop-ui:\n")[1]?.split("\n  desktop-ui-visual:\n")[0] ?? "";
+  const visualJob = workflow.split("\n  desktop-ui-visual:\n")[1]?.split("\n  desktop-e2e:\n")[0] ?? "";
+  assert.match(functionalJob, /run: pnpm --filter @kalcode\/desktop run test:ui:functional/u);
+  assert.match(functionalJob, /run: pnpm --filter @kalcode\/desktop test:ui:widgets/u);
+  assert.match(functionalJob, /run: pnpm --filter @kalcode\/ui test:ui:primitives/u);
+  assert.doesNotMatch(functionalJob, /test:ui:visual-ci/u);
+  assert.match(visualJob, /run: pnpm --filter @kalcode\/desktop run test:ui:visual-ci/u);
+  assert.doesNotMatch(visualJob, /test:ui:functional|test:ui:widgets|test:ui:primitives/u);
 });
 
 test("inventory validation rejects a zero floor and overlapping authority fields", () => {
@@ -348,9 +423,15 @@ test("suite selection is explicit and cannot silently omit an unknown suite", ()
   assert.equal(selectSuites(inventory, ["run", "unit"]).length, 8);
   assert.deepEqual(
     selectSuites(inventory, ["run", "e2e"]).map(({ id }) => id),
-    ["desktop-native-e2e", "website-e2e", "website-checkout-enabled-e2e"],
+    [
+      "desktop-native-e2e",
+      "desktop-ui-functional-e2e",
+      "desktop-ui-visual-e2e",
+      "website-e2e",
+      "website-checkout-enabled-e2e",
+    ],
   );
-  assert.equal(selectSuites(inventory, ["run", "all"]).length, 11);
+  assert.equal(selectSuites(inventory, ["run", "all"]).length, 13);
   assert.deepEqual(
     selectSuites(inventory, ["--suite", "api-unit"]).map(({ id }) => id),
     ["api-unit"],

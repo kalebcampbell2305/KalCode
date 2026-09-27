@@ -160,7 +160,8 @@ jobs:
       - name: Install Chromium system dependencies
         if: steps.playwright-cache.outputs.cache-hit == 'true'
         run: pnpm --filter @kalcode/desktop exec playwright install-deps chromium
-      - run: pnpm --filter @kalcode/desktop test:ui --grep-invert @screenshots
+      - name: Functional UI and accessibility gate
+        run: pnpm --filter @kalcode/desktop run test:ui:functional
       - name: Widget pointer lifecycle regressions
         run: pnpm --filter @kalcode/desktop test:ui:widgets
       - name: Shared UI primitive regressions
@@ -169,12 +170,54 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: desktop-ui-test-results
+          name: desktop-ui-functional-test-results
           path: |
             apps/desktop/test-results/
             apps/desktop/playwright-report/
             packages/ui/test-results/
           if-no-files-found: ignore
+          retention-days: 14
+
+  desktop-ui-visual:
+    name: Desktop UI visual evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Playwright version
+        id: playwright
+        shell: bash
+        run: echo "version=$(node -p "require('./apps/desktop/node_modules/@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}-chromium
+      - name: Install Chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm --filter @kalcode/desktop exec playwright install --with-deps chromium
+      - name: Install Chromium system dependencies
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: pnpm --filter @kalcode/desktop exec playwright install-deps chromium
+      - name: CI visual evidence gate
+        run: pnpm --filter @kalcode/desktop run test:ui:visual-ci
+      - name: Upload visual evidence and Playwright diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-ui-visual-results
+          path: |
+            apps/desktop/qa/screenshots/
+            apps/desktop/test-results/
+            apps/desktop/playwright-report/
+          if-no-files-found: warn
           retention-days: 14
 
   desktop-e2e:

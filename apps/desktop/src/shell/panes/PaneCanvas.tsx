@@ -188,8 +188,9 @@ function PaneCanvasSurface({
   const ref = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const [drag, setDrag] = useState<DragState | null>(null);
+  // The ref owns the gesture from pointerdown, before it crosses the threshold and enters
+  // render state. An unrelated render in that interval must not overwrite the live gesture.
   const dragRef = useRef<DragState | null>(null);
-  dragRef.current = drag;
   const suppressClick = useRef(false);
   // Re-render when a surface registers pane contents (for example the Dashboard).
   const registryVersion = useSyncExternalStore(subscribeRegistry, registryTick, registryTick);

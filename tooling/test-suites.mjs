@@ -180,16 +180,20 @@ export function auditWorkspaceSuiteCoverage(inventory, root = ROOT) {
   const declared = new Set(
     inventory.suites.filter((suite) => suite.package !== null).map((suite) => `${suite.package}\0${suite.script}`),
   );
-  const discovered = new Set();
+  const required = new Set();
+  const available = new Set();
   for (const packagePath of workspacePackages(root)) {
     const value = JSON.parse(readFileSync(packagePath, "utf8"));
     if (typeof value.name !== "string" || !value.scripts || typeof value.scripts !== "object") continue;
+    for (const [script, command] of Object.entries(value.scripts)) {
+      if (typeof command === "string") available.add(`${value.name}\0${script}`);
+    }
     for (const script of ["test", "test:e2e"]) {
-      if (typeof value.scripts[script] === "string") discovered.add(`${value.name}\0${script}`);
+      if (typeof value.scripts[script] === "string") required.add(`${value.name}\0${script}`);
     }
   }
-  const missing = [...discovered].filter((entry) => !declared.has(entry));
-  const stale = [...declared].filter((entry) => !discovered.has(entry));
+  const missing = [...required].filter((entry) => !declared.has(entry));
+  const stale = [...declared].filter((entry) => !available.has(entry));
   if (missing.length || stale.length) {
     throw new Error(
       `test suite inventory does not match workspace scripts (missing=${missing.join(",") || "none"}; stale=${stale.join(",") || "none"})`,

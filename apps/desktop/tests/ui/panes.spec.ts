@@ -223,7 +223,20 @@ test.describe("tabs and drag and drop", () => {
     // Onto the bottom edge of the right pane: a new pane below it.
     await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
     await page.mouse.down();
-    await page.mouse.move(target.x + target.width / 2, target.y + target.height - 30, { steps: 12 });
+    // A resize/render between pointerdown and the first move must not cancel the gesture.
+    // Slow runners can produce the same render while terminals finish initializing.
+    const surface = canvas(page);
+    const surfaceBefore = await box(surface);
+    await surface.evaluate((element, width) => {
+      const htmlElement = element as HTMLElement;
+      htmlElement.style.flex = "none";
+      htmlElement.style.width = `${width}px`;
+    }, surfaceBefore.width - 40);
+    await expect.poll(async () => (await box(pane(page, 1))).width).toBeLessThan(target.width - 10);
+    const resizedTarget = await box(pane(page, 1));
+    await page.mouse.move(resizedTarget.x + resizedTarget.width / 2, resizedTarget.y + resizedTarget.height - 30, {
+      steps: 12,
+    });
     await expect(page.locator('[class*="dropZone"]')).toHaveAttribute("data-zone", "bottom");
     await page.mouse.up();
     await expect(panes(page)).toHaveCount(3);
