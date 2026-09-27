@@ -234,13 +234,16 @@ custom domains `kalcoded.com` and `www.kalcoded.com`. First deployed 2026-09-24.
 Contact published on the site: `CONTACT_EMAIL` in `src/lib/site.ts`.
 
 Keep `RELEASE_CATALOG_ENABLED=false` until signed-release publishing has uploaded and verified every
-content-addressed descriptor and artifact, committed the immutable version row, advanced the stable
-pointer, and probed the public stable manifest and installer. Enabling the flag is the final atomic
-authority transition and belongs to that reviewed publish transaction; this website deployment does
-not enable it automatically. Before the first authoritative signed release, rollback may restore
-`false` to preserve the verified preview. After the transition, rollback must preserve catalog
-authority. Never toggle the flag to `false` automatically or in response to catalog errors, because
-that would silently downgrade release authority to mutable legacy objects.
+content-addressed descriptor and artifact, committed the immutable version row and initialized the
+exact Stable pointer. While the flag is `false`, certify the release only through its public
+version-specific immutable routes; the mutable Stable routes still use the legacy authority and are
+not proof of the D1 catalog. Deploying W with the flag set to `true` is the final atomic authority
+transition. After that deployment, the normal idempotent publisher from clean N must probe the
+public Stable manifest, installer and updater feed through the D1 authority. Before the first
+authoritative signed release, rollback may restore `false` to preserve the verified preview. After
+the transition, rollback must preserve catalog authority. Never toggle the flag to `false`
+automatically or in response to catalog errors, because that would silently downgrade release
+authority to mutable legacy objects.
 
 For the first cutover, B is the exact signed-artifact build commit, N is B or its clean
 `docs/releases/`-only publisher descendant, and W is final main with the generated
