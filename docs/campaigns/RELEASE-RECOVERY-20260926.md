@@ -522,7 +522,7 @@ No Stable artifacts/feed or production download cutover is authorized by these p
 physical receipts alone. Clean installs, real update/rollback/re-update, installed OAuth,
 KalVoice/provider/browser QA and final live publication verification remain outstanding.
 
-## Desktop automatic OAuth return repair — 2026-09-27
+## Desktop automatic OAuth return repair ï¿½ 2026-09-27
 
 The owner rejected the manual-first desktop return page after browser authentication.
 API packet ef66f6e (including 22d9c3e) supersedes that page with one automatic canonical
@@ -557,3 +557,40 @@ clean install, kalcodeqa2 for baseline update/rollback; prior profiles and all a
 are preserved. The in-progress abd6 Mac notarization may finish as preserved evidence,
 but it cannot substitute for the new native source artifact. No Stable publication or
 SHIPPED claim follows from these offline checks.
+
+## Installed OAuth code and session restoration repair â€” 2026-09-27
+
+The signed a1087d9 Windows candidate was installed in the clean standard-user
+kalcodeqa3 profile. Its browser callback succeeded, but the desktop remained at
+VERIFY. A bounded owner-run diagnostic confirmed the expected quoted per-user and
+effective protocol handler, installed executable, valid Authenticode signature,
+and one native social_callback_rejected event. The safe API trace showed the
+callback but no session-completion request. No raw logs or callback URLs were
+collected. The diagnostic's original binary-match field compared against the
+build-tree executable instead of the signed installer's embedded executable; that
+field is excluded from conclusions and its expected value was corrected.
+
+Native repair 9c14ae5 aligns authorization-code parsing with the existing API's
+visible-ASCII length-1-through-2048 contract. Google's percent-encoded slash was
+previously rejected after decoding. Provider, state, nonce, PKCE, duplicate-field,
+URI shape, expiry and one-use session checks remain unchanged. The old predicate
+fails the realistic synthetic code regression. The corrected full desktop suite
+passes 198 tests; strict Clippy, formatting and secret scan pass. A native runtime
+regression exercises callback parsing, exact completion arguments, signed OWNER
+entitlement, Ready authority, persisted session, cleared pending attempt and cold
+session restoration. Its API/store adapters are deterministic test fixtures;
+actual installed production OAuth remains a mandatory separate proof.
+
+A separate frontend regression reproduced an initial bootstrapping snapshot never
+being replaced after the native authority finished restoration. The repair observes
+account status as well as runtime status until bootstrap resolves, within the
+existing bounded polling window. Generation fencing prevents late restoration from
+resurrecting a logged-out account. A failed restoration exposes a recoverable error
+rather than treating a spinner as account authority.
+
+The a1087d9 Mac checkpoint completed Developer ID signing, Apple Accepted submission
+49ed6e79-b53d-41da-bc09-958687862fdb with an issue-free log, stapling and Gatekeeper
+assessment. It is preserved evidence and must be replaced with the repaired source
+before final physical certification. All earlier installers, QA profiles, baseline
+artifacts and release evidence remain preserved. No Stable publication is claimed.
+Frontend packet ebb1579 adds seven tests (five provider, one IPC/gate integration, one retry/accessibility); focused 20/20 and full desktop JavaScript 909/909 across 103 files pass, with typecheck and scoped Biome clean. The first full run exposed an existing assertion that waited for the phase element rather than its ready content; waitFor now checks the intended ready state without relaxing that requirement. The existing nonfatal jsdom canvas warning remains. Final-main affected gates and installed OAuth/OWNER/cold-restart proof remain required before publication.
