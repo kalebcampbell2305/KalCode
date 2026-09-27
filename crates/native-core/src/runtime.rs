@@ -662,21 +662,20 @@ mod windows_home_paths {
     }
 
     fn plausible_dos_home_alias(full: &str, home: &OsStr) -> bool {
-        let Some((full_drive, full_parts)) = absolute_windows_parts(Path::new(full)) else {
-            return false;
-        };
         let Some((home_drive, home_parts)) = absolute_windows_parts(Path::new(home)) else {
             return false;
         };
-        if !full_drive.eq_ignore_ascii_case(&home_drive)
-            || home_parts.is_empty()
-            || full_parts.len() < home_parts.len()
-        {
+        let Some((full_drive, full_parts)) =
+            absolute_windows_prefix_parts(Path::new(full), home_parts.len())
+        else {
+            return false;
+        };
+        if !full_drive.eq_ignore_ascii_case(&home_drive) || home_parts.is_empty() {
             return false;
         }
         let mut saw_alias = false;
         for (candidate, configured) in full_parts.iter().zip(&home_parts) {
-            if candidate.eq_ignore_ascii_case(configured) {
+            if windows_component_eq(candidate, configured) {
                 continue;
             }
             if !plausible_dos_component(candidate) && !plausible_dos_component(configured) {
@@ -685,6 +684,10 @@ mod windows_home_paths {
             saw_alias = true;
         }
         saw_alias
+    }
+
+    fn windows_component_eq(left: &str, right: &str) -> bool {
+        left.to_lowercase() == right.to_lowercase()
     }
 
     fn absolute_windows_parts(path: &Path) -> Option<(u8, Vec<String>)> {
@@ -707,6 +710,31 @@ mod windows_home_paths {
             parts.push(part.to_str()?.to_owned());
         }
         Some((drive, parts))
+    }
+
+    fn absolute_windows_prefix_parts(path: &Path, count: usize) -> Option<(u8, Vec<String>)> {
+        let mut components = path.components();
+        let Component::Prefix(prefix) = components.next()? else {
+            return None;
+        };
+        let drive = match prefix.kind() {
+            Prefix::Disk(drive) | Prefix::VerbatimDisk(drive) => drive,
+            _ => return None,
+        };
+        if !matches!(components.next(), Some(Component::RootDir)) {
+            return None;
+        }
+        let parts: Option<Vec<_>> = components
+            .take(count)
+            .map(|component| {
+                let Component::Normal(part) = component else {
+                    return None;
+                };
+                Some(part.to_str()?.to_owned())
+            })
+            .collect();
+        let parts = parts?;
+        (parts.len() == count).then_some((drive, parts))
     }
 
     fn plausible_dos_component(component: &str) -> bool {
@@ -986,6 +1014,32 @@ mod windows_home_paths {
                 .as_deref(),
                 Some(PRIVATE_PATH)
             );
+            assert_eq!(
+                redact_with_lookup(
+                    r"C:\USERSL~1\élodie\codex.exe",
+                    OsStr::new(r"C:\Users Long\Élodie"),
+                    AliasLookup::Unavailable(Vec::new()),
+                )
+                .as_deref(),
+                Some(PRIVATE_PATH)
+            );
+            assert_eq!(
+                redact_with_lookup(
+                    r"C:\USERSL~1\Ålodie\codex.exe",
+                    OsStr::new(r"C:\Users Long\Élodie"),
+                    AliasLookup::Unavailable(Vec::new()),
+                ),
+                None
+            );
+            assert_eq!(
+                redact_with_lookup(
+                    r"C:\Users\KAL~1\sub\..\tool.exe",
+                    OsStr::new(r"C:\Users\Kaleb"),
+                    AliasLookup::Unavailable(Vec::new()),
+                )
+                .as_deref(),
+                Some(PRIVATE_PATH)
+            );
 
             for path in [
                 r"C:\Users\another-user\codex.exe",
@@ -1073,17 +1127,41 @@ fn strip_home<'a>(path: &'a str, home: &str, windows: bool) -> Option<&'a str> {
             (path, home)
         };
     let home = home.trim_end_matches(['/', '\\']);
-    if home.is_empty() || !path.is_char_boundary(home.len()) || path.len() < home.len() {
+    if home.is_empty() {
+        return None;
+    }
+    if windows {
+        let end = windows_case_prefix_end(path, home)?;
+        return Some(&path[end..]);
+    }
+    if !path.is_char_boundary(home.len()) || path.len() < home.len() {
         return None;
     }
     let (head, rest) = path.split_at(home.len());
-    let same = if windows {
-        head.replace('\\', "/").to_lowercase() == home.replace('\\', "/").to_lowercase()
-    } else {
-        head == home
-    };
+    let same = head == home;
     let at_boundary = rest.is_empty() || rest.starts_with(['/', '\\']);
     (same && at_boundary).then_some(rest)
+}
+
+fn windows_case_prefix_end(path: &str, home: &str) -> Option<usize> {
+    let normalized_home = home.replace('\\', "/").to_lowercase();
+    let mut normalized_path = String::with_capacity(normalized_home.len());
+    for (index, ch) in path.char_indices() {
+        if ch == '\\' {
+            normalized_path.push('/');
+        } else {
+            normalized_path.extend(ch.to_lowercase());
+        }
+        if normalized_path.len() > normalized_home.len() {
+            return None;
+        }
+        if normalized_path == normalized_home {
+            let end = index + ch.len_utf8();
+            let rest = &path[end..];
+            return (rest.is_empty() || rest.starts_with(['/', '\\'])).then_some(end);
+        }
+    }
+    None
 }
 
 impl KalError {
@@ -1138,6 +1216,18 @@ mod path_tests {
                 "{path:?} vs {home:?}"
             );
         }
+    }
+
+    #[test]
+    fn windows_unicode_case_folding_preserves_the_original_suffix_boundary() {
+        assert_eq!(
+            strip_home(r"c:\users\ßeta\tool.exe", r"C:\Users\ẞeta", true),
+            Some(r"\tool.exe")
+        );
+        assert_eq!(
+            strip_home(r"c:\users\ßeta2\tool.exe", r"C:\Users\ẞeta", true),
+            None
+        );
     }
 
     #[test]
