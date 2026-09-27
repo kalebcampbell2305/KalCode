@@ -3,10 +3,12 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, mpsc};
 use std::time::{Duration, Instant};
 
-use kalcode_contracts::agent::{AgentEvent, AgentInput, AgentProvider, SessionConfig};
+use kalcode_contracts::agent::{
+    AgentEvent, AgentEventSink, AgentInput, AgentProvider, SessionConfig,
+};
 use kalcode_contracts::permissions::PermissionMode;
 use kalcode_providers::managed::ManagedProfiles;
 use kalcode_providers::{DetectEnv, GeminiProvider};
@@ -164,6 +166,187 @@ fn wait_for_turn(rx: &mpsc::Receiver<AgentEvent>) {
     }
 }
 
+#[derive(Default)]
+struct LifecycleState {
+    completed_turns: u8,
+    second_completion_held: bool,
+    second_completion_timed_out: bool,
+    release_second_completion: bool,
+    sink_dropped: bool,
+}
+
+struct LifecycleControl {
+    state: Mutex<LifecycleState>,
+    changed: Condvar,
+    callback_wait: Duration,
+}
+
+impl Default for LifecycleControl {
+    fn default() -> Self {
+        Self::with_callback_wait(WAIT)
+    }
+}
+
+impl LifecycleControl {
+    fn with_callback_wait(callback_wait: Duration) -> Self {
+        Self {
+            state: Mutex::new(LifecycleState::default()),
+            changed: Condvar::new(),
+            callback_wait,
+        }
+    }
+
+    fn lock_state(&self) -> MutexGuard<'_, LifecycleState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn wait_until(&self, label: &str, ready: impl Fn(&LifecycleState) -> bool) {
+        let deadline = Instant::now() + WAIT;
+        let mut state = self.lock_state();
+        while !ready(&state) {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                drop(state);
+                panic!("timed out waiting for {label}");
+            }
+            let (next, timeout) = self
+                .changed
+                .wait_timeout(state, remaining)
+                .unwrap_or_else(PoisonError::into_inner);
+            state = next;
+            if timeout.timed_out() && !ready(&state) {
+                drop(state);
+                panic!("timed out waiting for {label}");
+            }
+        }
+    }
+
+    fn wait_for_second_completion(&self) {
+        self.wait_until("the second turn completion gate", |state| {
+            state.second_completion_held || state.second_completion_timed_out
+        });
+        self.assert_second_completion_did_not_time_out();
+    }
+
+    fn wait_for_sink_drop(&self) {
+        self.wait_until("the final provider event sink drop", |state| {
+            state.sink_dropped
+        });
+    }
+
+    fn release_second_completion(&self) {
+        let mut state = self.lock_state();
+        state.release_second_completion = true;
+        self.changed.notify_all();
+    }
+
+    fn assert_second_completion_did_not_time_out(&self) {
+        let timed_out = self.lock_state().second_completion_timed_out;
+        assert!(!timed_out, "second turn completion callback timed out");
+    }
+}
+
+struct LifecycleSink {
+    events: mpsc::Sender<AgentEvent>,
+    control: Arc<LifecycleControl>,
+}
+
+impl AgentEventSink for LifecycleSink {
+    fn emit(&self, event: AgentEvent) {
+        let turn_completed = matches!(event, AgentEvent::TurnCompleted { .. });
+        let _ = self.events.send(event);
+        if !turn_completed {
+            return;
+        }
+
+        let mut state = self.control.lock_state();
+        state.completed_turns = state.completed_turns.saturating_add(1);
+        if state.completed_turns != 2 {
+            return;
+        }
+        // Test-only scheduling control: the production sink contract is non-blocking. Holding
+        // this exact callback proves both shared lease owners before allowing reader teardown.
+        state.second_completion_held = true;
+        self.control.changed.notify_all();
+        let gate_deadline = Instant::now() + self.control.callback_wait;
+        while !state.release_second_completion {
+            let remaining = gate_deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                state.second_completion_timed_out = true;
+                self.control.changed.notify_all();
+                return;
+            }
+            let (next, timeout) = self
+                .control
+                .changed
+                .wait_timeout(state, remaining)
+                .unwrap_or_else(PoisonError::into_inner);
+            state = next;
+            if timeout.timed_out() && !state.release_second_completion {
+                state.second_completion_timed_out = true;
+                self.control.changed.notify_all();
+                return;
+            }
+        }
+    }
+}
+
+impl Drop for LifecycleSink {
+    fn drop(&mut self) {
+        let mut state = self.control.lock_state();
+        state.sink_dropped = true;
+        self.control.changed.notify_all();
+    }
+}
+
+struct ReleaseOnDrop(Arc<LifecycleControl>);
+
+impl ReleaseOnDrop {
+    fn release(&self) {
+        self.0.release_second_completion();
+    }
+}
+
+impl Drop for ReleaseOnDrop {
+    fn drop(&mut self) {
+        self.0.release_second_completion();
+    }
+}
+
+#[test]
+fn lifecycle_sink_callback_timeout_is_bounded_and_cleanup_safe() {
+    let control = Arc::new(LifecycleControl::with_callback_wait(Duration::from_millis(
+        25,
+    )));
+    let (events, _rx) = mpsc::channel();
+    let (done, done_rx) = mpsc::sync_channel(1);
+    let worker_control = Arc::clone(&control);
+    let worker = std::thread::spawn(move || {
+        let sink = LifecycleSink {
+            events,
+            control: worker_control,
+        };
+        sink.emit(AgentEvent::TurnCompleted { ok: true });
+        sink.emit(AgentEvent::TurnCompleted { ok: true });
+        drop(sink);
+        let _ = done.send(());
+    });
+    // Declared after `worker`, so every panic releases a gated callback before the handle drops.
+    let release_on_drop = ReleaseOnDrop(Arc::clone(&control));
+
+    if let Err(error) = done_rx.recv_timeout(WAIT) {
+        release_on_drop.release();
+        done_rx
+            .recv_timeout(WAIT)
+            .expect("callback worker completed after failure cleanup");
+        worker.join().expect("callback timeout cleanup worker");
+        panic!("callback timeout was not bounded: {error}");
+    }
+    worker.join().expect("callback timeout worker");
+    control.wait_for_sink_drop();
+    assert!(control.lock_state().second_completion_timed_out);
+}
+
 fn canonical(path: impl AsRef<Path>) -> PathBuf {
     std::fs::canonicalize(path).expect("canonical path")
 }
@@ -173,14 +356,18 @@ fn managed_headless_turn_runs_from_neutral_profile_and_repairs_the_floor() {
     let rig = Rig::new();
     let provider = GeminiProvider::new_managed(rig.env(), rig.profiles.clone());
     let (tx, rx) = mpsc::channel();
+    let lifecycle = Arc::new(LifecycleControl::default());
     let session = provider
         .start_session(
             rig.config(),
-            Box::new(move |event: AgentEvent| {
-                let _ = tx.send(event);
+            Box::new(LifecycleSink {
+                events: tx,
+                control: Arc::clone(&lifecycle),
             }),
         )
         .expect("managed session");
+    // Declared after `session`, so every panic releases the gated callback before session drop.
+    let release_on_drop = ReleaseOnDrop(Arc::clone(&lifecycle));
     assert!(
         rig.profiles
             .acquire_sign_in_lease("gemini-cli", &rig.account_id)
@@ -258,6 +445,7 @@ fn managed_headless_turn_runs_from_neutral_profile_and_repairs_the_floor() {
         })
         .expect("second send");
     wait_for_turn(&rx);
+    lifecycle.wait_for_second_completion();
     let restored: serde_json::Value =
         serde_json::from_slice(&std::fs::read(settings).expect("restored settings"))
             .expect("restored JSON");
@@ -274,6 +462,15 @@ fn managed_headless_turn_runs_from_neutral_profile_and_repairs_the_floor() {
         "terminate alone does not release before provider cleanup"
     );
     drop(session);
+    assert!(
+        rig.profiles
+            .acquire_sign_in_lease("gemini-cli", &rig.account_id)
+            .is_err(),
+        "session drop released before the provider output reader finished"
+    );
+    release_on_drop.release();
+    lifecycle.wait_for_sink_drop();
+    lifecycle.assert_second_completion_did_not_time_out();
     let _sign_in = rig
         .profiles
         .acquire_sign_in_lease("gemini-cli", &rig.account_id)
