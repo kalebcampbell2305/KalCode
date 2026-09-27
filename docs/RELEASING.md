@@ -10,7 +10,7 @@ claimed.
 | Platform | Status |
 | --- | --- |
 | Windows 10 (1809) or later, x64 | NSIS per-user installer. Public builds must pass Azure Artifact Signing, timestamp, clean-install, update-mode and uninstall verification. |
-| macOS | Not available. No macOS build machine or Apple signing. |
+| macOS 14 or later, Apple silicon arm64 | Physical Mac and Developer ID/notary access are configured. Production packaging, verification and publication tooling are implemented; the final signed application, clean-install/update trials and public delivery remain release gates. |
 | Linux | Not available. No Linux build machine; never tested. |
 
 When no verified build is published, `apps/website/src/data/releases.json` has `"latest": null`
@@ -106,9 +106,9 @@ failed verification report.
 For the private GitHub repository, `.github/workflows/windows-release-verify.yml` provides the
 clean Windows runner without putting Azure credentials in CI. After a clean local signed build is
 frozen, create a private **draft** release containing exactly its `build.json`, installer, and
-installer `.sig`, then
+both updater signatures (`.sig` and `.windows-x86_64.sig`), then
 dispatch the workflow at the exact build commit with the draft tag, version, full commit and
-installer SHA-256. The workflow validates those immutable inputs, downloads only the three expected
+installer SHA-256. The workflow validates those immutable inputs, downloads only the four expected
 assets, rechecks the SHA-256, verifies the updater signature using the tracked public key, checks
 the redacted signing contract, runs `release:verify`, and uploads only
 `verify.json` for seven days. Download that report into `dist/release/<version>/verify.json` before
@@ -423,20 +423,26 @@ signature before it launches the raw NSIS installer in update mode.
   ticks "Delete the application data" in the uninstaller (unticked by default; never in silent or
   update mode).
 
-## Adding macOS and Linux later
+## macOS production lane
 
-Neither can be built or tested on the Windows development machine, and neither may appear as a
-download until it has been built and tested for real. The path:
+Run the native arm64 lane on the physical Apple silicon Mac, from the same clean build commit as
+Windows. Follow [MACOS.md](MACOS.md) for the exact signing environment and commands. The canonical
+`node tooling/release/macos-package.mjs --channel stable` pipeline builds the app and required
+helpers, applies Developer ID signatures and hardened runtime, requires Apple's final Accepted
+status and an issue-free matching log, staples the DMG, and checks Gatekeeper. The existing
+`KalCode-release` Keychain profile supplies notarization authority; never copy credentials into
+source or command logs. A build-only checkpoint is not publishable.
 
-1. **CI runners** (for example GitHub Actions `macos-14` for Apple silicon + Intel universal,
-   `ubuntu-22.04` for Linux) running the same steps: clean checkout, `pnpm install --frozen-lockfile`,
-   `pnpm tauri build --bundles dmg` / `--bundles appimage,deb`, SHA-256, and the E2E suite where a
-   driver exists (WebView2-based E2E is Windows-only; macOS/Linux need their own harness).
-2. **macOS signing and notarization**: an Apple Developer ID certificate and `notarytool`
-   credentials as CI secrets; Gatekeeper blocks unsigned, un-notarized apps by default, so macOS
-   should not ship unsigned.
-3. **Linux**: AppImage and `.deb`; optionally GPG-sign the checksums.
-4. Extend `build`/`verify` records per platform, add `/download/macos-universal` and
-   `/download/linux-x64` routes (same `serveFile` path in `worker/downloads.ts`), add the
-   platforms to `buildManifest` in `tooling/release/manifest.mjs`, and remove them from
-   `NOT_BUILT` only when a verified artifact is uploaded.
+Transfer the immutable Mac packet through the canonical Windows updater-signature handoff, then
+require real clean-profile product QA and the baseline update/rollback/reupdate sequence on the Mac.
+The publisher supports the `darwin-aarch64` updater target and `/download/macos-arm64`; it requires
+matching build, verification and final schema-v2 QA evidence. Website support is implemented but
+must remain unavailable until the verified artifact is published. A signed runtime component does
+not certify the application DMG. No Intel or universal artifact is claimed.
+
+## Linux remains unavailable
+
+Linux has no completed production build, signing, install or device-verification lane. Do not add a
+Linux download or updater target until its native dependencies, installer, policy, clean-install,
+update/rollback and live delivery gates have been implemented and verified. Windows and macOS
+release readiness does not imply Linux readiness.

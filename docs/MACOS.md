@@ -2,15 +2,20 @@
 
 ## Current truth
 
-The repository now has a macOS Tauri overlay, least-privilege signing inputs, a read-only bootstrap
-check, a native-architecture DMG packager, and a fail-closed verifier. These pieces are
-**implemented but not authenticated or live**. On 2026-09-25, the physical Apple M1 Mac built a
-native debug `KalCode.app` with bundled local Whisper and an arm64 update helper. The binary reported
-the Development channel with test hooks enabled, and its ad hoc signature correctly failed the
-production release gate. Node 24, pnpm 10.33.2, Rust 1.98.1, CMake 4.4.3, and the Command Line Tools
-are configured for development. No production KalCode DMG has been signed, notarized, installed,
-published, or product-tested on macOS, and no macOS URL may be added to the public release manifest
-yet.
+The repository has the canonical macOS Tauri overlay, least-privilege signing inputs, read-only
+bootstrap, native-architecture DMG packager, fail-closed verifier, updater consumer and multi-platform
+publisher. The physical Apple silicon Mac, Developer ID signing identity and `KalCode-release`
+notarization profile are configured. Profile access was verified in the owner's GUI session; an SSH
+session alone may lack access to the unlocked Keychain. No credential values belong in this document
+or release evidence.
+
+As of the September 27 release closeout, the separately signed arm64 KalVoice runtime archive has
+an Accepted, issue-free Apple notarization result and has been published with signed manifests.
+That component proof does not certify the application. The final production KalCode.app/DMG has not
+yet completed build, notarization, stapling, Gatekeeper, clean-profile product QA or public delivery.
+No macOS application download may be advertised until those gates pass. Detailed commit-bound test
+results, failed attempts and current pending work are in
+[campaigns/RELEASE-RECOVERY-20260926.md](campaigns/RELEASE-RECOVERY-20260926.md).
 
 The direct-download target is macOS 14 or later. This is deliberate: the pinned Tauri 2.11.6 API
 documents `data_store_identifier` as the WKWebView replacement for `data_directory`, and that API is
@@ -175,21 +180,22 @@ Packaging proof alone cannot make the macOS build releasable. These gates are cu
 
 | Area | Current macOS state | Required proof |
 | --- | --- | --- |
-| Provider/account isolation | The isolated Mac integration packet implements the existing guardian lifecycle with a custodian, unreaped anchor, activation-gated exact root, durable state transitions, and mandatory CLEAN/Blocked proof. On the physical M1, 18 guardian regressions and three real process tests passed, including stubborn same-group descendant cleanup and a guarded PTY. The packet is not yet part of the canonical release candidate. | Canonical integration plus Windows Job Object reproof, official supported-provider version certification, real multi-account separation, crash/logout/app-loss recovery, and an explicit unsupported result for intentionally detached descendants. |
+| Provider/account isolation | The integrated canonical Mac provider runtime implements the existing guardian lifecycle with a custodian, unreaped anchor, activation-gated exact root, durable state transitions, and mandatory CLEAN/Blocked proof. On the physical M1, 18 guardian regressions and three real process tests passed, including stubborn same-group descendant cleanup and a guarded PTY. Those historical focused results do not replace final-commit or installed-provider proof. | Final-commit Windows Job Object reproof, official supported-provider version certification, real multi-account separation, crash/logout/app-loss recovery, and an explicit unsupported result for intentionally detached descendants. |
 | Browser | The canonical abstraction now uses deterministic `data_store_identifier` values on macOS 14+ and distinct values for different data roots/workspaces in unit tests. | Real WKWebView persistence, logout/deletion semantics, and cross-workspace cookie/storage isolation on a Mac. |
 | Updater | The Mac consumer is implemented and its core policy, journal recovery, atomic `renameatx_np` swap, rollback, desktop command path, and bundled helper compile pass on the physical M1. Production package verification requires the helper at `Contents/MacOS/kalcode-update-helper`. | Developer ID/notary/ticket verification of a real old-to-new artifact, relaunch health acknowledgement, sleep/wake, clean-machine rollback proof, and canonical Windows signer handoff for the target-bound updater signature. |
 | KalVoice | macOS CoreAudio/TTS code, explicit AVAudioApplication permission state, Doctor reporting, and microphone metadata exist. The physical M1 compiled the bundled Whisper feature and passed 214 current native library tests with one intentionally ignored archive test; that archive test then passed explicitly against the exact curated development ZIP. Two release-mode local-reasoning runs each produced 64/65 exact safe actions, zero unsafe actions, no inference failures, and p95 latency of 489/492 ms. No microphone was opened. | Real microphone prompt, denial, capture, transcription, TTS, device loss, cancellation, sleep/wake, privacy-retention checks, and the separately signed/notarized production component on each advertised architecture. |
-| Secure store | The canonical secure-store crate selects macOS Keychain. | Fresh-account store/read/delete, locked-keychain denial, restart, logout, and cross-account isolation on a clean Mac. |
+| Secure store | The canonical secure-store crate selects macOS Keychain; a real GUI-session ignored Keychain floor test passed during release recovery. Final source and fresh-account coverage remain required. | Fresh-account store/read/delete, locked-keychain denial, restart, logout, and cross-account isolation on a clean Mac. |
 | E2E/install | The existing compiled-app harness is WebView2/PowerShell/Windows specific. | A native macOS harness covering DMG open, drag/install, first launch, second launch, shortcut/Dock expectations, sign-in/out, Browser, providers, KalVoice, update, rollback, and uninstall/retained data. |
-| CI/release | The Rust matrix compiles on `macos-latest`; no signed DMG, notarization, or clean-machine lane exists. | Protected, pinned macOS build and verification jobs for each advertised architecture, artifact digest handoff, and independent clean-machine verification. |
-| Website/feed | Manifest types understand macOS, but production builders, publisher, routes, and updater descriptors are Windows-only. | Digest-qualified immutable DMG objects, D1 release authority, friendly and pinned routes, feed entries, range/download tests, production readback, and truthful UI. |
+| CI/release | The Rust matrix compiles on `macos-latest`; the physical arm64 packaging lane and resume/verifier tooling exist, with Developer ID and notarization access configured. The final app packet and clean-profile proof are pending. | Exact clean-source native build and verification for every advertised architecture, artifact digest handoff, and independent clean-profile installation verification. |
+| Website/feed | Production packager, publisher, manifests, D1 routes and updater descriptors support macOS arm64. Stable publication and installed public-feed proof are pending. | Digest-qualified immutable DMG objects, D1 release authority, friendly and pinned routes, feed entries, range/download tests, production readback, and truthful UI. |
 
 Do not publish a macOS row, stable feed entry, or download URL until every applicable row passes.
 
 ## Rollback
 
-Before publication, delete the ignored `dist/release/<version>/KalCode_*.dmg` and its Mac records;
-source rollback is an ordinary revert of the Mac-scoped commit. After publication, immutable artifact
+Before publication, preserve failed candidates and their evidence for diagnosis or exact resume;
+source rollback is an ordinary revert of the relevant Mac-scoped commit. Do not delete a recorded
+notarization checkpoint to silently resubmit. After publication, immutable artifact
 objects and evidence remain immutable. Product rollback uses a higher version that restores the
 previous behavior. An emergency feed withdrawal or exceptional downgrade remains a separately
 authorized, audited D1 operation with an exact-current-version precondition.
