@@ -1,8 +1,9 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AccountClient, type AccountSnapshot, type RuntimeStatus } from "../ipc/account.ts";
 import { createAccountMemory } from "../ipc/accountMemory.ts";
+import { SettingsAccount } from "../surfaces/settings/SettingsAccount.tsx";
 import { ConnectedAccountGate } from "./AccountGate.tsx";
 import { type AccountOperations, AccountProvider, useAccount } from "./AccountProvider.tsx";
 
@@ -51,6 +52,76 @@ async function completeFreeOnboarding(user: ReturnType<typeof userEvent.setup>) 
 afterEach(() => vi.useRealTimers());
 
 describe("account onboarding integration", () => {
+  it.each(["Google browser return", "cold session restoration"])(
+    "shows server-authoritative OWNER usage after %s without plan selection",
+    async (entry) => {
+      vi.useFakeTimers();
+      const owner: AccountSnapshot = { ...snapshot("ready"), tier: "owner" };
+      let current: AccountSnapshot = {
+        ...snapshot("bootstrapping"),
+        phase: entry === "Google browser return" ? "signed_out" : "bootstrapping",
+      };
+      const invoke = async (command: string, args?: Record<string, unknown>) => {
+        switch (command) {
+          case "account_status":
+            return current;
+          case "runtime_status":
+            return current.phase === "ready"
+              ? runtime("ready")
+              : { phase: "signed_out", ready: false };
+          case "account_social_start":
+            if (args?.provider !== "google") throw new Error("Expected the Google browser handoff");
+            current = {
+              ...snapshot("bootstrapping"),
+              phase: "social_pending",
+              pendingExpiresAt: "2026-09-25T12:10:00Z",
+            };
+            return current;
+          case "account_usage":
+            return {
+              used: 7,
+              allowance: null,
+              periodStart: "2026-09-01T00:00:00.000Z",
+              resetsAt: "2026-10-01T00:00:00.000Z",
+            };
+          default:
+            throw new Error(`Unexpected account IPC command: ${command}`);
+        }
+      };
+      const client = new AccountClient({ invoke });
+      render(
+        <AccountProvider client={client} runtimePollMs={10} socialStatusPollMs={10}>
+          <ConnectedAccountGate>
+            <Workspace />
+            <SettingsAccount />
+          </ConnectedAccountGate>
+        </AccountProvider>,
+      );
+      await act(async () => undefined);
+      if (entry === "Google browser return") {
+        await act(async () => screen.getByRole("button", { name: "Continue with Google" }).click());
+        expect(screen.queryByRole("region", { name: "Workspace" })).not.toBeInTheDocument();
+      } else {
+        expect(screen.getByRole("heading", { name: "Restoring your session" })).toBeInTheDocument();
+      }
+
+      // Native completion/restoration publishes authority; no second sign-in or plan click occurs.
+      current = owner;
+      await act(async () => vi.advanceTimersByTimeAsync(10));
+
+      expect(screen.getByRole("heading", { name: "Workspace ready" })).toBeInTheDocument();
+      const account = within(screen.getByRole("region", { name: "KalCode account" }));
+      expect(account.getByText("owner@example.com")).toBeInTheDocument();
+      expect(account.getByText("Owner")).toBeInTheDocument();
+      expect(account.getByText("Unlimited requests")).toBeInTheDocument();
+      expect(account.getByText("Dictation").parentElement).toHaveTextContent("DictationUnlimited");
+      expect(account.getByText("No subscription payment required")).toBeInTheDocument();
+      expect(account.queryByText("Usage unavailable")).not.toBeInTheDocument();
+      expect(account.queryByRole("button", { name: "Manage plan" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "Choose your plan" })).not.toBeInTheDocument();
+    },
+  );
+
   it("opens the connected gate after the real AccountClient adapter observes cold bootstrap completion", async () => {
     vi.useFakeTimers();
     let accountReads = 0;

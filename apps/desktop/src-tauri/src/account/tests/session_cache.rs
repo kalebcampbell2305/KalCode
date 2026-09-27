@@ -7,8 +7,8 @@ use std::sync::Mutex;
 
 use account::model::{PendingAuthSecret, PublicAccount, SessionSecret};
 use account::session_store::{
-    ACCOUNT_SESSION_KEY, AccountSessionStore, CachedAccountSecret, SessionStoreError,
-    SignedUsageReceipt,
+    ACCOUNT_SESSION_KEY, ACCOUNT_USAGE_RECEIPT_KEY, AccountSessionStore, CachedAccountSecret,
+    SessionStoreError, SignedUsageReceipt,
 };
 use account::social::SocialProvider;
 use kalcode_secure_store::{SecretKey, SecretStore, SecretStoreError, SecretString};
@@ -16,6 +16,10 @@ use kalcode_secure_store::{SecretKey, SecretStore, SecretStoreError, SecretStrin
 #[derive(Default)]
 struct TestStore {
     values: Mutex<HashMap<String, SecretString>>,
+    max_utf16_bytes: Option<usize>,
+    reject_key: Mutex<Option<String>>,
+    reject_get: Mutex<Option<String>>,
+    reject_delete: Mutex<Option<String>>,
 }
 
 struct FailingStore;
@@ -48,6 +52,17 @@ impl SecretStore for TestStore {
     }
 
     fn set(&self, key: &SecretKey, value: &SecretString) -> Result<(), SecretStoreError> {
+        if self.reject_key.lock().expect("reject key").as_deref() == Some(key.account()) {
+            return Err(secret_shaped_backend_error());
+        }
+        if self
+            .max_utf16_bytes
+            .is_some_and(|limit| value.expose_secret().encode_utf16().count() * 2 > limit)
+        {
+            return Err(SecretStoreError::Access(
+                "Windows credential blob exceeds capacity".into(),
+            ));
+        }
         self.values
             .lock()
             .expect("store lock")
@@ -56,6 +71,9 @@ impl SecretStore for TestStore {
     }
 
     fn get(&self, key: &SecretKey) -> Result<Option<SecretString>, SecretStoreError> {
+        if self.reject_get.lock().expect("reject get").as_deref() == Some(key.account()) {
+            return Err(secret_shaped_backend_error());
+        }
         Ok(self
             .values
             .lock()
@@ -65,6 +83,9 @@ impl SecretStore for TestStore {
     }
 
     fn delete(&self, key: &SecretKey) -> Result<bool, SecretStoreError> {
+        if self.reject_delete.lock().expect("reject delete").as_deref() == Some(key.account()) {
+            return Err(secret_shaped_backend_error());
+        }
         Ok(self
             .values
             .lock()
@@ -82,8 +103,242 @@ fn account() -> PublicAccount {
     }
 }
 
+// Storage validates token shape; verification remains the account runtime's responsibility.
+// Rebuild public vector payloads with production-sized identifiers without reading credentials.
+fn social_token_shape(section: &str, name: &str, account_id: &str) -> String {
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    let vectors: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../../../../crates/entitlements/testdata/vectors.json"
+    ))
+    .expect("vectors");
+    let token = vectors[section]
+        .as_array()
+        .expect("cases")
+        .iter()
+        .find(|case| case["name"] == name)
+        .expect("case")["token"]
+        .as_str()
+        .expect("token");
+    let mut parts: Vec<String> = token.split('.').map(str::to_owned).collect();
+    for (index, part) in parts.iter_mut().take(2).enumerate() {
+        let mut payload: serde_json::Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(part.as_bytes()).expect("base64"))
+                .expect("payload");
+        if index == 0 {
+            payload["kid"] = "k2026-09-25".into();
+        } else {
+            payload["keyId"] = "k2026-09-25".into();
+            payload["accountId"] = account_id.into();
+        }
+        *part = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).expect("JSON"));
+    }
+    parts.join(".")
+}
+
 #[test]
-fn signed_cache_round_trips_only_inside_the_fixed_os_secret_envelope() {
+fn social_owner_usage_receipt_round_trips_with_windows_credential_capacity() {
+    let backend = TestStore {
+        max_utf16_bytes: Some(2560),
+        ..TestStore::default()
+    };
+    let store = AccountSessionStore::new(&backend).expect("store");
+    let session =
+        SessionSecret::new(format!("kcs_{}", "a".repeat(43)), 1_900_000_000).expect("session");
+    let public = PublicAccount {
+        id: format!("acct_{}", "a".repeat(43)),
+        email: "owner@example.com".into(),
+        activated_at: Some("2026-09-25T12:00:00.000Z".into()),
+    };
+    let cached = CachedAccountSecret::new(social_token_shape("cases", "owner", &public.id), public)
+        .expect("entitlement");
+    let receipt = SignedUsageReceipt::new(social_token_shape(
+        "receiptCases",
+        "owner-receipt",
+        &cached.account().id,
+    ))
+    .expect("receipt");
+    store
+        .save_full(Some(&session), None, Some(&cached), None)
+        .expect("login fits Windows credential");
+    store
+        .save_full(Some(&session), None, Some(&cached), Some(&receipt))
+        .expect("adding verified usage must fit Windows credential storage");
+    let loaded = store.load().expect("restart load").expect("session");
+    assert_eq!(loaded.cached().expect("cached").account(), cached.account());
+    assert_eq!(
+        loaded.usage_receipt().expect("receipt").expose_receipt(),
+        receipt.expose_receipt()
+    );
+    store.clear().expect("logout");
+    assert!(
+        backend.values.lock().expect("store").is_empty(),
+        "logout removes account secrets"
+    );
+}
+
+#[test]
+fn receipt_backend_failures_do_not_replace_or_restore_session_authority() {
+    let backend = TestStore::default();
+    let store = AccountSessionStore::new(&backend).expect("store");
+    let session =
+        SessionSecret::new(format!("kcs_{}", "a".repeat(43)), 1_900_000_000).expect("session");
+    let cached =
+        CachedAccountSecret::new("header.payload.signature".into(), account()).expect("cache");
+    let usage = SignedUsageReceipt::new("usage.payload.signature".into()).expect("receipt");
+    store
+        .save_full(Some(&session), None, Some(&cached), Some(&usage))
+        .expect("seed");
+    *backend.reject_get.lock().expect("reject get") = Some(ACCOUNT_USAGE_RECEIPT_KEY.into());
+    let loaded = store
+        .load()
+        .expect("optional read failure")
+        .expect("session");
+    assert_eq!(loaded.cached(), Some(&cached));
+    assert!(loaded.usage_receipt().is_none());
+    *backend.reject_get.lock().expect("reject get") = None;
+    *backend.reject_key.lock().expect("reject key") = Some(ACCOUNT_USAGE_RECEIPT_KEY.into());
+    let changed = SignedUsageReceipt::new("changed.payload.signature".into()).expect("receipt");
+    assert!(
+        store
+            .save_full(Some(&session), None, Some(&cached), Some(&changed))
+            .is_err()
+    );
+    assert_eq!(
+        store
+            .load()
+            .expect("load")
+            .expect("session")
+            .usage_receipt(),
+        Some(&usage)
+    );
+    *backend.reject_delete.lock().expect("reject delete") = Some(ACCOUNT_USAGE_RECEIPT_KEY.into());
+    assert!(
+        store.clear().is_err(),
+        "failed cache cleanup must be reported"
+    );
+    assert!(
+        store.load().expect("load").is_none(),
+        "orphan cache cannot restore deleted session"
+    );
+    *backend.reject_delete.lock().expect("reject delete") = None;
+    store.clear().expect("retry cleanup");
+    assert!(backend.values.lock().expect("values").is_empty());
+}
+
+#[test]
+fn legacy_inline_receipt_migrates_without_losing_session_or_receipt() {
+    let backend = TestStore::default();
+    let store = AccountSessionStore::new(&backend).expect("store");
+    let session =
+        SessionSecret::new(format!("kcs_{}", "a".repeat(43)), 1_900_000_000).expect("session");
+    let cached =
+        CachedAccountSecret::new("header.payload.signature".into(), account()).expect("cache");
+    let usage = SignedUsageReceipt::new("usage.payload.signature".into()).expect("receipt");
+    store
+        .save_full(Some(&session), None, Some(&cached), None)
+        .expect("seed");
+    let key = SecretKey::new(ACCOUNT_SESSION_KEY).expect("key");
+    let mut legacy: serde_json::Value = serde_json::from_str(
+        backend
+            .get(&key)
+            .expect("get")
+            .expect("envelope")
+            .expose_secret(),
+    )
+    .expect("JSON");
+    legacy["usageReceipt"] = usage.expose_receipt().into();
+    backend
+        .set(&key, &SecretString::new(legacy.to_string()))
+        .expect("legacy envelope");
+    let loaded = store.load().expect("legacy load").expect("session");
+    assert_eq!(loaded.usage_receipt(), Some(&usage));
+    store
+        .save_full(
+            loaded.session(),
+            loaded.pending(),
+            loaded.cached(),
+            loaded.usage_receipt(),
+        )
+        .expect("migration save");
+    let migrated: serde_json::Value = serde_json::from_str(
+        backend
+            .get(&key)
+            .expect("get")
+            .expect("envelope")
+            .expose_secret(),
+    )
+    .expect("JSON");
+    assert!(migrated["usageReceipt"].is_null());
+    let restored = store.load().expect("load").expect("session");
+    assert_eq!(
+        restored.session().expect("session").expose_token(),
+        session.expose_token()
+    );
+    assert_eq!(restored.usage_receipt(), Some(&usage));
+}
+
+#[test]
+fn interrupted_account_switch_cannot_attach_another_accounts_receipt() {
+    let backend = TestStore::default();
+    let store = AccountSessionStore::new(&backend).expect("store");
+    let session =
+        SessionSecret::new(format!("kcs_{}", "a".repeat(43)), 1_900_000_000).expect("session");
+    let cached =
+        CachedAccountSecret::new("header.payload.signature".into(), account()).expect("cache");
+    let usage = SignedUsageReceipt::new("usage.payload.signature".into()).expect("receipt");
+    store
+        .save_full(Some(&session), None, Some(&cached), Some(&usage))
+        .expect("initial account");
+    let mut other = account();
+    other.id = "account-2".into();
+    let other_cache =
+        CachedAccountSecret::new("other.payload.signature".into(), other).expect("cache");
+    *backend.reject_key.lock().expect("reject key") = Some(ACCOUNT_SESSION_KEY.into());
+    assert!(
+        store
+            .save_full(Some(&session), None, Some(&other_cache), Some(&usage))
+            .is_err()
+    );
+    let restored = store
+        .load()
+        .expect("old session remains readable")
+        .expect("session");
+    assert_eq!(restored.cached().expect("cache").account().id, "account-1");
+    assert!(
+        restored.usage_receipt().is_none(),
+        "foreign account cache must be ignored"
+    );
+    store.clear().expect("logout clears both accounts' data");
+    assert!(backend.values.lock().expect("values").is_empty());
+}
+
+#[test]
+fn corrupt_optional_receipt_does_not_discard_verified_login_state() {
+    let backend = TestStore::default();
+    let store = AccountSessionStore::new(&backend).expect("store");
+    let session =
+        SessionSecret::new(format!("kcs_{}", "a".repeat(43)), 1_900_000_000).expect("session");
+    let cached =
+        CachedAccountSecret::new("header.payload.signature".into(), account()).expect("cache");
+    store
+        .save_full(Some(&session), None, Some(&cached), None)
+        .expect("session");
+    backend
+        .set(
+            &SecretKey::new(ACCOUNT_USAGE_RECEIPT_KEY).expect("key"),
+            &SecretString::new("invalid"),
+        )
+        .expect("broken cache");
+    let restored = store
+        .load()
+        .expect("login remains readable")
+        .expect("session");
+    assert_eq!(restored.cached(), Some(&cached));
+    assert!(restored.usage_receipt().is_none());
+}
+
+#[test]
+fn signed_cache_round_trips_only_inside_account_os_credentials() {
     let backend = TestStore::default();
     let store = AccountSessionStore::new(&backend).expect("store");
     let session =
@@ -95,16 +350,15 @@ fn signed_cache_round_trips_only_inside_the_fixed_os_secret_envelope() {
     store
         .save_full(Some(&session), None, Some(&cached), Some(&usage))
         .expect("save");
-    assert_eq!(
-        backend
-            .values
-            .lock()
-            .expect("lock")
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>(),
-        vec![ACCOUNT_SESSION_KEY]
-    );
+    let mut keys = backend
+        .values
+        .lock()
+        .expect("lock")
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    keys.sort();
+    assert_eq!(keys, vec![ACCOUNT_SESSION_KEY, ACCOUNT_USAGE_RECEIPT_KEY]);
 
     let loaded = store.load().expect("load").expect("value");
     assert_eq!(

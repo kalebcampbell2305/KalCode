@@ -10,18 +10,26 @@ use super::social::SocialProvider;
 const MAX_SIGNED_TOKEN_LENGTH: usize = 8192;
 
 pub const ACCOUNT_SESSION_KEY: &str = "kalcode-account-session";
+pub const ACCOUNT_USAGE_RECEIPT_KEY: &str = "kalcode-account-usage-receipt";
 const ENVELOPE_VERSION: u32 = 2;
 const LEGACY_ENVELOPE_VERSION: u32 = 1;
 
 pub struct AccountSessionStore<'a> {
     backend: &'a dyn SecretStore,
     key: SecretKey,
+    usage_key: SecretKey,
 }
 
 impl<'a> AccountSessionStore<'a> {
     pub fn new(backend: &'a dyn SecretStore) -> Result<Self, SessionStoreError> {
         let key = SecretKey::new(ACCOUNT_SESSION_KEY).map_err(|_| SessionStoreError::Backend)?;
-        Ok(Self { backend, key })
+        let usage_key =
+            SecretKey::new(ACCOUNT_USAGE_RECEIPT_KEY).map_err(|_| SessionStoreError::Backend)?;
+        Ok(Self {
+            backend,
+            key,
+            usage_key,
+        })
     }
 
     pub fn load(&self) -> Result<Option<StoredSession>, SessionStoreError> {
@@ -86,6 +94,18 @@ impl<'a> AccountSessionStore<'a> {
         if usage_receipt.is_some() && cached.is_none() {
             return Err(SessionStoreError::Corrupt);
         }
+        // Legacy envelopes retain their inline receipt until the next successful save.
+        // The separate receipt is only a cache: absence, corruption, or an interrupted
+        // account switch cannot invalidate the independently verified login authority.
+        let usage_receipt = usage_receipt.or_else(|| {
+            let account = cached.as_ref()?.account();
+            let secret = self.backend.get(&self.usage_key).ok()??;
+            let receipt: StoredUsageReceipt = serde_json::from_str(secret.expose_secret()).ok()?;
+            if receipt.version != 1 || receipt.account_id != account.id {
+                return None;
+            }
+            SignedUsageReceipt::new(receipt.receipt).ok()
+        });
         Ok(Some(StoredSession {
             session,
             pending,
@@ -149,23 +169,52 @@ impl<'a> AccountSessionStore<'a> {
                 email: &value.account().email,
                 activated_at: value.account().activated_at.as_deref(),
             }),
-            usage_receipt: usage_receipt.map(SignedUsageReceipt::expose_receipt),
+            usage_receipt: None,
             checkout: checkout.map(|value| WriteCheckout {
                 request_id: value.request_id(),
                 tier: value.tier().as_str(),
             }),
         };
         let json = serde_json::to_string(&envelope).map_err(|_| SessionStoreError::Corrupt)?;
+        // Windows passwords are UTF-16 and limited to 2560 bytes per credential.
+        // A social account's session + entitlement + receipt exceeds that limit.
+        // Write the account-bound cache first; a failed envelope write leaves the old
+        // session authoritative and cannot apply another account's cached receipt.
+        if let (Some(receipt), Some(cached)) = (usage_receipt, cached) {
+            let receipt = StoredUsageReceipt {
+                version: 1,
+                account_id: cached.account().id.clone(),
+                receipt: receipt.expose_receipt().to_owned(),
+            };
+            let receipt_json =
+                serde_json::to_string(&receipt).map_err(|_| SessionStoreError::Corrupt)?;
+            self.backend
+                .set(&self.usage_key, &SecretString::new(receipt_json))
+                .map_err(|_| SessionStoreError::Backend)?;
+        } else {
+            self.backend
+                .delete(&self.usage_key)
+                .map_err(|_| SessionStoreError::Backend)?;
+        }
         self.backend
             .set(&self.key, &SecretString::new(json))
             .map_err(|_| SessionStoreError::Backend)
     }
 
     pub fn clear(&self) -> Result<bool, SessionStoreError> {
-        self.backend
-            .delete(&self.key)
-            .map_err(|_| SessionStoreError::Backend)
+        let session = self.backend.delete(&self.key);
+        let receipt = self.backend.delete(&self.usage_key);
+        Ok(session.map_err(|_| SessionStoreError::Backend)?
+            | receipt.map_err(|_| SessionStoreError::Backend)?)
     }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredUsageReceipt {
+    version: u32,
+    account_id: String,
+    receipt: String,
 }
 
 pub struct StoredSession {

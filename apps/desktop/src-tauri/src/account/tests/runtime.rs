@@ -28,6 +28,7 @@ const FREE_TOKEN: &str = "eyJhbGciOiJFZERTQSIsImtpZCI6InRlc3QtdmVjdG9ycy0xIiwidH
 #[derive(Default)]
 struct TestStore {
     values: Mutex<HashMap<String, SecretString>>,
+    max_utf16_bytes: Option<usize>,
     set_gate: Mutex<Option<Arc<PollGate>>>,
     delete_gate: Mutex<Option<Arc<PollGate>>>,
 }
@@ -38,6 +39,14 @@ impl SecretStore for TestStore {
     }
 
     fn set(&self, key: &SecretKey, value: &SecretString) -> Result<(), SecretStoreError> {
+        if self
+            .max_utf16_bytes
+            .is_some_and(|limit| value.expose_secret().encode_utf16().count() * 2 > limit)
+        {
+            return Err(SecretStoreError::Access(
+                "Windows credential blob exceeds capacity".into(),
+            ));
+        }
         if let Some(gate) = self.set_gate.lock().expect("set gate").clone() {
             gate.block_call();
         }
@@ -92,6 +101,7 @@ impl Clock for MutableClock {
 
 #[derive(Default)]
 struct FakeApi {
+    usage_reads: Mutex<VecDeque<Result<UsageResponse, ApiError>>>,
     request_usage: Mutex<VecDeque<Result<account::api::RequestUsageResponse, ApiError>>>,
     request_calls: Mutex<Vec<(String, bool)>>,
     starts: Mutex<VecDeque<Result<EmailStartResponse, ApiError>>>,
@@ -255,7 +265,7 @@ impl AccountApi for FakeApi {
     }
 
     fn usage(&self, _: &str) -> Result<UsageResponse, ApiError> {
-        Err(ApiError::Local("unexpected_test_call"))
+        pop(&self.usage_reads)
     }
 
     fn record_kalvoice(
@@ -373,6 +383,64 @@ fn request_receipt(name: &str, allowed: bool) -> account::api::RequestUsageRespo
             },
         },
     }
+}
+
+#[test]
+fn verified_owner_usage_survives_windows_storage_and_offline_restart() {
+    let backend = Arc::new(TestStore {
+        max_utf16_bytes: Some(2560),
+        ..TestStore::default()
+    });
+    let session = SessionSecret::new(signed_in().token, 1_900_000_000).expect("session");
+    let cached = CachedAccountSecret::new(
+        vector_token("cases", "owner"),
+        PublicAccount {
+            id: ACCOUNT_ID.into(),
+            email: format!("{}@example.com", "a".repeat(58)),
+            activated_at: Some("2026-09-25T12:00:00.000Z".into()),
+        },
+    )
+    .expect("cache");
+    AccountSessionStore::new(backend.as_ref())
+        .expect("store")
+        .save_full(Some(&session), None, Some(&cached), None)
+        .expect("login persists");
+    let api = Arc::new(FakeApi::default());
+    api.accounts
+        .lock()
+        .expect("queue")
+        .push_back(Err(ApiError::Transport));
+    api.usage_reads
+        .lock()
+        .expect("queue")
+        .push_back(Ok(request_receipt("owner-receipt", true).usage));
+    let account = runtime(api.clone(), backend.clone());
+    assert_eq!(
+        account.bootstrap().expect("bootstrap").tier,
+        Some(AccountTier::Owner)
+    );
+    let usage = account
+        .usage()
+        .expect("verified server usage persists within Windows capacity");
+    assert_eq!(usage.allowance, None);
+    assert_eq!(usage.used, 12345);
+    api.accounts
+        .lock()
+        .expect("queue")
+        .push_back(Err(ApiError::Transport));
+    api.usage_reads
+        .lock()
+        .expect("queue")
+        .push_back(Err(ApiError::Transport));
+    let restored = runtime(api, backend.clone());
+    assert_eq!(
+        restored.bootstrap().expect("restart").tier,
+        Some(AccountTier::Owner)
+    );
+    let restored_usage = restored.usage().expect("signed cached usage");
+    assert_eq!(restored_usage, usage);
+    restored.logout().expect("logout");
+    assert!(backend.values.lock().expect("secrets").is_empty());
 }
 
 #[test]
@@ -995,7 +1063,12 @@ fn cold_start_restores_persisted_social_pkce_before_completing_the_callback() {
 #[test]
 fn provider_authorization_code_completes_to_owner_and_restores_the_session() {
     let api = Arc::new(FakeApi::default());
-    let store = Arc::new(TestStore::default());
+    let store = Arc::new(TestStore {
+        max_utf16_bytes: Some(2560),
+        ..TestStore::default()
+    });
+    let mut public = api_account(true);
+    public.email = format!("{}@example.com", "a".repeat(58));
     let account = runtime(api.clone(), store.clone());
     account
         .start_social(SocialProvider::Google)
@@ -1020,7 +1093,7 @@ fn provider_authorization_code_completes_to_owner_and_restores_the_session() {
     api.accounts
         .lock()
         .expect("queue")
-        .push_back(Ok(api_account(true)));
+        .push_back(Ok(public.clone()));
     api.entitlements
         .lock()
         .expect("queue")
@@ -1040,6 +1113,13 @@ fn provider_authorization_code_completes_to_owner_and_restores_the_session() {
     assert_eq!(signed_in.phase, AccountPhase::Ready);
     assert_eq!(signed_in.tier, Some(AccountTier::Owner));
     assert_eq!(account.authority(), AccountAuthority::Active);
+    api.usage_reads
+        .lock()
+        .expect("queue")
+        .push_back(Ok(request_receipt("owner-receipt", true).usage));
+    let usage = account.usage().expect("Google owner usage persists");
+    assert_eq!(usage.allowance, None);
+    assert_eq!(usage.used, 12345);
 
     assert_eq!(
         *api.social_complete_calls.lock().expect("social calls"),
@@ -1063,16 +1143,39 @@ fn provider_authorization_code_completes_to_owner_and_restores_the_session() {
     api.accounts
         .lock()
         .expect("queue")
-        .push_back(Ok(api_account(true)));
+        .push_back(Ok(public.clone()));
     api.entitlements
         .lock()
         .expect("queue")
         .push_back(Ok(EntitlementResponse {
             token: vector_token("cases", "owner"),
         }));
-    let restored = runtime(api, store).bootstrap().expect("restore session");
+    let restored_account = Arc::new(runtime(api.clone(), store));
+    let restored = restored_account.bootstrap().expect("restore session");
     assert_eq!(restored.phase, AccountPhase::Ready);
     assert_eq!(restored.tier, Some(AccountTier::Owner));
+    api.usage_reads
+        .lock()
+        .expect("queue")
+        .push_back(Err(ApiError::Transport));
+    assert_eq!(
+        restored_account.usage().expect("restored owner usage"),
+        usage
+    );
+    use kalcode_kalvoice::accounting::RequestAccounting;
+    let (_directory, core) = metering_core();
+    let meter =
+        crate::kalvoice_accounting::AccountKalVoice::new(core, restored_account).expect("meter");
+    api.request_usage
+        .lock()
+        .expect("queue")
+        .push_back(Err(ApiError::Transport));
+    assert!(
+        meter
+            .authorize(&kalcode_contracts::ids::new_id())
+            .expect("owner request")
+            .allowed
+    );
 }
 
 #[test]

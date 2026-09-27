@@ -443,6 +443,42 @@ describe("KalVoice Requests", () => {
     const receipt = await verifyUsageReceipt(body.receipt, signer.trusted, NOW_S);
     expect(receipt).toMatchObject({ ok: true, receipt: { ...body.usage, accountId: PRO_ACCOUNT, tier: "pro" } });
   });
+
+  it("returns signed unlimited OWNER usage and full grants without a billing subscription", async () => {
+    const d = deps();
+    seed(d, OWNER_ACCOUNT, 20_000);
+    expect(await d.store.activeGrants(OWNER_ACCOUNT, NOW.toISOString())).toEqual([
+      { tier: "owner", source: "grant", grantedAt: CREATED, expiresAt: null },
+    ]);
+
+    const entitlementResponse = await handleRequest(asAccount(OWNER_ACCOUNT), d);
+    expect(entitlementResponse.status).toBe(200);
+    const entitlementBody = (await entitlementResponse.json()) as { token: string };
+    expect(await verifyEntitlementToken(entitlementBody.token, signer.trusted, NOW_S)).toMatchObject({
+      ok: true,
+      entitlement: {
+        accountId: OWNER_ACCOUNT,
+        tier: "owner",
+        unrestricted: true,
+        features: [],
+        limits: {},
+      },
+    });
+
+    const response = await handleRequest(asAccount(OWNER_ACCOUNT, KALVOICE_USAGE_PATH), d);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as UsageBody;
+    expect(body.usage).toEqual({
+      used: 20_000,
+      allowance: null,
+      periodStart: "2026-08-31T10:00:00.000Z",
+      resetsAt: "2026-09-30T10:00:00.000Z",
+    });
+    expect(await verifyUsageReceipt(body.receipt, signer.trusted, NOW_S)).toMatchObject({
+      ok: true,
+      receipt: { ...body.usage, accountId: OWNER_ACCOUNT, tier: "owner" },
+    });
+  });
 });
 
 describe("responses", () => {
