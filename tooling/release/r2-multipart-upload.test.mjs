@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -7,7 +7,9 @@ import test from "node:test";
 import { componentObjectUploadInvocation } from "./component-publish.mjs";
 import {
   MULTIPART_PART_BYTES,
+  multipartFailureStage,
   parseRemoteMultipartArgs,
+  runMultipartCliSupervisor,
   runRemoteR2Multipart,
   uploadFileR2Multipart,
   uploadR2Multipart,
@@ -141,6 +143,40 @@ test("a part retries at most three times and keeps only its successful ETag", as
   assert.equal(attempts, 3);
   assert.equal(delays.length, 2);
   assert.deepEqual(state.completed[0], [{ partNumber: 1, etag: "successful-etag" }]);
+});
+
+test("remote RPC promise properties are resolved before fail-closed validation", async () => {
+  const key = "components/v1/model/test/object.bin";
+  let completedParts;
+  const upload = {
+    key: Promise.resolve(key),
+    uploadId: Promise.resolve("remote-upload-1"),
+    async uploadPart(partNumber) {
+      return {
+        partNumber: Promise.resolve(partNumber),
+        etag: Promise.resolve(`remote-etag-${partNumber}`),
+      };
+    },
+    async abort() {
+      assert.fail("a valid remote upload must not be aborted");
+    },
+    async complete(parts) {
+      completedParts = parts;
+      return { key: Promise.resolve(key), size: Promise.resolve(4) };
+    },
+  };
+  const result = await uploadR2Multipart(
+    {
+      bucket: { createMultipartUpload: async () => upload },
+      key,
+      sizeBytes: 4,
+      httpMetadata: METADATA,
+      readPart: virtualReader(),
+    },
+    TEST_OPTIONS,
+  );
+  assert.deepEqual(completedParts, [{ partNumber: 1, etag: "remote-etag-1" }]);
+  assert.deepEqual(result, { key, size: 4 });
 });
 
 test("terminal part failure aborts once and abort failure never masks the bounded error", async () => {
@@ -326,6 +362,96 @@ test("remote proxy setup and disposal have independent hard deadlines", async (t
     /binding could not be disposed/,
   );
   assert.equal(disposeCalls, 1);
+});
+
+test("the CLI retries only process-isolated proxy setup failures", async () => {
+  const rawArgs = [
+    "--key",
+    "components/v1/model/test/object.bin",
+    "--file",
+    import.meta.filename,
+    "--size",
+    String(statSync(import.meta.filename).size),
+    "--content-type",
+    METADATA.contentType,
+    "--cache-control",
+    METADATA.cacheControl,
+  ];
+  const attempts = [];
+  const recovered = await runMultipartCliSupervisor(rawArgs, {
+    runAttempt() {
+      attempts.push("attempt");
+      return { status: attempts.length < 3 ? 71 : 0 };
+    },
+  });
+  assert.deepEqual(recovered, { ok: true, stage: null, attempts: 3 });
+  assert.equal(attempts.length, 3);
+
+  attempts.length = 0;
+  const exhausted = await runMultipartCliSupervisor(rawArgs, {
+    runAttempt() {
+      attempts.push("attempt");
+      return { status: 71 };
+    },
+  });
+  assert.deepEqual(exhausted, { ok: false, stage: "proxy_setup", attempts: 3 });
+  assert.equal(attempts.length, 3);
+
+  for (const [status, stage] of [
+    [70, "unknown"],
+    [72, "binding"],
+    [73, "source"],
+    [74, "create"],
+    [75, "handle"],
+    [76, "part_read"],
+    [77, "part_upload"],
+    [78, "complete"],
+    [79, "completed_object"],
+    [80, "dispose"],
+    [199, "unknown"],
+  ]) {
+    let calls = 0;
+    const failed = await runMultipartCliSupervisor(rawArgs, {
+      runAttempt() {
+        calls += 1;
+        return { status, stdout: "private response", stderr: "private credential" };
+      },
+    });
+    assert.deepEqual(failed, { ok: false, stage, attempts: 1 });
+    assert.equal(calls, 1);
+    assert.equal(JSON.stringify(failed).includes("private"), false);
+  }
+});
+
+test("multipart failure diagnostics are static and reject forged stages", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "kalcode-r2-diagnostic-test-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const path = join(directory, "object.bin");
+  writeFileSync(path, "four");
+  let failure;
+  try {
+    await runRemoteR2Multipart(
+      {
+        key: "components/v1/model/test/object.bin",
+        path,
+        sizeBytes: 4,
+        contentType: METADATA.contentType,
+        cacheControl: METADATA.cacheControl,
+      },
+      {
+        getPlatformProxy: async () => {
+          throw new Error("credential=private provider response");
+        },
+        setupTimeoutMs: 50,
+      },
+    );
+  } catch (error) {
+    failure = error;
+  }
+  assert.equal(failure?.message, "Wrangler remote R2 binding could not be established");
+  assert.equal(multipartFailureStage(failure), "proxy_setup");
+  assert.equal(JSON.stringify(failure).includes("private"), false);
+  assert.equal(multipartFailureStage({ multipartFailureStage: "proxy_setup\ncredential=private" }), "unknown");
 });
 
 test("remote arguments and publisher selection are closed at the Wrangler single-put boundary", (t) => {

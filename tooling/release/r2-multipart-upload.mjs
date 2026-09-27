@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { fork, spawnSync } from "node:child_process";
 import { lstatSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -19,8 +20,26 @@ const DEFAULT_ABORT_TIMEOUT_MS = 30_000;
 const DEFAULT_PROXY_SETUP_TIMEOUT_MS = 60_000;
 const DEFAULT_PROXY_DISPOSE_TIMEOUT_MS = 30_000;
 const HELPER_PROCESS_TIMEOUT_MS = 30 * 60_000;
+const HELPER_PROCESS_GRACE_MS = 5_000;
+const PROXY_SETUP_ATTEMPTS = 3;
+const INTERNAL_ATTEMPT_ARG = "--internal-proxy-attempt";
 const IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
 const CONTENT_TYPES = new Set(["application/jose", "application/octet-stream", "application/zip"]);
+const FAILURE_EXIT_CODES = Object.freeze({
+  unknown: 70,
+  proxy_setup: 71,
+  binding: 72,
+  source: 73,
+  create: 74,
+  handle: 75,
+  part_read: 76,
+  part_upload: 77,
+  complete: 78,
+  completed_object: 79,
+  dispose: 80,
+});
+const FAILURE_STAGES = new Set(Object.keys(FAILURE_EXIT_CODES));
+const EXIT_FAILURE_STAGES = new Map(Object.entries(FAILURE_EXIT_CODES).map(([stage, exitCode]) => [exitCode, stage]));
 
 function safeKey(key) {
   if (typeof key !== "string" || key.length < 16 || key.length > 1024 || !key.startsWith("components/v1/")) {
@@ -56,8 +75,18 @@ function safeMetadata(value) {
   return value;
 }
 
-function staticFailure(message) {
-  return new Error(message);
+function staticFailure(message, stage = "unknown") {
+  const error = new Error(message);
+  Object.defineProperty(error, "multipartFailureStage", {
+    value: FAILURE_STAGES.has(stage) ? stage : "unknown",
+    enumerable: false,
+  });
+  return error;
+}
+
+export function multipartFailureStage(error) {
+  const stage = error?.multipartFailureStage;
+  return typeof stage === "string" && FAILURE_STAGES.has(stage) ? stage : "unknown";
 }
 
 async function withTimeout(promise, milliseconds, message) {
@@ -80,19 +109,67 @@ function retryDelay(attempt, random) {
   return 250 * 2 ** (attempt - 1) + jitter;
 }
 
-function validUploadedPart(value, expectedPartNumber) {
+function safeEtag(value) {
   return (
-    value &&
-    typeof value === "object" &&
-    value.partNumber === expectedPartNumber &&
-    typeof value.etag === "string" &&
-    value.etag.length > 0 &&
-    value.etag.length <= 1024 &&
-    Array.from(value.etag).every((character) => {
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 1024 &&
+    Array.from(value).every((character) => {
       const code = character.codePointAt(0);
       return code >= 0x20 && code !== 0x7f;
     })
   );
+}
+
+async function normalizeUploadedPart(value, expectedPartNumber, operationTimeoutMs) {
+  if (!value || (typeof value !== "object" && typeof value !== "function")) return null;
+  try {
+    // Wrangler remote bindings expose native service objects through Cap'n Web. Their fields are
+    // RPC thenables even though the Workers R2 types declare immediate property values.
+    const [partNumber, etag] = await withTimeout(
+      Promise.all([value.partNumber, value.etag]),
+      operationTimeoutMs,
+      "multipart part result timed out",
+    );
+    return partNumber === expectedPartNumber && safeEtag(etag) ? { partNumber, etag } : null;
+  } catch {
+    return null;
+  }
+}
+
+async function validUploadHandle(upload, key, operationTimeoutMs) {
+  if (
+    !upload ||
+    typeof upload.uploadPart !== "function" ||
+    typeof upload.complete !== "function" ||
+    typeof upload.abort !== "function"
+  ) {
+    return false;
+  }
+  try {
+    const [uploadKey, uploadId] = await withTimeout(
+      Promise.all([upload.key, upload.uploadId]),
+      operationTimeoutMs,
+      "multipart upload handle properties timed out",
+    );
+    return uploadKey === key && typeof uploadId === "string" && uploadId.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function normalizedCompletedObject(value, key, sizeBytes, operationTimeoutMs) {
+  if (!value || (typeof value !== "object" && typeof value !== "function")) return null;
+  try {
+    const [completedKey, completedSize] = await withTimeout(
+      Promise.all([value.key, value.size]),
+      operationTimeoutMs,
+      "multipart completed object properties timed out",
+    );
+    return completedKey === key && completedSize === sizeBytes ? { key: completedKey, size: completedSize } : null;
+  } catch {
+    return null;
+  }
 }
 
 async function bestEffortAbort(upload, timeoutMs) {
@@ -137,19 +214,11 @@ export async function uploadR2Multipart(
       "multipart upload creation timed out",
     );
   } catch {
-    throw staticFailure("multipart upload could not be created");
+    throw staticFailure("multipart upload could not be created", "create");
   }
-  if (
-    !upload ||
-    upload.key !== key ||
-    typeof upload.uploadId !== "string" ||
-    upload.uploadId.length === 0 ||
-    typeof upload.uploadPart !== "function" ||
-    typeof upload.complete !== "function" ||
-    typeof upload.abort !== "function"
-  ) {
+  if (!(await validUploadHandle(upload, key, operationTimeoutMs))) {
     await bestEffortAbort(upload ?? { abort: async () => {} }, abortTimeoutMs);
-    throw staticFailure("multipart upload handle is invalid");
+    throw staticFailure("multipart upload handle is invalid", "handle");
   }
 
   const uploadedParts = new Array(partCount);
@@ -172,10 +241,10 @@ export async function uploadR2Multipart(
             `multipart part ${partNumber} read timed out`,
           );
         } catch {
-          throw staticFailure(`multipart part ${partNumber} could not be read`);
+          throw staticFailure(`multipart part ${partNumber} could not be read`, "part_read");
         }
         if (!(bytes instanceof Uint8Array) || bytes.byteLength !== length) {
-          throw staticFailure(`multipart part ${partNumber} had an invalid length`);
+          throw staticFailure(`multipart part ${partNumber} had an invalid length`, "part_read");
         }
         // Wrangler's remote-binding RPC recognizes the exact Uint8Array prototype; Node Buffers
         // are Uint8Array subclasses but have a different prototype and are not an RPC byte value.
@@ -191,18 +260,24 @@ export async function uploadR2Multipart(
               operationTimeoutMs,
               `multipart part ${partNumber} timed out`,
             );
-            if (!validUploadedPart(result, partNumber)) throw staticFailure("multipart part result is invalid");
-            successful = { partNumber: result.partNumber, etag: result.etag };
+            const uploadedPart = await normalizeUploadedPart(result, partNumber, operationTimeoutMs);
+            if (!uploadedPart) {
+              throw staticFailure("multipart part result is invalid", "part_upload");
+            }
+            successful = uploadedPart;
             break;
           } catch {
             if (failure !== null) break;
             if (attempt < maxAttempts) await sleep(retryDelay(attempt, random));
           }
         }
-        if (!successful) throw staticFailure(`multipart part ${partNumber} failed after bounded retries`);
+        if (!successful) {
+          throw staticFailure(`multipart part ${partNumber} failed after bounded retries`, "part_upload");
+        }
         uploadedParts[index] = successful;
       } catch (error) {
-        failure ??= error instanceof Error ? error : staticFailure(`multipart part ${partNumber} failed`);
+        failure ??=
+          error instanceof Error ? error : staticFailure(`multipart part ${partNumber} failed`, "part_upload");
       }
     }
   };
@@ -214,7 +289,7 @@ export async function uploadR2Multipart(
   }
   if (Array.from({ length: partCount }, (_, index) => uploadedParts[index]).some((part) => !part)) {
     await bestEffortAbort(upload, abortTimeoutMs);
-    throw staticFailure("multipart upload part set is incomplete");
+    throw staticFailure("multipart upload part set is incomplete", "part_upload");
   }
 
   const orderedParts = [...uploadedParts].sort((left, right) => left.partNumber - right.partNumber);
@@ -223,13 +298,14 @@ export async function uploadR2Multipart(
     completed = await withTimeout(upload.complete(orderedParts), operationTimeoutMs, "multipart completion timed out");
   } catch {
     await bestEffortAbort(upload, abortTimeoutMs);
-    throw staticFailure("multipart upload could not be completed");
+    throw staticFailure("multipart upload could not be completed", "complete");
   }
-  if (!completed || completed.key !== key || completed.size !== sizeBytes) {
+  const completedObject = await normalizedCompletedObject(completed, key, sizeBytes, operationTimeoutMs);
+  if (!completedObject) {
     await bestEffortAbort(upload, abortTimeoutMs);
-    throw staticFailure("multipart completed object did not match the verified upload");
+    throw staticFailure("multipart completed object did not match the verified upload", "completed_object");
   }
-  return completed;
+  return completedObject;
 }
 
 function canonicalFile(path) {
@@ -247,7 +323,9 @@ export async function uploadFileR2Multipart({ bucket, key, path, sizeBytes, http
   const descriptor = await open(path, "r");
   try {
     const before = await descriptor.stat();
-    if (!before.isFile() || before.size !== sizeBytes) throw staticFailure("verified upload size changed");
+    if (!before.isFile() || before.size !== sizeBytes) {
+      throw staticFailure("verified upload size changed", "source");
+    }
     const result = await uploadR2Multipart(
       {
         bucket,
@@ -262,14 +340,18 @@ export async function uploadFileR2Multipart({ bucket, key, path, sizeBytes, http
             if (item.bytesRead === 0) break;
             read += item.bytesRead;
           }
-          if (read !== length) throw staticFailure(`multipart part ${partNumber} became incomplete`);
+          if (read !== length) {
+            throw staticFailure(`multipart part ${partNumber} became incomplete`, "part_read");
+          }
           return bytes;
         },
       },
       options,
     );
     const after = await descriptor.stat();
-    if (!after.isFile() || after.size !== sizeBytes) throw staticFailure("verified upload size changed");
+    if (!after.isFile() || after.size !== sizeBytes) {
+      throw staticFailure("verified upload size changed", "source");
+    }
     return result;
   } finally {
     await descriptor.close();
@@ -350,11 +432,11 @@ export async function runRemoteR2Multipart(
         "Wrangler remote binding setup timed out",
       );
     } catch {
-      throw staticFailure("Wrangler remote R2 binding could not be established");
+      throw staticFailure("Wrangler remote R2 binding could not be established", "proxy_setup");
     }
     const bucket = platform?.env?.RELEASES;
     if (!bucket || typeof bucket.createMultipartUpload !== "function") {
-      throw staticFailure("Wrangler remote R2 binding is invalid");
+      throw staticFailure("Wrangler remote R2 binding is invalid", "binding");
     }
     result = await uploadFileR2Multipart(
       {
@@ -367,13 +449,13 @@ export async function runRemoteR2Multipart(
       uploaderOptions,
     );
   } catch (error) {
-    failure = error instanceof Error ? error : staticFailure("multipart publication failed");
+    failure = error instanceof Error ? error : staticFailure("multipart publication failed", "unknown");
   } finally {
     if (platform) {
       try {
         await withTimeout(platform.dispose(), disposeTimeoutMs, "Wrangler remote binding disposal timed out");
       } catch {
-        failure ??= staticFailure("Wrangler remote R2 binding could not be disposed");
+        failure ??= staticFailure("Wrangler remote R2 binding could not be disposed", "dispose");
       }
     }
     rmSync(directory, { recursive: true, force: true });
@@ -382,28 +464,142 @@ export async function runRemoteR2Multipart(
   return result;
 }
 
+function terminateAttemptTree(child) {
+  if (!child.pid) return;
+  if (process.platform === "win32") {
+    const killed = spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+      stdio: "ignore",
+      timeout: 10_000,
+      windowsHide: true,
+    });
+    if (killed.status !== 0) {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // The isolated attempt may already have exited between the IPC result and tree termination.
+      }
+    }
+    return;
+  }
+  try {
+    process.kill(-child.pid, "SIGKILL");
+  } catch {
+    child.kill("SIGKILL");
+  }
+}
+
+function isolatedAttempt(rawArgs) {
+  return new Promise((resolveAttempt) => {
+    // A timed-out getPlatformProxy() does not expose its partially-created session for disposal.
+    // Keep setup in a child so the complete process tree can be terminated before a clean retry.
+    const child = fork(import.meta.filename, [INTERNAL_ATTEMPT_ARG, ...rawArgs], {
+      detached: process.platform !== "win32",
+      stdio: ["ignore", "ignore", "ignore", "ipc"],
+      windowsHide: true,
+    });
+    let reportedStatus = null;
+    let settled = false;
+    const finish = (status) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      resolveAttempt({ status });
+    };
+    const deadline = setTimeout(() => {
+      terminateAttemptTree(child);
+      finish(FAILURE_EXIT_CODES.unknown);
+    }, HELPER_PROCESS_TIMEOUT_MS + HELPER_PROCESS_GRACE_MS);
+    child.on("message", (message) => {
+      if (!message || typeof message !== "object" || message.type !== "kalcode-r2-multipart-result") return;
+      if (message.ok === true) {
+        reportedStatus = 0;
+        return;
+      }
+      const stage = typeof message.stage === "string" && FAILURE_STAGES.has(message.stage) ? message.stage : "unknown";
+      reportedStatus = FAILURE_EXIT_CODES[stage];
+      if (stage === "proxy_setup") terminateAttemptTree(child);
+    });
+    child.once("error", () => {
+      terminateAttemptTree(child);
+      finish(FAILURE_EXIT_CODES.unknown);
+    });
+    child.once("exit", (code) => finish(reportedStatus ?? code ?? FAILURE_EXIT_CODES.unknown));
+  });
+}
+
+export async function runMultipartCliSupervisor(rawArgs, { runAttempt = isolatedAttempt } = {}) {
+  parseRemoteMultipartArgs(rawArgs);
+  for (let attempt = 1; attempt <= PROXY_SETUP_ATTEMPTS; attempt += 1) {
+    const result = await runAttempt(rawArgs);
+    if (result?.status === 0) return { ok: true, stage: null, attempts: attempt };
+    const stage = EXIT_FAILURE_STAGES.get(result?.status) ?? "unknown";
+    if (stage !== "proxy_setup" || attempt === PROXY_SETUP_ATTEMPTS) {
+      return { ok: false, stage, attempts: attempt };
+    }
+  }
+  return { ok: false, stage: "unknown", attempts: PROXY_SETUP_ATTEMPTS };
+}
+
+function reportInternalAttempt(ok, stage) {
+  const exitCode = ok ? 0 : FAILURE_EXIT_CODES[FAILURE_STAGES.has(stage) ? stage : "unknown"];
+  if (typeof process.send !== "function") process.exit(exitCode);
+  const keepAlive = stage === "proxy_setup" ? setInterval(() => {}, HELPER_PROCESS_TIMEOUT_MS) : null;
+  try {
+    process.send({ type: "kalcode-r2-multipart-result", ok, stage }, (error) => {
+      if (error && keepAlive !== null) clearInterval(keepAlive);
+      if (error || keepAlive === null) process.exit(exitCode);
+    });
+  } catch {
+    if (keepAlive !== null) clearInterval(keepAlive);
+    process.exit(exitCode);
+  }
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === resolve(import.meta.filename)) {
-  const watchdog = setTimeout(() => {
-    console.error("multipart component upload exceeded its process deadline");
+  const processArgs = process.argv.slice(2);
+  const internalAttempt = processArgs[0] === INTERNAL_ATTEMPT_ARG;
+  const rawArgs = internalAttempt ? processArgs.slice(1) : processArgs;
+  if (!internalAttempt) {
+    let args;
+    try {
+      args = parseRemoteMultipartArgs(rawArgs);
+    } catch {
+      console.error("multipart component upload arguments are invalid");
+      process.exit(1);
+    }
+    let outcome;
+    try {
+      outcome = await runMultipartCliSupervisor(rawArgs);
+    } catch {
+      console.error("multipart component upload failed: unknown");
+      process.exit(1);
+    }
+    if (outcome.ok) {
+      console.log(`Uploaded multipart component object ${args.sizeBytes} bytes.`);
+      process.exit(0);
+    }
+    console.error(`multipart component upload failed: ${outcome.stage}`);
     process.exit(1);
+  }
+  const watchdog = setTimeout(() => {
+    reportInternalAttempt(false, "unknown");
   }, HELPER_PROCESS_TIMEOUT_MS);
   let args;
   try {
-    args = parseRemoteMultipartArgs(process.argv.slice(2));
+    args = parseRemoteMultipartArgs(rawArgs);
   } catch {
     clearTimeout(watchdog);
-    console.error("multipart component upload arguments are invalid");
     process.exit(1);
   }
   runRemoteR2Multipart(args).then(
     (result) => {
       clearTimeout(watchdog);
-      console.log(`Uploaded multipart component object ${result.size} bytes.`);
+      void result;
+      reportInternalAttempt(true, null);
     },
-    () => {
+    (error) => {
       clearTimeout(watchdog);
-      console.error("multipart component upload failed");
-      process.exit(1);
+      reportInternalAttempt(false, multipartFailureStage(error));
     },
   );
 }
