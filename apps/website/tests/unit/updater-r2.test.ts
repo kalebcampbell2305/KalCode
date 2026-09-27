@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { getPlatformProxy } from "wrangler";
-import { type DownloadDeps, handleDownload, type ReleaseBucket } from "../../worker/downloads";
+import { type DownloadDeps, downloadDepsFromEnv, handleDownload, type ReleaseBucket } from "../../worker/downloads";
 import { releaseCatalog } from "../../worker/release-catalog";
 import type { UpdaterChannel, UpdaterDescriptorV2, UpdaterTarget } from "../../worker/updater-descriptor";
 import { syntheticUpdaterDescriptor } from "./fixtures/updater-descriptor";
@@ -154,6 +154,40 @@ afterAll(async () => {
 });
 
 describe("authoritative multi-platform updater routes against local R2", () => {
+  it("serves both staged platforms and only their bound signatures before customer pointer activation", async () => {
+    const staged = {
+      ...downloadDepsFromEnv({
+        DB: proxy.env.DB,
+        RELEASES: proxy.env.RELEASES,
+        ASSETS: deps.assets as Fetcher,
+        RELEASE_CATALOG_ENABLED: "false",
+      }),
+      log: () => undefined,
+    };
+    const probe = async (path: string, init: RequestInit = {}) => {
+      const response = await handleDownload(new Request(`https://kalcoded.com${path}`, init), staged);
+      if (!response) throw new Error("Staged updater route was not handled");
+      return response;
+    };
+    const feed = await probe(`/releases/updater/stable/${VERSION}.json`);
+    expect(feed.status).toBe(200);
+    expect(feed.headers.get("X-KalCode-Release-Authority")).toBe("d1-v1");
+    expect(await feed.json()).toEqual(descriptor);
+    for (const [hash, signatureHash, file, bytes] of [
+      [windowsHash, windowsSignatureHash, WINDOWS_FILE, WINDOWS_BYTES],
+      [macHash, macSignatureHash, MAC_FILE, MAC_BYTES],
+    ] as const) {
+      const artifact = await probe(artifactPath(hash, file), { headers: { range: "bytes=64-127" } });
+      expect(artifact.status).toBe(206);
+      expect(new Uint8Array(await artifact.arrayBuffer())).toEqual(bytes.slice(64, 128));
+      const signature = await probe(signaturePath(hash, signatureHash, file));
+      expect(signature.status).toBe(200);
+      expect(await sha256(await signature.text())).toBe(signatureHash);
+    }
+    expect((await probe(signaturePath(macHash, windowsSignatureHash, MAC_FILE))).status).toBe(404);
+    expect((await probe(artifactPath(macHash, WINDOWS_FILE))).status).toBe(404);
+  });
+
   it("serves the exact Windows and macOS artifacts selected by the v2 descriptor", async () => {
     const windows = await request(artifactPath(windowsHash, WINDOWS_FILE), { headers: { range: "bytes=64-127" } });
     expect(windows.status).toBe(206);

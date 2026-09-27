@@ -2,7 +2,13 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { getPlatformProxy } from "wrangler";
-import { type DownloadDeps, handleDownload, MANIFEST_KEY, type ReleaseBucket } from "../../worker/downloads";
+import {
+  type DownloadDeps,
+  downloadDepsFromEnv,
+  handleDownload,
+  MANIFEST_KEY,
+  type ReleaseBucket,
+} from "../../worker/downloads";
 import { releaseCatalog } from "../../worker/release-catalog";
 import { syntheticUpdaterDescriptor } from "./fixtures/updater-descriptor";
 
@@ -76,6 +82,102 @@ async function download(path: string, init: RequestInit = {}): Promise<Response>
 }
 
 describe("downloads against local R2", () => {
+  it.each(["stable", "beta", "dev"] as const)(
+    "serves immutable %s updater claims before pointer rollout without changing the preview",
+    async (channel) => {
+      const version = "1.4.0";
+      const file = `KalCode_${version}_x64-setup.exe`;
+      const digest = "d".repeat(64);
+      const body = JSON.stringify(syntheticUpdaterDescriptor(version, file, digest, INSTALLER.byteLength, channel));
+      const hash = Array.from(
+        new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(body))),
+        (n) => n.toString(16).padStart(2, "0"),
+      ).join("");
+      const key = `releases/updater/${channel}/${version}/${hash}.json`;
+      const artifact = `releases/updater/${channel}/${version}/${digest}/${file}`;
+      await proxy.env.RELEASES.put(key, body);
+      await proxy.env.RELEASES.put(artifact, INSTALLER);
+      await proxy.env.DB.prepare("INSERT INTO release_publication_versions VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+        .bind(
+          channel,
+          version,
+          "0000014",
+          key,
+          `releases/${version}/${hash}.json`,
+          hash,
+          hash,
+          "2026-09-25T12:00:00.000Z",
+        )
+        .run();
+      const preview = {
+        ...downloadDepsFromEnv({
+          DB: proxy.env.DB,
+          RELEASES: proxy.env.RELEASES,
+          ASSETS: deps.assets as Fetcher,
+          RELEASE_CATALOG_ENABLED: "false",
+        }),
+        log: () => undefined,
+      };
+      const request = async (path: string, init: RequestInit = {}) => {
+        const response = await handleDownload(new Request(`https://kalcoded.com${path}`, init), preview);
+        if (!response) throw new Error("Updater QA route was not handled");
+        return response;
+      };
+      const pointers = await proxy.env.DB.prepare(
+        "SELECT channel,version FROM release_publication_pointers ORDER BY channel",
+      ).all();
+      const legacy = JSON.stringify({ version: "0.0.1", notes: "Existing preview feed" });
+      await proxy.env.RELEASES.put(`releases/updater/${channel}.json`, legacy);
+      const response = await request(`/releases/updater/${channel}/${version}.json`);
+      expect(response?.status).toBe(200);
+      expect(response?.headers.get("X-KalCode-Release-Authority")).toBe("d1-v1");
+      expect(await response?.text()).toBe(body);
+      const range = await request(`/${artifact}`, { headers: { range: "bytes=1000-1999" } });
+      expect(range?.status).toBe(206);
+      expect(new Uint8Array(await range.arrayBuffer())).toEqual(INSTALLER.slice(1000, 2000));
+      const latest = await request(`/releases/updater/${channel}.json`);
+      expect(await latest?.text()).toBe(legacy);
+      expect(latest?.headers.has("X-KalCode-Release-Authority")).toBe(false);
+      const download = await request("/download/windows-x64");
+      expect(download?.status).toBe(200);
+      expect(new Uint8Array(await download.arrayBuffer())).toEqual(INSTALLER);
+      expect((await request("/download/macos-arm64"))?.status).toBe(404);
+      const manifest = await request("/releases/latest.json");
+      expect(await manifest.json()).toMatchObject({ latest: { channel: "preview" } });
+      expect(manifest?.headers.has("X-KalCode-Release-Authority")).toBe(false);
+      expect(
+        await proxy.env.DB.prepare("SELECT channel,version FROM release_publication_pointers ORDER BY channel").all(),
+      ).toMatchObject({ results: pointers.results });
+      await proxy.env.RELEASES.put(key, "tampered");
+      expect((await request(`/releases/updater/${channel}/${version}.json`))?.status).toBe(503);
+      expect((await request(`/${artifact}`))?.status).toBe(503);
+    },
+  );
+
+  it("never falls back to legacy version bytes when pre-rollout D1 authority is missing or unavailable", async () => {
+    const path = "/releases/updater/stable/8.8.8.json";
+    await proxy.env.RELEASES.put(path.slice(1), "unclaimed legacy bytes");
+    const preview = {
+      ...downloadDepsFromEnv({
+        DB: proxy.env.DB,
+        RELEASES: proxy.env.RELEASES,
+        ASSETS: deps.assets as Fetcher,
+        RELEASE_CATALOG_ENABLED: "false",
+      }),
+      log: () => undefined,
+    };
+    expect((await handleDownload(new Request(`https://kalcoded.com${path}`), preview))?.status).toBe(404);
+    const broken = {
+      ...preview,
+      catalog: {
+        get: async () => {
+          throw new Error("synthetic D1 outage");
+        },
+      },
+    };
+    expect((await handleDownload(new Request(`https://kalcoded.com${path}`), broken))?.status).toBe(503);
+  });
+
   it("resolves authoritative D1 publication and verifies real R2 descriptor bytes", async () => {
     const body = JSON.stringify(
       syntheticUpdaterDescriptor(VERSION, FILE, "a".repeat(64), INSTALLER.byteLength, "stable"),

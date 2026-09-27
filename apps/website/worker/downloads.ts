@@ -8,6 +8,8 @@
  * Before the first signed stable release, the verified preview uses the legacy integrity-checked R2
  * manifest. Once RELEASE_CATALOG_ENABLED is exactly `true`, fixed manifest/feed routes resolve D1
  * pointers and never fall back to mutable R2 pointers.
+ * Exact-version updater routes always use immutable D1 claims, allowing signed device QA before
+ * customer pointers are activated. Missing or invalid claims never fall back to legacy objects.
  * Native update installation separately verifies artifact SHA-256, Minisign, and Authenticode.
  *
  * Routes:
@@ -59,6 +61,8 @@ export interface ReleaseBucket {
 
 export interface DownloadDeps {
   catalog?: ReleaseCatalog;
+  /** Existing rollout policy for moving links only; exact-version updater claims are independent. */
+  catalogPointersEnabled?: boolean;
   bucket: ReleaseBucket | null;
   assets: { fetch(request: Request): Promise<Response> };
   log: (entry: Record<string, string>) => void;
@@ -95,7 +99,8 @@ const CONTENT_TYPES: ReadonlyArray<readonly [string, string]> = [
 
 export function downloadDepsFromEnv(env: DownloadEnv): DownloadDeps {
   return {
-    ...(env.RELEASE_CATALOG_ENABLED === "true" ? { catalog: releaseCatalog(env.DB) } : {}),
+    catalog: releaseCatalog(env.DB),
+    catalogPointersEnabled: env.RELEASE_CATALOG_ENABLED === "true",
     bucket: env.RELEASES ?? null,
     assets: env.ASSETS,
     // Structured logs only. Never pass IP addresses or request headers here.
@@ -628,14 +633,20 @@ export async function handleDownload(request: Request, deps: DownloadDeps): Prom
   const match = matchDownloadRoute(url.pathname);
   if (!match) return null;
 
+  // A staged immutable version has no customer pointer. Resolve its exact claim through the
+  // same catalog while keeping legacy moving links unchanged until the explicit rollout.
+  const usesCatalog = deps.catalogPointersEnabled !== false || (match.kind === "updater" && !match.mutable);
+  const routeDeps = { ...deps };
+  if (!usesCatalog) delete routeDeps.catalog;
+
   let response: Response;
   try {
-    response = await route(request, url, deps, match);
+    response = await route(request, url, routeDeps, match);
   } catch (error) {
     deps.log({ level: "error", event: "download.error", error: errorName(error) });
     response = unavailable(request);
   }
-  if (deps.catalog && (match.kind === "manifest" || (match.kind === "updater" && match.file.endsWith(".json")))) {
+  if (routeDeps.catalog && (match.kind === "manifest" || (match.kind === "updater" && match.file.endsWith(".json")))) {
     response.headers.set("X-KalCode-Release-Authority", "d1-v1");
   }
   return withSecurityHeaders(response, url.pathname, await siteCsp());
