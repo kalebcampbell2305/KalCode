@@ -16,13 +16,6 @@ pub(crate) enum RecoveryLockRole {
 }
 
 impl RecoveryLock {
-    #[cfg(test)]
-    pub(crate) fn acquire(_root: &Path, _role: RecoveryLockRole) -> Result<Self, GuardianError> {
-        Err(GuardianError::Unavailable(
-            "the provider guardian recovery lock requires Windows".into(),
-        ))
-    }
-
     pub(crate) fn acquire_expected(
         _root: &Path,
         _expected_identity: &str,
