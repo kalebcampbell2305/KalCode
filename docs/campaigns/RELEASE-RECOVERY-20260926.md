@@ -352,3 +352,47 @@ The following 15 diagnostic-only commits were individually checked and are not a
 - `5b9454dfeb8d7aa9f607c2f021598ba8acf55cfd`
 - `e606e2d7ed7d869413722c688602677d9c7be3f0`
 - `d4d495a436e8ec6f9201f8bdd80e6671f6aa3466`
+
+### 2026-09-27 — Final-gate repairs after source 72b2dfb
+
+The exact `72b2dfbaed2e987e88ee88a99dc04ab25a452957` gate was not release-green.
+Local Windows production-Whisper Rust passed 2,042 tests with 16 existing ignores,
+strict Clippy/format/protocol checks passed, and a fresh native E2E build passed all 23 tests.
+The physical Mac headless gate passed 2,017 JavaScript tests with two existing platform skips
+and website E2E 148 passed/eight reviewed skips; its GUI Rust gate was still running at this entry.
+Hosted run `36330146500` completed seven successful jobs and three failed jobs:
+Windows PTY lifecycle (two tests), Linux PTY output replay (one test), and UI dropdown primitives
+(two tests). Hosted native E2E 23, functional UI 245, visual UI 56, website, and macOS Rust passed.
+Hosted macOS uses the default-feature profile (1,990 passed/15 ignored); this does not replace
+the physical production-Whisper profile. Ubuntu protocol verification remained unexecuted after failure.
+
+Three bounded repairs were independently reviewed and harvested in order:
+
+- `d4a8065f35d56eb8ac8404664a90859edbe65ef1` → `8bc7889`: dropdown entrance animation
+  now applies only while open, and closed content is hidden independently of animation events.
+  Existing action/radio effects, visibility, and focus assertions are unchanged. Browser primitives
+  passed 4/4, UI units 68/68, and post-integration browser reproof passed 4/4. Hosted failure logs
+  remain the original regression evidence; final hosted reproof is mandatory.
+- `434bd109aa7649a6acec77bfba2c6575ba71c604` → `f25870f`: test-only PTY fixture repair.
+  The unattached-startup test now waits up to five seconds for reader delivery after its unchanged
+  15-second exit wait. Windows lifecycle fixtures use the existing exact test executable, live-child
+  verification, and atomic PID publication instead of PowerShell startup. Production PTY/JobObject
+  behavior is unchanged. Three focused tests passed ten times each; package 34/34, strict Clippy,
+  and formatting passed. Disabling quiescence made both lifecycle assertions fail on a live child;
+  production bytes were restored and the package passed again, including independent parent reproof.
+- `8be3ddfe1d89f55e4e71bb932b823aeb7bccd7ee` → `976881d`: pane drag hit testing reads current
+  controller/layout and live canvas dimensions after resize, with current controller use on drop.
+  The strengthened reachable two-axis resize regression failed with the old captured geometry
+  (`center` instead of `bottom`). An initial repair typo was separately preserved and corrected.
+  Final proof: focused 20/20 plus independent 1/1, desktop units 902/902, functional UI 245/245,
+  visual UI 56/56, widgets 2/2, primitives 4/4, typecheck and Biome; no flaky result was accepted.
+
+All three packets received immutable-commit review and canonical secret scanning. No suite was removed,
+no production timeout increased, and no new product scope or credential change was introduced.
+Rollback reference `rollback/main-before-final-gate-repairs-20260927` preserves exact 72b2dfb.
+Evidence is retained under `target/recovery-20260927-final-B-hosted-ci`,
+`target/recovery-20260927-dropdown-presence`, `target/recovery-20260927-linux-pty-output-drain`,
+and `target/recovery-20260927-pane-drag-geometry`.
+The next frozen main commit still requires complete integrated gates, private main push, matching
+production builds/signatures, Apple Accepted/staple/Gatekeeper proof, physical clean-install/product
+and update/rollback trials, publication, website cutover, and live verification. Nothing is SHIPPED.
