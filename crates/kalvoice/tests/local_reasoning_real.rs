@@ -1,15 +1,51 @@
 //! Opt-in real candidate benchmark. It uses only synthetic commands, never prints requests or
 //! model output, performs no download, and requires locally staged artifacts with pinned digests.
 
+#[cfg(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 use std::fs;
+#[cfg(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 use std::io::{BufReader, Read as _};
+#[cfg(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 use std::path::Path;
+#[cfg(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 use std::time::{Duration, Instant};
 
+#[cfg(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 use base64::Engine as _;
+#[cfg(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+#[cfg(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 use ed25519_dalek::{Signer as _, SigningKey};
+#[cfg(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 use kalcode_contracts::threads::WorkspaceOption;
+#[cfg(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 use kalcode_kalvoice::component_manifest::{
     ComponentArch, ComponentKind, ComponentPlatform, ComponentVerifier, TOKEN_TYPE,
 };
@@ -17,18 +53,42 @@ use kalcode_kalvoice::component_manifest::{
 use kalcode_kalvoice::component_store::LLAMA_B11146_MACOS_ARM64_CPU_POLICY;
 #[cfg(all(windows, target_arch = "x86_64"))]
 use kalcode_kalvoice::component_store::LLAMA_B11146_WINDOWS_CPU_POLICY;
+#[cfg(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 use kalcode_kalvoice::component_store::{
     ComponentSelector, ComponentStore, RuntimeArchivePolicy, TrustedComponentDirectory,
 };
 use kalcode_kalvoice::grammar::{Understood, understand};
+#[cfg(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 use kalcode_kalvoice::guarded_worker::{
     GuardedWorkerError, GuardedWorkerLauncher, GuardedWorkerProcess, GuardedWorkerSpec,
 };
+#[cfg(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 use kalcode_kalvoice::llama_worker::{
     InterpretationCancellation, LlamaWorker, LlamaWorkerError, LlamaWorkerLimits,
 };
+#[cfg(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 use kalcode_kalvoice::local_reasoning::{LocalInterpretation, LocalInterpretationRequest};
+#[cfg(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 use sha2::{Digest as _, Sha256};
+#[cfg(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 use tempfile::TempDir;
 
 #[cfg(all(windows, target_arch = "x86_64"))]
@@ -39,9 +99,21 @@ const RUNTIME_SHA256: &str = "14cf1303ca9ac3abd94816850532f9f9a69ac66fbaca3776fc
 const RUNTIME_SIZE: u64 = 10_535_820;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const RUNTIME_SHA256: &str = "0342a5523fab1ca5cbdaf1875e814fb5942011fc70a4aae191003fed3fbf2e6b";
+#[cfg(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 const KEY_ID: &str = "benchmark-1";
+#[cfg(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 const WORKSPACE_ID: &str = "0199a914-5ea1-7db0-b36b-aee1bdc846d6";
 
+#[cfg(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 fn digest(path: &Path) -> std::io::Result<String> {
     let file = fs::File::open(path)?;
     let mut reader = BufReader::with_capacity(1024 * 1024, file);
@@ -57,6 +129,10 @@ fn digest(path: &Path) -> std::io::Result<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+#[cfg(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 #[derive(Clone, Copy)]
 struct ModelCandidate {
     component_id: &'static str,
@@ -67,6 +143,10 @@ struct ModelCandidate {
     source_revision: &'static str,
 }
 
+#[cfg(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 const MODEL_CANDIDATES: &[ModelCandidate] = &[
     ModelCandidate {
         component_id: "kalvoice.reasoner.qwen3-5-0-8b-q4",
@@ -484,6 +564,10 @@ const REASONING_CASES: &[BenchmarkCase] = &[
     ("negative_empty_intent", "hello KalVoice", None),
 ];
 
+#[cfg(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 #[allow(clippy::too_many_arguments)]
 fn signed_token(
     key: &SigningKey,
@@ -545,6 +629,10 @@ fn signed_token(
     )
 }
 
+#[cfg(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 fn host_platform_name() -> &'static str {
     if cfg!(target_os = "windows") {
         "windows"
@@ -555,6 +643,10 @@ fn host_platform_name() -> &'static str {
     }
 }
 
+#[cfg(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 fn host_arch_name() -> &'static str {
     if cfg!(target_arch = "aarch64") {
         "aarch64"
@@ -574,6 +666,10 @@ fn runtime_policy() -> RuntimeArchivePolicy {
     return LLAMA_B11146_MACOS_ARM64_CPU_POLICY;
 }
 
+#[cfg(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 fn host_platform() -> ComponentPlatform {
     if cfg!(target_os = "windows") {
         ComponentPlatform::Windows
@@ -584,6 +680,10 @@ fn host_platform() -> ComponentPlatform {
     }
 }
 
+#[cfg(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 fn host_arch() -> ComponentArch {
     if cfg!(target_arch = "aarch64") {
         ComponentArch::Aarch64
@@ -592,6 +692,10 @@ fn host_arch() -> ComponentArch {
     }
 }
 
+#[cfg(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 fn request(text: &str) -> LocalInterpretationRequest {
     LocalInterpretationRequest {
         request: text.to_owned(),
@@ -603,6 +707,10 @@ fn request(text: &str) -> LocalInterpretationRequest {
     }
 }
 
+#[cfg(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 fn kind(result: &LocalInterpretation) -> Option<&'static str> {
     match result {
         LocalInterpretation::Uncertain => None,
@@ -610,6 +718,10 @@ fn kind(result: &LocalInterpretation) -> Option<&'static str> {
     }
 }
 
+#[cfg(any(
+    all(windows, target_arch = "x86_64"),
+    all(target_os = "macos", target_arch = "aarch64")
+))]
 fn worker_error_code(error: LlamaWorkerError) -> &'static str {
     match error {
         LlamaWorkerError::IncompatibleComponents => "incompatible_components",
