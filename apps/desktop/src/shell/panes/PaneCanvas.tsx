@@ -284,11 +284,6 @@ function PaneCanvasSurface({
   }, []);
 
   // ---------- Drag and drop (tabs and whole panes) ----------
-  const visible = useMemo(
-    () => new Set(panes.filter((p) => !p.collapsed && (!maximized || p.paneId === maximized)).map((p) => p.paneId)),
-    [panes, maximized],
-  );
-
   const beginDrag = (event: PointerEvent<HTMLElement>, source: DragSource) => {
     if (event.button !== 0 || panes.length === 0) return;
     const start = { x: event.clientX, y: event.clientY };
@@ -299,16 +294,33 @@ function PaneCanvasSurface({
       const canvas = ref.current;
       if (!current || !canvas) return;
       if (!current.active && Math.hypot(e.clientX - start.x, e.clientY - start.y) < DRAG_THRESHOLD) return;
+      // The window listener outlives the render that installed it. A ResizeObserver update or
+      // layout command can land between pointerdown and the first move, so hit testing must use
+      // one current controller/layout snapshot and the canvas' current dimensions.
+      const currentController = latestController.current;
+      const currentLayout = currentController.layout;
+      const width = Math.floor(canvas.clientWidth);
+      const height = Math.floor(canvas.clientHeight);
+      currentController.size.current = { width, height };
+      setSize((previous) => (previous.width === width && previous.height === height ? previous : { width, height }));
+      const currentPaneWidth = Math.max(0, width - (currentLayout.dock.length > 0 ? DOCK_PX + DOCK_GAP : 0));
+      const currentGeometry = computeGeometry(currentLayout, currentPaneWidth, height);
+      const currentPanes = leaves(currentLayout.root);
+      const currentMaximized = currentLayout.maximizedPaneId;
+      const currentVisible = new Set(
+        currentPanes
+          .filter((pane) => !pane.collapsed && (!currentMaximized || pane.paneId === currentMaximized))
+          .map((pane) => pane.paneId),
+      );
+      const currentSource = findLeaf(currentLayout, source.paneId);
       const bounds = canvas.getBoundingClientRect();
-      const target = hitTest(geometry.panes, e.clientX - bounds.left, e.clientY - bounds.top, visible);
+      const target = hitTest(currentGeometry.panes, e.clientX - bounds.left, e.clientY - bounds.top, currentVisible);
       const valid =
+        currentSource &&
+        (source.kind === "pane" || source.index < currentSource.tabs.length) &&
         target &&
         !(target.paneId === source.paneId && (source.kind === "pane" || target.zone === "center")) &&
-        !(
-          source.kind === "tab" &&
-          target.paneId === source.paneId &&
-          (findLeaf(layout, source.paneId)?.tabs.length ?? 0) < 2
-        );
+        !(source.kind === "tab" && target.paneId === source.paneId && currentSource.tabs.length < 2);
       const next = { ...current, active: true, target: valid ? target : null };
       dragRef.current = next;
       setDrag(next);
@@ -326,9 +338,10 @@ function PaneCanvasSurface({
         suppressClick.current = false;
       }, 0);
       if (!current.target) return;
+      const currentController = latestController.current;
       if (source.kind === "tab")
-        controller.moveTab(source.paneId, source.index, current.target.paneId, current.target.zone);
-      else controller.movePane(source.paneId, current.target.paneId, current.target.zone);
+        currentController.moveTab(source.paneId, source.index, current.target.paneId, current.target.zone);
+      else currentController.movePane(source.paneId, current.target.paneId, current.target.zone);
     };
     const onCancel = () => {
       window.removeEventListener("pointermove", onMove);

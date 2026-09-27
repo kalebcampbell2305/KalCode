@@ -214,6 +214,7 @@ test.describe("maximize, collapse, close and reopen never stop a process", () =>
 
 test.describe("tabs and drag and drop", () => {
   test("a tab dragged onto another pane's edge gets its own pane; onto its tabs it joins them", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
     await openCode(page);
     await page.keyboard.press("Control+Alt+d");
     await expect(panes(page)).toHaveCount(2);
@@ -223,20 +224,46 @@ test.describe("tabs and drag and drop", () => {
     // Onto the bottom edge of the right pane: a new pane below it.
     await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
     await page.mouse.down();
-    // A resize/render between pointerdown and the first move must not cancel the gesture.
-    // Slow runners can produce the same render while terminals finish initializing.
+    // A resize/render between pointerdown and the first move must not retain stale hit-test geometry.
+    // Window and wrapping-header changes can produce the same two-dimensional resize in production.
     const surface = canvas(page);
     const surfaceBefore = await box(surface);
-    await surface.evaluate((element, width) => {
-      const htmlElement = element as HTMLElement;
-      htmlElement.style.flex = "none";
-      htmlElement.style.width = `${width}px`;
-    }, surfaceBefore.width - 40);
+    await surface.evaluate(
+      (element, next) => {
+        const htmlElement = element as HTMLElement;
+        htmlElement.style.flex = "none";
+        htmlElement.style.width = `${next.width}px`;
+        htmlElement.style.height = `${next.height}px`;
+      },
+      { width: surfaceBefore.width - 40, height: surfaceBefore.height - 180 },
+    );
     await expect.poll(async () => (await box(pane(page, 1))).width).toBeLessThan(target.width - 10);
+    await expect.poll(async () => (await box(pane(page, 1))).height).toBeLessThan(target.height - 150);
+    const resizedSurface = await box(surface);
     const resizedTarget = await box(pane(page, 1));
-    await page.mouse.move(resizedTarget.x + resizedTarget.width / 2, resizedTarget.y + resizedTarget.height - 30, {
-      steps: 12,
-    });
+    const viewport = page.viewportSize();
+    if (!viewport) throw new Error("The desktop UI test must have a bounded viewport.");
+    const reachable = {
+      left: Math.max(resizedSurface.x, resizedTarget.x, 0),
+      right: Math.min(resizedSurface.x + resizedSurface.width, resizedTarget.x + resizedTarget.width, viewport.width),
+      top: Math.max(resizedSurface.y, resizedTarget.y, 0),
+      bottom: Math.min(
+        resizedSurface.y + resizedSurface.height,
+        resizedTarget.y + resizedTarget.height,
+        viewport.height,
+      ),
+    };
+    expect(reachable.right - reachable.left).toBeGreaterThan(60);
+    expect(reachable.bottom - reachable.top).toBeGreaterThan(60);
+    const reachableBottomPoint = {
+      x: (reachable.left + reachable.right) / 2,
+      y: reachable.bottom - 30,
+    };
+    expect(reachableBottomPoint.x).toBeGreaterThan(reachable.left);
+    expect(reachableBottomPoint.x).toBeLessThan(reachable.right);
+    expect(reachableBottomPoint.y).toBeGreaterThan(reachable.top);
+    expect(reachableBottomPoint.y).toBeLessThan(reachable.bottom);
+    await page.mouse.move(reachableBottomPoint.x, reachableBottomPoint.y, { steps: 12 });
     await expect(page.locator('[class*="dropZone"]')).toHaveAttribute("data-zone", "bottom");
     await page.mouse.up();
     await expect(panes(page)).toHaveCount(3);
