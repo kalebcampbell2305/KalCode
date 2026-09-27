@@ -6,6 +6,10 @@
 //! recovery paths must stay outside this admission gate.
 
 use std::collections::BTreeMap;
+#[cfg(feature = "e2e")]
+use std::ffi::OsStr;
+#[cfg(feature = "e2e")]
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -13,6 +17,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::AppState;
 use crate::runtime_coordinator::{RuntimeAccess, RuntimeState};
 use kalcode_core::{IpcError, KalError};
+#[cfg(feature = "e2e")]
+use kalcode_resources::probe::{Counters, ProbePlan, RawCpu, RawMemory, RawSample};
 use kalcode_resources::{
     Activity, AdmissionDecision, AdmissionReason, AdmissionRequirements, AdmissionState,
     CapacityAdvice, CapacityRequest, Constraint, Governor, GovernorConfig, GovernorHandle,
@@ -20,12 +26,93 @@ use kalcode_resources::{
     ResourceMode, ResourceSnapshot, RunningWork, SamplerStats, WorkspaceRoot, admission_max_age,
     capacity, evaluate_admission,
 };
+#[cfg(feature = "e2e")]
+use kalcode_resources::{SystemClock, SystemProbe};
 use serde::Serialize;
 
 const REPORT_HISTORY_POINTS: usize = 60;
 const MAX_LOCAL_CPU_MILLICORES: u32 = 64_000;
 const MAX_LOCAL_MEMORY_MIB: u64 = 262_144;
 const MAX_LOCAL_DISK_MIB: u64 = 1_048_576;
+#[cfg(feature = "e2e")]
+const RESOURCE_FIXTURE_OPT_IN_ENV: &str = "KALCODE_E2E_RESOURCE_FIXTURE";
+#[cfg(feature = "e2e")]
+const RESOURCE_FIXTURE_VALUE: &str = "provider-capacity-v1";
+
+#[cfg(feature = "e2e")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum E2eResourceFixtureSelection {
+    Real,
+    ProviderCapacity,
+    Rejected,
+}
+
+/// One fixed low-pressure sample for marked native E2E profiles. The normal governor still owns
+/// smoothing, freshness, pressure, capacity, admission, reservations and provider limits.
+#[cfg(feature = "e2e")]
+struct E2eProviderCapacityProbe;
+
+#[cfg(feature = "e2e")]
+impl SystemProbe for E2eProviderCapacityProbe {
+    fn sample(&mut self, _plan: &ProbePlan<'_>) -> RawSample {
+        RawSample {
+            cpu: Reading::Value(RawCpu {
+                total_percent: 5.0,
+                logical_cores: 8,
+            }),
+            memory: Reading::Value(RawMemory {
+                total_bytes: 16 * 1024 * 1024 * 1024,
+                available_bytes: 12 * 1024 * 1024 * 1024,
+            }),
+            disk_io: Reading::Value(Counters {
+                generation: 1,
+                a_bytes: 0,
+                b_bytes: 0,
+            }),
+            commit: None,
+            network: None,
+            volumes: None,
+            processes: None,
+            gpu: None,
+        }
+    }
+}
+
+#[cfg(feature = "e2e")]
+fn classify_e2e_resource_fixture(
+    opt_in: Option<&OsStr>,
+    data_dir: Option<&Path>,
+    attested: impl FnOnce(&Path) -> bool,
+) -> E2eResourceFixtureSelection {
+    let Some(opt_in) = opt_in else {
+        return E2eResourceFixtureSelection::Real;
+    };
+    if opt_in != OsStr::new(RESOURCE_FIXTURE_VALUE) {
+        return E2eResourceFixtureSelection::Rejected;
+    }
+    match data_dir {
+        Some(data_dir) if attested(data_dir) => E2eResourceFixtureSelection::ProviderCapacity,
+        _ => E2eResourceFixtureSelection::Rejected,
+    }
+}
+
+#[cfg(feature = "e2e")]
+fn e2e_resource_fixture_selection() -> E2eResourceFixtureSelection {
+    let opt_in = std::env::var_os(RESOURCE_FIXTURE_OPT_IN_ENV);
+    let data_dir = std::env::var_os("KALCODE_DATA_DIR").map(std::path::PathBuf::from);
+    classify_e2e_resource_fixture(opt_in.as_deref(), data_dir.as_deref(), |data_dir| {
+        crate::account::e2e::provider_fixture_is_attested(data_dir).unwrap_or(false)
+    })
+}
+
+#[cfg(feature = "e2e")]
+fn start_e2e_provider_capacity_governor() -> Result<GovernorHandle, kalcode_resources::ModeError> {
+    Governor::start_with(
+        GovernorConfig::default(),
+        Box::new(E2eProviderCapacityProbe),
+        Arc::new(SystemClock::default()),
+    )
+}
 
 mod provider;
 pub(crate) use provider::ResourceAdmissionProvider;
@@ -373,7 +460,7 @@ impl ResourceGovernorState {
     /// Starts the one process-wide sampler. Invalid built-in configuration degrades to a visible,
     /// fail-closed state instead of preventing the desktop and recovery surfaces from opening.
     pub fn start() -> Self {
-        let (handle, fallback_status) = match Governor::start(GovernorConfig::default()) {
+        let started = |result: Result<GovernorHandle, kalcode_resources::ModeError>| match result {
             Ok(handle) => (Some(handle), GovernorStatus::Starting),
             Err(error) => {
                 tracing::error!(
@@ -389,6 +476,29 @@ impl ResourceGovernorState {
                 )
             }
         };
+        #[cfg(feature = "e2e")]
+        let (handle, fallback_status) = match e2e_resource_fixture_selection() {
+            E2eResourceFixtureSelection::Real => {
+                started(Governor::start(GovernorConfig::default()))
+            }
+            E2eResourceFixtureSelection::ProviderCapacity => {
+                started(start_e2e_provider_capacity_governor())
+            }
+            E2eResourceFixtureSelection::Rejected => {
+                tracing::error!(
+                    event = "resources.e2e_fixture_rejected",
+                    "the resource E2E fixture was rejected"
+                );
+                (
+                    None,
+                    GovernorStatus::Failed {
+                        reason: "the resource governor could not start".into(),
+                    },
+                )
+            }
+        };
+        #[cfg(not(feature = "e2e"))]
+        let (handle, fallback_status) = started(Governor::start(GovernorConfig::default()));
         Self {
             runtime: Mutex::new(Runtime {
                 handle,

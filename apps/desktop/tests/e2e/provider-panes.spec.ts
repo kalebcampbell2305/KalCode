@@ -2,13 +2,15 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 import {
   closeGracefully,
   EXE,
   launch,
   processesMatching,
+  RESOURCE_PROVIDER_FIXTURE_OPT_IN,
   removeDir,
+  test,
   waitForProviderAdmission,
   writeManagedFakeProviderConfig,
 } from "./harness.ts";
@@ -77,6 +79,7 @@ test("a provider pane runs the CLI in a PTY and routes its tool calls through Ka
     KALCODE_E2E_PICK_FOLDER: project,
     // The default routing (engine), stated explicitly so the test doesn't depend on it.
     KALCODE_E2E_HOOK_DECISIONS: "engine",
+    KALCODE_E2E_RESOURCE_FIXTURE: RESOURCE_PROVIDER_FIXTURE_OPT_IN,
     PATH: `${bin};${process.env.PATH ?? ""}`,
   };
 

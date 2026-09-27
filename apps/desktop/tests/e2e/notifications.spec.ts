@@ -2,12 +2,14 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 import {
   closeGracefully,
   EXE,
   launch,
+  RESOURCE_PROVIDER_FIXTURE_OPT_IN,
   removeDir,
+  test,
   waitForProviderAdmission,
   writeManagedFakeProviderConfig,
 } from "./harness.ts";
@@ -71,6 +73,7 @@ test("a pane's permission request and completion reach the notification center, 
   const env = {
     KALCODE_E2E_PICK_FOLDER: project,
     KALCODE_E2E_HOOK_DECISIONS: "engine",
+    KALCODE_E2E_RESOURCE_FIXTURE: RESOURCE_PROVIDER_FIXTURE_OPT_IN,
     PATH: `${bin};${process.env.PATH ?? ""}`,
   };
 

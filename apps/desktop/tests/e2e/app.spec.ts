@@ -1,9 +1,17 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { expect, type Page, test } from "@playwright/test";
-import { closeGracefully, EXE, killForcibly, launch, removeDir } from "./harness.ts";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { expect, type Page } from "@playwright/test";
+import {
+  closeGracefully,
+  EXE,
+  killForcibly,
+  launch,
+  removeDir,
+  test,
+  writeManagedFakeProviderConfig,
+} from "./harness.ts";
 
 // A binary built with the `e2e` feature (test hooks enabled) into its own target directory:
 //   CARGO_TARGET_DIR=target/e2e pnpm tauri build --no-bundle --features e2e
@@ -22,6 +30,27 @@ test.beforeAll(() => {
 });
 
 const activity = (page: Page) => page.getByRole("region", { name: "Activity" });
+const FAKE = join(dirname(EXE), "kalcode-fake-provider.exe");
+
+interface ProviderStatusLite {
+  id: string;
+  detection: { state: string; auth: string; displayPath: string | null; version: string | null } | null;
+}
+
+function invoke<T>(page: Page, command: string): Promise<T> {
+  return page.evaluate(
+    (cmd) =>
+      (
+        window as unknown as { __TAURI_INTERNALS__: { invoke: (command: string) => Promise<unknown> } }
+      ).__TAURI_INTERNALS__.invoke(cmd),
+    command,
+  ) as Promise<T>;
+}
+
+function displayedPath(path: string): string {
+  const home = homedir();
+  return path.toLowerCase().startsWith(home.toLowerCase()) ? `~${path.slice(home.length)}` : path;
+}
 
 test("launch, change settings, quit, relaunch: settings and history persist", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-"));
@@ -99,9 +128,32 @@ test("a database from a newer KalCode is refused with a clear explanation", asyn
 // (`claude auth status`, `codex login status`); it never sends a prompt or signs in.
 test("the Providers page detects the installed Claude Code CLI", async () => {
   const dataDir = mkdtempSync(join(tmpdir(), "kalcode-e2e-"));
+  const root = mkdtempSync(join(tmpdir(), "kalcode-e2e-provider-detection-"));
+  const bin = join(root, "bin");
+  mkdirSync(bin);
+  expect(existsSync(FAKE), "build:e2e must build the fake provider").toBe(true);
+  for (const name of ["claude.exe", "codex.exe", "gemini.exe"]) copyFileSync(FAKE, join(bin, name));
+  writeManagedFakeProviderConfig(bin);
   try {
-    const app = await launch(dataDir);
+    const app = await launch(dataDir, { PATH: `${bin};${process.env.PATH ?? ""}` });
     await expect(app.page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+
+    // Safety gate: native detection resolved every provider to the no-network fake before the UI
+    // asserts any installed or account state.
+    const statuses = await invoke<ProviderStatusLite[]>(app.page, "providers_detect");
+    for (const [id, executable, version] of [
+      ["claude-code", "claude.exe", "2.1.282"],
+      ["codex", "codex.exe", "0.155.1"],
+      ["gemini-cli", "gemini.exe", "0.61.0"],
+    ] as const) {
+      const status = statuses.find((candidate) => candidate.id === id);
+      expect(status?.detection?.state, id).toBe("installed");
+      expect(status?.detection?.displayPath?.toLowerCase(), id).toBe(
+        displayedPath(join(bin, executable)).toLowerCase(),
+      );
+      expect(status?.detection?.version, id).toBe(version);
+    }
+
     await app.page.getByRole("button", { name: "Providers" }).click();
     await expect(app.page.getByRole("heading", { level: 1, name: "Providers" })).toBeVisible();
 
@@ -121,6 +173,7 @@ test("the Providers page detects the installed Claude Code CLI", async () => {
     await closeGracefully(app);
   } finally {
     removeDir(dataDir);
+    removeDir(root);
   }
 });
 

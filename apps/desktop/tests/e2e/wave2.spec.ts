@@ -2,8 +2,8 @@ import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, type Page, test } from "@playwright/test";
-import { closeGracefully, EXE, launch, removeDir } from "./harness.ts";
+import { expect, type Page } from "@playwright/test";
+import { closeGracefully, EXE, launch, removeDir, test } from "./harness.ts";
 
 /**
  * Wave 2 integration against the real app: a workspace (Z1) is offered to threads (Z3) together

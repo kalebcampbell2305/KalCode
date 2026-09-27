@@ -2,8 +2,8 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, type Page, test } from "@playwright/test";
-import { closeGracefully, closeWindowNamed, EXE, launch, processesMatching, removeDir } from "./harness.ts";
+import { expect, type Page } from "@playwright/test";
+import { closeGracefully, closeWindowNamed, EXE, launch, processesMatching, removeDir, test } from "./harness.ts";
 
 /**
  * Z1 end to end against the real app: open a real folder, run real shells in real

@@ -3,8 +3,8 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { expect, type Page, test } from "@playwright/test";
-import { ACCOUNT_KALVOICE_FIXTURE_OPT_IN, closeGracefully, EXE, launch, removeDir } from "./harness.ts";
+import { expect, type Page } from "@playwright/test";
+import { ACCOUNT_KALVOICE_FIXTURE_OPT_IN, closeGracefully, EXE, launch, removeDir, test } from "./harness.ts";
 
 /**
  * Data safety and permission enforcement against the real app:

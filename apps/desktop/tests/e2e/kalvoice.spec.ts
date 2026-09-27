@@ -1,14 +1,16 @@
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 import {
   ACCOUNT_KALVOICE_FIXTURE_OPT_IN,
   closeGracefully,
   EXE,
   launch,
   processesMatching,
+  RESOURCE_PROVIDER_FIXTURE_OPT_IN,
   removeDir,
+  test,
   waitForProviderAdmission,
   writeManagedFakeProviderConfig,
 } from "./harness.ts";
@@ -83,6 +85,7 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
   const env = {
     KALCODE_E2E_ACCOUNT_FIXTURE: ACCOUNT_KALVOICE_FIXTURE_OPT_IN,
     KALCODE_E2E_PICK_FOLDER: project,
+    KALCODE_E2E_RESOURCE_FIXTURE: RESOURCE_PROVIDER_FIXTURE_OPT_IN,
     PATH: `${bin};${process.env.PATH ?? ""}`,
   };
   if (MODEL) {

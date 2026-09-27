@@ -1,13 +1,15 @@
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 import {
   closeGracefully,
   EXE,
   launch,
   processesMatching,
+  RESOURCE_PROVIDER_FIXTURE_OPT_IN,
   removeDir,
+  test,
   waitForProviderAdmission,
   writeManagedFakeProviderConfig,
 } from "./harness.ts";
@@ -51,6 +53,7 @@ test("message search opt-out is immediate and survives restart", async () => {
   try {
     const app = await launch(dataDir, {
       KALCODE_E2E_PICK_FOLDER: project,
+      KALCODE_E2E_RESOURCE_FIXTURE: RESOURCE_PROVIDER_FIXTURE_OPT_IN,
       PATH: `${bin};${process.env.PATH ?? ""}`,
     });
     const page = app.page;

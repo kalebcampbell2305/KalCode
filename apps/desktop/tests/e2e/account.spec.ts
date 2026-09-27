@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { expect, test } from "@playwright/test";
+import { expect } from "@playwright/test";
 import {
   ACCOUNT_FIXTURE_OPT_IN,
   closeGracefully,
@@ -8,6 +8,7 @@ import {
   launch,
   type Running,
   removeDir,
+  test,
 } from "./harness.ts";
 
 test.skip(process.platform !== "win32", "Real-app account E2E drives the compiled WebView2 app on Windows.");

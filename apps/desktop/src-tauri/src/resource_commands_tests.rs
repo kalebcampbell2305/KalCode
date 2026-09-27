@@ -20,8 +20,102 @@ use super::{
     ResourceFreshnessState, ResourceGovernorState, Runtime, freshness, projected_admission,
     recent_history, sampler_stats,
 };
+#[cfg(feature = "e2e")]
+use super::{
+    E2eResourceFixtureSelection, classify_e2e_resource_fixture,
+    start_e2e_provider_capacity_governor,
+};
 
 const NOW_MS: i64 = 1_800_000_000_000;
+
+#[cfg(feature = "e2e")]
+#[test]
+fn e2e_resource_fixture_requires_exact_opt_in_and_attested_data_root() {
+    use std::ffi::OsStr;
+    use std::path::Path;
+
+    let path = Path::new("C:/Temp/kalcode-e2e-fixture");
+    assert_eq!(
+        classify_e2e_resource_fixture(None, Some(path), |_| true),
+        E2eResourceFixtureSelection::Real
+    );
+    assert_eq!(
+        classify_e2e_resource_fixture(Some(OsStr::new("provider-capacity-v2")), Some(path), |_| {
+            true
+        }),
+        E2eResourceFixtureSelection::Rejected
+    );
+    assert_eq!(
+        classify_e2e_resource_fixture(Some(OsStr::new("provider-capacity-v1")), None, |_| true),
+        E2eResourceFixtureSelection::Rejected
+    );
+    assert_eq!(
+        classify_e2e_resource_fixture(Some(OsStr::new("provider-capacity-v1")), Some(path), |_| {
+            false
+        },),
+        E2eResourceFixtureSelection::Rejected
+    );
+    assert_eq!(
+        classify_e2e_resource_fixture(Some(OsStr::new("provider-capacity-v1")), Some(path), |_| {
+            true
+        },),
+        E2eResourceFixtureSelection::ProviderCapacity
+    );
+}
+
+#[cfg(feature = "e2e")]
+#[test]
+fn e2e_provider_sample_uses_canonical_capacity_and_still_enforces_limits() {
+    use std::collections::BTreeMap;
+
+    use kalcode_resources::CustomLimits;
+
+    let handle = start_e2e_provider_capacity_governor().expect("fixed fixture governor");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while handle.latest().is_none() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(handle.latest().is_some(), "fixture sample was not ingested");
+    let state = Arc::new(ResourceGovernorState {
+        runtime: Mutex::new(Runtime {
+            handle: Some(handle),
+            activity: ActivityTracker::default(),
+            fallback_status: GovernorStatus::Starting,
+        }),
+    });
+
+    let admitted = state.report().admission;
+    assert_eq!(admitted.state, AdmissionState::Allowed);
+    assert!(admitted.additional > 0);
+
+    state.set_active_tasks(ModeLimits::balanced().max_agents);
+    let held = state.report().admission;
+    assert_eq!(held.state, AdmissionState::Held);
+    assert_eq!(held.additional, 0);
+    assert!(!held.reasons.is_empty());
+
+    state.set_active_tasks(0);
+    let provider = ProviderId::new("codex");
+    state
+        .set_mode(ResourceMode::Custom(CustomLimits {
+            per_provider: BTreeMap::from([(provider.clone(), 0)]),
+            ..CustomLimits::default()
+        }))
+        .expect("valid provider-specific limit");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while state.report().snapshot.mode != ModeKind::Custom && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(state.report().snapshot.mode, ModeKind::Custom);
+    let provider_denial = match state.reserve_provider_task(provider) {
+        Ok(_) => panic!("provider-specific zero limit must deny the reservation"),
+        Err(decision) => decision,
+    };
+    assert_eq!(provider_denial.state, AdmissionState::Held);
+    assert_eq!(provider_denial.additional, 0);
+    assert!(!provider_denial.reasons.is_empty());
+    state.shutdown();
+}
 
 fn snapshot(sampled_at_unix_ms: i64) -> ResourceSnapshot {
     let mut snapshot = ResourceSnapshot::unknown("not sampled", ModeKind::Balanced);

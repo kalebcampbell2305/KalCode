@@ -2,8 +2,8 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { chromium, expect, type Page, test } from "@playwright/test";
-import { closeGracefully, EXE, launch, PORT, removeDir } from "./harness.ts";
+import { chromium, expect, type Page } from "@playwright/test";
+import { closeGracefully, EXE, launch, PORT, removeDir, test } from "./harness.ts";
 import { clickOwnedClientPoint } from "./windowsPointer.ts";
 
 test.skip(process.platform !== "win32", "Real-app E2E drives WebView2 and runs on Windows.");

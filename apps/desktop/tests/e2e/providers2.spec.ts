@@ -2,13 +2,15 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 import {
   closeGracefully,
   EXE,
   launch,
   processesMatching,
+  RESOURCE_PROVIDER_FIXTURE_OPT_IN,
   removeDir,
+  test,
   waitForProviderAdmission,
   writeManagedFakeProviderConfig,
 } from "./harness.ts";
@@ -99,6 +101,7 @@ test("Codex and Gemini CLI threads stream to done and Provider Health reports th
   try {
     const app = await launch(dataDir, {
       KALCODE_E2E_PICK_FOLDER: project,
+      KALCODE_E2E_RESOURCE_FIXTURE: RESOURCE_PROVIDER_FIXTURE_OPT_IN,
       PATH: `${bin};${process.env.PATH ?? ""}`,
     });
     const page = app.page;
@@ -201,6 +204,7 @@ test("a Codex pane reports authenticated notify status and ignores forged termin
   try {
     const app = await launch(dataDir, {
       KALCODE_E2E_PICK_FOLDER: project,
+      KALCODE_E2E_RESOURCE_FIXTURE: RESOURCE_PROVIDER_FIXTURE_OPT_IN,
       PATH: `${bin};${process.env.PATH ?? ""}`,
     });
     const page = app.page;

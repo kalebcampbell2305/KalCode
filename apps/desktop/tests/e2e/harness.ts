@@ -2,7 +2,7 @@ import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { type Browser, chromium, type Page } from "@playwright/test";
+import { type Browser, chromium, type Page, test as playwrightTest, type TestInfo } from "@playwright/test";
 import { type LaunchReadinessTimer, waitForLaunchConnection, waitForLaunchReadiness } from "./launchReadiness.ts";
 
 /**
@@ -16,6 +16,7 @@ export const PORT = Number(process.env.KALCODE_E2E_CDP_PORT ?? 9333);
 export const ACCOUNT_FIXTURE_OPT_IN = "onboarding-v1";
 export const ACCOUNT_READY_FIXTURE_OPT_IN = "ready-v1";
 export const ACCOUNT_KALVOICE_FIXTURE_OPT_IN = "kalvoice-under-limit-v1";
+export const RESOURCE_PROVIDER_FIXTURE_OPT_IN = "provider-capacity-v1";
 const ACCOUNT_FIXTURE_PREFIX = "kalcode-e2e-account-";
 const ACCOUNT_FIXTURE_MARKER = ".kalcode-account-e2e-v1";
 const ACCOUNT_FIXTURE_MARKER_CONTENT = "kalcode-account-e2e-v1\n";
@@ -27,6 +28,149 @@ export interface Running {
   browser: Browser;
   page: Page;
 }
+
+interface OwnedApplication {
+  child: ChildProcess;
+  browser: Browser | null;
+  page: Page | null;
+}
+
+/** Exact per-test ownership. Failed cleanup stays registered for the fixture's bounded retry. */
+export class OwnedApplicationRegistry<T> {
+  readonly #owners = new Map<string, Set<T>>();
+
+  begin(owner: string): void {
+    if (this.#owners.has(owner)) throw new Error("The native E2E owner is already active");
+    this.#owners.set(owner, new Set());
+  }
+
+  track(owner: string, value: T): void {
+    const values = this.#owners.get(owner);
+    if (!values) throw new Error("Native E2E launch requires the harness test fixture");
+    values.add(value);
+  }
+
+  release(owner: string, value: T): void {
+    this.#owners.get(owner)?.delete(value);
+  }
+
+  count(owner: string): number {
+    return this.#owners.get(owner)?.size ?? 0;
+  }
+
+  requireActive(owner: string): void {
+    if (!this.#owners.has(owner)) throw new Error("Native E2E launch requires the harness test fixture");
+  }
+
+  async cleanup(owner: string, cleanup: (value: T) => Promise<void>): Promise<number> {
+    const values = this.#owners.get(owner);
+    if (!values) return 0;
+    let failures = 0;
+    for (const value of [...values]) {
+      try {
+        await cleanup(value);
+        values.delete(value);
+      } catch {
+        failures += 1;
+      }
+    }
+    return failures;
+  }
+
+  async cleanupAll(cleanup: (value: T) => Promise<void>): Promise<number> {
+    let failures = 0;
+    for (const owner of [...this.#owners.keys()]) {
+      failures += await this.cleanup(owner, cleanup);
+      if (this.count(owner) === 0) this.finish(owner);
+    }
+    return failures;
+  }
+
+  finish(owner: string): void {
+    this.#owners.delete(owner);
+  }
+}
+
+const ownedApplications = new OwnedApplicationRegistry<OwnedApplication>();
+
+export async function settleOwnedApplications<T>(
+  registry: OwnedApplicationRegistry<T>,
+  owner: string,
+  cleanup: (value: T) => Promise<void>,
+  bodyFailed: boolean,
+  report: (failures: number) => Promise<void>,
+): Promise<void> {
+  let failures = await registry.cleanup(owner, cleanup);
+  if (failures > 0) failures = await registry.cleanup(owner, cleanup);
+  if (failures === 0) {
+    registry.finish(owner);
+    return;
+  }
+  if (bodyFailed) {
+    await report(failures).catch(() => undefined);
+    return;
+  }
+  throw new Error(`Failed to settle ${failures} owned native application(s)`);
+}
+
+function currentOwner(): string {
+  return playwrightTest.info().testId;
+}
+
+async function attachCleanupFailure(testInfo: TestInfo, failures: number): Promise<void> {
+  await testInfo.attach("native E2E owned cleanup failure", {
+    body: Buffer.from(`Failed to settle ${failures} owned native application(s) after two bounded attempts.\n`),
+    contentType: "text/plain",
+  });
+}
+
+/**
+ * Every spec imports this test fixture. It owns even partially launched children and settles them
+ * without scanning or terminating any process that the current test did not spawn.
+ */
+export const test = playwrightTest.extend<
+  { _ownedNativeApplications: undefined },
+  { _ownedNativeWorkerCleanup: undefined }
+>({
+  _ownedNativeWorkerCleanup: [
+    async (
+      // biome-ignore lint/correctness/noEmptyPattern: Playwright requires an object pattern here.
+      {},
+      use,
+    ) => {
+      await use(undefined);
+      const failures = await ownedApplications.cleanupAll(cleanupOwnedApplication);
+      if (failures > 0) throw new Error(`Failed to settle ${failures} owned native application(s) at worker exit`);
+    },
+    { auto: true, scope: "worker" },
+  ],
+  _ownedNativeApplications: [
+    async (
+      // biome-ignore lint/correctness/noEmptyPattern: Playwright requires an object pattern here.
+      {},
+      use,
+      testInfo,
+    ) => {
+      ownedApplications.begin(testInfo.testId);
+      let useError: unknown;
+      try {
+        await use(undefined);
+      } catch (error) {
+        useError = error;
+      }
+
+      await settleOwnedApplications(
+        ownedApplications,
+        testInfo.testId,
+        cleanupOwnedApplication,
+        useError !== undefined || testInfo.status !== testInfo.expectedStatus,
+        (failures) => attachCleanupFailure(testInfo, failures),
+      );
+      if (useError !== undefined) throw useError;
+    },
+    { auto: true },
+  ],
+});
 
 /** Creates the fresh, explicitly marked directory the native account fixture requires. */
 export function createAccountFixtureDataDir(): string {
@@ -67,8 +211,23 @@ export function writeManagedFakeProviderConfig(binDir: string): void {
   );
 }
 
-function isolatedWebviewEnvironment(overrides: Record<string, string>): NodeJS.ProcessEnv {
-  const childEnvironment: NodeJS.ProcessEnv = { ...process.env, ...overrides };
+export function isolatedWebviewEnvironment(
+  overrides: Record<string, string>,
+  source: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const inherited: NodeJS.ProcessEnv = { ...source };
+  for (const name of Object.keys(inherited)) {
+    const upper = name.toUpperCase();
+    if (
+      upper.startsWith("WEBVIEW2_") ||
+      upper.startsWith("COREWEBVIEW2_") ||
+      upper.startsWith("WEBKIT_INSPECTOR") ||
+      upper === "KALCODE_E2E_RESOURCE_FIXTURE"
+    ) {
+      delete inherited[name];
+    }
+  }
+  const childEnvironment: NodeJS.ProcessEnv = { ...inherited, ...overrides };
   for (const name of Object.keys(childEnvironment)) {
     const upper = name.toUpperCase();
     if (upper.startsWith("WEBVIEW2_") || upper.startsWith("COREWEBVIEW2_") || upper.startsWith("WEBKIT_INSPECTOR")) {
@@ -96,6 +255,8 @@ export async function launch(dataDir: string, env: Record<string, string> = {}):
   if (!Number.isInteger(PORT) || PORT < 1_024 || PORT > 65_535) {
     throw new Error(`KALCODE_E2E_CDP_PORT must be an integer from 1024 through 65535; received ${String(PORT)}`);
   }
+  const owner = currentOwner();
+  ownedApplications.requireActive(owner);
   const child = spawn(EXE, [], {
     env: {
       ...isolatedWebviewEnvironment({ KALCODE_E2E_ACCOUNT_FIXTURE: ACCOUNT_READY_FIXTURE_OPT_IN, ...env }),
@@ -104,6 +265,8 @@ export async function launch(dataDir: string, env: Record<string, string> = {}):
     },
     stdio: "ignore",
   });
+  const owned: OwnedApplication = { child, browser: null, page: null };
+  ownedApplications.track(owner, owned);
   let spawnError: Error | null = null;
   child.once("error", (error) => {
     spawnError = error;
@@ -126,6 +289,7 @@ export async function launch(dataDir: string, env: Record<string, string> = {}):
       disposeLate: (connection) => connection.close().catch(() => undefined),
     });
     const connectedBrowser = browser;
+    owned.browser = connectedBrowser;
 
     const page = await waitForLaunchReadiness<Page>(
       {
@@ -152,10 +316,12 @@ export async function launch(dataDir: string, env: Record<string, string> = {}):
       },
       { deadline, processName: EXE },
     );
-    return { child, browser: connectedBrowser, page };
+    owned.page = page;
+    return owned as Running;
   } catch (error) {
-    await browser?.close().catch(() => undefined);
-    await stopOwnedProcess(child, true);
+    await cleanupOwnedApplication(owned)
+      .then(() => ownedApplications.release(owner, owned))
+      .catch(() => undefined);
     throw error;
   }
 }
@@ -191,56 +357,93 @@ export async function waitForProviderAdmission(page: Page, timeoutMs = 60_000): 
 
 /** Graceful close: WM_CLOSE to the window, as when the user clicks the close button. */
 export async function closeGracefully(app: Running) {
-  let requested = false;
-  try {
-    requested = closeWindowNamed(app.child.pid ?? -1, "KalCode");
-  } catch {
-    // The process may have closed between the CDP action and the UI Automation lookup.
-  }
-  if (!requested && app.child.pid !== undefined && app.child.exitCode === null) {
+  let requested = ownedChildIsTerminal(app.child);
+  if (!requested) {
     try {
-      execFileSync("taskkill", ["/PID", String(app.child.pid)], { windowsHide: true });
+      requested = closeWindowNamed(app.child.pid ?? -1, "KalCode");
     } catch {
-      // The bounded wait below distinguishes a concurrent exit from a process still running.
+      // The process may have closed between the CDP action and the UI Automation lookup.
     }
   }
-  const exited = await Promise.race([
-    waitForExit(app.child).then(() => true),
-    new Promise<false>((resolveExit) => setTimeout(() => resolveExit(false), 10_000)),
-  ]);
-  if (!exited && app.child.pid !== undefined) {
-    execFileSync("taskkill", ["/F", "/PID", String(app.child.pid)], { windowsHide: true });
-    await waitForExit(app.child);
-  }
-  await app.browser.close().catch(() => undefined);
+  if (!requested && !ownedChildIsTerminal(app.child)) app.child.kill();
+  if (!(await waitForOwnedExit(app.child, 10_000))) await stopOwnedProcess(app.child, true);
+  await closeBrowserBounded(app.browser);
+  ownedApplications.release(currentOwner(), app);
 }
 
 /** Simulates a desktop crash while preserving its independent process-cleanup guardian. */
 export async function killForcibly(app: Running): Promise<void> {
   await stopOwnedProcess(app.child, true);
-  await app.browser.close().catch(() => undefined);
+  await closeBrowserBounded(app.browser);
+  ownedApplications.release(currentOwner(), app);
 }
 
 async function stopOwnedProcess(child: ChildProcess, force: boolean): Promise<void> {
-  if (child.exitCode !== null) return;
-  if (child.pid === undefined) throw new Error("The E2E process has no pid");
-  try {
-    execFileSync("taskkill", [...(force ? ["/F"] : []), "/PID", String(child.pid)], {
-      windowsHide: true,
-    });
-  } catch (error) {
-    if (child.exitCode === null) throw error;
+  if (ownedChildIsTerminal(child)) return;
+  if (!child.kill(force ? "SIGKILL" : undefined) && !ownedChildIsTerminal(child)) {
+    throw new Error("The owned E2E process could not be signaled");
   }
-  const exited = await Promise.race([
-    waitForExit(child).then(() => true),
-    new Promise<false>((resolveExit) => setTimeout(() => resolveExit(false), 10_000)),
-  ]);
-  if (!exited) throw new Error(`E2E process ${child.pid} did not exit within 10 seconds`);
+  if (!(await waitForOwnedExit(child, 10_000))) throw new Error("The owned E2E process did not exit within 10 seconds");
+}
+
+async function waitForOwnedExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
+  if (ownedChildIsTerminal(child)) return true;
+  return new Promise<boolean>((resolveExit) => {
+    const finish = (exited: boolean) => {
+      clearTimeout(handle);
+      child.off("exit", onExit);
+      resolveExit(exited);
+    };
+    const onExit = () => finish(true);
+    const handle = setTimeout(() => finish(false), timeoutMs);
+    child.once("exit", onExit);
+    if (ownedChildIsTerminal(child)) finish(true);
+  });
+}
+
+async function closeBrowserBounded(browser: Browser): Promise<void> {
+  let handle: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<never>((_, reject) => {
+    handle = setTimeout(() => reject(new Error("The owned E2E browser did not close within 5 seconds")), 5_000);
+  });
+  try {
+    await Promise.race([browser.close(), timedOut]);
+  } finally {
+    if (handle !== undefined) clearTimeout(handle);
+  }
+}
+
+async function cleanupOwnedApplication(app: OwnedApplication): Promise<void> {
+  const failures: string[] = [];
+  try {
+    await stopOwnedProcess(app.child, true);
+  } catch {
+    failures.push("process");
+  }
+  if (app.browser) {
+    try {
+      await closeBrowserBounded(app.browser);
+    } catch {
+      failures.push("browser");
+    }
+  }
+  if (failures.length > 0) throw new Error(`Owned native cleanup failed: ${failures.join(",")}`);
 }
 
 export function waitForExit(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null) return Promise.resolve();
-  return new Promise((resolveExit) => child.once("exit", () => resolveExit()));
+  if (ownedChildIsTerminal(child)) return Promise.resolve();
+  return new Promise((resolveExit) => {
+    const onExit = () => resolveExit();
+    child.once("exit", onExit);
+    if (ownedChildIsTerminal(child)) {
+      child.off("exit", onExit);
+      resolveExit();
+    }
+  });
+}
+
+export function ownedChildIsTerminal(child: Pick<ChildProcess, "exitCode" | "pid" | "signalCode">): boolean {
+  return child.exitCode !== null || child.signalCode !== null || child.pid === undefined;
 }
 
 /** WebView2 helper processes release file locks shortly after the app exits. */
@@ -271,17 +474,26 @@ export function processesMatching(needle: string): number[] {
  */
 export function closeWindowNamed(pid: number, name: string): boolean {
   const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "try {",
     "Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes",
     "$A = [System.Windows.Automation.AutomationElement]",
     "$S = [System.Windows.Automation.TreeScope]",
     `$byPid = New-Object System.Windows.Automation.PropertyCondition($A::ProcessIdProperty, ${pid})`,
     `$byName = New-Object System.Windows.Automation.PropertyCondition($A::NameProperty, '${name.replaceAll("'", "''")}')`,
+    "$byWindow = New-Object System.Windows.Automation.PropertyCondition($A::ControlTypeProperty, [System.Windows.Automation.ControlType]::Window)",
+    "$namedWindow = New-Object System.Windows.Automation.AndCondition($byName, $byWindow)",
     "$found = $null",
     "foreach ($top in $A::RootElement.FindAll($S::Children, $byPid)) {",
-    `  if ($top.Current.Name -eq '${name.replaceAll("'", "''")}') { $found = $top; break }`,
-    "  $found = $top.FindFirst($S::Descendants, $byName); if ($found) { break }",
+    `  if ($top.Current.Name -eq '${name.replaceAll("'", "''")}' -and $top.Current.ControlType -eq [System.Windows.Automation.ControlType]::Window) { $found = $top; break }`,
+    "  $found = $top.FindFirst($S::Descendants, $namedWindow); if ($found) { break }",
     "}",
-    "if ($found) { $found.GetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern).Close(); 'closed' } else { 'none' }",
+    "$pattern = $null",
+    "if ($found -and $found.TryGetCurrentPattern([System.Windows.Automation.WindowPattern]::Pattern, [ref]$pattern)) {",
+    "  ([System.Windows.Automation.WindowPattern]$pattern).Close()",
+    "  'closed'",
+    "} else { 'none' }",
+    "} catch { 'none' }",
   ].join("\n");
   const out = execFileSync("powershell", ["-NoProfile", "-Command", script], {
     encoding: "utf8",

@@ -2,8 +2,8 @@ import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, type Page, test } from "@playwright/test";
-import { closeGracefully, EXE, launch, removeDir } from "./harness.ts";
+import { expect, type Page } from "@playwright/test";
+import { closeGracefully, EXE, launch, removeDir, test } from "./harness.ts";
 
 /**
  * Z7-W2 end to end against the real app: workspaces made from the rail, pinned, renamed in the
