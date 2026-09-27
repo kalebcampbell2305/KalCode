@@ -330,7 +330,13 @@ function identityFromClaims(
   expectedNonce: string,
   now: Date,
 ): OpenIdIdentity {
-  if (!validAudience(claims, config.clientId) || !validTimes(claims, now)) throw new OAuthProviderError();
+  // Entra application IDs are UUIDs; the issued audience uses canonical lowercase.
+  // Preserve case-sensitive audience matching for Google and non-UUID identifiers.
+  const audienceClientId =
+    config.provider === "microsoft" && MICROSOFT_TENANT.test(config.clientId)
+      ? config.clientId.toLowerCase()
+      : config.clientId;
+  if (!validAudience(claims, audienceClientId) || !validTimes(claims, now)) throw new OAuthProviderError();
   if (typeof claims.nonce !== "string" || !constantTimeEqual(claims.nonce, expectedNonce)) {
     throw new OAuthProviderError();
   }

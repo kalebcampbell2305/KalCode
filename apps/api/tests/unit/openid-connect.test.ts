@@ -245,6 +245,35 @@ describe("OpenID Connect providers", () => {
       subject: `${tenant}:microsoft-subject-456`,
       email: "person@example.com",
     });
+    const upperCaseClient = { ...MICROSOFT, clientId: MICROSOFT.clientId.toUpperCase() };
+    const upperCaseFetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(response(microsoftDiscovery()))
+      .mockResolvedValueOnce(response({ id_token: token }))
+      .mockResolvedValueOnce(response({ keys: [{ ...key.publicJwk, alg: undefined, issuer }] }));
+    await expect(
+      exchangeOpenIdIdentity(upperCaseFetcher, upperCaseClient, "oauth-code", VERIFIER, NONCE, NOW),
+    ).resolves.toEqual({
+      provider: "microsoft",
+      subject: `${tenant}:microsoft-subject-456`,
+      email: "person@example.com",
+    });
+    const differentClientFetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(response(microsoftDiscovery()))
+      .mockResolvedValueOnce(response({ id_token: token }))
+      .mockResolvedValueOnce(response({ keys: [{ ...key.publicJwk, alg: undefined, issuer }] }));
+    await expectStage(
+      exchangeOpenIdIdentity(
+        differentClientFetcher,
+        { ...upperCaseClient, clientId: upperCaseClient.clientId.replace("0000", "1000") },
+        "oauth-code",
+        VERIFIER,
+        NONCE,
+        NOW,
+      ),
+      "claims",
+    );
   });
 
   it("rejects mutable Microsoft email and preferred_username claims without verified domain ownership", async () => {
