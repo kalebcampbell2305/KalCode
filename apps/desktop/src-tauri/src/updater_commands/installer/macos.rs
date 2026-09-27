@@ -1,6 +1,6 @@
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -107,10 +107,9 @@ impl PreparedMacInstaller {
             }
             let parent = current_app.parent().ok_or_else(installer_invalid)?;
             let staged_app = parent.join(format!(".KalCode-update-{id}.app"));
-            kalcode_updater::mac_swap::validate_swap_paths(&current_app, &staged_app)?;
-            if fs::symlink_metadata(&staged_app).is_ok() {
-                return Err(installer_storage_failed());
-            }
+            // Claim this exact sibling atomically before copying. Cleanup authority begins only
+            // after this succeeds, so a preexisting owner path is never removed on failure.
+            create_staged_app(&current_app, &staged_app)?;
             staged_created = Some((current_app.clone(), staged_app.clone()));
             let copy = Command::new("/usr/bin/ditto")
                 .args([OsStr::new("--rsrc"), OsStr::new("--extattr")])
@@ -399,6 +398,21 @@ fn digest_file(path: &Path) -> Result<String, UpdateError> {
     super::digest_reader(&mut file)
 }
 
+fn create_staged_app(current: &Path, staged: &Path) -> Result<(), UpdateError> {
+    kalcode_updater::mac_swap::validate_swap_paths(current, staged)?;
+    fs::create_dir(staged).map_err(staged_app_create_error)
+}
+
+fn staged_app_create_error(error: io::Error) -> UpdateError {
+    match error.kind() {
+        io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem => UpdateError::new(
+            "update_install_location_unwritable",
+            "KalCode can't update this install location. Standard users should install KalCode in ~/Applications. If KalCode is in /Applications, replace it manually using an administrator account.",
+        ),
+        _ => installer_storage_failed(),
+    }
+}
+
 fn remove_staged_app(current: &Path, staged: &Path) -> Result<(), UpdateError> {
     kalcode_updater::mac_swap::validate_swap_paths(current, staged)?;
     let metadata = match fs::symlink_metadata(staged) {
@@ -417,4 +431,136 @@ fn identity_mismatch() -> UpdateError {
         "update_signing_identity_mismatch",
         "The update isn't signed by the installed KalCode identity.",
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::io;
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    use tempfile::tempdir;
+
+    use super::{create_staged_app, remove_staged_app, staged_app_create_error};
+
+    struct RestorePermissions {
+        path: PathBuf,
+        permissions: fs::Permissions,
+    }
+
+    impl RestorePermissions {
+        fn restrict(path: &Path) -> io::Result<Self> {
+            let permissions = fs::metadata(path)?.permissions();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o555))?;
+            Ok(Self {
+                path: path.to_path_buf(),
+                permissions,
+            })
+        }
+    }
+
+    impl Drop for RestorePermissions {
+        fn drop(&mut self) {
+            let _ = fs::set_permissions(&self.path, self.permissions.clone());
+        }
+    }
+
+    #[test]
+    fn only_unwritable_install_location_errors_are_actionable() {
+        for kind in [
+            io::ErrorKind::PermissionDenied,
+            io::ErrorKind::ReadOnlyFilesystem,
+        ] {
+            let error = staged_app_create_error(io::Error::from(kind));
+            assert_eq!(error.code(), "update_install_location_unwritable");
+            let message = error.to_string();
+            assert!(message.contains("~/Applications"));
+            assert!(message.contains("If KalCode is in /Applications"));
+            assert!(message.contains("administrator"));
+        }
+
+        for kind in [io::ErrorKind::AlreadyExists, io::ErrorKind::Other] {
+            assert_eq!(
+                staged_app_create_error(io::Error::from(kind)).code(),
+                "update_installer_storage_failed"
+            );
+        }
+    }
+
+    #[test]
+    fn staged_creation_never_replaces_or_removes_an_existing_path()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempdir()?;
+        let current = temp.path().join("KalCode.app");
+        let staged = temp.path().join(".KalCode-update-existing.app");
+        fs::create_dir(&current)?;
+        fs::create_dir(&staged)?;
+        let sentinel = staged.join("owner-data");
+        fs::write(&sentinel, b"preserve")?;
+
+        let error = match create_staged_app(&current, &staged) {
+            Ok(()) => return Err(io::Error::other("existing path was replaced").into()),
+            Err(error) => error,
+        };
+        assert_eq!(error.code(), "update_installer_storage_failed");
+        assert_eq!(fs::read(&sentinel)?, b"preserve");
+        Ok(())
+    }
+
+    #[test]
+    fn unwritable_parent_is_actionable_without_touching_the_installed_app()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempdir()?;
+        let install_root = temp.path().join("Applications");
+        let current = install_root.join("KalCode.app");
+        let staged = install_root.join(".KalCode-update-unwritable.app");
+        fs::create_dir(&install_root)?;
+        fs::create_dir(&current)?;
+        let sentinel = current.join("owner-data");
+        fs::write(&sentinel, b"preserve")?;
+        let _restore = RestorePermissions::restrict(&install_root)?;
+
+        let error = match create_staged_app(&current, &staged) {
+            Ok(()) => return Err(io::Error::other("unwritable parent accepted staging").into()),
+            Err(error) => error,
+        };
+        assert_eq!(error.code(), "update_install_location_unwritable");
+        assert_eq!(fs::read(&sentinel)?, b"preserve");
+        assert!(!staged.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn precreated_staging_accepts_ditto_and_owned_cleanup_is_bounded()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempdir()?;
+        let current = temp.path().join("KalCode.app");
+        let candidate = temp.path().join("Candidate.app");
+        let staged = temp.path().join(".KalCode-update-readable.app");
+        fs::create_dir(&current)?;
+        fs::create_dir_all(candidate.join("Contents"))?;
+        fs::write(candidate.join("Contents").join("marker"), b"candidate")?;
+
+        create_staged_app(&current, &staged)?;
+        let copy = Command::new("/usr/bin/ditto")
+            .args(["--rsrc", "--extattr"])
+            .arg(&candidate)
+            .arg(&staged)
+            .output()?;
+        if !copy.status.success() {
+            return Err(io::Error::other("ditto failed").into());
+        }
+        assert_eq!(
+            fs::read(staged.join("Contents").join("marker"))?,
+            b"candidate"
+        );
+
+        remove_staged_app(&current, &staged)?;
+        assert!(!staged.exists());
+        assert!(current.exists());
+        assert!(candidate.exists());
+        Ok(())
+    }
 }
