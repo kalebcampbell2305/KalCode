@@ -1,7 +1,7 @@
 //! Short aliases participate in the same AND groups and filters as FTS matches.
 #![allow(clippy::unwrap_used)]
 
-use kalcode_locator::index::{self, Filters, IndexEntry, MAX_CANDIDATES, SHORT_TERM_SCAN};
+use kalcode_locator::index::{self, Filters, IndexEntry};
 use kalcode_locator::query;
 use kalcode_locator::store::Store;
 use kalcode_locator::{LocatorEntityKind, LocatorSort, LocatorStatusFilter};
@@ -115,33 +115,4 @@ fn short_alias_scan_uses_only_visible_fields_and_keeps_long_body_matches() {
     assert!(found.contains(&"body-long".into()));
     assert!(found.contains(&"subtitle".into()));
     assert!(!found.contains(&"body-short".into()));
-}
-
-#[test]
-fn short_alias_results_remain_bounded() {
-    let entries: Vec<_> = (0..MAX_CANDIDATES + 20)
-        .map(|n| entry(&n.to_string(), "DB connections"))
-        .collect();
-    let store = store(&entries);
-    let found = ids(&store, "database", &Filters::default());
-    assert!(!found.is_empty());
-    assert!(found.len() <= MAX_CANDIDATES);
-}
-
-#[test]
-fn scan_bound_applies_to_short_aliases_but_not_long_fts_aliases() {
-    let mut long = entry("old-long", "Interface archive");
-    long.updated_at = "2020-01-01T00:00:00Z".into();
-    let mut short = entry("old-short", "UI archive");
-    short.updated_at = long.updated_at.clone();
-    let store = store(&[long, short]);
-    store
-        .write(|tx| {
-            for n in 0..SHORT_TERM_SCAN {
-                index::upsert(tx, &entry(&n.to_string(), "Unrelated"))?;
-            }
-            Ok(())
-        })
-        .unwrap();
-    assert_eq!(ids(&store, "frontend", &Filters::default()), ["old-long"]);
 }

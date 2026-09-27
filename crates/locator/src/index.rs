@@ -517,6 +517,22 @@ fn candidates(
     parsed: &ParsedQuery,
     filters: &Filters,
 ) -> Result<Vec<Candidate>> {
+    candidates_with_alias_interrupt_policy(conn, parsed, filters, || {
+        let started = Instant::now();
+        move || started.elapsed() > ALIAS_BUDGET
+    })
+}
+
+fn candidates_with_alias_interrupt_policy<MakeInterrupt, Interrupt>(
+    conn: &Connection,
+    parsed: &ParsedQuery,
+    filters: &Filters,
+    make_interrupt: MakeInterrupt,
+) -> Result<Vec<Candidate>>
+where
+    MakeInterrupt: FnOnce() -> Interrupt,
+    Interrupt: FnMut() -> bool + Send + 'static,
+{
     let direct = candidates_with(conn, parsed, filters, true)?;
     let has_aliases = parsed
         .groups
@@ -529,8 +545,7 @@ fn candidates(
     // budget is interrupted and the direct matches are used (LOC-06 keeps its bound even when
     // an alias is made of very common trigrams). The direct matches always stay (short words
     // only the scan could find).
-    let started = Instant::now();
-    conn.progress_handler(1000, Some(move || started.elapsed() > ALIAS_BUDGET))?;
+    conn.progress_handler(1000, Some(make_interrupt()))?;
     let widened = candidates_with(conn, parsed, filters, false);
     conn.progress_handler(0, None::<fn() -> bool>)?;
     let mut widened = match widened {
@@ -904,4 +919,135 @@ pub fn is_corruption(error: &KalError) -> bool {
     text.contains("malformed")
         || text.contains("corrupt")
         || text.contains("no such table: locator")
+}
+
+#[cfg(test)]
+mod alias_contract_tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+    use crate::query;
+    use crate::store::Store;
+
+    fn entry(id: &str, title: &str) -> IndexEntry {
+        IndexEntry {
+            kind: LocatorEntityKind::Thread,
+            entity_id: id.into(),
+            workspace_id: Some("atlas".into()),
+            provider_id: Some("codex".into()),
+            title: title.into(),
+            subtitle: None,
+            status: Some("idle".into()),
+            updated_at: "2026-09-25T12:00:00Z".into(),
+            body: None,
+        }
+    }
+
+    fn store(entries: &[IndexEntry]) -> Store {
+        let store = Store::memory().unwrap();
+        store
+            .write(|tx| {
+                for entry in entries {
+                    upsert(tx, entry)?;
+                }
+                Ok(())
+            })
+            .unwrap();
+        store
+    }
+
+    fn candidate_ids(store: &Store, text: &str) -> Vec<String> {
+        store
+            .read(|conn| {
+                candidates_with(conn, &query::parse(text), &Filters::default(), false).map(
+                    |candidates| {
+                        candidates
+                            .into_iter()
+                            .map(|candidate| candidate.entity_id)
+                            .collect()
+                    },
+                )
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn short_alias_results_remain_bounded() {
+        let entries: Vec<_> = (0..MAX_CANDIDATES + 20)
+            .map(|n| entry(&n.to_string(), "DB connections"))
+            .collect();
+        let store = store(&entries);
+        let found = candidate_ids(&store, "database");
+        assert!(!found.is_empty());
+        assert!(found.len() <= MAX_CANDIDATES);
+    }
+
+    #[test]
+    fn scan_bound_applies_to_short_aliases_but_not_long_fts_aliases() {
+        let mut long = entry("old-long", "Interface archive");
+        long.updated_at = "2020-01-01T00:00:00Z".into();
+        let mut short = entry("old-short", "UI archive");
+        short.updated_at = long.updated_at.clone();
+        let store = store(&[long, short]);
+        store
+            .write(|tx| {
+                for n in 0..SHORT_TERM_SCAN {
+                    upsert(tx, &entry(&n.to_string(), "Unrelated"))?;
+                }
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(candidate_ids(&store, "frontend"), ["old-long"]);
+    }
+
+    #[test]
+    fn interrupted_alias_widening_keeps_direct_results_and_clears_handler() {
+        let mut entries = vec![
+            entry("direct", "Frontend exact"),
+            entry("alias-only", "UI archive"),
+        ];
+        entries.extend((0..2_048).map(|n| entry(&format!("unrelated-{n}"), "Unrelated workspace")));
+        let store = store(&entries);
+        let callbacks = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&callbacks);
+        let parsed = query::parse("frontend");
+
+        let interrupted = store
+            .read(|conn| {
+                candidates_with_alias_interrupt_policy(
+                    conn,
+                    &parsed,
+                    &Filters::default(),
+                    move || {
+                        move || {
+                            observed.fetch_add(1, Ordering::SeqCst);
+                            true
+                        }
+                    },
+                )
+            })
+            .unwrap();
+        let interrupted_ids: HashSet<_> = interrupted
+            .into_iter()
+            .map(|candidate| candidate.entity_id)
+            .collect();
+        let callback_count_after_interrupt = callbacks.load(Ordering::SeqCst);
+        assert!(callback_count_after_interrupt > 0);
+        assert!(interrupted_ids.contains("direct"));
+        assert!(!interrupted_ids.contains("alias-only"));
+
+        let after_interrupt: HashSet<_> = store
+            .read(|conn| candidates_with(conn, &parsed, &Filters::default(), false))
+            .unwrap()
+            .into_iter()
+            .map(|candidate| candidate.entity_id)
+            .collect();
+        assert!(after_interrupt.contains("direct"));
+        assert!(after_interrupt.contains("alias-only"));
+        assert_eq!(
+            callbacks.load(Ordering::SeqCst),
+            callback_count_after_interrupt
+        );
+    }
 }
