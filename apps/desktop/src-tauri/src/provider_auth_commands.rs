@@ -192,12 +192,15 @@ impl ProviderRuntimeAuthority {
         let guardian = GuardianRuntime::launch(helper, data_dir).map_err(|error| {
             match error {
                 GuardianError::RecoveryOwned => "workspace_owned",
-                GuardianError::RecoveryPending | GuardianError::QuiescencePending
+                GuardianError::RecoveryPending
+                | GuardianError::QuiescencePending
                 | GuardianError::BlockedUnclean => "workspace_recovery_pending",
-                GuardianError::CorruptMarker | GuardianError::UnknownSchema(_)
+                GuardianError::CorruptMarker
+                | GuardianError::UnknownSchema(_)
                 | GuardianError::MarkerEncoding(_) => "workspace_recovery_metadata_invalid",
                 _ => "provider_guardian_unavailable",
-            }.to_owned()
+            }
+            .to_owned()
         })?;
         let profiles = Arc::new(
             ManagedProfiles::for_data_dir_guarded(
