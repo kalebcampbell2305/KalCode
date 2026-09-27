@@ -1172,9 +1172,14 @@ mod tests {
     impl AccountFixture {
         fn new() -> Self {
             let temp = tempfile::tempdir().expect("temp");
+            let temp_root = if cfg!(target_os = "macos") {
+                temp.path().canonicalize().expect("canonical temp")
+            } else {
+                temp.path().to_path_buf()
+            };
             let core = Arc::new(
                 Core::open(CoreConfig {
-                    paths: Paths::new(temp.path()),
+                    paths: Paths::new(&temp_root),
                     app_version: "0.0.0-test".into(),
                     channel: BuildChannel::Development,
                 })
@@ -1182,7 +1187,7 @@ mod tests {
             );
             let workspace_id = kalcode_contracts::ids::new_id();
             core.transact(|tx| {
-                let root_path = temp.path().join("workspace").display().to_string();
+                let root_path = temp_root.join("workspace").display().to_string();
                 let now = kalcode_core::time::now_rfc3339();
                 tx.execute(
                     "INSERT INTO workspaces (
@@ -1193,7 +1198,7 @@ mod tests {
                 Ok(((), Vec::new()))
             })
             .expect("workspace fixture");
-            let profiles = ManagedProfiles::for_data_dir(temp.path()).expect("managed profiles");
+            let profiles = ManagedProfiles::for_data_dir(&temp_root).expect("managed profiles");
             Self {
                 _temp: temp,
                 store: AccountStore::new(core.clone()),

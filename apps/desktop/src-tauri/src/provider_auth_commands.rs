@@ -1489,9 +1489,14 @@ mod tests {
     impl Fixture {
         fn new() -> Self {
             let temp = tempfile::tempdir().expect("temp");
+            let temp_root = if cfg!(target_os = "macos") {
+                temp.path().canonicalize().expect("canonical temp")
+            } else {
+                temp.path().to_path_buf()
+            };
             let core = Arc::new(
                 Core::open(CoreConfig {
-                    paths: Paths::new(temp.path()),
+                    paths: Paths::new(&temp_root),
                     app_version: "0.0.0-test".into(),
                     channel: BuildChannel::Development,
                 })
@@ -1508,7 +1513,7 @@ mod tests {
                     "kalcode-provider-guardian"
                 });
             let runtime =
-                ProviderRuntimeAuthority::start_with_helper(core.clone(), temp.path(), &helper)
+                ProviderRuntimeAuthority::start_with_helper(core.clone(), &temp_root, &helper)
                     .expect("runtime authority");
             let account = runtime
                 .account_store()

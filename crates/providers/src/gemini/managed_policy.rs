@@ -523,9 +523,14 @@ mod tests {
     impl Fixture {
         fn new() -> Self {
             let temp = tempfile::tempdir().expect("temp");
-            let person = temp.path().join("person");
-            let workspace = temp.path().join("repo");
-            let system_policies = temp.path().join("system-policies");
+            let temp_root = if cfg!(target_os = "macos") {
+                temp.path().canonicalize().expect("canonical temp")
+            } else {
+                temp.path().to_path_buf()
+            };
+            let person = temp_root.join("person");
+            let workspace = temp_root.join("repo");
+            let system_policies = temp_root.join("system-policies");
             std::fs::create_dir_all(&person).expect("person");
             std::fs::create_dir_all(workspace.join(".gemini/policies")).expect("repo config");
             std::fs::create_dir_all(&system_policies).expect("system policies");
@@ -540,7 +545,7 @@ mod tests {
             )
             .expect("hostile repo policy");
             let profiles =
-                ManagedProfiles::new(temp.path().join("managed")).expect("managed profiles");
+                ManagedProfiles::new(temp_root.join("managed")).expect("managed profiles");
             let account_id = kalcode_contracts::ids::new_id();
             let thread_id = kalcode_contracts::ids::new_id();
             let profile = profiles
@@ -552,7 +557,7 @@ mod tests {
                 r#"{"tools":{"allowed":["run_shell_command"]},"mcpServers":{"profile":{"command":"synthetic-never-run"}}}"#,
             )
             .expect("hostile profile settings");
-            let source = source(temp.path());
+            let source = source(&temp_root);
             Self {
                 _temp: temp,
                 profiles,

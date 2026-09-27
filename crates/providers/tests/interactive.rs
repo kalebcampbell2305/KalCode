@@ -57,13 +57,18 @@ impl Rig {
         managed: bool,
     ) -> Self {
         let dir = tempfile::tempdir().expect("dir");
+        let dir_root = if cfg!(target_os = "macos") {
+            dir.path().canonicalize().expect("canonical dir")
+        } else {
+            dir.path().to_path_buf()
+        };
         let name = if cfg!(windows) {
             "claude.exe"
         } else {
             "claude"
         };
-        std::fs::copy(FAKE, dir.path().join(name)).expect("copy fake");
-        std::fs::write(dir.path().join("fake-provider.json"), config.to_string()).expect("config");
+        std::fs::copy(FAKE, dir_root.join(name)).expect("copy fake");
+        std::fs::write(dir_root.join("fake-provider.json"), config.to_string()).expect("config");
         let sessions = tempfile::tempdir().expect("sessions");
         let endpoint = Endpoint::generate(Some(sessions.path())).expect("endpoint");
         let bridge = Arc::new(BridgeServer::start(ServerConfig::new(endpoint)).expect("bridge"));
@@ -72,7 +77,7 @@ impl Rig {
         let guardian = managed.then(|| {
             kalcode_providers::guardian::GuardianRuntime::launch(
                 std::path::Path::new(env!("CARGO_BIN_EXE_kalcode-provider-guardian")),
-                dir.path(),
+                &dir_root,
             )
             .expect("native provider guardian")
         });
@@ -93,7 +98,7 @@ impl Rig {
             let profiles = {
                 let guardian = guardian.as_ref().expect("managed guardian");
                 ManagedProfiles::for_data_dir_guarded(
-                    dir.path(),
+                    &dir_root,
                     guardian.authority(),
                     guardian.profile_generation(),
                 )
@@ -101,7 +106,7 @@ impl Rig {
             };
             #[cfg(not(any(windows, target_os = "macos")))]
             let profiles =
-                ManagedProfiles::new(dir.path().join("managed")).expect("managed profiles");
+                ManagedProfiles::new(dir_root.join("managed")).expect("managed profiles");
             provider = provider.with_managed_profiles(profiles);
         }
         let provider = Arc::new(provider);

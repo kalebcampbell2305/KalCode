@@ -714,12 +714,21 @@ mod tests {
             .map(|(_, value)| value.as_os_str())
     }
 
+    fn fixture_root(temp: &tempfile::TempDir) -> PathBuf {
+        if cfg!(target_os = "macos") {
+            temp.path().canonicalize().expect("canonical temp")
+        } else {
+            temp.path().to_path_buf()
+        }
+    }
+
     #[test]
     fn root_must_be_an_absolute_child_of_an_existing_directory() {
         assert!(ManagedProfiles::new(PathBuf::from("relative/profiles")).is_err());
 
         let temp = tempfile::tempdir().expect("temp");
-        let root = temp.path().join("managed");
+        let temp_root = fixture_root(&temp);
+        let root = temp_root.join("managed");
         let profiles = ManagedProfiles::new(root.clone()).expect("managed profiles");
         assert!(root.is_dir());
         assert_eq!(
@@ -727,13 +736,14 @@ mod tests {
             std::fs::canonicalize(root).expect("canonical")
         );
 
-        assert!(ManagedProfiles::new(temp.path().join("missing/child")).is_err());
+        assert!(ManagedProfiles::new(temp_root.join("missing/child")).is_err());
     }
 
     #[test]
     fn profile_and_session_paths_are_stable_and_reject_untrusted_names() {
         let temp = tempfile::tempdir().expect("temp");
-        let profiles = ManagedProfiles::new(temp.path().join("managed")).expect("profiles");
+        let temp_root = fixture_root(&temp);
+        let profiles = ManagedProfiles::new(temp_root.join("managed")).expect("profiles");
         let account_id = kalcode_contracts::ids::new_id();
         let thread_id = kalcode_contracts::ids::new_id();
 
@@ -796,7 +806,8 @@ mod tests {
     #[test]
     fn launch_env_is_base_only_and_never_touches_original_auth_files() {
         let temp = tempfile::tempdir().expect("temp");
-        let original = temp.path().join("person");
+        let temp_root = fixture_root(&temp);
+        let original = temp_root.join("person");
         std::fs::create_dir(&original).expect("person home");
         let codex_config = original.join(".codex");
         let gemini_config = original.join(".gemini");
@@ -810,14 +821,14 @@ mod tests {
         std::fs::write(&codex_auth, b"original-codex").expect("codex fixture");
         std::fs::write(&gemini_auth, b"original-gemini").expect("gemini fixture");
         std::fs::write(&claude_auth, b"original-claude").expect("claude fixture");
-        let hostile_codex = temp.path().join("hostile-codex");
-        let hostile_gemini = temp.path().join("hostile-gemini");
-        let hostile_claude = temp.path().join("hostile-claude");
-        let hostile_claude_credentials = temp.path().join("hostile-claude-credentials");
+        let hostile_codex = temp_root.join("hostile-codex");
+        let hostile_gemini = temp_root.join("hostile-gemini");
+        let hostile_claude = temp_root.join("hostile-claude");
+        let hostile_claude_credentials = temp_root.join("hostile-claude-credentials");
         let source = source(&[
             ("HOME", original.as_os_str()),
             ("USERPROFILE", original.as_os_str()),
-            ("PATH", temp.path().as_os_str()),
+            ("PATH", temp_root.as_os_str()),
             ("CODEX_HOME", hostile_codex.as_os_str()),
             ("GEMINI_CLI_HOME", hostile_gemini.as_os_str()),
             ("CLAUDE_CONFIG_DIR", hostile_claude.as_os_str()),
@@ -833,7 +844,7 @@ mod tests {
             ("GOOGLE_APPLICATION_CREDENTIALS", OsStr::new("fixture-path")),
             ("KALCODE_INTERNAL", OsStr::new("test-internal")),
         ]);
-        let profiles = ManagedProfiles::new(temp.path().join("managed")).expect("profiles");
+        let profiles = ManagedProfiles::new(temp_root.join("managed")).expect("profiles");
         let account_a = kalcode_contracts::ids::new_id();
         let account_b = kalcode_contracts::ids::new_id();
 
@@ -927,7 +938,8 @@ mod tests {
     #[test]
     fn shared_session_leases_exclude_sign_in_and_sign_in_excludes_sessions() {
         let temp = tempfile::tempdir().expect("temp");
-        let profiles = ManagedProfiles::new(temp.path().join("managed")).expect("profiles");
+        let temp_root = fixture_root(&temp);
+        let profiles = ManagedProfiles::new(temp_root.join("managed")).expect("profiles");
         let account_a = kalcode_contracts::ids::new_id();
         let account_b = kalcode_contracts::ids::new_id();
 
@@ -962,8 +974,9 @@ mod tests {
     #[test]
     fn canonical_data_root_and_lifecycle_lease_share_the_profile_lock() {
         let temp = tempfile::tempdir().expect("temp");
-        let profiles = ManagedProfiles::for_data_dir(temp.path()).expect("profiles");
-        let same = ManagedProfiles::for_data_dir(temp.path()).expect("same root");
+        let temp_root = fixture_root(&temp);
+        let profiles = ManagedProfiles::for_data_dir(&temp_root).expect("profiles");
+        let same = ManagedProfiles::for_data_dir(&temp_root).expect("same root");
         let account = kalcode_contracts::ids::new_id();
         let session = profiles
             .acquire_session_lease("codex", &account)
@@ -1134,7 +1147,8 @@ mod tests {
             }
         }
         let temp = tempfile::tempdir().expect("temp");
-        let profiles = ManagedProfiles::new(temp.path().join("managed")).expect("profiles");
+        let temp_root = fixture_root(&temp);
+        let profiles = ManagedProfiles::new(temp_root.join("managed")).expect("profiles");
         let account = kalcode_contracts::ids::new_id();
         let lease = profiles
             .acquire_session_lease("codex", &account)
@@ -1164,16 +1178,17 @@ mod tests {
     #[test]
     fn linked_ancestry_and_linked_profile_directories_are_rejected_when_supported() {
         let temp = tempfile::tempdir().expect("temp");
-        let outside = temp.path().join("outside");
+        let temp_root = fixture_root(&temp);
+        let outside = temp_root.join("outside");
         std::fs::create_dir(&outside).expect("outside");
-        let linked_parent = temp.path().join("linked-parent");
+        let linked_parent = temp_root.join("linked-parent");
         if !directory_link(&outside, &linked_parent) {
             eprintln!("directory links are unavailable; link cases skipped");
             return;
         }
         assert!(ManagedProfiles::new(linked_parent.join("managed")).is_err());
 
-        let profiles = ManagedProfiles::new(temp.path().join("managed")).expect("profiles");
+        let profiles = ManagedProfiles::new(temp_root.join("managed")).expect("profiles");
         let account_id = kalcode_contracts::ids::new_id();
         let profile_parent = profiles
             .ensure_directory(&["providers"])
@@ -1181,7 +1196,7 @@ mod tests {
         assert!(directory_link(&outside, &profile_parent.join("codex")));
         assert!(profiles.profile_home("codex", &account_id).is_err());
 
-        let separate = ManagedProfiles::new(temp.path().join("separate")).expect("separate");
+        let separate = ManagedProfiles::new(temp_root.join("separate")).expect("separate");
         let account_root = separate
             .ensure_directory(&["providers", "gemini-cli", "accounts", &account_id])
             .expect("account root");

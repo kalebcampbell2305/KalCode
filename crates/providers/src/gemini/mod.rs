@@ -373,10 +373,15 @@ mod tests {
     #[test]
     fn a_managed_provider_requires_an_explicit_account_before_detection_or_launch() {
         let temp = tempfile::tempdir().expect("temp");
-        let workspace = temp.path().join("workspace");
+        let temp_root = if cfg!(target_os = "macos") {
+            temp.path().canonicalize().expect("canonical temp")
+        } else {
+            temp.path().to_path_buf()
+        };
+        let workspace = temp_root.join("workspace");
         std::fs::create_dir(&workspace).expect("workspace");
         let profiles =
-            crate::managed::ManagedProfiles::new(temp.path().join("managed")).expect("profiles");
+            crate::managed::ManagedProfiles::new(temp_root.join("managed")).expect("profiles");
         let provider = GeminiProvider::new_managed(DetectEnv::default(), profiles);
         let error = match provider.start_session(
             SessionConfig {
@@ -410,20 +415,22 @@ mod tests {
     #[test]
     fn managed_detection_uses_only_the_selected_profile_environment() {
         let temp = tempfile::tempdir().expect("temp");
+        let temp_root = if cfg!(target_os = "macos") {
+            temp.path().canonicalize().expect("canonical temp")
+        } else {
+            temp.path().to_path_buf()
+        };
         let profiles =
-            crate::managed::ManagedProfiles::new(temp.path().join("managed")).expect("profiles");
+            crate::managed::ManagedProfiles::new(temp_root.join("managed")).expect("profiles");
         let account_id = kalcode_contracts::ids::new_id();
         let source = DetectEnv {
             vars: vec![
-                (
-                    "HOME".into(),
-                    temp.path().join("standalone").into_os_string(),
-                ),
-                ("PATH".into(), temp.path().as_os_str().to_os_string()),
+                ("HOME".into(), temp_root.join("standalone").into_os_string()),
+                ("PATH".into(), temp_root.as_os_str().to_os_string()),
                 ("GEMINI_API_KEY".into(), "synthetic-secret".into()),
                 (
                     "GEMINI_CLI_HOME".into(),
-                    temp.path().join("old").into_os_string(),
+                    temp_root.join("old").into_os_string(),
                 ),
             ],
             windows: false,

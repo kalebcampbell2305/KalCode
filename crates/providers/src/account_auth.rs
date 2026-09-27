@@ -1013,20 +1013,25 @@ mod tests {
     fn fixture_with_timeouts(scenario: &str, timeouts: AuthTimeouts) -> Fixture {
         let recursive_test_process_slot = lock(&crate::RECURSIVE_TEST_EXECUTABLE_SLOT);
         let temp = tempfile::tempdir().expect("tempdir");
+        let temp_root = if cfg!(target_os = "macos") {
+            temp.path().canonicalize().expect("canonical tempdir")
+        } else {
+            temp.path().to_path_buf()
+        };
         let profiles = Arc::new(
-            ManagedProfiles::new(temp.path().join("managed-profiles")).expect("managed profiles"),
+            ManagedProfiles::new(temp_root.join("managed-profiles")).expect("managed profiles"),
         );
         let current_exe = std::env::current_exe().expect("current test executable");
-        let exit_marker = temp.path().join("fake-app-server-exited");
+        let exit_marker = temp_root.join("fake-app-server-exited");
         let source_env = DetectEnv {
             vars: vec![
                 (
                     "HOME".into(),
-                    temp.path().join("ordinary-home").into_os_string(),
+                    temp_root.join("ordinary-home").into_os_string(),
                 ),
                 (
                     "USERPROFILE".into(),
-                    temp.path().join("ordinary-home").into_os_string(),
+                    temp_root.join("ordinary-home").into_os_string(),
                 ),
                 ("OPENAI_API_KEY".into(), "must-not-reach-child".into()),
                 (

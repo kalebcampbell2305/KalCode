@@ -117,21 +117,26 @@ fn installation_registry_never_probes_the_standalone_account() {
 fn managed_claude_requires_an_account_and_holds_its_profile_until_session_cleanup() {
     let fake = FakeInstall::new("claude", json!({"version": "2.1.282 (Claude Code)"}));
     let storage = tempfile::tempdir().expect("storage");
+    let storage_root = if cfg!(target_os = "macos") {
+        storage.path().canonicalize().expect("canonical storage")
+    } else {
+        storage.path().to_path_buf()
+    };
     #[cfg(any(windows, target_os = "macos"))]
     let guardian = kalcode_providers::guardian::GuardianRuntime::launch(
         std::path::Path::new(env!("CARGO_BIN_EXE_kalcode-provider-guardian")),
-        storage.path(),
+        &storage_root,
     )
     .expect("native provider guardian");
     #[cfg(any(windows, target_os = "macos"))]
     let profiles = kalcode_providers::managed::ManagedProfiles::for_data_dir_guarded(
-        storage.path(),
+        &storage_root,
         guardian.authority(),
         guardian.profile_generation(),
     )
     .expect("guarded profiles");
     #[cfg(not(any(windows, target_os = "macos")))]
-    let profiles = kalcode_providers::managed::ManagedProfiles::new(storage.path().join("managed"))
+    let profiles = kalcode_providers::managed::ManagedProfiles::new(storage_root.join("managed"))
         .expect("profiles");
     let adapter = provider(&fake).with_managed_profiles(profiles.clone());
     assert!(matches!(
@@ -186,21 +191,26 @@ fn managed_claude_requires_an_account_and_holds_its_profile_until_session_cleanu
 fn managed_claude_rejects_an_unreviewed_version_before_session_launch() {
     let fake = FakeInstall::new("claude", json!({"version": "2.1.300 (Claude Code)"}));
     let storage = tempfile::tempdir().expect("storage");
+    let storage_root = if cfg!(target_os = "macos") {
+        storage.path().canonicalize().expect("canonical storage")
+    } else {
+        storage.path().to_path_buf()
+    };
     #[cfg(any(windows, target_os = "macos"))]
     let guardian = kalcode_providers::guardian::GuardianRuntime::launch(
         std::path::Path::new(env!("CARGO_BIN_EXE_kalcode-provider-guardian")),
-        storage.path(),
+        &storage_root,
     )
     .expect("native provider guardian");
     #[cfg(any(windows, target_os = "macos"))]
     let profiles = kalcode_providers::managed::ManagedProfiles::for_data_dir_guarded(
-        storage.path(),
+        &storage_root,
         guardian.authority(),
         guardian.profile_generation(),
     )
     .expect("guarded profiles");
     #[cfg(not(any(windows, target_os = "macos")))]
-    let profiles = kalcode_providers::managed::ManagedProfiles::new(storage.path().join("managed"))
+    let profiles = kalcode_providers::managed::ManagedProfiles::new(storage_root.join("managed"))
         .expect("profiles");
     let adapter = provider(&fake).with_managed_profiles(profiles);
     let mut config = fake.config(PermissionMode::Plan, None);

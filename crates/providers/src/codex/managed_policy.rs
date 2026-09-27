@@ -313,30 +313,31 @@ mod tests {
 
     fn fixture() -> (TempDir, ManagedProfiles, DetectEnv, String, PathBuf) {
         let temp = tempfile::tempdir().expect("temp");
-        let profiles =
-            ManagedProfiles::new(temp.path().join("profiles")).expect("managed profiles");
+        let temp_root = if cfg!(target_os = "macos") {
+            temp.path().canonicalize().expect("canonical temp")
+        } else {
+            temp.path().to_path_buf()
+        };
+        let profiles = ManagedProfiles::new(temp_root.join("profiles")).expect("managed profiles");
         let account_id = uuid::Uuid::new_v4().hyphenated().to_string();
-        let workspace = temp.path().join("repo.with.dots");
+        let workspace = temp_root.join("repo.with.dots");
         std::fs::create_dir(&workspace).expect("workspace");
         let source = DetectEnv {
             vars: vec![
                 ("PATH".into(), std::env::var_os("PATH").unwrap_or_default()),
                 (
                     "HOME".into(),
-                    temp.path().join("ordinary-home").into_os_string(),
+                    temp_root.join("ordinary-home").into_os_string(),
                 ),
                 (
                     "USERPROFILE".into(),
-                    temp.path().join("ordinary-user").into_os_string(),
+                    temp_root.join("ordinary-user").into_os_string(),
                 ),
                 ("OPENAI_API_KEY".into(), "secret".into()),
                 ("CODEX_APP_SERVER_LOGIN_ISSUER".into(), "hostile".into()),
                 ("CODEX_APP_SERVER_LOGIN_CLIENT_ID".into(), "hostile".into()),
                 ("CODEX_APP_SERVER_DEV_OPEN_APP_URL".into(), "hostile".into()),
-                (
-                    "CODEX_HOME".into(),
-                    temp.path().join("old").into_os_string(),
-                ),
+                ("CODEX_HOME".into(), temp_root.join("old").into_os_string()),
             ],
             windows: cfg!(windows),
             probe_timeout: None,
@@ -420,7 +421,12 @@ mod tests {
     #[test]
     fn auth_rejects_a_matching_account_lease_from_another_profile_root() {
         let (temp, profiles, source, account_id, _workspace) = fixture();
-        let other_root = temp.path().join("other-profiles");
+        let temp_root = if cfg!(target_os = "macos") {
+            temp.path().canonicalize().expect("canonical temp")
+        } else {
+            temp.path().to_path_buf()
+        };
+        let other_root = temp_root.join("other-profiles");
         let other = ManagedProfiles::new(other_root).expect("other managed profiles");
         let wrong_root_lease = other
             .acquire_sign_in_lease(PROVIDER, &account_id)
@@ -538,10 +544,14 @@ mod tests {
         use std::time::Duration;
 
         let temp = tempfile::tempdir().expect("temp");
-        let profiles =
-            ManagedProfiles::new(temp.path().join("profiles")).expect("managed profiles");
+        let temp_root = if cfg!(target_os = "macos") {
+            temp.path().canonicalize().expect("canonical temp")
+        } else {
+            temp.path().to_path_buf()
+        };
+        let profiles = ManagedProfiles::new(temp_root.join("profiles")).expect("managed profiles");
         let account_id = uuid::Uuid::new_v4().hyphenated().to_string();
-        let workspace = temp.path().join("workspace");
+        let workspace = temp_root.join("workspace");
         let project_config_dir = workspace.join(".codex");
         std::fs::create_dir_all(&project_config_dir).expect("project config directory");
         std::fs::write(
@@ -550,7 +560,7 @@ mod tests {
         )
         .expect("project config");
 
-        let ordinary_home = temp.path().join("ordinary-codex-home");
+        let ordinary_home = temp_root.join("ordinary-codex-home");
         std::fs::create_dir(&ordinary_home).expect("ordinary home");
         let ordinary_config = "[mcp_servers.ordinary_probe]\ncommand='ordinary-probe'\n";
         std::fs::write(ordinary_home.join(CONFIG_NAME), ordinary_config).expect("ordinary config");

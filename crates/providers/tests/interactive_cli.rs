@@ -54,6 +54,11 @@ impl Rig {
 
     fn build(cli: PaneCli, managed: bool, eligibility: Option<CloudConfigEligibility>) -> Self {
         let dir = tempfile::tempdir().expect("dir");
+        let dir_root = if cfg!(target_os = "macos") {
+            dir.path().canonicalize().expect("canonical dir")
+        } else {
+            dir.path().to_path_buf()
+        };
         let base = match cli {
             PaneCli::Codex => "codex",
             PaneCli::Gemini => "gemini",
@@ -63,13 +68,13 @@ impl Rig {
         } else {
             base.to_owned()
         };
-        std::fs::copy(FAKE, dir.path().join(name)).expect("copy fake");
+        std::fs::copy(FAKE, dir_root.join(name)).expect("copy fake");
         let fake_config = if managed && cli == PaneCli::Gemini {
             r#"{"version":"0.61.0"}"#
         } else {
             "{}"
         };
-        std::fs::write(dir.path().join("fake-provider.json"), fake_config).expect("config");
+        std::fs::write(dir_root.join("fake-provider.json"), fake_config).expect("config");
         let sessions = tempfile::tempdir().expect("sessions");
         let bridge = (cli == PaneCli::Codex).then(|| {
             let endpoint = Endpoint::generate(Some(sessions.path())).expect("endpoint");
@@ -80,12 +85,12 @@ impl Rig {
         let guardian = managed.then(|| {
             kalcode_providers::guardian::GuardianRuntime::launch(
                 std::path::Path::new(env!("CARGO_BIN_EXE_kalcode-provider-guardian")),
-                dir.path(),
+                &dir_root,
             )
             .expect("native provider guardian")
         });
         let mut vars: Vec<(OsString, OsString)> = vec![
-            ("PATH".into(), dir.path().into()),
+            ("PATH".into(), dir_root.clone().into_os_string()),
             ("ANTHROPIC_API_KEY".into(), "test-anthropic-value".into()),
             ("OPENAI_API_KEY".into(), "test-openai-value".into()),
             ("GEMINI_API_KEY".into(), "test-gemini-value".into()),
@@ -99,7 +104,7 @@ impl Rig {
         #[cfg(any(windows, target_os = "macos"))]
         let profiles = guardian.as_ref().map(|guardian| {
             ManagedProfiles::for_data_dir_guarded(
-                dir.path(),
+                &dir_root,
                 guardian.authority(),
                 guardian.profile_generation(),
             )
@@ -107,7 +112,7 @@ impl Rig {
         });
         #[cfg(not(any(windows, target_os = "macos")))]
         let profiles = managed
-            .then(|| ManagedProfiles::new(dir.path().join("managed")).expect("managed profiles"));
+            .then(|| ManagedProfiles::new(dir_root.join("managed")).expect("managed profiles"));
         let resolved_accounts = Arc::new(Mutex::new(Vec::new()));
         let mut provider = InteractiveCliProvider::new(
             cli,

@@ -747,9 +747,14 @@ mod tests {
     fn fixture(scenario: &str) -> Fixture {
         let recursive_test_process_slot = lock(&crate::RECURSIVE_TEST_EXECUTABLE_SLOT);
         let temp = tempfile::tempdir().expect("tempdir");
+        let temp_root = if cfg!(target_os = "macos") {
+            temp.path().canonicalize().expect("canonical tempdir")
+        } else {
+            temp.path().to_path_buf()
+        };
         let profiles =
-            Arc::new(ManagedProfiles::new(temp.path().join("managed-profiles")).expect("profiles"));
-        let state_marker = temp.path().join("connected");
+            Arc::new(ManagedProfiles::new(temp_root.join("managed-profiles")).expect("profiles"));
+        let state_marker = temp_root.join("connected");
         let mut extra_env: BTreeMap<OsString, OsString> = [
             ("CLAUDE_AUTH_TEST_SCENARIO".into(), scenario.into()),
             (
@@ -772,15 +777,15 @@ mod tests {
             std::env::current_exe().expect("test executable"),
             DetectEnv {
                 vars: vec![
-                    ("HOME".into(), temp.path().join("ordinary").into_os_string()),
+                    ("HOME".into(), temp_root.join("ordinary").into_os_string()),
                     (
                         "USERPROFILE".into(),
-                        temp.path().join("ordinary").into_os_string(),
+                        temp_root.join("ordinary").into_os_string(),
                     ),
                     ("ANTHROPIC_API_KEY".into(), "must-not-reach-child".into()),
                     (
                         "CLAUDE_SECURESTORAGE_CONFIG_DIR".into(),
-                        temp.path().join("hostile").into_os_string(),
+                        temp_root.join("hostile").into_os_string(),
                     ),
                 ],
                 windows: cfg!(windows),

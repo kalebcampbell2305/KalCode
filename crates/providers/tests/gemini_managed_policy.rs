@@ -28,8 +28,13 @@ struct Rig {
 impl Rig {
     fn new() -> Self {
         let temp = tempfile::tempdir().expect("temp");
-        let bin = temp.path().join("bin");
-        let workspace = temp.path().join("repo");
+        let temp_root = if cfg!(target_os = "macos") {
+            temp.path().canonicalize().expect("canonical temp")
+        } else {
+            temp.path().to_path_buf()
+        };
+        let bin = temp_root.join("bin");
+        let workspace = temp_root.join("repo");
         std::fs::create_dir(&bin).expect("bin");
         std::fs::create_dir(&workspace).expect("workspace");
         std::fs::create_dir_all(workspace.join(".gemini/policies")).expect("repo config");
@@ -60,18 +65,18 @@ impl Rig {
         #[cfg(any(windows, target_os = "macos"))]
         let guardian = kalcode_providers::guardian::GuardianRuntime::launch(
             Path::new(env!("CARGO_BIN_EXE_kalcode-provider-guardian")),
-            temp.path(),
+            &temp_root,
         )
         .expect("native provider guardian");
         #[cfg(any(windows, target_os = "macos"))]
         let profiles = ManagedProfiles::for_data_dir_guarded(
-            temp.path(),
+            &temp_root,
             guardian.authority(),
             guardian.profile_generation(),
         )
         .expect("guarded managed profiles");
         #[cfg(not(any(windows, target_os = "macos")))]
-        let profiles = ManagedProfiles::new(temp.path().join("managed")).expect("managed profiles");
+        let profiles = ManagedProfiles::new(temp_root.join("managed")).expect("managed profiles");
         let account_id = kalcode_contracts::ids::new_id();
         let thread_id = kalcode_contracts::ids::new_id();
         Self {
