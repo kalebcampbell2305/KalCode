@@ -264,7 +264,12 @@ fn codex_tool_turn_reports_commands_and_file_changes() {
         }
     )));
     assert!(events.iter().any(|e| matches!(e, AgentEvent::ToolCompleted { tool_call_id, ok: true, .. } if tool_call_id == "item_0")));
-    let work = fake.work.path().display().to_string();
+    let work_root = if cfg!(target_os = "macos") {
+        fake.work.path().canonicalize().expect("canonical workdir")
+    } else {
+        fake.work.path().to_path_buf()
+    };
+    let work = work_root.display().to_string();
     assert!(events.iter().any(|e| matches!(e, AgentEvent::FileChanged { path, change: FileChange::Modified } if path.ends_with("notes.md") && path.starts_with(&work))));
     let args = fake.args();
     assert_eq!(after(&args, "--sandbox"), Some("danger-full-access"));
