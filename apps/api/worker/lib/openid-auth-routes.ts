@@ -4,6 +4,7 @@ import { readJsonBody } from "./body";
 import { constantTimeEqual, hmacSha256Base64Url, randomBase64Url, sha256Base64Url } from "./crypto";
 import { isPkceChallenge, isPkceVerifier, verifyPkce } from "./github-oauth";
 import { apiError, json } from "./http";
+import { nativeAuthHandoff } from "./native-auth-handoff";
 import {
   buildOpenIdAuthorizeUrl,
   exchangeOpenIdIdentity,
@@ -192,27 +193,25 @@ export function openIdAuthService(options: Options): OpenIdAuthService {
         return apiError(400, "sign_in_failed", GENERIC_SIGN_IN);
       }
       const error = failure ? (errors[0] === "access_denied" ? "sign_in_canceled" : "sign_in_failed") : null;
-      const destination =
-        attempt.clientKind === "website" ? new URL(WEBSITE_ACCOUNT) : new URL(`kalcode://auth/${provider}`);
       if (attempt.clientKind === "website") {
+        const destination = new URL(WEBSITE_ACCOUNT);
         const fragment = new URLSearchParams({ socialProvider: provider });
         if (error) fragment.set("socialError", error);
         else fragment.set("socialCode", codes[0] as string);
         fragment.set("socialState", state);
         destination.hash = fragment.toString();
-      } else {
-        if (error) destination.searchParams.set("error", error);
-        else destination.searchParams.set("code", codes[0] as string);
-        destination.searchParams.set("state", state);
+        return new Response(null, {
+          status: 302,
+          headers: {
+            location: destination.toString(),
+            "cache-control": "no-store",
+            "referrer-policy": "no-referrer",
+          },
+        });
       }
-      return new Response(null, {
-        status: 302,
-        headers: {
-          location: destination.toString(),
-          "cache-control": "no-store",
-          "referrer-policy": "no-referrer",
-        },
-      });
+      return error
+        ? nativeAuthHandoff(provider, { state, error })
+        : nativeAuthHandoff(provider, { state, code: codes[0] as string });
     },
 
     async complete(request, provider) {

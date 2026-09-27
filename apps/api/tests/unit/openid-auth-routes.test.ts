@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { AccountStore } from "../../worker/lib/account-store";
 import { sha256Base64Url } from "../../worker/lib/crypto";
@@ -50,6 +51,17 @@ function post(path: string, body: unknown, headers: Record<string, string> = {})
     headers: { "content-type": "application/json", "cf-connecting-ip": "203.0.113.9", ...headers },
     body: JSON.stringify(body),
   });
+}
+
+function handoffHref(html: string): string {
+  const match = /<a href="([^"]+)">Open KalCode<\/a>/.exec(html);
+  expect(match).not.toBeNull();
+  return (match?.[1] ?? "")
+    .replaceAll("&amp;", "&")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&#39;", "'")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">");
 }
 
 describe("OpenID account auth routes", () => {
@@ -572,7 +584,7 @@ describe("OpenID account auth routes", () => {
     }
   });
 
-  it("redirects desktop cancellation and success only to the provider-specific registered native URI", async () => {
+  it("requires an explicit browser gesture for the desktop handoff without leaking callback authority", async () => {
     const store = fakeStore({
       openIdAttempt: vi.fn(async () => ({
         stateHash: await sha256Base64Url(STATE),
@@ -594,14 +606,49 @@ describe("OpenID account auth routes", () => {
       new Request(`https://api.kalcoded.com/v1/auth/google/callback?error=access_denied&state=${STATE}`),
       "google",
     );
-    expect(canceled.headers.get("location")).toBe(`kalcode://auth/google?error=sign_in_canceled&state=${STATE}`);
-    const success = await auth.callback(
-      new Request(`https://api.kalcoded.com/v1/auth/google/callback?code=4%2F0AdQt8qh.opaque~code&state=${STATE}`),
+    expect(canceled.status).toBe(200);
+    expect(canceled.headers.get("location")).toBeNull();
+    expect(canceled.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    expect(canceled.headers.get("cache-control")).toBe("no-store");
+    expect(canceled.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(canceled.headers.get("x-frame-options")).toBe("DENY");
+    expect(handoffHref(await canceled.text())).toBe(`kalcode://auth/google?error=sign_in_canceled&state=${STATE}`);
+
+    const failed = await auth.callback(
+      new Request(`https://api.kalcoded.com/v1/auth/google/callback?error=server_error&state=${STATE}`),
       "google",
     );
-    expect(success.headers.get("location")).toBe(
-      `kalcode://auth/google?code=4%2F0AdQt8qh.opaque%7Ecode&state=${STATE}`,
+    expect(failed.status).toBe(200);
+    expect(handoffHref(await failed.text())).toBe(`kalcode://auth/google?error=sign_in_failed&state=${STATE}`);
+
+    const hostileCode = '"><img/src=x/onerror=alert(1)>';
+    const success = await auth.callback(
+      new Request(
+        `https://api.kalcoded.com/v1/auth/google/callback?code=${encodeURIComponent(hostileCode)}&state=${STATE}`,
+      ),
+      "google",
     );
+    expect(success.status).toBe(200);
+    const html = await success.text();
+    const expectedHandoff = new URL("kalcode://auth/google");
+    expectedHandoff.searchParams.set("code", hostileCode);
+    expectedHandoff.searchParams.set("state", STATE);
+    expect(handoffHref(html)).toBe(expectedHandoff.toString());
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain("signed in");
+    expect(html).not.toMatch(
+      /<(?:link|form|iframe)|\bsrc=|\b(?:fetch|XMLHttpRequest|WebSocket|localStorage|sessionStorage)\b/i,
+    );
+    const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+    expect(scripts).toHaveLength(1);
+    expect(scripts[0]?.[1]).toBe('history.replaceState(null, "", location.pathname);');
+    const scriptHash = createHash("sha256")
+      .update(scripts[0]?.[1] ?? "", "utf8")
+      .digest("base64");
+    expect(success.headers.get("content-security-policy")).toBe(
+      `default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; script-src 'sha256-${scriptHash}'`,
+    );
+    expect(success.headers.get("set-cookie")).toBeNull();
   });
 
   it("redirects only a stored website attempt to the fixed account fragment", async () => {
