@@ -1,18 +1,18 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import {
   boundedJsonFetch,
-  completeBootstrapAuthority,
-  decideBootstrapPointerAction,
   buildInitialPointerStatement,
   buildPointerAdvanceStatement,
   buildPointerReadStatement,
-  buildVersionReadStatement,
   buildVersionClaimStatement,
+  buildVersionReadStatement,
+  completeBootstrapAuthority,
+  decideBootstrapPointerAction,
   parseD1Rows,
   pointerAdvanceProblems,
   publicationRowProblems,

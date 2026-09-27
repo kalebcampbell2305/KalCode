@@ -513,6 +513,7 @@ impl PtySession {
         }
         #[cfg(all(not(windows), not(target_os = "macos")))]
         {
+            let _ = &on_exit;
             let _ = admission;
             Err(PtyError::Spawn(
                 "the crash guardian is unsupported on this platform".into(),
@@ -569,6 +570,7 @@ impl PtySession {
         }
         #[cfg(all(not(windows), not(target_os = "macos")))]
         {
+            let _ = &on_exit;
             let _ = admission;
             Err(PtyError::Spawn(
                 "the crash guardian is unsupported on this platform".into(),
