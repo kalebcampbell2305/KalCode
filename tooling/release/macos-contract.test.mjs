@@ -70,22 +70,25 @@ test("release credentials require Developer ID for the exact team and a stored n
 });
 
 test("Tauri receives only signing identity and the explicit deployment target", () => {
-  const result = macBuildEnvironment(
-    {
-      KEEP: "yes",
-      APPLE_ID: "remove",
-      APPLE_PASSWORD: "remove",
-      APPLE_API_KEY: "remove",
-      APPLE_API_KEY_PATH: "remove",
-      APPLE_API_ISSUER: "remove",
-      APPLE_TEAM_ID: "remove",
-    },
-    identity,
-    readUpdaterPublicKey(),
-  );
+  const inherited = {
+    KEEP: "yes",
+    CI: "false",
+    TAURI_BUNDLER_DMG_IGNORE_CI: "true",
+    APPLE_ID: "remove",
+    APPLE_PASSWORD: "remove",
+    APPLE_API_KEY: "remove",
+    APPLE_API_KEY_PATH: "remove",
+    APPLE_API_ISSUER: "remove",
+    APPLE_TEAM_ID: "remove",
+  };
+  const original = { ...inherited };
+  const result = macBuildEnvironment(inherited, identity, readUpdaterPublicKey());
   assert.equal(result.KEEP, "yes");
+  assert.equal(result.CI, "true");
+  assert.equal(result.TAURI_BUNDLER_DMG_IGNORE_CI, undefined);
   assert.equal(result.APPLE_SIGNING_IDENTITY, identity);
   assert.equal(result.MACOSX_DEPLOYMENT_TARGET, MACOS_MINIMUM_VERSION);
+  assert.deepEqual(inherited, original);
   for (const key of [
     "APPLE_ID",
     "APPLE_PASSWORD",

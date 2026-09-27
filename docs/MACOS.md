@@ -94,6 +94,12 @@ From a clean, immutable commit on the native Mac runner:
 node tooling/release/macos-package.mjs --channel stable
 ```
 
+The packager forces Tauri's supported headless DMG mode (`CI=true`) and removes an inherited
+`TAURI_BUNDLER_DMG_IGNORE_CI` override. The resulting image still contains the exact signed app and
+the `Applications` link used for drag installation, while omitting Finder-only window and icon
+positioning that requires GUI AppleEvents. This does not relax any signing, minimum-OS,
+notarization, stapling, Gatekeeper or independent-verifier gate.
+
 The product channel is mandatory (`stable`, `beta`, or `dev`). The production package always includes `kalvoice-whisper`; additional safe Cargo features can be
 specified with `--features`. The command builds only a DMG, requires the repository's explicit 14.0
 deployment target and hardened runtime configuration, refuses `e2e`, uses the approved Developer ID

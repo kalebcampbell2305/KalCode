@@ -152,9 +152,13 @@ export function macBuildEnvironment(env, signingIdentity, updaterPublicKey) {
     "APPLE_ID",
     "APPLE_PASSWORD",
     "APPLE_TEAM_ID",
+    "TAURI_BUNDLER_DMG_IGNORE_CI",
   ]) {
     delete result[name];
   }
+  // The pinned Tauri bundler maps exact CI=true to its supported headless DMG mode. That mode
+  // retains the Applications link while avoiding Finder AppleEvents on unattended release hosts.
+  result.CI = "true";
   result.APPLE_SIGNING_IDENTITY = signingIdentity;
   result.MACOSX_DEPLOYMENT_TARGET = MACOS_MINIMUM_VERSION;
   return result;
