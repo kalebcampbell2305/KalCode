@@ -9,6 +9,8 @@ mod runtime_coordinator;
 mod runtime_lifecycle;
 #[cfg(test)]
 mod startup_recovery_tests;
+#[cfg(test)]
+mod window_lifecycle_tests;
 use runtime_coordinator::RuntimeCoordinator;
 mod browser_commands;
 mod browser_policy;
@@ -260,6 +262,80 @@ fn uses_default_data_dir() -> bool {
     matches!(environment::data_dir_override(), DataDirOverride::None)
 }
 
+fn restore_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> bool {
+    let Some(window) = app.get_window("main") else {
+        return false;
+    };
+    // Keep all three independent attempts: a platform-specific unminimize failure must not keep
+    // a retained window from being shown or focused by a second launch.
+    let unminimized = window.unminimize().is_ok();
+    let shown = window.show().is_ok();
+    let focused = window.set_focus().is_ok();
+    unminimized && shown && focused
+}
+
+fn route_main_close(
+    label: &str,
+    ready: bool,
+    prevent_close: impl FnOnce(),
+    request_exit: impl FnOnce(),
+) {
+    if label == "main" && !ready {
+        // Keep the only owner-facing window alive until the bounded RunEvent shutdown path has
+        // proved cleanup. Otherwise the last window is destroyed before ExitRequested can be
+        // prevented, and a second launch has no window to restore while cleanup is in flight.
+        prevent_close();
+        request_exit();
+    }
+}
+
+fn handle_window_event<R: tauri::Runtime>(window: &tauri::Window<R>, event: &tauri::WindowEvent) {
+    let tauri::WindowEvent::CloseRequested { api, .. } = event else {
+        return;
+    };
+    let Some(exit) = window
+        .app_handle()
+        .try_state::<runtime_shutdown::ExitControl>()
+    else {
+        return;
+    };
+    route_main_close(
+        window.label(),
+        exit.ready.load(std::sync::atomic::Ordering::Acquire),
+        || api.prevent_close(),
+        || window.app_handle().exit(0),
+    );
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExitAttempt {
+    Ready,
+    Start,
+    Pending,
+}
+
+fn begin_exit_attempt(exit: &runtime_shutdown::ExitControl) -> ExitAttempt {
+    use std::sync::atomic::Ordering;
+
+    if exit.ready.load(Ordering::Acquire) {
+        ExitAttempt::Ready
+    } else if exit.requested.swap(true, Ordering::AcqRel) {
+        ExitAttempt::Pending
+    } else {
+        ExitAttempt::Start
+    }
+}
+
+fn finish_exit_attempt(exit: &runtime_shutdown::ExitControl, clean: bool) {
+    use std::sync::atomic::Ordering;
+
+    if clean {
+        exit.ready.store(true, Ordering::Release);
+    } else {
+        exit.requested.store(false, Ordering::Release);
+    }
+}
+
 #[cfg(feature = "e2e")]
 fn build_e2e_main_webview(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let data_dir = match environment::data_dir_override() {
@@ -320,16 +396,12 @@ pub fn run(removed_overrides: Vec<String>) {
             config.create = false;
         }
     }
-    let mut builder = tauri::Builder::default();
+    let mut builder = tauri::Builder::default().on_window_event(handle_window_event);
     // A second launch against the default data folder focuses the running window. (Exclusive
     // use of a data folder is enforced separately by the core's lock file, in every mode.)
     if uses_default_data_dir() {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
+            let _ = restore_main_window(app);
         }));
     }
     let app = builder
@@ -664,25 +736,26 @@ pub fn run(removed_overrides: Vec<String>) {
     };
 
     app.run(|handle, event| {
-        use std::sync::atomic::Ordering;
         if let RunEvent::ExitRequested { api, code, .. } = event {
             let exit = handle.state::<runtime_shutdown::ExitControl>();
-            if !exit.ready.load(Ordering::Acquire) {
-                api.prevent_exit();
-                if !exit.requested.swap(true, Ordering::AcqRel) {
+            match begin_exit_attempt(&exit) {
+                ExitAttempt::Ready => {}
+                ExitAttempt::Pending => api.prevent_exit(),
+                ExitAttempt::Start => {
+                    api.prevent_exit();
                     let handle = handle.clone();
                     std::thread::spawn(move || {
                         if shutdown_runtime(&handle) {
-                            handle
-                                .state::<runtime_shutdown::ExitControl>()
-                                .ready
-                                .store(true, Ordering::Release);
+                            finish_exit_attempt(
+                                &handle.state::<runtime_shutdown::ExitControl>(),
+                                true,
+                            );
                             handle.exit(code.unwrap_or(0));
                         } else {
-                            handle
-                                .state::<runtime_shutdown::ExitControl>()
-                                .requested
-                                .store(false, Ordering::Release);
+                            finish_exit_attempt(
+                                &handle.state::<runtime_shutdown::ExitControl>(),
+                                false,
+                            );
                             tracing::error!(event = "app.exit_cleanup_incomplete");
                         }
                     });
