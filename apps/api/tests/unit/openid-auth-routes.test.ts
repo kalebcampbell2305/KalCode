@@ -447,6 +447,7 @@ describe("OpenID account auth routes", () => {
       "claims_email_verification_missing",
       "claims_email_verification_type",
       "claims_email_verification_affirmative_text",
+      "claims_email_verification_one_text",
       "claims_email_verification_denied",
     ] as const) {
       const safeLogs: Record<string, string>[] = [];

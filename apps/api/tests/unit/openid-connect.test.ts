@@ -285,6 +285,7 @@ describe("OpenID Connect providers", () => {
       { preferred_username: "victim@example.com" },
       { email: "victim@example.com", xms_edov: false },
       { email: "victim@example.com", xms_edov: "true" },
+      { email: "victim@example.com", xms_edov: "1" },
       { email: "victim@example.com", xms_edov: 1 },
       { xms_edov: true },
     ] as Record<string, unknown>[]) {
@@ -312,11 +313,13 @@ describe("OpenID Connect providers", () => {
           ? "claims_email_verification_missing"
           : emailClaims.xms_edov === "true"
             ? "claims_email_verification_affirmative_text"
-            : typeof emailClaims.xms_edov !== "boolean"
-              ? "claims_email_verification_type"
-              : emailClaims.xms_edov === false
-                ? "claims_email_verification_denied"
-                : "claims_email",
+            : emailClaims.xms_edov === "1"
+              ? "claims_email_verification_one_text"
+              : typeof emailClaims.xms_edov !== "boolean"
+                ? "claims_email_verification_type"
+                : emailClaims.xms_edov === false
+                  ? "claims_email_verification_denied"
+                  : "claims_email",
       );
     }
   });
