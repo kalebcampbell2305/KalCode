@@ -70,6 +70,9 @@ function loadSigningKey(secret: string | undefined): Promise<EntitlementSigningK
 
 export function depsFromEnv(env: Env): Deps {
   const now = () => new Date();
+  // Structured logs only. Never log tokens, keys, emails, subjects or account ids.
+  // biome-ignore lint/suspicious/noConsole: console is the Workers structured-logging sink.
+  const log: Deps["log"] = (entry) => console.log(JSON.stringify(entry));
   const accountStore = d1AccountStore(env.DB);
   const githubReady =
     /^[A-Za-z0-9_.-]{8,100}$/.test(env.GITHUB_OAUTH_CLIENT_ID ?? "") &&
@@ -117,6 +120,7 @@ export function depsFromEnv(env: Env): Deps {
           clients: openIdClients,
           rateLimitKey: env.AUTH_RATE_LIMIT_KEY as string,
           now,
+          log,
         })
       : null;
   const emailReady = isAccountMailServiceBinding(env.ACCOUNT_MAILER) && (env.AUTH_RATE_LIMIT_KEY?.length ?? 0) >= 32;
@@ -153,8 +157,6 @@ export function depsFromEnv(env: Env): Deps {
     signingKey: () => loadSigningKey(env.ENTITLEMENT_SIGNING_KEY),
     previousPublicKeys: () => parsePreviousPublicKeys(env.ENTITLEMENT_PREVIOUS_PUBLIC_KEYS),
     now,
-    // Structured logs only. Never log tokens, keys, emails or account ids.
-    // biome-ignore lint/suspicious/noConsole: console is the Workers structured-logging sink.
-    log: (entry) => console.log(JSON.stringify(entry)),
+    log,
   };
 }

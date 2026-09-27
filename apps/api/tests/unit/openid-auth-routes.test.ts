@@ -313,6 +313,7 @@ describe("OpenID account auth routes", () => {
 
   it("does not issue a session when an email collision requires explicit identity linking", async () => {
     const nonce = "n".repeat(43);
+    const logs: Record<string, string>[] = [];
     const store = fakeStore({
       openIdAttempt: vi.fn(async () => ({
         stateHash: await sha256Base64Url(STATE),
@@ -336,6 +337,7 @@ describe("OpenID account auth routes", () => {
         subject: "new-google-subject",
         email: "existing@example.com",
       })),
+      log: (entry) => logs.push(entry),
     });
     const response = await auth.complete(
       post("/v1/auth/google/complete", { state: STATE, code: "code", codeVerifier: VERIFIER, nonce }),
@@ -348,6 +350,139 @@ describe("OpenID account auth routes", () => {
       message: "Sign-in could not be completed. Start again.",
     });
     expect(store.createSession).not.toHaveBeenCalled();
+    expect(logs).toEqual([
+      { level: "warn", event: "api.oidc_sign_in_failed", provider: "google", stage: "identity_collision" },
+    ]);
+    expect(JSON.stringify(logs)).not.toContain("existing@example.com");
+    expect(JSON.stringify(logs)).not.toContain("new-google-subject");
+  });
+
+  it("logs only an allowlisted stage when an exchange throws malicious provider content", async () => {
+    const nonce = "n".repeat(43);
+    const logs: Record<string, string>[] = [];
+    const store = fakeStore({
+      openIdAttempt: vi.fn(async () => ({
+        stateHash: await sha256Base64Url(STATE),
+        provider: "google" as const,
+        codeChallenge: CHALLENGE,
+        nonceHash: await sha256Base64Url(nonce),
+        expiresAt: "2026-09-25T12:10:00.000Z",
+        consumedAt: null,
+        clientKind: "website" as const,
+      })),
+      consumeOpenIdAttempt: vi.fn(async () => true),
+    });
+    const privateValues = [
+      "private-code",
+      "private-token",
+      "private-state",
+      "private-nonce",
+      "private@example.com",
+      "private-subject",
+      "private-client-secret",
+      "private-provider-response",
+    ];
+    const malicious = [
+      `code=${privateValues[0]}`,
+      `token=${privateValues[1]}`,
+      `state=${privateValues[2]}`,
+      `nonce=${privateValues[3]}`,
+      `email=${privateValues[4]}`,
+      `subject=${privateValues[5]}`,
+      `client_secret=${privateValues[6]}`,
+      `raw=${privateValues[7]}`,
+    ].join("&");
+    const auth = openIdAuthService({
+      store,
+      clients: { google: GOOGLE },
+      rateLimitKey: "r".repeat(32),
+      now: () => NOW,
+      exchangeIdentity: vi.fn(async () => {
+        throw new Error(malicious);
+      }),
+      log: (entry) => logs.push(entry),
+    });
+
+    const response = await auth.complete(
+      post(
+        "/v1/auth/google/complete",
+        { state: STATE, code: "code", codeVerifier: VERIFIER, nonce },
+        { origin: "https://kalcoded.com" },
+      ),
+      "google",
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      ok: false,
+      error: "sign_in_failed",
+      message: "Sign-in could not be completed. Start again.",
+    });
+    expect(logs).toEqual([
+      { level: "warn", event: "api.oidc_sign_in_failed", provider: "google", stage: "token_exchange" },
+    ]);
+    for (const value of privateValues) expect(JSON.stringify(logs)).not.toContain(value);
+    expect(store.createOrGetOpenIdAccount).not.toHaveBeenCalled();
+    expect(store.createSession).not.toHaveBeenCalled();
+  });
+
+  it("separates account binding failures from session creation failures", async () => {
+    const nonce = "n".repeat(43);
+    const attempt = {
+      stateHash: await sha256Base64Url(STATE),
+      provider: "google" as const,
+      codeChallenge: CHALLENGE,
+      nonceHash: await sha256Base64Url(nonce),
+      expiresAt: "2026-09-25T12:10:00.000Z",
+      consumedAt: null,
+      clientKind: "desktop" as const,
+    };
+    const identity = { provider: "google" as const, subject: "private-subject", email: "private@example.com" };
+
+    for (const scenario of [
+      {
+        stage: "account_binding",
+        store: fakeStore({
+          openIdAttempt: vi.fn(async () => attempt),
+          consumeOpenIdAttempt: vi.fn(async () => true),
+          createOrGetOpenIdAccount: vi.fn(async () => {
+            throw new Error("database-private-content");
+          }),
+        }),
+      },
+      {
+        stage: "session_creation",
+        store: fakeStore({
+          openIdAttempt: vi.fn(async () => attempt),
+          consumeOpenIdAttempt: vi.fn(async () => true),
+          createOrGetOpenIdAccount: vi.fn(async () => "acct_google"),
+          createSession: vi.fn(async () => false),
+        }),
+      },
+    ] as const) {
+      const logs: Record<string, string>[] = [];
+      const auth = openIdAuthService({
+        store: scenario.store,
+        clients: { google: GOOGLE },
+        rateLimitKey: "r".repeat(32),
+        now: () => NOW,
+        exchangeIdentity: vi.fn(async () => identity),
+        log: (entry) => logs.push(entry),
+      });
+      const response = await auth.complete(
+        post("/v1/auth/google/complete", { state: STATE, code: "code", codeVerifier: VERIFIER, nonce }),
+        "google",
+      );
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        ok: false,
+        error: "sign_in_failed",
+        message: "Sign-in could not be completed. Start again.",
+      });
+      expect(logs).toEqual([
+        { level: "warn", event: "api.oidc_sign_in_failed", provider: "google", stage: scenario.stage },
+      ]);
+      expect(JSON.stringify(logs)).not.toContain("private");
+    }
   });
 
   it("redirects desktop cancellation and success only to the provider-specific registered native URI", async () => {

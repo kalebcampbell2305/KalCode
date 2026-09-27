@@ -8,6 +8,8 @@ import {
   buildOpenIdAuthorizeUrl,
   exchangeOpenIdIdentity,
   type OpenIdClientConfig,
+  OpenIdExchangeError,
+  type OpenIdFailureStage,
   type OpenIdIdentity,
   type OpenIdProvider,
 } from "./openid-connect";
@@ -46,6 +48,21 @@ interface Options {
   now: () => Date;
   fetcher?: typeof fetch;
   exchangeIdentity?: ExchangeIdentity;
+  log?: (entry: Record<string, string>) => void;
+}
+
+function exchangeFailureStage(error: unknown): OpenIdFailureStage {
+  if (error instanceof OpenIdExchangeError) {
+    switch (error.stage) {
+      case "discovery":
+      case "token_exchange":
+      case "token_parse":
+      case "signature":
+      case "claims":
+        return error.stage;
+    }
+  }
+  return "token_exchange";
 }
 
 function originAllowed(request: Request, clientKind: AuthClientKind): boolean {
@@ -83,6 +100,15 @@ function unavailable(): Response {
 export function openIdAuthService(options: Options): OpenIdAuthService {
   const { store, clients, rateLimitKey, now, fetcher = fetch } = options;
   const exchangeIdentity = options.exchangeIdentity ?? exchangeOpenIdIdentity;
+
+  function failed(provider: OpenIdProvider, stage: OpenIdFailureStage): Response {
+    try {
+      options.log?.({ level: "warn", event: "api.oidc_sign_in_failed", provider, stage });
+    } catch {
+      // Diagnostics must never change the authentication result.
+    }
+    return apiError(400, "sign_in_failed", GENERIC_SIGN_IN);
+  }
 
   async function rateAllowed(
     request: Request,
@@ -233,18 +259,30 @@ export function openIdAuthService(options: Options): OpenIdAuthService {
         return apiError(400, "sign_in_failed", GENERIC_SIGN_IN);
       }
 
+      let identity: OpenIdIdentity;
       try {
-        const identity = await exchangeIdentity(fetcher, config, code, codeVerifier, nonce, completedAt);
-        if (identity.provider !== provider) throw new Error("provider mismatch");
+        identity = await exchangeIdentity(fetcher, config, code, codeVerifier, nonce, completedAt);
+      } catch (error) {
+        return failed(provider, exchangeFailureStage(error));
+      }
+      if (identity.provider !== provider) return failed(provider, "account_binding");
+
+      let storedAccountId: string | null;
+      try {
         const accountId = `acct_${await sha256Base64Url(`${provider}:${identity.subject}`)}`;
-        const storedAccountId = await store.createOrGetOpenIdAccount({
+        storedAccountId = await store.createOrGetOpenIdAccount({
           accountId,
           provider,
           subject: identity.subject,
           email: identity.email,
           now: completedAt.toISOString(),
         });
-        if (!storedAccountId) return apiError(400, "sign_in_failed", GENERIC_SIGN_IN);
+      } catch {
+        return failed(provider, "account_binding");
+      }
+      if (!storedAccountId) return failed(provider, "identity_collision");
+
+      try {
         const token = `kcs_${randomBase64Url()}`;
         const expiresAt = new Date(completedAt.getTime() + SESSION_MS);
         if (
@@ -256,7 +294,7 @@ export function openIdAuthService(options: Options): OpenIdAuthService {
             clientKind: attempt.clientKind,
           }))
         ) {
-          return apiError(400, "sign_in_failed", GENERIC_SIGN_IN);
+          return failed(provider, "session_creation");
         }
         return attempt.clientKind === "website"
           ? json({ ok: true, status: "signed_in", expiresAt: expiresAt.toISOString() }, 200, {
@@ -264,7 +302,7 @@ export function openIdAuthService(options: Options): OpenIdAuthService {
             })
           : json({ ok: true, token, accountId: storedAccountId, expiresAt: expiresAt.toISOString() }, 200);
       } catch {
-        return apiError(400, "sign_in_failed", GENERIC_SIGN_IN);
+        return failed(provider, "session_creation");
       }
     },
 

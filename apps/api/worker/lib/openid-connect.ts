@@ -13,6 +13,27 @@ const SUBJECT = /^[\x21-\x7e]{1,255}$/;
 
 export type OpenIdProvider = "google" | "microsoft";
 
+export type OpenIdFailureStage =
+  | "discovery"
+  | "token_exchange"
+  | "token_parse"
+  | "signature"
+  | "claims"
+  | "account_binding"
+  | "identity_collision"
+  | "session_creation";
+
+/** Carries only an allowlisted stage. Provider responses and underlying errors are discarded. */
+export class OpenIdExchangeError extends Error {
+  readonly stage: OpenIdFailureStage;
+
+  constructor(stage: OpenIdFailureStage) {
+    super("identity unavailable");
+    this.name = "OpenIdExchangeError";
+    this.stage = stage;
+  }
+}
+
 export interface OpenIdClientConfig {
   provider: OpenIdProvider;
   clientId: string;
@@ -48,6 +69,14 @@ interface ParsedToken {
   signature: Uint8Array;
   header: Record<string, unknown>;
   claims: Record<string, unknown>;
+}
+
+async function atStage<T>(stage: OpenIdFailureStage, action: () => T | Promise<T>): Promise<T> {
+  try {
+    return await action();
+  } catch {
+    throw new OpenIdExchangeError(stage);
+  }
 }
 
 const PROVIDERS: Record<OpenIdProvider, ProviderDescriptor> = {
@@ -344,28 +373,32 @@ export async function exchangeOpenIdIdentity(
   now: Date,
 ): Promise<OpenIdIdentity> {
   if (!AUTHORIZATION_CODE.test(code) || !isPkceVerifier(verifier) || !FLOW_VALUE.test(expectedNonce)) {
-    throw new OAuthProviderError();
+    throw new OpenIdExchangeError("token_exchange");
   }
-  const metadata = await discovery(fetcher, config.provider);
-  const tokenResponse = await fetcher(
-    metadata.token_endpoint,
-    requestInit({
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
-      body: new URLSearchParams({
-        client_id: config.clientId,
-        client_secret: config.clientSecret,
-        code,
-        redirect_uri: config.callbackUrl,
-        grant_type: "authorization_code",
-        code_verifier: verifier,
-      }).toString(),
-    }),
-  );
-  const tokenBody = object(await readJson(tokenResponse));
+  const metadata = await atStage("discovery", () => discovery(fetcher, config.provider));
+  const tokenBody = await atStage("token_exchange", async () => {
+    const tokenResponse = await fetcher(
+      metadata.token_endpoint,
+      requestInit({
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+        body: new URLSearchParams({
+          client_id: config.clientId,
+          client_secret: config.clientSecret,
+          code,
+          redirect_uri: config.callbackUrl,
+          grant_type: "authorization_code",
+          code_verifier: verifier,
+        }).toString(),
+      }),
+    );
+    return object(await readJson(tokenResponse));
+  });
   const rawIdToken = tokenBody?.id_token;
-  if (typeof rawIdToken !== "string" || rawIdToken.length > MAX_ID_TOKEN_BYTES) throw new OAuthProviderError();
-  const token = parseIdToken(rawIdToken);
-  await verifySignature(fetcher, config.provider, metadata.jwks_uri, token);
-  return identityFromClaims(config, token.claims, expectedNonce, now);
+  if (typeof rawIdToken !== "string" || rawIdToken.length > MAX_ID_TOKEN_BYTES) {
+    throw new OpenIdExchangeError("token_parse");
+  }
+  const token = await atStage("token_parse", () => parseIdToken(rawIdToken));
+  await atStage("signature", () => verifySignature(fetcher, config.provider, metadata.jwks_uri, token));
+  return atStage("claims", () => identityFromClaims(config, token.claims, expectedNonce, now));
 }

@@ -4,6 +4,8 @@ import {
   buildOpenIdAuthorizeUrl,
   exchangeOpenIdIdentity,
   type OpenIdClientConfig,
+  OpenIdExchangeError,
+  type OpenIdFailureStage,
 } from "../../worker/lib/openid-connect";
 
 const NOW = new Date("2026-09-25T12:00:00.000Z");
@@ -86,6 +88,16 @@ function microsoftDiscovery() {
     jwks_uri: "https://login.microsoftonline.com/common/discovery/v2.0/keys",
     id_token_signing_alg_values_supported: ["RS256"],
   };
+}
+
+async function expectStage(promise: Promise<unknown>, stage: OpenIdFailureStage): Promise<void> {
+  const error = await promise.then(
+    () => null,
+    (reason: unknown) => reason,
+  );
+  expect(error).toBeInstanceOf(OpenIdExchangeError);
+  expect(error).toMatchObject({ message: "identity unavailable", stage });
+  expect(Object.keys(error as object).sort()).toEqual(["name", "stage"]);
 }
 
 describe("OpenID Connect providers", () => {
@@ -186,9 +198,7 @@ describe("OpenID Connect providers", () => {
         .mockResolvedValueOnce(response(googleDiscovery()))
         .mockResolvedValueOnce(response({ id_token: token }))
         .mockResolvedValueOnce(response({ keys: [signingKey.publicJwk] }));
-      await expect(exchangeOpenIdIdentity(fetcher, GOOGLE, "oauth-code", VERIFIER, NONCE, NOW)).rejects.toThrow(
-        "identity unavailable",
-      );
+      await expectStage(exchangeOpenIdIdentity(fetcher, GOOGLE, "oauth-code", VERIFIER, NONCE, NOW), "claims");
     }
 
     const token = await idToken(signingKey, base);
@@ -197,9 +207,7 @@ describe("OpenID Connect providers", () => {
       .mockResolvedValueOnce(response(googleDiscovery()))
       .mockResolvedValueOnce(response({ id_token: token }))
       .mockResolvedValueOnce(response({ keys: [wrongKey.publicJwk] }));
-    await expect(exchangeOpenIdIdentity(fetcher, GOOGLE, "oauth-code", VERIFIER, NONCE, NOW)).rejects.toThrow(
-      "identity unavailable",
-    );
+    await expectStage(exchangeOpenIdIdentity(fetcher, GOOGLE, "oauth-code", VERIFIER, NONCE, NOW), "signature");
   });
 
   it("binds a Microsoft identity to its tenant and validates the tenant-specific issuer", async () => {
@@ -299,9 +307,28 @@ describe("OpenID Connect providers", () => {
     const fetcher = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(response({ ...googleDiscovery(), token_endpoint: "https://attacker.example/token" }));
-    await expect(exchangeOpenIdIdentity(fetcher, GOOGLE, "oauth-code", VERIFIER, NONCE, NOW)).rejects.toThrow(
-      "identity unavailable",
-    );
+    await expectStage(exchangeOpenIdIdentity(fetcher, GOOGLE, "oauth-code", VERIFIER, NONCE, NOW), "discovery");
     expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("separates token exchange and token parsing without retaining provider error content", async () => {
+    const malicious = "provider-secret-payload-must-not-survive";
+    const rejectedExchange = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(response(googleDiscovery()))
+      .mockResolvedValueOnce(response({ error: malicious }, 400));
+    await expectStage(
+      exchangeOpenIdIdentity(rejectedExchange, GOOGLE, "oauth-code", VERIFIER, NONCE, NOW),
+      "token_exchange",
+    );
+
+    const malformedToken = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(response(googleDiscovery()))
+      .mockResolvedValueOnce(response({ id_token: `header.${malicious}.signature` }));
+    await expectStage(
+      exchangeOpenIdIdentity(malformedToken, GOOGLE, "oauth-code", VERIFIER, NONCE, NOW),
+      "token_parse",
+    );
   });
 });
