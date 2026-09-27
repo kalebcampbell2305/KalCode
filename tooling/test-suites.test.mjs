@@ -134,7 +134,7 @@ function playwrightReport({ expected = 2, unexpected = 0, flaky = 0, skipped = [
 }
 
 test("the reviewed inventory covers every required workspace suite and Rust ignore", () => {
-  assert.equal(inventory.suites.length, 10);
+  assert.equal(inventory.suites.length, 11);
   assert.deepEqual(
     inventory.suites.map(({ id }) => id),
     [
@@ -148,6 +148,7 @@ test("the reviewed inventory covers every required workspace suite and Rust igno
       "rust-workspace",
       "desktop-native-e2e",
       "website-e2e",
+      "website-checkout-enabled-e2e",
     ],
   );
   auditWorkspaceSuiteCoverage(inventory);
@@ -302,6 +303,39 @@ test("website skip profiles require reviewed counts and runtime reasons", () => 
       }),
     /unreviewed skip reason/,
   );
+
+  const enabled = inventory.suites.find(({ id }) => id === "website-checkout-enabled-e2e");
+  assert.throws(() => selectProfile(website, "win32", { KALCODE_CHECKOUT_ENABLED_GATE: "1" }), /BLOCKED/);
+  assert.throws(() => selectProfile(website, "win32", { PUBLIC_CHECKOUT_ENABLED: "true" }), /BLOCKED/);
+  assert.throws(() => selectProfile(enabled, "win32", {}), /BLOCKED/);
+  assert.throws(() => selectProfile(enabled, "win32", { KALCODE_CHECKOUT_ENABLED_GATE: "1" }), /BLOCKED/);
+  assert.throws(() => selectProfile(enabled, "win32", { PUBLIC_CHECKOUT_ENABLED: "true" }), /BLOCKED/);
+  const enabledProfile = selectProfile(enabled, "win32", {
+    KALCODE_CHECKOUT_ENABLED_GATE: "1",
+    PUBLIC_CHECKOUT_ENABLED: "true",
+  });
+  assert.equal(enabledProfile.minimumExecuted, 3);
+  assert.equal(enabledProfile.skippedMinimum, 0);
+  assert.equal(enabledProfile.skippedMaximum, 0);
+  assert.equal(enabledProfile.maximumFlaky, 0);
+  assert.doesNotThrow(() =>
+    validateSuiteResult(enabled, enabledProfile, {
+      executed: 3,
+      failed: 0,
+      skipped: 0,
+      flaky: 0,
+      skipReasons: [],
+    }),
+  );
+  assert.throws(() =>
+    validateSuiteResult(enabled, enabledProfile, {
+      executed: 3,
+      failed: 0,
+      skipped: 1,
+      flaky: 0,
+      skipReasons: ["silently disabled"],
+    }),
+  );
 });
 
 test("native E2E is explicitly blocked where no reviewed harness exists", () => {
@@ -312,8 +346,11 @@ test("native E2E is explicitly blocked where no reviewed harness exists", () => 
 
 test("suite selection is explicit and cannot silently omit an unknown suite", () => {
   assert.equal(selectSuites(inventory, ["run", "unit"]).length, 8);
-  assert.equal(selectSuites(inventory, ["run", "e2e"]).length, 2);
-  assert.equal(selectSuites(inventory, ["run", "all"]).length, 10);
+  assert.deepEqual(
+    selectSuites(inventory, ["run", "e2e"]).map(({ id }) => id),
+    ["desktop-native-e2e", "website-e2e", "website-checkout-enabled-e2e"],
+  );
+  assert.equal(selectSuites(inventory, ["run", "all"]).length, 11);
   assert.deepEqual(
     selectSuites(inventory, ["--suite", "api-unit"]).map(({ id }) => id),
     ["api-unit"],

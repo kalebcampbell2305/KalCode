@@ -219,7 +219,11 @@
       "profiles": [
         {
           "platforms": ["win32", "darwin", "linux"],
-          "environment": { "STAGE_URL": "absent" },
+          "environment": {
+            "STAGE_URL": "absent",
+            "KALCODE_CHECKOUT_ENABLED_GATE": "absent",
+            "PUBLIC_CHECKOUT_ENABLED": "absent"
+          },
           "minimumExecuted": 145,
           "skippedMinimum": 8,
           "skippedMaximum": 8,
@@ -239,7 +243,11 @@
         },
         {
           "platforms": ["win32", "darwin", "linux"],
-          "environment": { "STAGE_URL": "present" },
+          "environment": {
+            "STAGE_URL": "present",
+            "KALCODE_CHECKOUT_ENABLED_GATE": "absent",
+            "PUBLIC_CHECKOUT_ENABLED": "absent"
+          },
           "minimumExecuted": 137,
           "skippedMinimum": 0,
           "skippedMaximum": 16,
@@ -259,6 +267,31 @@
         }
       ],
       "unavailableReason": null
+    },
+    {
+      "id": "website-checkout-enabled-e2e",
+      "group": "e2e",
+      "runner": "playwright",
+      "package": "@kalcode/website",
+      "script": "test:e2e",
+      "command": null,
+      "timeoutMs": 900000,
+      "profiles": [
+        {
+          "platforms": ["win32", "darwin", "linux"],
+          "environment": {
+            "STAGE_URL": "absent",
+            "KALCODE_CHECKOUT_ENABLED_GATE": "present",
+            "PUBLIC_CHECKOUT_ENABLED": "present"
+          },
+          "minimumExecuted": 3,
+          "skippedMinimum": 0,
+          "skippedMaximum": 0,
+          "allowedSkipReasons": [],
+          "maximumFlaky": 0
+        }
+      ],
+      "unavailableReason": "The checkout-enabled gate requires KALCODE_CHECKOUT_ENABLED_GATE=1 and PUBLIC_CHECKOUT_ENABLED=true."
     }
   ],
   "rustIntentionalIgnores": [

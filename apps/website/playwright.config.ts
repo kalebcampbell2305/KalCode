@@ -20,9 +20,24 @@ const OUT_DIR = process.env.KALCODE_E2E_OUT_DIR;
 const INSPECTOR_PORT = process.env.KALCODE_E2E_INSPECTOR_PORT;
 /** Set to 1 to serve an existing build in OUT_DIR (or dist) instead of building first. */
 const SKIP_BUILD = process.env.KALCODE_E2E_SKIP_BUILD === "1";
+const CHECKOUT_GATE_VALUE = process.env.KALCODE_CHECKOUT_ENABLED_GATE;
+const PUBLIC_CHECKOUT_VALUE = process.env.PUBLIC_CHECKOUT_ENABLED;
+if (CHECKOUT_GATE_VALUE !== undefined && CHECKOUT_GATE_VALUE !== "1") {
+  throw new Error("KALCODE_CHECKOUT_ENABLED_GATE must be exactly 1 when present");
+}
+if (PUBLIC_CHECKOUT_VALUE !== undefined && PUBLIC_CHECKOUT_VALUE !== "true") {
+  throw new Error("PUBLIC_CHECKOUT_ENABLED must be exactly true when present");
+}
+const CHECKOUT_ENABLED_GATE = CHECKOUT_GATE_VALUE === "1";
+if (CHECKOUT_ENABLED_GATE !== (PUBLIC_CHECKOUT_VALUE === "true")) {
+  throw new Error("The checkout-enabled gate and checkout build flag must be enabled together");
+}
 
 export default defineConfig({
   testDir: "tests/e2e",
+  ...(CHECKOUT_ENABLED_GATE
+    ? { testMatch: "**/checkout-enabled.spec.ts" }
+    : { testIgnore: "**/checkout-enabled.spec.ts" }),
   fullyParallel: false,
   workers: 1,
   forbidOnly: Boolean(process.env.CI),
