@@ -43,3 +43,9 @@ pub use gemini::GeminiProvider;
 pub use health::HealthMonitor;
 pub use model::{AdapterState, ModelSource, ProviderStatus};
 pub use registry::ProviderRegistry;
+
+// These test fixtures recursively launch this crate's large unit-test executable as a fake
+// provider. Keep their complete child/RPC/PTY lifecycles from competing for that synthetic
+// machine resource while the registered workspace runner executes tests in parallel.
+#[cfg(test)]
+pub(crate) static RECURSIVE_TEST_EXECUTABLE_SLOT: std::sync::Mutex<()> = std::sync::Mutex::new(());

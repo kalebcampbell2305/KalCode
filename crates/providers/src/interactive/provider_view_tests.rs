@@ -155,6 +155,10 @@ impl Drop for Rig {
     }
 }
 
+fn recursive_test_process_slot() -> std::sync::MutexGuard<'static, ()> {
+    lock(&crate::RECURSIVE_TEST_EXECUTABLE_SLOT)
+}
+
 fn pause(
     chosen: &'static std::thread::LocalKey<RefCell<Option<Pause>>>,
     reached: Sender<()>,
@@ -172,6 +176,8 @@ fn pause(
 
 #[test]
 fn pending_attach_does_not_suppress_the_existing_cursor_responder() {
+    // Locals drop in reverse declaration order, so every Rig is killed and joined first.
+    let _recursive_test_process_slot = recursive_test_process_slot();
     let rig = Rig::new();
     let observed = rig.observer();
     let panes = rig.panes.clone();
@@ -197,6 +203,7 @@ fn pending_attach_does_not_suppress_the_existing_cursor_responder() {
 
 #[test]
 fn removed_view_does_not_suppress_the_existing_cursor_responder() {
+    let _recursive_test_process_slot = recursive_test_process_slot();
     let rig = Rig::new();
     let observed = rig.observer();
     let attached = rig.panes.attach(&rig.thread_id, |_| true).expect("attach");
@@ -222,6 +229,7 @@ fn removed_view_does_not_suppress_the_existing_cursor_responder() {
 
 #[test]
 fn independent_views_rejected_replay_and_repeated_detach_keep_exact_counts() {
+    let _recursive_test_process_slot = recursive_test_process_slot();
     let rig = Rig::new();
     let first = rig
         .panes
@@ -247,6 +255,7 @@ fn independent_views_rejected_replay_and_repeated_detach_keep_exact_counts() {
 
 #[test]
 fn rejected_live_output_retires_the_view_without_explicit_detach() {
+    let _recursive_test_process_slot = recursive_test_process_slot();
     let rig = Rig::new();
     let observed = rig.observer();
     let replay = std::sync::atomic::AtomicBool::new(true);
@@ -267,6 +276,7 @@ fn rejected_live_output_retires_the_view_without_explicit_detach() {
 
 #[test]
 fn view_retirement_stays_bound_to_its_original_session_after_registry_replacement() {
+    let _recursive_test_process_slot = recursive_test_process_slot();
     let original = Rig::new();
     let replacement = Rig::new();
     let attached = original
@@ -283,6 +293,7 @@ fn view_retirement_stays_bound_to_its_original_session_after_registry_replacemen
 
 #[test]
 fn attaching_replays_history_once_then_streams_new_output_once() {
+    let _recursive_test_process_slot = recursive_test_process_slot();
     let rig = Rig::new();
     let observed = rig.observer();
     assert_eq!(rig.observe(&observed), 0);

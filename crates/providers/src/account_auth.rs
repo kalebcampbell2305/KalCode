@@ -994,6 +994,9 @@ mod tests {
         profiles: Arc<ManagedProfiles>,
         manager: CodexAccountAuthManager,
         exit_marker: PathBuf,
+        // Fields drop in declaration order. Keep the shared slot last so it covers the child,
+        // bounded RPC/process cleanup, profile authority, and temporary-root teardown.
+        _recursive_test_process_slot: std::sync::MutexGuard<'static, ()>,
     }
 
     fn fixture(scenario: &str) -> Fixture {
@@ -1008,6 +1011,7 @@ mod tests {
     }
 
     fn fixture_with_timeouts(scenario: &str, timeouts: AuthTimeouts) -> Fixture {
+        let recursive_test_process_slot = lock(&crate::RECURSIVE_TEST_EXECUTABLE_SLOT);
         let temp = tempfile::tempdir().expect("tempdir");
         let profiles = Arc::new(
             ManagedProfiles::new(temp.path().join("managed-profiles")).expect("managed profiles"),
@@ -1070,6 +1074,7 @@ mod tests {
             profiles,
             manager,
             exit_marker,
+            _recursive_test_process_slot: recursive_test_process_slot,
         }
     }
 
