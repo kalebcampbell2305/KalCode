@@ -30,8 +30,8 @@ fn context(timeout: Duration) -> std::io::Result<(tempfile::TempDir, Arc<RunCont
 }
 
 #[test]
-fn panics_and_timeouts_are_isolated_as_could_not_check() {
-    let (_dir, ctx) = context(Duration::from_secs(1)).expect("context");
+fn panics_and_private_errors_are_isolated_and_redacted() {
+    let (_dir, ctx) = context(Duration::from_secs(2)).expect("context");
     let plan = vec![
         def("test.ok", DoctorArea::System, "OK", |_| {
             CheckOutput::passed("OK")
@@ -49,14 +49,8 @@ fn panics_and_timeouts_are_isolated_as_could_not_check() {
                 )
             },
         ),
-        def("test.slow", DoctorArea::System, "Slow", |ctx| {
-            while !ctx.budget.should_stop() {
-                thread::yield_now();
-            }
-            CheckOutput::passed("late")
-        }),
     ];
-    let batch = Runner::new(Duration::from_millis(25), 8).run(Arc::clone(&ctx), plan);
+    let batch = Runner::new(Duration::from_secs(2), 8).run(Arc::clone(&ctx), plan);
     assert_eq!(batch.status, RunStatus::Completed);
     assert_eq!(batch.checks[0].status, CheckStatus::Passed);
     assert_eq!(batch.checks[1].status, CheckStatus::CouldNotCheck);
@@ -69,15 +63,28 @@ fn panics_and_timeouts_are_isolated_as_could_not_check() {
         batch.checks[2].reason.as_deref(),
         Some("The check could not be completed safely.")
     );
-    assert_eq!(batch.checks[3].status, CheckStatus::CouldNotCheck);
-    assert_eq!(
-        batch.checks[3].reason.as_deref(),
-        Some("The check timed out.")
-    );
     let encoded = serde_json::to_string(&batch).expect("json");
     assert!(!encoded.contains("private panic payload"));
     assert!(!encoded.contains("Users\\owner"));
     assert!(!encoded.contains("ghp_"));
+}
+
+#[test]
+fn slow_checks_are_truthfully_timed_out() {
+    let (_dir, ctx) = context(Duration::from_secs(1)).expect("context");
+    let plan = vec![def("test.slow", DoctorArea::System, "Slow", |ctx| {
+        while !ctx.budget.should_stop() {
+            thread::yield_now();
+        }
+        CheckOutput::passed("late")
+    })];
+    let batch = Runner::new(Duration::from_millis(25), 8).run(ctx, plan);
+    assert_eq!(batch.status, RunStatus::Completed);
+    assert_eq!(batch.checks[0].status, CheckStatus::CouldNotCheck);
+    assert_eq!(
+        batch.checks[0].reason.as_deref(),
+        Some("The check timed out.")
+    );
 }
 
 #[test]
