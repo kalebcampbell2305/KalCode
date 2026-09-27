@@ -760,7 +760,11 @@ fn interrupt_stops_a_slow_turn_and_keeps_partial_output() {
             })
             .unwrap();
         h.runtime.unsubscribe_stream(sid);
-        !seen.lock().unwrap().is_empty()
+        let buffered = seen.lock().unwrap().contains(&AgentEvent::MessageDelta {
+            message_id: "m".into(),
+            text: "Working on it".into(),
+        });
+        buffered
     });
 
     let streamed = Arc::new(Mutex::new(Vec::new()));
@@ -788,9 +792,12 @@ fn interrupt_stops_a_slow_turn_and_keeps_partial_output() {
     assert!(h.provider.last_session().calls().contains(&Call::Interrupt));
     let messages = h.runtime.messages(&id, 50, None).unwrap();
     assert_eq!(messages.last().unwrap().content, "Working on it");
-    // The provider's own TurnCompleted after the interrupt keeps the thread idle.
-    std::thread::sleep(std::time::Duration::from_millis(50));
-    assert_eq!(status(&h, &id), ThreadStatus::Idle);
+    // The operation returns the exact user-driven transition even when the provider's queued
+    // TurnCompleted subsequently clears its transient activity from durable state.
+    wait_until("provider completion applied", || {
+        let current = h.runtime.get(&id).expect("thread after completion");
+        current.status == ThreadStatus::Idle && current.current_activity.is_none()
+    });
     assert_code(h.runtime.interrupt(&id), "thread_not_working");
 
     // The session is still usable.

@@ -763,17 +763,19 @@ impl ThreadRuntime {
     /// Stops the current turn; the session stays open for more input.
     pub fn interrupt(&self, thread_id: &str) -> Result<ThreadSummary> {
         validate::thread_id(thread_id)?;
-        self.inner
+        let row = self
+            .inner
             .halt_turn(thread_id, ThreadStatus::Idle, INTERRUPTED_ACTIVITY)?;
-        self.inner.summary(thread_id)
+        Ok(self.inner.summary_from_row(row))
     }
 
     /// Stops the current turn and holds the thread `paused` until resumed.
     pub fn pause(&self, thread_id: &str) -> Result<ThreadSummary> {
         validate::thread_id(thread_id)?;
-        self.inner
+        let row = self
+            .inner
             .halt_turn(thread_id, ThreadStatus::Paused, PAUSED_ACTIVITY)?;
-        self.inner.summary(thread_id)
+        Ok(self.inner.summary_from_row(row))
     }
 
     /// Ends the session and its process tree. The thread becomes `interrupted`, resumable.
@@ -1198,12 +1200,16 @@ impl Inner {
 
     fn summary(&self, thread_id: &str) -> Result<ThreadSummary> {
         let row = self.row(thread_id)?;
+        Ok(self.summary_from_row(row))
+    }
+
+    fn summary_from_row(&self, row: ThreadRow) -> ThreadSummary {
         let workspace_name = self
             .workspaces
             .resolve(&row.workspace_id)
             .ok()
             .map(|w| w.name);
-        Ok(self.to_summary(row, workspace_name))
+        self.to_summary(row, workspace_name)
     }
 
     fn to_summary(&self, row: ThreadRow, workspace_name: Option<String>) -> ThreadSummary {
@@ -2300,10 +2306,18 @@ impl Inner {
     }
 
     /// Interrupt (→ idle) or pause (→ paused) the current turn, keeping the session.
-    fn halt_turn(&self, thread_id: &str, to: ThreadStatus, activity: &'static str) -> Result<()> {
-        let row = self.row(thread_id)?;
+    fn halt_turn(
+        &self,
+        thread_id: &str,
+        to: ThreadStatus,
+        activity: &'static str,
+    ) -> Result<ThreadRow> {
+        // Preserve the public `thread_not_found` result before consulting live runtime state.
+        self.row(thread_id)?;
         let live = self.existing_live(thread_id).ok_or_else(not_running)?;
         let mut state = live.lock();
+        // Status may have changed while this call waited for the per-thread authority lock.
+        let row = self.row(thread_id)?;
         let session = state.session.clone().ok_or_else(not_running)?;
         let mid_turn = row.status.is_live() || row.status == ThreadStatus::WaitingForPermission;
         if mid_turn {
@@ -2336,19 +2350,20 @@ impl Inner {
         self.flush_buffers(&live.ctx, &mut state)?;
         let now = now_rfc3339();
         let ctx = &live.ctx;
-        self.core.write_with_events(|tx| {
+        let (halted_row, _) = self.core.write_with_events(|tx| {
             store::cancel_open_tool_calls(tx, thread_id, &now)?;
             store::set_pending_approvals(tx, thread_id, 0)?;
             let from = store::set_status(tx, thread_id, to, Some(activity), &now)?;
+            let row = store::get(tx, thread_id)?;
             Ok((
-                (),
+                row,
                 ctx.status_changed(EventSource::Core, from, to, Some(activity)),
             ))
         })?;
         if had_pending {
             self.gate.expire_for_thread(thread_id);
         }
-        Ok(())
+        Ok(halted_row)
     }
 
     fn stop(&self, thread_id: &str, activity: &'static str) -> Result<()> {
