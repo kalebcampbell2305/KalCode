@@ -391,6 +391,7 @@ test.describe("search", () => {
 test.describe("in panes (Z7-W1 pane system)", () => {
   async function command(page: Page, name: string) {
     await page.keyboard.press("Control+k");
+    await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
     await page.keyboard.type(name);
     await page.getByRole("option", { name }).click();
   }
@@ -439,6 +440,7 @@ test.describe("in panes (Z7-W1 pane system)", () => {
       await item(page, /^atlas-api/).click({ button: "right" });
       await page.getByRole("menuitem", { name: "Open project in a pane" }).click();
       await expect(page.getByRole("tab", { name: /^Project/ })).toBeVisible();
+      await expect(page.locator('[role="menu"]')).toHaveCount(0);
       await command(page, "Show Home in a pane");
       await expect(page.getByRole("tab", { name: /^Home/ })).toBeVisible();
       await command(page, "Show Git status in a pane");

@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import { type HTMLAttributes, type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useOpenInPane } from "../panes/useOpenInPane.ts";
+import { globalShortcut, isRailToggleShortcut } from "../shortcuts.ts";
 import {
   badgeLabel,
   initials,
@@ -59,6 +60,11 @@ export type RailDialog =
 
 const REVEAL_LABEL =
   typeof navigator !== "undefined" && /Mac/.test(navigator.platform) ? "Reveal in Finder" : "Show in File Explorer";
+
+function onMenuTriggerKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
+  if (globalShortcut(event) || isRailToggleShortcut(event)) return;
+  event.stopPropagation();
+}
 
 /** `label` names the tree; the rail column's is "Workspaces" (a pane's copy says where it is). */
 export function RailTree({
@@ -442,7 +448,7 @@ function WorkspaceMenu({
           tabIndex={-1}
           aria-label="More actions"
           onClick={(e) => e.stopPropagation()}
-          onKeyDown={(e) => e.stopPropagation()}
+          onKeyDown={onMenuTriggerKeyDown}
         >
           <MoreHorizontal />
         </button>
@@ -569,7 +575,7 @@ function GroupMenu({
           tabIndex={-1}
           aria-label="More actions"
           onClick={(e) => e.stopPropagation()}
-          onKeyDown={(e) => e.stopPropagation()}
+          onKeyDown={onMenuTriggerKeyDown}
         >
           <MoreHorizontal />
         </button>

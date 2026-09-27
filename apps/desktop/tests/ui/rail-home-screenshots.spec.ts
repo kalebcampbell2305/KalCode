@@ -79,8 +79,10 @@ const SCENES: Scene[] = [
       await item(page, /^atlas-api/).click({ button: "right" });
       await page.getByRole("menuitem", { name: "Open project in a pane" }).click();
       await expect(page.getByRole("tab", { name: /^Project/ })).toBeVisible();
+      await expect(page.locator('[role="menu"]')).toHaveCount(0);
       for (const name of ["Show Home in a pane", "Show Git status in a pane"]) {
         await page.keyboard.press("Control+k");
+        await expect(page.getByRole("dialog", { name: "Command palette" })).toBeVisible();
         await page.keyboard.type(name);
         await page.getByRole("option", { name }).click();
       }
