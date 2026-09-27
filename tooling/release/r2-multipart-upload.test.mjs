@@ -379,9 +379,12 @@ test("the CLI retries only process-isolated proxy setup failures", async () => {
   ];
   const attempts = [];
   const recovered = await runMultipartCliSupervisor(rawArgs, {
-    runAttempt() {
+    startAttempt() {
       attempts.push("attempt");
-      return { status: attempts.length < 3 ? 71 : 0 };
+      return {
+        result: Promise.resolve({ status: attempts.length < 3 ? 71 : 0 }),
+        terminate() {},
+      };
     },
   });
   assert.deepEqual(recovered, { ok: true, stage: null, attempts: 3 });
@@ -389,9 +392,9 @@ test("the CLI retries only process-isolated proxy setup failures", async () => {
 
   attempts.length = 0;
   const exhausted = await runMultipartCliSupervisor(rawArgs, {
-    runAttempt() {
+    startAttempt() {
       attempts.push("attempt");
-      return { status: 71 };
+      return { result: Promise.resolve({ status: 71 }), terminate() {} };
     },
   });
   assert.deepEqual(exhausted, { ok: false, stage: "proxy_setup", attempts: 3 });
@@ -408,19 +411,85 @@ test("the CLI retries only process-isolated proxy setup failures", async () => {
     [78, "complete"],
     [79, "completed_object"],
     [80, "dispose"],
+    [81, "deadline"],
     [199, "unknown"],
   ]) {
     let calls = 0;
     const failed = await runMultipartCliSupervisor(rawArgs, {
-      runAttempt() {
+      startAttempt() {
         calls += 1;
-        return { status, stdout: "private response", stderr: "private credential" };
+        return {
+          result: Promise.resolve({ status, stdout: "private response", stderr: "private credential" }),
+          terminate() {},
+        };
       },
     });
     assert.deepEqual(failed, { ok: false, stage, attempts: 1 });
     assert.equal(calls, 1);
     assert.equal(JSON.stringify(failed).includes("private"), false);
   }
+});
+
+test("the total supervisor deadline terminates its active child before returning", async () => {
+  const rawArgs = [
+    "--key",
+    "components/v1/model/test/object.bin",
+    "--file",
+    import.meta.filename,
+    "--size",
+    String(statSync(import.meta.filename).size),
+    "--content-type",
+    METADATA.contentType,
+    "--cache-control",
+    METADATA.cacheControl,
+  ];
+  const events = [];
+  await assert.rejects(
+    runMultipartCliSupervisor(rawArgs, { totalTimeoutMs: 29 * 60_000 + 1 }),
+    /supervisor timeout is invalid/,
+  );
+  const outcome = await runMultipartCliSupervisor(rawArgs, {
+    totalTimeoutMs: 5,
+    startAttempt() {
+      events.push("start");
+      return {
+        result: new Promise(() => {}),
+        terminate() {
+          events.push("terminate");
+        },
+      };
+    },
+  });
+  events.push("return");
+  assert.deepEqual(outcome, { ok: false, stage: "deadline", attempts: 1 });
+  assert.deepEqual(events, ["start", "terminate", "return"]);
+});
+
+test("setup retries consume one shared supervisor deadline", async () => {
+  const rawArgs = [
+    "--key",
+    "components/v1/model/test/object.bin",
+    "--file",
+    import.meta.filename,
+    "--size",
+    String(statSync(import.meta.filename).size),
+    "--content-type",
+    METADATA.contentType,
+    "--cache-control",
+    METADATA.cacheControl,
+  ];
+  const times = [0, 0, 6, 11];
+  let starts = 0;
+  const outcome = await runMultipartCliSupervisor(rawArgs, {
+    totalTimeoutMs: 10,
+    now: () => times.shift() ?? 11,
+    startAttempt() {
+      starts += 1;
+      return { result: Promise.resolve({ status: 71 }), terminate() {} };
+    },
+  });
+  assert.deepEqual(outcome, { ok: false, stage: "deadline", attempts: 2 });
+  assert.equal(starts, 2);
 });
 
 test("multipart failure diagnostics are static and reject forged stages", async (t) => {

@@ -5,6 +5,7 @@ import { open } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
+import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 
 import { R2_BUCKET, WEBSITE_DIR } from "./lib.mjs";
@@ -20,7 +21,7 @@ const DEFAULT_ABORT_TIMEOUT_MS = 30_000;
 const DEFAULT_PROXY_SETUP_TIMEOUT_MS = 60_000;
 const DEFAULT_PROXY_DISPOSE_TIMEOUT_MS = 30_000;
 const HELPER_PROCESS_TIMEOUT_MS = 30 * 60_000;
-const HELPER_PROCESS_GRACE_MS = 5_000;
+const SUPERVISOR_TOTAL_TIMEOUT_MS = 29 * 60_000;
 const PROXY_SETUP_ATTEMPTS = 3;
 const INTERNAL_ATTEMPT_ARG = "--internal-proxy-attempt";
 const IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
@@ -37,9 +38,11 @@ const FAILURE_EXIT_CODES = Object.freeze({
   complete: 78,
   completed_object: 79,
   dispose: 80,
+  deadline: 81,
 });
 const FAILURE_STAGES = new Set(Object.keys(FAILURE_EXIT_CODES));
 const EXIT_FAILURE_STAGES = new Map(Object.entries(FAILURE_EXIT_CODES).map(([stage, exitCode]) => [exitCode, stage]));
+const monotonicNow = () => performance.now();
 
 function safeKey(key) {
   if (typeof key !== "string" || key.length < 16 || key.length > 1024 || !key.startsWith("components/v1/")) {
@@ -484,15 +487,21 @@ function terminateAttemptTree(child) {
   try {
     process.kill(-child.pid, "SIGKILL");
   } catch {
-    child.kill("SIGKILL");
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // The isolated attempt may already have exited at the deadline boundary.
+    }
   }
 }
 
-function isolatedAttempt(rawArgs) {
-  return new Promise((resolveAttempt) => {
+function startIsolatedAttempt(rawArgs) {
+  let child;
+  let terminate;
+  const result = new Promise((resolveAttempt) => {
     // A timed-out getPlatformProxy() does not expose its partially-created session for disposal.
     // Keep setup in a child so the complete process tree can be terminated before a clean retry.
-    const child = fork(import.meta.filename, [INTERNAL_ATTEMPT_ARG, ...rawArgs], {
+    child = fork(import.meta.filename, [INTERNAL_ATTEMPT_ARG, ...rawArgs], {
       detached: process.platform !== "win32",
       stdio: ["ignore", "ignore", "ignore", "ipc"],
       windowsHide: true,
@@ -502,13 +511,11 @@ function isolatedAttempt(rawArgs) {
     const finish = (status) => {
       if (settled) return;
       settled = true;
-      clearTimeout(deadline);
       resolveAttempt({ status });
     };
-    const deadline = setTimeout(() => {
+    terminate = () => {
       terminateAttemptTree(child);
-      finish(FAILURE_EXIT_CODES.unknown);
-    }, HELPER_PROCESS_TIMEOUT_MS + HELPER_PROCESS_GRACE_MS);
+    };
     child.on("message", (message) => {
       if (!message || typeof message !== "object" || message.type !== "kalcode-r2-multipart-result") return;
       if (message.ok === true) {
@@ -517,20 +524,62 @@ function isolatedAttempt(rawArgs) {
       }
       const stage = typeof message.stage === "string" && FAILURE_STAGES.has(message.stage) ? message.stage : "unknown";
       reportedStatus = FAILURE_EXIT_CODES[stage];
-      if (stage === "proxy_setup") terminateAttemptTree(child);
+      if (stage === "proxy_setup") terminate();
     });
     child.once("error", () => {
-      terminateAttemptTree(child);
+      terminate();
       finish(FAILURE_EXIT_CODES.unknown);
     });
     child.once("exit", (code) => finish(reportedStatus ?? code ?? FAILURE_EXIT_CODES.unknown));
   });
+  return { result, terminate: () => terminate?.() };
 }
 
-export async function runMultipartCliSupervisor(rawArgs, { runAttempt = isolatedAttempt } = {}) {
+export async function runMultipartCliSupervisor(
+  rawArgs,
+  { startAttempt = startIsolatedAttempt, totalTimeoutMs = SUPERVISOR_TOTAL_TIMEOUT_MS, now = monotonicNow } = {},
+) {
   parseRemoteMultipartArgs(rawArgs);
+  positiveInteger(totalTimeoutMs, "multipart supervisor timeout", SUPERVISOR_TOTAL_TIMEOUT_MS);
+  if (typeof now !== "function") throw new Error("multipart supervisor clock is invalid");
+  const startedAt = now();
+  if (!Number.isFinite(startedAt)) throw new Error("multipart supervisor clock is invalid");
   for (let attempt = 1; attempt <= PROXY_SETUP_ATTEMPTS; attempt += 1) {
-    const result = await runAttempt(rawArgs);
+    const currentTime = now();
+    if (!Number.isFinite(currentTime)) throw new Error("multipart supervisor clock is invalid");
+    const elapsedMs = currentTime - startedAt;
+    const remainingMs = totalTimeoutMs - Math.max(0, elapsedMs);
+    if (remainingMs <= 0) return { ok: false, stage: "deadline", attempts: attempt - 1 };
+    let isolated;
+    try {
+      isolated = startAttempt(rawArgs);
+    } catch {
+      return { ok: false, stage: "unknown", attempts: attempt };
+    }
+    if (!isolated || typeof isolated.terminate !== "function" || typeof isolated.result?.then !== "function") {
+      try {
+        isolated?.terminate?.();
+      } catch {
+        // Invalid attempts still receive a best-effort cleanup before failing closed.
+      }
+      return { ok: false, stage: "unknown", attempts: attempt };
+    }
+    let deadlineTimer;
+    const result = await Promise.race([
+      Promise.resolve(isolated.result).catch(() => ({ status: FAILURE_EXIT_CODES.unknown })),
+      new Promise((resolveDeadline) => {
+        deadlineTimer = setTimeout(() => {
+          try {
+            isolated.terminate();
+          } catch {
+            // The process may have exited at the deadline boundary.
+          } finally {
+            resolveDeadline({ status: FAILURE_EXIT_CODES.deadline });
+          }
+        }, remainingMs);
+      }),
+    ]);
+    clearTimeout(deadlineTimer);
     if (result?.status === 0) return { ok: true, stage: null, attempts: attempt };
     const stage = EXIT_FAILURE_STAGES.get(result?.status) ?? "unknown";
     if (stage !== "proxy_setup" || attempt === PROXY_SETUP_ATTEMPTS) {
