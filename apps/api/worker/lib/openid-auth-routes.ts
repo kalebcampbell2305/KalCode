@@ -62,6 +62,7 @@ function exchangeFailureStage(error: unknown): OpenIdFailureStage {
       case "claims_email":
       case "claims_email_verification_missing":
       case "claims_email_verification_type":
+      case "claims_email_verification_affirmative_text":
       case "claims_email_verification_denied":
         return error.stage;
     }

@@ -310,11 +310,13 @@ describe("OpenID Connect providers", () => {
         exchangeOpenIdIdentity(fetcher, MICROSOFT, "oauth-code", VERIFIER, NONCE, NOW),
         emailClaims.xms_edov === undefined
           ? "claims_email_verification_missing"
-          : typeof emailClaims.xms_edov !== "boolean"
-            ? "claims_email_verification_type"
-            : emailClaims.xms_edov === false
-              ? "claims_email_verification_denied"
-              : "claims_email",
+          : emailClaims.xms_edov === "true"
+            ? "claims_email_verification_affirmative_text"
+            : typeof emailClaims.xms_edov !== "boolean"
+              ? "claims_email_verification_type"
+              : emailClaims.xms_edov === false
+                ? "claims_email_verification_denied"
+                : "claims_email",
       );
     }
   });

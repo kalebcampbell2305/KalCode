@@ -22,6 +22,7 @@ export type OpenIdFailureStage =
   | "claims_email"
   | "claims_email_verification_missing"
   | "claims_email_verification_type"
+  | "claims_email_verification_affirmative_text"
   | "claims_email_verification_denied"
   | "account_binding"
   | "identity_collision"
@@ -85,6 +86,7 @@ async function atStage<T>(stage: OpenIdFailureStage, action: () => T | Promise<T
       (error.stage === "claims_email" ||
         error.stage === "claims_email_verification_missing" ||
         error.stage === "claims_email_verification_type" ||
+        error.stage === "claims_email_verification_affirmative_text" ||
         error.stage === "claims_email_verification_denied")
     ) {
       throw error;
@@ -357,6 +359,7 @@ function identityFromClaims(
   // Entra app registration must request this optional ID-token claim. Never fall back to the
   // display-only `preferred_username`, because email magic-link login shares this account field.
   if (claims.xms_edov === undefined) throw new OpenIdExchangeError("claims_email_verification_missing");
+  if (claims.xms_edov === "true") throw new OpenIdExchangeError("claims_email_verification_affirmative_text");
   if (typeof claims.xms_edov !== "boolean") throw new OpenIdExchangeError("claims_email_verification_type");
   if (claims.xms_edov !== true) throw new OpenIdExchangeError("claims_email_verification_denied");
   let email: string;
