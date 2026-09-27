@@ -196,7 +196,9 @@ fn missing_tools_are_truthful_and_ignores_apply_to_later_runs() {
         core,
         host: HostFacts {
             vars: Vec::new(),
-            windows: cfg!(windows),
+            // Model an empty Windows installation so platform-level fallback directories cannot
+            // discover tools installed on the test runner outside this intentionally empty host.
+            windows: true,
             webview_version: Err("not supplied".into()),
             migrations: kalcode_core::db::MIGRATIONS,
         },
