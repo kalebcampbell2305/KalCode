@@ -69,6 +69,13 @@ function response(value: unknown, status = 200): Response {
   });
 }
 
+function redirect(): Response {
+  return new Response(null, {
+    status: 302,
+    headers: { location: "https://redirect-target.invalid/never-requested" },
+  });
+}
+
 function googleDiscovery() {
   return {
     issuer: "https://accounts.google.com",
@@ -163,7 +170,7 @@ describe("OpenID Connect providers", () => {
       "https://www.googleapis.com/oauth2/v3/certs",
     ]);
     for (const [, init] of fetcher.mock.calls) {
-      expect(init).toMatchObject({ redirect: "error" });
+      expect(init).toMatchObject({ redirect: "manual" });
       expect(init?.signal).toBeInstanceOf(AbortSignal);
     }
     expect(fetcher.mock.calls[1]?.[1]?.body).toContain(`client_secret=${GOOGLE.clientSecret}`);
@@ -309,6 +316,47 @@ describe("OpenID Connect providers", () => {
       .mockResolvedValueOnce(response({ ...googleDiscovery(), token_endpoint: "https://attacker.example/token" }));
     await expectStage(exchangeOpenIdIdentity(fetcher, GOOGLE, "oauth-code", VERIFIER, NONCE, NOW), "discovery");
     expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects redirects without contacting their destination during discovery, token exchange or JWKS lookup", async () => {
+    const token = `${encodeBase64UrlText(JSON.stringify({ alg: "RS256", kid: "redirect-key" }))}.${encodeBase64UrlText(
+      JSON.stringify({}),
+    )}.AQ`;
+    const cases = [
+      {
+        stage: "discovery" as const,
+        fetcher: vi.fn<typeof fetch>().mockResolvedValueOnce(redirect()),
+        calls: 1,
+      },
+      {
+        stage: "token_exchange" as const,
+        fetcher: vi
+          .fn<typeof fetch>()
+          .mockResolvedValueOnce(response(googleDiscovery()))
+          .mockResolvedValueOnce(redirect()),
+        calls: 2,
+      },
+      {
+        stage: "signature" as const,
+        fetcher: vi
+          .fn<typeof fetch>()
+          .mockResolvedValueOnce(response(googleDiscovery()))
+          .mockResolvedValueOnce(response({ id_token: token }))
+          .mockResolvedValueOnce(redirect()),
+        calls: 3,
+      },
+    ];
+
+    for (const testCase of cases) {
+      await expectStage(
+        exchangeOpenIdIdentity(testCase.fetcher, GOOGLE, "oauth-code", VERIFIER, NONCE, NOW),
+        testCase.stage,
+      );
+      expect(testCase.fetcher).toHaveBeenCalledTimes(testCase.calls);
+      for (const [, init] of testCase.fetcher.mock.calls) {
+        expect(init).toMatchObject({ redirect: "manual" });
+      }
+    }
   });
 
   it("separates token exchange and token parsing without retaining provider error content", async () => {

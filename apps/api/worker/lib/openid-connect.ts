@@ -105,7 +105,9 @@ function object(value: unknown): Record<string, unknown> | null {
 function requestInit(init: RequestInit = {}): RequestInit {
   return {
     ...init,
-    redirect: "error",
+    // Workerd rejects `redirect: "error"` before issuing even a non-redirecting request.
+    // Manual mode exposes a 3xx response without following it; readJson then rejects it.
+    redirect: "manual",
     signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
   };
 }
