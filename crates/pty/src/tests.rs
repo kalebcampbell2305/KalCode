@@ -19,48 +19,11 @@ fn windows_process_is_alive(pid: u32) -> bool {
 }
 
 #[cfg(windows)]
-fn powershell_literal(path: &std::path::Path) -> String {
-    path.to_string_lossy().replace('\'', "''")
-}
-
-#[cfg(windows)]
-fn root_with_long_lived_descendant(pid_file: &std::path::Path) -> ProgramSpec {
-    let system_root =
-        PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into()));
-    let powershell = system_root
-        .join("System32")
-        .join("WindowsPowerShell")
-        .join("v1.0")
-        .join("powershell.exe");
-    let ping = system_root.join("System32").join("PING.EXE");
-    let script = format!(
-        "$child = Start-Process -FilePath '{}' -ArgumentList '-n','120','127.0.0.1' -WindowStyle Hidden -PassThru; if ($child.HasExited) {{ exit 9 }}; [IO.File]::WriteAllText('{}', [string]$child.Id)",
-        powershell_literal(&ping),
-        powershell_literal(pid_file),
-    );
-    ProgramSpec {
-        program: powershell,
-        args: vec![
-            "-NoProfile".into(),
-            "-NonInteractive".into(),
-            "-WindowStyle".into(),
-            "Hidden".into(),
-            "-Command".into(),
-            script.into(),
-        ],
-        cwd: pid_file.parent().expect("pid file parent").to_path_buf(),
-        env: vec![
-            ("SystemRoot".into(), system_root.clone().into_os_string()),
-            ("WINDIR".into(), system_root.into_os_string()),
-        ],
-        size: TerminalSize::new(80, 24).expect("size"),
-    }
-}
-
-#[cfg(windows)]
 const FAILURE_HELPER_MODE: &str = "KALCODE_PTY_FAILURE_HELPER";
 #[cfg(windows)]
 const FAILURE_HELPER_PID_FILE: &str = "KALCODE_PTY_FAILURE_PID_FILE";
+#[cfg(windows)]
+const FAILURE_HELPER_EXIT_AFTER_SPAWN: &str = "KALCODE_PTY_FAILURE_HELPER_EXIT_AFTER_SPAWN";
 
 /// This test doubles as an absolute-path, console-independent helper process for setup-failure
 /// regressions. Unlike PowerShell it does not wait for a ConPTY cursor-position response before
@@ -89,11 +52,56 @@ fn pty_failure_descendant_helper() {
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .expect("spawn failure-test descendant");
-    std::fs::write(&pid_file, descendant.id().to_string()).expect("record descendant pid");
+    assert!(
+        descendant
+            .try_wait()
+            .expect("probe failure-test descendant")
+            .is_none(),
+        "failure-test descendant exited before readiness"
+    );
+    let staged_pid_file = pid_file.with_extension("pid.pending");
+    std::fs::write(&staged_pid_file, descendant.id().to_string()).expect("stage descendant pid");
+    std::fs::rename(staged_pid_file, &pid_file).expect("publish descendant pid");
+
+    let exit_after_spawn = match std::env::var_os(FAILURE_HELPER_EXIT_AFTER_SPAWN) {
+        None => false,
+        Some(value) if value == "1" => true,
+        Some(_) => panic!("invalid failure-helper exit role"),
+    };
+    if exit_after_spawn {
+        drop(descendant);
+        return;
+    }
 
     std::thread::sleep(Duration::from_secs(90));
     let _ = descendant.kill();
     let _ = descendant.wait();
+}
+
+#[cfg(windows)]
+fn root_with_long_lived_descendant(pid_file: &std::path::Path) -> ProgramSpec {
+    let system_root =
+        PathBuf::from(std::env::var_os("SystemRoot").unwrap_or_else(|| r"C:\Windows".into()));
+    ProgramSpec {
+        program: std::env::current_exe().expect("test binary"),
+        args: vec![
+            "--exact".into(),
+            "tests::pty_failure_descendant_helper".into(),
+            "--nocapture".into(),
+        ],
+        cwd: pid_file.parent().expect("pid file parent").to_path_buf(),
+        env: vec![
+            (FAILURE_HELPER_MODE.into(), "1".into()),
+            (
+                FAILURE_HELPER_PID_FILE.into(),
+                pid_file.as_os_str().to_os_string(),
+            ),
+            (FAILURE_HELPER_EXIT_AFTER_SPAWN.into(), "1".into()),
+            ("SystemRoot".into(), system_root.clone().into_os_string()),
+            ("WINDIR".into(), system_root.into_os_string()),
+        ],
+        size: TerminalSize::new(80, 24).expect("size"),
+    }
 }
 
 #[cfg(windows)]
@@ -436,6 +444,16 @@ fn answers_cursor_requests_when_no_view_is_attached() {
         r.lock().expect("lock").extend_from_slice(chunk);
         true
     });
+    // Process exit and PTY output draining run on independent threads. `attach` atomically
+    // replays the scrollback and registers for later chunks, so wait for the reader to deliver
+    // output that was still pending when the exit callback ran.
+    assert!(
+        wait_until(Duration::from_secs(5), || {
+            String::from_utf8_lossy(&replay.lock().expect("lock")).contains("unattended-ok")
+        }),
+        "output was not drained after exit: {:?}",
+        String::from_utf8_lossy(&replay.lock().expect("lock"))
+    );
     let text = String::from_utf8_lossy(&replay.lock().expect("lock")).into_owned();
     assert!(text.contains("unattended-ok"), "{text:?}");
     assert!(
@@ -599,13 +617,15 @@ fn natural_root_exit_quiesces_descendants_before_callback() {
     let callback_pid_file = pid_file.clone();
     let _session =
         PtySession::spawn_program(root_with_long_lived_descendant(&pid_file), move |exit| {
-            let pid = std::fs::read_to_string(&callback_pid_file)
-                .expect("root recorded descendant pid")
-                .trim()
-                .parse::<u32>()
-                .expect("descendant pid");
-            *callback_observed.lock().expect("callback result") =
-                Some((exit, pid, windows_process_is_alive(pid)));
+            let observation = std::fs::read_to_string(&callback_pid_file)
+                .map_err(|error| format!("root did not record descendant pid: {error}"))
+                .and_then(|pid| {
+                    pid.trim().parse::<u32>().map_err(|error| {
+                        format!("root recorded an invalid descendant pid: {error}")
+                    })
+                })
+                .map(|pid| (exit, pid, windows_process_is_alive(pid)));
+            *callback_observed.lock().expect("callback result") = Some(observation);
         })
         .expect("spawn contained root");
 
@@ -619,7 +639,9 @@ fn natural_root_exit_quiesces_descendants_before_callback() {
     let (exit, child_pid, child_alive) = observed
         .lock()
         .expect("callback result")
-        .expect("callback result");
+        .take()
+        .expect("callback result")
+        .unwrap_or_else(|error| panic!("contained root fixture failed: {error}"));
     assert!(exit.success, "root exit: {exit:?}");
     assert!(!exit.killed, "natural exit must remain distinguishable");
     assert!(
