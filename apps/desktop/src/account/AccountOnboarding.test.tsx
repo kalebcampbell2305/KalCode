@@ -40,6 +40,28 @@ function actions() {
 }
 
 describe("AccountOnboarding", () => {
+  it("offers an explicit retry when native session restoration times out", async () => {
+    const accountActions = actions();
+    render(
+      <AccountOnboarding
+        snapshot={snapshot("bootstrapping")}
+        busy={false}
+        error={{
+          code: "account_bootstrap_timeout",
+          message: "KalCode couldn't finish restoring your session. Try again.",
+          retryable: true,
+        }}
+        actions={accountActions}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "Restoring your session" })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveAttribute("aria-busy", "false");
+    expect(screen.getByRole("alert")).toHaveTextContent("couldn't finish restoring your session");
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(accountActions.retry).toHaveBeenCalledOnce();
+  });
+
   it("uses the same private email flow for sign in and account creation", async () => {
     const accountActions = actions();
     const { rerender } = render(

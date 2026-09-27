@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AccountSnapshot, RuntimeStatus } from "../ipc/account.ts";
@@ -6,6 +6,7 @@ import {
   type AccountOperations,
   AccountProvider,
   MAX_CONFIRMATION_POLLS,
+  MAX_RUNTIME_STATUS_POLLS,
   type SocialProvider,
   useAccount,
 } from "./AccountProvider.tsx";
@@ -79,6 +80,30 @@ function Harness() {
 afterEach(() => vi.useRealTimers());
 
 describe("AccountProvider", () => {
+  it("refreshes account authority when persisted-session bootstrap finishes after the UI mounts", async () => {
+    vi.useFakeTimers();
+    const status = vi
+      .fn<() => Promise<AccountSnapshot>>()
+      .mockResolvedValueOnce(snapshot("bootstrapping"))
+      .mockResolvedValue(snapshot("ready"));
+    const runtimeStatus = vi
+      .fn<() => Promise<RuntimeStatus>>()
+      .mockResolvedValueOnce({ phase: "starting", ready: false })
+      .mockResolvedValue({ phase: "ready", ready: true });
+    const client = operations({ status, runtimeStatus });
+    render(
+      <AccountProvider client={client} runtimePollMs={10}>
+        <Harness />
+      </AccountProvider>,
+    );
+    await act(async () => undefined);
+    expect(screen.getByLabelText("phase")).toHaveTextContent("bootstrapping");
+    await act(async () => vi.advanceTimersByTimeAsync(20));
+    expect(screen.getByLabelText("phase")).toHaveTextContent("ready");
+    expect(client.startSocial).not.toHaveBeenCalled();
+    expect(client.startEmail).not.toHaveBeenCalled();
+  });
+
   it("boots from account and runtime authority without deriving a local plan", async () => {
     const client = operations({
       status: vi.fn(async () => snapshot("ready")),
@@ -89,9 +114,79 @@ describe("AccountProvider", () => {
         <Harness />
       </AccountProvider>,
     );
-    expect(await screen.findByLabelText("phase")).toHaveTextContent("ready");
+    await waitFor(() => expect(screen.getByLabelText("phase")).toHaveTextContent("ready"));
     expect(client.status).toHaveBeenCalledOnce();
     expect(client.runtimeStatus).toHaveBeenCalledOnce();
+  });
+
+  it("does not stop observing bootstrap just because the workspace is initially signed out", async () => {
+    vi.useFakeTimers();
+    const status = vi
+      .fn<() => Promise<AccountSnapshot>>()
+      .mockResolvedValueOnce(snapshot("bootstrapping"))
+      .mockResolvedValueOnce(snapshot("bootstrapping"))
+      .mockResolvedValue(snapshot("signed_out"));
+    render(
+      <AccountProvider client={operations({ status })} runtimePollMs={10}>
+        <Harness />
+      </AccountProvider>,
+    );
+    await act(async () => vi.advanceTimersByTimeAsync(20));
+    expect(status).toHaveBeenCalledTimes(3);
+    expect(screen.getByLabelText("phase")).toHaveTextContent("signed_out");
+  });
+
+  it("continues restored social attempts through canonical status into ready", async () => {
+    vi.useFakeTimers();
+    const status = vi
+      .fn<() => Promise<AccountSnapshot>>()
+      .mockResolvedValueOnce(snapshot("bootstrapping"))
+      .mockResolvedValueOnce(snapshot("social_pending"))
+      .mockResolvedValue(snapshot("ready"));
+    const runtimeStatus = vi
+      .fn<() => Promise<RuntimeStatus>>()
+      .mockResolvedValueOnce({ phase: "starting", ready: false })
+      .mockResolvedValueOnce({ phase: "signed_out", ready: false })
+      .mockResolvedValue({ phase: "ready", ready: true });
+    render(
+      <AccountProvider client={operations({ status, runtimeStatus })} runtimePollMs={10} socialStatusPollMs={10}>
+        <Harness />
+      </AccountProvider>,
+    );
+    await act(async () => vi.advanceTimersByTimeAsync(20));
+    expect(screen.getByLabelText("phase")).toHaveTextContent("ready");
+  });
+
+  it("does not resurrect an account from an in-flight bootstrap status after logout", async () => {
+    vi.useFakeTimers();
+    const pending = deferred<AccountSnapshot>();
+    const status = vi
+      .fn<() => Promise<AccountSnapshot>>()
+      .mockResolvedValueOnce(snapshot("bootstrapping"))
+      .mockImplementationOnce(() => pending.promise);
+    render(
+      <AccountProvider client={operations({ status })} runtimePollMs={10}>
+        <Harness />
+      </AccountProvider>,
+    );
+    await act(async () => vi.advanceTimersByTimeAsync(10));
+    await act(async () => screen.getByRole("button", { name: "logout" }).click());
+    await act(async () => pending.resolve(snapshot("ready")));
+    expect(screen.getByLabelText("phase")).toHaveTextContent("signed_out");
+  });
+
+  it("bounds bootstrap observation and reports a recoverable error without inventing authority", async () => {
+    vi.useFakeTimers();
+    const status = vi.fn(async () => snapshot("bootstrapping"));
+    render(
+      <AccountProvider client={operations({ status })} runtimePollMs={10}>
+        <Harness />
+      </AccountProvider>,
+    );
+    await act(async () => vi.runAllTimersAsync());
+    expect(status).toHaveBeenCalledTimes(MAX_RUNTIME_STATUS_POLLS + 1);
+    expect(screen.getByLabelText("phase")).toHaveTextContent("bootstrapping");
+    expect(screen.getByLabelText("error")).toHaveTextContent("account_bootstrap_timeout");
   });
 
   it("generation-fences late account and runtime results after logout", async () => {

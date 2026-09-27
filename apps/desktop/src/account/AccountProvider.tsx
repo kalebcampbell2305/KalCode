@@ -284,6 +284,48 @@ export function AccountProvider({
     [client, pollRuntime, refreshUsage, socialStatusPollMs],
   );
 
+  const pollBootstrap = useCallback(
+    (expectedGeneration: number, attempt: number) => {
+      if (expectedGeneration !== generation.current) return;
+      if (attempt >= MAX_RUNTIME_STATUS_POLLS) {
+        if (mounted.current) {
+          dispatch({
+            type: "error",
+            generation: expectedGeneration,
+            error: {
+              code: "account_bootstrap_timeout",
+              message: "KalCode couldn't finish restoring your session. Try again.",
+              retryable: true,
+            },
+          });
+        }
+        return;
+      }
+      runtimeTimer.current = setTimeout(() => {
+        runtimeTimer.current = null;
+        if (!mounted.current || expectedGeneration !== generation.current) return;
+        void client
+          .status()
+          .then(async (snapshot) => {
+            if (!mounted.current || expectedGeneration !== generation.current) return;
+            const runtime = await client.runtimeStatus();
+            if (!mounted.current || expectedGeneration !== generation.current) return;
+            dispatch({ type: "resolved", generation: expectedGeneration, snapshot, runtime });
+            if (snapshot.phase === "bootstrapping") pollBootstrap(expectedGeneration, attempt + 1);
+            else if (snapshot.phase === "social_pending") pollSocialStatus(expectedGeneration, 0);
+            else if (snapshot.phase === "confirming_plan") pollConfirmation(expectedGeneration, 0);
+            else if (!runtimeSettled(snapshot, runtime)) pollRuntime(expectedGeneration, snapshot, 0);
+            else void refreshUsage(expectedGeneration, snapshot, runtime);
+          })
+          .catch((error: unknown) => {
+            if (!mounted.current || expectedGeneration !== generation.current) return;
+            dispatch({ type: "error", generation: expectedGeneration, error: safeError(error) });
+          });
+      }, runtimePollMs);
+    },
+    [client, pollConfirmation, pollRuntime, pollSocialStatus, refreshUsage, runtimePollMs],
+  );
+
   const runSnapshot = useCallback(
     async (operation: () => Promise<AccountSnapshot>, confirmPaid = false) => {
       const expectedGeneration = nextGeneration();
@@ -295,7 +337,9 @@ export function AccountProvider({
         const runtime = await client.runtimeStatus();
         if (!mounted.current || expectedGeneration !== generation.current) return;
         dispatch({ type: "resolved", generation: expectedGeneration, snapshot, runtime });
-        if (snapshot.phase === "social_pending") {
+        if (snapshot.phase === "bootstrapping") {
+          pollBootstrap(expectedGeneration, 0);
+        } else if (snapshot.phase === "social_pending") {
           pollSocialStatus(expectedGeneration, 0);
         } else if (confirmPaid && snapshot.phase === "confirming_plan") {
           pollConfirmation(expectedGeneration, 0);
@@ -310,7 +354,7 @@ export function AccountProvider({
         dispatch({ type: "error", generation: expectedGeneration, error: safeError(error) });
       }
     },
-    [client, nextGeneration, pollConfirmation, pollRuntime, pollSocialStatus, refreshUsage],
+    [client, nextGeneration, pollBootstrap, pollConfirmation, pollRuntime, pollSocialStatus, refreshUsage],
   );
 
   useEffect(() => {

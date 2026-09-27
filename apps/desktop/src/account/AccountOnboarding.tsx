@@ -83,10 +83,15 @@ export function AccountOnboarding({ snapshot, busy, error, actions }: AccountOnb
         </header>
 
         {snapshot.phase === "bootstrapping" ? (
-          <div className={styles.center} role="status" aria-busy="true">
+          <div className={styles.center} role="status" aria-busy={!error}>
             <p className={styles.eyebrow}>Account</p>
             <h1 id="account-title">Restoring your session</h1>
             <p>KalCode is verifying this device before opening your workspace.</p>
+            {error?.retryable ? (
+              <Button variant="primary" busy={busy} onClick={() => void actions.retry()}>
+                Try again
+              </Button>
+            ) : null}
           </div>
         ) : snapshot.phase === "signed_out" && mode === null ? (
           <div className={styles.center}>
