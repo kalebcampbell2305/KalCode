@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 import type { AccountStore } from "../../worker/lib/account-store";
 import { sha256Base64Url } from "../../worker/lib/crypto";
@@ -54,7 +55,7 @@ function post(path: string, body: unknown, headers: Record<string, string> = {})
 }
 
 function handoffHref(html: string): string {
-  const match = /<a href="([^"]+)">Open KalCode<\/a>/.exec(html);
+  const match = /<a(?: id="open-kalcode")? href="([^"]+)">Open KalCode<\/a>/.exec(html);
   expect(match).not.toBeNull();
   return (match?.[1] ?? "")
     .replaceAll("&amp;", "&")
@@ -65,7 +66,7 @@ function handoffHref(html: string): string {
 }
 
 describe("OpenID account auth routes", () => {
-  it("creates a provider-bound, nonce-bound attempt without persisting raw state or nonce", async () => {
+  it("creates an explicit desktop provider-bound account-chooser attempt without persisting raw state or nonce", async () => {
     const store = fakeStore();
     const auth = openIdAuthService({
       store,
@@ -73,7 +74,10 @@ describe("OpenID account auth routes", () => {
       rateLimitKey: "r".repeat(32),
       now: () => NOW,
     });
-    const response = await auth.start(post("/v1/auth/google/start", { codeChallenge: CHALLENGE }), "google");
+    const response = await auth.start(
+      post("/v1/auth/google/start", { client: "desktop", codeChallenge: CHALLENGE }),
+      "google",
+    );
     expect(response.status).toBe(200);
     const body = (await response.json()) as { authorizeUrl: string; nonce: string; expiresAt: string };
     const url = new URL(body.authorizeUrl);
@@ -81,6 +85,7 @@ describe("OpenID account auth routes", () => {
     expect(state).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(body.nonce).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(url.searchParams.get("nonce")).toBe(body.nonce);
+    expect(url.searchParams.get("prompt")).toBe("select_account");
     expect(store.createOpenIdAttempt).toHaveBeenCalledWith({
       stateHash: await sha256Base64Url(state as string),
       provider: "google",
@@ -94,6 +99,42 @@ describe("OpenID account auth routes", () => {
     const persisted = JSON.stringify(vi.mocked(store.createOpenIdAttempt).mock.calls);
     expect(persisted).not.toContain(state);
     expect(persisted).not.toContain(body.nonce);
+  });
+
+  it("keeps legacy desktop starts compatible without adding an unrecognized chooser parameter", async () => {
+    const store = fakeStore();
+    const auth = openIdAuthService({
+      store,
+      clients: { google: GOOGLE },
+      rateLimitKey: "r".repeat(32),
+      now: () => NOW,
+    });
+    const response = await auth.start(post("/v1/auth/google/start", { codeChallenge: CHALLENGE }), "google");
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { authorizeUrl: string };
+    expect(new URL(body.authorizeUrl).searchParams.has("prompt")).toBe(false);
+    expect(store.createOpenIdAttempt).toHaveBeenCalledWith(expect.objectContaining({ clientKind: "desktop" }));
+  });
+
+  it("rejects unknown desktop clients and extra start fields before creating an attempt", async () => {
+    const createOpenIdAttempt = vi.fn(async () => undefined);
+    const auth = openIdAuthService({
+      store: fakeStore({ createOpenIdAttempt }),
+      clients: { google: GOOGLE },
+      rateLimitKey: "r".repeat(32),
+      now: () => NOW,
+    });
+    const unknown = await auth.start(
+      post("/v1/auth/google/start", { client: "mobile", codeChallenge: CHALLENGE }),
+      "google",
+    );
+    const extra = await auth.start(
+      post("/v1/auth/google/start", { client: "desktop", codeChallenge: CHALLENGE, prompt: "none" }),
+      "google",
+    );
+    expect(unknown.status).toBe(400);
+    expect(extra.status).toBe(400);
+    expect(createOpenIdAttempt).not.toHaveBeenCalled();
   });
 
   it("binds website starts to the exact website origin and persists the client kind", async () => {
@@ -114,6 +155,8 @@ describe("OpenID account auth routes", () => {
       "google",
     );
     expect(response.status).toBe(200);
+    const websiteBody = (await response.json()) as { authorizeUrl: string };
+    expect(new URL(websiteBody.authorizeUrl).searchParams.has("prompt")).toBe(false);
     expect(store.createOpenIdAttempt).toHaveBeenCalledWith(
       expect.objectContaining({ provider: "google", codeChallenge: CHALLENGE, clientKind: "website" }),
     );
@@ -584,7 +627,7 @@ describe("OpenID account auth routes", () => {
     }
   });
 
-  it("requires an explicit browser gesture for the desktop handoff without leaking callback authority", async () => {
+  it("attempts the desktop handoff once after document readiness and retains a safe explicit fallback", async () => {
     const store = fakeStore({
       openIdAttempt: vi.fn(async () => ({
         stateHash: await sha256Base64Url(STATE),
@@ -641,10 +684,64 @@ describe("OpenID account auth routes", () => {
     );
     const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
     expect(scripts).toHaveLength(1);
-    expect(scripts[0]?.[1]).toBe('history.replaceState(null, "", location.pathname);');
-    const scriptHash = createHash("sha256")
-      .update(scripts[0]?.[1] ?? "", "utf8")
-      .digest("base64");
+    const script = scripts[0]?.[1] ?? "";
+    expect(script).not.toContain(STATE);
+    expect(script).not.toContain(hostileCode);
+    const replaceState = vi.fn();
+    const click = vi.fn();
+    const timeout = vi.fn();
+    let ready: (() => void) | null = null;
+    let revealFallback: (() => void) | null = null;
+    const addEventListener = vi.fn((event: string, listener: () => void, options?: { once?: boolean }) => {
+      expect(event).toBe("DOMContentLoaded");
+      expect(options).toEqual({ once: true });
+      ready = listener;
+    });
+    class TestAnchor {
+      click = click;
+    }
+    class TestElement {
+      hidden = true;
+    }
+    const anchor = new TestAnchor();
+    const fallback = new TestElement();
+    const getElementById = vi.fn((id: string) => {
+      if (id === "open-kalcode") return anchor;
+      if (id === "handoff-fallback") return fallback;
+      return null;
+    });
+    runInNewContext(script, {
+      history: { replaceState },
+      location: { pathname: "/v1/auth/google/callback" },
+      addEventListener,
+      document: { getElementById },
+      HTMLAnchorElement: TestAnchor,
+      HTMLElement: TestElement,
+      setTimeout: (listener: () => void, delay: number) => {
+        timeout(delay);
+        revealFallback = listener;
+      },
+    });
+    expect(replaceState).toHaveBeenCalledWith(null, "", "/v1/auth/google/callback");
+    expect(click).not.toHaveBeenCalled();
+    expect(ready).not.toBeNull();
+    (ready as unknown as () => void)();
+    (ready as unknown as () => void)();
+    expect(getElementById).toHaveBeenCalledWith("open-kalcode");
+    expect(click).toHaveBeenCalledTimes(1);
+    expect(timeout).toHaveBeenCalledOnce();
+    expect(timeout).toHaveBeenCalledWith(1_500);
+    expect(fallback.hidden).toBe(true);
+    expect(revealFallback).not.toBeNull();
+    (revealFallback as unknown as () => void)();
+    expect(fallback.hidden).toBe(false);
+    expect(html).toContain('<a id="open-kalcode" href="');
+    expect(html).toContain("Signing you in to KalCode&hellip;");
+    expect(html).toContain('<p id="handoff-fallback" hidden>');
+    expect(html).toContain('If KalCode does not open, select <a id="open-kalcode"');
+    expect(html).toContain(">Open KalCode</a> to finish this sign-in attempt.");
+    expect(html).toContain("<noscript>");
+    const scriptHash = createHash("sha256").update(script, "utf8").digest("base64");
     expect(success.headers.get("content-security-policy")).toBe(
       `default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; script-src 'sha256-${scriptHash}'`,
     );
@@ -676,6 +773,8 @@ describe("OpenID account auth routes", () => {
     expect(success.headers.get("location")).toBe(
       `https://kalcoded.com/account#socialProvider=google&socialCode=opaque-code&socialState=${STATE}`,
     );
+    expect(success.status).toBe(302);
+    expect(await success.text()).toBe("");
     expect(new URL(success.headers.get("location") as string).search).toBe("");
 
     const canceled = await auth.callback(

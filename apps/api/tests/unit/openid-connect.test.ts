@@ -108,21 +108,22 @@ async function expectStage(promise: Promise<unknown>, stage: OpenIdFailureStage)
 }
 
 describe("OpenID Connect providers", () => {
-  it("builds least-scope Google and Microsoft authorization URLs with state, nonce and S256 PKCE", () => {
-    const google = new URL(buildOpenIdAuthorizeUrl(GOOGLE, STATE, CHALLENGE, NONCE));
+  it("adds the account chooser only to desktop Google and Microsoft authorization URLs", () => {
+    const google = new URL(buildOpenIdAuthorizeUrl(GOOGLE, STATE, CHALLENGE, NONCE, true));
     expect(google.origin + google.pathname).toBe("https://accounts.google.com/o/oauth2/v2/auth");
     expect(Object.fromEntries(google.searchParams)).toEqual({
       client_id: GOOGLE.clientId,
       code_challenge: CHALLENGE,
       code_challenge_method: "S256",
       nonce: NONCE,
+      prompt: "select_account",
       redirect_uri: GOOGLE.callbackUrl,
       response_type: "code",
       scope: "openid email",
       state: STATE,
     });
 
-    const microsoft = new URL(buildOpenIdAuthorizeUrl(MICROSOFT, STATE, CHALLENGE, NONCE));
+    const microsoft = new URL(buildOpenIdAuthorizeUrl(MICROSOFT, STATE, CHALLENGE, NONCE, true));
     expect(microsoft.origin + microsoft.pathname).toBe(
       "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
     );
@@ -131,12 +132,21 @@ describe("OpenID Connect providers", () => {
       code_challenge: CHALLENGE,
       code_challenge_method: "S256",
       nonce: NONCE,
+      prompt: "select_account",
       redirect_uri: MICROSOFT.callbackUrl,
       response_mode: "query",
       response_type: "code",
       scope: "openid email",
       state: STATE,
     });
+
+    for (const config of [GOOGLE, MICROSOFT]) {
+      const website = new URL(buildOpenIdAuthorizeUrl(config, STATE, CHALLENGE, NONCE, false));
+      expect(website.searchParams.has("prompt")).toBe(false);
+      expect(website.searchParams.get("state")).toBe(STATE);
+      expect(website.searchParams.get("nonce")).toBe(NONCE);
+      expect(website.searchParams.get("code_challenge")).toBe(CHALLENGE);
+    }
   });
 
   it("verifies Google signature, issuer, audience, lifetime, nonce and verified email", async () => {

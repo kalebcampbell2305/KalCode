@@ -1,7 +1,8 @@
 import type { OpenIdProvider } from "./openid-connect";
 
-const HISTORY_REPLACE_SCRIPT = 'history.replaceState(null, "", location.pathname);';
-const HISTORY_REPLACE_SCRIPT_SHA256 = "ixzo+owSEfJWq9z0HJaxCJAlk3mRYZRq9JaxhZ3hBmA=";
+const HANDOFF_SCRIPT =
+  'history.replaceState(null,"",location.pathname);let attempted=false;addEventListener("DOMContentLoaded",()=>{if(attempted)return;attempted=true;const link=document.getElementById("open-kalcode");setTimeout(()=>{const fallback=document.getElementById("handoff-fallback");if(fallback instanceof HTMLElement)fallback.hidden=false;},1500);if(link instanceof HTMLAnchorElement)link.click();},{once:true});';
+const HANDOFF_SCRIPT_SHA256 = "QJlZwCEUIs0xNO6mLw5czDA8+dQSbCsQHUUjU46Wlos=";
 
 type NativeAuthResult =
   | { state: string; code: string }
@@ -25,9 +26,9 @@ function escapeHtmlAttribute(value: string): string {
 }
 
 /**
- * Returns a script-free-except-for-history-cleanup browser boundary for the native OIDC handoff.
- * The short-lived authorization values remain only in the explicit custom-protocol link. They are
- * never persisted here, and no automatic navigation can bypass the browser's user-gesture policy.
+ * Returns a browser boundary for the native OIDC handoff. The page makes one best-effort automatic
+ * custom-protocol launch after it is ready, then reveals an explicit fallback for browsers that
+ * require a user gesture. It never treats browser navigation as proof that sign-in completed.
  */
 export function nativeAuthHandoff(provider: OpenIdProvider, result: NativeAuthResult): Response {
   const destination = new URL(`kalcode://auth/${provider}`);
@@ -41,13 +42,14 @@ export function nativeAuthHandoff(provider: OpenIdProvider, result: NativeAuthRe
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Return to KalCode</title>
-<script>${HISTORY_REPLACE_SCRIPT}</script>
+<script>${HANDOFF_SCRIPT}</script>
 </head>
 <body>
 <main>
 <h1>Return to KalCode</h1>
-<p>Open KalCode to finish this sign-in attempt.</p>
-<p><a href="${href}">Open KalCode</a></p>
+<p>Signing you in to KalCode&hellip;</p>
+<p id="handoff-fallback" hidden>If KalCode does not open, select <a id="open-kalcode" href="${href}">Open KalCode</a> to finish this sign-in attempt.</p>
+<noscript><p>JavaScript is unavailable. Select <a href="${href}">Open KalCode</a> to finish this sign-in attempt.</p></noscript>
 <p>You can close this tab after KalCode opens.</p>
 </main>
 </body>
@@ -58,7 +60,7 @@ export function nativeAuthHandoff(provider: OpenIdProvider, result: NativeAuthRe
     headers: {
       "content-type": "text/html; charset=utf-8",
       "cache-control": "no-store",
-      "content-security-policy": `default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; script-src 'sha256-${HISTORY_REPLACE_SCRIPT_SHA256}'`,
+      "content-security-policy": `default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; script-src 'sha256-${HANDOFF_SCRIPT_SHA256}'`,
       "cross-origin-opener-policy": "same-origin",
       "cross-origin-resource-policy": "same-origin",
       "permissions-policy": "camera=(), geolocation=(), microphone=(), payment=(), usb=()",

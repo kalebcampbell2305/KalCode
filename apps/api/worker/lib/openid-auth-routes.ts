@@ -140,8 +140,12 @@ export function openIdAuthService(options: Options): OpenIdAuthService {
       const body = await readInput(request);
       if (body instanceof Response) return body;
       const clientKind: AuthClientKind | null =
-        body.client === undefined ? "desktop" : body.client === "website" ? "website" : null;
-      const expectedKeys = clientKind === "website" ? 2 : 1;
+        body.client === undefined || body.client === "desktop"
+          ? "desktop"
+          : body.client === "website"
+            ? "website"
+            : null;
+      const expectedKeys = body.client === undefined ? 1 : 2;
       if (!clientKind || Object.keys(body).length !== expectedKeys || !isPkceChallenge(body.codeChallenge)) {
         return apiError(400, "invalid_request", GENERIC_SIGN_IN);
       }
@@ -149,6 +153,9 @@ export function openIdAuthService(options: Options): OpenIdAuthService {
       if (!(await rateAllowed(request, "oauth_start", 10))) {
         return apiError(429, "rate_limited", "Please wait before trying again.", { "retry-after": "600" });
       }
+      // The explicit desktop client opts into the chooser parameter. Omitted client stays compatible
+      // with installed desktop versions whose authorization-URL allowlist predates that parameter.
+      const selectAccount = body.client === "desktop";
 
       const state = randomBase64Url();
       const nonce = randomBase64Url();
@@ -167,7 +174,7 @@ export function openIdAuthService(options: Options): OpenIdAuthService {
       return json(
         {
           ok: true,
-          authorizeUrl: buildOpenIdAuthorizeUrl(config, state, body.codeChallenge, nonce),
+          authorizeUrl: buildOpenIdAuthorizeUrl(config, state, body.codeChallenge, nonce, selectAccount),
           nonce,
           expiresAt: expiresAt.toISOString(),
         },

@@ -380,6 +380,7 @@ export function buildOpenIdAuthorizeUrl(
   state: string,
   challenge: string,
   nonce: string,
+  selectAccount: boolean,
 ): string {
   if (!FLOW_VALUE.test(state) || !isPkceChallenge(challenge) || !FLOW_VALUE.test(nonce)) {
     throw new OAuthProviderError();
@@ -395,6 +396,7 @@ export function buildOpenIdAuthorizeUrl(
     code_challenge: challenge,
     code_challenge_method: "S256",
   };
+  if (selectAccount) params.prompt = "select_account";
   if (config.provider === "microsoft") params.response_mode = "query";
   url.search = new URLSearchParams(params).toString();
   return url.toString();
