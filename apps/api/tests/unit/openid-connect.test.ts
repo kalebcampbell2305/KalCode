@@ -276,6 +276,35 @@ describe("OpenID Connect providers", () => {
     );
   });
 
+  it("accepts the exact signed Microsoft personal-account domain verification representation", async () => {
+    const key = await keyPair();
+    const tenant = "9188040d-6c67-4c5b-b112-36a304b66dad";
+    const issuer = `https://login.microsoftonline.com/${tenant}/v2.0`;
+    const token = await idToken(key, {
+      iss: issuer,
+      tid: tenant,
+      sub: "personal-subject",
+      aud: MICROSOFT.clientId,
+      iat: Math.floor(NOW.getTime() / 1000) - 5,
+      nbf: Math.floor(NOW.getTime() / 1000) - 5,
+      exp: Math.floor(NOW.getTime() / 1000) + 300,
+      nonce: NONCE,
+      ver: "2.0",
+      email: "Person@Example.com",
+      xms_edov: "1",
+    });
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(response(microsoftDiscovery()))
+      .mockResolvedValueOnce(response({ id_token: token }))
+      .mockResolvedValueOnce(response({ keys: [{ ...key.publicJwk, alg: undefined, issuer }] }));
+    await expect(exchangeOpenIdIdentity(fetcher, MICROSOFT, "oauth-code", VERIFIER, NONCE, NOW)).resolves.toEqual({
+      provider: "microsoft",
+      subject: `${tenant}:personal-subject`,
+      email: "person@example.com",
+    });
+  });
+
   it("rejects mutable Microsoft email and preferred_username claims without verified domain ownership", async () => {
     const key = await keyPair();
     const tenant = "aaaabbbb-0000-cccc-1111-dddd2222eeee";
@@ -285,7 +314,10 @@ describe("OpenID Connect providers", () => {
       { preferred_username: "victim@example.com" },
       { email: "victim@example.com", xms_edov: false },
       { email: "victim@example.com", xms_edov: "true" },
-      { email: "victim@example.com", xms_edov: "1" },
+      ...["0", "false", "True", " true", "true ", " 1", "1 ", "01", 0, null, [], ["1"], {}].map((xms_edov) => ({
+        email: "victim@example.com",
+        xms_edov,
+      })),
       { email: "victim@example.com", xms_edov: 1 },
       { xms_edov: true },
     ] as Record<string, unknown>[]) {
@@ -313,13 +345,11 @@ describe("OpenID Connect providers", () => {
           ? "claims_email_verification_missing"
           : emailClaims.xms_edov === "true"
             ? "claims_email_verification_affirmative_text"
-            : emailClaims.xms_edov === "1"
-              ? "claims_email_verification_one_text"
-              : typeof emailClaims.xms_edov !== "boolean"
-                ? "claims_email_verification_type"
-                : emailClaims.xms_edov === false
-                  ? "claims_email_verification_denied"
-                  : "claims_email",
+            : typeof emailClaims.xms_edov !== "boolean"
+              ? "claims_email_verification_type"
+              : emailClaims.xms_edov === false
+                ? "claims_email_verification_denied"
+                : "claims_email",
       );
     }
   });
