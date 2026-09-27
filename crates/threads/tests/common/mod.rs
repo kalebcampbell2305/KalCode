@@ -387,7 +387,7 @@ impl PermissionGate for TestGate {
     }
 
     fn expire_for_thread(&self, thread_id: &str) {
-        let observer = self.expire_observer.lock().unwrap().clone();
+        let observer = self.expire_observer.lock().unwrap().take();
         if let Some(observer) = observer {
             observer(thread_id);
         }
