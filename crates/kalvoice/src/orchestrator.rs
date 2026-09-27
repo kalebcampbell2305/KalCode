@@ -344,6 +344,9 @@ pub fn provider_display_name(id: &ProviderId) -> String {
 
 type Clock = Arc<dyn Fn() -> OffsetDateTime + Send + Sync>;
 
+#[cfg(test)]
+type LocalInterpretationTimeoutObserver = Arc<dyn Fn(Instant) + Send + Sync>;
+
 pub struct Orchestrator {
     core: Arc<Core>,
     entitlement: Option<Arc<dyn EntitlementSource>>,
@@ -355,6 +358,8 @@ pub struct Orchestrator {
     active_claims: Arc<Mutex<HashSet<String>>>,
     local_interpretation_active: Arc<AtomicBool>,
     local_interpretation_state: Mutex<LocalInterpretationState>,
+    #[cfg(test)]
+    local_interpretation_timeout_observer: Mutex<Option<LocalInterpretationTimeoutObserver>>,
 }
 
 impl Orchestrator {
@@ -375,6 +380,8 @@ impl Orchestrator {
             active_claims: Arc::new(Mutex::new(HashSet::new())),
             local_interpretation_active: Arc::new(AtomicBool::new(false)),
             local_interpretation_state: Mutex::new(LocalInterpretationState::default()),
+            #[cfg(test)]
+            local_interpretation_timeout_observer: Mutex::new(None),
         }
     }
 
@@ -395,6 +402,8 @@ impl Orchestrator {
             active_claims: Arc::new(Mutex::new(HashSet::new())),
             local_interpretation_active: Arc::new(AtomicBool::new(false)),
             local_interpretation_state: Mutex::new(LocalInterpretationState::default()),
+            #[cfg(test)]
+            local_interpretation_timeout_observer: Mutex::new(None),
         }
     }
 
@@ -428,6 +437,30 @@ impl Orchestrator {
     pub fn with_local_interpreter(mut self, interpreter: Arc<dyn LocalInterpreter>) -> Self {
         self.local_interpreter = interpreter;
         self
+    }
+
+    #[cfg(test)]
+    fn with_local_interpretation_timeout_observer(
+        mut self,
+        observer: impl Fn(Instant) + Send + Sync + 'static,
+    ) -> Self {
+        *self
+            .local_interpretation_timeout_observer
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(observer));
+        self
+    }
+
+    #[cfg(test)]
+    fn observe_local_interpretation_timeout(&self, deadline: Instant) {
+        let observer = self
+            .local_interpretation_timeout_observer
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(observer) = observer {
+            observer(deadline);
+        }
     }
 
     /// Cancels the current local inference and proves its worker thread has settled within the
@@ -1450,7 +1483,9 @@ impl Run<'_> {
             Some(result) => result,
             None => {
                 operation.cancellation.cancel();
-                let settle_deadline = Instant::now() + LOCAL_INTERPRETATION_SETTLE_TIMEOUT;
+                #[cfg(test)]
+                self.o.observe_local_interpretation_timeout(deadline);
+                let settle_deadline = deadline + LOCAL_INTERPRETATION_SETTLE_TIMEOUT;
                 if operation.wait_until(settle_deadline).is_some() {
                     let _ = self
                         .o

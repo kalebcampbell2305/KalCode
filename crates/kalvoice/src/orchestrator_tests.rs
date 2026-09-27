@@ -1,7 +1,7 @@
 //! Orchestrator tests with executor, local-interpreter, and compatibility provider-directory
 //! fakes. Production local-runtime wiring lives outside this crate.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Barrier, Mutex};
 use std::time::{Duration, Instant};
@@ -310,6 +310,40 @@ struct BlockingLocalInterpreter {
     calls: AtomicUsize,
     first_entered: mpsc::SyncSender<()>,
     release_first: Mutex<mpsc::Receiver<()>>,
+}
+
+struct LocalTimeoutTestCleanup {
+    observer_resume: Option<mpsc::SyncSender<()>>,
+    interpreter_release: Option<mpsc::SyncSender<()>>,
+    request: Option<std::thread::JoinHandle<()>>,
+}
+
+impl LocalTimeoutTestCleanup {
+    fn release_observer(&mut self) {
+        if let Some(resume) = self.observer_resume.take() {
+            let _ = resume.try_send(());
+        }
+    }
+
+    fn release_interpreter(&mut self) {
+        if let Some(release) = self.interpreter_release.take() {
+            let _ = release.try_send(());
+        }
+    }
+
+    fn join_request(&mut self) {
+        if let Some(request) = self.request.take() {
+            let _ = request.join();
+        }
+    }
+}
+
+impl Drop for LocalTimeoutTestCleanup {
+    fn drop(&mut self) {
+        self.release_observer();
+        self.release_interpreter();
+        self.join_request();
+    }
 }
 
 impl LocalInterpreter for BlockingLocalInterpreter {
@@ -973,6 +1007,129 @@ fn noncooperative_timeout_retains_custody_until_bounded_drain_settles() {
     let retry = orchestrator
         .handle(request("plan the retry"))
         .expect("retry");
+    assert!(matches!(retry.outcome, KalVoiceOutcome::Completed { .. }));
+    assert!(retry.counted);
+    assert_eq!(interpreter.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(h.executor.executed.lock().expect("lock").len(), 1);
+}
+
+#[test]
+fn noncooperative_timeout_does_not_renew_settle_budget_after_a_late_wake() {
+    let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+    let (release_tx, release_rx) = mpsc::sync_channel(1);
+    let interpreter = Arc::new(BlockingLocalInterpreter {
+        calls: AtomicUsize::new(0),
+        first_entered: entered_tx,
+        release_first: Mutex::new(release_rx),
+    });
+    let (timeout_entered_tx, timeout_entered_rx) = mpsc::sync_channel(1);
+    let (timeout_resume_tx, timeout_resume_rx) = mpsc::sync_channel(1);
+    let timeout_resume_rx = Arc::new(Mutex::new(timeout_resume_rx));
+    let observer_timed_out = Arc::new(AtomicBool::new(false));
+    let timeout_observer = {
+        let timeout_resume_rx = timeout_resume_rx.clone();
+        let observer_timed_out = observer_timed_out.clone();
+        move |deadline| {
+            let _ = timeout_entered_tx.try_send(deadline);
+            if timeout_resume_rx
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .recv_timeout(Duration::from_secs(5))
+                .is_err()
+            {
+                observer_timed_out.store(true, Ordering::SeqCst);
+            }
+        }
+    };
+    let mut h = harness_with_interpreter(
+        Tier::Free,
+        FakeExecutor::default(),
+        Arc::new(NoProviders),
+        Some(interpreter.clone()),
+    );
+    h.orchestrator = h
+        .orchestrator
+        .with_local_interpretation_timeout_observer(timeout_observer);
+    let orchestrator = Arc::new(h.orchestrator);
+    let first_orchestrator = orchestrator.clone();
+    let (response_tx, response_rx) = mpsc::sync_channel(1);
+    let first = std::thread::spawn(move || {
+        let response = first_orchestrator
+            .handle(request("plan the first release"))
+            .expect("first");
+        let _ = response_tx.send((response, Instant::now()));
+    });
+    let mut cleanup = LocalTimeoutTestCleanup {
+        observer_resume: Some(timeout_resume_tx),
+        interpreter_release: Some(release_tx),
+        request: Some(first),
+    };
+
+    entered_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("interpreter entered");
+    let primary_deadline = timeout_entered_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("primary timeout branch entered");
+    let timeout_started = primary_deadline
+        .checked_sub(LOCAL_INTERPRETATION_TIMEOUT)
+        .expect("primary deadline has a start");
+    let delayed_observation = primary_deadline + Duration::from_millis(260);
+    std::thread::sleep(
+        delayed_observation
+            .checked_duration_since(Instant::now())
+            .unwrap_or_default(),
+    );
+    cleanup.release_observer();
+
+    let response_deadline = timeout_started + Duration::from_secs(2);
+    let promptly_returned = response_rx.recv_timeout(
+        response_deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or_default(),
+    );
+    let Ok((timed_out, returned_at)) = promptly_returned else {
+        cleanup.release_interpreter();
+        cleanup.join_request();
+        panic!("timeout branch renewed its settle budget after the aggregate deadline");
+    };
+    let elapsed = returned_at.duration_since(timeout_started);
+    let retained_custody = !orchestrator.drain_local_interpretation(Duration::from_millis(50));
+    let busy = orchestrator
+        .handle(request("plan the second release"))
+        .expect("busy");
+    let no_execution_before_release = h.executor.executed.lock().expect("lock").is_empty();
+
+    cleanup.release_interpreter();
+    let drained = orchestrator.drain_local_interpretation(Duration::from_secs(1));
+    let retry = orchestrator
+        .handle(request("plan the retry"))
+        .expect("retry");
+    cleanup.join_request();
+
+    assert!(
+        matches!(
+            timed_out.outcome,
+            KalVoiceOutcome::Failed { ref code, .. } if code == "local_reasoning_timeout"
+        ),
+        "{:?}",
+        timed_out.outcome
+    );
+    assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
+    assert!(!observer_timed_out.load(Ordering::SeqCst));
+    assert!(!timed_out.counted);
+    assert!(retained_custody);
+    assert!(
+        matches!(
+            busy.outcome,
+            KalVoiceOutcome::Failed { ref code, .. } if code == "local_reasoning_busy"
+        ),
+        "{:?}",
+        busy.outcome
+    );
+    assert!(!busy.counted);
+    assert!(no_execution_before_release);
+    assert!(drained);
     assert!(matches!(retry.outcome, KalVoiceOutcome::Completed { .. }));
     assert!(retry.counted);
     assert_eq!(interpreter.calls.load(Ordering::SeqCst), 2);
