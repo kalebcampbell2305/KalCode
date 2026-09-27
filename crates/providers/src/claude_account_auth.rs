@@ -734,15 +734,24 @@ mod tests {
     use super::*;
 
     const ACCOUNT_ID: &str = "5c61fc90-b5b6-4970-979c-a5876275e90f";
+    // Every fixture recursively launches this large test executable as its fake Claude CLI.
+    // Concurrent cold starts under the full workspace runner can exhaust the fixture's bounded
+    // two-second probe window before any scenario code runs. One process-local slot keeps that
+    // harness resource deterministic; concurrency within each scenario remains unchanged.
+    static FAKE_CLAUDE_PROCESS_SLOT: Mutex<()> = Mutex::new(());
 
     struct Fixture {
         _temp: tempfile::TempDir,
         profiles: Arc<ManagedProfiles>,
         manager: ClaudeAccountAuthManager,
         state_marker: PathBuf,
+        // Fields drop in declaration order. Keep the slot last so it remains held until every
+        // fixture-owned manager, profile authority, marker path, and temporary root is gone.
+        _process_slot: std::sync::MutexGuard<'static, ()>,
     }
 
     fn fixture(scenario: &str) -> Fixture {
+        let process_slot = lock(&FAKE_CLAUDE_PROCESS_SLOT);
         let temp = tempfile::tempdir().expect("tempdir");
         let profiles =
             Arc::new(ManagedProfiles::new(temp.path().join("managed-profiles")).expect("profiles"));
@@ -801,6 +810,7 @@ mod tests {
             profiles,
             manager,
             state_marker,
+            _process_slot: process_slot,
         }
     }
 
