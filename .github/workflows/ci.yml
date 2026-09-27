@@ -249,6 +249,21 @@ jobs:
         if: steps.playwright-cache.outputs.cache-hit == 'true'
         run: pnpm --filter @kalcode/website exec playwright install-deps chromium
       - run: pnpm --filter @kalcode/website test:e2e
+      - name: Checkout-enabled website E2E
+        shell: bash
+        env:
+          CI: "1"
+          KALCODE_CHECKOUT_ENABLED_GATE: "1"
+          PUBLIC_CHECKOUT_ENABLED: "true"
+          KALCODE_E2E_PORT: "8898"
+          KALCODE_E2E_MAIL_PORT: "8899"
+          KALCODE_E2E_INSPECTOR_PORT: "8900"
+          KALCODE_E2E_PERSIST: ".wrangler/checkout-enabled-e2e-state"
+          KALCODE_E2E_OUT_DIR: ".wrangler/checkout-enabled-e2e-dist"
+        run: |
+          set -euo pipefail
+          unset STAGE_URL KALCODE_E2E_SKIP_BUILD
+          node tooling/test-suites.mjs --suite website-checkout-enabled-e2e
       - name: Upload Playwright traces and screenshots
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
