@@ -521,3 +521,39 @@ the affected API and packaging gates, private push, and matching final platform 
 No Stable artifacts/feed or production download cutover is authorized by these partial
 physical receipts alone. Clean installs, real update/rollback/re-update, installed OAuth,
 KalVoice/provider/browser QA and final live publication verification remain outstanding.
+
+## Desktop automatic OAuth return repair — 2026-09-27
+
+The owner rejected the manual-first desktop return page after browser authentication.
+API packet ef66f6e (including 22d9c3e) supersedes that page with one automatic canonical
+kalcode:// invocation after DOM readiness and a secondary fallback after 1.5 seconds.
+No-script fallback, query removal, strict static-hash CSP, no-store/no-referrer and
+escaped fixed-protocol values remain. The page says "Opening KalCode" for success,
+cancellation and failure; navigation is not treated as proof of authentication.
+Explicit desktop start requests opt into provider-native select_account. Legacy
+one-key desktop requests preserve their old authorization URL contract; website
+requests retain the website callback and never launch the app. Focused API 26/26,
+full API 286/286, typecheck, Biome, dry-run and exact-response Chromium checks passed.
+
+Native packet e836817 sends the explicit desktop client and strictly validates the
+single account-selection prompt alongside existing OAuth parameters. Admitted warm
+callbacks reuse the canonical independent unminimize/show/focus attempts. A bounded
+cold-start regression exposed a genuine self-deadlock: a temporary pending-state
+mutex guard survived into a branch that reacquired the same lock. The minimal scoped
+clone fixes that lifetime and proves saved provider/state/PKCE/nonce completion after
+bootstrap. One-use account authority remains responsible for queued duplicates.
+Focused regressions, 197 desktop production-Whisper tests, strict Clippy and fmt passed.
+
+Windows verifier packet 64440dc measures actual per-user protocol registration in
+all three temporary install/upgrade passes and checks uninstall removal. It preserves
+any pre-existing handler through preflight refusal and requires the exact quoted
+installed executable and quoted URL argument. Adjacent release tests passed 18/18.
+This is registration evidence tooling, not proof of signed OS activation.
+
+All source packets receive immutable independent review before integration. Actual
+final-main affected gates, matching signed artifacts and physical warm/cold/minimized
+OAuth completion remain mandatory. Windows kalcodeqa3 is still reserved for the final
+clean install, kalcodeqa2 for baseline update/rollback; prior profiles and all artifacts
+are preserved. The in-progress abd6 Mac notarization may finish as preserved evidence,
+but it cannot substitute for the new native source artifact. No Stable publication or
+SHIPPED claim follows from these offline checks.
