@@ -59,7 +59,7 @@
     },
     "windows": {
       "webviewInstallMode": { "type": "downloadBootstrapper" },
-      "nsis": { "installMode": "currentUser" }
+      "nsis": { "installMode": "currentUser", "installerHooks": "./windows/installer-hooks.nsh" }
     }
   }
 }
