@@ -21,6 +21,8 @@ import { stripeClient } from "./stripe";
 import type { EntitlementSigningKey } from "./token";
 
 export interface Env {
+  /** Exact true blocks all requests before any dependency construction during schema recovery. */
+  ACCOUNT_SCHEMA_MAINTENANCE?: string;
   DB: D1Database;
   /** Worker secret: Ed25519 private JWK with `kid`. Absent → entitlement endpoint answers 503. */
   ENTITLEMENT_SIGNING_KEY?: string;
