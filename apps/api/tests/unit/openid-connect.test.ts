@@ -255,7 +255,10 @@ describe("OpenID Connect providers", () => {
       { email: "victim@example.com" },
       { preferred_username: "victim@example.com" },
       { email: "victim@example.com", xms_edov: false },
-    ]) {
+      { email: "victim@example.com", xms_edov: "true" },
+      { email: "victim@example.com", xms_edov: 1 },
+      { xms_edov: true },
+    ] as Record<string, unknown>[]) {
       const token = await idToken(key, {
         iss: issuer,
         tid: tenant,
@@ -274,8 +277,15 @@ describe("OpenID Connect providers", () => {
         .mockResolvedValueOnce(response({ id_token: token }))
         .mockResolvedValueOnce(response({ keys: [{ ...key.publicJwk, alg: undefined, issuer }] }));
 
-      await expect(exchangeOpenIdIdentity(fetcher, MICROSOFT, "oauth-code", VERIFIER, NONCE, NOW)).rejects.toThrow(
-        "identity unavailable",
+      await expectStage(
+        exchangeOpenIdIdentity(fetcher, MICROSOFT, "oauth-code", VERIFIER, NONCE, NOW),
+        emailClaims.xms_edov === undefined
+          ? "claims_email_verification_missing"
+          : typeof emailClaims.xms_edov !== "boolean"
+            ? "claims_email_verification_type"
+            : emailClaims.xms_edov === false
+              ? "claims_email_verification_denied"
+              : "claims_email",
       );
     }
   });
