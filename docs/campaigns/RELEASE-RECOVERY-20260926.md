@@ -396,3 +396,32 @@ and `target/recovery-20260927-pane-drag-geometry`.
 The next frozen main commit still requires complete integrated gates, private main push, matching
 production builds/signatures, Apple Accepted/staple/Gatekeeper proof, physical clean-install/product
 and update/rollback trials, publication, website cutover, and live verification. Nothing is SHIPPED.
+
+### 2026-09-27 — Final shortcut repair and release source freeze
+
+Source 47ac59c completed Windows production-Whisper Rust 2042 passed/16 existing ignores,
+strict Clippy/format/protocol, JavaScript 2020 passed, website 148 passed/8 reviewed skips,
+and physical Mac Rust 1990 passed/16 existing ignores plus real GUI Keychain and pinned
+Codex isolation checks. Mac JavaScript 2017 passed/2 existing skips and website 148/8 passed.
+Hosted run 36332602930 passed all three Rust platforms, Ubuntu protocol, dependency/security,
+format/type/unit and website jobs. Its functional and visual failures were the same rail shortcut defect.
+Windows native reproof passed 23/23 with the identical binary after the prior cookie-request timing
+occurrence failed to reproduce in the focused case and ten lifecycle/cookie cases. The original
+failure remains preserved; no Browser production repair or timeout relaxation is claimed.
+
+Immutable eebd5efd9aaf5743392a458c1eb849b0531f5167 was independently reviewed and harvested
+as 1452268. Both rail More-actions triggers now allow canonical global shortcut chords to bubble;
+ordinary tree keys retain propagation isolation. Instrumented key capture/bubble evidence proved
+the original Ctrl+K was swallowed after menu focus restoration. Three exact files changed.
+Focused functional 2/2, affected pane/visual selection 49/49, full functional 245/245,
+shortcut units 3/3, typecheck, Biome and canonical secret scan passed. No test was removed.
+The redundant visual run was canceled under the owner's closeout override and is not claimed green.
+
+Evidence: target/recovery-20260927-rail-menu-readiness,
+target/recovery-20260927-final-47ac59c-native-reproof,
+target/recovery-20260927-final-mac/47ac59c, and target/recovery-20260927-final-47ac-hosted-ci.
+The only change after those platform/backend gates is RailTree shortcut propagation and its two UI
+regressions, plus this ledger. Unaffected green gates carry forward under explicit owner instruction;
+focused final-main shortcut proof binds the integrated source. Existing rollback references remain.
+Production build/signing, notarization/stapling, physical install/update/rollback, installed KalVoice,
+Stable publication, website cutover and live verification remain required. Nothing is SHIPPED.
