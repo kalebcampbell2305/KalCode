@@ -27,6 +27,12 @@ test("signed release builds embed the public key and sign the exact staged insta
   assert.match(source, /cryptographicallyVerified: signingMode\.sign/);
   assert.match(source, /versionBound: signingMode\.sign/);
   assert.doesNotMatch(source, /publisherIdentityOids[,:]\s*publisherIdentityOids/);
+  const bundle = source.indexOf('run("pnpm", tauriArgs');
+  const decidePostBundle = source.indexOf("postBundleApplicationSigningAction(", bundle);
+  const restoreSignature = source.indexOf("signTarget({ targetPath: builtApp", decidePostBundle);
+  const finalVerification = source.indexOf("const builtAppSignature", restoreSignature);
+  assert.ok(bundle >= 0 && decidePostBundle > bundle && restoreSignature > decidePostBundle);
+  assert.ok(finalVerification > restoreSignature);
 });
 
 test("temporary publisher identity evidence is cleaned when signing setup fails", () => {

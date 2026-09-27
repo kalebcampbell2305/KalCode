@@ -16,6 +16,7 @@ import {
   normalizeAuthenticodeResult,
   parsePublisherIdentityEnvironment,
   parseSigningMode,
+  postBundleApplicationSigningAction,
   publicSigningProblems,
   publicVerificationProblems,
   releaseProcessOptions,
@@ -57,6 +58,20 @@ test("release evidence accepts only a valid timestamped Authenticode result", ()
   assert.equal(timestampedAuthenticodeIsValid({ status: "Valid", timestamped: false }), false);
   assert.equal(timestampedAuthenticodeIsValid({ status: "HashMismatch", timestamped: true }), false);
   assert.equal(timestampedAuthenticodeIsValid(null), false);
+});
+
+test("post-bundle application signing repairs only Tauri's unsigned restore", () => {
+  assert.equal(postBundleApplicationSigningAction({ status: "NotSigned", timestamped: false }), "sign");
+  assert.equal(postBundleApplicationSigningAction({ status: "Valid", timestamped: true }), "accept");
+  for (const evidence of [
+    { status: "NotSigned", timestamped: true },
+    { status: "Valid", timestamped: false },
+    { status: "HashMismatch", timestamped: false },
+    { status: "Unknown", timestamped: false },
+    null,
+  ]) {
+    assert.throws(() => postBundleApplicationSigningAction(evidence), /unexpected Authenticode state/);
+  }
 });
 
 test("release installer names are derived from canonical SemVer only", () => {

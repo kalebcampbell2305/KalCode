@@ -57,6 +57,7 @@ import {
   expectedWindowsInstallerFile,
   findArtifactSigningTools,
   parseSigningMode,
+  postBundleApplicationSigningAction,
   signingEnvironment,
   signTarget,
   timestampedAuthenticodeIsValid,
@@ -248,6 +249,11 @@ try {
       CARGO_TARGET_DIR: TARGET_DIR,
     },
   });
+  if (signingMode.sign && postBundleApplicationSigningAction(authenticodeStatus(builtApp, powershellJson)) === "sign") {
+    // Tauri 2.11 restores its unsigned, unpatched main binary after packaging each bundle.
+    // Re-sign that canonical build output before the signing workspace and metadata are removed.
+    signTarget({ targetPath: builtApp, metadataPath, env: childEnvironment });
+  }
 } catch (error) {
   buildFailure = error;
 } finally {

@@ -123,6 +123,13 @@ export function timestampedAuthenticodeIsValid(result) {
   return evidence.status === "Valid" && evidence.timestamped === true;
 }
 
+export function postBundleApplicationSigningAction(result) {
+  const evidence = normalizeAuthenticodeResult(result);
+  if (evidence.status === "NotSigned" && evidence.timestamped === false) return "sign";
+  if (timestampedAuthenticodeIsValid(evidence)) return "accept";
+  throw new Error("the post-bundle application has an unexpected Authenticode state");
+}
+
 export function signingEnvironment(baseEnvironment, { exists = existsSync } = {}) {
   const environment = {};
   let pathName = "Path";
