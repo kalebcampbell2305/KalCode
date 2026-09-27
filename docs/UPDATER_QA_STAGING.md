@@ -28,13 +28,17 @@ QA records:
 | macOS arm64 | `macos-arm64-build.json` | `macos-arm64-verify.json` | `macos-arm64-qa.json` |
 
 Preliminary QA uses schema version 2, status `preliminary-passed`, all product checks true (including
-the exact artifact's normal clean install under the clean `kalcodeqa` OS user), every
+the exact artifact's normal clean install under a dedicated clean standard OS user), every
 safeguard false, and `updateTrial: null`. It binds the exact target, Stable channel, version,
 commit and artifact SHA-256. Windows still requires Azure Artifact Signing, timestamp and its
 target/channel Minisign signature. macOS still requires Developer ID, hardened runtime, exact
 entitlements, Accepted notarization with an issue-free log, staple and Gatekeeper evidence. The
 preliminary status is accepted only by this staging tool; `release:publish` requires the completed
 trial.
+
+Use `kalcodeqa` for the direct candidate install and the separately prepared `kalcodeqa2` for the
+direct baseline install and its update/rollback/re-update sequence on each platform. Preserve both
+profiles and the owner's development session; do not clear or migrate profile data between trials.
 
 ## Dry run and stage
 
