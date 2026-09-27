@@ -1,5 +1,6 @@
-// Builds the binary the real-app E2E suite drives: release profile with the `e2e` feature
-// (test hooks enabled), into target/e2e so it never replaces the shipping build.
+// Builds the binary the real-app E2E suite drives: release profile with the `e2e` test hooks and
+// the same on-device speech engine as production, into target/e2e so it never replaces the
+// shipping build.
 // Also builds, into the same folder, the `kalcode-hook` helper provider panes run (it ships next
 // to the KalCode executable) and the fake provider CLI the pane tests use (test support only;
 // no AI service is contacted).
@@ -12,7 +13,7 @@ const env = { ...process.env, CARGO_TARGET_DIR: targetDir };
 const shell = process.platform === "win32";
 const helperInventory = JSON.parse(readFileSync(new URL("./e2e-helpers.json", import.meta.url), "utf8"));
 
-const app = spawnSync("pnpm", ["tauri", "build", "--no-bundle", "--features", "e2e"], {
+const app = spawnSync("pnpm", ["tauri", "build", "--no-bundle", "--features", "e2e,kalvoice-whisper"], {
   cwd: fileURLToPath(new URL("..", import.meta.url)),
   env,
   stdio: "inherit",

@@ -2,7 +2,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { closeGracefully, EXE, launch, removeDir } from "./harness.ts";
+import { ACCOUNT_KALVOICE_FIXTURE_OPT_IN, closeGracefully, EXE, launch, removeDir } from "./harness.ts";
 
 /**
  * KalVoice in the real app (native commands, the signal channel, SQLite ledger and
@@ -66,7 +66,7 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
     copyFileSync(MODEL, join(dataDir, "models", "whisper", "ggml-tiny.en.bin"));
   }
   try {
-    let app = await launch(dataDir);
+    let app = await launch(dataDir, { KALCODE_E2E_ACCOUNT_FIXTURE: ACCOUNT_KALVOICE_FIXTURE_OPT_IN });
     let page = app.page;
     await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible({ timeout: 20_000 });
     await expect(widget(page)).toBeVisible();
@@ -198,14 +198,16 @@ test("KalVoice runs natively; routing, usage and the widget's placement survive 
     await page.waitForTimeout(600);
     await closeGracefully(app);
 
-    app = await launch(dataDir);
+    app = await launch(dataDir, { KALCODE_E2E_ACCOUNT_FIXTURE: ACCOUNT_KALVOICE_FIXTURE_OPT_IN });
     page = app.page;
     await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible({ timeout: 20_000 });
     await expect(widget(page)).toHaveAttribute("data-anchor", "top_left");
     await page.getByRole("button", { name: "KalVoice", exact: true }).click();
     // The typed command, the spoken one and the approval request counted; dictation and the
     // request without a local runtime did not.
-    await expect(page.locator("#kalvoice-status").getByText(/^3 \/ 75 used · 72 remaining · renews/)).toBeVisible();
+    await expect(
+      page.locator("#kalvoice-status").getByText(/^415 \/ 1,500 used · 1,085 remaining · renews/),
+    ).toBeVisible();
     await page.getByRole("button", { name: "Dashboard" }).click();
     const activity = page.getByRole("region", { name: "Activity" });
     await expect(activity.getByText("KalVoice ran a command").first()).toBeVisible();

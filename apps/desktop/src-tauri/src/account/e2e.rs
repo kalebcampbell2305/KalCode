@@ -25,6 +25,7 @@ use super::session_store::AccountSessionStore;
 pub const FIXTURE_OPT_IN_ENV: &str = "KALCODE_E2E_ACCOUNT_FIXTURE";
 pub const FIXTURE_ONBOARDING_VALUE: &str = "onboarding-v1";
 pub const FIXTURE_READY_VALUE: &str = "ready-v1";
+pub const FIXTURE_KALVOICE_VALUE: &str = "kalvoice-under-limit-v1";
 pub const FIXTURE_MARKER_FILENAME: &str = ".kalcode-account-e2e-v1";
 pub const FIXTURE_MARKER_CONTENT: &str = "kalcode-account-e2e-v1\n";
 pub const FIXTURE_DIRECTORY_PREFIX: &str = "kalcode-e2e-";
@@ -38,6 +39,8 @@ const SESSION_TOKEN: &str = "kcs_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
 const POLL_TOKEN: &str = "ppppppppppppppppppppppppppppppppppppppppppp";
 const FREE_TOKEN: &str = "eyJhbGciOiJFZERTQSIsImtpZCI6InRlc3QtdmVjdG9ycy0xIiwidHlwIjoia2FsY29kZS1lbnRpdGxlbWVudC52MSJ9.eyJ2ZXJzaW9uIjoxLCJhY2NvdW50SWQiOiIwYjZmMWMxZS01YTM5LTRkMGMtOWEwZi0yYjFmN2Q5ZTRjMTEiLCJ0aWVyIjoiZnJlZSIsInVucmVzdHJpY3RlZCI6ZmFsc2UsImZlYXR1cmVzIjpbXSwibGltaXRzIjp7ImNvbmN1cnJlbnRUaHJlYWRzIjoyLCJrYWx2b2ljZVJlcXVlc3RzUGVyTW9udGgiOjc1fSwiaXNzdWVkQXQiOjE3OTAwMDAwMDAsImV4cGlyZXNBdCI6MTc5MDYwNDgwMCwia2V5SWQiOiJ0ZXN0LXZlY3RvcnMtMSJ9.JPD0pSzGnCY4FEO0wpcQOQRHEsNtpVGwmYVQSR2vwVdgF52ldGAy9Yhbz8M9phFb98HFZXYXpqFBrFNPmRQ3CQ";
 const FREE_USAGE_RECEIPT: &str = "eyJhbGciOiJFZERTQSIsImtpZCI6InRlc3QtdmVjdG9ycy0xIiwidHlwIjoia2FsY29kZS11c2FnZS52MSJ9.eyJ2ZXJzaW9uIjoxLCJhY2NvdW50SWQiOiIwYjZmMWMxZS01YTM5LTRkMGMtOWEwZi0yYjFmN2Q5ZTRjMTEiLCJ0aWVyIjoiZnJlZSIsInVzZWQiOjc1LCJhbGxvd2FuY2UiOjc1LCJwZXJpb2RTdGFydCI6IjIwMjYtMDktMTBUMDg6MDA6MDAuMDAwWiIsInJlc2V0c0F0IjoiMjAyNi0xMC0xMFQwODowMDowMC4wMDBaIiwiaXNzdWVkQXQiOjE3OTAwMDAwMDAsImV4cGlyZXNBdCI6MTc5MDI1OTIwMCwia2V5SWQiOiJ0ZXN0LXZlY3RvcnMtMSJ9.JM5k8bKsK8Cu8kNyPjsxjLFk7Aj_ZyriamrglxQFBSmAp_uMdk6c4mlECTMxARrFp9IOzAmy4XXN6D2gGboMDQ";
+const PRO_TOKEN: &str = "eyJhbGciOiJFZERTQSIsImtpZCI6InRlc3QtdmVjdG9ycy0xIiwidHlwIjoia2FsY29kZS1lbnRpdGxlbWVudC52MSJ9.eyJ2ZXJzaW9uIjoxLCJhY2NvdW50SWQiOiIwYjZmMWMxZS01YTM5LTRkMGMtOWEwZi0yYjFmN2Q5ZTRjMTEiLCJ0aWVyIjoicHJvIiwidW5yZXN0cmljdGVkIjpmYWxzZSwiZmVhdHVyZXMiOlsicGVyc2lzdGVudEFnZW50cyIsIm11bHRpQWdlbnRXb3JrZmxvd3MiLCJzY2hlZHVsZWRBdXRvbWF0aW9ucyJdLCJsaW1pdHMiOnsiY29uY3VycmVudFRocmVhZHMiOjgsImthbHZvaWNlUmVxdWVzdHNQZXJNb250aCI6MTUwMH0sImlzc3VlZEF0IjoxNzkwMDAwMDAwLCJleHBpcmVzQXQiOjE3OTA2MDQ4MDAsImtleUlkIjoidGVzdC12ZWN0b3JzLTEifQ.nLynMjJct_fE39u6wdztmdbtsv80fNmJZNS730JT_NefIGbpS-utQkibc2HPmcVIGVxydUjqo4UdrW9wZSXKBw";
+const PRO_USAGE_RECEIPT: &str = "eyJhbGciOiJFZERTQSIsImtpZCI6InRlc3QtdmVjdG9ycy0xIiwidHlwIjoia2FsY29kZS11c2FnZS52MSJ9.eyJ2ZXJzaW9uIjoxLCJhY2NvdW50SWQiOiIwYjZmMWMxZS01YTM5LTRkMGMtOWEwZi0yYjFmN2Q5ZTRjMTEiLCJ0aWVyIjoicHJvIiwidXNlZCI6NDEyLCJhbGxvd2FuY2UiOjE1MDAsInBlcmlvZFN0YXJ0IjoiMjAyNi0wOS0xMFQwODowMDowMC4wMDBaIiwicmVzZXRzQXQiOiIyMDI2LTEwLTEwVDA4OjAwOjAwLjAwMFoiLCJpc3N1ZWRBdCI6MTc5MDAwMDAwMCwiZXhwaXJlc0F0IjoxNzkwMjU5MjAwLCJrZXlJZCI6InRlc3QtdmVjdG9ycy0xIn0.8CeQaN7fIUrTbyqieB5XvRRAEGlQitpey_l7x1cacYLjfytfY-diJTGH6pxvwYdNv21oxBXwSPZAUXJJC8VVDg";
 
 const PRODUCTION_SENTINELS: &[&str] = &[
     "kalcode.db",
@@ -100,6 +103,8 @@ fn fixture_mode_from_environment(
         FixtureMode::Onboarding
     } else if mode == OsStr::new(FIXTURE_READY_VALUE) {
         FixtureMode::Ready
+    } else if mode == OsStr::new(FIXTURE_KALVOICE_VALUE) {
+        FixtureMode::KalVoiceUnderLimit
     } else {
         return Err(error(
             "fixture_opt_in_invalid",
@@ -122,6 +127,7 @@ fn fixture_mode_from_environment(
 enum FixtureMode {
     Onboarding,
     Ready,
+    KalVoiceUnderLimit,
 }
 
 fn validate_fixture_directory(
@@ -259,9 +265,12 @@ fn error(code: &'static str, message: &'static str) -> E2eAccountFixtureError {
 fn build_runtime(mode: FixtureMode) -> Arc<AccountRuntime> {
     let verifier = Verifier::from_keys([("test-vectors-1", TEST_PUBLIC_KEY)])
         .expect("checked-in test-vector public key must remain valid");
-    let api = Arc::new(E2eAccountApi::default());
+    let api = Arc::new(E2eAccountApi {
+        kalvoice_under_limit: mode == FixtureMode::KalVoiceUnderLimit,
+        ..E2eAccountApi::default()
+    });
     let store = Arc::new(MemorySecretStore::default());
-    if mode == FixtureMode::Ready {
+    if matches!(mode, FixtureMode::Ready | FixtureMode::KalVoiceUnderLimit) {
         api.activated.store(true, Ordering::SeqCst);
         let session = SessionSecret::new(SESSION_TOKEN.into(), 1_893_456_000)
             .expect("synthetic E2E session must remain structurally valid");
@@ -332,6 +341,7 @@ struct E2eAccountApi {
     polls: AtomicUsize,
     activations: AtomicUsize,
     logouts: AtomicUsize,
+    kalvoice_under_limit: bool,
 }
 
 #[derive(Default)]
@@ -463,20 +473,29 @@ impl AccountApi for E2eAccountApi {
             return Err(ApiError::Local("e2e_account_not_activated"));
         }
         Ok(EntitlementResponse {
-            token: FREE_TOKEN.into(),
+            token: if self.kalvoice_under_limit {
+                PRO_TOKEN.into()
+            } else {
+                FREE_TOKEN.into()
+            },
         })
     }
 
     fn usage(&self, bearer: &str) -> Result<UsageResponse, ApiError> {
         Self::authorize(bearer)?;
+        let (used, allowance, receipt) = if self.kalvoice_under_limit {
+            (412, 1500, PRO_USAGE_RECEIPT)
+        } else {
+            (75, 75, FREE_USAGE_RECEIPT)
+        };
         Ok(UsageResponse {
             usage: AccountUsageSnapshot {
-                used: 75,
-                allowance: Some(75),
+                used,
+                allowance: Some(allowance),
                 period_start: "2026-09-10T08:00:00.000Z".into(),
                 resets_at: "2026-10-10T08:00:00.000Z".into(),
             },
-            receipt: FREE_USAGE_RECEIPT.into(),
+            receipt: receipt.into(),
         })
     }
 }
@@ -626,5 +645,17 @@ mod tests {
         assert_eq!(snapshot.phase, AccountPhase::Ready);
         assert_eq!(snapshot.tier, Some(AccountTier::Free));
         assert!(runtime.acquire_active_lease().is_ok());
+        assert_eq!(runtime.usage().expect("signed usage").used, 75);
+    }
+
+    #[test]
+    fn kalvoice_fixture_uses_existing_signed_pro_authority_with_capacity() {
+        let runtime = build_runtime(FixtureMode::KalVoiceUnderLimit);
+        let snapshot = runtime.bootstrap().expect("KalVoice fixture bootstrap");
+        assert_eq!(snapshot.phase, AccountPhase::Ready);
+        assert_eq!(snapshot.tier, Some(AccountTier::Pro));
+        assert!(runtime.acquire_active_lease().is_ok());
+        assert_eq!(runtime.usage().expect("signed usage").used, 412);
+        assert_eq!(runtime.usage().expect("signed usage").allowance, Some(1500));
     }
 }

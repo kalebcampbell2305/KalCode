@@ -14,6 +14,7 @@ export const EXE =
 export const PORT = Number(process.env.KALCODE_E2E_CDP_PORT ?? 9333);
 export const ACCOUNT_FIXTURE_OPT_IN = "onboarding-v1";
 export const ACCOUNT_READY_FIXTURE_OPT_IN = "ready-v1";
+export const ACCOUNT_KALVOICE_FIXTURE_OPT_IN = "kalvoice-under-limit-v1";
 const ACCOUNT_FIXTURE_PREFIX = "kalcode-e2e-account-";
 const ACCOUNT_FIXTURE_MARKER = ".kalcode-account-e2e-v1";
 const ACCOUNT_FIXTURE_MARKER_CONTENT = "kalcode-account-e2e-v1\n";
@@ -135,6 +136,35 @@ export async function launch(dataDir: string, env: Record<string, string> = {}):
     await stopOwnedProcess(child, true);
     throw error;
   }
+}
+
+interface ProviderAdmissionReport {
+  status: { state: string };
+  admission: {
+    state: "allowed" | "held";
+    additional: number;
+    reasons: unknown[];
+    snapshotSeq: number | null;
+  };
+  freshness: { state: string; detail: string };
+}
+
+/** Waits for a real, fresh governor sample that can admit provider work. */
+export async function waitForProviderAdmission(page: Page, timeoutMs = 60_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  let last: ProviderAdmissionReport | null = null;
+  while (Date.now() <= deadline) {
+    last = (await page.evaluate(() =>
+      (
+        window as unknown as {
+          __TAURI_INTERNALS__: { invoke: (command: string) => Promise<ProviderAdmissionReport> };
+        }
+      ).__TAURI_INTERNALS__.invoke("resource_report"),
+    )) as ProviderAdmissionReport;
+    if (last.admission.state === "allowed" && last.admission.additional > 0) return;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
+  }
+  throw new Error(`Provider admission was not allowed within ${timeoutMs}ms: ${JSON.stringify(last)}`);
 }
 
 /** Graceful close: WM_CLOSE to the window, as when the user clicks the close button. */

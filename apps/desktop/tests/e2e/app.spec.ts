@@ -57,6 +57,7 @@ test("launch, change settings, quit, relaunch: settings and history persist", as
     // Crash: the next launch reports the interrupted session.
     await killForcibly(app);
     app = await launch(dataDir);
+    await expect(app.page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
     await expect(activity(app.page).getByText("Previous session ended unexpectedly")).toBeVisible();
 
     // Structured JSON logs were written, and contain no credential material.

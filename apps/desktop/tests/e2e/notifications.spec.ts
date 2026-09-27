@@ -3,7 +3,14 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, type Page, test } from "@playwright/test";
-import { closeGracefully, EXE, launch, removeDir, writeManagedFakeProviderConfig } from "./harness.ts";
+import {
+  closeGracefully,
+  EXE,
+  launch,
+  removeDir,
+  waitForProviderAdmission,
+  writeManagedFakeProviderConfig,
+} from "./harness.ts";
 
 /**
  * Z7-W3 end to end against the real app: a provider pane asks for permission and later finishes;
@@ -77,6 +84,7 @@ test("a pane's permission request and completion reach the notification center, 
     await nav(page, "Code").click();
     await page.getByRole("button", { name: "Open folder…" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "notify-site" })).toBeVisible();
+    await waitForProviderAdmission(page);
     await page.getByRole("button", { name: "New Claude Code pane" }).click();
     await expect(pane(page)).toBeVisible({ timeout: 30_000 });
     await expectPaneText(page, FAKE_BANNER, 30_000); // safety gate: the fake, not a real provider

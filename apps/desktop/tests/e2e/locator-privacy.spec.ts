@@ -8,6 +8,7 @@ import {
   launch,
   processesMatching,
   removeDir,
+  waitForProviderAdmission,
   writeManagedFakeProviderConfig,
 } from "./harness.ts";
 
@@ -72,6 +73,7 @@ test("message search opt-out is immediate and survives restart", async () => {
     const workspaces = await invoke<{ id: string }[]>(page, "workspace_list");
     const workspace = workspaces[0];
     expect(workspace).toBeTruthy();
+    await waitForProviderAdmission(page);
     await invoke(page, "thread_create", {
       providerId: "codex",
       workspaceId: workspace?.id,

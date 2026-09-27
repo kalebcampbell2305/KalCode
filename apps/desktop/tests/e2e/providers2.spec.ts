@@ -9,6 +9,7 @@ import {
   launch,
   processesMatching,
   removeDir,
+  waitForProviderAdmission,
   writeManagedFakeProviderConfig,
 } from "./harness.ts";
 
@@ -68,6 +69,7 @@ async function shot(page: Page, name: string) {
 }
 
 async function startThread(page: Page, provider: string, task: string) {
+  await waitForProviderAdmission(page);
   await nav(page, "Threads").click();
   await expect(page.getByRole("heading", { level: 1, name: "Threads" })).toBeVisible();
   await page.getByRole("button", { name: "New thread" }).first().click();
@@ -210,6 +212,7 @@ test("a Codex pane reports authenticated notify status and ignores forged termin
     await nav(page, "Code").click();
     await page.getByRole("button", { name: "Open folder…" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "codex-pane-site" })).toBeVisible();
+    await waitForProviderAdmission(page);
     await page.getByRole("button", { name: "New Codex pane" }).click();
     const pane = page.locator("[data-provider-pane]").first();
     await expect(pane).toBeVisible({ timeout: 30_000 });

@@ -11,6 +11,7 @@ import {
   processesMatching,
   removeDir,
   waitForExit,
+  waitForProviderAdmission,
   writeManagedFakeProviderConfig,
 } from "./harness.ts";
 
@@ -97,6 +98,7 @@ test("a pane layout is saved per workspace and restored after a graceful quit an
     // Pane 2 (split right): the provider CLI in a PTY (the fake).
     await page.keyboard.press("Control+Alt+d");
     await expect(panes(page)).toHaveCount(2);
+    await waitForProviderAdmission(page);
     await page.getByRole("button", { name: "New Claude Code pane" }).click();
     const provider = page.locator("[data-provider-pane]").first();
     await expect(provider.locator("[data-pane-terminal] .xterm-rows")).toContainText(

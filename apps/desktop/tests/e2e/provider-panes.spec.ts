@@ -9,6 +9,7 @@ import {
   launch,
   processesMatching,
   removeDir,
+  waitForProviderAdmission,
   writeManagedFakeProviderConfig,
 } from "./harness.ts";
 
@@ -87,6 +88,7 @@ test("a provider pane runs the CLI in a PTY and routes its tool calls through Ka
     await page.getByRole("button", { name: "Open folder…" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "pane-site" })).toBeVisible();
 
+    await waitForProviderAdmission(page);
     await page.getByRole("button", { name: "New Claude Code pane" }).click();
     await expect(pane(page)).toBeVisible({ timeout: 30_000 });
     // Safety gate: this must be the fake provider before anything is typed.

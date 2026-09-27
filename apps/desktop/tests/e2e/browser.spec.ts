@@ -264,7 +264,7 @@ test("native Browser is isolated, navigates in split panes and restores safe wor
 
     // A position-only pane swap (equal dimensions) must still move the native child WebView2.
     const firstById = page.locator(`[data-browser-id="${firstId}"]`);
-    const firstViewport = firstById.getByRole("document");
+    const firstViewport = firstById.getByRole("button", { name: /^Browser:/ });
     const firstFrame = firstById.locator("xpath=ancestor::*[@data-pane-id]").first();
     const oldBounds = await state(page, firstId as string);
     const oldRect = await firstViewport.boundingBox();
