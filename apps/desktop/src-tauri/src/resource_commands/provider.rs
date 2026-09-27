@@ -50,7 +50,7 @@ impl ProviderAdmission for GovernorAdmission {
                     "resource admission held a managed provider start"
                 );
                 Err(ProviderError::Start(
-                    "KalCode held this provider start until current resource telemetry and capacity are available."
+                    "KalCode could not start this provider because current resource telemetry or capacity is unavailable. Check resource availability, then retry the thread."
                         .into(),
                 ))
             }
