@@ -576,7 +576,7 @@ mod windows_home_paths {
 
     enum AliasLookup {
         Ineligible,
-        Unavailable,
+        Unavailable(Vec<String>),
         Verified(Vec<String>),
     }
 
@@ -589,10 +589,12 @@ mod windows_home_paths {
             AliasLookup::Verified(aliases) => {
                 redact_home_candidates(full, aliases.iter().map(String::as_str), true)
             }
-            AliasLookup::Unavailable if plausible_dos_home_alias(full, home) => {
-                Some(PRIVATE_PATH.to_owned())
+            AliasLookup::Unavailable(aliases) => {
+                redact_home_candidates(full, aliases.iter().map(String::as_str), true).or_else(
+                    || plausible_dos_home_alias(full, home).then(|| PRIVATE_PATH.to_owned()),
+                )
             }
-            AliasLookup::Ineligible | AliasLookup::Unavailable => None,
+            AliasLookup::Ineligible => None,
         }
     }
 
@@ -620,27 +622,31 @@ mod windows_home_paths {
         match drive_type(drive) {
             DRIVE_REMOVABLE | DRIVE_FIXED | DRIVE_RAMDISK => {}
             DRIVE_REMOTE => return AliasLookup::Ineligible,
-            _ => return AliasLookup::Unavailable,
+            _ => return AliasLookup::Unavailable(Vec::new()),
         }
         let original = home.to_string_lossy();
         let mut resolved = Vec::with_capacity(2);
+        let mut unavailable = false;
         for call in [
             GetLongPathNameW as PathNameFn,
             GetShortPathNameW as PathNameFn,
         ] {
-            let Some(alias) = resolve(home, call) else {
-                return AliasLookup::Unavailable;
-            };
-            resolved.push(alias);
+            match resolve(home, call) {
+                Some(alias) => resolved.push(alias),
+                None => unavailable = true,
+            }
         }
         let mut seen = HashSet::new();
-        AliasLookup::Verified(
-            resolved
-                .into_iter()
-                .filter(|alias| strip_home(alias, &original, true) != Some(""))
-                .filter(|alias| seen.insert(alias.replace('\\', "/").to_lowercase()))
-                .collect(),
-        )
+        let aliases = resolved
+            .into_iter()
+            .filter(|alias| strip_home(alias, &original, true) != Some(""))
+            .filter(|alias| seen.insert(alias.replace('\\', "/").to_lowercase()))
+            .collect();
+        if unavailable {
+            AliasLookup::Unavailable(aliases)
+        } else {
+            AliasLookup::Verified(aliases)
+        }
     }
 
     fn absolute_local_drive(home: &OsStr) -> Option<u8> {
@@ -673,7 +679,7 @@ mod windows_home_paths {
             if candidate.eq_ignore_ascii_case(configured) {
                 continue;
             }
-            if !plausible_dos_component(candidate) {
+            if !plausible_dos_component(candidate) && !plausible_dos_component(configured) {
                 return false;
             }
             saw_alias = true;
@@ -826,7 +832,7 @@ mod windows_home_paths {
         fn alias_api_failures_and_unchanged_names_add_no_candidates() {
             let failures =
                 aliases_with(OsStr::new(r"C:\Users\Kaleb"), |_| DRIVE_FIXED, |_, _| None);
-            assert!(matches!(failures, AliasLookup::Unavailable));
+            assert!(matches!(failures, AliasLookup::Unavailable(aliases) if aliases.is_empty()));
 
             let unchanged = aliases_with(
                 OsStr::new(r"C:\Users\Kaleb"),
@@ -892,6 +898,69 @@ mod windows_home_paths {
         }
 
         #[test]
+        fn partial_alias_success_is_used_before_the_opaque_fallback() {
+            let calls = Cell::new(0);
+            let short_home = OsStr::new(r"C:\Users\RUNNER~1");
+            let lookup = aliases_with(
+                short_home,
+                |_| DRIVE_FIXED,
+                |_, _| {
+                    let call = calls.get();
+                    calls.set(call + 1);
+                    (call == 0).then(|| r"C:\Users\runneradmin".to_owned())
+                },
+            );
+            assert_eq!(calls.get(), 2);
+            assert_eq!(
+                redact_with_lookup(
+                    r"C:\Users\runneradmin\AppData\codex.exe",
+                    short_home,
+                    lookup,
+                )
+                .as_deref(),
+                Some(r"~\AppData\codex.exe")
+            );
+
+            let calls = Cell::new(0);
+            let long_home = OsStr::new(r"C:\Users\runneradmin");
+            let lookup = aliases_with(
+                long_home,
+                |_| DRIVE_FIXED,
+                |_, _| {
+                    let call = calls.get();
+                    calls.set(call + 1);
+                    (call == 1).then(|| r"C:\Users\RUNNER~1".to_owned())
+                },
+            );
+            assert_eq!(calls.get(), 2);
+            assert_eq!(
+                redact_with_lookup(r"C:\Users\RUNNER~1\AppData\codex.exe", long_home, lookup,)
+                    .as_deref(),
+                Some(r"~\AppData\codex.exe")
+            );
+        }
+
+        #[test]
+        fn unavailable_long_name_for_a_short_configured_home_is_opaque() {
+            let calls = Cell::new(0);
+            let home = OsStr::new(r"C:\Users\RUNNER~1");
+            let lookup = aliases_with(
+                home,
+                |_| DRIVE_FIXED,
+                |home, _| {
+                    let call = calls.get();
+                    calls.set(call + 1);
+                    (call == 1).then(|| home.to_string_lossy().into_owned())
+                },
+            );
+            assert_eq!(calls.get(), 2);
+            assert_eq!(
+                redact_with_lookup(r"C:\Users\runneradmin\codex.exe", home, lookup).as_deref(),
+                Some(PRIVATE_PATH)
+            );
+        }
+
+        #[test]
         fn unavailable_alias_lookup_hides_only_ambiguous_dos_home_paths() {
             let home = OsStr::new(r"C:\Users\runneradmin");
             for path in [
@@ -903,7 +972,7 @@ mod windows_home_paths {
                 r"C:\Users\KÅLEB~1\codex.exe",
             ] {
                 assert_eq!(
-                    redact_with_lookup(path, home, AliasLookup::Unavailable).as_deref(),
+                    redact_with_lookup(path, home, AliasLookup::Unavailable(Vec::new())).as_deref(),
                     Some(PRIVATE_PATH),
                     "{path:?}"
                 );
@@ -912,7 +981,7 @@ mod windows_home_paths {
                 redact_with_lookup(
                     r"C:\DOCUME~1\RUNNER~1\codex.exe",
                     OsStr::new(r"C:\Documents and Settings\runneradmin"),
-                    AliasLookup::Unavailable,
+                    AliasLookup::Unavailable(Vec::new()),
                 )
                 .as_deref(),
                 Some(PRIVATE_PATH)
@@ -925,7 +994,7 @@ mod windows_home_paths {
                 r"\\server\share\RUNNER~1\codex.exe",
             ] {
                 assert_eq!(
-                    redact_with_lookup(path, home, AliasLookup::Unavailable),
+                    redact_with_lookup(path, home, AliasLookup::Unavailable(Vec::new())),
                     None,
                     "{path:?}"
                 );
@@ -958,7 +1027,7 @@ mod windows_home_paths {
                 .expect("create trusted-home alias fixture");
             let aliases = match aliases(directory.path().as_os_str()) {
                 AliasLookup::Verified(aliases) => aliases,
-                AliasLookup::Ineligible | AliasLookup::Unavailable => {
+                AliasLookup::Ineligible | AliasLookup::Unavailable(_) => {
                     panic!("trusted local synthetic directory alias lookup failed")
                 }
             };
