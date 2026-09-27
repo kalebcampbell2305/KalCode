@@ -61,6 +61,97 @@ jobs:
       KALCODE_SKIP_OS_KEYCHAIN_TEST: ${{ matrix.os == 'ubuntu-latest' && '1' || '' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Reclaim unused Linux hosted SDK space
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${RUNNER_ENVIRONMENT:-}" != "github-hosted" ]]; then
+            echo "Refusing SDK cleanup outside a GitHub-hosted runner." >&2
+            exit 1
+          fi
+
+          readonly workspace_root="$(realpath -e -- "$GITHUB_WORKSPACE")"
+          readonly home_root="$(realpath -e -- "$HOME")"
+          readonly -a sdk_roots=(
+            /usr/local/lib/android
+            /usr/share/dotnet
+          )
+          protected_roots=(
+            "$workspace_root"
+            "$home_root"
+            /opt/hostedtoolcache
+            /usr/local/bin
+            /usr/bin
+            /usr/lib
+            /usr/include
+            /lib
+            /lib64
+          )
+          for variable in RUNNER_TOOL_CACHE CARGO_HOME RUSTUP_HOME NVM_DIR; do
+            value="${!variable:-}"
+            if [[ -n "$value" ]]; then
+              protected_roots+=("$(realpath -m -- "$value")")
+            fi
+          done
+          readonly -a protected_roots
+
+          echo "Disk space before hosted SDK cleanup:"
+          df -h /
+          available_before="$(df -B1 --output=avail / | awk 'NR == 2 { print $1 }')"
+          [[ "$available_before" =~ ^[0-9]+$ ]]
+
+          removed_count=0
+          for sdk_root in "${sdk_roots[@]}"; do
+            case "$sdk_root" in
+              /usr/local/lib/android|/usr/share/dotnet) ;;
+              *) echo "Refusing non-allowlisted SDK root: $sdk_root" >&2; exit 1 ;;
+            esac
+
+            if [[ -L "$sdk_root" ]]; then
+              echo "Refusing symlinked SDK root: $sdk_root" >&2
+              exit 1
+            fi
+            if [[ ! -e "$sdk_root" ]]; then
+              echo "Hosted SDK root already absent; skipping: $sdk_root"
+              continue
+            fi
+            if [[ ! -d "$sdk_root" ]]; then
+              echo "Refusing non-directory SDK root: $sdk_root" >&2
+              exit 1
+            fi
+
+            resolved="$(realpath -e -- "$sdk_root")"
+            if [[ "$resolved" != "$sdk_root" ]]; then
+              echo "Refusing redirected SDK root: $sdk_root" >&2
+              exit 1
+            fi
+            for protected_root in "${protected_roots[@]}"; do
+              if [[ "$resolved" == "$protected_root" || "$resolved" == "$protected_root"/* || "$protected_root" == "$resolved"/* ]]; then
+                echo "Refusing protected SDK root: $sdk_root" >&2
+                exit 1
+              fi
+            done
+
+            echo "Reclaiming documented hosted SDK root: $sdk_root"
+            sudo rm -rf --one-file-system -- "$resolved"
+            if [[ -e "$resolved" || -L "$resolved" ]]; then
+              echo "Hosted SDK root remains after cleanup: $sdk_root" >&2
+              exit 1
+            fi
+            removed_count=$((removed_count + 1))
+          done
+
+          available_after="$(df -B1 --output=avail / | awk 'NR == 2 { print $1 }')"
+          [[ "$available_after" =~ ^[0-9]+$ ]]
+          if (( removed_count > 0 && available_after <= available_before )); then
+            echo "Hosted SDK cleanup did not increase available disk space." >&2
+            exit 1
+          fi
+          echo "Disk space after hosted SDK cleanup:"
+          df -h /
+          echo "Reclaimed available bytes: $((available_after - available_before))"
       - name: Linux system libraries for Tauri
         if: matrix.os == 'ubuntu-latest'
         run: |

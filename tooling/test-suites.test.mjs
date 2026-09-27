@@ -205,6 +205,65 @@ function listedDesktopUiTests(script, args = []) {
   );
 }
 
+function assertLinuxRustDiskReclaim(workflow) {
+  const rustJob = workflow.split("\n  rust:\n")[1]?.split("\n  cargo-deny:\n")[0] ?? "";
+  const checkout = rustJob.indexOf("      - uses: actions/checkout@");
+  const reclaim = rustJob.indexOf("      - name: Reclaim unused Linux hosted SDK space\n");
+  const systemLibraries = rustJob.indexOf("      - name: Linux system libraries for Tauri\n");
+  assert.ok(checkout >= 0 && reclaim > checkout && systemLibraries > reclaim);
+
+  const reclaimStep = rustJob.slice(reclaim, systemLibraries);
+  assert.match(reclaimStep, /if: matrix\.os == 'ubuntu-latest'/u);
+  assert.match(reclaimStep, /\[\[ "\$\{RUNNER_ENVIRONMENT:-\}" != "github-hosted" \]\]/u);
+
+  const roots = /readonly -a sdk_roots=\(\n(?<roots>[\s\S]*?)\n\s+\)/u.exec(reclaimStep)?.groups?.roots;
+  assert.deepEqual(
+    roots
+      ?.split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean),
+    ["/usr/local/lib/android", "/usr/share/dotnet"],
+  );
+  assert.ok(reclaimStep.includes('if [[ -L "$sdk_root" ]]; then'));
+  assert.ok(reclaimStep.includes('resolved="$(realpath -e -- "$sdk_root")"'));
+  assert.ok(reclaimStep.includes('if [[ "$resolved" != "$sdk_root" ]]; then'));
+  assert.ok(
+    reclaimStep.includes(
+      'if [[ "$resolved" == "$protected_root" || "$resolved" == "$protected_root"/* || "$protected_root" == "$resolved"/* ]]; then',
+    ),
+  );
+  assert.ok(reclaimStep.includes('sudo rm -rf --one-file-system -- "$resolved"'));
+  assert.ok(reclaimStep.includes('if [[ -e "$resolved" || -L "$resolved" ]]; then'));
+  assert.ok(reclaimStep.includes("removed_count > 0 && available_after <= available_before"));
+
+  assert.match(rustJob, /matrix:\n\s+os: \[windows-latest, macos-latest, ubuntu-latest\]/u);
+  for (const command of [
+    "      - run: cargo fmt --all -- --check",
+    "      - run: cargo clippy --workspace --all-targets -- -D warnings",
+    "      - run: cargo test --workspace",
+  ]) {
+    assert.equal(rustJob.split(command).length - 1, 1, `${command.trim()} must remain exact`);
+  }
+}
+
+test("Linux Rust CI reclaims only documented hosted SDK roots behind fail-closed guards", () => {
+  const workflow = readFileSync(join(import.meta.dirname, "..", ".github", "workflows", "ci.yml"), "utf8").replaceAll(
+    "\r",
+    "",
+  );
+  assert.doesNotThrow(() => assertLinuxRustDiskReclaim(workflow));
+
+  for (const weakened of [
+    workflow.replace('"github-hosted"', '"self-hosted"'),
+    workflow.replace(' || "$protected_root" == "$resolved"/*', ""),
+    workflow.replace(' || "$resolved" == "$protected_root"/*', ""),
+    workflow.replace("/usr/share/dotnet", "/opt/ghc"),
+    workflow.replace(" --one-file-system", ""),
+  ]) {
+    assert.throws(() => assertLinuxRustDiskReclaim(weakened));
+  }
+});
+
 test("desktop UI functional and CI-visual gates exactly partition the established automated suite", () => {
   const functionalSuite = inventory.suites.find(({ id }) => id === "desktop-ui-functional-e2e");
   const visualSuite = inventory.suites.find(({ id }) => id === "desktop-ui-visual-e2e");
