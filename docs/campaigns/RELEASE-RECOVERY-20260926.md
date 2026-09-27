@@ -594,3 +594,11 @@ assessment. It is preserved evidence and must be replaced with the repaired sour
 before final physical certification. All earlier installers, QA profiles, baseline
 artifacts and release evidence remain preserved. No Stable publication is claimed.
 Frontend packet ebb1579 adds seven tests (five provider, one IPC/gate integration, one retry/accessibility); focused 20/20 and full desktop JavaScript 909/909 across 103 files pass, with typecheck and scoped Biome clean. The first full run exposed an existing assertion that waited for the phase element rather than its ready content; waitFor now checks the intended ready state without relaxing that requirement. The existing nonfatal jsdom canvas warning remains. Final-main affected gates and installed OAuth/OWNER/cold-restart proof remain required before publication.
+
+Final integration 12f2f5b exposed the same readiness-oracle issue in a second
+existing logout-fencing test: the phase label existed before its signed-out content.
+Reviewed test-only c248973 waits for that unchanged signed-out assertion. The original
+908/909 result is retained; focused 10/10, corrected full 909/909 and affected browser
+UI 2/2 pass. Production source is unchanged by this follow-up. Native Windows 198/0
+and physical Mac 191/0, strict Clippy and fmt passed on 12f2f5b and remain applicable
+across this test/documentation-only delta; installed final-artifact proof is pending.
