@@ -23,6 +23,7 @@
 
 .header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-4);
@@ -32,6 +33,7 @@
 
 .heading {
   display: flex;
+  flex: 1 1 16rem;
   align-items: baseline;
   gap: var(--space-3);
   min-width: 0;
@@ -72,9 +74,13 @@
 
 .headerActions {
   display: flex;
-  flex: none;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
 }
 
 .headerActions:focus-visible {

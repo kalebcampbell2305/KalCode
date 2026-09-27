@@ -174,12 +174,43 @@ test.describe("workspace rail", () => {
   });
 
   test("a narrow window starts with the strip; expanding it there lasts for the session", async ({ page }) => {
-    await page.setViewportSize({ width: 1366, height: 768 });
+    await page.setViewportSize({ width: 1024, height: 700 });
     await open(page, "rail");
     const strip = page.getByRole("navigation", { name: "Workspaces (collapsed rail)" });
     await expect(strip).toBeVisible();
     await strip.getByRole("button", { name: "Show the workspace rail" }).click();
     await expect(tree(page)).toBeVisible();
+    await nav(page, "Code").click();
+    const workspaceHeading = page.getByRole("heading", { level: 1, name: "kalcode" });
+    await expect(workspaceHeading).toBeVisible();
+    const geometry = await page.locator("#code-actions").evaluate((actions) => {
+      const header = actions.closest("header");
+      const heading = header?.querySelector("h1");
+      if (!header || !heading) throw new Error("The Code workspace header is incomplete");
+      const headerBox = header.getBoundingClientRect();
+      const actionBox = actions.getBoundingClientRect();
+      const controls = [...actions.querySelectorAll("button")].map((control) => {
+        const box = control.getBoundingClientRect();
+        return { left: box.left, right: box.right, width: box.width, height: box.height };
+      });
+      return {
+        headingWidth: heading.getBoundingClientRect().width,
+        controlCount: controls.length,
+        actionsContained: actionBox.left >= headerBox.left && actionBox.right <= headerBox.right + 0.5,
+        controlsContained: controls.every(
+          ({ left, right, width, height }) =>
+            width > 0 && height > 0 && left >= headerBox.left && right <= headerBox.right + 0.5,
+        ),
+      };
+    });
+    expect(geometry).toEqual({
+      headingWidth: expect.any(Number),
+      controlCount: expect.any(Number),
+      actionsContained: true,
+      controlsContained: true,
+    });
+    expect(geometry.headingWidth).toBeGreaterThan(0);
+    expect(geometry.controlCount).toBeGreaterThan(0);
     await nav(page, "Threads").click();
     await expect(tree(page)).toBeVisible();
     await page.setViewportSize({ width: 1600, height: 900 });
