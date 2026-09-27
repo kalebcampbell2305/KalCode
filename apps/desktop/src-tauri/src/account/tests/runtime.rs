@@ -4,14 +4,16 @@ use crate::account;
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 
 use account::api::{
     AccountApi, ApiAccount, ApiError, BrowserUrlResponse, EmailStartResponse, EntitlementResponse,
     PaidTier, PollResponse, SignedInResponse, SocialCompleteResponse, SocialStartResponse,
     UsageResponse,
 };
-use account::model::{AccountAuthority, AccountPhase, AccountTier, PublicAccount, SessionSecret};
+use account::model::{
+    AccountAuthority, AccountPhase, AccountTier, PendingAuthSecret, PublicAccount, SessionSecret,
+};
 use account::runtime::{AccountRuntime, Clock};
 use account::session_store::{AccountSessionStore, CachedAccountSecret};
 use account::social::SocialProvider;
@@ -96,6 +98,7 @@ struct FakeApi {
     polls: Mutex<VecDeque<Result<PollResponse, ApiError>>>,
     refreshes: Mutex<VecDeque<Result<SignedInResponse, ApiError>>>,
     social_completes: Mutex<VecDeque<Result<SocialCompleteResponse, ApiError>>>,
+    social_complete_calls: Mutex<Vec<SocialCompleteCall>>,
     accounts: Mutex<VecDeque<Result<ApiAccount, ApiError>>>,
     entitlements: Mutex<VecDeque<Result<EntitlementResponse, ApiError>>>,
     checkouts: Mutex<VecDeque<Result<BrowserUrlResponse, ApiError>>>,
@@ -106,6 +109,8 @@ struct FakeApi {
     checkout_request_ids: Mutex<Vec<String>>,
     account_calls: AtomicUsize,
 }
+
+type SocialCompleteCall = (SocialProvider, String, String, String, String);
 
 #[derive(Default)]
 struct PollGate {
@@ -175,7 +180,7 @@ impl AccountApi for FakeApi {
             url::form_urlencoded::byte_serialize(provider.callback_url().as_bytes()).collect();
         Ok(SocialStartResponse {
             authorize_url: format!(
-                "{base}?client_id=test-client&redirect_uri={redirect}&response_type=code&scope=openid%20email&state={state}&nonce={nonce}&code_challenge={code_challenge}&code_challenge_method=S256{response_mode}"
+                "{base}?client_id=test-client&redirect_uri={redirect}&response_type=code&scope=openid%20email&state={state}&nonce={nonce}&code_challenge={code_challenge}&code_challenge_method=S256&prompt=select_account{response_mode}"
             ),
             nonce,
             expires_at: "2026-09-21T14:24:20.000Z".into(),
@@ -184,15 +189,25 @@ impl AccountApi for FakeApi {
 
     fn complete_social(
         &self,
-        _: SocialProvider,
-        _: &str,
-        _: &str,
-        _: &str,
-        _: &str,
+        provider: SocialProvider,
+        state: &str,
+        code: &str,
+        code_verifier: &str,
+        nonce: &str,
     ) -> Result<SocialCompleteResponse, ApiError> {
         if let Some(gate) = self.poll_gate.lock().expect("poll gate").clone() {
             gate.block_call();
         }
+        self.social_complete_calls
+            .lock()
+            .expect("social calls")
+            .push((
+                provider,
+                state.to_owned(),
+                code.to_owned(),
+                code_verifier.to_owned(),
+                nonce.to_owned(),
+            ));
         pop(&self.social_completes)
     }
 
@@ -903,6 +918,77 @@ fn social_callback_is_exact_attempt_bound_and_success_clears_pending_into_keycha
     assert_eq!(
         runtime.snapshot().phase,
         AccountPhase::AuthenticatedUnactivated
+    );
+}
+
+#[test]
+fn cold_start_restores_persisted_social_pkce_before_completing_the_callback() {
+    let api = Arc::new(FakeApi::default());
+    let store = Arc::new(TestStore::default());
+    let state = "s".repeat(43);
+    let verifier = "v".repeat(64);
+    let nonce = "n".repeat(43);
+    let pending = PendingAuthSecret::social(
+        SocialProvider::Google,
+        state.clone(),
+        verifier.clone(),
+        nonce.clone(),
+        NOW + 300,
+    )
+    .expect("valid pending social attempt");
+    AccountSessionStore::new(store.as_ref())
+        .expect("store")
+        .save(None, Some(&pending))
+        .expect("persist pending attempt");
+    api.social_completes
+        .lock()
+        .expect("queue")
+        .push_back(Ok(SocialCompleteResponse {
+            token: format!("kcs_{}", "a".repeat(43)),
+            account_id: format!("acct_{}", "g".repeat(43)),
+            expires_at: "2030-01-01T00:00:00.000Z".into(),
+        }));
+    api.accounts
+        .lock()
+        .expect("queue")
+        .push_back(Ok(ApiAccount {
+            id: format!("acct_{}", "g".repeat(43)),
+            email: "owner@example.com".into(),
+            activated_at: None,
+        }));
+
+    let runtime = Arc::new(runtime(api.clone(), store));
+    let (bootstrap_tx, bootstrap_rx) = mpsc::sync_channel(1);
+    let bootstrapping = {
+        let runtime = runtime.clone();
+        std::thread::spawn(move || {
+            let _ = bootstrap_tx.send(runtime.bootstrap());
+        })
+    };
+    let bootstrap = bootstrap_rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .expect("persisted social bootstrap must not deadlock")
+        .expect("bootstrap pending attempt");
+    bootstrapping.join().expect("bootstrap thread");
+    assert_eq!(bootstrap.phase, AccountPhase::SocialPending);
+    assert_eq!(
+        runtime
+            .handle_social_callback_url(&format!(
+                "kalcode://auth/google?code=oauth-code&state={state}"
+            ))
+            .expect("complete restored attempt")
+            .phase,
+        AccountPhase::AuthenticatedUnactivated
+    );
+    assert_eq!(
+        *api.social_complete_calls.lock().expect("social calls"),
+        vec![(
+            SocialProvider::Google,
+            state,
+            "oauth-code".into(),
+            verifier,
+            nonce,
+        )]
     );
 }
 

@@ -392,7 +392,10 @@ impl AccountRuntime {
         if self.lock_state().session.is_some() {
             return self.fetch_authority(generation);
         }
-        if let Some(pending) = self.lock_state().pending.clone() {
+        // Do not keep the temporary state guard alive across this branch: the branch publishes
+        // the restored pending snapshot under the same mutex.
+        let pending = { self.lock_state().pending.clone() };
+        if let Some(pending) = pending {
             if !self.is_current(generation) {
                 return Ok(self.snapshot());
             }

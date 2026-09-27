@@ -182,9 +182,9 @@ pub fn validate_social_authorize_url(
     }
 
     let expected_fields = if provider == SocialProvider::Microsoft {
-        9
+        10
     } else {
-        8
+        9
     };
     let mut client_id = None;
     let mut redirect_uri = None;
@@ -194,6 +194,7 @@ pub fn validate_social_authorize_url(
     let mut nonce = None;
     let mut challenge = None;
     let mut challenge_method = None;
+    let mut prompt = None;
     let mut fields = 0_usize;
     for (key, value) in url.query_pairs() {
         fields += 1;
@@ -207,6 +208,7 @@ pub fn validate_social_authorize_url(
             "nonce" => &mut nonce,
             "code_challenge" => &mut challenge,
             "code_challenge_method" => &mut challenge_method,
+            "prompt" => &mut prompt,
             "response_mode" if provider == SocialProvider::Microsoft => {
                 if value != "query" {
                     return Err(ApiError::InvalidResponse);
@@ -233,6 +235,7 @@ pub fn validate_social_authorize_url(
         || nonce.as_deref() != Some(expected_nonce)
         || challenge.as_deref() != Some(expected_challenge)
         || challenge_method.as_deref() != Some("S256")
+        || prompt.as_deref() != Some("select_account")
     {
         return Err(ApiError::InvalidResponse);
     }

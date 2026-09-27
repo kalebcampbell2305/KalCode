@@ -452,7 +452,14 @@ impl AccountApi for HttpAccountApi {
     ) -> Result<SocialStartResponse, ApiError> {
         let path = format!("/v1/auth/{}/start", provider.as_str());
         let wire: SocialStartWire = self
-            .post(&path, None, Some(&SocialStartRequest { code_challenge }))?
+            .post(
+                &path,
+                None,
+                Some(&SocialStartRequest {
+                    client: "desktop",
+                    code_challenge,
+                }),
+            )?
             .ok_or(ApiError::InvalidResponse)?;
         if !wire.ok {
             return Err(ApiError::InvalidResponse);
@@ -710,7 +717,29 @@ struct PollRequest<'a> {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SocialStartRequest<'a> {
+    client: &'static str,
     code_challenge: &'a str,
+}
+
+#[cfg(test)]
+mod social_start_request_tests {
+    use super::*;
+
+    #[test]
+    fn desktop_social_start_explicitly_requests_the_desktop_client_contract() {
+        let encoded = serde_json::to_value(SocialStartRequest {
+            client: "desktop",
+            code_challenge: "challenge",
+        })
+        .expect("serialize social start request");
+        assert_eq!(
+            encoded,
+            serde_json::json!({
+                "client": "desktop",
+                "codeChallenge": "challenge",
+            })
+        );
+    }
 }
 
 #[derive(Serialize)]

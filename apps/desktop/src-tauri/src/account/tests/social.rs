@@ -74,7 +74,7 @@ fn authorize_url(provider: SocialProvider) -> String {
         ),
     };
     format!(
-        "{base}?client_id=client&redirect_uri={}&response_type=code&scope=openid%20email&state={STATE}&nonce={NONCE}&code_challenge={CHALLENGE}&code_challenge_method=S256{response_mode}",
+        "{base}?client_id=client&redirect_uri={}&response_type=code&scope=openid%20email&state={STATE}&nonce={NONCE}&code_challenge={CHALLENGE}&code_challenge_method=S256&prompt=select_account{response_mode}",
         url::form_urlencoded::byte_serialize(provider.callback_url().as_bytes())
             .collect::<String>()
     )
@@ -97,7 +97,10 @@ fn authorize_url_rejects_open_redirects_tampering_and_extra_parameters() {
         valid.replacen("accounts.google.com", "attacker.example", 1),
         valid.replacen(CHALLENGE, STATE, 1),
         valid.replacen(NONCE, STATE, 1),
-        format!("{valid}&prompt=consent"),
+        valid.replace("&prompt=select_account", ""),
+        valid.replace("prompt=select_account", "prompt=consent"),
+        format!("{valid}&prompt=select_account"),
+        format!("{valid}&access_type=offline"),
         valid.replacen(
             "https%3A%2F%2Fapi.kalcoded.com",
             "https%3A%2F%2Fattacker.example",
