@@ -469,3 +469,55 @@ are included in this ledger. Web OAuth/OWNER proofs remain valid; installed hand
 Evidence: target/recovery-20260927-macos-package-success, the Windows worker's lifecycle packet,
 target/recovery-20260927-windows-production-7afdfec and the separate redacted owner diagnostic.
 Unchanged prior gates carry forward; affected app/native and packaging gates bind the next main.
+
+### Physical closeout repairs and disk preservation, 2026-09-27
+
+Exact fc3669a passed the affected Windows desktop production-Whisper library gate (193),
+strict Clippy/format, and fresh native desktop gate (23 executed, zero failures/skips).
+The physical Mac passed its affected desktop library gate (186), strict Clippy/format,
+and packaging contracts (37). Unchanged earlier gates carry forward. Private main was
+pushed to fc3669a and its exact remote identity was read back.
+
+Emergency cleanup removed only 71 ignored Cargo debug incremental directories. The
+59 owning worktrees retained identical HEAD/status during cleanup, including unique
+and uncommitted work. Actual free space rose from 42.99 GiB to 324.39 GiB (281.40 GiB
+recovered). Source, release caches, signed candidate/baseline installers, evidence,
+and credentials were preserved. The separate cleanup plan, removal receipts and
+independent preservation review remain under target/recovery-20260927-*.
+
+The owner installed the signed fc3669a Windows candidate and reported three successful
+X-close/reopen cycles. This proves the reported regression check, not a clean install:
+kalcodeqa already contained earlier candidate data. It remains preserved. The owner
+prepared fresh standard Windows kalcodeqa3 for the final direct candidate install;
+untouched kalcodeqa2 remains the baseline/update/rollback profile. Mac kalcodeqa and
+kalcodeqa2 retain their original distinct candidate/baseline roles.
+
+The installed Google retry still left Chrome blank and the app waiting for its browser.
+A bounded redacted trace observed the Google callback returning HTTP 302 successfully.
+Reviewed 2f99972 replaces only desktop Google/Microsoft callbacks with an explicit
+Open KalCode browser handoff. Existing state, provider, expiry, nonce, PKCE and atomic
+completion checks remain; website callbacks retain their original 302 fragment flow.
+The page has no storage or external resources, no premature success claim, strict CSP,
+no-store/no-referrer headers, an escaped fixed-protocol link, and a hash-bound static
+script removing the callback query from browser history. RED was expected 200 versus
+actual 302; focused 14, complete API 284, typecheck, Biome, dry-run and local Chromium
+render/history/link proof passed. The four production OIDC bindings were confirmed as
+encrypted secrets without reading their values. Production deployment/retry is pending.
+
+Actual fc3669a Mac packaging exposed a second concrete bundler mismatch: pinned Tauri
+re-signed the three helpers with basename identifiers and the app microphone entitlement.
+Reviewed fe008dc preserves the exact original DMG, verifies that pinned input shape,
+copies into an owned workspace, restores canonical helper identifiers with zero helper
+entitlements, re-signs the app with its sole approved audio-input grant, and rebuilds
+and verifies the DMG before staging it. Failed detach retains the workspace. Exact
+staged bytes remain the evidence authority. Contract RED was 15/1; related tests 38/0,
+Biome and secret scan passed. Physical scratch correction passed signatures, entitlements,
+architectures, layout and production build-info; strict helper entitlement probes returned
+exit zero and empty output for all three helpers. The actual final canonical package,
+Accepted notarization, staple and Gatekeeper checks remain mandatory.
+
+Both repairs received hash-bound independent approval. The next integrated main needs
+the affected API and packaging gates, private push, and matching final platform builds.
+No Stable artifacts/feed or production download cutover is authorized by these partial
+physical receipts alone. Clean installs, real update/rollback/re-update, installed OAuth,
+KalVoice/provider/browser QA and final live publication verification remain outstanding.
