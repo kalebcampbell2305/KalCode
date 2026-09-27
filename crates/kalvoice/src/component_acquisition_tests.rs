@@ -508,7 +508,7 @@ fn cancellation_interrupts_waiting_for_an_acquisition_lock() {
     let digest = format!("{:x}", Sha256::digest(bytes));
     let transport = FakeTransport::new(vec![Ok(response(200, bytes))]);
     let calls = Arc::clone(&transport.calls);
-    let (acquirer, _, _) = harness(&temp, &key, transport);
+    let (mut acquirer, _, _) = harness(&temp, &key, transport);
     let lock = open_acquisition_lock(
         &temp
             .path()
@@ -517,17 +517,40 @@ fn cancellation_interrupts_waiting_for_an_acquisition_lock() {
     )
     .expect("acquisition lock");
     lock.lock_exclusive().expect("hold acquisition lock");
+    let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
+    let (resume_tx, resume_rx) = std::sync::mpsc::sync_channel(1);
+    let resume_rx = Arc::new(Mutex::new(resume_rx));
+    let first_conflict = Arc::new(AtomicBool::new(true));
+    acquirer.observe_lock_conflict(Arc::new(move || {
+        if first_conflict.swap(false, Ordering::SeqCst) {
+            let _ = entered_tx.try_send(());
+            if let Ok(receiver) = resume_rx.lock() {
+                let _ = receiver.recv_timeout(Duration::from_secs(5));
+            }
+        }
+    }));
     let cancel = Arc::new(AtomicBool::new(false));
     let worker_cancel = Arc::clone(&cancel);
-    let task =
-        std::thread::spawn(move || acquirer.acquire(&signed, NOW, true, &worker_cancel, |_, _| {}));
+    let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
+    let task = std::thread::spawn(move || {
+        let result = acquirer.acquire(&signed, NOW, true, &worker_cancel, |_, _| {});
+        let _ = result_tx.send(result);
+    });
 
-    std::thread::sleep(Duration::from_millis(50));
+    let entered = entered_rx.recv_timeout(Duration::from_secs(5));
     let started = std::time::Instant::now();
     cancel.store(true, Ordering::SeqCst);
-    let result = task.join().expect("acquisition task");
+    let _ = resume_tx.try_send(());
+    let result = result_rx.recv_timeout(Duration::from_secs(2));
+    let elapsed = started.elapsed();
+    drop(lock);
+    let joined = task.join();
+
+    entered.expect("worker reached the held acquisition lock");
+    joined.expect("acquisition task");
+    let result = result.expect("cancellation completed while the lock remained held");
     assert!(matches!(result, Err(ComponentAcquisitionError::Cancelled)));
-    assert!(started.elapsed() < Duration::from_secs(1));
+    assert!(elapsed < Duration::from_secs(1));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 

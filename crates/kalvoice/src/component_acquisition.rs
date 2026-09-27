@@ -29,6 +29,9 @@ const MAX_RESPONSE_HEADER_BYTES: usize = 64 * 1024;
 const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const DOWNLOAD_ADMISSION_MARGIN: u64 = 64 * 1024 * 1024;
 
+#[cfg(test)]
+type LockConflictObserver = Arc<dyn Fn() + Send + Sync>;
+
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentAcquisitionError {
     #[error("explicit component download consent is required")]
@@ -144,6 +147,8 @@ pub struct ComponentAcquirer {
     verifier: ComponentVerifier,
     staging_root: TrustedComponentDirectory,
     transport: Arc<dyn ArtifactTransport>,
+    #[cfg(test)]
+    lock_conflict_observer: Option<LockConflictObserver>,
 }
 
 impl ComponentAcquirer {
@@ -157,6 +162,8 @@ impl ComponentAcquirer {
             verifier,
             staging_root,
             transport: Arc::new(UreqTransport::new()),
+            #[cfg(test)]
+            lock_conflict_observer: None,
         }
     }
 
@@ -172,7 +179,13 @@ impl ComponentAcquirer {
             verifier,
             staging_root,
             transport,
+            lock_conflict_observer: None,
         }
+    }
+
+    #[cfg(test)]
+    fn observe_lock_conflict(&mut self, observer: LockConflictObserver) {
+        self.lock_conflict_observer = Some(observer);
     }
 
     /// Downloads and installs one component after explicit user consent.
@@ -227,6 +240,10 @@ impl ComponentAcquirer {
             match lock.try_lock_exclusive() {
                 Ok(()) => break,
                 Err(error) if lock_conflict(&error) => {
+                    #[cfg(test)]
+                    if let Some(observer) = &self.lock_conflict_observer {
+                        observer();
+                    }
                     if cancel.load(Ordering::SeqCst) {
                         return Err(ComponentAcquisitionError::Cancelled);
                     }
