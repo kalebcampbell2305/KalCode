@@ -671,6 +671,9 @@ impl ProcessSampler {
                 match self.system.process(spid) {
                     None => return Ok(SignalOutcome::Stopped),
                     Some(p) if p.start_time() != start_time => return Ok(SignalOutcome::Stopped),
+                    Some(p) if process_status_is_terminal(p.status()) => {
+                        return Ok(SignalOutcome::Stopped);
+                    }
                     Some(_) if Instant::now() >= deadline => {
                         return Ok(SignalOutcome::StillRunning);
                     }
@@ -679,6 +682,16 @@ impl ProcessSampler {
             }
         }
     }
+}
+
+#[cfg(any(not(windows), test))]
+fn process_status_is_terminal(status: sysinfo::ProcessStatus) -> bool {
+    // Unix retains an exited child as a zombie/dead row until its parent reaps it. The identity
+    // remains visible, but the process can no longer execute and the requested stop has completed.
+    matches!(
+        status,
+        sysinfo::ProcessStatus::Zombie | sysinfo::ProcessStatus::Dead
+    )
 }
 
 fn process_creation_identity(pid: u32, _fallback: u64) -> u64 {
@@ -1175,6 +1188,16 @@ mod tests {
             *events.lock().expect("events"),
             ["open:42", "identity:original"]
         );
+    }
+
+    #[test]
+    fn unix_zombie_and_dead_are_terminal_but_live_states_are_not() {
+        assert!(process_status_is_terminal(sysinfo::ProcessStatus::Zombie));
+        assert!(process_status_is_terminal(sysinfo::ProcessStatus::Dead));
+        assert!(!process_status_is_terminal(sysinfo::ProcessStatus::Run));
+        assert!(!process_status_is_terminal(
+            sysinfo::ProcessStatus::UninterruptibleDiskSleep
+        ));
     }
 
     #[test]
