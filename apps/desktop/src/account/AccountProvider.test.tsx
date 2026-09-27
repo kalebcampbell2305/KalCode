@@ -203,7 +203,7 @@ describe("AccountProvider", () => {
         <Harness />
       </AccountProvider>,
     );
-    expect(await screen.findByLabelText("phase")).toHaveTextContent("signed_out");
+    await waitFor(() => expect(screen.getByLabelText("phase")).toHaveTextContent("signed_out"));
     await userEvent.click(screen.getByRole("button", { name: "start" }));
     await act(async () => email.resolve(snapshot("email_pending")));
     await userEvent.click(screen.getByRole("button", { name: "logout" }));
