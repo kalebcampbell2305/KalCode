@@ -10,7 +10,14 @@
   background: var(--panel-sheen), var(--color-surface-3);
   box-shadow: var(--shadow-xl);
   transform-origin: var(--radix-dropdown-menu-content-transform-origin);
+}
+
+.content[data-state="open"] {
   animation: appear var(--dur-fast) var(--ease-emphasized);
+}
+
+.content[data-state="closed"] {
+  display: none;
 }
 
 .item {
