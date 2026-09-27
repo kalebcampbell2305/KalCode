@@ -328,7 +328,7 @@ test("successful DMG cleanup cannot erase the package evidence authority", () =>
 
   assert.match(
     source,
-    /const packagedEvidence = await inspectPackagedDmg\(\{[\s\S]*?artifactPath,[\s\S]*?arch,[\s\S]*?expectedTeamId: credentials\.teamId,[\s\S]*?\}\);/,
+    /packagedEvidence = await inspectPackagedDmg\(\{[\s\S]*?artifactPath,[\s\S]*?arch,[\s\S]*?expectedTeamId: credentials\.teamId,[\s\S]*?\}\);/,
     "build evidence must be extracted from the exact staged DMG after Tauri cleanup",
   );
   assert.match(
@@ -345,7 +345,29 @@ test("successful DMG cleanup cannot erase the package evidence authority", () =>
   assert.doesNotMatch(source, /missing_built_app/);
   assert.match(
     source,
-    /copyFileSync\(candidates\[0\], artifactPath, constants\.COPYFILE_EXCL\);[\s\S]*?await verifyMacCandidate\(\{ artifactPath, record, expectedTeamId: credentials\.teamId \}\);/,
+    /copyFileSync\(correctedArtifactPath, artifactPath, constants\.COPYFILE_EXCL\);[\s\S]*?await verifyMacCandidate\(\{ artifactPath, record, expectedTeamId: credentials\.teamId \}\);/,
     "the exact staged DMG must remain the post-build verification authority",
   );
+});
+
+test("Tauri sidecars are canonically re-signed before the release DMG becomes authoritative", () => {
+  const root = join(import.meta.dirname, "..", "..");
+  const source = readFileSync(join(root, "tooling", "release", "macos-package.mjs"), "utf8");
+
+  assert.match(
+    source,
+    /await withCanonicalMacSidecarSignatures\([\s\S]*?sourceArtifactPath: candidates\[0\],[\s\S]*?signingIdentity: credentials\.signingIdentity,[\s\S]*?expectedTeamId: credentials\.teamId,[\s\S]*?async \(correctedArtifactPath\) => \{[\s\S]*?copyFileSync\(correctedArtifactPath, artifactPath, constants\.COPYFILE_EXCL\);[\s\S]*?inspectPackagedDmg/,
+    "the staged release DMG must come from the canonical sidecar-signature correction boundary",
+  );
+  assert.deepEqual(
+    MACOS_HELPERS.map(({ identifier }) => identifier),
+    ["com.kalcode.desktop.update-helper", "com.kalcode.desktop.provider-guardian", "com.kalcode.desktop.hook"],
+  );
+  assert.match(source, /"--identifier",\s*helper\.identifier,\s*path/);
+  assert.match(source, /codesign[\s\S]*?--entitlements[\s\S]*?entitlements\.plist[\s\S]*?repairAppPath/);
+  assert.match(source, /bundle_dmg\.sh/);
+  assert.match(source, /--app-drop-link[\s\S]*?--skip-jenkins/);
+  assert.match(source, /hdiutil[\s\S]*?verify[\s\S]*?repairedArtifactPath/);
+  assert.match(source, /helper_entitlements_mismatch/);
+  assert.match(source, /codesign[\s\S]*?--verify[\s\S]*?repairedArtifactPath/);
 });

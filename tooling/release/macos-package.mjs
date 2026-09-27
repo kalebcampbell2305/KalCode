@@ -33,7 +33,9 @@ import {
 } from "./lib.mjs";
 import {
   assertProductionCodesign,
+  assertProductionEntitlements,
   expectedMacDmgFile,
+  MACOS_BUNDLE_ID,
   MACOS_EXECUTABLE,
   MACOS_HELPERS,
   MACOS_MINIMUM_VERSION,
@@ -106,6 +108,234 @@ function assertContainedNativeBinary(path, appPath, label, arch) {
   assertPlainNativeBinary(path, label, arch);
 }
 
+function mountedKalCodeApp(mountPath) {
+  const entries = readdirSync(mountPath, { withFileTypes: true });
+  const applications = entries.filter(({ name }) => name.endsWith(".app")).map(({ name }) => name);
+  if (applications.length !== 1 || applications[0] !== "KalCode.app") {
+    throw new MacReleaseError("invalid_dmg_contents", "The DMG must contain exactly one KalCode.app bundle.");
+  }
+  const applicationsLink = join(mountPath, "Applications");
+  const applicationsLinkStat = lstatSync(applicationsLink, { throwIfNoEntry: false });
+  if (!applicationsLinkStat?.isSymbolicLink() || readlinkSync(applicationsLink) !== "/Applications") {
+    throw new MacReleaseError("invalid_dmg_contents", "The DMG must contain the exact Applications link.");
+  }
+  const appPath = join(mountPath, applications[0]);
+  const appStat = lstatSync(appPath);
+  if (!appStat.isDirectory() || appStat.isSymbolicLink()) {
+    throw new MacReleaseError("invalid_app_bundle", "The DMG must contain one plain KalCode.app bundle.");
+  }
+  const realMount = realpathSync(mountPath);
+  if (!realpathSync(appPath).startsWith(`${realMount}${sep}`)) {
+    throw new MacReleaseError("invalid_app_bundle", "The app bundle escapes the mounted DMG.");
+  }
+  return appPath;
+}
+
+function codesignEntitlements(path) {
+  return macProcessRunner.capture("codesign", ["--display", "--entitlements", ":-", path]);
+}
+
+function assertNoHelperEntitlements(path) {
+  if (codesignEntitlements(path) !== "") {
+    throw new MacReleaseError("helper_entitlements_mismatch", "A bundled helper carries app-only entitlements.");
+  }
+}
+
+function assertExpectedTauriSidecarSignature(path, helper, expectedTeamId) {
+  macProcessRunner.run("codesign", ["--verify", "--strict", "--verbose=2", path]);
+  assertProductionCodesign(
+    macProcessRunner.capture("codesign", ["--display", "--verbose=4", path], { output: "stderr" }),
+    expectedTeamId,
+    helper.name,
+  );
+  const entitlements = codesignEntitlements(path);
+  if (entitlements === "") {
+    throw new MacReleaseError(
+      "tauri_sidecar_contract_changed",
+      "The pinned Tauri sidecar signature no longer has the expected app entitlement boundary.",
+    );
+  }
+  assertProductionEntitlements(
+    macProcessRunner.capture("plutil", ["-convert", "json", "-o", "-", "--", "-"], {
+      input: entitlements,
+    }),
+  );
+}
+
+async function withCanonicalMacSidecarSignatures(
+  { sourceArtifactPath, bundleDir, arch, signingIdentity, expectedTeamId },
+  consume,
+) {
+  const workspace = realpathSync(mkdtempSync(join(tmpdir(), "kalcode-macos-sidecar-signatures-")));
+  const mountPath = join(workspace, "mount");
+  const repairAppPath = join(workspace, "KalCode.app");
+  const repairedArtifactPath = join(workspace, "KalCode-repaired.dmg");
+  mkdirSync(mountPath);
+  let attachAttempted = false;
+  let safeToRemoveWorkspace = true;
+  let pendingError;
+  try {
+    macProcessRunner.run("hdiutil", ["verify", sourceArtifactPath]);
+    macProcessRunner.run("codesign", ["--verify", "--strict", "--verbose=2", sourceArtifactPath]);
+    attachAttempted = true;
+    macProcessRunner.run("hdiutil", [
+      "attach",
+      "-readonly",
+      "-nobrowse",
+      "-noautoopen",
+      "-mountpoint",
+      mountPath,
+      sourceArtifactPath,
+    ]);
+    const appPath = mountedKalCodeApp(mountPath);
+    const executable = join(appPath, "Contents", "MacOS", MACOS_EXECUTABLE);
+    assertContainedNativeBinary(executable, appPath, "The Tauri KalCode executable", arch);
+    macProcessRunner.run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", appPath]);
+    assertProductionCodesign(
+      macProcessRunner.capture("codesign", ["--display", "--verbose=4", appPath], { output: "stderr" }),
+      expectedTeamId,
+    );
+    for (const helper of MACOS_HELPERS) {
+      const path = join(appPath, "Contents", "MacOS", helper.name);
+      assertContainedNativeBinary(path, appPath, `The Tauri ${helper.name} helper`, arch);
+      assertExpectedTauriSidecarSignature(path, helper, expectedTeamId);
+    }
+    macProcessRunner.run("ditto", [appPath, repairAppPath]);
+  } catch (error) {
+    pendingError = error;
+  } finally {
+    if (attachAttempted) {
+      try {
+        macProcessRunner.run("hdiutil", ["detach", mountPath]);
+      } catch (error) {
+        safeToRemoveWorkspace = false;
+        pendingError ??= error;
+      }
+    }
+  }
+  try {
+    if (pendingError) throw pendingError;
+    if (
+      !existsSync(repairAppPath) ||
+      !lstatSync(repairAppPath).isDirectory() ||
+      lstatSync(repairAppPath).isSymbolicLink()
+    ) {
+      throw new MacReleaseError("invalid_app_bundle", "The copied app bundle is not a plain directory.");
+    }
+    if (!realpathSync(repairAppPath).startsWith(`${workspace}${sep}`)) {
+      throw new MacReleaseError("invalid_app_bundle", "The copied app bundle escapes the owned repair workspace.");
+    }
+    for (const helper of MACOS_HELPERS) {
+      const path = join(repairAppPath, "Contents", "MacOS", helper.name);
+      assertContainedNativeBinary(path, repairAppPath, `The copied ${helper.name} helper`, arch);
+      macProcessRunner.run("codesign", [
+        "--force",
+        "--sign",
+        signingIdentity,
+        "--options",
+        "runtime",
+        "--timestamp",
+        "--identifier",
+        helper.identifier,
+        path,
+      ]);
+      macProcessRunner.run("codesign", ["--verify", "--strict", "--verbose=2", path]);
+      assertProductionCodesign(
+        macProcessRunner.capture("codesign", ["--display", "--verbose=4", path], { output: "stderr" }),
+        expectedTeamId,
+        helper.identifier,
+      );
+      assertNoHelperEntitlements(path);
+    }
+    const entitlementsPath = join(ROOT, "apps", "desktop", "src-tauri", "entitlements.plist");
+    macProcessRunner.run("codesign", [
+      "--force",
+      "--sign",
+      signingIdentity,
+      "--options",
+      "runtime",
+      "--timestamp",
+      "--identifier",
+      MACOS_BUNDLE_ID,
+      "--entitlements",
+      entitlementsPath,
+      repairAppPath,
+    ]);
+    macProcessRunner.run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", repairAppPath]);
+    assertProductionCodesign(
+      macProcessRunner.capture("codesign", ["--display", "--verbose=4", repairAppPath], { output: "stderr" }),
+      expectedTeamId,
+    );
+    assertProductionEntitlements(
+      macProcessRunner.capture("plutil", ["-convert", "json", "-o", "-", "--", "-"], {
+        input: codesignEntitlements(repairAppPath),
+      }),
+    );
+
+    if (
+      !existsSync(bundleDir) ||
+      !lstatSync(bundleDir).isDirectory() ||
+      lstatSync(bundleDir).isSymbolicLink() ||
+      realpathSync(bundleDir) !== resolve(bundleDir)
+    ) {
+      throw new MacReleaseError("unsafe_dmg_tool", "The Tauri DMG tool directory is unsafe.");
+    }
+    const bundleScript = join(bundleDir, "bundle_dmg.sh");
+    const volumeIcon = join(bundleDir, "icon.icns");
+    for (const [path, label] of [
+      [bundleScript, "The pinned Tauri DMG script"],
+      [volumeIcon, "The generated DMG icon"],
+    ]) {
+      if (!existsSync(path) || !lstatSync(path).isFile() || lstatSync(path).isSymbolicLink()) {
+        throw new MacReleaseError("unsafe_dmg_tool", `${label} is not a regular file.`);
+      }
+      if (!realpathSync(path).startsWith(`${realpathSync(bundleDir)}${sep}`)) {
+        throw new MacReleaseError("unsafe_dmg_tool", `${label} escapes the Tauri bundle directory.`);
+      }
+    }
+    const dmgEnvironment = { ...process.env, CI: "true" };
+    delete dmgEnvironment.TAURI_BUNDLER_DMG_IGNORE_CI;
+    macProcessRunner.run(
+      bundleScript,
+      [
+        "--volname",
+        "KalCode",
+        "--icon",
+        "KalCode.app",
+        "180",
+        "170",
+        "--app-drop-link",
+        "480",
+        "170",
+        "--window-size",
+        "660",
+        "400",
+        "--hide-extension",
+        "KalCode.app",
+        "--volicon",
+        volumeIcon,
+        "--skip-jenkins",
+        repairedArtifactPath,
+        repairAppPath,
+      ],
+      { cwd: workspace, env: dmgEnvironment, timeout: 600_000 },
+    );
+    if (
+      !existsSync(repairedArtifactPath) ||
+      !lstatSync(repairedArtifactPath).isFile() ||
+      lstatSync(repairedArtifactPath).isSymbolicLink()
+    ) {
+      throw new MacReleaseError("missing_repaired_dmg", "The canonical sidecar repair did not produce a plain DMG.");
+    }
+    macProcessRunner.run("codesign", ["--force", "--sign", signingIdentity, "--timestamp", repairedArtifactPath]);
+    macProcessRunner.run("hdiutil", ["verify", repairedArtifactPath]);
+    macProcessRunner.run("codesign", ["--verify", "--strict", "--verbose=2", repairedArtifactPath]);
+    await consume(repairedArtifactPath);
+  } finally {
+    if (safeToRemoveWorkspace) rmSync(workspace, { recursive: true, force: true });
+  }
+}
+
 async function inspectPackagedDmg({ artifactPath, arch, expectedTeamId }) {
   const workspace = realpathSync(mkdtempSync(join(tmpdir(), "kalcode-macos-package-")));
   const mountPath = join(workspace, "mount");
@@ -114,6 +344,8 @@ async function inspectPackagedDmg({ artifactPath, arch, expectedTeamId }) {
   let pendingError;
   let evidence;
   try {
+    macProcessRunner.run("hdiutil", ["verify", artifactPath]);
+    macProcessRunner.run("codesign", ["--verify", "--strict", "--verbose=2", artifactPath]);
     attachAttempted = true;
     macProcessRunner.run("hdiutil", [
       "attach",
@@ -124,25 +356,7 @@ async function inspectPackagedDmg({ artifactPath, arch, expectedTeamId }) {
       mountPath,
       artifactPath,
     ]);
-    const entries = readdirSync(mountPath, { withFileTypes: true });
-    const applications = entries.filter(({ name }) => name.endsWith(".app")).map(({ name }) => name);
-    if (applications.length !== 1 || applications[0] !== "KalCode.app") {
-      throw new MacReleaseError("invalid_dmg_contents", "The DMG must contain exactly one KalCode.app bundle.");
-    }
-    const applicationsLink = join(mountPath, "Applications");
-    const applicationsLinkStat = lstatSync(applicationsLink, { throwIfNoEntry: false });
-    if (!applicationsLinkStat?.isSymbolicLink() || readlinkSync(applicationsLink) !== "/Applications") {
-      throw new MacReleaseError("invalid_dmg_contents", "The DMG must contain the exact Applications link.");
-    }
-    const appPath = join(mountPath, applications[0]);
-    const appStat = lstatSync(appPath);
-    if (!appStat.isDirectory() || appStat.isSymbolicLink()) {
-      throw new MacReleaseError("invalid_app_bundle", "The DMG must contain one plain KalCode.app bundle.");
-    }
-    const realMount = realpathSync(mountPath);
-    if (!realpathSync(appPath).startsWith(`${realMount}${sep}`)) {
-      throw new MacReleaseError("invalid_app_bundle", "The app bundle escapes the mounted DMG.");
-    }
+    const appPath = mountedKalCodeApp(mountPath);
     const executable = join(appPath, "Contents", "MacOS", MACOS_EXECUTABLE);
     assertContainedNativeBinary(executable, appPath, "The mounted KalCode executable", arch);
     macProcessRunner.run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", appPath]);
@@ -160,6 +374,7 @@ async function inspectPackagedDmg({ artifactPath, arch, expectedTeamId }) {
         expectedTeamId,
         helper.identifier,
       );
+      assertNoHelperEntitlements(path);
       helpers.push({
         name: helper.name,
         identifier: helper.identifier,
@@ -373,12 +588,26 @@ async function main() {
     throw new MacReleaseError("unsafe_staging_directory", "The release staging directory is unsafe.");
   }
   mkdirSync(join(outDir, `macos-${arch}-candidate`), { mode: 0o700 });
-  copyFileSync(candidates[0], artifactPath, constants.COPYFILE_EXCL);
-  const packagedEvidence = await inspectPackagedDmg({
-    artifactPath,
-    arch,
-    expectedTeamId: credentials.teamId,
-  });
+  let packagedEvidence;
+  await withCanonicalMacSidecarSignatures(
+    {
+      sourceArtifactPath: candidates[0],
+      bundleDir,
+      arch,
+      signingIdentity: credentials.signingIdentity,
+      expectedTeamId: credentials.teamId,
+    },
+    async (correctedArtifactPath) => {
+      copyFileSync(correctedArtifactPath, artifactPath, constants.COPYFILE_EXCL);
+      packagedEvidence = await inspectPackagedDmg({
+        artifactPath,
+        arch,
+        expectedTeamId: credentials.teamId,
+      });
+    },
+  );
+  assertCleanTree("After the canonical macOS sidecar-signature correction, the working tree");
+  if (headCommit() !== commit) throw new MacReleaseError("head_moved", "HEAD moved during macOS package correction.");
   const buildInfo = validateBuildInfo(packagedEvidence.buildInfoOutput, {
     version,
     requestedReleaseChannel: options.requestedReleaseChannel,
