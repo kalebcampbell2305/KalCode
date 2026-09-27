@@ -131,15 +131,23 @@ function validateSourceAuthority({ baselineSource, candidateSource, baseline, ca
   if (candidateTail.some((path) => !path.startsWith("docs/releases/"))) {
     throw new Error("candidate source changed beyond release notes after the signed build commit");
   }
-  const based = spawnSync(
-    "git",
-    ["-C", baselineSource, "merge-base", "--is-ancestor", candidate.commit, baseline.commit],
-    {
-      windowsHide: true,
-    },
-  );
-  if (based.status !== 0) throw new Error("QA baseline is not derived from the exact candidate commit");
-  const changedFiles = git(baselineSource, ["diff", "--name-only", candidate.commit, baseline.commit])
+  validateBaselineSourceAuthority({ baselineSource, baseline, candidate });
+}
+
+export function validateBaselineSourceAuthority({ baselineSource, baseline, candidate }) {
+  // The signed older baseline remains immutable as release fixes advance the candidate.
+  // Bind its mechanical derivation to its original source, then require that source in
+  // the candidate's history. Rebuilding the baseline would erase the older-code trial.
+  const parents = git(baselineSource, ["rev-list", "--parents", "-n", "1", baseline.commit]).split(/\s+/u);
+  if (parents.length !== 2 || parents[0] !== baseline.commit) {
+    throw new Error("QA baseline must have exactly one parent source commit");
+  }
+  const sourceBase = parents[1];
+  const based = spawnSync("git", ["-C", baselineSource, "merge-base", "--is-ancestor", sourceBase, candidate.commit], {
+    windowsHide: true,
+  });
+  if (based.status !== 0) throw new Error("QA baseline source base is not an ancestor of the exact candidate commit");
+  const changedFiles = git(baselineSource, ["diff", "--name-only", sourceBase, baseline.commit])
     .split(/\r?\n/u)
     .filter(Boolean);
   const metadata = JSON.parse(command("cargo", ["metadata", "--no-deps", "--format-version", "1"], baselineSource));
@@ -149,7 +157,7 @@ function validateSourceAuthority({ baselineSource, candidateSource, baseline, ca
     candidateVersion: candidate.version,
     baselineVersion: baseline.version,
     workspacePackages,
-    candidateFiles: sourceFiles(baselineSource, candidate.commit),
+    candidateFiles: sourceFiles(baselineSource, sourceBase),
     baselineFiles: sourceFiles(baselineSource, baseline.commit),
     changedFiles,
   });
