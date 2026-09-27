@@ -88,6 +88,7 @@ describe("download page platforms", () => {
     expect(html).toContain('href="/download/windows-x64"');
     expect(html).toContain('href="/download/macos-arm64"');
     expect(body).toContain("copy KalCode.app to ~/Applications before launching it");
+    expect(body).toContain("Create an Applications folder in your home folder if needed");
     expect(body).toContain("supports in-app updates and rollback");
     expect(body).toContain("shortcut points to the system /Applications folder");
     expect(body).toContain("requires an administrator to replace the app manually for later versions");
