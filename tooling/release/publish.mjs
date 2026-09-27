@@ -37,7 +37,7 @@ import {
   pointerAdvanceProblems,
   publicationRowProblems,
   resolvePlatformPublicationState,
-  resolvePublicationState,
+  writeFrozenPublicationJson,
 } from "./publication-safety.mjs";
 import {
   buildPublishPlan,
@@ -54,7 +54,7 @@ import {
   publicVerificationProblems,
   releaseProcessOptions,
 } from "./signing.mjs";
-import { createPlatformUpdaterManifest, createUpdaterManifest } from "./updater-manifest.mjs";
+import { createPlatformUpdaterManifest } from "./updater-manifest.mjs";
 import { readUpdaterPublicKey } from "./updater-signing.mjs";
 
 let mode;
@@ -96,7 +96,11 @@ function requiredRecord(path, label, required) {
   return readJson(path);
 }
 
-const windowsPaths = { build: join(outDir, "build.json"), verify: join(outDir, "verify.json") };
+const windowsPaths = {
+  build: join(outDir, "build.json"),
+  verify: join(outDir, "verify.json"),
+  qa: join(outDir, "windows-x86_64-qa.json"),
+};
 const macPaths = {
   build: join(outDir, "macos-arm64-build.json"),
   verify: join(outDir, "macos-arm64-verify.json"),
@@ -122,6 +126,7 @@ const packetProblems = [];
 if (windowsMentioned) {
   let build = null;
   let verify = null;
+  let qa = null;
   try {
     build = requiredRecord(windowsPaths.build, "Windows release packet", true);
     verify = requiredRecord(
@@ -129,6 +134,7 @@ if (windowsMentioned) {
       "Windows release packet",
       mode !== "local" || existsSync(windowsPaths.verify),
     );
+    qa = requiredRecord(windowsPaths.qa, "Windows release packet", mode !== "local");
   } catch (error) {
     packetProblems.push(error instanceof Error ? error.message : String(error));
   }
@@ -149,8 +155,12 @@ if (windowsMentioned) {
       target: "windows-x86_64",
       build,
       verify,
+      qa,
       artifactPath: join(outDir, safeFile ?? "invalid-windows-artifact"),
-      signaturePath: join(outDir, safeFile ? `${safeFile}${macMentioned ? ".windows-x86_64" : ""}.sig` : "invalid.sig"),
+      signaturePath: join(
+        outDir,
+        safeFile ? `${safeFile}${mode === "local" ? "" : ".windows-x86_64"}.sig` : "invalid.sig",
+      ),
     });
   }
 }
@@ -217,7 +227,7 @@ if (mode !== "local") {
   if (windows) {
     problems.push(...publicSigningProblems(windows.build));
     problems.push(...publicVerificationProblems(windows.build, windows.verify));
-    if (macMentioned) problems.push(...windowsUpdaterV2Problems(windows.build, windows.verify));
+    problems.push(...windowsUpdaterV2Problems(windows.build, windows.verify));
   }
   releaseNotesText = existsSync(notes) ? readFileSync(notes, "utf8") : null;
   if (releaseNotesText === null) problems.push(`release notes missing: ${relative(ROOT, notes)}`);
@@ -253,13 +263,14 @@ if (mode !== "local") {
 if (publishesRemote) assertCleanTree(initializesAuthority ? "A release-authority bootstrap" : "A publish");
 
 const publicationStatePath = join(outDir, "publication.json");
+const usesPublicationState = mode !== "local";
 const existingPublicationState =
-  publishesRemote && existsSync(publicationStatePath) ? readJson(publicationStatePath) : null;
+  usesPublicationState && existsSync(publicationStatePath) ? readJson(publicationStatePath) : null;
 let publicationState;
 try {
-  if (packets.length === 1 && packets[0].target === "windows-x86_64") {
-    publicationState = resolvePublicationState(existingPublicationState, packets[0].build, new Date().toISOString());
-  } else {
+  if (usesPublicationState) {
+    const signatureDigests = new Map();
+    for (const packet of packets) signatureDigests.set(packet.target, await sha256File(packet.signaturePath));
     publicationState = resolvePlatformPublicationState(
       existingPublicationState,
       {
@@ -271,15 +282,19 @@ try {
           file: packet.build.file,
           size: packet.build.size,
           sha256: packet.build.sha256,
+          signatureSha256: signatureDigests.get(packet.target),
           builtAt: packet.build.builtAt ?? packet.build.createdAt,
         })),
       },
       new Date().toISOString(),
     );
+  } else {
+    publicationState = { publishedAt: new Date().toISOString() };
   }
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error));
 }
+if (usesPublicationState) writeFrozenPublicationJson(publicationStatePath, publicationState);
 const publishedAt = publicationState.publishedAt;
 const windows = packets.find((packet) => packet.target === "windows-x86_64");
 const mac = packets.find((packet) => packet.target === "darwin-aarch64");
@@ -312,28 +327,26 @@ if (mode !== "local") {
       artifactKey: `releases/updater/${channel}/${version}/${packet.build.sha256}/${packet.build.file}`,
       publicKeyBase64: updaterPublicKey,
     }));
-    updaterManifest = mac
-      ? await createPlatformUpdaterManifest({
-          artifacts,
-          requestedChannel: channel,
-          publishedAt,
-          notes: releaseNotesText,
-        })
-      : await createUpdaterManifest({
-          ...artifacts[0],
-          requestedChannel: channel,
-          publishedAt,
-          notes: releaseNotesText,
-        });
+    updaterManifest = await createPlatformUpdaterManifest({
+      artifacts,
+      requestedChannel: channel,
+      publishedAt,
+      notes: releaseNotesText,
+    });
   } catch (error) {
     problems.push(error instanceof Error ? error.message : String(error));
   }
 }
 
 const latestJsonPath = join(outDir, "latest.json");
-writeJson(latestJsonPath, manifest);
 const updaterJsonPath = join(outDir, `${channel}.json`);
-if (updaterManifest) writeJson(updaterJsonPath, updaterManifest);
+if (usesPublicationState) {
+  writeFrozenPublicationJson(latestJsonPath, manifest);
+  if (updaterManifest) writeFrozenPublicationJson(updaterJsonPath, updaterManifest);
+} else {
+  writeJson(latestJsonPath, manifest);
+  if (updaterManifest) writeJson(updaterJsonPath, updaterManifest);
+}
 const downloadDescriptorSha256 = await sha256File(latestJsonPath);
 const updaterDescriptorSha256 = updaterManifest ? await sha256File(updaterJsonPath) : null;
 const platformObjects = new Map();
@@ -536,7 +549,6 @@ if (publishesRemote) {
 }
 
 if (problems.length > 0) fail(`refusing to publish:\n  ${problems.join("\n  ")}`);
-if (publishesRemote && existingPublicationState === null) writeJson(publicationStatePath, publicationState);
 console.log(
   mode === "local"
     ? "  ok   local Windows build and manifest checks passed"
@@ -656,19 +668,12 @@ try {
     JSON.stringify(readJson(downloadDescriptorPath)) !== JSON.stringify(manifest)
   )
     fail("immutable download descriptor read back with different metadata or bytes");
-  const reverified = mac
-    ? await createPlatformUpdaterManifest({
-        artifacts: downloadedInputs,
-        requestedChannel: channel,
-        publishedAt,
-        notes: releaseNotesText,
-      })
-    : await createUpdaterManifest({
-        ...downloadedInputs[0],
-        requestedChannel: channel,
-        publishedAt,
-        notes: releaseNotesText,
-      });
+  const reverified = await createPlatformUpdaterManifest({
+    artifacts: downloadedInputs,
+    requestedChannel: channel,
+    publishedAt,
+    notes: releaseNotesText,
+  });
   if (
     (await sha256File(updaterDescriptorPath)) !== updaterDescriptorSha256 ||
     JSON.stringify(readJson(updaterDescriptorPath)) !== JSON.stringify(updaterManifest) ||

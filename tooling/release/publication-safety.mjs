@@ -1,4 +1,6 @@
 import { Buffer } from "node:buffer";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 
 const CHANNEL_PATTERN = /^(?:stable|beta|dev)$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
@@ -116,7 +118,8 @@ export function resolvePlatformPublicationState(existing, release, now) {
         artifact.file.includes("..") ||
         !Number.isSafeInteger(artifact?.size) ||
         artifact.size <= 0 ||
-        !SHA256_PATTERN.test(artifact?.sha256 ?? "")
+        !SHA256_PATTERN.test(artifact?.sha256 ?? "") ||
+        !SHA256_PATTERN.test(artifact?.signatureSha256 ?? "")
       ) {
         throw new Error("publication release artifact identity is invalid");
       }
@@ -126,6 +129,7 @@ export function resolvePlatformPublicationState(existing, release, now) {
         file: artifact.file,
         size: artifact.size,
         sha256: artifact.sha256,
+        signatureSha256: artifact.signatureSha256,
         builtAt,
       };
     })
@@ -135,7 +139,7 @@ export function resolvePlatformPublicationState(existing, release, now) {
     throw new Error("publication timestamp predates an exact platform build");
   }
   const candidate = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     version: release.version,
     commit: release.commit,
     channel: release.requestedReleaseChannel,
@@ -173,6 +177,31 @@ function canonicalJson(value) {
       .join(",")}}`;
   }
   return JSON.stringify(value);
+}
+
+export function publicationJsonBytes(value) {
+  return Buffer.from(`${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+/** Creates a release identity/descriptor once, or proves the existing bytes are identical. */
+export function writeFrozenPublicationJson(path, value) {
+  const bytes = publicationJsonBytes(value);
+  if (existsSync(path)) {
+    if (!Buffer.from(readFileSync(path)).equals(bytes)) {
+      throw new Error("immutable publication file already exists with different bytes; bump the version");
+    }
+    return "reused";
+  }
+  mkdirSync(dirname(path), { recursive: true });
+  let descriptor;
+  try {
+    descriptor = openSync(path, "wx", 0o600);
+    writeFileSync(descriptor, bytes);
+    fsyncSync(descriptor);
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+  return "created";
 }
 
 // Unary length prefixes preserve integer ordering for arbitrary-width canonical numeric fields.
@@ -254,6 +283,58 @@ export function buildVersionClaimStatement(candidate) {
     sqlLiteral(value.publishedAt),
   ];
   return `INSERT INTO release_publication_versions (${columns.join(", ")}) SELECT ${values.join(", ")} WHERE NOT EXISTS (SELECT 1 FROM release_publication_pointers WHERE channel = ${sqlLiteral(value.channel)} AND (release_publication_pointers.precedence_key > ${sqlLiteral(value.precedenceKey)} OR (release_publication_pointers.precedence_key = ${sqlLiteral(value.precedenceKey)} AND release_publication_pointers.version <> ${sqlLiteral(value.version)}))) ON CONFLICT(channel, version) DO NOTHING RETURNING channel, version, precedence_key, updater_descriptor_key, download_descriptor_key, updater_descriptor_sha256, download_descriptor_sha256, published_at;`;
+}
+
+/**
+ * Claims an immutable version for updater QA only while the channel pointer still equals the
+ * read-only snapshot. It inserts no pointer row and has no UPDATE authority.
+ */
+export function buildQaVersionClaimStatement(candidate, expectedCurrent) {
+  const value = validatePointerCandidate(candidate);
+  let pointerGuard;
+  if (expectedCurrent === null) {
+    pointerGuard = `NOT EXISTS (SELECT 1 FROM release_publication_pointers WHERE channel = ${sqlLiteral(value.channel)})`;
+  } else {
+    if (!expectedCurrent || typeof expectedCurrent !== "object" || Array.isArray(expectedCurrent)) {
+      throw new Error("expected release pointer is invalid");
+    }
+    const expected = validatePointerCandidate({
+      channel: expectedCurrent.channel,
+      version: expectedCurrent.version,
+      updaterDescriptorKey: expectedCurrent.updater_descriptor_key,
+      downloadDescriptorKey: expectedCurrent.download_descriptor_key,
+      updaterDescriptorSha256: expectedCurrent.updater_descriptor_sha256,
+      downloadDescriptorSha256: expectedCurrent.download_descriptor_sha256,
+      publishedAt: expectedCurrent.published_at,
+    });
+    if (expected.channel !== value.channel) throw new Error("expected release pointer channel is invalid");
+    const expectedPrecedence = expected.precedenceKey;
+    if (expectedCurrent.precedence_key !== expectedPrecedence) {
+      throw new Error("expected release pointer precedence is invalid");
+    }
+    pointerGuard = `EXISTS (SELECT 1 FROM release_publication_pointers AS pointers JOIN release_publication_versions AS versions ON versions.channel = pointers.channel AND versions.version = pointers.version AND versions.precedence_key = pointers.precedence_key WHERE pointers.channel = ${sqlLiteral(value.channel)} AND pointers.version = ${sqlLiteral(expected.version)} AND pointers.precedence_key = ${sqlLiteral(expectedPrecedence)} AND versions.updater_descriptor_key = ${sqlLiteral(expected.updaterDescriptorKey)} AND versions.download_descriptor_key = ${sqlLiteral(expected.downloadDescriptorKey)} AND versions.updater_descriptor_sha256 = ${sqlLiteral(expected.updaterDescriptorSha256)} AND versions.download_descriptor_sha256 = ${sqlLiteral(expected.downloadDescriptorSha256)} AND versions.published_at = ${sqlLiteral(expected.publishedAt)})`;
+  }
+  const columns = [
+    "channel",
+    "version",
+    "precedence_key",
+    "updater_descriptor_key",
+    "download_descriptor_key",
+    "updater_descriptor_sha256",
+    "download_descriptor_sha256",
+    "published_at",
+  ];
+  const values = [
+    sqlLiteral(value.channel),
+    sqlLiteral(value.version),
+    sqlLiteral(value.precedenceKey),
+    sqlLiteral(value.updaterDescriptorKey),
+    sqlLiteral(value.downloadDescriptorKey),
+    sqlLiteral(value.updaterDescriptorSha256),
+    sqlLiteral(value.downloadDescriptorSha256),
+    sqlLiteral(value.publishedAt),
+  ];
+  return `INSERT INTO release_publication_versions (${columns.join(", ")}) SELECT ${values.join(", ")} WHERE ${pointerGuard} ON CONFLICT(channel, version) DO NOTHING RETURNING channel, version, precedence_key, updater_descriptor_key, download_descriptor_key, updater_descriptor_sha256, download_descriptor_sha256, published_at;`;
 }
 
 export function buildPointerAdvanceStatement(candidate, expectedCurrent = undefined) {
@@ -342,6 +423,16 @@ export function publicationRowProblems(row, candidate) {
   return Object.entries(exact).every(([key, expected]) => row[key] === expected)
     ? []
     : [`D1 release pointer already claims ${row.version} with different immutable descriptors`];
+}
+
+/** The QA staging lane needs an exact immutable version row, never an older-compatible pointer. */
+export function exactPublicationRowProblems(row, candidate) {
+  const value = validatePointerCandidate(candidate);
+  if (row === null || row === undefined) return ["D1 immutable release version row is missing"];
+  if (row?.channel !== value.channel || row?.version !== value.version) {
+    return ["D1 immutable release version row names a different release"];
+  }
+  return publicationRowProblems(row, value);
 }
 
 export function pointerAdvanceProblems({

@@ -360,6 +360,8 @@ export function publicSigningProblems(build) {
     compiledProbe?.status !== "verified" ||
     compiledProbe?.method !== "build_info_probe_v1" ||
     compiledProbe?.schemaVersion !== 1 ||
+    compiledProbe?.version !== build.version ||
+    compiledProbe?.channel !== build.compiledChannel ||
     compiledProbe?.testHooks !== false
   ) {
     problems.push("public Windows releases require the exact production binary probe with test hooks disabled");

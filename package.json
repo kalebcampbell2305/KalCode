@@ -33,6 +33,7 @@
     "release:verify": "node tooling/release/verify-windows.mjs",
     "release:publish": "node tooling/release/publish.mjs",
     "release:publish:dry-run": "node tooling/release/publish.mjs --dry-run",
+    "release:stage-updater-qa": "node tooling/release/stage-updater-qa.mjs",
     "release:smoke:local": "node tooling/release/smoke-local.mjs"
   },
   "devDependencies": {

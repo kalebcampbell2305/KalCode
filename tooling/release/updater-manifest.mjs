@@ -3,6 +3,7 @@ import { createReadStream } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { basename } from "node:path";
 import { validateMacBuildRecord } from "./macos-contract.mjs";
+import { semverPrecedenceKey } from "./publication-safety.mjs";
 import { validateCompiledChannel } from "./release-channel.mjs";
 import { publicSigningProblems, publicVerificationProblems, updaterSigningEvidenceIsExact } from "./signing.mjs";
 
@@ -24,9 +25,137 @@ const MINISIGN_PUBLIC_KEY_BYTES = 42;
 const MINISIGN_SIGNATURE_BYTES = 74;
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 const TARGET_FORMATS = Object.freeze({ "windows-x86_64": "nsis", "darwin-aarch64": "dmg" });
+const QA_CHECKS = Object.freeze([
+  "install",
+  "cleanInstall",
+  "launch",
+  "auth",
+  "providers",
+  "accountIsolation",
+  "kalvoice",
+  "browser",
+  "workspace",
+  "sleepWake",
+]);
+const QA_SAFEGUARDS = Object.freeze([
+  "authenticationBypassed",
+  "cacheSeeded",
+  "fixtureOnly",
+  "testHooks",
+  "tlsBypassed",
+]);
 
 function fail(message) {
   throw new Error(`updater manifest blocked: ${message}`);
+}
+
+function exactKeys(value, keys) {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort())
+  );
+}
+
+function releaseIdentityProblems(value, expected, label) {
+  const problems = [];
+  if (!exactKeys(value, ["commit", "sha256", "version"])) problems.push(`${label} identity has unexpected fields`);
+  if (!VERSION.test(value?.version ?? "")) problems.push(`${label} version is invalid`);
+  if (!COMMIT.test(value?.commit ?? "")) problems.push(`${label} commit is invalid`);
+  if (!SHA256.test(value?.sha256 ?? "")) problems.push(`${label} SHA-256 is invalid`);
+  if (
+    expected &&
+    (value?.version !== expected.version || value?.commit !== expected.commit || value?.sha256 !== expected.sha256)
+  ) {
+    problems.push(`${label} does not bind the exact release`);
+  }
+  return problems;
+}
+
+/**
+ * Validates customer-device QA separately from package signing. Preliminary evidence is accepted
+ * only by the unlisted updater-QA staging tool; the normal publisher requires the complete
+ * lower-to-newer, rollback and re-update sequence.
+ */
+export function updaterQaProblems(record, expected, phase = "final") {
+  const problems = [];
+  if (
+    !exactKeys(record, [
+      "channel",
+      "checks",
+      "release",
+      "safeguards",
+      "schemaVersion",
+      "status",
+      "target",
+      "updateTrial",
+    ])
+  ) {
+    return ["updater QA record has unexpected fields"];
+  }
+  if (record.schemaVersion !== 2) problems.push("updater QA schema is unsupported");
+  if (!Object.hasOwn(TARGET_FORMATS, record.target) || record.target !== expected?.target) {
+    problems.push("updater QA target does not match the release");
+  }
+  if (!CHANNELS.has(record.channel) || record.channel !== expected?.channel) {
+    problems.push("updater QA channel does not match the release");
+  }
+  problems.push(...releaseIdentityProblems(record.release, expected?.release, "updater QA release"));
+  if (!exactKeys(record.checks, QA_CHECKS) || QA_CHECKS.some((key) => record.checks?.[key] !== true)) {
+    problems.push("updater QA product checks are incomplete");
+  }
+  if (!exactKeys(record.safeguards, QA_SAFEGUARDS) || QA_SAFEGUARDS.some((key) => record.safeguards?.[key] !== false)) {
+    problems.push("updater QA used a test hook, cache seed, bypass, or fixture-only proof");
+  }
+  if (phase === "preliminary") {
+    if (record.channel !== "stable") problems.push("preliminary updater QA staging is Stable-only");
+    if (record.status !== "preliminary-passed" || record.updateTrial !== null) {
+      problems.push("preliminary updater QA must leave the real update trial pending");
+    }
+    return problems;
+  }
+  if (phase !== "final") return ["updater QA validation phase is invalid"];
+  if (record.status !== "passed") problems.push("completed updater QA is required");
+  const trial = record.updateTrial;
+  if (!exactKeys(trial, ["baseline", "candidate", "method", "outcomes"])) {
+    problems.push("completed updater QA trial is invalid");
+    return problems;
+  }
+  const expectedMethod =
+    record.channel === "stable" ? "public-unlisted-immutable-version-v1" : "signed-local-candidate-v1";
+  if (trial.method !== expectedMethod) {
+    problems.push("updater QA did not use the required exact signed candidate method");
+  }
+  problems.push(...releaseIdentityProblems(trial.baseline, null, "updater QA baseline"));
+  problems.push(...releaseIdentityProblems(trial.candidate, expected?.release, "updater QA candidate"));
+  try {
+    if (semverPrecedenceKey(trial.baseline?.version) >= semverPrecedenceKey(trial.candidate?.version)) {
+      problems.push("updater QA baseline is not lower than the candidate");
+    }
+  } catch {
+    problems.push("updater QA trial versions are invalid");
+  }
+  const required = [
+    ["update", trial.baseline, trial.candidate],
+    ["rollback", trial.candidate, trial.baseline],
+    ["reupdate", trial.baseline, trial.candidate],
+  ];
+  if (!Array.isArray(trial.outcomes) || trial.outcomes.length !== required.length) {
+    problems.push("updater QA must prove update, rollback, and re-update exactly once");
+  } else {
+    for (let index = 0; index < required.length; index += 1) {
+      const [step, from, to] = required[index];
+      const outcome = trial.outcomes[index];
+      if (!exactKeys(outcome, ["from", "passed", "step", "to"]) || outcome.step !== step || outcome.passed !== true) {
+        problems.push(`updater QA ${step} outcome is incomplete`);
+        continue;
+      }
+      problems.push(...releaseIdentityProblems(outcome.from, from, `updater QA ${step} source`));
+      problems.push(...releaseIdentityProblems(outcome.to, to, `updater QA ${step} destination`));
+    }
+  }
+  return problems;
 }
 
 function signingEvidenceIsExact(signing) {
@@ -179,6 +308,8 @@ async function createWindowsManifest(
     requestedChannel = build?.requestedReleaseChannel,
     publishedAt,
     notes,
+    qa,
+    qaPhase = "final",
   },
   signatureTarget,
 ) {
@@ -195,10 +326,20 @@ async function createWindowsManifest(
   if (requestedChannel === "stable" && build.version.includes("-")) fail("prerelease versions cannot enter stable");
   if (!COMMIT.test(build?.commit ?? "")) fail("build commit is invalid");
   if (!SHA256.test(build?.sha256 ?? "")) fail("build SHA-256 is invalid");
+  const qaProblems = updaterQaProblems(
+    qa,
+    {
+      target: "windows-x86_64",
+      channel: requestedChannel,
+      release: { version: build.version, commit: build.commit, sha256: build.sha256 },
+    },
+    qaPhase,
+  );
   if (requestedChannel === "stable") {
     const problems = [...publicSigningProblems(build), ...publicVerificationProblems(build, verify)];
+    problems.push(...qaProblems);
     if (problems.length > 0) fail(problems.join("; "));
-  }
+  } else if (qaProblems.length > 0) fail(qaProblems.join("; "));
   if (typeof notes !== "string" || notes.trim().length === 0 || notes.length > 10_000) {
     fail("release notes are required and must be concise");
   }
@@ -248,7 +389,13 @@ async function createWindowsManifest(
 }
 
 /** A v2 feed contains only explicitly supplied, independently verified platform artifacts. */
-export async function createPlatformUpdaterManifest({ artifacts, requestedChannel, publishedAt, notes }) {
+export async function createPlatformUpdaterManifest({
+  artifacts,
+  requestedChannel,
+  publishedAt,
+  notes,
+  qaPhase = "final",
+}) {
   if (
     !Array.isArray(artifacts) ||
     artifacts.length < 1 ||
@@ -272,10 +419,13 @@ export async function createPlatformUpdaterManifest({ artifacts, requestedChanne
       fail("platform artifacts must share an exact version and source commit");
     let artifact;
     if (input.target === "windows-x86_64") {
-      const legacy = await createWindowsManifest({ ...input, requestedChannel, publishedAt, notes }, input.target);
+      const legacy = await createWindowsManifest(
+        { ...input, requestedChannel, publishedAt, notes, qaPhase },
+        input.target,
+      );
       artifact = { ...legacy.platforms[input.target], size: legacy.kalcode.size, sha256: legacy.kalcode.sha256 };
     } else {
-      artifact = await validateMacUpdateArtifact(input, requestedChannel);
+      artifact = await validateMacUpdateArtifact(input, requestedChannel, qaPhase);
     }
     platforms[input.target] = { url: artifact.url, signature: artifact.signature };
     metadata[input.target] = {
@@ -294,7 +444,7 @@ export async function createPlatformUpdaterManifest({ artifacts, requestedChanne
   };
 }
 
-async function validateMacUpdateArtifact(input, channel) {
+async function validateMacUpdateArtifact(input, channel, qaPhase) {
   const { build, verify, qa, artifactPath, artifactKey, signaturePath, publicKeyBase64 } = input;
   validateMacBuildRecord(build, artifactPath);
   if (build.arch !== "arm64" || build.requestedReleaseChannel !== channel)
@@ -325,28 +475,16 @@ async function validateMacUpdateArtifact(input, channel) {
     if (verify[key] !== build[key]) fail("Mac verification does not bind the exact artifact and source");
   }
   // Signing alone does not certify the actual application or its update/recovery path.
-  const requiredChecks = [
-    "install",
-    "launch",
-    "auth",
-    "providers",
-    "accountIsolation",
-    "kalvoice",
-    "browser",
-    "workspace",
-    "sleepWake",
-    "update",
-    "rollback",
-  ];
-  if (
-    qa?.status !== "passed" ||
-    qa.target !== input.target ||
-    qa.version !== build.version ||
-    qa.commit !== build.commit ||
-    qa.sha256 !== build.sha256 ||
-    requiredChecks.some((key) => qa.checks?.[key] !== true)
-  )
-    fail("Mac physical-device QA for the exact artifact is incomplete");
+  const qaProblems = updaterQaProblems(
+    qa,
+    {
+      target: input.target,
+      channel,
+      release: { version: build.version, commit: build.commit, sha256: build.sha256 },
+    },
+    qaPhase,
+  );
+  if (qaProblems.length > 0) fail(`Mac physical-device QA is incomplete: ${qaProblems.join("; ")}`);
   const file = basename(artifactPath ?? "");
   const expectedKey = `releases/updater/${channel}/${build.version}/${build.sha256}/${file}`;
   if (

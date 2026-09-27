@@ -86,14 +86,14 @@ test("the real Windows producer supplies the aggregate publisher's target-and-ch
   assert.match(source, /target: WINDOWS_UPDATER_TARGET,[\s\S]*channel: channel\.requestedReleaseChannel/);
   assert.match(source, /signatureFile: signingMode\.sign \? `\$\{file\}\.windows-x86_64\.sig` : null/);
   assert.match(publishSource, /windowsUpdaterV2Problems\(windows\.build, windows\.verify\)/);
-  assert.match(publishSource, /safeFile \? `\$\{safeFile\}\$\{macMentioned \? "\.windows-x86_64" : ""\}\.sig`/);
+  assert.match(publishSource, /safeFile \? `\$\{safeFile\}\$\{mode === "local" \? "" : "\.windows-x86_64"\}\.sig`/);
   assert.match(
     updaterManifestSource,
     /signatureTarget \? `\$\{file\}\.\$\{signatureTarget\}\.sig` : `\$\{file\}\.sig`/,
   );
   assert.match(
     updaterManifestSource,
-    /createWindowsManifest\(\{ \.\.\.input, requestedChannel, publishedAt, notes \}, input\.target\)/,
+    /createWindowsManifest\([\s\S]*\{ \.\.\.input, requestedChannel, publishedAt, notes, qaPhase \},[\s\S]*input\.target/,
   );
 });
 

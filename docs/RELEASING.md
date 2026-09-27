@@ -34,6 +34,10 @@ commit releases.json, build and deploy the website
 Everything lands in `dist/release/<version>/` (ignored by git): the installer, its detached
 `.sig`, `build.json`, `verify.json`, the website manifest, and the channel updater manifest.
 
+The first real updater certification uses the immutable, pointer-free workflow in
+[`UPDATER_QA_STAGING.md`](UPDATER_QA_STAGING.md). It stages a signed lower version and the exact
+candidate for physical update, rollback and re-update proof without selecting either as Stable.
+
 ### 1. Build
 
 `pnpm release:build --channel stable` refuses to run on a dirty working tree, runs

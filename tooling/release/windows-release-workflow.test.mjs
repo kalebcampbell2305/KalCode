@@ -50,6 +50,8 @@ test("Windows candidate transport carries and authenticates both updater signatu
       status: "verified",
       method: "build_info_probe_v1",
       schemaVersion: 1,
+      version,
+      channel: "stable",
       testHooks: false,
     },
     signing: {

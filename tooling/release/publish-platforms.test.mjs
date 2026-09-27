@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import { buildManifest, validateManifest } from "./manifest.mjs";
-import { pointerAdvanceProblems, resolvePlatformPublicationState } from "./publication-safety.mjs";
+import {
+  pointerAdvanceProblems,
+  resolvePlatformPublicationState,
+  writeFrozenPublicationJson,
+} from "./publication-safety.mjs";
 import { buildPublishPlan, publishedUpdaterProblems, windowsUpdaterV2Problems } from "./publish-plan.mjs";
 
 const VERSION = "1.2.3";
@@ -236,9 +241,17 @@ test("resumable publication state binds the whole ordered artifact set", () => {
         file: windows.file,
         size: 41,
         sha256: WINDOWS_SHA,
+        signatureSha256: windows.signatureSha256,
         builtAt: "2026-09-25T10:00:00.000Z",
       },
-      { target: mac.target, file: mac.file, size: 42, sha256: MAC_SHA, builtAt: "2026-09-25T11:00:00.000Z" },
+      {
+        target: mac.target,
+        file: mac.file,
+        size: 42,
+        sha256: MAC_SHA,
+        signatureSha256: mac.signatureSha256,
+        builtAt: "2026-09-25T11:00:00.000Z",
+      },
     ],
   };
   const first = resolvePlatformPublicationState(null, release, "2026-09-25T12:00:00.000Z");
@@ -257,7 +270,28 @@ test("resumable publication state binds the whole ordered artifact set", () => {
       ),
     /exact platform set/,
   );
+  const replacedSignature = structuredClone(release);
+  replacedSignature.artifacts[0].signatureSha256 = "9".repeat(64);
+  assert.throws(
+    () => resolvePlatformPublicationState(first, replacedSignature, "2026-09-25T13:00:00.000Z"),
+    /exact platform set/,
+  );
   assert.throws(() => resolvePlatformPublicationState(null, release, "2026-09-25T10:30:00.000Z"), /predates/);
+});
+
+test("publication state and generated descriptors are create-once byte identities", () => {
+  const path = join(mkdtempSync(join(tmpdir(), "kalcode-frozen-publication-")), "publication.json");
+  const value = { schemaVersion: 3, publishedAt: "2026-09-25T12:00:00.000Z", signatureSha256: "a".repeat(64) };
+  assert.equal(writeFrozenPublicationJson(path, value), "created");
+  assert.equal(writeFrozenPublicationJson(path, structuredClone(value)), "reused");
+  assert.throws(
+    () => writeFrozenPublicationJson(path, { ...value, publishedAt: "2026-09-25T12:01:00.000Z" }),
+    /different bytes/,
+  );
+  assert.throws(
+    () => writeFrozenPublicationJson(path, { ...value, signatureSha256: "b".repeat(64) }),
+    /different bytes/,
+  );
 });
 
 test("same-version guards compare the complete aggregate, independent of object key order", () => {
@@ -355,6 +389,8 @@ test("the canonical publisher consumes both verified platform packets before its
   assert.match(source, /macos-arm64-build\.json/);
   assert.match(source, /macos-arm64-verify\.json/);
   assert.match(source, /macos-arm64-qa\.json/);
+  assert.match(source, /windows-x86_64-qa\.json/);
+  assert.match(source, /writeFrozenPublicationJson/);
   assert.match(source, /\.windows-x86_64/);
   assert.match(source, /createPlatformUpdaterManifest/);
   assert.match(source, /artifacts:/);

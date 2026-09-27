@@ -419,6 +419,8 @@ const record = {
     status: "verified",
     method: "build_info_probe_v1",
     schemaVersion: buildInfo.schemaVersion,
+    version: buildInfo.version,
+    channel: buildInfo.channel,
     testHooks: buildInfo.testHooks,
   },
   installMode,

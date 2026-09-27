@@ -355,3 +355,29 @@ export function buildPublishPlan({
   }
   return plan;
 }
+
+/**
+ * Plans the unlisted updater-QA objects. It deliberately has no switch for a mutable feed or D1
+ * pointer: every returned key is digest-qualified and safe to expose only by its immutable URL.
+ */
+export function buildUpdaterQaStagePlan(input) {
+  if (input?.channel !== "stable") throw new Error("updater QA staging is Stable-only");
+  const plan = buildPublishPlan({
+    ...input,
+    includeDownloadDescriptor: true,
+    includeUpdater: true,
+    includeImmutableUpdater: true,
+    includeLocalPointer: false,
+  });
+  for (const entry of plan) {
+    if (
+      entry.kind === "local-pointer" ||
+      entry.key === "releases/latest.json" ||
+      entry.key === "releases/updater/stable.json" ||
+      !entry.argv.includes("public, max-age=31536000, immutable")
+    ) {
+      throw new Error("updater QA stage plan contains a mutable publication object");
+    }
+  }
+  return plan;
+}

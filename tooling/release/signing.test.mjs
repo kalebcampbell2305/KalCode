@@ -222,6 +222,8 @@ test("a public release requires valid timestamped installer and application sign
       status: "verified",
       method: "build_info_probe_v1",
       schemaVersion: 1,
+      version: "1.2.3",
+      channel: "stable",
       testHooks: false,
     },
     signing: {
@@ -294,6 +296,15 @@ test("a public release requires valid timestamped installer and application sign
     }).join("\n"),
     /production binary probe/,
   );
+  for (const compiledChannelVerification of [
+    { ...build.compiledChannelVerification, version: "1.2.2" },
+    { ...build.compiledChannelVerification, channel: "beta" },
+  ]) {
+    assert.match(
+      publicSigningProblems({ ...build, compiledChannelVerification }).join("\n"),
+      /production binary probe/,
+    );
+  }
 });
 
 test("signature evidence drops certificate identity details", () => {

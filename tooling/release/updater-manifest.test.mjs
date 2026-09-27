@@ -12,6 +12,51 @@ const commit = "a".repeat(40);
 const artifactBytes = Buffer.from("updater artifact");
 const artifactSha256 = createHash("sha256").update(artifactBytes).digest("hex");
 const guardianSha256 = "c".repeat(64);
+const baselineCommit = "b".repeat(40);
+const baselineSha256 = "d".repeat(64);
+
+function qaEvidence(target, version = "1.2.3", candidateCommit = commit, candidateSha256 = artifactSha256) {
+  const baseline = { version: "1.2.2", commit: baselineCommit, sha256: baselineSha256 };
+  const candidate = { version, commit: candidateCommit, sha256: candidateSha256 };
+  return {
+    schemaVersion: 2,
+    status: "passed",
+    target,
+    channel: "stable",
+    release: candidate,
+    safeguards: {
+      testHooks: false,
+      cacheSeeded: false,
+      authenticationBypassed: false,
+      tlsBypassed: false,
+      fixtureOnly: false,
+    },
+    checks: Object.fromEntries(
+      [
+        "install",
+        "cleanInstall",
+        "launch",
+        "auth",
+        "providers",
+        "accountIsolation",
+        "kalvoice",
+        "browser",
+        "workspace",
+        "sleepWake",
+      ].map((key) => [key, true]),
+    ),
+    updateTrial: {
+      method: "public-unlisted-immutable-version-v1",
+      baseline,
+      candidate,
+      outcomes: [
+        { step: "update", from: baseline, to: candidate, passed: true },
+        { step: "rollback", from: candidate, to: baseline, passed: true },
+        { step: "reupdate", from: baseline, to: candidate, passed: true },
+      ],
+    },
+  };
+}
 
 function signer() {
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
@@ -103,6 +148,8 @@ function evidence(channel = "stable") {
       status: "verified",
       method: "build_info_probe_v1",
       schemaVersion: 1,
+      version: "1.2.3",
+      channel,
       testHooks: false,
     },
   };
@@ -166,7 +213,7 @@ function evidence(channel = "stable") {
       },
     ],
   };
-  return { build, verify };
+  return { build, verify, qa: qaEvidence("windows-x86_64") };
 }
 
 function fixture(channel = "stable") {
@@ -357,6 +404,20 @@ test("a valid signature cannot substitute bytes from a different build record", 
       artifactKey: `releases/updater/stable/1.2.3/${substitutedSha256}/${input.build.file}`,
       build: { ...input.build, sha256: substitutedSha256 },
       verify: { ...input.verify, sha256: substitutedSha256 },
+      qa: {
+        ...input.qa,
+        release: { ...input.qa.release, sha256: substitutedSha256 },
+        updateTrial: {
+          ...input.qa.updateTrial,
+          candidate: { ...input.qa.updateTrial.candidate, sha256: substitutedSha256 },
+          outcomes: input.qa.updateTrial.outcomes.map((outcome) => ({
+            ...outcome,
+            ...(outcome.step === "rollback"
+              ? { from: { ...outcome.from, sha256: substitutedSha256 } }
+              : { to: { ...outcome.to, sha256: substitutedSha256 } }),
+          })),
+        },
+      },
       publishedAt: "2026-09-25T12:00:00.000Z",
       notes: "Release notes.",
     }),
@@ -424,6 +485,40 @@ test("v2 preserves Windows gates and cryptographically binds its platform target
   await assert.rejects(createPlatformUpdaterManifest(options), /selected platform target/);
 });
 
+test("Windows Beta and Dev publication retain exact channel-bound final QA", async () => {
+  for (const channel of ["beta", "dev"]) {
+    const input = fixture(channel);
+    if (channel === "dev") {
+      input.build.compiledChannel = "development";
+      input.build.compiledChannelVerification.channel = "development";
+    }
+    input.qa.channel = channel;
+    input.qa.updateTrial.method = "signed-local-candidate-v1";
+    input.signaturePath = `${input.artifactPath}.windows-x86_64.sig`;
+    writeFileSync(
+      input.signaturePath,
+      signature("1.2.3", artifactBytes, releaseSigner, ["target:windows-x86_64", `channel:${channel}`]),
+    );
+    const manifest = await createPlatformUpdaterManifest({
+      artifacts: [{ ...input, target: "windows-x86_64" }],
+      requestedChannel: channel,
+      publishedAt: "2026-09-25T12:00:00.000Z",
+      notes: "Preview update.",
+    });
+    assert.equal(manifest.kalcode.channel, channel);
+    input.qa.channel = "stable";
+    await assert.rejects(
+      createPlatformUpdaterManifest({
+        artifacts: [{ ...input, target: "windows-x86_64" }],
+        requestedChannel: channel,
+        publishedAt: "2026-09-25T12:00:00.000Z",
+        notes: "Preview update.",
+      }),
+      /channel does not match/,
+    );
+  }
+});
+
 test("v2 rejects missing, duplicate and unsupported platform artifacts", async () => {
   const options = { requestedChannel: "stable", publishedAt: "2026-09-25T12:00:00.000Z", notes: "Update." };
   for (const artifacts of [
@@ -457,6 +552,42 @@ test("v2 rejects a valid cryptographic signature with noncanonical field order",
       notes: "Update.",
     }),
     /canonical order/,
+  );
+});
+
+test("preliminary staging and final publication produce byte-identical candidate descriptors", async () => {
+  const input = fixture();
+  input.signaturePath = `${input.artifactPath}.windows-x86_64.sig`;
+  writeFileSync(
+    input.signaturePath,
+    signature("1.2.3", artifactBytes, releaseSigner, ["target:windows-x86_64", "channel:stable"]),
+  );
+  const preliminary = {
+    ...input.qa,
+    status: "preliminary-passed",
+    updateTrial: null,
+  };
+  const common = {
+    requestedChannel: "stable",
+    publishedAt: "2026-09-25T12:00:00.000Z",
+    notes: "Update.",
+  };
+  const staged = await createPlatformUpdaterManifest({
+    ...common,
+    qaPhase: "preliminary",
+    artifacts: [{ ...input, qa: preliminary, target: "windows-x86_64" }],
+  });
+  const final = await createPlatformUpdaterManifest({
+    ...common,
+    artifacts: [{ ...input, target: "windows-x86_64" }],
+  });
+  assert.equal(`${JSON.stringify(staged, null, 2)}\n`, `${JSON.stringify(final, null, 2)}\n`);
+  await assert.rejects(
+    createPlatformUpdaterManifest({
+      ...common,
+      artifacts: [{ ...input, qa: preliminary, target: "windows-x86_64" }],
+    }),
+    /completed updater QA/,
   );
 });
 
@@ -533,28 +664,7 @@ function macFixture() {
     ticketStapled: true,
     gatekeeperAccepted: true,
   };
-  const qa = {
-    status: "passed",
-    target: "darwin-aarch64",
-    version: build.version,
-    commit,
-    sha256: artifactSha256,
-    checks: Object.fromEntries(
-      [
-        "install",
-        "launch",
-        "auth",
-        "providers",
-        "accountIsolation",
-        "kalvoice",
-        "browser",
-        "workspace",
-        "sleepWake",
-        "update",
-        "rollback",
-      ].map((key) => [key, true]),
-    ),
-  };
+  const qa = qaEvidence("darwin-aarch64");
   return {
     target: "darwin-aarch64",
     build,
@@ -620,7 +730,7 @@ test("v2 Mac feed refuses incomplete signing, physical QA and channel evidence",
       input.qa.checks.kalvoice = false;
     },
     (input) => {
-      input.qa.sha256 = "b".repeat(64);
+      input.qa.release.sha256 = "b".repeat(64);
     },
     (input) => {
       input.build.compiledChannelVerification.testHooks = true;
@@ -638,6 +748,39 @@ test("v2 Mac feed refuses incomplete signing, physical QA and channel evidence",
         publishedAt: "2026-09-25T12:00:00.000Z",
         notes: "Update.",
       }),
+    );
+  }
+});
+
+test("Mac Beta and Dev publication retain exact channel-bound final QA", async () => {
+  for (const channel of ["beta", "dev"]) {
+    const mac = macFixture();
+    mac.build.requestedReleaseChannel = channel;
+    mac.build.compiledChannel = channel === "dev" ? "development" : channel;
+    mac.build.compiledChannelVerification.channel = mac.build.compiledChannel;
+    mac.artifactKey = `releases/updater/${channel}/1.2.3/${artifactSha256}/${mac.build.file}`;
+    writeFileSync(
+      mac.signaturePath,
+      signature("1.2.3", artifactBytes, releaseSigner, ["target:darwin-aarch64", `channel:${channel}`], mac.build.file),
+    );
+    mac.qa.channel = channel;
+    mac.qa.updateTrial.method = "signed-local-candidate-v1";
+    const manifest = await createPlatformUpdaterManifest({
+      artifacts: [mac],
+      requestedChannel: channel,
+      publishedAt: "2026-09-25T12:00:00.000Z",
+      notes: "Preview update.",
+    });
+    assert.equal(manifest.kalcode.channel, channel);
+    mac.qa.channel = "stable";
+    await assert.rejects(
+      createPlatformUpdaterManifest({
+        artifacts: [mac],
+        requestedChannel: channel,
+        publishedAt: "2026-09-25T12:00:00.000Z",
+        notes: "Preview update.",
+      }),
+      /channel does not match/,
     );
   }
 });
