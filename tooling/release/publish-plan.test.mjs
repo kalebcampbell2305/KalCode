@@ -1,11 +1,17 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import {
   boundedJsonFetch,
+  completeBootstrapAuthority,
+  decideBootstrapPointerAction,
+  buildInitialPointerStatement,
   buildPointerAdvanceStatement,
   buildPointerReadStatement,
+  buildVersionReadStatement,
   buildVersionClaimStatement,
   parseD1Rows,
   pointerAdvanceProblems,
@@ -40,10 +46,175 @@ test("publish modes reject typos, duplicates, conflicting modes, and removed byp
   assert.equal(parsePublishMode([]), "remote");
   assert.equal(parsePublishMode(["--dry-run"]), "dry-run");
   assert.equal(parsePublishMode(["--local"]), "local");
+  assert.equal(parsePublishMode(["--bootstrap-authority"]), "bootstrap");
   assert.throws(() => parsePublishMode(["--dryrun"]), /unknown/);
   assert.throws(() => parsePublishMode(["--local", "--local"]), /only once/);
+  assert.throws(() => parsePublishMode(["--bootstrap-authority", "--bootstrap-authority"]), /only once/);
   assert.throws(() => parsePublishMode(["--local", "--dry-run"]), /mutually exclusive/);
+  assert.throws(() => parsePublishMode(["--local", "--bootstrap-authority"]), /mutually exclusive/);
   assert.throws(() => parsePublishMode(["--without-install-test"]), /was removed/);
+});
+
+test("bootstrap resumes from clean N after an exact manifest write and formatter failure", (context) => {
+  const migration = readFileSync(
+    new URL("../../apps/website/migrations/0003_release_publication_pointers.sql", import.meta.url),
+    "utf8",
+  );
+  const db = new DatabaseSync(":memory:");
+  db.exec("PRAGMA foreign_keys = ON;");
+  db.exec(migration);
+  const candidate = Object.freeze({
+    channel: "stable",
+    version: "1.2.3",
+    updaterDescriptorKey: `releases/updater/stable/1.2.3/${"a".repeat(64)}.json`,
+    downloadDescriptorKey: `releases/1.2.3/${"b".repeat(64)}.json`,
+    updaterDescriptorSha256: "a".repeat(64),
+    downloadDescriptorSha256: "b".repeat(64),
+    publishedAt: "2026-09-25T12:00:00.000Z",
+  });
+  const frozenCandidate = JSON.stringify(candidate);
+  const recoveryRoot = mkdtempSync(join(tmpdir(), "kalcode-bootstrap-recovery-"));
+  context.after(() => rmSync(recoveryRoot, { recursive: true, force: true }));
+  const failedWorkspaceManifest = join(recoveryRoot, "failed-workspace", "releases.json");
+  const partialWorkspaceManifest = join(recoveryRoot, "partial-workspace", "releases.json");
+  const freshWorkspaceManifest = join(recoveryRoot, "fresh-workspace", "releases.json");
+  for (const directory of ["failed-workspace", "partial-workspace", "fresh-workspace"]) {
+    mkdirSync(join(recoveryRoot, directory));
+  }
+  const execute = (statement) => db.prepare(statement).all();
+  let pointerReads = 0;
+  const readPointer = () => {
+    pointerReads += 1;
+    return execute(buildPointerReadStatement(candidate.channel));
+  };
+  const events = [];
+  let pointerWrites = 0;
+  let manifestWrites = 0;
+
+  const attempt = ({ failure, manifestPath }) => {
+    const action = decideBootstrapPointerAction(readPointer(), candidate);
+    events.push(`${action}:immutable-readback`);
+    const claimed = execute(buildVersionClaimStatement(candidate));
+    const versionRows =
+      claimed.length > 0 ? claimed : execute(buildVersionReadStatement(candidate.channel, candidate.version));
+    assert.deepEqual(publicationRowProblems(versionRows[0], candidate), []);
+    events.push(`${action}:version-claim`);
+    return completeBootstrapAuthority({
+      action,
+      candidate,
+      initializePointer:
+        action === "initialize"
+          ? () => {
+              pointerWrites += 1;
+              return execute(buildInitialPointerStatement(candidate));
+            }
+          : undefined,
+      readPointer,
+      writeManifest: () => {
+        manifestWrites += 1;
+        if (failure === "partial-write") {
+          writeFileSync(manifestPath, '{"schemaVersion":', "utf8");
+          throw new Error("simulated manifest disk write failure");
+        }
+        writeFileSync(manifestPath, `${JSON.stringify(candidate, null, 2)}\n`, "utf8");
+        if (failure === "formatter") throw new Error("simulated manifest formatter failure");
+        events.push(`${action}:manifest-write`);
+      },
+    });
+  };
+
+  assert.throws(
+    () => attempt({ failure: "formatter", manifestPath: failedWorkspaceManifest }),
+    /simulated manifest formatter failure/,
+  );
+  assert.equal(pointerWrites, 1);
+  assert.equal(readPointer().length, 1);
+  assert.deepEqual(JSON.parse(readFileSync(failedWorkspaceManifest, "utf8")), candidate);
+  const readsBeforeRetry = pointerReads;
+  assert.throws(
+    () => attempt({ failure: "partial-write", manifestPath: partialWorkspaceManifest }),
+    /simulated manifest disk write failure/,
+  );
+  assert.equal(pointerReads - readsBeforeRetry, 2, "resume must preflight and then re-read the exact pointer");
+  assert.equal(readFileSync(partialWorkspaceManifest, "utf8"), '{"schemaVersion":');
+  const readsBeforeFreshRetry = pointerReads;
+  assert.doesNotThrow(() => attempt({ failure: null, manifestPath: freshWorkspaceManifest }));
+  assert.equal(pointerReads - readsBeforeFreshRetry, 2, "fresh retry must re-prove the exact pointer");
+  assert.equal(pointerWrites, 1, "an exact bootstrap retry must not mutate the existing pointer");
+  assert.equal(manifestWrites, 3);
+  assert.deepEqual(events, [
+    "initialize:immutable-readback",
+    "initialize:version-claim",
+    "resume:immutable-readback",
+    "resume:version-claim",
+    "resume:immutable-readback",
+    "resume:version-claim",
+    "resume:manifest-write",
+  ]);
+  assert.deepEqual(JSON.parse(readFileSync(freshWorkspaceManifest, "utf8")), candidate);
+  assert.deepEqual(publicationRowProblems(readPointer()[0], candidate), []);
+  assert.equal(JSON.stringify(candidate), frozenCandidate, "the frozen publication identity must remain unchanged");
+});
+
+test("bootstrap rejects every non-exact existing pointer before publication effects", () => {
+  const candidate = {
+    channel: "stable",
+    version: "1.2.3",
+    updaterDescriptorKey: `releases/updater/stable/1.2.3/${"a".repeat(64)}.json`,
+    downloadDescriptorKey: `releases/1.2.3/${"b".repeat(64)}.json`,
+    updaterDescriptorSha256: "a".repeat(64),
+    downloadDescriptorSha256: "b".repeat(64),
+    publishedAt: "2026-09-25T12:00:00.000Z",
+  };
+  const exact = {
+    channel: candidate.channel,
+    version: candidate.version,
+    precedence_key: semverPrecedenceKey(candidate.version),
+    updater_descriptor_key: candidate.updaterDescriptorKey,
+    download_descriptor_key: candidate.downloadDescriptorKey,
+    updater_descriptor_sha256: candidate.updaterDescriptorSha256,
+    download_descriptor_sha256: candidate.downloadDescriptorSha256,
+    published_at: candidate.publishedAt,
+  };
+  const conflicts = [
+    { ...exact, channel: "beta" },
+    { ...exact, version: "1.2.2", precedence_key: semverPrecedenceKey("1.2.2") },
+    { ...exact, version: "1.2.4", precedence_key: semverPrecedenceKey("1.2.4") },
+    { ...exact, precedence_key: semverPrecedenceKey("1.2.4") },
+    { ...exact, updater_descriptor_key: `releases/updater/stable/1.2.3/${"c".repeat(64)}.json` },
+    { ...exact, download_descriptor_key: `releases/1.2.3/${"c".repeat(64)}.json` },
+    { ...exact, updater_descriptor_sha256: "c".repeat(64) },
+    { ...exact, download_descriptor_sha256: "c".repeat(64) },
+    { ...exact, published_at: "2026-09-25T12:00:01.000Z" },
+    { malformed: true },
+  ];
+  const effects = { uploads: 0, d1Mutations: 0, manifestWrites: 0 };
+  const attempt = (row) => {
+    const action = decideBootstrapPointerAction([row], candidate);
+    effects.uploads += 1;
+    effects.d1Mutations += 1;
+    effects.manifestWrites += 1;
+    return action;
+  };
+  for (const row of conflicts) {
+    assert.throws(() => attempt(row), /bootstrap/);
+    assert.deepEqual(effects, { uploads: 0, d1Mutations: 0, manifestWrites: 0 });
+  }
+  assert.throws(() => decideBootstrapPointerAction([exact, exact], candidate), /multiple rows/);
+  assert.deepEqual(effects, { uploads: 0, d1Mutations: 0, manifestWrites: 0 });
+  assert.equal(decideBootstrapPointerAction([], candidate), "initialize");
+  assert.equal(decideBootstrapPointerAction([exact], candidate), "resume");
+  assert.throws(
+    () =>
+      completeBootstrapAuthority({
+        action: "resume",
+        candidate,
+        initializePointer: () => [],
+        readPointer: () => [exact],
+        writeManifest: () => {},
+      }),
+    /received pointer mutation authority/,
+  );
 });
 
 test("public upload plan contains only digest-qualified immutable objects", () => {

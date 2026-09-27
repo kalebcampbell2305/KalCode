@@ -242,6 +242,22 @@ not enable it automatically. Before the first authoritative signed release, roll
 authority. Never toggle the flag to `false` automatically or in response to catalog errors, because
 that would silently downgrade release authority to mutable legacy objects.
 
+For the first cutover, B is the exact signed-artifact build commit, N is B or its clean
+`docs/releases/`-only publisher descendant, and W is final main with the generated
+`src/data/releases.json` plus `RELEASE_CATALOG_ENABLED=true`. Artifact and final schema-v2 QA
+records remain bound to B. Before W, certify artifacts through their immutable version-specific
+routes. An exact-candidate `--bootstrap-authority` retry may finish the local manifest after a
+post-pointer crash or formatter failure only from a fresh clean checkout at exact N with the
+complete, byte-identical ignored release directory and frozen publication. Preserve or copy any
+external updater-QA receipt separately at its governed external path, and inventory both evidence
+sets. Provision the same locked dependencies and preserve the failed checkout untouched; never
+weaken the clean-tree gate or discard unrelated work. The joined D1 pointer/version row must match
+every authority field, and resume revalidates local and remote bytes without replacing or updating
+that pointer. After W is deployed, the normal publisher from clean N must independently prove the
+mutable Stable download and updater routes and regenerate a manifest byte-equal to W. Keep this
+pre-cutover and post-cutover evidence distinct, and preserve `RELEASE_CATALOG_ENABLED=true` with D1
+authority in every post-cutover rollback.
+
 ```bash
 wrangler d1 create kalcode-web                      # once; put the id in wrangler.jsonc
 wrangler secret put RESEND_API_KEY                  # once; sending-only key for kalcoded.com

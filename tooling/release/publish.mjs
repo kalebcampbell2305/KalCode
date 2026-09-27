@@ -28,6 +28,8 @@ import { expectedMacDmgFile } from "./macos-contract.mjs";
 import { buildManifest, validateManifest } from "./manifest.mjs";
 import {
   boundedJsonFetch,
+  completeBootstrapAuthority,
+  decideBootstrapPointerAction,
   buildInitialPointerStatement,
   buildPointerAdvanceStatement,
   buildPointerReadStatement,
@@ -441,6 +443,7 @@ const reusedUpdaterSignatures = new Set();
 let reuseDownloadDescriptor = false;
 let reuseUpdaterDescriptor = false;
 let authoritativePreviousRow;
+let bootstrapPointerAction = null;
 
 function getR2Object(key, path) {
   return spawnSync(
@@ -468,13 +471,17 @@ async function probeImmutableObject(key, path, expectedSha256, label) {
 if (publishesRemote) {
   try {
     const rows = executeD1(buildPointerReadStatement(channel));
-    if (rows.length > 1) throw new Error("authoritative D1 pointer returned multiple rows");
+    if (!initializesAuthority && rows.length > 1) throw new Error("authoritative D1 pointer returned multiple rows");
     authoritativePreviousRow = rows[0] ?? null;
     if (initializesAuthority) {
-      if (rows.length !== 0) problems.push("release authority bootstrap requires an empty channel");
+      bootstrapPointerAction = decideBootstrapPointerAction(rows, pointerCandidate);
     } else problems.push(...publicationRowProblems(rows[0] ?? null, pointerCandidate));
-  } catch {
-    problems.push("authoritative D1 release pointer is unavailable");
+  } catch (error) {
+    problems.push(
+      initializesAuthority && error instanceof Error && error.message.startsWith("release authority bootstrap")
+        ? error.message
+        : "authoritative D1 release pointer is unavailable",
+    );
   }
   const buckets = spawnSync(process.execPath, [wranglerBin, "r2", "bucket", "list"], {
     ...releaseProcessOptions({ cwd: WEBSITE_DIR, encoding: "utf8" }),
@@ -694,11 +701,39 @@ if (versionRows.length !== 1) fail("authoritative D1 release version could not b
 const versionProblems = publicationRowProblems(versionRows[0], pointerCandidate);
 if (versionProblems.length > 0) fail(versionProblems.join("; "));
 
-const advanced = executeD1(
-  initializesAuthority
-    ? buildInitialPointerStatement(pointerCandidate)
-    : buildPointerAdvanceStatement(pointerCandidate, authoritativePreviousRow),
-);
+if (initializesAuthority) {
+  try {
+    completeBootstrapAuthority({
+      action: bootstrapPointerAction,
+      candidate: pointerCandidate,
+      initializePointer:
+        bootstrapPointerAction === "initialize"
+          ? () => executeD1(buildInitialPointerStatement(pointerCandidate))
+          : undefined,
+      readPointer: () => executeD1(buildPointerReadStatement(pointerCandidate.channel)),
+      writeManifest: () => {
+        if (channel === "stable") {
+          writeJson(WEBSITE_MANIFEST, manifest);
+          run(
+            "pnpm",
+            ["exec", "biome", "format", "--write", WEBSITE_MANIFEST],
+            releaseProcessOptions({ timeout: 60_000 }),
+          );
+        }
+      },
+    });
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+  console.log(
+    bootstrapPointerAction === "resume"
+      ? "Resumed the exact D1 release authority bootstrap after verified publication recovery."
+      : "Initialized the empty D1 release authority from the verified aggregate release.",
+  );
+  process.exit(0);
+}
+
+const advanced = executeD1(buildPointerAdvanceStatement(pointerCandidate, authoritativePreviousRow));
 if (advanced.length !== 1 || advanced[0]?.channel !== pointerCandidate.channel || advanced[0]?.version !== version) {
   const current = executeD1(buildPointerReadStatement(pointerCandidate.channel));
   const reason = publicationRowProblems(current[0] ?? null, pointerCandidate);
@@ -707,15 +742,6 @@ if (advanced.length !== 1 || advanced[0]?.channel !== pointerCandidate.channel |
 const authoritative = executeD1(buildPointerReadStatement(pointerCandidate.channel));
 if (authoritative.length !== 1 || publicationRowProblems(authoritative[0], pointerCandidate).length > 0) {
   fail("authoritative D1 release pointer did not read back exactly");
-}
-
-if (initializesAuthority) {
-  if (channel === "stable") {
-    writeJson(WEBSITE_MANIFEST, manifest);
-    run("pnpm", ["exec", "biome", "format", "--write", WEBSITE_MANIFEST], releaseProcessOptions({ timeout: 60_000 }));
-  }
-  console.log("Initialized the empty D1 release authority from the verified aggregate release.");
-  process.exit(0);
 }
 
 const verificationNonce = encodeURIComponent(updaterDescriptorSha256.slice(0, 16));

@@ -435,6 +435,67 @@ export function exactPublicationRowProblems(row, candidate) {
   return publicationRowProblems(row, value);
 }
 
+/**
+ * Selects the only two safe bootstrap states before any publication write:
+ * an empty channel may be initialized, while an existing channel may only resume the byte- and
+ * field-exact frozen candidate that previously crossed the pointer linearization point.
+ */
+export function decideBootstrapPointerAction(rows, candidate) {
+  validatePointerCandidate(candidate);
+  if (!Array.isArray(rows)) throw new Error("release authority bootstrap pointer result is invalid");
+  if (rows.length > 1) throw new Error("release authority bootstrap pointer returned multiple rows");
+  if (rows.length === 0) return "initialize";
+  const problems = exactPublicationRowProblems(rows[0], candidate);
+  if (problems.length > 0) {
+    throw new Error(`release authority bootstrap cannot resume: ${problems.join("; ")}`);
+  }
+  return "resume";
+}
+
+/**
+ * Completes the pointer-to-manifest bootstrap boundary. A resumed attempt never receives pointer
+ * mutation authority, and both paths re-read the exact joined pointer row before writing the local
+ * manifest. This deliberately leaves an exact pointer recoverable when the manifest write fails.
+ */
+export function completeBootstrapAuthority({ action, candidate, initializePointer, readPointer, writeManifest }) {
+  if (action !== "initialize" && action !== "resume") {
+    throw new Error("release authority bootstrap action is invalid");
+  }
+  for (const [name, operation] of Object.entries({ readPointer, writeManifest })) {
+    if (typeof operation !== "function") throw new Error(`release authority bootstrap ${name} operation is invalid`);
+  }
+  if (action === "initialize" && typeof initializePointer !== "function") {
+    throw new Error("release authority bootstrap initializePointer operation is invalid");
+  }
+  if (action === "resume" && initializePointer !== undefined) {
+    throw new Error("release authority bootstrap resume received pointer mutation authority");
+  }
+  validatePointerCandidate(candidate);
+  if (action === "initialize") {
+    const inserted = initializePointer();
+    if (
+      !Array.isArray(inserted) ||
+      inserted.length !== 1 ||
+      inserted[0]?.channel !== candidate.channel ||
+      inserted[0]?.version !== candidate.version
+    ) {
+      let reason = "authoritative D1 release pointer compare-and-set was rejected";
+      try {
+        decideBootstrapPointerAction(readPointer(), candidate);
+      } catch (error) {
+        reason = error instanceof Error ? error.message : reason;
+      }
+      throw new Error(reason);
+    }
+  }
+  const authoritative = readPointer();
+  if (decideBootstrapPointerAction(authoritative, candidate) !== "resume") {
+    throw new Error("authoritative D1 release pointer did not read back exactly");
+  }
+  writeManifest();
+  return authoritative[0];
+}
+
 export function pointerAdvanceProblems({
   version,
   downloadSha256,

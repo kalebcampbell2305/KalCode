@@ -80,6 +80,19 @@ test("publishing verifies content-addressed objects before atomically advancing 
   assert.match(publishSource, /boundedJsonFetch/);
 });
 
+test("bootstrap retry decides before effects and re-verifies immutable state before manifest completion", () => {
+  const cleanTreeGate = publishSource.indexOf("if (publishesRemote) assertCleanTree");
+  const bootstrapDecision = publishSource.indexOf("decideBootstrapPointerAction(rows, pointerCandidate)");
+  const upload = publishSource.indexOf("for (const upload of uploads)");
+  const immutableReadback = publishSource.indexOf("const finalReadback");
+  const versionClaim = publishSource.indexOf("buildVersionClaimStatement(pointerCandidate)");
+  const bootstrapCompletion = publishSource.indexOf("completeBootstrapAuthority({");
+  const manifestCompletion = publishSource.indexOf("writeManifest:", bootstrapCompletion);
+  assert.ok(cleanTreeGate >= 0 && bootstrapDecision > cleanTreeGate && upload > bootstrapDecision);
+  assert.ok(immutableReadback > upload && versionClaim > immutableReadback);
+  assert.ok(bootstrapCompletion > versionClaim && manifestCompletion > bootstrapCompletion);
+});
+
 test("the real Windows producer supplies the aggregate publisher's target-and-channel-bound signature", () => {
   assert.match(source, /const updaterV2SignaturePath = `\$\{staged\}\.windows-x86_64\.sig`/);
   assert.match(source, /signaturePath: updaterV2SignaturePath,[\s\S]*target: WINDOWS_UPDATER_TARGET/);

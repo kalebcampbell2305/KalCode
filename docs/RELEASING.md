@@ -183,6 +183,36 @@ pnpm --filter @kalcode/website exec wrangler deploy
 curl -sI https://kalcoded.com/download/windows-x64
 ```
 
+The first D1 catalog cutover has three explicit source authorities. **B** is the exact clean commit
+that produced the signed artifacts. **N** is the clean publisher commit: B itself or a descendant
+whose only changes are the matching `docs/releases/` notes. **W** is the reviewed final-main state
+that adds the generated `apps/website/src/data/releases.json` and enables
+`RELEASE_CATALOG_ENABLED=true`. Artifact and schema-v2 QA records stay bound to B; the publisher
+runs from N; the public website is deployed from W.
+
+While the production flag is still `false`, the one-time
+`pnpm release:publish --bootstrap-authority` path may initialize an empty channel only after the
+normal final schema-v2 QA, signing, immutable upload and full readback gates pass. If a crash occurs
+after its exact D1 pointer is inserted but before `releases.json` is committed—including a formatter
+failure after the file write—preserve the failed checkout and resume from a fresh clean checkout at
+exact N. Copy the complete ignored `dist/release/<version>/` directory byte-for-byte: artifacts,
+signatures, build/verify/final-QA records, `publication.json` and its frozen descriptors. Preserve or
+copy any external updater-QA staging receipt separately at its governed external path; inventory and
+verify both without moving the receipt into the release directory. Provision the same locked
+dependencies before retrying. Never bypass the clean-tree gate, alter either evidence set or discard
+unrelated work. Resume requires the joined pointer and immutable version row to match the candidate's
+channel, version, precedence, both descriptor keys, both descriptor SHA-256 values and `publishedAt`;
+it re-verifies every local and remote object and version claim, does not mutate the existing pointer,
+re-reads it exactly, and only then writes the manifest. Any older, newer, malformed or
+same-version-different row fails before publication writes.
+
+Pre-cutover physical QA uses only the version-specific immutable routes. It does not claim that the
+mutable Stable routes are live. After W is deployed and the flag is `true`, run the normal
+idempotent publisher from clean N and require exact public Stable feed, download and updater
+readback. Its regenerated manifest must be byte-equal to the manifest reviewed in W. Bootstrap is
+not a substitute for that post-cutover proof. Rollback after cutover must preserve `true` and the D1
+authority.
+
 `pnpm release:publish --local` uploads only the unsigned development installer and website
 manifest to the local R2 simulation. It never creates an updater feed and leaves the committed
 manifest alone. `pnpm release:smoke:local` then starts
