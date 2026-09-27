@@ -42,7 +42,8 @@ node tooling/release/component-notarize-macos.mjs \
 The second command reads KALCODE_NOTARY_KEYCHAIN_PROFILE, validates exact candidate/ZIP/member
 digests, persists Apple's returned job ID before waiting and reuses it on retries. Ambiguous
 submission outcomes and stale invocation locks fail closed. It requires Accepted, an issue-free
-log binding the exact ZIP SHA-256, and `codesign --verify --strict -R=notarized` on every code member.
+log binding the exact ZIP SHA-256, and
+`codesign -vvvv --verify --strict -R=notarized --check-notarization` on every code member.
 Only then does the local record become release-eligible. The publisher now recognizes this exact
 Mac policy and rejects missing, pending, mismatched or incomplete evidence. Windows signing,
 component-key custody and publisher gates remain authoritative and unchanged.

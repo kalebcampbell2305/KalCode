@@ -156,8 +156,10 @@ export async function notarizeMacRuntime(
     acceptedNotaryLog(log, id);
     if (JSON.parse(log).sha256 !== record.artifact.sha256)
       throw Error("Apple notary log does not bind the exact runtime ZIP digest");
-    // Apple does not support stapling bare command-line tools or dylibs. Verify
-    // the system's notarized requirement on every signed member instead.
+    // Apple creates tickets for standalone binaries but does not support
+    // stapling them. The accepted, issue-free log above binds notarization to
+    // this exact ZIP digest. Opt into Apple's online ticket lookup while
+    // re-verifying every extracted member before recording archive-level proof.
     verifyMacRuntimeDirectory(staging, { runner, requireNotarized: true });
     const verified = {
       ...record,

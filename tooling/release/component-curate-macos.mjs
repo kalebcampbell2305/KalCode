@@ -164,7 +164,9 @@ export function verifyMacRuntimeDirectory(directory, { runner = macProcessRunner
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || Object.keys(parsed).length !== 0)
         throw Error("Mac runtime must not carry entitlement exceptions");
     }
-    if (requireNotarized) runner.run("codesign", ["--verify", "--strict", "-R=notarized", path]);
+    if (requireNotarized) {
+      runner.run("codesign", ["-vvvv", "--verify", "--strict", "-R=notarized", "--check-notarization", path]);
+    }
   }
 }
 

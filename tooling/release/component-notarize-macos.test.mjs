@@ -77,7 +77,12 @@ function fixture(t, options = {}) {
   const runner = {
     run(command, args) {
       calls.push([command, ...args]);
-      if (options.failRequirement && args.includes("-R=notarized")) throw Error("notarized requirement failed");
+      if (options.failStrictSignature && command === "codesign" && args.includes("--strict")) {
+        throw Error("strict signature verification failed");
+      }
+      if (options.failOnlineNotarization && args.includes("--check-notarization")) {
+        throw Error("online notarization verification failed");
+      }
     },
     capture(command, args) {
       calls.push([command, ...args]);
@@ -131,7 +136,17 @@ test("publisher rejects signed-only Mac candidate and accepts only fully bound n
   assert.throws(() => validateMacRuntimePublicationEvidence(f.record, f.artifact, catalog, contract), /not eligible/);
   const accepted = await f.run();
   assert.doesNotThrow(() => validateMacRuntimePublicationEvidence(accepted, f.artifact, catalog, contract));
-  assert.equal(f.calls.filter((c) => c.includes("-R=notarized")).length, 11);
+  // Standalone binaries cannot carry stapled tickets, so codesign must opt into
+  // Apple's online notarization lookup when it evaluates the requirement.
+  const notarizedChecks = f.calls.filter((c) => c.includes("-R=notarized"));
+  assert.equal(notarizedChecks.length, 11);
+  assert.ok(notarizedChecks.every((c) => c.includes("--check-notarization")));
+  assert.equal(
+    f.calls.filter(
+      (c) => c[0] === "codesign" && c.includes("--verify") && c.includes("--strict") && !c.includes("-R=notarized"),
+    ).length,
+    22,
+  );
   for (const patch of [
     { members: [] },
     { releaseEligible: false },
@@ -157,12 +172,13 @@ test("ambiguous submission never silently retries", async (t) => {
   await assert.rejects(f.run(), /ambiguous/);
   assert.equal(f.calls.filter((c) => c[2] === "submit").length, 1);
 });
-test("Apple rejection, issues, wrong artifact log and failed notarized requirement remain ineligible", async (t) => {
+test("Apple rejection, issues, wrong artifact log and failed member verification remain ineligible", async (t) => {
   for (const options of [
     { rejected: true },
     { issues: [{ severity: "warning" }] },
     { wrongLogDigest: true },
-    { failRequirement: true },
+    { failStrictSignature: true },
+    { failOnlineNotarization: true },
   ]) {
     const f = fixture(t, options);
     await assert.rejects(f.run());
