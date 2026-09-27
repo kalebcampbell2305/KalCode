@@ -41,7 +41,7 @@ describe("Account page", () => {
   });
 
   it("treats OWNER as permanent private access without subscription billing", () => {
-    expect(source).toContain("data-owner-access");
+    expect(source).toContain("<p data-owner-access hidden></p>");
     expect(source).toContain("No subscription payment is required");
     expect(source).toContain("billingPortal.hidden = owner");
     expect(source).toContain("ownerNotice.hidden = !owner");
@@ -59,6 +59,7 @@ describe("Account page", () => {
       "activateFree.hidden = true",
       "upgrades.hidden = true",
       "ownerNotice.hidden = true",
+      'ownerNotice.textContent = ""',
       "checkoutClosedNotice.hidden = true",
       "billingPortal.hidden = true",
     ]) {

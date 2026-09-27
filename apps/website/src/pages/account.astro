@@ -59,9 +59,7 @@ const checkoutEnabled = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
               </button>
             ))}
           </div>
-          <p data-owner-access hidden>
-            OWNER access is permanent and includes full access with unlimited KalVoice Requests. No subscription payment is required.
-          </p>
+          <p data-owner-access hidden></p>
           {!checkoutEnabled && <p data-checkout-closed>Paid plans are not open yet. You can activate Free below.</p>}
           <div class="account-actions">
             <button class="button button--primary" type="button" data-activate-free>Activate Free</button>
@@ -555,7 +553,10 @@ const checkoutEnabled = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
     if (usageOutput) usageOutput.textContent = "Usage unavailable";
     if (activateFree) activateFree.hidden = true;
     if (upgrades) upgrades.hidden = true;
-    if (ownerNotice) ownerNotice.hidden = true;
+    if (ownerNotice) {
+      ownerNotice.hidden = true;
+      ownerNotice.textContent = "";
+    }
     if (checkoutClosedNotice) checkoutClosedNotice.hidden = true;
     if (billingPortal) billingPortal.hidden = true;
     const response = await api("/v1/account");
@@ -581,7 +582,12 @@ const checkoutEnabled = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
       if (planOutput) planOutput.textContent = entitlement.entitlement.tier === "max2x" ? "MAX 2X" : entitlement.entitlement.tier.toUpperCase();
       if (upgrades) upgrades.hidden = entitlement.entitlement.tier !== "free";
       const owner = entitlement.entitlement.tier === "owner";
-      if (ownerNotice) ownerNotice.hidden = !owner;
+      if (ownerNotice) {
+        ownerNotice.hidden = !owner;
+        ownerNotice.textContent = owner
+          ? "OWNER access is permanent and includes full access with unlimited KalVoice Requests. No subscription payment is required."
+          : "";
+      }
       if (checkoutClosedNotice) checkoutClosedNotice.hidden = owner;
       if (billingPortal) billingPortal.hidden = owner;
     }
