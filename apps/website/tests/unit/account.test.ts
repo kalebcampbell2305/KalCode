@@ -37,8 +37,35 @@ describe("Account page", () => {
     expect(source).toContain("Confirming your plan…");
     expect(source).toContain("Your paid plan is not active yet.");
     expect(source).not.toContain("Payment received");
-    expect(source).not.toContain("OWNER");
     expect(source).not.toMatch(/>\s*Tokens?\s*</i);
+  });
+
+  it("treats OWNER as permanent private access without subscription billing", () => {
+    expect(source).toContain("data-owner-access");
+    expect(source).toContain("No subscription payment is required");
+    expect(source).toContain("billingPortal.hidden = owner");
+    expect(source).toContain("ownerNotice.hidden = !owner");
+    expect(source).toContain("checkoutClosedNotice.hidden = owner");
+  });
+
+  it("clears every account authority display before refreshing server state", () => {
+    const start = source.indexOf("async function loadAccount");
+    const request = source.indexOf('const response = await api("/v1/account")', start);
+    expect(start).toBeGreaterThan(-1);
+    expect(request).toBeGreaterThan(start);
+    for (const reset of [
+      'planOutput.textContent = "Plan unavailable"',
+      'usageOutput.textContent = "Usage unavailable"',
+      "activateFree.hidden = true",
+      "upgrades.hidden = true",
+      "ownerNotice.hidden = true",
+      "checkoutClosedNotice.hidden = true",
+      "billingPortal.hidden = true",
+    ]) {
+      const resetAt = source.indexOf(reset, start);
+      expect(resetAt, reset).toBeGreaterThan(start);
+      expect(resetAt, reset).toBeLessThan(request);
+    }
   });
 
   it("renders every paid plan from the canonical protocol catalog without hardcoded prices", () => {

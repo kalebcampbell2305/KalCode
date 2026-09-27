@@ -81,6 +81,12 @@ export function SettingsAccountView({ account, usage, busy, error, onManage, onL
           <dt>Dictation</dt>
           <dd>Unlimited</dd>
         </div>
+        {account.tier === "owner" ? (
+          <div>
+            <dt>Billing</dt>
+            <dd>No subscription payment required</dd>
+          </div>
+        ) : null}
       </dl>
       {error ? (
         <p className={styles.error} role="alert">

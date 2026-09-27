@@ -57,4 +57,21 @@ describe("SettingsAccountView", () => {
     expect(onManage).toHaveBeenCalledOnce();
     expect(onLogout).toHaveBeenCalledOnce();
   });
+
+  it("shows OWNER as unlimited private access without subscription billing", () => {
+    render(
+      <SettingsAccountView
+        account={{ ...account, tier: "owner" }}
+        usage={{ ...usage, allowance: null }}
+        busy={false}
+        error={null}
+        onManage={vi.fn()}
+        onLogout={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Owner")).toBeInTheDocument();
+    expect(screen.getByText("Unlimited requests")).toBeInTheDocument();
+    expect(screen.getByText("No subscription payment required")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Manage plan" })).not.toBeInTheDocument();
+  });
 });

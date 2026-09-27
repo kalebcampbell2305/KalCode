@@ -44,6 +44,50 @@ test.describe("Account", () => {
     }
   });
 
+  test("shows OWNER as unlimited private access without billing actions", async ({ page }) => {
+    let billingRequests = 0;
+    await page.route("https://api.kalcoded.com/**", async (route) => {
+      const request = route.request();
+      const origin = request.headers().origin ?? "";
+      const headers = {
+        "access-control-allow-origin": origin,
+        "access-control-allow-credentials": "true",
+        "access-control-allow-headers": "content-type",
+      };
+      if (request.method() === "OPTIONS") {
+        await route.fulfill({ status: 204, headers });
+        return;
+      }
+      const path = new URL(request.url()).pathname;
+      if (path.startsWith("/v1/billing/")) billingRequests += 1;
+      const body =
+        path === "/v1/account"
+          ? { ok: true, account: { email: "owner@example.com", activatedAt: "2026-09-26T00:00:00.000Z" } }
+          : path === "/v1/entitlement"
+            ? { ok: true, entitlement: { tier: "owner" } }
+            : path === "/v1/kalvoice/usage"
+              ? { ok: true, usage: { used: 7, allowance: null, resetsAt: "2026-10-01T00:00:00.000Z" } }
+              : { ok: false, error: "unexpected_test_route" };
+      await route.fulfill({
+        status: body.ok ? 200 : 404,
+        contentType: "application/json",
+        headers,
+        body: JSON.stringify(body),
+      });
+    });
+
+    await page.goto("/account");
+    await expect(page.locator("[data-account-plan]")).toHaveText("OWNER");
+    await expect(page.locator("[data-account-usage]")).toContainText("Unlimited");
+    await expect(page.locator("[data-owner-access]")).toContainText("No subscription payment is required");
+    await expect(page.locator("[data-owner-access]")).toBeVisible();
+    await expect(page.locator("[data-billing-portal]")).toBeHidden();
+    await expect(page.locator("[data-account-upgrades]")).toBeHidden();
+    await expect(page.locator("[data-checkout-closed]")).toBeHidden();
+    await expect(page.locator("[data-activate-free]")).toBeHidden();
+    expect(billingRequests).toBe(0);
+  });
+
   test("does not claim payment from an unconfirmed checkout query flag", async ({ page }) => {
     await page.route("https://api.kalcoded.com/**", (route) =>
       route.fulfill({

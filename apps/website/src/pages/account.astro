@@ -59,10 +59,13 @@ const checkoutEnabled = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
               </button>
             ))}
           </div>
-          {!checkoutEnabled && <p>Paid plans are not open yet. You can activate Free below.</p>}
+          <p data-owner-access hidden>
+            OWNER access is permanent and includes full access with unlimited KalVoice Requests. No subscription payment is required.
+          </p>
+          {!checkoutEnabled && <p data-checkout-closed>Paid plans are not open yet. You can activate Free below.</p>}
           <div class="account-actions">
             <button class="button button--primary" type="button" data-activate-free>Activate Free</button>
-            <button class="button button--secondary" type="button" data-billing-portal>Manage billing</button>
+            <button class="button button--secondary" type="button" data-billing-portal hidden>Manage billing</button>
             <button class="button button--secondary" type="button" data-logout>Sign out</button>
           </div>
           <button class="account-delete" type="button" data-delete-account>Delete account</button>
@@ -346,7 +349,10 @@ const checkoutEnabled = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
   const planOutput = document.querySelector<HTMLElement>("[data-account-plan]");
   const usageOutput = document.querySelector<HTMLElement>("[data-account-usage]");
   const upgrades = document.querySelector<HTMLElement>("[data-account-upgrades]");
+  const ownerNotice = document.querySelector<HTMLElement>("[data-owner-access]");
+  const checkoutClosedNotice = document.querySelector<HTMLElement>("[data-checkout-closed]");
   const activateFree = document.querySelector<HTMLButtonElement>("[data-activate-free]");
+  const billingPortal = document.querySelector<HTMLButtonElement>("[data-billing-portal]");
 
   async function api(path: string, init: RequestInit = {}) {
     try {
@@ -544,6 +550,14 @@ const checkoutEnabled = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
   }
 
   async function loadAccount(): Promise<string | null> {
+    if (emailOutput) emailOutput.textContent = "";
+    if (planOutput) planOutput.textContent = "Plan unavailable";
+    if (usageOutput) usageOutput.textContent = "Usage unavailable";
+    if (activateFree) activateFree.hidden = true;
+    if (upgrades) upgrades.hidden = true;
+    if (ownerNotice) ownerNotice.hidden = true;
+    if (checkoutClosedNotice) checkoutClosedNotice.hidden = true;
+    if (billingPortal) billingPortal.hidden = true;
     const response = await api("/v1/account");
     if (!response?.ok) return null;
     const body = await response.json() as { account: { email: string; activatedAt: string | null } };
@@ -551,8 +565,11 @@ const checkoutEnabled = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
     if (accessControls) accessControls.hidden = true;
     if (summary) summary.hidden = false;
     if (emailOutput) emailOutput.textContent = body.account.email;
-    if (!body.account.activatedAt) return "pending";
-    if (activateFree) activateFree.hidden = true;
+    if (!body.account.activatedAt) {
+      if (activateFree) activateFree.hidden = false;
+      if (checkoutClosedNotice) checkoutClosedNotice.hidden = false;
+      return "pending";
+    }
     const [entitlementResponse, usageResponse] = await Promise.all([
       api("/v1/entitlement"),
       api("/v1/kalvoice/usage"),
@@ -563,6 +580,10 @@ const checkoutEnabled = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
       tier = entitlement.entitlement.tier;
       if (planOutput) planOutput.textContent = entitlement.entitlement.tier === "max2x" ? "MAX 2X" : entitlement.entitlement.tier.toUpperCase();
       if (upgrades) upgrades.hidden = entitlement.entitlement.tier !== "free";
+      const owner = entitlement.entitlement.tier === "owner";
+      if (ownerNotice) ownerNotice.hidden = !owner;
+      if (checkoutClosedNotice) checkoutClosedNotice.hidden = owner;
+      if (billingPortal) billingPortal.hidden = owner;
     }
     if (usageResponse?.ok) {
       const usage = await usageResponse.json() as {

@@ -1,6 +1,8 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { d1AccountStore } from "../../worker/lib/account-store";
 import { d1BillingStore } from "../../worker/lib/billing-store";
+import { resolveEntitlement } from "../../worker/lib/entitlement";
+import { d1Store } from "../../worker/lib/store";
 import type { StripeSubscriptionSnapshot } from "../../worker/lib/stripe";
 import { openDatabase } from "../support/platform";
 import { createMigratedDatabase, removeDatabase } from "../support/wrangler";
@@ -860,6 +862,89 @@ describe("D1 billing authority", () => {
         .prepare("SELECT activated_at FROM accounts WHERE id = 'acct_owner_checkout'")
         .first<{ activated_at: string | null }>(),
     ).toEqual({ activated_at: "2026-09-25T12:00:01.000Z" });
+  });
+
+  it("keeps an operator OWNER grant effective through later Stripe upgrade, downgrade, and cancellation snapshots", async () => {
+    const accountId = "acct_owner_webhook";
+    const customerId = "cus_owner_webhook";
+    const subscriptionId = "sub_owner_webhook";
+    await db
+      .prepare("INSERT INTO accounts (id, email, email_verified_at, created_at) VALUES (?1, ?2, ?3, ?3)")
+      .bind(accountId, "owner-webhook@example.com", T0)
+      .run();
+    const billing = d1BillingStore(db);
+    await billing.reserveCustomer({ accountId, idempotencyKey: "owner_webhook_customer", now: T0 });
+    expect(await billing.bindCustomer(accountId, customerId, T0)).toBe(true);
+
+    async function applySnapshot(
+      status: StripeSubscriptionSnapshot["status"],
+      tier: StripeSubscriptionSnapshot["tier"],
+      now: string,
+      token: string,
+    ) {
+      const lease = await billing.acquireLease({
+        subscriptionId,
+        token,
+        now,
+        expiresAt: new Date(Date.parse(now) + 60_000).toISOString(),
+      });
+      if (!lease) throw new Error("test lease missing");
+      expect(
+        await billing.applySubscription(
+          {
+            id: subscriptionId,
+            customerId,
+            status,
+            tier,
+            periodStart: T0,
+            periodEnd: "2026-10-25T12:00:00.000Z",
+          },
+          lease,
+          now,
+        ),
+      ).toBe(true);
+      await billing.releaseLease(lease);
+    }
+
+    await applySnapshot("canceled", "pro", "2026-09-25T12:00:01.000Z", "lease_owner_canceled_1");
+    await db
+      .prepare(
+        `INSERT INTO entitlement_grants (account_id, tier, source, granted_by, reason, granted_at)
+         VALUES (?1, 'owner', 'grant', 'operator:test', 'owner', ?2)`,
+      )
+      .bind(accountId, "2026-09-25T12:00:02.000Z")
+      .run();
+
+    await applySnapshot("active", "max", "2026-09-25T12:00:03.000Z", "lease_owner_upgrade_01");
+    expect((await resolveEntitlement(d1Store(db), accountId, new Date("2026-09-25T12:00:04.000Z"))).tier).toBe("owner");
+    await applySnapshot("active", "pro", "2026-09-25T12:00:05.000Z", "lease_owner_downgrade1");
+    expect((await resolveEntitlement(d1Store(db), accountId, new Date("2026-09-25T12:00:06.000Z"))).tier).toBe("owner");
+    await applySnapshot("canceled", "pro", "2026-09-25T12:00:07.000Z", "lease_owner_canceled_2");
+
+    expect((await resolveEntitlement(d1Store(db), accountId, new Date("2026-09-25T12:00:08.000Z"))).tier).toBe("owner");
+    expect(
+      await db
+        .prepare(
+          `SELECT tier, source, expires_at, revoked_at, billing_subscription_id
+           FROM entitlement_grants WHERE account_id = ?1 AND tier = 'owner'`,
+        )
+        .bind(accountId)
+        .first(),
+    ).toEqual({
+      tier: "owner",
+      source: "grant",
+      expires_at: null,
+      revoked_at: null,
+      billing_subscription_id: null,
+    });
+    expect(
+      await db
+        .prepare(
+          "SELECT COUNT(*) AS active FROM entitlement_grants WHERE billing_subscription_id = ?1 AND revoked_at IS NULL",
+        )
+        .bind(subscriptionId)
+        .first(),
+    ).toEqual({ active: 0 });
   });
 
   it("refuses OWNER while a returned Checkout remains open and preserves its cleanup handle", async () => {
