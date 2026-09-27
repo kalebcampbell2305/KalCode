@@ -1,8 +1,6 @@
 //! Optional spoken replies through the operating system's speech synthesis (Windows speech,
 //! macOS AVSpeechSynthesizer via the `tts` crate). Off by default; never a cloud voice.
 
-use std::time::Duration;
-
 /// Speaks short replies.
 pub trait SpeechOutput: Send + Sync {
     /// Whether the OS voice could be initialized on this machine.
@@ -49,8 +47,9 @@ pub use os::OsSpeech;
 mod os {
     use std::sync::Mutex;
     use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+    use std::time::Duration;
 
-    use super::{Duration, SpeechOutput};
+    use super::SpeechOutput;
 
     enum Command {
         Speak(String, Box<dyn FnOnce() + Send>),
