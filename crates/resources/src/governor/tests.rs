@@ -369,16 +369,34 @@ fn shutdown_is_prompt_during_an_idle_wait() {
 
 #[test]
 fn lagging_subscribers_lose_updates_and_history_stays_bounded() {
-    let (probe, _) = probe(|_, _| sample(10.0));
+    let (entered_tx, entered_rx) = std::sync::mpsc::sync_channel(1);
+    let (release_tx, release_rx) = std::sync::mpsc::sync_channel(1);
+    let (probe, _) = probe(move |call, _| {
+        if call == 1 {
+            entered_tx.send(()).expect("first probe entered");
+            release_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("release first probe");
+        }
+        sample(10.0)
+    });
     let clock = Arc::new(ManualClock::racing(Duration::from_secs(120)));
     let config = GovernorConfig {
         history_capacity: 5,
         ..config()
     };
     let handle = Governor::start_with(config, probe, clock).unwrap();
+    let mut release = ProbeRelease(Some(release_tx));
+    let entered = entered_rx.recv_timeout(Duration::from_secs(5));
     let never_read = handle.subscribe(1);
     let dropped = handle.subscribe(4);
     drop(dropped);
+    let released = release.release();
+    assert!(entered.is_ok(), "first probe did not enter: {entered:?}");
+    assert!(
+        released.is_ok(),
+        "first probe was not released: {released:?}"
+    );
     wait_until("samples", Duration::from_secs(10), || seq(&handle) >= 30);
     assert!(handle.stats().dropped_updates > 0);
     assert_eq!(handle.history().len(), 5);
