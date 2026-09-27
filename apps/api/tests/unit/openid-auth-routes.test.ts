@@ -65,6 +65,13 @@ function handoffHref(html: string): string {
     .replaceAll("&gt;", ">");
 }
 
+function expectNeutralHandoffCopy(html: string): void {
+  expect(html).toContain("Opening KalCode&hellip;");
+  expect(html).not.toContain("Signing you in");
+  expect(html).not.toContain("signed in");
+  expect(html).not.toContain("Sign-in complete");
+}
+
 describe("OpenID account auth routes", () => {
   it("creates an explicit desktop provider-bound account-chooser attempt without persisting raw state or nonce", async () => {
     const store = fakeStore();
@@ -655,14 +662,18 @@ describe("OpenID account auth routes", () => {
     expect(canceled.headers.get("cache-control")).toBe("no-store");
     expect(canceled.headers.get("referrer-policy")).toBe("no-referrer");
     expect(canceled.headers.get("x-frame-options")).toBe("DENY");
-    expect(handoffHref(await canceled.text())).toBe(`kalcode://auth/google?error=sign_in_canceled&state=${STATE}`);
+    const canceledHtml = await canceled.text();
+    expect(handoffHref(canceledHtml)).toBe(`kalcode://auth/google?error=sign_in_canceled&state=${STATE}`);
+    expectNeutralHandoffCopy(canceledHtml);
 
     const failed = await auth.callback(
       new Request(`https://api.kalcoded.com/v1/auth/google/callback?error=server_error&state=${STATE}`),
       "google",
     );
     expect(failed.status).toBe(200);
-    expect(handoffHref(await failed.text())).toBe(`kalcode://auth/google?error=sign_in_failed&state=${STATE}`);
+    const failedHtml = await failed.text();
+    expect(handoffHref(failedHtml)).toBe(`kalcode://auth/google?error=sign_in_failed&state=${STATE}`);
+    expectNeutralHandoffCopy(failedHtml);
 
     const hostileCode = '"><img/src=x/onerror=alert(1)>';
     const success = await auth.callback(
@@ -678,7 +689,7 @@ describe("OpenID account auth routes", () => {
     expectedHandoff.searchParams.set("state", STATE);
     expect(handoffHref(html)).toBe(expectedHandoff.toString());
     expect(html).not.toContain("<img");
-    expect(html).not.toContain("signed in");
+    expectNeutralHandoffCopy(html);
     expect(html).not.toMatch(
       /<(?:link|form|iframe)|\bsrc=|\b(?:fetch|XMLHttpRequest|WebSocket|localStorage|sessionStorage)\b/i,
     );
@@ -736,7 +747,7 @@ describe("OpenID account auth routes", () => {
     (revealFallback as unknown as () => void)();
     expect(fallback.hidden).toBe(false);
     expect(html).toContain('<a id="open-kalcode" href="');
-    expect(html).toContain("Signing you in to KalCode&hellip;");
+    expect(html).toContain("Opening KalCode&hellip;");
     expect(html).toContain('<p id="handoff-fallback" hidden>');
     expect(html).toContain('If KalCode does not open, select <a id="open-kalcode"');
     expect(html).toContain(">Open KalCode</a> to finish this sign-in attempt.");

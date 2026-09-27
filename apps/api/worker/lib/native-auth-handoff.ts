@@ -47,7 +47,7 @@ export function nativeAuthHandoff(provider: OpenIdProvider, result: NativeAuthRe
 <body>
 <main>
 <h1>Return to KalCode</h1>
-<p>Signing you in to KalCode&hellip;</p>
+<p>Opening KalCode&hellip;</p>
 <p id="handoff-fallback" hidden>If KalCode does not open, select <a id="open-kalcode" href="${href}">Open KalCode</a> to finish this sign-in attempt.</p>
 <noscript><p>JavaScript is unavailable. Select <a href="${href}">Open KalCode</a> to finish this sign-in attempt.</p></noscript>
 <p>You can close this tab after KalCode opens.</p>
