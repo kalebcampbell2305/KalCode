@@ -38,7 +38,9 @@ Values were traced at release repair commit `91166fa79e0deeb47147a27e43df5c04975
 
 ## Shared architecture and handoff
 
-One confidential registration per provider is sufficient for the existing desktop flow and the browser-session extension under repair. Both use the same API callback. Do not register `kalcode://auth/google` or `kalcode://auth/microsoft` with the providers: those are internal desktop handoffs after the HTTPS callback. The current website baseline has email sign-in only; website social sign-in remains a separate implementation and verification gate.
+One confidential registration per provider is sufficient for desktop and website sessions. Both use the same API callback. Do not register `kalcode://auth/google` or `kalcode://auth/microsoft` with the providers: those are internal desktop handoffs after the HTTPS callback. Website social sign-in is integrated in the release candidate; production deployment and live provider verification remain outstanding.
+
+Owner update: both production registrations now exist. Preserve their current production client IDs. The previous Google client secret was exposed during owner setup and must not be used; the owner is replacing it directly in the encrypted `GOOGLE_OIDC_CLIENT_SECRET` Worker binding. Microsoft client-secret creation/configuration remains owner work unless already completed. Wait for explicit owner confirmation that all four bindings are configured, then inspect binding names only and run production verification. Do not retrieve, print, log, or request secret values.
 
 Store secrets in an owner-controlled password manager or protected local file outside the repository, or set the named Cloudflare bindings directly. Report only the storage location/account or that bindings are configured. No password, secret, private key, or 2FA value is needed in chat. Registration completion permits secure binding, migrations, deployment, and live OAuth verification; it is not itself a successful login proof.
 

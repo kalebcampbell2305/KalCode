@@ -74,4 +74,12 @@ The resource-admission error message now states that a provider could not start 
 
 ## Rollback state
 
-No schema, dependency, credential, production-store, or public-route change is included in this packet. Before integration, discard neither the preserved original worktrees nor release evidence. Revert the bounded repair commit to undo these source changes; do not reset main or later history. Any future signed build must be regenerated from the final verified commit. Main, public release pointers, and deployed versions remain unchanged by this packet.
+The website social packet includes additive API migration 0009 and extends existing auth routes; these changes have not been deployed. No production credential or store was modified by this recovery. Before integration, discard neither the preserved original worktrees nor release evidence. Revert bounded repair commits to undo source changes; do not reset main or later history. For deployed social-auth rollback, stop new website attempts and wait their ten-minute TTL before reverting the API; retain the additive column. Any future signed build must be regenerated from the final verified commit. Main, public release pointers, and deployed versions remain unchanged by this packet.
+
+## Continued closeout
+
+PTY cursor fallback repair `cfb08f6` was inspected and independently reviewed, then harvested as `45bb866`. A rejecting final listener previously left a live cursor-position query unanswered; the production reader now supplies one fallback reply when all listeners reject delivery. The redundant Codex-only watcher was removed. Parent verification passed all 34 PTY tests with zero ignores/failures. The author's production-reader regression first failed, then passed; accepting-view and initially-empty-view cases also passed. The discarded ConPTY child oracle is not counted as a pass because ConPTY consumed the response before child inspection.
+
+Independent adversarial review of website social commit `efc27ff` passed without an actionable source defect. Migration 0009 must precede the API deployment, which must precede the website deployment. Live provider sign-in remains mandatory. The owner reports both provider registrations now exist, but Google secret rotation and confirmation of all four production bindings are pending. Preserve existing client IDs and never use the exposed prior Google secret.
+
+The isolated native E2E fixture packet remains unharvested. Its production-Whisper build and focused account fixture tests passed, but the forced-kill third-launch test now exposes a persistent workspace bootstrap stall after account verification. The Dashboard assertion remains in place; this is a release blocker under investigation, not a timeout waived as success.
