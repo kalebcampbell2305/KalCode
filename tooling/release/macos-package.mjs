@@ -8,14 +8,17 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { join, resolve, sep } from "node:path";
 
 import {
   appVersion,
@@ -92,6 +95,102 @@ function assertPlainNativeBinary(path, label, arch) {
   if (architectures.length !== 1 || architectures[0] !== expectedBinaryArchitecture(arch)) {
     throw new MacReleaseError("helper_architecture_mismatch", `${label} has the wrong architecture.`);
   }
+}
+
+function assertContainedNativeBinary(path, appPath, label, arch) {
+  const realApp = realpathSync(appPath);
+  const realBinary = realpathSync(path);
+  if (!realBinary.startsWith(`${realApp}${sep}`)) {
+    throw new MacReleaseError("unsafe_bundled_member", `${label} escapes the mounted app bundle.`);
+  }
+  assertPlainNativeBinary(path, label, arch);
+}
+
+async function inspectPackagedDmg({ artifactPath, arch, expectedTeamId }) {
+  const workspace = realpathSync(mkdtempSync(join(tmpdir(), "kalcode-macos-package-")));
+  const mountPath = join(workspace, "mount");
+  mkdirSync(mountPath);
+  let attachAttempted = false;
+  let pendingError;
+  let evidence;
+  try {
+    attachAttempted = true;
+    macProcessRunner.run("hdiutil", [
+      "attach",
+      "-readonly",
+      "-nobrowse",
+      "-noautoopen",
+      "-mountpoint",
+      mountPath,
+      artifactPath,
+    ]);
+    const entries = readdirSync(mountPath, { withFileTypes: true });
+    const applications = entries.filter(({ name }) => name.endsWith(".app")).map(({ name }) => name);
+    if (applications.length !== 1 || applications[0] !== "KalCode.app") {
+      throw new MacReleaseError("invalid_dmg_contents", "The DMG must contain exactly one KalCode.app bundle.");
+    }
+    const applicationsLink = join(mountPath, "Applications");
+    const applicationsLinkStat = lstatSync(applicationsLink, { throwIfNoEntry: false });
+    if (!applicationsLinkStat?.isSymbolicLink() || readlinkSync(applicationsLink) !== "/Applications") {
+      throw new MacReleaseError("invalid_dmg_contents", "The DMG must contain the exact Applications link.");
+    }
+    const appPath = join(mountPath, applications[0]);
+    const appStat = lstatSync(appPath);
+    if (!appStat.isDirectory() || appStat.isSymbolicLink()) {
+      throw new MacReleaseError("invalid_app_bundle", "The DMG must contain one plain KalCode.app bundle.");
+    }
+    const realMount = realpathSync(mountPath);
+    if (!realpathSync(appPath).startsWith(`${realMount}${sep}`)) {
+      throw new MacReleaseError("invalid_app_bundle", "The app bundle escapes the mounted DMG.");
+    }
+    const executable = join(appPath, "Contents", "MacOS", MACOS_EXECUTABLE);
+    assertContainedNativeBinary(executable, appPath, "The mounted KalCode executable", arch);
+    macProcessRunner.run("codesign", ["--verify", "--deep", "--strict", "--verbose=2", appPath]);
+    assertProductionCodesign(
+      macProcessRunner.capture("codesign", ["--display", "--verbose=4", appPath], { output: "stderr" }),
+      expectedTeamId,
+    );
+    const helpers = [];
+    for (const helper of MACOS_HELPERS) {
+      const path = join(appPath, "Contents", "MacOS", helper.name);
+      assertContainedNativeBinary(path, appPath, `The mounted ${helper.name} helper`, arch);
+      macProcessRunner.run("codesign", ["--verify", "--strict", "--verbose=2", path]);
+      assertProductionCodesign(
+        macProcessRunner.capture("codesign", ["--display", "--verbose=4", path], { output: "stderr" }),
+        expectedTeamId,
+        helper.identifier,
+      );
+      helpers.push({
+        name: helper.name,
+        identifier: helper.identifier,
+        architecture: arch,
+        sha256: await sha256File(path),
+        signed: true,
+        expectedTeamBound: true,
+        hardenedRuntime: true,
+        timestamped: true,
+      });
+    }
+    evidence = {
+      buildInfoOutput: macProcessRunner.capture(executable, ["--build-info"]),
+      helpers,
+    };
+  } catch (error) {
+    pendingError = error;
+  } finally {
+    let safeToRemoveWorkspace = !attachAttempted;
+    if (attachAttempted) {
+      try {
+        macProcessRunner.run("hdiutil", ["detach", mountPath]);
+        safeToRemoveWorkspace = true;
+      } catch (error) {
+        pendingError ??= error;
+      }
+    }
+    if (safeToRemoveWorkspace) rmSync(workspace, { recursive: true, force: true });
+  }
+  if (pendingError) throw pendingError;
+  return evidence;
 }
 
 function assertToolchain(target, identity) {
@@ -187,7 +286,6 @@ async function main() {
     }
   }
   const bundleDir = join(TARGET_DIR, target, "release", "bundle", "dmg");
-  const builtExecutable = join(TARGET_DIR, target, "release", MACOS_EXECUTABLE);
   const startedAt = Date.now();
   const buildEnv = macSdkBuildEnvironment(
     macBuildEnvironment(
@@ -208,7 +306,6 @@ async function main() {
     throw new MacReleaseError("stale_release_helper", "Remove every previous staged macOS helper before rebuilding.");
   }
   const createdSidecars = [];
-  const builtHelperEvidence = [];
   try {
     mkdirSync(helperDirectory, { recursive: true });
     const helperDirectoryStat = lstatSync(helperDirectory);
@@ -245,16 +342,6 @@ async function main() {
         credentials.teamId,
         helper.identifier,
       );
-      builtHelperEvidence.push({
-        name: helper.name,
-        identifier: helper.identifier,
-        architecture: arch,
-        sha256: await sha256File(helper.sidecar),
-        signed: true,
-        expectedTeamBound: true,
-        hardenedRuntime: true,
-        timestamped: true,
-      });
     }
     macProcessRunner.run("pnpm", macTauriBuildArgs({ target, features }), {
       cwd: ROOT,
@@ -266,11 +353,6 @@ async function main() {
   }
   assertCleanTree("After the macOS release build, the working tree");
   if (headCommit() !== commit) throw new MacReleaseError("head_moved", "HEAD moved during the macOS build.");
-  assertPlainNativeBinary(builtExecutable, "The KalCode release executable", arch);
-  const buildInfo = validateBuildInfo(macProcessRunner.capture(builtExecutable, ["--build-info"]), {
-    version,
-    requestedReleaseChannel: options.requestedReleaseChannel,
-  });
 
   const candidates = existsSync(bundleDir)
     ? readdirSync(bundleDir)
@@ -292,6 +374,15 @@ async function main() {
   }
   mkdirSync(join(outDir, `macos-${arch}-candidate`), { mode: 0o700 });
   copyFileSync(candidates[0], artifactPath, constants.COPYFILE_EXCL);
+  const packagedEvidence = await inspectPackagedDmg({
+    artifactPath,
+    arch,
+    expectedTeamId: credentials.teamId,
+  });
+  const buildInfo = validateBuildInfo(packagedEvidence.buildInfoOutput, {
+    version,
+    requestedReleaseChannel: options.requestedReleaseChannel,
+  });
   const record = {
     schemaVersion: 1,
     kind: "macos-signed-candidate",
@@ -314,7 +405,7 @@ async function main() {
     releaseDescriptorEligible: false,
     releaseDescriptorBlockedReason: "notarization_pending",
     features,
-    helpers: builtHelperEvidence,
+    helpers: packagedEvidence.helpers,
     requestedReleaseChannel: options.requestedReleaseChannel,
     compiledChannel: buildInfo.channel,
     compiledChannelVerification: {

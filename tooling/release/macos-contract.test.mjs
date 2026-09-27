@@ -328,14 +328,15 @@ test("successful DMG cleanup cannot erase the package evidence authority", () =>
 
   assert.match(
     source,
-    /const builtExecutable = join\(TARGET_DIR, target, "release", MACOS_EXECUTABLE\);/,
-    "build-info evidence must come from the durable release executable",
+    /const packagedEvidence = await inspectPackagedDmg\(\{[\s\S]*?artifactPath,[\s\S]*?arch,[\s\S]*?expectedTeamId: credentials\.teamId,[\s\S]*?\}\);/,
+    "build evidence must be extracted from the exact staged DMG after Tauri cleanup",
   );
   assert.match(
     source,
-    /sha256: await sha256File\(helper\.sidecar\)/,
-    "signed helper evidence must be captured before Tauri cleans its temporary bundle inputs",
+    /sha256: await sha256File\(path\)/,
+    "helper evidence must bind the signed helpers mounted from the exact staged DMG",
   );
+  assert.doesNotMatch(source, /sha256: await sha256File\(helper\.sidecar\)/);
   assert.doesNotMatch(
     source,
     /"bundle",\s*"macos",\s*"KalCode\.app"/,
