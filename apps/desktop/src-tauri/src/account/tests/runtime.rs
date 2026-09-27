@@ -15,7 +15,7 @@ use account::model::{
     AccountAuthority, AccountPhase, AccountTier, PendingAuthSecret, PublicAccount, SessionSecret,
 };
 use account::runtime::{AccountRuntime, Clock};
-use account::session_store::{AccountSessionStore, CachedAccountSecret};
+use account::session_store::{ACCOUNT_USAGE_RECEIPT_KEY, AccountSessionStore, CachedAccountSecret};
 use account::social::SocialProvider;
 use kalcode_entitlements::Verifier;
 use kalcode_secure_store::{SecretKey, SecretStore, SecretStoreError, SecretString};
@@ -29,6 +29,7 @@ const FREE_TOKEN: &str = "eyJhbGciOiJFZERTQSIsImtpZCI6InRlc3QtdmVjdG9ycy0xIiwidH
 struct TestStore {
     values: Mutex<HashMap<String, SecretString>>,
     max_utf16_bytes: Option<usize>,
+    reject_set_key: Mutex<Option<String>>,
     set_gate: Mutex<Option<Arc<PollGate>>>,
     delete_gate: Mutex<Option<Arc<PollGate>>>,
 }
@@ -39,6 +40,9 @@ impl SecretStore for TestStore {
     }
 
     fn set(&self, key: &SecretKey, value: &SecretString) -> Result<(), SecretStoreError> {
+        if self.reject_set_key.lock().expect("reject set").as_deref() == Some(key.account()) {
+            return Err(SecretStoreError::Access("credential write refused".into()));
+        }
         if self
             .max_utf16_bytes
             .is_some_and(|limit| value.expose_secret().encode_utf16().count() * 2 > limit)
@@ -1176,6 +1180,105 @@ fn provider_authorization_code_completes_to_owner_and_restores_the_session() {
             .expect("owner request")
             .allowed
     );
+}
+
+#[test]
+fn microsoft_owner_usage_stays_unlimited_when_the_receipt_cache_write_fails() {
+    let api = Arc::new(FakeApi::default());
+    let store = Arc::new(TestStore {
+        max_utf16_bytes: Some(2560),
+        ..TestStore::default()
+    });
+    let account = runtime(api.clone(), store.clone());
+    account
+        .start_social(SocialProvider::Microsoft)
+        .expect("start Microsoft");
+    let pending = AccountSessionStore::new(store.as_ref())
+        .expect("store")
+        .load()
+        .expect("load pending")
+        .expect("pending record")
+        .pending()
+        .cloned()
+        .expect("pending social attempt");
+    api.social_completes
+        .lock()
+        .expect("queue")
+        .push_back(Ok(SocialCompleteResponse {
+            token: signed_in().token,
+            account_id: ACCOUNT_ID.into(),
+            expires_at: "2030-01-01T00:00:00.000Z".into(),
+        }));
+    api.accounts
+        .lock()
+        .expect("queue")
+        .push_back(Ok(api_account(true)));
+    api.entitlements
+        .lock()
+        .expect("queue")
+        .push_back(Ok(EntitlementResponse {
+            token: vector_token("cases", "owner"),
+        }));
+    // Entra authorization codes are long dotted visible-ASCII values.
+    let code = format!("1.AXYA{}.synthetic-entra_code~", "x".repeat(1_400));
+    let mut callback = url::Url::parse("kalcode://auth/microsoft").expect("callback base");
+    callback
+        .query_pairs_mut()
+        .append_pair("code", &code)
+        .append_pair("state", pending.expose_state().expect("state"));
+    let signed_in = account
+        .handle_social_callback_url(callback.as_str())
+        .expect("complete Microsoft authorization code");
+    assert_eq!(signed_in.phase, AccountPhase::Ready);
+    assert_eq!(signed_in.tier, Some(AccountTier::Owner));
+
+    // The receipt credential is only a cache. A refused OS write must not turn a verified
+    // server-authoritative OWNER receipt into "Usage unavailable".
+    *store.reject_set_key.lock().expect("reject set") = Some(ACCOUNT_USAGE_RECEIPT_KEY.into());
+    api.usage_reads
+        .lock()
+        .expect("queue")
+        .push_back(Ok(request_receipt("owner-receipt", true).usage));
+    let usage = account
+        .usage()
+        .expect("verified OWNER usage despite receipt cache write failure");
+    assert_eq!(usage.allowance, None);
+    assert_eq!(usage.used, 12345);
+
+    // The saved session remains authoritative and restores on a cold start.
+    api.accounts
+        .lock()
+        .expect("queue")
+        .push_back(Ok(api_account(true)));
+    api.entitlements
+        .lock()
+        .expect("queue")
+        .push_back(Ok(EntitlementResponse {
+            token: vector_token("cases", "owner"),
+        }));
+    let restored_account = runtime(api.clone(), store.clone());
+    let restored = restored_account.bootstrap().expect("restore session");
+    assert_eq!(restored.phase, AccountPhase::Ready);
+    assert_eq!(restored.tier, Some(AccountTier::Owner));
+    api.usage_reads
+        .lock()
+        .expect("queue")
+        .push_back(Ok(request_receipt("owner-receipt", true).usage));
+    assert_eq!(
+        restored_account
+            .usage()
+            .expect("restored OWNER usage despite receipt cache write failure"),
+        usage
+    );
+    // A malformed or mismatched server receipt still never produces usage.
+    api.usage_reads
+        .lock()
+        .expect("queue")
+        .push_back(Ok(UsageResponse {
+            receipt: "forged.receipt.signature".into(),
+            usage: usage.clone(),
+        }));
+    assert!(restored_account.usage().is_err());
 }
 
 #[test]
