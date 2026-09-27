@@ -85,4 +85,3 @@ jobs:
         run: |
           node tooling/gen-protocol-index.mjs
           git diff --exit-code -- packages/protocol/src/generated
-
