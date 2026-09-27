@@ -144,7 +144,7 @@ pub fn parse_social_callback(raw: &str) -> Result<SocialCallback, SocialCallback
         .filter(|value| valid_opaque(value))
         .ok_or(SocialCallbackError)?;
     match (code, error) {
-        (Some(code), None) if valid_oauth_value(&code) => Ok(SocialCallback::Success {
+        (Some(code), None) if valid_authorization_code(&code) => Ok(SocialCallback::Success {
             provider,
             state,
             code,
@@ -249,10 +249,11 @@ pub fn valid_opaque(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
-fn valid_oauth_value(value: &str) -> bool {
+fn valid_authorization_code(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= MAX_OAUTH_VALUE_LENGTH
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'~' | b'-'))
+        // Keep this identical to the API callback/complete boundary. Provider authorization
+        // codes are opaque visible-ASCII credentials; URL query decoding has already isolated
+        // the exact `code` field, and the value is never logged or rendered.
+        && value.bytes().all(|byte| (b'!'..=b'~').contains(&byte))
 }

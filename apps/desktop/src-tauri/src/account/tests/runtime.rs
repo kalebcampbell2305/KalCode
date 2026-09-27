@@ -993,6 +993,89 @@ fn cold_start_restores_persisted_social_pkce_before_completing_the_callback() {
 }
 
 #[test]
+fn provider_authorization_code_completes_to_owner_and_restores_the_session() {
+    let api = Arc::new(FakeApi::default());
+    let store = Arc::new(TestStore::default());
+    let account = runtime(api.clone(), store.clone());
+    account
+        .start_social(SocialProvider::Google)
+        .expect("start Google");
+    let pending = AccountSessionStore::new(store.as_ref())
+        .expect("store")
+        .load()
+        .expect("load pending")
+        .expect("pending record")
+        .pending()
+        .cloned()
+        .expect("pending social attempt");
+
+    api.social_completes
+        .lock()
+        .expect("queue")
+        .push_back(Ok(SocialCompleteResponse {
+            token: signed_in().token,
+            account_id: ACCOUNT_ID.into(),
+            expires_at: "2030-01-01T00:00:00.000Z".into(),
+        }));
+    api.accounts
+        .lock()
+        .expect("queue")
+        .push_back(Ok(api_account(true)));
+    api.entitlements
+        .lock()
+        .expect("queue")
+        .push_back(Ok(EntitlementResponse {
+            token: vector_token("cases", "owner"),
+        }));
+
+    let code = "4/0AcvDMr-synthetic+provider-code";
+    let mut callback = url::Url::parse("kalcode://auth/google").expect("callback base");
+    callback
+        .query_pairs_mut()
+        .append_pair("code", code)
+        .append_pair("state", pending.expose_state().expect("state"));
+    let signed_in = account
+        .handle_social_callback_url(callback.as_str())
+        .expect("complete provider authorization code");
+    assert_eq!(signed_in.phase, AccountPhase::Ready);
+    assert_eq!(signed_in.tier, Some(AccountTier::Owner));
+    assert_eq!(account.authority(), AccountAuthority::Active);
+
+    assert_eq!(
+        *api.social_complete_calls.lock().expect("social calls"),
+        vec![(
+            SocialProvider::Google,
+            pending.expose_state().expect("state").into(),
+            code.into(),
+            pending.expose_code_verifier().into(),
+            pending.expose_nonce().expect("nonce").into(),
+        )]
+    );
+    let stored = AccountSessionStore::new(store.as_ref())
+        .expect("store")
+        .load()
+        .expect("load session")
+        .expect("stored session");
+    assert!(stored.session().is_some());
+    assert!(stored.pending().is_none());
+    assert!(stored.cached().is_some());
+
+    api.accounts
+        .lock()
+        .expect("queue")
+        .push_back(Ok(api_account(true)));
+    api.entitlements
+        .lock()
+        .expect("queue")
+        .push_back(Ok(EntitlementResponse {
+            token: vector_token("cases", "owner"),
+        }));
+    let restored = runtime(api, store).bootstrap().expect("restore session");
+    assert_eq!(restored.phase, AccountPhase::Ready);
+    assert_eq!(restored.tier, Some(AccountTier::Owner));
+}
+
+#[test]
 fn social_cancel_clears_pending_and_wrong_account_response_fails_closed() {
     let api = Arc::new(FakeApi::default());
     let store = Arc::new(TestStore::default());

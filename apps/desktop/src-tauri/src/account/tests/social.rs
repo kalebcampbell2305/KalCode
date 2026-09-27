@@ -26,6 +26,19 @@ fn callback_parser_accepts_only_exact_provider_bound_shapes_and_redacts_payloads
     assert!(!rendered.contains("one-use-code"));
     assert!(!rendered.contains(STATE));
 
+    let google = parse_social_callback(&format!(
+        "kalcode://auth/google?code=4%2F0AcvDMr-synthetic&state={STATE}"
+    ))
+    .expect("valid percent-encoded Google authorization code");
+    assert!(matches!(
+        google,
+        SocialCallback::Success {
+            provider: SocialProvider::Google,
+            ref code,
+            ..
+        } if code == "4/0AcvDMr-synthetic"
+    ));
+
     assert!(matches!(
         parse_social_callback(&format!(
             "kalcode://auth/microsoft?error=sign_in_canceled&state={STATE}"
@@ -57,6 +70,12 @@ fn callback_parser_rejects_unknown_duplicate_credential_and_ambiguous_payloads()
         format!("kalcode://auth/google?error=access_denied&state={STATE}"),
         format!("kalcode://auth/google?token=bearer&state={STATE}"),
         "kalcode://auth/google?code=code&state=short".into(),
+        format!("kalcode://auth/google?code=contains%20space&state={STATE}"),
+        format!("kalcode://auth/google?code=contains%0Anewline&state={STATE}"),
+        format!(
+            "kalcode://auth/google?code={}&state={STATE}",
+            "x".repeat(2_049)
+        ),
     ] {
         assert!(
             parse_social_callback(&raw).is_err(),
