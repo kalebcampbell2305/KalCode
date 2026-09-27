@@ -425,3 +425,47 @@ regressions, plus this ledger. Unaffected green gates carry forward under explic
 focused final-main shortcut proof binds the integrated source. Existing rollback references remain.
 Production build/signing, notarization/stapling, physical install/update/rollback, installed KalVoice,
 Stable publication, website cutover and live verification remain required. Nothing is SHIPPED.
+### 2026-09-27 — Physical closeout failures and bounded repairs
+
+The 7afdfec source was pushed to the private remote. Both Windows candidate 0.1.5 and private
+0.1.4 baseline were built, timestamp-signed, and independently verified for the installer,
+application, guardian and both updater signatures. They remain preserved diagnostic artifacts.
+They were not published to Stable and do not substitute for rebuilt repaired-source artifacts.
+
+The owner installed 0.1.5 as the standard Windows user, closed the window with X, and initially
+could not reopen it. A process remained briefly; the subsequent redacted profile diagnostic
+found no process and no recorded shutdown-failure events, and a later launch succeeded.
+Thus a permanent cleanup failure is not proven. The concrete lifecycle defect is that the main
+window could be destroyed before bounded ExitRequested cleanup finished, leaving no window for
+the single-instance callback during that interval. Reviewed edbfd91 was harvested as f47d193:
+main close now prevents destruction and invokes the existing bounded exit authority. Duplicate
+requests still coalesce; retry after cleanup denial, ready exit and child-window semantics remain.
+RED1, focused3, desktop production-Whisper lib193, strict Clippy, format and secret scan passed.
+Fresh integrated native execution and physical X/relaunch remain required.
+
+Physical macOS packaging successfully produced the signed DMG, then failed because Tauri had
+removed its temporary bundle/macos/KalCode.app. Reviewed d1fc528+b50c24b were harvested as
+d2027be+edad5a7. Evidence now comes from the exact staged DMG, mounted read-only: contained
+plain app/helpers, architectures, production signatures, team/identifiers/runtime/timestamps,
+actual helper digests, build-info and the exact Applications link are checked. Bounded detach
+must succeed before workspace removal. Canonical candidate verification independently remounts
+and rechecks the completed record. No pre-bundle helper hash assumption remains. Contract
+RED14/1 then GREEN15/0, related37/0 and Biome passed. Two incidental full-tooling failures came
+from absent dependencies in the new worktree; after frozen offline install those exact two
+checks passed. No broad rerun or source workaround was used. Actual repaired packaging remains
+required. Nothing was submitted to Apple or published from the failed package attempt.
+
+Correction to the previous hosted summary: run36332602930 also completed native22/23; provider
+pane creation remained pending after admission/click. Both local full native runs passed that
+case, including unchanged-binary23/23 reproof. Bounded triage found no actionable source defect;
+the original RED trace remains preserved, with no timeout/retry changes or claimed hosted pass.
+The automatic push run36335326373 assigned no runners and executed zero steps because GitHub
+billing/spending admission rejected it. It supplies no test result.
+
+The owner reports a blank browser tab at Google's correct authorization host during installed
+OAuth QA. Native URL validation/opener navigation succeeded; no callback or credential defect
+is yet proven. Browser/profile isolation is pending. No URL query, credentials or account data
+are included in this ledger. Web OAuth/OWNER proofs remain valid; installed handoff is pending.
+Evidence: target/recovery-20260927-macos-package-success, the Windows worker's lifecycle packet,
+target/recovery-20260927-windows-production-7afdfec and the separate redacted owner diagnostic.
+Unchanged prior gates carry forward; affected app/native and packaging gates bind the next main.
