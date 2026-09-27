@@ -91,6 +91,7 @@ fn run() -> Result<(), ()> {
         if observed.state().install_attempt.is_none()
             && observed.state().last_successful_version.as_deref() == Some(&attempt.to_version)
         {
+            remove_verified_previous_app(&attempt, &swap)?;
             return Ok(());
         }
         if child.try_wait().map_err(|_| ())?.is_some() {
@@ -171,6 +172,44 @@ fn verify_swap_inputs(
         return Err(());
     }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn remove_verified_previous_app(
+    attempt: &kalcode_updater::InstallAttempt,
+    swap: &MacSwapAttempt,
+) -> Result<(), ()> {
+    let binding = attempt.binding.as_ref().ok_or(())?;
+    if binding.target != UpdateTarget::DarwinAarch64
+        || digest_file(&app_executable(&swap.staged_app))? != binding.source_sha256
+        || verify_app_identity(&swap.staged_app, &attempt.from_version)?
+            != binding.signing_requirement_sha256
+        || verify_app_identity(&swap.current_app, &attempt.to_version)?
+            != binding.signing_requirement_sha256
+    {
+        return Err(());
+    }
+    kalcode_updater::mac_swap::remove_swapped_out_app(&swap.current_app, &swap.staged_app)
+        .map_err(|_| ())
+}
+
+#[cfg(target_os = "macos")]
+fn remove_verified_failed_app(
+    attempt: &kalcode_updater::InstallAttempt,
+    swap: &MacSwapAttempt,
+) -> Result<(), ()> {
+    let binding = attempt.binding.as_ref().ok_or(())?;
+    if binding.target != UpdateTarget::DarwinAarch64
+        || digest_file(&app_executable(&swap.current_app))? != binding.source_sha256
+        || verify_app_identity(&swap.current_app, &attempt.from_version)?
+            != binding.signing_requirement_sha256
+        || verify_app_identity(&swap.staged_app, &attempt.to_version)?
+            != binding.signing_requirement_sha256
+    {
+        return Err(());
+    }
+    kalcode_updater::mac_swap::remove_swapped_out_app(&swap.current_app, &swap.staged_app)
+        .map_err(|_| ())
 }
 
 #[cfg(target_os = "macos")]
@@ -275,6 +314,17 @@ fn combined_text(output: &Output) -> Result<String, ()> {
     String::from_utf8(bytes).map_err(|_| ())
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn finish_health_rollback(
+    cancel_attempt: impl FnOnce() -> Result<(), ()>,
+    launch_restored: impl FnOnce() -> Result<(), ()>,
+    cleanup_failed: impl FnOnce() -> Result<(), ()>,
+) -> Result<(), ()> {
+    cancel_attempt()?;
+    launch_restored()?;
+    cleanup_failed()
+}
+
 #[cfg(target_os = "macos")]
 fn rollback(
     journal_path: &Path,
@@ -326,11 +376,67 @@ fn rollback(
     {
         return Err(());
     }
-    let mut journal = UpdateJournal::load(journal_path).map_err(|_| ())?;
-    journal
-        .cancel_install_attempt("mac_update_health_check_failed")
-        .map_err(|_| ())?;
-    let restored = launch_app(&swap.current_app)?;
-    drop(restored);
+    finish_health_rollback(
+        || {
+            let mut journal = UpdateJournal::load(journal_path).map_err(|_| ())?;
+            journal
+                .cancel_install_attempt("mac_update_health_check_failed")
+                .map_err(|_| ())
+        },
+        || {
+            let restored = launch_app(&swap.current_app)?;
+            drop(restored);
+            Ok(())
+        },
+        || remove_verified_failed_app(attempt, swap),
+    )?;
     Err(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use super::finish_health_rollback;
+
+    #[test]
+    fn failed_health_rollback_cleans_only_after_cancel_and_relaunch() {
+        for failure in [Some("cancel"), Some("launch"), None] {
+            let order = RefCell::new(Vec::new());
+            let result = finish_health_rollback(
+                || {
+                    order.borrow_mut().push("cancel");
+                    if failure == Some("cancel") {
+                        Err(())
+                    } else {
+                        Ok(())
+                    }
+                },
+                || {
+                    order.borrow_mut().push("launch");
+                    if failure == Some("launch") {
+                        Err(())
+                    } else {
+                        Ok(())
+                    }
+                },
+                || {
+                    order.borrow_mut().push("cleanup");
+                    Ok(())
+                },
+            );
+            if failure.is_some() {
+                assert!(result.is_err());
+            } else {
+                assert!(result.is_ok());
+            }
+            let expected = match failure {
+                Some("cancel") => vec!["cancel"],
+                Some("launch") => vec!["cancel", "launch"],
+                None => vec!["cancel", "launch", "cleanup"],
+                Some(_) => unreachable!(),
+            };
+            assert_eq!(*order.borrow(), expected);
+        }
+    }
 }

@@ -114,6 +114,19 @@ pub fn validate_swap_paths(current: &Path, staged: &Path) -> Result<(), UpdateEr
     if valid { Ok(()) } else { Err(helper_error()) }
 }
 
+/// Removes only the hidden sibling bundle left behind by an already completed app swap.
+/// Callers must first verify which version and signing identity the staged bundle contains.
+pub fn remove_swapped_out_app(current: &Path, staged: &Path) -> Result<(), UpdateError> {
+    validate_swap_paths(current, staged)?;
+    for path in [current, staged] {
+        let metadata = std::fs::symlink_metadata(path).map_err(|_| helper_error())?;
+        if !metadata.is_dir() || metadata.file_type().is_symlink() {
+            return Err(helper_error());
+        }
+    }
+    std::fs::remove_dir_all(staged).map_err(|_| helper_error())
+}
+
 fn helper_error() -> UpdateError {
     UpdateError::new(
         "update_helper_failed",
@@ -138,6 +151,65 @@ mod tests {
         ] {
             assert!(validate_swap_paths(&current, &invalid).is_err());
         }
+    }
+
+    #[test]
+    fn swapped_out_app_removal_preserves_the_installed_app() {
+        let temp = tempfile::tempdir().unwrap();
+        let current = temp.path().join("KalCode.app");
+        let staged = temp.path().join(".KalCode-update-cleanup.app");
+        std::fs::create_dir(&current).unwrap();
+        std::fs::write(current.join("marker"), b"installed").unwrap();
+        std::fs::create_dir_all(staged.join("Contents").join("MacOS")).unwrap();
+        std::fs::write(
+            staged.join("Contents").join("MacOS").join("marker"),
+            b"superseded",
+        )
+        .unwrap();
+
+        remove_swapped_out_app(&current, &staged).unwrap();
+
+        assert_eq!(std::fs::read(current.join("marker")).unwrap(), b"installed");
+        assert!(!staged.exists());
+    }
+
+    #[test]
+    fn swapped_out_app_removal_rejects_unverified_path_shapes() {
+        let temp = tempfile::tempdir().unwrap();
+        let current = temp.path().join("KalCode.app");
+        let staged = temp.path().join(".KalCode-update-cleanup.app");
+        std::fs::create_dir(&current).unwrap();
+        std::fs::write(current.join("marker"), b"installed").unwrap();
+        std::fs::write(&staged, b"not an app bundle").unwrap();
+
+        assert!(remove_swapped_out_app(&current, &current).is_err());
+        assert!(remove_swapped_out_app(&current, &staged).is_err());
+        assert_eq!(std::fs::read(current.join("marker")).unwrap(), b"installed");
+        assert_eq!(std::fs::read(&staged).unwrap(), b"not an app bundle");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn swapped_out_app_removal_never_follows_a_replaced_bundle_link() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let current = temp.path().join("KalCode.app");
+        let staged = temp.path().join(".KalCode-update-cleanup.app");
+        let outside = temp.path().join("outside");
+        std::fs::create_dir(&current).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("keep"), b"outside").unwrap();
+        symlink(&outside, &staged).unwrap();
+
+        assert!(remove_swapped_out_app(&current, &staged).is_err());
+        assert_eq!(std::fs::read(outside.join("keep")).unwrap(), b"outside");
+        assert!(
+            std::fs::symlink_metadata(&staged)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
     }
 
     #[cfg(target_os = "macos")]
