@@ -46,12 +46,15 @@ import {
 import { assertCleanTree, R2_BUCKET, sha256File, WEBSITE_DIR } from "./lib.mjs";
 import { parseD1Rows } from "./publication-safety.mjs";
 import { isMissingR2Object } from "./publish-plan.mjs";
+import { WRANGLER_SINGLE_PUT_MAX_BYTES } from "./r2-multipart-upload.mjs";
 import { releaseProcessOptions } from "./signing.mjs";
 
 const D1_DATABASE = "kalcode-web";
 const CONTRACT_PATH = join(import.meta.dirname, "components", "kalvoice-local-reasoning-v1.json");
 export const COMPONENT_PUBLIC_KEY_PATH = join(import.meta.dirname, "component-public-key.json");
 const wranglerBin = join(WEBSITE_DIR, "node_modules", "wrangler", "bin", "wrangler.js");
+const multipartUploadBin = join(import.meta.dirname, "r2-multipart-upload.mjs");
+const MULTIPART_PROCESS_TIMEOUT_MS = 30 * 60_000;
 const MAX_PACKET_BYTES = 64 * 1024;
 const MAX_PUBLIC_KEY_BYTES = 4 * 1024;
 const MAX_CATALOG_BYTES = 192 * 1024;
@@ -434,9 +437,57 @@ function getR2Object(key, destination) {
   throw new Error("component object readback failed");
 }
 
+function uploadMetadata(upload) {
+  if (!upload || typeof upload !== "object" || Array.isArray(upload)) {
+    throw new Error("component object upload plan is invalid");
+  }
+  const prefix = ["r2", "object", "put", `${R2_BUCKET}/${upload.key}`, "--file", upload.path, "--content-type"];
+  if (
+    !Array.isArray(upload.argv) ||
+    upload.argv.length !== 10 ||
+    prefix.some((value, index) => upload.argv[index] !== value) ||
+    upload.argv[8] !== "--cache-control" ||
+    upload.argv[9] !== "public, max-age=31536000, immutable" ||
+    !["application/jose", "application/octet-stream", "application/zip"].includes(upload.argv[7])
+  ) {
+    throw new Error("component object upload plan is invalid");
+  }
+  return { contentType: upload.argv[7], cacheControl: upload.argv[9] };
+}
+
+export function componentObjectUploadInvocation(upload, sizeBytes) {
+  if (!Number.isSafeInteger(sizeBytes) || sizeBytes < 1) throw new Error("component upload size is invalid");
+  const metadata = uploadMetadata(upload);
+  if (sizeBytes <= WRANGLER_SINGLE_PUT_MAX_BYTES) {
+    return { kind: "wrangler", args: [wranglerBin, ...upload.argv, "--remote"] };
+  }
+  return {
+    kind: "multipart",
+    args: [
+      multipartUploadBin,
+      "--key",
+      upload.key,
+      "--file",
+      upload.path,
+      "--size",
+      String(sizeBytes),
+      "--content-type",
+      metadata.contentType,
+      "--cache-control",
+      metadata.cacheControl,
+    ],
+  };
+}
+
 function putR2Object(upload) {
-  const result = spawnSync(process.execPath, [wranglerBin, ...upload.argv, "--remote"], {
-    ...releaseProcessOptions({ cwd: WEBSITE_DIR, stdio: "inherit" }),
+  const sizeBytes = statSync(upload.path).size;
+  const invocation = componentObjectUploadInvocation(upload, sizeBytes);
+  const result = spawnSync(process.execPath, invocation.args, {
+    ...releaseProcessOptions({
+      cwd: WEBSITE_DIR,
+      stdio: "inherit",
+      ...(invocation.kind === "multipart" ? { timeout: MULTIPART_PROCESS_TIMEOUT_MS } : {}),
+    }),
   });
   if (result.status !== 0) throw new Error(`component object upload failed: ${upload.kind}`);
 }
