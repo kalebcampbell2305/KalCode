@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { type Browser, chromium, type Page } from "@playwright/test";
+import { type LaunchReadinessTimer, waitForLaunchConnection, waitForLaunchReadiness } from "./launchReadiness.ts";
 
 /**
  * Launching and closing the real KalCode binary for end-to-end tests (see app.spec.ts for the
@@ -77,6 +78,19 @@ function isolatedWebviewEnvironment(overrides: Record<string, string>): NodeJS.P
   return childEnvironment;
 }
 
+function launchTimer(milliseconds: number): LaunchReadinessTimer {
+  let handle: ReturnType<typeof setTimeout> | undefined;
+  const elapsed = new Promise<void>((resolveElapsed) => {
+    handle = setTimeout(resolveElapsed, milliseconds);
+  });
+  return {
+    elapsed,
+    cancel: () => {
+      if (handle !== undefined) clearTimeout(handle);
+    },
+  };
+}
+
 export async function launch(dataDir: string, env: Record<string, string> = {}): Promise<Running> {
   prepareAccountFixtureDataDir(dataDir);
   if (!Number.isInteger(PORT) || PORT < 1_024 || PORT > 65_535) {
@@ -97,40 +111,48 @@ export async function launch(dataDir: string, env: Record<string, string> = {}):
   let browser: Browser | null = null;
   try {
     const deadline = Date.now() + 30_000;
-    let connectionError: unknown = null;
-    while (!browser) {
-      try {
-        browser = await chromium.connectOverCDP(`http://127.0.0.1:${PORT}`);
-      } catch (error) {
-        connectionError = error;
-        if (spawnError) throw new Error(`${EXE} could not start`, { cause: spawnError });
-        if (child.exitCode !== null) {
-          throw new Error(`${EXE} exited with code ${String(child.exitCode)} before opening CDP port ${PORT}`, {
-            cause: error,
-          });
-        }
-        if (Date.now() > deadline) {
-          throw new Error(`${EXE} did not open CDP port ${PORT} within 30 seconds`, { cause: connectionError });
-        }
-        await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
-      }
-    }
+    const processProbe = {
+      now: Date.now,
+      timer: launchTimer,
+      startupError: () => spawnError,
+      exitCode: () => child.exitCode,
+    };
+    browser = await waitForLaunchConnection(processProbe, {
+      deadline,
+      processName: EXE,
+      port: PORT,
+      pollMilliseconds: 250,
+      connect: (timeout) => chromium.connectOverCDP(`http://127.0.0.1:${PORT}`, { timeout }),
+      disposeLate: (connection) => connection.close().catch(() => undefined),
+    });
+    const connectedBrowser = browser;
 
-    const deadlineDb = Date.now() + 10_000;
-    while (!existsSync(join(dataDir, "kalcode.db"))) {
-      if (child.exitCode !== null) {
-        throw new Error(`${EXE} exited with code ${String(child.exitCode)} before opening its isolated database`);
-      }
-      if (Date.now() > deadlineDb) {
-        throw new Error(`${EXE} did not use the isolated data folder; build it with --features e2e`);
-      }
-      await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
-    }
-    const context = browser.contexts()[0];
-    if (!context) throw new Error("No WebView2 browser context");
-    let page = context.pages().find((candidate) => !candidate.url().startsWith("devtools"));
-    while (!page) page = await context.waitForEvent("page");
-    return { child, browser, page };
+    const page = await waitForLaunchReadiness<Page>(
+      {
+        ...processProbe,
+        databaseReady: () => existsSync(join(dataDir, "kalcode.db")),
+        candidates: () =>
+          connectedBrowser
+            .contexts()
+            .flatMap((context) => context.pages())
+            .filter((candidate) => !candidate.isClosed() && !candidate.url().startsWith("devtools")),
+        initialized: async (candidate) =>
+          candidate.evaluate(() => {
+            const tauri = (
+              window as unknown as {
+                __TAURI_INTERNALS__?: { invoke?: unknown };
+              }
+            ).__TAURI_INTERNALS__;
+            const root = document.getElementById("root");
+            return (
+              document.readyState !== "loading" && typeof tauri?.invoke === "function" && root?.hasChildNodes() === true
+            );
+          }),
+        candidateValid: (candidate) => !candidate.isClosed() && !candidate.url().startsWith("devtools"),
+      },
+      { deadline, processName: EXE },
+    );
+    return { child, browser: connectedBrowser, page };
   } catch (error) {
     await browser?.close().catch(() => undefined);
     await stopOwnedProcess(child, true);
