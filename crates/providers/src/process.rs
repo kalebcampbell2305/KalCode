@@ -850,6 +850,172 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
+    #[cfg(windows)]
+    const PROCESS_TREE_FIXTURE_ROLE: &str = "KALCODE_PROCESS_TREE_FIXTURE_ROLE";
+    #[cfg(windows)]
+    const PROCESS_TREE_FIXTURE_MARKER: &str = "KALCODE_PROCESS_TREE_FIXTURE_MARKER";
+    #[cfg(windows)]
+    const PROCESS_TREE_TEST: &str =
+        "process::tests::supervised_child_waits_for_job_tree_quiescence_after_root_exit";
+
+    #[cfg(windows)]
+    fn process_tree_fixture_args() -> [OsString; 4] {
+        [
+            "--exact".into(),
+            PROCESS_TREE_TEST.into(),
+            "--nocapture".into(),
+            "--test-threads=1".into(),
+        ]
+    }
+
+    #[cfg(windows)]
+    fn process_tree_descendant_fixture() -> Result<(), String> {
+        let marker = std::env::var_os(PROCESS_TREE_FIXTURE_MARKER)
+            .map(PathBuf::from)
+            .ok_or_else(|| "the descendant marker path is missing".to_owned())?;
+        let pid = std::process::id();
+        let staged = marker.with_extension(format!("{pid}.tmp"));
+        std::fs::write(&staged, pid.to_string())
+            .map_err(|error| format!("couldn't stage the descendant PID: {error}"))?;
+        std::fs::rename(&staged, &marker)
+            .map_err(|error| format!("couldn't publish the descendant PID: {error}"))?;
+
+        // The outer test proves that the supervised root exits while this descendant is still
+        // alive. Only the Job Object may end this process; a normal return would weaken that
+        // quiescence proof into a race against a fixture timeout.
+        loop {
+            thread::park();
+        }
+    }
+
+    #[cfg(windows)]
+    fn process_tree_root_fixture() -> Result<(), String> {
+        use std::os::windows::process::CommandExt;
+
+        let marker = std::env::var_os(PROCESS_TREE_FIXTURE_MARKER)
+            .map(PathBuf::from)
+            .ok_or_else(|| "the descendant marker path is missing".to_owned())?;
+        let executable = std::env::current_exe()
+            .map_err(|error| format!("couldn't resolve the fixture executable: {error}"))?;
+        let mut command = Command::new(executable);
+        command
+            .args(process_tree_fixture_args())
+            .env(PROCESS_TREE_FIXTURE_ROLE, "descendant")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(0x0800_0000);
+        let mut descendant = command
+            .spawn()
+            .map_err(|error| format!("couldn't start the descendant fixture: {error}"))?;
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let readiness = loop {
+            match std::fs::read_to_string(&marker) {
+                Ok(value) => {
+                    let published = value.trim().parse::<u32>().map_err(|error| {
+                        format!("the descendant published an invalid PID: {error}")
+                    });
+                    break published.and_then(|published| {
+                        if published == descendant.id() {
+                            Ok(())
+                        } else {
+                            Err(format!(
+                                "the descendant published PID {published}, expected {}",
+                                descendant.id()
+                            ))
+                        }
+                    });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => break Err(format!("couldn't read descendant readiness: {error}")),
+            }
+            match descendant.try_wait() {
+                Ok(Some(status)) => {
+                    break Err(format!(
+                        "the descendant exited before publishing readiness: {status}"
+                    ));
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    break Err(format!(
+                        "couldn't inspect the descendant before readiness: {error}"
+                    ));
+                }
+            }
+            if Instant::now() >= deadline {
+                break Err("the descendant did not publish readiness within 10 seconds".into());
+            }
+            thread::sleep(Duration::from_millis(15));
+        };
+
+        if let Err(error) = readiness {
+            let kill = descendant.kill();
+            let cleanup_deadline = Instant::now() + Duration::from_secs(5);
+            let cleanup = loop {
+                match descendant.try_wait() {
+                    Ok(Some(_)) => break Ok(()),
+                    Ok(None) if Instant::now() < cleanup_deadline => {
+                        thread::sleep(Duration::from_millis(15));
+                    }
+                    Ok(None) => break Err("descendant cleanup timed out".to_owned()),
+                    Err(cleanup) => {
+                        break Err(format!("couldn't reap the descendant: {cleanup}"));
+                    }
+                }
+            };
+            return Err(format!("{error}; cleanup kill={kill:?}, wait={cleanup:?}"));
+        }
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn windows_process_is_running(
+        tasklist: &std::path::Path,
+        pid: u32,
+        timeout: Duration,
+    ) -> Result<bool, String> {
+        if timeout.is_zero() {
+            return Err(format!("the PID {pid} inspection deadline elapsed"));
+        }
+        let output = run_probe(
+            &ProcessSpec {
+                program: tasklist.to_path_buf(),
+                args: ["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"]
+                    .into_iter()
+                    .map(OsString::from)
+                    .collect(),
+                cwd: None,
+                env: crate::detect::DetectEnv::from_process()
+                    .provider_env(&crate::env::EnvPolicy::BASE),
+            },
+            timeout,
+            true,
+            4 * 1024,
+        )
+        .map_err(|error| format!("couldn't inspect PID {pid}: {error}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "tasklist failed while inspecting PID {pid}: {}",
+                output.status
+            ));
+        }
+        Ok(output.stdout.contains(&format!(",\"{pid}\",")))
+    }
+
+    #[cfg(windows)]
+    fn cleanup_process_tree_fixture(child: &SupervisedChild) -> String {
+        // Test failures must clean the retained exact Job Object even when its root has already
+        // exited. `kill_confirmed` intentionally treats an exited root as terminal after the
+        // platform adapter proves quiescence; this failure cleanup invokes the tree primitive
+        // unconditionally so a broken quiescence implementation cannot orphan the fixture used
+        // to detect that very defect.
+        child.close_stdin();
+        let kill = kill_tree(&mut lock(&child.child));
+        let wait = child.wait_timeout(Duration::from_secs(5));
+        format!("kill={kill:?}, wait={wait:?}")
+    }
+
     fn lines(input: &[u8], max: usize) -> Vec<OutputLine> {
         let mut reader = BufReader::with_capacity(4, Cursor::new(input.to_vec()));
         let mut out = Vec::new();
@@ -862,72 +1028,147 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn supervised_child_waits_for_job_tree_quiescence_after_root_exit() {
+        if let Some(role) = std::env::var_os(PROCESS_TREE_FIXTURE_ROLE) {
+            let result = match role.to_str() {
+                Some("root") => process_tree_root_fixture(),
+                Some("descendant") => process_tree_descendant_fixture(),
+                _ => Err("the process-tree fixture role is invalid".into()),
+            };
+            result.expect("process-tree fixture");
+            return;
+        }
+
         let temp = tempfile::tempdir().expect("temp");
         let marker = temp.path().join("descendant-pid");
-        let marker_literal = marker.to_string_lossy().replace('\'', "''");
         let system_root = std::env::var_os("SystemRoot").expect("SystemRoot");
-        let powershell = std::path::Path::new(&system_root)
+        let tasklist = std::path::Path::new(&system_root)
             .join("System32")
-            .join("WindowsPowerShell")
-            .join("v1.0")
-            .join("powershell.exe");
-        let command = format!(
-            "$p=Start-Process -WindowStyle Hidden -FilePath '{}' -ArgumentList '-NoProfile','-NonInteractive','-Command','Start-Sleep -Seconds 60' -PassThru; [IO.File]::WriteAllText('{}',[string]$p.Id)",
-            powershell.to_string_lossy().replace('\'', "''"),
-            marker_literal,
-        );
-        let env =
+            .join("tasklist.exe");
+        let executable = std::env::current_exe().expect("fixture executable");
+        let mut env =
             crate::detect::DetectEnv::from_process().provider_env(&crate::env::EnvPolicy::BASE);
-        let (child, _lines) = SupervisedChild::spawn(&ProcessSpec {
-            program: powershell,
-            args: vec![
-                "-NoProfile".into(),
-                "-NonInteractive".into(),
-                "-Command".into(),
-                command.into(),
-            ],
+        env.insert(PROCESS_TREE_FIXTURE_ROLE.into(), "root".into());
+        env.insert(
+            PROCESS_TREE_FIXTURE_MARKER.into(),
+            marker.as_os_str().to_owned(),
+        );
+        let (child, lines) = SupervisedChild::spawn(&ProcessSpec {
+            program: executable,
+            args: process_tree_fixture_args().into(),
             cwd: Some(temp.path().to_path_buf()),
             env,
         })
         .expect("supervised root");
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !marker.exists() && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(15));
-        }
-        let descendant_pid = std::fs::read_to_string(&marker)
-            .expect("descendant pid marker")
-            .trim()
-            .parse::<u32>()
-            .expect("descendant pid");
+        let root_pid = child.pid();
 
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let descendant_pid = loop {
+            match std::fs::read_to_string(&marker) {
+                Ok(value) => match value.trim().parse::<u32>() {
+                    Ok(pid) => break Ok(pid),
+                    Err(error) => break Err(format!("invalid descendant PID: {error}")),
+                },
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => break Err(format!("couldn't read descendant readiness: {error}")),
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let inspection = remaining.min(Duration::from_secs(2));
+            match windows_process_is_running(&tasklist, root_pid, inspection) {
+                Ok(true) => {}
+                Ok(false) => match std::fs::read_to_string(&marker) {
+                    Ok(value) => match value.trim().parse::<u32>() {
+                        Ok(pid) => break Ok(pid),
+                        Err(error) => break Err(format!("invalid descendant PID: {error}")),
+                    },
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        break Err("the supervised root exited before descendant readiness".into());
+                    }
+                    Err(error) => {
+                        break Err(format!("couldn't read descendant readiness: {error}"));
+                    }
+                },
+                Err(error) => break Err(error),
+            }
+            if Instant::now() >= deadline {
+                break Err("the descendant did not publish readiness within 10 seconds".into());
+            }
+            thread::sleep(Duration::from_millis(15));
+        };
+        let descendant_pid = match descendant_pid {
+            Ok(pid) => pid,
+            Err(error) => {
+                let cleanup = cleanup_process_tree_fixture(&child);
+                let output: Vec<_> = lines.try_iter().take(8).collect();
+                panic!(
+                    "{error}; root stderr={}; root output={output:?}; cleanup {cleanup}",
+                    child.stderr_tail()
+                );
+            }
+        };
+
+        let root_exit_deadline = Instant::now() + Duration::from_secs(10);
+        let root_first_exit = loop {
+            let root_timeout = root_exit_deadline
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_secs(2));
+            let root_running = windows_process_is_running(&tasklist, root_pid, root_timeout);
+            let descendant_timeout = root_exit_deadline
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_secs(2));
+            let descendant_running =
+                windows_process_is_running(&tasklist, descendant_pid, descendant_timeout);
+            match (root_running, descendant_running) {
+                (Ok(false), Ok(true)) => break Ok(()),
+                (Ok(_), Ok(false)) => {
+                    break Err("the descendant exited before its supervised root".to_owned());
+                }
+                (Err(error), _) | (_, Err(error)) => break Err(error),
+                (Ok(true), Ok(true)) => {}
+            }
+            if Instant::now() >= root_exit_deadline {
+                break Err("the supervised root did not exit within 10 seconds".into());
+            }
+            thread::sleep(Duration::from_millis(15));
+        };
+        if let Err(error) = root_first_exit {
+            let cleanup = cleanup_process_tree_fixture(&child);
+            let output: Vec<_> = lines.try_iter().take(8).collect();
+            panic!(
+                "{error}; root stderr={}; root output={output:?}; cleanup {cleanup}",
+                child.stderr_tail()
+            );
+        }
+
+        let status = match child.wait_timeout(Duration::from_secs(10)) {
+            Ok(Some(status)) => status,
+            outcome => {
+                let cleanup = cleanup_process_tree_fixture(&child);
+                panic!(
+                    "the exited root and its descendant job did not quiesce: {outcome:?}; cleanup {cleanup}"
+                );
+            }
+        };
+        let output: Vec<_> = lines.try_iter().take(8).collect();
         assert!(
-            child
-                .wait_timeout(Duration::from_secs(10))
-                .expect("job wait")
-                .is_some(),
-            "the exited root and its descendant job must quiesce"
+            status.success(),
+            "the supervised root failed: {status}; stderr={}; output={output:?}",
+            child.stderr_tail()
         );
-        let tasklist = std::path::Path::new(&system_root)
-            .join("System32")
-            .join("tasklist.exe");
-        use std::os::windows::process::CommandExt;
-        let mut tasklist_command = Command::new(tasklist);
-        tasklist_command.creation_flags(0x0800_0000);
-        let output = tasklist_command
-            .args([
-                "/FI",
-                &format!("PID eq {descendant_pid}"),
-                "/NH",
-                "/FO",
-                "CSV",
-            ])
-            .output()
-            .expect("tasklist");
-        let listing = String::from_utf8_lossy(&output.stdout);
-        assert!(
-            !listing.contains(&format!(",\"{descendant_pid}\",")),
-            "descendant remained alive after the supervised root exited: {listing}"
-        );
+        match windows_process_is_running(&tasklist, descendant_pid, Duration::from_secs(2)) {
+            Ok(false) => {}
+            Ok(true) => {
+                let cleanup = cleanup_process_tree_fixture(&child);
+                panic!(
+                    "descendant {descendant_pid} remained alive after Job Object quiescence; cleanup {cleanup}"
+                );
+            }
+            Err(error) => {
+                let cleanup = cleanup_process_tree_fixture(&child);
+                panic!(
+                    "couldn't prove descendant {descendant_pid} quiescence: {error}; cleanup {cleanup}"
+                );
+            }
+        }
     }
 
     #[test]
