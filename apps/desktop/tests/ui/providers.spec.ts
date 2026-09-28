@@ -118,9 +118,10 @@ test.describe("providers", () => {
 
     await work.getByRole("button", { name: "Sign in Work" }).click();
     await expect(work.getByText("Signed in", { exact: true })).toBeVisible();
-    await work.getByRole("button", { name: "Make Work default" }).click();
+    await work.getByRole("button", { name: "Set Work as default" }).click();
     await expect(work.getByText("Default", { exact: true })).toBeVisible();
 
+    await work.getByRole("button", { name: "Manage Work" }).click();
     await work.getByRole("button", { name: "Rename Work" }).click();
     await work.getByLabel("Account name for Work").fill("Work profile");
     await work.getByRole("button", { name: "Save account name" }).click();

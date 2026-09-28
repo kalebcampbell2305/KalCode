@@ -133,3 +133,69 @@
     flex-direction: column;
   }
 }
+
+/* What uses the account: labelled counts, never colour alone. */
+.usage {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2) var(--space-3);
+  margin: 0;
+  padding: var(--space-2) 0;
+  border-block: 1px solid var(--color-border-subtle);
+  font-size: var(--type-small);
+}
+
+.usage > div {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+
+.usage dt {
+  color: var(--color-text-muted);
+}
+
+.usage dd {
+  margin: 0;
+  overflow: hidden;
+  color: var(--color-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.manage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px dashed var(--color-border-subtle);
+}
+
+.chevron,
+.chevronOpen {
+  width: 0.875rem;
+  height: 0.875rem;
+  transition: transform var(--dur-fast) var(--ease-standard);
+}
+
+.chevronOpen {
+  transform: rotate(180deg);
+}
+
+.connectForm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-lit-soft);
+  border-radius: var(--radius-md);
+  background: var(--color-accent-soft);
+}
+
+.connectForm > :first-child {
+  flex: 1 1 18rem;
+  min-width: 0;
+}

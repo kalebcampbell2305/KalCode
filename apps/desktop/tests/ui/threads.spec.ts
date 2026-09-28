@@ -80,14 +80,14 @@ test.describe("threads", () => {
 
     // Defaults: first provider, provider's default model, first workspace, Approve.
     await expect(form.getByLabel("Provider")).toHaveValue("claude-code");
-    await expect(form.getByLabel("Account")).toHaveValue("0192f3c4-0000-7000-8000-000000000101");
+    await expect(form.getByLabel("Account", { exact: true })).toHaveValue("0192f3c4-0000-7000-8000-000000000101");
     await expect(form.getByLabel("Model")).toHaveValue("");
     await expect(form.getByRole("radio", { name: "Approve" })).toBeChecked();
     await expect(form.getByText("Edits, commands and network access wait for your approval.")).toBeVisible();
     await expect(form.getByRole("button", { name: "Start thread" })).toBeDisabled();
 
     await form.getByLabel("Model").selectOption("opus");
-    await form.getByLabel("Workspace").selectOption({ label: "kalcoded.com" });
+    await form.getByLabel("Workspace", { exact: true }).selectOption({ label: "kalcoded.com" });
     await form.getByLabel("Task").fill("fix the OAuth callback race in the login flow");
     await form.getByLabel("Task").press(`${MOD}+Enter`);
 
@@ -122,8 +122,11 @@ test.describe("threads", () => {
 
     // Codex lists no models up front: only the provider's default.
     await form.getByLabel("Provider").selectOption("codex");
-    await expect(form.getByLabel("Account").locator("option")).toHaveText(["Personal (default)", "Work (signed out)"]);
-    await expect(form.getByLabel("Account")).toHaveValue("0192f3c4-0000-7000-8000-000000000201");
+    await expect(form.getByLabel("Account", { exact: true }).locator("option")).toHaveText([
+      "Personal (default)",
+      "Work (signed out)",
+    ]);
+    await expect(form.getByLabel("Account", { exact: true })).toHaveValue("0192f3c4-0000-7000-8000-000000000201");
     await expect(form.getByLabel("Model").locator("option")).toHaveText(["Provider default"]);
     await expect(form.getByText(/With Codex: Runs like Plan/)).toBeVisible();
 
@@ -226,7 +229,7 @@ test.describe("threads", () => {
     await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Threads" }).click();
     await page.getByRole("button", { name: "New thread" }).first().click();
     const form = page.getByRole("region", { name: "New thread" });
-    await expect(form.getByLabel("Account")).toBeDisabled();
+    await expect(form.getByLabel("Account", { exact: true })).toBeDisabled();
     await expect(form.getByText("Add a managed account before starting this provider.")).toBeVisible();
     await form.getByLabel("Task").fill("Do not launch without an isolated account");
     await expect(form.getByRole("button", { name: "Start thread" })).toBeDisabled();

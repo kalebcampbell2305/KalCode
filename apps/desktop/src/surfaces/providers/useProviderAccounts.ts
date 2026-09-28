@@ -1,9 +1,10 @@
-import type { ProviderAccount } from "@kalcode/protocol";
+import type { ProviderAccount, ProviderAccountBinding, ThreadSummary, Workspace } from "@kalcode/protocol";
 import { useToast } from "@kalcode/ui/components";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KalCodeClient } from "../../ipc/client.ts";
 import { toKalCodeError } from "../../ipc/errors.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
+import { presentStatus } from "../threads/model.ts";
 import { signInFailureTitle } from "./providerLabels.ts";
 
 /** Providers whose own official sign-in KalCode runs natively for one managed account. */
@@ -55,11 +56,60 @@ interface ActiveLogin {
   providerId: BrowserAuthProvider;
 }
 
+/** What uses one account right now. Derived from public thread and binding metadata only. */
+export interface AccountUsage {
+  /** Non-archived threads bound to the account. */
+  threads: number;
+  /** Of those, the ones whose provider is working now. */
+  running: number;
+  /** Names of the workspaces whose default for this provider is the account, sorted. */
+  workspaces: string[];
+}
+
+export const NO_USAGE: AccountUsage = { threads: 0, running: 0, workspaces: [] };
+
+/**
+ * Per-account usage: non-archived threads bound to each account (running ones counted
+ * separately) and the workspaces that remember each account. A binding for a workspace KalCode no
+ * longer lists is not shown.
+ */
+export function accountUsage(
+  threads: readonly ThreadSummary[],
+  bindings: readonly ProviderAccountBinding[],
+  workspaces: readonly Pick<Workspace, "id" | "name">[],
+): Map<string, AccountUsage> {
+  const usage = new Map<string, AccountUsage>();
+  const entry = (accountId: string) => {
+    let current = usage.get(accountId);
+    if (!current) {
+      current = { threads: 0, running: 0, workspaces: [] };
+      usage.set(accountId, current);
+    }
+    return current;
+  };
+  for (const thread of threads) {
+    if (thread.archivedAt !== null || !thread.providerAccountId) continue;
+    const current = entry(thread.providerAccountId);
+    current.threads += 1;
+    if (presentStatus(thread.status).working) current.running += 1;
+  }
+  const names = new Map(workspaces.map((workspace) => [workspace.id, workspace.name]));
+  for (const binding of bindings) {
+    if (binding.kind !== "workspace") continue;
+    const name = names.get(binding.scopeId);
+    if (name !== undefined) entry(binding.accountId).workspaces.push(name);
+  }
+  for (const current of usage.values()) current.workspaces.sort((a, b) => a.localeCompare(b));
+  return usage;
+}
+
 export function useProviderAccounts(enabled: boolean) {
   const { client } = useRuntime();
   const toast = useToast();
   const [accounts, setAccounts] = useState<ProviderAccount[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [usage, setUsage] = useState<Map<string, AccountUsage> | null>(null);
+  const [usageError, setUsageError] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [activeLogin, setActiveLogin] = useState<ActiveLogin | null>(null);
   const cancelledLogins = useRef(new Set<string>());
@@ -82,15 +132,33 @@ export function useProviderAccounts(enabled: boolean) {
     [client],
   );
 
+  // Thread use and workspace defaults are read separately: if they can't load, the accounts (and
+  // their sign-in) still can, and the card says the usage is unavailable instead of showing zero.
+  const loadUsage = useCallback(async () => {
+    try {
+      const [threads, bindings, workspaces] = await Promise.all([
+        client.listThreads(),
+        client.listProviderAccountBindings({ kind: "workspace" }),
+        client.listWorkspaces(),
+      ]);
+      setUsage(accountUsage(threads, bindings, workspaces));
+      setUsageError(null);
+    } catch (error) {
+      setUsage(null);
+      setUsageError(toKalCodeError(error).message);
+    }
+  }, [client]);
+
   const load = useCallback(async () => {
     if (!enabled) return;
     setLoadError(null);
+    void loadUsage();
     try {
       setAccounts(await client.listProviderAccounts());
     } catch (error) {
       setLoadError(toKalCodeError(error).message);
     }
-  }, [client, enabled]);
+  }, [client, enabled, loadUsage]);
 
   useEffect(() => {
     void load();
@@ -221,6 +289,8 @@ export function useProviderAccounts(enabled: boolean) {
   return {
     accounts,
     loadError,
+    usage,
+    usageError,
     busyKey,
     activeLogin,
     load,

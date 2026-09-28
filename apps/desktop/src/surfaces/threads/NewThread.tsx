@@ -1,4 +1,11 @@
-import type { PermissionMode, ProviderAccount, ProviderStatus, ThreadOptions, ThreadSummary } from "@kalcode/protocol";
+import type {
+  PermissionMode,
+  ProviderAccount,
+  ProviderAccountBinding,
+  ProviderStatus,
+  ThreadOptions,
+  ThreadSummary,
+} from "@kalcode/protocol";
 import {
   Badge,
   Button,
@@ -22,9 +29,10 @@ import { usePromptConfirmation } from "../../context/usePromptConfirmation.ts";
 import type { CreateThreadInput } from "../../ipc/client.ts";
 import { type KalCodeError, toKalCodeError } from "../../ipc/errors.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
+import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { MOD_LABEL } from "../../shell/shortcuts.ts";
-import { requestProvidersTab } from "../providers/providersTab.ts";
+import { openProviderAccounts } from "../providers/providersTab.ts";
 import { PERMISSION_MODES, providerModeNote, type UnavailableProvider, unavailableProviders } from "./model.ts";
 import styles from "./NewThread.module.css";
 
@@ -39,18 +47,26 @@ export function NewThread({ onCreated, onCancel }: NewThreadProps) {
   const { navigate } = useNavigation();
   const [options, setOptions] = useState<ThreadOptions | null>(null);
   const [accounts, setAccounts] = useState<ProviderAccount[] | null>(null);
+  const [bindings, setBindings] = useState<ProviderAccountBinding[]>([]);
   const [unavailable, setUnavailable] = useState<UnavailableProvider[]>([]);
   const [loadError, setLoadError] = useState<KalCodeError | null>(null);
 
   const load = useCallback(() => {
     setLoadError(null);
-    Promise.all([client.threadOptions(), client.listProviderAccounts()])
-      .then(async ([next, providerAccounts]) => {
+    // Workspace defaults are read with the accounts: if they can't load, the form doesn't guess a
+    // different account; it shows the error instead.
+    Promise.all([
+      client.threadOptions(),
+      client.listProviderAccounts(),
+      client.listProviderAccountBindings({ kind: "workspace" }),
+    ])
+      .then(async ([next, providerAccounts, workspaceBindings]) => {
         // `thread_options` runs provider detection first when it hasn't run yet, so the cached
         // statuses explain every provider that isn't offered.
         const statuses: ProviderStatus[] = await client.listProviders().catch(() => []);
         setUnavailable(unavailableProviders(statuses, new Set(next.providers.map((p) => p.id))));
         setAccounts(providerAccounts);
+        setBindings(workspaceBindings);
         setOptions(next);
       })
       .catch((error) => setLoadError(toKalCodeError(error)));
@@ -125,6 +141,7 @@ export function NewThread({ onCreated, onCancel }: NewThreadProps) {
           <NewThreadForm
             options={options}
             accounts={accounts}
+            bindings={bindings}
             unavailable={unavailable}
             onCreated={onCreated}
             onCancel={onCancel}
@@ -154,12 +171,14 @@ function ProviderAvailability({ providers }: { providers: readonly UnavailablePr
 function NewThreadForm({
   options,
   accounts,
+  bindings,
   unavailable,
   onCreated,
   onCancel,
 }: {
   options: ThreadOptions;
   accounts: readonly ProviderAccount[];
+  bindings: readonly ProviderAccountBinding[];
   unavailable: readonly UnavailableProvider[];
 } & NewThreadProps) {
   const { client } = useRuntime();
@@ -167,13 +186,19 @@ function NewThreadForm({
   const { navigate } = useNavigation();
   const toast = useToast();
   const id = useId();
-  const [providerId, setProviderId] = useState(options.providers[0]?.id ?? "");
-  const initialAccounts = accounts.filter((account) => account.providerId === (options.providers[0]?.id ?? ""));
-  const [providerAccountId, setProviderAccountId] = useState(
-    initialAccounts.find((account) => account.isDefault)?.id ?? initialAccounts[0]?.id ?? "",
+  // New threads start in the active workspace (the one the rail and Code show), when it can run one.
+  const activeWorkspaceId = useWorkspaces().active?.id ?? null;
+  const offered = (workspace: string | null): workspace is string =>
+    workspace !== null && options.workspaces.some((w) => w.id === workspace);
+  const initialProvider = options.providers[0]?.id ?? "";
+  const initialWorkspace = offered(activeWorkspaceId) ? activeWorkspaceId : (options.workspaces[0]?.id ?? "");
+  const [providerId, setProviderId] = useState(initialProvider);
+  const [providerAccountId, setProviderAccountId] = useState(() =>
+    preselectAccount(accounts, bindings, initialProvider, initialWorkspace),
   );
   const [model, setModel] = useState("");
-  const [workspaceId, setWorkspaceId] = useState(options.workspaces[0]?.id ?? "");
+  const [workspaceId, setWorkspaceId] = useState(initialWorkspace);
+  const [remember, setRemember] = useState(false);
   const [mode, setMode] = useState<PermissionMode>(options.defaultPermissionMode);
   const [task, setTask] = useState("");
   const [name, setName] = useState("");
@@ -183,6 +208,7 @@ function NewThreadForm({
   const provider = options.providers.find((p) => p.id === providerId);
   const providerAccounts = accounts.filter((account) => account.providerId === providerId);
   const providerAccount = providerAccounts.find((account) => account.id === providerAccountId);
+  const workspaceBinding = bindingFor(bindings, providerId, workspaceId);
   const accountReady = providerAccount != null && providerAccount.authenticationState !== "not_authenticated";
   const modes = options.permissionModes;
   const workspace = options.workspaces.find((w) => w.id === workspaceId);
@@ -196,11 +222,33 @@ function NewThreadForm({
     workspaceId,
   ].join(":");
   const confirmation = usePromptConfirmation(promptScope, client);
+  const cancelConfirmation = confirmation.cancel;
   const launchDetail = providerAccount ? `${modelName} · ${providerAccount.displayName}` : modelName;
 
   useEffect(() => {
     taskRef.current?.focus();
   }, []);
+
+  // A different workspace (or provider) re-resolves the account: that workspace's remembered
+  // account first, then the provider default. The source line under the picker says which.
+  const chooseWorkspace = useCallback(
+    (next: string) => {
+      setWorkspaceId(next);
+      setProviderAccountId(preselectAccount(accounts, bindings, providerId, next));
+    },
+    [accounts, bindings, providerId],
+  );
+
+  // Switching workspace elsewhere (rail, palette, KalVoice) while this form is open moves the form
+  // with it, so A → B → A restores A's account. Existing threads keep their own account.
+  const followedWorkspace = useRef(activeWorkspaceId);
+  useEffect(() => {
+    if (activeWorkspaceId === followedWorkspace.current) return;
+    followedWorkspace.current = activeWorkspaceId;
+    if (activeWorkspaceId === null || !options.workspaces.some((w) => w.id === activeWorkspaceId)) return;
+    cancelConfirmation();
+    chooseWorkspace(activeWorkspaceId);
+  }, [activeWorkspaceId, options.workspaces, chooseWorkspace, cancelConfirmation]);
 
   const submit = async (event?: FormEvent) => {
     event?.preventDefault();
@@ -223,6 +271,29 @@ function NewThreadForm({
       confirmBypass: false,
       profileId: null,
     };
+    // Captured now: the choice the person confirmed, not whatever the form shows later.
+    const rememberFor =
+      remember && workspaceBinding?.accountId !== providerAccountId && providerAccount && workspace && provider
+        ? { account: providerAccount, workspace, providerName: provider.displayName }
+        : null;
+    const finish = async (thread: ThreadSummary) => {
+      if (rememberFor) {
+        try {
+          await client.bindProviderAccount(providerId, "workspace", rememberFor.workspace.id, rememberFor.account.id);
+          toast.show({
+            tone: "success",
+            title: `New ${rememberFor.providerName} threads in ${rememberFor.workspace.name} use ${rememberFor.account.displayName}`,
+          });
+        } catch (err) {
+          toast.show({
+            tone: "danger",
+            title: "Workspace default wasn't saved",
+            description: toKalCodeError(err).message,
+          });
+        }
+      }
+      onCreated(thread);
+    };
     await confirmation.request({
       review: () => client.reviewCreateThreadPrompt(input),
       effect: (promptReviewId) => client.createThread(input, promptReviewId),
@@ -234,7 +305,7 @@ function NewThreadForm({
             description: thread.error?.message ?? "Open the thread for details.",
           });
         }
-        onCreated(thread);
+        void finish(thread);
       },
       onError: (err) => setError(toKalCodeError(err)),
     });
@@ -284,11 +355,8 @@ function NewThreadForm({
                 onChange={(event) => {
                   confirmation.cancel();
                   const nextProvider = event.target.value;
-                  const nextAccounts = accounts.filter((account) => account.providerId === nextProvider);
                   setProviderId(nextProvider);
-                  setProviderAccountId(
-                    nextAccounts.find((account) => account.isDefault)?.id ?? nextAccounts[0]?.id ?? "",
-                  );
+                  setProviderAccountId(preselectAccount(accounts, bindings, nextProvider, workspaceId));
                   setModel("");
                 }}
               >
@@ -303,11 +371,20 @@ function NewThreadForm({
               htmlFor={`${id}-account`}
               label="Account"
               hint={
-                providerAccounts.length === 0
-                  ? "Add a managed account before starting this provider."
-                  : providerAccount?.authenticationState === "not_authenticated"
-                    ? "Sign in to this account under Providers before starting."
-                    : "This exact isolated provider profile will run the thread."
+                providerAccounts.length === 0 ? (
+                  "Add a managed account before starting this provider."
+                ) : (
+                  <>
+                    {providerAccount ? (
+                      <span className={styles.accountSource}>
+                        {sourceText(providerAccount, workspaceBinding, workspace?.name)}
+                      </span>
+                    ) : null}{" "}
+                    {providerAccount?.authenticationState === "not_authenticated"
+                      ? "Sign in to this account under Providers before starting."
+                      : "This exact isolated provider profile will run the thread."}
+                  </>
+                )
               }
             >
               <Select
@@ -358,7 +435,8 @@ function NewThreadForm({
                 size="sm"
                 variant="ghost"
                 onClick={() => {
-                  requestProvidersTab("accounts");
+                  // Opens this provider's section; with no account yet, its connect form too.
+                  openProviderAccounts({ providerId, connect: providerAccounts.length === 0 });
                   navigate("providers");
                 }}
               >
@@ -375,7 +453,7 @@ function NewThreadForm({
             value={workspaceId}
             onChange={(event) => {
               confirmation.cancel();
-              setWorkspaceId(event.target.value);
+              chooseWorkspace(event.target.value);
             }}
           >
             {options.workspaces.map((w) => (
@@ -385,6 +463,28 @@ function NewThreadForm({
             ))}
           </Select>
         </Field>
+
+        <div className={styles.remember}>
+          <label className={styles.rememberToggle}>
+            <input
+              type="checkbox"
+              checked={remember}
+              disabled={!providerAccount}
+              aria-describedby={remember ? `${id}-remember-hint` : undefined}
+              onChange={(event) => {
+                confirmation.cancel();
+                setRemember(event.target.checked);
+              }}
+            />
+            Remember these accounts for this workspace
+          </label>
+          {remember && providerAccount && workspace ? (
+            <p id={`${id}-remember-hint`} className={styles.hint}>
+              New {provider?.displayName ?? "provider"} threads in {workspace.name} will start with{" "}
+              {providerAccount.displayName}.
+            </p>
+          ) : null}
+        </div>
 
         <div className={styles.field}>
           <p id={`${id}-mode-label`} className={styles.label}>
@@ -459,6 +559,43 @@ function NewThreadForm({
       />
     </>
   );
+}
+
+function bindingFor(
+  bindings: readonly ProviderAccountBinding[],
+  providerId: string,
+  workspaceId: string,
+): ProviderAccountBinding | undefined {
+  return bindings.find(
+    (binding) => binding.kind === "workspace" && binding.providerId === providerId && binding.scopeId === workspaceId,
+  );
+}
+
+/**
+ * The account a new thread starts with, in the same order the runtime resolves one: the
+ * workspace's remembered account, then the provider default, then the provider's first account.
+ */
+function preselectAccount(
+  accounts: readonly ProviderAccount[],
+  bindings: readonly ProviderAccountBinding[],
+  providerId: string,
+  workspaceId: string,
+): string {
+  const candidates = accounts.filter((account) => account.providerId === providerId);
+  const bound = bindingFor(bindings, providerId, workspaceId);
+  if (bound && candidates.some((account) => account.id === bound.accountId)) return bound.accountId;
+  return candidates.find((account) => account.isDefault)?.id ?? candidates[0]?.id ?? "";
+}
+
+/** Why this account is selected, in words: the workspace's default, the provider default, or a pick. */
+function sourceText(
+  account: ProviderAccount,
+  binding: ProviderAccountBinding | undefined,
+  workspaceName: string | undefined,
+): string {
+  if (binding?.accountId === account.id) return `Workspace default for ${workspaceName ?? "this workspace"}.`;
+  if (account.isDefault) return "Default account.";
+  return "Chosen for this thread.";
 }
 
 function accountOption(account: ProviderAccount): string {
