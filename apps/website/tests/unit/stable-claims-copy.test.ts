@@ -151,7 +151,7 @@ describe("KalVoice voice-to-thread docs", () => {
       "“Clear that” removes only the text KalVoice typed there since the last send or clear, and never text you typed yourself; if KalVoice can't tell which text it typed, it changes nothing and says so.",
       "neither counts as a KalVoice Request.",
       "“Tell Authentication to run the tests” or “Ask Research why the build failed” opens that thread",
-      "“Research on Gemini B”",
+      "“Research on Codex B”",
       "“Which one — Release Windows or Release Mac?”",
       "“What needs permission?”, “Open the one that failed” and “Go back”",
       "“Tell it to continue”",

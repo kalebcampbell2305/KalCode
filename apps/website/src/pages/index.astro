@@ -13,7 +13,7 @@ import Base from "../layouts/Base.astro";
 import { HERO_POSTER_PRELOADS } from "../lib/hero";
 import { RELEASES, downloadCta, servedStableRelease } from "../lib/releases";
 import { structuredData } from "../lib/seo";
-import { KALVOICE, PROVIDERS, getPage, planSummary } from "../lib/site";
+import { GEMINI_AVAILABILITY, KALVOICE, PROVIDERS, getPage, planSummary } from "../lib/site";
 import { firstStage, hasStage } from "../lib/stage";
 
 const page = getPage("/");
@@ -91,8 +91,8 @@ const policies = [
         <span class="visually-hidden">KalCode: </span>One intelligence that operates your entire AI workspace.
       </h1>
       <p class="hero__line">
-        Connect Claude Code, Codex, Gemini and the coding tools you already use — then operate them
-        from one workspace.
+        Connect Claude Code, Codex and the coding tools you already use — then operate them from one
+        workspace.
       </p>
       <div class="button-row hero__actions">
         <DownloadButton />
@@ -149,6 +149,7 @@ const policies = [
           <span class="providers__status">Through the same runtime</span>
         </li>
       </ul>
+      <p class="providers__note">{GEMINI_AVAILABILITY.notice}</p>
     </div>
   </section>
 
@@ -270,7 +271,7 @@ const policies = [
         <article class="frame frame--tile" aria-labelledby="keys-title">
           <p class="eyebrow">Your providers</p>
           <h3 id="keys-title" class="headline">Use your own accounts. Sign in from KalCode.</h3>
-          <p>Claude Code, Codex and Gemini CLI run on your own accounts: sign in to each from KalCode, with a separate managed profile for every account.</p>
+          <p>Claude Code and Codex run on your own accounts: sign in to each from KalCode, with a separate managed profile for every account. {GEMINI_AVAILABILITY.short}</p>
           {
             hasStage("ProviderSwitch") ? (
               <StageSlot name="ProviderSwitch" width="compact" />
