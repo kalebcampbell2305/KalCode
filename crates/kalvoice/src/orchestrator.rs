@@ -361,6 +361,19 @@ pub struct ExecContext {
 }
 
 /// The runtime APIs KalVoice drives — the same ones the UI uses. The desktop implements this.
+/// Intents that change a named thread or send it words. They must never act on a loosely
+/// matched name; see [`Executor::resolve_thread_target`].
+fn acts_on_thread(intent: &KalVoiceIntent) -> bool {
+    matches!(
+        intent,
+        KalVoiceIntent::PauseThreads { .. }
+            | KalVoiceIntent::ResumeThreads { .. }
+            | KalVoiceIntent::StopThreads { .. }
+            | KalVoiceIntent::RebindThreadAccount { .. }
+            | KalVoiceIntent::DirectPrompt { .. }
+    )
+}
+
 pub trait Executor: Send + Sync {
     /// Native-resolved workspaces safe to name in local interpretation. Paths never cross this
     /// boundary. The default is empty so incomplete adapters fail closed for workspace actions.
@@ -385,12 +398,25 @@ pub trait Executor: Send + Sync {
     }
     /// Resolves the thread a grammar command named ("pause the login thread"). `intent` tells
     /// how strict to be: a destructive command never acts on a partial or ambiguous name.
+    ///
+    /// The default only resolves names for opening or showing a thread. It fails closed for every
+    /// intent that acts on a thread (pause, resume, stop, switch its account, send it words):
+    /// [`Self::find_thread`] may match loosely, so an executor must override this method with
+    /// exact, unique matching before those intents can name a thread.
     fn resolve_thread_target(
         &self,
         name: &str,
-        _intent: &KalVoiceIntent,
+        intent: &KalVoiceIntent,
         _ctx: &ExecContext,
     ) -> std::result::Result<Option<String>, ExecError> {
+        if acts_on_thread(intent) {
+            return Err(ExecError::new(
+                "target_unconfirmed",
+                format!(
+                    "KalVoice couldn't confirm which thread \u{201c}{name}\u{201d} is, so it left it alone."
+                ),
+            ));
+        }
         self.find_thread(name)
     }
     /// Whether `query` names exactly one open session (so "tell <query> …" is meant for

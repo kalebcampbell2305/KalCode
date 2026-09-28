@@ -194,6 +194,15 @@ impl Executor for FakeExecutor {
     fn find_thread(&self, name: &str) -> std::result::Result<Option<String>, ExecError> {
         Ok((name == "login fix").then(|| "0192f3c4-0000-7000-8000-00000000000b".to_owned()))
     }
+    /// `find_thread` above only matches one exact name, so it is strict enough for every use.
+    fn resolve_thread_target(
+        &self,
+        name: &str,
+        _intent: &KalVoiceIntent,
+        _ctx: &ExecContext,
+    ) -> std::result::Result<Option<String>, ExecError> {
+        self.find_thread(name)
+    }
     fn check(&self, intent: &KalVoiceIntent) -> std::result::Result<(), ExecError> {
         self.checked.lock().expect("lock").push(intent.clone());
         if self.unavailable && !matches!(intent, KalVoiceIntent::Navigate { .. }) {
@@ -2575,4 +2584,70 @@ fn open_new_thread_directive_uses_the_documented_wire_shape() {
         Some(AUTH)
     );
     assert_eq!(UiDirective::FocusPrevious.thread_id(), None);
+}
+
+/// An executor that keeps the trait's default `resolve_thread_target` over a loose
+/// `find_thread` (any name matches).
+struct LooseExecutor;
+
+impl Executor for LooseExecutor {
+    fn find_workspace(&self, _name: &str) -> std::result::Result<Option<String>, ExecError> {
+        Ok(None)
+    }
+    fn find_thread(&self, _name: &str) -> std::result::Result<Option<String>, ExecError> {
+        Ok(Some("0192f3c4-0000-7000-8000-00000000000b".to_owned()))
+    }
+    fn check(&self, _intent: &KalVoiceIntent) -> std::result::Result<(), ExecError> {
+        Ok(())
+    }
+    fn execute(
+        &self,
+        _intent: &KalVoiceIntent,
+        _ctx: &ExecContext,
+    ) -> std::result::Result<Executed, ExecError> {
+        Err(ExecError::new("unused", "unused"))
+    }
+}
+
+#[test]
+fn default_thread_target_resolution_fails_closed_for_intents_that_act_on_a_thread() {
+    let ctx = ExecContext {
+        request_id: new_id(),
+        workspace_id: None,
+        thread_id: None,
+        providers: Vec::new(),
+        last_target_id: None,
+    };
+    for intent in [
+        KalVoiceIntent::PauseThreads {
+            scope: ThreadScope::All,
+        },
+        KalVoiceIntent::ResumeThreads {
+            scope: ThreadScope::All,
+        },
+        KalVoiceIntent::StopThreads {
+            scope: ThreadScope::All,
+        },
+        KalVoiceIntent::RebindThreadAccount {
+            thread_query: Some("login".into()),
+            provider_id: None,
+            account_query: "work".into(),
+        },
+        KalVoiceIntent::DirectPrompt {
+            target: "login".into(),
+            prompt: "run the tests".into(),
+        },
+    ] {
+        let refused = LooseExecutor
+            .resolve_thread_target("login", &intent, &ctx)
+            .expect_err("a loose default never picks a thread to act on");
+        assert_eq!(refused.code, "target_unconfirmed", "{intent:?}");
+    }
+    // Opening or showing a thread still resolves through `find_thread`.
+    assert!(
+        LooseExecutor
+            .resolve_thread_target("login", &KalVoiceIntent::StatusReport, &ctx)
+            .expect("open")
+            .is_some()
+    );
 }
