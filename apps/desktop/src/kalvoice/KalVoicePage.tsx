@@ -15,6 +15,39 @@ function Key({ name }: { name: string }) {
   return <kbd>{displayKey(name)}</kbd>;
 }
 
+const LOCAL_INTELLIGENCE = {
+  not_installed: {
+    tone: "waiting",
+    label: "Not installed",
+    detail: "Direct commands work now. Download the on-device interpreter for other supported phrasing.",
+    action: "Set up local intelligence",
+  },
+  installed: {
+    tone: "waiting",
+    label: "Installed; not running",
+    detail: "The local interpreter is installed. Retry startup in KalVoice settings.",
+    action: "Open KalVoice settings",
+  },
+  warming: {
+    tone: "waiting",
+    label: "Starting",
+    detail: "The on-device interpreter is starting. Direct commands remain available.",
+    action: null,
+  },
+  ready: {
+    tone: "success",
+    label: "Ready",
+    detail: "The on-device interpreter handles supported phrasing without a connected provider.",
+    action: null,
+  },
+  unavailable: {
+    tone: "outline",
+    label: "Unavailable",
+    detail: "Direct commands remain available. Check local interpreter startup in KalVoice settings.",
+    action: "Open KalVoice settings",
+  },
+} as const;
+
 /** The KalVoice surface: ask, see what's ready, and this session's requests. */
 export function KalVoicePage() {
   const kv = useKalVoice();
@@ -48,26 +81,7 @@ export function KalVoicePage() {
               detail: `${status.models.find((m) => m.id === status.activeModel)?.displayName ?? status.activeModel} model, on this computer.`,
             };
 
-  const usable = status?.providers.filter((p) => p.available) ?? [];
-  const selected = status?.preferences.intelligence;
-  const intelligence = !status
-    ? null
-    : usable.length === 0
-      ? {
-          tone: "waiting" as const,
-          label: "No provider connected",
-          detail: "Direct commands work now. Other requests need your own provider.",
-        }
-      : {
-          tone: "success" as const,
-          label:
-            selected?.kind === "provider"
-              ? selected.providerId
-              : usable.length === 1
-                ? (usable[0]?.displayName ?? "")
-                : "Choose one",
-          detail: "Runs on your own account. KalCode never pays for or sees it.",
-        };
+  const intelligence = status ? LOCAL_INTELLIGENCE[status.localReasoning ?? "unavailable"] : null;
 
   return (
     <Page
@@ -133,9 +147,9 @@ export function KalVoicePage() {
               <p className={styles.tileTitle}>Intelligence</p>
               {intelligence ? <Badge tone={intelligence.tone}>{intelligence.label}</Badge> : null}
               <p className={styles.tileDetail}>{intelligence?.detail}</p>
-              {usable.length === 0 ? (
-                <Button size="sm" onClick={() => navigate("providers")}>
-                  Open Providers
+              {intelligence?.action ? (
+                <Button size="sm" onClick={() => navigate("settings")}>
+                  {intelligence.action}
                 </Button>
               ) : null}
             </li>
@@ -210,7 +224,10 @@ export function KalVoicePage() {
         <ul className={styles.privacy}>
           <li>Audio is held in memory on this computer, recognized here, and discarded right after.</li>
           <li>Nothing you say is recorded, stored or uploaded. Activity shows ids and counts, never your words.</li>
-          <li>Requests that need reasoning go only to a provider you connected, under your own account.</li>
+          <li>
+            Command interpretation runs on this computer. Coding tasks you send to a provider use that provider's
+            account and permissions.
+          </li>
         </ul>
       </Section>
     </Page>
