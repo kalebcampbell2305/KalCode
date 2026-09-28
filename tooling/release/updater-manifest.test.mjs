@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { parseUpdaterDescriptor } from "../../apps/website/worker/updater-descriptor.ts";
-import { createPlatformUpdaterManifest, createUpdaterManifest } from "./updater-manifest.mjs";
+import { createPlatformUpdaterManifest, createUpdaterManifest, updaterQaProblems } from "./updater-manifest.mjs";
+import { assembleRelease } from "./updater-qa-stage-assembly.mjs";
 
 const commit = "a".repeat(40);
 const artifactBytes = Buffer.from("updater artifact");
@@ -57,6 +58,142 @@ function qaEvidence(target, version = "1.2.3", candidateCommit = commit, candida
     },
   };
 }
+
+function unavailableBaselineQa(target) {
+  const sha256 =
+    target === "windows-x86_64"
+      ? "4d4d8897ab376b5532e3940d79c13a2a2674614ade729ace211dba7f662ebb70"
+      : "918646e4b26f39463a6bd841c2f705ed7a18b42ec271668932a97b7d65c8c987";
+  const record = qaEvidence(target, "0.1.4", "0ee34938d6543bba3679cb008174231d0e9544ec", sha256);
+  record.status = "preliminary-passed";
+  record.updateTrial = null;
+  record.checks.kalvoice = false;
+  record.kalvoiceUnavailable = {
+    release: { ...record.release },
+    target,
+    reason: "stable-surface-hidden",
+    observation: {
+      release: { ...record.release },
+      target,
+      profile: "kalcodeqa2",
+      receiptSha256: "f".repeat(64),
+      observedAt: "2026-09-28T01:00:00.000Z",
+      surfaceAbsent: true,
+      activationUnavailable: true,
+    },
+  };
+  return record;
+}
+
+function baselineAuthority(record) {
+  return { release: { ...record.release }, target: record.target, reason: "stable-surface-hidden" };
+}
+
+test("baseline preliminary QA preserves observed, exact-bound KalVoice unavailability as false", () => {
+  for (const target of ["windows-x86_64", "darwin-aarch64"]) {
+    const record = unavailableBaselineQa(target);
+    const expected = { target, channel: "stable", release: { ...record.release } };
+    const before = structuredClone(record);
+    assert.deepEqual(updaterQaProblems(record, expected, "baseline-preliminary", baselineAuthority(record)), []);
+    assert.deepEqual(record, before, "validation must never normalize unavailable into a passed check");
+  }
+});
+
+test("unavailable baseline evidence cannot authorize candidate preliminary or final QA", () => {
+  const record = unavailableBaselineQa("windows-x86_64");
+  const expected = { target: record.target, channel: "stable", release: { ...record.release } };
+  for (const phase of ["preliminary", "final"]) {
+    assert.notDeepEqual(updaterQaProblems(record, expected, phase), []);
+  }
+});
+
+test("baseline unavailability requires complete exact-bound source and physical absence evidence", () => {
+  for (const mutate of [
+    (r) => delete r.kalvoiceUnavailable,
+    (r) => (r.kalvoiceUnavailable.target = "darwin-aarch64"),
+    (r) => (r.kalvoiceUnavailable.release.commit = "e".repeat(40)),
+    (r) => (r.kalvoiceUnavailable.release.sha256 = "e".repeat(64)),
+    (r) => (r.kalvoiceUnavailable.release.version = "1.2.1"),
+    (r) => (r.kalvoiceUnavailable.reason = "not-tested"),
+    (r) => delete r.kalvoiceUnavailable.observation,
+    (r) => (r.kalvoiceUnavailable.observation.release.sha256 = "e".repeat(64)),
+    (r) => (r.kalvoiceUnavailable.observation.release.commit = "e".repeat(40)),
+    (r) => (r.kalvoiceUnavailable.observation.release.version = "0.1.3"),
+    (r) => (r.kalvoiceUnavailable.observation.target = "darwin-aarch64"),
+    (r) => (r.kalvoiceUnavailable.observation.profile = ""),
+    (r) => (r.kalvoiceUnavailable.observation.receiptSha256 = "not-a-hash"),
+    (r) => (r.kalvoiceUnavailable.observation.observedAt = "invalid"),
+    (r) => (r.kalvoiceUnavailable.observation.surfaceAbsent = false),
+    (r) => (r.kalvoiceUnavailable.observation.activationUnavailable = false),
+    (r) => (r.kalvoiceUnavailable.observation.unreviewed = true),
+    (r) => (r.checks.kalvoice = true),
+    (r) => (r.checks.kalvoice = null),
+    (r) => (r.channel = "beta"),
+    (r) => (r.status = "passed"),
+    (r) => (r.updateTrial = {}),
+  ]) {
+    const record = unavailableBaselineQa("windows-x86_64");
+    const expected = { target: record.target, channel: "stable", release: { ...record.release } };
+    mutate(record);
+    assert.notDeepEqual(updaterQaProblems(record, expected, "baseline-preliminary", baselineAuthority(record)), []);
+  }
+});
+
+test("baseline role never waives authentication, another product check, or a safeguard", () => {
+  const original = unavailableBaselineQa("windows-x86_64");
+  const expected = { target: original.target, channel: "stable", release: { ...original.release } };
+  for (const key of Object.keys(original.checks).filter((key) => key !== "kalvoice")) {
+    const record = structuredClone(original);
+    record.checks[key] = false;
+    assert.notDeepEqual(
+      updaterQaProblems(record, expected, "baseline-preliminary", baselineAuthority(record)),
+      [],
+      key,
+    );
+  }
+  for (const key of Object.keys(original.safeguards)) {
+    const record = structuredClone(original);
+    record.safeguards[key] = true;
+    assert.notDeepEqual(
+      updaterQaProblems(record, expected, "baseline-preliminary", baselineAuthority(record)),
+      [],
+      key,
+    );
+  }
+});
+
+test("baseline capability authority is mandatory and limited to reviewed source and platform bytes", () => {
+  for (const target of ["windows-x86_64", "darwin-aarch64"]) {
+    const record = unavailableBaselineQa(target);
+    const expected = { target, channel: "stable", release: { ...record.release } };
+    assert.notDeepEqual(updaterQaProblems(record, expected, "baseline-preliminary"), []);
+    for (const mutate of [
+      (r) => (r.release.commit = "a".repeat(40)),
+      (r) => (r.release.sha256 = "a".repeat(64)),
+      (r) => (r.release.version = "0.1.5"),
+    ]) {
+      const substituted = structuredClone(record);
+      mutate(substituted);
+      substituted.kalvoiceUnavailable.release = { ...substituted.release };
+      substituted.kalvoiceUnavailable.observation.release = { ...substituted.release };
+      assert.notDeepEqual(
+        updaterQaProblems(
+          substituted,
+          { ...expected, release: substituted.release },
+          "baseline-preliminary",
+          baselineAuthority(substituted),
+        ),
+        [],
+      );
+    }
+    const wrongTarget = baselineAuthority(record);
+    wrongTarget.target = target === "windows-x86_64" ? "darwin-aarch64" : "windows-x86_64";
+    assert.notDeepEqual(updaterQaProblems(record, expected, "baseline-preliminary", wrongTarget), []);
+    for (const phase of ["preliminary", "final"]) {
+      assert.notDeepEqual(updaterQaProblems(record, expected, phase, baselineAuthority(record)), []);
+    }
+  }
+});
 
 function signer() {
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
@@ -701,6 +838,60 @@ test("v2 publishes only the verified platforms without inventing parity", async 
     createPlatformUpdaterManifest({ ...options, artifacts: [windows, mac] }),
     /exact version and source commit/,
   );
+});
+
+test("stage assembly selects baseline capability validation only for the explicit baseline role", async () => {
+  const windows = { ...fixture(), target: "windows-x86_64" };
+  windows.signaturePath = `${windows.artifactPath}.windows-x86_64.sig`;
+  writeFileSync(
+    windows.signaturePath,
+    signature("1.2.3", artifactBytes, releaseSigner, ["target:windows-x86_64", "channel:stable"]),
+  );
+  const packets = [windows, macFixture()];
+  for (const packet of packets) {
+    packet.build.builtAt = "2026-01-01T00:00:00.000Z";
+    packet.qa = unavailableBaselineQa(packet.target);
+  }
+  const staging = mkdtempSync(join(tmpdir(), "kalcode-stage-baseline-role-"));
+  const options = { staging, source: staging, packets, version: "1.2.3", notes: "Private test baseline", write: false };
+  // The fixtures deliberately use another signing key. Baseline selection must reach
+  // real signature verification before creating any trusted capability context.
+  await assert.rejects(assembleRelease({ ...options, role: "baseline" }), /updater signature is invalid/);
+  await assert.rejects(assembleRelease(options), /QA record has unexpected fields/);
+  await assert.rejects(assembleRelease({ ...options, role: "candidate" }), /QA record has unexpected fields/);
+  await assert.rejects(assembleRelease({ ...options, role: "unknown" }), /role is invalid/);
+});
+
+test("baseline phase keeps real artifact, signature, and Mac notarization guards", async () => {
+  for (const target of ["windows-x86_64", "darwin-aarch64"]) {
+    const input = target === "darwin-aarch64" ? macFixture() : { ...fixture(), target };
+    if (target === "windows-x86_64") {
+      input.signaturePath = `${input.artifactPath}.${target}.sig`;
+      writeFileSync(
+        input.signaturePath,
+        signature("1.2.3", artifactBytes, releaseSigner, [`target:${target}`, "channel:stable"]),
+      );
+    }
+    input.qa = unavailableBaselineQa(target);
+    const options = {
+      artifacts: [input],
+      requestedChannel: "stable",
+      notes: "Private test baseline",
+      publishedAt: "2026-01-01T00:00:00.000Z",
+      qaPhase: "baseline-preliminary",
+    };
+    // Even correctly signed unapproved bytes/source cannot claim the pinned disposition.
+    await assert.rejects(createPlatformUpdaterManifest(options), /unavailability evidence is invalid/);
+    writeFileSync(input.artifactPath, Buffer.from("changed artifact"));
+    await assert.rejects(createPlatformUpdaterManifest(options), /signature is invalid/);
+    if (target === "darwin-aarch64") {
+      input.verify.notaryAccepted = false;
+      await assert.rejects(createPlatformUpdaterManifest(options), /notarization verification is incomplete/);
+    } else {
+      input.build.signatureStatus = "Invalid";
+      await assert.rejects(createPlatformUpdaterManifest(options), /Authenticode signature is not valid/);
+    }
+  }
 });
 
 test("v2 Mac feed refuses incomplete signing, physical QA and channel evidence", async () => {

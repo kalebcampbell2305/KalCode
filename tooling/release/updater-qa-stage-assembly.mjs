@@ -164,7 +164,8 @@ export function validateBaselineSourceAuthority({ baselineSource, baseline, cand
   if (problems.length > 0) throw new Error(`baseline source is not an exact QA derivation: ${problems.join("; ")}`);
 }
 
-export async function assembleRelease({ staging, source, packets, version, notes, write }) {
+export async function assembleRelease({ staging, source, packets, version, notes, write, role = "candidate" }) {
+  if (role !== "baseline" && role !== "candidate") throw new Error("updater QA release role is invalid");
   const commit = packets[0].build.commit;
   if (packets.some((packet) => packet.build.commit !== commit)) {
     throw new Error(`${version} platform packets do not share one source commit`);
@@ -204,7 +205,7 @@ export async function assembleRelease({ staging, source, packets, version, notes
     requestedChannel: "stable",
     publishedAt: publication.publishedAt,
     notes,
-    qaPhase: "preliminary",
+    qaPhase: role === "baseline" ? "baseline-preliminary" : "preliminary",
   });
   const windows = packets.find((packet) => packet.target === "windows-x86_64");
   const mac = packets.find((packet) => packet.target === "darwin-aarch64");
@@ -327,6 +328,7 @@ export async function assembleUpdaterQaStage(options) {
     version: baselineVersion,
     notes: "Private signed baseline for KalCode updater release QA.",
     write,
+    role: "baseline",
   });
   const candidate = await assembleRelease({
     staging: options.candidateStaging,
