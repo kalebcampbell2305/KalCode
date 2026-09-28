@@ -8,6 +8,17 @@ use std::sync::{Mutex, PoisonError};
 pub struct ExitControl {
     pub requested: std::sync::atomic::AtomicBool,
     pub ready: std::sync::atomic::AtomicBool,
+    /// Set once `RunEvent::Exit` arrives: the event loop is gone and the main thread is blocked in
+    /// the final cleanup, so work queued for the main thread would never run. Cleanup must not
+    /// wait on it.
+    pub event_loop_ended: std::sync::atomic::AtomicBool,
+}
+
+impl ExitControl {
+    pub fn event_loop_ended(&self) -> bool {
+        self.event_loop_ended
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
 }
 
 #[derive(Default)]

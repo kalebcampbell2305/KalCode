@@ -1004,6 +1004,14 @@ fn sync_talk_key(
     runtime: &Arc<KalVoiceRuntime>,
     trigger: &'static str,
 ) -> Option<std::sync::mpsc::Receiver<Status<Shortcut>>> {
+    // After `RunEvent::Exit` (macOS `terminate:`) the main thread is blocked in the final cleanup,
+    // so a queued reconcile would never run and waiting for it would spend the cleanup budget.
+    if app
+        .try_state::<crate::runtime_shutdown::ExitControl>()
+        .is_some_and(|exit| exit.event_loop_ended())
+    {
+        return None;
+    }
     let (done, result) = std::sync::mpsc::sync_channel(1);
     let handle = app.clone();
     let runtime = runtime.clone();

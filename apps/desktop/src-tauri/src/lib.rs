@@ -337,6 +337,40 @@ fn finish_exit_attempt(exit: &runtime_shutdown::ExitControl, clean: bool) {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExitEventCleanup {
+    /// The `ExitRequested` path already proved cleanup; nothing more to do.
+    AlreadyDrained,
+    Drained,
+    Incomplete,
+}
+
+/// Final cleanup for `RunEvent::Exit`. On macOS, `terminate:` (the default menu's Quit / Cmd+Q,
+/// Dock Quit, logout, shutdown) ends the event loop with `Exit` alone; no `ExitRequested`
+/// precedes it, so the runtime must be drained here, synchronously, before the process ends.
+/// After a completed `ExitRequested` drain this is a no-op. While one is still in flight,
+/// `shutdown` joins it (the runtime shutdown is serialized and caches success), so the runtime is
+/// never drained twice and nothing waits on the now-stopped event loop.
+fn drain_on_exit_event(
+    exit: &runtime_shutdown::ExitControl,
+    shutdown: impl FnOnce() -> bool,
+) -> ExitEventCleanup {
+    exit.event_loop_ended
+        .store(true, std::sync::atomic::Ordering::Release);
+    match begin_exit_attempt(exit) {
+        ExitAttempt::Ready => ExitEventCleanup::AlreadyDrained,
+        ExitAttempt::Start | ExitAttempt::Pending => {
+            let clean = shutdown();
+            finish_exit_attempt(exit, clean);
+            if clean {
+                ExitEventCleanup::Drained
+            } else {
+                ExitEventCleanup::Incomplete
+            }
+        }
+    }
+}
+
 #[cfg(feature = "e2e")]
 fn build_e2e_main_webview(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let data_dir = match environment::data_dir_override() {
@@ -787,6 +821,12 @@ pub fn run(removed_overrides: Vec<String>) {
                 }
             }
         } else if let RunEvent::Exit = event {
+            let exit = handle.state::<runtime_shutdown::ExitControl>();
+            if drain_on_exit_event(&exit, || shutdown_runtime(handle))
+                == ExitEventCleanup::Incomplete
+            {
+                tracing::error!(event = "app.exit_cleanup_incomplete", path = "exit_event");
+            }
             shutdown_services(handle);
         }
     });
