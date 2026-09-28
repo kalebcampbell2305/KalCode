@@ -65,7 +65,6 @@ import {
   composeInThread,
   type DirectiveReport,
   followUpChoice,
-  isOpenNewThreadDirective,
   submitComposer,
 } from "./voiceDirectives.ts";
 
@@ -445,20 +444,17 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
             expiresAt: Date.now() + CHOICE_TTL_MS,
           });
           break;
-        default: {
-          // Lane B1 adds `open_new_thread` on the wire before the generated union does. On Stable
-          // it only opens New thread, prefilled: nothing starts until the person sends (S3).
-          const wire: unknown = directive;
-          if (isOpenNewThreadDirective(wire)) {
-            navigate("threads");
-            threads?.request("new", undefined, {
-              providerId: wire.providerId,
-              providerAccountId: wire.providerAccountId,
-              workspaceId: wire.workspaceId,
-            });
-          }
+        case "open_new_thread":
+          // Only opens New thread, prefilled: nothing starts until the person sends (S3). An empty
+          // provider id is not a request KalVoice can prefill.
+          if (directive.providerId.length === 0) break;
+          navigate("threads");
+          threads?.request("new", undefined, {
+            providerId: directive.providerId,
+            providerAccountId: directive.providerAccountId,
+            workspaceId: directive.workspaceId,
+          });
           break;
-        }
       }
     },
     [navigate, report, composerDeps],

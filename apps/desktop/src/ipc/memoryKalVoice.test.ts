@@ -88,6 +88,25 @@ describe("memory KalVoice composer and session commands (TK-3 subset)", () => {
     });
   });
 
+  it("accepts lane B1's native phrasings for send, clear and go back", async () => {
+    const memory = createMemoryKalVoice(() => undefined, "");
+    for (const text of ["send the message", "press send", "Hey Kal, send that"]) {
+      expect((await talk(memory, text, "field")).response?.directive, text).toEqual({
+        kind: "submit_composer",
+        threadId: THREAD,
+      });
+    }
+    for (const text of ["never mind", "cancel that", "do not send it"]) {
+      expect((await talk(memory, text, "field")).response?.directive, text).toEqual({
+        kind: "clear_composer",
+        threadId: THREAD,
+      });
+    }
+    for (const text of ["go back", "switch back to the previous terminal", "back to the thread I was just using"]) {
+      expect((await talk(memory, text, "none")).response?.directive, text).toEqual({ kind: "focus_previous" });
+    }
+  });
+
   it("refuses to submit or clear a raw terminal", async () => {
     const memory = createMemoryKalVoice(() => undefined, "");
     const talked = await talk(memory, "send that", "terminal");

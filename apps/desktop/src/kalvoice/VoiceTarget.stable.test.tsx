@@ -365,7 +365,7 @@ describe("KalVoice composer target (Stable, TK-2)", () => {
       providerId: "codex",
       providerAccountId: null,
       workspaceId: null,
-    } as unknown as UiDirective);
+    });
     await talk(h, "open a new codex thread with my work account");
     const form = within(await screen.findByRole("region", { name: "New thread" }));
     await waitFor(() => expect(form.getByRole("combobox", { name: "Provider" })).toHaveValue("codex"));

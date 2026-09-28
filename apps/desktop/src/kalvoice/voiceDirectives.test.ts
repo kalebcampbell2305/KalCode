@@ -12,7 +12,6 @@ import {
   composeInThread,
   type DirectiveReport,
   followUpChoice,
-  isOpenNewThreadDirective,
   submitComposer,
 } from "./voiceDirectives.ts";
 
@@ -164,40 +163,6 @@ describe("compose_in_thread", () => {
     const d = deps();
     await composeInThread(d, { threadId: THREAD, text: "hello", submit: true });
     expect(d.reports[0]).toMatchObject({ ok: false });
-  });
-});
-
-describe("open_new_thread guard", () => {
-  it("accepts only the documented wire shape", () => {
-    expect(
-      isOpenNewThreadDirective({
-        kind: "open_new_thread",
-        providerId: "codex",
-        providerAccountId: null,
-        workspaceId: null,
-      }),
-    ).toBe(true);
-    expect(
-      isOpenNewThreadDirective({
-        kind: "open_new_thread",
-        providerId: "codex",
-        providerAccountId: "a",
-        workspaceId: "w",
-      }),
-    ).toBe(true);
-    expect(
-      isOpenNewThreadDirective({ kind: "open_new_thread", providerId: "", providerAccountId: null, workspaceId: null }),
-    ).toBe(false);
-    expect(
-      isOpenNewThreadDirective({
-        kind: "open_new_thread",
-        providerId: "codex",
-        providerAccountId: 3,
-        workspaceId: null,
-      }),
-    ).toBe(false);
-    expect(isOpenNewThreadDirective({ kind: "open_thread", threadId: "t" })).toBe(false);
-    expect(isOpenNewThreadDirective(null)).toBe(false);
   });
 });
 

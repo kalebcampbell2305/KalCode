@@ -178,17 +178,32 @@ export type MemorySessionResolver = (
   context: { workspaceId: string | null; focusedThreadId: string | null },
 ) => Promise<SessionResolution>;
 
-/** "send that", "clear that", "go back", "tell <name> to <prompt>" (TK-3 subset). */
+/** Addressing KalVoice itself ("Hey Kal, …"), as native `grammar_sessions::ADDRESS`. */
+const ADDRESS =
+  /^(?:hey kal ?code|hey kal ?voice|hey kal|hey cal|ok(?:ay)? kal|kal ?code|kal ?voice|kal)(?:[\s,:;!.\-—]+|$)/iu;
+const THING = "(?:thread|terminal|session|one|pane|agent|tab)";
+const GO_BACK = new RegExp(
+  `^(?:go back|(?:(?:go|switch|jump|take|head) )?back to (?:the|my) (?:(?:previous|last) )?${THING}(?: i was (?:just )?(?:using|in|on|at|working (?:in|on)|looking at))?|(?:previous|last) ${THING})$`,
+);
+
+/** "send that", "clear that", "go back", "tell <name> to <prompt>": the phrases of native
+ * `grammar_sessions` (0.1.5 TK-3, lane B1) that UI tests drive. */
 function sessionCommand(text: string, t: string): Parsed | null {
-  if (/^(?:send|submit) (?:that|it|this)(?: now)?$/.test(t)) return { kind: "submit_focused", high: true };
-  if (/^(?:(?:clear|scratch) (?:that|it|this)|don'?t send (?:that|it|this))$/.test(t)) {
-    return { kind: "clear_focused", high: true };
-  }
   if (
-    /^(?:go back(?: to (?:the )?(?:terminal|thread|session|one) i was (?:just )?using)?|focus (?:the )?previous(?: terminal| thread| session)?)$/.test(
+    /^(?:(?:send|submit) (?:that|it|this)(?: now)?|(?:send|submit) (?:that|this|the) (?:message|prompt)|(?:press|hit|click) send)$/.test(
       t,
     )
   ) {
+    return { kind: "submit_focused", high: true };
+  }
+  if (
+    /^(?:(?:clear|cancel|scratch|delete) (?:that|this|it)|never ?mind(?: that)?|(?:don'?t|do not) send (?:that|it|this))$/.test(
+      t,
+    )
+  ) {
+    return { kind: "clear_focused", high: true };
+  }
+  if (GO_BACK.test(t)) {
     return {
       kind: "focus_previous",
       high: true,
@@ -197,8 +212,15 @@ function sessionCommand(text: string, t: string): Parsed | null {
     };
   }
   // The prompt keeps the person's own casing and punctuation.
-  const direct = text.trim().match(/^(?:hey kal[,.]?\s+)?(?:tell|ask)\s+(.+?)\s+to\s+(\S.*)$/iu);
-  if (direct?.[1] && direct[2]) {
+  const spoken = text.trim().replace(ADDRESS, "");
+  const direct = spoken.match(
+    /^(?:(?:please|okay|ok|now|so)\s+|(?:can|could|would|will) you\s+)*(?:tell|ask)\s+(.+?)(?:\s+(?:to|that)\s+|\s*[,:;]\s*)(\S.*)$/iu,
+  );
+  if (
+    direct?.[1] &&
+    direct[2] &&
+    !/^(?:me|us|you|yourself|everyone|everybody|them|him|her|about|for|if|whether)\b/iu.test(direct[1])
+  ) {
     return { kind: "direct_prompt", high: false, direct: { query: direct[1], prompt: direct[2] } };
   }
   return null;
@@ -212,7 +234,7 @@ function normalize(text: string): string {
     .replace(/\bwhat's\b/g, "what is")
     .replace(/\s+/g, " ")
     .trim()
-    .replace(/^(please |hey kalvoice )+/, "");
+    .replace(/^(please |hey kalvoice |hey kal code |hey kalcode |hey kal |ok kal |okay kal )+/, "");
 }
 
 const PROVIDER_IDS: Record<string, string> = {

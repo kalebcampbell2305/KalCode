@@ -28,29 +28,6 @@ export interface ComposerDirectiveDeps {
   signal?: AbortSignal;
 }
 
-/** `open_new_thread` (Lane B1, not yet in the generated protocol): New thread, prefilled. */
-export interface OpenNewThreadDirective {
-  kind: "open_new_thread";
-  providerId: string;
-  providerAccountId: string | null;
-  workspaceId: string | null;
-}
-
-const optionalString = (value: unknown) => value === null || typeof value === "string";
-
-/** Narrow guard for the wire directive native adds in Lane B1; the generated union follows later. */
-export function isOpenNewThreadDirective(value: unknown): value is OpenNewThreadDirective {
-  if (typeof value !== "object" || value === null) return false;
-  const v = value as Record<string, unknown>;
-  return (
-    v.kind === "open_new_thread" &&
-    typeof v.providerId === "string" &&
-    v.providerId.length > 0 &&
-    optionalString(v.providerAccountId) &&
-    optionalString(v.workspaceId)
-  );
-}
-
 const quoted = (name: string) => `“${name}”`;
 
 function notResuming(name: string): string {
