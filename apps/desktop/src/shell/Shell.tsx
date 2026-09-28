@@ -1,4 +1,4 @@
-import { type CSSProperties, useLayoutEffect, useRef } from "react";
+import { type CSSProperties, useCallback, useLayoutEffect, useRef } from "react";
 import { FloatingAssistant } from "../kalvoice/FloatingAssistant.tsx";
 import { KalVoicePage } from "../kalvoice/KalVoicePage.tsx";
 import { KalVoiceProvider } from "../kalvoice/KalVoiceProvider.tsx";
@@ -9,6 +9,7 @@ import { WorkspaceProvider } from "../runtime/WorkspaceProvider.tsx";
 import { CodePage } from "../surfaces/code/CodePage.tsx";
 import { useNewTerminalShortcut } from "../surfaces/code/useNewTerminalShortcut.ts";
 import { Dashboard } from "../surfaces/dashboard/Dashboard.tsx";
+import { focusSection } from "../surfaces/dashboard/useNow.ts";
 import { FolderSurface } from "../surfaces/folder/FolderSurface.tsx";
 import { GatedSurface } from "../surfaces/gated/GatedSurface.tsx";
 import { HomeSurface } from "../surfaces/home/HomeSurface.tsx";
@@ -32,6 +33,7 @@ import styles from "./Shell.module.css";
 import { ShellSlotsProvider, useShellSlots } from "./ShellSlots.tsx";
 import { Sidebar } from "./Sidebar.tsx";
 import { useShortcuts } from "./shortcuts.ts";
+import { UpdateReadyNotice } from "./UpdateReadyNotice.tsx";
 
 export function Shell() {
   const { info, settings, client } = useRuntime();
@@ -71,8 +73,8 @@ export function Shell() {
 }
 
 function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
-  const { settings, updateSettings } = useRuntime();
-  const { current } = useNavigation();
+  const { settings, updateSettings, client } = useRuntime();
+  const { current, navigate } = useNavigation();
   // Z7-W2: the palette's open state and query are shared (search can open with a query).
   const { open: paletteOpen, setOpen: setPaletteOpen } = useSearch();
   const rail = useRail();
@@ -97,6 +99,12 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
   });
   useNewTerminalShortcut();
   useRailShortcut();
+
+  // The update-ready notice's "Details" opens Settings → Updates once the page has rendered.
+  const openUpdateDetails = useCallback(() => {
+    navigate("settings");
+    requestAnimationFrame(() => requestAnimationFrame(() => focusSection("updates")));
+  }, [navigate]);
 
   return (
     <div
@@ -146,6 +154,7 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
       <ApprovalsPanel />
       <ApprovalAnnouncer />
       <NotificationCenter />
+      <UpdateReadyNotice client={client} onOpenDetails={openUpdateDetails} />
     </div>
   );
 }

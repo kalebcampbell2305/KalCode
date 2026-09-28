@@ -5,7 +5,7 @@ import { toKalCodeError } from "../../ipc/errors.ts";
 import type { UpdateChannel, UpdateStatus } from "../../ipc/updater.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import styles from "./UpdaterSettings.module.css";
-import { updatePresentation } from "./updaterModel.ts";
+import { restartAndInstall, updatePresentation } from "./updaterModel.ts";
 
 type Operation = "channel" | "check" | "cancel" | "install" | "restore";
 
@@ -142,7 +142,7 @@ export function UpdaterSettings() {
             <Button
               variant="primary"
               busy={operation === "install"}
-              onClick={() => void run("install", () => client.updaterInstall().then(() => undefined))}
+              onClick={() => void run("install", () => restartAndInstall(client).then(() => undefined))}
             >
               Restart and install{status.availableVersion ? ` ${status.availableVersion}` : ""}
             </Button>

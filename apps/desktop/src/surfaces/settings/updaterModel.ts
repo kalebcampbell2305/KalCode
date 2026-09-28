@@ -1,3 +1,4 @@
+import type { KalCodeClient } from "../../ipc/client.ts";
 import type { UpdateStatus } from "../../ipc/updater.ts";
 
 export interface UpdatePresentation {
@@ -53,4 +54,13 @@ export function updatePresentation(status: UpdateStatus): UpdatePresentation {
         progress: null,
       };
   }
+}
+
+/**
+ * The one restart-and-install path. Settings → Updates and the shell's update-ready notice both
+ * call it, and only after an explicit user action: native closes active work safely, then
+ * restarts into the verified update.
+ */
+export function restartAndInstall(client: Pick<KalCodeClient, "updaterInstall">): Promise<void> {
+  return client.updaterInstall();
 }

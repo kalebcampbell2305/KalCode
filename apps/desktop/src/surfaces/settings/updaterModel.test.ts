@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { UpdateStatus } from "../../ipc/updater.ts";
-import { updatePresentation } from "./updaterModel.ts";
+import { restartAndInstall, updatePresentation } from "./updaterModel.ts";
 
 const base: UpdateStatus = {
   channel: "stable",
@@ -38,5 +38,13 @@ describe("updatePresentation", () => {
       detail: "The update signature is invalid.",
       progress: null,
     });
+  });
+});
+
+describe("restartAndInstall", () => {
+  it("is the single install path and calls the native install command once", async () => {
+    const client = { updaterInstall: vi.fn(async () => undefined) };
+    await restartAndInstall(client);
+    expect(client.updaterInstall).toHaveBeenCalledOnce();
   });
 });
