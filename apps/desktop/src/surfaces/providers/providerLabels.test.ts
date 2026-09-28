@@ -123,8 +123,15 @@ describe("guidance", () => {
     expect(hint).toMatch(/^Open Accounts, add a Gemini CLI account and choose Sign in\./);
     expect(hint).toContain("Google sign-in in your browser for that account only");
     expect(hint).not.toMatch(/^Run /);
-    expect(accountSignInHint(claude)).toBeNull();
-    expect(accountSignInHint(codex)).toBeNull();
+    // Claude Code and Codex threads also run in managed per-account profiles, so their Setup
+    // guidance must point at the account card, never at a standalone terminal login.
+    const claudeHint = accountSignInHint(claude);
+    expect(claudeHint).toMatch(/^Open Accounts, add a .+ account and choose Sign in\./);
+    expect(claudeHint).toContain("Running claude in a terminal signs in a separate profile");
+    const codexHint = accountSignInHint(codex);
+    expect(codexHint).toMatch(/^Open Accounts, add a .+ account and choose Sign in\./);
+    expect(codexHint).toContain("Codex opens ChatGPT sign-in");
+    expect(accountSignInHint({ id: "other-cli", displayName: "Other" })).toBeNull();
   });
 
   it("offers install guidance only when the CLI is missing", () => {

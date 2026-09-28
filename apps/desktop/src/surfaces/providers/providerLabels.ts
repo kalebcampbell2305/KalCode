@@ -82,11 +82,17 @@ export function needsSignIn(status: ProviderStatus): boolean {
  * would sign in the wrong place. `null` keeps the provider's own command guidance.
  */
 export function accountSignInHint(status: Pick<ProviderStatus, "id" | "displayName">): string | null {
-  if (status.id !== "gemini-cli") return null;
+  const managed: Record<string, { opens: string; command: string }> = {
+    "gemini-cli": { opens: "Gemini opens Google sign-in", command: "gemini" },
+    "claude-code": { opens: "Claude Code opens its sign-in", command: "claude" },
+    codex: { opens: "Codex opens ChatGPT sign-in", command: "codex" },
+  };
+  const provider = managed[status.id];
+  if (!provider) return null;
   return (
-    `Open Accounts, add a ${status.displayName} account and choose Sign in. Gemini opens Google sign-in in ` +
-    "your browser for that account only. Running gemini in a terminal signs in a separate profile that " +
-    "KalCode threads don't use."
+    `Open Accounts, add a ${status.displayName} account and choose Sign in. ${provider.opens} in ` +
+    `your browser for that account only. Running ${provider.command} in a terminal signs in a separate ` +
+    "profile that KalCode threads don't use."
   );
 }
 
