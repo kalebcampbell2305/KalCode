@@ -40,16 +40,17 @@ const kalvoiceShipped = servedStableRelease(RELEASES) !== null;
   <h2>Logs</h2>
   <p>
     Logs are structured and stay local. Before anything is written, a redaction pass removes
-    credential patterns such as API keys, authorization headers, private keys, and passwords in
-    URLs.
+    credential patterns such as API keys, authorization headers, private keys, passwords in URLs,
+    OAuth tokens, sign-in codes in redirect URLs, and KalCode session tokens.
   </p>
 
   <h2>Voice</h2>
   <p>
     {kalvoiceShipped ? "KalVoice dictation" : "KalVoice dictation, in development,"} uses a
     speech-recognition model that runs on your computer. Audio is captured into memory, transcribed on the device, and discarded; it is never
-    stored or uploaded. The model is downloaded only after you agree, and is kept in KalCode's data
-    folder.
+    stored or uploaded. KalCode downloads the default English model by itself from its signed
+    component catalog, verifies it before use, and keeps it in KalCode's data folder. If you remove
+    it, KalCode doesn't download it again on its own.
   </p>
 
   <h2>What leaves your device</h2>

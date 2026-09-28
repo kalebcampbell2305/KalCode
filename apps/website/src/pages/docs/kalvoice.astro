@@ -16,7 +16,7 @@ const stable = servedStableRelease(RELEASES);
     {KALVOICE.summary}
     {
       stable
-        ? `KalVoice ships in KalCode Stable ${stable.version}. Speech recognition and command interpretation run on your computer; KalCode downloads their signed local components in the app when you set up KalVoice, with no separate Python or Ollama installation.`
+        ? `KalVoice ships in KalCode Stable ${stable.version}. Speech recognition and command interpretation run on your computer; KalCode downloads and verifies their signed local components by itself when you first open it, with no separate Python or Ollama installation.`
         : "KalVoice is in development and not available in a public build yet."
     }
     For the overview, see the <a href="/kalvoice">KalVoice page</a>.
@@ -71,8 +71,16 @@ const stable = servedStableRelease(RELEASES);
     your words somewhere else. Press <kbd>Esc</kbd> to cancel.
   </p>
   <p>
-    The speech model is downloaded only after you agree to it, from the model's official
-    distribution, and its checksum is verified before use. Nothing is downloaded automatically.
+    In a thread's message box, a hint names the provider, thread and account KalVoice is writing
+    to while you hold the key, and your words go only into that thread's box. In a terminal,
+    KalVoice types your words but never presses Enter or runs a command.
+  </p>
+  <p>
+    KalCode gets its default English speech model by itself the first time you open it, from
+    KalCode's signed component catalog on kalcoded.com, and verifies its signature and SHA-256
+    checksum before using it. The download waits while your computer is short on resources and
+    while you are holding the key. If you remove the model, KalCode doesn't download it again on
+    its own. Other speech models are downloaded only when you choose them.
   </p>
 
   <h2>Command mode</h2>
@@ -88,6 +96,42 @@ const stable = servedStableRelease(RELEASES);
     More complex interpretation requires KalVoice's on-device runtime. When it is unavailable,
     KalVoice reports that limitation without sending your request to a connected provider.
     Unavailable requests do not consume your allowance.
+  </p>
+  <p>
+    Once the speech model is ready, KalCode prepares that on-device runtime by itself (about
+    850 MB). You can pause it, and a download that fails is retried automatically. To download it
+    only when you choose, for example on a metered connection, turn off
+    <strong>Prepare local intelligence automatically</strong> in KalVoice settings.
+  </p>
+
+  <h2>Voice and your threads</h2>
+  <p>KalVoice can put your words into a thread and send them, always through that thread's own Send:</p>
+  <ul>
+    <li>
+      “Send that” sends what is in the focused thread's message box, and “Clear that” empties it
+      without sending. Neither counts as a KalVoice Request.
+    </li>
+    <li>
+      “Tell Authentication to run the tests” or “Ask Research why the build failed” opens that
+      thread and sends the rest of what you said, in your words. You can name a thread by its
+      provider and account too, such as “Research on Gemini B”.
+    </li>
+    <li>
+      When more than one thread fits, KalVoice asks, for example “Which one — Release Windows or
+      Release Mac?”, and sends nothing until you click one or say its name.
+    </li>
+    <li>
+      “What needs permission?”, “Open the one that failed” and “Go back” find and open threads by
+      what they are doing or by where you just were.
+    </li>
+    <li>
+      “It” means the thread in front of you, or else the one your last command was about, as in
+      “Tell it to continue”.
+    </li>
+  </ul>
+  <p>
+    Your prompt still goes through the thread's prompt review. KalVoice never sends to a thread
+    that is waiting for your permission and never resumes a stopped thread.
   </p>
 
   <h2>KalVoice Requests</h2>
