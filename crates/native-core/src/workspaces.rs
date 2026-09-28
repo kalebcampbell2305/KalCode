@@ -550,6 +550,12 @@ impl Core {
             ));
         }
         tx.execute("DELETE FROM workspaces WHERE id = ?1", [id])?;
+        // Per-workspace provider-account defaults belong to the workspace: remove them with it
+        // so no binding dangles for an id that no longer exists (switch accounts).
+        tx.execute(
+            "DELETE FROM provider_account_bindings WHERE kind = 'workspace' AND scope_id = ?1",
+            [id],
+        )?;
         if crate::db::meta_get(&tx, META_ACTIVE_WORKSPACE)?.as_deref() == Some(id) {
             tx.execute(
                 "DELETE FROM app_meta WHERE key = ?1",
@@ -1290,6 +1296,88 @@ mod tests {
     use super::*;
     use crate::flags::BuildChannel;
     use crate::runtime::{CoreConfig, Paths};
+
+    /// Switch accounts: a removed workspace takes its per-workspace account defaults with it,
+    /// so no binding dangles for a workspace id that no longer exists.
+    #[test]
+    fn removing_a_workspace_deletes_only_its_account_bindings() {
+        let data = tempfile::tempdir().expect("data");
+        let (gone, kept) = (
+            tempfile::tempdir().expect("gone"),
+            tempfile::tempdir().expect("kept"),
+        );
+        let core = Core::open(CoreConfig {
+            paths: Paths::new(data.path()),
+            app_version: "0.1.0-test".into(),
+            channel: BuildChannel::Development,
+        })
+        .expect("open");
+        let gone = core.open_workspace(gone.path()).expect("gone workspace");
+        let kept = core.open_workspace(kept.path()).expect("kept workspace");
+        let account = new_id();
+        let bindings = |conn: &Connection| -> Vec<(String, String)> {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT provider_id, scope_id FROM provider_account_bindings
+                     ORDER BY provider_id, scope_id",
+                )
+                .expect("prepare");
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .expect("query")
+                .collect::<std::result::Result<_, _>>()
+                .expect("rows")
+        };
+        {
+            let conn = core.conn();
+            conn.execute(
+                "INSERT INTO provider_accounts (
+                   id, provider_id, display_name, authentication_state, is_default, created_at
+                 ) VALUES (?1, 'gemini-cli', 'Gemini A', 'authenticated', 1, '2026-09-28T00:00:00Z')",
+                [&account],
+            )
+            .expect("account");
+            for scope in [&gone.id, &kept.id] {
+                conn.execute(
+                    "INSERT INTO provider_account_bindings (provider_id, kind, scope_id, account_id)
+                     VALUES ('gemini-cli', 'workspace', ?1, ?2)",
+                    [scope, &account],
+                )
+                .expect("binding");
+            }
+            // Same id as the removed workspace, but a different scope kind: never touched.
+            conn.execute(
+                "INSERT INTO provider_account_bindings (provider_id, kind, scope_id, account_id)
+                 VALUES ('gemini-cli', 'agent', ?1, ?2)",
+                [&gone.id, &account],
+            )
+            .expect("agent binding");
+        }
+
+        core.remove_workspace(&gone.id).expect("remove");
+        let mut expected = vec![
+            ("gemini-cli".to_owned(), gone.id.clone()),
+            ("gemini-cli".to_owned(), kept.id.clone()),
+        ];
+        expected.sort();
+        let remaining = bindings(&core.conn());
+        assert_eq!(remaining.len(), 2);
+        let kinds: Vec<String> = {
+            let conn = core.conn();
+            let mut stmt = conn
+                .prepare("SELECT kind FROM provider_account_bindings WHERE scope_id = ?1")
+                .expect("prepare");
+            stmt.query_map([&gone.id], |r| r.get(0))
+                .expect("query")
+                .collect::<std::result::Result<_, _>>()
+                .expect("rows")
+        };
+        assert_eq!(
+            kinds,
+            ["agent"],
+            "only the removed workspace's own binding went"
+        );
+        assert_eq!(remaining, expected);
+    }
 
     /// Regression: an exit report from a session that Restart replaced must not end the tab's
     /// new shell (it used to mark the new row exited and publish `shell.failed`).

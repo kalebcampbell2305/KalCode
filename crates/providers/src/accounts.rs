@@ -1427,6 +1427,83 @@ mod tests {
             .expect("archived label reusable");
     }
 
+    /// Switch accounts: archiving an account drops every workspace default that selected it.
+    /// That workspace then resolves to the provider default (documented behaviour the Accounts
+    /// UI shows by no longer listing the workspace under "Default in"), while an explicit id of
+    /// the archived account is refused rather than swapped for another account.
+    #[test]
+    fn archive_drops_workspace_defaults_and_resolution_falls_back_to_the_provider_default() {
+        let fixture = Fixture::new();
+        let default = fixture.store.create("gemini-cli", "Gemini A").expect("a");
+        let chosen = fixture.store.create("gemini-cli", "Gemini B").expect("b");
+        let (workspace, other) = (
+            kalcode_contracts::ids::new_id(),
+            kalcode_contracts::ids::new_id(),
+        );
+        insert_workspace(&fixture, &workspace);
+        insert_workspace(&fixture, &other);
+        for scope in [&workspace, &other] {
+            fixture
+                .store
+                .bind("gemini-cli", Kind::Workspace, scope, &chosen.id)
+                .expect("bind");
+        }
+        let scopes = ProviderAccountScopes {
+            workspace_id: Some(workspace.clone()),
+            ..ProviderAccountScopes::default()
+        };
+        assert_eq!(
+            fixture
+                .store
+                .resolve("gemini-cli", &scopes)
+                .expect("resolve")
+                .expect("bound")
+                .id,
+            chosen.id
+        );
+
+        fixture
+            .store
+            .archive(&fixture.profiles, &chosen.id)
+            .expect("archive");
+        assert!(
+            fixture
+                .store
+                .list_bindings(Some("gemini-cli"), Some(Kind::Workspace), None)
+                .expect("bindings")
+                .is_empty()
+        );
+        let raw: i64 = fixture
+            .core
+            .read(|conn| {
+                Ok(conn.query_row(
+                    "SELECT COUNT(*) FROM provider_account_bindings WHERE account_id = ?1",
+                    [&chosen.id],
+                    |row| row.get(0),
+                )?)
+            })
+            .expect("count");
+        assert_eq!(raw, 0, "no dangling rows for the archived account");
+        assert_eq!(
+            fixture
+                .store
+                .resolve("gemini-cli", &scopes)
+                .expect("resolve")
+                .expect("default")
+                .id,
+            default.id
+        );
+        assert!(
+            fixture
+                .store
+                .get(&chosen.id)
+                .expect("tombstone")
+                .archived_at
+                .is_some(),
+            "the tombstone stays readable so threads bound to it can say so"
+        );
+    }
+
     #[test]
     fn corrupt_rows_return_an_error_instead_of_empty_or_unknown_state() {
         let fixture = Fixture::new();

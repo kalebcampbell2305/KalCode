@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use kalcode_contracts::agent::{
-    AgentEvent, AgentEventSink, AgentProvider, AgentSession, ProviderCapabilities,
+    AgentEvent, AgentEventSink, AgentProvider, AgentSession, AuthState, ProviderCapabilities,
     ProviderDetection, ProviderError, ProviderId, SessionConfig,
 };
 use kalcode_contracts::context::PromptReview;
@@ -20,6 +20,7 @@ use kalcode_contracts::threads::{ThreadMessage, ThreadStatus, ThreadSummary};
 use kalcode_core::{Core, ErrorCategory, IpcError, KalError};
 use kalcode_permissions::{PermissionService, ThreadModeStore};
 use kalcode_providers::accounts::AccountStore;
+use kalcode_providers::codex::managed_policy::CloudConfigEligibility;
 use kalcode_providers::health::observe::ObservedProvider;
 use kalcode_providers::managed::ManagedProfiles;
 use kalcode_providers::model::{AdapterState, ProviderStatus};
@@ -908,9 +909,6 @@ pub fn thread_resume(
 /// cleared (resume ids are account-scoped), so the next turn starts a fresh provider session.
 /// Refused while a turn is running, starting or awaiting approval. Emits
 /// `thread.account_changed` and returns the updated summary.
-///
-/// Phase 0 contract: the final signature and registration, with the body landing in the
-/// switch-accounts runtime lane. Until then it refuses without changing anything.
 #[tauri::command(async)]
 pub fn thread_rebind_account(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
@@ -920,16 +918,66 @@ pub fn thread_rebind_account(
     provider_account_id: String,
 ) -> Result<ThreadSummary, IpcError> {
     _runtime_access.revalidate()?;
-    let _ = (&app, &state, &thread_id, &provider_account_id);
-    Err(thread_rebind_unavailable().to_ipc())
+    let runtime = state.runtime()?;
+    // The cached plan truth only: a rebind never refreshes or signs in (that happens at launch).
+    let codex_plan = |account_id: &str| {
+        state
+            .provider_runtime
+            .as_ref()
+            .and_then(|authority| authority.codex_cloud_config(account_id).ok())
+    };
+    rebind_thread_account(
+        app.core()?,
+        runtime,
+        &thread_id,
+        &provider_account_id,
+        codex_plan,
+    )
+    .map_err(|error| error.log_and_convert("thread_rebind_account"))
 }
 
-fn thread_rebind_unavailable() -> KalError {
-    KalError::new(
-        ErrorCategory::Internal,
-        "thread_rebind_unavailable",
-        "Switching a thread's provider account isn't available in this build yet.",
-    )
+/// Validates what the thread runtime can't see, then rebinds. Order (mirrored by the memory
+/// transport): archived thread; account id, existence, provider and removal; the current
+/// account is a no-op; sign-in state (`not_authenticated` refused, `unknown` allowed because
+/// launch re-checks); a cached Codex organization plan; then the runtime's busy checks.
+fn rebind_thread_account(
+    core: &Arc<Core>,
+    runtime: &ThreadRuntime,
+    thread_id: &str,
+    account_id: &str,
+    codex_plan: impl Fn(&str) -> Option<CloudConfigEligibility>,
+) -> kalcode_core::Result<ThreadSummary> {
+    let thread = runtime.get(thread_id)?;
+    if thread.archived_at.is_some() {
+        return Err(KalError::validation(
+            "thread_archived",
+            "This thread is archived.",
+        ));
+    }
+    let account = AccountStore::new(core.clone()).get(account_id)?;
+    let account = validate_creation_account(account, thread.provider_id.as_str())?;
+    if thread.provider_account_id.as_deref() != Some(account.id.as_str()) {
+        if account.authentication_state == AuthState::NotAuthenticated {
+            return Err(KalError::new(
+                ErrorCategory::Provider,
+                "provider_account_not_authenticated",
+                format!(
+                    "{label} isn't signed in. Sign in to {label} in Providers, then switch.",
+                    label = account.display_name
+                ),
+            ));
+        }
+        if account.provider_id.as_str() == ProviderId::CODEX
+            && codex_plan(&account.id) == Some(CloudConfigEligibility::Eligible)
+        {
+            return Err(KalError::new(
+                ErrorCategory::Provider,
+                "provider_account_plan_unsupported",
+                "This Codex organization plan isn't supported by managed profiles yet.",
+            ));
+        }
+    }
+    runtime.rebind_account(thread_id, &account.id)
 }
 
 #[tauri::command(async)]
@@ -1397,6 +1445,347 @@ mod tests {
                 "prompt_review_without_prompt"
             );
         }
+    }
+
+    /// A provider adapter shaped like the managed ones: it launches with the selected account's
+    /// sanitized environment and holds that account's shared profile lease for the session's
+    /// lifetime. It records which profile home each launch would use.
+    struct ProfileProbe {
+        provider: &'static str,
+        profiles: ManagedProfiles,
+        launches: Mutex<Vec<(String, Option<String>, std::path::PathBuf)>>,
+    }
+
+    impl ProfileProbe {
+        fn launches(&self) -> Vec<(String, Option<String>, std::path::PathBuf)> {
+            self.launches
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+        }
+    }
+
+    /// Keeps the event sink like a real adapter: dropping it would read as the process exiting.
+    struct ProbeSession(#[allow(dead_code)] Box<dyn AgentEventSink>);
+
+    impl AgentSession for ProbeSession {
+        fn provider_session_id(&self) -> Option<String> {
+            None
+        }
+        fn send(&self, _input: kalcode_contracts::agent::AgentInput) -> Result<(), ProviderError> {
+            Ok(())
+        }
+        fn interrupt(&self) -> Result<(), ProviderError> {
+            Ok(())
+        }
+        fn terminate(&self) -> Result<(), ProviderError> {
+            Ok(())
+        }
+        fn respond_to_approval(
+            &self,
+            _request_id: &str,
+            _decision: kalcode_contracts::permissions::ApprovalDecision,
+        ) -> Result<(), ProviderError> {
+            Ok(())
+        }
+    }
+
+    impl AgentProvider for ProfileProbe {
+        fn id(&self) -> ProviderId {
+            ProviderId::new(self.provider)
+        }
+
+        fn display_name(&self) -> &str {
+            self.provider
+        }
+
+        fn detect(&self) -> ProviderDetection {
+            ProviderDetection {
+                provider_id: self.id(),
+                display_name: self.provider.into(),
+                state: DetectionState::Installed,
+                display_path: None,
+                version: None,
+                minimum_version: None,
+                auth: AuthState::Authenticated,
+                message: None,
+                checked_at: String::new(),
+            }
+        }
+
+        fn capabilities(&self) -> ProviderCapabilities {
+            match self.provider {
+                ProviderId::CODEX => kalcode_providers::catalog::codex_capabilities(),
+                _ => kalcode_providers::catalog::gemini_capabilities(),
+            }
+        }
+
+        fn start_session(
+            &self,
+            config: SessionConfig,
+            sink: Box<dyn AgentEventSink>,
+        ) -> Result<Box<dyn AgentSession>, ProviderError> {
+            let account = config
+                .provider_account_id
+                .clone()
+                .ok_or(ProviderError::NotAuthenticated)?;
+            let env =
+                self.profiles
+                    .launch_env(self.provider, &account, &DetectEnv::from_process())?;
+            let variable = match self.provider {
+                ProviderId::CODEX => "CODEX_HOME",
+                _ => "GEMINI_CLI_HOME",
+            };
+            let home = env
+                .get(std::ffi::OsStr::new(variable))
+                .map(std::path::PathBuf::from)
+                .ok_or_else(|| ProviderError::Start("no managed home".into()))?;
+            let lease = self
+                .profiles
+                .acquire_session_lease(self.provider, &account)?;
+            self.launches
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push((account, config.resume_session_id, home));
+            Ok(kalcode_providers::managed::hold_session_lease(
+                Box::new(ProbeSession(sink)),
+                lease,
+            ))
+        }
+    }
+
+    struct OneWorkspace(kalcode_threads::ResolvedWorkspace);
+
+    impl kalcode_threads::WorkspaceResolver for OneWorkspace {
+        fn list(&self) -> kalcode_core::Result<Vec<kalcode_threads::ResolvedWorkspace>> {
+            Ok(vec![self.0.clone()])
+        }
+
+        fn resolve(
+            &self,
+            workspace_id: &str,
+        ) -> kalcode_core::Result<kalcode_threads::ResolvedWorkspace> {
+            if workspace_id == self.0.id {
+                Ok(self.0.clone())
+            } else {
+                Err(kalcode_threads::registry::workspace_not_found())
+            }
+        }
+    }
+
+    struct RebindFixture {
+        accounts: AccountFixture,
+        gemini: Arc<ProfileProbe>,
+        codex: Arc<ProfileProbe>,
+        runtime: ThreadRuntime,
+    }
+
+    impl RebindFixture {
+        fn new() -> Self {
+            let accounts = AccountFixture::new();
+            let root = accounts._temp.path().join("repo");
+            std::fs::create_dir_all(&root).expect("repo");
+            let registry = Arc::new(ProviderRegistry::new());
+            let probe = |provider| {
+                Arc::new(ProfileProbe {
+                    provider,
+                    profiles: accounts.profiles.clone(),
+                    launches: Mutex::new(Vec::new()),
+                })
+            };
+            let (gemini, codex) = (probe(ProviderId::GEMINI_CLI), probe(ProviderId::CODEX));
+            for inner in [&gemini, &codex] {
+                let inner: Arc<dyn AgentProvider> = inner.clone();
+                registry.register(Arc::new(AccountBoundProvider::new(
+                    inner,
+                    accounts.store.clone(),
+                    accounts.profiles.clone(),
+                    false,
+                )));
+            }
+            let runtime = ThreadRuntime::new(
+                accounts.core.clone(),
+                registry,
+                Arc::new(OneWorkspace(kalcode_threads::ResolvedWorkspace {
+                    id: accounts.workspace_id.clone(),
+                    name: "Fixture".into(),
+                    root,
+                })),
+                Arc::new(kalcode_contracts::permissions::AskUnlessReadGate),
+            )
+            .expect("runtime");
+            Self {
+                accounts,
+                gemini,
+                codex,
+                runtime,
+            }
+        }
+
+        fn account(&self, provider: &str, label: &str, state: AuthState) -> ProviderAccount {
+            let account = self
+                .accounts
+                .store
+                .create(provider, label)
+                .expect("account");
+            self.accounts
+                .store
+                .mark_authentication(&account.id, state, None, None)
+                .expect("auth state")
+        }
+
+        fn idle_thread(&self, provider: &str, account: &ProviderAccount) -> ThreadSummary {
+            self.runtime
+                .create_idle(kalcode_threads::CreateIdleThread {
+                    provider_id: provider.into(),
+                    provider_account_id: Some(account.id.clone()),
+                    account_label: Some(account.display_name.clone()),
+                    workspace_id: self.accounts.workspace_id.clone(),
+                    model: None,
+                    permission_mode: PermissionMode::Approve,
+                    name: None,
+                })
+                .expect("idle thread")
+        }
+
+        fn rebind(
+            &self,
+            thread: &ThreadSummary,
+            account_id: &str,
+            plan: Option<CloudConfigEligibility>,
+        ) -> kalcode_core::Result<ThreadSummary> {
+            rebind_thread_account(
+                &self.accounts.core,
+                &self.runtime,
+                &thread.id,
+                account_id,
+                |_| plan,
+            )
+        }
+
+        fn in_use(&self, provider: &str, account: &ProviderAccount) -> bool {
+            self.accounts
+                .profiles
+                .acquire_account_lifecycle_lease(provider, &account.id)
+                .is_err()
+        }
+    }
+
+    #[test]
+    fn rebind_releases_the_old_profile_and_the_next_launch_uses_only_the_new_accounts_home() {
+        let fixture = RebindFixture::new();
+        let a = fixture.account(ProviderId::GEMINI_CLI, "Gemini A", AuthState::Authenticated);
+        let b = fixture.account(ProviderId::GEMINI_CLI, "Gemini B", AuthState::Unknown);
+        let thread = fixture.idle_thread(ProviderId::GEMINI_CLI, &a);
+        assert_eq!(thread.status, ThreadStatus::Idle);
+        assert!(
+            fixture.in_use(ProviderId::GEMINI_CLI, &a),
+            "the idle session holds A"
+        );
+
+        let rebound = fixture.rebind(&thread, &b.id, None).expect("rebind");
+        assert_eq!(rebound.provider_account_id.as_deref(), Some(b.id.as_str()));
+        assert_eq!(rebound.account_label.as_deref(), Some("Gemini B"));
+        assert!(
+            !fixture.in_use(ProviderId::GEMINI_CLI, &a),
+            "ending the idle session released A's shared profile lease"
+        );
+
+        fixture.runtime.resume(&thread.id, None).expect("resume");
+        let launches = fixture.gemini.launches();
+        assert_eq!(launches.len(), 2);
+        let (account, resume_id, home) = &launches[1];
+        assert_eq!(account, &b.id);
+        assert_eq!(resume_id, &None);
+        let home = home.to_string_lossy();
+        assert!(home.contains(&b.id) && !home.contains(&a.id), "{home}");
+        assert!(fixture.in_use(ProviderId::GEMINI_CLI, &b));
+        assert!(
+            !fixture.in_use(ProviderId::GEMINI_CLI, &a),
+            "nothing reads or holds the old profile after the rebind"
+        );
+    }
+
+    #[test]
+    fn rebind_refuses_unusable_targets_without_touching_the_thread() {
+        let fixture = RebindFixture::new();
+        let a = fixture.account(ProviderId::GEMINI_CLI, "Gemini A", AuthState::Authenticated);
+        let signed_out = fixture.account(
+            ProviderId::GEMINI_CLI,
+            "Gemini B",
+            AuthState::NotAuthenticated,
+        );
+        let removed = fixture.account(ProviderId::GEMINI_CLI, "Old", AuthState::Authenticated);
+        fixture
+            .accounts
+            .store
+            .archive(&fixture.accounts.profiles, &removed.id)
+            .expect("archive");
+        let work = fixture.account(ProviderId::CODEX, "Work", AuthState::Authenticated);
+        let org = fixture.account(ProviderId::CODEX, "Org", AuthState::Authenticated);
+        let thread = fixture.idle_thread(ProviderId::GEMINI_CLI, &a);
+
+        for (account, code) in [
+            (signed_out.id.as_str(), "provider_account_not_authenticated"),
+            (removed.id.as_str(), "provider_account_archived"),
+            (work.id.as_str(), "provider_account_mismatch"),
+            (
+                "0192f3c4-0000-7000-8000-000000000999",
+                "provider_account_unknown",
+            ),
+            ("not-an-id", "provider_account_id_invalid"),
+        ] {
+            assert_eq!(
+                fixture.rebind(&thread, account, None).expect_err(code).code,
+                code
+            );
+        }
+        let unchanged = fixture.runtime.get(&thread.id).expect("thread");
+        assert_eq!(
+            unchanged.provider_account_id.as_deref(),
+            Some(a.id.as_str())
+        );
+        assert_eq!(unchanged.status, ThreadStatus::Idle, "session kept");
+        assert!(fixture.in_use(ProviderId::GEMINI_CLI, &a));
+
+        // The current account is a no-op success even when its sign-in state is stale.
+        fixture
+            .accounts
+            .store
+            .mark_authentication(&a.id, AuthState::NotAuthenticated, None, None)
+            .expect("signed out");
+        let same = fixture.rebind(&thread, &a.id, None).expect("same account");
+        assert_eq!(same.status, ThreadStatus::Idle);
+
+        // Codex: a cached organization plan is refused now, not on the next message; an
+        // unverified plan is left to the launch-time refresh.
+        let codex_thread = fixture.idle_thread(ProviderId::CODEX, &work);
+        assert_eq!(
+            fixture
+                .rebind(
+                    &codex_thread,
+                    &org.id,
+                    Some(CloudConfigEligibility::Eligible)
+                )
+                .expect_err("organization plan")
+                .code,
+            "provider_account_plan_unsupported"
+        );
+        fixture
+            .rebind(&codex_thread, &org.id, None)
+            .expect("unverified plan is checked at launch");
+        assert_eq!(fixture.codex.launches().len(), 1);
+
+        fixture.runtime.stop(&thread.id).expect("stop");
+        fixture.runtime.archive(&thread.id).expect("archive");
+        let archived = fixture.runtime.get(&thread.id).expect("archived thread");
+        assert_eq!(
+            fixture
+                .rebind(&archived, &a.id, None)
+                .expect_err("archived thread")
+                .code,
+            "thread_archived"
+        );
     }
 
     #[test]

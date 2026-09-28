@@ -65,6 +65,25 @@ describe("switch accounts memory contract", () => {
     }
   });
 
+  it("matches native: pending approvals refuse, an idle live session ends, the current account is a no-op", async () => {
+    const client = new KalCodeClient(createMemoryTransport("threads"));
+    const threads = await client.listThreads();
+    const waiting = threads.find((thread) => thread.status === "waiting_for_permission");
+    if (!waiting) throw new Error("fixture has no waiting thread");
+    const other = await client.createProviderAccount(waiting.providerId, "Other");
+    await expect(client.rebindThreadAccount(waiting.id, other.id)).rejects.toMatchObject({
+      code: "thread_rebind_pending_approval",
+    });
+
+    const idle = threads.find((thread) => thread.status === "idle");
+    if (!idle) throw new Error("fixture has no idle thread");
+    const target = await client.createProviderAccount(idle.providerId, "Next");
+    const rebound = await client.rebindThreadAccount(idle.id, target.id);
+    expect(rebound).toMatchObject({ status: "completed", resumable: false, providerAccountId: target.id });
+    expect(await client.rebindThreadAccount(idle.id, target.id)).toMatchObject({ status: "completed" });
+    expect((await client.resumeThread(idle.id)).providerAccountId).toBe(target.id);
+  });
+
   it("lists workspace bindings with filters and drops them when the account is archived", async () => {
     const client = new KalCodeClient(createMemoryTransport("threads"));
     const geminiB = await client.createProviderAccount("gemini-cli", "Gemini B");

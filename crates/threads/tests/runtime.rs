@@ -1804,22 +1804,20 @@ fn selected_provider_account_survives_runtime_restart_and_default_changes() {
         gate.clone(),
     )
     .expect("restart");
-    restarted.resume(&created.id, None).expect("resume");
+    let sessions_before = provider.session_count();
+    // The thread keeps its archived account selection instead of using the new default, and
+    // says so clearly rather than launching anything.
+    assert_code(
+        restarted.resume(&created.id, None),
+        "provider_account_archived",
+    );
+    assert_eq!(provider.session_count(), sessions_before);
     let resumed = restarted.get(&created.id).expect("summary");
     assert_eq!(
         resumed.provider_account_id.as_deref(),
         Some(personal_id.as_str())
     );
     assert_eq!(resumed.account_label.as_deref(), Some("My Personal"));
-    assert_eq!(
-        provider
-            .last_session()
-            .config
-            .provider_account_id
-            .as_deref(),
-        Some(personal_id.as_str()),
-        "resume keeps the thread's archived account selection instead of using the new default"
-    );
     drop((dir, workspace_id));
 }
 

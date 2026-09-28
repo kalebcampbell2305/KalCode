@@ -60,6 +60,8 @@ pub const STOPPED_ACTIVITY: &str = "Stopped by you";
 pub const SHUTDOWN_ACTIVITY: &str = "KalCode closed";
 pub const INTERRUPTED_ACTIVITY: &str = "Interrupted by you";
 pub const PAUSED_ACTIVITY: &str = "Paused";
+/// Activity of a thread whose idle session was ended because its account was switched.
+pub const ACCOUNT_SWITCHED_ACTIVITY: &str = "Switched provider account";
 const NEW_SESSION_NOTICE: &str = "Started a new provider session. The earlier conversation couldn't be restored, so the provider won't remember the messages above.";
 
 type StreamSubscriber = Box<dyn Fn(&AgentEvent) -> bool + Send + Sync>;
@@ -261,6 +263,10 @@ enum EndReason {
     Failed { code: String, message: String },
     /// The user (or shutdown) stopped the thread.
     Stopped { activity: &'static str },
+    /// The thread was rebound to another account; its idle session under the old account ends.
+    /// The thread is resumable (`completed`, not `interrupted`) and no `thread.completed`
+    /// notification is published, because nothing finished.
+    AccountSwitched,
 }
 
 #[derive(Default)]
@@ -835,6 +841,30 @@ impl ThreadRuntime {
         validate::thread_id(thread_id)?;
         self.inner.archive(thread_id)?;
         self.inner.summary(thread_id)
+    }
+
+    /// Explicitly rebinds a thread to another account of its provider (switch accounts). Only
+    /// future provider requests use the new account: past messages stay, and the provider resume
+    /// id is cleared with the account in one transaction because it belongs to the old account's
+    /// profile home. An idle live session is ended first (without marking the thread
+    /// interrupted), which drops it and so releases the old profile's shared lease; the next
+    /// turn starts a fresh session under the new account with the new-session notice.
+    ///
+    /// Refused while a turn is starting or running (`thread_rebind_busy`) or an approval is
+    /// pending (`thread_rebind_pending_approval`), for archived threads, and for unknown,
+    /// removed or other-provider accounts. Rebinding to the current account changes nothing.
+    /// Sign-in state and plan policy are the caller's to check: this crate never sees them.
+    /// Records `thread.account_changed` with the account's label snapshot.
+    pub fn rebind_account(&self, thread_id: &str, account_id: &str) -> Result<ThreadSummary> {
+        validate::thread_id(thread_id)?;
+        if !is_valid_id(account_id) {
+            return Err(KalError::validation(
+                "provider_account_id_invalid",
+                "That account or binding id isn't valid.",
+            ));
+        }
+        let row = self.inner.rebind_account(thread_id, account_id)?;
+        Ok(self.inner.summary_from_row(row))
     }
 
     /// Changes a thread's permission mode and records `permission.mode_changed` atomically.
@@ -2137,6 +2167,11 @@ impl Inner {
                     EndReason::Stopped { activity } => {
                         (ThreadStatus::Interrupted, Some((*activity).to_owned()), None)
                     }
+                    EndReason::AccountSwitched => (
+                        ThreadStatus::Completed,
+                        Some(ACCOUNT_SWITCHED_ACTIVITY.to_owned()),
+                        None,
+                    ),
                     EndReason::Failed { code, message } => (
                         ThreadStatus::Failed,
                         None,
@@ -2181,7 +2216,7 @@ impl Inner {
                     },
                 ));
             }
-            if to == ThreadStatus::Completed {
+            if to == ThreadStatus::Completed && !matches!(reason, EndReason::AccountSwitched) {
                 events.push(ctx.event(
                     EventSource::Core,
                     EventPayload::ThreadCompleted {
@@ -2423,21 +2458,22 @@ impl Inner {
         let workspace = self.workspaces.resolve(&row.workspace_id)?;
         let cwd = workspace.root.to_string_lossy().into_owned();
         let capabilities = entry.provider.capabilities();
-        let resume_id = if capabilities.resume {
-            row.provider_session_id.clone()
-        } else {
-            None
-        };
         let has_history = self
             .core
             .read(|conn| store::messages(conn, thread_id, 1, None))?
             .into_iter()
             .next()
             .is_some();
-        let notice = (resume_id.is_none() && has_history).then_some(NEW_SESSION_NOTICE);
         let ctx = Ctx::from_row(&row);
         let now = now_rfc3339();
         self.core.write_with_events(|tx| {
+            // A thread keeps its own account: when that account was removed from KalCode, say
+            // so instead of launching (or falling back to another account).
+            if let Some(account_id) = store::get(tx, thread_id)?.provider_account_id
+                && store::account(tx, &account_id)?.is_some_and(|account| account.archived)
+            {
+                return Err(thread_account_archived());
+            }
             store::set_cwd(tx, thread_id, &cwd, &workspace.name)?;
             let from = store::set_status(
                 tx,
@@ -2456,8 +2492,67 @@ impl Inner {
                 ),
             ))
         })?;
+        // Read the account and resume id after the `starting` write: a rebind that committed
+        // before it is seen here, and one after it is refused as busy. So a resume id is never
+        // paired with a different account than the one it was recorded under.
         let row = self.row(thread_id)?;
+        let resume_id = if capabilities.resume {
+            row.provider_session_id.clone()
+        } else {
+            None
+        };
+        let notice = (resume_id.is_none() && has_history).then_some(NEW_SESSION_NOTICE);
         self.start_session(&row, &entry, resume_id, text, notice)
+    }
+
+    fn rebind_account(&self, thread_id: &str, account_id: &str) -> Result<ThreadRow> {
+        let row = self.row(thread_id)?;
+        if row.archived_at.is_some() {
+            return Err(archived());
+        }
+        let account = self.core.read(|conn| store::account(conn, account_id))?;
+        rebind_target(account, &row.provider_id)?;
+        if row.provider_account_id.as_deref() == Some(account_id) {
+            return Ok(row);
+        }
+        // Hold the thread's authority lock (when it has live state) so no turn can start on the
+        // old session between the busy check and the write.
+        let live = self.existing_live(thread_id);
+        let mut state = live.as_ref().map(|live| live.lock());
+        let row = self.row(thread_id)?;
+        let pending = state.as_ref().map_or(0, |state| state.pending.len());
+        rebind_ready(&row, pending)?;
+        if let (Some(live), Some(state)) = (&live, state.as_mut())
+            && state.session.is_some()
+        {
+            self.end_session(live, state, EndReason::AccountSwitched)?;
+        }
+        let ctx = Ctx::from_row(&row);
+        let (row, _) = self.core.write_with_events(|tx| {
+            // Authoritative re-checks in the write transaction: a resume that marked the thread
+            // `starting`, an archive of the thread, or an archive of the account since the
+            // checks above all refuse instead of rebinding.
+            let current = store::get(tx, thread_id)?;
+            if current.archived_at.is_some() {
+                return Err(archived());
+            }
+            rebind_ready(&current, 0)?;
+            let account = rebind_target(store::account(tx, account_id)?, &current.provider_id)?;
+            store::set_account(tx, thread_id, account_id, Some(&account.display_name))?;
+            let row = store::get(tx, thread_id)?;
+            let event = ctx.event(
+                EventSource::Ui,
+                EventPayload::ThreadAccountChanged {
+                    thread_id: thread_id.to_owned(),
+                    provider_account_id: account_id.to_owned(),
+                    account_label: row.account_label.clone(),
+                },
+            );
+            Ok((row, vec![event]))
+        })?;
+        drop(state);
+        tracing::info!(event = "thread.account_changed", thread_id = %thread_id);
+        Ok(row)
     }
 
     fn rename(&self, thread_id: &str, name: &str) -> Result<()> {
@@ -2534,6 +2629,60 @@ impl Inner {
 
 fn archived() -> KalError {
     KalError::validation("thread_archived", "This thread is archived.")
+}
+
+fn thread_account_archived() -> KalError {
+    KalError::validation(
+        "provider_account_archived",
+        "This thread's account was removed from KalCode. Switch the thread to an active account to continue.",
+    )
+}
+
+/// The account a thread may be rebound to: an existing, active account of the thread's provider.
+fn rebind_target(
+    account: Option<store::AccountRef>,
+    provider_id: &ProviderId,
+) -> Result<store::AccountRef> {
+    let account = account.ok_or_else(|| {
+        KalError::validation(
+            "provider_account_unknown",
+            "That provider account no longer exists.",
+        )
+    })?;
+    if account.provider_id != *provider_id {
+        return Err(KalError::validation(
+            "provider_account_mismatch",
+            "That account belongs to a different provider.",
+        ));
+    }
+    if account.archived {
+        return Err(KalError::validation(
+            "provider_account_archived",
+            "That account was removed from KalCode. Reconnect it or choose an active account.",
+        ));
+    }
+    Ok(account)
+}
+
+/// A rebind waits for a quiet thread: no turn starting or running, no approval pending (an
+/// approved action would otherwise run under the wrong account).
+fn rebind_ready(row: &ThreadRow, live_pending: usize) -> Result<()> {
+    if row.status == ThreadStatus::WaitingForPermission
+        || row.pending_approvals > 0
+        || live_pending > 0
+    {
+        return Err(KalError::validation(
+            "thread_rebind_pending_approval",
+            "Answer or deny the pending approval, or stop the thread, before switching accounts.",
+        ));
+    }
+    if row.status.is_live() {
+        return Err(KalError::validation(
+            "thread_rebind_busy",
+            "Wait for the current turn to finish or stop the thread first.",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

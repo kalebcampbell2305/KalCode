@@ -217,6 +217,57 @@ pub fn set_provider_session(
     Ok(())
 }
 
+/// Rebinds a thread to another provider account: the account id and its owner-visible label
+/// snapshot change, and the provider resume id is cleared in the same statement. Resume ids are
+/// account-scoped (Claude `CLAUDE_CONFIG_DIR/projects`, Codex `CODEX_HOME/sessions`, Gemini
+/// `GEMINI_CLI_HOME/.gemini/tmp` live in the old account's profile home), so keeping one would
+/// make the next start fail under the new account or silently skip the new-session notice.
+/// Messages, tool calls and files are untouched.
+pub fn set_account(
+    conn: &Connection,
+    id: &str,
+    provider_account_id: &str,
+    account_label: Option<&str>,
+) -> Result<()> {
+    let changed = conn.execute(
+        "UPDATE threads
+         SET provider_account_id = ?2, account_label = ?3, provider_session_id = NULL
+         WHERE id = ?1",
+        params![id, provider_account_id, account_label],
+    )?;
+    if changed == 0 {
+        return Err(thread_not_found());
+    }
+    Ok(())
+}
+
+/// What the thread runtime may know about a provider account: its owner, label and whether it
+/// was removed from KalCode. Never identity, authentication state or credentials.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountRef {
+    pub provider_id: ProviderId,
+    pub display_name: String,
+    pub archived: bool,
+}
+
+/// Reads an account's owner, label and archive state (`None` when no such account exists).
+pub fn account(conn: &Connection, id: &str) -> Result<Option<AccountRef>> {
+    Ok(conn
+        .query_row(
+            "SELECT provider_id, display_name, archived_at IS NOT NULL
+             FROM provider_accounts WHERE id = ?1",
+            [id],
+            |r| {
+                Ok(AccountRef {
+                    provider_id: ProviderId::new(r.get::<_, String>(0)?),
+                    display_name: r.get(1)?,
+                    archived: r.get(2)?,
+                })
+            },
+        )
+        .optional()?)
+}
+
 pub fn set_error(conn: &Connection, id: &str, error: Option<(&str, &str)>) -> Result<()> {
     conn.execute(
         "UPDATE threads SET error_code = ?2, error_message = ?3 WHERE id = ?1",
@@ -647,6 +698,74 @@ mod tests {
                 .code,
             "invalid_cursor"
         );
+    }
+
+    fn account_row(conn: &Connection, id: &str, provider: &str, label: &str, archived: bool) {
+        conn.execute(
+            "INSERT INTO provider_accounts (
+                id, provider_id, display_name, authentication_state, is_default, created_at,
+                archived_at
+             ) VALUES (?1, ?2, ?3, 'authenticated', 0, '2026-09-28T00:00:00Z', ?4)",
+            params![
+                id,
+                provider,
+                label,
+                archived.then_some("2026-09-28T01:00:00Z")
+            ],
+        )
+        .expect("account");
+    }
+
+    #[test]
+    fn set_account_changes_the_snapshot_and_clears_the_account_scoped_resume_id() {
+        let conn = conn();
+        let id = new_id();
+        thread(&conn, &id, "2026-09-28T10:00:00.000Z");
+        let (a, b) = (new_id(), new_id());
+        account_row(&conn, &a, "gemini-cli", "Gemini A", false);
+        account_row(&conn, &b, "gemini-cli", "Gemini B", false);
+        conn.execute(
+            "UPDATE threads SET provider_account_id = ?2, account_label = 'Gemini A' WHERE id = ?1",
+            params![id, a],
+        )
+        .expect("bind a");
+        set_provider_session(&conn, &id, "gemini-chat-under-a", Some("gemini-2.5-pro"))
+            .expect("resume id");
+
+        set_account(&conn, &id, &b, Some("Gemini B")).expect("rebind");
+        let row = get(&conn, &id).expect("row");
+        assert_eq!(row.provider_account_id.as_deref(), Some(b.as_str()));
+        assert_eq!(row.account_label.as_deref(), Some("Gemini B"));
+        assert_eq!(
+            row.provider_session_id, None,
+            "a resume id lives in the old account's profile home and must not survive a rebind"
+        );
+        assert_eq!(row.model.as_deref(), Some("gemini-2.5-pro"));
+        assert_eq!(
+            set_account(&conn, &new_id(), &b, Some("Gemini B"))
+                .expect_err("missing thread")
+                .code,
+            "thread_not_found"
+        );
+    }
+
+    #[test]
+    fn account_ref_reads_owner_label_and_archive_state_only() {
+        let conn = conn();
+        let (active, archived) = (new_id(), new_id());
+        account_row(&conn, &active, "codex", "Work", false);
+        account_row(&conn, &archived, "codex", "Old", true);
+        let found = account(&conn, &active).expect("read").expect("active");
+        assert_eq!(found.provider_id.as_str(), "codex");
+        assert_eq!(found.display_name, "Work");
+        assert!(!found.archived);
+        assert!(
+            account(&conn, &archived)
+                .expect("read")
+                .expect("row")
+                .archived
+        );
+        assert_eq!(account(&conn, &new_id()).expect("read"), None);
     }
 
     #[test]

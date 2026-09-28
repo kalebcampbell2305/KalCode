@@ -60,6 +60,9 @@ pub struct FakeSession {
     fail_send: AtomicBool,
     terminate_failures: AtomicUsize,
     interrupt_supported: bool,
+    /// Set when the runtime drops its handle: a real adapter releases the account's shared
+    /// profile lease at that point.
+    released: AtomicBool,
 }
 
 impl FakeSession {
@@ -84,6 +87,11 @@ impl FakeSession {
         self.ended.load(Ordering::SeqCst)
     }
 
+    /// The runtime no longer holds this session (its profile lease would be released).
+    pub fn is_released(&self) -> bool {
+        self.released.load(Ordering::SeqCst)
+    }
+
     /// Simulates the provider process dying.
     pub fn crash(&self, exit_code: Option<i32>) {
         self.ended.store(true, Ordering::SeqCst);
@@ -92,6 +100,12 @@ impl FakeSession {
 }
 
 struct SessionHandle(Arc<FakeSession>);
+
+impl Drop for SessionHandle {
+    fn drop(&mut self) {
+        self.0.released.store(true, Ordering::SeqCst);
+    }
+}
 
 impl AgentSession for SessionHandle {
     fn provider_session_id(&self) -> Option<String> {
@@ -293,6 +307,7 @@ impl AgentProvider for FakeProvider {
             fail_send: AtomicBool::new(false),
             terminate_failures: AtomicUsize::new(0),
             interrupt_supported: self.interrupt,
+            released: AtomicBool::new(false),
         });
         self.sessions.lock().unwrap().push(session.clone());
         Ok(Box::new(SessionHandle(session)))

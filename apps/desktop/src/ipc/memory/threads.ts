@@ -940,20 +940,15 @@ export function createThreadsMemory(
       return summary(t);
     },
     // Like native `thread_rebind_account`: future provider requests use the new account, past
-    // messages stay, and the account-scoped resume id is cleared so the next start is fresh.
+    // messages stay, and the account-scoped resume id is cleared so the next start is fresh. Same
+    // refusal order as native: archived thread, account (id, owner, removal), current account is
+    // a no-op, sign-in state, then pending approval / busy. An idle live session is ended first
+    // (native releases the old profile lease), leaving the thread resumable as "completed".
     thread_rebind_account: (args) => {
       const t = get(args);
       if (t.archived) invalid("thread_archived", "This thread is archived.");
       const accountId = typeof args.providerAccountId === "string" ? args.providerAccountId : "";
       if (!UUID.test(accountId)) invalid("provider_account_id_invalid", "That account or binding id isn't valid.");
-      if (
-        t.summary.status === "starting" ||
-        LIVE.has(t.summary.status) ||
-        t.summary.status === "waiting_for_permission" ||
-        t.summary.pendingApprovals > 0
-      ) {
-        invalid("thread_rebind_busy", "Wait for the current turn to finish or stop the thread first.");
-      }
       if (accountFor === null) {
         return error(
           "internal",
@@ -962,6 +957,7 @@ export function createThreadsMemory(
         );
       }
       const target = accountFor(accountId, t.summary.providerId);
+      if (t.summary.providerAccountId === accountId) return summary(t);
       if (target.authenticationState === "not_authenticated") {
         return error(
           "provider",
@@ -969,9 +965,25 @@ export function createThreadsMemory(
           `${target.displayName} isn't signed in. Sign in to ${target.displayName} in Providers, then switch.`,
         );
       }
-      if (t.summary.providerAccountId === accountId) return summary(t);
+      if (t.summary.status === "waiting_for_permission" || t.summary.pendingApprovals > 0 || t.pendingRequest) {
+        invalid(
+          "thread_rebind_pending_approval",
+          "Answer or deny the pending approval, or stop the thread, before switching accounts.",
+        );
+      }
+      if (LIVE.has(t.summary.status)) {
+        invalid("thread_rebind_busy", "Wait for the current turn to finish or stop the thread first.");
+      }
+      if (t.live) {
+        t.paneStop?.();
+        cancelTimers(t);
+        t.live = false;
+        flush(t);
+        cancelTools(t);
+        setStatus(t, "completed", "Switched provider account", "ui");
+      }
       t.providerSessionId = null;
-      t.summary = { ...t.summary, providerAccountId: accountId, accountLabel: target.displayName };
+      t.summary = { ...t.summary, providerAccountId: accountId, accountLabel: target.displayName, resumable: false };
       emit(
         {
           type: "thread.account_changed",
