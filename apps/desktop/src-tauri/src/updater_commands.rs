@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -13,8 +14,9 @@ use kalcode_core::{ErrorCategory, IpcError, KalError};
 use kalcode_updater::{
     ArtifactFormat, Candidate, InstallAttempt, InstallBinding, InstallKind, InstallOutcome,
     MAX_UPDATE_BYTES, MacSwapAttempt, OperationToken, RollbackCache, UpdateChannel, UpdateError,
-    UpdateJournal, UpdateMachine, UpdateStatus, UpdateTarget, validate_candidate_for_target,
-    validate_retained_candidate_for_target, verify_download, verify_signature_for_metadata,
+    UpdateJournal, UpdateMachine, UpdatePhase, UpdateStatus, UpdateTarget,
+    validate_candidate_for_target, validate_retained_candidate_for_target, verify_download,
+    verify_signature_for_metadata,
 };
 use reqwest::header::ACCEPT;
 use reqwest::redirect::Policy;
@@ -29,6 +31,13 @@ use installer::PreparedInstaller;
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const USER_AGENT: &str = concat!("KalCode/", env!("CARGO_PKG_VERSION"));
 const MAX_FEED_BYTES: u64 = 64 * 1024;
+/// While KalCode runs, the signed feed is re-checked about this often (the launch check covers
+/// startup), jittered by `PERIODIC_CHECK_JITTER_PERCENT` either way.
+const PERIODIC_CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+const PERIODIC_CHECK_JITTER_PERCENT: u64 = 10;
+/// The periodic timer re-reads the wall clock at least this often, so a machine that slept
+/// through the due time re-checks soon after it wakes.
+const PERIODIC_CHECK_POLL: Duration = Duration::from_secs(60);
 
 /// Quiesces active work before an installer can be launched. `false` means at least one runtime
 /// could not prove it stopped within its bounded shutdown window, so installation must abort.
@@ -73,6 +82,20 @@ struct Runtime {
 }
 
 impl Runtime {
+    /// Begins a check only when `allowed` accepts the current phase. The gate and the transition
+    /// share one lock, so a phase the gate refuses (a staged Ready update) is left untouched,
+    /// prepared bytes included.
+    fn begin_check_if(
+        &mut self,
+        allowed: fn(UpdatePhase) -> bool,
+    ) -> Result<Option<(OperationToken, UpdateChannel, AbortRegistration)>, UpdateError> {
+        if !allowed(self.machine.status().phase) {
+            return Ok(None);
+        }
+        self.prepared = None;
+        self.begin_cancellable_check().map(Some)
+    }
+
     fn begin_cancellable_check(
         &mut self,
     ) -> Result<(OperationToken, UpdateChannel, AbortRegistration), UpdateError> {
@@ -122,6 +145,8 @@ struct Inner {
     rollback: RollbackCache,
     prepared_dir: std::path::PathBuf,
     before_exit: BeforeUpdaterExit,
+    /// Dropping the sender stops the periodic re-check timer.
+    periodic_stop: Mutex<Option<Sender<()>>>,
 }
 
 #[derive(Clone)]
@@ -208,19 +233,71 @@ impl DesktopUpdaterState {
             rollback,
             prepared_dir: update_dir.join("prepared"),
             before_exit,
+            periodic_stop: Mutex::new(None),
         }))
     }
 
     pub fn check_in_background(&self) {
+        self.spawn_background_check(any_phase);
+    }
+
+    /// The launch check's pipeline, gated on `periodic_recheck_allowed`.
+    fn recheck_in_background(&self) {
+        self.spawn_background_check(periodic_recheck_allowed);
+    }
+
+    fn spawn_background_check(&self, allowed: fn(UpdatePhase) -> bool) {
         let updater = self.clone();
         tauri::async_runtime::spawn(async move {
-            if let Err(error) = updater.check().await {
+            if let Err(error) = updater.check_when(allowed).await {
                 tracing::warn!(
                     event = "updater.background_check_failed",
                     error_code = error.code()
                 );
             }
         });
+    }
+
+    /// Re-checks the signed feed about every six hours (plus or minus 10%) while KalCode runs,
+    /// through the same check as launch. Idempotent; `stop_periodic_checks` ends it on shutdown.
+    pub fn start_periodic_checks(&self) {
+        let (stop, stopped) = mpsc::channel();
+        {
+            let mut slot = self
+                .0
+                .periodic_stop
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if slot.is_some() {
+                return;
+            }
+            *slot = Some(stop);
+        }
+        let updater = self.clone();
+        let spawned = std::thread::Builder::new()
+            .name("kalcode-updater-periodic".into())
+            .spawn(move || {
+                run_periodic_checks(
+                    &stopped,
+                    PERIODIC_CHECK_POLL,
+                    || jittered_interval(PERIODIC_CHECK_INTERVAL, jitter_sample()),
+                    || updater.recheck_in_background(),
+                );
+            });
+        if spawned.is_err() {
+            tracing::warn!(event = "updater.periodic_check_unavailable");
+            self.stop_periodic_checks();
+        }
+    }
+
+    pub fn stop_periodic_checks(&self) {
+        drop(
+            self.0
+                .periodic_stop
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take(),
+        );
     }
 
     fn runtime(&self) -> MutexGuard<'_, Runtime> {
@@ -283,12 +360,22 @@ impl DesktopUpdaterState {
     }
 
     async fn check(&self) -> Result<UpdateStatus, UpdateError> {
+        self.check_when(any_phase).await
+    }
+
+    /// Returns the unchanged status when `allowed` refuses the current phase.
+    async fn check_when(
+        &self,
+        allowed: fn(UpdatePhase) -> bool,
+    ) -> Result<UpdateStatus, UpdateError> {
         let public_key = self.key()?.to_owned();
         let _target = self.target()?;
         let (token, channel, registration) = {
             let mut runtime = self.runtime();
-            runtime.prepared = None;
-            runtime.begin_cancellable_check()?
+            match runtime.begin_check_if(allowed)? {
+                Some(begun) => begun,
+                None => return Ok(runtime.machine.status().clone()),
+            }
         };
         let result =
             Abortable::new(self.check_inner(token, channel, &public_key), registration).await;
@@ -802,6 +889,74 @@ impl DesktopUpdaterState {
     }
 }
 
+/// Launch and manual checks may start from any phase (the state machine refuses busy ones).
+fn any_phase(_phase: UpdatePhase) -> bool {
+    true
+}
+
+/// Only a settled updater re-checks on its own: never while a check, download or install is
+/// running, and never while a verified update is Ready (a re-check would drop the staged bytes).
+fn periodic_recheck_allowed(phase: UpdatePhase) -> bool {
+    match phase {
+        UpdatePhase::Idle | UpdatePhase::UpToDate | UpdatePhase::Failed => true,
+        UpdatePhase::Checking
+        | UpdatePhase::Downloading
+        | UpdatePhase::Ready
+        | UpdatePhase::Installing => false,
+    }
+}
+
+/// `base` spread uniformly over plus or minus `PERIODIC_CHECK_JITTER_PERCENT`, chosen by `sample`.
+fn jittered_interval(base: Duration, sample: u64) -> Duration {
+    let base_ms = u64::try_from(base.as_millis()).unwrap_or(u64::MAX / 4);
+    let span = base_ms / 100 * PERIODIC_CHECK_JITTER_PERCENT;
+    let offset = sample % (2 * span + 1);
+    Duration::from_millis(base_ms - span + offset)
+}
+
+fn jitter_sample() -> u64 {
+    let mut bytes = [0_u8; 8];
+    if getrandom::fill(&mut bytes).is_ok() {
+        return u64::from_le_bytes(bytes);
+    }
+    // Jitter only spreads load, so the clock is an acceptable fallback source.
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| u64::from(elapsed.subsec_nanos()))
+}
+
+/// Calls `due` each time the wall clock passes the next deadline (`delay()` after the previous
+/// one), until `stop` is signalled or its sender is dropped. Each wait is capped at `poll` so a
+/// machine that slept past the deadline catches up after waking; a clock moved backwards
+/// re-arms one delay from now instead of waiting out the jump.
+fn run_periodic_checks(
+    stop: &Receiver<()>,
+    poll: Duration,
+    mut delay: impl FnMut() -> Duration,
+    mut due: impl FnMut(),
+) {
+    let mut interval = delay();
+    let mut deadline = SystemTime::now() + interval;
+    loop {
+        let wait = deadline
+            .duration_since(SystemTime::now())
+            .unwrap_or(Duration::ZERO)
+            .min(poll);
+        match stop.recv_timeout(wait) {
+            Err(RecvTimeoutError::Timeout) => {}
+            Ok(()) | Err(RecvTimeoutError::Disconnected) => return,
+        }
+        let now = SystemTime::now();
+        if now >= deadline {
+            due();
+            interval = delay();
+            deadline = now + interval;
+        } else if deadline.duration_since(now).unwrap_or(Duration::ZERO) > interval {
+            deadline = now + interval;
+        }
+    }
+}
+
 fn launch_after_quiescence<T>(
     before_exit: &BeforeUpdaterExit,
     launch: impl FnOnce() -> Result<T, UpdateError>,
@@ -1287,6 +1442,211 @@ mod tests {
             replacement_registration,
         ));
         assert!(result.is_err());
+    }
+
+    fn candidate(version: &str) -> Candidate {
+        Candidate {
+            version: version.into(),
+            notes: None,
+            metadata: kalcode_updater::FeedMetadata {
+                schema_version: 1,
+                channel: UpdateChannel::Stable,
+                target: UpdateTarget::WindowsX86_64,
+                format: ArtifactFormat::Nsis,
+                size: 2,
+                sha256: "a".repeat(64),
+                commit: "b".repeat(40),
+            },
+        }
+    }
+
+    /// A runtime holding a verified, staged update (phase Ready, prepared bytes present).
+    fn staged_runtime() -> Runtime {
+        let mut runtime = Runtime {
+            machine: UpdateMachine::new(UpdateChannel::Stable, "1.2.3"),
+            prepared: None,
+            active_check: None,
+        };
+        let (token, _, _) = runtime.begin_cancellable_check().unwrap();
+        runtime.finish_check(token);
+        runtime
+            .machine
+            .begin_download(token, candidate("1.2.4"))
+            .unwrap();
+        runtime.machine.ready(token, candidate("1.2.4")).unwrap();
+        runtime.prepared = Some(PreparedUpdate {
+            candidate: candidate("1.2.4"),
+            bytes: vec![1, 2],
+            signature: "signed".into(),
+        });
+        runtime
+    }
+
+    #[test]
+    fn periodic_recheck_runs_only_from_a_settled_phase() {
+        for (phase, allowed) in [
+            (UpdatePhase::Idle, true),
+            (UpdatePhase::UpToDate, true),
+            (UpdatePhase::Failed, true),
+            (UpdatePhase::Checking, false),
+            (UpdatePhase::Downloading, false),
+            (UpdatePhase::Ready, false),
+            (UpdatePhase::Installing, false),
+        ] {
+            assert_eq!(periodic_recheck_allowed(phase), allowed, "{phase:?}");
+        }
+    }
+
+    #[test]
+    fn periodic_recheck_never_replaces_a_staged_update() {
+        let mut runtime = staged_runtime();
+        assert_eq!(runtime.machine.status().phase, UpdatePhase::Ready);
+
+        assert!(
+            runtime
+                .begin_check_if(periodic_recheck_allowed)
+                .unwrap()
+                .is_none()
+        );
+
+        assert_eq!(runtime.machine.status().phase, UpdatePhase::Ready);
+        assert_eq!(
+            runtime.machine.status().available_version.as_deref(),
+            Some("1.2.4")
+        );
+        assert!(runtime.active_check.is_none());
+        let prepared = runtime.prepared.as_ref().expect("staged bytes kept");
+        assert_eq!(prepared.candidate, candidate("1.2.4"));
+        assert_eq!(runtime.machine.begin_install().unwrap(), candidate("1.2.4"));
+    }
+
+    #[test]
+    fn periodic_recheck_never_interrupts_a_running_check_or_download() {
+        let mut runtime = Runtime {
+            machine: UpdateMachine::new(UpdateChannel::Stable, "1.2.3"),
+            prepared: None,
+            active_check: None,
+        };
+        let (token, _, _) = runtime.begin_cancellable_check().unwrap();
+        assert!(
+            runtime
+                .begin_check_if(periodic_recheck_allowed)
+                .unwrap()
+                .is_none()
+        );
+        runtime
+            .machine
+            .begin_download(token, candidate("1.2.4"))
+            .unwrap();
+        assert!(
+            runtime
+                .begin_check_if(periodic_recheck_allowed)
+                .unwrap()
+                .is_none()
+        );
+        // The original operation is still current and can finish.
+        runtime.machine.check_token(token).unwrap();
+        assert_eq!(runtime.machine.status().phase, UpdatePhase::Downloading);
+    }
+
+    #[test]
+    fn periodic_recheck_starts_from_idle_up_to_date_and_failed() {
+        let mut runtime = Runtime {
+            machine: UpdateMachine::new(UpdateChannel::Stable, "1.2.3"),
+            prepared: None,
+            active_check: None,
+        };
+        let (token, _, _) = runtime
+            .begin_check_if(periodic_recheck_allowed)
+            .unwrap()
+            .expect("idle re-checks");
+        runtime.finish_check(token);
+        runtime.machine.no_update(token).unwrap();
+        assert_eq!(runtime.machine.status().phase, UpdatePhase::UpToDate);
+        let (token, _, _) = runtime
+            .begin_check_if(periodic_recheck_allowed)
+            .unwrap()
+            .expect("up-to-date re-checks");
+        runtime.finish_check(token);
+        runtime.machine.fail(token, "offline").unwrap();
+        assert!(
+            runtime
+                .begin_check_if(periodic_recheck_allowed)
+                .unwrap()
+                .is_some(),
+            "failed re-checks"
+        );
+        assert_eq!(runtime.machine.status().phase, UpdatePhase::Checking);
+    }
+
+    #[test]
+    fn manual_check_still_starts_from_a_staged_update() {
+        let mut runtime = staged_runtime();
+        assert!(runtime.begin_check_if(any_phase).unwrap().is_some());
+        assert!(runtime.prepared.is_none());
+        assert_eq!(runtime.machine.status().phase, UpdatePhase::Checking);
+    }
+
+    #[test]
+    fn periodic_interval_is_six_hours_jittered_by_ten_percent() {
+        let base = PERIODIC_CHECK_INTERVAL;
+        assert_eq!(base, Duration::from_secs(6 * 60 * 60));
+        let low = Duration::from_secs(6 * 60 * 60 * 9 / 10);
+        let high = Duration::from_secs(6 * 60 * 60 * 11 / 10);
+        assert_eq!(jittered_interval(base, 0), low);
+        assert_eq!(jittered_interval(base, 2 * 2_160_000), high);
+        for sample in [1, 12_345, u64::MAX, u64::MAX / 3, 2_160_000] {
+            let interval = jittered_interval(base, sample);
+            assert!(interval >= low && interval <= high, "{interval:?}");
+        }
+        assert_eq!(jittered_interval(base, 2_160_000), base);
+        for _ in 0..32 {
+            let interval = jittered_interval(base, jitter_sample());
+            assert!(interval >= low && interval <= high, "{interval:?}");
+        }
+    }
+
+    #[test]
+    fn periodic_timer_fires_repeatedly_and_stops_on_shutdown() {
+        let (stop, stopped) = mpsc::channel::<()>();
+        let (fired, fires) = mpsc::channel::<()>();
+        let timer = std::thread::spawn(move || {
+            run_periodic_checks(
+                &stopped,
+                Duration::from_millis(5),
+                || Duration::from_millis(1),
+                || fired.send(()).unwrap(),
+            );
+        });
+        for _ in 0..3 {
+            fires
+                .recv_timeout(Duration::from_secs(5))
+                .expect("the timer fires");
+        }
+        drop(stop);
+        timer.join().unwrap();
+    }
+
+    #[test]
+    fn periodic_timer_is_cancelled_before_its_first_deadline() {
+        let (stop, stopped) = mpsc::channel::<()>();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&calls);
+        let started = Instant::now();
+        let timer = std::thread::spawn(move || {
+            run_periodic_checks(
+                &stopped,
+                PERIODIC_CHECK_POLL,
+                || PERIODIC_CHECK_INTERVAL,
+                || {
+                    observed.fetch_add(1, Ordering::SeqCst);
+                },
+            );
+        });
+        stop.send(()).unwrap();
+        timer.join().unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(started.elapsed() < Duration::from_secs(5));
     }
 
     #[test]

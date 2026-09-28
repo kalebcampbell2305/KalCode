@@ -501,6 +501,7 @@ pub fn run(removed_overrides: Vec<String>) {
             kalvoice_commands::watch_foreground(app.handle());
             account_links::start(app.handle(), account, coordinator);
             updater.check_in_background();
+            updater.start_periodic_checks();
 
             // Safety net: the frontend shows the window after its first themed paint
             // (`window_ready`). If that never happens, show it anyway so the user is never
@@ -808,6 +809,9 @@ fn shutdown_runtime_once(handle: &tauri::AppHandle) -> bool {
 }
 
 fn shutdown_services(handle: &tauri::AppHandle) {
+    if let Some(updater) = handle.try_state::<updater_commands::DesktopUpdaterState>() {
+        updater.stop_periodic_checks();
+    }
     if let Some(state) = handle.try_state::<AppState>() {
         if let Some(core) = &state.core {
             core.shutdown();
