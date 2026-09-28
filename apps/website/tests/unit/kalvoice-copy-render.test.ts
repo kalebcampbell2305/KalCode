@@ -10,6 +10,7 @@ vi.mock("../../src/lib/releases", async (importOriginal) => ({
 }));
 
 import KalVoiceDemo from "../../src/components/stage/KalVoiceDemo.astro";
+import KalVoiceDocs from "../../src/pages/docs/kalvoice.astro";
 import LocalFirstDocs from "../../src/pages/docs/local-first.astro";
 import ProvidersDocs from "../../src/pages/docs/providers.astro";
 import Home from "../../src/pages/index.astro";
@@ -172,4 +173,28 @@ it("describes KalVoice as available in Stable on the KalVoice page and in its me
 it("keeps the in-development metadata for the KalVoice page while /download serves the preview", async () => {
   const html = await render(KalVoicePage, "/kalvoice");
   expect(html.match(/<meta name="description" content="([^"]*)"/)?.[1]).toMatch(/In development\.$/);
+});
+
+// The desktop app offers F1-F24 (except KalCode's reserved F5, F7 and F12), Pause, Scroll Lock and
+// Insert as the push-to-talk key, and refuses Caps Lock and Fn (crates/kalvoice/src/shortcuts.rs,
+// apps/desktop/src/kalvoice/shortcutModel.ts). The key is registered only while KalCode is the
+// foreground app (apps/desktop/src-tauri/src/kalvoice_talk_key.rs).
+describe.each([
+  { name: "KalVoice page", component: KalVoicePage as Component, path: "/kalvoice" },
+  { name: "KalVoice docs", component: KalVoiceDocs as Component, path: "/docs/kalvoice" },
+])("the push-to-talk key on the $name", ({ component, path }) => {
+  it.each([false, true])("offers only the keys the app accepts (Stable %s)", async (stable) => {
+    if (stable) selectSignedStable();
+    const copy = text(await render(component, path));
+    expect(copy).toContain("F8 is the default.");
+    expect(copy).toContain("another function key, Pause, Scroll Lock or Insert");
+    expect(copy).not.toMatch(/Caps Lock/i);
+    expect(copy).not.toMatch(/\bFn\b/);
+  });
+
+  it.each([false, true])("says the key works while KalCode is the active window (Stable %s)", async (stable) => {
+    if (stable) selectSignedStable();
+    const copy = text(await render(component, path));
+    expect(copy).toContain("The key works while KalCode is the active window, so other apps keep it otherwise.");
+  });
 });
