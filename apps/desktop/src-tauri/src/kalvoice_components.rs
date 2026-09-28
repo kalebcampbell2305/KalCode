@@ -30,6 +30,7 @@ use kalcode_kalvoice::component_store::{
 };
 use kalcode_kalvoice::models::{self, SpeechModelInfo, SpeechModelState};
 use kalcode_kalvoice::signals::LocalReasoningDownload;
+use kalcode_resources::{AdmissionDecision, AdmissionReason, HoldReason, ResourceKind};
 use kalcode_secure_store::SecretStore;
 use sha2::{Digest as _, Sha256};
 
@@ -108,6 +109,7 @@ pub(crate) enum ComponentManagerError {
     CatalogStorage,
     CatalogRollback,
     ResourceUnavailable,
+    CapacityHeld(ComponentCapacityReason),
     AcquisitionFailed,
     StorageUnavailable,
     InUse,
@@ -125,7 +127,8 @@ impl std::fmt::Display for ComponentManagerError {
             Self::CatalogInvalid => "KalVoice rejected an invalid signed component catalog.",
             Self::CatalogStorage => "KalVoice couldn't safely retain the signed component catalog.",
             Self::CatalogRollback => "KalVoice blocked a component catalog rollback.",
-            Self::ResourceUnavailable => "KalVoice is waiting for enough verified system capacity.",
+            Self::ResourceUnavailable => "KalVoice could not verify enough system capacity. This download attempt ended. Allow resource readings to refresh, then retry the download.",
+            Self::CapacityHeld(reason) => reason.message(),
             Self::AcquisitionFailed => "The signed component download failed. Try again.",
             Self::StorageUnavailable => "KalVoice's signed component storage is unavailable.",
             Self::InUse => "That speech model is still in use.",
@@ -147,13 +150,112 @@ impl ComponentManagerError {
             Self::CatalogInvalid => "component_catalog_invalid",
             Self::CatalogStorage => "component_catalog_storage_failed",
             Self::CatalogRollback => "component_catalog_rollback",
-            Self::ResourceUnavailable => "resource_capacity_unavailable",
+            Self::ResourceUnavailable | Self::CapacityHeld(_) => "resource_capacity_unavailable",
             Self::AcquisitionFailed => "component_acquisition_failed",
             Self::StorageUnavailable => "component_storage_failed",
             Self::InUse => "component_in_use",
             Self::NotInstalled => "model_not_installed",
         }
     }
+}
+
+/// Only bounded reason categories cross into the download error. Probe details, volume paths,
+/// process information and provider identities must never be copied from an admission decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ComponentCapacityReason {
+    Cpu,
+    Memory,
+    KalCodeMemory,
+    DiskSpace,
+    WorkloadLimit,
+    TelemetryUnavailable(ResourceKind),
+    StaleTelemetry,
+    UnverifiedTelemetry,
+    SamplerUnavailable,
+}
+
+impl ComponentCapacityReason {
+    fn message(self) -> &'static str {
+        match self {
+            Self::Cpu => {
+                "There is not enough CPU headroom within KalCode's safety limits. This download attempt ended. Let CPU-intensive work finish, then retry the download."
+            }
+            Self::Memory => {
+                "There is not enough memory headroom within KalCode's safety limits. This download attempt ended. Close unneeded memory-heavy applications safely, allow readings to refresh, then retry the download."
+            }
+            Self::KalCodeMemory => {
+                "KalCode has reached its memory capacity limit. This download attempt ended. Let active KalCode work finish, then retry the download."
+            }
+            Self::DiskSpace => {
+                "There is not enough available disk space within KalCode's safety limits. This download attempt ended. Free disk space safely, allow readings to refresh, then retry the download."
+            }
+            Self::WorkloadLimit => {
+                "KalCode has reached its concurrent-work limit. This download attempt ended. Let active work finish, then retry the download."
+            }
+            Self::TelemetryUnavailable(ResourceKind::Cpu) => {
+                "KalCode could not verify CPU capacity. This download attempt ended. Allow CPU readings to become available, then retry the download."
+            }
+            Self::TelemetryUnavailable(ResourceKind::Memory) => {
+                "KalCode could not verify available memory. This download attempt ended. Allow memory readings to become available, then retry the download."
+            }
+            Self::TelemetryUnavailable(ResourceKind::DiskSpace) => {
+                "KalCode could not verify available disk space. This download attempt ended. Allow disk readings to become available, then retry the download."
+            }
+            Self::TelemetryUnavailable(_) | Self::UnverifiedTelemetry => {
+                "KalCode could not verify current resource readings. This download attempt ended. Allow resource readings to refresh, then retry the download."
+            }
+            Self::StaleTelemetry => {
+                "KalCode's resource readings are out of date. This download attempt ended. Allow resource readings to refresh, then retry the download."
+            }
+            Self::SamplerUnavailable => {
+                "KalCode's capacity monitoring is not ready. This download attempt ended. Retry the download after monitoring becomes available."
+            }
+        }
+    }
+}
+
+fn acquisition_capacity_error(decision: AdmissionDecision) -> ComponentManagerError {
+    let reason = decision.reasons.iter().find_map(|reason| match reason {
+        AdmissionReason::GovernorNotReady { .. } => {
+            Some(ComponentCapacityReason::SamplerUnavailable)
+        }
+        AdmissionReason::SnapshotStale { .. } => Some(ComponentCapacityReason::StaleTelemetry),
+        AdmissionReason::SnapshotMissing
+        | AdmissionReason::SnapshotFromFuture { .. }
+        | AdmissionReason::SnapshotModeMismatch { .. } => {
+            Some(ComponentCapacityReason::UnverifiedTelemetry)
+        }
+        AdmissionReason::RequiredTelemetryUnknown { resource, .. }
+        | AdmissionReason::RequiredTelemetryUnavailable { resource, .. } => {
+            Some(ComponentCapacityReason::TelemetryUnavailable(*resource))
+        }
+        AdmissionReason::Capacity { holds } => holds.iter().find_map(|hold| match hold {
+            HoldReason::Pressure {
+                resource: ResourceKind::Cpu,
+                ..
+            }
+            | HoldReason::CpuHeadroom { .. } => Some(ComponentCapacityReason::Cpu),
+            HoldReason::Pressure {
+                resource: ResourceKind::Memory,
+                ..
+            }
+            | HoldReason::MemoryHeadroom { .. } => Some(ComponentCapacityReason::Memory),
+            HoldReason::Pressure {
+                resource: ResourceKind::DiskSpace,
+                ..
+            } => Some(ComponentCapacityReason::DiskSpace),
+            HoldReason::KalCodeMemoryCap { .. } => Some(ComponentCapacityReason::KalCodeMemory),
+            HoldReason::UserLimit { .. } | HoldReason::ProviderLimit { .. } => {
+                Some(ComponentCapacityReason::WorkloadLimit)
+            }
+            _ => None,
+        }),
+        AdmissionReason::CapacityUnavailable => None,
+    });
+    reason.map_or(
+        ComponentManagerError::ResourceUnavailable,
+        ComponentManagerError::CapacityHeld,
+    )
 }
 
 struct DownloadState {
@@ -313,7 +415,7 @@ impl ComponentAdmission for GovernorAdmission {
         self.0
             .reserve_local_task(estimate)
             .map(|reservation| Box::new(reservation) as Box<dyn HeldReservation>)
-            .map_err(|_| ComponentManagerError::ResourceUnavailable)
+            .map_err(acquisition_capacity_error)
     }
 }
 
@@ -1146,7 +1248,9 @@ fn map_acquisition_error(error: ComponentAcquisitionError) -> ComponentManagerEr
     match error {
         ComponentAcquisitionError::ConsentRequired => ComponentManagerError::ConsentRequired,
         ComponentAcquisitionError::Cancelled => ComponentManagerError::Cancelled,
-        ComponentAcquisitionError::NotEnoughSpace => ComponentManagerError::ResourceUnavailable,
+        ComponentAcquisitionError::NotEnoughSpace => {
+            ComponentManagerError::CapacityHeld(ComponentCapacityReason::DiskSpace)
+        }
         ComponentAcquisitionError::Install(ComponentStoreError::InUse) => {
             ComponentManagerError::InUse
         }
@@ -1261,6 +1365,188 @@ fn private_fixture_directory() -> std::io::Result<tempfile::TempDir> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capacity_rejection_reports_an_ended_attempt_with_retry_not_a_wait_queue() {
+        let error = ComponentManagerError::ResourceUnavailable;
+        assert_eq!(error.code(), "resource_capacity_unavailable");
+        let message = error.to_string();
+        assert!(message.contains("download attempt ended"), "{message}");
+        assert!(message.contains("retry"), "{message}");
+        assert!(!message.contains("waiting"), "{message}");
+    }
+
+    #[test]
+    fn acquisition_disk_space_failure_keeps_its_known_cause() {
+        let error = map_acquisition_error(ComponentAcquisitionError::NotEnoughSpace);
+        assert_eq!(
+            error,
+            ComponentManagerError::CapacityHeld(ComponentCapacityReason::DiskSpace)
+        );
+        assert_eq!(error.code(), "resource_capacity_unavailable");
+        assert!(error.to_string().contains("disk space"));
+        assert!(error.to_string().contains("download attempt ended"));
+    }
+
+    fn denied(reason: AdmissionReason) -> AdmissionDecision {
+        AdmissionDecision {
+            state: kalcode_resources::AdmissionState::Held,
+            mode: Some(kalcode_resources::ModeKind::Balanced),
+            additional: 0,
+            reasons: vec![reason],
+            snapshot_seq: Some(1),
+            sampled_at_unix_ms: Some(1),
+        }
+    }
+
+    #[test]
+    fn real_pressure_denials_keep_memory_cpu_and_disk_reasons_without_private_details() {
+        use kalcode_resources::{ModeKind, PressureLevel, Signal};
+        for (resource, signal, expected, text) in [
+            (
+                ResourceKind::Memory,
+                Signal::MemoryUsedPercent,
+                ComponentCapacityReason::Memory,
+                "memory headroom",
+            ),
+            (
+                ResourceKind::Cpu,
+                Signal::CpuPercent,
+                ComponentCapacityReason::Cpu,
+                "CPU headroom",
+            ),
+            (
+                ResourceKind::DiskSpace,
+                Signal::DiskFreeMb {
+                    mount: "private-volume-path".into(),
+                },
+                ComponentCapacityReason::DiskSpace,
+                "disk space",
+            ),
+        ] {
+            for level in [PressureLevel::High, PressureLevel::Critical] {
+                let error = acquisition_capacity_error(denied(AdmissionReason::Capacity {
+                    holds: vec![HoldReason::Pressure {
+                        resource,
+                        level,
+                        mode: ModeKind::Balanced,
+                        signal: signal.clone(),
+                        value: 91.8,
+                        threshold: Some(88.0),
+                    }],
+                }));
+                assert_eq!(error, ComponentManagerError::CapacityHeld(expected));
+                assert_eq!(error.code(), "resource_capacity_unavailable");
+                let message = error.to_string();
+                assert!(message.contains(text), "{message}");
+                assert!(message.contains("download attempt ended"), "{message}");
+                assert!(message.contains("retry"), "{message}");
+                assert!(!message.contains("private-volume-path"));
+                assert!(!message.contains("waiting"));
+            }
+        }
+    }
+
+    #[test]
+    fn stale_and_missing_telemetry_are_not_misreported_as_memory_pressure() {
+        let stale = acquisition_capacity_error(denied(AdmissionReason::SnapshotStale {
+            age_ms: 90_000,
+            max_age_ms: 15_000,
+        }));
+        assert_eq!(
+            stale,
+            ComponentManagerError::CapacityHeld(ComponentCapacityReason::StaleTelemetry)
+        );
+        assert!(stale.to_string().contains("out of date"));
+        for resource in [
+            ResourceKind::Cpu,
+            ResourceKind::Memory,
+            ResourceKind::DiskSpace,
+        ] {
+            for reason in [
+                AdmissionReason::RequiredTelemetryUnknown {
+                    resource,
+                    detail: "private-probe-detail".into(),
+                },
+                AdmissionReason::RequiredTelemetryUnavailable {
+                    resource,
+                    detail: "private-probe-detail".into(),
+                },
+            ] {
+                let error = acquisition_capacity_error(denied(reason));
+                assert_eq!(
+                    error,
+                    ComponentManagerError::CapacityHeld(
+                        ComponentCapacityReason::TelemetryUnavailable(resource)
+                    )
+                );
+                assert!(error.to_string().contains("could not verify"));
+                assert!(!error.to_string().contains("private-probe-detail"));
+                assert!(!error.to_string().contains("has reached"));
+            }
+        }
+        let unavailable = acquisition_capacity_error(denied(AdmissionReason::GovernorNotReady {
+            status: kalcode_resources::GovernorStatus::Failed {
+                reason: "private-sampler-detail".into(),
+            },
+        }));
+        assert_eq!(
+            unavailable,
+            ComponentManagerError::CapacityHeld(ComponentCapacityReason::SamplerUnavailable)
+        );
+        assert!(!unavailable.to_string().contains("private-sampler-detail"));
+        assert_eq!(
+            acquisition_capacity_error(denied(AdmissionReason::CapacityUnavailable)),
+            ComponentManagerError::ResourceUnavailable
+        );
+    }
+
+    #[test]
+    fn projected_budget_and_concurrency_denials_retain_their_actual_category() {
+        use kalcode_resources::ModeKind;
+        for (hold, expected) in [
+            (
+                HoldReason::CpuHeadroom {
+                    cpu_percent: 74.0,
+                    target_percent: 75.0,
+                    per_agent_percent: 2.0,
+                    mode: ModeKind::Balanced,
+                },
+                ComponentCapacityReason::Cpu,
+            ),
+            (
+                HoldReason::MemoryHeadroom {
+                    available_mb: 2100,
+                    reserve_mb: 2048,
+                    per_agent_mb: 96,
+                    mode: ModeKind::Balanced,
+                },
+                ComponentCapacityReason::Memory,
+            ),
+            (
+                HoldReason::KalCodeMemoryCap {
+                    used_mb: 2048,
+                    cap_mb: 2048,
+                    per_agent_mb: 96,
+                    mode: ModeKind::Balanced,
+                },
+                ComponentCapacityReason::KalCodeMemory,
+            ),
+            (
+                HoldReason::UserLimit {
+                    running: 4,
+                    limit: 4,
+                    mode: ModeKind::Balanced,
+                },
+                ComponentCapacityReason::WorkloadLimit,
+            ),
+        ] {
+            assert_eq!(
+                acquisition_capacity_error(denied(AdmissionReason::Capacity { holds: vec![hold] })),
+                ComponentManagerError::CapacityHeld(expected)
+            );
+        }
+    }
 
     #[test]
     fn speech_preferences_map_to_the_exact_signed_component_set() {

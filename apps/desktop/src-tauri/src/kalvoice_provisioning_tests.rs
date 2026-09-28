@@ -296,6 +296,79 @@ fn reasoning_quote_only_fetches_signed_metadata_and_exact_consent_precedes_acqui
     assert!(manager.acquire_reasoning().is_err());
 }
 
+struct DeniedAdmission;
+impl ComponentAdmission for DeniedAdmission {
+    fn reserve_acquisition(
+        &self,
+        _: u64,
+    ) -> Result<Box<dyn HeldReservation>, ComponentManagerError> {
+        Err(acquisition_capacity_error(AdmissionDecision {
+            state: kalcode_resources::AdmissionState::Held,
+            mode: Some(kalcode_resources::ModeKind::Balanced),
+            additional: 0,
+            reasons: vec![AdmissionReason::RequiredTelemetryUnavailable {
+                resource: ResourceKind::DiskSpace,
+                detail: "private-data-volume-path".into(),
+            }],
+            snapshot_seq: Some(1),
+            sampled_at_unix_ms: Some(1),
+        }))
+    }
+}
+
+#[test]
+fn held_download_keeps_specific_reason_starts_no_acquisition_and_can_be_retried() {
+    let (_temp, mut manager, acquisition, reservations) = fixture().unwrap();
+    Arc::get_mut(&mut manager).unwrap().admission = Arc::new(DeniedAdmission);
+    let quote = manager.prepare_reasoning().unwrap();
+    let speech_error = manager
+        .download_speech("tiny.en", true, |_, _| {
+            panic!("held speech download reported progress")
+        })
+        .unwrap_err();
+    assert_eq!(
+        speech_error,
+        ComponentManagerError::CapacityHeld(ComponentCapacityReason::TelemetryUnavailable(
+            ResourceKind::DiskSpace
+        ))
+    );
+    assert!(manager.downloads.lock().unwrap().running.is_empty());
+    assert!(acquisition.tokens.lock().unwrap().is_empty());
+    let error = manager
+        .download_reasoning(true, Some(&quote.catalog_identity), |_, _| {
+            panic!("held download reported progress")
+        })
+        .unwrap_err();
+    assert_eq!(
+        error,
+        ComponentManagerError::CapacityHeld(ComponentCapacityReason::TelemetryUnavailable(
+            ResourceKind::DiskSpace
+        ))
+    );
+    assert_eq!(error.code(), "resource_capacity_unavailable");
+    assert!(
+        error
+            .to_string()
+            .contains("could not verify available disk space")
+    );
+    assert!(!error.to_string().contains("private-data-volume-path"));
+    assert!(acquisition.tokens.lock().unwrap().is_empty());
+    assert!(manager.downloads.lock().unwrap().running.is_empty());
+    assert_eq!(reservations.load(Ordering::SeqCst), 0);
+    assert!(
+        manager.cache.read(&quote.catalog_identity).is_err(),
+        "held download must not retain a catalog or advance its floor"
+    );
+
+    Arc::get_mut(&mut manager).unwrap().admission = Arc::new(AdmissionSpy(reservations.clone()));
+    manager
+        .download_reasoning(true, Some(&quote.catalog_identity), |_, _| {})
+        .unwrap();
+    assert_eq!(acquisition.tokens.lock().unwrap().len(), 2);
+    assert!(manager.downloads.lock().unwrap().running.is_empty());
+    assert_eq!(reservations.load(Ordering::SeqCst), 0);
+}
+
 #[test]
 fn cancelled_runtime_download_cannot_start_reasoning_model_and_releases_reservation() {
     let (_temp, manager, acquisition, reservations) = fixture().unwrap();
