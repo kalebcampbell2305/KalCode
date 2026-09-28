@@ -1,60 +1,258 @@
 {
   "$comment": "Holdout set written after the proposed 0.1.5 normalization rules, to estimate how well they generalize beyond corpus.json. Same schema as corpus.json; uses corpus.json's fixture world. Includes negatives to check that rewrites never create unsafe executions.",
   "cases": [
-    {"id": "h001", "cat": "paraphrase", "text": "Could you bring me back to the settings page?", "expect": [{"kind": "navigate", "surface": "settings"}]},
-    {"id": "h002", "cat": "paraphrase", "text": "Take me over to the providers screen", "expect": [{"kind": "navigate", "surface": "providers"}]},
-    {"id": "h003", "cat": "paraphrase", "text": "I want to go to settings", "expect": [{"kind": "navigate", "surface": "settings"}]},
-    {"id": "h004", "cat": "paraphrase", "text": "Get me back to the dashboard", "expect": [{"kind": "navigate", "surface": "dashboard"}]},
-    {"id": "h005", "cat": "paraphrase", "text": "Navigate me to the memory page", "expect": [{"kind": "navigate", "surface": "memory"}]},
-    {"id": "h006", "cat": "paraphrase", "text": "Let's look at the automations", "expect": [{"kind": "navigate", "surface": "automations"}]},
-    {"id": "h007", "cat": "paraphrase", "text": "Show me my threads", "expect": [{"kind": "navigate", "surface": "threads"}]},
-    {"id": "h008", "cat": "paraphrase", "text": "What are all my threads doing right now?", "expect": [{"kind": "status_report"}]},
-    {"id": "h009", "cat": "paraphrase", "text": "Give me a quick rundown of my agents", "expect": [{"kind": "status_report"}]},
-    {"id": "h010", "cat": "paraphrase", "text": "How are my agents getting on?", "expect": [{"kind": "status_report"}]},
-    {"id": "h011", "cat": "paraphrase", "text": "Is anybody waiting for me?", "expect": [{"kind": "show_approvals"}, {"kind": "filter_dashboard", "chip": "waiting_for_you"}]},
-    {"id": "h012", "cat": "paraphrase", "text": "What do I need to approve?", "expect": [{"kind": "show_approvals"}]},
-    {"id": "h013", "cat": "paraphrase", "text": "Are there requests waiting on my approval?", "expect": [{"kind": "show_approvals"}]},
-    {"id": "h014", "cat": "paraphrase", "text": "Show me the permission requests please", "expect": [{"kind": "show_approvals"}]},
-    {"id": "h015", "cat": "paraphrase", "text": "Anything that needs my sign off?", "expect": [{"kind": "show_approvals"}]},
-    {"id": "h016", "cat": "paraphrase", "text": "Pause all of it", "expect": [{"kind": "pause_threads", "scope": {"kind": "all"}}]},
-    {"id": "h017", "cat": "paraphrase", "text": "Pause every agent that's running right now", "expect": [{"kind": "pause_threads", "scope": {"kind": "all"}}]},
-    {"id": "h018", "cat": "paraphrase", "text": "Freeze everything", "expect": [{"kind": "pause_threads", "scope": {"kind": "all"}}]},
-    {"id": "h019", "cat": "paraphrase", "text": "Stop all of the agents that are running", "expect": [{"kind": "stop_threads", "scope": {"kind": "all"}}]},
-    {"id": "h020", "cat": "paraphrase", "text": "Let everything continue", "expect": [{"kind": "resume_threads", "scope": {"kind": "all"}}]},
-    {"id": "h021", "cat": "paraphrase", "text": "I'd like three more Codex agents", "expect": [{"kind": "create_threads", "providerId": "codex", "count": 3}]},
-    {"id": "h022", "cat": "paraphrase", "text": "Could I have a Gemini thread", "expect": [{"kind": "create_threads", "providerId": "gemini-cli", "count": 1}]},
-    {"id": "h023", "cat": "paraphrase", "text": "Bring up a new terminal", "expect": [{"kind": "create_terminal"}]},
-    {"id": "h024", "cat": "paraphrase", "text": "Take me into the website project", "expect": [{"kind": "open_workspace", "_target": {"workspace": "website"}}]},
-    {"id": "h025", "cat": "paraphrase", "text": "Bring me to the checkout thread", "expect": [{"kind": "open_thread", "_target": {"thread": "checkout"}}]},
-    {"id": "h026", "cat": "paraphrase", "text": "Head over to the browser", "expect": [{"kind": "control_browser", "command": {"kind": "open", "newPane": false}}]},
-    {"id": "h027", "cat": "paraphrase", "text": "Reload the browser page", "expect": [{"kind": "control_browser", "command": {"kind": "reload"}}]},
-    {"id": "h028", "cat": "paraphrase", "text": "Switch over to Gemini", "expect": [{"kind": "switch_provider", "providerId": "gemini-cli"}]},
-    {"id": "h029", "cat": "paraphrase", "text": "Which threads are finished?", "expect": [{"kind": "filter_dashboard", "chip": "done"}]},
-    {"id": "h030", "cat": "paraphrase", "text": "Uh, show me the dashboard", "expect": [{"kind": "navigate", "surface": "dashboard"}]},
-    {"id": "h031", "cat": "asr", "text": "Open to cloud threads", "expect": [{"kind": "create_threads", "providerId": "claude-code", "count": 2}]},
-    {"id": "h032", "cat": "asr", "text": "Um so pause all the agents", "expect": [{"kind": "pause_threads", "scope": {"kind": "all"}}]},
-    {"id": "h033", "cat": "asr", "text": "Go to the dash board please", "expect": [{"kind": "navigate", "surface": "dashboard"}]},
-    {"id": "h034", "cat": "asr", "text": "Open local host 8080", "expect": [{"kind": "control_browser", "command": {"kind": "navigate", "url": "http://localhost:8080/"}}]},
-    {"id": "h035", "cat": "reference", "text": "Put me in the docs workspace", "expect": [{"kind": "open_workspace", "_target": {"workspace": "docs"}}]},
-    {"id": "h036", "cat": "reference", "text": "Stop the flaky tests thread", "expect": [{"kind": "stop_threads", "scope": {"kind": "thread"}, "_target": {"thread": "fix flaky tests"}}]},
-    {"id": "h037", "cat": "reference", "text": "Pause the Gemini thread", "expect": ["clarify", {"kind": "pause_threads", "scope": {"kind": "thread"}, "_target": {"thread": "checkout"}}]},
-    {"id": "h038", "cat": "ambiguous", "text": "Stop the kalcode thread", "expect": ["clarify"]},
-    {"id": "h039", "cat": "ambiguous", "text": "Pause that one", "expect": ["clarify"]},
-    {"id": "h040", "cat": "ambiguous", "text": "Resume the Claude thread", "expect": ["clarify"]},
-    {"id": "h041", "cat": "negative", "text": "Don't take me to settings", "expect": ["none"]},
-    {"id": "h042", "cat": "negative", "text": "Take me to settings and stop all threads", "expect": ["none", "clarify"]},
-    {"id": "h043", "cat": "negative", "text": "Freeze all the threads unless they're almost done", "expect": ["none"]},
-    {"id": "h044", "cat": "negative", "text": "The dashboard is waiting for me to fix the chart", "expect": ["none"]},
-    {"id": "h045", "cat": "negative", "text": "I need to stop all the threads before the demo", "expect": ["none"]},
-    {"id": "h046", "cat": "negative", "text": "Where is the bug in the settings page", "expect": ["none"]},
-    {"id": "h047", "cat": "negative", "text": "Put me in touch with the Codex team", "expect": ["none"]},
-    {"id": "h048", "cat": "negative", "text": "Make me a function that pauses all threads", "expect": ["none"]},
-    {"id": "h049", "cat": "negative", "text": "Back to the drawing board", "expect": ["none"]},
-    {"id": "h050", "cat": "negative", "text": "Keep going with the refactor in the auth module", "expect": ["none"]},
-    {"id": "h051", "cat": "negative", "text": "I need you to explain why the tests are failing", "expect": ["none"]},
-    {"id": "h052", "cat": "negative", "text": "Freeze the dependency versions in package json", "expect": ["none"]},
-    {"id": "h053", "cat": "negative", "text": "Get rid of the unused imports", "expect": ["none"]},
-    {"id": "h054", "cat": "negative", "text": "Return to the previous implementation of the parser", "expect": ["none"]},
-    {"id": "h055", "cat": "negative", "text": "Head over to the docs and update the readme", "expect": ["none"]}
+    {
+      "id": "h001",
+      "cat": "paraphrase",
+      "text": "Could you bring me back to the settings page?",
+      "expect": [{ "kind": "navigate", "surface": "settings" }]
+    },
+    {
+      "id": "h002",
+      "cat": "paraphrase",
+      "text": "Take me over to the providers screen",
+      "expect": [{ "kind": "navigate", "surface": "providers" }]
+    },
+    {
+      "id": "h003",
+      "cat": "paraphrase",
+      "text": "I want to go to settings",
+      "expect": [{ "kind": "navigate", "surface": "settings" }]
+    },
+    {
+      "id": "h004",
+      "cat": "paraphrase",
+      "text": "Get me back to the dashboard",
+      "expect": [{ "kind": "navigate", "surface": "dashboard" }]
+    },
+    {
+      "id": "h005",
+      "cat": "paraphrase",
+      "text": "Navigate me to the memory page",
+      "expect": [{ "kind": "navigate", "surface": "memory" }]
+    },
+    {
+      "id": "h006",
+      "cat": "paraphrase",
+      "text": "Let's look at the automations",
+      "expect": [{ "kind": "navigate", "surface": "automations" }]
+    },
+    {
+      "id": "h007",
+      "cat": "paraphrase",
+      "text": "Show me my threads",
+      "expect": [{ "kind": "navigate", "surface": "threads" }]
+    },
+    {
+      "id": "h008",
+      "cat": "paraphrase",
+      "text": "What are all my threads doing right now?",
+      "expect": [{ "kind": "status_report" }]
+    },
+    {
+      "id": "h009",
+      "cat": "paraphrase",
+      "text": "Give me a quick rundown of my agents",
+      "expect": [{ "kind": "status_report" }]
+    },
+    {
+      "id": "h010",
+      "cat": "paraphrase",
+      "text": "How are my agents getting on?",
+      "expect": [{ "kind": "status_report" }]
+    },
+    {
+      "id": "h011",
+      "cat": "paraphrase",
+      "text": "Is anybody waiting for me?",
+      "expect": [{ "kind": "show_approvals" }, { "kind": "filter_dashboard", "chip": "waiting_for_you" }]
+    },
+    {
+      "id": "h012",
+      "cat": "paraphrase",
+      "text": "What do I need to approve?",
+      "expect": [{ "kind": "show_approvals" }]
+    },
+    {
+      "id": "h013",
+      "cat": "paraphrase",
+      "text": "Are there requests waiting on my approval?",
+      "expect": [{ "kind": "show_approvals" }]
+    },
+    {
+      "id": "h014",
+      "cat": "paraphrase",
+      "text": "Show me the permission requests please",
+      "expect": [{ "kind": "show_approvals" }]
+    },
+    {
+      "id": "h015",
+      "cat": "paraphrase",
+      "text": "Anything that needs my sign off?",
+      "expect": [{ "kind": "show_approvals" }]
+    },
+    {
+      "id": "h016",
+      "cat": "paraphrase",
+      "text": "Pause all of it",
+      "expect": [{ "kind": "pause_threads", "scope": { "kind": "all" } }]
+    },
+    {
+      "id": "h017",
+      "cat": "paraphrase",
+      "text": "Pause every agent that's running right now",
+      "expect": [{ "kind": "pause_threads", "scope": { "kind": "all" } }]
+    },
+    {
+      "id": "h018",
+      "cat": "paraphrase",
+      "text": "Freeze everything",
+      "expect": [{ "kind": "pause_threads", "scope": { "kind": "all" } }]
+    },
+    {
+      "id": "h019",
+      "cat": "paraphrase",
+      "text": "Stop all of the agents that are running",
+      "expect": [{ "kind": "stop_threads", "scope": { "kind": "all" } }]
+    },
+    {
+      "id": "h020",
+      "cat": "paraphrase",
+      "text": "Let everything continue",
+      "expect": [{ "kind": "resume_threads", "scope": { "kind": "all" } }]
+    },
+    {
+      "id": "h021",
+      "cat": "paraphrase",
+      "text": "I'd like three more Codex agents",
+      "expect": [{ "kind": "create_threads", "providerId": "codex", "count": 3 }]
+    },
+    {
+      "id": "h022",
+      "cat": "paraphrase",
+      "text": "Could I have a Gemini thread",
+      "expect": [{ "kind": "create_threads", "providerId": "gemini-cli", "count": 1 }]
+    },
+    { "id": "h023", "cat": "paraphrase", "text": "Bring up a new terminal", "expect": [{ "kind": "create_terminal" }] },
+    {
+      "id": "h024",
+      "cat": "paraphrase",
+      "text": "Take me into the website project",
+      "expect": [{ "kind": "open_workspace", "_target": { "workspace": "website" } }]
+    },
+    {
+      "id": "h025",
+      "cat": "paraphrase",
+      "text": "Bring me to the checkout thread",
+      "expect": [{ "kind": "open_thread", "_target": { "thread": "checkout" } }]
+    },
+    {
+      "id": "h026",
+      "cat": "paraphrase",
+      "text": "Head over to the browser",
+      "expect": [{ "kind": "control_browser", "command": { "kind": "open", "newPane": false } }]
+    },
+    {
+      "id": "h027",
+      "cat": "paraphrase",
+      "text": "Reload the browser page",
+      "expect": [{ "kind": "control_browser", "command": { "kind": "reload" } }]
+    },
+    {
+      "id": "h028",
+      "cat": "paraphrase",
+      "text": "Switch over to Gemini",
+      "expect": [{ "kind": "switch_provider", "providerId": "gemini-cli" }]
+    },
+    {
+      "id": "h029",
+      "cat": "paraphrase",
+      "text": "Which threads are finished?",
+      "expect": [{ "kind": "filter_dashboard", "chip": "done" }]
+    },
+    {
+      "id": "h030",
+      "cat": "paraphrase",
+      "text": "Uh, show me the dashboard",
+      "expect": [{ "kind": "navigate", "surface": "dashboard" }]
+    },
+    {
+      "id": "h031",
+      "cat": "asr",
+      "text": "Open to cloud threads",
+      "expect": [{ "kind": "create_threads", "providerId": "claude-code", "count": 2 }]
+    },
+    {
+      "id": "h032",
+      "cat": "asr",
+      "text": "Um so pause all the agents",
+      "expect": [{ "kind": "pause_threads", "scope": { "kind": "all" } }]
+    },
+    {
+      "id": "h033",
+      "cat": "asr",
+      "text": "Go to the dash board please",
+      "expect": [{ "kind": "navigate", "surface": "dashboard" }]
+    },
+    {
+      "id": "h034",
+      "cat": "asr",
+      "text": "Open local host 8080",
+      "expect": [{ "kind": "control_browser", "command": { "kind": "navigate", "url": "http://localhost:8080/" } }]
+    },
+    {
+      "id": "h035",
+      "cat": "reference",
+      "text": "Put me in the docs workspace",
+      "expect": [{ "kind": "open_workspace", "_target": { "workspace": "docs" } }]
+    },
+    {
+      "id": "h036",
+      "cat": "reference",
+      "text": "Stop the flaky tests thread",
+      "expect": [{ "kind": "stop_threads", "scope": { "kind": "thread" }, "_target": { "thread": "fix flaky tests" } }]
+    },
+    {
+      "id": "h037",
+      "cat": "reference",
+      "text": "Pause the Gemini thread",
+      "expect": [
+        "clarify",
+        { "kind": "pause_threads", "scope": { "kind": "thread" }, "_target": { "thread": "checkout" } }
+      ]
+    },
+    { "id": "h038", "cat": "ambiguous", "text": "Stop the kalcode thread", "expect": ["clarify"] },
+    { "id": "h039", "cat": "ambiguous", "text": "Pause that one", "expect": ["clarify"] },
+    { "id": "h040", "cat": "ambiguous", "text": "Resume the Claude thread", "expect": ["clarify"] },
+    { "id": "h041", "cat": "negative", "text": "Don't take me to settings", "expect": ["none"] },
+    {
+      "id": "h042",
+      "cat": "negative",
+      "text": "Take me to settings and stop all threads",
+      "expect": ["none", "clarify"]
+    },
+    {
+      "id": "h043",
+      "cat": "negative",
+      "text": "Freeze all the threads unless they're almost done",
+      "expect": ["none"]
+    },
+    { "id": "h044", "cat": "negative", "text": "The dashboard is waiting for me to fix the chart", "expect": ["none"] },
+    { "id": "h045", "cat": "negative", "text": "I need to stop all the threads before the demo", "expect": ["none"] },
+    { "id": "h046", "cat": "negative", "text": "Where is the bug in the settings page", "expect": ["none"] },
+    { "id": "h047", "cat": "negative", "text": "Put me in touch with the Codex team", "expect": ["none"] },
+    { "id": "h048", "cat": "negative", "text": "Make me a function that pauses all threads", "expect": ["none"] },
+    { "id": "h049", "cat": "negative", "text": "Back to the drawing board", "expect": ["none"] },
+    { "id": "h050", "cat": "negative", "text": "Keep going with the refactor in the auth module", "expect": ["none"] },
+    { "id": "h051", "cat": "negative", "text": "I need you to explain why the tests are failing", "expect": ["none"] },
+    { "id": "h052", "cat": "negative", "text": "Freeze the dependency versions in package json", "expect": ["none"] },
+    { "id": "h053", "cat": "negative", "text": "Get rid of the unused imports", "expect": ["none"] },
+    {
+      "id": "h054",
+      "cat": "negative",
+      "text": "Return to the previous implementation of the parser",
+      "expect": ["none"]
+    },
+    { "id": "h055", "cat": "negative", "text": "Head over to the docs and update the readme", "expect": ["none"] }
   ]
 }
