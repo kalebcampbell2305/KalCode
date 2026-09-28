@@ -47,11 +47,16 @@ const kalvoiceShipped = servedStableRelease(RELEASES) !== null;
           </dd>
         </div>
         <div>
-          <dt>OS keychain for secrets</dt>
+          <dt>Where credentials are kept</dt>
           <dd>
-            Credentials are stored in your operating system's credential store. Secret values are
-            redacted from debug output, cleared from memory when dropped, and never written to the
-            database, logs, events or interface.
+            Your KalCode account session is kept in your operating system's credential store
+            (Windows Credential Manager or macOS Keychain). Provider sign-ins are kept by each
+            provider's own CLI, separately for every provider account through its own KalCode-managed
+            profile; KalCode never reads or copies them. Gemini CLI keeps its sign-in in its own AES-256-GCM encrypted
+            file, never in plaintext. Gemini derives that file's key from your computer and user
+            names, so it keeps the sign-in out of plaintext but not away from other programs running
+            as your user. KalCode's own secret values are redacted from debug output, cleared from
+            memory when dropped, and never written to the database, logs, events or interface.
           </dd>
         </div>
         <div>
@@ -81,7 +86,7 @@ const kalvoiceShipped = servedStableRelease(RELEASES) !== null;
         methods, using your own accounts. Model usage is billed by each provider under your
         account. KalCode holds no company provider credentials for your use, does not charge for,
         resell or meter provider usage, and never falls back to a KalCode-paid service. Your
-        provider credentials stay in your operating system's credential store.
+        provider sign-ins stay with each provider's own CLI, separately for every account you add.
       </p>
 
       <h2>Local voice</h2>
@@ -103,7 +108,7 @@ const kalvoiceShipped = servedStableRelease(RELEASES) !== null;
       <h2>Planned before release</h2>
       <ul>
         <li>Workspace containment: path canonicalization and symlink-escape detection.</li>
-        <li>Provider isolation with sanitized environments and scoped credentials.</li>
+        <li>Provider isolation with sanitized environments.</li>
         <li>The permission engine with an audit log of consequential decisions.</li>
         <li>Code-signed installers and signed updates.</li>
         <li>Server-side plan and usage checks, and verified billing webhooks, when paid plans launch.</li>

@@ -92,7 +92,7 @@ export const ACCOUNT_PAGE = {
   path: "/account",
   title: "Account — KalCode",
   description:
-    "Open your KalCode account to view your plan, KalVoice Requests and billing. Sign-in uses GitHub in the system browser; provider usage remains on your connected provider accounts.",
+    "Open your KalCode account to view your plan, KalVoice Requests and billing. Sign in with Google, Microsoft or a one-time email link; provider usage remains on your connected provider accounts.",
 } as const satisfies PageInfo;
 
 /**
@@ -158,7 +158,7 @@ export const PAGES = [
     path: "/docs/local-first",
     title: "Local-first — KalCode Docs",
     description:
-      "What KalCode keeps on your device, how it stores secrets in the OS keychain, and what never leaves your machine.",
+      "What KalCode keeps on your device, where your KalCode session and provider sign-ins are stored, and what never leaves your machine.",
   },
   {
     path: "/updates",
@@ -170,7 +170,7 @@ export const PAGES = [
     path: "/security",
     title: "Security — KalCode",
     description:
-      "KalCode security commitments: local-first data, on-device voice, your own provider accounts, an IPC allow-list, OS keychain secrets, no telemetry in current builds, and a permission model agents cannot bypass.",
+      "KalCode security commitments: local-first data, on-device voice, your own provider accounts in separate managed profiles, an IPC allow-list, your KalCode session in the OS credential store, no telemetry in current builds, and a permission model agents cannot bypass.",
   },
   {
     path: "/privacy",
@@ -261,23 +261,15 @@ export const DOCS_NAV = FOOTER_NAV.docs;
 export const TAGLINE = "One intelligence. A brighter tomorrow.";
 
 /**
- * Honest adapter status per provider (TRUTH.md, 2026-09-24). Shown wherever providers are named
- * next to each other, so no pane or bar implies more than the runtime can do today.
+ * Honest provider status on the Stable app (B4 8d6c133: crates/providers/src/catalog.rs marks all
+ * three adapters Implemented; apps/desktop/src-tauri/src/thread_commands.rs starts every thread in
+ * the account's managed profile). Access is the in-app sign-in each provider account supports:
+ * Claude Code `auth login --claudeai`, Codex ChatGPT login on personal plans (organization plans
+ * are refused), Gemini CLI "Sign in with Google". Managed launches strip provider API-key
+ * variables, so no API-key path is claimed. Provider panes are gated off Stable and not claimed.
  */
 export const PROVIDERS = [
-  { id: "claude", name: "Claude Code", access: "Claude sign-in or API key", status: "Adapter built", state: "built" },
-  {
-    id: "codex",
-    name: "Codex",
-    access: "ChatGPT sign-in or API key",
-    status: "Detected · adapter planned",
-    state: "planned",
-  },
-  {
-    id: "gemini",
-    name: "Gemini CLI",
-    access: "Google sign-in or API key",
-    status: "Detected · adapter planned",
-    state: "planned",
-  },
+  { id: "claude", name: "Claude Code", access: "Claude account sign-in", status: "Adapter built", state: "built" },
+  { id: "codex", name: "Codex", access: "ChatGPT sign-in (personal plans)", status: "Adapter built", state: "built" },
+  { id: "gemini", name: "Gemini CLI", access: "Google sign-in", status: "Adapter built", state: "built" },
 ] as const;

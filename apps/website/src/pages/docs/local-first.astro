@@ -22,10 +22,18 @@ const kalvoiceShipped = servedStableRelease(RELEASES) !== null;
 
   <h2>Secrets</h2>
   <p>
-    API keys and other credentials are stored in your operating system's credential store: Windows
-    Credential Manager, macOS Keychain, or Secret Service on Linux. They are never written to the
-    database, logs, events, or the interface, and they are cleared from memory when no longer
-    needed.
+    KalCode's own secrets, such as your KalCode account session, are stored in your operating
+    system's credential store: Windows Credential Manager or macOS Keychain. They are never written
+    to the database, logs, events, or the interface, and they are cleared from memory when no
+    longer needed.
+  </p>
+  <p>
+    Provider sign-ins are kept by each provider's own CLI, not by KalCode. Each provider account
+    you add gets its own KalCode-managed provider profile on your device, and the provider keeps
+    that account's sign-in for that profile: Claude Code and Codex in their own credential storage,
+    and Gemini CLI in its own AES-256-GCM encrypted file, never in plaintext. KalCode never reads
+    or copies these credentials. Gemini derives its file's key from your computer and user names, so the file is
+    kept out of plaintext but not away from other programs running as your user.
   </p>
 
   <h2>Logs</h2>
