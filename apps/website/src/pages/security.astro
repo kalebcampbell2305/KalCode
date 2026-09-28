@@ -93,8 +93,10 @@ const kalvoiceShipped = servedStableRelease(RELEASES) !== null;
       <p>
         {kalvoiceShipped ? "KalVoice" : "KalVoice, in development,"} transcribes dictation with a speech model that runs on your own
         computer. Audio is held in memory only while it is transcribed, then discarded: it is not
-        stored and not uploaded. The speech model is downloaded only with your consent and its
-        checksum is verified. Events record that a dictation or request happened, never its words.
+        stored and not uploaded. KalCode downloads its default speech model by itself from its signed
+        component catalog and verifies the signature and SHA-256 checksum before using it; if you
+        remove the model, it is not downloaded again on its own. Events record that a dictation or
+        request happened, never its words.
       </p>
 
       <h2>The permission model</h2>
