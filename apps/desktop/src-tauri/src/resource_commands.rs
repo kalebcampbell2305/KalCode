@@ -121,6 +121,8 @@ pub(crate) use provider::ResourceAdmissionProvider;
 /// its sampling and read locks independent and bounded.
 pub struct ResourceGovernorState {
     runtime: Mutex<Runtime>,
+    /// Push-to-talk asks heavy background starts to wait (bounded; see `kalcode_resources`).
+    interactive: kalcode_resources::InteractivePriority,
 }
 
 struct Runtime {
@@ -500,12 +502,19 @@ impl ResourceGovernorState {
         #[cfg(not(feature = "e2e"))]
         let (handle, fallback_status) = started(Governor::start(GovernorConfig::default()));
         Self {
+            interactive: kalcode_resources::InteractivePriority::default(),
             runtime: Mutex::new(Runtime {
                 handle,
                 activity: ActivityTracker::default(),
                 fallback_status,
             }),
         }
+    }
+
+    /// The push-to-talk priority gate: KalVoice opens spans while listening and transcribing,
+    /// and heavy background starts yield to them for a bounded time.
+    pub(crate) fn interactive(&self) -> &kalcode_resources::InteractivePriority {
+        &self.interactive
     }
 
     /// Current owner-facing report. No call in this path waits for a new sample or touches the OS.
@@ -814,6 +823,7 @@ impl ResourceGovernorState {
     #[cfg(test)]
     pub(crate) fn start_with_probe(probe: Box<dyn SystemProbe>) -> Self {
         Self {
+            interactive: kalcode_resources::InteractivePriority::default(),
             runtime: Mutex::new(Runtime {
                 handle: Some(
                     Governor::start_with(

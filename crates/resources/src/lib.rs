@@ -12,6 +12,8 @@
 //! - **Capacity** ([`capacity()`]): a pure function answering how many more agent tasks could
 //!   start now and what would hold the next one, for the Scheduler (P4). Until then it is
 //!   advisory and never blocks.
+//! - **Interactive priority** ([`InteractivePriority`]): push-to-talk asks background *starts* to
+//!   wait, bounded per span and per wait, so nothing is starved.
 //! - **Never acts**: nothing here kills, suspends or re-prioritises a process. Under pressure the
 //!   crate can only *propose* an action with an explanation ([`intervene::propose`]).
 //!
@@ -26,6 +28,7 @@ pub mod clock;
 pub mod engine;
 pub mod governor;
 pub mod history;
+pub mod interactive;
 pub mod intervene;
 pub mod mode;
 pub mod model;
@@ -46,6 +49,7 @@ pub use clock::{Clock, SystemClock};
 pub use engine::{Engine, GovernorConfig, Ingested, ModeChange, SmoothingConfig};
 pub use governor::{Governor, GovernorHandle, GovernorStatus, GovernorUpdate, SamplerStats};
 pub use history::HistoryPoint;
+pub use interactive::{InteractivePriority, InteractiveSpan, MAX_INTERACTIVE_DEFERRAL};
 pub use mode::{CustomLimits, GpuLimits, ModeError, ModeKind, ModeLimits, ResourceMode};
 pub use model::{
     MIB, PressureEntry, PressureLevel, PressureSummary, PressureTransition, ProcessRole, Reading,

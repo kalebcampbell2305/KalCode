@@ -5,9 +5,16 @@
 //! audio keeps each pass short) and publishes a partial transcript. On release, if everything
 //! after the last partial is silence — the common "speak, pause, release" — that partial *is*
 //! the final transcript and nothing is decoded again. Otherwise only one more pass runs.
+//!
+//! Release never waits for a partial pass that can't be used. If the last finished partial
+//! covers all the speech, it is the answer at once and the pass still running is cancelled.
+//! If the pass still running covers all the speech, finishing it is cheaper than starting over,
+//! so release waits for it. Otherwise that pass is cancelled (the engine stops at its next
+//! checkpoint and the result is discarded) and one final pass covers the whole recording, so no
+//! trailing words are lost.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -27,18 +34,41 @@ struct Partial {
     covered: usize,
 }
 
+/// What the worker has decoded, and what it is decoding now. One lock, so release sees a
+/// consistent pair.
+#[derive(Debug, Default)]
+struct Progress {
+    last: Option<Partial>,
+    /// Samples the pass running now covers.
+    in_flight: Option<usize>,
+}
+
 #[derive(Default)]
 struct Shared {
+    /// No new passes (release or cancel).
     stop: AtomicBool,
-    last: Mutex<Option<Partial>>,
+    /// Abandon the pass running now; its result is discarded.
+    cancel: Arc<AtomicBool>,
+    progress: Mutex<Progress>,
     first_voice: Mutex<Option<Instant>>,
     first_partial: Mutex<Option<Instant>>,
+}
+
+impl Shared {
+    fn progress(&self) -> MutexGuard<'_, Progress> {
+        self.progress.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn halt(&self) {
+        self.stop.store(true, Ordering::SeqCst);
+        self.cancel.store(true, Ordering::SeqCst);
+    }
 }
 
 /// How the final transcript was produced, for latency diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FinalSource {
-    /// The last partial already covered all the speech.
+    /// A partial already covered all the speech.
     ReusedPartial,
     /// One pass over the whole utterance after release.
     FinalPass,
@@ -91,48 +121,68 @@ impl Streamer {
         recognizer: &dyn SpeechRecognizer,
     ) -> Result<FinalTranscript, SttError> {
         self.shared.stop.store(true, Ordering::SeqCst);
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
-        }
-        let first_voice = *self
-            .shared
-            .first_voice
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        let first_partial = *self
-            .shared
-            .first_partial
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        let done = |text: String, source| FinalTranscript {
+        // Everything after `covered` is silence: a pass over that much has every word.
+        let covers = |covered: usize| covered <= audio.len() && is_silent(&audio[covered..]);
+        let usable =
+            |partial: Option<Partial>| partial.filter(|p| !p.text.is_empty() && covers(p.covered));
+        let (last, in_flight) = {
+            let progress = self.shared.progress();
+            (progress.last.clone(), progress.in_flight)
+        };
+        let outcome = if !heard_speech(audio) {
+            self.abandon_worker();
+            (String::new(), FinalSource::Silence)
+        } else if let Some(partial) = usable(last) {
+            self.abandon_worker();
+            (partial.text, FinalSource::ReusedPartial)
+        } else if let Some(partial) = in_flight
+            .filter(|covered| covers(*covered))
+            .and_then(|_| self.wait_for_worker())
+            .and_then(|()| usable(self.shared.progress().last.clone()))
+        {
+            (partial.text, FinalSource::ReusedPartial)
+        } else {
+            self.abandon_worker();
+            (
+                clean_transcript(&recognizer.transcribe(audio)?),
+                FinalSource::FinalPass,
+            )
+        };
+        let (text, source) = outcome;
+        Ok(FinalTranscript {
             text,
             source,
-            first_voice,
-            first_partial,
-        };
-        if !heard_speech(audio) {
-            return Ok(done(String::new(), FinalSource::Silence));
-        }
-        let last = self
-            .shared
-            .last
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone();
-        if let Some(partial) = last
-            && !partial.text.is_empty()
-            && partial.covered <= audio.len()
-            && is_silent(&audio[partial.covered..])
-        {
-            return Ok(done(partial.text, FinalSource::ReusedPartial));
-        }
-        let text = clean_transcript(&recognizer.transcribe(audio)?);
-        Ok(done(text, FinalSource::FinalPass))
+            first_voice: *self
+                .shared
+                .first_voice
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+            first_partial: *self
+                .shared
+                .first_partial
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+        })
     }
 
-    /// Stops streaming without a final transcript (cancel).
+    /// Cancels the pass in flight and leaves the worker to exit on its own. Not joined: its
+    /// copy of the audio is zeroed as soon as the engine stops the pass.
+    fn abandon_worker(&mut self) {
+        self.shared.halt();
+        drop(self.worker.take());
+    }
+
+    /// Lets the pass in flight finish (release already stopped any later one).
+    fn wait_for_worker(&mut self) -> Option<()> {
+        self.worker.take().map(|worker| {
+            let _ = worker.join();
+        })
+    }
+
+    /// Stops streaming without a final transcript (cancel). Cancels a pass in flight and waits
+    /// for the worker, so its copy of the audio is gone when this returns.
     pub fn cancel(mut self) {
-        self.shared.stop.store(true, Ordering::SeqCst);
+        self.shared.halt();
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
@@ -141,7 +191,7 @@ impl Streamer {
 
 impl Drop for Streamer {
     fn drop(&mut self) {
-        self.shared.stop.store(true, Ordering::SeqCst);
+        self.shared.halt();
     }
 }
 
@@ -178,19 +228,43 @@ fn run(
                 .unwrap_or_else(PoisonError::into_inner);
             first.get_or_insert_with(Instant::now);
         }
-        let result = recognizer.transcribe(&audio);
+        {
+            // Checked under the lock release reads: either release sees this pass, or this
+            // pass sees the release and never starts.
+            let mut progress = shared.progress();
+            if shared.stop.load(Ordering::SeqCst) {
+                audio.fill(0.0);
+                return;
+            }
+            progress.in_flight = Some(audio.len());
+        }
+        let result = recognizer.transcribe_cancellable(&audio, &shared.cancel);
         let len = audio.len();
         audio.fill(0.0);
-        let Ok(raw) = result else { continue };
-        let text = clean_transcript(&raw);
+        let text = match result {
+            // A cancelled pass may have been cut short: never use it.
+            _ if shared.cancel.load(Ordering::SeqCst) => {
+                shared.progress().in_flight = None;
+                return;
+            }
+            Err(_) => {
+                shared.progress().in_flight = None;
+                if shared.stop.load(Ordering::SeqCst) {
+                    return;
+                }
+                continue;
+            }
+            Ok(raw) => clean_transcript(&raw),
+        };
         covered = len;
         let changed = {
-            let mut last = shared.last.lock().unwrap_or_else(PoisonError::into_inner);
-            let changed = last.as_ref().is_none_or(|p| p.text != text);
-            *last = Some(Partial {
+            let mut progress = shared.progress();
+            let changed = progress.last.as_ref().is_none_or(|p| p.text != text);
+            progress.last = Some(Partial {
                 text: text.clone(),
                 covered: len,
             });
+            progress.in_flight = None;
             changed
         };
         if !text.is_empty() {
@@ -202,6 +276,9 @@ fn run(
             if changed && !shared.stop.load(Ordering::SeqCst) {
                 on_partial(&text);
             }
+        }
+        if shared.stop.load(Ordering::SeqCst) {
+            return;
         }
     }
 }
@@ -233,10 +310,101 @@ mod tests {
         }
     }
 
+    /// Test double for a slow engine: the first `fast` streaming passes return at once; later
+    /// ones take `slow` unless cancelled first. Final passes (`transcribe`) return at once.
+    struct SlowRecognizer {
+        fast: usize,
+        slow: Duration,
+        streaming_passes: AtomicUsize,
+        final_passes: AtomicUsize,
+        in_slow_pass: AtomicBool,
+        cancelled_passes: AtomicUsize,
+    }
+
+    impl SlowRecognizer {
+        fn new(fast: usize, slow: Duration) -> Arc<Self> {
+            Arc::new(Self {
+                fast,
+                slow,
+                streaming_passes: AtomicUsize::new(0),
+                final_passes: AtomicUsize::new(0),
+                in_slow_pass: AtomicBool::new(false),
+                cancelled_passes: AtomicUsize::new(0),
+            })
+        }
+
+        /// Long enough that a test finishing quickly proves nothing waited for it.
+        fn stuck(fast: usize) -> Arc<Self> {
+            Self::new(fast, Duration::from_secs(10))
+        }
+
+        fn text(audio: &[f32]) -> String {
+            let voiced = audio.iter().filter(|s| s.abs() > 0.05).count();
+            format!("voiced {}", voiced / 1_600)
+        }
+    }
+
+    impl SpeechRecognizer for SlowRecognizer {
+        fn transcribe(&self, audio: &[f32]) -> Result<String, SttError> {
+            self.final_passes.fetch_add(1, Ordering::SeqCst);
+            Ok(Self::text(audio))
+        }
+
+        fn transcribe_cancellable(
+            &self,
+            audio: &[f32],
+            cancel: &Arc<AtomicBool>,
+        ) -> Result<String, SttError> {
+            let n = self.streaming_passes.fetch_add(1, Ordering::SeqCst);
+            if n < self.fast {
+                return Ok(Self::text(audio));
+            }
+            self.in_slow_pass.store(true, Ordering::SeqCst);
+            let deadline = Instant::now() + self.slow;
+            while Instant::now() < deadline {
+                if cancel.load(Ordering::SeqCst) {
+                    self.cancelled_passes.fetch_add(1, Ordering::SeqCst);
+                    return Err(SttError::Failed("cancelled".into()));
+                }
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            Ok(Self::text(audio))
+        }
+    }
+
     fn tone(samples: usize) -> Vec<f32> {
         (0..samples)
             .map(|i| (i as f32 * 0.07).sin() * 0.3)
             .collect()
+    }
+
+    fn live_audio() -> (Arc<Mutex<Vec<f32>>>, Snapshot) {
+        let audio = Arc::new(Mutex::new(Vec::<f32>::new()));
+        let source = audio.clone();
+        let snapshot: Snapshot = Arc::new(move || Some(source.lock().expect("lock").clone()));
+        (audio, snapshot)
+    }
+
+    type Partials = Arc<Mutex<Vec<String>>>;
+
+    fn start(recognizer: Arc<dyn SpeechRecognizer>, snapshot: Snapshot) -> (Streamer, Partials) {
+        let partials = Partials::default();
+        let seen = partials.clone();
+        let streamer = Streamer::start(
+            recognizer,
+            snapshot,
+            Arc::new(move |t: &str| seen.lock().expect("lock").push(t.to_owned())),
+            Duration::from_millis(10),
+        );
+        (streamer, partials)
+    }
+
+    fn wait_for(what: &str, done: impl Fn() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !done() {
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 
     #[test]
@@ -251,9 +419,7 @@ mod tests {
         let recognizer = Arc::new(CountingRecognizer {
             calls: AtomicUsize::new(0),
         });
-        let audio = Arc::new(Mutex::new(Vec::<f32>::new()));
-        let source = audio.clone();
-        let snapshot: Snapshot = Arc::new(move || Some(source.lock().expect("lock").clone()));
+        let (audio, snapshot) = live_audio();
         let partials = Arc::new(Mutex::new(Vec::new()));
         let seen = partials.clone();
         let streamer = Streamer::start(
@@ -271,9 +437,9 @@ mod tests {
         let full = audio.lock().expect("lock").clone();
         let done = streamer.finish(&full, recognizer.as_ref()).expect("final");
         assert_eq!(done.source, FinalSource::ReusedPartial);
-        assert_eq!(
-            recognizer.calls.load(Ordering::SeqCst),
-            calls_before,
+        // A pass the worker had already started may still land; release starts none.
+        assert!(
+            recognizer.calls.load(Ordering::SeqCst) <= calls_before + 1,
             "no pass after release"
         );
         assert!(done.first_partial.is_some() && done.first_voice.is_some());
@@ -306,5 +472,133 @@ mod tests {
         .finish(&vec![0.0; 16_000], recognizer.as_ref())
         .expect("final");
         assert_eq!(silent.source, FinalSource::Silence);
+    }
+
+    #[test]
+    fn release_mid_decode_cancels_a_pass_that_cannot_cover_the_speech() {
+        // No fast pass: the first partial pass is still running at release, and the user kept
+        // talking after the audio it decodes.
+        let recognizer = SlowRecognizer::stuck(0);
+        let (audio, snapshot) = live_audio();
+        let (streamer, _) = start(recognizer.clone(), snapshot);
+        audio.lock().expect("lock").extend(tone(16_000));
+        wait_for("a partial pass in flight", || {
+            recognizer.in_slow_pass.load(Ordering::SeqCst)
+        });
+        audio.lock().expect("lock").extend(tone(8_000));
+        let full = audio.lock().expect("lock").clone();
+        let released = Instant::now();
+        let done = streamer.finish(&full, recognizer.as_ref()).expect("final");
+        assert!(
+            released.elapsed() < Duration::from_secs(2),
+            "release waited {:?} for a partial pass",
+            released.elapsed()
+        );
+        // Exactly one final pass, over the whole recording.
+        assert_eq!(done.source, FinalSource::FinalPass);
+        assert_eq!(done.text, SlowRecognizer::text(&full));
+        assert_eq!(recognizer.final_passes.load(Ordering::SeqCst), 1);
+        wait_for("the cancelled pass to stop", || {
+            recognizer.cancelled_passes.load(Ordering::SeqCst) == 1
+        });
+    }
+
+    #[test]
+    fn speech_after_the_last_partial_is_never_lost_while_a_pass_is_in_flight() {
+        // One fast partial over the first second, then a slow pass over more speech, and the
+        // user is still talking at release.
+        let recognizer = SlowRecognizer::stuck(1);
+        let (audio, snapshot) = live_audio();
+        let (streamer, partials) = start(recognizer.clone(), snapshot);
+        audio.lock().expect("lock").extend(tone(16_000));
+        wait_for("the first partial", || {
+            !partials.lock().expect("lock").is_empty()
+        });
+        audio.lock().expect("lock").extend(tone(16_000));
+        wait_for("a partial pass in flight", || {
+            recognizer.in_slow_pass.load(Ordering::SeqCst)
+        });
+        audio.lock().expect("lock").extend(tone(4_000));
+        let full = audio.lock().expect("lock").clone();
+        let released = Instant::now();
+        let done = streamer.finish(&full, recognizer.as_ref()).expect("final");
+        assert!(released.elapsed() < Duration::from_secs(2));
+        assert_eq!(done.source, FinalSource::FinalPass);
+        assert_eq!(
+            done.text,
+            SlowRecognizer::text(&full),
+            "the whole recording"
+        );
+        assert_ne!(
+            done.text,
+            partials.lock().expect("lock")[0],
+            "not the stale partial"
+        );
+        assert_eq!(recognizer.final_passes.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_silent_tail_reuses_the_partial_without_waiting_for_a_pass_in_flight() {
+        let recognizer = SlowRecognizer::stuck(1);
+        let (audio, snapshot) = live_audio();
+        let (streamer, partials) = start(recognizer.clone(), snapshot);
+        audio.lock().expect("lock").extend(tone(16_000));
+        wait_for("the first partial", || {
+            !partials.lock().expect("lock").is_empty()
+        });
+        // A pause: the next pass re-decodes speech plus silence and is slow.
+        audio.lock().expect("lock").extend(vec![0.0; 8_000]);
+        wait_for("a partial pass in flight", || {
+            recognizer.in_slow_pass.load(Ordering::SeqCst)
+        });
+        let full = audio.lock().expect("lock").clone();
+        let released = Instant::now();
+        let done = streamer.finish(&full, recognizer.as_ref()).expect("final");
+        assert!(released.elapsed() < Duration::from_secs(2));
+        assert_eq!(done.source, FinalSource::ReusedPartial);
+        assert_eq!(done.text, partials.lock().expect("lock")[0]);
+        assert_eq!(recognizer.final_passes.load(Ordering::SeqCst), 0);
+        wait_for("the cancelled pass to stop", || {
+            recognizer.cancelled_passes.load(Ordering::SeqCst) == 1
+        });
+    }
+
+    #[test]
+    fn a_pass_in_flight_that_covers_all_the_speech_is_finished_not_restarted() {
+        // No partial finished yet, but the pass running at release already has every word:
+        // finishing it beats cancelling it and decoding everything again.
+        let recognizer = SlowRecognizer::new(0, Duration::from_millis(150));
+        let (audio, snapshot) = live_audio();
+        let (streamer, _) = start(recognizer.clone(), snapshot);
+        let mut spoken = tone(16_000);
+        spoken.extend(vec![0.0; 4_000]);
+        audio.lock().expect("lock").extend(spoken);
+        wait_for("a partial pass in flight", || {
+            recognizer.in_slow_pass.load(Ordering::SeqCst)
+        });
+        // Only silence after the audio that pass decodes.
+        audio.lock().expect("lock").extend(vec![0.0; 1_600]);
+        let full = audio.lock().expect("lock").clone();
+        let done = streamer.finish(&full, recognizer.as_ref()).expect("final");
+        assert_eq!(done.source, FinalSource::ReusedPartial);
+        assert_eq!(done.text, SlowRecognizer::text(&full));
+        assert_eq!(recognizer.final_passes.load(Ordering::SeqCst), 0);
+        assert_eq!(recognizer.cancelled_passes.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn cancel_stops_a_pass_in_flight_and_waits_for_the_worker() {
+        let recognizer = SlowRecognizer::stuck(0);
+        let (audio, snapshot) = live_audio();
+        let (streamer, _) = start(recognizer.clone(), snapshot);
+        audio.lock().expect("lock").extend(tone(16_000));
+        wait_for("a partial pass in flight", || {
+            recognizer.in_slow_pass.load(Ordering::SeqCst)
+        });
+        let cancelled = Instant::now();
+        streamer.cancel();
+        assert!(cancelled.elapsed() < Duration::from_secs(2));
+        assert_eq!(recognizer.cancelled_passes.load(Ordering::SeqCst), 1);
+        assert_eq!(recognizer.final_passes.load(Ordering::SeqCst), 0);
     }
 }

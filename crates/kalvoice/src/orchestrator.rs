@@ -40,6 +40,7 @@ use time::OffsetDateTime;
 use ts_rs::TS;
 
 use crate::grammar::{self, Confidence, NamedTarget, Parsed, Understood};
+use crate::latency::LatencyTrace;
 use crate::ledger::{self, Consumption, ExecutionResult, RequestExecution};
 use crate::local_reasoning::{
     LOCAL_REASONING_FAILED_MESSAGE, LOCAL_REASONING_INVALID_OUTPUT_MESSAGE,
@@ -114,6 +115,16 @@ pub struct TalkResponse {
     pub response: Option<KalVoiceResponse>,
     /// Final transcript → route decided, in milliseconds.
     pub recognized_ms: f64,
+    /// Route decided → intent resolved (parsed, target bound), in milliseconds. Absent when no
+    /// intent was resolved (dictation, a rejection, a clarification).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub intent_ms: Option<f64>,
+    /// Intent resolved → the executor starts the action, in milliseconds. Absent when nothing
+    /// was executed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub action_ms: Option<f64>,
 }
 
 /// Decides what an utterance was meant as (docs/KALVOICE.md, "One gesture"):
@@ -770,6 +781,17 @@ impl Orchestrator {
         req: CommandRequest,
         on_stage: &dyn Fn(RequestStage),
     ) -> Result<KalVoiceResponse> {
+        self.handle_traced(req, on_stage, &LatencyTrace::default())
+    }
+
+    /// As [`Self::handle_with_stages`], marking when the intent is resolved and the action
+    /// starts on `trace` (durations only).
+    pub fn handle_traced(
+        &self,
+        req: CommandRequest,
+        on_stage: &dyn Fn(RequestStage),
+        trace: &LatencyTrace,
+    ) -> Result<KalVoiceResponse> {
         if !is_valid_id(&req.request_id) {
             return Err(KalError::validation(
                 "invalid_request_id",
@@ -830,6 +852,7 @@ impl Orchestrator {
             counted: false,
             on_stage,
             last_target_id: None,
+            trace,
         };
         if let Some((intent, replay)) = replay {
             run.intent = Some(intent);
@@ -1041,7 +1064,10 @@ impl Orchestrator {
                 route = TalkRoute::Command;
             }
         }
-        let recognized_ms = started.elapsed().as_secs_f64() * 1000.0;
+        // Routing (including the one-session check above) is done: recognition ends here.
+        let routed = Instant::now();
+        let recognized_ms = routed.saturating_duration_since(started).as_secs_f64() * 1000.0;
+        let trace = LatencyTrace::new(routed);
         if is_valid_id(&req.request_id) {
             // The route only (never the words).
             self.emit(vec![event(
@@ -1068,7 +1094,7 @@ impl Orchestrator {
                 )]);
                 None
             }
-            TalkRoute::Command | TalkRoute::Request => Some(self.handle_with_stages(
+            TalkRoute::Command | TalkRoute::Request => Some(self.handle_traced(
                 CommandRequest {
                     request_id: req.request_id,
                     text: req.text,
@@ -1077,12 +1103,15 @@ impl Orchestrator {
                     thread_id: req.thread_id,
                 },
                 on_stage,
+                &trace,
             )?),
         };
         Ok(TalkResponse {
             route,
             response,
             recognized_ms,
+            intent_ms: trace.intent_ms(),
+            action_ms: trace.action_ms(),
         })
     }
 
@@ -1399,6 +1428,7 @@ struct Run<'a> {
     counted: bool,
     on_stage: &'a dyn Fn(RequestStage),
     last_target_id: Option<String>,
+    trace: &'a LatencyTrace,
 }
 
 impl Run<'_> {
@@ -1568,6 +1598,8 @@ impl Run<'_> {
         intent: KalVoiceIntent,
         providers: Vec<ProviderId>,
     ) -> Result<KalVoiceResponse> {
+        // Parsed (or chosen by the local interpreter) and its target bound.
+        self.trace.intent_resolved();
         let ctx = self.context(providers);
         if let Err(e) = self.o.executor.check_with_context(&intent, &ctx) {
             return Ok(self.fail_with(e));
@@ -1590,6 +1622,7 @@ impl Run<'_> {
     /// takes no usage claim: its only effect is the composer's own Send or clear, run by the UI.
     fn execute_free(&mut self, intent: &KalVoiceIntent, ctx: &ExecContext) -> KalVoiceResponse {
         (self.on_stage)(RequestStage::Executing);
+        self.trace.action_started();
         match self.o.executor.execute(intent, ctx) {
             Ok(done) => {
                 self.o
@@ -1649,6 +1682,7 @@ impl Run<'_> {
             }
         }
         (self.on_stage)(RequestStage::Executing);
+        self.trace.action_started();
         match self.o.executor.execute(intent, ctx) {
             Ok(done) => {
                 self.o

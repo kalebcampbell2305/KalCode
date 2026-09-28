@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, PoisonError};
 
 /// Whether this build includes the whisper.cpp engine.
@@ -37,6 +38,18 @@ impl SttError {
 /// Turns 16 kHz mono audio into text, on the device.
 pub trait SpeechRecognizer: Send + Sync {
     fn transcribe(&self, audio: &[f32]) -> Result<String, SttError>;
+
+    /// As [`Self::transcribe`], but stops early once `cancel` is set; a pass stopped that way
+    /// returns an error and its text must never be used. Engines that cannot stop mid-pass run
+    /// it to the end.
+    fn transcribe_cancellable(
+        &self,
+        audio: &[f32],
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<String, SttError> {
+        let _ = cancel;
+        self.transcribe(audio)
+    }
 }
 
 /// Minimum audio worth transcribing (a quarter second).
@@ -256,8 +269,10 @@ fn load(_path: &Path, _english_only: bool) -> Result<Arc<dyn SpeechRecognizer>, 
 
 #[cfg(feature = "whisper")]
 mod whisper {
+    use std::cell::RefCell;
     use std::path::Path;
-    use std::sync::{Mutex, PoisonError};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex, PoisonError};
 
     use whisper_rs::{
         FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
@@ -268,12 +283,73 @@ mod whisper {
     const VOCABULARY: &str =
         "KalCode, KalVoice, Claude Code, Codex, Gemini CLI, threads, workspace, terminal.";
 
+    thread_local! {
+        /// The cancel flag of the pass this thread is running, when that pass can be cancelled.
+        static RUNNING_CANCEL: RefCell<Option<Arc<AtomicBool>>> = const { RefCell::new(None) };
+    }
+
+    /// whisper.cpp's abort callback: whether the pass running on this thread was cancelled.
+    /// whisper.cpp asks on the thread that called `full`, after encoding and after each decoded
+    /// token. Asked from any other thread it finds no flag and answers no, so the worst case is
+    /// a pass that runs to its end, as it did before cancellation existed.
+    fn cancel_requested() -> bool {
+        RUNNING_CANCEL
+            .try_with(|slot| {
+                slot.try_borrow()
+                    .ok()
+                    .and_then(|flag| flag.as_ref().map(|f| f.load(Ordering::SeqCst)))
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false)
+    }
+
+    /// whisper-rs 0.16's `set_abort_callback_safe` stores the closure as a `Box<dyn FnMut>`
+    /// but its trampoline reads that pointer as the concrete closure type, which is only sound
+    /// for a zero-sized closure (one that captures nothing). This refuses anything else at
+    /// compile time; state reaches the callback through `RUNNING_CANCEL` instead.
+    fn capture_free<F: FnMut() -> bool + 'static>(callback: F) -> F {
+        const {
+            assert!(
+                std::mem::size_of::<F>() == 0,
+                "the abort callback must capture nothing"
+            )
+        };
+        callback
+    }
+
+    /// Publishes a pass's cancel flag to the abort callback for as long as it runs.
+    struct CancelScope;
+
+    impl CancelScope {
+        fn enter(flag: Option<Arc<AtomicBool>>) -> Self {
+            let _ = RUNNING_CANCEL.try_with(|slot| {
+                if let Ok(mut slot) = slot.try_borrow_mut() {
+                    *slot = flag;
+                }
+            });
+            Self
+        }
+    }
+
+    impl Drop for CancelScope {
+        fn drop(&mut self) {
+            let _ = RUNNING_CANCEL.try_with(|slot| {
+                if let Ok(mut slot) = slot.try_borrow_mut() {
+                    *slot = None;
+                }
+            });
+        }
+    }
+
     pub struct WhisperRecognizer {
         context: WhisperContext,
         /// Reused across passes (allocating a state costs tens of milliseconds).
         state: Mutex<Option<WhisperState>>,
-        english_only: bool,
-        threads: i32,
+        /// Decoder settings, built once and cloned per pass. whisper-rs never frees the strings
+        /// or the callback box a `FullParams` allocates (building them per pass leaked a little
+        /// on every partial). Built once, they stay valid for as long as any clone can hand
+        /// whisper.cpp a pointer to them.
+        params: FullParams<'static, 'static>,
     }
 
     impl WhisperRecognizer {
@@ -292,14 +368,11 @@ mod whisper {
             Ok(Self {
                 context,
                 state: Mutex::new(Some(state)),
-                english_only,
-                threads: i32::try_from(threads).unwrap_or(4),
+                params: base_params(english_only, i32::try_from(threads).unwrap_or(4)),
             })
         }
-    }
 
-    impl SpeechRecognizer for WhisperRecognizer {
-        fn transcribe(&self, audio: &[f32]) -> Result<String, SttError> {
+        fn run(&self, audio: &[f32], cancel: Option<&Arc<AtomicBool>>) -> Result<String, SttError> {
             let mut slot = self.state.lock().unwrap_or_else(PoisonError::into_inner);
             let state = match slot.as_mut() {
                 Some(state) => state,
@@ -309,30 +382,19 @@ mod whisper {
                         .map_err(|e| SttError::Failed(e.to_string()))?,
                 ),
             };
+            if cancel.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+                return Err(SttError::Failed("cancelled".into()));
+            }
             let budget = decode_budget(audio.len());
-            let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-            params.set_language(Some(if self.english_only { "en" } else { "auto" }));
-            params.set_n_threads(self.threads);
-            params.set_translate(false);
-            params.set_no_context(true);
-            params.set_no_timestamps(true);
-            params.set_single_segment(true);
-            params.set_suppress_blank(true);
-            params.set_suppress_nst(true);
-            params.set_temperature_inc(0.0);
+            let mut params = self.params.clone();
             // Short utterances don't need whisper's 30 s window: a context sized to the audio
             // cuts the encoder cost several times; the token cap stops repetition loops.
             params.set_audio_ctx(budget.audio_ctx);
             params.set_max_tokens(budget.max_tokens);
-            params.set_print_special(false);
-            params.set_print_progress(false);
-            params.set_print_realtime(false);
-            params.set_print_timestamps(false);
-            // Primes the model with KalCode's vocabulary (product and provider names).
-            params.set_initial_prompt(VOCABULARY);
-            state
-                .full(params, audio)
-                .map_err(|e| SttError::Failed(e.to_string()))?;
+            let scope = CancelScope::enter(cancel.cloned());
+            let outcome = state.full(params, audio);
+            drop(scope);
+            outcome.map_err(|e| SttError::Failed(e.to_string()))?;
             let mut text = String::new();
             for segment in state.as_iter() {
                 if let Ok(part) = segment.to_str_lossy() {
@@ -341,6 +403,65 @@ mod whisper {
                 }
             }
             Ok(clean_transcript(&text))
+        }
+    }
+
+    /// Settings shared by every pass.
+    fn base_params(english_only: bool, threads: i32) -> FullParams<'static, 'static> {
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        params.set_language(Some(if english_only { "en" } else { "auto" }));
+        params.set_n_threads(threads);
+        params.set_translate(false);
+        params.set_no_context(true);
+        params.set_no_timestamps(true);
+        params.set_single_segment(true);
+        params.set_suppress_blank(true);
+        params.set_suppress_nst(true);
+        params.set_temperature_inc(0.0);
+        params.set_print_special(false);
+        params.set_print_progress(false);
+        params.set_print_realtime(false);
+        params.set_print_timestamps(false);
+        // Primes the model with KalCode's vocabulary (product and provider names).
+        params.set_initial_prompt(VOCABULARY);
+        params.set_abort_callback_safe(capture_free(cancel_requested));
+        params
+    }
+
+    impl SpeechRecognizer for WhisperRecognizer {
+        fn transcribe(&self, audio: &[f32]) -> Result<String, SttError> {
+            self.run(audio, None)
+        }
+
+        fn transcribe_cancellable(
+            &self,
+            audio: &[f32],
+            cancel: &Arc<AtomicBool>,
+        ) -> Result<String, SttError> {
+            self.run(audio, Some(cancel))
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn the_abort_callback_sees_only_the_running_passs_flag_on_its_thread() {
+            assert!(!cancel_requested(), "no pass running");
+            let flag = Arc::new(AtomicBool::new(false));
+            let scope = CancelScope::enter(Some(flag.clone()));
+            assert!(!cancel_requested());
+            flag.store(true, Ordering::SeqCst);
+            assert!(cancel_requested());
+            // Another thread never sees this pass's flag.
+            assert!(!std::thread::spawn(cancel_requested).join().expect("join"));
+            drop(scope);
+            assert!(!cancel_requested(), "cleared when the pass ends");
+            // A pass that can't be cancelled publishes no flag.
+            let uncancellable = CancelScope::enter(None);
+            assert!(!cancel_requested());
+            drop(uncancellable);
         }
     }
 }

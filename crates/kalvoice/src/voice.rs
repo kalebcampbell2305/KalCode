@@ -267,14 +267,21 @@ impl VoiceController {
     }
 
     /// Stops listening and finishes recognition on the device. The audio is zeroed and dropped
-    /// before this returns, whatever the outcome. Blocking; call from a background thread.
+    /// before this returns, whatever the outcome; a partial pass cancelled by the release zeroes
+    /// its own earlier copy the moment the engine stops it. Blocking; call from a background
+    /// thread.
     pub fn end(&self, session_id: &str) -> Result<VoiceResult, VoiceError> {
         self.end_timed(session_id).map(|f| f.result)
     }
 
     /// As [`Self::end`], with the stage timings of this interaction.
     pub fn end_timed(&self, session_id: &str) -> Result<Finished, VoiceError> {
-        let key_up = Instant::now();
+        self.end_timed_at(session_id, Instant::now())
+    }
+
+    /// As [`Self::end_timed`], for a key released at `key_up` (taken where the release was
+    /// observed, before any thread hand-off, so key-up timings include that hand-off).
+    pub fn end_timed_at(&self, session_id: &str, key_up: Instant) -> Result<Finished, VoiceError> {
         let session = self
             .take(Some(session_id))
             .ok_or(VoiceError::NotListening)?;
@@ -325,6 +332,13 @@ impl VoiceController {
                 return Err(e.into());
             }
         };
+        let key_up_to_audio_final = ms(key_up.elapsed());
+        tracing::info!(
+            event = "kalvoice.latency_stage",
+            stage = "audio_finalized",
+            from = "ptt_up",
+            ms = key_up_to_audio_final
+        );
         let outcome = self
             .recognizers
             .recognizer()
@@ -364,6 +378,7 @@ impl VoiceController {
                 }
                 .to_owned(),
             ),
+            key_up_to_audio_final: Some(key_up_to_audio_final),
             ..StageTimings::default()
         };
         let result = if done.text.is_empty() {
@@ -616,6 +631,20 @@ mod tests {
         let last = kalvoice_events(&core).pop().expect("event");
         assert_eq!(last["type"], "kalvoice.dictation_failed");
         assert_eq!(last["payload"]["code"], "cancelled");
+    }
+
+    #[test]
+    fn key_up_timings_start_where_the_release_was_observed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (_, _, voice) = setup(dir.path(), speech(), None, Ok(()), Ok("go".into()));
+        let id = voice.begin(KalVoiceMode::Command).expect("begin");
+        let key_up = Instant::now();
+        std::thread::sleep(Duration::from_millis(20));
+        let timings = voice.end_timed_at(&id, key_up).expect("end").timings;
+        let audio_final = timings.key_up_to_audio_final.expect("audio finalized");
+        let final_ms = timings.key_up_to_final.expect("final");
+        assert!(audio_final >= 20.0, "includes the hand-off: {audio_final}");
+        assert!(final_ms >= audio_final);
     }
 
     #[test]

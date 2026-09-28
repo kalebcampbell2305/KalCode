@@ -595,6 +595,37 @@ fn talk_commands_count_and_type_instead_refunds_reversible_ones() {
 }
 
 #[test]
+fn talk_reports_intent_and_action_start_timings_only_when_they_happen() {
+    let h = harness();
+    let command = h
+        .orchestrator
+        .talk(talk("go to settings", TalkTarget::None), &|_| {})
+        .expect("talk");
+    let intent_ms = command.intent_ms.expect("intent resolved");
+    let action_ms = command.action_ms.expect("action started");
+    assert!((0.0..1_000.0).contains(&intent_ms));
+    assert!((0.0..1_000.0).contains(&action_ms));
+    // Durations only on the wire; absent stages are omitted, not null.
+    let json = serde_json::to_value(&command).expect("json");
+    assert!(json["intentMs"].is_number() && json["actionMs"].is_number());
+
+    let dictation = h
+        .orchestrator
+        .talk(talk("some prose to type", TalkTarget::Field), &|_| {})
+        .expect("talk");
+    assert_eq!((dictation.intent_ms, dictation.action_ms), (None, None));
+    let json = serde_json::to_value(&dictation).expect("json");
+    assert!(json.get("intentMs").is_none() && json.get("actionMs").is_none());
+
+    // Understood but nothing to run: no intent was resolved and nothing started.
+    let request = h
+        .orchestrator
+        .talk(talk("plan the release", TalkTarget::None), &|_| {})
+        .expect("talk");
+    assert_eq!((request.intent_ms, request.action_ms), (None, None));
+}
+
+#[test]
 fn stages_are_reported_in_order() {
     let h = harness();
     let seen = Mutex::new(Vec::new());

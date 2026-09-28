@@ -77,6 +77,7 @@ fn e2e_provider_sample_uses_canonical_capacity_and_still_enforces_limits() {
     }
     assert!(handle.latest().is_some(), "fixture sample was not ingested");
     let state = Arc::new(ResourceGovernorState {
+        interactive: kalcode_resources::InteractivePriority::default(),
         runtime: Mutex::new(Runtime {
             handle: Some(handle),
             activity: ActivityTracker::default(),
@@ -149,6 +150,7 @@ fn held(reason: AdmissionReason) -> AdmissionDecision {
 
 fn deterministic_state() -> Arc<ResourceGovernorState> {
     Arc::new(ResourceGovernorState {
+        interactive: kalcode_resources::InteractivePriority::default(),
         runtime: Mutex::new(Runtime {
             handle: None,
             activity: ActivityTracker::default(),
@@ -623,6 +625,7 @@ fn ipc_history_keeps_only_the_most_recent_bounded_points() {
 #[test]
 fn missing_sampler_is_visible_and_holds_new_work() {
     let state = ResourceGovernorState {
+        interactive: kalcode_resources::InteractivePriority::default(),
         runtime: Mutex::new(Runtime {
             handle: None,
             activity: ActivityTracker::default(),
@@ -660,6 +663,7 @@ fn missing_sampler_is_visible_and_holds_new_work() {
 #[test]
 fn shutdown_is_idempotent_when_startup_failed() {
     let state = ResourceGovernorState {
+        interactive: kalcode_resources::InteractivePriority::default(),
         runtime: Mutex::new(Runtime {
             handle: None,
             activity: ActivityTracker::default(),

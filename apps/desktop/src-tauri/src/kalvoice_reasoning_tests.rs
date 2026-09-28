@@ -123,6 +123,7 @@ struct FakeHost {
     reserves: AtomicUsize,
     launches: Arc<AtomicUsize>,
     live_reservations: Arc<AtomicUsize>,
+    voice: kalcode_resources::InteractivePriority,
 }
 
 impl FakeHost {
@@ -137,6 +138,7 @@ impl FakeHost {
             reserves: AtomicUsize::new(0),
             launches: Arc::default(),
             live_reservations: Arc::default(),
+            voice: kalcode_resources::InteractivePriority::default(),
         })
     }
 
@@ -213,6 +215,10 @@ impl InterpreterHost for FakeHost {
                 .take(),
             Admission::Real(resources) => resources.subscribe(CAPACITY_EVENT_BUFFER),
         }
+    }
+    fn yield_to_voice(&self, cancelled: &dyn Fn() -> bool) -> Duration {
+        self.voice
+            .yield_to_interactive(MAX_INTERACTIVE_DEFERRAL, cancelled)
     }
 }
 
@@ -347,6 +353,46 @@ fn installed_components_reach_ready_on_the_governors_next_sample_without_a_retry
     );
     drop(reasoning);
     assert!(resources.shutdown_checked());
+}
+
+#[test]
+fn a_start_waits_for_push_to_talk_to_finish_and_then_proceeds_without_a_retry() {
+    let (host, _samples) = FakeHost::scripted(Vec::new());
+    let span = host.voice.begin();
+    let reasoning = interpreter(host.clone(), AutostartPolicy::default());
+    let (driver, _published) = spawn_autostart(&reasoning);
+    std::thread::sleep(Duration::from_millis(150));
+    // Nothing verified, reserved or launched while the user is talking.
+    assert_eq!(host.acquires.load(Ordering::SeqCst), 0);
+    assert_eq!(host.launches.load(Ordering::SeqCst), 0);
+    let released = Instant::now();
+    drop(span);
+    driver.join().unwrap();
+    assert!(released.elapsed() < Duration::from_secs(2));
+    assert_eq!(reasoning.snapshot(), (LocalReasoningStatus::Ready, None));
+    assert_eq!(host.launches.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn push_to_talk_deferral_is_bounded_even_if_a_span_never_ends() {
+    let (host, _samples) = FakeHost::scripted(Vec::new());
+    // A span nobody ends (a session lost on some path) stops deferring at its bound.
+    let gate = kalcode_resources::InteractivePriority::with_cap(Duration::from_millis(100));
+    let _span = gate.begin();
+    let Some(host) = Arc::into_inner(host) else {
+        panic!("sole owner");
+    };
+    let host = Arc::new(FakeHost {
+        voice: gate,
+        ..host
+    });
+    let reasoning = interpreter(host.clone(), AutostartPolicy::default());
+    let started = Instant::now();
+    let (driver, _published) = spawn_autostart(&reasoning);
+    driver.join().unwrap();
+    assert!(started.elapsed() >= Duration::from_millis(80));
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert_eq!(reasoning.snapshot(), (LocalReasoningStatus::Ready, None));
 }
 
 #[test]

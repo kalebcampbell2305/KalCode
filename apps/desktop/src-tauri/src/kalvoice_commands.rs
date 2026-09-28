@@ -226,6 +226,12 @@ pub struct KalVoiceRuntime {
     shutting_down: AtomicBool,
     background: Arc<BackgroundTasks>,
     latency: LatencyLog,
+    /// Push-to-talk priority: heavy background starts wait while a session listens or
+    /// transcribes (bounded by the Resource Governor's gate).
+    voice_priority: kalcode_resources::InteractivePriority,
+    /// The open priority span of each session, by session id, until it is transcribed or
+    /// discarded.
+    priority_spans: Mutex<HashMap<String, kalcode_resources::InteractiveSpan>>,
 }
 
 #[derive(Default)]
@@ -302,6 +308,25 @@ impl KalVoiceRuntime {
 
     fn signal(&self, signal: &KalVoiceSignal) {
         self.signals.send(signal);
+    }
+
+    /// A session started listening: heavy background starts wait until it is transcribed or
+    /// discarded (each span stops deferring at its bound even if it is never closed).
+    fn open_priority(&self, session_id: &str) {
+        let mut spans = self
+            .priority_spans
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        spans.retain(|_, span| !span.expired());
+        spans.insert(session_id.to_owned(), self.voice_priority.begin());
+    }
+
+    /// The session's transcript is ready, or the session was discarded.
+    fn close_priority(&self, session_id: &str) {
+        self.priority_spans
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(session_id);
     }
 
     fn status(&self) -> Result<KalVoiceStatus, KalError> {
@@ -400,6 +425,14 @@ struct LeasedRecognizer(Arc<LoadedRecognizer>);
 impl SpeechRecognizer for LeasedRecognizer {
     fn transcribe(&self, audio: &[f32]) -> Result<String, SttError> {
         self.0.recognizer.transcribe(audio)
+    }
+
+    fn transcribe_cancellable(
+        &self,
+        audio: &[f32],
+        cancel: &Arc<AtomicBool>,
+    ) -> Result<String, SttError> {
+        self.0.recognizer.transcribe_cancellable(audio, cancel)
     }
 }
 
@@ -683,6 +716,7 @@ pub fn init(
             guardian,
         ))
     });
+    let voice_priority = resources.interactive().clone();
     let reasoning = DesktopLocalInterpreter::new(components.clone(), resources, launcher);
     let providers = Arc::new(DesktopProviders {
         registry,
@@ -746,6 +780,8 @@ pub fn init(
         shutting_down: AtomicBool::new(false),
         background: Arc::new(BackgroundTasks::default()),
         latency: LatencyLog::new(200),
+        voice_priority,
+        priority_spans: Mutex::new(HashMap::new()),
     });
     // Live partial transcripts go to the UI as ghost text.
     let partial_runtime = Arc::downgrade(&runtime);
@@ -1300,7 +1336,8 @@ pub fn on_shortcut(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {
         ShortcutState::Released => {
             tracing::info!(event = "kalvoice.ptt_key_up");
             if let Some((id, mode)) = runtime.voice.listening() {
-                finish_listening(runtime, id, mode);
+                // `pressed` is when this callback saw the release: key-up timings start there.
+                finish_listening_at(runtime, id, mode, pressed);
             }
         }
     }
@@ -1356,6 +1393,13 @@ fn start_listening_at(
                 event = "kalvoice.microphone_open_succeeded",
                 key_down_to_mic_ms
             );
+            tracing::info!(
+                event = "kalvoice.latency_stage",
+                stage = "mic_open",
+                from = "ptt_down",
+                ms = pressed.elapsed().as_secs_f64() * 1000.0
+            );
+            runtime.open_priority(&session_id);
             tracing::info!(event = "kalvoice.audio_capture_started");
             tracing::info!(event = "kalvoice.ptt_state_listening");
             runtime.signal(&KalVoiceSignal::ListeningStarted {
@@ -1412,8 +1456,19 @@ fn stream_level(runtime: Arc<KalVoiceRuntime>, session_id: String) {
 /// Stops the microphone and finishes recognition on a background thread; the transcript and
 /// stage timings arrive as a signal.
 fn finish_listening(runtime: Arc<KalVoiceRuntime>, session_id: String, mode: KalVoiceMode) {
+    finish_listening_at(runtime, session_id, mode, Instant::now());
+}
+
+/// As [`finish_listening`], for a key released at `key_up`.
+fn finish_listening_at(
+    runtime: Arc<KalVoiceRuntime>,
+    session_id: String,
+    mode: KalVoiceMode,
+    key_up: Instant,
+) {
     let Some(task) = runtime.background.start() else {
         runtime.voice.cancel(Some(&session_id));
+        runtime.close_priority(&session_id);
         return;
     };
     tracing::info!(event = "kalvoice.audio_capture_stop_requested");
@@ -1429,13 +1484,23 @@ fn finish_listening(runtime: Arc<KalVoiceRuntime>, session_id: String, mode: Kal
             // Ending stops the microphone, then recognizes what was captured.
             tracing::info!(event = "kalvoice.stt_started");
             let started = Instant::now();
-            let ended = runtime.voice.end_timed(&session_id);
+            let ended = runtime.voice.end_timed_at(&session_id, key_up);
+            runtime.close_priority(&session_id);
             let stt_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
             tracing::info!(event = "kalvoice.audio_capture_stopped");
             tracing::info!(event = "kalvoice.audio_capture_finalized");
             let signal = match ended {
                 Ok(finished) => {
                     tracing::info!(event = "kalvoice.stt_completed", outcome = "ok", stt_ms);
+                    let timings = &finished.timings;
+                    tracing::info!(
+                        event = "kalvoice.latency_stage",
+                        stage = "transcript_ready",
+                        from = "ptt_up",
+                        ms = timings.key_up_to_final.unwrap_or_default(),
+                        partial_reused = timings.final_source.as_deref() == Some("reused_partial"),
+                        final_source = timings.final_source.as_deref().unwrap_or("unknown")
+                    );
                     match &finished.result {
                         VoiceResult::Transcript { .. } => {
                             tracing::info!(event = "kalvoice.transcript_ready");
@@ -1473,6 +1538,7 @@ fn finish_listening(runtime: Arc<KalVoiceRuntime>, session_id: String, mode: Kal
         let (runtime, session_id) = fallback;
         tracing::warn!(event = "kalvoice.stt_thread_unavailable");
         runtime.voice.cancel(Some(&session_id));
+        runtime.close_priority(&session_id);
         runtime.signal(&KalVoiceSignal::ListeningFailed {
             session_id: Some(session_id),
             mode,
@@ -1693,6 +1759,25 @@ pub async fn kalvoice_talk(
         }
         let talked = talked.map_err(to_ipc("kalvoice_talk"))?;
         runtime.latency.record_recognized(talked.recognized_ms);
+        runtime
+            .latency
+            .record_resolution(talked.intent_ms, talked.action_ms);
+        if let Some(ms) = talked.intent_ms {
+            tracing::info!(
+                event = "kalvoice.latency_stage",
+                stage = "intent_resolved",
+                from = "route_decided",
+                ms
+            );
+        }
+        if let Some(ms) = talked.action_ms {
+            tracing::info!(
+                event = "kalvoice.latency_stage",
+                stage = "action_started",
+                from = "intent_resolved",
+                ms
+            );
+        }
         if let Some(response) = &talked.response {
             speak_reply(&runtime, response);
             synchronize_usage(&runtime);
@@ -1887,6 +1972,7 @@ pub fn kalvoice_listen_cancel(
     let listening = runtime.voice.listening();
     let cancelled = runtime.voice.cancel(None);
     if let (true, Some((session_id, mode))) = (cancelled, listening) {
+        runtime.close_priority(&session_id);
         runtime.signal(&KalVoiceSignal::Cancelled { session_id, mode });
     }
     Ok(cancelled)

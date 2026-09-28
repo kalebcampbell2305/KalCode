@@ -7,4 +7,16 @@ export type StageTimings = { keyDownToMic: number | null, speechToPartial: numbe
 /**
  * `reused_partial` when the final transcript needed no pass after release.
  */
-finalSource: string | null, };
+finalSource: string | null,
+/**
+ * Key up → recording stopped and finalized (the start of stage 3).
+ */
+keyUpToAudioFinal?: number,
+/**
+ * Route decided → intent resolved: parsed and its target bound (inside stage 5).
+ */
+recognizedToIntent?: number,
+/**
+ * Intent resolved → the executor starts the action (inside stage 5).
+ */
+intentToAction?: number, };

@@ -258,6 +258,9 @@ fn main() {
                     "recognizedToExecuted",
                     Some((handled_ms - talked.recognized_ms).max(0.0)),
                 ),
+                ("keyUpToAudioFinal", timings.key_up_to_audio_final),
+                ("recognizedToIntent", talked.intent_ms),
+                ("intentToAction", talked.action_ms),
             ] {
                 if let Some(v) = value {
                     stages.entry(name).or_default().push(v);

@@ -25,6 +25,7 @@ use kalcode_kalvoice::local_reasoning::{
 use kalcode_kalvoice::signals::LocalReasoningStatus;
 use kalcode_resources::{
     AdmissionDecision, AdmissionReason, GovernorStatus, GovernorUpdate, HoldReason,
+    MAX_INTERACTIVE_DEFERRAL,
 };
 
 use crate::kalvoice_components::{ComponentManagerError, KalVoiceComponentManager};
@@ -212,6 +213,13 @@ trait InterpreterHost: Send + Sync {
     fn reserve(&self, estimate: LocalWorkloadEstimate) -> Result<Box<dyn Send>, AdmissionDecision>;
     /// The governor's updates, whose fresh samples re-evaluate a held start. `None`: no sampler.
     fn capacity_events(&self) -> Option<Receiver<GovernorUpdate>>;
+    /// Waits while push-to-talk is listening or transcribing, for at most
+    /// [`MAX_INTERACTIVE_DEFERRAL`], before a start verifies, spawns and loads the model.
+    /// Returns how long it waited.
+    fn yield_to_voice(&self, cancelled: &dyn Fn() -> bool) -> Duration {
+        let _ = cancelled;
+        Duration::ZERO
+    }
 }
 
 struct DesktopHost {
@@ -282,6 +290,12 @@ impl InterpreterHost for DesktopHost {
 
     fn capacity_events(&self) -> Option<Receiver<GovernorUpdate>> {
         self.resources.subscribe(CAPACITY_EVENT_BUFFER)
+    }
+
+    fn yield_to_voice(&self, cancelled: &dyn Fn() -> bool) -> Duration {
+        self.resources
+            .interactive()
+            .yield_to_interactive(MAX_INTERACTIVE_DEFERRAL, cancelled)
     }
 }
 
@@ -523,6 +537,17 @@ impl DesktopLocalInterpreter {
     }
 
     fn attempt(&self, report: &dyn Fn()) -> Attempt {
+        // A start hashes, spawns and loads a model: let a push-to-talk utterance finish first.
+        let deferred = self
+            .host
+            .yield_to_voice(&|| self.cancellation.is_cancelled());
+        if !deferred.is_zero() {
+            tracing::info!(
+                event = "kalvoice.runtime_autostart_deferred",
+                reason = "push_to_talk",
+                deferred_ms = u64::try_from(deferred.as_millis()).unwrap_or(u64::MAX)
+            );
+        }
         let mut state = self.lock();
         if self.cancellation.is_cancelled() || state.warming || state.cleanup.is_some() {
             return Attempt::Idle;
