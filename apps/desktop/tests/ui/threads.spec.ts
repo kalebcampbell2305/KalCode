@@ -345,7 +345,7 @@ test.describe("threads", () => {
     const running = rows.filter({ hasText: "Fix OAuth Callback Race" });
     await expect(running.getByText("Running a tool")).toBeVisible();
     await expect(running.getByText("Run npm test")).toBeVisible();
-    await expect(running.getByText("Claude Code · kalcode")).toBeVisible();
+    await expect(running.getByText("Claude Code · Personal · kalcode")).toBeVisible();
     const waiting = rows.filter({ hasText: "Add Dark Mode Toggle" });
     await expect(waiting.getByText("Needs approval")).toBeVisible();
     await expect(waiting.getByText("1 approval")).toBeVisible();

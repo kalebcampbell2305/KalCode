@@ -36,8 +36,10 @@ import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { MOD_LABEL } from "../../shell/shortcuts.ts";
 import { ApprovalPrompt, usePermissions } from "../permissions/index.ts";
+import { AccountSwitcher } from "./AccountSwitcher.tsx";
 import { buildTimeline, PERMISSION_MODES, presentStatus, TOOL_STATUS, threadActions } from "./model.ts";
 import styles from "./ThreadDetail.module.css";
+import { useThreadAccountChanges } from "./useThreadAccount.ts";
 import { type LiveMessage, useThreadDetail } from "./useThreads.ts";
 
 interface ThreadDetailProps {
@@ -66,6 +68,14 @@ export function ThreadDetail({ threadId, archived, onArchived }: ThreadDetailPro
   const toast = useToast();
   const detail = useThreadDetail(threadId);
   const [busy, setBusy] = useState<Action | null>(null);
+  // A rebind from anywhere (this header, the palette, KalVoice, another window) shows at once.
+  useThreadAccountChanges(threadId, (change) =>
+    detail.setThread((current) =>
+      current && current.id === change.threadId
+        ? { ...current, providerAccountId: change.providerAccountId, accountLabel: change.accountLabel }
+        : current,
+    ),
+  );
 
   const run = async (action: Action, call: () => Promise<ThreadSummary>): Promise<boolean> => {
     setBusy(action);
@@ -186,7 +196,15 @@ export function ThreadDetail({ threadId, archived, onArchived }: ThreadDetailPro
               <ProviderGlyph provider={thread.providerId} size="xs" />
               {thread.providerName}
               {thread.model ? ` · ${thread.model}` : ""}
-              {thread.accountLabel ? ` · ${thread.accountLabel}` : ""}
+              {" · "}
+              <AccountSwitcher
+                thread={thread}
+                archived={archived}
+                onRebound={(next) => {
+                  detail.setThread(next);
+                  void detail.reload();
+                }}
+              />
             </dd>
           </div>
           <div>

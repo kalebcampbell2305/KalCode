@@ -164,7 +164,8 @@ export function ThreadList({
                   <span className={styles.meta}>
                     <ProviderGlyph provider={thread.providerId} size="xs" />
                     <span className={styles.metaText}>
-                      {thread.providerName} · {thread.workspaceName}
+                      {thread.providerName}
+                      {thread.accountLabel ? ` · ${thread.accountLabel}` : ""} · {thread.workspaceName}
                     </span>
                     {thread.pendingApprovals > 0 ? (
                       <Badge tone="waiting" className={styles.pending}>

@@ -1,6 +1,7 @@
 import { Button, EmptyState } from "@kalcode/ui/components";
 import { MessagesSquare, Plus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { setSelectedThread, useRebindRequest } from "./accountIntent.ts";
 import { useThreadsIntent } from "./intent.tsx";
 import { NewThread } from "./NewThread.tsx";
 import { ThreadDetail } from "./ThreadDetail.tsx";
@@ -40,8 +41,33 @@ export function ThreadsSurface() {
     else requestAnimationFrame(() => searchRef.current?.focus());
   }, [intent]);
 
+  // A rebind asked for elsewhere (command palette, KalVoice) shows its thread; the thread's
+  // header then opens the Rebind dialog and marks the request handled.
+  const rebind = useRebindRequest();
+  useEffect(() => {
+    if (!rebind) return;
+    setPane((current) =>
+      current.kind === "detail" && current.threadId === rebind.threadId
+        ? current
+        : { kind: "detail", threadId: rebind.threadId },
+    );
+  }, [rebind]);
+
   const selectedId = pane.kind === "detail" ? pane.threadId : null;
   const selectedEntry = list.entries.find((entry) => entry.thread.id === selectedId) ?? null;
+
+  // Tell the palette and KalVoice which thread (and account) is on screen.
+  const selectedThread = selectedEntry?.thread ?? null;
+  const selectedProvider = selectedThread?.providerId ?? null;
+  const selectedAccount = selectedThread?.providerAccountId ?? null;
+  useEffect(() => {
+    setSelectedThread(
+      selectedId !== null && selectedProvider !== null
+        ? { threadId: selectedId, providerId: selectedProvider, providerAccountId: selectedAccount }
+        : null,
+    );
+  }, [selectedId, selectedProvider, selectedAccount]);
+  useEffect(() => () => setSelectedThread(null), []);
   const hasThreads = list.entries.length > 0;
 
   return (
