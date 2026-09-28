@@ -51,12 +51,19 @@ const kalvoiceShipped = servedStableRelease(RELEASES) !== null;
     speech-recognition model that runs on your computer. Audio is captured into memory, transcribed on the device, and discarded; it is never
     stored or uploaded. KalCode downloads the default English model by itself from its signed
     component catalog, verifies it before use, and keeps it in KalCode's data folder. If you remove
-    it, KalCode doesn't download it again on its own.
+    it, KalCode doesn't download it again on its own. Once speech is ready, KalCode also downloads
+    its on-device interpreter (about 850 MB) from the same signed catalog. Turn off Prepare local
+    intelligence automatically in Settings › KalVoice to download it yourself instead. These
+    downloads send no audio or text.
   </p>
 
   <h2>What leaves your device</h2>
   <p>
-    Current development builds send no telemetry and no user data off your device. When you run a
+    Current development builds send no telemetry and no user data off your device. Apart from your
+    KalCode account (sign-in, plan and KalVoice Request counts), KalCode contacts kalcoded.com only
+    for its signed update feed, at launch and about every six hours while it is open, and to
+    download KalVoice's signed components when they are needed. None of these requests carry
+    telemetry, audio or text. When you run a
     provider, that provider's own CLI talks to its service under your account, exactly as it does
     when you use it directly. KalVoice interprets commands on your computer and never sends them
     to a provider; words you dictate into a provider thread go to that provider.

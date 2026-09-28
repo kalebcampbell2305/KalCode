@@ -155,7 +155,7 @@ describe("KalVoice voice-to-thread docs", () => {
       "“Which one — Release Windows or Release Mac?”",
       "“What needs permission?”, “Open the one that failed” and “Go back”",
       "“Tell it to continue”",
-      "KalVoice never sends to a thread that is waiting for your permission and never resumes a stopped thread.",
+      "KalVoice never sends to a thread that is waiting for your permission and never resumes a stopped thread to send to it.",
       "In a terminal, KalVoice types your words but never presses Enter or runs a command.",
     ]) {
       expect(docs).toContain(phrase);
@@ -174,6 +174,25 @@ describe("KalVoice voice-to-thread docs", () => {
     expect(docs).toContain("Prepare local intelligence automatically");
     expect(text(await render(Security, "/security"))).toContain(
       "KalCode downloads its default speech model by itself from its signed component catalog",
+    );
+  });
+
+  it("discloses the automatic interpreter download wherever the speech download is described", async () => {
+    const disclosure =
+      "Once speech is ready, KalCode also downloads its on-device interpreter (about 850 MB) from the same signed catalog. Turn off Prepare local intelligence automatically in Settings › KalVoice to download it yourself instead. These downloads send no audio or text.";
+    for (const [component, path] of [
+      [Privacy, "/privacy"],
+      [Security, "/security"],
+      [LocalFirstDocs, "/docs/local-first"],
+    ] as const) {
+      expect(text(await render(component as Component, path)), path).toContain(disclosure);
+    }
+  });
+
+  it("names what KalCode itself contacts kalcoded.com for", async () => {
+    const copy = text(await render(LocalFirstDocs, "/docs/local-first"));
+    expect(copy).toContain(
+      "KalCode contacts kalcoded.com only for its signed update feed, at launch and about every six hours while it is open, and to download KalVoice's signed components when they are needed. None of these requests carry telemetry, audio or text.",
     );
   });
 });
