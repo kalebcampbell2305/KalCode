@@ -103,6 +103,8 @@ interface KalVoiceValue {
 const KalVoiceContext = createContext<KalVoiceValue | null>(null);
 
 const DONE_SETTLE_MS = 4000;
+/** Lets native's window-focus handler (re)register the talk key before status is re-read. */
+const FOREGROUND_REFRESH_MS = 200;
 
 function useWindowWidth(): number {
   const [width, setWidth] = useState(() => (typeof window === "undefined" ? 1440 : window.innerWidth));
@@ -501,14 +503,18 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   const onSignalRef = useRef(onSignal);
   onSignalRef.current = onSignal;
 
-  // Subscribe once per client; the latest handler is read through a ref.
+  // The client keeps one native channel for the window; this provider only adds a listener, so
+  // remounts never replace or drop the live channel. The latest handler is read through a ref.
   useEffect(() => {
     let active = true;
+    let remove: (() => void) | null = null;
     void (async () => {
       try {
-        await client.subscribeKalVoice((signal) => {
+        const unsubscribe = await client.subscribeKalVoice((signal) => {
           if (active) onSignalRef.current(signal);
         });
+        if (active) remove = unsubscribe;
+        else unsubscribe();
       } catch (error) {
         if (active) setStatusError(toKalCodeError(error));
       }
@@ -516,6 +522,31 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
     })();
     return () => {
       active = false;
+      remove?.();
+    };
+  }, [client, refreshStatus]);
+
+  // The native talk key is registered only while KalCode is in front, and native sends no signal
+  // when that changes: re-read status when the window comes forward (after native's own focus
+  // handler has run) and renew the signal channel in case native dropped it.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const onForeground = () => {
+      if (document.visibilityState === "hidden") return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        // A refused renewal leaves the existing native channel in place (native replaces only on success).
+        void client.renewKalVoiceSubscription().catch(() => undefined);
+        void refreshStatus();
+      }, FOREGROUND_REFRESH_MS);
+    };
+    window.addEventListener("focus", onForeground);
+    document.addEventListener("visibilitychange", onForeground);
+    return () => {
+      if (timer) clearTimeout(timer);
+      window.removeEventListener("focus", onForeground);
+      document.removeEventListener("visibilitychange", onForeground);
     };
   }, [client, refreshStatus]);
 

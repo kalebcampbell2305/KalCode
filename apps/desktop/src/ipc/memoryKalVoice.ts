@@ -488,14 +488,16 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
     timers: ReturnType<typeof setInterval>[];
   } | null = null;
   const latency: StageTimings[] = [];
-  const subscribers = new Set<(signal: KalVoiceSignal) => void>();
+  // Like native: one channel per window, replaced on every subscribe.
+  let subscriber: ((signal: KalVoiceSignal) => void) | null = null;
   const transcript =
     transcriptOverride ??
     (typeof location !== "undefined" ? new URLSearchParams(location.search).get("transcript") : null) ??
     "Add a unit test for the parser";
 
   const signal = (s: KalVoiceSignal) => {
-    for (const subscriber of subscribers) setTimeout(() => subscriber(s), 0);
+    const target = subscriber;
+    if (target) setTimeout(() => target(s), 0);
   };
 
   const usage = (): KalVoiceUsage => {
@@ -902,7 +904,7 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
     handlers,
     decideApproval,
     subscribe(onSignal) {
-      subscribers.add(onSignal);
+      subscriber = onSignal;
       installKeys();
     },
   };

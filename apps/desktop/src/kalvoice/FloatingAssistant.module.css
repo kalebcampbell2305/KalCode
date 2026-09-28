@@ -39,6 +39,21 @@
   --phase-line: var(--status-failed-line);
 }
 
+/* Idle but push to talk can't work (key not registered, no model, …): say so in the error tone. */
+.panel[data-attention] {
+  --phase-tone: var(--status-failed);
+  --phase-text: var(--status-failed-text);
+  --phase-line: var(--status-failed-line);
+}
+
+.panel[data-attention] .body {
+  width: 28rem;
+}
+
+.panel[data-attention] .card {
+  border-color: var(--phase-line);
+}
+
 .panel[data-dragging] {
   cursor: grabbing;
   user-select: none;

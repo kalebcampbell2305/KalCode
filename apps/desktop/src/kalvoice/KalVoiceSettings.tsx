@@ -2,12 +2,13 @@ import type { LocalReasoningDownload, PanelAnchor, SpeechModelInfo } from "@kalc
 import { Badge, Button, Panel, Skeleton } from "@kalcode/ui/components";
 import { AudioLines } from "lucide-react";
 import { AlertDialog } from "radix-ui";
-import { type KeyboardEvent, useId, useState } from "react";
+import { type KeyboardEvent, useEffect, useId, useState } from "react";
 import { toKalCodeError } from "../ipc/errors.ts";
 import { formatBytes } from "./assistantState.ts";
 import { useKalVoice, useOptionalKalVoice } from "./KalVoiceProvider.tsx";
 import styles from "./KalVoiceSettings.module.css";
 import { ANCHOR_LABELS } from "./panelGeometry.ts";
+import { pushToTalkReadiness } from "./readiness.ts";
 import { checkReserved, displayKey, isModifierOnly, talkKeyChoiceHint, talkKeyFromEvent } from "./shortcutModel.ts";
 
 const ANCHORS: PanelAnchor[] = [
@@ -44,6 +45,11 @@ export function KalVoiceSettings() {
 
 function KalVoiceSettingsSection() {
   const { status, statusError, refreshStatus } = useKalVoice();
+  // Opening Settings re-reads native status, so key registration shown here is current.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: once per mount.
+  useEffect(() => {
+    void refreshStatus();
+  }, []);
   return (
     <Panel
       id="kalvoice"
@@ -69,6 +75,7 @@ function KalVoiceSettingsSection() {
         )
       ) : (
         <div className={styles.rows}>
+          <PushToTalkReadinessRow />
           <TalkKeyRow />
           {status.shortcutIssues.map((issue) => (
             <p key={issue.accelerator} className={styles.issue} role="alert">
@@ -83,6 +90,25 @@ function KalVoiceSettingsSection() {
         </div>
       )}
     </Panel>
+  );
+}
+
+/** Whether holding the key works right now, from native status (never assumed). */
+function PushToTalkReadinessRow() {
+  const { status, statusError, refreshStatus } = useKalVoice();
+  const readiness = pushToTalkReadiness(status, statusError);
+  return (
+    <div className={styles.readiness} role="status" aria-label="Push-to-talk readiness" data-ready={readiness.ready}>
+      <p>
+        {readiness.ready ? "Ready. " : `${readiness.label}. `}
+        {readiness.message}
+      </p>
+      {readiness.code === "talk_key_inactive" ? (
+        <Button size="sm" variant="ghost" onClick={() => void refreshStatus()}>
+          Check again
+        </Button>
+      ) : null}
+    </div>
   );
 }
 

@@ -453,7 +453,9 @@ test.describe("Settings, KalVoice", () => {
     await expect(page.getByRole("switch", { name: "Push to talk" })).toHaveAttribute("aria-checked", "false");
     await page.keyboard.down("F8");
     await page.keyboard.up("F8");
-    await expectState(page, "Ready");
+    // Truthful: the widget no longer claims Ready while the key is off.
+    await expectState(page, "Off");
+    await expect(shown(page).getByText("Push to talk is off. Turn it on in Settings, KalVoice.")).toBeVisible();
   });
 
   test("downloads a speech model only after consent", async ({ page }) => {

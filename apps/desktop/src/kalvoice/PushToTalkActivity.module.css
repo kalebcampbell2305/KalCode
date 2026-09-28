@@ -1,0 +1,72 @@
+/*
+ * Push-to-talk activity when the widget is hidden or collapsed: a small bar at the bottom
+ * centre of the window, in the widget's state tones.
+ */
+.activity {
+  --phase-tone: var(--status-muted);
+  --phase-line: var(--color-border-lit-soft);
+  position: fixed;
+  z-index: 45; /* same layer as the widget: above page content, below dialogs and toasts */
+  bottom: var(--space-4);
+  left: 50%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1-5);
+  width: min(28rem, calc(100vw - 2 * var(--space-4)));
+  padding: var(--space-2) var(--space-3);
+  transform: translateX(-50%);
+  border: 1px solid var(--phase-line);
+  border-radius: var(--radius-xl);
+  background: color-mix(in srgb, var(--color-surface-3) 94%, transparent);
+  box-shadow: 0 18px 44px -22px rgb(0 0 0 / 0.85);
+}
+
+.activity[data-phase="listening"] {
+  --phase-tone: var(--color-accent);
+  --phase-line: var(--color-border-lit);
+}
+
+.activity:is([data-phase="transcribing"], [data-phase="thinking"], [data-phase="executing"]) {
+  --phase-tone: var(--status-working);
+  --phase-line: var(--status-working-line);
+}
+
+.activity[data-phase="done"] {
+  --phase-tone: var(--status-done);
+  --phase-line: var(--status-done-line);
+}
+
+.activity[data-phase="error"] {
+  --phase-tone: var(--status-failed);
+  --phase-line: var(--status-failed-line);
+}
+
+.state {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  color: var(--color-text);
+  font-size: var(--type-ui);
+  font-weight: var(--weight-medium);
+}
+
+.dot {
+  flex: none;
+  width: 0.4375rem;
+  height: 0.4375rem;
+  border-radius: 50%;
+  background: var(--phase-tone);
+}
+
+.detail {
+  color: var(--color-text-secondary);
+  font-size: var(--type-ui);
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}

@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   client: {
     subscribeKalVoice: vi.fn(),
+    renewKalVoiceSubscription: vi.fn().mockResolvedValue(undefined),
     kalvoiceStatus: vi.fn().mockResolvedValue(null),
     kalvoiceLatencyRecord: vi.fn().mockResolvedValue(undefined),
     kalvoiceTypeInstead: vi.fn().mockResolvedValue(false),
@@ -45,6 +46,7 @@ beforeEach(() => {
   mocks.signal = null;
   mocks.client.subscribeKalVoice.mockImplementation(async (signal) => {
     mocks.signal = signal;
+    return () => undefined;
   });
   mocks.talk.mockResolvedValue({ route: "dictation", response: null, recognizedMs: 1 });
 });

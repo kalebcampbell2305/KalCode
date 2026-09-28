@@ -8,6 +8,7 @@ import { usageLine } from "./assistantState.ts";
 import styles from "./KalVoicePage.module.css";
 import { useKalVoice } from "./KalVoiceProvider.tsx";
 import { LatencyDiagnostics } from "./LatencyDiagnostics.tsx";
+import { pushToTalkReadiness } from "./readiness.ts";
 import { displayKey } from "./shortcutModel.ts";
 import { KalVoiceWordmark, Orb } from "./Visuals.tsx";
 
@@ -51,35 +52,35 @@ const LOCAL_INTELLIGENCE = {
 /** The KalVoice surface: ask, see what's ready, and this session's requests. */
 export function KalVoicePage() {
   const kv = useKalVoice();
-  const { status, state, levelRef, history, submit, setPanelVisible } = kv;
+  const { status, statusError, refreshStatus, state, levelRef, history, submit, setPanelVisible } = kv;
   const { navigate } = useNavigation();
   const { info } = useRuntime();
 
+  // "Ready" only when the native talk key is registered; otherwise the exact reason.
+  const readiness = pushToTalkReadiness(status, statusError);
   const dictation = !status
     ? null
-    : !status.speechEngine
+    : readiness.ready
       ? {
-          tone: "outline" as const,
-          label: "Not in this build",
-          detail: "This build doesn't include the on-device speech engine.",
+          tone: "success" as const,
+          label: "Ready",
+          detail: `${status.models.find((m) => m.id === status.activeModel)?.displayName ?? status.activeModel} model, on this computer.`,
+          fix: null,
         }
-      : !status.microphoneSupported
-        ? {
-            tone: "outline" as const,
-            label: "Unavailable",
-            detail: "Microphone capture isn't supported on this platform yet.",
-          }
-        : !status.activeModel
-          ? {
-              tone: "waiting" as const,
-              label: "Needs a speech model",
-              detail: "Download a speech model to start dictating.",
-            }
-          : {
-              tone: "success" as const,
-              label: "Ready",
-              detail: `${status.models.find((m) => m.id === status.activeModel)?.displayName ?? status.activeModel} model, on this computer.`,
-            };
+      : {
+          tone:
+            readiness.code === "speech_engine_unavailable" || readiness.code === "microphone_unsupported"
+              ? ("outline" as const)
+              : ("waiting" as const),
+          label: readiness.label,
+          detail: readiness.message,
+          fix:
+            readiness.code === "model_not_installed"
+              ? "Set up speech"
+              : readiness.fix === "settings"
+                ? "Open KalVoice settings"
+                : null,
+        };
 
   const intelligence = status ? LOCAL_INTELLIGENCE[status.localReasoning ?? "unavailable"] : null;
 
@@ -128,15 +129,15 @@ export function KalVoicePage() {
               <p className={styles.tileMeta}>
                 Hold <Key name={status.preferences.talkKey} /> to talk to KalVoice
               </p>
-              {dictation?.tone === "waiting" ? (
+              {dictation?.fix ? (
                 <Button size="sm" onClick={() => navigate("settings")}>
-                  Set up speech
+                  {dictation.fix}
                 </Button>
               ) : null}
             </li>
             <li className={styles.tile}>
               <p className={styles.tileTitle}>Commands</p>
-              <Badge tone="success">Ready</Badge>
+              <Badge tone="success">Available</Badge>
               <p className={styles.tileDetail}>
                 Say “Open Dashboard” or “Open four Codex terminals”: KalCode acts the moment you let go. Provider
                 sessions keep their own native permission prompts.
@@ -177,6 +178,13 @@ export function KalVoicePage() {
               <p className={styles.tileMeta}>Provider usage: Handled by your connected provider</p>
             </li>
           </ul>
+        ) : statusError ? (
+          <div role="alert">
+            <p className={styles.tileDetail}>{readiness.message}</p>
+            <Button size="sm" onClick={() => void refreshStatus()}>
+              Try again
+            </Button>
+          </div>
         ) : null}
       </Section>
 

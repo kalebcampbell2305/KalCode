@@ -108,6 +108,7 @@ describe("KalVoice local intelligence first use", () => {
     expect(intelligenceCard().queryByRole("button")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Set up speech" }));
     expect(seams.navigate).toHaveBeenCalledExactlyOnceWith("settings");
-    expect(screen.getByText("Commands").closest("li")).toHaveTextContent("Ready");
+    expect(screen.getByText("Commands").closest("li")).toHaveTextContent("Available");
+    expect(screen.getByText("Commands").closest("li")).not.toHaveTextContent("Ready");
   });
 });

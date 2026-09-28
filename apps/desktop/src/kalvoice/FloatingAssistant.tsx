@@ -15,6 +15,7 @@ import { type SlotEdge, useShellSlots, VOICE_SLOT_GAP } from "../shell/ShellSlot
 import { announcement, STATE_LABELS, usageLine } from "./assistantState.ts";
 import styles from "./FloatingAssistant.module.css";
 import { useKalVoice } from "./KalVoiceProvider.tsx";
+import { FixAction } from "./PushToTalkActivity.tsx";
 import {
   ANCHOR_LABELS,
   EDGE_MARGIN,
@@ -25,6 +26,7 @@ import {
   positionFor,
   type Size,
 } from "./panelGeometry.ts";
+import { pushToTalkReadiness } from "./readiness.ts";
 import { displayKey } from "./shortcutModel.ts";
 import { KalVoiceWordmark, Orb, Waveform } from "./Visuals.tsx";
 
@@ -62,7 +64,10 @@ function useViewport(): Size {
  */
 export function FloatingAssistant() {
   const kv = useKalVoice();
-  const { state, panel, setPanel, setPanelVisible, levelRef, status } = kv;
+  const { state, panel, setPanel, setPanelVisible, levelRef, status, statusError } = kv;
+  // "Ready" only when the native key is really registered; otherwise the exact reason.
+  const readiness = pushToTalkReadiness(status, statusError);
+  const notReady = state.phase === "idle" && !readiness.ready;
   const { navigate } = useNavigation();
   const viewport = useViewport();
   const ref = useRef<HTMLElement | null>(null);
@@ -103,7 +108,11 @@ export function FloatingAssistant() {
       : null;
   const compactHeight = useRef(0);
   const detailShown =
-    state.phase === "listening" || state.phase === "transcribing" || state.phase === "done" || state.phase === "error";
+    notReady ||
+    state.phase === "listening" ||
+    state.phase === "transcribing" ||
+    state.phase === "done" ||
+    state.phase === "error";
   if (panel.view !== "expanded" && !detailShown && size.height > 0) compactHeight.current = size.height;
   const reserving = panel.visible && status !== null && slotEdge !== null && slots !== null;
   const bandHeight = Math.ceil((compactHeight.current || 44) + 2 * VOICE_SLOT_GAP);
@@ -127,9 +136,7 @@ export function FloatingAssistant() {
   const position = drag ?? resting;
   const view = panel.view;
   const talkKey = displayKey(status.preferences.talkKey);
-  const hint = status.preferences.talkEnabled
-    ? `Hold ${talkKey} to talk to KalVoice.`
-    : "Push to talk is off in Settings, KalVoice.";
+  const hint = readiness.message;
 
   const onPointerDown = (event: ReactPointerEvent<HTMLElement>) => {
     if (event.button !== 0) return;
@@ -203,21 +210,8 @@ export function FloatingAssistant() {
   const growsDown = panel.anchor.startsWith("top");
   const phase = state.phase;
   const listening = phase === "listening" || phase === "transcribing";
-  const showsDetail = listening || phase === "done" || phase === "error";
-  const fixAction =
-    state.code === "needs_provider" ? (
-      <Button size="sm" onClick={() => navigate("providers")}>
-        Open Providers
-      </Button>
-    ) : state.code === "local_reasoning_unavailable" ? (
-      <Button size="sm" onClick={() => navigate("settings")}>
-        Open KalVoice settings
-      </Button>
-    ) : state.code === "model_not_installed" || state.code === "speech_engine_unavailable" ? (
-      <Button size="sm" onClick={() => navigate("settings")}>
-        Set up speech
-      </Button>
-    ) : null;
+  const showsDetail = notReady || listening || phase === "done" || phase === "error";
+  const stateLabel = notReady ? readiness.label : STATE_LABELS[phase];
 
   return (
     <section
@@ -225,6 +219,7 @@ export function FloatingAssistant() {
       className={styles.panel}
       data-view={view}
       data-phase={phase}
+      data-attention={notReady || undefined}
       data-dragging={drag ? "true" : undefined}
       data-anchor={panel.anchor}
       aria-label="KalVoice widget"
@@ -237,7 +232,7 @@ export function FloatingAssistant() {
         <button
           type="button"
           className={styles.orbOnly}
-          aria-label={`Open the widget (${STATE_LABELS[phase]}). Arrow keys move it.`}
+          aria-label={`Open the widget (${stateLabel}). Arrow keys move it.`}
           title={hint}
           onClick={() => {
             if (suppressClick.current) {
@@ -291,7 +286,7 @@ export function FloatingAssistant() {
               </button>
               <p className={styles.state}>
                 <span className={styles.dot} aria-hidden="true" />
-                <span className={styles.stateName}>{STATE_LABELS[phase]}</span>
+                <span className={styles.stateName}>{stateLabel}</span>
               </p>
               <div className={styles.controls} data-no-drag>
                 <IconButton
@@ -355,11 +350,21 @@ export function FloatingAssistant() {
                     ) : null}
                   </div>
                 ) : null}
+                {notReady ? (
+                  <div className={styles.result}>
+                    <p className={styles.message}>{readiness.message}</p>
+                    {readiness.fix === "settings" ? (
+                      <Button size="sm" onClick={() => navigate("settings")}>
+                        {readiness.code === "model_not_installed" ? "Set up speech" : "Open KalVoice settings"}
+                      </Button>
+                    ) : null}
+                  </div>
+                ) : null}
                 {phase === "error" && state.message ? (
                   <div className={styles.result}>
                     <p className={styles.message}>{state.message}</p>
                     <div className={styles.actions}>
-                      {fixAction}
+                      <FixAction code={state.code} />
                       <Button size="sm" variant="ghost" onClick={kv.dismiss}>
                         Dismiss
                       </Button>
@@ -371,7 +376,7 @@ export function FloatingAssistant() {
 
             {view === "expanded" ? (
               <div className={styles.more}>
-                <p className={styles.hint}>{hint}</p>
+                {notReady ? null : <p className={styles.hint}>{hint}</p>}
                 {phase === "idle" && state.message ? <p className={styles.message}>{state.message}</p> : null}
                 <p className={styles.usage}>
                   {usageLine(status.usage)}

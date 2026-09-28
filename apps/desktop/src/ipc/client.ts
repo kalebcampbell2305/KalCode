@@ -249,12 +249,55 @@ export class KalCodeClient {
 
   // ---- KalVoice ----
 
-  async subscribeKalVoice(onSignal: (signal: KalVoiceSignal) => void): Promise<void> {
+  private readonly kalvoiceListeners = new Set<(signal: KalVoiceSignal) => void>();
+  private kalvoiceChannel: Promise<void> | null = null;
+
+  /**
+   * Listens to this window's KalVoice signals. Native keeps exactly one channel per window and
+   * replaces it on every `kalvoice_subscribe`, so the client opens one channel and fans it out:
+   * listeners come and go (React remounts, StrictMode) without ever replacing or dropping the
+   * live channel. Resolves to a function that removes this listener.
+   */
+  async subscribeKalVoice(onSignal: (signal: KalVoiceSignal) => void): Promise<() => void> {
+    this.kalvoiceListeners.add(onSignal);
+    const remove = () => {
+      this.kalvoiceListeners.delete(onSignal);
+    };
     try {
-      await this.transport.subscribeKalVoice(onSignal);
+      this.kalvoiceChannel ??= this.openKalVoiceChannel();
+      await this.kalvoiceChannel;
+    } catch (error) {
+      remove();
+      throw toKalCodeError(error);
+    }
+    return remove;
+  }
+
+  /**
+   * Registers this window's channel again (native replaces it; signals are never duplicated).
+   * Heals a channel the native side dropped after a failed send.
+   */
+  async renewKalVoiceSubscription(): Promise<void> {
+    if (this.kalvoiceListeners.size === 0) return;
+    this.kalvoiceChannel = this.openKalVoiceChannel();
+    try {
+      await this.kalvoiceChannel;
     } catch (error) {
       throw toKalCodeError(error);
     }
+  }
+
+  private openKalVoiceChannel(): Promise<void> {
+    const opening = this.transport
+      .subscribeKalVoice((signal) => {
+        for (const listener of [...this.kalvoiceListeners]) listener(signal);
+      })
+      .catch((error: unknown) => {
+        // The next listener (or renewal) tries again instead of trusting a channel that never opened.
+        if (this.kalvoiceChannel === opening) this.kalvoiceChannel = null;
+        throw error;
+      });
+    return opening;
   }
 
   kalvoiceStatus(): Promise<KalVoiceStatus> {

@@ -2,6 +2,7 @@ import { type CSSProperties, useLayoutEffect, useRef } from "react";
 import { FloatingAssistant } from "../kalvoice/FloatingAssistant.tsx";
 import { KalVoicePage } from "../kalvoice/KalVoicePage.tsx";
 import { KalVoiceProvider } from "../kalvoice/KalVoiceProvider.tsx";
+import { PushToTalkActivity } from "../kalvoice/PushToTalkActivity.tsx";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { UiIntentsProvider } from "../runtime/uiIntents.tsx";
 import { WorkspaceProvider } from "../runtime/WorkspaceProvider.tsx";
@@ -141,6 +142,7 @@ function ShellLayout({ kalvoice }: { kalvoice: boolean }) {
       </main>
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
       {kalvoice ? <FloatingAssistant /> : null}
+      {kalvoice ? <PushToTalkActivity /> : null}
       <ApprovalsPanel />
       <ApprovalAnnouncer />
       <NotificationCenter />
