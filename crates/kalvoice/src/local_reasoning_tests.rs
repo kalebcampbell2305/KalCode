@@ -63,7 +63,17 @@ fn fallthrough_candidates_are_opaque_host_owned_safely_labeled_and_bounded() {
 
 #[test]
 fn exact_fallthrough_workspace_name_is_preserved_but_unknown_or_ambiguous_is_refused() {
-    let text = "put me in the project KalCode";
+    // 0.1.5: the deterministic second chance now understands "put me in the project X" itself.
+    assert_eq!(
+        grammar::understand("put me in the project KalCode"),
+        Understood::Intent {
+            intent: KalVoiceIntent::OpenWorkspace {
+                query: "kalcode".into()
+            },
+            target: None,
+        }
+    );
+    let text = "take me into the project KalCode";
     assert!(matches!(
         grammar::understand(text),
         Understood::Intent {
@@ -84,7 +94,7 @@ fn exact_fallthrough_workspace_name_is_preserved_but_unknown_or_ambiguous_is_ref
 
     assert!(
         grounded_action_candidates(&request(
-            "put me in the project ProductionSecrets",
+            "take me into the project ProductionSecrets",
             &[(WORKSPACE_ID, "KalCode")],
         ))
         .is_empty()
@@ -93,7 +103,7 @@ fn exact_fallthrough_workspace_name_is_preserved_but_unknown_or_ambiguous_is_ref
     let duplicate_id = "0199a914-5ea1-7db0-b36b-aee1bdc846d7";
     assert!(
         grounded_action_candidates(&request(
-            "put me in the project KalCode",
+            "take me into the project KalCode",
             &[(WORKSPACE_ID, "KalCode"), (duplicate_id, "kalcode")],
         ))
         .is_empty()
@@ -111,22 +121,22 @@ fn exact_fallthrough_workspace_name_is_preserved_but_unknown_or_ambiguous_is_ref
 
 #[test]
 fn navigation_fallthrough_uses_only_canonical_surface_registry_entries() {
+    // 0.1.5: the deterministic second chance understands these phrasings itself, so the model
+    // is never offered them.
     let text = "bring me to settings";
-    assert!(matches!(
+    assert_eq!(
         grammar::understand(text),
         Understood::Intent {
-            intent: KalVoiceIntent::Reasoning { .. },
-            ..
+            intent: KalVoiceIntent::Navigate {
+                surface: kalcode_contracts::app::SurfaceId::Settings
+            },
+            target: None,
         }
-    ));
-    let candidates = grounded_action_candidates(&request(text, &[(WORKSPACE_ID, "KalCode")]));
-    assert_eq!(candidates.len(), 1);
-    assert_eq!(candidates[0].label, "Open settings");
+    );
+    assert!(grounded_action_candidates(&request(text, &[(WORKSPACE_ID, "KalCode")])).is_empty());
     assert_eq!(
-        candidates[0].intent,
-        KalVoiceIntent::Navigate {
-            surface: kalcode_contracts::app::SurfaceId::Settings
-        }
+        grammar::local_reasoning_groundings("bring me to settings"),
+        Vec::new()
     );
 
     assert!(
@@ -217,4 +227,37 @@ fn the_local_interpreter_can_never_send_or_clear_prompt_text() {
             "{intent:?}"
         );
     }
+}
+
+#[test]
+fn the_local_interpreter_can_never_set_a_workspace_account() {
+    let workspaces = vec![WorkspaceOption {
+        id: WORKSPACE_ID.into(),
+        name: "KalCode".into(),
+    }];
+    for workspace_id in [None, Some(WORKSPACE_ID.to_owned())] {
+        let intent = KalVoiceIntent::SetWorkspaceAccount {
+            provider_id: kalcode_contracts::agent::ProviderId::new(
+                kalcode_contracts::agent::ProviderId::GEMINI_CLI,
+            ),
+            account_query: "Gemini A".into(),
+            workspace_id,
+        };
+        assert!(
+            validate_action(intent.clone(), &workspaces).is_err(),
+            "{intent:?}"
+        );
+    }
+    // A rebind still only asks the person to confirm, so an interpreted one stays valid.
+    assert!(
+        validate_action(
+            KalVoiceIntent::RebindThreadAccount {
+                thread_query: None,
+                provider_id: None,
+                account_query: "Gemini B".into(),
+            },
+            &workspaces
+        )
+        .is_ok()
+    );
 }

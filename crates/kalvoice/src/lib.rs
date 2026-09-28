@@ -1,6 +1,7 @@
 //! KalVoice: the coding assistant and voice layer inside KalCode (docs/KALVOICE.md).
 //!
 //! - [`grammar`]: deterministic command grammar (text to `KalVoiceIntent`), no model.
+//! - [`normalize`]: deterministic second chance for paraphrases and speech-recognition variants.
 //! - [`ledger`]: provisional local count of KalVoice Requests (dictation is never counted).
 //! - [`local_reasoning`]: validated structured actions from an optional on-device interpreter.
 //! - [`plan`]: allowances per entitlement tier (mirrors `packages/protocol/src/plans.ts`).
@@ -34,6 +35,7 @@ pub mod ledger;
 pub mod llama_worker;
 pub mod local_reasoning;
 pub mod models;
+pub mod normalize;
 pub mod orchestrator;
 pub mod plan;
 pub mod prefs;

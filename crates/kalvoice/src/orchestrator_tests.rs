@@ -1844,6 +1844,9 @@ fn required_push_to_talk_commands_run_without_the_local_interpreter() {
         workspace_id: None,
         account_query: None,
     };
+    let permission = KalVoiceIntent::WhichSessions {
+        state: kalcode_contracts::sessions::SessionAttention::WaitingForPermission,
+    };
     let cases = [
         ("Open settings", &settings),
         ("Open settings.", &settings),
@@ -1855,8 +1858,9 @@ fn required_push_to_talk_commands_run_without_the_local_interpreter() {
         ("Open four Codex terminals.", &codex),
         ("Open 4 Codex terminals.", &codex),
         ("Open for Codex terminals.", &codex),
-        ("What needs permission?", &KalVoiceIntent::ShowApprovals),
-        ("what needs permission", &KalVoiceIntent::ShowApprovals),
+        // 0.1.5: reads back the sessions waiting for permission (and opens the approvals).
+        ("What needs permission?", &permission),
+        ("what needs permission", &permission),
     ];
     let mut expected = Vec::new();
     for (text, intent) in cases {
@@ -2130,4 +2134,414 @@ fn terminal_kalvoice_directives_use_stable_tags() {
         choose["choices"][0]["label"],
         "Release Windows \u{b7} Codex"
     );
+}
+
+// ---- 0.1.5 terminal-aware KalVoice ----
+
+const AUTH: &str = "0192f3c4-0000-7000-8000-0000000000a1";
+const WORKSPACE_A: &str = "0192f3c4-0000-7000-8000-0000000000c1";
+const WORKSPACE_B: &str = "0192f3c4-0000-7000-8000-0000000000c2";
+
+/// A session-aware executor: "auth" is one session, "release" is two, and every context it
+/// saw is recorded.
+#[derive(Default)]
+struct SessionExecutor {
+    contexts: Mutex<Vec<ExecContext>>,
+    executed: Mutex<Vec<KalVoiceIntent>>,
+}
+
+impl SessionExecutor {
+    fn resolve(query: &str, ctx: &ExecContext) -> std::result::Result<String, ExecError> {
+        match query.to_lowercase().as_str() {
+            "auth" => Ok(AUTH.into()),
+            "it" => ctx
+                .thread_id
+                .clone()
+                .or_else(|| ctx.last_target_id.clone())
+                .ok_or_else(|| ExecError::new("target_unclear", "Say which session.")),
+            "release" => Err(ExecError::new(
+                "target_ambiguous",
+                "Which one \u{2014} Release Windows or Release Mac?",
+            )
+            .with_directive(UiDirective::ChooseSession {
+                question: "Which one \u{2014} Release Windows or Release Mac?".into(),
+                choices: Vec::new(),
+                follow_up: kalcode_contracts::sessions::SessionFollowUp::Open,
+            })),
+            _ => Err(ExecError::new("thread_not_found", "No such session.")),
+        }
+    }
+}
+
+impl Executor for SessionExecutor {
+    fn find_workspace(&self, _name: &str) -> std::result::Result<Option<String>, ExecError> {
+        Ok(None)
+    }
+    fn find_thread(&self, _name: &str) -> std::result::Result<Option<String>, ExecError> {
+        panic!("session targets go through resolve_thread_target");
+    }
+    fn check(&self, _intent: &KalVoiceIntent) -> std::result::Result<(), ExecError> {
+        Ok(())
+    }
+    fn check_with_context(
+        &self,
+        intent: &KalVoiceIntent,
+        ctx: &ExecContext,
+    ) -> std::result::Result<(), ExecError> {
+        match intent {
+            KalVoiceIntent::DirectPrompt { target, .. }
+            | KalVoiceIntent::OpenThread { query: target } => {
+                Self::resolve(target, ctx).map(|_| ())
+            }
+            _ => Ok(()),
+        }
+    }
+    fn resolve_thread_target(
+        &self,
+        name: &str,
+        _intent: &KalVoiceIntent,
+        ctx: &ExecContext,
+    ) -> std::result::Result<Option<String>, ExecError> {
+        Self::resolve(name, ctx).map(Some)
+    }
+    fn names_one_session(&self, query: &str, ctx: &ExecContext) -> bool {
+        Self::resolve(query, ctx).is_ok()
+    }
+    fn execute(
+        &self,
+        intent: &KalVoiceIntent,
+        ctx: &ExecContext,
+    ) -> std::result::Result<Executed, ExecError> {
+        self.contexts.lock().expect("lock").push(ctx.clone());
+        self.executed.lock().expect("lock").push(intent.clone());
+        let directive = match intent {
+            KalVoiceIntent::DirectPrompt { target, prompt } => Some(UiDirective::ComposeInThread {
+                thread_id: Self::resolve(target, ctx)?,
+                text: prompt.clone(),
+                submit: true,
+            }),
+            KalVoiceIntent::OpenThread { query } => Some(UiDirective::OpenThread {
+                thread_id: Self::resolve(query, ctx)?,
+            }),
+            KalVoiceIntent::SubmitFocused => Some(UiDirective::SubmitComposer {
+                thread_id: ctx
+                    .thread_id
+                    .clone()
+                    .ok_or_else(|| ExecError::new("thread_not_focused", "Click a thread first."))?,
+            }),
+            KalVoiceIntent::OpenWorkspace { .. } => Some(UiDirective::OpenWorkspace {
+                workspace_id: WORKSPACE_B.into(),
+            }),
+            _ => None,
+        };
+        Ok(Executed {
+            summary: format!("Done: {}", describe(intent)),
+            directive,
+        })
+    }
+}
+
+struct SessionHarness {
+    _dir: tempfile::TempDir,
+    executor: Arc<SessionExecutor>,
+    orchestrator: Orchestrator,
+    now: Arc<Mutex<OffsetDateTime>>,
+}
+
+fn session_harness(tier: Tier) -> SessionHarness {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let core = Arc::new(
+        Core::open_with_migrations(
+            CoreConfig {
+                paths: Paths::new(dir.path()),
+                app_version: "test".into(),
+                channel: BuildChannel::Development,
+            },
+            kalcode_core::db::MIGRATIONS,
+        )
+        .expect("core"),
+    );
+    let executor = Arc::new(SessionExecutor::default());
+    let now = Arc::new(Mutex::new(NOW));
+    let clock = now.clone();
+    let orchestrator = Orchestrator::new(
+        core,
+        Arc::new(FixedEntitlement(tier)),
+        executor.clone(),
+        Arc::new(NoProviders),
+    )
+    .with_clock(move || *clock.lock().expect("clock"));
+    SessionHarness {
+        _dir: dir,
+        executor,
+        orchestrator,
+        now,
+    }
+}
+
+fn in_workspace(text: &str, workspace: &str) -> CommandRequest {
+    CommandRequest {
+        workspace_id: Some(workspace.into()),
+        ..request(text)
+    }
+}
+
+impl SessionHarness {
+    fn last_context(&self) -> ExecContext {
+        self.executor
+            .contexts
+            .lock()
+            .expect("lock")
+            .last()
+            .cloned()
+            .expect("executed")
+    }
+
+    fn advance(&self, by: time::Duration) {
+        *self.now.lock().expect("clock") += by;
+    }
+}
+
+#[test]
+fn send_that_and_clear_that_are_free_and_work_with_the_allowance_used_up() {
+    let h = harness();
+    let meter = account_meter(&h, "account-a", 0, false);
+    let executor = Arc::new(SessionExecutor::default());
+    let orchestrator = Orchestrator::new_accounted(h.core.clone(), meter.clone(), executor.clone());
+    let focused = CommandRequest {
+        thread_id: Some(AUTH.into()),
+        ..request("send that")
+    };
+    let sent = orchestrator.handle(focused).expect("send that");
+    assert_eq!(
+        sent.outcome,
+        KalVoiceOutcome::Completed {
+            summary: "Done: submit focused".into()
+        }
+    );
+    assert_eq!(
+        sent.directive,
+        Some(UiDirective::SubmitComposer {
+            thread_id: AUTH.into()
+        })
+    );
+    assert!(!sent.counted);
+    let cleared = orchestrator
+        .handle(request("never mind"))
+        .expect("clear that");
+    assert!(matches!(cleared.outcome, KalVoiceOutcome::Completed { .. }));
+    assert!(!cleared.counted);
+    // Neither was metered; a counted command is still refused at the limit.
+    assert_eq!(meter.calls.load(Ordering::SeqCst), 0);
+    assert!(matches!(
+        orchestrator
+            .handle(request("open settings"))
+            .expect("limit")
+            .outcome,
+        KalVoiceOutcome::LimitReached { .. }
+    ));
+    // "Send that" with no thread in front is refused, still uncounted.
+    let nothing = orchestrator.handle(request("send it")).expect("refused");
+    assert!(
+        matches!(nothing.outcome, KalVoiceOutcome::Failed { ref code, .. } if code == "thread_not_focused")
+    );
+    assert!(!nothing.counted);
+}
+
+#[test]
+fn a_clarification_is_answered_before_anything_is_counted_and_carries_the_choices() {
+    let h = session_harness(Tier::Free);
+    let before = h.orchestrator.usage().expect("usage").used;
+    let response = h
+        .orchestrator
+        .handle(request("tell Release to bump the version"))
+        .expect("ambiguous");
+    assert!(
+        matches!(response.outcome, KalVoiceOutcome::Failed { ref code, ref message } if code == "target_ambiguous" && message.starts_with("Which one"))
+    );
+    assert!(matches!(
+        response.directive,
+        Some(UiDirective::ChooseSession { .. })
+    ));
+    assert!(!response.counted);
+    assert_eq!(h.orchestrator.usage().expect("usage").used, before);
+    assert!(h.executor.executed.lock().expect("lock").is_empty());
+
+    // A unique target composes (the UI submits through the composer) and counts once.
+    let sent = h
+        .orchestrator
+        .handle(request("tell Auth to not delete the tests"))
+        .expect("direct prompt");
+    assert_eq!(
+        sent.directive,
+        Some(UiDirective::ComposeInThread {
+            thread_id: AUTH.into(),
+            text: "not delete the tests".into(),
+            submit: true,
+        })
+    );
+    assert!(sent.counted);
+    assert_eq!(h.orchestrator.usage().expect("usage").used, before + 1);
+}
+
+#[test]
+fn it_means_the_last_session_for_two_minutes_or_three_commands_in_one_workspace() {
+    let h = session_harness(Tier::Owner);
+    let opened = h
+        .orchestrator
+        .handle(in_workspace("open the auth thread", WORKSPACE_A))
+        .expect("open");
+    assert_eq!(
+        opened.directive,
+        Some(UiDirective::OpenThread {
+            thread_id: AUTH.into()
+        })
+    );
+    // "Tell it to continue" resolves to the session the last command opened.
+    let told = h
+        .orchestrator
+        .handle(in_workspace("tell it to continue", WORKSPACE_A))
+        .expect("tell it");
+    assert_eq!(
+        told.directive,
+        Some(UiDirective::ComposeInThread {
+            thread_id: AUTH.into(),
+            text: "continue".into(),
+            submit: true,
+        })
+    );
+    // Three unrelated commands later, "it" is forgotten.
+    for _ in 0..3 {
+        h.orchestrator
+            .handle(in_workspace("open settings", WORKSPACE_A))
+            .expect("navigate");
+        assert_eq!(h.last_context().last_target_id.as_deref(), Some(AUTH));
+    }
+    h.orchestrator
+        .handle(in_workspace("open settings", WORKSPACE_A))
+        .expect("navigate");
+    assert_eq!(h.last_context().last_target_id, None);
+
+    // Two minutes.
+    h.orchestrator
+        .handle(in_workspace("open auth", WORKSPACE_A))
+        .expect("open");
+    h.advance(time::Duration::seconds(119));
+    h.orchestrator
+        .handle(in_workspace("open settings", WORKSPACE_A))
+        .expect("navigate");
+    assert_eq!(h.last_context().last_target_id.as_deref(), Some(AUTH));
+    h.advance(time::Duration::seconds(2));
+    let stale = h
+        .orchestrator
+        .handle(in_workspace("tell it to continue", WORKSPACE_A))
+        .expect("stale");
+    assert!(
+        matches!(stale.outcome, KalVoiceOutcome::Failed { ref code, .. } if code == "target_unclear")
+    );
+
+    // Another workspace clears it.
+    h.orchestrator
+        .handle(in_workspace("open auth", WORKSPACE_A))
+        .expect("open");
+    h.orchestrator
+        .handle(in_workspace("open settings", WORKSPACE_B))
+        .expect("navigate");
+    assert_eq!(h.last_context().last_target_id, None);
+    h.orchestrator
+        .handle(in_workspace("open settings", WORKSPACE_A))
+        .expect("navigate");
+    assert_eq!(h.last_context().last_target_id, None);
+}
+
+#[test]
+fn addressed_and_session_utterances_route_without_hijacking_dictation() {
+    use TalkRoute::{Command, Dictation, Request};
+    use TalkTarget::{Field, None as Nothing, Terminal};
+    for (text, target, route) in [
+        // Addressed: never dictated.
+        ("Hey Kal, open settings", Field, Command),
+        ("Kal, plan the release", Field, Request),
+        ("hey kalcode what needs permission", Terminal, Command),
+        // Send/clear the composer.
+        ("send that", Field, Command),
+        ("don't send that", Field, Command),
+        // A bare name is dictation in a text box, a command with nothing focused.
+        ("open Authentication", Field, Dictation),
+        ("open Authentication", Nothing, Command),
+        // P1: command-shaped words are never typed into a terminal or provider pane.
+        (
+            "show me what the gemini agents think about it",
+            Terminal,
+            Request,
+        ),
+        (
+            "show me what the gemini agents think about it",
+            Field,
+            Dictation,
+        ),
+        ("npm test", Terminal, Dictation),
+        ("git status", Terminal, Dictation),
+    ] {
+        assert_eq!(talk_route(text, target), route, "{text} / {target:?}");
+    }
+
+    // "Tell <session> …" with a text box focused: a command only for exactly one session.
+    let h = session_harness(Tier::Owner);
+    let unique = h
+        .orchestrator
+        .talk(talk("tell Auth to rerun the tests", Field), &|_| {})
+        .expect("talk");
+    assert_eq!(unique.route, Command);
+    assert!(matches!(
+        unique.response.and_then(|r| r.directive),
+        Some(UiDirective::ComposeInThread { .. })
+    ));
+    let unclear = h
+        .orchestrator
+        .talk(talk("tell Release to bump the version", Field), &|_| {})
+        .expect("talk");
+    assert_eq!(unclear.route, Dictation);
+    assert!(unclear.response.is_none());
+    let addressed = h
+        .orchestrator
+        .talk(
+            talk("Hey Kal, tell Release to bump the version", Field),
+            &|_| {},
+        )
+        .expect("talk");
+    assert_eq!(addressed.route, Command);
+    assert!(matches!(
+        addressed.response.and_then(|r| r.directive),
+        Some(UiDirective::ChooseSession { .. })
+    ));
+}
+
+#[test]
+fn open_new_thread_directive_uses_the_documented_wire_shape() {
+    let json = serde_json::to_value(UiDirective::OpenNewThread {
+        provider_id: ProviderId::new(ProviderId::CODEX),
+        provider_account_id: Some("acct-1".into()),
+        workspace_id: None,
+    })
+    .expect("json");
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "kind": "open_new_thread",
+            "providerId": "codex",
+            "providerAccountId": "acct-1",
+            "workspaceId": null
+        })
+    );
+    assert_eq!(
+        UiDirective::ComposeInThread {
+            thread_id: AUTH.into(),
+            text: String::new(),
+            submit: false
+        }
+        .thread_id(),
+        Some(AUTH)
+    );
+    assert_eq!(UiDirective::FocusPrevious.thread_id(), None);
 }

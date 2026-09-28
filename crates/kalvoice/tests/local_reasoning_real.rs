@@ -293,10 +293,11 @@ const DETERMINISTIC_CASES: &[BenchmarkCase] = &[
     ),
 ];
 
-/// Held-out model-selection samples. Every entry must remain a genuine canonical-grammar
-/// fallthrough. Positives are phrased differently from the focused unit regressions; negatives
-/// exercise refusal and unsupported requests without exposing request text or model output.
-const REASONING_CASES: &[BenchmarkCase] = &[
+/// Requests the deterministic second chance (0.1.5, P2) or the session grammar now understands
+/// without the model: they are no longer model fallthroughs. An unknown workspace still fails
+/// closed in the executor, and a provider-only "tell/ask" target asks the person to confirm the
+/// session before anything is composed.
+const SECOND_CHANCE_CASES: &[BenchmarkCase] = &[
     (
         "reasoning_navigation_01",
         "take me over to threads",
@@ -333,28 +334,13 @@ const REASONING_CASES: &[BenchmarkCase] = &[
         Some("show_approvals"),
     ),
     (
-        "reasoning_approvals_02",
-        "pull up permission",
-        Some("show_approvals"),
-    ),
-    (
         "reasoning_approvals_03",
         "let me see permissions",
         Some("show_approvals"),
     ),
     (
-        "reasoning_approvals_04",
-        "bring up approval",
-        Some("show_approvals"),
-    ),
-    (
         "reasoning_approvals_05",
         "pull up permissions",
-        Some("show_approvals"),
-    ),
-    (
-        "reasoning_approvals_06",
-        "let me see approval",
         Some("show_approvals"),
     ),
     (
@@ -396,6 +382,42 @@ const REASONING_CASES: &[BenchmarkCase] = &[
         "reasoning_workspace_02",
         "put me in my project KalCode",
         Some("open_workspace"),
+    ),
+    (
+        "negative_unknown_workspace",
+        "put me in the workspace ProductionSecrets",
+        Some("open_workspace"),
+    ),
+    (
+        "negative_provider_claude",
+        "ask Claude to implement billing",
+        Some("direct_prompt"),
+    ),
+    (
+        "negative_provider_gemini",
+        "tell Gemini to fix the CSS",
+        Some("direct_prompt"),
+    ),
+];
+
+/// Held-out model-selection samples. Every entry must remain a genuine canonical-grammar
+/// fallthrough. Positives are phrased differently from the focused unit regressions; negatives
+/// exercise refusal and unsupported requests without exposing request text or model output.
+const REASONING_CASES: &[BenchmarkCase] = &[
+    (
+        "reasoning_approvals_02",
+        "pull up permission",
+        Some("show_approvals"),
+    ),
+    (
+        "reasoning_approvals_04",
+        "bring up approval",
+        Some("show_approvals"),
+    ),
+    (
+        "reasoning_approvals_06",
+        "let me see approval",
+        Some("show_approvals"),
     ),
     (
         "reasoning_workspace_03",
@@ -450,11 +472,6 @@ const REASONING_CASES: &[BenchmarkCase] = &[
         None,
     ),
     ("negative_unknown_surface", "take me over to billing", None),
-    (
-        "negative_unknown_workspace",
-        "put me in the workspace ProductionSecrets",
-        None,
-    ),
     ("negative_unknown_target", "pull up release controls", None),
     (
         "negative_provider_prompt",
@@ -478,16 +495,6 @@ const REASONING_CASES: &[BenchmarkCase] = &[
         None,
     ),
     ("negative_coding_review", "review this pull request", None),
-    (
-        "negative_provider_claude",
-        "ask Claude to implement billing",
-        None,
-    ),
-    (
-        "negative_provider_gemini",
-        "tell Gemini to fix the CSS",
-        None,
-    ),
     (
         "negative_provider_codex_alt",
         "have Codex edit the database",
@@ -760,6 +767,15 @@ fn benchmark_corpus_separates_deterministic_commands_from_reasoning_fallthroughs
         assert_eq!(Some(intent.kind_name()), *expected, "{case_id}");
     }
 
+    for (case_id, text, expected) in SECOND_CHANCE_CASES {
+        assert!(ids.insert(*case_id), "duplicate benchmark case id");
+        assert!(requests.insert(*text), "duplicate benchmark request");
+        let Understood::Intent { intent, .. } = understand(text) else {
+            panic!("{case_id} must be a deterministic intent");
+        };
+        assert_eq!(Some(intent.kind_name()), *expected, "{case_id}");
+    }
+
     let mut positive_fallthroughs = 0_usize;
     let mut negative_fallthroughs = 0_usize;
     for (case_id, text, expected) in REASONING_CASES {
@@ -781,7 +797,8 @@ fn benchmark_corpus_separates_deterministic_commands_from_reasoning_fallthroughs
             negative_fallthroughs += 1;
         }
     }
-    assert!(positive_fallthroughs >= 20);
+    // Most former positives are now deterministic (SECOND_CHANCE_CASES); the rest stay here.
+    assert!(positive_fallthroughs >= 8);
     assert!(negative_fallthroughs >= 30);
 }
 

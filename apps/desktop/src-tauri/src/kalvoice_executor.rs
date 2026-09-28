@@ -18,9 +18,17 @@
 //! the person to confirm KalCode's Rebind dialog (`confirm_thread_rebind`); KalVoice never
 //! rebinds a thread itself. `set_workspace_account` writes the workspace's default account
 //! binding (metadata; starting a thread still needs that account signed in). `create_threads`
-//! that names an account opens idle headless threads in Threads when provider panes are off.
-//! A signed-out account is refused with a sign-in message, and an ambiguous name is answered
-//! with a short question rather than a guess.
+//! that names an account opens KalCode's New thread form (`open_new_thread`) when provider panes
+//! are off: voice never creates or starts a session there. A signed-out account is refused with
+//! a sign-in message, and an ambiguous name is answered with a short question rather than a
+//! guess.
+//!
+//! 0.1.5 terminal-aware KalVoice: every spoken session name goes through the session resolver
+//! (`session_resolver.rs`), never a first match and never the Session Locator. Several fits are a
+//! "Which one?" refusal carrying a `choose_session` directive; destructive commands (pause, stop,
+//! resume, account switch) never act on a partial name or a provider alone. "Tell <session> …"
+//! puts the words in that thread's composer and presses its own Send (prompt review still runs);
+//! it is refused while a permission request is open and never resumes a stopped thread.
 
 use std::sync::Arc;
 
@@ -31,8 +39,11 @@ use kalcode_contracts::kalvoice::{
 };
 use kalcode_contracts::permissions::{ApprovalStatus, PermissionMode};
 use kalcode_contracts::provider_accounts::{ProviderAccount, ProviderAccountBindingKind};
-use kalcode_contracts::threads::ThreadSummary;
+use kalcode_contracts::sessions::{
+    MAX_SESSION_CHOICES, SessionAttention, SessionFollowUp, SessionMatchTier, SessionResolution,
+};
 use kalcode_contracts::threads::WorkspaceOption;
+use kalcode_contracts::threads::{ThreadStatus, ThreadSummary};
 use kalcode_contracts::workspace_ui::{DashboardChip, SplitAxis};
 use kalcode_core::workspaces::TerminalSize;
 use kalcode_core::{Core, KalError};
@@ -46,6 +57,8 @@ use kalcode_threads::{
     BulkOutcome, CoreWorkspaces, CreateIdleThread, ResolvedWorkspace, ThreadRuntime,
     WorkspaceResolver,
 };
+
+use crate::session_resolver::{self, ResolveContext};
 
 /// Size a terminal opened by voice starts at; the Code view resizes it when it attaches.
 const VOICE_TERMINAL_SIZE: (u16, u16) = (120, 30);
@@ -394,44 +407,420 @@ impl DesktopExecutor {
     }
 }
 
+/// How strictly a spoken session name must resolve before KalVoice acts on it (P3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TargetUse {
+    /// Open or focus: any unique answer, including a unique partial name or provider.
+    Open,
+    /// Put the person's words in a thread's composer: a provider alone ("ask Codex") is
+    /// confirmed first, even when only one thread fits.
+    Compose,
+    /// Pause, stop, resume or switch the account of a thread: never a partial name or a
+    /// provider alone, and never a guess between several.
+    Destructive,
+}
+
+fn target_use(intent: &KalVoiceIntent) -> TargetUse {
+    match intent {
+        KalVoiceIntent::PauseThreads { .. }
+        | KalVoiceIntent::ResumeThreads { .. }
+        | KalVoiceIntent::StopThreads { .. }
+        | KalVoiceIntent::RebindThreadAccount { .. } => TargetUse::Destructive,
+        KalVoiceIntent::DirectPrompt { .. } => TargetUse::Compose,
+        _ => TargetUse::Open,
+    }
+}
+
+/// "pause" / "stop" …: what a destructive command does, for "say its full name to … it".
+fn destructive_verb(intent: &KalVoiceIntent) -> &'static str {
+    match intent {
+        KalVoiceIntent::PauseThreads { .. } => "pause",
+        KalVoiceIntent::ResumeThreads { .. } => "resume",
+        KalVoiceIntent::StopThreads { .. } => "stop",
+        _ => "switch",
+    }
+}
+
+/// A thread that is stopped or paused: its composer would resume it ("Resume and send").
+fn is_stopped(status: ThreadStatus) -> bool {
+    matches!(
+        status,
+        ThreadStatus::Paused
+            | ThreadStatus::Completed
+            | ThreadStatus::Failed
+            | ThreadStatus::Interrupted
+    )
+}
+
+fn permission_pending(thread: &ThreadSummary) -> bool {
+    thread.status == ThreadStatus::WaitingForPermission || thread.pending_approvals > 0
+}
+
+fn permission_pending_error(thread: &ThreadSummary) -> ExecError {
+    ExecError::new(
+        "permission_pending",
+        format!(
+            "\u{201c}{}\u{201d} is waiting for your permission. Answer it first; KalVoice doesn't send to a thread while a permission request is open.",
+            thread.name
+        ),
+    )
+}
+
+/// Whether a thread in `thread`'s state counts as `state`. "Waiting for you" includes a
+/// pending permission request: both wait on the person.
+fn attention_matches(state: SessionAttention, thread: &ThreadSummary) -> bool {
+    match state {
+        SessionAttention::WaitingForPermission => permission_pending(thread),
+        SessionAttention::WaitingForYou => {
+            state.matches(thread.status) || permission_pending(thread)
+        }
+        other => other.matches(thread.status),
+    }
+}
+
+/// "Which one — Auth or Release Mac?" for several sessions found by state or name.
+fn choose_session(
+    question: String,
+    threads: &[&ThreadSummary],
+    follow_up: SessionFollowUp,
+) -> UiDirective {
+    UiDirective::ChooseSession {
+        question,
+        choices: threads
+            .iter()
+            .take(MAX_SESSION_CHOICES)
+            .map(|t| session_resolver::candidate(t))
+            .collect(),
+        follow_up,
+    }
+}
+
+/// Labels for a spoken list: names, or "Name · Provider · Account" when names repeat.
+fn spoken_labels(threads: &[&ThreadSummary]) -> Vec<String> {
+    let mut names: Vec<String> = threads.iter().map(|t| t.name.to_lowercase()).collect();
+    names.sort();
+    names.dedup();
+    if names.len() == threads.len() {
+        threads.iter().map(|t| t.name.clone()).collect()
+    } else {
+        threads
+            .iter()
+            .map(|t| session_resolver::session_label(t))
+            .collect()
+    }
+}
+
 impl DesktopExecutor {
-    /// The first open thread matching a spoken name — by name first, then by meaning through
-    /// the Session Locator ("focus the auth thread" finds "Authentication Refactor") — or a
-    /// user-safe "not found".
-    fn named_thread(
+    /// Open threads (the store listing, most recent first), current workspace first.
+    fn open_threads(&self, workspace_id: Option<&str>) -> Result<Vec<ThreadSummary>, ExecError> {
+        let mut threads = self
+            .threads()?
+            .list(None, false)
+            .map_err(|e| from_core(&e))?;
+        threads.sort_by_key(|t| workspace_id.is_none_or(|w| t.workspace_id != w));
+        Ok(threads)
+    }
+
+    /// The one open thread a spoken name means (session resolver, P3). Never guesses: several
+    /// fits, or a fit too loose for `use_`, is a "Which one?" refusal whose `ChooseSession`
+    /// directive runs `follow_up` on the session the person picks.
+    fn resolve_session(
         &self,
         query: &str,
-    ) -> Result<kalcode_contracts::threads::ThreadSummary, ExecError> {
-        let threads = self.threads()?;
-        if let Some(found) = threads
-            .find(query)
-            .map_err(|e| from_core(&e))?
-            .into_iter()
-            .next()
-        {
-            return Ok(found);
-        }
-        let located = self.locator.as_ref().and_then(|locator| {
-            locator
-                .search(&kalcode_locator::LocatorQuery {
-                    text: query.to_owned(),
-                    kinds: vec![kalcode_locator::LocatorEntityKind::Thread],
-                    tz_offset_minutes: local_offset_minutes(),
-                    ..kalcode_locator::LocatorQuery::default()
+        use_: TargetUse,
+        ctx: &ExecContext,
+        follow_up: SessionFollowUp,
+        verb: &str,
+    ) -> Result<ThreadSummary, ExecError> {
+        let threads = self
+            .threads()?
+            .list(None, false)
+            .map_err(|e| from_core(&e))?;
+        // "There" points at the session in front, like "it".
+        let query = if query.trim().eq_ignore_ascii_case("there") {
+            "it"
+        } else {
+            query
+        };
+        let resolution = session_resolver::resolve(
+            &threads,
+            query,
+            &ResolveContext {
+                workspace_id: ctx.workspace_id.as_deref(),
+                focused_thread_id: ctx.thread_id.as_deref(),
+                last_target_id: ctx.last_target_id.as_deref(),
+            },
+        );
+        match resolution {
+            SessionResolution::Resolved { target, tier } => {
+                let loose = match use_ {
+                    TargetUse::Open => false,
+                    TargetUse::Compose => tier == SessionMatchTier::ProviderOnly,
+                    TargetUse::Destructive => {
+                        matches!(
+                            tier,
+                            SessionMatchTier::ProviderOnly | SessionMatchTier::Fuzzy
+                        )
+                    }
+                };
+                if loose {
+                    let question = if use_ == TargetUse::Destructive {
+                        format!(
+                            "Did you mean \u{201c}{}\u{201d}? Say its full name to {verb} it.",
+                            target.name
+                        )
+                    } else {
+                        format!("Did you mean \u{201c}{}\u{201d}?", target.label)
+                    };
+                    return Err(ExecError::new("target_unconfirmed", question.clone())
+                        .with_directive(UiDirective::ChooseSession {
+                            question,
+                            choices: vec![target],
+                            follow_up,
+                        }));
+                }
+                threads
+                    .into_iter()
+                    .find(|t| t.id == target.thread_id)
+                    .ok_or_else(|| {
+                        ExecError::new("thread_not_found", "That thread is no longer open.")
+                    })
+            }
+            SessionResolution::Ambiguous {
+                question, choices, ..
+            } => Err(
+                ExecError::new("target_ambiguous", question.clone()).with_directive(
+                    UiDirective::ChooseSession {
+                        question,
+                        choices,
+                        follow_up,
+                    },
+                ),
+            ),
+            SessionResolution::NotFound { message } => {
+                Err(if session_resolver::is_pronoun(query) {
+                    ExecError::new("target_unclear", message)
+                } else {
+                    ExecError::new(
+                        "thread_not_found",
+                        format!(
+                            "KalCode has no open thread named \u{201c}{}\u{201d}.",
+                            query.trim()
+                        ),
+                    )
                 })
-                .ok()
-                .and_then(|r| r.results.items.into_iter().next())
-        });
-        if let Some(hit) = located
-            && let Ok(thread) = threads.get(&hit.entity_id)
-            && thread.archived_at.is_none()
-        {
-            return Ok(thread);
+            }
         }
-        Err(ExecError::new(
-            "thread_not_found",
-            format!("KalCode has no open thread named \u{201c}{query}\u{201d}."),
-        ))
+    }
+
+    /// The thread in front of the person ("send that", "clear that").
+    fn focused_thread(&self, ctx: &ExecContext) -> Result<ThreadSummary, ExecError> {
+        let id = ctx.thread_id.as_deref().ok_or_else(|| {
+            ExecError::new(
+                "thread_not_focused",
+                "Click a thread first, then say \u{201c}send that\u{201d} or \u{201c}clear that\u{201d}.",
+            )
+        })?;
+        let thread = self.threads()?.get(id).map_err(|e| from_core(&e))?;
+        if thread.archived_at.is_some() {
+            return Err(ExecError::new(
+                "thread_archived",
+                "That thread is archived. Restore it first.",
+            ));
+        }
+        Ok(thread)
+    }
+
+    /// "Send that": the focused thread's composer presses its own Send. Refused while a
+    /// permission is pending and for a stopped thread (its Send would resume it).
+    fn prepare_submit(&self, ctx: &ExecContext) -> Result<ThreadSummary, ExecError> {
+        let thread = self.focused_thread(ctx)?;
+        if permission_pending(&thread) {
+            return Err(permission_pending_error(&thread));
+        }
+        if is_stopped(thread.status) {
+            return Err(ExecError::new(
+                "thread_stopped",
+                format!(
+                    "\u{201c}{}\u{201d} is stopped. KalVoice doesn't resume threads; press Resume and send yourself.",
+                    thread.name
+                ),
+            ));
+        }
+        Ok(thread)
+    }
+
+    /// "Tell <target> <prompt>": the thread, and whether its composer may press Send (never for
+    /// a stopped thread: KalVoice doesn't resume by voice).
+    fn prepare_direct_prompt(
+        &self,
+        target: &str,
+        prompt: &str,
+        ctx: &ExecContext,
+    ) -> Result<(ThreadSummary, bool), ExecError> {
+        if prompt.trim().is_empty() {
+            return Err(ExecError::new(
+                "prompt_missing",
+                "Say what to tell the thread, for example \u{201c}tell Auth to run the tests\u{201d}.",
+            ));
+        }
+        let thread = self.resolve_session(
+            target,
+            TargetUse::Compose,
+            ctx,
+            SessionFollowUp::Compose {
+                text: prompt.to_owned(),
+                submit: true,
+            },
+            "send to",
+        )?;
+        if permission_pending(&thread) {
+            return Err(permission_pending_error(&thread));
+        }
+        let submit = !is_stopped(thread.status);
+        Ok((thread, submit))
+    }
+
+    /// Open threads in `state`, current workspace first.
+    fn threads_in_state(
+        &self,
+        state: SessionAttention,
+        ctx: &ExecContext,
+    ) -> Result<Vec<ThreadSummary>, ExecError> {
+        Ok(self
+            .open_threads(ctx.workspace_id.as_deref())?
+            .into_iter()
+            .filter(|t| attention_matches(state, t))
+            .collect())
+    }
+
+    /// "Focus the one waiting for permission": exactly one, or a "Which one?" choice.
+    fn prepare_focus_by_state(
+        &self,
+        state: SessionAttention,
+        ctx: &ExecContext,
+    ) -> Result<ThreadSummary, ExecError> {
+        let found = self.threads_in_state(state, ctx)?;
+        match found.as_slice() {
+            [] => Err(ExecError::new(
+                "session_not_found",
+                match state {
+                    SessionAttention::WaitingForPermission => {
+                        "No thread is waiting for permission."
+                    }
+                    SessionAttention::WaitingForYou => "No thread is waiting for you.",
+                    SessionAttention::Failed => "No thread has failed.",
+                    SessionAttention::Stuck => "No thread is stuck.",
+                },
+            )),
+            [one] => Ok(one.clone()),
+            many => {
+                let shown: Vec<&ThreadSummary> = many.iter().take(MAX_SESSION_CHOICES).collect();
+                let mut question = format!(
+                    "Which one \u{2014} {}?",
+                    or_list_owned(&spoken_labels(&shown))
+                );
+                if many.len() > shown.len() {
+                    question.push_str(&format!(
+                        " {} threads match; say the name of the one you want.",
+                        many.len()
+                    ));
+                }
+                Err(ExecError::new("target_ambiguous", question.clone())
+                    .with_directive(choose_session(question, &shown, SessionFollowUp::Open)))
+            }
+        }
+    }
+
+    /// "Which agent failed?": up to three names, the rest counted.
+    fn which_sessions(
+        &self,
+        state: SessionAttention,
+        ctx: &ExecContext,
+    ) -> Result<Executed, ExecError> {
+        let found = self.threads_in_state(state, ctx)?;
+        let refs: Vec<&ThreadSummary> = found.iter().collect();
+        let shown = &refs[..refs.len().min(3)];
+        let summary = if found.is_empty() {
+            match state {
+                SessionAttention::WaitingForPermission => {
+                    "No threads are waiting for permission.".to_owned()
+                }
+                SessionAttention::WaitingForYou => "Nothing is waiting for you.".to_owned(),
+                SessionAttention::Failed => "No threads have failed.".to_owned(),
+                SessionAttention::Stuck => "No threads are stuck.".to_owned(),
+            }
+        } else {
+            let verb = match (state, found.len()) {
+                (SessionAttention::Failed, _) => "failed".to_owned(),
+                (_, 1) => format!("is {}", state.phrase()),
+                _ => format!("are {}", state.phrase()),
+            };
+            let mut names = spoken_labels(shown);
+            let more = found.len() - shown.len();
+            if more > 0 {
+                names.push(format!("{more} more"));
+            }
+            format!(
+                "{} {verb}: {}.",
+                plural(found.len(), "thread", "threads"),
+                and_list(&names)
+            )
+        };
+        let directive = match state {
+            SessionAttention::WaitingForPermission if self.permissions.is_some() => {
+                Some(UiDirective::ShowApprovals)
+            }
+            SessionAttention::WaitingForPermission
+            | SessionAttention::WaitingForYou
+            | SessionAttention::Failed => Some(UiDirective::FilterDashboard {
+                chip: DashboardChip::WaitingForYou,
+            }),
+            SessionAttention::Stuck => None,
+        };
+        Ok(Executed { summary, directive })
+    }
+
+    /// Resolves the sessions an intent names, before anything counts.
+    fn check_sessions(&self, intent: &KalVoiceIntent, ctx: &ExecContext) -> Result<(), ExecError> {
+        match intent {
+            KalVoiceIntent::OpenThread { query } | KalVoiceIntent::Focus { query } => self
+                .resolve_session(query, TargetUse::Open, ctx, SessionFollowUp::Open, "open")
+                .map(|_| ()),
+            KalVoiceIntent::RequestPermissionMode {
+                thread_query: Some(query),
+                ..
+            } => self
+                .resolve_session(query, TargetUse::Open, ctx, SessionFollowUp::Open, "open")
+                .map(|_| ()),
+            KalVoiceIntent::DirectPrompt { target, prompt } => {
+                self.prepare_direct_prompt(target, prompt, ctx).map(|_| ())
+            }
+            KalVoiceIntent::SubmitFocused => self.prepare_submit(ctx).map(|_| ()),
+            KalVoiceIntent::ClearFocused => self.focused_thread(ctx).map(|_| ()),
+            KalVoiceIntent::FocusByState { state } => {
+                self.prepare_focus_by_state(*state, ctx).map(|_| ())
+            }
+            KalVoiceIntent::RebindThreadAccount {
+                thread_query,
+                provider_id,
+                account_query,
+            } => {
+                if thread_query
+                    .as_deref()
+                    .is_some_and(|q| !q.trim().is_empty())
+                {
+                    self.prepare_rebind(
+                        thread_query.as_deref(),
+                        provider_id.as_ref(),
+                        account_query,
+                        ctx,
+                    )?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Search by voice: names and statuses are read back, never content (LOC-04).
@@ -554,6 +943,19 @@ fn or_list(labels: &[&str]) -> String {
     }
 }
 
+fn or_list_owned(labels: &[String]) -> String {
+    or_list(&labels.iter().map(String::as_str).collect::<Vec<_>>())
+}
+
+/// "A and B" / "A, B and C".
+fn and_list(labels: &[String]) -> String {
+    match labels {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
 impl DesktopExecutor {
     /// The one account of `provider` a spoken name means, signed in or not yet checked. Asks
     /// which one when several match; never signs in or bypasses the provider's own auth.
@@ -604,17 +1006,24 @@ impl DesktopExecutor {
         Ok(account)
     }
 
-    /// The thread a rebind means: the named one, else the one the person is looking at.
+    /// The thread a rebind means: the named one (never a partial or ambiguous name), else the
+    /// one the person is looking at.
     fn rebind_thread(
         &self,
         thread_query: Option<&str>,
-        focused: Option<&str>,
+        ctx: &ExecContext,
     ) -> Result<ThreadSummary, ExecError> {
         let runtime = self.threads()?;
         if let Some(query) = thread_query.map(str::trim).filter(|q| !q.is_empty()) {
-            return self.named_thread(query);
+            return self.resolve_session(
+                query,
+                TargetUse::Destructive,
+                ctx,
+                SessionFollowUp::Open,
+                "switch",
+            );
         }
-        let id = focused.ok_or_else(|| {
+        let id = ctx.thread_id.as_deref().ok_or_else(|| {
             ExecError::new(
                 "thread_not_specified",
                 "Open the thread first, or say which one, for example \u{201c}switch the login fix thread to Gemini B\u{201d}.",
@@ -636,9 +1045,9 @@ impl DesktopExecutor {
         thread_query: Option<&str>,
         provider_hint: Option<&ProviderId>,
         account_query: &str,
-        focused: Option<&str>,
+        ctx: &ExecContext,
     ) -> Result<(ThreadSummary, ProviderAccount), ExecError> {
-        let thread = self.rebind_thread(thread_query, focused)?;
+        let thread = self.rebind_thread(thread_query, ctx)?;
         if let Some(hint) = provider_hint
             && hint != &thread.provider_id
         {
@@ -666,15 +1075,16 @@ impl DesktopExecutor {
         Ok((workspace, account))
     }
 
-    /// Idle headless threads bound to a named account: the Threads-surface path, for builds
-    /// without provider panes. Nothing starts until the person sends the thread a message.
-    fn prepare_headless_threads(
+    /// "Open a Codex thread with my work account" where provider panes are unavailable: KalCode's
+    /// New thread form, with the provider, account and workspace chosen. Voice never starts or
+    /// creates a session here; the person starts it from the form (0.1.5 review S3).
+    fn prepare_new_thread_form(
         &self,
         provider: &ProviderId,
         count: u8,
         workspace_id: Option<&str>,
         account_query: &str,
-    ) -> Result<(ResolvedWorkspace, CreateIdleThread), ExecError> {
+    ) -> Result<(Option<ResolvedWorkspace>, ProviderAccount), ExecError> {
         if count == 0 || count > 16 {
             return Err(ExecError::new(
                 "invalid_thread_count",
@@ -682,7 +1092,14 @@ impl DesktopExecutor {
             ));
         }
         let runtime = self.threads()?;
-        let workspace = self.target_workspace(workspace_id)?;
+        // A named workspace must exist; otherwise the active one, if any (the form can choose).
+        let workspace = match workspace_id {
+            Some(id) => Some(self.workspace(id)?),
+            None => match self.core.active_workspace().map_err(|e| from_core(&e))? {
+                Some(active) => Some(self.workspace(&active.id)?),
+                None => None,
+            },
+        };
         let options = runtime.options().map_err(|e| from_core(&e))?;
         if !options.providers.iter().any(|p| &p.id == provider) {
             return Err(ExecError::new(
@@ -691,75 +1108,41 @@ impl DesktopExecutor {
             ));
         }
         let account = self.spoken_account(provider, account_query)?;
-        let request = CreateIdleThread {
-            provider_id: provider.to_string(),
-            provider_account_id: Some(account.id),
-            account_label: Some(account.display_name),
-            workspace_id: workspace.id.clone(),
-            model: None,
-            permission_mode: PermissionMode::Approve,
-            name: None,
-        };
-        Ok((workspace, request))
+        Ok((workspace, account))
     }
 
-    fn create_headless_threads(
+    fn open_new_thread_form(
         &self,
         provider: &ProviderId,
         count: u8,
         workspace_id: Option<&str>,
         account_query: &str,
     ) -> Result<Executed, ExecError> {
-        let (workspace, request) =
-            self.prepare_headless_threads(provider, count, workspace_id, account_query)?;
-        let runtime = self.threads()?;
-        let mut ids = Vec::new();
-        let mut first_error = None;
-        for _ in 0..count {
-            match runtime.create_idle(request.clone()) {
-                Ok(thread) => ids.push(thread.id),
-                Err(error) => {
-                    first_error.get_or_insert(error);
-                }
-            }
-        }
-        if ids.is_empty() {
-            return Err(first_error.as_ref().map_or_else(
-                || ExecError::new("threads_failed", "KalVoice could not open those threads."),
-                from_core,
-            ));
-        }
+        let (workspace, account) =
+            self.prepare_new_thread_form(provider, count, workspace_id, account_query)?;
         let provider_name = provider_display_name(provider);
-        let label = request.account_label.unwrap_or_default();
-        let summary = match &first_error {
-            Some(error) if ids.len() < usize::from(count) => format!(
-                "Opened {} of {count} {provider_name} threads in {} with {label}. {}",
-                ids.len(),
-                workspace.name,
-                error.message
-            ),
-            _ if ids.len() == 1 => format!(
-                "Opened a new {provider_name} thread in {} with {label}. Send it a message in Threads to start.",
-                workspace.name
-            ),
-            _ => format!(
-                "Opened {} {provider_name} threads in {} with {label}. Send each a message in Threads to start.",
-                ids.len(),
-                workspace.name
-            ),
-        };
-        let directive = if ids.len() == 1 {
-            UiDirective::OpenThread {
-                thread_id: ids.remove(0),
-            }
+        let place = workspace
+            .as_ref()
+            .map(|w| format!(" in {}", w.name))
+            .unwrap_or_default();
+        let summary = if count == 1 {
+            format!(
+                "Opening New thread for {provider_name}{place} with {}. Start it from there.",
+                account.display_name
+            )
         } else {
-            UiDirective::Navigate {
-                surface: SurfaceId::Threads,
-            }
+            format!(
+                "Opening New thread for {provider_name}{place} with {}. Start each of the {count} threads from there.",
+                account.display_name
+            )
         };
         Ok(Executed {
             summary,
-            directive: Some(directive),
+            directive: Some(UiDirective::OpenNewThread {
+                provider_id: provider.clone(),
+                provider_account_id: Some(account.id),
+                workspace_id: workspace.map(|w| w.id),
+            }),
         })
     }
 }
@@ -819,14 +1202,62 @@ impl Executor for DesktopExecutor {
         Ok(None)
     }
 
+    /// A thread by name through the session resolver, only when exactly one open thread fits
+    /// by id, exact name or provider/account + name (never a first match).
     fn find_thread(&self, name: &str) -> Result<Option<String>, ExecError> {
-        Ok(self
+        let threads = self
             .threads()?
-            .find(name)
-            .map_err(|e| from_core(&e))?
-            .into_iter()
-            .next()
-            .map(|t| t.id))
+            .list(None, false)
+            .map_err(|e| from_core(&e))?;
+        Ok(
+            match session_resolver::resolve(&threads, name, &ResolveContext::default()) {
+                SessionResolution::Resolved { target, tier }
+                    if !matches!(
+                        tier,
+                        SessionMatchTier::ProviderOnly | SessionMatchTier::Fuzzy
+                    ) =>
+                {
+                    Some(target.thread_id)
+                }
+                _ => None,
+            },
+        )
+    }
+
+    fn check_with_context(
+        &self,
+        intent: &KalVoiceIntent,
+        ctx: &ExecContext,
+    ) -> Result<(), ExecError> {
+        self.check(intent)?;
+        self.check_sessions(intent, ctx)
+    }
+
+    fn resolve_thread_target(
+        &self,
+        name: &str,
+        intent: &KalVoiceIntent,
+        ctx: &ExecContext,
+    ) -> Result<Option<String>, ExecError> {
+        self.resolve_session(
+            name,
+            target_use(intent),
+            ctx,
+            SessionFollowUp::Open,
+            destructive_verb(intent),
+        )
+        .map(|thread| Some(thread.id))
+    }
+
+    fn names_one_session(&self, query: &str, ctx: &ExecContext) -> bool {
+        self.resolve_session(
+            query,
+            TargetUse::Compose,
+            ctx,
+            SessionFollowUp::Open,
+            "send to",
+        )
+        .is_ok()
     }
 
     fn check(&self, intent: &KalVoiceIntent) -> Result<(), ExecError> {
@@ -843,7 +1274,7 @@ impl Executor for DesktopExecutor {
                 workspace_id,
                 account_query: Some(account_query),
             } if !self.provider_panes_enabled => self
-                .prepare_headless_threads(
+                .prepare_new_thread_form(
                     provider_id,
                     *count,
                     workspace_id.as_deref(),
@@ -883,7 +1314,12 @@ impl Executor for DesktopExecutor {
             | KalVoiceIntent::PauseThreads { .. }
             | KalVoiceIntent::ResumeThreads { .. }
             | KalVoiceIntent::StopThreads { .. }
-            | KalVoiceIntent::StatusReport => self.threads().map(|_| ()),
+            | KalVoiceIntent::StatusReport
+            | KalVoiceIntent::SubmitFocused
+            | KalVoiceIntent::ClearFocused
+            | KalVoiceIntent::DirectPrompt { .. }
+            | KalVoiceIntent::FocusByState { .. }
+            | KalVoiceIntent::WhichSessions { .. } => self.threads().map(|_| ()),
             KalVoiceIntent::RequestPermissionMode { thread_query, .. } => {
                 self.threads()?;
                 if thread_query.as_deref().is_none_or(|q| q.trim().is_empty()) {
@@ -899,17 +1335,18 @@ impl Executor for DesktopExecutor {
                 "not_in_this_build",
                 "Provider switching isn't in this build yet, so KalVoice can't do that.",
             )),
-            // The focused thread is only known at execution; a named thread and a provider-led
-            // account are checked now, so an unknown name is refused before anything counts.
+            // A named thread is resolved with the request's context (`check_with_context`); a
+            // provider-led account is checked here, so an unknown name is refused before
+            // anything counts.
             KalVoiceIntent::RebindThreadAccount {
                 thread_query,
                 provider_id,
                 account_query,
             } => {
                 self.threads()?;
-                if let Some(query) = thread_query.as_deref().filter(|q| !q.trim().is_empty()) {
-                    self.prepare_rebind(Some(query), provider_id.as_ref(), account_query, None)?;
-                } else if let Some(provider) = provider_id {
+                if thread_query.as_deref().is_none_or(|q| q.trim().is_empty())
+                    && let Some(provider) = provider_id
+                {
                     self.spoken_account(provider, account_query)?;
                 }
                 Ok(())
@@ -934,16 +1371,63 @@ impl Executor for DesktopExecutor {
 
     fn execute(&self, intent: &KalVoiceIntent, ctx: &ExecContext) -> Result<Executed, ExecError> {
         match intent {
-            // Terminal-aware KalVoice contract only (TK-0); the voice lane replaces this refusal.
-            KalVoiceIntent::SubmitFocused
-            | KalVoiceIntent::ClearFocused
-            | KalVoiceIntent::DirectPrompt { .. }
-            | KalVoiceIntent::FocusByState { .. }
-            | KalVoiceIntent::FocusPrevious
-            | KalVoiceIntent::WhichSessions { .. } => Err(ExecError::new(
-                "not_in_this_build",
-                "That KalVoice session command isn't in this build yet.",
-            )),
+            // ---- Terminal-aware KalVoice (0.1.5). Every send is the thread composer's own Send
+            // (prompt review, warnings, busy refusals); KalVoice never sends natively, never
+            // resumes a stopped thread and never names the prompt in a summary. ----
+            KalVoiceIntent::SubmitFocused => {
+                let thread = self.prepare_submit(ctx)?;
+                Ok(Executed {
+                    summary: format!("Sending in \u{201c}{}\u{201d}.", thread.name),
+                    directive: Some(UiDirective::SubmitComposer {
+                        thread_id: thread.id,
+                    }),
+                })
+            }
+            KalVoiceIntent::ClearFocused => {
+                let thread = self.focused_thread(ctx)?;
+                Ok(Executed {
+                    summary: "Cleared what KalVoice typed.".into(),
+                    directive: Some(UiDirective::ClearComposer {
+                        thread_id: thread.id,
+                    }),
+                })
+            }
+            KalVoiceIntent::DirectPrompt { target, prompt } => {
+                let (thread, submit) = self.prepare_direct_prompt(target, prompt, ctx)?;
+                Ok(Executed {
+                    summary: if submit {
+                        format!("Sending to \u{201c}{}\u{201d}.", thread.name)
+                    } else {
+                        format!(
+                            "\u{201c}{}\u{201d} is stopped, so KalVoice put your message in its composer without sending. KalVoice doesn't resume threads; press Resume and send when you're ready.",
+                            thread.name
+                        )
+                    },
+                    directive: Some(UiDirective::ComposeInThread {
+                        thread_id: thread.id,
+                        text: prompt.clone(),
+                        submit,
+                    }),
+                })
+            }
+            KalVoiceIntent::FocusByState { state } => {
+                let thread = self.prepare_focus_by_state(*state, ctx)?;
+                Ok(Executed {
+                    summary: format!(
+                        "Opened \u{201c}{}\u{201d} ({}).",
+                        thread.name,
+                        state.phrase()
+                    ),
+                    directive: Some(UiDirective::OpenThread {
+                        thread_id: thread.id,
+                    }),
+                })
+            }
+            KalVoiceIntent::WhichSessions { state } => self.which_sessions(*state, ctx),
+            KalVoiceIntent::FocusPrevious => Ok(Executed {
+                summary: "Going back to where you were.".into(),
+                directive: Some(UiDirective::FocusPrevious),
+            }),
             KalVoiceIntent::Navigate { surface } => Ok(Executed {
                 summary: format!(
                     "Opened {}.",
@@ -996,7 +1480,7 @@ impl Executor for DesktopExecutor {
                 count,
                 workspace_id,
                 account_query: Some(account_query),
-            } if !self.provider_panes_enabled => self.create_headless_threads(
+            } if !self.provider_panes_enabled => self.open_new_thread_form(
                 provider_id,
                 *count,
                 workspace_id.as_deref(),
@@ -1047,7 +1531,13 @@ impl Executor for DesktopExecutor {
                 })
             }
             KalVoiceIntent::OpenThread { query } | KalVoiceIntent::Focus { query } => {
-                let thread = self.named_thread(query)?;
+                let thread = self.resolve_session(
+                    query,
+                    TargetUse::Open,
+                    ctx,
+                    SessionFollowUp::Open,
+                    "open",
+                )?;
                 Ok(Executed {
                     summary: format!("Opened \u{201c}{}\u{201d}.", thread.name),
                     directive: Some(UiDirective::OpenThread {
@@ -1058,7 +1548,13 @@ impl Executor for DesktopExecutor {
             KalVoiceIntent::RequestPermissionMode { mode, thread_query } => {
                 // Only asks: opens the thread; the person changes the mode in its permission
                 // menu. KalVoice never calls `thread_set_permission_mode`.
-                let thread = self.named_thread(thread_query.as_deref().unwrap_or_default())?;
+                let thread = self.resolve_session(
+                    thread_query.as_deref().unwrap_or_default(),
+                    TargetUse::Open,
+                    ctx,
+                    SessionFollowUp::Open,
+                    "open",
+                )?;
                 Ok(Executed {
                     summary: format!(
                         "Opened \u{201c}{}\u{201d}. To switch it to {}, choose it in the thread's permission menu; KalVoice doesn't change permission modes.",
@@ -1187,7 +1683,7 @@ impl Executor for DesktopExecutor {
                     thread_query.as_deref(),
                     provider_id.as_ref(),
                     account_query,
-                    ctx.thread_id.as_deref(),
+                    ctx,
                 )?;
                 if thread.provider_account_id.as_deref() == Some(account.id.as_str()) {
                     return Ok(Executed {
@@ -1393,6 +1889,7 @@ mod tests {
             workspace_id: None,
             thread_id: None,
             providers: Vec::new(),
+            last_target_id: None,
         }
     }
 
@@ -1857,7 +2354,7 @@ mod tests {
         }
 
         fn run(&self, intent: &KalVoiceIntent, ctx: &ExecContext) -> Result<Executed, ExecError> {
-            self.executor.check(intent)?;
+            self.executor.check_with_context(intent, ctx)?;
             self.executor.execute(intent, ctx)
         }
     }
@@ -2048,7 +2545,7 @@ mod tests {
     }
 
     #[test]
-    fn stable_creates_an_idle_headless_thread_on_the_named_account() {
+    fn stable_voice_opens_the_new_thread_form_instead_of_creating_threads() {
         let f = accounts_fixture();
         f.account(ProviderId::CODEX, "Personal", AuthState::Authenticated);
         let work = f.account(ProviderId::CODEX, "Codex Work", AuthState::Authenticated);
@@ -2059,36 +2556,37 @@ mod tests {
             account_query: account.map(str::to_owned),
         };
 
-        // "Open a new Codex thread with my work account."
-        let done = f.run(&intent(Some("work"), 1), &ctx()).expect("create");
-        let Some(UiDirective::OpenThread { thread_id }) = done.directive else {
-            panic!("expected OpenThread, got {:?}", done.directive);
-        };
-        let thread = f.runtime.get(&thread_id).expect("thread");
-        assert_eq!(thread.provider_account_id, Some(work.id.clone()));
-        assert_eq!(thread.account_label.as_deref(), Some("Codex Work"));
+        // "Open a new Codex thread with my work account." Nothing is created or started.
+        let done = f.run(&intent(Some("work"), 1), &ctx()).expect("form");
+        assert_eq!(
+            done.directive,
+            Some(UiDirective::OpenNewThread {
+                provider_id: ProviderId::new(ProviderId::CODEX),
+                provider_account_id: Some(work.id.clone()),
+                workspace_id: Some(f.workspace_id.clone()),
+            })
+        );
         assert!(
-            done.summary.starts_with("Opened a new Codex thread in "),
+            done.summary.starts_with("Opening New thread for Codex in ")
+                && done
+                    .summary
+                    .ends_with(" with Codex Work. Start it from there."),
             "{}",
             done.summary
         );
-        // Headless: no provider pane terminal.
-        assert_eq!(thread.terminal_id, None);
-
         let two = f.run(&intent(Some("codex work"), 2), &ctx()).expect("two");
-        assert_eq!(
-            two.directive,
-            Some(UiDirective::Navigate {
-                surface: SurfaceId::Threads
-            })
+        assert!(
+            two.summary
+                .ends_with("Start each of the 2 threads from there.")
         );
+        assert!(f.runtime.list(None, false).expect("threads").is_empty());
 
         // Without an account, and for panes, Stable still refuses provider panes.
         assert_eq!(
             f.executor.check(&intent(None, 1)).map_err(|e| e.code),
             Err("provider_panes_unavailable".into())
         );
-        // Signed-out accounts never get a thread.
+        // Signed-out accounts never get a form either.
         f.account(ProviderId::CODEX, "Old", AuthState::NotAuthenticated);
         assert_eq!(
             f.executor
@@ -2096,7 +2594,438 @@ mod tests {
                 .map_err(|e| e.code),
             Err("provider_account_signed_out".into())
         );
-        assert_eq!(f.runtime.list(None, false).expect("threads").len(), 3);
+        assert!(f.runtime.list(None, false).expect("threads").is_empty());
+    }
+
+    // ---- 0.1.5 terminal-aware KalVoice ----
+
+    impl AccountsFixture {
+        fn named(&self, provider: &str, account: &ProviderAccount, name: &str) -> ThreadSummary {
+            let thread = self
+                .runtime
+                .create_idle(CreateIdleThread {
+                    provider_id: provider.into(),
+                    provider_account_id: Some(account.id.clone()),
+                    account_label: Some(account.display_name.clone()),
+                    workspace_id: self.workspace_id.clone(),
+                    model: None,
+                    permission_mode: PermissionMode::Approve,
+                    name: Some(name.into()),
+                })
+                .expect("thread");
+            // The fixture provider never starts; begin from a plain idle thread.
+            self.set_status(&thread, ThreadStatus::Idle);
+            self.runtime.get(&thread.id).expect("thread")
+        }
+
+        fn set_status(&self, thread: &ThreadSummary, status: ThreadStatus) {
+            self.executor
+                .core
+                .transact(|tx| {
+                    kalcode_threads::store::set_status(
+                        tx,
+                        &thread.id,
+                        status,
+                        None,
+                        "2026-09-28T12:00:00.000Z",
+                    )?;
+                    Ok(((), Vec::new()))
+                })
+                .expect("status");
+            assert_eq!(self.runtime.get(&thread.id).expect("thread").status, status);
+        }
+
+        fn ctx(&self) -> ExecContext {
+            ExecContext {
+                workspace_id: Some(self.workspace_id.clone()),
+                ..ctx()
+            }
+        }
+    }
+
+    /// Authentication (Codex Work), Release Windows (Codex Personal), Release Mac (Gemini A),
+    /// Research on Gemini A and on Gemini B.
+    struct Sessions {
+        f: AccountsFixture,
+        auth: ThreadSummary,
+        release_windows: ThreadSummary,
+        release_mac: ThreadSummary,
+        research_a: ThreadSummary,
+        research_b: ThreadSummary,
+    }
+
+    fn sessions() -> Sessions {
+        let f = accounts_fixture();
+        let work = f.account(ProviderId::CODEX, "Codex Work", AuthState::Authenticated);
+        let personal = f.account(ProviderId::CODEX, "Personal", AuthState::Authenticated);
+        let a = f.account(ProviderId::GEMINI_CLI, "Gemini A", AuthState::Authenticated);
+        let b = f.account(ProviderId::GEMINI_CLI, "Gemini B", AuthState::Authenticated);
+        Sessions {
+            auth: f.named(ProviderId::CODEX, &work, "Authentication"),
+            release_windows: f.named(ProviderId::CODEX, &personal, "Release Windows"),
+            release_mac: f.named(ProviderId::GEMINI_CLI, &a, "Release Mac"),
+            research_a: f.named(ProviderId::GEMINI_CLI, &a, "Research"),
+            research_b: f.named(ProviderId::GEMINI_CLI, &b, "Research"),
+            f,
+        }
+    }
+
+    fn open(query: &str) -> KalVoiceIntent {
+        KalVoiceIntent::OpenThread {
+            query: query.into(),
+        }
+    }
+
+    fn opened(thread: &ThreadSummary) -> Option<UiDirective> {
+        Some(UiDirective::OpenThread {
+            thread_id: thread.id.clone(),
+        })
+    }
+
+    fn choices(error: &ExecError) -> Vec<String> {
+        match error.directive.as_deref() {
+            Some(UiDirective::ChooseSession { choices, .. }) => {
+                choices.iter().map(|c| c.thread_id.clone()).collect()
+            }
+            other => panic!("expected ChooseSession, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn voice_session_names_resolve_by_tier_and_clarify_instead_of_guessing() {
+        let s = sessions();
+        let ctx = s.f.ctx();
+        // Exact name, a unique partial name (open only) and provider/account + name.
+        for (query, thread) in [
+            ("Authentication", &s.auth),
+            ("the authentication thread", &s.auth),
+            ("auth", &s.auth),
+            ("Gemini B Research", &s.research_b),
+            ("research on gemini a", &s.research_a),
+        ] {
+            assert_eq!(
+                s.f.run(&open(query), &ctx).expect(query).directive,
+                opened(thread),
+                "{query}"
+            );
+        }
+        // Ties are a clarification naming the choices, never the most recent.
+        let release = s.f.run(&open("release"), &ctx).expect_err("ambiguous");
+        assert_eq!(release.code, "target_ambiguous");
+        assert_eq!(
+            release.message,
+            "Which one \u{2014} Release Mac or Release Windows?"
+        );
+        let mut picked = choices(&release);
+        picked.sort();
+        let mut expected = vec![s.release_mac.id.clone(), s.release_windows.id.clone()];
+        expected.sort();
+        assert_eq!(picked, expected);
+        let research = s.f.run(&open("research"), &ctx).expect_err("ambiguous");
+        assert_eq!(
+            research.message,
+            "Which one \u{2014} Research on Gemini B or Research on Gemini A?"
+        );
+        // "It": the focused thread, then the last target, else ask.
+        let focused = ExecContext {
+            thread_id: Some(s.release_mac.id.clone()),
+            last_target_id: Some(s.auth.id.clone()),
+            ..s.f.ctx()
+        };
+        assert_eq!(
+            s.f.run(&open("it"), &focused).expect("it").directive,
+            opened(&s.release_mac)
+        );
+        let remembered = ExecContext {
+            last_target_id: Some(s.auth.id.clone()),
+            ..s.f.ctx()
+        };
+        for query in ["it", "that one", "there"] {
+            assert_eq!(
+                s.f.run(&open(query), &remembered).expect(query).directive,
+                opened(&s.auth),
+                "{query}"
+            );
+        }
+        assert_eq!(
+            s.f.run(&open("it"), &ctx).map_err(|e| e.code),
+            Err("target_unclear".into())
+        );
+        assert_eq!(
+            s.f.run(&open("payments webhook"), &ctx)
+                .map_err(|e| e.message),
+            Err("KalCode has no open thread named \u{201c}payments webhook\u{201d}.".into())
+        );
+        // The trait-level lookup never picks among several.
+        assert_eq!(s.f.executor.find_thread("release").expect("find"), None);
+        assert_eq!(
+            s.f.executor.find_thread("Authentication").expect("find"),
+            Some(s.auth.id.clone())
+        );
+    }
+
+    #[test]
+    fn destructive_voice_commands_never_act_on_partial_or_ambiguous_names() {
+        let s = sessions();
+        let ctx = s.f.ctx();
+        let pause = KalVoiceIntent::PauseThreads {
+            scope: kalcode_contracts::kalvoice::ThreadScope::Thread {
+                thread_id: String::new(),
+            },
+        };
+        let target = |name: &str, ctx: &ExecContext| {
+            s.f.executor
+                .resolve_thread_target(name, &pause, ctx)
+                .map_err(|e| (e.code.clone(), e))
+        };
+        assert_eq!(
+            target("Authentication", &ctx).expect("exact"),
+            Some(s.auth.id.clone())
+        );
+        assert_eq!(
+            target("gemini b research", &ctx).expect("qualified"),
+            Some(s.research_b.id.clone())
+        );
+        // A partial name: "Did you mean …?" with the one choice, nothing paused.
+        let (code, partial) = target("auth", &ctx).expect_err("partial");
+        assert_eq!(code, "target_unconfirmed");
+        assert_eq!(
+            partial.message,
+            "Did you mean \u{201c}Authentication\u{201d}? Say its full name to pause it."
+        );
+        assert_eq!(choices(&partial), vec![s.auth.id.clone()]);
+        // A provider alone, even when only one thread fits it.
+        assert_eq!(
+            target("codex work", &ctx).map_err(|(code, _)| code),
+            Err("target_unconfirmed".into())
+        );
+        assert_eq!(
+            target("release", &ctx).map_err(|(code, _)| code),
+            Err("target_ambiguous".into())
+        );
+        assert_eq!(
+            target("this", &ctx).map_err(|(code, _)| code),
+            Err("target_unclear".into())
+        );
+        let here = ExecContext {
+            thread_id: Some(s.release_mac.id.clone()),
+            ..s.f.ctx()
+        };
+        assert_eq!(
+            target("this", &here).expect("focused"),
+            Some(s.release_mac.id.clone())
+        );
+        // An account switch by a partial name is refused the same way.
+        assert_eq!(
+            s.f.run(&rebind(Some("auth"), None, "personal"), &ctx)
+                .map_err(|e| e.code),
+            Err("target_unconfirmed".into())
+        );
+    }
+
+    fn tell(target: &str, prompt: &str) -> KalVoiceIntent {
+        KalVoiceIntent::DirectPrompt {
+            target: target.into(),
+            prompt: prompt.into(),
+        }
+    }
+
+    #[test]
+    fn direct_prompts_compose_through_the_composer_and_never_resume_or_race_a_permission() {
+        let s = sessions();
+        let ctx = s.f.ctx();
+        let prompt = "Review the latest login failure, and don't push anything.";
+        let done =
+            s.f.run(&tell("Authentication", prompt), &ctx)
+                .expect("tell");
+        assert_eq!(
+            done.directive,
+            Some(UiDirective::ComposeInThread {
+                thread_id: s.auth.id.clone(),
+                text: prompt.into(),
+                submit: true,
+            })
+        );
+        // The summary names the thread only, never the words.
+        assert_eq!(done.summary, "Sending to \u{201c}Authentication\u{201d}.");
+        assert!(s.f.executor.names_one_session("Authentication", &ctx));
+
+        // Several fits: "Which one?", and the pick composes the same words.
+        let ambiguous =
+            s.f.run(&tell("release", "bump the version"), &ctx)
+                .expect_err("ambiguous");
+        assert_eq!(ambiguous.code, "target_ambiguous");
+        assert!(matches!(
+            ambiguous.directive.as_deref(),
+            Some(UiDirective::ChooseSession {
+                follow_up: SessionFollowUp::Compose { text, submit: true },
+                ..
+            }) if text == "bump the version"
+        ));
+        assert!(!s.f.executor.names_one_session("release", &ctx));
+        // A provider or account alone is confirmed first, even when unique.
+        let provider_only =
+            s.f.run(&tell("Codex Work", "run the tests"), &ctx)
+                .expect_err("provider only");
+        assert_eq!(provider_only.code, "target_unconfirmed");
+        assert_eq!(choices(&provider_only), vec![s.auth.id.clone()]);
+
+        // A pending permission: refused before anything counts.
+        s.f.set_status(&s.auth, ThreadStatus::WaitingForPermission);
+        let refused =
+            s.f.executor
+                .check_with_context(&tell("Authentication", "continue"), &ctx)
+                .expect_err("permission pending");
+        assert_eq!(refused.code, "permission_pending");
+        assert!(refused.message.contains("waiting for your permission"));
+
+        // Stopped or paused: put in the composer, never sent (KalVoice doesn't resume).
+        for status in [ThreadStatus::Paused, ThreadStatus::Interrupted] {
+            s.f.set_status(&s.auth, status);
+            let stopped =
+                s.f.run(&tell("Authentication", "continue"), &ctx)
+                    .expect("stopped");
+            assert_eq!(
+                stopped.directive,
+                Some(UiDirective::ComposeInThread {
+                    thread_id: s.auth.id.clone(),
+                    text: "continue".into(),
+                    submit: false,
+                })
+            );
+            assert!(stopped.summary.contains("doesn't resume threads"));
+        }
+        assert_eq!(
+            s.f.run(&tell("Authentication", "  "), &ctx)
+                .map_err(|e| e.code),
+            Err("prompt_missing".into())
+        );
+    }
+
+    #[test]
+    fn send_that_and_clear_that_act_on_the_focused_thread_only() {
+        let s = sessions();
+        let nothing = s.f.ctx();
+        assert_eq!(
+            s.f.run(&KalVoiceIntent::SubmitFocused, &nothing)
+                .map_err(|e| e.code),
+            Err("thread_not_focused".into())
+        );
+        assert_eq!(
+            s.f.run(&KalVoiceIntent::ClearFocused, &nothing)
+                .map_err(|e| e.code),
+            Err("thread_not_focused".into())
+        );
+        let here = ExecContext {
+            thread_id: Some(s.auth.id.clone()),
+            ..s.f.ctx()
+        };
+        assert_eq!(
+            s.f.run(&KalVoiceIntent::SubmitFocused, &here)
+                .expect("send")
+                .directive,
+            Some(UiDirective::SubmitComposer {
+                thread_id: s.auth.id.clone()
+            })
+        );
+        assert_eq!(
+            s.f.run(&KalVoiceIntent::ClearFocused, &here)
+                .expect("clear")
+                .directive,
+            Some(UiDirective::ClearComposer {
+                thread_id: s.auth.id.clone()
+            })
+        );
+        s.f.set_status(&s.auth, ThreadStatus::Paused);
+        assert_eq!(
+            s.f.run(&KalVoiceIntent::SubmitFocused, &here)
+                .map_err(|e| e.code),
+            Err("thread_stopped".into())
+        );
+        s.f.set_status(&s.auth, ThreadStatus::WaitingForPermission);
+        assert_eq!(
+            s.f.run(&KalVoiceIntent::SubmitFocused, &here)
+                .map_err(|e| e.code),
+            Err("permission_pending".into())
+        );
+        // Clearing never sends, so it is allowed whatever the state.
+        assert!(s.f.run(&KalVoiceIntent::ClearFocused, &here).is_ok());
+    }
+
+    #[test]
+    fn sessions_by_state_focus_one_or_clarify_and_read_back_names() {
+        let s = sessions();
+        let ctx = s.f.ctx();
+        let focus = |state| KalVoiceIntent::FocusByState { state };
+        let which = |state| KalVoiceIntent::WhichSessions { state };
+        assert_eq!(
+            s.f.run(&focus(SessionAttention::Failed), &ctx)
+                .map_err(|e| e.message),
+            Err("No thread has failed.".into())
+        );
+        s.f.set_status(&s.auth, ThreadStatus::Failed);
+        let one =
+            s.f.run(&focus(SessionAttention::Failed), &ctx)
+                .expect("one failed");
+        assert_eq!(one.directive, opened(&s.auth));
+        assert_eq!(
+            one.summary,
+            "Opened \u{201c}Authentication\u{201d} (failed)."
+        );
+        s.f.set_status(&s.release_mac, ThreadStatus::Failed);
+        let two =
+            s.f.run(&focus(SessionAttention::Failed), &ctx)
+                .expect_err("two failed");
+        assert_eq!(two.code, "target_ambiguous");
+        assert_eq!(choices(&two).len(), 2);
+
+        let read =
+            s.f.run(&which(SessionAttention::Failed), &ctx)
+                .expect("which failed");
+        assert!(
+            read.summary.starts_with("2 threads failed: ")
+                && read.summary.contains("Authentication")
+                && read.summary.contains("Release Mac"),
+            "{}",
+            read.summary
+        );
+        assert_eq!(
+            read.directive,
+            Some(UiDirective::FilterDashboard {
+                chip: DashboardChip::WaitingForYou
+            })
+        );
+        s.f.set_status(&s.research_a, ThreadStatus::WaitingForPermission);
+        let permission =
+            s.f.run(&which(SessionAttention::WaitingForPermission), &ctx)
+                .expect("permission");
+        assert_eq!(
+            permission.summary,
+            "1 thread is waiting for permission: Research."
+        );
+        // Waiting for you includes a pending permission request.
+        assert_eq!(
+            s.f.run(&focus(SessionAttention::WaitingForYou), &ctx)
+                .expect("waiting for you")
+                .directive,
+            opened(&s.research_a)
+        );
+        let stuck =
+            s.f.run(&which(SessionAttention::Stuck), &ctx)
+                .expect("stuck");
+        assert_eq!(stuck.summary, "No threads are stuck.");
+        assert_eq!(stuck.directive, None);
+        let _ = (&s.release_windows, &s.research_b);
+    }
+
+    #[test]
+    fn go_back_is_a_ui_directive() {
+        let dir = tempfile::tempdir().expect("data");
+        let executor = executor(dir.path());
+        let done = executor
+            .execute(&KalVoiceIntent::FocusPrevious, &ctx())
+            .expect("back");
+        assert_eq!(done.directive, Some(UiDirective::FocusPrevious));
     }
 
     #[test]

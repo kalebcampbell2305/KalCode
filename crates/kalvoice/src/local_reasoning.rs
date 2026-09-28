@@ -272,15 +272,9 @@ pub(crate) fn validate_action(
                 && provider_id.as_ref().is_none_or(valid_provider)
                 && valid_text(account_query)
         }
-        KalVoiceIntent::SetWorkspaceAccount {
-            provider_id,
-            account_query,
-            workspace_id,
-        } => {
-            valid_provider(provider_id)
-                && valid_text(account_query)
-                && valid_workspace_id(workspace_id, workspaces)
-        }
+        // A workspace default changes stored bindings for every later thread: only the
+        // deterministic grammar may produce it, never an interpreted guess (0.1.5 review N6).
+        KalVoiceIntent::SetWorkspaceAccount { .. } => false,
         // Read-only lookups and focus changes are safe to interpret.
         KalVoiceIntent::FocusByState { .. }
         | KalVoiceIntent::FocusPrevious

@@ -15,6 +15,11 @@
 //! "model-dependent" (correct only if an ideal selector could pick the expected candidate).
 //! No speech content is logged anywhere; this file only reads synthetic corpus text.
 //!
+//! Modes: `baseline` (grammar + the legacy first-match thread lookup), `proposed` (the harness's
+//! own rewrite simulation on top), and `product` (0.1.5 as shipped: the grammar's built-in second
+//! chance, strict session targets, and the executor's answer for session commands). Since the
+//! second chance is now product code, `baseline` here is no longer the pre-0.1.5 grammar.
+//!
 //! Run (release timings): `CARGO_BUILD_JOBS=2 cargo test --release -p kalcode-kalvoice --lib
 //! understanding_bench -- --nocapture --test-threads=1`
 //! Results: `<target>/kalvoice-understanding-results.json`.
@@ -298,6 +303,75 @@ fn run_pipeline(text: &str, world: &World, proposed: bool) -> Stage {
             _ => stage,
         },
         _ => stage,
+    }
+}
+
+/// PRODUCT (0.1.5 as shipped): the grammar already includes the second chance (P2), so no
+/// harness rewrite runs; thread targets use the strict resolution the session resolver enforces
+/// (P3); session commands are scored by what the desktop executor does with them in this
+/// fixture world, where no thread is focused and no thread carries a state.
+fn run_product(text: &str, world: &World) -> Stage {
+    match run_once(text, world, true) {
+        Stage::Fast { intent, target } => session_effect(intent, target, world),
+        other => other,
+    }
+}
+
+fn session_effect(intent: Value, target: Target, world: &World) -> Stage {
+    match intent["kind"].as_str() {
+        // Nothing is focused in the fixture: "Click a thread first".
+        Some("submit_focused" | "clear_focused") => Stage::Rejected {
+            code: "thread_not_focused",
+        },
+        Some("direct_prompt") => {
+            let name = intent["target"].as_str().unwrap_or_default().to_owned();
+            match world.resolve_thread_strict(&name) {
+                Resolved::Id(id) => Stage::Fast {
+                    intent,
+                    target: Target::Thread(name, Resolved::Id(id)),
+                },
+                Resolved::Ambiguous => Stage::Rejected {
+                    code: "target_ambiguous",
+                },
+                Resolved::NotFound => Stage::Rejected {
+                    code: "thread_not_found",
+                },
+            }
+        }
+        // No fixture thread is failed, stuck or waiting: "No thread has failed."
+        Some("focus_by_state") => Stage::Rejected {
+            code: "session_not_found",
+        },
+        // The readback's visible part: the approvals panel or the Dashboard filter.
+        Some("which_sessions") => Stage::Fast {
+            intent: match intent["state"].as_str() {
+                Some("waiting_for_permission") => json!({ "kind": "show_approvals" }),
+                Some("stuck") => intent,
+                _ => json!({ "kind": "filter_dashboard", "chip": "waiting_for_you" }),
+            },
+            target: Target::None,
+        },
+        // "Focus on that" / "open it" with nothing focused and nothing remembered.
+        Some("focus" | "open_thread")
+            if matches!(
+                intent["query"].as_str(),
+                Some("it" | "this" | "that" | "this one" | "that one" | "there")
+            ) =>
+        {
+            Stage::Rejected {
+                code: "target_unclear",
+            }
+        }
+        // Destructive commands never act on a partial name (session resolver, P3).
+        Some("pause_threads" | "resume_threads" | "stop_threads")
+            if matches!(&target, Target::Thread(name, Resolved::Id(_))
+                if !world.threads.iter().any(|t| t.name.eq_ignore_ascii_case(name.trim_start_matches("my ")))) =>
+        {
+            Stage::Rejected {
+                code: "target_unconfirmed",
+            }
+        }
+        _ => Stage::Fast { intent, target },
     }
 }
 
@@ -1059,6 +1133,10 @@ fn is_reasoning(understood: &Understood) -> bool {
 }
 
 fn score_corpus(cases: &[Value], world: &World, proposed: bool) -> Scored {
+    score_corpus_mode(cases, world, proposed, false)
+}
+
+fn score_corpus_mode(cases: &[Value], world: &World, proposed: bool, product: bool) -> Scored {
     let mut by_cat: BTreeMap<String, BTreeMap<&'static str, usize>> = BTreeMap::new();
     let mut totals: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut details = Vec::new();
@@ -1069,7 +1147,11 @@ fn score_corpus(cases: &[Value], world: &World, proposed: bool) -> Scored {
         let cat = case["cat"].as_str().unwrap().to_owned();
         let text = case["text"].as_str().unwrap();
         let expect = case["expect"].as_array().unwrap();
-        let stage = run_pipeline(text, world, proposed);
+        let stage = if product {
+            run_product(text, world)
+        } else {
+            run_pipeline(text, world, proposed)
+        };
         let verdict = score(expect, &stage, world);
 
         // Routing when a terminal/provider pane has focus: production dictates (and, for a
@@ -1084,17 +1166,22 @@ fn score_corpus(cases: &[Value], world: &World, proposed: bool) -> Scored {
         } else {
             baseline_command
         };
-        let dictated = !command_now;
+        // The product routes command-shaped fall-throughs away from a terminal itself (P1).
+        let dictated = if product {
+            talk_route(text, TalkTarget::Terminal) == TalkRoute::Dictation
+        } else {
+            !command_now
+        };
         let wants_intent = expect.iter().any(Value::is_object);
         if wants_intent {
             intended += 1;
             if dictated {
                 dict_terminal += 1;
-                if !command_shaped(text) {
+                if product || !command_shaped(text) {
                     after_guard += 1;
                 }
             }
-        } else if dictated && command_shaped(text) {
+        } else if !product && dictated && command_shaped(text) {
             guard_held_nonintent += 1;
         }
         let counts = by_cat.entry(cat.clone()).or_default();
@@ -1161,6 +1248,8 @@ fn understanding_bench() {
     let proposed = score_corpus(cases, &world, true);
     let holdout_baseline = score_corpus(holdout_cases, &world, false);
     let holdout_proposed = score_corpus(holdout_cases, &world, true);
+    let product = score_corpus_mode(cases, &world, false, true);
+    let holdout_product = score_corpus_mode(holdout_cases, &world, false, true);
 
     // Timing: the deterministic work production does per utterance.
     let mut understand_ms = Vec::new();
@@ -1230,11 +1319,15 @@ fn understanding_bench() {
         "proposed": { "summary": proposed.summary, "totals": proposed.totals, "routing": proposed.routing },
         "holdout_baseline": { "summary": holdout_baseline.summary, "totals": holdout_baseline.totals, "routing": holdout_baseline.routing },
         "holdout_proposed": { "summary": holdout_proposed.summary, "totals": holdout_proposed.totals, "routing": holdout_proposed.routing },
+        "product": { "summary": product.summary, "totals": product.totals, "routing": product.routing },
+        "holdout_product": { "summary": holdout_product.summary, "totals": holdout_product.totals, "routing": holdout_product.routing },
         "thread_target_picked_one_of_several": thread_picks,
         "cases_baseline": baseline.details,
         "cases_proposed": proposed.details,
         "cases_holdout_baseline": holdout_baseline.details,
         "cases_holdout_proposed": holdout_proposed.details,
+        "cases_product": product.details,
+        "cases_holdout_product": holdout_product.details,
     });
     let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/kalvoice-understanding-results.json");
@@ -1251,6 +1344,8 @@ fn understanding_bench() {
         "proposed",
         "holdout_baseline",
         "holdout_proposed",
+        "product",
+        "holdout_product",
     ] {
         println!("== {key}");
         println!(

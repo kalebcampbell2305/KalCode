@@ -454,3 +454,62 @@ fn resolving_across_a_large_listing_stays_well_under_50ms() {
         "three resolves over 1000 threads took {elapsed:?} (budget 50 ms each)"
     );
 }
+
+/// Latency report for voice targets (run with `--ignored --nocapture`): p50/p95 of one resolve
+/// over a realistic open-thread listing (60 threads) across every tier.
+#[test]
+#[ignore = "latency report, not a gate"]
+fn resolver_latency_report() {
+    let providers = [
+        (ProviderId::CLAUDE_CODE, "Claude Code"),
+        (ProviderId::CODEX, "Codex"),
+        (ProviderId::GEMINI_CLI, "Gemini CLI"),
+    ];
+    let threads: Vec<ThreadSummary> = (0..60)
+        .map(|i| {
+            let (provider, provider_name) = providers[i % 3];
+            let mut t = summary(
+                "00",
+                &format!("Feature {i} refactor"),
+                (provider, provider_name),
+                Some(if i % 2 == 0 { "Personal" } else { "Work" }),
+                ws1(),
+                ThreadStatus::Idle,
+                false,
+            );
+            t.id = format!("0192f3c4-0000-7000-8000-{i:012}");
+            t
+        })
+        .collect();
+    let ctx = ResolveContext {
+        workspace_id: Some(ws1().0),
+        focused_thread_id: Some("0192f3c4-0000-7000-8000-000000000007"),
+        last_target_id: None,
+    };
+    let queries = [
+        "Feature 42 refactor",
+        "codex work feature 7 refactor",
+        "it",
+        "gemini personal",
+        "feature 4",
+        "featur 42 refactr",
+        "nothing like it",
+    ];
+    let mut samples = Vec::new();
+    for _ in 0..200 {
+        for query in queries {
+            let started = Instant::now();
+            std::hint::black_box(resolve(&threads, query, &ctx));
+            samples.push(started.elapsed().as_secs_f64() * 1000.0);
+        }
+    }
+    samples.sort_by(f64::total_cmp);
+    let at = |q: f64| samples[((samples.len() - 1) as f64 * q).round() as usize];
+    println!(
+        "session_resolver::resolve over 60 threads: p50 {:.3} ms, p95 {:.3} ms, max {:.3} ms (n={})",
+        at(0.5),
+        at(0.95),
+        at(1.0),
+        samples.len()
+    );
+}

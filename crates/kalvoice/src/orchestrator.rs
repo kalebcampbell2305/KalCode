@@ -39,7 +39,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use ts_rs::TS;
 
-use crate::grammar::{self, Confidence, NamedTarget, Understood};
+use crate::grammar::{self, Confidence, NamedTarget, Parsed, Understood};
 use crate::ledger::{self, Consumption, ExecutionResult, RequestExecution};
 use crate::local_reasoning::{
     LOCAL_REASONING_FAILED_MESSAGE, LOCAL_REASONING_INVALID_OUTPUT_MESSAGE,
@@ -119,14 +119,31 @@ pub struct TalkResponse {
 /// Decides what an utterance was meant as (docs/KALVOICE.md, "One gesture"):
 /// a command when the grammar recognizes it with high confidence (or at all, when nothing that
 /// takes text had focus); otherwise text for the focused input; otherwise a request.
+///
+/// 0.1.5: an utterance that addresses KalVoice ("Hey Kal, …") is never dictated, and words that
+/// look like a KalCode command are never typed into a focused terminal or provider pane (where a
+/// provider pane would submit them to the agent): they become a request instead (P1).
 pub fn talk_route(text: &str, target: TalkTarget) -> TalkRoute {
-    let (understood, confidence) = grammar::understand_with_confidence(text);
-    let command_like = match &understood {
+    route_parsed(&grammar::understand_talk(text), text, target)
+}
+
+fn route_parsed(parsed: &Parsed, text: &str, target: TalkTarget) -> TalkRoute {
+    let command_like = match &parsed.understood {
         Understood::Intent { intent, .. } => !intent.needs_reasoning(),
         Understood::Rejected { code, .. } => *code != "empty_request",
     };
-    match (command_like, confidence, target) {
+    if parsed.addressed {
+        return if command_like {
+            TalkRoute::Command
+        } else {
+            TalkRoute::Request
+        };
+    }
+    match (command_like, parsed.confidence, target) {
         (true, Confidence::High, _) | (true, _, TalkTarget::None) => TalkRoute::Command,
+        (_, _, TalkTarget::Terminal) if crate::normalize::command_shaped(text) => {
+            TalkRoute::Request
+        }
         (_, _, TalkTarget::Field | TalkTarget::Terminal) => TalkRoute::Dictation,
         _ => TalkRoute::Request,
     }
@@ -249,6 +266,28 @@ pub enum UiDirective {
         choices: Vec<kalcode_contracts::sessions::SessionCandidate>,
         follow_up: kalcode_contracts::sessions::SessionFollowUp,
     },
+    /// Opens KalCode's New thread form with this provider (and account, and workspace) chosen.
+    /// Nothing starts: the person starts the thread from the form. Voice uses this where
+    /// provider panes are unavailable, so it never creates a session by itself.
+    OpenNewThread {
+        provider_id: ProviderId,
+        provider_account_id: Option<String>,
+        workspace_id: Option<String>,
+    },
+}
+
+impl UiDirective {
+    /// The thread this directive acts on, if it names exactly one.
+    pub fn thread_id(&self) -> Option<&str> {
+        match self {
+            Self::OpenThread { thread_id }
+            | Self::ConfirmThreadRebind { thread_id, .. }
+            | Self::SubmitComposer { thread_id }
+            | Self::ClearComposer { thread_id }
+            | Self::ComposeInThread { thread_id, .. } => Some(thread_id),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -270,6 +309,9 @@ pub struct KalVoiceResponse {
 pub struct ExecError {
     pub code: String,
     pub message: String,
+    /// What the UI shows with the refusal, such as the choices of a "Which one?" clarification.
+    /// Nothing has happened when a request fails. Boxed: most errors carry none.
+    pub directive: Option<Box<UiDirective>>,
 }
 
 impl ExecError {
@@ -277,7 +319,14 @@ impl ExecError {
         Self {
             code: code.into(),
             message: message.into(),
+            directive: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_directive(mut self, directive: UiDirective) -> Self {
+        self.directive = Some(Box::new(directive));
+        self
     }
 }
 
@@ -295,6 +344,9 @@ pub struct ExecContext {
     pub thread_id: Option<String>,
     /// Providers a pane layout command named ("split Claude and Codex side by side"), in order.
     pub providers: Vec<ProviderId>,
+    /// The session a recent command resolved to ("tell it to continue"): bounded follow-up
+    /// memory, at most two minutes and three commands old, and only in the same workspace.
+    pub last_target_id: Option<String>,
 }
 
 /// The runtime APIs KalVoice drives — the same ones the UI uses. The desktop implements this.
@@ -311,6 +363,30 @@ pub trait Executor: Send + Sync {
     /// Whether this build can run `intent` at all. Checked before asking for permission or
     /// counting the request.
     fn check(&self, intent: &KalVoiceIntent) -> std::result::Result<(), ExecError>;
+    /// As [`Self::check`], with what the person is looking at: resolves the sessions an intent
+    /// names so an ambiguous or refused target is answered before anything is counted.
+    fn check_with_context(
+        &self,
+        intent: &KalVoiceIntent,
+        _ctx: &ExecContext,
+    ) -> std::result::Result<(), ExecError> {
+        self.check(intent)
+    }
+    /// Resolves the thread a grammar command named ("pause the login thread"). `intent` tells
+    /// how strict to be: a destructive command never acts on a partial or ambiguous name.
+    fn resolve_thread_target(
+        &self,
+        name: &str,
+        _intent: &KalVoiceIntent,
+        _ctx: &ExecContext,
+    ) -> std::result::Result<Option<String>, ExecError> {
+        self.find_thread(name)
+    }
+    /// Whether `query` names exactly one open session (so "tell <query> …" is meant for
+    /// KalVoice even while a text box has focus).
+    fn names_one_session(&self, _query: &str, _ctx: &ExecContext) -> bool {
+        false
+    }
     fn execute(
         &self,
         intent: &KalVoiceIntent,
@@ -400,8 +476,31 @@ pub struct Orchestrator {
     active_claims: Arc<Mutex<HashSet<String>>>,
     local_interpretation_active: Arc<AtomicBool>,
     local_interpretation_state: Mutex<LocalInterpretationState>,
+    follow_up: Mutex<Option<FollowUp>>,
     #[cfg(test)]
     local_interpretation_timeout_observer: Mutex<Option<LocalInterpretationTimeoutObserver>>,
+}
+
+/// How long "it" keeps meaning the last resolved session.
+const FOLLOW_UP_TTL: time::Duration = time::Duration::minutes(2);
+/// How many later commands "it" survives.
+const FOLLOW_UP_COMMANDS: u8 = 3;
+
+/// The session the last command resolved to, for "tell it to continue" (memory only; ids only).
+#[derive(Debug, Clone)]
+struct FollowUp {
+    thread_id: String,
+    workspace_id: Option<String>,
+    set_at: OffsetDateTime,
+    commands: u8,
+}
+
+impl FollowUp {
+    fn fresh(&self, now: OffsetDateTime, workspace_id: Option<&str>) -> bool {
+        now - self.set_at <= FOLLOW_UP_TTL
+            && self.commands < FOLLOW_UP_COMMANDS
+            && self.workspace_id.as_deref() == workspace_id
+    }
 }
 
 impl Orchestrator {
@@ -422,6 +521,7 @@ impl Orchestrator {
             active_claims: Arc::new(Mutex::new(HashSet::new())),
             local_interpretation_active: Arc::new(AtomicBool::new(false)),
             local_interpretation_state: Mutex::new(LocalInterpretationState::default()),
+            follow_up: Mutex::new(None),
             #[cfg(test)]
             local_interpretation_timeout_observer: Mutex::new(None),
         }
@@ -444,6 +544,7 @@ impl Orchestrator {
             active_claims: Arc::new(Mutex::new(HashSet::new())),
             local_interpretation_active: Arc::new(AtomicBool::new(false)),
             local_interpretation_state: Mutex::new(LocalInterpretationState::default()),
+            follow_up: Mutex::new(None),
             #[cfg(test)]
             local_interpretation_timeout_observer: Mutex::new(None),
         }
@@ -728,13 +829,21 @@ impl Orchestrator {
             intent: None,
             counted: false,
             on_stage,
+            last_target_id: None,
         };
         if let Some((intent, replay)) = replay {
             run.intent = Some(intent);
             return Ok(run.replay(replay));
         }
+        let understood = grammar::understand(&req.text);
+        // "Send that" and "clear that" are free (the voice form of pressing Send or clearing a
+        // text box), so they work even when the allowance is used up.
+        let free = matches!(
+            &understood,
+            Understood::Intent { intent, .. } if !intent.counts_against_allowance()
+        );
         // The allowance is checked before any work.
-        if run.usage.exhausted() {
+        if run.usage.exhausted() && !free {
             self.emit(vec![run.limit_event()]);
             return Ok(run.respond(KalVoiceOutcome::LimitReached {
                 resets_at: run.usage.resets_at.clone(),
@@ -745,8 +854,9 @@ impl Orchestrator {
             input: req.input,
         })]);
         on_stage(RequestStage::Thinking);
+        run.last_target_id = self.follow_up_target(req.workspace_id.as_deref());
 
-        match grammar::understand(&req.text) {
+        match understood {
             Understood::Rejected { code, message } => Ok(run.fail(code, message)),
             Understood::Intent {
                 intent: KalVoiceIntent::Reasoning { request },
@@ -769,10 +879,12 @@ impl Orchestrator {
                     None => (intent, Vec::new()),
                     // Named providers aren't looked up; the layout command carries them.
                     Some(NamedTarget::Providers(providers)) => (intent, providers),
-                    Some(target) => match self.resolve(&target) {
-                        Ok(id) => (grammar::bind_target(intent, id), Vec::new()),
-                        Err(e) => return Ok(run.fail(&e.code, e.message)),
-                    },
+                    Some(target) => {
+                        match self.resolve(&target, &intent, &run.context(Vec::new())) {
+                            Ok(id) => (grammar::bind_target(intent, id), Vec::new()),
+                            Err(e) => return Ok(run.fail_with(e)),
+                        }
+                    }
                 };
                 run.command(intent, providers)
             }
@@ -798,7 +910,12 @@ impl Orchestrator {
         }
     }
 
-    fn resolve(&self, target: &NamedTarget) -> std::result::Result<String, ExecError> {
+    fn resolve(
+        &self,
+        target: &NamedTarget,
+        intent: &KalVoiceIntent,
+        ctx: &ExecContext,
+    ) -> std::result::Result<String, ExecError> {
         let lookup =
             |name: &str, find: &dyn Fn(&str) -> std::result::Result<Option<String>, ExecError>| {
                 // Forgiving about a leading "my" ("in my website workspace").
@@ -818,13 +935,15 @@ impl Orchestrator {
                         format!("KalCode has no workspace named \u{201c}{name}\u{201d}."),
                     )
                 }),
-            NamedTarget::Thread(name) => lookup(name, &|n| self.executor.find_thread(n))?
-                .ok_or_else(|| {
-                    ExecError::new(
-                        "thread_not_found",
-                        format!("KalCode has no thread named \u{201c}{name}\u{201d}."),
-                    )
-                }),
+            NamedTarget::Thread(name) => lookup(name, &|n| {
+                self.executor.resolve_thread_target(n, intent, ctx)
+            })?
+            .ok_or_else(|| {
+                ExecError::new(
+                    "thread_not_found",
+                    format!("KalCode has no thread named \u{201c}{name}\u{201d}."),
+                )
+            }),
             NamedTarget::Providers(_) => Err(ExecError::new(
                 "not_a_target",
                 "KalVoice couldn't tell what that refers to.",
@@ -832,11 +951,96 @@ impl Orchestrator {
         }
     }
 
+    /// The session "it" means for this request while the memory is fresh: set by the last
+    /// command that acted on one session, it lasts two minutes and three commands, and another
+    /// workspace clears it. Each consultation counts as one command.
+    fn follow_up_target(&self, workspace_id: Option<&str>) -> Option<String> {
+        let now = (self.clock)();
+        let mut slot = self
+            .follow_up
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if !slot.as_ref().is_some_and(|f| f.fresh(now, workspace_id)) {
+            *slot = None;
+            return None;
+        }
+        let follow_up = slot.as_mut()?;
+        follow_up.commands += 1;
+        Some(follow_up.thread_id.clone())
+    }
+
+    /// As [`Self::follow_up_target`] without counting a command (routing only).
+    fn peek_follow_up(&self, workspace_id: Option<&str>) -> Option<String> {
+        let now = (self.clock)();
+        self.follow_up
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .filter(|f| f.fresh(now, workspace_id))
+            .map(|f| f.thread_id.clone())
+    }
+
+    /// Remembers the one session a command acted on; opening a workspace forgets it.
+    fn remember(&self, intent: &KalVoiceIntent, done: &Executed, workspace_id: Option<&str>) {
+        let thread = done
+            .directive
+            .as_ref()
+            .and_then(UiDirective::thread_id)
+            .map(str::to_owned)
+            .or_else(|| match intent {
+                KalVoiceIntent::PauseThreads {
+                    scope: ThreadScope::Thread { thread_id },
+                }
+                | KalVoiceIntent::ResumeThreads {
+                    scope: ThreadScope::Thread { thread_id },
+                }
+                | KalVoiceIntent::StopThreads {
+                    scope: ThreadScope::Thread { thread_id },
+                } => Some(thread_id.clone()),
+                _ => None,
+            });
+        let mut slot = self
+            .follow_up
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(thread_id) = thread {
+            *slot = Some(FollowUp {
+                thread_id,
+                workspace_id: workspace_id.map(str::to_owned),
+                set_at: (self.clock)(),
+                commands: 0,
+            });
+        } else if matches!(done.directive, Some(UiDirective::OpenWorkspace { .. })) {
+            *slot = None;
+        }
+    }
+
     /// Handles one push-to-talk utterance: routes it, then runs the command or request, or
     /// records the dictation (never counted). Blocking; call from a background thread.
     pub fn talk(&self, req: TalkRequest, on_stage: &dyn Fn(RequestStage)) -> Result<TalkResponse> {
         let started = Instant::now();
-        let route = talk_route(&req.text, req.target);
+        let parsed = grammar::understand_talk(&req.text);
+        let mut route = route_parsed(&parsed, &req.text, req.target);
+        // "Tell <session> …" while a text box has focus is for KalVoice only when it names
+        // exactly one open session; otherwise the words are dictated as said.
+        if route == TalkRoute::Dictation
+            && let Understood::Intent {
+                intent: KalVoiceIntent::DirectPrompt { target, .. },
+                ..
+            } = &parsed.understood
+        {
+            let valid = |id: &Option<String>| id.clone().filter(|id| is_valid_id(id));
+            let ctx = ExecContext {
+                request_id: req.request_id.clone(),
+                workspace_id: valid(&req.workspace_id),
+                thread_id: valid(&req.thread_id),
+                providers: Vec::new(),
+                last_target_id: self.peek_follow_up(req.workspace_id.as_deref()),
+            };
+            if self.executor.names_one_session(target, &ctx) {
+                route = TalkRoute::Command;
+            }
+        }
         let recognized_ms = started.elapsed().as_secs_f64() * 1000.0;
         if is_valid_id(&req.request_id) {
             // The route only (never the words).
@@ -1194,9 +1398,27 @@ struct Run<'a> {
     intent: Option<String>,
     counted: bool,
     on_stage: &'a dyn Fn(RequestStage),
+    last_target_id: Option<String>,
 }
 
 impl Run<'_> {
+    fn context(&self, providers: Vec<ProviderId>) -> ExecContext {
+        ExecContext {
+            request_id: self.req.request_id.clone(),
+            workspace_id: self.req.workspace_id.clone(),
+            thread_id: self.req.thread_id.clone(),
+            providers,
+            last_target_id: self.last_target_id.clone(),
+        }
+    }
+
+    /// A refusal, with what the UI shows alongside it (a clarification's choices).
+    fn fail_with(&mut self, error: ExecError) -> KalVoiceResponse {
+        let mut response = self.fail(&error.code, error.message);
+        response.directive = error.directive.map(|directive| *directive);
+        response
+    }
+
     fn correlation(&self) -> Correlation {
         Correlation {
             request_id: Some(self.req.request_id.clone()),
@@ -1346,15 +1568,13 @@ impl Run<'_> {
         intent: KalVoiceIntent,
         providers: Vec<ProviderId>,
     ) -> Result<KalVoiceResponse> {
-        if let Err(e) = self.o.executor.check(&intent) {
-            return Ok(self.fail(&e.code, e.message));
+        let ctx = self.context(providers);
+        if let Err(e) = self.o.executor.check_with_context(&intent, &ctx) {
+            return Ok(self.fail_with(e));
         }
-        let ctx = ExecContext {
-            request_id: self.req.request_id.clone(),
-            workspace_id: self.req.workspace_id.clone(),
-            thread_id: self.req.thread_id.clone(),
-            providers,
-        };
+        if !intent.counts_against_allowance() {
+            return Ok(self.execute_free(&intent, &ctx));
+        }
         // Claim immediately before execution. The claim and allowance check are atomic, so a
         // concurrent retry can observe but can never repeat the effect.
         match self.claim()? {
@@ -1363,6 +1583,34 @@ impl Run<'_> {
             })),
             ClaimDecision::Replay(replay) => Ok(self.replay(replay)),
             ClaimDecision::Execute(claim) => self.execute(&intent, &ctx, claim),
+        }
+    }
+
+    /// Runs an intent that never counts against the allowance ("send that", "clear that"). It
+    /// takes no usage claim: its only effect is the composer's own Send or clear, run by the UI.
+    fn execute_free(&mut self, intent: &KalVoiceIntent, ctx: &ExecContext) -> KalVoiceResponse {
+        (self.on_stage)(RequestStage::Executing);
+        match self.o.executor.execute(intent, ctx) {
+            Ok(done) => {
+                self.o
+                    .remember(intent, &done, self.req.workspace_id.as_deref());
+                self.o.emit(vec![
+                    self.event(EventPayload::KalVoiceCommandExecuted {
+                        request_id: self.req.request_id.clone(),
+                        intent: intent.kind_name().to_owned(),
+                    }),
+                    self.event(EventPayload::KalVoiceRequestCompleted {
+                        request_id: self.req.request_id.clone(),
+                    }),
+                ]);
+                self.respond_with(
+                    KalVoiceOutcome::Completed {
+                        summary: done.summary,
+                    },
+                    done.directive,
+                )
+            }
+            Err(e) => self.fail_with(e),
         }
     }
 
@@ -1403,6 +1651,8 @@ impl Run<'_> {
         (self.on_stage)(RequestStage::Executing);
         match self.o.executor.execute(intent, ctx) {
             Ok(done) => {
+                self.o
+                    .remember(intent, &done, self.req.workspace_id.as_deref());
                 claim.finish(
                     self.o,
                     ExecutionResult::Completed,
@@ -1432,10 +1682,13 @@ impl Run<'_> {
                         code: e.code.clone(),
                     })],
                 )?;
-                Ok(self.respond(KalVoiceOutcome::Failed {
-                    code: e.code,
-                    message: e.message,
-                }))
+                Ok(self.respond_with(
+                    KalVoiceOutcome::Failed {
+                        code: e.code,
+                        message: e.message,
+                    },
+                    e.directive.map(|directive| *directive),
+                ))
             }
         }
     }

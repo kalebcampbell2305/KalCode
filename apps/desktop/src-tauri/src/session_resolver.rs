@@ -55,6 +55,11 @@ const PRONOUNS: &[&str] = &[
     "the current session",
 ];
 
+/// Whether `query` only points at a session ("it", "that one") rather than naming one.
+pub fn is_pronoun(query: &str) -> bool {
+    PRONOUNS.contains(&normalize(query).as_str())
+}
+
 /// Leading words dropped from a query ("the Authentication thread").
 const LEADING_FILLER: &[&str] = &["the", "my", "our"];
 /// Trailing words dropped from a query ("the Authentication thread").

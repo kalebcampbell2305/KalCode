@@ -533,8 +533,6 @@ fn workspaces_terminals_and_threads_by_name() {
 fn approvals_and_status() {
     for text in [
         "show approvals",
-        "what needs permission",
-        "What needs permission?",
         "what needs my approval",
         "what is waiting for approval",
         "are there any pending approvals",
@@ -1274,5 +1272,541 @@ fn account_commands_never_run_negated_or_compound() {
         "open a new Codex thread with my work account and delete files",
     ] {
         assert!(is_reasoning(text), "{text}: {:?}", understand(text));
+    }
+}
+
+// ---- 0.1.5 terminal-aware KalVoice ----
+
+use kalcode_contracts::sessions::SessionAttention;
+
+fn talk(text: &str) -> Parsed {
+    understand_talk(text)
+}
+
+fn direct(target: &str, prompt: &str) -> KalVoiceIntent {
+    KalVoiceIntent::DirectPrompt {
+        target: target.into(),
+        prompt: prompt.into(),
+    }
+}
+
+#[test]
+fn send_that_and_clear_that_name_the_focused_composer() {
+    for text in [
+        "send that",
+        "Send it.",
+        "send it now",
+        "please send this",
+        "submit this",
+        "Submit that!",
+        "okay send that",
+        "send the message",
+        "hit send",
+    ] {
+        let (understood, confidence) = understand_with_confidence(text);
+        assert_eq!(
+            understood,
+            Understood::intent(KalVoiceIntent::SubmitFocused),
+            "{text}"
+        );
+        assert_eq!(confidence, Confidence::High, "{text}");
+    }
+    for text in [
+        "clear that",
+        "never mind",
+        "Never mind.",
+        "nevermind",
+        "don't send that",
+        "Don\u{2019}t send it",
+        "do not send that",
+        "cancel that",
+        "scratch that",
+    ] {
+        let (understood, confidence) = understand_with_confidence(text);
+        assert_eq!(
+            understood,
+            Understood::intent(KalVoiceIntent::ClearFocused),
+            "{text}"
+        );
+        assert_eq!(confidence, Confidence::High, "{text}");
+    }
+    // Longer sentences that merely contain the words are not commands.
+    for text in [
+        "send that to the team tomorrow",
+        "never mind the tests for now",
+        "don't send that email yet",
+        "clear that cache before the build",
+        "send",
+    ] {
+        assert!(
+            !matches!(
+                understand(text),
+                Understood::Intent {
+                    intent: KalVoiceIntent::SubmitFocused | KalVoiceIntent::ClearFocused,
+                    ..
+                }
+            ),
+            "{text}: {:?}",
+            understand(text)
+        );
+    }
+    // "Cancel that" is not "cancel the X thread" (stop) and vice versa.
+    assert!(matches!(
+        intent("cancel the login thread"),
+        KalVoiceIntent::StopThreads { .. }
+    ));
+}
+
+#[test]
+fn direct_prompts_keep_the_spoken_words_exactly() {
+    for (text, expected) in [
+        (
+            "tell Authentication to review the latest login failure",
+            direct("Authentication", "review the latest login failure"),
+        ),
+        // Parsed before the negation and compound guards: the prompt is the person's words.
+        (
+            "tell Auth to not delete the tests",
+            direct("Auth", "not delete the tests"),
+        ),
+        (
+            "Tell Release Mac to bump the version, and don't touch CI.",
+            direct("Release Mac", "bump the version, and don't touch CI."),
+        ),
+        (
+            "ask Gemini B Research to summarize the design doc",
+            direct("Gemini B Research", "summarize the design doc"),
+        ),
+        (
+            "Ask Codex why the build failed?",
+            direct("Codex", "why the build failed?"),
+        ),
+        ("ask it what's left", direct("it", "what's left")),
+        ("tell it to continue", direct("it", "continue")),
+        (
+            "tell that thread to continue",
+            direct("that thread", "continue"),
+        ),
+        (
+            "Tell Codex, run the tests",
+            direct("Codex", "run the tests"),
+        ),
+        (
+            "tell Auth that the API key is rotated",
+            direct("Auth", "the API key is rotated"),
+        ),
+        (
+            "please tell the Backend thread to use Postgres 16",
+            direct("the Backend thread", "use Postgres 16"),
+        ),
+        (
+            "can you ask Claude to explain the diff",
+            direct("Claude", "explain the diff"),
+        ),
+    ] {
+        assert_eq!(understand(text), Understood::intent(expected), "{text}");
+    }
+    // Low confidence: with a text box focused, an unaddressed "tell …" stays dictation unless
+    // the desktop resolves its target to exactly one session.
+    assert_eq!(
+        understand_with_confidence("tell Auth to run the tests").1,
+        Confidence::Low
+    );
+    // "Tell me …", "ask about …" and a target without a prompt boundary are not direct prompts.
+    assert_eq!(
+        intent("tell me what my threads are doing"),
+        KalVoiceIntent::StatusReport
+    );
+    for text in [
+        "tell me a joke",
+        "ask about the release",
+        "ask for help",
+        "tell everyone the build is green",
+        "ask Claude Code review everything carefully in the repo now",
+    ] {
+        assert!(
+            !matches!(intent(text), KalVoiceIntent::DirectPrompt { .. }),
+            "{text}: {:?}",
+            understand(text)
+        );
+    }
+    assert_eq!(rejected("tell Auth to"), "prompt_missing");
+}
+
+#[test]
+fn addressing_kalvoice_is_stripped_and_reported() {
+    for text in [
+        "Hey Kal, open settings",
+        "hey kal open settings",
+        "Kal, open settings.",
+        "hey KalCode, open settings",
+        "Hey Kal Code open settings",
+        "hey kalvoice open settings",
+    ] {
+        let parsed = talk(text);
+        assert!(parsed.addressed, "{text}");
+        assert_eq!(
+            parsed.understood,
+            Understood::intent(KalVoiceIntent::Navigate {
+                surface: SurfaceId::Settings
+            }),
+            "{text}"
+        );
+    }
+    let addressed = talk("Hey Kal, tell Auth to rerun the tests");
+    assert!(addressed.addressed);
+    assert_eq!(
+        addressed.understood,
+        Understood::intent(direct("Auth", "rerun the tests"))
+    );
+    // Not addressed: "hey" alone, or the name in the middle of a sentence.
+    for text in [
+        "hey open settings",
+        "open settings",
+        "ask Kal about it",
+        "Calendar sync",
+    ] {
+        assert!(!talk(text).addressed, "{text}");
+    }
+    assert_eq!(rejected("Hey Kal"), "empty_request");
+    // A reasoning request loses the address, keeps the rest.
+    assert_eq!(
+        intent("Hey Kal, plan the Postgres migration"),
+        KalVoiceIntent::Reasoning {
+            request: "plan the Postgres migration".into()
+        }
+    );
+}
+
+#[test]
+fn go_to_kalvoice_is_not_stripped_as_a_wake_word() {
+    for text in [
+        "Go to KalVoice",
+        "open kalvoice",
+        "show kalvoice",
+        "take me to KalVoice",
+    ] {
+        assert_eq!(
+            intent(text),
+            KalVoiceIntent::Navigate {
+                surface: SurfaceId::KalVoice
+            },
+            "{text}"
+        );
+    }
+    // Still filler after a complete command.
+    assert_eq!(
+        intent("open settings kalvoice"),
+        KalVoiceIntent::Navigate {
+            surface: SurfaceId::Settings
+        }
+    );
+}
+
+#[test]
+fn go_back_is_the_previous_session_and_a_page_is_in_the_browser() {
+    for text in [
+        "go back",
+        "Go back.",
+        "go back to the thread I was just using",
+        "go back to the terminal I was using",
+        "go back to the previous thread",
+        "switch back to the last terminal",
+        "back to the session I was working in",
+        "previous thread",
+    ] {
+        assert_eq!(intent(text), KalVoiceIntent::FocusPrevious, "{text}");
+    }
+    for text in ["go back in the browser", "back", "go back a page"] {
+        assert!(
+            matches!(
+                intent(text),
+                KalVoiceIntent::ControlBrowser {
+                    command: BrowserControl::Back { .. },
+                    ..
+                }
+            ),
+            "{text}: {:?}",
+            understand(text)
+        );
+    }
+    assert_eq!(
+        intent("go back to settings"),
+        KalVoiceIntent::Navigate {
+            surface: SurfaceId::Settings
+        }
+    );
+}
+
+#[test]
+fn sessions_can_be_found_by_state() {
+    let by_state = |state| KalVoiceIntent::FocusByState { state };
+    for (text, state) in [
+        ("open the one that failed", SessionAttention::Failed),
+        ("show me the failed thread", SessionAttention::Failed),
+        ("focus the agent that is stuck", SessionAttention::Stuck),
+        (
+            "open the terminal waiting for permission",
+            SessionAttention::WaitingForPermission,
+        ),
+        (
+            "take me to the thread that needs permission",
+            SessionAttention::WaitingForPermission,
+        ),
+        (
+            "focus the one waiting for me",
+            SessionAttention::WaitingForYou,
+        ),
+    ] {
+        let (understood, confidence) = understand_with_confidence(text);
+        assert_eq!(understood, Understood::intent(by_state(state)), "{text}");
+        assert_eq!(confidence, Confidence::High, "{text}");
+    }
+    let which = |state| KalVoiceIntent::WhichSessions { state };
+    for (text, state) in [
+        ("which agent is stuck", SessionAttention::Stuck),
+        ("Which one failed?", SessionAttention::Failed),
+        (
+            "what needs permission",
+            SessionAttention::WaitingForPermission,
+        ),
+        (
+            "What needs permission?",
+            SessionAttention::WaitingForPermission,
+        ),
+        (
+            "which provider is waiting on me",
+            SessionAttention::WaitingForYou,
+        ),
+        ("which threads failed", SessionAttention::Failed),
+        ("is anything stuck", SessionAttention::Stuck),
+        (
+            "which agents are waiting for permission",
+            SessionAttention::WaitingForPermission,
+        ),
+    ] {
+        assert_eq!(intent(text), which(state), "{text}");
+    }
+    // The approvals panel and the Dashboard filters keep their phrases.
+    for text in [
+        "what needs my approval",
+        "what's waiting on me",
+        "show approvals",
+    ] {
+        assert_eq!(intent(text), KalVoiceIntent::ShowApprovals, "{text}");
+    }
+    assert!(matches!(
+        intent("show the agents that are waiting for me"),
+        KalVoiceIntent::FilterDashboard { .. }
+    ));
+    // Negated state questions are not commands.
+    assert!(is_reasoning("which one didn't fail"));
+}
+
+#[test]
+fn a_session_can_be_opened_by_its_name() {
+    for (text, expected) in [
+        (
+            "open Authentication",
+            KalVoiceIntent::OpenThread {
+                query: "authentication".into(),
+            },
+        ),
+        (
+            "take me to Release Mac",
+            KalVoiceIntent::OpenThread {
+                query: "release mac".into(),
+            },
+        ),
+        (
+            "go to research",
+            KalVoiceIntent::OpenThread {
+                query: "research".into(),
+            },
+        ),
+        (
+            "focus Auth API",
+            KalVoiceIntent::Focus {
+                query: "auth api".into(),
+            },
+        ),
+        (
+            "show me that one",
+            KalVoiceIntent::OpenThread {
+                query: "that one".into(),
+            },
+        ),
+    ] {
+        let (understood, confidence) = understand_with_confidence(text);
+        assert_eq!(understood, Understood::intent(expected), "{text}");
+        // A bare name is low confidence: in a text box it is still dictation.
+        assert_eq!(confidence, Confidence::Low, "{text}");
+    }
+    // Surfaces, workspaces, the browser and panes keep their meaning.
+    assert_eq!(
+        intent("open settings"),
+        KalVoiceIntent::Navigate {
+            surface: SurfaceId::Settings
+        }
+    );
+    assert!(matches!(
+        intent("take me to the browser"),
+        KalVoiceIntent::ControlBrowser { .. }
+    ));
+    assert!(matches!(
+        intent("open four Codex agents using my personal account"),
+        KalVoiceIntent::CreateProviderPanes { .. }
+    ));
+    for text in [
+        "open the pod bay doors",
+        "open file:///c:/windows/system32",
+        "open four codex threads immediately in parallel with a plan",
+        "go to line five of the main file",
+        "open a new tab",
+        "open the file and explain it",
+    ] {
+        assert!(
+            !matches!(
+                understand(text),
+                Understood::Intent {
+                    intent: KalVoiceIntent::OpenThread { .. } | KalVoiceIntent::Focus { .. },
+                    ..
+                }
+            ),
+            "{text}: {:?}",
+            understand(text)
+        );
+    }
+}
+
+#[test]
+fn mode_and_model_words_are_never_account_labels() {
+    for text in [
+        "switch this thread to plan",
+        "switch this thread to auto",
+        "switch this thread to approve",
+        "switch to gemini pro",
+        "switch to gemini flash",
+        "switch this thread to claude opus",
+        "use gemini pro in this workspace",
+        "open a codex thread with my pro account",
+    ] {
+        assert!(
+            !matches!(
+                understand(text),
+                Understood::Intent {
+                    intent: KalVoiceIntent::RebindThreadAccount { .. }
+                        | KalVoiceIntent::SetWorkspaceAccount { .. }
+                        | KalVoiceIntent::CreateThreads {
+                            account_query: Some(_),
+                            ..
+                        },
+                    ..
+                }
+            ),
+            "{text}: {:?}",
+            understand(text)
+        );
+    }
+    for text in [
+        "switch this thread to bypass",
+        "switch this thread to bypass permissions",
+        "switch the login thread to bypass",
+        "switch to bypass mode",
+    ] {
+        assert_eq!(rejected(text), "bypass_not_allowed", "{text}");
+    }
+    // Real labels still work, and the mode phrases keep their old meaning.
+    assert!(matches!(
+        intent("switch this thread to Gemini B"),
+        KalVoiceIntent::RebindThreadAccount { .. }
+    ));
+    assert!(matches!(
+        intent("switch this thread to plan mode"),
+        KalVoiceIntent::RequestPermissionMode { .. }
+    ));
+}
+
+#[test]
+fn second_chance_understands_paraphrases_and_speech_variants() {
+    for (text, expected) in [
+        (
+            "Can you take me back to settings?",
+            KalVoiceIntent::Navigate {
+                surface: SurfaceId::Settings,
+            },
+        ),
+        (
+            "um, open the dash board",
+            KalVoiceIntent::Navigate {
+                surface: SurfaceId::Dashboard,
+            },
+        ),
+        (
+            "Pause everything that's currently running.",
+            KalVoiceIntent::PauseThreads {
+                scope: ThreadScope::All,
+            },
+        ),
+        (
+            "Show me anything that needs permission.",
+            KalVoiceIntent::ShowApprovals,
+        ),
+        ("so, send that", KalVoiceIntent::SubmitFocused),
+        (
+            "open two cloud code threads",
+            KalVoiceIntent::CreateThreads {
+                provider_id: ProviderId::new(ProviderId::CLAUDE_CODE),
+                count: 2,
+                workspace_id: None,
+                account_query: None,
+            },
+        ),
+    ] {
+        assert_eq!(intent(text), expected, "{text}");
+    }
+    // A statement never becomes a command, and a negation or compound never gets a second
+    // chance.
+    for text in [
+        "The dashboard is waiting for me to fix the chart",
+        "um don't pause everything",
+        "take me to settings and stop all threads",
+    ] {
+        assert!(is_reasoning(text), "{text}: {:?}", understand(text));
+    }
+}
+
+#[test]
+fn pronoun_panes_and_name_particles_do_not_become_names() {
+    assert_eq!(
+        intent("make it bigger"),
+        KalVoiceIntent::Resize {
+            direction: kalcode_contracts::kalvoice::PaneDirection::Right,
+            steps: 2
+        }
+    );
+    assert_eq!(rejected("make that one bigger"), "target_unclear");
+    assert_eq!(
+        intent("open up the kalcode project"),
+        KalVoiceIntent::OpenWorkspace {
+            query: "kalcode".into()
+        }
+    );
+    assert_eq!(
+        intent("open the thread called login refactor"),
+        KalVoiceIntent::OpenThread {
+            query: "login refactor".into()
+        }
+    );
+    // A speech-recognition variant is fixed before a bare name is looked up.
+    assert!(matches!(
+        intent("open local host 3000"),
+        KalVoiceIntent::ControlBrowser { .. }
+    ));
+    for text in ["open four", "show me more"] {
+        assert!(
+            !matches!(intent(text), KalVoiceIntent::OpenThread { .. }),
+            "{text}"
+        );
     }
 }

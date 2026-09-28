@@ -21,6 +21,9 @@ use kalcode_contracts::kalvoice::{
 use kalcode_contracts::workspace_ui::{DashboardChip, SplitAxis};
 use url::Url;
 
+#[path = "grammar_sessions.rs"]
+mod sessions;
+
 /// The most threads one request may open.
 pub const MAX_THREADS_PER_REQUEST: u32 = 16;
 
@@ -79,18 +82,39 @@ pub enum Confidence {
 
 /// Understands one request. Pure and deterministic.
 pub fn understand(text: &str) -> Understood {
-    understand_with_confidence(text).0
+    understand_talk(text).understood
 }
 
 /// As [`understand`], with how confidently the utterance reads as a command. Reasoning and
 /// empty requests are always `Low`.
 pub fn understand_with_confidence(text: &str) -> (Understood, Confidence) {
-    let mut confidence = Confidence::Low;
-    let understood = understand_inner(text, &mut confidence);
-    (understood, confidence)
+    let parsed = understand_talk(text);
+    (parsed.understood, parsed.confidence)
 }
 
-fn understand_inner(text: &str, confidence: &mut Confidence) -> Understood {
+/// What the grammar made of one utterance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Parsed {
+    pub understood: Understood,
+    pub confidence: Confidence,
+    /// The person addressed KalVoice ("Hey Kal, …", "Kal, …"). An addressed utterance is a
+    /// command or a request, never words to type.
+    pub addressed: bool,
+}
+
+/// As [`understand`], also reporting confidence and whether KalVoice was addressed.
+pub fn understand_talk(text: &str) -> Parsed {
+    let (addressed, rest) = sessions::strip_address(text.trim());
+    let mut confidence = Confidence::Low;
+    let understood = understand_inner(rest, &mut confidence, true);
+    Parsed {
+        understood,
+        confidence,
+        addressed,
+    }
+}
+
+fn understand_inner(text: &str, confidence: &mut Confidence, second_chance: bool) -> Understood {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return Understood::Rejected {
@@ -98,13 +122,90 @@ fn understand_inner(text: &str, confidence: &mut Confidence) -> Understood {
             message: "Say or type what you want KalVoice to do.".into(),
         };
     }
+    let tokens = normalize(trimmed);
+    // "Send that", "don't send that", "tell Auth to …", "go back": before the length, negation
+    // and compound checks, because their own words may contain both.
+    if let Some((understood, sure)) = sessions::before_guards(trimmed, &tokens) {
+        *confidence = sure;
+        return understood;
+    }
     if trimmed.chars().count() > MAX_COMMAND_CHARS {
         return Understood::reasoning(trimmed);
     }
-    let tokens = normalize(trimmed);
     if tokens.is_empty() || tokens.len() > MAX_COMMAND_TOKENS {
         return Understood::reasoning(trimmed);
     }
+    let understood = understand_rules(trimmed, &tokens, confidence);
+    if !second_chance || !is_reasoning(&understood) || local_reasoning_must_refuse(trimmed) {
+        return understood;
+    }
+    if let Some(retried) = retry_rewritten(trimmed, &tokens, confidence) {
+        return retried;
+    }
+    // Last: "open Authentication", a session by the person's own words (never a rewrite).
+    // Low confidence: in a focused text box such words stay dictation.
+    sessions::locator(trimmed, strip_filler(&tokens)).unwrap_or(understood)
+}
+
+/// P2: one deterministic second chance for a paraphrase or speech-recognition variant. The
+/// rewrite is parsed by the same grammar; an unanchored rewrite may only yield a read-only
+/// intent and never raises confidence.
+fn retry_rewritten(
+    trimmed: &str,
+    tokens: &[String],
+    confidence: &mut Confidence,
+) -> Option<Understood> {
+    let rewrite = crate::normalize::second_chance(trimmed)?;
+    if normalize(&rewrite.text) == tokens {
+        return None;
+    }
+    let mut second = Confidence::Low;
+    let retried = understand_inner(&rewrite.text, &mut second, false);
+    let usable = match &retried {
+        // A rewrite never carries rewritten words into a prompt: the prompt-carrying intents
+        // come only from the person's original words.
+        Understood::Intent {
+            intent: KalVoiceIntent::DirectPrompt { .. },
+            ..
+        } => false,
+        Understood::Intent { intent, .. } => {
+            !intent.needs_reasoning() && (!rewrite.read_only || is_read_only(intent))
+        }
+        Understood::Rejected { code, .. } => !rewrite.read_only && *code != "empty_request",
+    };
+    if !usable {
+        return None;
+    }
+    if !rewrite.read_only {
+        *confidence = second;
+    }
+    Some(retried)
+}
+
+fn is_reasoning(understood: &Understood) -> bool {
+    matches!(
+        understood,
+        Understood::Intent {
+            intent: KalVoiceIntent::Reasoning { .. },
+            ..
+        }
+    )
+}
+
+/// Intents that only show or read something (safe for an unanchored rewrite).
+fn is_read_only(intent: &KalVoiceIntent) -> bool {
+    matches!(
+        intent,
+        KalVoiceIntent::Navigate { .. }
+            | KalVoiceIntent::ShowApprovals
+            | KalVoiceIntent::StatusReport
+            | KalVoiceIntent::FilterDashboard { .. }
+            | KalVoiceIntent::WhichSessions { .. }
+            | KalVoiceIntent::Search { .. }
+    )
+}
+
+fn understand_rules(trimmed: &str, tokens: &[String], confidence: &mut Confidence) -> Understood {
     // Negations and compound requests are never deterministic commands. The one exception is
     // pane arrangement, whose own words include "and" ("split Claude and Codex side by side",
     // "top and bottom"): only those patterns are tried when a conjunction is present.
@@ -112,13 +213,24 @@ fn understand_inner(text: &str, confidence: &mut Confidence) -> Understood {
         return Understood::reasoning(trimmed);
     }
     let compound = tokens.iter().any(|t| is_conjunction(t));
-    let core = strip_filler(&tokens);
+    let core = strip_filler(tokens);
     if core.is_empty() {
         return Understood::reasoning(trimmed);
     }
     if let Some(intent) = browser_request(trimmed, core) {
         *confidence = Confidence::High;
         return Understood::intent(intent);
+    }
+    // Sessions by state ("focus the one waiting for permission", "which agent is stuck?", "what
+    // needs permission?") before every other rule, so the approvals panel doesn't read the last
+    // one; tried only when a state word is present, to keep the common path cheap.
+    if !compound && core.iter().any(|w| sessions::is_state_word(w)) {
+        for rule in state_rules() {
+            if let Some(caps) = match_nodes(&rule.nodes, core, &Caps::default()) {
+                *confidence = Confidence::High;
+                return (rule.build)(&caps);
+            }
+        }
     }
     let candidates = if compound { and_rules() } else { rules() };
     for rule in candidates {
@@ -327,6 +439,37 @@ fn pane_request(tokens: &[String]) -> Option<Understood> {
         }
         workspace = Some(NamedTarget::Workspace(name.join(" ")));
         words = &words[..at];
+    }
+    // "Make it bigger" is the focused pane; "make that one bigger" doesn't say which pane.
+    if words.first().is_some_and(|w| w == "make")
+        && words.len() >= 3
+        && let Some(grow) = match words.last()?.as_str() {
+            "bigger" | "larger" => Some(true),
+            "smaller" => Some(false),
+            _ => None,
+        }
+    {
+        match words[1..words.len() - 1].join(" ").as_str() {
+            "it" | "this" | "this one" => {
+                return Some(Understood::intent(KalVoiceIntent::Resize {
+                    direction: if grow {
+                        PaneDirection::Right
+                    } else {
+                        PaneDirection::Left
+                    },
+                    steps: 2,
+                }));
+            }
+            "that" | "that one" | "them" => {
+                return Some(Understood::Rejected {
+                    code: "target_unclear",
+                    message:
+                        "Say which pane, or focus it and say \u{201c}make this bigger\u{201d}."
+                            .into(),
+                });
+            }
+            _ => {}
+        }
     }
     let control = if words.first().is_some_and(|w| w == "make") && words.len() >= 3 {
         match words.last()?.as_str() {
@@ -841,7 +984,15 @@ fn strip_filler(tokens: &[String]) -> &[String] {
     }
     'trailing: loop {
         for phrase in TRAILING_FILLER {
-            if phrase_at(&tokens[start..end], phrase, false) {
+            // "Go to KalVoice" names the surface: the wake word is only filler at the end of a
+            // request that doesn't point at it ("open settings, KalVoice").
+            let names_surface = *phrase == ["kalvoice"]
+                && end >= start + 2
+                && matches!(
+                    tokens[end - 2].as_str(),
+                    "to" | "open" | "show" | "the" | "my" | "view" | "display" | "launch"
+                );
+            if !names_surface && phrase_at(&tokens[start..end], phrase, false) {
                 end -= phrase.len();
                 continue 'trailing;
             }
@@ -1064,8 +1215,12 @@ fn slot_candidates(slot: Slot, tokens: &[String]) -> Vec<(usize, Fill)> {
             // Shortest first, so optional trailing words ("… workspace") are not swallowed.
             for len in 1..=tokens.len() {
                 let words = &tokens[..len];
-                // A name never starts with an article or pronoun ("show me the X thread").
-                if matches!(words[0].as_str(), "the" | "a" | "an" | "me") {
+                // A name never starts with an article or pronoun ("show me the X thread"), nor
+                // with "up" or "called" ("open up the kalcode project", "the thread called X").
+                if matches!(
+                    words[0].as_str(),
+                    "the" | "a" | "an" | "me" | "up" | "called" | "named"
+                ) {
                     break;
                 }
                 let name = words.join(" ");
@@ -1247,6 +1402,17 @@ const THREAD_STATE: &str = "(active|running|current|paused|open|idle|working|bus
 fn rules() -> &'static [Rule] {
     static RULES: OnceLock<Vec<Rule>> = OnceLock::new();
     RULES.get_or_init(build_rules)
+}
+
+fn state_rules() -> &'static [Rule] {
+    static RULES: OnceLock<Vec<Rule>> = OnceLock::new();
+    RULES.get_or_init(|| {
+        let mut rules = Vec::new();
+        sessions::state_rules(&mut |pattern: String, build: Build| {
+            rules.push(rule(pattern, build));
+        });
+        rules
+    })
 }
 
 /// The only patterns tried on a request containing a conjunction: pane arrangements whose own
@@ -1653,15 +1819,7 @@ fn build_rules() -> Vec<Rule> {
         format!("{MODE_VERB} [the|my] <name> thread (to|into|in) bypass [mode]"),
         "(turn on|enable|use|allow|switch to|go to) bypass [mode]".to_owned(),
     ] {
-        add(
-            p,
-            Box::new(|_| Understood::Rejected {
-                code: "bypass_not_allowed",
-                message:
-                    "KalVoice can't turn on Bypass. Only you can, in the thread's permission menu."
-                        .into(),
-            }),
-        );
+        add(p, Box::new(|_| bypass_refused()));
     }
 
     // Provider accounts (0.1.5). Last, so thread permission modes ("switch the X thread to plan
@@ -1769,6 +1927,9 @@ fn account_rules(add: &mut impl FnMut(String, Build)) {
             let (Some(provider), Some(account)) = (c.provider, c.names.first()) else {
                 return Understood::reasoning("");
             };
+            if let Some(not_account) = not_an_account(account) {
+                return not_account;
+            }
             with_workspace(
                 KalVoiceIntent::CreateThreads {
                     provider_id: ProviderId::new(provider),
@@ -1782,14 +1943,55 @@ fn account_rules(add: &mut impl FnMut(String, Build)) {
     );
 }
 
-/// A rebind request, or reasoning when the "account" is really a mode ("… to fast mode").
+/// Words that are never an account label: permission modes and model names. "Switch this
+/// thread to plan" keeps its old meaning (not a command) and "… to bypass" is refused, instead of
+/// looking for an account called "plan" or "bypass".
+const NOT_AN_ACCOUNT: &[&str] = &[
+    "mode",
+    "plan",
+    "approve",
+    "auto",
+    "custom",
+    "bypass",
+    "permission",
+    "permissions",
+    "pro",
+    "flash",
+    "opus",
+    "sonnet",
+    "haiku",
+    "mini",
+    "model",
+];
+
+/// Why an account slot holds no account: `Some(refusal)` for Bypass, `Some(reasoning)` for a mode
+/// or model word, `None` when it may be an account label.
+fn not_an_account(account_query: &str) -> Option<Understood> {
+    let words: Vec<&str> = account_query.split(' ').collect();
+    if words.contains(&"bypass") {
+        return Some(bypass_refused());
+    }
+    (account_query.is_empty() || words.iter().any(|w| NOT_AN_ACCOUNT.contains(w)))
+        .then(|| Understood::reasoning(""))
+}
+
+fn bypass_refused() -> Understood {
+    Understood::Rejected {
+        code: "bypass_not_allowed",
+        message: "KalVoice can't turn on Bypass. Only you can, in the thread's permission menu."
+            .into(),
+    }
+}
+
+/// A rebind request, or reasoning when the "account" is really a mode or model ("… to fast
+/// mode", "… to plan", "… to Gemini Pro"); Bypass is refused.
 fn rebind(
     thread_query: Option<String>,
     provider: Option<&'static str>,
     account_query: String,
 ) -> Understood {
-    if account_query.is_empty() || account_query.split(' ').any(|w| w == "mode") {
-        return Understood::reasoning("");
+    if let Some(not_account) = not_an_account(&account_query) {
+        return not_account;
     }
     Understood::intent(KalVoiceIntent::RebindThreadAccount {
         thread_query,
@@ -1802,6 +2004,9 @@ fn workspace_account(c: &Caps, workspace: Option<&String>) -> Understood {
     let (Some(provider), Some(account)) = (c.account_provider, c.account.clone()) else {
         return Understood::reasoning("");
     };
+    if let Some(not_account) = not_an_account(&account) {
+        return not_account;
+    }
     with_workspace(
         KalVoiceIntent::SetWorkspaceAccount {
             provider_id: ProviderId::new(provider),
