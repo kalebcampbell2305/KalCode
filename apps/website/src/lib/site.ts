@@ -70,13 +70,14 @@ export const KALVOICE = {
   status: "In development",
   /**
    * One push-to-talk key: hold it, speak, release. KalVoice decides from context whether the words
-   * are dictation (typed into the focused input) or a command. Configurable to Caps Lock, another
-   * single key, or Fn on keyboards that expose it to apps.
+   * are dictation (typed into the focused input) or a command. Configurable to another function
+   * key, Pause, Scroll Lock or Insert; the app refuses Caps Lock and Fn
+   * (crates/kalvoice/src/shortcuts.rs). The key is held only while KalCode is the foreground app.
    */
   pushToTalkKey: "F8",
-  /** The one line that says the key can be changed. Never claims Fn works everywhere. */
+  /** Says the key can be changed and when it works. Offers only keys the app accepts. */
   keyNote:
-    "F8 is the default. Choose Caps Lock or another single key instead, or Fn on keyboards that pass it to apps.",
+    "F8 is the default. Choose another function key, Pause, Scroll Lock or Insert instead. The key works while KalCode is the active window, so other apps keep it otherwise.",
   globeAlt: "KalVoice globe: a sphere of connected points of light",
 } as const;
 
