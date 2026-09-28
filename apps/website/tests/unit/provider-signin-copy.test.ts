@@ -76,10 +76,10 @@ describe("provider docs sign-in", () => {
 describe("home and product provider summaries", () => {
   it("say sign-in happens from KalCode", async () => {
     expect(text(await render(Home, "/"))).toContain(
-      "run on your own accounts: sign in from KalCode, or bring an API key",
+      "run on your own accounts: sign in to each from KalCode, with a separate managed profile for every account",
     );
     expect(text(await render(Product, "/product"))).toContain(
-      "each provider's own sign-in, run from KalCode for your account, or an API key you provide",
+      "each provider's own sign-in, run from KalCode for your account.",
     );
   });
 });
