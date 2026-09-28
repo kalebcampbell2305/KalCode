@@ -1812,6 +1812,73 @@ fn deterministic_app_control_commands_execute_without_a_second_permission_layer(
     assert_eq!(h.executor.executed.lock().expect("lock").len(), 8);
 }
 
+/// Release acceptance (owner architecture): F8 → local STT → deterministic fast path. The
+/// required spoken commands, as whisper transcribes them (capitalized, punctuated, digits or a
+/// "four"/"for" homophone), must run as commands from every focus target without consulting the
+/// optional local interpreter, which here is absent (reports `Unavailable`).
+#[test]
+fn required_push_to_talk_commands_run_without_the_local_interpreter() {
+    use TalkTarget::{Field, None as Nothing, Terminal};
+    let interpreter = Arc::new(FakeLocalInterpreter::new(Err(
+        LocalInterpretationError::Unavailable,
+    )));
+    let h = harness_with_interpreter(
+        Tier::Pro,
+        FakeExecutor::default(),
+        Arc::new(NoProviders),
+        Some(interpreter.clone()),
+    );
+    let settings = KalVoiceIntent::Navigate {
+        surface: SurfaceId::Settings,
+    };
+    let dashboard = KalVoiceIntent::Navigate {
+        surface: SurfaceId::Dashboard,
+    };
+    let codex = KalVoiceIntent::CreateThreads {
+        provider_id: ProviderId::new(ProviderId::CODEX),
+        count: 4,
+        workspace_id: None,
+    };
+    let cases = [
+        ("Open settings", &settings),
+        ("Open settings.", &settings),
+        ("open settings", &settings),
+        ("Open dashboard", &dashboard),
+        ("Open dashboard.", &dashboard),
+        ("Open the dashboard.", &dashboard),
+        ("Open four Codex terminals", &codex),
+        ("Open four Codex terminals.", &codex),
+        ("Open 4 Codex terminals.", &codex),
+        ("Open for Codex terminals.", &codex),
+        ("What needs permission?", &KalVoiceIntent::ShowApprovals),
+        ("what needs permission", &KalVoiceIntent::ShowApprovals),
+    ];
+    let mut expected = Vec::new();
+    for (text, intent) in cases {
+        for target in [Nothing, Field, Terminal] {
+            let talked = h
+                .orchestrator
+                .talk(talk(text, target), &|_| {})
+                .expect("talk");
+            assert_eq!(talked.route, TalkRoute::Command, "{text} ({target:?})");
+            let response = talked.response.expect("command response");
+            assert!(
+                matches!(response.outcome, KalVoiceOutcome::Completed { .. }),
+                "{text} ({target:?}): {:?}",
+                response.outcome
+            );
+            assert_ne!(response.intent.as_deref(), Some("reasoning"), "{text}");
+            expected.push(intent.clone());
+        }
+    }
+    assert_eq!(
+        interpreter.calls.load(Ordering::SeqCst),
+        0,
+        "deterministic commands never wait on the optional local interpreter"
+    );
+    assert_eq!(*h.executor.executed.lock().expect("lock"), expected);
+}
+
 #[test]
 fn talk_records_its_route_without_the_words() {
     let h = harness();
