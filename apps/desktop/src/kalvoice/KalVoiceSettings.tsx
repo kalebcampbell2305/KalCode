@@ -98,16 +98,22 @@ function KalVoiceSettingsSection() {
 
 /** Whether holding the key works right now, from native status (never assumed). */
 function PushToTalkReadinessRow() {
-  const { status, statusError, signalsError, refreshStatus, retryConnection } = useKalVoice();
-  const readiness = pushToTalkReadiness(status, statusError, signalsError);
+  const { status, statusError, signalsError, talkKey, retryConnection } = useKalVoice();
+  const readiness = pushToTalkReadiness(status, statusError, signalsError, talkKey);
   return (
-    <div className={styles.readiness} role="status" aria-label="Push-to-talk readiness" data-ready={readiness.ready}>
+    <div
+      className={styles.readiness}
+      role="status"
+      aria-label="Push-to-talk readiness"
+      data-attention={!readiness.ready && readiness.attention}
+    >
       <p>
         {readiness.ready ? "Ready. " : `${readiness.label}. `}
         {readiness.message}
       </p>
       {readiness.code === "talk_key_inactive" ? (
-        <Button size="sm" variant="ghost" onClick={() => void refreshStatus()}>
+        // Re-subscribing makes native report the key's current registration.
+        <Button size="sm" variant="ghost" onClick={() => void retryConnection()}>
           Check again
         </Button>
       ) : readiness.fix === "retry" ? (

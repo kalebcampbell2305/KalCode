@@ -77,13 +77,55 @@ describe("push-to-talk readiness is derived only from native status", () => {
   });
 });
 
-describe("native talk-key registration updates", () => {
-  it("apply to the last status without touching anything else", () => {
-    const before = status();
-    const issue = { mode: "talk" as const, accelerator: "F8", message: "Another app is using this key." };
-    const after = withTalkKeyState(before, { active: false, issues: [issue] });
-    expect(after).toMatchObject({ talkKeyActive: false, shortcutIssues: [issue], usage: before.usage });
-    expect(pushToTalkReadiness(after, null).code).toBe("talk_key_unavailable");
-    expect(withTalkKeyState(null, { active: true, issues: [] })).toBeNull();
+describe("native talk_key signal", () => {
+  const key = (active: boolean, reason: string | null) => ({ active, reason, accelerator: "F8" });
+
+  it("overrides what an older status read said about the key", () => {
+    const before = status({ talkKeyActive: false });
+    const after = withTalkKeyState(before, key(true, null));
+    expect(after).toMatchObject({ talkKeyActive: true, shortcutIssues: [], usage: before.usage });
+    expect(pushToTalkReadiness(before, null, null, key(true, null))).toMatchObject({ ready: true, label: "Ready" });
+    expect(withTalkKeyState(null, key(true, null))).toBeNull();
+  });
+
+  it("maps every native reason to exact copy, a fix, and whether it is a problem", () => {
+    const r = (reason: string) => pushToTalkReadiness(status(), null, null, key(false, reason));
+    expect(r("os_refused")).toMatchObject({
+      code: "talk_key_unavailable",
+      message: "F8 unavailable: Another app is using this key. Choose a different one.",
+      fix: "settings",
+      attention: true,
+    });
+    expect(r("unparseable")).toMatchObject({
+      code: "talk_key_unavailable",
+      message: "F8 unavailable: KalCode couldn't read F8. Choose a different key.",
+      fix: "settings",
+      attention: true,
+    });
+    expect(r("disabled")).toMatchObject({ code: "talk_disabled", label: "Off", fix: "settings" });
+    expect(r("prefs_error")).toMatchObject({ code: "talk_key_unregistered", fix: "retry", attention: true });
+    expect(r("shutting_down")).toMatchObject({ code: "shutting_down", attention: false });
+    expect(r("mystery")).toMatchObject({ code: "talk_key_inactive", attention: true });
+  });
+
+  it("KalCode in the background is expected: not an error, and never claimed Ready", () => {
+    const r = pushToTalkReadiness(status(), null, null, key(false, "not_focused"));
+    expect(r).toMatchObject({
+      ready: false,
+      code: "talk_key_not_focused",
+      label: "Ready when in front",
+      message: "F8 works while KalCode is the active window.",
+      fix: null,
+      attention: false,
+    });
+  });
+
+  it("an OS refusal keeps other modes' issues and replaces only the talk key's", () => {
+    const other = { mode: "command" as const, accelerator: "F9", message: "Taken." };
+    const after = withTalkKeyState(
+      status({ shortcutIssues: [other, { mode: "talk", accelerator: "F8", message: "old" }] }),
+      key(true, null),
+    );
+    expect(after?.shortcutIssues).toEqual([other]);
   });
 });

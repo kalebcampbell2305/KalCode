@@ -400,6 +400,11 @@ export function AccountProvider({
   return <AccountContext.Provider value={value}>{children}</AccountContext.Provider>;
 }
 
+/** The account, or null outside an AccountProvider (e.g. isolated component tests). */
+export function useOptionalAccount(): AccountContextValue | null {
+  return useContext(AccountContext);
+}
+
 export function useAccount(): AccountContextValue {
   const value = useContext(AccountContext);
   if (!value) throw new Error("useAccount must be used inside AccountProvider");

@@ -42,7 +42,7 @@
   gap: var(--space-2);
 }
 
-/* Push-to-talk readiness, straight from native status: neutral when ready, red otherwise. */
+/* Push-to-talk readiness, straight from native status: red only for a problem. */
 .readiness {
   display: flex;
   align-items: center;
@@ -54,7 +54,7 @@
   line-height: var(--leading-normal);
 }
 
-.readiness[data-ready="false"] {
+.readiness[data-attention="true"] {
   color: var(--status-failed-text);
 }
 

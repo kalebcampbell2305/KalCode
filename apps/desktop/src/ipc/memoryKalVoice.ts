@@ -521,6 +521,13 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
 
   const activeModel = () => [prefs.speechModel, ...CATALOG.map((m) => m.id)].find((id) => installed.has(id)) ?? null;
 
+  const talkKeySignal = (): KalVoiceSignal => ({
+    kind: "talk_key",
+    active: prefs.talkEnabled,
+    reason: prefs.talkEnabled ? null : "disabled",
+    accelerator: prefs.talkKey,
+  });
+
   const status = (): KalVoiceStatus => ({
     usage: usage(),
     preferences: prefs,
@@ -799,8 +806,11 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
     const keys = (Object.keys(next) as (keyof KalVoicePreferences)[])
       .filter((k) => JSON.stringify(next[k]) !== JSON.stringify(prefs[k]))
       .map((k) => `kalvoice.${k}`);
+    const keyChanged = next.talkKey !== prefs.talkKey || next.talkEnabled !== prefs.talkEnabled;
     prefs = next;
     if (keys.length) emit({ type: "settings.changed", payload: { keys } });
+    // Like native: every talk-key registration change is reported.
+    if (keyChanged) signal(talkKeySignal());
     return status();
   };
 
@@ -906,6 +916,8 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
     subscribe(onSignal) {
       subscriber = onSignal;
       installKeys();
+      // Like native: each subscribe is answered with the key's current registration.
+      signal(talkKeySignal());
     },
   };
 }

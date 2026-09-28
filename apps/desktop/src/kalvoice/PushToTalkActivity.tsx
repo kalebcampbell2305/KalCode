@@ -39,11 +39,11 @@ export function FixAction({ code }: { code: string | null }) {
  * or the exact failure appears here on every page. It reflects only real native signals.
  */
 export function PushToTalkActivity() {
-  const { state, panel, status, statusError, signalsError, retryConnection, dismiss } = useKalVoice();
+  const { state, panel, status, statusError, signalsError, talkKey, retryConnection, dismiss } = useKalVoice();
   const [dismissed, setDismissed] = useState<string | null>(null);
   const widgetShowsDetail = panel.visible && status !== null && panel.view !== "orb";
   const phase = state.phase;
-  const readiness = pushToTalkReadiness(status, statusError, signalsError);
+  const readiness = pushToTalkReadiness(status, statusError, signalsError, talkKey);
   const disconnected =
     readiness.code === "status_unavailable" ||
     readiness.code === "signals_unavailable" ||

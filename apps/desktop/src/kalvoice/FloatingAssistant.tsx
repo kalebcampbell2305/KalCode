@@ -66,8 +66,10 @@ export function FloatingAssistant() {
   const kv = useKalVoice();
   const { state, panel, setPanel, setPanelVisible, levelRef, status, statusError, signalsError } = kv;
   // "Ready" only when the native key is really registered; otherwise the exact reason.
-  const readiness = pushToTalkReadiness(status, statusError, signalsError);
+  const readiness = pushToTalkReadiness(status, statusError, signalsError, kv.talkKey);
   const notReady = state.phase === "idle" && !readiness.ready;
+  // Expected states (e.g. KalCode in the background) change the label only; problems open up.
+  const attention = notReady && readiness.attention;
   const { navigate } = useNavigation();
   const viewport = useViewport();
   const ref = useRef<HTMLElement | null>(null);
@@ -108,7 +110,7 @@ export function FloatingAssistant() {
       : null;
   const compactHeight = useRef(0);
   const detailShown =
-    notReady ||
+    attention ||
     state.phase === "listening" ||
     state.phase === "transcribing" ||
     state.phase === "done" ||
@@ -210,7 +212,7 @@ export function FloatingAssistant() {
   const growsDown = panel.anchor.startsWith("top");
   const phase = state.phase;
   const listening = phase === "listening" || phase === "transcribing";
-  const showsDetail = notReady || listening || phase === "done" || phase === "error";
+  const showsDetail = attention || listening || phase === "done" || phase === "error";
   const stateLabel = notReady ? readiness.label : STATE_LABELS[phase];
 
   return (
@@ -219,7 +221,7 @@ export function FloatingAssistant() {
       className={styles.panel}
       data-view={view}
       data-phase={phase}
-      data-attention={notReady || undefined}
+      data-attention={attention || undefined}
       data-dragging={drag ? "true" : undefined}
       data-anchor={panel.anchor}
       aria-label="KalVoice widget"
@@ -353,7 +355,7 @@ export function FloatingAssistant() {
                     ) : null}
                   </div>
                 ) : null}
-                {notReady ? (
+                {attention ? (
                   <div className={styles.result}>
                     <p className={styles.message}>{readiness.message}</p>
                     {readiness.fix === "settings" ? (
@@ -383,7 +385,7 @@ export function FloatingAssistant() {
 
             {view === "expanded" ? (
               <div className={styles.more}>
-                {notReady ? null : <p className={styles.hint}>{hint}</p>}
+                {attention ? null : <p className={styles.hint}>{hint}</p>}
                 {phase === "idle" && state.message ? <p className={styles.message}>{state.message}</p> : null}
                 <p className={styles.usage}>
                   {usageLine(status.usage)}

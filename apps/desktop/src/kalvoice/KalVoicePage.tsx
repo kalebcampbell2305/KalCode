@@ -52,12 +52,23 @@ const LOCAL_INTELLIGENCE = {
 /** The KalVoice surface: ask, see what's ready, and this session's requests. */
 export function KalVoicePage() {
   const kv = useKalVoice();
-  const { status, statusError, signalsError, retryConnection, state, levelRef, history, submit, setPanelVisible } = kv;
+  const {
+    status,
+    statusError,
+    signalsError,
+    talkKey,
+    retryConnection,
+    state,
+    levelRef,
+    history,
+    submit,
+    setPanelVisible,
+  } = kv;
   const { navigate } = useNavigation();
   const { info } = useRuntime();
 
   // "Ready" only when the native talk key is registered; otherwise the exact reason.
-  const readiness = pushToTalkReadiness(status, statusError, signalsError);
+  const readiness = pushToTalkReadiness(status, statusError, signalsError, talkKey);
   const dictation = !status
     ? null
     : readiness.ready

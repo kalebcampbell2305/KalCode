@@ -98,7 +98,11 @@ async function mount({ statusPatch, strict = false, statusFailure, subscribeFail
   };
   const inject = (signal: KalVoiceSignal) => act(() => deliver?.(signal));
   const talks = () => invoked.filter((c) => c === "kalvoice_talk").length;
-  return { transport, subscribe, user, go, inject, talks };
+  // Let the account runtime settle (its "ready" transition renews the channel once) so tests can
+  // count subscribes caused by what they do.
+  await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+  const settled = subscribe.mock.calls.length;
+  return { transport, subscribe, user, go, inject, talks, settled };
 }
 
 const NOT_STARTED = {
@@ -116,7 +120,7 @@ const release = () => fireEvent.keyUp(window, { code: "F8", key: "F8" });
 
 describe("push to talk is always visible", () => {
   it("regression guard: one live subscription across navigation, page mount/unmount and dialogs", async () => {
-    const { subscribe, user, go } = await mount();
+    const { subscribe, user, go, talks, settled } = await mount();
     await go("KalVoice");
     await go("Settings");
     await screen.findByText("Speech model");
@@ -131,22 +135,27 @@ describe("push to talk is always visible", () => {
     await go("Threads");
     await go("KalVoice");
     await go("Settings");
-    expect(subscribe).toHaveBeenCalledTimes(1);
+    expect(subscribe).toHaveBeenCalledTimes(settled);
 
     press();
     await widgetState("Listening");
     release();
     await widgetState("Processing");
+    await widgetState("Done");
+    expect(talks()).toBe(1);
   });
 
   it("StrictMode remounts add listeners but never a second native channel", async () => {
-    const { subscribe, go } = await mount({ strict: true });
+    const { subscribe, go, talks } = await mount({ strict: true });
     await go("Threads");
-    expect(subscribe).toHaveBeenCalledTimes(1);
+    // The initial channel plus at most the account runtime's one renewal; never one per mount.
+    expect(subscribe.mock.calls.length).toBeLessThanOrEqual(2);
     press();
     await widgetState("Listening");
     release();
     await widgetState("Processing");
+    await widgetState("Done");
+    expect(talks()).toBe(1);
   });
 
   it.each(["Dashboard", "Threads", "Settings"])(
@@ -202,34 +211,37 @@ describe("push to talk is always visible", () => {
 });
 
 describe("push-to-talk readiness is truthful", () => {
-  it("never says Ready while the talk key is unregistered, and shows the OS reason everywhere", async () => {
-    let patch: Partial<KalVoiceStatus> = {
-      talkKeyActive: false,
-      shortcutIssues: [
-        { mode: "talk", accelerator: "F8", message: "Another app is using this key. Choose a different one." },
-      ],
-    };
-    const { go } = await mount({ statusPatch: () => patch });
+  it("follows native talk_key: never Ready while unregistered, the OS reason everywhere, background is not an error", async () => {
+    const { go, inject } = await mount();
+    await widgetState("Ready");
+    const talkKey = (active: boolean, reason: string | null) =>
+      inject({ kind: "talk_key", active, reason, accelerator: "F8" });
+
+    talkKey(false, "os_refused");
     await widgetState("Key unavailable");
     expect(within(widget()).queryByText("Ready", { selector: "span" })).toBeNull();
     expect(widget()).toHaveTextContent("F8 unavailable: Another app is using this key.");
 
     await go("Settings");
     const readiness = await screen.findByRole("status", { name: "Push-to-talk readiness" });
-    expect(readiness).toHaveTextContent("F8 unavailable: Another app is using this key.");
-    expect(readiness).not.toHaveTextContent(/^Ready/);
+    // The Settings status re-read on open must not resurrect Ready over the native signal.
+    await waitFor(() => expect(readiness).toHaveTextContent("F8 unavailable: Another app is using this key."));
+    expect(readiness).toHaveAttribute("data-attention", "true");
 
     await go("KalVoice");
     const tile = screen.getByText("Push to talk", { selector: "p" }).closest("li");
     expect(tile).toHaveTextContent("Key unavailable");
     expect(tile).not.toHaveTextContent("Ready");
 
-    // Registered once KalCode is in front: a window focus re-reads native status.
-    patch = { talkKeyActive: false, shortcutIssues: [] };
-    fireEvent.focus(window);
-    await waitFor(() => expect(tile).toHaveTextContent("Key not active"));
-    patch = {};
-    fireEvent.focus(window);
+    // KalCode went to the background: expected, shown without an error.
+    talkKey(false, "not_focused");
+    await waitFor(() => expect(tile).toHaveTextContent("Ready when in front"));
+    await widgetState("Ready when in front");
+    expect(widget()).not.toHaveAttribute("data-attention");
+    expect(screen.queryByRole("alert", { name: "Push to talk" })).toBeNull();
+
+    // Back in front: native registers the key again.
+    talkKey(true, null);
     await waitFor(() => expect(tile).toHaveTextContent("Ready"));
     await widgetState("Ready");
   });
@@ -293,11 +305,11 @@ describe("signals that aren't connected are never masked", () => {
   });
 
   it("renewing the channel mid-utterance delivers the result once and routes it once", async () => {
-    const { subscribe, talks } = await mount();
+    const { subscribe, talks, settled } = await mount();
     press();
     await widgetState("Listening");
     fireEvent.focus(window);
-    await waitFor(() => expect(subscribe).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(subscribe).toHaveBeenCalledTimes(settled + 1));
     release();
     await widgetState("Processing");
     await widgetState("Done");
@@ -306,10 +318,10 @@ describe("signals that aren't connected are never masked", () => {
 
   it("an older Ready status is not trusted once a refresh fails", async () => {
     let failing = false;
-    await mount({ statusFailure: () => (failing ? NOT_STARTED : null) });
+    const { go } = await mount({ statusFailure: () => (failing ? NOT_STARTED : null) });
     await widgetState("Ready");
     failing = true;
-    fireEvent.focus(window);
+    await go("Settings"); // Opening Settings re-reads status.
     await widgetState("Unverified");
     expect(widget()).toHaveTextContent("KalVoice status couldn't be refreshed");
     failing = false;

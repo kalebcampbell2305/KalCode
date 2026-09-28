@@ -24,6 +24,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useOptionalAccount } from "../account/AccountProvider.tsx";
 import { type KalCodeError, toKalCodeError } from "../ipc/errors.ts";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { useUiIntents } from "../runtime/uiIntents.tsx";
@@ -47,6 +48,7 @@ import {
 } from "./dictation.ts";
 import { type DictationSession, DictationSessions } from "./dictationSessions.ts";
 import { placementFor, sizeClassFor } from "./panelGeometry.ts";
+import { type TalkKeyState, withTalkKeyState } from "./readiness.ts";
 
 export interface HistoryItem {
   requestId: string;
@@ -66,6 +68,8 @@ interface KalVoiceValue {
   statusError: KalCodeError | null;
   /** No live signal channel: push-to-talk progress can't be shown until this clears. */
   signalsError: KalCodeError | null;
+  /** The latest native push-to-talk key registration (`talk_key` signal), if any yet. */
+  talkKey: TalkKeyState | null;
   refreshStatus: () => Promise<void>;
   /** Reconnects signals if needed, then re-reads status ("Try again"). */
   retryConnection: () => Promise<void>;
@@ -107,8 +111,6 @@ interface KalVoiceValue {
 const KalVoiceContext = createContext<KalVoiceValue | null>(null);
 
 const DONE_SETTLE_MS = 4000;
-/** Lets native's window-focus handler (re)register the talk key before status is re-read. */
-const FOREGROUND_REFRESH_MS = 200;
 
 function useWindowWidth(): number {
   const [width, setWidth] = useState(() => (typeof window === "undefined" ? 1440 : window.innerWidth));
@@ -173,6 +175,8 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   } | null>(null);
   /** For "Type it instead": where the words would have gone and the page before a navigation. */
   const undo = useRef<{ requestId: string; target: DictationTarget | null; previous: Destination | null } | null>(null);
+  const statusRef = useRef({ status, error: statusError });
+  statusRef.current = { status, error: statusError };
   const stateRef = useRef(state);
   stateRef.current = state;
   const currentRef = useRef(current);
@@ -209,9 +213,14 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  // The latest native `talk_key` signal. Native sends it on every registration change and on each
+  // subscribe, so it is newer than any status read and is applied on top of every status.
+  const [talkKey, setTalkKey] = useState<TalkKeyState | null>(null);
+  const talkKeyRef = useRef<TalkKeyState | null>(null);
+
   const refreshStatus = useCallback(async () => {
     try {
-      setStatus(await client.kalvoiceStatus());
+      setStatus(withTalkKeyState(await client.kalvoiceStatus(), talkKeyRef.current));
       setStatusError(null);
     } catch (error) {
       setStatusError(toKalCodeError(error));
@@ -221,7 +230,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   const updatePreferences = useCallback(
     async (patch: KalVoicePreferencesPatch) => {
       const next = await client.kalvoiceUpdatePreferences(patch);
-      setStatus(next);
+      setStatus(withTalkKeyState(next, talkKeyRef.current));
       return next;
     },
     [client],
@@ -434,6 +443,17 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
             );
           }
           break;
+        case "talk_key": {
+          const update: TalkKeyState = {
+            active: signal.active,
+            reason: signal.reason,
+            accelerator: signal.accelerator,
+          };
+          talkKeyRef.current = update;
+          setTalkKey(update);
+          setStatus((current) => withTalkKeyState(current, update));
+          return;
+        }
         case "reveal":
           setStatus((s) =>
             s && !s.preferences.panelVisible ? { ...s, preferences: { ...s.preferences, panelVisible: true } } : s,
@@ -534,7 +554,10 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           }
           remove = unsubscribe;
         }
-        if (active) setSignalsError(null);
+        if (!active) return;
+        setSignalsError(null);
+        // Connected while status is missing or unverified (e.g. the runtime just came up): re-read it.
+        if (!statusRef.current.status || statusRef.current.error) void refreshStatus();
       } catch (error) {
         // A refused renewal keeps the attached listener and native's existing channel; only a
         // listener that never attached means signals can't arrive.
@@ -551,24 +574,17 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
     void connect().then(() => {
       if (active) void refreshStatus();
     });
-    // Coming forward: renew (or retry) the channel now, and re-read status once native's own
-    // focus handler has (re)registered the talk key.
-    let timer: ReturnType<typeof setTimeout> | null = null;
+    // Coming forward: renew (or retry) the channel. Native answers every subscribe with the
+    // current `talk_key`, and reports focus changes itself, so nothing is re-read on a delay.
     const onForeground = () => {
       if (document.visibilityState === "hidden") return;
       void connect();
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => {
-        timer = null;
-        void refreshStatus();
-      }, FOREGROUND_REFRESH_MS);
     };
     window.addEventListener("focus", onForeground);
     document.addEventListener("visibilitychange", onForeground);
     return () => {
       active = false;
       remove?.();
-      if (timer) clearTimeout(timer);
       window.removeEventListener("focus", onForeground);
       document.removeEventListener("visibilitychange", onForeground);
     };
@@ -582,6 +598,18 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
     retriedForStatus.current = status;
     void connectSignals.current();
   }, [status, signalsError]);
+
+  // The account's native runtime becoming ready (a new runtime generation): connect signals if
+  // they aren't, and re-read status, which could only fail before.
+  const runtimeReady = useOptionalAccount()?.runtime.ready ?? false;
+  const wasRuntimeReady = useRef(runtimeReady);
+  useEffect(() => {
+    const became = runtimeReady && !wasRuntimeReady.current;
+    wasRuntimeReady.current = runtimeReady;
+    if (!became) return;
+    void connectSignals.current();
+    void refreshStatus();
+  }, [runtimeReady, refreshStatus]);
 
   /** "Try again": reconnect signals (if needed) and re-read status. */
   const retryConnection = useCallback(async () => {
@@ -787,6 +815,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       status,
       statusError,
       signalsError,
+      talkKey,
       refreshStatus,
       retryConnection,
       state,
@@ -816,6 +845,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       status,
       statusError,
       signalsError,
+      talkKey,
       refreshStatus,
       retryConnection,
       state,
