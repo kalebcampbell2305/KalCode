@@ -22,6 +22,9 @@ pub enum Skip {
     ShuttingDown,
     /// Preferences could not be read and none were read before.
     PrefsError,
+    /// No KalCode page is subscribed to KalVoice signals yet (cold start, page reload), so a
+    /// press could not show listening or run anything.
+    NotConnected,
 }
 
 impl Skip {
@@ -31,6 +34,7 @@ impl Skip {
             Self::Disabled => "disabled",
             Self::ShuttingDown => "shutting_down",
             Self::PrefsError => "prefs_error",
+            Self::NotConnected => "not_connected",
         }
     }
 }
@@ -54,11 +58,13 @@ pub enum Want<K> {
     Release(Skip),
 }
 
-/// Decides what to hold. `prefs` is the latest successfully read preferences (the caller keeps
-/// the last good read, so one failed read never drops a working key).
+/// Decides what to hold. `connected` is whether at least one KalCode page is subscribed to
+/// KalVoice signals. `prefs` is the latest successfully read preferences (the caller keeps the
+/// last good read, so one failed read never drops a working key).
 pub fn want<K: Copy>(
     shutting_down: bool,
     foreground: bool,
+    connected: bool,
     prefs: Option<TalkPrefs<K>>,
 ) -> Want<K> {
     if shutting_down {
@@ -72,6 +78,9 @@ pub fn want<K: Copy>(
     }
     if !foreground {
         return Want::Release(Skip::NotFocused);
+    }
+    if !connected {
+        return Want::Release(Skip::NotConnected);
     }
     prefs.key.map_or(Want::Unparseable, Want::Hold)
 }
@@ -240,7 +249,7 @@ mod tests {
 
     /// Mirrors the app: each transition recomputes `want` from current facts and reconciles.
     fn step(held: &mut Option<u32>, os: &mut Fake, foreground: bool, key: u32) -> Status<u32> {
-        reconcile(held, want(false, foreground, prefs(key)), os).result
+        reconcile(held, want(false, foreground, true, prefs(key)), os).result
     }
 
     #[test]
@@ -282,7 +291,7 @@ mod tests {
     fn another_app_in_front_releases_and_returning_registers_again() {
         let (mut held, mut os) = (None, Fake::default());
         step(&mut held, &mut os, true, F8);
-        let away = reconcile(&mut held, want(false, false, prefs(F8)), &mut os);
+        let away = reconcile(&mut held, want(false, false, true, prefs(F8)), &mut os);
         assert_eq!(away.released, Some(F8));
         assert_eq!(away.result, Status::Idle(Skip::NotFocused));
         assert!(os.ours.is_empty());
@@ -298,7 +307,7 @@ mod tests {
         let (mut held, mut os) = (None, Fake::default());
         step(&mut held, &mut os, true, F8);
         os.fail_unregister = true;
-        let changed = reconcile(&mut held, want(false, true, prefs(F9)), &mut os);
+        let changed = reconcile(&mut held, want(false, true, true, prefs(F9)), &mut os);
         assert_eq!(
             changed.result,
             Status::Unavailable(Unavailable::ReleaseFailed)
@@ -377,16 +386,36 @@ mod tests {
     fn changing_the_key_moves_the_single_registration() {
         let (mut held, mut os) = (None, Fake::default());
         step(&mut held, &mut os, true, F8);
-        let moved = reconcile(&mut held, want(false, true, prefs(F9)), &mut os);
+        let moved = reconcile(&mut held, want(false, true, true, prefs(F9)), &mut os);
         assert_eq!(moved.released, Some(F8));
         assert_eq!(moved.result, Status::Holding(F9, Held::Registered));
         assert_eq!(os.ours, HashSet::from([F9]));
     }
 
     #[test]
+    fn a_press_before_any_page_subscribed_is_never_captured() {
+        // Cold launch: KalCode is in front but its page has not subscribed yet. Holding the key
+        // then would capture a press whose listening state and result reach no one.
+        let (mut held, mut os) = (None, Fake::default());
+        let early = reconcile(&mut held, want(false, true, false, prefs(F8)), &mut os);
+        assert_eq!(early.result, Status::Idle(Skip::NotConnected));
+        assert!(os.ours.is_empty());
+        // The page subscribes: the key is registered.
+        assert_eq!(
+            step(&mut held, &mut os, true, F8),
+            Status::Holding(F8, Held::Registered)
+        );
+        // The page reloads (its subscription is gone): the key is released until it returns.
+        let reload = reconcile(&mut held, want(false, true, false, prefs(F8)), &mut os);
+        assert_eq!(reload.released, Some(F8));
+        assert_eq!(reload.result, Status::Idle(Skip::NotConnected));
+        assert!(os.ours.is_empty());
+    }
+
+    #[test]
     fn unreadable_preferences_without_a_previous_read_skip_with_a_reason() {
         assert_eq!(
-            want::<u32>(false, true, None),
+            want::<u32>(false, true, true, None),
             Want::Release(Skip::PrefsError)
         );
     }
@@ -397,27 +426,30 @@ mod tests {
             enabled: false,
             key: Some(F8),
         });
-        assert_eq!(want(false, true, off), Want::Release(Skip::Disabled));
+        assert_eq!(want(false, true, true, off), Want::Release(Skip::Disabled));
         assert_eq!(
-            want(true, true, prefs(F8)),
+            want(true, true, true, prefs(F8)),
             Want::Release(Skip::ShuttingDown)
         );
         let bad = Some(TalkPrefs::<u32> {
             enabled: true,
             key: None,
         });
-        assert_eq!(want(false, true, bad), Want::Unparseable);
-        assert_eq!(want(false, false, bad), Want::Release(Skip::NotFocused));
+        assert_eq!(want(false, true, true, bad), Want::Unparseable);
+        assert_eq!(
+            want(false, false, true, bad),
+            Want::Release(Skip::NotFocused)
+        );
     }
 
     #[test]
     fn shutdown_releases_and_later_transitions_cannot_reregister() {
         let (mut held, mut os) = (None, Fake::default());
         step(&mut held, &mut os, true, F8);
-        let stopped = reconcile(&mut held, want(true, true, prefs(F8)), &mut os);
+        let stopped = reconcile(&mut held, want(true, true, true, prefs(F8)), &mut os);
         assert_eq!(stopped.released, Some(F8));
         for _ in 0..5 {
-            reconcile(&mut held, want(true, true, prefs(F8)), &mut os);
+            reconcile(&mut held, want(true, true, true, prefs(F8)), &mut os);
         }
         assert!(os.ours.is_empty());
         assert_eq!(held, None);

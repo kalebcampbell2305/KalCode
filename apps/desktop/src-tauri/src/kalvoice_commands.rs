@@ -87,6 +87,15 @@ impl KalVoiceSignals {
             .remove(webview);
     }
 
+    /// Whether any page is subscribed (the talk key is held only then).
+    fn connected(&self) -> bool {
+        !self
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_empty()
+    }
+
     fn send(&self, signal: &KalVoiceSignal) {
         broadcast(
             &self.0.lock().unwrap_or_else(PoisonError::into_inner),
@@ -777,10 +786,19 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
 }
 
 /// A trusted page started (re)loading: its signal callbacks are gone until it subscribes again.
+/// Without a subscriber the key is released until the page subscribes again.
 pub fn on_page_load_started(app: &AppHandle, webview: &str) {
     if let Some(signals) = app.try_state::<Arc<KalVoiceSignals>>() {
         signals.unsubscribe(webview);
     }
+    let Some(runtime) = crate::runtime_coordinator::RuntimeState::<KalVoiceState>::from_app(app)
+        .ok()
+        .and_then(|state| state.0.clone())
+    else {
+        return;
+    };
+    // Queued rather than inline: this runs inside the webview's page-load callback.
+    defer_talk_key_sync(app, &runtime, "unsubscribed");
 }
 
 /// A (re)loaded trusted page starts its KalVoice UI fresh: re-derive the key's state.
@@ -941,6 +959,7 @@ fn reconcile_talk_key(
     let want = talk_key::want(
         shutting_down,
         foreground,
+        runtime.signals.connected(),
         prefs.as_ref().map(|(enabled, accelerator)| TalkPrefs {
             enabled: *enabled,
             key: parse_shortcut(accelerator),
@@ -2038,6 +2057,7 @@ mod tests {
     #[test]
     fn a_webview_has_exactly_one_channel_and_a_new_subscription_replaces_it() {
         let signals = KalVoiceSignals::default();
+        assert!(!signals.connected());
         let (first, first_delivered) = flaky_channel(0);
         let (second, second_delivered) = flaky_channel(0);
         signals.subscribe("main", first);
@@ -2055,7 +2075,9 @@ mod tests {
                 .unwrap_or_else(PoisonError::into_inner),
             1
         );
+        assert!(signals.connected());
         signals.unsubscribe("main");
+        assert!(!signals.connected(), "the talk key needs a live subscriber");
         signals.send(&KalVoiceSignal::Reveal);
         assert_eq!(
             *second_delivered
