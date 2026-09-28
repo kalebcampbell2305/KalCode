@@ -12,6 +12,24 @@ export const MANIFEST = JSON.parse(
 ) as ReleaseManifest;
 /** The published Windows build, or null while there is no public build. */
 export const WINDOWS_BUILD = MANIFEST.latest?.platforms.find((platform) => platform.os === "windows") ?? null;
+/** "Stable" or "Preview", as the site labels the manifest's channel (src/lib/releases.ts channelLabel). */
+export const CHANNEL_LABEL = MANIFEST.latest?.channel === "stable" ? "Stable" : "Preview";
+/**
+ * True when a manifest selects a complete signed Stable release (signed Windows x64 and macOS
+ * arm64), mirroring signedStableRelease() in src/lib/releases.ts, which specs cannot import:
+ * Playwright's loader rejects its JSON import without an import attribute.
+ * tests/unit/e2e-helpers.test.ts keeps the two rules equal.
+ */
+export function isSignedStable(manifest: ReleaseManifest): boolean {
+  const latest = manifest.latest;
+  return (
+    latest?.channel === "stable" &&
+    latest.platforms.some((p) => p.os === "windows" && p.arch === "x64" && p.signed) &&
+    latest.platforms.some((p) => p.os === "macos" && p.arch === "arm64" && p.signed)
+  );
+}
+/** The committed manifest selects a complete signed Stable release. */
+export const SIGNED_STABLE = isSignedStable(MANIFEST);
 
 const PERSIST_DIR = process.env.KALCODE_E2E_PERSIST ?? ".wrangler/e2e-state";
 /** The local mail sink (tests/e2e/mail-sink.mjs); same default as playwright.config.ts. */

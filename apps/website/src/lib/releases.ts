@@ -55,6 +55,35 @@ export function assertManifest(value: unknown): ReleaseManifest {
 /** The manifest shipped with this build. */
 export const RELEASES: ReleaseManifest = assertManifest(manifestJson);
 
+/** A complete signed Stable selection, used by public availability copy. */
+export function signedStableRelease(manifest: ReleaseManifest): ReleaseManifest["latest"] {
+  const latest = manifest.latest;
+  return latest?.channel === "stable" &&
+    latest.platforms.some((platform) => platform.os === "windows" && platform.arch === "x64" && platform.signed) &&
+    latest.platforms.some((platform) => platform.os === "macos" && platform.arch === "arm64" && platform.signed)
+    ? latest
+    : null;
+}
+
+/**
+ * The Stable release /download serves (Stable channel with at least one signed build), even when
+ * it is not the complete Windows and Mac selection `signedStableRelease` requires.
+ */
+export function servedStableRelease(manifest: ReleaseManifest): ReleaseManifest["latest"] {
+  const latest = manifest.latest;
+  return latest?.channel === "stable" && latest.platforms.some((platform) => platform.signed) ? latest : null;
+}
+
+/** "Stable" or "Preview", from the published release's channel. */
+export function channelLabel(manifest: ReleaseManifest): "Stable" | "Preview" {
+  return manifest.latest?.channel === "stable" ? "Stable" : "Preview";
+}
+
+/** "Windows and macOS": the systems the published release has builds for, in manifest order. */
+export function releaseSystems(manifest: ReleaseManifest): string {
+  return (manifest.latest?.platforms ?? []).map((platform) => OS_NAMES[platform.os]).join(" and ");
+}
+
 /** The build for an OS, or null when that OS has no public build. */
 export function buildFor(manifest: ReleaseManifest, os: ReleaseOs): ReleasePlatform | null {
   return manifest.latest?.platforms.find((platform) => platform.os === os) ?? null;
@@ -106,7 +135,7 @@ export function downloadCta(manifest: ReleaseManifest = RELEASES): DownloadCta {
       label: "Download KalCode",
       href: windows.url,
       os: "windows",
-      note: `Windows · Preview ${manifest.latest.version} · ${formatBytes(windows.size)}`,
+      note: `Windows · ${channelLabel(manifest)} ${manifest.latest.version} · ${formatBytes(windows.size)}`,
     };
   }
   return {
@@ -120,13 +149,13 @@ export function downloadCta(manifest: ReleaseManifest = RELEASES): DownloadCta {
 
 /**
  * The one-line build status used in the footer and on pages that describe the product:
- * "In private development" until a build is public, then "Preview 0.1.0 for Windows".
+ * "In private development" until a build is public, then "Preview 0.1.0 for Windows" or
+ * "Stable 0.1.5 for Windows and macOS".
  */
 export function buildStatus(manifest: ReleaseManifest = RELEASES): string {
   const latest = manifest.latest;
   if (!latest) return "In private development";
-  const systems = latest.platforms.map((platform) => OS_NAMES[platform.os]);
-  return `Preview ${latest.version} for ${systems.join(" and ")}`;
+  return `${channelLabel(manifest)} ${latest.version} for ${releaseSystems(manifest)}`;
 }
 
 /** "84.2 MB" — decimal units, one decimal place from 1 MB up. */
