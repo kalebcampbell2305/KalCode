@@ -184,7 +184,7 @@ impl ComponentCapacityReason {
                 "There is not enough memory headroom within KalCode's safety limits. This download attempt ended. Close unneeded memory-heavy applications safely, allow readings to refresh, then retry the download."
             }
             Self::KalCodeMemory => {
-                "KalCode has reached its memory capacity limit. This download attempt ended. Let active KalCode work finish, then retry the download."
+                "There is not enough memory headroom within KalCode's memory limit for this download. This download attempt ended. Let active KalCode work finish, then retry the download."
             }
             Self::DiskSpace => {
                 "There is not enough available disk space within KalCode's safety limits. This download attempt ended. Free disk space safely, allow readings to refresh, then retry the download."
@@ -1525,7 +1525,7 @@ mod tests {
             ),
             (
                 HoldReason::KalCodeMemoryCap {
-                    used_mb: 2048,
+                    used_mb: 2000,
                     cap_mb: 2048,
                     per_agent_mb: 96,
                     mode: ModeKind::Balanced,
@@ -1541,10 +1541,14 @@ mod tests {
                 ComponentCapacityReason::WorkloadLimit,
             ),
         ] {
-            assert_eq!(
-                acquisition_capacity_error(denied(AdmissionReason::Capacity { holds: vec![hold] })),
-                ComponentManagerError::CapacityHeld(expected)
-            );
+            let error =
+                acquisition_capacity_error(denied(AdmissionReason::Capacity { holds: vec![hold] }));
+            assert_eq!(error, ComponentManagerError::CapacityHeld(expected));
+            if expected == ComponentCapacityReason::KalCodeMemory {
+                let message = error.to_string();
+                assert!(message.contains("not enough memory headroom"), "{message}");
+                assert!(!message.contains("has reached"), "{message}");
+            }
         }
     }
 
