@@ -68,6 +68,10 @@ use talk_key::{Held, KeyRegistry, RegisterError, Status, TalkPrefs, Unavailable}
 /// are rebuilt per account generation (sign-in, restore, account change) on a background thread,
 /// and a page usually subscribes once, possibly before the first runtime is published. Keeping
 /// the channels here means every runtime generation reaches the same, already-subscribed UI.
+/// Signals carry no generation tag: this relies on `runtime_coordinator` publishing a new
+/// generation only after the previous runtime's `shutdown` settled its background threads
+/// (`reconcile_retained_bundle` keeps an unclean bundle), so an old account's transcript can't
+/// arrive after a new account's runtime is live. Relaxing that gating requires tagging signals.
 #[derive(Default)]
 pub struct KalVoiceSignals(Mutex<HashMap<String, Channel<KalVoiceSignal>>>);
 
