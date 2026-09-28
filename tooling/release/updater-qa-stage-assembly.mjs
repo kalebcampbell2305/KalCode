@@ -164,7 +164,7 @@ export function validateBaselineSourceAuthority({ baselineSource, baseline, cand
   if (problems.length > 0) throw new Error(`baseline source is not an exact QA derivation: ${problems.join("; ")}`);
 }
 
-async function assembleRelease({ staging, source, packets, version, notes, write }) {
+export async function assembleRelease({ staging, source, packets, version, notes, write }) {
   const commit = packets[0].build.commit;
   if (packets.some((packet) => packet.build.commit !== commit)) {
     throw new Error(`${version} platform packets do not share one source commit`);
@@ -182,7 +182,7 @@ async function assembleRelease({ staging, source, packets, version, notes, write
       size: packet.build.size,
       sha256: packet.build.sha256,
       signatureSha256: signatureDigests.get(packet.target),
-      builtAt: packet.build.builtAt,
+      builtAt: packet.build.builtAt ?? packet.build.createdAt,
     })),
   };
   const publicationPath = join(staging, "publication.json");

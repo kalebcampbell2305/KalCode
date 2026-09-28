@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { validateBaselineSourceAuthority } from "./updater-qa-stage-assembly.mjs";
+import { assembleRelease, validateBaselineSourceAuthority } from "./updater-qa-stage-assembly.mjs";
 
 function fixture(t, mutateBaseline = () => {}) {
   const source = mkdtempSync(join(tmpdir(), "kalcode-baseline-authority-"));
@@ -128,4 +128,63 @@ test("rejects merge-derived baselines even when their tree has the expected vers
       }),
     /single parent|one parent/,
   );
+});
+
+function timestampStage(t, macTimes) {
+  const staging = mkdtempSync(join(tmpdir(), "kalcode-stage-timestamp-"));
+  t.after(() => rmSync(staging, { recursive: true, force: true }));
+  const signaturePath = join(staging, "fixture.sig");
+  writeFileSync(signaturePath, "uncertified fixture signature");
+  const packets = [
+    { target: "windows-x86_64", file: "KalCode_1.2.3_x64-setup.exe", times: { builtAt: "2026-01-01T00:00:00.000Z" } },
+    { target: "darwin-aarch64", file: "KalCode_1.2.3_arm64.dmg", times: macTimes },
+  ].map(({ target, file, times }) => ({
+    target,
+    signaturePath,
+    build: {
+      version: "1.2.3",
+      commit: "a".repeat(40),
+      requestedReleaseChannel: "stable",
+      file,
+      sha256: "b".repeat(64),
+      size: 100,
+      ...times,
+    },
+  }));
+  return {
+    staging,
+    publication: join(staging, "publication.json"),
+    run: () => assembleRelease({ staging, source: staging, packets, version: "1.2.3", notes: "Fixture", write: true }),
+  };
+}
+
+test("QA staging accepts Mac createdAt while retaining downstream artifact certification", async (t) => {
+  const createdAt = "2026-01-02T00:00:00.000Z";
+  const f = timestampStage(t, { createdAt });
+  // This fixture intentionally has no valid signing/QA evidence. Valid time mapping may
+  // create local publication identity, but must never authorize its distribution.
+  await assert.rejects(f.run(), /build is not eligible for a release descriptor/);
+  const publication = JSON.parse(readFileSync(f.publication, "utf8"));
+  assert.equal(publication.artifacts.find((artifact) => artifact.target === "darwin-aarch64").builtAt, createdAt);
+});
+
+test("QA staging gives builtAt precedence over createdAt", async (t) => {
+  const builtAt = "2026-01-03T00:00:00.000Z";
+  const f = timestampStage(t, { builtAt, createdAt: "2026-01-02T00:00:00.000Z" });
+  await assert.rejects(f.run(), /build is not eligible for a release descriptor/);
+  const publication = JSON.parse(readFileSync(f.publication, "utf8"));
+  assert.equal(publication.artifacts.find((artifact) => artifact.target === "darwin-aarch64").builtAt, builtAt);
+});
+
+test("QA staging rejects malformed fallback or preferred build timestamps", async (t) => {
+  for (const times of [
+    {},
+    { createdAt: "not a timestamp" },
+    { createdAt: "2026-01-02T00:00:00Z" },
+    { builtAt: "invalid", createdAt: "2026-01-02T00:00:00.000Z" },
+  ]) {
+    const f = timestampStage(t, times);
+    await assert.rejects(f.run(), /publication artifact build time is not a canonical timestamp/);
+    assert.equal(existsSync(f.publication), false);
+  }
 });
