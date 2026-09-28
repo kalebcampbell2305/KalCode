@@ -547,6 +547,15 @@ pub fn bind_target(intent: KalVoiceIntent, id: String) -> KalVoiceIntent {
         KalVoiceIntent::CreateTerminal { .. } => KalVoiceIntent::CreateTerminal {
             workspace_id: Some(id),
         },
+        KalVoiceIntent::SetWorkspaceAccount {
+            provider_id,
+            account_query,
+            ..
+        } => KalVoiceIntent::SetWorkspaceAccount {
+            provider_id,
+            account_query,
+            workspace_id: Some(id),
+        },
         KalVoiceIntent::PauseThreads { scope } => KalVoiceIntent::PauseThreads {
             scope: bind_scope(scope),
         },
@@ -859,7 +868,7 @@ fn phrase_at(tokens: &[String], phrase: &[&str], leading: bool) -> bool {
 // Pattern engine: a tiny backtracking matcher over tokens.
 //
 // Syntax: `word` literal · `(a b|c)` alternatives · `[a|b c]` optional · `<count>`, `<provider>`,
-// `<surface>`, `<name>` slots. A pattern must consume every token.
+// `<surface>`, `<account>`, `<name>` slots. A pattern must consume every token.
 
 #[derive(Debug, Clone)]
 enum Node {
@@ -874,6 +883,9 @@ enum Slot {
     Count,
     Provider,
     Surface,
+    /// A provider-led account label ("gemini b", "codex work"): a provider name followed by at
+    /// least one more word that isn't a thread, pane, mode or scope word.
+    Account,
     Name,
 }
 
@@ -885,6 +897,9 @@ struct Caps {
     providers: Vec<&'static str>,
     surface: Option<SurfaceId>,
     names: Vec<String>,
+    /// The provider an `<account>` slot started with, and the whole spoken label.
+    account_provider: Option<&'static str>,
+    account: Option<String>,
 }
 
 fn compile(pattern: &str) -> Vec<Node> {
@@ -931,6 +946,7 @@ fn parse_alternatives(chars: &[char], pos: &mut usize, close: Option<char>) -> V
                     "count" => Slot::Count,
                     "provider" => Slot::Provider,
                     "surface" => Slot::Surface,
+                    "account" => Slot::Account,
                     _ => Slot::Name,
                 }));
             }
@@ -1018,6 +1034,29 @@ fn slot_candidates(slot: Slot, tokens: &[String]) -> Vec<(usize, Fill)> {
                     && let Some(surface) = surface_words(&tokens[..len])
                 {
                     out.push((len, Box::new(move |c: &mut Caps| c.surface = Some(surface))));
+                }
+            }
+        }
+        Slot::Account => {
+            // The longest provider name wins, so "gemini cli" never leaves "cli" as a label.
+            let provider = [2, 1].into_iter().find_map(|len| {
+                (tokens.len() >= len)
+                    .then(|| provider_words(&tokens[..len]).map(|id| (len, id)))
+                    .flatten()
+            });
+            if let Some((len, id)) = provider
+                && tokens.get(len).is_some_and(|w| !is_account_stop_word(w))
+            {
+                // Shortest first, so optional trailing words ("… account") are not swallowed.
+                for end in len + 1..=tokens.len() {
+                    let label = tokens[..end].join(" ");
+                    out.push((
+                        end,
+                        Box::new(move |c: &mut Caps| {
+                            c.account_provider = Some(id);
+                            c.account = Some(label.clone());
+                        }),
+                    ));
                 }
             }
         }
@@ -1123,6 +1162,36 @@ fn provider_words(words: &[String]) -> Option<&'static str> {
         "gemini cli" | "gemini" => ProviderId::GEMINI_CLI,
         _ => return None,
     })
+}
+
+/// Words that can't start an account label after a provider name: "switch to Codex threads" or
+/// "use Gemini in this workspace" name no account.
+fn is_account_stop_word(word: &str) -> bool {
+    matches!(
+        word,
+        "thread"
+            | "threads"
+            | "session"
+            | "sessions"
+            | "agent"
+            | "agents"
+            | "terminal"
+            | "terminals"
+            | "pane"
+            | "panes"
+            | "mode"
+            | "workspace"
+            | "project"
+            | "account"
+            | "accounts"
+            | "in"
+            | "inside"
+            | "for"
+            | "on"
+            | "to"
+            | "with"
+            | "using"
+    )
 }
 
 fn surface_words(words: &[String]) -> Option<SurfaceId> {
@@ -1595,7 +1664,152 @@ fn build_rules() -> Vec<Rule> {
         );
     }
 
+    // Provider accounts (0.1.5). Last, so thread permission modes ("switch the X thread to plan
+    // mode"), Bypass refusals and "switch to <provider>" keep their meaning; an account label
+    // needs at least one word after the provider ("switch to Gemini B").
+    account_rules(&mut add);
+
     rules
+}
+
+/// "This thread", as the focused thread (`thread_query: None`).
+const THIS_THREAD: &str = "(this|the|current|the current|this current|my current|my)";
+/// "This workspace", as the active workspace (`workspace_id: None`).
+const THIS_WORKSPACE: &str =
+    "(this|the|current|the current|this current|my current|my) (workspace|project)";
+
+fn account_rules(add: &mut impl FnMut(String, Build)) {
+    // Rebinding a thread only ever asks: the person confirms KalCode's Rebind dialog.
+    let focused_named = |c: &Caps| {
+        rebind(
+            None,
+            c.provider,
+            c.names.first().cloned().unwrap_or_default(),
+        )
+    };
+    let focused_spoken = |c: &Caps| {
+        rebind(
+            None,
+            c.account_provider,
+            c.account.clone().unwrap_or_default(),
+        )
+    };
+    // "Switch this Gemini thread to Gemini B." / "switch the thread to my work account"
+    add(
+        format!("switch [{THIS_THREAD}] [<provider>] thread to [my|the] <name> [account]"),
+        Box::new(focused_named),
+    );
+    // "Switch to Gemini A." / "switch gemini b": a provider-led label, never a bare provider.
+    add(
+        "switch [to] [my|the] <account> [account]".into(),
+        Box::new(focused_spoken),
+    );
+    // "Switch to my work account." (no provider: the thread's own provider).
+    add(
+        "switch to [my|the] <name> account".into(),
+        Box::new(focused_named),
+    );
+    // "Switch the login fix thread to Gemini B."
+    add(
+        "switch [the|my] <name> thread to [my|the] <name> [account]".into(),
+        Box::new(|c: &Caps| {
+            rebind(
+                c.names.first().cloned(),
+                None,
+                c.names.get(1).cloned().unwrap_or_default(),
+            )
+        }),
+    );
+    // "Use Codex work for this thread."
+    add(
+        format!("use [my|the] <account> [account] (for|in|on) {THIS_THREAD} thread"),
+        Box::new(focused_spoken),
+    );
+    add(
+        format!("use [my|the] <name> account (for|in|on) {THIS_THREAD} thread"),
+        Box::new(focused_named),
+    );
+
+    // A workspace default is metadata only; starting a thread still needs that account signed in.
+    // "Use Gemini A in this workspace." (before the named form, which would read "this" as a name)
+    add(
+        format!("use [my|the] <account> [account] (in|for|on) {THIS_WORKSPACE}"),
+        Box::new(|c: &Caps| workspace_account(c, None)),
+    );
+    add(
+        format!("use [my|the] <account> [account] {IN_WORKSPACE}"),
+        Box::new(|c: &Caps| workspace_account(c, c.names.first())),
+    );
+    // Without a provider the account can't be told apart from another provider's: ask.
+    for p in [
+        format!("use [my|the] <name> account (in|for|on) {THIS_WORKSPACE}"),
+        format!("use [my|the] <name> account {IN_WORKSPACE}"),
+    ] {
+        add(
+            p,
+            Box::new(|_| {
+                Understood::Rejected {
+                code: "provider_not_specified",
+                message: "Say which provider's account, for example \u{201c}use Gemini A in this workspace\u{201d}.".into(),
+            }
+            }),
+        );
+    }
+
+    // "Open a new Codex thread with my work account." Threads only: panes keep the pane grammar.
+    add(
+        format!(
+            "{OPEN_VERB} [up] [<count>] [new|more|additional|fresh] <provider> (thread|threads) (with|using) [my|the] <name> [account] [{IN_WORKSPACE}]"
+        ),
+        Box::new(|c: &Caps| {
+            let count = match check_count(c.count.unwrap_or(1)) {
+                Ok(count) => count,
+                Err(rejected) => return rejected,
+            };
+            let (Some(provider), Some(account)) = (c.provider, c.names.first()) else {
+                return Understood::reasoning("");
+            };
+            with_workspace(
+                KalVoiceIntent::CreateThreads {
+                    provider_id: ProviderId::new(provider),
+                    count,
+                    workspace_id: None,
+                    account_query: Some(account.clone()),
+                },
+                c.names.get(1),
+            )
+        }),
+    );
+}
+
+/// A rebind request, or reasoning when the "account" is really a mode ("… to fast mode").
+fn rebind(
+    thread_query: Option<String>,
+    provider: Option<&'static str>,
+    account_query: String,
+) -> Understood {
+    if account_query.is_empty() || account_query.split(' ').any(|w| w == "mode") {
+        return Understood::reasoning("");
+    }
+    Understood::intent(KalVoiceIntent::RebindThreadAccount {
+        thread_query,
+        provider_id: provider.map(ProviderId::new),
+        account_query,
+    })
+}
+
+fn workspace_account(c: &Caps, workspace: Option<&String>) -> Understood {
+    let (Some(provider), Some(account)) = (c.account_provider, c.account.clone()) else {
+        return Understood::reasoning("");
+    };
+    with_workspace(
+        KalVoiceIntent::SetWorkspaceAccount {
+            provider_id: ProviderId::new(provider),
+            account_query: account,
+            workspace_id: None,
+        },
+        workspace,
+    )
 }
 
 /// "Show", as a Dashboard filter verb.

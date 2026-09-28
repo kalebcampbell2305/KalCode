@@ -1,4 +1,5 @@
-import type { SettingsPatch, SurfaceId } from "@kalcode/protocol";
+import type { ProviderAccount, SettingsPatch, SurfaceId } from "@kalcode/protocol";
+import { useToast } from "@kalcode/ui/components";
 import { Command } from "cmdk";
 import {
   ArrowRightLeft,
@@ -27,15 +28,21 @@ import {
   SquareTerminal,
   Sun,
   Undo2,
+  UserRoundCheck,
+  UserRoundCog,
   X,
 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
+import { toKalCodeError } from "../ipc/errors.ts";
 import { useOptionalKalVoice } from "../kalvoice/KalVoiceProvider.tsx";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { useWorkspaces } from "../runtime/WorkspaceProvider.tsx";
 import { CODE_SHORTCUT_LABELS } from "../surfaces/code/shortcuts.ts";
+import { requestProvidersTab } from "../surfaces/providers/providersTab.ts";
 import { useDiagnosticsActions } from "../surfaces/settings/useDiagnosticsActions.ts";
+import { requestRebind, useSelectedThread } from "../surfaces/threads/accountIntent.ts";
 import { useThreadsIntent } from "../surfaces/threads/intent.tsx";
+import { accountKeywords, accountProviderName, matchAccounts, parseAccountCommand } from "./accountCommands.ts";
 import styles from "./CommandPalette.module.css";
 import { PRIMARY_ORDER, SURFACES, useNavigation, VIEWS, viewVisible } from "./navigation.tsx";
 import { dispatchPaneCommand, type PaneCommand } from "./panes/paneCommands.ts";
@@ -68,7 +75,8 @@ function namedCommand(root: HTMLElement, typed: string): HTMLElement | undefined
 }
 
 export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
-  const { info, settings, updateSettings } = useRuntime();
+  const { client, info, settings, updateSettings } = useRuntime();
+  const toast = useToast();
   const { navigate } = useNavigation();
   const diagnostics = useDiagnosticsActions();
   const kalvoice = useOptionalKalVoice();
@@ -131,6 +139,60 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     });
 
   const visible = new Set(info.flags.surfaces.filter((f) => f.visible).map((f) => f.id));
+
+  // 0.1.5 account commands ("switch gemini b", "use codex work"). Accounts are read when the
+  // palette opens; a thread rebind only asks the Rebind dialog, a workspace default is confirmed.
+  const selectedThread = useSelectedThread();
+  const [accounts, setAccounts] = useState<ProviderAccount[]>([]);
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    client
+      .listProviderAccounts()
+      .then((listed) => live && setAccounts(listed))
+      .catch(() => live && setAccounts([]));
+    return () => {
+      live = false;
+    };
+  }, [client, open]);
+  const accountPhrase = parseAccountCommand(search.query);
+  const accountMatches = accountPhrase ? matchAccounts(accounts, accountPhrase) : [];
+  const activeWorkspace = workspaces.active?.available ? workspaces.active : null;
+  const signInFirst = (account: ProviderAccount) => {
+    toast.show({
+      tone: "danger",
+      title: `Sign in to ${account.displayName} first`,
+      description: `${account.displayName} (${accountProviderName(account.providerId)}) isn't signed in. Sign in on the Providers Accounts tab, then try again.`,
+    });
+    requestProvidersTab("accounts");
+    navigate("providers");
+  };
+  const rebindThread = (account: ProviderAccount, threadId: string) =>
+    run(() => {
+      if (account.authenticationState === "not_authenticated") return signInFirst(account);
+      navigate("threads");
+      threadsIntent.request("open", threadId);
+      requestRebind(threadId, account.id);
+    });
+  const setWorkspaceDefault = (account: ProviderAccount, workspace: { id: string; name: string }) =>
+    run(async () => {
+      if (account.authenticationState === "not_authenticated") return signInFirst(account);
+      const provider = accountProviderName(account.providerId);
+      try {
+        await client.bindProviderAccount(account.providerId, "workspace", workspace.id, account.id);
+        toast.show({
+          tone: "success",
+          title: `New ${provider} threads in ${workspace.name} use ${account.displayName}`,
+          description: "Existing threads keep their accounts.",
+        });
+      } catch (error) {
+        toast.show({
+          tone: "danger",
+          title: "Workspace account wasn't saved",
+          description: toKalCodeError(error).message,
+        });
+      }
+    });
   const destinations = [...PRIMARY_ORDER, "settings" as const].filter((id): id is SurfaceId => visible.has(id));
   const views = (["home", "folder"] as const).filter((view) => viewVisible(view, info.flags.features));
 
@@ -266,6 +328,52 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
               </Item>
             ))}
         </Command.Group>
+
+        {accountMatches.length > 0 && (selectedThread || activeWorkspace) ? (
+          <Command.Group heading="Accounts" className={styles.group}>
+            {accountMatches.flatMap((account) => {
+              const name = `${account.displayName} (${accountProviderName(account.providerId)})`;
+              const keywords = [...accountKeywords(account), search.query.trim()];
+              const signedOut = account.authenticationState === "not_authenticated" ? "Signed out" : undefined;
+              const items = [];
+              if (selectedThread && selectedThread.providerId === account.providerId) {
+                const current = selectedThread.providerAccountId === account.id;
+                items.push(
+                  <Item
+                    key={`thread:${account.id}`}
+                    icon={<UserRoundCheck />}
+                    onSelect={
+                      current
+                        ? run(() =>
+                            toast.show({ tone: "info", title: `This thread already uses ${account.displayName}` }),
+                          )
+                        : rebindThread(account, selectedThread.threadId)
+                    }
+                    keywords={keywords}
+                    current={current}
+                    badge={signedOut}
+                  >
+                    {`Use ${name} for this thread`}
+                  </Item>,
+                );
+              }
+              if (activeWorkspace) {
+                items.push(
+                  <Item
+                    key={`workspace:${account.id}`}
+                    icon={<UserRoundCog />}
+                    onSelect={setWorkspaceDefault(account, activeWorkspace)}
+                    keywords={keywords}
+                    badge={signedOut}
+                  >
+                    {`Use ${name} in this workspace`}
+                  </Item>,
+                );
+              }
+              return items;
+            })}
+          </Command.Group>
+        ) : null}
 
         {visible.has("code") && workspaces.active?.available ? (
           <Command.Group heading="Panes" className={styles.group}>
@@ -444,9 +552,11 @@ interface ItemProps {
   keywords?: string[];
   shortcut?: string;
   current?: boolean;
+  /** A short state shown after the label ("Signed out"). */
+  badge?: string | undefined;
 }
 
-function Item({ icon, children, onSelect, keywords, shortcut, current }: ItemProps) {
+function Item({ icon, children, onSelect, keywords, shortcut, current, badge }: ItemProps) {
   return (
     <Command.Item className={styles.item} onSelect={onSelect} value={children} {...(keywords ? { keywords } : {})}>
       <span className={styles.itemIcon} aria-hidden="true">
@@ -454,6 +564,7 @@ function Item({ icon, children, onSelect, keywords, shortcut, current }: ItemPro
       </span>
       <span className={styles.itemLabel}>{children}</span>
       {current ? <span className={styles.current}>Current</span> : null}
+      {badge ? <span className={styles.current}>{badge}</span> : null}
       {shortcut ? <kbd>{shortcut}</kbd> : null}
     </Command.Item>
   );

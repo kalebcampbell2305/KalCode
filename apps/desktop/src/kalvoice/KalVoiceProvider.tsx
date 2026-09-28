@@ -38,7 +38,7 @@ import {
 } from "../shell/panes/paneCommands.ts";
 import { useOptionalSearch } from "../shell/rail/search/SearchProvider.tsx";
 import { usePermissions } from "../surfaces/permissions/index.ts";
-import { getSelectedThread } from "../surfaces/threads/accountIntent.ts";
+import { getSelectedThread, requestRebind } from "../surfaces/threads/accountIntent.ts";
 import { type AssistantState, INITIAL_STATE, reduce } from "./assistantState.ts";
 import {
   type DictationTarget,
@@ -339,6 +339,13 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
         case "search":
           // Z7-W2: KalVoice already read back the names; the palette shows the results.
           search.current?.openWith(directive.query);
+          break;
+        case "confirm_thread_rebind":
+          // 0.1.5: KalVoice never rebinds a thread. It asks Threads to show the Rebind dialog;
+          // only the person's confirmation there switches the account.
+          requestRebind(directive.threadId, directive.accountId);
+          if (getSelectedThread()?.threadId === directive.threadId) navigate("threads");
+          else void intents.focus({ kind: "thread", threadId: directive.threadId });
           break;
         default:
           break;

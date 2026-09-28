@@ -13,15 +13,25 @@
 //!
 //! Z7-W3: `filter_dashboard` only changes what the Dashboard shows; its summary counts the
 //! runtime's non-archived threads by Dashboard chip (`ThreadStatus::chip`).
+//!
+//! 0.1.5 switch accounts: `rebind_thread_account` only resolves the thread and account and asks
+//! the person to confirm KalCode's Rebind dialog (`confirm_thread_rebind`); KalVoice never
+//! rebinds a thread itself. `set_workspace_account` writes the workspace's default account
+//! binding (metadata; starting a thread still needs that account signed in). `create_threads`
+//! that names an account opens idle headless threads in Threads when provider panes are off.
+//! A signed-out account is refused with a sign-in message, and an ambiguous name is answered
+//! with a short question rather than a guess.
 
 use std::sync::Arc;
 
-use kalcode_contracts::agent::ProviderId;
+use kalcode_contracts::agent::{AuthState, ProviderId};
 use kalcode_contracts::app::SurfaceId;
 use kalcode_contracts::kalvoice::{
     BrowserControl, KalVoiceIntent, PaneDirection, ProviderPaneRequest,
 };
 use kalcode_contracts::permissions::{ApprovalStatus, PermissionMode};
+use kalcode_contracts::provider_accounts::{ProviderAccount, ProviderAccountBindingKind};
+use kalcode_contracts::threads::ThreadSummary;
 use kalcode_contracts::threads::WorkspaceOption;
 use kalcode_contracts::workspace_ui::{DashboardChip, SplitAxis};
 use kalcode_core::workspaces::TerminalSize;
@@ -31,6 +41,7 @@ use kalcode_kalvoice::orchestrator::{
     requestable_mode_label,
 };
 use kalcode_permissions::PermissionService;
+use kalcode_providers::accounts::AccountStore;
 use kalcode_threads::{
     BulkOutcome, CoreWorkspaces, CreateIdleThread, ResolvedWorkspace, ThreadRuntime,
     WorkspaceResolver,
@@ -474,6 +485,285 @@ impl DesktopExecutor {
     }
 }
 
+/// Lowercase words of a spoken or typed label ("Gemini-B" and "gemini b" are the same).
+fn label_words(text: &str) -> Vec<String> {
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// `words` without a leading provider name ("gemini cli b" -> "b") or a trailing "account".
+fn without_provider<'a>(words: &'a [String], provider: &ProviderId) -> &'a [String] {
+    let aliases: &[&[&str]] = match provider.as_str() {
+        ProviderId::CLAUDE_CODE => &[&["claude", "code"], &["claude"]],
+        ProviderId::CODEX => &[&["codex"]],
+        ProviderId::GEMINI_CLI => &[&["gemini", "cli"], &["gemini"]],
+        _ => &[],
+    };
+    let mut rest = words;
+    if let Some(alias) = aliases.iter().find(|alias| {
+        rest.len() >= alias.len() && rest.iter().zip(alias.iter()).all(|(w, a)| w == a)
+    }) {
+        rest = &rest[alias.len()..];
+    }
+    if rest.last().is_some_and(|w| w == "account") {
+        rest = &rest[..rest.len() - 1];
+    }
+    rest
+}
+
+/// The accounts a spoken name could mean, best match first: the exact label, the label without
+/// its provider name ("Gemini B" for "b"), then labels containing every spoken word ("Codex
+/// Work" for "work"). A name that is only the provider ("Gemini") matches all its accounts.
+/// Never picks between equal matches.
+fn matching_accounts<'a>(
+    accounts: &'a [ProviderAccount],
+    provider: &ProviderId,
+    query: &str,
+) -> Vec<&'a ProviderAccount> {
+    let spoken = label_words(query);
+    let spoken_rest = without_provider(&spoken, provider);
+    if spoken_rest.is_empty() {
+        return accounts.iter().collect();
+    }
+    let matches = |rank: u8, label: &[String]| match rank {
+        0 => label == spoken.as_slice(),
+        1 => without_provider(label, provider) == spoken_rest,
+        _ => spoken_rest.iter().all(|w| label.contains(w)),
+    };
+    for rank in 0..3 {
+        let found: Vec<&ProviderAccount> = accounts
+            .iter()
+            .filter(|a| matches(rank, &label_words(&a.display_name)))
+            .collect();
+        if !found.is_empty() {
+            return found;
+        }
+    }
+    Vec::new()
+}
+
+/// "Gemini A or Gemini B" / "A, B or C".
+fn or_list(labels: &[&str]) -> String {
+    match labels {
+        [] => String::new(),
+        [one] => (*one).to_owned(),
+        [rest @ .., last] => format!("{} or {last}", rest.join(", ")),
+    }
+}
+
+impl DesktopExecutor {
+    /// The one account of `provider` a spoken name means, signed in or not yet checked. Asks
+    /// which one when several match; never signs in or bypasses the provider's own auth.
+    fn spoken_account(
+        &self,
+        provider: &ProviderId,
+        query: &str,
+    ) -> Result<ProviderAccount, ExecError> {
+        let provider_name = provider_display_name(provider);
+        let accounts = AccountStore::new(self.core.clone())
+            .list(Some(provider.as_str()))
+            .map_err(|e| from_core(&e))?;
+        if accounts.is_empty() {
+            return Err(ExecError::new(
+                "provider_account_required",
+                format!("Connect a {provider_name} account in Providers first."),
+            ));
+        }
+        let found = matching_accounts(&accounts, provider, query);
+        let account = match found.as_slice() {
+            [] => {
+                return Err(ExecError::new(
+                    "provider_account_not_found",
+                    format!(
+                        "KalCode has no {provider_name} account called \u{201c}{}\u{201d}. Connect it in Providers, or say another account.",
+                        query.trim()
+                    ),
+                ));
+            }
+            [one] => (*one).clone(),
+            many => {
+                let labels: Vec<&str> = many.iter().map(|a| a.display_name.as_str()).collect();
+                return Err(ExecError::new(
+                    "provider_account_ambiguous",
+                    format!("Which account \u{2014} {}?", or_list(&labels)),
+                ));
+            }
+        };
+        if account.authentication_state == AuthState::NotAuthenticated {
+            return Err(ExecError::new(
+                "provider_account_signed_out",
+                format!(
+                    "{} isn't signed in. Sign in to it in Providers, then try again.",
+                    account.display_name
+                ),
+            ));
+        }
+        Ok(account)
+    }
+
+    /// The thread a rebind means: the named one, else the one the person is looking at.
+    fn rebind_thread(
+        &self,
+        thread_query: Option<&str>,
+        focused: Option<&str>,
+    ) -> Result<ThreadSummary, ExecError> {
+        let runtime = self.threads()?;
+        if let Some(query) = thread_query.map(str::trim).filter(|q| !q.is_empty()) {
+            return self.named_thread(query);
+        }
+        let id = focused.ok_or_else(|| {
+            ExecError::new(
+                "thread_not_specified",
+                "Open the thread first, or say which one, for example \u{201c}switch the login fix thread to Gemini B\u{201d}.",
+            )
+        })?;
+        let thread = runtime.get(id).map_err(|e| from_core(&e))?;
+        if thread.archived_at.is_some() {
+            return Err(ExecError::new(
+                "thread_archived",
+                "That thread is archived. Restore it before switching its account.",
+            ));
+        }
+        Ok(thread)
+    }
+
+    /// Resolves a rebind without changing anything. The Rebind dialog does the switch.
+    fn prepare_rebind(
+        &self,
+        thread_query: Option<&str>,
+        provider_hint: Option<&ProviderId>,
+        account_query: &str,
+        focused: Option<&str>,
+    ) -> Result<(ThreadSummary, ProviderAccount), ExecError> {
+        let thread = self.rebind_thread(thread_query, focused)?;
+        if let Some(hint) = provider_hint
+            && hint != &thread.provider_id
+        {
+            let provider_name = provider_display_name(&thread.provider_id);
+            return Err(ExecError::new(
+                "provider_account_mismatch",
+                format!(
+                    "\u{201c}{}\u{201d} is a {provider_name} thread, so it can only switch to another {provider_name} account.",
+                    thread.name
+                ),
+            ));
+        }
+        let account = self.spoken_account(&thread.provider_id, account_query)?;
+        Ok((thread, account))
+    }
+
+    fn prepare_workspace_account(
+        &self,
+        provider: &ProviderId,
+        account_query: &str,
+        workspace_id: Option<&str>,
+    ) -> Result<(ResolvedWorkspace, ProviderAccount), ExecError> {
+        let workspace = self.target_workspace(workspace_id)?;
+        let account = self.spoken_account(provider, account_query)?;
+        Ok((workspace, account))
+    }
+
+    /// Idle headless threads bound to a named account: the Threads-surface path, for builds
+    /// without provider panes. Nothing starts until the person sends the thread a message.
+    fn prepare_headless_threads(
+        &self,
+        provider: &ProviderId,
+        count: u8,
+        workspace_id: Option<&str>,
+        account_query: &str,
+    ) -> Result<(ResolvedWorkspace, CreateIdleThread), ExecError> {
+        if count == 0 || count > 16 {
+            return Err(ExecError::new(
+                "invalid_thread_count",
+                "Open between 1 and 16 threads at a time.",
+            ));
+        }
+        let runtime = self.threads()?;
+        let workspace = self.target_workspace(workspace_id)?;
+        let options = runtime.options().map_err(|e| from_core(&e))?;
+        if !options.providers.iter().any(|p| &p.id == provider) {
+            return Err(ExecError::new(
+                "provider_unavailable",
+                "That provider is not ready. Check Providers before opening threads.",
+            ));
+        }
+        let account = self.spoken_account(provider, account_query)?;
+        let request = CreateIdleThread {
+            provider_id: provider.to_string(),
+            provider_account_id: Some(account.id),
+            account_label: Some(account.display_name),
+            workspace_id: workspace.id.clone(),
+            model: None,
+            permission_mode: PermissionMode::Approve,
+            name: None,
+        };
+        Ok((workspace, request))
+    }
+
+    fn create_headless_threads(
+        &self,
+        provider: &ProviderId,
+        count: u8,
+        workspace_id: Option<&str>,
+        account_query: &str,
+    ) -> Result<Executed, ExecError> {
+        let (workspace, request) =
+            self.prepare_headless_threads(provider, count, workspace_id, account_query)?;
+        let runtime = self.threads()?;
+        let mut ids = Vec::new();
+        let mut first_error = None;
+        for _ in 0..count {
+            match runtime.create_idle(request.clone()) {
+                Ok(thread) => ids.push(thread.id),
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        if ids.is_empty() {
+            return Err(first_error.as_ref().map_or_else(
+                || ExecError::new("threads_failed", "KalVoice could not open those threads."),
+                from_core,
+            ));
+        }
+        let provider_name = provider_display_name(provider);
+        let label = request.account_label.unwrap_or_default();
+        let summary = match &first_error {
+            Some(error) if ids.len() < usize::from(count) => format!(
+                "Opened {} of {count} {provider_name} threads in {} with {label}. {}",
+                ids.len(),
+                workspace.name,
+                error.message
+            ),
+            _ if ids.len() == 1 => format!(
+                "Opened a new {provider_name} thread in {} with {label}. Send it a message in Threads to start.",
+                workspace.name
+            ),
+            _ => format!(
+                "Opened {} {provider_name} threads in {} with {label}. Send each a message in Threads to start.",
+                ids.len(),
+                workspace.name
+            ),
+        };
+        let directive = if ids.len() == 1 {
+            UiDirective::OpenThread {
+                thread_id: ids.remove(0),
+            }
+        } else {
+            UiDirective::Navigate {
+                surface: SurfaceId::Threads,
+            }
+        };
+        Ok(Executed {
+            summary,
+            directive: Some(directive),
+        })
+    }
+}
+
 impl Executor for DesktopExecutor {
     fn workspace_options(&self) -> Result<Vec<WorkspaceOption>, ExecError> {
         let resolver = self.workspace_resolver();
@@ -551,6 +841,19 @@ impl Executor for DesktopExecutor {
                 provider_id,
                 count,
                 workspace_id,
+                account_query: Some(account_query),
+            } if !self.provider_panes_enabled => self
+                .prepare_headless_threads(
+                    provider_id,
+                    *count,
+                    workspace_id.as_deref(),
+                    account_query,
+                )
+                .map(|_| ()),
+            KalVoiceIntent::CreateThreads {
+                provider_id,
+                count,
+                workspace_id,
                 account_query,
             } => self
                 .prepare_provider_panes(
@@ -596,9 +899,28 @@ impl Executor for DesktopExecutor {
                 "not_in_this_build",
                 "Provider switching isn't in this build yet, so KalVoice can't do that.",
             )),
-            // Phase 0 contract only; the switch-accounts executor lane replaces these refusals.
-            KalVoiceIntent::RebindThreadAccount { .. }
-            | KalVoiceIntent::SetWorkspaceAccount { .. } => Err(account_switch_unavailable()),
+            // The focused thread is only known at execution; a named thread and a provider-led
+            // account are checked now, so an unknown name is refused before anything counts.
+            KalVoiceIntent::RebindThreadAccount {
+                thread_query,
+                provider_id,
+                account_query,
+            } => {
+                self.threads()?;
+                if let Some(query) = thread_query.as_deref().filter(|q| !q.trim().is_empty()) {
+                    self.prepare_rebind(Some(query), provider_id.as_ref(), account_query, None)?;
+                } else if let Some(provider) = provider_id {
+                    self.spoken_account(provider, account_query)?;
+                }
+                Ok(())
+            }
+            KalVoiceIntent::SetWorkspaceAccount {
+                provider_id,
+                account_query,
+                workspace_id,
+            } => self
+                .prepare_workspace_account(provider_id, account_query, workspace_id.as_deref())
+                .map(|_| ()),
             KalVoiceIntent::ShowApprovals if self.permissions.is_none() => Err(ExecError::new(
                 "approvals_unavailable",
                 "KalCode's permission engine isn't running, so there's nothing KalVoice can show.",
@@ -659,6 +981,17 @@ impl Executor for DesktopExecutor {
                     }),
                 })
             }
+            KalVoiceIntent::CreateThreads {
+                provider_id,
+                count,
+                workspace_id,
+                account_query: Some(account_query),
+            } if !self.provider_panes_enabled => self.create_headless_threads(
+                provider_id,
+                *count,
+                workspace_id.as_deref(),
+                account_query,
+            ),
             KalVoiceIntent::CreateThreads {
                 provider_id,
                 count,
@@ -834,17 +1167,70 @@ impl Executor for DesktopExecutor {
                 "not_in_this_build",
                 "Provider switching isn't in this build yet, so KalVoice can't do that.",
             )),
-            KalVoiceIntent::RebindThreadAccount { .. }
-            | KalVoiceIntent::SetWorkspaceAccount { .. } => Err(account_switch_unavailable()),
+            KalVoiceIntent::RebindThreadAccount {
+                thread_query,
+                provider_id,
+                account_query,
+            } => {
+                // Never rebinds: the person confirms (or cancels) KalCode's Rebind dialog.
+                let (thread, account) = self.prepare_rebind(
+                    thread_query.as_deref(),
+                    provider_id.as_ref(),
+                    account_query,
+                    ctx.thread_id.as_deref(),
+                )?;
+                if thread.provider_account_id.as_deref() == Some(account.id.as_str()) {
+                    return Ok(Executed {
+                        summary: format!(
+                            "\u{201c}{}\u{201d} already uses {}.",
+                            thread.name, account.display_name
+                        ),
+                        directive: Some(UiDirective::OpenThread {
+                            thread_id: thread.id,
+                        }),
+                    });
+                }
+                Ok(Executed {
+                    summary: format!(
+                        "Confirm in KalCode to switch \u{201c}{}\u{201d} to {}.",
+                        thread.name, account.display_name
+                    ),
+                    directive: Some(UiDirective::ConfirmThreadRebind {
+                        thread_id: thread.id,
+                        account_id: account.id,
+                    }),
+                })
+            }
+            KalVoiceIntent::SetWorkspaceAccount {
+                provider_id,
+                account_query,
+                workspace_id,
+            } => {
+                let (workspace, account) = self.prepare_workspace_account(
+                    provider_id,
+                    account_query,
+                    workspace_id.as_deref(),
+                )?;
+                AccountStore::new(self.core.clone())
+                    .bind(
+                        provider_id.as_str(),
+                        ProviderAccountBindingKind::Workspace,
+                        &workspace.id,
+                        &account.id,
+                    )
+                    .map_err(|e| from_core(&e))?;
+                Ok(Executed {
+                    summary: format!(
+                        "New {} threads in {} will use {}.",
+                        provider_display_name(provider_id),
+                        workspace.name,
+                        account.display_name
+                    ),
+                    directive: None,
+                })
+            }
         }
     }
-}
-
-fn account_switch_unavailable() -> ExecError {
-    ExecError::new(
-        "not_in_this_build",
-        "Switching provider accounts by voice isn't in this build yet, so KalVoice can't do that.",
-    )
 }
 
 fn browser_summary(command: &BrowserControl) -> String {
@@ -1345,5 +1731,399 @@ mod tests {
         );
         let failed = bulk_summary("resume", "Resumed", idle, &[outcome(false, None)]);
         assert!(matches!(failed, Err(e) if e.message == "KalVoice couldn't resume any threads."));
+    }
+
+    // ---- 0.1.5 switch accounts ----
+
+    /// A registered provider that never starts a session (idle threads never need one).
+    struct IdleProvider(&'static str);
+
+    impl kalcode_contracts::agent::AgentProvider for IdleProvider {
+        fn id(&self) -> ProviderId {
+            ProviderId::new(self.0)
+        }
+
+        fn display_name(&self) -> &str {
+            self.0
+        }
+
+        fn detect(&self) -> kalcode_contracts::agent::ProviderDetection {
+            kalcode_contracts::agent::ProviderDetection {
+                provider_id: self.id(),
+                display_name: self.0.into(),
+                state: kalcode_contracts::agent::DetectionState::Installed,
+                display_path: None,
+                version: None,
+                minimum_version: None,
+                auth: AuthState::Authenticated,
+                message: None,
+                checked_at: String::new(),
+            }
+        }
+
+        fn capabilities(&self) -> kalcode_contracts::agent::ProviderCapabilities {
+            match self.0 {
+                ProviderId::GEMINI_CLI => kalcode_providers::catalog::gemini_capabilities(),
+                _ => kalcode_providers::catalog::codex_capabilities(),
+            }
+        }
+
+        fn start_session(
+            &self,
+            _config: kalcode_contracts::agent::SessionConfig,
+            _sink: Box<dyn kalcode_contracts::agent::AgentEventSink>,
+        ) -> Result<
+            Box<dyn kalcode_contracts::agent::AgentSession>,
+            kalcode_contracts::agent::ProviderError,
+        > {
+            Err(kalcode_contracts::agent::ProviderError::Unsupported)
+        }
+    }
+
+    struct AccountsFixture {
+        _data: tempfile::TempDir,
+        _project: tempfile::TempDir,
+        executor: DesktopExecutor,
+        store: AccountStore,
+        workspace_id: String,
+        runtime: Arc<ThreadRuntime>,
+    }
+
+    /// Stable-like: provider panes off, the thread runtime running with Codex and Gemini.
+    fn accounts_fixture() -> AccountsFixture {
+        let data = tempfile::tempdir().expect("data");
+        let project = tempfile::tempdir().expect("project");
+        let mut executor = executor(data.path());
+        let registry = Arc::new(kalcode_threads::ProviderRegistry::new());
+        registry.register(Arc::new(IdleProvider(ProviderId::CODEX)));
+        registry.register(Arc::new(IdleProvider(ProviderId::GEMINI_CLI)));
+        let runtime = Arc::new(
+            ThreadRuntime::new(
+                executor.core.clone(),
+                registry,
+                Arc::new(CoreWorkspaces::new(executor.core.clone())),
+                Arc::new(kalcode_contracts::permissions::AskUnlessReadGate),
+            )
+            .expect("runtime"),
+        );
+        executor.threads = Some(runtime.clone());
+        executor.visible.push(SurfaceId::Threads);
+        let workspace_id = executor
+            .core
+            .open_workspace(project.path())
+            .expect("open")
+            .id;
+        let store = AccountStore::new(executor.core.clone());
+        AccountsFixture {
+            _data: data,
+            _project: project,
+            executor,
+            store,
+            workspace_id,
+            runtime,
+        }
+    }
+
+    impl AccountsFixture {
+        fn account(&self, provider: &str, label: &str, state: AuthState) -> ProviderAccount {
+            let account = self.store.create(provider, label).expect("account");
+            self.store
+                .mark_authentication(&account.id, state, None, None)
+                .expect("auth")
+        }
+
+        fn thread(&self, provider: &str, account: &ProviderAccount) -> ThreadSummary {
+            self.runtime
+                .create_idle(CreateIdleThread {
+                    provider_id: provider.into(),
+                    provider_account_id: Some(account.id.clone()),
+                    account_label: Some(account.display_name.clone()),
+                    workspace_id: self.workspace_id.clone(),
+                    model: None,
+                    permission_mode: PermissionMode::Approve,
+                    name: Some("Login fix".into()),
+                })
+                .expect("thread")
+        }
+
+        fn run(&self, intent: &KalVoiceIntent, ctx: &ExecContext) -> Result<Executed, ExecError> {
+            self.executor.check(intent)?;
+            self.executor.execute(intent, ctx)
+        }
+    }
+
+    fn rebind(thread: Option<&str>, provider: Option<&str>, account: &str) -> KalVoiceIntent {
+        KalVoiceIntent::RebindThreadAccount {
+            thread_query: thread.map(str::to_owned),
+            provider_id: provider.map(ProviderId::new),
+            account_query: account.into(),
+        }
+    }
+
+    fn focused(thread_id: &str) -> ExecContext {
+        ExecContext {
+            thread_id: Some(thread_id.to_owned()),
+            ..ctx()
+        }
+    }
+
+    #[test]
+    fn voice_rebind_only_asks_the_rebind_dialog_and_never_changes_the_thread() {
+        let f = accounts_fixture();
+        let a = f.account(ProviderId::GEMINI_CLI, "Gemini A", AuthState::Authenticated);
+        let b = f.account(ProviderId::GEMINI_CLI, "Gemini B", AuthState::Unknown);
+        let thread = f.thread(ProviderId::GEMINI_CLI, &a);
+
+        // "Switch this Gemini thread to Gemini B." (the shown thread)
+        let done = f
+            .run(
+                &rebind(None, Some(ProviderId::GEMINI_CLI), "gemini b"),
+                &focused(&thread.id),
+            )
+            .expect("rebind request");
+        assert_eq!(
+            done.directive,
+            Some(UiDirective::ConfirmThreadRebind {
+                thread_id: thread.id.clone(),
+                account_id: b.id.clone(),
+            })
+        );
+        assert_eq!(
+            done.summary,
+            "Confirm in KalCode to switch \u{201c}Login fix\u{201d} to Gemini B."
+        );
+        // Asking changed nothing: the thread still belongs to Gemini A.
+        let unchanged = f.runtime.get(&thread.id).expect("thread");
+        assert_eq!(unchanged.provider_account_id, Some(a.id.clone()));
+        assert_eq!(unchanged.account_label.as_deref(), Some("Gemini A"));
+
+        // A named thread and a provider-less label ("b") resolve the same way.
+        let named = f
+            .run(&rebind(Some("login fix"), None, "b"), &ctx())
+            .expect("named rebind");
+        assert_eq!(
+            named.directive,
+            Some(UiDirective::ConfirmThreadRebind {
+                thread_id: thread.id.clone(),
+                account_id: b.id.clone(),
+            })
+        );
+
+        // Already on that account: say so and just open the thread.
+        let same = f
+            .run(&rebind(None, None, "Gemini A"), &focused(&thread.id))
+            .expect("same account");
+        assert_eq!(
+            same.summary,
+            "\u{201c}Login fix\u{201d} already uses Gemini A."
+        );
+        assert_eq!(
+            same.directive,
+            Some(UiDirective::OpenThread {
+                thread_id: thread.id.clone()
+            })
+        );
+    }
+
+    #[test]
+    fn voice_rebind_refuses_ambiguity_sign_out_and_the_wrong_provider() {
+        let f = accounts_fixture();
+        let a = f.account(ProviderId::GEMINI_CLI, "Gemini A", AuthState::Authenticated);
+        f.account(ProviderId::GEMINI_CLI, "Gemini B", AuthState::Authenticated);
+        f.account(
+            ProviderId::GEMINI_CLI,
+            "Gemini C",
+            AuthState::NotAuthenticated,
+        );
+        f.account(ProviderId::CODEX, "Work", AuthState::Authenticated);
+        let thread = f.thread(ProviderId::GEMINI_CLI, &a);
+        let here = focused(&thread.id);
+
+        let ambiguous = f
+            .run(&rebind(None, None, "gemini"), &here)
+            .map_err(|e| (e.code, e.message));
+        assert_eq!(
+            ambiguous,
+            Err((
+                "provider_account_ambiguous".into(),
+                "Which account \u{2014} Gemini A, Gemini B or Gemini C?".into()
+            ))
+        );
+        let signed_out = f
+            .run(&rebind(None, None, "gemini c"), &here)
+            .map_err(|e| (e.code, e.message));
+        assert_eq!(
+            signed_out,
+            Err((
+                "provider_account_signed_out".into(),
+                "Gemini C isn't signed in. Sign in to it in Providers, then try again.".into()
+            ))
+        );
+        assert_eq!(
+            f.run(&rebind(None, None, "gemini z"), &here)
+                .map_err(|e| e.code),
+            Err("provider_account_not_found".into())
+        );
+        // A Codex account never lands on a Gemini thread.
+        assert_eq!(
+            f.run(&rebind(None, Some(ProviderId::CODEX), "codex work"), &here)
+                .map_err(|e| e.code),
+            Err("provider_account_mismatch".into())
+        );
+        // "This thread" with no thread on screen: ask which one.
+        assert_eq!(
+            f.run(&rebind(None, None, "gemini b"), &ctx())
+                .map_err(|e| e.code),
+            Err("thread_not_specified".into())
+        );
+        assert_eq!(
+            f.runtime
+                .get(&thread.id)
+                .expect("thread")
+                .provider_account_id,
+            Some(a.id)
+        );
+    }
+
+    #[test]
+    fn voice_sets_the_workspace_default_account_and_says_so() {
+        let f = accounts_fixture();
+        f.account(ProviderId::GEMINI_CLI, "Gemini B", AuthState::Authenticated);
+        let a = f.account(ProviderId::GEMINI_CLI, "Gemini A", AuthState::Unknown);
+        f.account(
+            ProviderId::GEMINI_CLI,
+            "Gemini Off",
+            AuthState::NotAuthenticated,
+        );
+        let intent = |account: &str| KalVoiceIntent::SetWorkspaceAccount {
+            provider_id: ProviderId::new(ProviderId::GEMINI_CLI),
+            account_query: account.into(),
+            workspace_id: None,
+        };
+
+        let done = f.run(&intent("gemini a"), &ctx()).expect("bind");
+        assert_eq!(done.directive, None);
+        assert!(
+            done.summary.starts_with("New Gemini threads in ")
+                && done.summary.ends_with(" will use Gemini A."),
+            "{}",
+            done.summary
+        );
+        let bindings = f
+            .store
+            .list_bindings(
+                Some(ProviderId::GEMINI_CLI),
+                Some(ProviderAccountBindingKind::Workspace),
+                Some(&f.workspace_id),
+            )
+            .expect("bindings");
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].account_id, a.id);
+
+        // Signed out or unknown: nothing is written.
+        assert_eq!(
+            f.executor.check(&intent("gemini off")).map_err(|e| e.code),
+            Err("provider_account_signed_out".into())
+        );
+        assert_eq!(
+            f.executor.check(&intent("gemini q")).map_err(|e| e.code),
+            Err("provider_account_not_found".into())
+        );
+        let after = f
+            .store
+            .list_bindings(Some(ProviderId::GEMINI_CLI), None, None)
+            .expect("bindings");
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].account_id, a.id);
+    }
+
+    #[test]
+    fn stable_creates_an_idle_headless_thread_on_the_named_account() {
+        let f = accounts_fixture();
+        f.account(ProviderId::CODEX, "Personal", AuthState::Authenticated);
+        let work = f.account(ProviderId::CODEX, "Codex Work", AuthState::Authenticated);
+        let intent = |account: Option<&str>, count: u8| KalVoiceIntent::CreateThreads {
+            provider_id: ProviderId::new(ProviderId::CODEX),
+            count,
+            workspace_id: None,
+            account_query: account.map(str::to_owned),
+        };
+
+        // "Open a new Codex thread with my work account."
+        let done = f.run(&intent(Some("work"), 1), &ctx()).expect("create");
+        let Some(UiDirective::OpenThread { thread_id }) = done.directive else {
+            panic!("expected OpenThread, got {:?}", done.directive);
+        };
+        let thread = f.runtime.get(&thread_id).expect("thread");
+        assert_eq!(thread.provider_account_id, Some(work.id.clone()));
+        assert_eq!(thread.account_label.as_deref(), Some("Codex Work"));
+        assert!(
+            done.summary.starts_with("Opened a new Codex thread in "),
+            "{}",
+            done.summary
+        );
+        // Headless: no provider pane terminal.
+        assert_eq!(thread.terminal_id, None);
+
+        let two = f.run(&intent(Some("codex work"), 2), &ctx()).expect("two");
+        assert_eq!(
+            two.directive,
+            Some(UiDirective::Navigate {
+                surface: SurfaceId::Threads
+            })
+        );
+
+        // Without an account, and for panes, Stable still refuses provider panes.
+        assert_eq!(
+            f.executor.check(&intent(None, 1)).map_err(|e| e.code),
+            Err("provider_panes_unavailable".into())
+        );
+        // Signed-out accounts never get a thread.
+        f.account(ProviderId::CODEX, "Old", AuthState::NotAuthenticated);
+        assert_eq!(
+            f.executor
+                .check(&intent(Some("old"), 1))
+                .map_err(|e| e.code),
+            Err("provider_account_signed_out".into())
+        );
+        assert_eq!(f.runtime.list(None, false).expect("threads").len(), 3);
+    }
+
+    #[test]
+    fn spoken_account_names_match_without_guessing() {
+        let account = |label: &str| ProviderAccount {
+            id: label.into(),
+            provider_id: ProviderId::new(ProviderId::GEMINI_CLI),
+            display_name: label.into(),
+            provider_reported_identity: None,
+            authentication_state: AuthState::Unknown,
+            is_default: false,
+            created_at: String::new(),
+            last_used_at: None,
+            last_checked_at: None,
+            last_error_code: None,
+            archived_at: None,
+        };
+        let accounts = [
+            account("Gemini A"),
+            account("Gemini B"),
+            account("Work"),
+            account("Work 2"),
+        ];
+        let gemini = ProviderId::new(ProviderId::GEMINI_CLI);
+        let labels = |query: &str| -> Vec<String> {
+            matching_accounts(&accounts, &gemini, query)
+                .into_iter()
+                .map(|a| a.display_name.clone())
+                .collect()
+        };
+        assert_eq!(labels("gemini b"), ["Gemini B"]);
+        assert_eq!(labels("Gemini-A"), ["Gemini A"]);
+        assert_eq!(labels("b"), ["Gemini B"]);
+        assert_eq!(labels("gemini cli b account"), ["Gemini B"]);
+        assert_eq!(labels("work"), ["Work"]);
+        assert_eq!(labels("gemini"), ["Gemini A", "Gemini B", "Work", "Work 2"]);
+        assert!(labels("gemini z").is_empty());
+        assert_eq!(or_list(&["Gemini A", "Gemini B"]), "Gemini A or Gemini B");
     }
 }

@@ -1020,3 +1020,259 @@ fn dashboard_filters_by_chip() {
     assert!(is_reasoning("don't show completed work"));
     assert!(is_reasoning("show completed work and archive it"));
 }
+
+fn rebind(thread: Option<&str>, provider: Option<&str>, account: &str) -> KalVoiceIntent {
+    KalVoiceIntent::RebindThreadAccount {
+        thread_query: thread.map(str::to_owned),
+        provider_id: provider.map(ProviderId::new),
+        account_query: account.into(),
+    }
+}
+
+fn workspace_account(provider: &str, account: &str) -> KalVoiceIntent {
+    KalVoiceIntent::SetWorkspaceAccount {
+        provider_id: ProviderId::new(provider),
+        account_query: account.into(),
+        workspace_id: None,
+    }
+}
+
+#[test]
+fn switching_a_thread_account_is_a_confirmable_rebind_request() {
+    let gemini = Some(ProviderId::GEMINI_CLI);
+    let codex = Some(ProviderId::CODEX);
+    let cases = [
+        // The brief's phrase, with the focused thread's provider as a hint.
+        (
+            "Switch this Gemini thread to Gemini B.",
+            rebind(None, gemini, "gemini b"),
+        ),
+        (
+            "switch this thread to Gemini B",
+            rebind(None, None, "gemini b"),
+        ),
+        (
+            "switch the thread to my work account",
+            rebind(None, None, "work"),
+        ),
+        (
+            "switch the current Codex thread to work",
+            rebind(None, codex, "work"),
+        ),
+        // "switch (this thread) to {account}": a provider-led label names an account.
+        ("switch to Gemini A", rebind(None, gemini, "gemini a")),
+        ("Switch to gemini b.", rebind(None, gemini, "gemini b")),
+        ("switch gemini b", rebind(None, gemini, "gemini b")),
+        (
+            "switch to my Gemini CLI B account",
+            rebind(None, gemini, "gemini cli b"),
+        ),
+        ("switch to Codex work", rebind(None, codex, "codex work")),
+        (
+            "please switch to my work account",
+            rebind(None, None, "work"),
+        ),
+        // A named thread.
+        (
+            "switch the login fix thread to Gemini B",
+            rebind(Some("login fix"), None, "gemini b"),
+        ),
+        (
+            "use Codex work for this thread",
+            rebind(None, codex, "codex work"),
+        ),
+    ];
+    for (text, expected) in cases {
+        let (understood, confidence) = understand_with_confidence(text);
+        assert_eq!(
+            understood,
+            Understood::Intent {
+                intent: expected,
+                target: None
+            },
+            "{text}"
+        );
+        assert_eq!(confidence, Confidence::High, "{text}");
+    }
+}
+
+#[test]
+fn switch_to_a_provider_is_not_captured_by_account_labels_and_vice_versa() {
+    // Risk 3: "switch to gemini a" must reach the account rules, while a bare provider (one or
+    // two words) keeps its old meaning.
+    for (text, provider) in [
+        ("switch to Gemini", ProviderId::GEMINI_CLI),
+        ("switch to Gemini CLI", ProviderId::GEMINI_CLI),
+        ("switch to Claude Code", ProviderId::CLAUDE_CODE),
+        ("switch to Codex", ProviderId::CODEX),
+    ] {
+        assert_eq!(
+            intent(text),
+            KalVoiceIntent::SwitchProvider {
+                provider_id: ProviderId::new(provider)
+            },
+            "{text}"
+        );
+    }
+    assert!(matches!(
+        intent("switch to Gemini A"),
+        KalVoiceIntent::RebindThreadAccount { .. }
+    ));
+    // Existing "switch" commands keep their meaning.
+    assert_eq!(
+        intent("switch to code"),
+        KalVoiceIntent::Navigate {
+            surface: SurfaceId::Code
+        }
+    );
+    assert_eq!(
+        intent("switch to the billing project"),
+        KalVoiceIntent::OpenWorkspace {
+            query: "billing".into()
+        }
+    );
+    assert!(matches!(
+        intent("switch the login thread to plan mode"),
+        KalVoiceIntent::RequestPermissionMode { .. }
+    ));
+    assert!(matches!(
+        intent("switch this thread to plan mode"),
+        KalVoiceIntent::RequestPermissionMode { .. }
+    ));
+    assert_eq!(
+        rejected("switch the login thread to bypass"),
+        "bypass_not_allowed"
+    );
+    assert!(matches!(
+        intent("switch to the login thread"),
+        KalVoiceIntent::OpenThread { .. }
+    ));
+    // A provider followed by a thread, pane or mode word is not an account label, and a bare
+    // word without "account" or a provider is not one either.
+    for text in [
+        "switch to codex threads",
+        "switch to gemini mode",
+        "switch this thread to fast mode",
+        "switch to work",
+    ] {
+        assert!(
+            !matches!(
+                intent(text),
+                KalVoiceIntent::RebindThreadAccount { .. } | KalVoiceIntent::SwitchProvider { .. }
+            ),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn workspace_account_defaults_need_a_provider_led_label() {
+    for (text, expected) in [
+        (
+            "Use Gemini A in this workspace.",
+            workspace_account(ProviderId::GEMINI_CLI, "gemini a"),
+        ),
+        (
+            "use gemini a for this workspace",
+            workspace_account(ProviderId::GEMINI_CLI, "gemini a"),
+        ),
+        (
+            "use my Codex work account in the current project",
+            workspace_account(ProviderId::CODEX, "codex work"),
+        ),
+        (
+            "use claude personal in this workspace",
+            workspace_account(ProviderId::CLAUDE_CODE, "claude personal"),
+        ),
+    ] {
+        assert_eq!(
+            understand(text),
+            Understood::Intent {
+                intent: expected,
+                target: None
+            },
+            "{text}"
+        );
+    }
+    assert_eq!(
+        target("use Gemini A in the website workspace"),
+        Some(NamedTarget::Workspace("website".into()))
+    );
+    assert_eq!(
+        bind_target(
+            intent("use Gemini A in the website workspace"),
+            "ws-1".into()
+        ),
+        KalVoiceIntent::SetWorkspaceAccount {
+            provider_id: ProviderId::new(ProviderId::GEMINI_CLI),
+            account_query: "gemini a".into(),
+            workspace_id: Some("ws-1".into()),
+        }
+    );
+    // Which provider's "work"? Ask instead of guessing.
+    assert_eq!(
+        rejected("use my work account in this workspace"),
+        "provider_not_specified"
+    );
+    // A bare provider names no account.
+    assert!(is_reasoning("use gemini in this workspace"));
+}
+
+#[test]
+fn new_threads_can_name_their_account() {
+    let with_account = |provider: &str, count: u8, account: &str| KalVoiceIntent::CreateThreads {
+        provider_id: ProviderId::new(provider),
+        count,
+        workspace_id: None,
+        account_query: Some(account.into()),
+    };
+    assert_eq!(
+        intent("Open a new Codex thread with my work account."),
+        with_account(ProviderId::CODEX, 1, "work")
+    );
+    assert_eq!(
+        intent("open two gemini threads using Gemini B"),
+        with_account(ProviderId::GEMINI_CLI, 2, "gemini b")
+    );
+    let named = "open a new Codex thread with my work account in the website workspace";
+    assert_eq!(
+        target(named),
+        Some(NamedTarget::Workspace("website".into()))
+    );
+    assert_eq!(
+        bind_target(intent(named), "ws-1".into()),
+        KalVoiceIntent::CreateThreads {
+            provider_id: ProviderId::new(ProviderId::CODEX),
+            count: 1,
+            workspace_id: Some("ws-1".into()),
+            account_query: Some("work".into()),
+        }
+    );
+    // Without an account the phrase is unchanged; panes keep the pane grammar.
+    assert_eq!(
+        intent("open a new Codex thread"),
+        create(ProviderId::CODEX, 1)
+    );
+    assert!(matches!(
+        intent("open four Codex agents using my personal account"),
+        KalVoiceIntent::CreateProviderPanes { .. }
+    ));
+    assert_eq!(
+        rejected("open forty Codex threads with my work account"),
+        "thread_count_too_large"
+    );
+}
+
+#[test]
+fn account_commands_never_run_negated_or_compound() {
+    for text in [
+        "don't switch this thread to Gemini B",
+        "switch this thread to Gemini B and delete the branch",
+        "switch to Gemini B then stop everything",
+        "use Gemini A in this workspace and open two Codex threads",
+        "never use gemini a in this workspace",
+        "open a new Codex thread with my work account and delete files",
+    ] {
+        assert!(is_reasoning(text), "{text}: {:?}", understand(text));
+    }
+}
