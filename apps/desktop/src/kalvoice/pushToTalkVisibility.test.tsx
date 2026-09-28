@@ -2,9 +2,9 @@ import type { KalVoiceSignal, KalVoiceStatus, SurfaceFlag } from "@kalcode/proto
 import { ToastProvider, TooltipProvider } from "@kalcode/ui/components";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Fragment, StrictMode } from "react";
+import { Fragment, StrictMode, useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AccountProvider } from "../account/AccountProvider.tsx";
+import { AccountProvider, useOptionalAccount } from "../account/AccountProvider.tsx";
 import { AccountClient } from "../ipc/account.ts";
 import { KalCodeClient } from "../ipc/client.ts";
 import { createMemoryTransport } from "../ipc/memoryTransport.ts";
@@ -47,6 +47,19 @@ interface MountOptions {
   subscribeFailure?: () => object | null;
 }
 
+/**
+ * Reports the account runtime's readiness after each commit. It renders after the Shell, so its
+ * effect runs after KalVoice's "runtime became ready" effect in the same commit: once it reports
+ * ready, any channel renewal that transition causes has already called `kalvoice_subscribe`.
+ */
+function AccountReadyProbe({ onReady }: { onReady: () => void }) {
+  const ready = useOptionalAccount()?.runtime.ready ?? false;
+  useEffect(() => {
+    if (ready) onReady();
+  }, [ready, onReady]);
+  return null;
+}
+
 async function mount({ statusPatch, strict = false, statusFailure, subscribeFailure }: MountOptions = {}) {
   const transport = createMemoryTransport("account-ready", { detectDelayMs: 0 });
   let deliver: ((signal: KalVoiceSignal) => void) | null = null;
@@ -77,6 +90,10 @@ async function mount({ statusPatch, strict = false, statusFailure, subscribeFail
   boot.info.flags.surfaces = (nativeStableSurfaces as SurfaceFlag[]).map((flag) => ({ ...flag }));
   boot.info.flags.features = boot.info.flags.features.map((flag) => ({ ...flag, visible: flag.state === "available" }));
   const Root = strict ? StrictMode : Fragment;
+  let accountReady = false;
+  const onAccountReady = () => {
+    accountReady = true;
+  };
   render(
     <Root>
       <ToastProvider>
@@ -85,6 +102,7 @@ async function mount({ statusPatch, strict = false, statusFailure, subscribeFail
             <RuntimeProvider client={client} info={boot.info} initialSettings={await client.getSettings()}>
               <Shell />
             </RuntimeProvider>
+            <AccountReadyProbe onReady={onAccountReady} />
           </AccountProvider>
         </TooltipProvider>
       </ToastProvider>
@@ -98,9 +116,10 @@ async function mount({ statusPatch, strict = false, statusFailure, subscribeFail
   };
   const inject = (signal: KalVoiceSignal) => act(() => deliver?.(signal));
   const talks = () => invoked.filter((c) => c === "kalvoice_talk").length;
-  // Let the account runtime settle (its "ready" transition renews the channel once) so tests can
-  // count subscribes caused by what they do.
-  await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+  // Let the account runtime settle (its "ready" transition renews the channel at most once) so
+  // tests can count subscribes caused by what they do. Waits for that transition to commit rather
+  // than for a fixed delay, which a loaded machine can outlast.
+  await waitFor(() => expect(accountReady).toBe(true));
   const settled = subscribe.mock.calls.length;
   return { transport, subscribe, user, go, inject, talks, settled, invoked };
 }
@@ -143,7 +162,9 @@ describe("push to talk is always visible", () => {
     await widgetState("Processing");
     await widgetState("Done");
     expect(talks()).toBe(1);
-  });
+    // Every step waits on a condition; the budget covers a full Shell mount plus seven page
+    // changes and a dialog, which a loaded machine (a full parallel suite) can slow past 5 s.
+  }, 20_000);
 
   it("StrictMode remounts add listeners but never a second native channel", async () => {
     const { subscribe, go, talks } = await mount({ strict: true });
