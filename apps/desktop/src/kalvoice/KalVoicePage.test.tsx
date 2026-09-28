@@ -1,3 +1,4 @@
+import type { KalVoiceStatus } from "@kalcode/protocol";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMemoryKalVoice } from "../ipc/memoryKalVoice.ts";
@@ -56,10 +57,13 @@ function intelligenceCard() {
 
 describe("KalVoice local intelligence first use", () => {
   it("routes missing local components to Settings and the signed download consent flow", async () => {
-    // A connected provider cannot replace the local interpreter installation.
+    // A connected provider cannot replace the local interpreter installation. Automatic
+    // preparation is off, so the owner's review dialog is the path.
+    const current = seams.value.status as KalVoiceStatus;
     seams.value.status = {
-      ...(seams.value.status as object),
+      ...current,
       providers: [{ id: "codex", displayName: "Codex", available: true }],
+      preferences: { ...current.preferences, localIntelligenceAuto: false },
     };
     const page = render(<KalVoicePage />);
     expect(intelligenceCard().getByText("Not installed")).toBeInTheDocument();
@@ -103,8 +107,24 @@ describe("KalVoice local intelligence first use", () => {
     },
   );
 
+  it("prepares local intelligence and speech on its own with no setup click", () => {
+    seams.value.status = { ...(seams.value.status as object), activeModel: null };
+    render(<KalVoicePage />);
+    expect(intelligenceCard().getByText("Waiting for speech")).toBeInTheDocument();
+    expect(intelligenceCard().queryByRole("button")).not.toBeInTheDocument();
+    expect(screen.getByText("Preparing speech")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Set up speech" })).not.toBeInTheDocument();
+  });
+
   it("shows starting without premature readiness while speech setup stays available", () => {
-    seams.value.status = { ...(seams.value.status as object), localReasoning: "warming", activeModel: null };
+    const current = seams.value.status as KalVoiceStatus;
+    seams.value.status = {
+      ...current,
+      localReasoning: "warming",
+      activeModel: null,
+      // The owner removed the speech model: setup stays one click away.
+      preferences: { ...current.preferences, speechModelAutoDownload: false },
+    };
     render(<KalVoicePage />);
     expect(intelligenceCard().getByText("Starting")).toBeInTheDocument();
     expect(intelligenceCard().queryByRole("button")).not.toBeInTheDocument();

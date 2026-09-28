@@ -10,8 +10,10 @@
  * recognizes audio.
  *
  * Scenarios (`?scenario=`): kalvoice-limit (allowance used up), kalvoice-no-model (no speech
- * model installed), kalvoice-mic-denied (microphone blocked), kalvoice-approvals (a legacy URL
- * alias retained for app-control coverage), kalvoice-slow (stages last long enough to observe).
+ * model installed and the owner opted out of the automatic download), kalvoice-first-run (a
+ * brand-new install: the default speech model provisions itself, as native zero-setup does),
+ * kalvoice-mic-denied (microphone blocked), kalvoice-approvals (a legacy URL alias retained for
+ * app-control coverage), kalvoice-slow (stages last long enough to observe).
  * App-control commands run immediately; provider sessions keep their own native permission
  * prompts. Thread commands report fixed test-double results.
  * `?transcript=` sets what the fake recognizer "hears" (`__kalcodeMemory.kalvoice.setTranscript` changes
@@ -20,6 +22,7 @@
  */
 import type {
   CommandRequest,
+  ComponentProvisioning,
   DashboardChip,
   EventPayload,
   IpcError,
@@ -50,6 +53,7 @@ const FREE_KALVOICE_ALLOWANCE = 75;
 export const KALVOICE_SCENARIOS = [
   "kalvoice-limit",
   "kalvoice-no-model",
+  "kalvoice-first-run",
   "kalvoice-mic-denied",
   "kalvoice-approvals",
   "kalvoice-slow",
@@ -73,7 +77,7 @@ const TALK_KEYS = [...Array.from({ length: 24 }, (_, i) => `F${i + 1}`), "Pause"
 /** Pretends another app already registered this key globally (to exercise the refusal path). */
 const TAKEN_BY_ANOTHER_APP = "F9";
 
-const SOURCE = "Hugging Face, ggerganov/whisper.cpp (official whisper.cpp models)";
+const SOURCE = "KalCode's signed component catalog on kalcoded.com";
 const CATALOG: Omit<SpeechModelInfo, "state">[] = [
   {
     id: "tiny.en",
@@ -524,6 +528,9 @@ function defaults(): KalVoicePreferences {
     panelDefault: "top",
     panelVisible: true,
     panelPlacements: [],
+    speechModelAutoDownload: true,
+    localIntelligenceAuto: true,
+    localIntelligencePaused: false,
   };
 }
 
@@ -541,8 +548,13 @@ export interface MemoryKalVoice {
 export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOverride?: string | null): MemoryKalVoice {
   const slow = scenario === "kalvoice-slow";
   let prefs = defaults();
-  const installed = new Set<string>(scenario === "kalvoice-no-model" ? [] : ["tiny.en"]);
+  const firstRun = scenario === "kalvoice-first-run";
+  // No model and the owner opted out (removed it), so nothing provisions itself.
+  if (scenario === "kalvoice-no-model") prefs = { ...prefs, speechModelAutoDownload: false };
+  const installed = new Set<string>(scenario === "kalvoice-no-model" || firstRun ? [] : ["tiny.en"]);
   const partial = new Map<string, number>();
+  // Like native: automatic (zero-setup) downloads report their phase as `provisioning` items.
+  const automatic = new Map<string, ComponentProvisioning>();
   const downloading = new Map<string, ReturnType<typeof setInterval>>();
   const counted = new Map<string, string>();
   let used = scenario === "kalvoice-limit" ? FREE_KALVOICE_ALLOWANCE : 0;
@@ -608,7 +620,48 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
     talkKeyActive: prefs.talkEnabled,
     shortcutIssues: [],
     listening: listening ? { sessionId: listening.sessionId, mode: listening.mode } : null,
+    provisioning: [...automatic.values()],
   });
+
+  const publishProvisioning = () => signal({ kind: "provisioning", items: [...automatic.values()] });
+
+  /** The default speech model provisions itself: preparing, downloading, verifying, installed. */
+  const provisionDefault = () => {
+    const model = CATALOG[0];
+    if (!model || !prefs.speechModelAutoDownload || activeModel() || automatic.has(model.id)) return;
+    const item: ComponentProvisioning = {
+      modelId: model.id,
+      automatic: true,
+      phase: "preparing",
+      receivedBytes: 0,
+      totalBytes: model.sizeBytes,
+    };
+    automatic.set(model.id, item);
+    publishProvisioning();
+    const step = Math.ceil(model.sizeBytes / (slow ? 40 : 8));
+    const timer = setInterval(() => {
+      const current = automatic.get(model.id);
+      if (!current) {
+        clearInterval(timer);
+        return;
+      }
+      if (current.phase === "verifying") {
+        clearInterval(timer);
+        automatic.delete(model.id);
+        installed.add(model.id);
+        publishProvisioning();
+        signal({ kind: "model_installed", modelId: model.id });
+        return;
+      }
+      const received = Math.min(model.sizeBytes, current.receivedBytes + step);
+      automatic.set(model.id, {
+        ...current,
+        phase: received >= model.sizeBytes ? "verifying" : "downloading",
+        receivedBytes: received,
+      });
+      publishProvisioning();
+    }, 150);
+  };
 
   const begin = (mode: KalVoiceMode): string | null => {
     if (listening) return null;
@@ -876,6 +929,9 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
       "panelDefault",
       "panelVisible",
       "panelPlacement",
+      "speechModelAutoDownload",
+      "localIntelligenceAuto",
+      "localIntelligencePaused",
     ]);
     if (Object.keys(patch).some((k) => !allowed.has(k))) {
       fail("ipc_rejected", "KalCode couldn't complete that request.", "internal");
@@ -916,6 +972,9 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
       next.panelPlacements = [];
     }
     if (patch.panelVisible !== undefined) next.panelVisible = patch.panelVisible;
+    if (patch.speechModelAutoDownload !== undefined) next.speechModelAutoDownload = patch.speechModelAutoDownload;
+    if (patch.localIntelligenceAuto !== undefined) next.localIntelligenceAuto = patch.localIntelligenceAuto;
+    if (patch.localIntelligencePaused !== undefined) next.localIntelligencePaused = patch.localIntelligencePaused;
     if (patch.panelPlacement) {
       const p: PanelPlacement = patch.panelPlacement;
       if (p.x > 1000 || p.y > 1000) fail("invalid_panel_position", "The KalVoice panel position is out of range.");
@@ -1006,6 +1065,12 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
     },
     kalvoice_model_cancel: (args) => {
       const id = String(args.modelId);
+      // Like native: a speech model the owner stopped is not fetched again on its own.
+      if (CATALOG.some((m) => m.id === id)) prefs = { ...prefs, speechModelAutoDownload: false };
+      if (automatic.delete(id)) {
+        publishProvisioning();
+        return true;
+      }
       const timer = downloading.get(id);
       if (!timer) return false;
       clearInterval(timer);
@@ -1022,8 +1087,12 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
       const id = String(args.modelId);
       installed.delete(id);
       partial.delete(id);
+      // Like native: a removed model is an opt-out from automatic provisioning.
+      prefs = { ...prefs, speechModelAutoDownload: false };
       return models();
     },
+    // Native opens only the OS microphone privacy page; the test double has no OS to open.
+    kalvoice_open_microphone_settings: () => undefined,
   };
 
   const decideApproval = (_args: Record<string, unknown>): undefined => undefined;
@@ -1044,6 +1113,8 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
       installKeys();
       // Like native: each subscribe is answered with the key's current registration.
       signal(talkKeySignal());
+      // Like native: once the runtime is up, a missing default speech model provisions itself.
+      if (firstRun) provisionDefault();
     },
   };
 }

@@ -1,4 +1,4 @@
-import type { KalVoiceStatus } from "@kalcode/protocol";
+import type { ComponentProvisioning, KalVoiceStatus } from "@kalcode/protocol";
 import { describe, expect, it } from "vitest";
 import { createMemoryKalVoice } from "../ipc/memoryKalVoice.ts";
 import { pushToTalkReadiness, withTalkKeyState } from "./readiness.ts";
@@ -43,10 +43,24 @@ describe("push-to-talk readiness is derived only from native status", () => {
     expect(
       pushToTalkReadiness(status({ preferences: { ...base.preferences, talkEnabled: false } }), null),
     ).toMatchObject({ ready: false, code: "talk_disabled", fix: "settings" });
-    expect(pushToTalkReadiness(status({ activeModel: null }), null)).toMatchObject({
+    // The owner removed the model (opt-out): Settings keeps the manual download.
+    expect(
+      pushToTalkReadiness(
+        status({ activeModel: null, preferences: { ...base.preferences, speechModelAutoDownload: false } }),
+        null,
+      ),
+    ).toMatchObject({
       ready: false,
       code: "model_not_installed",
       fix: "settings",
+    });
+    // Zero setup: with no opt-out, a missing model is being prepared, not a setup chore.
+    expect(pushToTalkReadiness(status({ activeModel: null }), null)).toMatchObject({
+      ready: false,
+      code: "model_preparing",
+      label: "Preparing speech",
+      fix: null,
+      attention: false,
     });
     expect(pushToTalkReadiness(status({ speechEngine: false }), null)).toMatchObject({
       ready: false,
@@ -133,5 +147,70 @@ describe("native talk_key signal", () => {
       key(true, null),
     );
     expect(after?.shortcutIssues).toEqual([other]);
+  });
+});
+
+describe("push to talk while its speech model is prepared automatically", () => {
+  const item = (patch: Partial<ComponentProvisioning>): ComponentProvisioning => ({
+    modelId: "tiny.en",
+    automatic: true,
+    phase: "downloading",
+    receivedBytes: 31_000_000,
+    totalBytes: 77_704_715,
+    ...patch,
+  });
+  const preparing = (patch: Partial<ComponentProvisioning>) =>
+    pushToTalkReadiness(status({ activeModel: null, provisioning: [item(patch)] }), null);
+
+  it("shows download progress, then verification, and never Ready before the model is active", () => {
+    const downloading = preparing({});
+    expect(downloading).toMatchObject({ ready: false, code: "model_preparing", label: "Preparing speech 39%" });
+    expect(downloading.message).toMatch(/Downloading the English \(fastest\) speech model: 31 MB of 78 MB/);
+    expect(downloading.attention).toBe(false);
+    expect(preparing({ phase: "verifying", receivedBytes: 77_704_715 })).toMatchObject({
+      ready: false,
+      label: "Verifying speech",
+    });
+    expect(preparing({ phase: "preparing", receivedBytes: 0 }).label).toBe("Preparing speech");
+    // Even with the key registered, no active model is never Ready.
+    const registered = pushToTalkReadiness(
+      status({ activeModel: null, talkKeyActive: true, provisioning: [item({ phase: "verifying" })] }),
+      null,
+      null,
+      { active: true, reason: null, accelerator: "F8" },
+    );
+    expect(registered.ready).toBe(false);
+  });
+
+  it("says when it is waiting for system resources or for push to talk", () => {
+    expect(preparing({ phase: "waiting_for_resources", reason: "disk_space" })).toMatchObject({
+      label: "Waiting for system resources",
+      message: "The English (fastest) speech model downloads when enough disk space is free.",
+      attention: false,
+    });
+    expect(preparing({ phase: "waiting_for_talk", reason: "push_to_talk" }).message).toMatch(
+      /continues when push to talk is released/,
+    );
+  });
+
+  it("reports an unavailable download with its reason and the automatic retry", () => {
+    const failed = preparing({
+      phase: "retry_scheduled",
+      reason: "component_catalog_unavailable",
+      retryInSeconds: 300,
+    });
+    expect(failed).toMatchObject({
+      ready: false,
+      code: "model_unavailable",
+      label: "Speech unavailable",
+      fix: "settings",
+      attention: true,
+    });
+    expect(failed.message).toMatch(/catalog couldn't be reached/);
+    expect(failed.message).toMatch(/retries automatically in about 5 minutes, and when you return to KalCode/);
+  });
+
+  it("is Ready once the model is installed and active", () => {
+    expect(pushToTalkReadiness(status({ provisioning: [] }), null).ready).toBe(true);
   });
 });

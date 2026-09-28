@@ -2,13 +2,22 @@ import { Button } from "@kalcode/ui/components";
 import { useState } from "react";
 import { useNavigation } from "../shell/navigation.tsx";
 import { STATE_LABELS } from "./assistantState.ts";
-import { useKalVoice } from "./KalVoiceProvider.tsx";
+import { useKalVoice, useOptionalKalVoice } from "./KalVoiceProvider.tsx";
 import styles from "./PushToTalkActivity.module.css";
 import { pushToTalkReadiness } from "./readiness.ts";
 
 /** The in-app fix for a KalVoice error code, when KalCode has one. */
 export function FixAction({ code }: { code: string | null }) {
   const { navigate } = useNavigation();
+  const kv = useOptionalKalVoice();
+  if (code === "microphone_denied" && kv) {
+    // Opens only the OS microphone privacy page (Windows Settings or macOS System Settings).
+    return (
+      <Button size="sm" onClick={() => void kv.openMicrophoneSettings()}>
+        Open privacy settings
+      </Button>
+    );
+  }
   if (code === "needs_provider") {
     return (
       <Button size="sm" onClick={() => navigate("providers")}>

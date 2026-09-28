@@ -4,7 +4,8 @@
  * the native key is registered, enabled, and a speech model is active; anything else names the
  * exact reason and where to fix it.
  */
-import type { KalVoiceSignal, KalVoiceStatus, ShortcutIssue } from "@kalcode/protocol";
+import type { ComponentProvisioning, KalVoiceSignal, KalVoiceStatus, ShortcutIssue } from "@kalcode/protocol";
+import { formatBytes } from "./assistantState.ts";
 import { displayKey } from "./shortcutModel.ts";
 
 export type PushToTalkIssue =
@@ -19,6 +20,8 @@ export type PushToTalkIssue =
   | "talk_key_unregistered"
   | "shutting_down"
   | "model_not_installed"
+  | "model_preparing"
+  | "model_unavailable"
   | "talk_key_not_focused"
   | "talk_key_connecting"
   | "talk_key_inactive";
@@ -79,6 +82,147 @@ export function withReasoningState(
     localReasoning: update.status,
     ...(update.issue === undefined ? {} : { localReasoningIssue: update.issue }),
   };
+}
+
+/** Applies the latest native `provisioning` list (newer than a status read computed before it). */
+export function withProvisioning(
+  status: KalVoiceStatus | null,
+  items: ComponentProvisioning[] | null,
+): KalVoiceStatus | null {
+  if (!status || !items) return status;
+  return { ...status, provisioning: items };
+}
+
+/** The local-intelligence download id; every other provisioning item is a speech model. */
+export const LOCAL_REASONING_ID = "local-reasoning";
+
+/** A component download for `modelId`, if one is pending or running. */
+export function provisioningFor(
+  status: Pick<KalVoiceStatus, "provisioning"> | null | undefined,
+  modelId: string,
+): ComponentProvisioning | null {
+  return status?.provisioning?.find((item) => item.modelId === modelId) ?? null;
+}
+
+/** The speech model download that push to talk is waiting for (automatic first, then manual). */
+function speechProvisioning(status: KalVoiceStatus): ComponentProvisioning | null {
+  const speech = (status.provisioning ?? []).filter((item) => item.modelId !== LOCAL_REASONING_ID);
+  return speech.find((item) => item.automatic) ?? speech[0] ?? null;
+}
+
+/** What KalCode is waiting for, in owner terms, from a safe reason code. */
+export function waitingReason(reason: string | undefined): string {
+  switch (reason) {
+    case "cpu":
+      return "the CPU is less busy";
+    case "memory":
+    case "kalcode_memory":
+      return "enough memory is free";
+    case "disk_space":
+      return "enough disk space is free";
+    case "workload_limit":
+      return "other KalCode work finishes";
+    case "push_to_talk":
+      return "push to talk is released";
+    default:
+      return "current resource readings are available";
+  }
+}
+
+/** When the next automatic attempt runs, from `retryInSeconds`. */
+export function retryWhen(seconds: number | undefined): string {
+  if (seconds === undefined) return "automatically";
+  if (seconds < 90) return "automatically in about a minute";
+  return `automatically in about ${Math.round(seconds / 60)} minutes`;
+}
+
+/** Why a download attempt failed, in owner terms (the safe code otherwise). */
+export function failureReason(reason: string | undefined): string {
+  switch (reason) {
+    case "component_catalog_unavailable":
+      return "KalCode's component catalog couldn't be reached";
+    case "component_acquisition_failed":
+      return "the download didn't complete";
+    case "resource_capacity_unavailable":
+      return "this computer didn't have room for it yet";
+    case "component_storage_failed":
+      return "KalCode's component storage wasn't available";
+    default:
+      return reason ? `the download stopped (${reason})` : "the download stopped";
+  }
+}
+
+/** Push to talk while its speech model is being prepared: truthful, never "Ready" early. */
+function speechNotReady(status: KalVoiceStatus): {
+  code: "model_preparing" | "model_unavailable";
+  label: string;
+  message: string;
+  attention: boolean;
+} | null {
+  const item = speechProvisioning(status);
+  const model = item ? (status.models.find((m) => m.id === item.modelId)?.displayName ?? item.modelId) : null;
+  if (!item) {
+    return status.preferences.speechModelAutoDownload
+      ? {
+          code: "model_preparing",
+          label: "Preparing speech",
+          message: "KalCode is getting its English speech model from its signed component catalog.",
+          attention: false,
+        }
+      : null;
+  }
+  const percent = item.totalBytes > 0 ? Math.min(100, Math.floor((item.receivedBytes / item.totalBytes) * 100)) : 0;
+  switch (item.phase) {
+    case "preparing":
+      return {
+        code: "model_preparing",
+        label: "Preparing speech",
+        message: `Getting the ${model} speech model from KalCode's signed component catalog.`,
+        attention: false,
+      };
+    case "downloading":
+      return {
+        code: "model_preparing",
+        label: `Preparing speech ${percent}%`,
+        message: `Downloading the ${model} speech model: ${formatBytes(item.receivedBytes)} of ${formatBytes(item.totalBytes)}. Push to talk works when it's ready.`,
+        attention: false,
+      };
+    case "verifying":
+      return {
+        code: "model_preparing",
+        label: "Verifying speech",
+        message: `Checking the ${model} speech model's signature and checksum before using it.`,
+        attention: false,
+      };
+    case "waiting_for_resources":
+      return {
+        code: "model_preparing",
+        label: "Waiting for system resources",
+        message: `The ${model} speech model downloads when ${waitingReason(item.reason)}.`,
+        attention: false,
+      };
+    case "waiting_for_talk":
+      return {
+        code: "model_preparing",
+        label: "Preparing speech",
+        message: `The ${model} speech model download continues when push to talk is released.`,
+        attention: false,
+      };
+    case "paused":
+      return {
+        code: "model_unavailable",
+        label: "Paused",
+        message: `The ${model} speech model download is paused. Resume it in Settings, KalVoice.`,
+        attention: true,
+      };
+    case "retry_scheduled":
+      return {
+        code: "model_unavailable",
+        label: "Speech unavailable",
+        message: `Couldn't get the ${model} speech model: ${failureReason(item.reason)}. KalCode retries ${retryWhen(item.retryInSeconds)}, and when you return to KalCode.`,
+        attention: true,
+      };
+  }
 }
 
 /**
@@ -157,6 +301,16 @@ export function pushToTalkReadiness(
     );
   }
   if (!current.activeModel) {
+    const preparing = speechNotReady(current);
+    if (preparing) {
+      return not(
+        preparing.code,
+        preparing.label,
+        preparing.message,
+        preparing.code === "model_unavailable" ? "settings" : null,
+        preparing.attention,
+      );
+    }
     return not(
       "model_not_installed",
       "Needs a speech model",

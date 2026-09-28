@@ -191,11 +191,33 @@ test.describe("Push to talk (fake recognizer)", () => {
     await expect(page.getByRole("heading", { level: 1, name: "Settings" })).toBeVisible();
   });
 
-  test("reports a blocked microphone", async ({ page }) => {
+  test("reports a blocked microphone with one click to the privacy settings", async ({ page }) => {
     await open(page, "?scenario=kalvoice-mic-denied");
     await page.keyboard.down("F8");
     await page.keyboard.up("F8");
     await expect(shown(page).getByText("Microphone access is blocked.", { exact: false })).toBeVisible();
+    const settingsButton = shown(page).getByRole("button", { name: "Open privacy settings" });
+    await expect(settingsButton).toBeVisible();
+    await settingsButton.click();
+    // Native opens only the OS microphone page; nothing fails in the app.
+    await expect(page.getByText("Couldn't open privacy settings")).toHaveCount(0);
+  });
+
+  test("a brand-new install prepares its speech model with no setup click, then is Ready", async ({ page }) => {
+    await open(page, "?scenario=kalvoice-first-run&transcript=go%20to%20settings");
+    await page.getByRole("button", { name: "Settings" }).click();
+    const readiness = page.getByRole("status", { name: "Push-to-talk readiness" });
+    // Truthful states while it downloads and verifies; never Ready early.
+    await expect(readiness).toContainText(/Preparing speech|Verifying speech/);
+    await expect(readiness).not.toContainText(/^Ready/);
+    await expect(page.getByText("Speech model installed").first()).toBeVisible();
+    await expect(readiness).toContainText("Ready. Hold F8 to talk to KalVoice.");
+    const section = page.getByRole("region", { name: "KalVoice", exact: true });
+    await expect(section.getByText("signed component catalog on kalcoded.com", { exact: false })).toBeVisible();
+    await expect(section.getByRole("switch", { name: "Prepare local intelligence automatically" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
   });
 
   test("the monthly limit stops requests before any work; dictation keeps working", async ({ page }) => {
@@ -465,7 +487,7 @@ test.describe("Settings, KalVoice", () => {
     const english = section.getByRole("listitem").filter({ hasText: "English (fastest)" });
     await english.getByRole("button", { name: "Download" }).click();
     const dialog = page.getByRole("alertdialog", { name: /Download English \(fastest\) speech model\?/ });
-    await expect(dialog).toContainText("78 MB from Hugging Face, ggerganov/whisper.cpp");
+    await expect(dialog).toContainText("78 MB from KalCode's signed component catalog on kalcoded.com");
     await expect(dialog).toContainText("SHA-256");
     await dialog.getByRole("button", { name: "Cancel" }).click();
     await expect(english.getByRole("progressbar")).toHaveCount(0);

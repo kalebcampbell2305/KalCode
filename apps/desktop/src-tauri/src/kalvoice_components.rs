@@ -30,7 +30,9 @@ use kalcode_kalvoice::component_store::{
 };
 use kalcode_kalvoice::models::{self, SpeechModelInfo, SpeechModelState};
 use kalcode_kalvoice::signals::LocalReasoningDownload;
-use kalcode_resources::{AdmissionDecision, AdmissionReason, HoldReason, ResourceKind};
+use kalcode_resources::{
+    AdmissionDecision, AdmissionReason, GovernorUpdate, HoldReason, ResourceKind,
+};
 use kalcode_secure_store::SecretStore;
 use sha2::{Digest as _, Sha256};
 
@@ -48,6 +50,12 @@ const ACQUISITION_MEMORY_MIB: u64 = 96;
 const ACQUISITION_DISK_MARGIN_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_RETAINED_CATALOGS: usize = 8;
 const CATALOG_PRUNE_MINIMUM_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+/// A download the Resource Governor holds waits this long (re-evaluated on every governor
+/// sample) before the attempt ends.
+const ADMISSION_WAIT: Duration = Duration::from_secs(10 * 60);
+/// How often a waiting download looks for cancellation, a deadline, or the end of push to talk.
+const WAIT_SLICE: Duration = Duration::from_millis(100);
+const CAPACITY_EVENT_BUFFER: usize = 16;
 
 pub(crate) const SPEECH_COMPONENT_IDS: [&str; 5] = [
     "kalvoice.speech.whisper.tiny-en",
@@ -58,6 +66,61 @@ pub(crate) const SPEECH_COMPONENT_IDS: [&str; 5] = [
 ];
 const DEFAULT_SPEECH_COMPONENT_ID: &str = SPEECH_COMPONENT_IDS[0];
 pub(crate) const REASONING_DOWNLOAD_ID: &str = "local-reasoning";
+
+/// Who authorized a component download. The acquisition pipeline (catalog signature, rollback
+/// floor, per-component signature, size and SHA-256) is identical for every grant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DownloadConsent {
+    /// No consent: nothing is fetched.
+    Declined,
+    /// The owner confirmed a download dialog.
+    User,
+    /// System-granted consent for a default component only (the default speech model and the
+    /// local-intelligence pair), under KalCode's zero-setup provisioning.
+    AutomaticDefault,
+}
+
+impl DownloadConsent {
+    pub(crate) const fn from_user(consent: bool) -> Self {
+        if consent { Self::User } else { Self::Declined }
+    }
+
+    pub(crate) const fn code(self) -> &'static str {
+        match self {
+            Self::Declined => "declined",
+            Self::User => "user",
+            Self::AutomaticDefault => "automatic_default",
+        }
+    }
+
+    const fn granted(self) -> bool {
+        !matches!(self, Self::Declined)
+    }
+}
+
+/// Where a registered download stands. Every phase is observed, never assumed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DownloadPhase {
+    /// Fetching and verifying the signed catalog.
+    Preparing,
+    /// Held by the Resource Governor, with a safe reason code.
+    WaitingForResources(&'static str),
+    /// Held while push to talk is in use.
+    WaitingForTalk,
+    Downloading,
+    /// Every byte arrived; the store is verifying and installing it.
+    Verifying,
+}
+
+/// A running download as the UI may see it: no URL, token or path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DownloadSnapshot {
+    pub(crate) model_id: String,
+    pub(crate) consent: DownloadConsent,
+    pub(crate) phase: DownloadPhase,
+    pub(crate) received_bytes: u64,
+    pub(crate) total_bytes: u64,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SpeechComponent {
@@ -222,6 +285,21 @@ pub(crate) enum ComponentCapacityReason {
 }
 
 impl ComponentCapacityReason {
+    /// A safe code for a download that is waiting for this resource.
+    pub(crate) const fn code(self) -> &'static str {
+        match self {
+            Self::Cpu => "cpu",
+            Self::Memory => "memory",
+            Self::KalCodeMemory => "kalcode_memory",
+            Self::DiskSpace => "disk_space",
+            Self::WorkloadLimit => "workload_limit",
+            Self::TelemetryUnavailable(_) | Self::UnverifiedTelemetry | Self::StaleTelemetry => {
+                "resource_readings"
+            }
+            Self::SamplerUnavailable => "resource_monitor",
+        }
+    }
+
     fn message(self) -> &'static str {
         match self {
             Self::Cpu => {
@@ -309,6 +387,8 @@ struct DownloadState {
     cancel: Arc<AtomicBool>,
     received_bytes: u64,
     total_bytes: u64,
+    consent: DownloadConsent,
+    phase: DownloadPhase,
 }
 
 #[derive(Default)]
@@ -331,6 +411,8 @@ impl Drop for DownloadRegistration<'_> {
             .running
             .remove(&self.preference_id);
         self.manager.downloads_settled.notify_all();
+        // The download left the list: the UI must stop showing it as running.
+        self.manager.notify();
     }
 }
 
@@ -431,11 +513,41 @@ impl AcquisitionService for SignedAcquisitionService {
 trait HeldReservation: Send {}
 impl HeldReservation for LocalTaskReservation {}
 
+/// What ended one wait for the governor.
+enum CapacityWake {
+    /// A fresh sample: evaluate admission again.
+    Sample,
+    /// Nothing new within the slice.
+    Idle,
+    /// The sampler is gone; no sample will come.
+    Closed,
+}
+
+trait CapacityUpdates: Send {
+    fn wait(&self, timeout: Duration) -> CapacityWake;
+}
+
+impl CapacityUpdates for std::sync::mpsc::Receiver<GovernorUpdate> {
+    fn wait(&self, timeout: Duration) -> CapacityWake {
+        match self.recv_timeout(timeout) {
+            Ok(GovernorUpdate::Sample(_)) => CapacityWake::Sample,
+            Ok(_) | Err(std::sync::mpsc::RecvTimeoutError::Timeout) => CapacityWake::Idle,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => CapacityWake::Closed,
+        }
+    }
+}
+
 trait ComponentAdmission: Send + Sync {
     fn reserve_acquisition(
         &self,
         size_bytes: u64,
     ) -> Result<Box<dyn HeldReservation>, ComponentManagerError>;
+
+    /// Governor samples that re-evaluate a held download. `None`: no sampler, so a hold ends
+    /// the attempt at once.
+    fn updates(&self) -> Option<Box<dyn CapacityUpdates>> {
+        None
+    }
 }
 
 struct GovernorAdmission(Arc<ResourceGovernorState>);
@@ -464,7 +576,18 @@ impl ComponentAdmission for GovernorAdmission {
             .map(|reservation| Box::new(reservation) as Box<dyn HeldReservation>)
             .map_err(acquisition_capacity_error)
     }
+
+    fn updates(&self) -> Option<Box<dyn CapacityUpdates>> {
+        self.0
+            .subscribe(CAPACITY_EVENT_BUFFER)
+            .map(|updates| Box::new(updates) as Box<dyn CapacityUpdates>)
+    }
 }
+
+/// Reports whether push to talk is in use right now (the microphone is live).
+pub(crate) type InteractiveProbe = Arc<dyn Fn() -> bool + Send + Sync>;
+/// Told after any download changes phase or progress (never while a manager lock is held).
+pub(crate) type DownloadObserver = Arc<dyn Fn() + Send + Sync>;
 
 struct CatalogCache {
     directory: PathBuf,
@@ -613,6 +736,9 @@ pub(crate) struct KalVoiceComponentManager {
     prepared_reasoning: Mutex<Option<String>>,
     downloads: Mutex<Downloads>,
     downloads_settled: Condvar,
+    admission_wait: Duration,
+    interactive: Mutex<Option<InteractiveProbe>>,
+    observer: Mutex<Option<DownloadObserver>>,
 }
 
 impl KalVoiceComponentManager {
@@ -686,6 +812,9 @@ impl KalVoiceComponentManager {
             prepared_reasoning: Mutex::new(None),
             downloads: Mutex::new(Downloads::default()),
             downloads_settled: Condvar::new(),
+            admission_wait: ADMISSION_WAIT,
+            interactive: Mutex::new(None),
+            observer: Mutex::new(None),
         });
         manager.restore_current_catalog();
         Ok(manager)
@@ -768,7 +897,7 @@ impl KalVoiceComponentManager {
                         .unwrap_or(spec.size_bytes),
                     english_only: spec.english_only,
                     state,
-                    source: "KalCode signed components (official whisper.cpp models)".into(),
+                    source: "KalCode's signed component catalog on kalcoded.com".into(),
                 })
             })
             .collect()
@@ -838,7 +967,7 @@ impl KalVoiceComponentManager {
         &self,
         consent: bool,
         catalog_identity: Option<&str>,
-        mut progress: impl FnMut(u64, u64),
+        progress: impl FnMut(u64, u64),
     ) -> Result<(), ComponentManagerError> {
         if !consent {
             return Err(ComponentManagerError::ConsentRequired);
@@ -849,40 +978,59 @@ impl KalVoiceComponentManager {
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
             .ok_or(ComponentManagerError::ConsentRequired)?;
-        let now = unix_seconds();
-        let catalog = verify_catalog(&self.verifier, &token, now, self.contract())
+        let catalog = verify_catalog(&self.verifier, &token, unix_seconds(), self.contract())
             .map_err(map_catalog_error)?;
         if catalog_identity != Some(catalog.token_sha256()) {
             return Err(ComponentManagerError::ConsentRequired);
         }
-        let quote = reasoning_quote(&catalog)?;
-        let cancel = Arc::new(AtomicBool::new(false));
-        {
-            let mut downloads = self
-                .downloads
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            if downloads.stopping {
-                return Err(ComponentManagerError::Cancelled);
-            }
-            if downloads.running.contains_key(REASONING_DOWNLOAD_ID) {
-                return Err(ComponentManagerError::AlreadyDownloading);
-            }
-            downloads.running.insert(
-                REASONING_DOWNLOAD_ID.into(),
-                DownloadState {
-                    cancel: cancel.clone(),
-                    received_bytes: 0,
-                    total_bytes: quote.size_bytes,
-                },
-            );
-        }
+        let cancel = self.register(REASONING_DOWNLOAD_ID, DownloadConsent::User)?;
         let _registration = DownloadRegistration {
             manager: self,
             preference_id: REASONING_DOWNLOAD_ID.into(),
         };
-        let _reservation = self.admission.reserve_acquisition(quote.size_bytes)?;
-        let retained = self.cache.retain(&token, catalog.token_sha256())?;
+        self.install_reasoning(&token, &catalog, &cancel, progress)
+    }
+
+    /// Zero-setup provisioning of the local-intelligence pair: the signed catalog is fetched
+    /// and verified exactly as the review dialog does, under system-granted consent for this
+    /// default component. Already installed components are reused, never fetched again.
+    pub(crate) fn download_reasoning_automatic(
+        &self,
+        progress: impl FnMut(u64, u64),
+    ) -> Result<(), ComponentManagerError> {
+        if self.reasoning_installed() {
+            return Ok(());
+        }
+        let cancel = self.register(REASONING_DOWNLOAD_ID, DownloadConsent::AutomaticDefault)?;
+        let _registration = DownloadRegistration {
+            manager: self,
+            preference_id: REASONING_DOWNLOAD_ID.into(),
+        };
+        let token = self.fetcher.fetch(
+            &catalog_url(self.channel, self.platform, self.arch)?,
+            &cancel,
+        )?;
+        let catalog = verify_catalog(&self.verifier, &token, unix_seconds(), self.contract())
+            .map_err(map_catalog_error)?;
+        self.install_reasoning(&token, &catalog, &cancel, progress)
+    }
+
+    /// The one acquisition path for the reasoning pair, whoever consented.
+    fn install_reasoning(
+        &self,
+        token: &str,
+        catalog: &VerifiedComponentCatalog,
+        cancel: &Arc<AtomicBool>,
+        mut progress: impl FnMut(u64, u64),
+    ) -> Result<(), ComponentManagerError> {
+        let now = unix_seconds();
+        let quote = reasoning_quote(catalog)?;
+        self.update(REASONING_DOWNLOAD_ID, |running| {
+            running.total_bytes = quote.size_bytes;
+        });
+        let _reservation =
+            self.reserve_admitted(REASONING_DOWNLOAD_ID, quote.size_bytes, cancel)?;
+        let retained = self.cache.retain(token, catalog.token_sha256())?;
         let retained_catalog = verify_catalog(&self.verifier, &retained, now, self.contract())
             .map_err(map_catalog_error)?;
         self.floor
@@ -890,7 +1038,7 @@ impl KalVoiceComponentManager {
                 &retained_catalog,
                 now,
                 Instant::now() + FLOOR_TIMEOUT,
-                &cancel,
+                cancel,
             )
             .map_err(|_| {
                 if cancel.load(Ordering::SeqCst) {
@@ -909,23 +1057,16 @@ impl KalVoiceComponentManager {
             let entry = retained_catalog
                 .entry(role)
                 .ok_or(ComponentManagerError::CatalogInvalid)?;
+            self.set_phase(REASONING_DOWNLOAD_ID, DownloadPhase::Downloading);
             self.acquisition
                 .acquire(
                     entry.token(),
                     unix_seconds(),
                     true,
-                    &cancel,
+                    cancel,
                     &mut |received, _| {
                         let received = completed + received;
-                        if let Some(running) = self
-                            .downloads
-                            .lock()
-                            .unwrap_or_else(PoisonError::into_inner)
-                            .running
-                            .get_mut(REASONING_DOWNLOAD_ID)
-                        {
-                            running.received_bytes = received;
-                        }
+                        self.progressed(REASONING_DOWNLOAD_ID, received, quote.size_bytes, cancel);
                         progress(received, quote.size_bytes);
                     },
                 )
@@ -939,30 +1080,35 @@ impl KalVoiceComponentManager {
         &self,
         preference_id: &str,
         consent: bool,
+        progress: impl FnMut(u64, u64),
+    ) -> Result<(), ComponentManagerError> {
+        self.download_speech_with(preference_id, DownloadConsent::from_user(consent), progress)
+    }
+
+    /// Zero-setup provisioning of the default speech model (`tiny.en`) under system-granted
+    /// consent. Any installed speech model is reused: nothing is fetched while one is present.
+    pub(crate) fn download_default_speech(
+        &self,
+        progress: impl FnMut(u64, u64),
+    ) -> Result<(), ComponentManagerError> {
+        if self.speech_present() {
+            return Ok(());
+        }
+        self.download_speech_with(
+            models::DEFAULT_MODEL,
+            DownloadConsent::AutomaticDefault,
+            progress,
+        )
+    }
+
+    fn download_speech_with(
+        &self,
+        preference_id: &str,
+        consent: DownloadConsent,
         mut progress: impl FnMut(u64, u64),
     ) -> Result<(), ComponentManagerError> {
         let component = authorize_download(preference_id, consent)?;
-        let cancel = Arc::new(AtomicBool::new(false));
-        {
-            let mut downloads = self
-                .downloads
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            if downloads.stopping {
-                return Err(ComponentManagerError::Cancelled);
-            }
-            if downloads.running.contains_key(preference_id) {
-                return Err(ComponentManagerError::AlreadyDownloading);
-            }
-            downloads.running.insert(
-                preference_id.to_owned(),
-                DownloadState {
-                    cancel: Arc::clone(&cancel),
-                    received_bytes: 0,
-                    total_bytes: 0,
-                },
-            );
-        }
+        let cancel = self.register(preference_id, consent)?;
         let _registration = DownloadRegistration {
             manager: self,
             preference_id: preference_id.to_owned(),
@@ -978,19 +1124,11 @@ impl KalVoiceComponentManager {
             .find(|entry| entry.component().manifest().component_id == component.component_id)
             .ok_or(ComponentManagerError::CatalogInvalid)?;
         let size_bytes = entry.component().manifest().size_bytes;
-        {
-            let mut downloads = self
-                .downloads
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner);
-            let running = downloads
-                .running
-                .get_mut(preference_id)
-                .ok_or(ComponentManagerError::Cancelled)?;
-            running.total_bytes = size_bytes;
+        if !self.update(preference_id, |running| running.total_bytes = size_bytes) {
+            return Err(ComponentManagerError::Cancelled);
         }
 
-        let _reservation = self.admission.reserve_acquisition(size_bytes)?;
+        let _reservation = self.reserve_admitted(preference_id, size_bytes, &cancel)?;
         if cancel.load(Ordering::SeqCst) {
             return Err(ComponentManagerError::Cancelled);
         }
@@ -1028,26 +1166,315 @@ impl KalVoiceComponentManager {
             })
             .ok_or(ComponentManagerError::CatalogInvalid)?;
         let signed_manifest = exact_entry.token().to_owned();
+        self.set_phase(preference_id, DownloadPhase::Downloading);
         let result = self.acquisition.acquire(
             &signed_manifest,
             now_unix,
-            consent,
+            consent.granted(),
             &cancel,
             &mut |received, total| {
-                if let Some(running) = self
-                    .downloads
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .running
-                    .get_mut(preference_id)
-                {
-                    running.received_bytes = received;
-                    running.total_bytes = total;
-                }
+                self.progressed(preference_id, received, total, &cancel);
                 progress(received, total);
             },
         );
         result.map_err(map_acquisition_error)
+    }
+
+    /// Registers a download under its consent, or refuses a duplicate or a sealed manager.
+    fn register(
+        &self,
+        preference_id: &str,
+        consent: DownloadConsent,
+    ) -> Result<Arc<AtomicBool>, ComponentManagerError> {
+        let cancel = Arc::new(AtomicBool::new(false));
+        {
+            let mut downloads = self
+                .downloads
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if downloads.stopping {
+                return Err(ComponentManagerError::Cancelled);
+            }
+            if downloads.running.contains_key(preference_id) {
+                return Err(ComponentManagerError::AlreadyDownloading);
+            }
+            downloads.running.insert(
+                preference_id.to_owned(),
+                DownloadState {
+                    cancel: Arc::clone(&cancel),
+                    received_bytes: 0,
+                    total_bytes: 0,
+                    consent,
+                    phase: DownloadPhase::Preparing,
+                },
+            );
+        }
+        // Only the consent kind is recorded: never a URL, token or path.
+        tracing::info!(
+            event = "kalvoice.component_download_authorized",
+            component = preference_id,
+            consent = consent.code()
+        );
+        self.notify();
+        Ok(cancel)
+    }
+
+    /// Applies `change` to a running download. `false` when it is no longer registered.
+    fn update(&self, preference_id: &str, change: impl FnOnce(&mut DownloadState)) -> bool {
+        let updated = self
+            .downloads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .running
+            .get_mut(preference_id)
+            .map(change)
+            .is_some();
+        if updated {
+            self.notify();
+        }
+        updated
+    }
+
+    fn set_phase(&self, preference_id: &str, phase: DownloadPhase) {
+        let changed = self
+            .downloads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .running
+            .get_mut(preference_id)
+            .is_some_and(|running| std::mem::replace(&mut running.phase, phase) != phase);
+        if changed {
+            self.notify();
+        }
+    }
+
+    /// Records progress and yields the network while push to talk is in use: the acquirer's
+    /// read loop stays parked here until the microphone closes (or the download is cancelled).
+    fn progressed(&self, preference_id: &str, received: u64, total: u64, cancel: &AtomicBool) {
+        self.update(preference_id, |running| {
+            running.received_bytes = received;
+            running.total_bytes = total;
+            running.phase = if total > 0 && received >= total {
+                DownloadPhase::Verifying
+            } else {
+                DownloadPhase::Downloading
+            };
+        });
+        if self.talk_active() {
+            let resume = self.phase(preference_id);
+            self.wait_for_talk(preference_id, cancel);
+            if let Some(phase) = resume {
+                self.set_phase(preference_id, phase);
+            }
+        }
+    }
+
+    fn phase(&self, preference_id: &str) -> Option<DownloadPhase> {
+        self.downloads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .running
+            .get(preference_id)
+            .map(|running| running.phase)
+    }
+
+    fn talk_active(&self) -> bool {
+        let probe = self
+            .interactive
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        probe.is_some_and(|probe| probe())
+    }
+
+    /// Parks while push to talk is in use. Returns `false` if the download was cancelled.
+    fn wait_for_talk(&self, preference_id: &str, cancel: &AtomicBool) -> bool {
+        let mut logged = false;
+        while self.talk_active() {
+            if cancel.load(Ordering::SeqCst) {
+                return false;
+            }
+            if !logged {
+                logged = true;
+                self.set_phase(preference_id, DownloadPhase::WaitingForTalk);
+                tracing::info!(
+                    event = "kalvoice.component_download_deferred",
+                    component = preference_id,
+                    reason = "push_to_talk"
+                );
+            }
+            std::thread::sleep(WAIT_SLICE);
+        }
+        !cancel.load(Ordering::SeqCst)
+    }
+
+    /// Reserves acquisition capacity, waiting (bounded) while the Resource Governor holds the
+    /// download: every fresh governor sample re-evaluates admission, and push to talk always
+    /// goes first. With no sampler, or once the bounded wait ends, the hold's reason is returned.
+    fn reserve_admitted(
+        &self,
+        preference_id: &str,
+        size_bytes: u64,
+        cancel: &AtomicBool,
+    ) -> Result<Box<dyn HeldReservation>, ComponentManagerError> {
+        // Subscribe before the first evaluation so no sample between a hold and the wait is lost.
+        let updates = self.admission.updates();
+        let deadline = Instant::now() + self.admission_wait;
+        let mut logged = None;
+        loop {
+            if !self.wait_for_talk(preference_id, cancel) {
+                return Err(ComponentManagerError::Cancelled);
+            }
+            let error = match self.admission.reserve_acquisition(size_bytes) {
+                Ok(reservation) => {
+                    self.set_phase(preference_id, DownloadPhase::Preparing);
+                    return Ok(reservation);
+                }
+                Err(
+                    error @ (ComponentManagerError::CapacityHeld(_)
+                    | ComponentManagerError::ResourceUnavailable),
+                ) => error,
+                Err(error) => return Err(error),
+            };
+            let Some(updates) = updates.as_ref() else {
+                return Err(error);
+            };
+            let reason = match error {
+                ComponentManagerError::CapacityHeld(reason) => reason.code(),
+                _ => "capacity_unavailable",
+            };
+            if logged != Some(reason) {
+                logged = Some(reason);
+                tracing::info!(
+                    event = "kalvoice.component_download_waiting",
+                    component = preference_id,
+                    reason
+                );
+            }
+            self.set_phase(preference_id, DownloadPhase::WaitingForResources(reason));
+            loop {
+                if cancel.load(Ordering::SeqCst) {
+                    return Err(ComponentManagerError::Cancelled);
+                }
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    tracing::info!(
+                        event = "kalvoice.component_download_wait_ended",
+                        component = preference_id,
+                        reason
+                    );
+                    return Err(error);
+                }
+                match updates.wait(remaining.min(WAIT_SLICE)) {
+                    CapacityWake::Sample => break,
+                    CapacityWake::Idle => {}
+                    CapacityWake::Closed => return Err(error),
+                }
+            }
+        }
+    }
+
+    fn notify(&self) {
+        let observer = self
+            .observer
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(observer) = observer {
+            observer();
+        }
+    }
+
+    /// Push to talk's live state: while it reports `true`, no component bytes are fetched.
+    pub(crate) fn set_interactive_probe(&self, probe: InteractiveProbe) {
+        *self
+            .interactive
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(probe);
+    }
+
+    pub(crate) fn set_observer(&self, observer: DownloadObserver) {
+        *self.observer.lock().unwrap_or_else(PoisonError::into_inner) = Some(observer);
+    }
+
+    /// Every registered download, for truthful progress in the UI.
+    pub(crate) fn download_snapshots(&self) -> Vec<DownloadSnapshot> {
+        let downloads = self
+            .downloads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let mut snapshots = downloads
+            .running
+            .iter()
+            .map(|(model_id, running)| DownloadSnapshot {
+                model_id: model_id.clone(),
+                consent: running.consent,
+                phase: running.phase,
+                received_bytes: running.received_bytes,
+                total_bytes: running.total_bytes,
+            })
+            .collect::<Vec<_>>();
+        snapshots.sort_by(|a, b| a.model_id.cmp(&b.model_id));
+        snapshots
+    }
+
+    /// Whether any speech model has a verified receipt in the signed store. Reads receipts only
+    /// (no OS keychain), so a slow credential store can never make an installed model look
+    /// missing and trigger a second download.
+    pub(crate) fn speech_present(&self) -> bool {
+        let now_unix = unix_seconds();
+        SPEECH_COMPONENTS.iter().any(|component| {
+            matches!(
+                self.store
+                    .status(&self.speech_selector(*component), now_unix),
+                ComponentReceiptStatus::Present { .. }
+            )
+        })
+    }
+
+    /// Bytes of the reasoning pair already on disk (installed or partially downloaded) and the
+    /// pair's signed size, so a paused download shows where it will resume. `(0, 0)` before any
+    /// catalog was accepted.
+    pub(crate) fn reasoning_on_disk(&self) -> (u64, u64) {
+        let Some(catalog) = self
+            .current_catalog
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+        else {
+            return (0, 0);
+        };
+        let now_unix = unix_seconds();
+        [CatalogRole::ReasoningRuntime, CatalogRole::ReasoningModel]
+            .into_iter()
+            .filter_map(|role| catalog.entry(role))
+            .map(|entry| {
+                let manifest = entry.component().manifest();
+                let selector = ComponentSelector {
+                    component_id: manifest.component_id.clone(),
+                    kind: manifest.kind,
+                    platform: manifest.platform,
+                    arch: manifest.arch,
+                    runtime_abi: manifest.runtime_abi.clone(),
+                };
+                let retained = if matches!(
+                    self.store.status(&selector, now_unix),
+                    ComponentReceiptStatus::Present { .. }
+                ) {
+                    manifest.size_bytes
+                } else {
+                    fs::metadata(
+                        self.staging_directory
+                            .join(format!("{}.partial", manifest.sha256)),
+                    )
+                    .map(|metadata| metadata.len().min(manifest.size_bytes))
+                    .unwrap_or(0)
+                };
+                (retained, manifest.size_bytes)
+            })
+            .fold((0, 0), |(retained, total), (part, size)| {
+                (retained + part, total + size)
+            })
     }
 
     pub(crate) fn cancel(&self, preference_id: &str) -> bool {
@@ -1221,16 +1648,25 @@ fn speech_component(preference_id: &str) -> Option<SpeechComponent> {
         .find(|component| component.preference_id == preference_id)
 }
 
+/// The owner's confirmation authorizes any catalog speech model. System-granted consent covers
+/// only the default model; every other model keeps its download dialog.
 fn authorize_download(
     preference_id: &str,
-    consent: bool,
+    consent: DownloadConsent,
 ) -> Result<SpeechComponent, ComponentManagerError> {
     let component =
         speech_component(preference_id).ok_or(ComponentManagerError::UnknownSpeechModel)?;
-    if !consent {
-        return Err(ComponentManagerError::ConsentRequired);
+    match consent {
+        DownloadConsent::User => Ok(component),
+        DownloadConsent::AutomaticDefault
+            if component.component_id == DEFAULT_SPEECH_COMPONENT_ID =>
+        {
+            Ok(component)
+        }
+        DownloadConsent::AutomaticDefault | DownloadConsent::Declined => {
+            Err(ComponentManagerError::ConsentRequired)
+        }
     }
-    Ok(component)
 }
 
 fn validate_track(
@@ -1742,19 +2178,52 @@ mod tests {
     #[test]
     fn consent_and_exact_model_validation_happen_before_acquisition() {
         assert_eq!(
-            authorize_download("tiny.en", false),
+            authorize_download("tiny.en", DownloadConsent::from_user(false)),
             Err(ComponentManagerError::ConsentRequired)
         );
         assert_eq!(
-            authorize_download("not-a-model", true),
+            authorize_download("not-a-model", DownloadConsent::User),
             Err(ComponentManagerError::UnknownSpeechModel)
         );
         assert_eq!(
-            authorize_download("tiny.en", true)
+            authorize_download("tiny.en", DownloadConsent::from_user(true))
                 .expect("authorized")
                 .component_id,
             DEFAULT_SPEECH_COMPONENT_ID
         );
+    }
+
+    #[test]
+    fn system_granted_consent_covers_only_the_default_speech_model() {
+        assert_eq!(models::DEFAULT_MODEL, "tiny.en");
+        assert_eq!(
+            authorize_download("tiny.en", DownloadConsent::AutomaticDefault)
+                .expect("the default model is provisioned automatically")
+                .component_id,
+            DEFAULT_SPEECH_COMPONENT_ID
+        );
+        for other in ["base.en", "small.en", "base", "small"] {
+            assert_eq!(
+                authorize_download(other, DownloadConsent::AutomaticDefault),
+                Err(ComponentManagerError::ConsentRequired),
+                "{other} must keep its download dialog"
+            );
+            assert!(authorize_download(other, DownloadConsent::User).is_ok());
+        }
+        assert_eq!(
+            DownloadConsent::AutomaticDefault.code(),
+            "automatic_default"
+        );
+        assert_eq!(DownloadConsent::User.code(), "user");
+    }
+
+    #[test]
+    fn a_governor_hold_ends_after_its_bound_with_the_old_ended_attempt_copy() {
+        // The waiting download's final error keeps the truthful "attempt ended" wording.
+        let error = ComponentManagerError::CapacityHeld(ComponentCapacityReason::Memory);
+        assert_eq!(ComponentCapacityReason::Memory.code(), "memory");
+        assert_eq!(ComponentCapacityReason::DiskSpace.code(), "disk_space");
+        assert!(error.to_string().contains("download attempt ended"));
     }
 
     #[test]

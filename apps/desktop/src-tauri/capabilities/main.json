@@ -79,6 +79,7 @@
     "allow-kalvoice-reasoning-retry",
     "allow-kalvoice-model-cancel",
     "allow-kalvoice-model-delete",
+    "allow-kalvoice-open-microphone-settings",
     "allow-kalvoice-talk",
     "allow-kalvoice-type-instead",
     "allow-kalvoice-latency",

@@ -591,3 +591,387 @@ fn invalid_signed_metadata_never_opens_a_download_or_advances_the_floor() {
             .is_none()
     );
 }
+
+// ------------------------------------------------------------------------------------------
+// Zero-setup provisioning (ZS-Z1): automatic consent, reuse, governor waits, push to talk.
+
+/// Admits every acquisition, counting evaluations and live reservations.
+#[derive(Default)]
+struct CountingAdmission {
+    calls: AtomicUsize,
+    live: Arc<AtomicUsize>,
+    /// Evaluations to hold (as memory pressure) before admitting.
+    holds: AtomicUsize,
+    updates: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+}
+impl CapacityUpdates for std::sync::mpsc::Receiver<()> {
+    fn wait(&self, timeout: Duration) -> CapacityWake {
+        match self.recv_timeout(timeout) {
+            Ok(()) => CapacityWake::Sample,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => CapacityWake::Idle,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => CapacityWake::Closed,
+        }
+    }
+}
+impl ComponentAdmission for CountingAdmission {
+    fn reserve_acquisition(
+        &self,
+        _: u64,
+    ) -> Result<Box<dyn HeldReservation>, ComponentManagerError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        if self
+            .holds
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |holds| {
+                holds.checked_sub(1)
+            })
+            .is_ok()
+        {
+            return Err(ComponentManagerError::CapacityHeld(
+                ComponentCapacityReason::Memory,
+            ));
+        }
+        self.live.fetch_add(1, Ordering::SeqCst);
+        Ok(Box::new(Permit(self.live.clone())))
+    }
+    fn updates(&self) -> Option<Box<dyn CapacityUpdates>> {
+        self.updates
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+            .map(|updates| Box::new(updates) as Box<dyn CapacityUpdates>)
+    }
+}
+
+type Observed = Arc<Mutex<Vec<DownloadSnapshot>>>;
+
+/// Records every download snapshot the manager publishes.
+fn observe(manager: &Arc<KalVoiceComponentManager>) -> Observed {
+    let seen: Observed = Arc::default();
+    let record = seen.clone();
+    let weak = Arc::downgrade(manager);
+    manager.set_observer(Arc::new(move || {
+        if let Some(manager) = weak.upgrade() {
+            record
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .extend(manager.download_snapshots());
+        }
+    }));
+    seen
+}
+
+fn acquired_ids(manager: &KalVoiceComponentManager, acquisition: &AcquisitionSpy) -> Vec<String> {
+    acquisition
+        .tokens
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+        .map(|token| {
+            manager.verifier.verify(token, unix_seconds()).map_or_else(
+                |_| "unverified".to_owned(),
+                |verified| verified.manifest().component_id.clone(),
+            )
+        })
+        .collect()
+}
+
+fn with_admission(
+    manager: &mut Arc<KalVoiceComponentManager>,
+    admission: CountingAdmission,
+) -> Arc<CountingAdmission> {
+    let admission = Arc::new(admission);
+    let Some(inner) = Arc::get_mut(manager) else {
+        panic!("the fixture manager is unexpectedly shared");
+    };
+    inner.admission = admission.clone();
+    admission
+}
+
+fn eventually(what: &str, mut done: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !done() {
+        assert!(Instant::now() < deadline, "timed out waiting for {what}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn phase_of(manager: &KalVoiceComponentManager, id: &str) -> Option<DownloadPhase> {
+    manager
+        .download_snapshots()
+        .into_iter()
+        .find(|download| download.model_id == id)
+        .map(|download| download.phase)
+}
+
+#[test]
+fn automatic_default_download_fetches_only_tiny_en_once_under_automatic_default_consent() {
+    let (_temp, mut manager, acquisition, _) = fixture().unwrap();
+    let admission = with_admission(&mut manager, CountingAdmission::default());
+    let seen = observe(&manager);
+    manager.download_default_speech(|_, _| {}).unwrap();
+    assert_eq!(
+        acquired_ids(&manager, &acquisition),
+        vec![DEFAULT_SPEECH_COMPONENT_ID.to_owned()]
+    );
+    assert_eq!(admission.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(admission.live.load(Ordering::SeqCst), 0);
+    let consents = seen
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|download| (download.model_id.clone(), download.consent))
+        .collect::<Vec<_>>();
+    assert!(!consents.is_empty());
+    assert!(
+        consents
+            .iter()
+            .all(|entry| *entry == ("tiny.en".to_owned(), DownloadConsent::AutomaticDefault))
+    );
+    // The download went through Preparing, Downloading and (all bytes in) Verifying.
+    let phases = seen
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|download| download.phase)
+        .collect::<Vec<_>>();
+    for phase in [
+        DownloadPhase::Preparing,
+        DownloadPhase::Downloading,
+        DownloadPhase::Verifying,
+    ] {
+        assert!(phases.contains(&phase), "{phase:?} in {phases:?}");
+    }
+    assert!(manager.download_snapshots().is_empty());
+}
+
+#[test]
+fn system_consent_never_downloads_another_model_and_the_dialog_consent_is_user() {
+    let (_temp, mut manager, acquisition, _) = fixture().unwrap();
+    with_admission(&mut manager, CountingAdmission::default());
+    let seen = observe(&manager);
+    for other in ["base.en", "small.en", "base", "small"] {
+        assert_eq!(
+            manager.download_speech_with(other, DownloadConsent::AutomaticDefault, |_, _| {}),
+            Err(ComponentManagerError::ConsentRequired)
+        );
+    }
+    assert!(acquisition.tokens.lock().unwrap().is_empty());
+    assert!(seen.lock().unwrap().is_empty(), "nothing was registered");
+    manager.download_speech("base.en", true, |_, _| {}).unwrap();
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .all(|download| download.consent == DownloadConsent::User)
+    );
+}
+
+#[test]
+fn an_installed_speech_model_is_detected_and_reused_never_fetched_again() {
+    let (temp, mut manager, acquisition, _) = fixture().unwrap();
+    let admission = with_admission(&mut manager, CountingAdmission::default());
+    // A real signed receipt for tiny.en (the owner's installed, in-use model).
+    let bytes = vec![7_u8; 1024];
+    let host = host_local_reasoning_contract().unwrap();
+    let now = unix_seconds();
+    let key = SigningKey::from_bytes(&[71; 32]);
+    let digest = sha256_hex(&bytes);
+    let manifest = sign(
+        &ComponentManifest {
+            schema_version: 1,
+            component_id: DEFAULT_SPEECH_COMPONENT_ID.into(),
+            kind: ComponentKind::Model,
+            version: "2026.09.1".into(),
+            sequence: 1,
+            platform: host.runtime.platform,
+            arch: host.runtime.arch,
+            runtime_abi: WHISPER_GGML_ABI.into(),
+            size_bytes: 1024,
+            sha256: digest.clone(),
+            artifact_url: format!(
+                "https://kalcoded.com/components/v1/model/{DEFAULT_SPEECH_COMPONENT_ID}/2026.09.1/{digest}/artifact.bin"
+            ),
+            licenses: vec![ComponentLicense {
+                spdx_id: "MIT".into(),
+                notice_sha256: "bb".repeat(32),
+            }],
+            provenance: ComponentProvenance {
+                source_id: "synthetic/test".into(),
+                source_revision: "test-1".into(),
+                source_integrity_sha256: "cc".repeat(32),
+                build_recipe_sha256: "dd".repeat(32),
+            },
+            issued_at: now - 30,
+            expires_at: now + 3600,
+            key_id: "synthetic-test".into(),
+        },
+        &key,
+        TOKEN_TYPE,
+    )
+    .unwrap();
+    let artifact = temp.path().join("tiny.bin");
+    fs::write(&artifact, &bytes).unwrap();
+    manager
+        .store
+        .install_from_file(&manifest, &artifact, now)
+        .unwrap();
+    assert!(manager.speech_present());
+    manager.download_default_speech(|_, _| {}).unwrap();
+    assert!(acquisition.tokens.lock().unwrap().is_empty());
+    assert_eq!(admission.calls.load(Ordering::SeqCst), 0);
+    assert!(manager.download_snapshots().is_empty());
+}
+
+#[test]
+fn a_held_download_waits_and_is_re_evaluated_on_each_governor_sample() {
+    let (_temp, mut manager, acquisition, _) = fixture().unwrap();
+    let (samples, updates) = std::sync::mpsc::sync_channel(8);
+    let admission = with_admission(
+        &mut manager,
+        CountingAdmission {
+            holds: AtomicUsize::new(2),
+            updates: Mutex::new(Some(updates)),
+            ..Default::default()
+        },
+    );
+    let driver = {
+        let manager = manager.clone();
+        std::thread::spawn(move || manager.download_default_speech(|_, _| {}))
+    };
+    eventually("the governor hold", || {
+        phase_of(&manager, "tiny.en") == Some(DownloadPhase::WaitingForResources("memory"))
+    });
+    // No sample, no re-evaluation (never a busy timer loop).
+    std::thread::sleep(WAIT_SLICE * 3);
+    assert_eq!(admission.calls.load(Ordering::SeqCst), 1);
+    samples.send(()).unwrap();
+    eventually("the second evaluation", || {
+        admission.calls.load(Ordering::SeqCst) == 2
+    });
+    assert!(acquisition.tokens.lock().unwrap().is_empty());
+    samples.send(()).unwrap();
+    assert_eq!(driver.join().unwrap(), Ok(()));
+    assert_eq!(admission.calls.load(Ordering::SeqCst), 3);
+    assert_eq!(acquisition.tokens.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn a_hold_that_outlasts_the_bounded_wait_ends_with_its_reason_and_fetches_nothing() {
+    let (_temp, mut manager, acquisition, _) = fixture().unwrap();
+    let (_samples, updates) = std::sync::mpsc::sync_channel::<()>(8);
+    with_admission(
+        &mut manager,
+        CountingAdmission {
+            holds: AtomicUsize::new(usize::MAX),
+            updates: Mutex::new(Some(updates)),
+            ..Default::default()
+        },
+    );
+    Arc::get_mut(&mut manager).unwrap().admission_wait = Duration::from_millis(150);
+    let started = Instant::now();
+    assert_eq!(
+        manager.download_default_speech(|_, _| {}),
+        Err(ComponentManagerError::CapacityHeld(
+            ComponentCapacityReason::Memory
+        ))
+    );
+    assert!(started.elapsed() >= Duration::from_millis(150));
+    assert!(acquisition.tokens.lock().unwrap().is_empty());
+    assert!(manager.download_snapshots().is_empty());
+    assert_eq!(ADMISSION_WAIT, Duration::from_secs(600));
+}
+
+#[test]
+fn no_download_starts_while_push_to_talk_is_active() {
+    let (_temp, mut manager, acquisition, _) = fixture().unwrap();
+    let admission = with_admission(&mut manager, CountingAdmission::default());
+    let talking = Arc::new(AtomicBool::new(true));
+    let probe = talking.clone();
+    manager.set_interactive_probe(Arc::new(move || probe.load(Ordering::SeqCst)));
+    let driver = {
+        let manager = manager.clone();
+        std::thread::spawn(move || manager.download_default_speech(|_, _| {}))
+    };
+    eventually("the push-to-talk deferral", || {
+        phase_of(&manager, "tiny.en") == Some(DownloadPhase::WaitingForTalk)
+    });
+    std::thread::sleep(WAIT_SLICE * 2);
+    assert_eq!(admission.calls.load(Ordering::SeqCst), 0);
+    assert!(acquisition.tokens.lock().unwrap().is_empty());
+    talking.store(false, Ordering::SeqCst);
+    assert_eq!(driver.join().unwrap(), Ok(()));
+    assert_eq!(acquisition.tokens.lock().unwrap().len(), 1);
+}
+
+/// Starts push to talk as the first bytes arrive, then reports them.
+struct TalkMidDownload(Arc<AtomicBool>);
+impl AcquisitionService for TalkMidDownload {
+    fn acquire(
+        &self,
+        _: &str,
+        _: i64,
+        consent: bool,
+        _: &AtomicBool,
+        progress: &mut dyn FnMut(u64, u64),
+    ) -> Result<(), ComponentAcquisitionError> {
+        assert!(consent);
+        self.0.store(true, Ordering::SeqCst);
+        progress(512, 1024);
+        progress(1024, 1024);
+        Ok(())
+    }
+}
+
+#[test]
+fn a_running_download_yields_the_network_while_push_to_talk_is_active() {
+    let (_temp, mut manager, _, _) = fixture().unwrap();
+    with_admission(&mut manager, CountingAdmission::default());
+    let talking = Arc::new(AtomicBool::new(false));
+    Arc::get_mut(&mut manager).unwrap().acquisition = Arc::new(TalkMidDownload(talking.clone()));
+    let probe = talking.clone();
+    manager.set_interactive_probe(Arc::new(move || probe.load(Ordering::SeqCst)));
+    let seen = observe(&manager);
+    let driver = {
+        let manager = manager.clone();
+        std::thread::spawn(move || manager.download_default_speech(|_, _| {}))
+    };
+    eventually("the mid-download deferral", || {
+        phase_of(&manager, "tiny.en") == Some(DownloadPhase::WaitingForTalk)
+    });
+    let paused_at = seen
+        .lock()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|download| download.phase == DownloadPhase::WaitingForTalk)
+        .map(|download| download.received_bytes);
+    assert_eq!(paused_at, Some(512));
+    std::thread::sleep(WAIT_SLICE * 2);
+    assert!(
+        !driver.is_finished(),
+        "no bytes are read while the microphone is live"
+    );
+    talking.store(false, Ordering::SeqCst);
+    assert_eq!(driver.join().unwrap(), Ok(()));
+}
+
+#[test]
+fn automatic_local_intelligence_uses_the_same_signed_pipeline_under_automatic_consent() {
+    let (_temp, manager, acquisition, reservations) = fixture().unwrap();
+    let seen = observe(&manager);
+    manager.download_reasoning_automatic(|_, _| {}).unwrap();
+    assert_eq!(
+        acquired_ids(&manager, &acquisition),
+        vec![
+            LOCAL_REASONING_RUNTIME_ID.to_owned(),
+            LOCAL_REASONING_MODEL_ID.to_owned()
+        ]
+    );
+    assert_eq!(reservations.load(Ordering::SeqCst), 0);
+    assert!(seen.lock().unwrap().iter().all(|download| {
+        download.model_id == REASONING_DOWNLOAD_ID
+            && download.consent == DownloadConsent::AutomaticDefault
+    }));
+    // The catalog it used is now current, so a paused download can report its signed size.
+    assert_eq!(manager.reasoning_on_disk(), (0, 2048));
+}

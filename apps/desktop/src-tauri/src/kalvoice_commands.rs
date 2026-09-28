@@ -59,6 +59,8 @@ use kalcode_kalvoice::signals::{LocalReasoningDownload, LocalReasoningStatus};
 #[path = "kalvoice_reasoning.rs"]
 mod reasoning;
 use reasoning::DesktopLocalInterpreter;
+#[path = "kalvoice_provisioning.rs"]
+mod provisioning;
 #[path = "kalvoice_talk_key.rs"]
 mod talk_key;
 use talk_key::{Held, KeyRegistry, RegisterError, Status, TalkPrefs, Unavailable};
@@ -216,6 +218,8 @@ pub struct KalVoiceRuntime {
     voice: VoiceController,
     components: Arc<KalVoiceComponentManager>,
     reasoning: Arc<DesktopLocalInterpreter>,
+    /// Zero-setup provisioning of the default speech model and local intelligence.
+    provisioning: provisioning::Provisioner,
     recognizers: Arc<DesktopRecognizers>,
     /// The OS voice, started on first use.
     speech: std::sync::OnceLock<Arc<dyn SpeechOutput>>,
@@ -356,6 +360,7 @@ impl KalVoiceRuntime {
                 .voice
                 .listening()
                 .map(|(session_id, mode)| ListeningSession { session_id, mode }),
+            provisioning: Some(provisioning::items(self)),
         })
     }
 
@@ -770,6 +775,7 @@ pub fn init(
         voice,
         components,
         reasoning,
+        provisioning: provisioning::Provisioner::default(),
         recognizers,
         speech: std::sync::OnceLock::new(),
         microphone_supported: cfg!(any(windows, target_os = "macos")),
@@ -795,6 +801,7 @@ pub fn init(
                 });
             }
         }));
+    provisioning::attach(&runtime);
     sync_talk_key(app, &runtime, "runtime_started");
     keep_warm(&runtime);
     synchronize_usage(&runtime);
@@ -833,8 +840,10 @@ fn current_reasoning_signal(reasoning: &DesktopLocalInterpreter) -> KalVoiceSign
 
 /// Loads the speech model in the background so the first key press doesn't wait for it, then
 /// drives the installed local interpreter to ready, publishing each status transition. The
-/// interpreter keeps a held start pending until the Resource Governor admits it.
+/// interpreter keeps a held start pending until the Resource Governor admits it. Also starts (or
+/// wakes) zero-setup provisioning of whatever default component is still missing.
 fn keep_warm(runtime: &Arc<KalVoiceRuntime>) {
+    provisioning::provision(runtime);
     let Some(task) = runtime.background.start() else {
         return;
     };
@@ -879,6 +888,9 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
                 .unwrap_or_else(PoisonError::into_inner)
                 .insert(window.label().to_owned(), *focused);
             foreground_changed(window.app_handle(), "window_focus");
+            if *focused {
+                provisioning::focus_gained(window.app_handle());
+            }
         }
         tauri::WindowEvent::Destroyed => {
             WINDOW_FOCUS
@@ -1556,7 +1568,9 @@ fn broadcast(channels: &HashMap<String, Channel<KalVoiceSignal>>, signal: &KalVo
     let kind = signal_kind(signal);
     let frequent = matches!(
         signal,
-        KalVoiceSignal::Level { .. } | KalVoiceSignal::Partial { .. }
+        KalVoiceSignal::Level { .. }
+            | KalVoiceSignal::Partial { .. }
+            | KalVoiceSignal::Provisioning { .. }
     );
     if channels.is_empty() && !frequent {
         tracing::warn!(
@@ -1591,6 +1605,7 @@ fn signal_kind(signal: &KalVoiceSignal) -> &'static str {
         KalVoiceSignal::ModelProgress { .. } => "model_progress",
         KalVoiceSignal::ModelInstalled { .. } => "model_installed",
         KalVoiceSignal::ModelFailed { .. } => "model_failed",
+        KalVoiceSignal::Provisioning { .. } => "provisioning",
         KalVoiceSignal::RequestStage { .. } => "request_stage",
         KalVoiceSignal::RequestResolved { .. } => "request_resolved",
         KalVoiceSignal::Speaking { .. } => "speaking",
@@ -1921,6 +1936,7 @@ pub async fn kalvoice_preferences_update(
         if saved.speech_model != before.speech_model {
             keep_warm(&runtime);
         }
+        provisioning::preferences_changed(&runtime, &before, &saved);
         runtime
             .status()
             .map_err(to_ipc("kalvoice_preferences_update"))
@@ -2093,7 +2109,9 @@ pub fn kalvoice_model_cancel(
     model_id: String,
 ) -> Result<bool, IpcError> {
     _runtime_access.revalidate()?;
-    Ok(state.runtime()?.components.cancel(&model_id))
+    let runtime = state.runtime()?;
+    provisioning::before_cancel(runtime, &model_id);
+    Ok(runtime.components.cancel(&model_id))
 }
 
 #[tauri::command(async)]
@@ -2108,7 +2126,39 @@ pub fn kalvoice_model_delete(
         .recognizers
         .delete_model(&model_id)
         .map_err(|e| KalError::validation(e.code(), e.to_string()).to_ipc())?;
+    provisioning::speech_removed(runtime);
     Ok(runtime.components.speech_models())
+}
+
+/// The operating system's microphone privacy page: the only address
+/// [`kalvoice_open_microphone_settings`] can open (no argument reaches the opener).
+#[cfg(windows)]
+const MICROPHONE_SETTINGS: Option<&str> = Some("ms-settings:privacy-microphone");
+#[cfg(target_os = "macos")]
+const MICROPHONE_SETTINGS: Option<&str> =
+    Some("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone");
+#[cfg(not(any(windows, target_os = "macos")))]
+const MICROPHONE_SETTINGS: Option<&str> = None;
+
+/// Opens the system's microphone privacy settings when access is blocked.
+#[tauri::command(async)]
+pub fn kalvoice_open_microphone_settings(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    app: AppHandle,
+) -> Result<(), IpcError> {
+    use tauri_plugin_opener::OpenerExt as _;
+    _runtime_access.revalidate()?;
+    let unavailable = || {
+        KalError::validation(
+            "microphone_settings_unavailable",
+            "KalCode couldn't open your system's microphone privacy settings.",
+        )
+        .to_ipc()
+    };
+    let url = MICROPHONE_SETTINGS.ok_or_else(unavailable)?;
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|_| unavailable())
 }
 
 #[cfg(test)]
@@ -2371,6 +2421,19 @@ mod tests {
                 "accelerator": "F8",
             })
         );
+    }
+
+    #[test]
+    fn microphone_settings_open_only_the_platform_privacy_page() {
+        #[cfg(windows)]
+        assert_eq!(MICROPHONE_SETTINGS, Some("ms-settings:privacy-microphone"));
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            MICROPHONE_SETTINGS,
+            Some("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+        );
+        #[cfg(not(any(windows, target_os = "macos")))]
+        assert_eq!(MICROPHONE_SETTINGS, None);
     }
 
     #[test]

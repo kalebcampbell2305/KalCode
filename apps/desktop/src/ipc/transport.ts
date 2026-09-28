@@ -78,6 +78,7 @@ export type CommandName =
   | "kalvoice_reasoning_retry"
   | "kalvoice_model_cancel"
   | "kalvoice_model_delete"
+  | "kalvoice_open_microphone_settings"
   | "kalvoice_talk"
   | "kalvoice_type_instead"
   | "kalvoice_latency"

@@ -102,7 +102,7 @@ async function mount({ statusPatch, strict = false, statusFailure, subscribeFail
   // count subscribes caused by what they do.
   await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
   const settled = subscribe.mock.calls.length;
-  return { transport, subscribe, user, go, inject, talks, settled };
+  return { transport, subscribe, user, go, inject, talks, settled, invoked };
 }
 
 const NOT_STARTED = {
@@ -187,7 +187,7 @@ describe("push to talk is always visible", () => {
   });
 
   it("shows native microphone and listening progress when collapsed to the orb or hidden", async () => {
-    const { user, inject } = await mount();
+    const { user, inject, invoked } = await mount();
     await user.click(within(widget()).getByRole("button", { name: "Collapse to the orb" }));
     press();
     const activity = await screen.findByRole("status", { name: "Push to talk" });
@@ -205,6 +205,9 @@ describe("push to talk is always visible", () => {
     });
     const alert = await screen.findByRole("alert", { name: "Push to talk" });
     expect(alert).toHaveTextContent("Microphone access is blocked");
+    // One click to the OS microphone privacy page (native opens only that page).
+    await user.click(within(alert).getByRole("button", { name: "Open privacy settings" }));
+    await waitFor(() => expect(invoked).toContain("kalvoice_open_microphone_settings"));
     await user.click(within(alert).getByRole("button", { name: "Dismiss" }));
     await waitFor(() => expect(screen.queryByRole("alert", { name: "Push to talk" })).toBeNull());
   }, 15_000);

@@ -1,3 +1,4 @@
+import type { ComponentProvisioning, KalVoiceStatus } from "@kalcode/protocol";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMemoryKalVoice } from "../ipc/memoryKalVoice.ts";
@@ -18,19 +19,30 @@ const quote = {
 const prepare = vi.fn();
 const download = vi.fn();
 const retry = vi.fn();
+const setPaused = vi.fn();
+const updatePreferences = vi.fn();
 
 beforeEach(() => {
   prepare.mockReset().mockResolvedValue(quote);
   download.mockReset().mockResolvedValue(undefined);
   retry.mockReset().mockResolvedValue(undefined);
+  setPaused.mockReset().mockResolvedValue(undefined);
+  updatePreferences.mockReset().mockResolvedValue(undefined);
   const voice = createMemoryKalVoice(() => undefined, "");
+  const status = voice.handlers.kalvoice_status?.({}) as KalVoiceStatus;
   seams.value = {
-    status: { ...(voice.handlers.kalvoice_status?.({}) as object), localReasoning: "not_installed" },
+    // The review dialog is the manual path: automatic preparation is off here.
+    status: {
+      ...status,
+      localReasoning: "not_installed",
+      preferences: { ...status.preferences, localIntelligenceAuto: false },
+    },
     downloads: {},
     prepareReasoning: prepare,
     retryReasoning: retry,
     downloadModel: download,
-    updatePreferences: vi.fn(),
+    setIntelligencePaused: setPaused,
+    updatePreferences,
     cancelDownload: vi.fn(),
     deleteModel: vi.fn(),
     refreshStatus: vi.fn(),
@@ -110,5 +122,147 @@ describe("automatic local startup status", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry local startup" }));
     expect(retry).toHaveBeenCalledOnce();
     expect(download).not.toHaveBeenCalled();
+  });
+});
+
+function withStatus(patch: Partial<KalVoiceStatus>, preferences: Partial<KalVoiceStatus["preferences"]> = {}) {
+  const current = seams.value.status as KalVoiceStatus;
+  seams.value.status = { ...current, ...patch, preferences: { ...current.preferences, ...preferences } };
+}
+
+const intelligence = (patch: Partial<ComponentProvisioning>): ComponentProvisioning => ({
+  modelId: "local-reasoning",
+  automatic: true,
+  phase: "downloading",
+  receivedBytes: 212_000_000,
+  totalBytes: 852_000_000,
+  ...patch,
+});
+
+describe("zero-setup local intelligence", () => {
+  it("prepares on its own with truthful progress and a visible Pause", () => {
+    withStatus({ provisioning: [intelligence({})] }, { localIntelligenceAuto: true });
+    render(<KalVoiceSettings />);
+    expect(screen.getByText("Preparing local intelligence (852 MB)…")).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "Preparing local intelligence" })).toHaveAttribute(
+      "aria-valuenow",
+      "24",
+    );
+    expect(screen.getByRole("note")).toHaveTextContent("Downloading 212 MB of 852 MB");
+    expect(screen.queryByRole("button", { name: "Review download" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+    expect(setPaused).toHaveBeenCalledExactlyOnceWith(true);
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it("shows a stored pause with where it stopped and resumes it", () => {
+    withStatus(
+      { provisioning: [intelligence({ phase: "paused" })] },
+      { localIntelligenceAuto: true, localIntelligencePaused: true },
+    );
+    render(<KalVoiceSettings />);
+    expect(screen.getByText("Paused")).toBeInTheDocument();
+    expect(screen.getByRole("note")).toHaveTextContent("paused at 212 MB of 852 MB");
+    fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+    expect(setPaused).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it("waits for a ready speech model before preparing local intelligence", () => {
+    withStatus({ activeModel: null, provisioning: [] }, { localIntelligenceAuto: true });
+    render(<KalVoiceSettings />);
+    expect(screen.getByText("Waiting for speech")).toBeInTheDocument();
+  });
+
+  it("names a governor hold and a scheduled retry without asking for a click", () => {
+    withStatus(
+      { provisioning: [intelligence({ phase: "waiting_for_resources", reason: "memory" })] },
+      { localIntelligenceAuto: true },
+    );
+    const view = render(<KalVoiceSettings />);
+    expect(screen.getByText("Waiting for system resources")).toBeInTheDocument();
+    expect(screen.getByRole("note")).toHaveTextContent("continues when enough memory is free");
+    view.unmount();
+    withStatus({
+      provisioning: [
+        intelligence({ phase: "retry_scheduled", reason: "component_catalog_unavailable", retryInSeconds: 60 }),
+      ],
+    });
+    render(<KalVoiceSettings />);
+    expect(screen.getByText("Unavailable")).toBeInTheDocument();
+    expect(screen.getByText(/retries automatically in about a minute/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Review download" })).not.toBeInTheDocument();
+  });
+
+  it("offers 'Prepare local intelligence automatically', on by default", () => {
+    withStatus({}, { localIntelligenceAuto: true });
+    render(<KalVoiceSettings />);
+    const toggle = screen.getByRole("switch", { name: "Prepare local intelligence automatically" });
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(toggle);
+    expect(updatePreferences).toHaveBeenCalledExactlyOnceWith({ localIntelligenceAuto: false });
+  });
+});
+
+describe("zero-setup speech model", () => {
+  it("says the model comes from KalCode's signed catalog on kalcoded.com, not whisper.cpp", () => {
+    render(<KalVoiceSettings />);
+    expect(screen.getByText(/signed component catalog on kalcoded\.com/)).toBeInTheDocument();
+    expect(screen.queryByText(/official whisper\.cpp/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/only when you choose/)).not.toBeInTheDocument();
+  });
+
+  it("shows the automatic download's progress and its governor wait", () => {
+    withStatus({
+      activeModel: null,
+      models: (seams.value.status as KalVoiceStatus).models.map((m) =>
+        m.id === "tiny.en" ? { ...m, state: { kind: "not_installed" } } : m,
+      ),
+      provisioning: [
+        {
+          modelId: "tiny.en",
+          automatic: true,
+          phase: "downloading",
+          receivedBytes: 38_852_358,
+          totalBytes: 77_704_715,
+        },
+      ],
+    });
+    const view = render(<KalVoiceSettings />);
+    expect(screen.getByRole("progressbar", { name: "Downloading English (fastest)" })).toHaveAttribute(
+      "aria-valuenow",
+      "50",
+    );
+    expect(screen.getByRole("status", { name: "Push-to-talk readiness" })).toHaveTextContent("Preparing speech 50%");
+    view.unmount();
+    withStatus({
+      provisioning: [
+        {
+          modelId: "tiny.en",
+          automatic: true,
+          phase: "waiting_for_resources",
+          reason: "cpu",
+          receivedBytes: 0,
+          totalBytes: 77_704_715,
+        },
+      ],
+    });
+    render(<KalVoiceSettings />);
+    expect(screen.getAllByText(/Waiting for system resources/).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/^Ready\./)).not.toBeInTheDocument();
+  });
+
+  it("after the owner removed the model, Settings shows the manual download again", () => {
+    withStatus(
+      {
+        activeModel: null,
+        models: (seams.value.status as KalVoiceStatus).models.map((m) => ({ ...m, state: { kind: "not_installed" } })),
+        provisioning: [],
+      },
+      { speechModelAutoDownload: false },
+    );
+    render(<KalVoiceSettings />);
+    expect(screen.getByText(/Downloaded when you choose/)).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Download" }).length).toBe(5);
+    expect(screen.getByRole("status", { name: "Push-to-talk readiness" })).toHaveTextContent("Needs a speech model");
   });
 });

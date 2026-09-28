@@ -21,8 +21,13 @@ function Key({ name }: { name: string }) {
 
 /** The Intelligence tile's call to action for each state (settings holds the controls). */
 function intelligenceAction(status: KalVoiceStatus): string | null {
-  if (status.localReasoning === "not_installed") return "Set up local intelligence";
-  return localIntelligence(status).retry ? "Open KalVoice settings" : null;
+  const view = localIntelligence(status);
+  if (status.localReasoning === "not_installed") {
+    // Preparing on its own needs nothing from the owner; a pause is resumed in Settings.
+    if (view.resumable) return "Open KalVoice settings";
+    return view.pausable ? null : "Set up local intelligence";
+  }
+  return view.retry ? "Open KalVoice settings" : null;
 }
 
 /** The KalVoice surface: ask, see what's ready, and this session's requests. */

@@ -1,4 +1,4 @@
-import type { LocalReasoningDownload, PanelAnchor, SpeechModelInfo } from "@kalcode/protocol";
+import type { ComponentProvisioning, LocalReasoningDownload, PanelAnchor, SpeechModelInfo } from "@kalcode/protocol";
 import { Badge, Button, Panel, Skeleton } from "@kalcode/ui/components";
 import { AudioLines } from "lucide-react";
 import { AlertDialog } from "radix-ui";
@@ -9,7 +9,14 @@ import { useKalVoice, useOptionalKalVoice } from "./KalVoiceProvider.tsx";
 import styles from "./KalVoiceSettings.module.css";
 import { localIntelligence } from "./localIntelligence.ts";
 import { ANCHOR_LABELS } from "./panelGeometry.ts";
-import { pushToTalkReadiness } from "./readiness.ts";
+import {
+  failureReason,
+  LOCAL_REASONING_ID,
+  provisioningFor,
+  pushToTalkReadiness,
+  retryWhen,
+  waitingReason,
+} from "./readiness.ts";
 import { checkReserved, displayKey, isModifierOnly, talkKeyChoiceHint, talkKeyFromEvent } from "./shortcutModel.ts";
 
 const ANCHORS: PanelAnchor[] = [
@@ -88,6 +95,7 @@ function KalVoiceSettingsSection() {
             ))}
           <TalkEnabledRow />
           <IntelligenceRow />
+          <IntelligenceAutoRow />
           <ModelsRow />
           <VoiceRepliesRow />
           <PanelRow />
@@ -234,13 +242,17 @@ function TalkEnabledRow() {
 }
 
 function IntelligenceRow() {
-  const { status, prepareReasoning, retryReasoning, downloadModel, downloads, cancelDownload } = useKalVoice();
+  const { status, prepareReasoning, retryReasoning, downloadModel, downloads, cancelDownload, setIntelligencePaused } =
+    useKalVoice();
   const [quote, setQuote] = useState<LocalReasoningDownload | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const progress = downloads["local-reasoning"];
   const readiness = status?.localReasoning ?? "unavailable";
   const view = localIntelligence(status);
+  const automatic = provisioningFor(status, LOCAL_REASONING_ID)?.automatic ?? false;
+  // An owner-started download (from the review dialog) keeps its own Cancel.
+  const progress = automatic ? undefined : downloads[LOCAL_REASONING_ID];
+  const auto = status?.preferences.localIntelligenceAuto ?? false;
   const review = async () => {
     setLoading(true);
     setError(null);
@@ -271,8 +283,16 @@ function IntelligenceRow() {
           {progress ? `Downloading ${formatBytes(progress.received)} / ${formatBytes(progress.total)}` : view.label}
         </span>
         {progress ? (
-          <Button size="sm" onClick={() => void cancelDownload("local-reasoning")}>
+          <Button size="sm" onClick={() => void cancelDownload(LOCAL_REASONING_ID)}>
             Cancel
+          </Button>
+        ) : view.resumable ? (
+          <Button size="sm" onClick={() => void setIntelligencePaused(false)}>
+            Resume
+          </Button>
+        ) : view.pausable && auto ? (
+          <Button size="sm" variant="ghost" onClick={() => void setIntelligencePaused(true)}>
+            Pause
           </Button>
         ) : readiness === "not_installed" ? (
           <Button size="sm" busy={loading} onClick={() => void review()}>
@@ -284,11 +304,23 @@ function IntelligenceRow() {
           </Button>
         ) : null}
       </Row>
-      {readiness === "waiting" ? (
+      {view.progress && view.progress.total > 0 ? (
+        <div
+          className={styles.progress}
+          role="progressbar"
+          aria-label="Preparing local intelligence"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.floor((view.progress.received / view.progress.total) * 100)}
+        >
+          <span style={{ transform: `scaleX(${view.progress.received / view.progress.total})` }} />
+        </div>
+      ) : null}
+      {readiness === "waiting" || (readiness === "not_installed" && (view.pausable || view.resumable)) ? (
         <p className={styles.note} role="note">
           {view.detail}
         </p>
-      ) : readiness === "failed" ? (
+      ) : readiness === "failed" || view.label === "Unavailable" ? (
         <p className={styles.issue} role="status">
           {view.detail}
         </p>
@@ -334,6 +366,51 @@ function IntelligenceRow() {
   );
 }
 
+/** "Prepare local intelligence automatically": a genuine preference for metered connections. */
+function IntelligenceAutoRow() {
+  const { status, updatePreferences } = useKalVoice();
+  if (!status) return null;
+  const on = status.preferences.localIntelligenceAuto;
+  return (
+    <Row
+      id="kalvoice-intelligence-auto"
+      label="Prepare local intelligence automatically"
+      help="After the speech model is ready, KalCode downloads the on-device interpreter (about 850 MB) from its signed component catalog. Turn this off on a metered connection; you can still download it yourself."
+    >
+      <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        aria-labelledby="kalvoice-intelligence-auto-label"
+        className={styles.switch}
+        onClick={() => void updatePreferences({ localIntelligenceAuto: !on })}
+      >
+        <span className={styles.switchThumb} />
+      </button>
+    </Row>
+  );
+}
+
+/** A speech model's automatic or owner-started download, in owner terms. */
+function modelProgressNote(item: ComponentProvisioning | null, model: SpeechModelInfo): string | null {
+  if (!item) return null;
+  switch (item.phase) {
+    case "preparing":
+      return "Preparing: getting it from KalCode's signed component catalog.";
+    case "downloading":
+      return null;
+    case "verifying":
+      return "Verifying its signature and checksum.";
+    case "waiting_for_resources":
+    case "waiting_for_talk":
+      return `Waiting for system resources: continues when ${waitingReason(item.reason)}.`;
+    case "paused":
+      return `Paused at ${formatBytes(item.receivedBytes)}.`;
+    case "retry_scheduled":
+      return `Couldn't download ${model.displayName}: ${failureReason(item.reason)}. KalCode retries ${retryWhen(item.retryInSeconds)}.`;
+  }
+}
+
 function ModelsRow() {
   const { status, downloads, downloadModel, cancelDownload, deleteModel, updatePreferences } = useKalVoice();
   const [consent, setConsent] = useState<SpeechModelInfo | null>(null);
@@ -351,8 +428,10 @@ function ModelsRow() {
           Speech model
         </p>
         <p className={styles.rowHelp}>
-          Downloaded only when you choose to, from the official whisper.cpp models, checked against their published
-          SHA-256, and kept in KalCode's data folder.
+          {status.preferences.speechModelAutoDownload
+            ? "KalCode gets English (fastest) automatically from its signed component catalog on kalcoded.com. Other models download when you choose them."
+            : "Downloaded when you choose, from KalCode's signed component catalog on kalcoded.com."}{" "}
+          Each model's signature and SHA-256 checksum are verified before use, and it's kept in KalCode's data folder.
         </p>
         {engineNote ? (
           <p className={styles.note} role="note">
@@ -362,10 +441,17 @@ function ModelsRow() {
       </div>
       <ul className={styles.modelList} aria-labelledby="kalvoice-models-label">
         {status.models.map((model) => {
-          const progress = downloads[model.id];
-          const state = progress ? "downloading" : model.state.kind;
+          const item = model.state.kind === "installed" ? null : provisioningFor(status, model.id);
+          const running = item && item.phase !== "retry_scheduled" && item.phase !== "paused";
+          const progress =
+            downloads[model.id] ??
+            (running && item.phase === "downloading"
+              ? { received: item.receivedBytes, total: item.totalBytes }
+              : undefined);
+          const state = progress || running ? "downloading" : model.state.kind;
           const active = status.activeModel === model.id;
           const percent = progress && progress.total > 0 ? Math.floor((progress.received / progress.total) * 100) : 0;
+          const note = modelProgressNote(item, model);
           return (
             <li key={model.id} className={styles.model} data-state={state} data-active={active || undefined}>
               <div className={styles.modelText}>
@@ -376,7 +462,12 @@ function ModelsRow() {
                 <p className={styles.modelMeta}>
                   {model.summary} {formatBytes(model.sizeBytes)}.
                 </p>
-                {state === "downloading" ? (
+                {note ? (
+                  <p className={styles.modelMeta} role="status">
+                    {note}
+                  </p>
+                ) : null}
+                {state === "downloading" && progress ? (
                   <div
                     className={styles.progress}
                     role="progressbar"
@@ -388,7 +479,7 @@ function ModelsRow() {
                     <span style={{ transform: `scaleX(${percent / 100})` }} />
                   </div>
                 ) : null}
-                {model.state.kind === "paused" && !progress ? (
+                {model.state.kind === "paused" && !progress && !running ? (
                   <p className={styles.modelMeta}>
                     Paused at {Math.floor((model.state.receivedBytes / model.sizeBytes) * 100)}%.
                   </p>
@@ -420,7 +511,7 @@ function ModelsRow() {
                     </Button>
                   </>
                 ) : null}
-                {state === "not_installed" ? (
+                {state === "not_installed" && item?.phase !== "retry_scheduled" ? (
                   <Button size="sm" onClick={() => setConsent(model)}>
                     Download
                   </Button>
@@ -460,9 +551,9 @@ function ConsentDialog({
             Download {model?.displayName} speech model?
           </AlertDialog.Title>
           <AlertDialog.Description className={styles.dialogBody}>
-            {model ? formatBytes(model.sizeBytes) : ""} from {model?.source}. KalCode checks it against the published
-            SHA-256 checksum and keeps it in its data folder on this computer. Your speech never leaves this computer.
-            You can remove the model at any time.
+            {model ? formatBytes(model.sizeBytes) : ""} from {model?.source}. KalCode verifies its signature and SHA-256
+            checksum and keeps it in its data folder on this computer. Your speech never leaves this computer. You can
+            remove the model at any time.
           </AlertDialog.Description>
           <div className={styles.dialogActions}>
             <AlertDialog.Cancel asChild>

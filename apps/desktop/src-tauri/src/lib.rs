@@ -608,6 +608,7 @@ pub fn run(removed_overrides: Vec<String>) {
                 kalvoice_commands::kalvoice_reasoning_retry,
                 kalvoice_commands::kalvoice_model_cancel,
                 kalvoice_commands::kalvoice_model_delete,
+                kalvoice_commands::kalvoice_open_microphone_settings,
                 kalvoice_commands::kalvoice_talk,
                 kalvoice_commands::kalvoice_type_instead,
                 kalvoice_commands::kalvoice_latency,

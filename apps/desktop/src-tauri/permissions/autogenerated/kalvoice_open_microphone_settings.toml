@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-kalvoice-open-microphone-settings"
+description = "Enables the kalvoice_open_microphone_settings command without any pre-configured scope."
+commands.allow = ["kalvoice_open_microphone_settings"]
+
+[[permission]]
+identifier = "deny-kalvoice-open-microphone-settings"
+description = "Denies the kalvoice_open_microphone_settings command without any pre-configured scope."
+commands.deny = ["kalvoice_open_microphone_settings"]

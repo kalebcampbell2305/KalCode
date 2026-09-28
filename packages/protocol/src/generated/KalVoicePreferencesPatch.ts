@@ -14,4 +14,4 @@ panelDefault?: PanelAnchor, panelVisible?: boolean,
 /**
  * Saves the placement for one window size class.
  */
-panelPlacement?: PanelPlacement, };
+panelPlacement?: PanelPlacement, speechModelAutoDownload?: boolean, localIntelligenceAuto?: boolean, localIntelligencePaused?: boolean, };

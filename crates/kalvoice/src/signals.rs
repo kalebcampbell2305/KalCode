@@ -57,6 +57,53 @@ pub struct KalVoiceStatus {
     pub shortcut_issues: Vec<ShortcutIssue>,
     /// The session listening right now, if any.
     pub listening: Option<ListeningSession>,
+    /// Component downloads in progress or pending (automatic first-run provisioning and manual
+    /// downloads), so the UI never claims "Ready" early.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub provisioning: Option<Vec<ComponentProvisioning>>,
+}
+
+/// Where one component download stands. Every phase is a fact native observed, never a guess.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ProvisioningPhase {
+    /// Queued: KalCode is fetching the signed catalog or about to start.
+    Preparing,
+    /// Held by the Resource Governor; `reason` names the resource. Re-evaluated on every sample.
+    WaitingForResources,
+    /// Held while push to talk is in use, so the download never competes with speech.
+    WaitingForTalk,
+    Downloading,
+    /// Every byte arrived; the signed size and SHA-256 are being checked before install.
+    Verifying,
+    /// The owner paused it (local intelligence only). Resumes where it stopped.
+    Paused,
+    /// The last attempt failed (`reason`); KalCode retries on its own after `retry_in_seconds`
+    /// and whenever KalCode comes back to the front.
+    RetryScheduled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ComponentProvisioning {
+    /// A speech model id (`tiny.en`) or `local-reasoning`.
+    pub model_id: String,
+    /// Started by KalCode's zero-setup provisioning (system-granted consent for a default
+    /// component) rather than by the owner's Download click.
+    pub automatic: bool,
+    pub phase: ProvisioningPhase,
+    pub received_bytes: u64,
+    pub total_bytes: u64,
+    /// Safe reason code while waiting or between retries (never a path or message).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub retry_in_seconds: Option<u64>,
 }
 
 /// Readiness of the separately consented on-device interpreter. Dictation is independent.
@@ -162,6 +209,10 @@ pub enum KalVoiceSignal {
         model_id: String,
         code: String,
         message: String,
+    },
+    /// Every pending or running component download (replaces the previous list).
+    Provisioning {
+        items: Vec<ComponentProvisioning>,
     },
     /// A request moved to a new stage of the pipeline.
     RequestStage {

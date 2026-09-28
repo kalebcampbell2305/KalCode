@@ -36,4 +36,21 @@ panelVisible: boolean,
 /**
  * Remembered placement per window size class.
  */
-panelPlacements: Array<PanelPlacement>, };
+panelPlacements: Array<PanelPlacement>,
+/**
+ * KalCode fetches the default speech model (`tiny.en`) through its signed component
+ * catalog without a click. Set to `false` when the owner removes or cancels a speech model,
+ * so a model they took away is never fetched again on its own (Settings keeps the manual
+ * download).
+ */
+speechModelAutoDownload: boolean,
+/**
+ * "Prepare local intelligence automatically": once a speech model is ready, KalCode fetches
+ * the on-device interpreter through the same signed pipeline. On by default; a genuine
+ * preference for metered connections.
+ */
+localIntelligenceAuto: boolean,
+/**
+ * The owner paused the automatic local-intelligence download. Survives restarts.
+ */
+localIntelligencePaused: boolean, };

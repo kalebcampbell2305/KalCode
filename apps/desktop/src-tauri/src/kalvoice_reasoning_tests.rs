@@ -255,6 +255,13 @@ fn sample() -> GovernorUpdate {
     )))
 }
 
+/// One round without the backoff that follows it in production, for tests of a single round.
+const ONE_ROUND: AutostartPolicy = AutostartPolicy {
+    capacity_wait: Duration::from_secs(15 * 60),
+    start_attempts: 3,
+    retry: None,
+};
+
 fn interpreter(host: Arc<FakeHost>, policy: AutostartPolicy) -> Arc<DesktopLocalInterpreter> {
     DesktopLocalInterpreter::with_host(host, None, policy)
 }
@@ -496,6 +503,7 @@ fn a_hold_that_outlasts_its_window_gives_up_with_a_truthful_reason() {
         AutostartPolicy {
             capacity_wait: Duration::from_millis(50),
             start_attempts: 3,
+            retry: None,
         },
     );
     let (driver, published) = spawn_autostart(&reasoning);
@@ -533,7 +541,7 @@ fn a_stopped_governor_is_reported_instead_of_waited_on() {
             reason: "the resource probe kept failing".into(),
         },
     })]);
-    let reasoning = interpreter(host.clone(), AutostartPolicy::default());
+    let reasoning = interpreter(host.clone(), ONE_ROUND);
     reasoning.autostart(&|_, _| {});
     assert_eq!(
         reasoning.snapshot(),
@@ -549,13 +557,13 @@ fn a_stopped_governor_is_reported_instead_of_waited_on() {
 // Genuine failures.
 
 #[test]
-fn a_hard_failure_surfaces_its_code_once_and_never_loops() {
+fn a_hard_failure_surfaces_its_code_once_and_ends_the_round() {
     let (host, samples) = FakeHost::scripted(vec![]);
     host.acquire_script
         .lock()
         .unwrap_or_else(PoisonError::into_inner)
         .push_back(StartFailure::hard("component_catalog_invalid"));
-    let reasoning = interpreter(host.clone(), AutostartPolicy::default());
+    let reasoning = interpreter(host.clone(), ONE_ROUND);
     // Returns on its own: no sample is needed to give up, and none restarts it.
     reasoning.autostart(&|_, _| {});
     assert_eq!(
@@ -576,7 +584,7 @@ fn a_hard_failure_surfaces_its_code_once_and_never_loops() {
 fn repeated_start_failures_stop_after_the_bound_with_the_last_code() {
     let (host, samples) = FakeHost::scripted(vec![]);
     host.fail_starts([StartFailure::transient("worker_health_timeout"); 5]);
-    let reasoning = interpreter(host.clone(), AutostartPolicy::default());
+    let reasoning = interpreter(host.clone(), ONE_ROUND);
     let (driver, _published) = spawn_autostart(&reasoning);
     for attempt in 1..=2 {
         eventually("a failed start", || {
@@ -635,12 +643,118 @@ fn an_unclean_previous_exit_recovers_on_the_next_sample() {
 fn manual_retry_after_giving_up_starts_again_without_reinstalling() {
     let (host, _samples) = FakeHost::scripted(vec![]);
     host.fail_starts([StartFailure::hard("worker_cleanup_unproven")]);
-    let reasoning = interpreter(host.clone(), AutostartPolicy::default());
+    let reasoning = interpreter(host.clone(), ONE_ROUND);
     reasoning.autostart(&|_, _| {});
     assert_eq!(reasoning.status(), LocalReasoningStatus::Failed);
     reasoning.autostart(&|_, _| {});
     assert_eq!(reasoning.snapshot(), (LocalReasoningStatus::Ready, None));
     assert_eq!(host.launches.load(Ordering::SeqCst), 2);
+}
+
+// ------------------------------------------------------------------------------------------
+// Nothing is final: bounded exponential backoff and a retry when KalCode comes to the front.
+
+#[test]
+fn the_backoff_is_one_five_fifteen_sixty_minutes_then_hourly() {
+    let minutes = |round| backoff_delay(round).as_secs() / 60;
+    assert_eq!(
+        (1..=7).map(minutes).collect::<Vec<_>>(),
+        vec![1, 5, 15, 60, 60, 60, 60]
+    );
+    assert_eq!(minutes(u32::MAX), 60);
+    assert_eq!(
+        AutostartPolicy::default().retry.map(|delay| delay(1)),
+        Some(Duration::from_secs(60))
+    );
+}
+
+#[test]
+fn a_round_that_ends_without_a_start_retries_on_its_own_after_the_backoff() {
+    // RED at b5342d6: three failures (or a 15-minute hold) gave up until "Retry local startup".
+    let (host, _samples) = FakeHost::scripted(vec![]);
+    host.fail_starts([
+        StartFailure::transient("worker_health_timeout"),
+        StartFailure::hard("worker_cleanup_unproven"),
+    ]);
+    let rounds = Arc::new(Mutex::new(Vec::new()));
+    fn short(round: u32) -> Duration {
+        Duration::from_millis(20 * u64::from(round))
+    }
+    let reasoning = interpreter(
+        host.clone(),
+        AutostartPolicy {
+            capacity_wait: Duration::from_secs(15 * 60),
+            start_attempts: 1,
+            retry: Some(short),
+        },
+    );
+    let record = rounds.clone();
+    reasoning.autostart(&move |status, issue| {
+        record
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((status, issue));
+    });
+    assert_eq!(reasoning.snapshot(), (LocalReasoningStatus::Ready, None));
+    assert_eq!(host.launches.load(Ordering::SeqCst), 3);
+    let published = rounds
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
+    assert!(published.contains(&(LocalReasoningStatus::Failed, Some("worker_health_timeout"))));
+    assert!(published.contains(&(
+        LocalReasoningStatus::Failed,
+        Some("worker_cleanup_unproven")
+    )));
+    assert_eq!(published.last(), Some(&(LocalReasoningStatus::Ready, None)));
+    assert_eq!(host.live_reservations.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn coming_back_to_the_front_retries_at_once_without_a_click() {
+    let (host, _samples) = FakeHost::scripted(vec![]);
+    host.fail_starts([StartFailure::hard("worker_cleanup_unproven")]);
+    fn an_hour(_: u32) -> Duration {
+        Duration::from_secs(60 * 60)
+    }
+    let reasoning = interpreter(
+        host.clone(),
+        AutostartPolicy {
+            capacity_wait: Duration::from_secs(15 * 60),
+            start_attempts: 3,
+            retry: Some(an_hour),
+        },
+    );
+    let (driver, _published) = spawn_autostart(&reasoning);
+    eventually("the failed round", || {
+        reasoning.snapshot()
+            == (
+                LocalReasoningStatus::Failed,
+                Some("worker_cleanup_unproven"),
+            )
+    });
+    assert_eq!(host.launches.load(Ordering::SeqCst), 1);
+    // What a focus event does (through keep_warm): nudge the waiting driver; returns at once.
+    reasoning.autostart(&|_, _| {});
+    driver.join().unwrap();
+    assert_eq!(reasoning.snapshot(), (LocalReasoningStatus::Ready, None));
+    assert_eq!(host.launches.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn a_driver_waiting_out_its_backoff_stops_promptly_at_shutdown() {
+    let (host, _samples) = FakeHost::scripted(vec![]);
+    host.fail_starts([StartFailure::hard("worker_cleanup_unproven")]);
+    let reasoning = interpreter(host.clone(), AutostartPolicy::default());
+    let (driver, _published) = spawn_autostart(&reasoning);
+    eventually("the failed round", || {
+        reasoning.status() == LocalReasoningStatus::Failed
+    });
+    let started = Instant::now();
+    assert!(reasoning.shutdown_reasoning(Instant::now() + Duration::from_secs(2)));
+    driver.join().unwrap();
+    assert!(started.elapsed() < Duration::from_secs(2));
+    assert_eq!(host.launches.load(Ordering::SeqCst), 1);
 }
 
 // ------------------------------------------------------------------------------------------

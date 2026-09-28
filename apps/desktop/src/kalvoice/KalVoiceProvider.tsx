@@ -1,4 +1,5 @@
 import type {
+  ComponentProvisioning,
   KalVoiceInput,
   KalVoicePreferencesPatch,
   KalVoiceResponse,
@@ -51,7 +52,13 @@ import {
 } from "./dictation.ts";
 import { type DictationSession, DictationSessions } from "./dictationSessions.ts";
 import { placementFor, sizeClassFor } from "./panelGeometry.ts";
-import { type LocalReasoningState, type TalkKeyState, withReasoningState, withTalkKeyState } from "./readiness.ts";
+import {
+  type LocalReasoningState,
+  type TalkKeyState,
+  withProvisioning,
+  withReasoningState,
+  withTalkKeyState,
+} from "./readiness.ts";
 import {
   CHOICE_TTL_MS,
   choiceIsLive,
@@ -113,6 +120,10 @@ interface KalVoiceValue {
   retryReasoning: () => Promise<void>;
   cancelDownload: (modelId: string) => Promise<void>;
   deleteModel: (modelId: string) => Promise<void>;
+  /** Pauses or resumes the automatic local-intelligence download (stored; survives restarts). */
+  setIntelligencePaused: (paused: boolean) => Promise<void>;
+  /** Opens the system's microphone privacy settings (when access is blocked). */
+  openMicrophoneSettings: () => Promise<void>;
   history: readonly HistoryItem[];
   sizeClass: SizeClass;
   panel: {
@@ -269,8 +280,14 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   const talkKeyRef = useRef<TalkKeyState | null>(null);
   // The latest native `local_reasoning_status`, applied over every status read the same way.
   const reasoningRef = useRef<LocalReasoningState | null>(null);
+  // The latest native `provisioning` list (component downloads), applied the same way.
+  const provisioningRef = useRef<ComponentProvisioning[] | null>(null);
   const withNativeState = useCallback(
-    (next: KalVoiceStatus) => withReasoningState(withTalkKeyState(next, talkKeyRef.current), reasoningRef.current),
+    (next: KalVoiceStatus) =>
+      withProvisioning(
+        withReasoningState(withTalkKeyState(next, talkKeyRef.current), reasoningRef.current),
+        provisioningRef.current,
+      ),
     [],
   );
 
@@ -669,6 +686,10 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
             [signal.modelId]: { received: signal.receivedBytes, total: signal.totalBytes },
           }));
           return;
+        case "provisioning":
+          provisioningRef.current = signal.items;
+          setStatus((current) => withProvisioning(current, signal.items));
+          return;
         case "local_reasoning_status": {
           const update: LocalReasoningState = {
             status: signal.status,
@@ -951,6 +972,33 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
     [client, refreshStatus, toast],
   );
 
+  const setIntelligencePaused = useCallback(
+    async (paused: boolean) => {
+      try {
+        await updatePreferences({ localIntelligencePaused: paused });
+      } catch (error) {
+        toast.show({
+          tone: "danger",
+          title: paused ? "Couldn't pause" : "Couldn't resume",
+          description: toKalCodeError(error).message,
+        });
+      }
+    },
+    [updatePreferences, toast],
+  );
+
+  const openMicrophoneSettings = useCallback(async () => {
+    try {
+      await client.kalvoiceOpenMicrophoneSettings();
+    } catch (error) {
+      toast.show({
+        tone: "danger",
+        title: "Couldn't open privacy settings",
+        description: toKalCodeError(error).message,
+      });
+    }
+  }, [client, toast]);
+
   const prefs = status?.preferences;
   const saved = placementFor(prefs?.panelPlacements ?? [], sizeClass, prefs?.panelDefault ?? "top");
   const visible = prefs?.panelVisible ?? true;
@@ -1029,6 +1077,8 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       retryReasoning,
       cancelDownload,
       deleteModel,
+      setIntelligencePaused,
+      openMicrophoneSettings,
       history,
       sizeClass,
       panel,
@@ -1061,6 +1111,8 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       retryReasoning,
       cancelDownload,
       deleteModel,
+      setIntelligencePaused,
+      openMicrophoneSettings,
       history,
       sizeClass,
       panel,

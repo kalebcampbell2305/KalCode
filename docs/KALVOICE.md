@@ -166,11 +166,23 @@ provider. Legacy stored provider-intelligence preferences do not authorize provi
 
 ## Speech models
 
-whisper.cpp models from Hugging Face `ggerganov/whisper.cpp`, pinned to revision
-`5359861c739e955e79d9a303bcbc70fb988958b1`, each with its published size and SHA-256. Nothing
-downloads without the person's consent in Settings; downloads resume, are verified before use,
-and are renamed into place atomically. Licence: MIT (whisper.cpp and the converted OpenAI
-Whisper weights).
+whisper.cpp models (upstream: Hugging Face `ggerganov/whisper.cpp`, revision
+`5359861c739e955e79d9a303bcbc70fb988958b1`), served as signed KalCode components from the signed
+component catalog on kalcoded.com. Every download is checked against the catalog's Ed25519
+signature, the component's own signature, its size and SHA-256, and the OS-held rollback floor;
+downloads resume, and are installed into KalCode's signed component store atomically. Licence:
+MIT (whisper.cpp and the converted OpenAI Whisper weights).
+
+**Zero setup.** After the runtime starts, KalCode fetches the default model (`tiny.en`) on its
+own through that same pipeline, with system-granted consent recorded as `automatic_default`
+(the only model it may fetch without a click; every other model keeps its download dialog). An
+installed speech model is always reused and never fetched again. If the owner removes (or
+cancels) a speech model, KalCode stores an opt-out and never re-downloads one on its own;
+Settings shows the manual Download again. Every component download waits (up to 10 minutes,
+re-evaluated on each Resource Governor sample) instead of failing when the governor has no
+room yet, and never fetches while push to talk is in use. The UI states are truthful:
+Preparing speech (downloading x% / verifying), Waiting for system resources, Unavailable (with
+the reason and the automatic retry), then Ready. The installer does not bundle a model.
 
 | Model | Size | Use |
 | --- | --- | --- |
@@ -211,7 +223,18 @@ Optional spoken replies use the operating system's speech synthesis. No cloud te
 ## Future
 
 On-device reasoning runtime certification, verified component acquisition, and held-out
-command benchmarks are production release gates. Component downloads require consent.
+command benchmarks are production release gates.
+
+**Local intelligence provisioning.** Once a speech model is ready, KalCode prepares local
+intelligence (llama.cpp runtime plus the Qwen model, about 850 MB) automatically through the same
+signed catalog and verified pipeline, under `automatic_default` consent, while the Settings
+preference "Prepare local intelligence automatically" is on (default; turn it off on a metered
+connection, then use Review download). Settings shows "Preparing local intelligence (850 MB)…"
+with progress and a Pause/Resume control; a pause is stored and survives restarts. A failed
+download or interpreter start is never final: KalCode retries after 1, 5, 15 and 60 minutes, then
+hourly, and at once when KalCode comes back to the front (no Retry click needed; Retry local
+startup still works). KalCode does not detect metered networks. Other components (non-default
+speech models) still require the owner's consent in their download dialog.
 
 ## Implementation (Z12)
 

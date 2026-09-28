@@ -367,6 +367,11 @@ export class KalCodeClient {
     return this.call("kalvoice_model_delete", { modelId });
   }
 
+  /** Opens the operating system's microphone privacy page (native allows only that page). */
+  kalvoiceOpenMicrophoneSettings(): Promise<void> {
+    return this.call("kalvoice_open_microphone_settings");
+  }
+
   /** Cached provider status; `detection` is null for providers not checked yet. */
   listProviders(): Promise<ProviderStatus[]> {
     return this.call("providers_list");

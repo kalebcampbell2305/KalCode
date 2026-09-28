@@ -86,6 +86,17 @@ pub struct KalVoicePreferences {
     pub panel_visible: bool,
     /// Remembered placement per window size class.
     pub panel_placements: Vec<PanelPlacement>,
+    /// KalCode fetches the default speech model (`tiny.en`) through its signed component
+    /// catalog without a click. Set to `false` when the owner removes or cancels a speech model,
+    /// so a model they took away is never fetched again on its own (Settings keeps the manual
+    /// download).
+    pub speech_model_auto_download: bool,
+    /// "Prepare local intelligence automatically": once a speech model is ready, KalCode fetches
+    /// the on-device interpreter through the same signed pipeline. On by default; a genuine
+    /// preference for metered connections.
+    pub local_intelligence_auto: bool,
+    /// The owner paused the automatic local-intelligence download. Survives restarts.
+    pub local_intelligence_paused: bool,
 }
 
 impl Default for KalVoicePreferences {
@@ -100,6 +111,9 @@ impl Default for KalVoicePreferences {
             panel_default: PanelAnchor::Top,
             panel_visible: true,
             panel_placements: Vec::new(),
+            speech_model_auto_download: true,
+            local_intelligence_auto: true,
+            local_intelligence_paused: false,
         }
     }
 }
@@ -135,6 +149,15 @@ pub struct KalVoicePreferencesPatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub panel_placement: Option<PanelPlacement>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub speech_model_auto_download: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub local_intelligence_auto: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub local_intelligence_paused: Option<bool>,
 }
 
 /// Legacy intelligence setting retained for older clients and stored preferences.
@@ -173,6 +196,9 @@ const KEY_REPLIES: &str = "voiceReplies";
 const KEY_PANEL_DEFAULT: &str = "panelDefault";
 const KEY_PANEL_VISIBLE: &str = "panelVisible";
 const KEY_PANEL_PLACEMENTS: &str = "panelPlacements";
+const KEY_SPEECH_AUTO: &str = "speechModelAutoDownload";
+const KEY_INTELLIGENCE_AUTO: &str = "localIntelligenceAuto";
+const KEY_INTELLIGENCE_PAUSED: &str = "localIntelligencePaused";
 
 /// Reads preferences; missing or invalid stored values fall back to defaults.
 pub fn load(conn: &Connection) -> Result<KalVoicePreferences> {
@@ -212,6 +238,15 @@ pub fn load(conn: &Connection) -> Result<KalVoicePreferences> {
                 .is_ok(),
             KEY_PANEL_PLACEMENTS => serde_json::from_value::<Vec<PanelPlacement>>(value)
                 .map(|v| prefs.panel_placements = normalize_placements(v))
+                .is_ok(),
+            KEY_SPEECH_AUTO => serde_json::from_value(value)
+                .map(|v| prefs.speech_model_auto_download = v)
+                .is_ok(),
+            KEY_INTELLIGENCE_AUTO => serde_json::from_value(value)
+                .map(|v| prefs.local_intelligence_auto = v)
+                .is_ok(),
+            KEY_INTELLIGENCE_PAUSED => serde_json::from_value(value)
+                .map(|v| prefs.local_intelligence_paused = v)
                 .is_ok(),
             _ => true,
         };
@@ -299,6 +334,15 @@ pub fn apply(
         next.panel_placements.push(placement);
         next.panel_placements = normalize_placements(std::mem::take(&mut next.panel_placements));
     }
+    if let Some(v) = patch.speech_model_auto_download {
+        next.speech_model_auto_download = v;
+    }
+    if let Some(v) = patch.local_intelligence_auto {
+        next.local_intelligence_auto = v;
+    }
+    if let Some(v) = patch.local_intelligence_paused {
+        next.local_intelligence_paused = v;
+    }
 
     let mut changes = Changes::default();
     let mut writes: Vec<(&str, Value)> = Vec::new();
@@ -329,6 +373,27 @@ pub fn apply(
             KEY_PANEL_PLACEMENTS,
             serde_json::to_value(&next.panel_placements)?,
         ));
+    }
+    for (key, next, current) in [
+        (
+            KEY_SPEECH_AUTO,
+            next.speech_model_auto_download,
+            current.speech_model_auto_download,
+        ),
+        (
+            KEY_INTELLIGENCE_AUTO,
+            next.local_intelligence_auto,
+            current.local_intelligence_auto,
+        ),
+        (
+            KEY_INTELLIGENCE_PAUSED,
+            next.local_intelligence_paused,
+            current.local_intelligence_paused,
+        ),
+    ] {
+        if next != current {
+            writes.push((key, Value::Bool(next)));
+        }
     }
     let now = now_rfc3339();
     for (key, value) in &writes {
@@ -381,6 +446,52 @@ mod tests {
         assert_eq!(prefs.intelligence, None);
         assert_eq!(prefs.speech_model, "tiny.en");
         assert!(!prefs.voice_replies);
+        // Zero setup: the default speech model and local intelligence provision themselves.
+        assert!(prefs.speech_model_auto_download);
+        assert!(prefs.local_intelligence_auto);
+        assert!(!prefs.local_intelligence_paused);
+    }
+
+    #[test]
+    fn provisioning_choices_persist_across_reloads_and_report_changes() {
+        let conn = conn();
+        let (prefs, changes) = apply(
+            &conn,
+            &KalVoicePreferencesPatch {
+                speech_model_auto_download: Some(false),
+                local_intelligence_paused: Some(true),
+                ..Default::default()
+            },
+        )
+        .expect("apply");
+        assert!(!prefs.speech_model_auto_download);
+        assert!(prefs.local_intelligence_paused);
+        assert!(prefs.local_intelligence_auto);
+        assert_eq!(
+            changes.keys,
+            vec![
+                "kalvoice.speechModelAutoDownload",
+                "kalvoice.localIntelligencePaused"
+            ]
+        );
+        // A restart reads the same stored choices (the opt-out and the pause survive).
+        assert_eq!(load(&conn).expect("reload"), prefs);
+        let (prefs, changes) = apply(
+            &conn,
+            &KalVoicePreferencesPatch {
+                local_intelligence_auto: Some(false),
+                local_intelligence_paused: Some(false),
+                ..Default::default()
+            },
+        )
+        .expect("resume");
+        assert!(!prefs.local_intelligence_auto);
+        assert!(!prefs.local_intelligence_paused);
+        assert_eq!(changes.keys.len(), 2);
+        assert_eq!(load(&conn).expect("reload"), prefs);
+        let patch: KalVoicePreferencesPatch =
+            serde_json::from_str(r#"{"localIntelligencePaused":true}"#).expect("json");
+        assert_eq!(patch.local_intelligence_paused, Some(true));
     }
 
     #[test]

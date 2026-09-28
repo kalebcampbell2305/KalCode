@@ -6,7 +6,9 @@
 //! measurement") and the next one is due a full idle interval later, so admission is held. A held
 //! start stays pending and is re-evaluated on the governor's next fresh sample — never on a timer —
 //! within a bounded window; genuine start failures are retried a bounded number of times, also on
-//! samples. Every transition is traced (event names and safe codes only) and published.
+//! samples. A round that ends without a start is never final: the next round follows on a bounded
+//! exponential backoff (1, 5, 15, 60 minutes, then hourly), or at once when KalCode comes back to
+//! the front. Every transition is traced (event names and safe codes only) and published.
 
 use std::cell::RefCell;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
@@ -40,13 +42,23 @@ const CAPACITY_EVENT_BUFFER: usize = 16;
 /// Only a fresh sample (or a retry) re-evaluates admission; this slice never does.
 const WAIT_SLICE: Duration = Duration::from_millis(200);
 
+/// The bounded exponential backoff between automatic rounds (component downloads and interpreter
+/// starts): 1, 5, 15 and 60 minutes, then hourly. `round` counts from 1.
+pub(super) fn backoff_delay(round: u32) -> Duration {
+    const MINUTES: [u64; 4] = [1, 5, 15, 60];
+    let index = usize::try_from(round.saturating_sub(1)).unwrap_or(usize::MAX);
+    Duration::from_secs(60 * MINUTES.get(index).copied().unwrap_or(60))
+}
+
 /// Bounds for an automatic start.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub(super) struct AutostartPolicy {
-    /// Longest continuous wait for the governor to admit the start before giving up.
+    /// Longest continuous wait for the governor to admit the start before this round ends.
     capacity_wait: Duration,
-    /// Genuine start attempts (spawn or health check) before giving up.
+    /// Genuine start attempts (spawn or health check) before this round ends.
     start_attempts: u32,
+    /// The delay before the next round after one ends without a start; `None` ends for good.
+    retry: Option<fn(u32) -> Duration>,
 }
 
 impl Default for AutostartPolicy {
@@ -54,6 +66,7 @@ impl Default for AutostartPolicy {
         Self {
             capacity_wait: Duration::from_secs(15 * 60),
             start_attempts: 3,
+            retry: Some(backoff_delay),
         }
     }
 }
@@ -332,6 +345,15 @@ enum Attempt {
     Idle,
 }
 
+/// How a round of evaluations ended.
+enum Round {
+    /// Ready, idle, or sealed: nothing more to do.
+    Done,
+    /// The round ended without a start and its backoff elapsed (or KalCode came to the front):
+    /// run a fresh round.
+    Again,
+}
+
 /// What ended a wait between evaluations.
 enum Wake {
     Sample,
@@ -395,10 +417,11 @@ impl DesktopLocalInterpreter {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Starts the installed interpreter and keeps that intent until it is ready, gives up within
-    /// its bounds, or the runtime is sealed. Called only by the runtime's retained background
-    /// task; no request can start a process. `publish` receives every distinct status. A call
-    /// while a start is already being driven asks that driver to evaluate again, once.
+    /// Starts the installed interpreter and keeps that intent until it is ready or the runtime is
+    /// sealed: a round that ends within its bounds reports why and is followed by another after
+    /// the policy's backoff. Called only by the runtime's retained background task; no request
+    /// can start a process. `publish` receives every distinct status. A call while a start is
+    /// already being driven asks that driver to evaluate again at once (also mid-backoff).
     pub(super) fn autostart(&self, publish: &dyn Fn(LocalReasoningStatus, Option<&'static str>)) {
         tracing::info!(event = "kalvoice.runtime_autostart_requested");
         {
@@ -419,10 +442,14 @@ impl DesktopLocalInterpreter {
                 *last.borrow_mut() = Some(current);
             }
         };
-        // Subscribe before the first evaluation so no sample between a hold and the wait is lost.
-        let events = self.host.capacity_events();
+        let mut rounds = 0_u32;
         loop {
-            self.drive(events.as_ref(), &report);
+            // Subscribe before the first evaluation so no sample between a hold and the wait is
+            // lost. Each round subscribes again, so a sampler that restarted is picked up.
+            let events = self.host.capacity_events();
+            if let Round::Again = self.drive(events.as_ref(), &report, &mut rounds) {
+                continue;
+            }
             report();
             // A request that arrived while this driver was finishing is served here, not lost.
             let mut state = self.lock();
@@ -437,7 +464,12 @@ impl DesktopLocalInterpreter {
         }
     }
 
-    fn drive(&self, events: Option<&Receiver<GovernorUpdate>>, report: &dyn Fn()) {
+    fn drive(
+        &self,
+        events: Option<&Receiver<GovernorUpdate>>,
+        report: &dyn Fn(),
+        rounds: &mut u32,
+    ) -> Round {
         let mut failures = 0_u32;
         let mut held_since: Option<Instant> = None;
         loop {
@@ -448,18 +480,17 @@ impl DesktopLocalInterpreter {
             match self.attempt(report) {
                 Attempt::Ready => {
                     tracing::info!(event = "kalvoice.intelligence_ready");
-                    return;
+                    *rounds = 0;
+                    return Round::Done;
                 }
-                Attempt::Idle => return,
+                Attempt::Idle => return Round::Done,
                 Attempt::Held(hold) => {
                     let since = *held_since.get_or_insert_with(Instant::now);
                     if hold.permanent || events.is_none() {
-                        self.give_up("resource_monitor_unavailable");
-                        return;
+                        return self.end_round("resource_monitor_unavailable", report, rounds);
                     }
                     if since.elapsed() >= self.policy.capacity_wait {
-                        self.give_up("capacity_wait_exhausted");
-                        return;
+                        return self.end_round("capacity_wait_exhausted", report, rounds);
                     }
                     self.lock().issue = Some(Issue::Waiting(hold.code));
                 }
@@ -470,8 +501,7 @@ impl DesktopLocalInterpreter {
                         || failures >= self.policy.start_attempts
                         || events.is_none()
                     {
-                        self.give_up(failure.code);
-                        return;
+                        return self.end_round(failure.code, report, rounds);
                     }
                     self.lock().issue = Some(Issue::Failed(failure.code));
                     tracing::info!(
@@ -492,10 +522,9 @@ impl DesktopLocalInterpreter {
                         trigger = "retry"
                     );
                 }
-                Wake::Stop => return,
+                Wake::Stop => return Round::Done,
                 Wake::MonitorLost => {
-                    self.give_up("resource_monitor_unavailable");
-                    return;
+                    return self.end_round("resource_monitor_unavailable", report, rounds);
                 }
             }
         }
@@ -504,6 +533,49 @@ impl DesktopLocalInterpreter {
     fn give_up(&self, code: &'static str) {
         self.lock().issue = Some(Issue::Failed(code));
         tracing::warn!(event = "kalvoice.runtime_autostart_failed", code);
+    }
+
+    /// A round ended without a start: report why, then wait out the backoff (cut short by a
+    /// retry request, such as KalCode coming back to the front) and ask for a fresh round.
+    fn end_round(&self, code: &'static str, report: &dyn Fn(), rounds: &mut u32) -> Round {
+        self.give_up(code);
+        report();
+        let Some(delay_for) = self.policy.retry else {
+            return Round::Done;
+        };
+        *rounds = rounds.saturating_add(1);
+        let delay = delay_for(*rounds);
+        tracing::info!(
+            event = "kalvoice.runtime_autostart_retry_scheduled",
+            code,
+            round = *rounds,
+            delay_s = delay.as_secs()
+        );
+        let deadline = Instant::now() + delay;
+        loop {
+            {
+                let mut state = self.lock();
+                if self.cancellation.is_cancelled() {
+                    return Round::Done;
+                }
+                if std::mem::take(&mut state.nudged) {
+                    tracing::info!(
+                        event = "kalvoice.runtime_autostart_requested",
+                        trigger = "retry"
+                    );
+                    return Round::Again;
+                }
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                tracing::info!(
+                    event = "kalvoice.runtime_autostart_requested",
+                    trigger = "backoff"
+                );
+                return Round::Again;
+            }
+            std::thread::sleep(remaining.min(WAIT_SLICE));
+        }
     }
 
     /// Blocks until the governor publishes a fresh sample, a retry is requested, or the runtime
