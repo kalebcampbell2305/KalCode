@@ -245,8 +245,9 @@ test.describe("providers", () => {
     await expect(claude.getByText("Outdated, version 2.1.100")).toBeVisible();
     await expect(claude.getByText("KalCode needs version 2.1.259 or later to run Claude Code threads.")).toBeVisible();
     await expect(claude.getByText("Signed out", { exact: true })).toBeVisible();
-    await expect(claude.getByText("claude auth login", { exact: true })).toBeVisible();
-    await expect(claude.getByText(/in a terminal to sign in to Claude Code with your own account/)).toBeVisible();
+    // Claude Code signs in only from its managed account card; a terminal `claude` uses another profile.
+    await expect(claude.getByText(/^Open Accounts, add a Claude Code account and choose Sign in\./)).toBeVisible();
+    await expect(claude.getByText(/in a terminal to sign in to Claude Code/)).toHaveCount(0);
   });
 
   test("health tab shows each provider's state, observations and what to do", async ({ page }) => {
