@@ -184,6 +184,27 @@ describe("thread account switch on Stable", () => {
     expect(within(menu).getByRole("menuitem", { name: "Manage provider accounts" })).toBeInTheDocument();
   });
 
+  it("Connect another opens Providers → Accounts with that provider's connect form; Manage opens it without", async () => {
+    const { user, calls } = await mountStable();
+    await openThreads(user);
+    await openThread(user, "Gemini docs pass");
+    let menu = await openMenu(user, "Personal");
+    await user.click(within(menu).getByRole("menuitem", { name: "Connect another Gemini CLI account" }));
+    const name = await screen.findByRole("textbox", { name: "Name for the new Gemini CLI account" });
+    expect(screen.getByRole("tab", { name: "Accounts" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("textbox", { name: "Name for the new Codex account" })).toBeNull();
+    expect(name).toBeInTheDocument();
+    // Opening the form creates or signs in nothing.
+    expect(calls("provider_account_create")).toBe(0);
+
+    await openThreads(user);
+    await openThread(user, "Codex cleanup");
+    menu = await openMenu(user, "Personal");
+    await user.click(within(menu).getByRole("menuitem", { name: "Manage provider accounts" }));
+    await waitFor(() => expect(screen.getByRole("tab", { name: "Accounts" })).toHaveAttribute("aria-selected", "true"));
+    expect(screen.queryByRole("textbox", { name: "Name for the new Codex account" })).toBeNull();
+  });
+
   it("disables signed-out accounts with the reason as text", async () => {
     const { user } = await mountStable();
     await openThreads(user);

@@ -14,8 +14,7 @@ import {
 import { ChevronDown, Plus, Settings2 } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
-import { useNavigation } from "../../shell/navigation.tsx";
-import { requestProvidersTab } from "../providers/providersTab.ts";
+import { useOpenProviderAccounts } from "../providers/providersTab.ts";
 import styles from "./AccountSwitcher.module.css";
 import { consumeRebindRequest, useRebindRequest } from "./accountIntent.ts";
 import { RebindThreadDialog } from "./RebindThreadDialog.tsx";
@@ -51,7 +50,7 @@ function describeAccount(account: ProviderAccount): string {
  */
 export function AccountSwitcher({ thread, archived, onRebound }: AccountSwitcherProps) {
   const { client } = useRuntime();
-  const { navigate } = useNavigation();
+  const openProviderAccounts = useOpenProviderAccounts();
   const toast = useToast();
   const list = useProviderAccountList(thread.providerId);
   const [target, setTarget] = useState<ProviderAccount | null>(null);
@@ -77,10 +76,10 @@ export function AccountSwitcher({ thread, archived, onRebound }: AccountSwitcher
     setSignInRequired(false);
   };
 
-  const openAccounts = () => {
-    requestProvidersTab("accounts");
-    navigate("providers");
-  };
+  // Providers → Accounts, scrolled to this thread's provider; "Connect another" also opens its
+  // connect form.
+  const openAccounts = () => openProviderAccounts({ providerId: thread.providerId });
+  const connectAnother = () => openProviderAccounts({ providerId: thread.providerId, connect: true });
 
   const confirm = async () => {
     if (!target || submitting.current) return;
@@ -216,7 +215,7 @@ export function AccountSwitcher({ thread, archived, onRebound }: AccountSwitcher
           </DropdownMenuRadioGroup>
         ) : null}
         <DropdownMenuSeparator />
-        <DropdownMenuItem icon={<Plus />} onSelect={openAccounts}>
+        <DropdownMenuItem icon={<Plus />} onSelect={connectAnother}>
           Connect another {thread.providerName} account
         </DropdownMenuItem>
         <DropdownMenuItem icon={<Settings2 />} onSelect={openAccounts}>
