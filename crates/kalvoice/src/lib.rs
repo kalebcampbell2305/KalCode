@@ -44,3 +44,8 @@ pub mod speech_output;
 pub mod streaming;
 pub mod stt;
 pub mod voice;
+
+// Analysis branch only: understanding + fast-path latency baseline (test builds only).
+#[cfg(test)]
+#[path = "../benches/understanding/harness.rs"]
+mod understanding_bench;
