@@ -186,5 +186,7 @@ export async function followUpChoice(
     deps.report({ ok: true, message: `Opened ${quoted(choice.name)}.` });
     return;
   }
+  // Say which session the answer picked before anything is sent (still through its own Send).
+  if (followUp.submit) deps.report({ ok: true, message: `Sending to ${choice.label}.` });
   await composeInThread(deps, { threadId: choice.threadId, text: followUp.text, submit: followUp.submit });
 }

@@ -581,7 +581,9 @@ function Composer({
   // KalVoice finds this thread's message box only through this registration (TK-2): dictation,
   // "send that", "clear that" and messages to a named thread. Read fresh on every call.
   const live = useRef({ thread, mode, hint, send, cancel: confirmation.cancel });
-  live.current = { thread, mode, hint, send, cancel: confirmation.cancel };
+  useLayoutEffect(() => {
+    live.current = { thread, mode, hint, send, cancel: confirmation.cancel };
+  });
   // biome-ignore lint/correctness/useExhaustiveDependencies: registered per thread; the rest is read through `live`.
   useEffect(
     () =>

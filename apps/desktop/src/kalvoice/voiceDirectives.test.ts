@@ -11,6 +11,7 @@ import {
   clearComposer,
   composeInThread,
   type DirectiveReport,
+  followUpChoice,
   isOpenNewThreadDirective,
   submitComposer,
 } from "./voiceDirectives.ts";
@@ -197,5 +198,55 @@ describe("open_new_thread guard", () => {
     ).toBe(false);
     expect(isOpenNewThreadDirective({ kind: "open_thread", threadId: "t" })).toBe(false);
     expect(isOpenNewThreadDirective(null)).toBe(false);
+  });
+});
+
+describe("clarification follow-up", () => {
+  const choice = {
+    threadId: THREAD,
+    name: "Authentication",
+    providerId: "claude-code" as const,
+    providerName: "Claude Code",
+    accountLabel: "Work",
+    workspaceId: "w",
+    workspaceName: "kalcode",
+    status: "idle" as const,
+    label: "Authentication · Claude Code · Work",
+  };
+
+  it("echoes “Sending to Name · Provider · Account” before sending through the composer", async () => {
+    const { handle } = composer("send");
+    const d = deps();
+    const order: string[] = [];
+    const report = d.report;
+    d.report = (result) => {
+      order.push(`report:${result.message}`);
+      report(result);
+    };
+    (handle.submit as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      order.push("submit");
+      return "sent";
+    });
+    await followUpChoice({ ...d, focusThread: () => undefined }, choice, {
+      kind: "compose",
+      text: "run the linter",
+      submit: true,
+    });
+    expect(order).toEqual([
+      "report:Sending to Authentication · Claude Code · Work.",
+      "submit",
+      "report:Sent to “Authentication”.",
+    ]);
+  });
+
+  it("no echo when the follow-up only fills the box", async () => {
+    composer("send");
+    const d = deps();
+    await followUpChoice({ ...d, focusThread: () => undefined }, choice, {
+      kind: "compose",
+      text: "draft",
+      submit: false,
+    });
+    expect(d.reports.map((r) => r.message)).toEqual(["Added to “Authentication”. Nothing was sent."]);
   });
 });

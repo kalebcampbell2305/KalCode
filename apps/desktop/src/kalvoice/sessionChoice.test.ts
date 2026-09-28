@@ -1,6 +1,6 @@
 import type { SessionCandidate } from "@kalcode/protocol";
 import { describe, expect, it } from "vitest";
-import { choiceIsLive, pickSpokenChoice } from "./sessionChoice.ts";
+import { choiceIsLive, isChoiceAnswer, pickSpokenChoice } from "./sessionChoice.ts";
 
 function candidate(
   threadId: string,
@@ -37,6 +37,12 @@ describe("pickSpokenChoice", () => {
     expect(pickSpokenChoice("use Gemini B", [researchA, researchB])).toBe(researchB);
   });
 
+  it("matches numbered choices", () => {
+    expect(pickSpokenChoice("number two", [releaseWindows, releaseMac])).toBe(releaseMac);
+    expect(pickSpokenChoice("the number 1", [releaseWindows, releaseMac])).toBe(releaseWindows);
+    expect(pickSpokenChoice("number four", [releaseWindows, releaseMac])).toBeNull();
+  });
+
   it("matches ordinals", () => {
     expect(pickSpokenChoice("the second one", [releaseWindows, releaseMac])).toBe(releaseMac);
     expect(pickSpokenChoice("last", [releaseWindows, releaseMac])).toBe(releaseMac);
@@ -55,5 +61,23 @@ describe("pickSpokenChoice", () => {
     expect(choiceIsLive(state, 999)).toBe(true);
     expect(choiceIsLive(state, 1000)).toBe(false);
     expect(choiceIsLive(null)).toBe(false);
+  });
+});
+
+describe("isChoiceAnswer", () => {
+  it("takes short answers and choice forms as answers", () => {
+    expect(isChoiceAnswer("the Mac one")).toBe(true);
+    expect(isChoiceAnswer("Hey Kal, Release Mac please")).toBe(true);
+    expect(isChoiceAnswer("the second one")).toBe(true);
+    expect(isChoiceAnswer("number two")).toBe(true);
+    expect(isChoiceAnswer("Release Windows Claude Code Work")).toBe(true);
+    expect(isChoiceAnswer("Release Windows on Claude Code Work")).toBe(false);
+  });
+
+  it("treats longer utterances as new requests", () => {
+    expect(isChoiceAnswer("tell the parser module to add a test for tabs")).toBe(false);
+    expect(isChoiceAnswer("open the dashboard and show me what is running")).toBe(false);
+    expect(isChoiceAnswer("")).toBe(false);
+    expect(isChoiceAnswer("the one")).toBe(false);
   });
 });

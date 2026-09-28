@@ -52,7 +52,13 @@ import {
 import { type DictationSession, DictationSessions } from "./dictationSessions.ts";
 import { placementFor, sizeClassFor } from "./panelGeometry.ts";
 import { type LocalReasoningState, type TalkKeyState, withReasoningState, withTalkKeyState } from "./readiness.ts";
-import { CHOICE_TTL_MS, choiceIsLive, pickSpokenChoice, type SessionChoiceState } from "./sessionChoice.ts";
+import {
+  CHOICE_TTL_MS,
+  choiceIsLive,
+  isChoiceAnswer,
+  pickSpokenChoice,
+  type SessionChoiceState,
+} from "./sessionChoice.ts";
 import {
   type ComposerDirectiveDeps,
   clearComposer,
@@ -421,6 +427,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           else clearComposer(composerDeps(), directive.threadId);
           break;
         case "compose_in_thread":
+          // No sink/terminal guard: it names its thread explicitly and never touches the focused target.
           void composeInThread(composerDeps(), directive);
           break;
         case "focus_previous":
@@ -543,12 +550,20 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       const recordAction = () =>
         afterPaint(() => void client.kalvoiceLatencyRecord(performance.now() - started).catch(() => undefined));
       try {
-        // An answer to "Which one?" is handled here: native keeps no conversation state.
+        // An answer to "Which one?" is handled here: native keeps no conversation state. Only a
+        // short answer or a choice form counts; anything else is a new request and drops the question.
         const pending = choiceRef.current;
-        const picked = choiceIsLive(pending) ? pickSpokenChoice(text, pending.choices) : null;
-        if (picked && followUp(picked.threadId)) {
-          recordAction();
-          return;
+        if (choiceIsLive(pending)) {
+          const answer = isChoiceAnswer(text);
+          const picked = answer ? pickSpokenChoice(text, pending.choices) : null;
+          if (picked && followUp(picked.threadId)) {
+            recordAction();
+            return;
+          }
+          if (!answer) {
+            choiceRef.current = null;
+            setSessionChoice(null);
+          }
         }
         const previous = currentRef.current;
         const talked = await client.kalvoiceTalk({

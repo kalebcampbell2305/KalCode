@@ -77,6 +77,30 @@ function candidateWords(choice: SessionCandidate): Set<string> {
   ]);
 }
 
+/** Words that don't count toward an answer's length ("the Mac one please", "Hey Kal, Mac"). */
+const ANSWER_FILLER = new Set(["the", "that", "one", "please", "hey", "kal"]);
+
+/** Longest utterance (after filler) still taken as an answer to "Which one?". */
+export const MAX_ANSWER_WORDS = 5;
+
+/** "the first one", "second", "number two", "the last one" (optionally after "Hey Kal"). */
+const CHOICE_FORM =
+  /^(?:hey kal )?(?:the )?(?:(?:first|second|third|fourth|last|1st|2nd|3rd|4th)(?: one)?|number (?:one|two|three|four|[1-4]))$/;
+
+const NUMBERED: Record<string, number> = { one: 0, "1": 0, two: 1, "2": 1, three: 2, "3": 2, four: 3, "4": 3 };
+
+/**
+ * Whether an utterance during a pending "Which one?" is an answer at all: a choice form, or short
+ * (≤ 5 words after filler). Anything longer is a new request, handled normally.
+ */
+export function isChoiceAnswer(text: string): boolean {
+  const said = normalizeSpoken(text);
+  if (!said) return false;
+  if (CHOICE_FORM.test(said)) return true;
+  const words = said.split(" ").filter((word) => !ANSWER_FILLER.has(word));
+  return words.length > 0 && words.length <= MAX_ANSWER_WORDS;
+}
+
 /**
  * The choice a spoken answer names, or null when it names none or more than one ("the Mac one",
  * "Release Mac", "second"). Every meaningful word must belong to exactly one choice.
@@ -88,6 +112,8 @@ export function pickSpokenChoice(text: string, choices: readonly SessionCandidat
     (choice) => normalizeSpoken(choice.name) === said || normalizeSpoken(choice.label) === said,
   );
   if (exact.length === 1) return exact[0] ?? null;
+  const numbered = said.match(/^(?:hey kal )?(?:the )?number (one|two|three|four|[1-4])$/);
+  if (numbered?.[1]) return choices.at(NUMBERED[numbered[1]] ?? -99) ?? null;
   const words = said.split(" ").filter((word) => !FILLER.has(word));
   if (words.length === 0) return null;
   if (words.length === 1) {

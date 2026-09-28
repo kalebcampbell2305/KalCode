@@ -276,6 +276,36 @@ describe("KalVoice composer target (Stable, TK-2)", () => {
     expect(sent(h)[1]?.args).toMatchObject({ threadId: threadIdOf(OAUTH), text: "update the changelog" });
   });
 
+  it("a long utterance during “Which one?” is a new request and drops the question", async () => {
+    const h = await mountStable();
+    await learnThreads(h);
+    await openThread(h, OAUTH);
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    await talk(h, "tell claude to run the linter");
+    await choicePanel();
+
+    const talks = h.calls.filter((c) => c.command === "kalvoice_talk").length;
+    await talk(h, "tell parser module to add a test for tabs");
+    // Went to native as a normal command, not as an answer; the pending question is gone.
+    expect(h.calls.filter((c) => c.command === "kalvoice_talk")).toHaveLength(talks + 1);
+    await waitFor(() => expect(sent(h)).toHaveLength(1));
+    expect(sent(h)[0]?.args).toMatchObject({ threadId: threadIdOf(PARSER), text: "add a test for tabs" });
+    expect(screen.queryByRole("list", { name: "Sessions" })).toBeNull();
+  });
+
+  it("“number two” answers “Which one?” by position", async () => {
+    const h = await mountStable();
+    await learnThreads(h);
+    await openThread(h, OAUTH);
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    await talk(h, "tell claude to run the linter");
+    const second = within(await choicePanel()).getAllByRole("button")[1]?.textContent ?? "";
+    await talk(h, "number two");
+    await waitFor(() => expect(sent(h)).toHaveLength(1));
+    const name = second.split(" · ")[0] ?? "";
+    expect(sent(h)[0]?.args).toMatchObject({ threadId: threadIdOf(name), text: "run the linter" });
+  });
+
   it("“Type it instead” lands in the thread that was focused, never the one on screen now", async () => {
     const h = await mountStable();
     await learnThreads(h);
