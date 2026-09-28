@@ -170,8 +170,8 @@
           "platforms": ["win32", "darwin"],
           "environment": {},
           "minimumExecuted": 1258,
-          "skippedMinimum": 19,
-          "skippedMaximum": 19,
+          "skippedMinimum": 22,
+          "skippedMaximum": 22,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         },
@@ -179,8 +179,8 @@
           "platforms": ["linux"],
           "environment": {},
           "minimumExecuted": 1258,
-          "skippedMinimum": 17,
-          "skippedMaximum": 17,
+          "skippedMinimum": 20,
+          "skippedMaximum": 20,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         }
@@ -220,7 +220,7 @@
         {
           "platforms": ["win32", "darwin", "linux"],
           "environment": {},
-          "minimumExecuted": 245,
+          "minimumExecuted": 250,
           "skippedMinimum": 0,
           "skippedMaximum": 0,
           "allowedSkipReasons": [],
@@ -361,7 +361,19 @@
     { "path": "crates/locator/tests/locator_perf.rs", "reason": "performance budget: run in release" },
     {
       "path": "crates/providers/src/codex/managed_policy.rs",
-      "reason": "run explicitly when certifying installed Codex CLI 0.157.0"
+      "reason": "run explicitly when certifying a Codex CLI release (KALCODE_CERTIFY_CODEX)"
+    },
+    {
+      "path": "crates/providers/tests/claude_sign_in_real.rs",
+      "reason": "needs a real Claude Code (KALCODE_REAL_CLAUDE); no sign-in, prompt or quota"
+    },
+    {
+      "path": "crates/providers/tests/claude_sign_in_real.rs",
+      "reason": "needs KALCODE_REAL_CLAUDE and KALCODE_REAL_CLAUDE_LOGIN_PROBE=1; opens the browser once"
+    },
+    {
+      "path": "crates/providers/tests/codex_certification_real.rs",
+      "reason": "needs a real Codex CLI (KALCODE_CERTIFY_CODEX); no sign-in, prompt or quota"
     },
     {
       "path": "crates/providers/tests/gemini_sign_in_real.rs",
