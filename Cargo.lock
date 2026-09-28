@@ -2983,6 +2983,7 @@ dependencies = [
  "libc",
  "process-wrap",
  "rusqlite",
+ "same-file",
  "serde",
  "serde_json",
  "tempfile",

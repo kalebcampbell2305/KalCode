@@ -22,7 +22,8 @@
 //! One display-only exception (release-lead security sign-off): for a signed-in account, KalCode
 //! reads the `active` field of `<GEMINI_CLI_HOME>/.gemini/google_accounts.json` in that account's
 //! own managed profile, and only that field, as the provider-reported identity. The file must be
-//! an ordinary file (no link or reparse point, checked before and after opening) of at most
+//! an ordinary file (no link or reparse point, checked before and after opening, and the opened
+//! handle must be the very file at that path inside the account's canonical home) of at most
 //! [`MAX_GOOGLE_ACCOUNTS_BYTES`] bytes that parses as JSON with an `active` string that looks like
 //! an email of at most `MAX_PROVIDER_IDENTITY_CHARS` characters; anything else yields no identity.
 //! `old` is never kept or exposed, no other file is opened (the credential stores never are), and
@@ -173,8 +174,13 @@ pub fn reported_identity(profiles: &ManagedProfiles, account_id: &str) -> Option
         .profile_home(ProviderId::GEMINI_CLI, account_id)
         .ok()?;
     let directory = gemini_directory(&home).ok()??;
+    let expected = std::fs::canonicalize(&home)
+        .ok()?
+        .join(GEMINI_DIR)
+        .join(GOOGLE_ACCOUNTS_FILE);
     let bytes = read_bounded_ordinary_file(
         &directory.join(GOOGLE_ACCOUNTS_FILE),
+        &expected,
         MAX_GOOGLE_ACCOUNTS_BYTES,
     )?;
     let parsed: GoogleAccounts = serde_json::from_slice(&bytes).ok()?;
@@ -204,10 +210,15 @@ fn looks_like_email(value: &str) -> bool {
         && !domain.contains("..")
 }
 
-/// Reads at most `cap` bytes from an ordinary file without following a link or reparse point: the
-/// path is inspected before opening, opened without following a final reparse point (Windows),
-/// and the opened handle must still be the same ordinary file within the cap.
-fn read_bounded_ordinary_file(path: &Path, cap: u64) -> Option<Vec<u8>> {
+/// Reads at most `cap` bytes from the ordinary file at `path` only when the opened handle is the
+/// very file at `expected` (a canonical path inside the account's home). The path is inspected
+/// before opening and opened without following a final link or reparse point (`O_NOFOLLOW`,
+/// `FILE_FLAG_OPEN_REPARSE_POINT`). A parent directory swapped for a link or junction around the
+/// open is caught afterwards without `unsafe`, the same way `kalcode-git` verifies its opens:
+/// `expected` must still canonicalize to itself (no link anywhere on it now), and the opened
+/// handle must be the same file as `expected` (volume serial + file index on Windows, device +
+/// inode on Unix), so a handle opened through an outside link, even one swapped back, is refused.
+fn read_bounded_ordinary_file(path: &Path, expected: &Path, cap: u64) -> Option<Vec<u8>> {
     use std::io::Read as _;
 
     let before = std::fs::symlink_metadata(path).ok()?;
@@ -216,15 +227,21 @@ fn read_bounded_ordinary_file(path: &Path, cap: u64) -> Option<Vec<u8>> {
     }
     let file = open_without_following(path).ok()?;
     let opened = file.metadata().ok()?;
-    if !opened.is_file()
-        || is_link_or_reparse(&opened)
-        || opened.len() > cap
-        || !same_file(&before, &opened)
+    if !opened.is_file() || is_link_or_reparse(&opened) || opened.len() > cap {
+        return None;
+    }
+    let opened = same_file::Handle::from_file(file).ok()?;
+    if std::fs::canonicalize(expected).ok()? != expected
+        || same_file::Handle::from_path(expected).ok()? != opened
     {
         return None;
     }
     let mut bytes = Vec::new();
-    file.take(cap + 1).read_to_end(&mut bytes).ok()?;
+    opened
+        .as_file()
+        .take(cap + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
     (u64::try_from(bytes.len()).ok()? <= cap).then_some(bytes)
 }
 
@@ -239,23 +256,14 @@ fn open_without_following(path: &Path) -> std::io::Result<std::fs::File> {
         .open(path)
 }
 
-#[cfg(not(windows))]
-fn open_without_following(path: &Path) -> std::io::Result<std::fs::File> {
-    std::fs::File::open(path)
-}
-
 #[cfg(unix)]
-fn same_file(before: &std::fs::Metadata, opened: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
+fn open_without_following(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt as _;
 
-    before.dev() == opened.dev() && before.ino() == opened.ino()
-}
-
-#[cfg(not(unix))]
-fn same_file(_before: &std::fs::Metadata, _opened: &std::fs::Metadata) -> bool {
-    // The Windows handle is opened on a reparse point itself rather than its target, so a swap to
-    // a link after the first check is caught by the handle's own attributes above.
-    true
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
 }
 
 /// Removes this account's Gemini credential files. Requires the account's exclusive lease so no
@@ -1368,10 +1376,34 @@ mod tests {
         );
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn identity_never_follows_a_junctioned_gemini_directory() {
-        let fixture = fixture("unused");
+    /// Links `link` to the directory `target`: a junction on Windows (no privilege needed), a
+    /// symlink on Unix.
+    fn link_directory(target: &Path, link: &Path) {
+        #[cfg(windows)]
+        {
+            let created = std::process::Command::new("cmd")
+                .arg("/C")
+                .arg("mklink")
+                .arg("/J")
+                .arg(link)
+                .arg(target)
+                .output()
+                .expect("mklink");
+            assert!(created.status.success(), "junction");
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(target, link).expect("directory symlink");
+    }
+
+    fn unlink_directory(link: &Path) {
+        #[cfg(windows)]
+        std::fs::remove_dir(link).expect("remove junction");
+        #[cfg(unix)]
+        std::fs::remove_file(link).expect("remove symlink");
+    }
+
+    /// An outside `.gemini` look-alike holding a signed-in store and a spoofed email.
+    fn outside_gemini(fixture: &Fixture) -> PathBuf {
         let outside = fixture._temp.path().join("outside-gemini");
         std::fs::create_dir_all(&outside).expect("outside");
         std::fs::write(outside.join(ENCRYPTED_CREDENTIALS_FILE), b"opaque").expect("store");
@@ -1380,27 +1412,90 @@ mod tests {
             br#"{"active":"outside@example.com"}"#,
         )
         .expect("accounts");
+        outside
+    }
+
+    #[test]
+    fn identity_never_follows_a_linked_gemini_directory() {
+        let fixture = fixture("unused");
+        let outside = outside_gemini(&fixture);
         let home = fixture
             .profiles
             .profile_home("gemini-cli", ACCOUNT_ID)
             .expect("home");
-        std::fs::create_dir_all(&home).expect("home dir");
-        let junction = home.join(GEMINI_DIR);
-        let created = std::process::Command::new("cmd")
-            .arg("/C")
-            .arg("mklink")
-            .arg("/J")
-            .arg(&junction)
-            .arg(&outside)
-            .output()
-            .expect("mklink");
-        assert!(created.status.success(), "junction");
+        let link = home.join(GEMINI_DIR);
+        link_directory(&outside, &link);
         assert_eq!(reported_identity(&fixture.profiles, ACCOUNT_ID), None);
         assert!(
             account_state(&fixture.profiles, ACCOUNT_ID).is_err(),
-            "a junctioned profile directory fails closed"
+            "a linked profile directory fails closed"
         );
-        std::fs::remove_dir(&junction).expect("remove junction");
+        unlink_directory(&link);
+    }
+
+    /// The race the directory pre-check cannot close: `.gemini` swapped for a link to an outside
+    /// directory between the check and the open (then possibly swapped back). The open goes
+    /// through the link; the post-open verification must refuse the handle either way.
+    #[test]
+    fn identity_refuses_a_handle_opened_through_a_swapped_gemini_directory() {
+        let fixture = fixture("unused");
+        let outside = outside_gemini(&fixture);
+        signed_in(
+            &fixture.profiles,
+            ACCOUNT_ID,
+            Some(br#"{"active":"inside@example.com"}"#),
+        );
+        let home = fixture
+            .profiles
+            .profile_home("gemini-cli", ACCOUNT_ID)
+            .expect("home");
+        let expected = std::fs::canonicalize(&home)
+            .expect("canonical home")
+            .join(GEMINI_DIR)
+            .join(GOOGLE_ACCOUNTS_FILE);
+        let cap = MAX_GOOGLE_ACCOUNTS_BYTES;
+
+        // Control: the account's own file, opened directly, is read.
+        assert!(
+            read_bounded_ordinary_file(
+                &home.join(GEMINI_DIR).join(GOOGLE_ACCOUNTS_FILE),
+                &expected,
+                cap
+            )
+            .is_some()
+        );
+
+        // Swapped back: the open went through an outside link while the real `.gemini` is intact
+        // again. The handle is a different file than the one at `expected`.
+        let alias = home.join("swapped-gemini");
+        link_directory(&outside, &alias);
+        assert_eq!(
+            read_bounded_ordinary_file(&alias.join(GOOGLE_ACCOUNTS_FILE), &expected, cap),
+            None,
+            "a handle opened through an outside link is refused"
+        );
+        unlink_directory(&alias);
+
+        // Still swapped: `.gemini` itself is now the link, so `expected` no longer
+        // canonicalizes to itself and the outside handle is refused.
+        let real = home.join("real-gemini");
+        std::fs::rename(home.join(GEMINI_DIR), &real).expect("move real .gemini aside");
+        link_directory(&outside, &home.join(GEMINI_DIR));
+        assert_eq!(
+            read_bounded_ordinary_file(
+                &home.join(GEMINI_DIR).join(GOOGLE_ACCOUNTS_FILE),
+                &expected,
+                cap
+            ),
+            None,
+            "a handle opened through a swapped .gemini is refused"
+        );
+        unlink_directory(&home.join(GEMINI_DIR));
+        std::fs::rename(&real, home.join(GEMINI_DIR)).expect("restore .gemini");
+        assert_eq!(
+            reported_identity(&fixture.profiles, ACCOUNT_ID).as_deref(),
+            Some("inside@example.com")
+        );
     }
 
     #[test]

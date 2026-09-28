@@ -35,6 +35,7 @@ kalcode-hook-bridge = { path = "../hook-bridge" }
 serde.workspace = true
 serde_json.workspace = true
 rusqlite.workspace = true
+same-file = "1"
 thiserror.workspace = true
 tracing.workspace = true
 time.workspace = true
@@ -46,7 +47,7 @@ winapi-util = "0.1"
 process-wrap = { version = "10.0.1", default-features = false, features = ["std", "job-object", "creation-flags"] }
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Win32_System_Pipes", "Win32_System_Threading"] }
 
-[target.'cfg(target_os = "macos")'.dependencies]
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [dev-dependencies]

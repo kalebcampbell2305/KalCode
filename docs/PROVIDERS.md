@@ -525,7 +525,8 @@ security sign-off): for a signed-in account, KalCode reads only the `active` fie
 `<GEMINI_CLI_HOME>/.gemini/google_accounts.json` inside that account's own managed profile and shows
 it as the account's provider-reported identity (as Claude Code's `auth status --json` email and
 Codex's `account/read` email are). The file must be an ordinary file (no symlink, junction or reparse
-point, checked before and after opening) of at most 16 KiB that parses as JSON with an `active`
+point, checked before and after opening; the opened handle must be the very file at that path inside
+the account's canonical home, so a `.gemini` swapped for a link mid-read is refused) of at most 16 KiB that parses as JSON with an `active`
 string that looks like an email (at most 320 characters, printable ASCII, one `@`, dotted domain);
 a missing, oversized, linked or invalid file yields no identity (the account label only). `old` is
 never kept or exposed, no other file is opened, and the identity is never logged. It is refreshed
