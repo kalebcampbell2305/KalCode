@@ -887,6 +887,46 @@ fn owner_is_unlimited() {
 }
 
 #[test]
+fn unavailable_interpreter_reports_readiness_without_claiming_build_support() {
+    // A wired interpreter can be temporarily unready (e.g. no resident worker). That is
+    // distinct from the default missing implementation, but neither exposes a precise cause.
+    for wired in [false, true] {
+        let interpreter = Arc::new(FakeLocalInterpreter::new(Err(
+            LocalInterpretationError::Unavailable,
+        )));
+        let h = harness_with_interpreter(
+            Tier::Free,
+            FakeExecutor::default(),
+            Arc::new(NoProviders),
+            wired.then(|| interpreter.clone() as Arc<dyn LocalInterpreter>),
+        );
+        let response = h
+            .orchestrator
+            .handle(request("plan the release sequence"))
+            .expect("unready response");
+        let KalVoiceOutcome::Failed { code, message } = &response.outcome else {
+            panic!(
+                "unready interpreter must fail closed: {:?}",
+                response.outcome
+            );
+        };
+        assert_eq!(code, "local_reasoning_unavailable");
+        assert!(message.contains("not ready"), "{message}");
+        assert!(message.contains("KalVoice settings"), "{message}");
+        assert!(!message.contains("this build"), "{message}");
+        assert!(!response.counted);
+        assert_eq!(response.usage.used, 0);
+        assert!(response.directive.is_none());
+        assert!(h.executor.executed.lock().expect("lock").is_empty());
+        assert_eq!(interpreter.calls.load(Ordering::SeqCst), usize::from(wired));
+        assert_eq!(
+            kalvoice_events(&h.core).last().expect("failure event")["payload"]["code"],
+            "local_reasoning_unavailable"
+        );
+    }
+}
+
+#[test]
 fn missing_local_interpreter_is_honest_and_not_counted() {
     let h = harness();
     let response = h

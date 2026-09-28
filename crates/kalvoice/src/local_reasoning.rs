@@ -25,8 +25,7 @@ const MAX_WORKSPACE_NAME_CHARS: usize = 256;
 pub const MAX_LOCAL_WORKSPACES: usize = 64;
 pub const MAX_GROUNDED_ACTION_CANDIDATES: usize = 8;
 
-pub const LOCAL_REASONING_UNAVAILABLE_MESSAGE: &str =
-    "On-device KalVoice interpretation isn't available in this build.";
+pub const LOCAL_REASONING_UNAVAILABLE_MESSAGE: &str = "The on-device KalVoice interpreter is not ready. Open KalVoice settings to check setup or startup.";
 pub const LOCAL_REASONING_UNCERTAIN_MESSAGE: &str =
     "KalVoice couldn't determine a safe local action. Try a more specific command.";
 pub const LOCAL_REASONING_FAILED_MESSAGE: &str =
