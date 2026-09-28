@@ -76,7 +76,14 @@ async function loadPackets(staging, version) {
   for (const specification of specifications) {
     const build = readJson(join(staging, specification.build), `${specification.target} build record`);
     const verify = readJson(join(staging, specification.verify), `${specification.target} verification record`);
-    const qa = readJson(join(staging, specification.qa), `${specification.target} preliminary QA record`);
+    let qaBytes;
+    let qa;
+    try {
+      qaBytes = readFileSync(join(staging, specification.qa));
+      qa = JSON.parse(qaBytes.toString("utf8"));
+    } catch {
+      throw new Error(`${specification.target} preliminary QA record is missing or invalid`);
+    }
     const artifactPath = join(staging, specification.file);
     const signaturePath = join(staging, specification.signature);
     if (build.version !== version || build.file !== specification.file || build.requestedReleaseChannel !== "stable") {
@@ -88,7 +95,7 @@ async function loadPackets(staging, version) {
     if (statSync(artifactPath).size !== build.size || (await sha256File(artifactPath)) !== build.sha256) {
       throw new Error(`${specification.target} artifact does not match its build record`);
     }
-    packets.push({ ...specification, build, verify, qa, artifactPath, signaturePath });
+    packets.push({ ...specification, build, verify, qa, qaSha256: sha256Bytes(qaBytes), artifactPath, signaturePath });
   }
   return packets;
 }
@@ -105,33 +112,70 @@ function sourceFiles(source, commit) {
   );
 }
 
-function validateSourceAuthority({ baselineSource, candidateSource, baseline, candidate }) {
-  const baselineHead = git(baselineSource, ["rev-parse", "HEAD"]);
-  if (baselineHead !== baseline.commit || git(baselineSource, ["status", "--porcelain", "--untracked-files=normal"])) {
-    throw new Error("baseline source must be a clean checkout of the exact signed build commit");
-  }
+const APPROVED_TOOL_FILES = new Set([
+  "tooling/release/updater-manifest.mjs",
+  "tooling/release/updater-manifest.test.mjs",
+  "tooling/release/updater-qa-stage-assembly.mjs",
+  "tooling/release/updater-qa-stage-assembly.test.mjs",
+  "tooling/release/stage-updater-qa.mjs",
+  "tooling/release/stage-updater-qa.test.mjs",
+]);
+
+function assertAncestor(source, commit, head, label) {
+  const result = spawnSync("git", ["-C", source, "merge-base", "--is-ancestor", commit, head], { windowsHide: true });
+  if (result.status !== 0) throw new Error(`${label} does not contain the exact signed build commit`);
+}
+
+// toolSource is injectable for Git-backed tests only. The CLI always uses the actual module ROOT.
+export function validateCandidateToolAuthority({
+  candidateSource,
+  candidateCommit,
+  approvedToolCommit,
+  toolSource = ROOT,
+}) {
   const candidateHead = git(candidateSource, ["rev-parse", "HEAD"]);
-  if (resolve(candidateSource) !== resolve(ROOT)) {
+  if (approvedToolCommit === undefined && resolve(candidateSource) !== resolve(toolSource)) {
     throw new Error("candidate source must be the checkout that owns the executing release tooling");
   }
   if (git(candidateSource, ["status", "--porcelain", "--untracked-files=normal"])) {
     throw new Error("candidate source must be clean before updater QA staging");
   }
-  const ancestor = spawnSync(
-    "git",
-    ["-C", candidateSource, "merge-base", "--is-ancestor", candidate.commit, candidateHead],
-    {
-      windowsHide: true,
-    },
-  );
-  if (ancestor.status !== 0) throw new Error("candidate source does not contain the exact signed build commit");
-  const candidateTail = git(candidateSource, ["diff", "--name-only", candidate.commit, candidateHead])
+  assertAncestor(candidateSource, candidateCommit, candidateHead, "candidate source");
+  const candidateTail = git(candidateSource, ["diff", "--name-only", candidateCommit, candidateHead])
     .split(/\r?\n/u)
     .filter(Boolean);
   if (candidateTail.some((path) => !path.startsWith("docs/releases/"))) {
     throw new Error("candidate source changed beyond release notes after the signed build commit");
   }
+  if (approvedToolCommit === undefined) return null;
+  if (!/^[a-f0-9]{40}$/u.test(approvedToolCommit) || git(toolSource, ["rev-parse", "HEAD"]) !== approvedToolCommit) {
+    throw new Error("executing tooling must match the exact approved tool commit");
+  }
+  if (git(toolSource, ["status", "--porcelain", "--untracked-files=normal"])) {
+    throw new Error("executing tool source must be clean before updater QA staging");
+  }
+  assertAncestor(toolSource, candidateCommit, approvedToolCommit, "executing tool source");
+  const toolTail = git(toolSource, ["diff", "--name-only", candidateCommit, approvedToolCommit])
+    .split(/\r?\n/u)
+    .filter(Boolean);
+  if (toolTail.some((path) => !APPROVED_TOOL_FILES.has(path))) {
+    throw new Error("executing tool source changed beyond the six reviewed release-tool files");
+  }
+  return { toolCommit: approvedToolCommit, productCommit: candidateCommit, candidateNotesCommit: candidateHead };
+}
+
+function validateSourceAuthority({ baselineSource, candidateSource, baseline, candidate, approvedToolCommit }) {
+  const baselineHead = git(baselineSource, ["rev-parse", "HEAD"]);
+  if (baselineHead !== baseline.commit || git(baselineSource, ["status", "--porcelain", "--untracked-files=normal"])) {
+    throw new Error("baseline source must be a clean checkout of the exact signed build commit");
+  }
+  const authority = validateCandidateToolAuthority({
+    candidateSource,
+    candidateCommit: candidate.commit,
+    approvedToolCommit,
+  });
   validateBaselineSourceAuthority({ baselineSource, baseline, candidate });
+  return authority;
 }
 
 export function validateBaselineSourceAuthority({ baselineSource, baseline, candidate }) {
@@ -164,7 +208,8 @@ export function validateBaselineSourceAuthority({ baselineSource, baseline, cand
   if (problems.length > 0) throw new Error(`baseline source is not an exact QA derivation: ${problems.join("; ")}`);
 }
 
-export async function assembleRelease({ staging, source, packets, version, notes, write }) {
+export async function assembleRelease({ staging, source, packets, version, notes, write, role = "candidate" }) {
+  if (role !== "baseline" && role !== "candidate") throw new Error("updater QA release role is invalid");
   const commit = packets[0].build.commit;
   if (packets.some((packet) => packet.build.commit !== commit)) {
     throw new Error(`${version} platform packets do not share one source commit`);
@@ -204,7 +249,7 @@ export async function assembleRelease({ staging, source, packets, version, notes
     requestedChannel: "stable",
     publishedAt: publication.publishedAt,
     notes,
-    qaPhase: "preliminary",
+    qaPhase: role === "baseline" ? "baseline-preliminary" : "preliminary",
   });
   const windows = packets.find((packet) => packet.target === "windows-x86_64");
   const mac = packets.find((packet) => packet.target === "darwin-aarch64");
@@ -307,12 +352,17 @@ export async function assembleUpdaterQaStage(options) {
   const candidateVersion = candidateBuild.version;
   const baselinePackets = await loadPackets(options.baselineStaging, baselineVersion);
   const candidatePackets = await loadPackets(options.candidateStaging, candidateVersion);
-  validateSourceAuthority({
+  const toolAuthority = validateSourceAuthority({
     baselineSource: options.baselineSource,
     candidateSource: options.candidateSource,
     baseline: { version: baselineVersion, commit: baselineBuild.commit },
     candidate: { version: candidateVersion, commit: candidateBuild.commit },
+    approvedToolCommit: options.approvedToolCommit,
   });
+  const sourceAuthority = toolAuthority && {
+    ...toolAuthority,
+    baselineQaSha256: Object.fromEntries(baselinePackets.map((packet) => [packet.target, packet.qaSha256])),
+  };
   const notesPath = join(options.candidateSource, "docs", "releases", `${candidateVersion}.md`);
   if (!existsSync(notesPath)) throw new Error("candidate release notes are missing");
   const candidateNotes = readFileSync(notesPath, "utf8");
@@ -327,6 +377,7 @@ export async function assembleUpdaterQaStage(options) {
     version: baselineVersion,
     notes: "Private signed baseline for KalCode updater release QA.",
     write,
+    role: "baseline",
   });
   const candidate = await assembleRelease({
     staging: options.candidateStaging,
@@ -336,5 +387,5 @@ export async function assembleUpdaterQaStage(options) {
     notes: candidateNotes,
     write,
   });
-  return { baseline, candidate };
+  return { baseline, candidate, ...(sourceAuthority && { sourceAuthority }) };
 }
