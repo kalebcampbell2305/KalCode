@@ -32,9 +32,6 @@ function mountComposer(threadId: string, name: string) {
     blockedReason: () => null,
     hasText: () => element.value.trim() !== "",
     submit: vi.fn(async () => "sent" as const),
-    clear: () => {
-      element.value = "";
-    },
   };
   const unregister = registerComposer(handle);
   return {

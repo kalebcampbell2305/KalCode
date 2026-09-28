@@ -3,9 +3,11 @@ import {
   type ComposerHandle,
   type ComposerMode,
   type ComposerSubmitOutcome,
+  composerForThread,
   registerComposer,
   resetComposerRegistryForTests,
 } from "./composerRegistry.ts";
+import { insertTranscript } from "./dictation.ts";
 import {
   type ComposerDirectiveDeps,
   clearComposer,
@@ -14,6 +16,7 @@ import {
   followUpChoice,
   submitComposer,
 } from "./voiceDirectives.ts";
+import { forgetVoiceText, resetVoiceSpansForTests } from "./voiceSpans.ts";
 
 const THREAD = "0192f3c4-0000-7000-8000-00000000d001";
 
@@ -35,12 +38,17 @@ function composer(mode: ComposerMode, outcome: ComposerSubmitOutcome = "sent") {
     blockedReason: () => (mode === "blocked" ? "Messages can be sent once the permission decision is made." : null),
     hasText: () => element.value.trim() !== "",
     submit: vi.fn(async () => outcome),
-    clear: vi.fn(() => {
-      element.value = "";
-    }),
   };
-  registerComposer(handle);
-  return { element, handle };
+  const registration = registerComposer(handle) && composerForThread(THREAD);
+  if (!registration) throw new Error("not registered");
+  /** Dictates at the caret exactly as push to talk does (recording what KalVoice typed). */
+  const dictate = (text: string) =>
+    insertTranscript({ kind: "composer", element, composer: registration, paneId: null }, text);
+  /** The person types at the caret (not KalVoice). */
+  const type = (text: string, at = element.value.length) => {
+    element.value = element.value.slice(0, at) + text + element.value.slice(at);
+  };
+  return { element, handle, dictate, type };
 }
 
 function deps(): ComposerDirectiveDeps & { reports: DirectiveReport[]; opened: string[] } {
@@ -57,6 +65,7 @@ function deps(): ComposerDirectiveDeps & { reports: DirectiveReport[]; opened: s
 
 afterEach(() => {
   resetComposerRegistryForTests();
+  resetVoiceSpansForTests();
   document.body.replaceChildren();
 });
 
@@ -101,15 +110,65 @@ describe("submit_composer", () => {
   });
 });
 
-describe("clear_composer", () => {
-  it("empties that composer and never sends", () => {
-    const { element, handle } = composer("send");
-    element.value = "scratch this";
+describe("clear_composer (only what KalVoice typed)", () => {
+  it("clears text that KalVoice alone typed, and never sends", async () => {
+    const { element, handle, dictate } = composer("send");
+    await dictate("scratch this");
+    await dictate("and this too");
     const d = deps();
     clearComposer(d, THREAD);
-    expect(handle.clear).toHaveBeenCalled();
-    expect(handle.submit).not.toHaveBeenCalled();
     expect(element.value).toBe("");
+    expect(handle.submit).not.toHaveBeenCalled();
+    expect(d.reports).toEqual([{ ok: true, message: "Cleared what KalVoice typed. Nothing was sent." }]);
+  });
+
+  it("removes only the dictated span from typed + voice text", async () => {
+    const { element, dictate, type } = composer("send");
+    type("Keep this:");
+    await dictate("review the login failure");
+    // The person types more, away from the dictated words.
+    type("NOTE ", 0);
+    const d = deps();
+    clearComposer(d, THREAD);
+    expect(element.value).toBe("NOTE Keep this:");
+    expect(d.reports[0]).toEqual({ ok: true, message: "Cleared what KalVoice typed. Nothing was sent." });
+  });
+
+  it("refuses and changes nothing when the person edited in or right next to the dictated text", async () => {
+    for (const edit of [
+      (e: HTMLTextAreaElement) => {
+        e.value = e.value.replace("login", "logout");
+      },
+      (e: HTMLTextAreaElement) => {
+        e.value = `${e.value}!!`;
+      },
+    ]) {
+      const { element, dictate, type } = composer("send");
+      type("Keep this:");
+      await dictate("review the login failure");
+      edit(element);
+      const before = element.value;
+      const d = deps();
+      clearComposer(d, THREAD);
+      expect(element.value).toBe(before);
+      expect(d.reports).toEqual([{ ok: false, message: "I couldn't tell which text I typed — clear it yourself." }]);
+      resetComposerRegistryForTests();
+      resetVoiceSpansForTests();
+      document.body.replaceChildren();
+    }
+  });
+
+  it("after a send there is nothing to clear, and the person's new text is kept", async () => {
+    const { element, dictate, type } = composer("send");
+    await dictate("send me");
+    // The composer's own Send empties the box and forgets what KalVoice typed.
+    element.value = "";
+    forgetVoiceText(THREAD);
+    type("my own words");
+    const d = deps();
+    clearComposer(d, THREAD);
+    expect(element.value).toBe("my own words");
+    expect(d.reports).toEqual([{ ok: true, message: "Nothing to clear." }]);
   });
 });
 

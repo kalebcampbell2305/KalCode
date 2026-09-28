@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { forgetVoiceText } from "./voiceSpans.ts";
 
 /**
  * Thread composers as fixed KalVoice targets (0.1.5 TK-2). Each thread's message box registers a
@@ -48,8 +49,6 @@ export interface ComposerHandle {
   hasText(): boolean;
   /** Runs the composer's own Send: prompt review and the warning dialog apply unchanged. */
   submit(): Promise<ComposerSubmitOutcome>;
-  /** Empties the box (and drops a pending prompt review). Never sends. */
-  clear(): void;
 }
 
 export interface ComposerRegistration {
@@ -78,11 +77,14 @@ function subscribe(listener: () => void) {
 /** Registers a thread's composer. The newest registration for a thread wins; returns unregister. */
 export function registerComposer(handle: ComposerHandle): () => void {
   const registration: ComposerRegistration = { handle, generation: nextGeneration++ };
+  // A newly mounted box starts empty: nothing KalVoice typed earlier is in it.
+  forgetVoiceText(handle.threadId);
   byThread.set(handle.threadId, registration);
   changed();
   return () => {
     if (byThread.get(handle.threadId) !== registration) return;
     byThread.delete(handle.threadId);
+    forgetVoiceText(handle.threadId);
     changed();
   };
 }

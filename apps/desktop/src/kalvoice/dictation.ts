@@ -5,6 +5,7 @@ import {
   composerForThread,
   isCurrentComposer,
 } from "./composerRegistry.ts";
+import { recordVoiceInsertion } from "./voiceSpans.ts";
 
 /**
  * Dictation targets: where a transcript goes. The target is resolved when the dictation
@@ -256,7 +257,7 @@ export function planInsertion(
   selectionStart: number,
   selectionEnd: number,
   transcript: string,
-): { value: string; caret: number; inserted: string } {
+): { value: string; caret: number; inserted: string; start: number; end: number } {
   const start = Math.max(0, Math.min(selectionStart, value.length));
   const end = Math.max(start, Math.min(selectionEnd, value.length));
   const before = value.slice(0, start);
@@ -264,7 +265,14 @@ export function planInsertion(
   const text = transcript.trim();
   const needsSpace = before.length > 0 && !/[\s([{"'`]$/.test(before) && !/^[.,!?;:)\]}]/.test(text);
   const inserted = `${needsSpace ? " " : ""}${text}`;
-  return { value: before + inserted + after, caret: start + inserted.length, inserted };
+  return { value: before + inserted + after, caret: start + inserted.length, inserted, start, end };
+}
+
+/** Replaces a text box's value the way typing would (React sees it), with the caret at `caret`. */
+export function replaceFieldText(el: HTMLInputElement | HTMLTextAreaElement, value: string, caret: number): void {
+  setNativeValue(el, value);
+  el.setSelectionRange(caret, caret);
+  el.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 function setNativeValue(el: HTMLInputElement | HTMLTextAreaElement, value: string) {
@@ -296,8 +304,19 @@ export async function insertTranscript(
     el.selectionEnd ?? el.value.length,
     transcript,
   );
+  const before = el.value;
   setNativeValue(el, plan.value);
   el.setSelectionRange(plan.caret, plan.caret);
+  // A composer remembers exactly what KalVoice typed, so "clear that" removes only that.
+  if (target.kind === "composer") {
+    recordVoiceInsertion(target.composer.handle.threadId, {
+      before,
+      start: plan.start,
+      end: plan.end,
+      inserted: plan.inserted,
+      after: plan.value,
+    });
+  }
   el.dispatchEvent(new Event("input", { bubbles: true }));
   return plan.inserted.length;
 }

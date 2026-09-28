@@ -114,6 +114,26 @@ test.describe("KalVoice thread composer target", () => {
     await expect(conversation(page)).not.toContainText("and one for escapes");
   });
 
+  test("“clear that” removes only what KalVoice typed and keeps typed text", async ({ page }) => {
+    await openThreads(page);
+    await openThread(page, PARSER);
+    await composer(page).click();
+    await page.keyboard.type("Keep this: ");
+    await talk(page, "review the login failure");
+    await expect(composer(page)).toHaveValue("Keep this: review the login failure");
+    await talk(page, "clear that");
+    await expect(composer(page)).toHaveValue("Keep this: ");
+
+    await composer(page).click();
+    await talk(page, "and the logout path");
+    await page.keyboard.type("!!");
+    await talk(page, "clear that");
+    await expect(
+      widget(page).getByText("I couldn't tell which text I typed — clear it yourself.").first(),
+    ).toBeVisible();
+    await expect(composer(page)).toHaveValue("Keep this: and the logout path!!");
+  });
+
   test("“tell <name> to …” sends to that thread; a waiting thread is refused", async ({ page }) => {
     await openThreads(page);
     await openThread(page, OAUTH);

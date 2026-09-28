@@ -78,6 +78,8 @@ describe("dictation insertion", () => {
       value: "fix the parser bug",
       caret: 18,
       inserted: " parser bug",
+      start: 7,
+      end: 7,
     });
     expect(planInsertion("", 0, 0, "hello")).toMatchObject({ value: "hello", caret: 5 });
     expect(planInsertion("say (", 5, 5, "hi")).toMatchObject({ value: "say (hi" });

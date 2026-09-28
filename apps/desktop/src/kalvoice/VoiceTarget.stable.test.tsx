@@ -14,6 +14,7 @@ import nativeStableSurfaces from "../shell/fixtures/stable-native-surfaces.json"
 import { Shell } from "../shell/Shell.tsx";
 import { resetAccountIntentForTests } from "../surfaces/threads/accountIntent.ts";
 import { composerForThread, resetComposerRegistryForTests } from "./composerRegistry.ts";
+import { resetVoiceSpansForTests } from "./voiceSpans.ts";
 
 // TK-2 on the Stable channel, end to end through the real Shell, KalVoice provider and the
 // in-memory runtime (its fake recognizer "hears" what each test sets): a focused thread composer
@@ -37,6 +38,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   resetComposerRegistryForTests();
+  resetVoiceSpansForTests();
   resetAccountIntentForTests();
   resetFocusHistoryForTests();
 });
@@ -204,6 +206,39 @@ describe("KalVoice composer target (Stable, TK-2)", () => {
     await waitFor(() => expect(composer()).toHaveValue("and one for escapes"));
     await talk(h, "clear that");
     await waitFor(() => expect(composer()).toHaveValue(""));
+    expect(sent(h)).toHaveLength(1);
+  });
+
+  it("“clear that” removes only what KalVoice typed; typed text stays; after a send nothing is cleared", async () => {
+    const h = await mountStable();
+    await learnThreads(h);
+    await openThread(h, PARSER);
+    await focusComposer();
+    await h.user.type(composer(), "Keep this: ");
+    await talk(h, "review the login failure");
+    await waitFor(() => expect(composer()).toHaveValue("Keep this: review the login failure"));
+
+    await talk(h, "clear that");
+    await waitFor(() => expect(composer()).toHaveValue("Keep this: "));
+    await findInWidget("Cleared what KalVoice typed. Nothing was sent.");
+
+    // Edited next to the dictated words: KalVoice can't tell exactly what it typed and refuses.
+    await focusComposer();
+    await talk(h, "and the logout path");
+    await h.user.type(composer(), "!!");
+    const edited = composer().value;
+    await talk(h, "clear that");
+    await findInWidget("I couldn't tell which text I typed — clear it yourself.");
+    expect(composer()).toHaveValue(edited);
+
+    // After a send there is nothing KalVoice typed left to clear; new typed text is kept.
+    await talk(h, "send that");
+    await waitFor(() => expect(sent(h)).toHaveLength(1));
+    await waitFor(() => expect(composer()).toHaveValue(""));
+    await h.user.type(composer(), "my own words");
+    await talk(h, "clear that");
+    await findInWidget("Nothing to clear.");
+    expect(composer()).toHaveValue("my own words");
     expect(sent(h)).toHaveLength(1);
   });
 

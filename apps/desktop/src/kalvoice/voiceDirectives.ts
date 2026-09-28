@@ -5,7 +5,8 @@ import {
   composerForThread,
   waitForComposer,
 } from "./composerRegistry.ts";
-import { insertTranscript } from "./dictation.ts";
+import { insertTranscript, replaceFieldText } from "./dictation.ts";
+import { forgetVoiceText, planVoiceClear } from "./voiceSpans.ts";
 
 /**
  * The UI side of KalVoice's composer directives (0.1.5 TK-2). Every send goes through the
@@ -75,15 +76,32 @@ export async function submitComposer(deps: ComposerDirectiveDeps, threadId: stri
   deps.report(await sendThrough(registration));
 }
 
-/** `clear_composer`: empties that thread's message box. Never sends. */
+/**
+ * `clear_composer`: removes only the text KalVoice typed into that thread's box since its last
+ * send or clear. Text the person typed is never deleted: when KalVoice can't tell exactly which
+ * characters it typed (the person edited in or right next to them), it refuses and changes
+ * nothing. Never sends.
+ */
 export function clearComposer(deps: ComposerDirectiveDeps, threadId: string): void {
-  const registration = composerForThread(threadId);
-  if (!registration?.handle.element()?.isConnected) {
+  const element = composerForThread(threadId)?.handle.element() ?? null;
+  if (!element?.isConnected) {
     deps.report({ ok: false, message: "That thread's message box isn't open. Nothing was cleared." });
     return;
   }
-  registration.handle.clear();
-  deps.report({ ok: true, message: `Cleared ${quoted(registration.handle.identity().threadName)}. Nothing was sent.` });
+  const plan = planVoiceClear(threadId, element.value);
+  if (plan.kind === "nothing") {
+    forgetVoiceText(threadId);
+    deps.report({ ok: true, message: "Nothing to clear." });
+    return;
+  }
+  if (plan.kind === "ambiguous") {
+    deps.report({ ok: false, message: "I couldn't tell which text I typed — clear it yourself." });
+    return;
+  }
+  // Through the box's own input path, so the composer (and a pending prompt review) follow.
+  replaceFieldText(element, plan.value, plan.caret);
+  forgetVoiceText(threadId);
+  deps.report({ ok: true, message: "Cleared what KalVoice typed. Nothing was sent." });
 }
 
 /**

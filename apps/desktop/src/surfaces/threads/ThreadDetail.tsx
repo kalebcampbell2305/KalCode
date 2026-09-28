@@ -37,6 +37,7 @@ import {
   useComposerListening,
   voiceTargetLabel,
 } from "../../kalvoice/composerRegistry.ts";
+import { forgetVoiceText } from "../../kalvoice/voiceSpans.ts";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { MOD_LABEL } from "../../shell/shortcuts.ts";
@@ -496,6 +497,8 @@ function Composer({
   const draft = useRef("");
   const setText = (next: string) => {
     draft.current = next;
+    // Sent or emptied: nothing KalVoice typed is left for "clear that" to remove.
+    if (next === "") forgetVoiceText(thread.id);
     setTextState(next);
   };
   const boxRef = useRef<HTMLTextAreaElement>(null);
@@ -580,11 +583,10 @@ function Composer({
 
   // KalVoice finds this thread's message box only through this registration (TK-2): dictation,
   // "send that", "clear that" and messages to a named thread. Read fresh on every call.
-  const live = useRef({ thread, mode, hint, send, cancel: confirmation.cancel });
+  const live = useRef({ thread, mode, hint, send });
   useLayoutEffect(() => {
-    live.current = { thread, mode, hint, send, cancel: confirmation.cancel };
+    live.current = { thread, mode, hint, send };
   });
-  // biome-ignore lint/correctness/useExhaustiveDependencies: registered per thread; the rest is read through `live`.
   useEffect(
     () =>
       registerComposer({
@@ -604,10 +606,6 @@ function Composer({
         blockedReason: () => (live.current.mode === "blocked" ? live.current.hint : null),
         hasText: () => draft.current.trim() !== "",
         submit: () => live.current.send(),
-        clear: () => {
-          live.current.cancel();
-          setText("");
-        },
       }),
     [thread.id],
   );
