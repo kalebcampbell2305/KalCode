@@ -11,13 +11,15 @@ import ProviderGlyph from "../components/ProviderGlyph.astro";
 import StageSlot from "../components/StageSlot.astro";
 import Base from "../layouts/Base.astro";
 import { HERO_POSTER_PRELOADS } from "../lib/hero";
-import { downloadCta } from "../lib/releases";
+import { RELEASES, downloadCta, servedStableRelease } from "../lib/releases";
 import { structuredData } from "../lib/seo";
 import { KALVOICE, PROVIDERS, getPage } from "../lib/site";
 import { firstStage, hasStage } from "../lib/stage";
 
 const page = getPage("/");
 const cta = downloadCta();
+// KalVoice is described as shipped only while /download serves a signed Stable release.
+const kalvoiceShipped = servedStableRelease(RELEASES) !== null;
 
 // Compose the story from the demos that exist (lib/stage.ts): a section never renders empty.
 const workspaceStage = firstStage("TryKalCode", "AppWindow");
@@ -187,7 +189,7 @@ const policies = [
     <div class="container container--wide">
       <div class="frame frame--split">
         <div class="frame__copy" data-reveal>
-          <p class="eyebrow">KalVoice · in development</p>
+          <p class="eyebrow">{kalvoiceShipped ? "KalVoice" : "KalVoice · in development"}</p>
           <h2 id="kalvoice-title" class="h2">Speak it. See it done.</h2>
           <p class="body-lg">
             Hold {KALVOICE.pushToTalkKey} to talk to KalVoice. Your words land in the focused agent; say a
