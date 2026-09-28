@@ -103,6 +103,10 @@ describe.each(["stable", "development"] as const)("%s build", (channel) => {
   it("searches the Session Locator from the palette only when the locator is in the build (E4)", async () => {
     const { user, invoke } = await mount(channel);
     const palette = await openPalette(user);
+    expect(palette.getByRole("combobox")).toHaveAttribute(
+      "placeholder",
+      stable ? "Search workspaces and commands" : "Search threads, workspaces and commands",
+    );
     await user.type(palette.getByRole("combobox"), "theme");
     if (stable) {
       await palette.findByRole("option", { name: /Use dark theme/ });

@@ -50,7 +50,7 @@ events flow to an `AgentEventSink`, and accounts arrive in a later campaign.
 
 Owner decision. KalCode is **zero-cost to run for providers**: it never pays for user inference.
 
-- Providers run only through the **user's own** documented CLI sign-in, subscription or API key.
+- Providers run only through the **user's own** provider account, signed in with the provider's official CLI.
   Usage counts against the user's own plan or is billed to the user's own account.
 - No company-owned Anthropic, OpenAI or Google credentials exist anywhere: not in the app, the
   repository, builds, CI, or any KalCode server. There is **no fallback** to a KalCode-paid API

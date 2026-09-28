@@ -168,7 +168,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     >
       <Command.Input
         className={styles.input}
-        placeholder="Search threads, workspaces and commands"
+        placeholder={locatorVisible ? "Search threads, workspaces and commands" : "Search workspaces and commands"}
         value={search.query}
         onValueChange={search.setQuery}
         maxLength={256}
