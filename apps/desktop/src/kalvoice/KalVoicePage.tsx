@@ -77,6 +77,7 @@ export function KalVoicePage() {
           label: "Ready",
           detail: `${status.models.find((m) => m.id === status.activeModel)?.displayName ?? status.activeModel} model, on this computer.`,
           fix: null,
+          action: "settings" as const,
         }
       : {
           tone:
@@ -93,6 +94,7 @@ export function KalVoicePage() {
                 : readiness.fix === "retry"
                   ? "Try again"
                   : null,
+          action: readiness.fix === "retry" ? ("retry" as const) : ("settings" as const),
         };
 
   const intelligence = status ? LOCAL_INTELLIGENCE[status.localReasoning ?? "unavailable"] : null;
@@ -145,7 +147,7 @@ export function KalVoicePage() {
               {dictation?.fix ? (
                 <Button
                   size="sm"
-                  onClick={() => (dictation.fix === "Try again" ? void retryConnection() : navigate("settings"))}
+                  onClick={() => (dictation.action === "retry" ? void retryConnection() : navigate("settings"))}
                 >
                   {dictation.fix}
                 </Button>

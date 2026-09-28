@@ -20,6 +20,7 @@ export type PushToTalkIssue =
   | "shutting_down"
   | "model_not_installed"
   | "talk_key_not_focused"
+  | "talk_key_connecting"
   | "talk_key_inactive";
 
 export type PushToTalkReadiness =
@@ -141,6 +142,10 @@ export function pushToTalkReadiness(
       "Download a speech model in Settings, KalVoice, to use push to talk.",
       "settings",
     );
+  }
+  if (reason === "not_connected") {
+    // Transient: native holds the key only once a KalCode page is subscribed to its signals.
+    return not("talk_key_connecting", "Connecting", `${key} works once KalVoice finishes connecting.`, null, false);
   }
   if (reason === "not_focused") {
     // Expected while KalCode is in the background: native registers the key again on focus.

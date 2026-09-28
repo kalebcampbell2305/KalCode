@@ -105,6 +105,12 @@ describe("native talk_key signal", () => {
     expect(r("disabled")).toMatchObject({ code: "talk_disabled", label: "Off", fix: "settings" });
     expect(r("prefs_error")).toMatchObject({ code: "talk_key_unregistered", fix: "retry", attention: true });
     expect(r("shutting_down")).toMatchObject({ code: "shutting_down", attention: false });
+    expect(r("not_connected")).toMatchObject({
+      code: "talk_key_connecting",
+      label: "Connecting",
+      fix: null,
+      attention: false,
+    });
     expect(r("mystery")).toMatchObject({ code: "talk_key_inactive", attention: true });
   });
 
