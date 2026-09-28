@@ -59,6 +59,13 @@ pub enum LaunchKind {
     /// A `.cmd`/`.bat` shim KalCode couldn't resolve; run through `cmd.exe` with the hardened
     /// environment.
     ShimUnresolved,
+    /// Unix: a `#!/usr/bin/env node` script started as `<absolute node> <script>`.
+    #[cfg(unix)]
+    EnvNode,
+    /// Unix: a `#!/usr/bin/env node` script with no `node` next to it or on an absolute `PATH`
+    /// entry. Started as-is, it could only fail; detection reports it instead.
+    #[cfg(unix)]
+    EnvNodeMissing,
 }
 
 fn is_script_launcher(path: &Path) -> bool {
@@ -69,6 +76,10 @@ fn is_script_launcher(path: &Path) -> bool {
 
 /// Decides how to start `executable` with the (already sanitized) provider environment `env`.
 pub fn resolve(executable: &Path, env: &BTreeMap<OsString, OsString>) -> Launch {
+    #[cfg(unix)]
+    if let Some(launch) = unix::env_node_launch(executable, env) {
+        return launch;
+    }
     let direct = |kind| Launch {
         program: executable.to_path_buf(),
         prefix_args: Vec::new(),
@@ -390,5 +401,264 @@ mod tests {
         big.push_str(&"rem padding\r\n".repeat(2000));
         let (_root, shim, _target) = install(&big, "cli.js");
         assert_eq!(shim_target(&shim), None);
+    }
+}
+
+/// Unix: Node.js CLIs installed with npm (Gemini CLI's `bundle/gemini.js`, Codex's
+/// `bin/codex.js`) start with `#!/usr/bin/env node`, and npm, Homebrew and the nodejs.org
+/// installer link them into the folder that holds `node` (`/opt/homebrew/bin`,
+/// `/usr/local/bin`, `<npm prefix>/bin`). An app started from Finder or the Dock gets
+/// `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, so `env` can't find `node` and every probe, sign-in and
+/// thread fails with `env: node: No such file or directory`. KalCode therefore starts such a
+/// script the way the Windows shims above are started: `<absolute node> <script>`, with `node`
+/// taken from the folder of the executable as found (what the installer put beside it), else
+/// from an **absolute** `PATH` entry of the provider environment. Never a relative folder.
+///
+/// `node` is used at the path found, not canonicalized: version-manager shims such as Volta's
+/// `node` pick their behavior from the name they are started under.
+#[cfg(unix)]
+mod unix {
+    use std::collections::BTreeMap;
+    use std::ffi::OsString;
+    use std::io::Read;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+
+    use super::{Launch, LaunchKind};
+    use crate::env::{absolute_path_entries, lookup};
+
+    /// The first line of an npm-installed script is short; anything longer is not one.
+    const MAX_SHEBANG_BYTES: u64 = 256;
+
+    /// `Some` only for a `#!/usr/bin/env node` script; every other executable is left as is.
+    pub(super) fn env_node_launch(
+        executable: &Path,
+        env: &BTreeMap<OsString, OsString>,
+    ) -> Option<Launch> {
+        if !is_env_node_script(executable) {
+            return None;
+        }
+        let Some(node) = node_for(executable, env) else {
+            tracing::warn!(
+                event = "provider.node_unresolved",
+                executable = %kalcode_core::runtime::display_path(executable)
+            );
+            return Some(Launch {
+                program: executable.to_path_buf(),
+                prefix_args: Vec::new(),
+                kind: LaunchKind::EnvNodeMissing,
+            });
+        };
+        let script = std::fs::canonicalize(executable).unwrap_or_else(|_| executable.into());
+        Some(Launch {
+            program: node,
+            prefix_args: vec![script.into_os_string()],
+            kind: LaunchKind::EnvNode,
+        })
+    }
+
+    /// Reads (never runs) the first line: exactly `#!<absolute path to env> node`.
+    fn is_env_node_script(path: &Path) -> bool {
+        let mut head = Vec::new();
+        let read = std::fs::File::open(path)
+            .and_then(|file| file.take(MAX_SHEBANG_BYTES).read_to_end(&mut head));
+        if read.is_err() {
+            return false;
+        }
+        let Some(rest) = head.strip_prefix(b"#!") else {
+            return false;
+        };
+        let Some(end) = rest.iter().position(|b| *b == b'\n') else {
+            return false;
+        };
+        let Ok(line) = std::str::from_utf8(&rest[..end]) else {
+            return false;
+        };
+        let mut words = line.split_ascii_whitespace();
+        let interpreter = words.next().map(Path::new);
+        interpreter.is_some_and(|p| p.is_absolute() && p.file_name().is_some_and(|n| n == "env"))
+            && words.next() == Some("node")
+            && words.next().is_none()
+    }
+
+    /// `node` beside the executable as found, else the first `node` in an absolute `PATH` entry.
+    fn node_for(executable: &Path, env: &BTreeMap<OsString, OsString>) -> Option<PathBuf> {
+        let beside = executable
+            .parent()
+            .filter(|dir| dir.is_absolute())
+            .map(|dir| dir.join("node"));
+        beside.filter(|p| is_executable_file(p)).or_else(|| {
+            let path = lookup(env, "PATH")?;
+            absolute_path_entries(path)
+                .into_iter()
+                .map(|dir| dir.join("node"))
+                .find(|p| is_executable_file(p))
+        })
+    }
+
+    fn is_executable_file(path: &Path) -> bool {
+        std::fs::metadata(path)
+            .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+    }
+}
+
+/// Unix: the actionable message detection reports when a `#!/usr/bin/env node` provider has no
+/// `node` KalCode can start it with (see [`unix`]). `None` when it can be started.
+#[cfg(unix)]
+pub fn missing_node_message(
+    display_name: &str,
+    executable: &Path,
+    env: &BTreeMap<OsString, OsString>,
+) -> Option<String> {
+    (resolve(executable, env).kind == LaunchKind::EnvNodeMissing).then(|| {
+        format!(
+            "Node.js for {display_name} was not found next to {}. Install Node.js in that folder, \
+             or reinstall {display_name} with the Node.js you use (Homebrew, the nodejs.org \
+             installer and npm put `node` beside the command).",
+            kalcode_core::runtime::display_path(executable)
+        )
+    })
+}
+
+#[cfg(test)]
+#[cfg(unix)]
+mod unix_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn write_mode(path: &Path, body: &[u8], mode: u32) {
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        std::fs::write(path, body).expect("write");
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).expect("chmod");
+    }
+
+    /// `<root>/bin/tool` -> `../lib/node_modules/tool/cli.js`, as npm links a package bin.
+    fn npm_layout(first_line: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let root = tempfile::tempdir().expect("tempdir");
+        let script = root.path().join("lib/node_modules/tool/cli.js");
+        write_mode(&script, format!("{first_line}\nmain()\n").as_bytes(), 0o755);
+        let bin = root.path().join("bin");
+        std::fs::create_dir_all(&bin).expect("mkdir");
+        let link = bin.join("tool");
+        std::os::unix::fs::symlink("../lib/node_modules/tool/cli.js", &link).expect("symlink");
+        let script = std::fs::canonicalize(&script).expect("canonical");
+        (root, link, script)
+    }
+
+    fn env_with_path(dirs: &[&Path]) -> BTreeMap<OsString, OsString> {
+        let mut env = BTreeMap::new();
+        env.insert(
+            OsString::from("PATH"),
+            std::env::join_paths(dirs).expect("join"),
+        );
+        env
+    }
+
+    #[test]
+    fn an_env_node_script_starts_with_the_node_beside_it() {
+        let (root, link, script) = npm_layout("#!/usr/bin/env node");
+        let node = root.path().join("bin/node");
+        write_mode(&node, b"", 0o755);
+        // Even when an absolute PATH entry also has one: the installer's own node wins.
+        let other = root.path().join("other");
+        write_mode(&other.join("node"), b"", 0o755);
+        let launch = resolve(&link, &env_with_path(&[&other]));
+        assert_eq!(launch.kind, LaunchKind::EnvNode);
+        assert_eq!(
+            launch.program, node,
+            "used at the path found, not canonicalized"
+        );
+        assert_eq!(launch.prefix_args, [script.into_os_string()]);
+    }
+
+    #[test]
+    fn without_node_beside_it_an_absolute_path_entry_supplies_node() {
+        let (root, link, script) = npm_layout("#!/usr/bin/env node");
+        let node_dir = root.path().join("nodejs/bin");
+        write_mode(&node_dir.join("node"), b"", 0o755);
+        let empty = root.path().join("empty");
+        std::fs::create_dir_all(&empty).expect("mkdir");
+        let launch = resolve(&link, &env_with_path(&[&empty, &node_dir]));
+        assert_eq!(launch.kind, LaunchKind::EnvNode);
+        assert_eq!(launch.program, node_dir.join("node"));
+        assert_eq!(launch.prefix_args, [script.into_os_string()]);
+    }
+
+    #[test]
+    fn no_usable_node_is_reported_not_guessed() {
+        let (root, link, _script) = npm_layout("#!/usr/bin/env node");
+        // Not executable, or not a file: neither counts.
+        write_mode(&root.path().join("bin/node"), b"", 0o644);
+        std::fs::create_dir_all(root.path().join("dir/node")).expect("mkdir");
+        let launch = resolve(&link, &env_with_path(&[&root.path().join("dir")]));
+        assert_eq!(launch.kind, LaunchKind::EnvNodeMissing);
+        assert_eq!(launch.program, link);
+        assert!(launch.prefix_args.is_empty());
+        let message =
+            missing_node_message("Gemini CLI", &link, &env_with_path(&[])).expect("message");
+        assert!(
+            message.starts_with("Node.js for Gemini CLI was not found next to "),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn relative_path_entries_never_supply_node() {
+        let (_root, link, _script) = npm_layout("#!/usr/bin/env node");
+        let here = tempfile::tempdir_in(".").expect("tempdir in cwd");
+        write_mode(&here.path().join("node"), b"", 0o755);
+        let rel = PathBuf::from(here.path().file_name().expect("name"));
+        assert!(
+            rel.join("node").is_file(),
+            "relative entry resolves from the cwd"
+        );
+        let launch = resolve(&link, &env_with_path(&[&rel]));
+        assert_eq!(launch.kind, LaunchKind::EnvNodeMissing);
+    }
+
+    #[test]
+    fn everything_else_starts_directly() {
+        for first_line in [
+            "#!/bin/sh",
+            "#!/usr/bin/env bash",
+            "#!/usr/bin/env nodejs",
+            "#!/usr/bin/env -S node --no-warnings",
+            "#!/usr/bin/env node --flag",
+            "#!/usr/local/bin/node",
+            "#!env node",
+            "// no shebang",
+        ] {
+            let (root, link, _script) = npm_layout(first_line);
+            write_mode(&root.path().join("bin/node"), b"", 0o755);
+            let launch = resolve(&link, &env_with_path(&[]));
+            assert_eq!(launch.kind, LaunchKind::Direct, "{first_line}");
+            assert_eq!(launch.program, link, "{first_line}");
+            assert!(missing_node_message("Tool", &link, &env_with_path(&[])).is_none());
+        }
+        // A native binary (Claude Code's launcher), an empty file and a missing file.
+        let root = tempfile::tempdir().expect("tempdir");
+        for (name, body) in [
+            ("native", &b"\xcf\xfa\xed\xfe\x07\x00\x00\x01"[..]),
+            ("empty", b""),
+        ] {
+            let path = root.path().join(name);
+            write_mode(&path, body, 0o755);
+            assert_eq!(
+                resolve(&path, &BTreeMap::new()).kind,
+                LaunchKind::Direct,
+                "{name}"
+            );
+        }
+        assert_eq!(
+            resolve(&root.path().join("missing"), &BTreeMap::new()).kind,
+            LaunchKind::Direct
+        );
+    }
+
+    #[test]
+    fn a_crlf_shebang_is_still_env_node() {
+        let (root, link, _script) = npm_layout("#!/usr/bin/env node\r");
+        write_mode(&root.path().join("bin/node"), b"", 0o755);
+        assert_eq!(resolve(&link, &BTreeMap::new()).kind, LaunchKind::EnvNode);
     }
 }

@@ -260,13 +260,29 @@ fn detect_inner(
     if let Some(exe) = &executable {
         detection.display_path = Some(display_path(exe));
         let provider_env = env.provider_env(&spec.env_policy);
-        match probe_version(
+        // Unix: a `#!/usr/bin/env node` CLI with no `node` KalCode can start it with would only
+        // fail with `env: node: No such file or directory`; say what is missing instead.
+        #[cfg(unix)]
+        let probed =
+            match crate::launch::missing_node_message(spec.display_name, exe, &provider_env) {
+                Some(message) => Err(("node_not_found", message)),
+                None => probe_version(
+                    spec.provider_id,
+                    exe,
+                    &provider_env,
+                    env.probe_timeout.unwrap_or(VERSION_TIMEOUT),
+                    guardian,
+                ),
+            };
+        #[cfg(not(unix))]
+        let probed = probe_version(
             spec.provider_id,
             exe,
             &provider_env,
             env.probe_timeout.unwrap_or(VERSION_TIMEOUT),
             guardian,
-        ) {
+        );
+        match probed {
             Ok(version) => {
                 detection.version = Some(version.to_string());
                 match &spec.minimum_version {
@@ -637,5 +653,71 @@ mod tests {
         assert_eq!(result.detection.auth, AuthState::Unknown);
         assert!(result.executable.is_none());
         assert!(!result.detection.checked_at.is_empty());
+    }
+
+    #[cfg(unix)]
+    fn write_executable(path: &Path, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(path, body).expect("write");
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+
+    /// npm, Homebrew and the nodejs.org installer link a CLI's `#!/usr/bin/env node` script into
+    /// the folder that holds `node`. A Finder-launched app's `PATH` (`/usr/bin:/bin:...`) has no
+    /// `node`, so running the link directly fails with `env: node: No such file or directory`.
+    #[cfg(unix)]
+    #[test]
+    fn env_node_scripts_run_with_the_node_beside_them_under_a_minimal_path() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let bin = root.path().join("bin");
+        let pkg = root.path().join("lib/node_modules/tool/bin");
+        let finder_path = root.path().join("finder-path");
+        for dir in [&bin, &pkg, &finder_path] {
+            std::fs::create_dir_all(dir).expect("mkdir");
+        }
+        write_executable(
+            &pkg.join("cli.js"),
+            "#!/usr/bin/env node\nconsole.log('tool 1.2.3')\n",
+        );
+        std::os::unix::fs::symlink("../lib/node_modules/tool/bin/cli.js", bin.join("tool"))
+            .expect("symlink");
+        let install_dir: &'static str = Box::leak(bin.to_str().expect("utf8").into());
+        let spec = DetectionSpec {
+            install_dirs: Box::leak(vec![install_dir].into_boxed_slice()),
+            ..SPEC
+        };
+        // The folder holding the CLI is found through the documented install folders only; the
+        // child `PATH` can't provide `node`.
+        let e = env(&[("PATH", finder_path.to_str().expect("utf8"))], false);
+
+        // No `node` next to the CLI: an actionable error, not `exited with code 127`.
+        let missing = detect(&spec, &e);
+        assert_eq!(missing.detection.state, DetectionState::Error);
+        assert_eq!(missing.error_code, Some("node_not_found"));
+        let message = missing.detection.message.expect("message");
+        assert!(
+            message.starts_with("Node.js for Test tool was not found next to "),
+            "{message}"
+        );
+        assert!(
+            message.contains(&display_path(&bin.join("tool"))),
+            "{message}"
+        );
+
+        // `node` next to the CLI (a stand-in that checks it was handed the script).
+        write_executable(
+            &bin.join("node"),
+            "#!/bin/sh\ncase \"$1\" in */lib/node_modules/tool/bin/cli.js) ;; *) exit 9 ;; esac\n\
+             [ \"$2\" = --version ] || exit 8\necho 'tool 1.2.3'\n",
+        );
+        let found = detect(&spec, &e);
+        assert_eq!(
+            found.detection.state,
+            DetectionState::Installed,
+            "{:?} {:?}",
+            found.error_code,
+            found.detection.message
+        );
+        assert_eq!(found.detection.version.as_deref(), Some("1.2.3"));
     }
 }
