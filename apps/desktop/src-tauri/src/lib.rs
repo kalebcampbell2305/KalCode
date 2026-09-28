@@ -181,7 +181,7 @@ fn start(app: &tauri::App, removed_overrides: &[String]) -> AppState {
     let channel = BuildChannel::current();
     let version = app.package_info().version.to_string();
     let mut info = AppInfo::current(&version, channel);
-    // KalVoice is Preview. Outside development builds it shows only when this build includes
+    // KalVoice is available on Stable. Outside development it requires this build to include
     // its on-device speech engine (`kalvoice-whisper`, which needs LLVM/libclang to build):
     // without it push to talk can't hear anything (docs/KALVOICE.md, "Building").
     info.flags.require_component(

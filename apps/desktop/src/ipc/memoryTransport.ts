@@ -100,6 +100,7 @@ const PROVIDER_SCENARIOS: readonly string[] = [
 /** Surfaces that work in this build (mirrors crates/native-core/src/flags.rs). */
 const AVAILABLE_SURFACES: ReadonlySet<SurfaceFlag["id"]> = new Set([
   "dashboard",
+  "kalvoice",
   "code",
   "threads",
   "providers",
@@ -220,7 +221,7 @@ export function createMemoryTransport(
     flags: {
       surfaces: SURFACES.map((id) => ({
         id,
-        state: AVAILABLE_SURFACES.has(id) ? "available" : id === "kalvoice" ? "preview" : "gated",
+        state: AVAILABLE_SURFACES.has(id) ? "available" : "gated",
         visible: true,
       })),
       // Every product feature is gated until its campaign merges (crates/native-core/src/flags.rs);

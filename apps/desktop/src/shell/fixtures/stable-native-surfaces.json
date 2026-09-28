@@ -1,0 +1,15 @@
+[
+  { "id": "dashboard", "state": "available", "visible": true },
+  { "id": "kalvoice", "state": "available", "visible": true },
+  { "id": "code", "state": "available", "visible": true },
+  { "id": "threads", "state": "available", "visible": true },
+  { "id": "agents", "state": "gated", "visible": false },
+  { "id": "missions", "state": "gated", "visible": false },
+  { "id": "automations", "state": "gated", "visible": false },
+  { "id": "skills", "state": "gated", "visible": false },
+  { "id": "plugins", "state": "gated", "visible": false },
+  { "id": "memory", "state": "gated", "visible": false },
+  { "id": "providers", "state": "available", "visible": true },
+  { "id": "settings", "state": "available", "visible": true },
+  { "id": "command_center", "state": "gated", "visible": false }
+]

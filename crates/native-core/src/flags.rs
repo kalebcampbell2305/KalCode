@@ -109,9 +109,8 @@ impl FeatureFlags {
         use SurfaceState::*;
         let table = [
             (Dashboard, Available),
-            // Z12: push to talk, commands and the voice widget work; parts that depend on
-            // campaigns not in this build say so honestly.
-            (KalVoice, Preview),
+            // Stable ships KalVoice; bootstrap still requires the compiled speech engine.
+            (KalVoice, Available),
             (Code, Available),
             (Threads, Available),
             (Agents, Gated),
@@ -149,7 +148,7 @@ impl FeatureFlags {
     /// Hides a surface outside development builds when a native component it needs is not
     /// compiled into this build (KalVoice without its on-device speech engine: push to talk
     /// couldn't hear anything). Development builds keep showing it, with the component's honest
-    /// "not in this build" state. Stable already hides every non-available surface.
+    /// "not in this build" state. This check also applies to available Stable surfaces.
     pub fn require_component(&mut self, surface: SurfaceId, compiled: bool, channel: BuildChannel) {
         if compiled || channel == BuildChannel::Development {
             return;
@@ -242,7 +241,7 @@ mod tests {
     }
 
     #[test]
-    fn kalvoice_is_preview_and_needs_its_speech_engine_outside_development() {
+    fn kalvoice_is_available_and_needs_its_speech_engine_outside_development() {
         let kalvoice = |flags: &FeatureFlags| {
             flags
                 .surfaces
@@ -256,18 +255,29 @@ mod tests {
             (BuildChannel::Beta, false, false),
             (BuildChannel::Development, false, true),
             (BuildChannel::Development, true, true),
-            (BuildChannel::Stable, true, false),
+            (BuildChannel::Stable, true, true),
             (BuildChannel::Stable, false, false),
         ] {
             let mut flags = FeatureFlags::for_channel(channel);
             flags.require_component(SurfaceId::KalVoice, compiled, channel);
             let flag = kalvoice(&flags);
-            assert_eq!(flag.state, SurfaceState::Preview);
+            assert_eq!(flag.state, SurfaceState::Available);
             assert_eq!(
                 flag.visible, visible,
                 "{channel:?}, engine compiled: {compiled}"
             );
         }
+    }
+
+    #[test]
+    fn stable_shell_fixture_matches_native_compiled_surfaces() {
+        let mut flags = FeatureFlags::for_channel(BuildChannel::Stable);
+        flags.require_component(SurfaceId::KalVoice, true, BuildChannel::Stable);
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../apps/desktop/src/shell/fixtures/stable-native-surfaces.json"
+        ))
+        .expect("native shell fixture");
+        assert_eq!(serde_json::to_value(&flags.surfaces).unwrap(), fixture);
     }
 
     #[test]
