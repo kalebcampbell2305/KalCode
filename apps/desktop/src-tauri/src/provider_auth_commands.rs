@@ -184,6 +184,9 @@ fn claude_failure_ipc(error: &ClaudeAccountAuthError) -> Option<(&'static str, S
                     .unwrap_or("a version KalCode couldn't read")
             ),
         )),
+        // Catch-all: every other variant shares `provider_auth_failed` and is told apart by its
+        // reason code. A new variant that needs its own IPC code or copy must get an explicit arm
+        // above; it will not get one automatically.
         error => Some((
             "provider_auth_failed",
             format!(

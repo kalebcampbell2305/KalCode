@@ -26,6 +26,9 @@ use crate::version::Version;
 const STATUS_TIMEOUT: Duration = Duration::from_secs(15);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const TERMINATE_GRACE: Duration = Duration::from_millis(500);
+/// Longest a failed login waits for its stdout reader to finish before classifying the exit. A
+/// descendant that inherited the pipe can keep it open, so this stays short and bounded.
+const OUTPUT_DRAIN_GRACE: Duration = Duration::from_millis(500);
 const MAX_STATUS_BYTES: usize = 64 * 1024;
 
 /// Account truth returned by Claude Code's documented `auth status --json` command.
@@ -312,11 +315,21 @@ impl ClaudeAccountAuthManager {
         };
         #[cfg(not(test))]
         let force_cleanup_failure = false;
+        #[cfg(test)]
+        let output_line_delay = match &self.launch_mode {
+            LaunchMode::Test { extra_env, .. } => extra_env
+                .get(&OsString::from("CLAUDE_AUTH_DELAY_OUTPUT_MS"))
+                .and_then(|value| value.to_str()?.parse().ok())
+                .map(Duration::from_millis),
+            LaunchMode::Production => None,
+        };
         // Login output may include a one-time browser URL. Drain it so the provider never sees a
         // broken pipe, but discard every bounded line without logging or crossing the WebView.
         // Only Claude's fixed browser hand-off prefix is recognised, as a reason code.
         let handoff_started = Arc::new(AtomicBool::new(false));
         let output_handoff = Arc::clone(&handoff_started);
+        let output_drained = Arc::new(AtomicBool::new(false));
+        let reader_drained = Arc::clone(&output_drained);
         let output_thread = if force_output_thread_failure {
             Err(std::io::Error::other(
                 "injected Claude output-thread start failure",
@@ -326,6 +339,13 @@ impl ClaudeAccountAuthManager {
                 .name("claude-account-login-output".into())
                 .spawn(move || {
                     while let Ok(line) = output.recv() {
+                        #[cfg(test)]
+                        if let Some(delay) = output_line_delay {
+                            thread::sleep(delay);
+                        }
+                        if matches!(line, crate::process::OutputLine::Closed) {
+                            break;
+                        }
                         if let crate::process::OutputLine::Line(line) = line
                             && !output_handoff.load(Ordering::Acquire)
                             && is_browser_handoff_line(&line)
@@ -334,6 +354,10 @@ impl ClaudeAccountAuthManager {
                             tracing::info!(event = "provider.claude_auth.browser_handoff_started");
                         }
                     }
+                    // Keep draining (discarding) anything after end-of-output so the reader never
+                    // blocks, but classification may now rely on every line being seen.
+                    reader_drained.store(true, Ordering::Release);
+                    while output.recv().is_ok() {}
                 })
         };
         if output_thread.is_err() {
@@ -348,6 +372,7 @@ impl ClaudeAccountAuthManager {
         }
         let child = Arc::new(child);
         let worker_handoff = Arc::clone(&handoff_started);
+        let worker_drained = Arc::clone(&output_drained);
         let worker_child = Arc::clone(&child);
         let outcome = Arc::new(LoginOutcome::default());
         let worker_outcome = Arc::clone(&outcome);
@@ -395,6 +420,15 @@ impl ClaudeAccountAuthManager {
                             }
                             Ok(Some(status)) => {
                                 let exit_code = status.code();
+                                // The stdout reader may not have seen the child's last lines
+                                // yet (including the browser hand-off). Wait, bounded, until it
+                                // reports end-of-output so the hand-off is never misclassified.
+                                let drain_deadline = Instant::now() + OUTPUT_DRAIN_GRACE;
+                                while !worker_drained.load(Ordering::Acquire)
+                                    && Instant::now() < drain_deadline
+                                {
+                                    thread::sleep(Duration::from_millis(5));
+                                }
                                 // The stderr reader may still be appending the child's final
                                 // line; give it one short, bounded chance before classifying.
                                 let rejected =
@@ -893,6 +927,9 @@ mod tests {
         if scenario.starts_with("output_thread_failure") {
             extra_env.insert("CLAUDE_AUTH_FAIL_OUTPUT_THREAD".into(), "1".into());
         }
+        if scenario.ends_with("_slow_reader") {
+            extra_env.insert("CLAUDE_AUTH_DELAY_OUTPUT_MS".into(), "100".into());
+        }
         if scenario.starts_with("worker_thread_failure") {
             extra_env.insert("CLAUDE_AUTH_FAIL_WORKER_THREAD".into(), "1".into());
         }
@@ -1221,6 +1258,17 @@ mod tests {
     }
 
     #[test]
+    fn a_lagging_output_reader_never_turns_a_post_handoff_exit_into_a_handoff_failure() {
+        // The reader processes each line 100 ms late, so the child has exited long before the
+        // hand-off line is classified. Classification must wait for end-of-output.
+        let (_fixture, error) = login_error("login_exit_after_handoff_slow_reader");
+        assert_eq!(
+            error,
+            ClaudeAccountAuthError::LoginExited { exit_code: Some(4) }
+        );
+    }
+
+    #[test]
     fn login_rejected_by_claudes_command_parser_reports_unsupported_auth_command() {
         let (_fixture, error) = login_error("login_unknown_option");
         assert_eq!(error, ClaudeAccountAuthError::UnsupportedAuthCommand);
@@ -1412,7 +1460,7 @@ mod tests {
                 std::thread::sleep(Duration::from_secs(60));
             }
             "login" if scenario == "login_exit_before_handoff" => std::process::exit(3),
-            "login" if scenario == "login_exit_after_handoff" => {
+            "login" if scenario.starts_with("login_exit_after_handoff") => {
                 println!("Opening browser to sign in…");
                 println!("If the browser didn't open, visit: https://example.test/never-real");
                 std::process::exit(4);
