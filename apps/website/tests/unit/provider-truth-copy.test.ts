@@ -158,6 +158,36 @@ describe("provider support status", () => {
   });
 });
 
+// B5 staging/b5: crates/providers/src/claude/mod.rs (2.1.282 up to 2.2.0), codex/mod.rs and
+// gemini/mod.rs (VersionWindow floors 0.155.1, 0.156.0, 0.157.0, 0.158.0 and 0.61.0).
+describe("supported provider CLI versions", () => {
+  it("names the certified release lines in the provider docs", async () => {
+    const copy = text(await render(ProvidersDocs, "/docs/providers"));
+    expect(copy).toContain(
+      "Claude Code 2.1.282 or a later 2.1 release, Codex CLI 0.155.1 or a later release in the 0.155 to 0.158 lines, and Gemini CLI 0.61. Pre-release builds aren't supported.",
+    );
+    expect(copy).toContain("a message that names the supported versions and how to install one");
+  });
+});
+
+// B5 Switch Accounts: AccountSwitcher.tsx, RebindThreadDialog.tsx, NewThread.tsx and
+// ProviderAccountsView.tsx on staging/b5.
+describe("provider accounts", () => {
+  it("describe several accounts, workspace defaults and confirmed switching", async () => {
+    const copy = text(await render(ProvidersDocs, "/docs/providers"));
+    expect(copy).toContain("You can add more than one account for each provider");
+    expect(copy).toContain(
+      "Set default chooses the account new threads use where a workspace has no default of its own",
+    );
+    expect(copy).toContain("Connect another account adds an account and starts its sign-in");
+    expect(copy).toContain("Gemini CLI accounts show the Google email they are signed in with.");
+    expect(copy).toContain("Remember these accounts for this workspace");
+    expect(copy).toContain("never changes account on its own, even when you change the default");
+    expect(copy).toContain("KalCode asks you to confirm first");
+    expect(copy).toContain("only future messages use the new account, starting a new provider session");
+  });
+});
+
 describe("credential storage", () => {
   it("puts KalCode's own session in the OS credential store and provider sign-ins with the provider", async () => {
     const copy = text(await render(LocalFirstDocs, "/docs/local-first"));

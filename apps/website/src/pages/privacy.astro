@@ -89,7 +89,9 @@ const sender = EMAIL_FROM.replace(/^.*<|>$/g, "");
         This site never uses your microphone. In the KalCode app,
         {kalvoiceShipped ? "KalVoice" : "KalVoice (in development)"} transcribes dictation on your
         device. Voice audio is held in memory only while it is transcribed, then discarded. It is not
-        retained, not uploaded, and never reaches us or this site. The speech model is downloaded only if you agree to it.
+        retained, not uploaded, and never reaches us or this site. The app downloads its default speech
+        model from kalcoded.com by itself; that download sends no audio or text, and if you remove the
+        model, the app doesn't download it again on its own.
       </p>
       <p>
         KalVoice interprets commands on your device. It never uses the AI providers you connected, or

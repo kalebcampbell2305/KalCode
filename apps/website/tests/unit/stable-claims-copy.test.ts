@@ -20,7 +20,9 @@ import ProvidersDocs from "../../src/pages/docs/providers.astro";
 import Home from "../../src/pages/index.astro";
 import KalVoicePage from "../../src/pages/kalvoice.astro";
 import Pricing from "../../src/pages/pricing.astro";
+import Privacy from "../../src/pages/privacy.astro";
 import Product from "../../src/pages/product.astro";
+import Security from "../../src/pages/security.astro";
 import Updates from "../../src/pages/updates.astro";
 
 beforeEach(() => Object.assign(fixture.manifest, structuredClone(publishedManifest)));
@@ -98,6 +100,76 @@ describe.each(PAGES_UNDER_TEST)("the $name", ({ component, path }) => {
     const html = await render(component, path);
     const copy = `${text(html)} ${metaDescription(html)}`;
     for (const pattern of [...GATED_CLAIMS, ...UNDERSTATEMENTS]) expect(copy).not.toMatch(pattern);
+  });
+});
+
+// Post-0.1.5 KalVoice and thread work (primary ruling on target/TERMINAL-KALVOICE-GAP.md): naming
+// raw terminals, passing context from one agent to another, rewriting prompts, fuzzy nicknames or
+// aliases, and the Session Locator (Gated on Stable) are not in 0.1.5.
+const NOT_IN_015 = [
+  /Session Locator/i,
+  /\bnam(e|es|ing) (your |a |the )?terminals?\b/i,
+  /\bterminals? by name\b/i,
+  /\b(pass|passes|passing|send|sends|sending|share|shares|sharing|hand|hands) (the )?context\b/i,
+  /\bcontext (from one|between|to another)\b/i,
+  /Context Drop/i,
+  /\b(rewrite|rewrites|rewriting|rephrase|rephrases|rephrasing|polish|polishes|polishing) (your |the )?prompts?\b/i,
+  /\b(aliases|nicknames?)\b/i,
+];
+
+// B5 zero-setup: the default English speech model downloads by itself after install, so no page may
+// still say it waits for consent or a setup step.
+const STALE_SPEECH_CONSENT = [
+  /downloaded only (after|if|with) (you agree|your consent)/i,
+  /only with your consent/i,
+  /Nothing is downloaded automatically/i,
+  /when you set up KalVoice/i,
+  /guided setup/i,
+];
+
+const B5_PAGES_UNDER_TEST = [
+  ...PAGES_UNDER_TEST,
+  { name: "security page", component: Security as Component, path: "/security" },
+  { name: "privacy page", component: Privacy as Component, path: "/privacy" },
+];
+
+describe.each(B5_PAGES_UNDER_TEST)("the $name for 0.1.5", ({ component, path }) => {
+  it("claims no post-0.1.5 voice or thread feature and no consent-gated speech download", async () => {
+    const html = await render(component, path);
+    const copy = `${text(html)} ${metaDescription(html)}`;
+    for (const pattern of [...NOT_IN_015, ...STALE_SPEECH_CONSENT]) expect(copy).not.toMatch(pattern);
+  });
+});
+
+// B5 voice-to-thread phrases, checked against crates/kalvoice/src/grammar_sessions.rs (lane B1) and
+// apps/desktop/src-tauri/src/{kalvoice_executor,session_resolver}.rs on staging/b5.
+describe("KalVoice voice-to-thread docs", () => {
+  it("lists only phrases the 0.1.5 grammar understands", async () => {
+    const docs = text(await render(KalVoiceDocs, "/docs/kalvoice"));
+    for (const phrase of [
+      "“Send that” sends what is in the focused thread's message box, and “Clear that” empties it without sending. Neither counts as a KalVoice Request.",
+      "“Tell Authentication to run the tests” or “Ask Research why the build failed” opens that thread",
+      "“Research on Gemini B”",
+      "“Which one — Release Windows or Release Mac?”",
+      "“What needs permission?”, “Open the one that failed” and “Go back”",
+      "“Tell it to continue”",
+      "KalVoice never sends to a thread that is waiting for your permission and never resumes a stopped thread.",
+      "In a terminal, KalVoice types your words but never presses Enter or runs a command.",
+    ]) {
+      expect(docs).toContain(phrase);
+    }
+  });
+
+  it("describes the automatic speech model and local intelligence preparation", async () => {
+    const docs = text(await render(KalVoiceDocs, "/docs/kalvoice"));
+    expect(docs).toContain("KalCode gets its default English speech model by itself the first time you open it");
+    expect(docs).toContain("verifies its signature and SHA-256 checksum before using it");
+    expect(docs).toContain("If you remove the model, KalCode doesn't download it again on its own.");
+    expect(docs).toContain("Once the speech model is ready, KalCode prepares that on-device runtime by itself");
+    expect(docs).toContain("Prepare local intelligence automatically");
+    expect(text(await render(Security, "/security"))).toContain(
+      "KalCode downloads its default speech model by itself from its signed component catalog",
+    );
   });
 });
 
