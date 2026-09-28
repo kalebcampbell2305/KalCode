@@ -30,9 +30,10 @@ const kalvoiceShipped = servedStableRelease(RELEASES) !== null;
   <p>
     Provider sign-ins are kept by each provider's own CLI, not by KalCode. Each provider account
     you add gets its own KalCode-managed provider profile on your device, and the provider keeps
-    that account's sign-in for that profile: Claude Code and Codex in their own credential storage,
-    and Gemini CLI in its own AES-256-GCM encrypted file, never in plaintext. KalCode never reads
-    or copies these credentials. Gemini derives its file's key from your computer and user names, so the file is
+    that account's sign-in for that profile. Claude Code and Codex keep their sign-in in their own
+    storage inside that profile, which can be an ordinary, unencrypted file (for example Codex's
+    auth.json). Gemini CLI keeps its sign-in in its own AES-256-GCM encrypted file, never in
+    plaintext. KalCode never reads or copies these credentials. Gemini derives its file's key from your computer and user names, so the file is
     kept out of plaintext but not away from other programs running as your user.
   </p>
 

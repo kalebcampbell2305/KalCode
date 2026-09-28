@@ -44,7 +44,7 @@ function wire(block: HTMLElement): void {
         app.state.dock === "none"
           ? "Dock closed."
           : tab === "browser"
-            ? "Browser docked: localhost:3000, a planned surface."
+            ? "Browser docked: localhost:3000."
             : "Dashboard docked.",
       );
     } else if (action === "permissions") {
