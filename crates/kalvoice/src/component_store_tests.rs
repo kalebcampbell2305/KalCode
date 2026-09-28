@@ -12,6 +12,75 @@ const NOW: i64 = 1_790_000_000;
 const KEY_ID: &str = "component-2026-1";
 
 #[test]
+fn app_data_initialization_preserves_existing_private_layout_and_contents() {
+    let temp = TempDir::new().expect("fixture");
+    let existing = test_directory(temp.path().join("app-data"));
+    for name in ["components", "catalog-cache", "catalog-floor-locks"] {
+        let child = existing.create_private_child(name).expect("existing child");
+        fs::write(child.path().join("retained"), b"retained authority").expect("retained bytes");
+    }
+    let initialized = TrustedComponentDirectory::initialize_private_app_data(existing.path())
+        .expect("initialize existing private root");
+    assert_eq!(initialized.identity, existing.identity);
+    assert_eq!(initialized.path(), existing.path());
+    existing.verify().expect("existing handle remains valid");
+    for name in ["components", "catalog-cache", "catalog-floor-locks"] {
+        assert_eq!(
+            fs::read(initialized.path().join(name).join("retained")).unwrap(),
+            b"retained authority"
+        );
+    }
+    assert!(!initialized.path().join(PRIVATE_COMPONENT_ROOT).exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn app_data_initialization_rejects_unsafe_roots_without_changing_them() {
+    use std::os::unix::fs::{PermissionsExt as _, symlink};
+    let temp = TempDir::new().expect("fixture");
+    let root = temp.path().join("unsafe");
+    fs::create_dir(&root).unwrap();
+    for mode in [0o775, 0o757, 0o777] {
+        fs::set_permissions(&root, fs::Permissions::from_mode(mode)).unwrap();
+        assert!(TrustedComponentDirectory::initialize_private_app_data(&root).is_err());
+        assert_eq!(
+            fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+            mode
+        );
+    }
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+    let linked = temp.path().join("linked");
+    symlink(&root, &linked).unwrap();
+    assert!(TrustedComponentDirectory::initialize_private_app_data(&linked).is_err());
+    assert_eq!(
+        fs::metadata(&root).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn app_data_initialization_rejects_replaced_anchor_before_permission_change() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let temp = TempDir::new().expect("fixture");
+    let root = temp.path().join("app-data");
+    fs::create_dir(&root).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+    let retained = AppDataDirectory::open_existing(&root).unwrap();
+    let displaced = temp.path().join("displaced");
+    fs::rename(&root, &displaced).unwrap();
+    fs::create_dir(&root).unwrap();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(retained.into_private().is_err());
+    for path in [&root, &displaced] {
+        assert_eq!(
+            fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+    }
+}
+
+#[test]
 fn private_directory_creation_preserves_existing_authority() {
     let temp = TempDir::new().expect("app data fixture");
     let root = TrustedComponentDirectory::create_private_root_under_app_data(temp.path())
@@ -93,6 +162,7 @@ fn app_data_rejects_group_write_and_foreign_ownership() {
     let root = fs::symlink_metadata("/").expect("root metadata");
     if root.uid() != effective_user_id() {
         assert!(!safe_app_data_directory(&root));
+        assert!(TrustedComponentDirectory::initialize_private_app_data("/").is_err());
     } else {
         use std::os::unix::ffi::OsStrExt as _;
         let foreign = temp.path().join("foreign");
@@ -105,6 +175,7 @@ fn app_data_rejects_group_write_and_foreign_ownership() {
         let metadata = fs::symlink_metadata(&foreign).expect("foreign metadata");
         assert!(!safe_app_data_directory(&metadata));
         assert!(!safe_store_directory(&metadata));
+        assert!(TrustedComponentDirectory::initialize_private_app_data(&foreign).is_err());
     }
 }
 

@@ -275,6 +275,24 @@ impl TrustedComponentDirectory {
         Ok(child)
     }
 
+    /// Initializes KalCode's existing per-user app-data root without relocating retained stores.
+    /// On Unix, only an owned, non-writable-by-others directory may be narrowed to owner-only
+    /// access. The change uses its retained no-follow handle, then rechecks the same identity.
+    /// Ordinary component directories must still use the non-repairing `open_existing` contract.
+    pub fn initialize_private_app_data(
+        path: impl AsRef<Path>,
+    ) -> Result<Self, ComponentStoreError> {
+        #[cfg(unix)]
+        {
+            AppDataDirectory::open_existing(path.as_ref())?.into_private()
+        }
+        #[cfg(not(unix))]
+        {
+            // Preserve existing Windows directory validation and storage layout unchanged.
+            Self::open_existing(path)
+        }
+    }
+
     pub fn open_existing(path: impl AsRef<Path>) -> Result<Self, ComponentStoreError> {
         let path = path.as_ref();
         let metadata = fs::symlink_metadata(path).map_err(storage)?;
@@ -345,6 +363,25 @@ struct AppDataDirectory {
 }
 
 impl AppDataDirectory {
+    #[cfg(unix)]
+    fn into_private(self) -> Result<TrustedComponentDirectory, ComponentStoreError> {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        self.verify()?;
+        // File::set_permissions uses the retained descriptor, never a path that could have
+        // been replaced after validation. Do not turn writable or foreign roots into trust.
+        self.anchor
+            .set_permissions(fs::Permissions::from_mode(0o700))
+            .map_err(storage)?;
+        let root = TrustedComponentDirectory {
+            path: Arc::new(self.path),
+            anchor: Arc::new(self.anchor),
+            identity: self.identity,
+        };
+        root.verify()?;
+        Ok(root)
+    }
+
     fn open_existing(path: &Path) -> Result<Self, ComponentStoreError> {
         let metadata = fs::symlink_metadata(path).map_err(storage)?;
         if !safe_app_data_directory(&metadata) {

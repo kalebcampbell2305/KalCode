@@ -582,8 +582,7 @@ impl KalVoiceComponentManager {
             host_local_reasoning_contract().ok_or(ComponentManagerError::CatalogUnavailable)?;
         let platform = host.runtime.platform;
         let arch = host.runtime.arch;
-        let root = TrustedComponentDirectory::open_existing(&state.paths.data_dir)
-            .map_err(|_| ComponentManagerError::StorageUnavailable)?;
+        let root = runtime_component_root(&state.paths.data_dir)?;
         let verifier = crate::kalvoice_component_trust::production_verifier()
             .map_err(|_| ComponentManagerError::CatalogInvalid)?;
         let track = CatalogFloorTrack::new(channel, platform, arch)
@@ -1350,6 +1349,13 @@ fn sync_parent(_directory: &Path) -> Result<(), ComponentManagerError> {
     Ok(())
 }
 
+fn runtime_component_root(
+    data_dir: &Path,
+) -> Result<TrustedComponentDirectory, ComponentManagerError> {
+    TrustedComponentDirectory::initialize_private_app_data(data_dir)
+        .map_err(|_| ComponentManagerError::StorageUnavailable)
+}
+
 #[cfg(test)]
 fn private_fixture_directory() -> std::io::Result<tempfile::TempDir> {
     let temp = tempfile::tempdir()?;
@@ -1365,6 +1371,49 @@ fn private_fixture_directory() -> std::io::Result<tempfile::TempDir> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn ordinary_macos_app_data_initializes_private_component_storage() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let temp = tempfile::tempdir().unwrap();
+        let data_dir = temp.path().join("com.kalcode.desktop");
+        // Reproduce ordinary macOS startup permissions even if the test runner has a
+        // restrictive umask. Never pre-tighten this fixture through the private helper.
+        fs::create_dir(&data_dir).unwrap();
+        fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            fs::metadata(&data_dir).unwrap().permissions().mode() & 0o777,
+            0o755
+        );
+        fs::write(data_dir.join("existing-state"), b"preserved").unwrap();
+
+        let root = runtime_component_root(&data_dir).expect("normal macOS app-data initializes");
+        assert_eq!(root.path(), fs::canonicalize(&data_dir).unwrap());
+        assert_eq!(
+            fs::metadata(root.path()).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        for name in [
+            "components",
+            "component-acquisition",
+            "catalog-cache",
+            "catalog-floor-locks",
+        ] {
+            let child = root.create_private_child(name).unwrap();
+            assert_eq!(child.path(), root.path().join(name));
+            assert_eq!(
+                fs::metadata(child.path()).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+        assert_eq!(
+            fs::read(data_dir.join("existing-state")).unwrap(),
+            b"preserved"
+        );
+        runtime_component_root(&data_dir).expect("restart reopens the same private root");
+    }
 
     #[test]
     fn capacity_rejection_reports_an_ended_attempt_with_retry_not_a_wait_queue() {
