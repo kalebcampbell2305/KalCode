@@ -1,4 +1,5 @@
-//! Account-isolated Codex launch policy for the exactly certified Codex CLI releases.
+//! Account-isolated Codex launch policy for the certified Codex CLI release lines
+//! ([`crate::codex::MANAGED_VERSIONS`]).
 //!
 //! A launch uses a dedicated `CODEX_HOME`, resets only that profile's known `config.toml`,
 //! forces the selected working directory to be untrusted with a complete inline TOML table,
@@ -534,12 +535,18 @@ mod tests {
         assert_eq!(std::fs::read(outside).expect("outside"), b"outside");
     }
 
-    /// Non-inference certification for the exact installed 0.157.0 release. This exercises the
-    /// official binary with synthetic homes and repository config only: no prompt, account read,
-    /// network request, or provider credential is involved.
+    /// Non-inference certification of one official Codex CLI release. This exercises the real
+    /// binary with synthetic homes and repository config only: no prompt, account read, network
+    /// request, or provider credential is involved.
+    ///
+    /// `KALCODE_CERTIFY_CODEX` names the executable or npm shim to certify (for example
+    /// `<scratch>/codex-0.158.0/node_modules/.bin/codex.cmd` after
+    /// `npm install --prefix <scratch>/codex-0.158.0 @openai/codex@0.158.0`); without it the
+    /// Codex on `PATH` is used. `KALCODE_CERTIFY_CODEX_VERSION`, when set, must equal the version
+    /// the binary reports.
     #[test]
-    #[ignore = "run explicitly when certifying installed Codex CLI 0.157.0"]
-    fn certifies_installed_codex_0_157_0_config_isolation() {
+    #[ignore = "run explicitly when certifying a Codex CLI release (KALCODE_CERTIFY_CODEX)"]
+    fn certifies_codex_config_isolation() {
         use crate::process::{ProcessSpec, run_probe};
         use std::time::Duration;
 
@@ -572,9 +579,12 @@ mod tests {
         source
             .vars
             .push(("CODEX_HOME".into(), ordinary_home.clone().into_os_string()));
-        let executable = source
-            .resolve_executable_only(&crate::catalog::codex_spec())
-            .expect("installed Codex executable");
+        let executable = match std::env::var_os("KALCODE_CERTIFY_CODEX") {
+            Some(path) => std::path::PathBuf::from(path),
+            None => source
+                .resolve_executable_only(&crate::catalog::codex_spec())
+                .expect("installed Codex executable"),
+        };
 
         let managed_home = profiles
             .profile_home(PROVIDER, &account_id)
@@ -593,8 +603,30 @@ mod tests {
         )
         .expect("managed launch");
 
+        let reported = run_probe(
+            &ProcessSpec {
+                program: executable.clone(),
+                args: vec!["--version".into()],
+                cwd: Some(managed_home.clone()),
+                env: prepared.env.clone(),
+            },
+            Duration::from_secs(15),
+            true,
+            16 * 1024,
+        )
+        .expect("bounded version probe");
+        assert!(reported.status.success(), "version probe failed");
+        let reported_version = reported
+            .stdout
+            .trim()
+            .strip_prefix("codex-cli ")
+            .unwrap_or_else(|| panic!("unexpected --version format: {}", reported.stdout.trim()));
+        if let Ok(expected) = std::env::var("KALCODE_CERTIFY_CODEX_VERSION") {
+            assert_eq!(reported_version, expected, "certifying the wrong binary");
+        }
+        eprintln!("certifying codex-cli {reported_version}");
         crate::codex::verify_managed_executable_version(&executable, &prepared.env, &managed_home)
-            .expect("exact installed version is certified");
+            .expect("installed version is in a certified line");
         let mut args = config_args(
             crate::codex::argv::POLICY_CONFIG
                 .iter()
@@ -636,9 +668,9 @@ mod tests {
         feature_args.extend([OsString::from("features"), "list".into()]);
         let features = run_probe(
             &ProcessSpec {
-                program: executable,
+                program: executable.clone(),
                 args: feature_args,
-                cwd: Some(workspace),
+                cwd: Some(workspace.clone()),
                 env: prepared.env.clone(),
             },
             Duration::from_secs(15),
@@ -658,6 +690,49 @@ mod tests {
                 .find(|line| line.split_whitespace().next() == Some(feature))
                 .unwrap_or_else(|| panic!("installed CLI did not report feature {feature}"));
             assert_eq!(line.split_whitespace().last(), Some("false"), "{line}");
+        }
+
+        // Every headless turn argv KalCode builds (`exec --json --ignore-rules
+        // --ignore-user-config`, the policy floor, the managed overrides, each permission mode and
+        // `exec resume`) must parse. `--help` replaces the stdin prompt marker so no turn starts.
+        use kalcode_contracts::permissions::PermissionMode;
+        let resume_id = kalcode_contracts::ids::new_id();
+        for mode in [
+            PermissionMode::Plan,
+            PermissionMode::Approve,
+            PermissionMode::Auto,
+            PermissionMode::Bypass,
+        ] {
+            for resume in [None, Some(resume_id.as_str())] {
+                let mut exec = crate::codex::argv::exec_args_with_overrides(
+                    mode,
+                    None,
+                    resume,
+                    &prepared.cli_overrides,
+                )
+                .expect("exec argv");
+                assert_eq!(exec.last().map(OsString::as_os_str), Some("-".as_ref()));
+                exec.pop();
+                exec.push("--help".into());
+                let parsed = run_probe(
+                    &ProcessSpec {
+                        program: executable.clone(),
+                        args: exec,
+                        cwd: Some(workspace.clone()),
+                        env: prepared.env.clone(),
+                    },
+                    Duration::from_secs(15),
+                    true,
+                    64 * 1024,
+                )
+                .expect("bounded exec argv probe");
+                assert!(
+                    parsed.status.success(),
+                    "{mode:?} resume={} argv rejected: {}",
+                    resume.is_some(),
+                    parsed.stderr
+                );
+            }
         }
 
         assert_eq!(

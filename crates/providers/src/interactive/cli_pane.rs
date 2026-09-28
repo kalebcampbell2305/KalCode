@@ -374,7 +374,7 @@ impl InteractiveCliProvider {
     }
 }
 
-/// Managed Gemini execution is pinned to the exact reviewed version as the headless adapter.
+/// Managed Gemini execution accepts the same certified release line as the headless adapter.
 /// Detection runs only against the selected account's sanitized environment.
 fn managed_gemini_executable(
     spec: &DetectionSpec,
@@ -396,13 +396,8 @@ fn managed_gemini_executable(
                         "Gemini CLI did not report a version KalCode can verify".into(),
                     )
                 })?;
-            if version == Version::new(0, 61, 0) {
-                Ok(executable)
-            } else {
-                Err(ProviderError::Start(format!(
-                    "managed Gemini profiles currently require certified Gemini CLI 0.61.0; found {version}"
-                )))
-            }
+            crate::gemini::require_managed_version(&version)?;
+            Ok(executable)
         }
         (DetectionState::Installed, Some(_)) => Err(ProviderError::NotAuthenticated),
         (DetectionState::NotInstalled, _) => Err(ProviderError::NotInstalled),

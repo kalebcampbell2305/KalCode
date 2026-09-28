@@ -4,7 +4,8 @@
 //! Sources (docs/PROVIDERS.md §11 [9][10][15][16]): the headless-mode guide and CLI reference
 //! (geminicli.com), and the stream-JSON event types the CLI defines in
 //! `packages/core/src/output/types.ts` (github.com/google-gemini/gemini-cli). Managed launches
-//! are certified against exact official package version 0.61.0. Deterministic tests use a fake
+//! accept the certified 0.61 line (0.61.0 or a later 0.61 patch release; see
+//! [`MANAGED_VERSIONS`]). Deterministic tests use a fake
 //! provider and recorded official-format fixtures; bounded real probes cover version detection
 //! and profile-home isolation without making an inference request.
 //!
@@ -45,6 +46,7 @@ use crate::managed::{
 };
 use crate::turns::{TurnAdapter, TurnLaunch, TurnNormalizer, TurnSession};
 use crate::version::Version;
+use crate::version_window::VersionWindow;
 
 const NOT_ENFORCED: &str = "Gemini Plan retains core project read tools, so it is not a \
                             secret-file privacy boundary. Managed profiles accept only the \
@@ -97,8 +99,27 @@ impl GeminiProvider {
     }
 }
 
-fn managed_version_supported(version: &Version) -> bool {
-    version == &Version::new(0, 61, 0)
+/// Certified Gemini CLI compatibility lines for managed profiles (see [`VersionWindow`]). The
+/// floor was certified on the official npm release with `tests/gemini_sign_in_real.rs`; add a
+/// line only after certifying its first release the same way.
+pub const MANAGED_VERSIONS: VersionWindow = VersionWindow {
+    cli_name: "Gemini CLI",
+    profile_name: "Gemini",
+    npm_package: "@google/gemini-cli",
+    floors: &[Version::new(0, 61, 0)],
+};
+
+/// The one predicate thread start, panes and sign-in use for managed Gemini.
+pub(crate) fn managed_version_supported(version: &Version) -> bool {
+    MANAGED_VERSIONS.supports(version)
+}
+
+pub(crate) fn require_managed_version(version: &Version) -> Result<(), ProviderError> {
+    if managed_version_supported(version) {
+        Ok(())
+    } else {
+        Err(ProviderError::Start(MANAGED_VERSIONS.refusal(version)))
+    }
 }
 
 fn managed_detection_env(
@@ -129,13 +150,8 @@ fn managed_executable(
                         "Gemini CLI did not report a version KalCode can verify".into(),
                     )
                 })?;
-            if managed_version_supported(&version) {
-                Ok(executable)
-            } else {
-                Err(ProviderError::Start(format!(
-                    "managed Gemini profiles currently require certified Gemini CLI 0.61.0; found {version}"
-                )))
-            }
+            require_managed_version(&version)?;
+            Ok(executable)
         }
         (DetectionState::Installed, Some(_)) => Err(ProviderError::NotAuthenticated),
         (DetectionState::NotInstalled, _) => Err(ProviderError::NotInstalled),
@@ -449,13 +465,47 @@ mod tests {
     }
 
     #[test]
-    fn managed_policy_accepts_only_the_certified_gemini_version() {
+    fn managed_policy_accepts_patch_releases_within_the_certified_gemini_line() {
         let version = |value| crate::version::Version::parse(value).expect("version");
         assert!(managed_version_supported(&version("0.61.0")));
-        assert!(!managed_version_supported(&version("0.61.9")));
-        assert!(!managed_version_supported(&version("0.60.99")));
-        assert!(!managed_version_supported(&version("0.62.0")));
-        assert!(!managed_version_supported(&version("1.61.0")));
+        assert!(managed_version_supported(&version("0.61.3")));
+        assert!(managed_version_supported(&version("0.61.9")));
+    }
+
+    #[test]
+    fn managed_policy_refuses_gemini_versions_outside_the_certified_line() {
+        let version = |value| crate::version::Version::parse(value).expect("version");
+        for refused in [
+            "0.60.99",
+            "0.62.0",
+            "0.61.0-preview.1",
+            "0.61.1-nightly.20260930.gabc",
+            "1.0.0",
+            "1.61.0",
+        ] {
+            assert!(
+                !managed_version_supported(&version(refused)),
+                "{refused} must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn gemini_refusal_names_the_found_version_the_supported_range_and_the_install_command() {
+        let found = crate::version::Version::parse("0.62.0").expect("version");
+        let ProviderError::Start(message) =
+            require_managed_version(&found).expect_err("0.62.0 must fail closed")
+        else {
+            panic!("unsupported Gemini CLI must be a start error");
+        };
+        assert!(message.contains("Gemini CLI 0.62.0"), "{message}");
+        assert!(message.contains("0.61.x"), "{message}");
+        assert!(
+            message.contains("npm install -g @google/gemini-cli@0.61.0"),
+            "{message}"
+        );
+        require_managed_version(&crate::version::Version::parse("0.61.3").expect("version"))
+            .expect("a 0.61 patch release starts");
     }
 
     #[test]

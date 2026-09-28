@@ -536,6 +536,46 @@ Windows verbatim `\\?\` `GEMINI_CLI_HOME`, so every path Gemini receives is in i
 skips system settings/defaults files whose directory is not administrator/root owned, so KalCode
 never relies on them for Gemini behavior.
 
+### 8.7.1 Managed-profile CLI versions (certified compatibility lines)
+
+Managed Codex and Gemini profiles depend on how the CLI loads configuration, credentials and
+flags, so they run only certified releases. Certification is per **compatibility line**:
+`MAJOR.MINOR` (for 0.x releases, `0.MINOR`). A version is accepted when it is a release build (no
+pre-release or build suffix) in a certified line and at or above that line's certified floor.
+Later patch releases in a certified line are accepted, so a provider patch release does not break
+signed-in users; a new line or major fails closed until its first release is certified on the real
+binary and added (`crates/providers/src/version_window.rs`, `codex::MANAGED_VERSIONS`,
+`gemini::MANAGED_VERSIONS`). Thread start, panes and sign-in use the same predicate. A refusal
+names the version found, the supported lines and the command that installs the newest certified
+release (`npm install -g @openai/codex@0.158.0`, `npm install -g @google/gemini-cli@0.61.0`).
+
+| CLI | Certified lines (floor) | Refused examples |
+| --- | --- | --- |
+| Codex CLI | 0.155 (0.155.1), 0.156 (0.156.0), 0.157 (0.157.0), 0.158 (0.158.0) | 0.155.0, 0.159.0, 0.158.0-alpha.15, 1.0.0 |
+| Gemini CLI | 0.61 (0.61.0) | 0.60.x, 0.62.0, 0.61.0-preview.1, 1.0.0 |
+
+Certification (2026-09-28) ran the official npm packages installed into scratch prefixes
+(`npm install --prefix <scratch>/codex-<v> @openai/codex@<v>`), never a global install, with no
+sign-in, prompt or quota. Codex: `codex::managed_policy::tests::certifies_codex_config_isolation`
+(`--version` format `codex-cli <v>`, MCP/feature isolation from standalone, profile and repository
+config, and every headless `exec --json --ignore-rules --ignore-user-config` argv, including
+`exec resume`, accepted) and `tests/codex_certification_real.rs` (production sign-in path under
+the guardian: version gate, app-server `initialize` reporting the managed `codexHome`,
+`account/read` shape, `account/login/start` returning an official-origin `authUrl` and a
+`loginId`, and `account/login/cancel`); select a binary with `KALCODE_CERTIFY_CODEX` and pin its
+version with `KALCODE_CERTIFY_CODEX_VERSION`. Gemini: `tests/gemini_sign_in_real.rs`
+(`KALCODE_REAL_GEMINI`).
+
+| Package | dist.integrity (sha512, prefix) | Result |
+| --- | --- | --- |
+| `@openai/codex@0.155.1` | `02fAAGyBtlA1zPjE` | PASS |
+| `@openai/codex@0.156.0` | `47dfpl2e8F47baSQ` | PASS |
+| `@openai/codex@0.156.1` | `nI1iVl/n2SO2lSvl` | PASS |
+| `@openai/codex@0.157.0` | `st1R2MhP3ndngOqj` | PASS |
+| `@openai/codex@0.157.1` | `qJ/UZ0bmYP+/Umav` | PASS |
+| `@openai/codex@0.158.0` | `GBhcKpQmVLsCtEP5` | PASS |
+| `@google/gemini-cli@0.61.0` | `dbQ9A0qBtFJNi6XB` | PASS |
+
 ### 8.8 `codex app-server` — the long-term Codex surface (plan)
 
 `codex app-server` speaks JSON-RPC 2.0 over stdio with `thread/start`, `thread/resume`,

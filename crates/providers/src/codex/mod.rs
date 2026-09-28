@@ -31,24 +31,38 @@ use crate::managed::{
 };
 use crate::turns::{TurnAdapter, TurnLaunch, TurnNormalizer, TurnSession};
 use crate::version::Version;
+use crate::version_window::VersionWindow;
 
-const CERTIFIED_MANAGED_VERSIONS: &[Version] = &[Version::new(0, 155, 1), Version::new(0, 157, 0)];
+/// Certified Codex CLI compatibility lines for managed profiles (see [`VersionWindow`]). Each
+/// floor was certified on the official npm release with the real-binary isolation and
+/// app-server protocol checks (`managed_policy::certifies_codex_config_isolation`,
+/// `tests/codex_certification_real.rs`); docs/PROVIDERS.md records the evidence. Add a line only
+/// after certifying its first release the same way.
+pub const MANAGED_VERSIONS: VersionWindow = VersionWindow {
+    cli_name: "Codex CLI",
+    profile_name: "Codex",
+    npm_package: "@openai/codex",
+    floors: &[
+        Version::new(0, 155, 1),
+        Version::new(0, 156, 0),
+        Version::new(0, 157, 0),
+        Version::new(0, 158, 0),
+    ],
+};
 
 fn managed_version_supported(version: &Version) -> bool {
-    CERTIFIED_MANAGED_VERSIONS.contains(version)
+    MANAGED_VERSIONS.supports(version)
 }
 
 fn require_managed_version(version: &Version) -> Result<(), ProviderError> {
     if managed_version_supported(version) {
         Ok(())
     } else {
-        Err(ProviderError::Start(format!(
-            "managed Codex profiles require a certified Codex CLI version (0.155.1 or 0.157.0); found {version}"
-        )))
+        Err(ProviderError::Start(MANAGED_VERSIONS.refusal(version)))
     }
 }
 
-/// Verifies an already-resolved Codex executable against the exact managed-profile allowlist.
+/// Verifies an already-resolved Codex executable against the managed-profile version window.
 /// Authentication uses this before app-server startup because an unauthenticated profile cannot
 /// use the ordinary detection path's login-status probe.
 #[cfg(test)]
@@ -196,9 +210,10 @@ pub(crate) fn usable_executable(
     }
 }
 
-/// Resolves Codex only when its complete managed-profile/config loading behavior matches the
-/// exact version certified by the isolation policy. Later versions require an explicit review;
-/// a minimum-version check is insufficient for this security boundary.
+/// Resolves Codex only when its version is in a compatibility line certified by the isolation
+/// policy ([`MANAGED_VERSIONS`]). Patch releases within a certified line are accepted; a new line
+/// requires certification first, since a minimum-version check is insufficient for this security
+/// boundary. Sign-in uses the same predicate ([`verify_managed_executable_version_guarded`]).
 pub(crate) fn managed_executable(
     spec: &DetectionSpec,
     env: &DetectEnv,
@@ -449,15 +464,134 @@ mod tests {
     }
 
     #[test]
-    fn managed_policy_accepts_only_the_certified_codex_version() {
+    fn managed_policy_accepts_patch_releases_within_certified_codex_lines() {
         let version = |value| Version::parse(value).expect("version");
-        assert!(managed_version_supported(&version("0.155.1")));
-        assert!(!managed_version_supported(&version("0.155.0")));
-        assert!(!managed_version_supported(&version("0.155.2")));
-        assert!(managed_version_supported(&version("0.157.0")));
-        assert!(!managed_version_supported(&version("0.156.0")));
-        assert!(!managed_version_supported(&version("0.157.1")));
-        assert!(!managed_version_supported(&version("1.155.1")));
+        for supported in [
+            "0.155.1", "0.155.2", "0.156.0", "0.156.1", "0.156.7", "0.157.0", "0.157.1", "0.158.0",
+            "0.158.4",
+        ] {
+            assert!(
+                managed_version_supported(&version(supported)),
+                "{supported} is in a certified line at or above its floor"
+            );
+            require_managed_version(&version(supported)).expect("supported version starts");
+        }
+    }
+
+    #[test]
+    fn managed_policy_refuses_codex_versions_outside_certified_lines() {
+        let version = |value| Version::parse(value).expect("version");
+        for refused in [
+            "0.154.9",
+            "0.155.0",
+            "0.159.0",
+            "0.158.0-alpha.15",
+            "0.157.1-alpha.1",
+            "0.158.0+build.1",
+            "1.0.0",
+            "1.155.1",
+        ] {
+            assert!(
+                !managed_version_supported(&version(refused)),
+                "{refused} must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn codex_refusal_names_the_found_version_the_supported_range_and_the_install_command() {
+        let found = Version::parse("0.159.0").expect("version");
+        let ProviderError::Start(message) =
+            require_managed_version(&found).expect_err("0.159.0 must fail closed")
+        else {
+            panic!("unsupported Codex must be a start error");
+        };
+        assert!(message.contains("Codex CLI 0.159.0"), "{message}");
+        assert!(
+            message.contains("0.155.x (0.155.1 or later), 0.156.x, 0.157.x or 0.158.x"),
+            "{message}"
+        );
+        assert!(
+            message.contains("npm install -g @openai/codex@0.158.0"),
+            "{message}"
+        );
+
+        let pre_release = Version::parse("0.158.0-alpha.15").expect("version");
+        let ProviderError::Start(message) =
+            require_managed_version(&pre_release).expect_err("pre-release must fail closed")
+        else {
+            panic!("unsupported Codex must be a start error");
+        };
+        assert!(message.contains("0.158.0-alpha.15"), "{message}");
+    }
+
+    /// Writes a fake Codex that records its working directory and reports `version`.
+    fn fake_codex_reporting(dir: &Path, version: &str) -> PathBuf {
+        #[cfg(windows)]
+        {
+            let script = dir.join("codex-version.cmd");
+            std::fs::write(
+                &script,
+                format!(
+                    "@echo off
+cd > \"%CWD_MARKER%\"
+echo codex-cli {version}
+"
+                ),
+            )
+            .expect("version script");
+            script
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let script = dir.join("codex-version");
+            std::fs::write(
+                &script,
+                format!(
+                    "#!/bin/sh
+pwd > \"$CWD_MARKER\"
+printf 'codex-cli {version}\n'
+"
+                ),
+            )
+            .expect("version script");
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700))
+                .expect("executable version script");
+            script
+        }
+    }
+
+    #[test]
+    fn sign_in_version_probe_uses_the_same_line_policy_as_thread_start() {
+        let temp = tempfile::tempdir().expect("temp");
+        let neutral = temp.path().join("neutral");
+        std::fs::create_dir(&neutral).expect("neutral directory");
+        let source = DetectEnv::from_process();
+        let mut env = source.provider_env(&crate::env::EnvPolicy::BASE);
+        env.insert(
+            "CWD_MARKER".into(),
+            temp.path().join("cwd-marker").into_os_string(),
+        );
+        for (index, (reported, accepted)) in [
+            ("0.156.1", true),
+            ("0.157.1", true),
+            ("0.158.0", true),
+            ("0.159.0", false),
+            ("0.158.0-alpha.15", false),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let dir = temp.path().join(format!("fake-{index}"));
+            std::fs::create_dir(&dir).expect("fake directory");
+            let executable = fake_codex_reporting(&dir, reported);
+            let result = verify_managed_executable_version(&executable, &env, &neutral);
+            assert_eq!(result.is_ok(), accepted, "{reported}: {result:?}");
+            if let Err(ProviderError::Start(message)) = result {
+                assert!(message.contains(reported), "{message}");
+            }
+        }
     }
 
     #[test]

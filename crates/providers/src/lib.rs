@@ -38,6 +38,7 @@ pub mod process;
 pub mod registry;
 pub(crate) mod turns;
 pub mod version;
+pub mod version_window;
 
 pub use claude::ClaudeCodeProvider;
 pub use codex::CodexProvider;

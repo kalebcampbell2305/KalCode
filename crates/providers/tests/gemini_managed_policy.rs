@@ -562,7 +562,13 @@ fn managed_launch_rejects_an_unreviewed_gemini_version() {
         Err(error) => error,
     };
     assert!(
-        error.to_string().contains("certified Gemini CLI 0.61.0"),
+        error
+            .to_string()
+            .contains("Gemini CLI 0.62.0 isn't supported")
+            && error.to_string().contains("0.61.x")
+            && error
+                .to_string()
+                .contains("npm install -g @google/gemini-cli@0.61.0"),
         "{error}"
     );
 }

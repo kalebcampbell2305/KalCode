@@ -40,9 +40,6 @@ const VERSION_TIMEOUT: Duration = Duration::from_secs(15);
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 const TERMINATE_GRACE: Duration = Duration::from_millis(500);
 
-/// The managed Gemini version whose credential layout and startup sign-in KalCode certified.
-const CERTIFIED_VERSION: Version = Version::new(0, 61, 0);
-
 /// Gemini's own configuration directory below `GEMINI_CLI_HOME`.
 const GEMINI_DIR: &str = ".gemini";
 /// Gemini CLI 0.61.0's plaintext "Sign in with Google" cache (`Storage.getOAuthCredsPath`), used
@@ -576,10 +573,14 @@ fn verify_certified_version(
         crate::process::ProcessError::Spawn(_) => GeminiAccountAuthError::StartFailed,
         _ => GeminiAccountAuthError::ConnectionEnded,
     })?;
-    let found = Version::find_in(&output.stdout)
-        .filter(|version| version.suffix.is_empty())
-        .ok_or(GeminiAccountAuthError::UnsupportedVersion)?;
-    if !output.status.success() || found != CERTIFIED_VERSION {
+    check_reported_version(output.status.success(), &output.stdout)
+}
+
+/// Accepts a `--version` report only when the probe succeeded and the reported release passes the
+/// same managed-version predicate thread start uses.
+fn check_reported_version(succeeded: bool, stdout: &str) -> Result<(), GeminiAccountAuthError> {
+    let found = Version::find_in(stdout).ok_or(GeminiAccountAuthError::UnsupportedVersion)?;
+    if !succeeded || !crate::gemini::managed_version_supported(&found) {
         return Err(GeminiAccountAuthError::UnsupportedVersion);
     }
     Ok(())
@@ -777,6 +778,47 @@ mod tests {
             .profile_home("gemini-cli", account_id)
             .expect("home")
             .join(GEMINI_DIR)
+    }
+
+    #[test]
+    fn sign_in_version_check_accepts_patch_releases_in_the_certified_line() {
+        for reported in [
+            "0.61.0
+", "0.61.3
+",
+        ] {
+            assert_eq!(check_reported_version(true, reported), Ok(()), "{reported}");
+        }
+    }
+
+    #[test]
+    fn sign_in_version_check_refuses_versions_outside_the_certified_line() {
+        for reported in [
+            "0.60.9
+",
+            "0.62.0
+",
+            "0.61.0-preview.1
+",
+            "1.0.0
+",
+            "not a version
+",
+        ] {
+            assert_eq!(
+                check_reported_version(true, reported),
+                Err(GeminiAccountAuthError::UnsupportedVersion),
+                "{reported}"
+            );
+        }
+        assert_eq!(
+            check_reported_version(
+                false, "0.61.0
+"
+            ),
+            Err(GeminiAccountAuthError::UnsupportedVersion),
+            "a failed probe is never trusted"
+        );
     }
 
     #[test]

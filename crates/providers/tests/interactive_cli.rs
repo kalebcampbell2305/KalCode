@@ -496,7 +496,13 @@ fn managed_gemini_rejects_an_unreviewed_version_before_interactive_launch() {
     .expect("unreviewed version");
     let error = rejected_start(&rig, Some(new_id()));
     assert!(
-        error.to_string().contains("certified Gemini CLI 0.61.0"),
+        error
+            .to_string()
+            .contains("Gemini CLI 0.62.0 isn't supported")
+            && error.to_string().contains("0.61.x")
+            && error
+                .to_string()
+                .contains("npm install -g @google/gemini-cli@0.61.0"),
         "{error}"
     );
     assert!(
