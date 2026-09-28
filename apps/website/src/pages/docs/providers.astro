@@ -7,11 +7,11 @@ import Docs from "../../layouts/Docs.astro";
   lead="KalCode works with the AI coding tools you already use, on your own accounts. Connecting them is free on every plan."
 >
   <h2>Supported providers</h2>
-  <p>The first providers KalCode is being built to connect:</p>
+  <p>KalCode runs threads with these providers today:</p>
   <ul>
-    <li><strong>Claude Code</strong> — the local CLI, using your own Claude account or API key.</li>
-    <li><strong>Codex</strong> — the local CLI, with its documented approval and sandbox settings.</li>
-    <li><strong>Gemini CLI</strong> — the local CLI, with its documented non-interactive output modes.</li>
+    <li><strong>Claude Code</strong> — the local CLI, signed in with your own Claude account.</li>
+    <li><strong>Codex</strong> — the local CLI, signed in with your own personal ChatGPT plan, with its documented approval and sandbox settings.</li>
+    <li><strong>Gemini CLI</strong> — the local CLI, signed in with your own Google account, with its documented non-interactive output modes.</li>
   </ul>
   <p>
     More providers can be added later through a documented adapter contract. Each integration is
@@ -20,8 +20,8 @@ import Docs from "../../layouts/Docs.astro";
 
   <h2>How connections work</h2>
   <p>
-    KalCode uses only legitimate, documented integration methods: an authenticated local CLI,
-    documented sign-in flows, API keys you provide, or enterprise credentials. It never scrapes
+    KalCode uses only legitimate, documented integration methods: each provider's own local CLI,
+    signed in through that provider's official sign-in flow. It never scrapes
     browser credentials, copies hidden session credentials, or reverse-engineers private
     authentication.
   </p>
