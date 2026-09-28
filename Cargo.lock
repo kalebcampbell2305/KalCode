@@ -2779,6 +2779,7 @@ dependencies = [
  "kalcode-updater",
  "kalcode-utilities",
  "kalcode-workspace-ui",
+ "libc",
  "reqwest 0.12.28",
  "semver",
  "serde",

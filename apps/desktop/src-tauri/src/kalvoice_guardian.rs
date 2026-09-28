@@ -20,7 +20,9 @@ use kalcode_providers::process::{ProcessSpec, SupervisedChild};
 
 #[cfg(windows)]
 const MAX_TCP_TABLE_BYTES: u32 = 16 * 1024 * 1024;
-#[cfg(windows)]
+#[cfg(target_os = "macos")]
+const MAX_FD_LIST_BYTES: usize = 1024 * 1024;
+#[cfg(any(windows, target_os = "macos"))]
 const OWNER_PROBE_INTERVAL: Duration = Duration::from_millis(5);
 
 type RetainedMap = BTreeMap<u64, Arc<RetainedChild>>;
@@ -319,7 +321,7 @@ fn run_background_operation(
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn prove_established_server_owner(
     stream: &TcpStream,
     endpoint: SocketAddrV4,
@@ -344,7 +346,13 @@ fn prove_established_server_owner(
         return Err(GuardedWorkerError::LoopbackOwnerMismatch);
     }
     loop {
+        #[cfg(windows)]
         let owners = windows_established_tuple_owners(server, client)?;
+        // macOS has no system-wide owner table. The accepted socket enters the child's descriptor
+        // table only after accept(), so an empty result before the deadline is retried like a
+        // not-yet-visible Windows row; the LISTEN socket never matches the established tuple.
+        #[cfg(target_os = "macos")]
+        let owners = macos_established_tuple_owners(expected_pid, server, client)?;
         match owners.as_slice() {
             [pid] if *pid == expected_pid => return Ok(()),
             [] if Instant::now() < deadline => thread::sleep(OWNER_PROBE_INTERVAL),
@@ -440,14 +448,208 @@ fn windows_established_tuple_owners(
     Ok(owners)
 }
 
-#[cfg(not(windows))]
+/// Returns `pid` once per descriptor of the exact process that holds an ESTABLISHED IPv4 TCP
+/// socket whose local end is `server` and whose remote end is `client`.
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+fn macos_established_tuple_owners(
+    pid: u32,
+    server: SocketAddrV4,
+    client: SocketAddrV4,
+) -> Result<Vec<u32>, GuardedWorkerError> {
+    use std::ffi::{c_int, c_void};
+    use std::mem::{offset_of, size_of};
+    use std::ptr;
+
+    // <sys/proc_info.h> layouts that libc does not export. Only the TCP arm of `soi_proto` is
+    // read; the rest of that union (sized by `un_sockinfo`) stays opaque.
+    const PROC_PIDFDSOCKETINFO: c_int = 3;
+    const SOCKINFO_TCP: i32 = 2;
+    const TSI_S_ESTABLISHED: i32 = 4;
+    const INI_IPV4: u8 = 0x1;
+    const FD_LIST_HEADROOM: usize = 32;
+
+    #[repr(C)]
+    #[allow(dead_code)]
+    struct ProcFileInfo {
+        fi_openflags: u32,
+        fi_status: u32,
+        fi_offset: i64,
+        fi_type: i32,
+        fi_guardflags: u32,
+    }
+    #[repr(C)]
+    #[allow(dead_code)]
+    struct SockbufInfo {
+        sbi_cc: u32,
+        sbi_hiwat: u32,
+        sbi_mbcnt: u32,
+        sbi_mbmax: u32,
+        sbi_lowat: u32,
+        sbi_flags: i16,
+        sbi_timeo: i16,
+    }
+    #[repr(C)]
+    #[allow(dead_code)]
+    struct In4In6Addr {
+        i46a_pad32: [u32; 3],
+        i46a_addr4: u32,
+    }
+    #[repr(C)]
+    #[allow(dead_code)]
+    struct InSockInfo {
+        insi_fport: i32,
+        insi_lport: i32,
+        insi_gencnt: u64,
+        insi_flags: u32,
+        insi_flow: u32,
+        insi_vflag: u8,
+        insi_ip_ttl: u8,
+        rfu_1: u32,
+        insi_faddr: In4In6Addr,
+        insi_laddr: In4In6Addr,
+        insi_v4: u8,
+        insi_v6: [u32; 3],
+    }
+    #[repr(C)]
+    #[allow(dead_code)]
+    struct TcpSockInfo {
+        tcpsi_ini: InSockInfo,
+        tcpsi_state: i32,
+        tcpsi_timer: [i32; 4],
+        tcpsi_mss: i32,
+        tcpsi_flags: u32,
+        rfu_1: u32,
+        tcpsi_tp: u64,
+    }
+    #[repr(C)]
+    #[allow(dead_code)]
+    struct SocketInfo {
+        soi_stat: libc::vinfo_stat,
+        soi_so: u64,
+        soi_pcb: u64,
+        soi_type: i32,
+        soi_protocol: i32,
+        soi_family: i32,
+        soi_options: i16,
+        soi_linger: i16,
+        soi_state: i16,
+        soi_qlen: i16,
+        soi_incqlen: i16,
+        soi_qlimit: i16,
+        soi_timeo: i16,
+        soi_error: u16,
+        soi_oobmark: u32,
+        soi_rcv: SockbufInfo,
+        soi_snd: SockbufInfo,
+        soi_kind: i32,
+        rfu_1: u32,
+        soi_proto: TcpSockInfo,
+        soi_proto_rest: [u8; 528 - size_of::<TcpSockInfo>()],
+    }
+    #[repr(C)]
+    #[allow(dead_code)]
+    struct SocketFdInfo {
+        pfi: ProcFileInfo,
+        psi: SocketInfo,
+    }
+    const _: () = {
+        assert!(size_of::<InSockInfo>() == 80);
+        assert!(offset_of!(InSockInfo, insi_faddr) == 32);
+        assert!(offset_of!(InSockInfo, insi_laddr) == 48);
+        assert!(size_of::<TcpSockInfo>() == 120);
+        assert!(offset_of!(TcpSockInfo, tcpsi_state) == 80);
+        assert!(offset_of!(SocketInfo, soi_kind) == 232);
+        assert!(offset_of!(SocketInfo, soi_proto) == 240);
+        assert!(size_of::<SocketInfo>() == 768);
+        assert!(size_of::<SocketFdInfo>() == 792);
+    };
+
+    let raw_pid = c_int::try_from(pid).map_err(|_| GuardedWorkerError::TransportFailed)?;
+    // SAFETY: a null buffer is the documented size query and nothing is written.
+    let needed =
+        unsafe { libc::proc_pidinfo(raw_pid, libc::PROC_PIDLISTFDS, 0, ptr::null_mut(), 0) };
+    let needed = usize::try_from(needed).map_err(|_| GuardedWorkerError::TransportFailed)?;
+    let entry = size_of::<libc::proc_fdinfo>();
+    // Headroom covers descriptors opened after the size query; a completely filled buffer is
+    // treated as possibly truncated rather than as a complete listing.
+    let capacity = needed / entry + FD_LIST_HEADROOM;
+    let bytes = capacity * entry;
+    if needed == 0 || bytes > MAX_FD_LIST_BYTES {
+        return Err(GuardedWorkerError::TransportFailed);
+    }
+    let mut fds = vec![
+        libc::proc_fdinfo {
+            proc_fd: 0,
+            proc_fdtype: 0,
+        };
+        capacity
+    ];
+    // SAFETY: `fds` is writable for `bytes` bytes (bounded by MAX_FD_LIST_BYTES, so it fits a
+    // c_int) and the kernel does not retain the pointer.
+    let written = unsafe {
+        libc::proc_pidinfo(
+            raw_pid,
+            libc::PROC_PIDLISTFDS,
+            0,
+            fds.as_mut_ptr().cast::<c_void>(),
+            bytes as c_int,
+        )
+    };
+    let written = usize::try_from(written).map_err(|_| GuardedWorkerError::TransportFailed)?;
+    if written == 0 || written >= bytes || written % entry != 0 {
+        return Err(GuardedWorkerError::TransportFailed);
+    }
+    let expected_server_addr = u32::from_ne_bytes(server.ip().octets());
+    let expected_client_addr = u32::from_ne_bytes(client.ip().octets());
+    let expected_server_port = i32::from(server.port().to_be());
+    let expected_client_port = i32::from(client.port().to_be());
+    let info_size = size_of::<SocketFdInfo>() as c_int;
+    let mut owners = Vec::new();
+    for fd in &fds[..written / entry] {
+        if fd.proc_fdtype != libc::PROX_FDTYPE_SOCKET as u32 {
+            continue;
+        }
+        // SAFETY: SocketFdInfo is plain integer data, for which all-zero bytes are valid.
+        let mut info: SocketFdInfo = unsafe { std::mem::zeroed() };
+        // SAFETY: `info` is writable for exactly `info_size` bytes and is not retained.
+        let copied = unsafe {
+            libc::proc_pidfdinfo(
+                raw_pid,
+                fd.proc_fd,
+                PROC_PIDFDSOCKETINFO,
+                (&mut info as *mut SocketFdInfo).cast::<c_void>(),
+                info_size,
+            )
+        };
+        // A descriptor closed after the listing is evidence of nothing; skip it.
+        if copied != info_size {
+            continue;
+        }
+        let tcp = &info.psi.soi_proto;
+        let ini = &tcp.tcpsi_ini;
+        if info.psi.soi_kind == SOCKINFO_TCP
+            && tcp.tcpsi_state == TSI_S_ESTABLISHED
+            && ini.insi_vflag & INI_IPV4 != 0
+            && ini.insi_laddr.i46a_addr4 == expected_server_addr
+            && ini.insi_lport == expected_server_port
+            && ini.insi_faddr.i46a_addr4 == expected_client_addr
+            && ini.insi_fport == expected_client_port
+        {
+            owners.push(pid);
+        }
+    }
+    Ok(owners)
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn prove_established_server_owner(
     _stream: &TcpStream,
     _endpoint: SocketAddrV4,
     _expected_pid: u32,
     _deadline: Instant,
 ) -> Result<(), GuardedWorkerError> {
-    // macOS uses its separately owned proc_pidinfo adapter. Other platforms remain fail-closed.
+    // No owner-proof adapter exists for other platforms; they remain fail-closed.
     Err(GuardedWorkerError::Unsupported)
 }
 
@@ -507,6 +709,185 @@ mod tests {
             ),
             Err(GuardedWorkerError::LoopbackOwnerMismatch)
         );
+        drop(stream);
+        server.join().expect("server");
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_tests {
+    use std::io::{BufRead as _, BufReader, ErrorKind, Read as _};
+    use std::net::{Ipv4Addr, TcpListener};
+    use std::process::{Child, Command, Stdio};
+
+    use super::*;
+
+    const FIXTURE_ENV: &str = "KALCODE_LOOPBACK_OWNER_FIXTURE";
+    const FIXTURE_TEST: &str = "kalvoice_guardian::macos_tests::loopback_owner_fixture_server";
+    // Every wait in these tests is bounded so a failure can never leave a hung run or process.
+    const FIXTURE_WAIT: Duration = Duration::from_secs(10);
+
+    /// Kills and reaps a spawned process on every exit path, including a failed assertion.
+    struct KillOnDrop(Child);
+
+    impl Drop for KillOnDrop {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    fn loopback_listener() -> (TcpListener, SocketAddrV4) {
+        let listener = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).expect("bind");
+        match listener.local_addr().expect("endpoint") {
+            SocketAddr::V4(endpoint) => (listener, endpoint),
+            SocketAddr::V6(_) => panic!("IPv4 fixture"),
+        }
+    }
+
+    /// Accepts one connection and holds it until the peer closes, all within `limit`.
+    fn serve_one(listener: &TcpListener, limit: Duration) {
+        let deadline = Instant::now() + limit;
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking listener");
+        let mut accepted = loop {
+            match listener.accept() {
+                Ok((accepted, _)) => break accepted,
+                Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "no connection before the deadline"
+                    );
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("accept: {error}"),
+            }
+        };
+        accepted.set_nonblocking(false).expect("blocking stream");
+        accepted
+            .set_read_timeout(Some(
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .max(Duration::from_millis(1)),
+            ))
+            .expect("read timeout");
+        let mut byte = [0_u8; 1];
+        let _ = accepted.read(&mut byte);
+    }
+
+    fn accept_one(listener: TcpListener) -> JoinHandle<()> {
+        thread::spawn(move || serve_one(&listener, FIXTURE_WAIT))
+    }
+
+    fn deadline() -> Instant {
+        Instant::now() + Duration::from_secs(2)
+    }
+
+    /// Re-executes this test binary as a separate process that owns a loopback server.
+    fn spawn_fixture_server() -> (KillOnDrop, SocketAddrV4) {
+        let mut child = KillOnDrop(
+            Command::new(std::env::current_exe().expect("test binary"))
+                .args([FIXTURE_TEST, "--exact", "--nocapture", "--test-threads=1"])
+                .env(FIXTURE_ENV, "1")
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("spawn fixture"),
+        );
+        let stdout = child.0.stdout.take().expect("fixture stdout");
+        let (sender, receiver) = mpsc::sync_channel(1);
+        // libtest prints "test <name> ... " before the body runs, so the marker can follow that
+        // prefix on the same line. The reader drains to EOF, which the kill-on-drop guarantees.
+        thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                if let Some((_, rest)) = line.split_once("fixture-port=") {
+                    let digits = rest
+                        .chars()
+                        .take_while(char::is_ascii_digit)
+                        .collect::<String>();
+                    let _ = sender.try_send(digits.parse::<u16>().ok());
+                }
+            }
+        });
+        let port = receiver
+            .recv_timeout(FIXTURE_WAIT)
+            .ok()
+            .flatten()
+            .expect("fixture port");
+        (child, SocketAddrV4::new(Ipv4Addr::LOCALHOST, port))
+    }
+
+    /// Inert unless re-executed by `spawn_fixture_server`.
+    #[test]
+    fn loopback_owner_fixture_server() {
+        if std::env::var_os(FIXTURE_ENV).is_none() {
+            return;
+        }
+        let (listener, endpoint) = loopback_listener();
+        println!("fixture-port={}", endpoint.port());
+        serve_one(&listener, FIXTURE_WAIT * 2);
+    }
+
+    #[test]
+    fn established_tuple_proof_finds_the_exact_server_owner() {
+        let (listener, endpoint) = loopback_listener();
+        let server = accept_one(listener);
+        let stream = TcpStream::connect(endpoint).expect("connect");
+        assert_eq!(
+            prove_established_server_owner(&stream, endpoint, std::process::id(), deadline()),
+            Ok(())
+        );
+        drop(stream);
+        server.join().expect("server");
+    }
+
+    #[test]
+    fn established_tuple_proof_rejects_an_impostor_pid() {
+        let (listener, endpoint) = loopback_listener();
+        let server = accept_one(listener);
+        // A live same-user process that does not hold the accepted socket.
+        let impostor = KillOnDrop(
+            Command::new("/bin/sleep")
+                .arg("30")
+                .spawn()
+                .expect("impostor"),
+        );
+        let stream = TcpStream::connect(endpoint).expect("connect");
+        assert_eq!(
+            prove_established_server_owner(&stream, endpoint, impostor.0.id(), deadline()),
+            Err(GuardedWorkerError::LoopbackOwnerMismatch)
+        );
+        drop(stream);
+        server.join().expect("server");
+    }
+
+    #[test]
+    fn established_tuple_proof_finds_a_spawned_child_server_and_rejects_the_client_process() {
+        let (child, endpoint) = spawn_fixture_server();
+        let stream = TcpStream::connect(endpoint).expect("connect");
+        // The child holds the LISTEN socket and the accepted server end; this process holds only
+        // the client end (local = client, remote = endpoint), which must never satisfy the proof.
+        assert_eq!(
+            prove_established_server_owner(&stream, endpoint, child.0.id(), deadline()),
+            Ok(())
+        );
+        assert_eq!(
+            prove_established_server_owner(&stream, endpoint, std::process::id(), deadline()),
+            Err(GuardedWorkerError::LoopbackOwnerMismatch)
+        );
+    }
+
+    #[test]
+    fn established_tuple_proof_rejects_an_exited_owner() {
+        let (listener, endpoint) = loopback_listener();
+        let server = accept_one(listener);
+        let mut exited = Command::new("/usr/bin/true").spawn().expect("spawn");
+        let pid = exited.id();
+        exited.wait().expect("reap");
+        let stream = TcpStream::connect(endpoint).expect("connect");
+        assert!(prove_established_server_owner(&stream, endpoint, pid, deadline()).is_err());
         drop(stream);
         server.join().expect("server");
     }

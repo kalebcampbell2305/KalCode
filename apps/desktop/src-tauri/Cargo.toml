@@ -67,6 +67,10 @@ webview2-com = "0.38.2"
 windows-core = "0.61.2"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock", "Win32_Security_Cryptography", "Win32_Security_Cryptography_Catalog", "Win32_Security_Cryptography_Sip", "Win32_Security_WinTrust", "Win32_Storage_FileSystem"] }
 
+# libproc bindings for the KalVoice loopback owner proof (kalvoice_guardian.rs).
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tempfile.workspace = true
 ed25519-dalek = "2"
