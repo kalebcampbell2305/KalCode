@@ -37,6 +37,13 @@ const STORAGE_ADMISSION_MARGIN: u64 = 64 * 1024 * 1024;
 const PRIVATE_COMPONENT_ROOT: &str = "kalvoice-components";
 const POINTER_PRIMARY: &str = "current.json";
 const POINTER_BACKUP: &str = "current.backup.json";
+/// Who authorized an installation, kept beside (never inside) `receipt.json`, so every receipt
+/// stays byte-for-byte in the shape older KalCode builds parse (their receipt parser refuses
+/// unknown fields; a lifecycle rollback must still load components installed by this build).
+/// Older builds never read this file. Informational only: never a trust input.
+const CONSENT_SIDECAR: &str = "consent.json";
+const CONSENT_SCHEMA: u32 = 1;
+const MAX_CONSENT_BYTES: u64 = 1024;
 
 pub const LOCAL_REASONING_RUNTIME_ID: &str = "kalvoice.runtime.llama-cpp";
 pub const LOCAL_REASONING_MODEL_ID: &str = "kalvoice.reasoner.qwen3-5-0-8b-q8";
@@ -428,8 +435,9 @@ pub enum ComponentReceiptStatus {
     Invalid,
 }
 
-/// Who authorized a component installation, persisted on its signed-store receipt. A receipt
-/// without the field (every receipt written before zero-setup provisioning) reads as `User`.
+/// Who authorized a component installation, persisted in a sidecar beside its signed-store
+/// receipt. A revision without a valid sidecar (every one written before zero-setup
+/// provisioning, or by an older build) reads as `User`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InstallConsent {
@@ -447,11 +455,15 @@ impl InstallConsent {
             Self::AutomaticDefault => "automatic_default",
         }
     }
+}
 
-    /// `User` is left off the receipt, so it stays byte-for-byte in the legacy shape.
-    const fn is_user(&self) -> bool {
-        matches!(self, Self::User)
-    }
+/// The consent sidecar, bound to the exact receipt bytes it describes.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ConsentSidecar {
+    schema_version: u32,
+    consent: InstallConsent,
+    receipt_sha256: String,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -584,8 +596,6 @@ struct Receipt {
     artifact_file: String,
     extracted_files: Vec<String>,
     entrypoint: Option<String>,
-    #[serde(default, skip_serializing_if = "InstallConsent::is_user")]
-    consent: InstallConsent,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -703,7 +713,7 @@ impl ComponentStore {
                     version: manifest.version.clone(),
                     sequence: manifest.sequence,
                     freshness: verified.freshness(),
-                    consent: receipt.consent,
+                    consent: read_install_consent(&revision),
                 }
             }
             _ => ComponentReceiptStatus::Invalid,
@@ -909,9 +919,23 @@ impl ComponentStore {
             artifact_file,
             extracted_files,
             entrypoint,
-            consent,
         };
-        write_json_synced(&staging.join("receipt.json"), &receipt)
+        let receipt_path = staging.join("receipt.json");
+        write_json_synced(&receipt_path, &receipt)?;
+        // `User` is the legacy default: only other grants need a sidecar. Written in staging, so
+        // it is published atomically with its revision.
+        if consent != InstallConsent::User {
+            let receipt_bytes = fs::read(&receipt_path).map_err(storage)?;
+            write_json_synced(
+                &staging.join(CONSENT_SIDECAR),
+                &ConsentSidecar {
+                    schema_version: CONSENT_SCHEMA,
+                    consent,
+                    receipt_sha256: hex_sha256(&receipt_bytes),
+                },
+            )?;
+        }
+        Ok(())
     }
 
     fn activate(
@@ -2141,6 +2165,30 @@ fn write_json_synced<T: Serialize>(path: &Path, value: &T) -> Result<(), Compone
         .map_err(storage)?;
     file.write_all(&bytes).map_err(storage)?;
     file.sync_all().map_err(storage)
+}
+
+/// The recorded consent of a revision: its sidecar when present, intact and bound to this exact
+/// receipt; otherwise `User` (legacy revisions and those written by older builds).
+fn read_install_consent(revision_dir: &Path) -> InstallConsent {
+    let Ok(sidecar) =
+        read_json_limited::<ConsentSidecar>(&revision_dir.join(CONSENT_SIDECAR), MAX_CONSENT_BYTES)
+    else {
+        return InstallConsent::User;
+    };
+    let bound = fs::read(revision_dir.join("receipt.json"))
+        .is_ok_and(|receipt| hex_sha256(&receipt) == sidecar.receipt_sha256);
+    if sidecar.schema_version == CONSENT_SCHEMA && bound {
+        sidecar.consent
+    } else {
+        InstallConsent::User
+    }
+}
+
+fn hex_sha256(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn read_json_limited<T: for<'de> Deserialize<'de>>(

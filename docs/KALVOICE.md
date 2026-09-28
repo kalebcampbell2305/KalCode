@@ -187,9 +187,10 @@ MIT (whisper.cpp and the converted OpenAI Whisper weights).
 **Zero setup.** After the runtime starts, KalCode fetches the default model (`tiny.en`) on its
 own through that same pipeline, with system-granted consent recorded as `automatic_default`
 (the only model it may fetch without a click; every other model keeps its download dialog). The
-consent kind (`automatic_default` or `user`) is persisted on the component's signed-store
-receipt; receipts written before this change have no such field and read as `user`, so they are
-still detected, loaded and reused. An installed speech model is always reused and never fetched
+consent kind is persisted in a sidecar (`consent.json`, bound to the receipt's SHA-256)
+beside the component's signed-store receipt; the receipt itself keeps exactly the legacy shape,
+so a lifecycle rollback to an older build still loads it. A revision without a valid sidecar
+(legacy, or written by an older build) reads as `user` and is still detected, loaded and reused. An installed speech model is always reused and never fetched
 again. If the owner removes (or
 cancels) a speech model, KalCode stores an opt-out and never re-downloads one on its own;
 Settings shows the manual Download again. Every component download waits (up to 10 minutes,

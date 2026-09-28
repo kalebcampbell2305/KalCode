@@ -1249,8 +1249,21 @@ fn receipts_under(root: &Path) -> Vec<std::path::PathBuf> {
     found
 }
 
+/// The receipt parser of KalCode 0.1.4 (and every build before zero-setup), field for field:
+/// it refuses unknown fields, so a receipt must never gain one.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[allow(dead_code)]
+struct LegacyReceipt {
+    schema_version: u32,
+    token: String,
+    artifact_file: String,
+    extracted_files: Vec<String>,
+    entrypoint: Option<String>,
+}
+
 #[test]
-fn install_consent_round_trips_on_the_receipt_and_legacy_receipts_read_as_user() {
+fn install_consent_lives_in_a_sidecar_and_every_receipt_keeps_the_legacy_shape() {
     let temp = TempDir::new().expect("temp");
     let key = signing_key(7);
     let root = temp.path().join("store");
@@ -1259,7 +1272,7 @@ fn install_consent_round_trips_on_the_receipt_and_legacy_receipts_read_as_user()
     let artifact = temp.path().join("model.gguf");
     write(&artifact, bytes);
 
-    // Zero-setup provisioning records its system-granted consent on the receipt.
+    // Zero-setup provisioning records its system-granted consent.
     let automatic = token(
         &key,
         "kalvoice.speech.auto",
@@ -1284,8 +1297,7 @@ fn install_consent_round_trips_on_the_receipt_and_legacy_receipts_read_as_user()
             ..
         }
     ));
-
-    // A dialog-consented install keeps the exact legacy receipt shape (no consent field).
+    // A dialog-consented install writes no sidecar.
     let user = token(
         &key,
         "kalvoice.speech.user",
@@ -1306,12 +1318,14 @@ fn install_consent_round_trips_on_the_receipt_and_legacy_receipts_read_as_user()
         }
     ));
 
+    // Every receipt, automatic or not, has exactly the legacy key set and parses with the
+    // 0.1.4 parser, so a lifecycle rollback still loads what this build installed.
     let receipts = receipts_under(&root);
     assert_eq!(receipts.len(), 2);
-    let mut consents = Vec::new();
+    let mut sidecars = 0;
     for path in &receipts {
-        let value: serde_json::Value =
-            serde_json::from_slice(&fs::read(path).expect("receipt")).expect("receipt json");
+        let raw = fs::read(path).expect("receipt");
+        let value: serde_json::Value = serde_json::from_slice(&raw).expect("receipt json");
         let mut keys = value
             .as_object()
             .expect("receipt object")
@@ -1319,37 +1333,122 @@ fn install_consent_round_trips_on_the_receipt_and_legacy_receipts_read_as_user()
             .cloned()
             .collect::<Vec<_>>();
         keys.sort();
-        consents.push(value.get("consent").cloned());
-        let mut legacy = vec![
-            "artifactFile",
-            "entrypoint",
-            "extractedFiles",
-            "schemaVersion",
-            "token",
-        ];
-        if value.get("consent").is_some() {
-            legacy.push("consent");
-            legacy.sort_unstable();
+        assert_eq!(
+            keys,
+            vec![
+                "artifactFile",
+                "entrypoint",
+                "extractedFiles",
+                "schemaVersion",
+                "token"
+            ]
+        );
+        serde_json::from_slice::<LegacyReceipt>(&raw).expect("the 0.1.4 parser accepts it");
+        let sidecar = path.with_file_name("consent.json");
+        if sidecar.exists() {
+            sidecars += 1;
+            let value: serde_json::Value =
+                serde_json::from_slice(&fs::read(&sidecar).expect("sidecar")).expect("json");
+            assert_eq!(value["consent"], "automatic_default");
         }
-        assert_eq!(keys, legacy);
     }
-    consents.sort_by_key(|consent| consent.is_some());
-    assert_eq!(
-        consents,
-        vec![None, Some(serde_json::Value::from("automatic_default"))]
-    );
+    assert_eq!(sidecars, 1, "only the automatic install has a sidecar");
 
-    // A pre-existing (legacy) receipt, reopened by a new store, is still installed and loads:
-    // the owner's installed model is reused, never fetched again.
-    drop(store);
-    let reopened = ComponentStore::new(test_directory(&root), verifier(&key), []).expect("reopen");
+    // A sidecar copied onto another receipt is not trusted: it is bound to its receipt bytes.
+    let automatic_receipt = receipts
+        .iter()
+        .find(|path| path.with_file_name("consent.json").exists())
+        .expect("automatic receipt")
+        .clone();
+    let user_receipt = receipts
+        .iter()
+        .find(|path| **path != automatic_receipt)
+        .expect("user receipt")
+        .clone();
+    let sidecar = automatic_receipt.with_file_name("consent.json");
+    fs::copy(&sidecar, user_receipt.with_file_name("consent.json")).expect("copy");
     assert!(matches!(
-        reopened.status(&user_selector, NOW),
+        store.status(&user_selector, NOW),
         ComponentReceiptStatus::Present {
             consent: InstallConsent::User,
             ..
         }
     ));
-    assert!(reopened.acquire(&user_selector, NOW).is_ok());
+
+    // Without its sidecar (a legacy revision, or one an older build left), a revision reads as
+    // User and is still installed and loadable: nothing is fetched again.
+    fs::remove_file(&sidecar).expect("remove sidecar");
+    drop(store);
+    let reopened = ComponentStore::new(test_directory(&root), verifier(&key), []).expect("reopen");
+    assert!(matches!(
+        reopened.status(&automatic_selector, NOW),
+        ComponentReceiptStatus::Present {
+            consent: InstallConsent::User,
+            ..
+        }
+    ));
     assert!(reopened.acquire(&automatic_selector, NOW).is_ok());
+    assert!(reopened.acquire(&user_selector, NOW).is_ok());
+}
+
+#[test]
+fn a_track_mixing_user_and_automatic_revisions_passes_history_validation_for_both_parsers() {
+    // 0.1.4 validates a track's history by reading EVERY revision's receipt: one receipt it
+    // could not parse would make the whole track (older user installs included) invalid.
+    let temp = TempDir::new().expect("temp");
+    let key = signing_key(7);
+    let root = temp.path().join("store");
+    let store = ComponentStore::new(test_directory(&root), verifier(&key), []).expect("store");
+    let artifact = temp.path().join("model.gguf");
+    let id = "kalvoice.speech.mixed";
+    write(&artifact, b"first revision");
+    store
+        .install_from_file(
+            &token(
+                &key,
+                id,
+                ComponentKind::Model,
+                "1.0.0",
+                1,
+                b"first revision",
+            ),
+            &artifact,
+            NOW,
+        )
+        .expect("user revision");
+    write(&artifact, b"second revision");
+    store
+        .install_from_file_with_consent(
+            &token(
+                &key,
+                id,
+                ComponentKind::Model,
+                "1.1.0",
+                2,
+                b"second revision",
+            ),
+            &artifact,
+            NOW,
+            InstallConsent::AutomaticDefault,
+        )
+        .expect("automatic revision");
+    let mixed = selector(id, ComponentKind::Model);
+    assert!(matches!(
+        store.status(&mixed, NOW),
+        ComponentReceiptStatus::Present {
+            sequence: 2,
+            consent: InstallConsent::AutomaticDefault,
+            ..
+        }
+    ));
+    let receipts = receipts_under(&root);
+    assert_eq!(receipts.len(), 2);
+    for path in &receipts {
+        serde_json::from_slice::<LegacyReceipt>(&fs::read(path).expect("receipt"))
+            .expect("the 0.1.4 parser accepts every revision in the track");
+        // The sidecar is a file at the revision root, never a directory 0.1.4 would scan.
+        let sidecar = path.with_file_name("consent.json");
+        assert!(!sidecar.is_dir());
+    }
+    assert!(store.acquire(&mixed, NOW).is_ok());
 }
