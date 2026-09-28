@@ -3,9 +3,13 @@
 //! spoken replies, and the runtime seams KalVoice drives.
 //!
 //! Push to talk: one key (F8 by default), registered through the official global-shortcut plugin
-//! only while a KalCode window has focus, so other apps keep the key. Press opens the
-//! microphone; release finishes recognition. A release that can't arrive (the window lost focus
-//! while the key was held) and the two-minute recording cap both finish the session.
+//! only while KalCode is the foreground app, so other apps keep the key. "Foreground" is the OS
+//! fact (on Windows, the foreground window belongs to this process; elsewhere, a KalCode window
+//! is key), not one webview's focus events, so focus moving into child views or KalCode's own
+//! dialogs keeps the key. Every lifecycle transition reconciles the registration
+//! ([`talk_key`]). Press opens the microphone; release finishes recognition. A release that
+//! can't arrive (KalCode left the foreground while the key was held) and the two-minute
+//! recording cap both finish the session.
 //!
 //! Runtimes KalVoice drives:
 //! - [`DesktopExecutor`](crate::kalvoice_executor::DesktopExecutor): workspaces and terminals
@@ -19,7 +23,7 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, LazyLock, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use kalcode_contracts::agent::{AgentProvider, ProviderId, SessionConfig};
@@ -42,7 +46,7 @@ use kalcode_kalvoice::shortcuts;
 use kalcode_kalvoice::signals::{KalVoiceSignal, KalVoiceStatus, ListeningSession, ShortcutIssue};
 use kalcode_kalvoice::speech_output::{SpeechOutput, spoken_text};
 use kalcode_kalvoice::stt::{ENGINE_AVAILABLE, RecognizerCache, SpeechRecognizer, SttError};
-use kalcode_kalvoice::voice::{RecognizerSource, VoiceController, VoiceError};
+use kalcode_kalvoice::voice::{RecognizerSource, VoiceController, VoiceError, VoiceResult};
 use kalcode_providers::ProviderRegistry;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, Webview};
@@ -55,6 +59,41 @@ use kalcode_kalvoice::signals::LocalReasoningDownload;
 #[path = "kalvoice_reasoning.rs"]
 mod reasoning;
 use reasoning::DesktopLocalInterpreter;
+#[path = "kalvoice_talk_key.rs"]
+mod talk_key;
+use talk_key::{Held, KeyRegistry, RegisterError, Status, TalkPrefs, Unavailable};
+
+/// The KalVoice signal channel of each subscribed webview (one per webview; a new subscription
+/// replaces it). App-level state managed in `lib.rs`, not part of a runtime: KalVoice runtimes
+/// are rebuilt per account generation (sign-in, restore, account change) on a background thread,
+/// and a page usually subscribes once, possibly before the first runtime is published. Keeping
+/// the channels here means every runtime generation reaches the same, already-subscribed UI.
+#[derive(Default)]
+pub struct KalVoiceSignals(Mutex<HashMap<String, Channel<KalVoiceSignal>>>);
+
+impl KalVoiceSignals {
+    fn subscribe(&self, webview: &str, channel: Channel<KalVoiceSignal>) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(webview.to_owned(), channel);
+    }
+
+    /// A page (re)load: that page's callbacks are gone; its next subscription replaces this.
+    fn unsubscribe(&self, webview: &str) {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(webview);
+    }
+
+    fn send(&self, signal: &KalVoiceSignal) {
+        broadcast(
+            &self.0.lock().unwrap_or_else(PoisonError::into_inner),
+            signal,
+        );
+    }
+}
 
 /// Tauri-managed state. `None` when the core failed to start or KalVoice is off in this
 /// build channel (then no shortcut is registered and every command explains why).
@@ -99,9 +138,15 @@ impl KalVoiceState {
 
 #[derive(Default)]
 struct Registered {
-    /// The push-to-talk key while it is registered (only while KalCode has focus).
+    /// The push-to-talk key while it is registered (only while KalCode is the foreground app).
     talk: Option<Shortcut>,
     issues: Vec<ShortcutIssue>,
+    /// The last talk-key preferences read successfully (enabled, accelerator), so one failed
+    /// read never drops or skips a working key.
+    prefs: Option<(bool, String)>,
+    /// The key state last told to the UI (active, reason code, accelerator), so repeated
+    /// transitions log and signal once per change.
+    last: Option<(bool, Option<&'static str>, String)>,
 }
 
 pub struct KalVoiceRuntime {
@@ -115,10 +160,9 @@ pub struct KalVoiceRuntime {
     /// The OS voice, started on first use.
     speech: std::sync::OnceLock<Arc<dyn SpeechOutput>>,
     microphone_supported: bool,
-    channels: Mutex<HashMap<String, Channel<KalVoiceSignal>>>,
+    /// The app-level signal channels (shared by every runtime generation).
+    signals: Arc<KalVoiceSignals>,
     shortcuts: Mutex<Registered>,
-    /// Whether a KalCode window has focus (the talk key is registered only then).
-    focused: AtomicBool,
     shutting_down: AtomicBool,
     background: Arc<BackgroundTasks>,
     latency: LatencyLog,
@@ -197,8 +241,7 @@ impl KalVoiceRuntime {
     }
 
     fn signal(&self, signal: &KalVoiceSignal) {
-        let mut channels = self.channels.lock().unwrap_or_else(PoisonError::into_inner);
-        channels.retain(|_, channel| channel.send(signal.clone()).is_ok());
+        self.signals.send(signal);
     }
 
     fn status(&self) -> Result<KalVoiceStatus, KalError> {
@@ -229,7 +272,7 @@ impl KalVoiceRuntime {
         })
     }
 
-    fn shutdown(&self, app: &AppHandle, timeout: Duration) -> bool {
+    fn shutdown(self: &Arc<Self>, app: &AppHandle, timeout: Duration) -> bool {
         let deadline = Instant::now() + timeout;
         self.shutting_down.store(true, Ordering::SeqCst);
         self.background.stop();
@@ -240,17 +283,17 @@ impl KalVoiceRuntime {
             .orchestrator
             .shutdown_local_interpretation(Duration::ZERO);
 
-        // Stop new shortcut events first, without holding the state lock over plugin work.
-        let shortcut = self
-            .shortcuts
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .talk
-            .take();
-        if let Some(shortcut) = shortcut {
-            let _ = app.global_shortcut().unregister(shortcut);
+        // Stop new shortcut events first: release the key on the main thread, where every
+        // registration change is serialized (a later queued reconcile sees `shutting_down`).
+        let released = sync_talk_key(app, self, "shutdown").is_some_and(|done| {
+            done.recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .is_ok()
+        });
+        if !released {
+            // Still queued: main-thread tasks run in order, so it releases the key before any
+            // successor runtime's first reconcile registers it.
+            tracing::warn!(event = "kalvoice.ptt_listener_release_pending");
         }
-        self.focused.store(false, Ordering::SeqCst);
 
         self.voice.cancel(None);
         if let Some(speech) = self.speech.get() {
@@ -270,10 +313,6 @@ impl KalVoiceRuntime {
         if downloads_settled && background_settled && local_settled && reasoning_settled {
             self.recognizers.shutdown();
         }
-        self.channels
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clear();
         downloads_settled && background_settled && local_settled && reasoning_settled
     }
 }
@@ -626,10 +665,8 @@ pub fn init(
         Arc::new(MicrophoneSource),
         recognizers.clone(),
     );
-    let focused = app
-        .get_webview_window("main")
-        .and_then(|w| w.is_focused().ok())
-        .unwrap_or(false);
+    #[cfg(not(windows))]
+    seed_window_focus(app);
     let runtime = Arc::new(KalVoiceRuntime {
         providers,
         orchestrator,
@@ -640,9 +677,10 @@ pub fn init(
         recognizers,
         speech: std::sync::OnceLock::new(),
         microphone_supported: cfg!(any(windows, target_os = "macos")),
-        channels: Mutex::new(HashMap::new()),
+        signals: app
+            .try_state::<Arc<KalVoiceSignals>>()
+            .map_or_else(Arc::default, |signals| signals.inner().clone()),
         shortcuts: Mutex::new(Registered::default()),
-        focused: AtomicBool::new(focused),
         shutting_down: AtomicBool::new(false),
         background: Arc::new(BackgroundTasks::default()),
         latency: LatencyLog::new(200),
@@ -659,8 +697,7 @@ pub fn init(
                 });
             }
         }));
-    refresh_talk_key(app, &runtime);
-    follow_focus(app, &runtime);
+    sync_talk_key(app, &runtime, "runtime_started");
     keep_warm(&runtime);
     synchronize_usage(&runtime);
     KalVoiceState(Some(runtime), "")
@@ -708,85 +745,419 @@ fn keep_warm(runtime: &Arc<KalVoiceRuntime>) {
         });
 }
 
-/// Registers the talk key while KalCode has focus; releases it (and finishes any session whose
-/// key-up could now be missed) when focus goes elsewhere.
-fn follow_focus(app: &AppHandle, runtime: &Arc<KalVoiceRuntime>) {
-    let Some(window) = app.get_webview_window("main") else {
-        return;
-    };
-    let handle = app.clone();
-    let weak = Arc::downgrade(runtime);
-    window.on_window_event(move |event| {
-        let tauri::WindowEvent::Focused(focused) = event else {
-            return;
-        };
-        let Some(runtime) = weak.upgrade() else {
-            return;
-        };
-        runtime.focused.store(*focused, Ordering::SeqCst);
-        if !*focused && let Some((id, mode)) = runtime.voice.listening() {
-            // The key-up will go to another app: finish with what was said so far.
-            finish_listening(runtime.clone(), id, mode);
+// ---------------------------------------------------------------------------------------------
+// Push-to-talk key lifecycle
+
+/// Each KalCode window's last reported focus, recorded from app start so a runtime built later
+/// knows the current state. The foreground source on macOS and Linux, where a window's focus is
+/// its key status and child webviews never take it.
+static WINDOW_FOCUS: LazyLock<Mutex<HashMap<String, bool>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Window events for every KalCode window (wired in `lib.rs`). A focus change anywhere is a
+/// trigger to re-derive the foreground state; on Windows the event's own value is not trusted,
+/// because WebView2 focus moves between child views without KalCode leaving the foreground.
+pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
+    match event {
+        tauri::WindowEvent::Focused(focused) => {
+            WINDOW_FOCUS
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert(window.label().to_owned(), *focused);
+            foreground_changed(window.app_handle(), "window_focus");
         }
-        refresh_talk_key(&handle, &runtime);
-    });
+        tauri::WindowEvent::Destroyed => {
+            WINDOW_FOCUS
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .remove(window.label());
+        }
+        _ => {}
+    }
 }
 
-/// Registers or releases the push-to-talk key to match focus and preferences. A key the OS
-/// refuses (another app registered it globally) is reported as an issue for Settings.
-fn refresh_talk_key(app: &AppHandle, runtime: &KalVoiceRuntime) {
-    let Ok(prefs) = runtime.orchestrator.preferences() else {
-        return;
-    };
-    let want = !runtime.shutting_down.load(Ordering::SeqCst)
-        && runtime.focused.load(Ordering::SeqCst)
-        && prefs.talk_enabled;
-    let manager = app.global_shortcut();
-    let mut registered = runtime
-        .shortcuts
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner);
-    let desired = parse_shortcut(&prefs.talk_key);
-    if (!want || registered.talk != desired)
-        && let Some(old) = registered.talk.take()
+/// A trusted page started (re)loading: its signal callbacks are gone until it subscribes again.
+pub fn on_page_load_started(app: &AppHandle, webview: &str) {
+    if let Some(signals) = app.try_state::<Arc<KalVoiceSignals>>() {
+        signals.unsubscribe(webview);
+    }
+}
+
+/// A (re)loaded trusted page starts its KalVoice UI fresh: re-derive the key's state.
+pub fn on_page_load(app: &AppHandle) {
+    foreground_changed(app, "page_load");
+}
+
+/// Starts following OS foreground changes (Windows), so the key is registered when KalCode comes
+/// to the front even if no webview reports a focus change. Called once from `setup`.
+pub fn watch_foreground(app: &AppHandle) {
+    #[cfg(windows)]
+    if !foreground::watch(app) {
+        tracing::warn!(event = "kalvoice.foreground_watch_unavailable");
+    }
+    #[cfg(not(windows))]
+    let _ = app;
+}
+
+/// Whether KalCode is the foreground app right now.
+fn kalcode_foreground() -> bool {
+    #[cfg(windows)]
     {
-        let _ = manager.unregister(old);
+        foreground::is_ours()
     }
-    if !want || registered.talk.is_some() {
-        return;
+    #[cfg(not(windows))]
+    {
+        WINDOW_FOCUS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .any(|focused| *focused)
     }
-    registered.issues.clear();
-    let result = desired
-        .ok_or_else(|| "KalCode couldn't read this key.".to_owned())
-        .and_then(|shortcut| {
-            manager
-                .register(shortcut)
-                .map(|()| shortcut)
-                .map_err(|_| "Another app is using this key. Choose a different one.".to_owned())
-        });
-    match result {
-        Ok(shortcut) => registered.talk = Some(shortcut),
-        Err(message) => {
-            tracing::warn!(event = "kalvoice.talk_key_unavailable");
-            registered.issues.push(ShortcutIssue {
-                mode: KalVoiceMode::Talk,
-                accelerator: prefs.talk_key.clone(),
-                message,
-            });
+}
+
+/// Records each window's current focus (called off the main thread at runtime start; accurate on
+/// macOS, where a window's focus is its key status).
+#[cfg(not(windows))]
+fn seed_window_focus(app: &AppHandle) {
+    let current: Vec<(String, bool)> = app
+        .windows()
+        .into_iter()
+        .map(|(label, window)| (label, window.is_focused().unwrap_or(false)))
+        .collect();
+    let mut focus = WINDOW_FOCUS.lock().unwrap_or_else(PoisonError::into_inner);
+    for (label, focused) in current {
+        if focused {
+            focus.insert(label, true);
+        } else {
+            focus.entry(label).or_insert(false);
         }
     }
 }
 
-/// Global shortcut handler (registered with the plugin in `lib.rs`): hold to talk.
-pub fn on_shortcut(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {
-    let pressed = Instant::now();
+/// KalCode entered or left the foreground (or may have): finish a held session whose key-up
+/// could now be missed, then reconcile the key for the current runtime.
+fn foreground_changed(app: &AppHandle, trigger: &'static str) {
     let Ok(state) = crate::runtime_coordinator::RuntimeState::<KalVoiceState>::from_app(app) else {
         return;
     };
     let Some(runtime) = state.0.clone() else {
         return;
     };
+    if !kalcode_foreground()
+        && let Some((id, mode)) = runtime.voice.listening()
+    {
+        // The key-up may go to another app: finish with what was said so far.
+        finish_listening(runtime.clone(), id, mode);
+    }
+    sync_talk_key(app, &runtime, trigger);
+}
+
+/// Reconciles the talk key on the main thread and returns a receiver for the result (it runs
+/// inline when already on the main thread). Every registration change goes through here, so
+/// changes are serialized on one thread and no KalVoice lock is held while waiting for the main
+/// thread. `None` when the main thread no longer accepts work (exiting). Never call it from the
+/// global-shortcut handler, where the plugin holds its own lock: use [`defer_talk_key_sync`].
+fn sync_talk_key(
+    app: &AppHandle,
+    runtime: &Arc<KalVoiceRuntime>,
+    trigger: &'static str,
+) -> Option<std::sync::mpsc::Receiver<Status<Shortcut>>> {
+    let (done, result) = std::sync::mpsc::sync_channel(1);
+    let handle = app.clone();
+    let runtime = runtime.clone();
+    app.run_on_main_thread(move || {
+        let status = reconcile_talk_key(&handle, &runtime, trigger);
+        let _ = done.send(status);
+    })
+    .ok()
+    .map(|()| result)
+}
+
+/// Reconciles and waits for the result (off the main thread, holding no KalVoice lock).
+fn settle_talk_key(app: &AppHandle, runtime: &Arc<KalVoiceRuntime>, trigger: &'static str) {
+    if let Some(done) = sync_talk_key(app, runtime, trigger)
+        && done.recv_timeout(Duration::from_secs(10)).is_err()
+    {
+        tracing::warn!(event = "kalvoice.ptt_listener_sync_pending", trigger);
+    }
+}
+
+/// Queues a reconcile to run after the current (plugin) callback returns.
+fn defer_talk_key_sync(app: &AppHandle, runtime: &Arc<KalVoiceRuntime>, trigger: &'static str) {
+    let app = app.clone();
+    let runtime = runtime.clone();
+    tauri::async_runtime::spawn(async move {
+        let _ = sync_talk_key(&app, &runtime, trigger);
+    });
+}
+
+/// The global-shortcut plugin as the reconciler's registry.
+struct PluginKeys<'a>(&'a tauri_plugin_global_shortcut::GlobalShortcut<tauri::Wry>);
+
+impl KeyRegistry<Shortcut> for PluginKeys<'_> {
+    fn register(&mut self, key: Shortcut) -> Result<(), RegisterError> {
+        self.0.register(key).map_err(|error| match error {
+            // The OS refused the key: on Windows "already registered"; on macOS the Carbon
+            // registration failed, almost always because another app holds the key.
+            tauri_plugin_global_shortcut::Error::GlobalHotkey(_) => RegisterError::InUse,
+            _ => RegisterError::Failed,
+        })
+    }
+    fn unregister(&mut self, key: Shortcut) -> Result<(), RegisterError> {
+        self.0.unregister(key).map_err(|_| RegisterError::Failed)
+    }
+    fn holds(&self, key: Shortcut) -> bool {
+        self.0.is_registered(key)
+    }
+}
+
+/// Main thread only (see [`sync_talk_key`]). Brings the registration to match foreground,
+/// preferences and lifecycle, records any issue for Settings, tells the UI when the key's state
+/// changes, and logs each change with a reason code (never user content).
+fn reconcile_talk_key(
+    app: &AppHandle,
+    runtime: &KalVoiceRuntime,
+    trigger: &'static str,
+) -> Status<Shortcut> {
+    let read = runtime.orchestrator.preferences();
+    let foreground = kalcode_foreground();
+    let shutting_down = runtime.shutting_down.load(Ordering::SeqCst);
+    let (prefs, mut held) = {
+        let mut registered = runtime
+            .shortcuts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        match &read {
+            Ok(prefs) => registered.prefs = Some((prefs.talk_enabled, prefs.talk_key.clone())),
+            Err(error) => {
+                tracing::warn!(
+                    event = "kalvoice.talk_key_prefs_unavailable",
+                    code = error.code
+                );
+            }
+        }
+        (registered.prefs.clone(), registered.talk)
+    };
+    let want = talk_key::want(
+        shutting_down,
+        foreground,
+        prefs.as_ref().map(|(enabled, accelerator)| TalkPrefs {
+            enabled: *enabled,
+            key: parse_shortcut(accelerator),
+        }),
+    );
+    if let talk_key::Want::Hold(key) = want
+        && held != Some(key)
+    {
+        tracing::info!(event = "kalvoice.ptt_listener_install_started", trigger);
+    }
+    // The plugin runs inline here (main thread); no KalVoice lock is held across it.
+    let outcome = talk_key::reconcile(&mut held, want, &mut PluginKeys(app.global_shortcut()));
+    if outcome.released.is_some() {
+        let reason = match outcome.result {
+            Status::Idle(skip) => skip.code(),
+            _ => "key_changed",
+        };
+        tracing::info!(event = "kalvoice.ptt_listener_disposed", reason, trigger);
+    }
+    let accelerator = prefs
+        .as_ref()
+        .map(|(_, accelerator)| accelerator.clone())
+        .unwrap_or_default();
+    let (active, reason) = match outcome.result {
+        Status::Holding(_, change) => {
+            if change != Held::Unchanged {
+                tracing::info!(
+                    event = "kalvoice.ptt_listener_installed",
+                    change = if change == Held::Adopted {
+                        "adopted"
+                    } else {
+                        "registered"
+                    },
+                    trigger
+                );
+            }
+            (true, None)
+        }
+        Status::Idle(skip) => (false, Some(skip.code())),
+        Status::Unavailable(Unavailable::Unparseable) => (false, Some("unparseable")),
+        Status::Unavailable(_) => (false, Some("os_refused")),
+    };
+    let changed = {
+        let mut registered = runtime
+            .shortcuts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        registered.talk = held;
+        match outcome.result {
+            Status::Holding(_, Held::Registered | Held::Adopted) => registered.issues.clear(),
+            Status::Unavailable(reason) if reason != Unavailable::ReleaseFailed => {
+                registered.issues = vec![ShortcutIssue {
+                    mode: KalVoiceMode::Talk,
+                    accelerator: accelerator.clone(),
+                    message: if reason == Unavailable::Unparseable {
+                        "KalCode couldn't read this key.".to_owned()
+                    } else {
+                        "Another app is using this key. Choose a different one.".to_owned()
+                    },
+                }];
+            }
+            _ => {}
+        }
+        let now = (active, reason, accelerator.clone());
+        let changed = registered.last.as_ref() != Some(&now);
+        registered.last = Some(now);
+        changed
+    };
+    if changed {
+        match outcome.result {
+            Status::Idle(skip) => tracing::info!(
+                event = "kalvoice.ptt_listener_skipped",
+                skip_reason = skip.code(),
+                trigger
+            ),
+            Status::Unavailable(unavailable) => tracing::warn!(
+                event = "kalvoice.talk_key_unavailable",
+                reason = unavailable.code(),
+                trigger
+            ),
+            Status::Holding(..) => {}
+        }
+        runtime.signal(&KalVoiceSignal::TalkKey {
+            active,
+            reason: reason.map(str::to_owned),
+            accelerator,
+        });
+    }
+    outcome.result
+}
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod foreground {
+    //! Windows foreground ownership: two read-only user32 queries, plus one out-of-context
+    //! foreground-change notification (no DLL injection, no input hook, no other app's content;
+    //! only whether the foreground window's process is this one).
+
+    use std::ffi::c_void;
+    use std::sync::OnceLock;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use tauri::AppHandle;
+
+    type Hwnd = *mut c_void;
+    type WinEventHook = *mut c_void;
+    type WinEventProc = unsafe extern "system" fn(WinEventHook, u32, Hwnd, i32, i32, u32, u32);
+
+    const EVENT_SYSTEM_FOREGROUND: u32 = 0x0003;
+    const WINEVENT_OUTOFCONTEXT: u32 = 0x0000;
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn GetForegroundWindow() -> Hwnd;
+        fn GetWindowThreadProcessId(window: Hwnd, process_id: *mut u32) -> u32;
+        fn SetWinEventHook(
+            event_min: u32,
+            event_max: u32,
+            module: *mut c_void,
+            callback: Option<WinEventProc>,
+            process_id: u32,
+            thread_id: u32,
+            flags: u32,
+        ) -> WinEventHook;
+    }
+
+    static APP: OnceLock<AppHandle> = OnceLock::new();
+    static WAS_OURS: AtomicBool = AtomicBool::new(false);
+
+    /// Whether the foreground window belongs to this process: the main window (whichever of
+    /// its webviews or child views has focus) or one of KalCode's own dialogs.
+    pub fn is_ours() -> bool {
+        // SAFETY: takes no arguments and returns a handle value (possibly null) that is only
+        // passed back to user32 below, never dereferenced.
+        let window = unsafe { GetForegroundWindow() };
+        if window.is_null() {
+            return false;
+        }
+        let mut process_id = 0_u32;
+        // SAFETY: `process_id` is a live local the call writes once; a stale window handle is
+        // reported as process 0 rather than faulting.
+        unsafe { GetWindowThreadProcessId(window, &raw mut process_id) };
+        process_id == std::process::id()
+    }
+
+    unsafe extern "system" fn on_foreground(
+        _hook: WinEventHook,
+        _event: u32,
+        _window: Hwnd,
+        _object: i32,
+        _child: i32,
+        _thread: u32,
+        _time: u32,
+    ) {
+        // Only transitions into or out of KalCode matter; foreground moves between other apps
+        // are ignored.
+        let ours = is_ours();
+        if WAS_OURS.swap(ours, Ordering::SeqCst) != ours
+            && let Some(app) = APP.get()
+        {
+            super::foreground_changed(app, "os_foreground");
+        }
+    }
+
+    /// Installs the notification on the calling (main) thread, whose message loop delivers it.
+    pub fn watch(app: &AppHandle) -> bool {
+        if APP.set(app.clone()).is_err() {
+            return true;
+        }
+        WAS_OURS.store(is_ours(), Ordering::SeqCst);
+        // SAFETY: `on_foreground` has the WINEVENTPROC signature and lives for the whole
+        // process; no module handle is passed (out-of-context delivery on this thread), and the
+        // hook stays installed until the process exits.
+        let hook = unsafe {
+            SetWinEventHook(
+                EVENT_SYSTEM_FOREGROUND,
+                EVENT_SYSTEM_FOREGROUND,
+                std::ptr::null_mut(),
+                Some(on_foreground),
+                0,
+                0,
+                WINEVENT_OUTOFCONTEXT,
+            )
+        };
+        !hook.is_null()
+    }
+}
+
+/// Global shortcut handler (registered with the plugin in `lib.rs`): hold to talk. It runs inside
+/// the plugin's callback (key-down on the main thread, key-up on a plugin thread), so it never
+/// changes registration directly.
+pub fn on_shortcut(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {
+    let pressed = Instant::now();
+    let key_state = match event.state {
+        ShortcutState::Pressed => "pressed",
+        ShortcutState::Released => "released",
+    };
+    tracing::info!(event = "kalvoice.ptt_callback_received", state = key_state);
+    let Ok(state) = crate::runtime_coordinator::RuntimeState::<KalVoiceState>::from_app(app) else {
+        tracing::info!(
+            event = "kalvoice.ptt_callback_ignored",
+            reason = "runtime_not_ready"
+        );
+        return;
+    };
+    let Some(runtime) = state.0.clone() else {
+        tracing::info!(
+            event = "kalvoice.ptt_callback_ignored",
+            reason = "kalvoice_unavailable"
+        );
+        return;
+    };
     if runtime.shutting_down.load(Ordering::SeqCst) {
+        tracing::info!(
+            event = "kalvoice.ptt_callback_ignored",
+            reason = "shutting_down"
+        );
         return;
     }
     let is_talk = runtime
@@ -797,21 +1168,42 @@ pub fn on_shortcut(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {
         .as_ref()
         == Some(shortcut);
     if !is_talk {
+        tracing::info!(
+            event = "kalvoice.ptt_callback_ignored",
+            reason = "not_talk_key"
+        );
         return;
     }
     match event.state {
         ShortcutState::Pressed => {
-            // Key repeat and a second press while listening are ignored (one session at a time).
-            if runtime.voice.listening().is_some() {
+            if !kalcode_foreground() {
+                // A stale registration: give the key back to the foreground app.
+                tracing::info!(
+                    event = "kalvoice.ptt_callback_ignored",
+                    reason = "not_focused"
+                );
+                defer_talk_key_sync(app, &runtime, "stale_key_press");
                 return;
             }
+            // Key repeat and a second press while listening are ignored (one session at a time).
+            if runtime.voice.listening().is_some() {
+                tracing::info!(
+                    event = "kalvoice.ptt_callback_ignored",
+                    reason = "already_listening"
+                );
+                return;
+            }
+            tracing::info!(event = "kalvoice.ptt_key_down");
+            // Bring the widget back if it was hidden, before listening starts or fails, so the
+            // listening state or the failure shows either way.
+            runtime.signal(&KalVoiceSignal::Reveal);
+            tracing::info!(event = "kalvoice.microphone_open_requested");
             if let Ok(id) = start_listening_at(&runtime, KalVoiceMode::Talk, false, pressed) {
-                // Bring the widget back if it was hidden; the key works either way.
-                runtime.signal(&KalVoiceSignal::Reveal);
                 watchdog(runtime.clone(), id);
             }
         }
         ShortcutState::Released => {
+            tracing::info!(event = "kalvoice.ptt_key_up");
             if let Some((id, mode)) = runtime.voice.listening() {
                 finish_listening(runtime, id, mode);
             }
@@ -863,6 +1255,14 @@ fn start_listening_at(
     }
     match runtime.voice.begin_at(mode, pressed) {
         Ok(session_id) => {
+            let key_down_to_mic_ms =
+                u64::try_from(pressed.elapsed().as_millis()).unwrap_or(u64::MAX);
+            tracing::info!(
+                event = "kalvoice.microphone_open_succeeded",
+                key_down_to_mic_ms
+            );
+            tracing::info!(event = "kalvoice.audio_capture_started");
+            tracing::info!(event = "kalvoice.ptt_state_listening");
             runtime.signal(&KalVoiceSignal::ListeningStarted {
                 session_id: session_id.clone(),
                 mode,
@@ -870,8 +1270,18 @@ fn start_listening_at(
             stream_level(runtime.clone(), session_id.clone());
             Ok(session_id)
         }
-        Err(VoiceError::AlreadyListening) => Err(VoiceError::AlreadyListening),
+        Err(VoiceError::AlreadyListening) => {
+            tracing::info!(
+                event = "kalvoice.microphone_open_failed",
+                code = VoiceError::AlreadyListening.code()
+            );
+            Err(VoiceError::AlreadyListening)
+        }
         Err(error) => {
+            tracing::info!(
+                event = "kalvoice.microphone_open_failed",
+                code = error.code()
+            );
             if !quiet {
                 runtime.signal(&KalVoiceSignal::ListeningFailed {
                     session_id: None,
@@ -911,31 +1321,120 @@ fn finish_listening(runtime: Arc<KalVoiceRuntime>, session_id: String, mode: Kal
         runtime.voice.cancel(Some(&session_id));
         return;
     };
+    tracing::info!(event = "kalvoice.audio_capture_stop_requested");
     runtime.signal(&KalVoiceSignal::Transcribing {
         session_id: session_id.clone(),
         mode,
     });
-    let _ = std::thread::Builder::new()
+    let fallback = (runtime.clone(), session_id.clone());
+    let spawned = std::thread::Builder::new()
         .name("kalvoice-transcribe".into())
         .spawn(move || {
             let _task = task;
-            let signal = match runtime.voice.end_timed(&session_id) {
+            // Ending stops the microphone, then recognizes what was captured.
+            tracing::info!(event = "kalvoice.stt_started");
+            let started = Instant::now();
+            let ended = runtime.voice.end_timed(&session_id);
+            let stt_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            tracing::info!(event = "kalvoice.audio_capture_stopped");
+            tracing::info!(event = "kalvoice.audio_capture_finalized");
+            let signal = match ended {
                 Ok(finished) => {
+                    tracing::info!(event = "kalvoice.stt_completed", outcome = "ok", stt_ms);
+                    match &finished.result {
+                        VoiceResult::Transcript { .. } => {
+                            tracing::info!(event = "kalvoice.transcript_ready");
+                        }
+                        VoiceResult::NothingHeard { .. } => {
+                            tracing::info!(event = "kalvoice.transcript_empty");
+                        }
+                    }
                     runtime.latency.record(finished.timings.clone());
                     KalVoiceSignal::Result {
                         result: finished.result,
                         timings: finished.timings,
                     }
                 }
-                Err(error) => KalVoiceSignal::ListeningFailed {
-                    session_id: Some(session_id),
-                    mode,
-                    code: error.code().to_owned(),
-                    message: error.to_string(),
-                },
+                Err(error) => {
+                    tracing::info!(
+                        event = "kalvoice.stt_completed",
+                        outcome = "failed",
+                        code = error.code(),
+                        stt_ms
+                    );
+                    KalVoiceSignal::ListeningFailed {
+                        session_id: Some(session_id),
+                        mode,
+                        code: error.code().to_owned(),
+                        message: error.to_string(),
+                    }
+                }
             };
             runtime.signal(&signal);
         });
+    if spawned.is_err() {
+        // Never leave the session open (every later key press would be ignored as "already
+        // listening" until the recording cap): discard it and say so.
+        let (runtime, session_id) = fallback;
+        tracing::warn!(event = "kalvoice.stt_thread_unavailable");
+        runtime.voice.cancel(Some(&session_id));
+        runtime.signal(&KalVoiceSignal::ListeningFailed {
+            session_id: Some(session_id),
+            mode,
+            code: "listening_failed".to_owned(),
+            message: "KalVoice couldn't finish listening. Try again.".to_owned(),
+        });
+    }
+}
+
+/// Sends a signal to every subscribed webview. A failed send keeps the channel: dropping it
+/// would silently orphan that window's KalVoice UI (no listening state, transcript or error)
+/// until it happened to subscribe again. A channel is replaced when its webview subscribes
+/// again (every page load does).
+fn broadcast(channels: &HashMap<String, Channel<KalVoiceSignal>>, signal: &KalVoiceSignal) {
+    let kind = signal_kind(signal);
+    let frequent = matches!(
+        signal,
+        KalVoiceSignal::Level { .. } | KalVoiceSignal::Partial { .. }
+    );
+    if channels.is_empty() && !frequent {
+        tracing::warn!(
+            event = "kalvoice.signal_dropped",
+            kind,
+            reason = "no_subscriber"
+        );
+    }
+    for channel in channels.values() {
+        if channel.send(signal.clone()).is_err() {
+            tracing::warn!(
+                event = "kalvoice.signal_dropped",
+                kind,
+                reason = "send_failed"
+            );
+        }
+    }
+}
+
+/// A signal's kind for logs (its serialized `kind` tag; never its content).
+fn signal_kind(signal: &KalVoiceSignal) -> &'static str {
+    match signal {
+        KalVoiceSignal::LocalReasoningStatus { .. } => "local_reasoning_status",
+        KalVoiceSignal::ListeningStarted { .. } => "listening_started",
+        KalVoiceSignal::Level { .. } => "level",
+        KalVoiceSignal::Partial { .. } => "partial",
+        KalVoiceSignal::Transcribing { .. } => "transcribing",
+        KalVoiceSignal::Result { .. } => "result",
+        KalVoiceSignal::ListeningFailed { .. } => "listening_failed",
+        KalVoiceSignal::Cancelled { .. } => "cancelled",
+        KalVoiceSignal::Reveal => "reveal",
+        KalVoiceSignal::ModelProgress { .. } => "model_progress",
+        KalVoiceSignal::ModelInstalled { .. } => "model_installed",
+        KalVoiceSignal::ModelFailed { .. } => "model_failed",
+        KalVoiceSignal::RequestStage { .. } => "request_stage",
+        KalVoiceSignal::RequestResolved { .. } => "request_resolved",
+        KalVoiceSignal::Speaking { .. } => "speaking",
+        KalVoiceSignal::TalkKey { .. } => "talk_key",
+    }
 }
 
 fn to_ipc(command: &'static str) -> impl Fn(KalError) -> IpcError {
@@ -976,30 +1475,48 @@ async fn blocking<T: Send + 'static>(
 
 /// Streams KalVoice signals to the calling webview (one channel per webview; replaced on
 /// resubscribe).
+///
+/// Needs no running KalVoice runtime (the account guard still requires an active account): the
+/// channel is app-level, so a page that subscribes before the runtime is published, or across a
+/// runtime rebuild, still receives every signal.
 #[tauri::command]
 pub fn kalvoice_subscribe(
-    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    app: AppHandle,
     webview: Webview,
-    state: crate::runtime_coordinator::RuntimeState<KalVoiceState>,
+    signals: tauri::State<'_, Arc<KalVoiceSignals>>,
     on_signal: Channel<KalVoiceSignal>,
 ) -> Result<(), IpcError> {
-    _runtime_access.revalidate()?;
-    let runtime = state.runtime()?;
-    runtime
-        .channels
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .insert(webview.label().to_owned(), on_signal);
+    signals.subscribe(webview.label(), on_signal);
+    let runtime = crate::runtime_coordinator::RuntimeState::<KalVoiceState>::from_app(&app)
+        .ok()
+        .and_then(|state| state.0.clone());
+    tracing::info!(
+        event = "kalvoice.subscribed",
+        runtime_ready = runtime.is_some()
+    );
+    if let Some(runtime) = runtime {
+        // Tell the new subscriber the key's current state, re-derived now (a fresh page).
+        runtime
+            .shortcuts
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .last = None;
+        sync_talk_key(&app, &runtime, "subscribe");
+    }
     Ok(())
 }
 
 #[tauri::command(async)]
 pub fn kalvoice_status(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    app: AppHandle,
     state: crate::runtime_coordinator::RuntimeState<KalVoiceState>,
 ) -> Result<KalVoiceStatus, IpcError> {
     _runtime_access.revalidate()?;
-    state.runtime()?.status().map_err(to_ipc("kalvoice_status"))
+    let runtime = state.runtime()?;
+    // Re-derive the key too; a change arrives as a `talk_key` signal.
+    sync_talk_key(&app, runtime, "status");
+    runtime.status().map_err(to_ipc("kalvoice_status"))
 }
 
 /// Handles one command bar request. Spoken replies (when enabled) read the result aloud.
@@ -1049,10 +1566,34 @@ pub async fn kalvoice_talk(
                 stage,
             });
         };
-        let talked = runtime
-            .orchestrator
-            .talk(request, &on_stage)
-            .map_err(to_ipc("kalvoice_talk"))?;
+        tracing::info!(event = "kalvoice.command_route_started");
+        let started = Instant::now();
+        let talked = runtime.orchestrator.talk(request, &on_stage);
+        let route_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        match &talked {
+            Ok(talk) => {
+                tracing::info!(
+                    event = "kalvoice.command_route_matched",
+                    route = match talk.route {
+                        kalcode_contracts::kalvoice::TalkRoute::Command => "command",
+                        kalcode_contracts::kalvoice::TalkRoute::Dictation => "dictation",
+                        kalcode_contracts::kalvoice::TalkRoute::Request => "request",
+                    }
+                );
+                tracing::info!(
+                    event = "kalvoice.command_executed",
+                    outcome = "ok",
+                    route_ms
+                );
+            }
+            Err(error) => tracing::info!(
+                event = "kalvoice.command_executed",
+                outcome = "failed",
+                code = error.code,
+                route_ms
+            ),
+        }
+        let talked = talked.map_err(to_ipc("kalvoice_talk"))?;
         runtime.latency.record_recognized(talked.recognized_ms);
         if let Some(response) = &talked.response {
             speak_reply(&runtime, response);
@@ -1168,7 +1709,7 @@ pub async fn kalvoice_preferences_update(
             .update_preferences(&patch)
             .map_err(|e| e.to_ipc())?;
         if saved.talk_key != before.talk_key || saved.talk_enabled != before.talk_enabled {
-            refresh_talk_key(&app, &runtime);
+            settle_talk_key(&app, &runtime, "preferences");
             let refused = runtime
                 .shortcuts
                 .lock()
@@ -1183,7 +1724,7 @@ pub async fn kalvoice_preferences_update(
                         talk_key: Some(before.talk_key.clone()),
                         ..Default::default()
                     });
-                refresh_talk_key(&app, &runtime);
+                settle_talk_key(&app, &runtime, "preferences_restored");
                 return Err(KalError::validation(
                     "talk_key_in_use",
                     format!(
@@ -1439,6 +1980,128 @@ mod tests {
                 reserved.accelerator
             );
         }
+    }
+
+    /// A channel whose first `fail_first` sends fail (the webview briefly unreachable), then
+    /// deliver, counting the signals that arrive.
+    fn flaky_channel(fail_first: usize) -> (Channel<KalVoiceSignal>, Arc<Mutex<usize>>) {
+        let delivered = Arc::new(Mutex::new(0_usize));
+        let attempts = Arc::new(Mutex::new(0_usize));
+        let counted = delivered.clone();
+        let channel = Channel::new(move |_body| {
+            let mut attempt = attempts.lock().unwrap_or_else(PoisonError::into_inner);
+            *attempt += 1;
+            if *attempt <= fail_first {
+                return Err(tauri::Error::WebviewNotFound);
+            }
+            *counted.lock().unwrap_or_else(PoisonError::into_inner) += 1;
+            Ok(())
+        });
+        (channel, delivered)
+    }
+
+    #[test]
+    fn one_failed_send_does_not_orphan_the_window_for_later_signals() {
+        // 60a17a8 removed a webview's channel after one failed send, so every later signal
+        // (listening started, transcript, failure) silently went nowhere until the page
+        // happened to subscribe again.
+        let (channel, delivered) = flaky_channel(1);
+        let channels = HashMap::from([("main".to_owned(), channel)]);
+        broadcast(&channels, &KalVoiceSignal::Reveal);
+        broadcast(
+            &channels,
+            &KalVoiceSignal::ListeningStarted {
+                session_id: "s1".into(),
+                mode: KalVoiceMode::Talk,
+            },
+        );
+        assert!(channels.contains_key("main"));
+        assert_eq!(*delivered.lock().unwrap_or_else(PoisonError::into_inner), 1);
+    }
+
+    #[test]
+    fn a_runtime_built_after_the_page_subscribed_reaches_it_and_so_does_its_successor() {
+        // 60a17a8 kept the channels inside each KalVoiceRuntime, so a page that subscribed
+        // before the runtime was published (or before a rebuild) was never signalled: the
+        // microphone opened and closed but the UI never showed listening or ran the command.
+        let signals = Arc::new(KalVoiceSignals::default());
+        let (channel, delivered) = flaky_channel(0);
+        signals.subscribe("main", channel);
+        for _generation in 0..2 {
+            // Each runtime generation takes the shared registry at start.
+            let runtime_signals = signals.clone();
+            runtime_signals.send(&KalVoiceSignal::Reveal);
+        }
+        assert_eq!(*delivered.lock().unwrap_or_else(PoisonError::into_inner), 2);
+    }
+
+    #[test]
+    fn a_webview_has_exactly_one_channel_and_a_new_subscription_replaces_it() {
+        let signals = KalVoiceSignals::default();
+        let (first, first_delivered) = flaky_channel(0);
+        let (second, second_delivered) = flaky_channel(0);
+        signals.subscribe("main", first);
+        signals.subscribe("main", second);
+        signals.send(&KalVoiceSignal::Reveal);
+        assert_eq!(
+            *first_delivered
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+            0
+        );
+        assert_eq!(
+            *second_delivered
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+            1
+        );
+        signals.unsubscribe("main");
+        signals.send(&KalVoiceSignal::Reveal);
+        assert_eq!(
+            *second_delivered
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+            1
+        );
+    }
+
+    #[test]
+    fn every_subscribed_window_receives_each_signal() {
+        let (main, main_delivered) = flaky_channel(0);
+        let (other, other_delivered) = flaky_channel(0);
+        let channels = HashMap::from([("main".to_owned(), main), ("other".to_owned(), other)]);
+        broadcast(&channels, &KalVoiceSignal::Reveal);
+        assert_eq!(
+            *main_delivered
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+            1
+        );
+        assert_eq!(
+            *other_delivered
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner),
+            1
+        );
+    }
+
+    #[test]
+    fn talk_key_signal_serializes_with_the_signal_conventions() {
+        let signal = KalVoiceSignal::TalkKey {
+            active: false,
+            reason: Some("not_focused".into()),
+            accelerator: "F8".into(),
+        };
+        assert_eq!(signal_kind(&signal), "talk_key");
+        assert_eq!(
+            serde_json::to_value(&signal).unwrap_or_default(),
+            serde_json::json!({
+                "kind": "talk_key",
+                "active": false,
+                "reason": "not_focused",
+                "accelerator": "F8",
+            })
+        );
     }
 
     #[test]

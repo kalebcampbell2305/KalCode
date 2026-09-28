@@ -396,7 +396,10 @@ pub fn run(removed_overrides: Vec<String>) {
             config.create = false;
         }
     }
-    let mut builder = tauri::Builder::default().on_window_event(handle_window_event);
+    let mut builder = tauri::Builder::default()
+        .on_window_event(handle_window_event)
+        // KalVoice's push-to-talk key follows every KalCode window's focus changes.
+        .on_window_event(kalvoice_commands::on_window_event);
     // A second launch against the default data folder focuses the running window. (Exclusive
     // use of a data folder is enforced separately by the core's lock file, in every mode.)
     if uses_default_data_dir() {
@@ -424,6 +427,8 @@ pub fn run(removed_overrides: Vec<String>) {
         .manage(runtime_shutdown::ExitControl::default())
         .manage(browser_commands::BrowserViews::default())
         .manage(code_commands::TerminalViews::default())
+        // KalVoice's per-webview signal channels outlive account runtime generations.
+        .manage(Arc::new(kalvoice_commands::KalVoiceSignals::default()))
         .on_page_load(|webview, payload| {
             // Untrusted native children must never outlive the trusted page that owns them.
             if payload.event() == PageLoadEvent::Started
@@ -438,6 +443,9 @@ pub fn run(removed_overrides: Vec<String>) {
                 return;
             }
             // A (re)load starts a fresh page whose JS callbacks no longer exist.
+            if payload.event() == PageLoadEvent::Started {
+                kalvoice_commands::on_page_load_started(webview.app_handle(), webview.label());
+            }
             if payload.event() == PageLoadEvent::Started
                 && let Some(state) = webview.try_state::<AppState>()
             {
@@ -449,6 +457,9 @@ pub fn run(removed_overrides: Vec<String>) {
                 ) {
                     threads.drop_stream(webview.label());
                 }
+            }
+            if payload.event() == PageLoadEvent::Finished && webview.label() == "main" {
+                kalvoice_commands::on_page_load(webview.app_handle());
             }
         })
         .setup(move |app| {
@@ -485,6 +496,8 @@ pub fn run(removed_overrides: Vec<String>) {
             app.manage(updater.clone());
             app.manage(state);
             coordinator.observe(app.handle().clone())?;
+            // On the main thread, whose message loop delivers OS foreground changes.
+            kalvoice_commands::watch_foreground(app.handle());
             account_links::start(app.handle(), account, coordinator);
             updater.check_in_background();
 
