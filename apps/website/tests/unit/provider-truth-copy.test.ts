@@ -10,13 +10,15 @@ vi.mock("../../src/lib/releases", async (importOriginal) => ({
 }));
 
 import ProviderSwitch from "../../src/components/stage/ProviderSwitch.astro";
-import { ACCOUNT_PAGE, PAGES, PROVIDERS } from "../../src/lib/site";
+import { ACCOUNT_PAGE, KALVOICE, PAGES, PROVIDERS } from "../../src/lib/site";
 import Account from "../../src/pages/account.astro";
 import DocsIndex from "../../src/pages/docs/index.astro";
 import LocalFirstDocs from "../../src/pages/docs/local-first.astro";
 import ProvidersDocs from "../../src/pages/docs/providers.astro";
+import Download from "../../src/pages/download.astro";
 import Home from "../../src/pages/index.astro";
 import KalVoicePage from "../../src/pages/kalvoice.astro";
+import Pricing from "../../src/pages/pricing.astro";
 import Product from "../../src/pages/product.astro";
 import Security from "../../src/pages/security.astro";
 import Updates from "../../src/pages/updates.astro";
@@ -118,26 +120,30 @@ describe.each(PAGES_UNDER_TEST)("the $name", ({ component, path, credentials = t
 });
 
 describe("provider support status", () => {
-  it("lists every provider as built, with account sign-in only", () => {
+  it("lists Claude Code and Codex as built and Gemini CLI as unavailable, with account sign-in only", () => {
     expect(PROVIDERS.map((p) => [p.name, p.access, p.status, p.state])).toEqual([
       ["Claude Code", "Claude account sign-in", "Adapter built", "built"],
       ["Codex", "ChatGPT sign-in (personal plans)", "Adapter built", "built"],
-      ["Gemini CLI", "Google sign-in", "Adapter built", "built"],
+      ["Gemini CLI", "Google sign-in", "Unavailable in 0.1.5", "unavailable"],
     ]);
   });
 
-  it("shows all three as built on the home page", async () => {
+  it("shows Claude Code and Codex as built and Gemini CLI as unavailable on the home page", async () => {
     const copy = text(await render(Home, "/"));
-    expect(copy.match(/Adapter built/g)?.length).toBeGreaterThanOrEqual(3);
+    expect(copy.match(/Adapter built/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(copy).toContain("Gemini CLI Unavailable in 0.1.5");
   });
 
   it("describes how each provider runs on the product page", async () => {
     const copy = text(await render(Product, "/product"));
-    expect(copy).toContain("Built · Claude Code, Codex, Gemini CLI");
+    expect(copy).toContain("Built · Claude Code, Codex");
+    expect(copy).not.toContain("Built · Claude Code, Codex, Gemini CLI");
     expect(copy).toContain(
       "Codex ChatGPT sign-in (personal plans) Headless JSON mode: threads you can resume and interrupt",
     );
-    expect(copy).toContain("Gemini CLI Google sign-in Headless stream mode: threads you can resume and interrupt");
+    expect(copy).toContain(
+      "Gemini CLI Google sign-in Headless stream mode: threads you can resume and interrupt Unavailable in 0.1.5",
+    );
     expect(copy).toContain("Claude Code, Codex and Gemini CLI adapters");
   });
 
@@ -154,7 +160,8 @@ describe("provider support status", () => {
     expect(copy).toContain("KalCode runs threads with these providers today");
     expect(copy).toContain("Claude Code — the local CLI, signed in with your own Claude account.");
     expect(copy).toContain("Codex — the local CLI, signed in with your own personal ChatGPT plan");
-    expect(copy).toContain("Gemini CLI — the local CLI, signed in with your own Google account");
+    expect(copy).not.toContain("Gemini CLI — the local CLI, signed in with your own Google account");
+    expect(copy).toContain("Gemini CLI is unavailable in 0.1.5");
   });
 });
 
@@ -230,5 +237,102 @@ describe("credential storage", () => {
     );
     for (const description of descriptions) expect(description).not.toMatch(/keychain/i);
     expect(descriptions.join(" ")).toContain("KalCode session");
+  });
+});
+
+// Google ended Gemini CLI "Login with Google" for Gemini Code Assist for individuals, Google AI Pro
+// and Ultra on June 18, 2026 (developers.google.com/gemini-code-assist/docs/deprecations/
+// code-assist-individuals). Standard and Enterprise licenses need a Google Cloud project, which B5
+// (65be519) cannot pass to its managed Gemini profiles, so Gemini CLI is unavailable in 0.1.5.
+const GEMINI_NOTICE = [
+  "On June 18, 2026, Google ended Gemini CLI access through Sign in with Google for personal Google accounts: Gemini Code Assist for individuals, Google AI Pro and Google AI Ultra.",
+  "KalCode 0.1.5 also can't set the Google Cloud project that Gemini Code Assist Standard and Enterprise licenses need, so Gemini CLI is currently unavailable in KalCode.",
+  "A personal Google account can still finish sign-in and show as signed in, but its threads fail.",
+  "Claude Code and Codex are unaffected.",
+  "KalCode will follow Google's replacement in a later update.",
+];
+
+// Claims that Gemini CLI works in 0.1.5 or that KalCode supports Google's replacement. Stage
+// previews (sample data) and the dated September 24 KalVoice archive entry are out of scope.
+const GEMINI_OVERCLAIMS = [
+  /Claude Code, Codex,? and Gemini CLI (run|connect|use)\b/i,
+  /Connect Claude Code, Codex, Gemini/i,
+  /Built · Claude Code, Codex, Gemini CLI/,
+  /Antigravity/i,
+];
+
+/** Makes the fixture a signed Stable 0.1.5 (Windows and Apple silicon), so Updates shows its entry. */
+function selectSignedStable015() {
+  const latest = fixture.manifest.latest;
+  const windows = latest?.platforms[0];
+  if (!latest || !windows) throw new Error("fixture has no Windows release");
+  latest.version = "0.1.5";
+  latest.channel = "stable";
+  windows.signed = true;
+  latest.platforms.push({ ...windows, os: "macos", arch: "arm64", signed: true });
+}
+
+describe("Gemini CLI availability", () => {
+  const pages = [
+    { name: "provider docs", component: ProvidersDocs as Component, path: "/docs/providers" },
+    { name: "home page", component: Home as Component, path: "/" },
+    { name: "product page", component: Product as Component, path: "/product" },
+  ];
+
+  it.each(pages)("the $name states Google's change and what 0.1.5 can do", async ({ component, path }) => {
+    const copy = text(await render(component, path));
+    for (const sentence of GEMINI_NOTICE) expect(copy).toContain(sentence);
+  });
+
+  it.each([
+    ...pages,
+    { name: "pricing page", component: Pricing as Component, path: "/pricing" },
+    { name: "download page", component: Download as Component, path: "/download" },
+    { name: "KalVoice page", component: KalVoicePage as Component, path: "/kalvoice" },
+  ])(
+    "the $name never claims Gemini CLI works in 0.1.5 or that Antigravity is supported",
+    async ({ component, path }) => {
+      const html = await render(component, path);
+      const copy = `${text(html)} ${metaDescription(html)}`;
+      for (const pattern of GEMINI_OVERCLAIMS) expect(copy).not.toMatch(pattern);
+    },
+  );
+
+  it("marks Gemini CLI unavailable in the 0.1.5 release entry", async () => {
+    selectSignedStable015();
+    const copy = text(await render(Updates, "/updates"));
+    expect(copy).toContain("Work with Claude Code and Codex through their official accounts");
+    expect(copy).toContain(
+      "Sign-in and threads with Claude Code 2.1.282 and later 2.1 releases and Codex 0.155.1 through 0.158.",
+    );
+    expect(copy).toContain(
+      "Gemini CLI is unavailable: on June 18, 2026, Google ended Gemini CLI access through Sign in with Google for personal accounts, and 0.1.5 can't set the Google Cloud project that Standard and Enterprise licenses need.",
+    );
+    expect(copy).not.toContain("Codex 0.155.1 through 0.158 and Gemini CLI 0.61");
+    expect(copy).not.toMatch(/Antigravity/i);
+  });
+
+  it("says on the download page that Gemini CLI is unavailable", async () => {
+    const copy = text(await render(Download as Component, "/download"));
+    expect(copy).toContain(
+      "Claude Code and Codex connect free on every plan. Gemini CLI is unavailable in 0.1.5 after Google ended personal-account access.",
+    );
+  });
+
+  it("keeps Gemini out of the home, KalVoice and provider-docs descriptions", () => {
+    const home = PAGES.find((p) => p.path === "/");
+    const docs = PAGES.find((p) => p.path === "/docs/providers");
+    expect(home?.description).toContain("Claude Code and Codex");
+    expect(home?.description).not.toMatch(/Gemini/);
+    expect(KALVOICE.summary).not.toMatch(/Gemini/);
+    expect(docs?.description).toContain("why Gemini CLI is unavailable in 0.1.5");
+  });
+
+  it("uses a working provider, not Gemini, as the account-switching example", async () => {
+    const copy = text(await render(ProvidersDocs, "/docs/providers"));
+    expect(copy).toContain(
+      "the command palette (“switch codex b”) or KalVoice (“Switch this Codex thread to Codex B”)",
+    );
+    expect(copy).not.toMatch(/Gemini [AB]\b|switch gemini/i);
   });
 });
