@@ -84,11 +84,16 @@ impl KalVoiceSignals {
     }
 
     /// A page (re)load: that page's callbacks are gone; its next subscription replaces this.
-    fn unsubscribe(&self, webview: &str) {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(webview);
+    /// Browser child webviews never subscribe, so their loads report `NotSubscribed`.
+    fn unsubscribe(&self, webview: &str) -> Unsubscribed {
+        let mut channels = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        if channels.remove(webview).is_none() {
+            Unsubscribed::NotSubscribed
+        } else if channels.is_empty() {
+            Unsubscribed::LastGone
+        } else {
+            Unsubscribed::OthersRemain
+        }
     }
 
     /// Whether any page is subscribed (the talk key is held only then).
@@ -106,6 +111,46 @@ impl KalVoiceSignals {
             signal,
         );
     }
+}
+
+/// What removing a webview's subscription changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Unsubscribed {
+    /// That webview had no channel (a browser child view): nothing changed.
+    NotSubscribed,
+    /// Another page is still subscribed: the key and any session stay.
+    OthersRemain,
+    /// No page is subscribed any more: the key is released until one subscribes.
+    LastGone,
+}
+
+/// Ends the session the reloading page was driving once no page is subscribed. Returns whether
+/// one was ended.
+///
+/// Cancelled, not finished: finishing (as a foreground change does) exists so the UI can show
+/// the transcript and run it through `kalvoice_talk`; here the page that would receive the
+/// result is gone, so recognizing the audio would only produce a result nobody can act on.
+/// Cancelling closes the microphone at once and discards the audio. Without this, a reload
+/// while the key is held released the key, the key-up was never recognized, and the microphone
+/// stayed open invisibly until the recording cap.
+fn end_orphaned_session(voice: &VoiceController, unsubscribed: Unsubscribed) -> bool {
+    if unsubscribed != Unsubscribed::LastGone {
+        return false;
+    }
+    let Some((session_id, mode)) = voice.listening() else {
+        return false;
+    };
+    let ended = voice.cancel(Some(&session_id));
+    tracing::info!(
+        event = "kalvoice.session_orphaned",
+        mode = match mode {
+            KalVoiceMode::Talk => "talk",
+            KalVoiceMode::Dictation => "dictation",
+            KalVoiceMode::Command => "command",
+        },
+        ended
+    );
+    ended
 }
 
 /// Tauri-managed state. `None` when the core failed to start or KalVoice is off in this
@@ -792,8 +837,14 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
 /// A trusted page started (re)loading: its signal callbacks are gone until it subscribes again.
 /// Without a subscriber the key is released until the page subscribes again.
 pub fn on_page_load_started(app: &AppHandle, webview: &str) {
-    if let Some(signals) = app.try_state::<Arc<KalVoiceSignals>>() {
-        signals.unsubscribe(webview);
+    let Some(signals) = app.try_state::<Arc<KalVoiceSignals>>() else {
+        return;
+    };
+    // Browser child navigations (never subscribed) and other pages staying subscribed change
+    // nothing: no main-thread preferences read, no "no subscriber" warnings.
+    let unsubscribed = signals.unsubscribe(webview);
+    if unsubscribed != Unsubscribed::LastGone {
+        return;
     }
     let Some(runtime) = crate::runtime_coordinator::RuntimeState::<KalVoiceState>::from_app(app)
         .ok()
@@ -801,6 +852,7 @@ pub fn on_page_load_started(app: &AppHandle, webview: &str) {
     else {
         return;
     };
+    end_orphaned_session(&runtime.voice, unsubscribed);
     // Queued rather than inline: this runs inside the webview's page-load callback.
     defer_talk_key_sync(app, &runtime, "unsubscribed");
 }
@@ -2058,6 +2110,82 @@ mod tests {
         assert_eq!(*delivered.lock().unwrap_or_else(PoisonError::into_inner), 2);
     }
 
+    /// A microphone that records until told to stop, counting stops.
+    #[derive(Default)]
+    struct HeldMic {
+        stopped: Arc<std::sync::atomic::AtomicUsize>,
+    }
+    struct HeldCapture(Arc<std::sync::atomic::AtomicUsize>);
+    impl kalcode_kalvoice::audio::ActiveCapture for HeldCapture {
+        fn finish(self: Box<Self>) -> Result<Vec<f32>, kalcode_kalvoice::audio::CaptureError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(Vec::new())
+        }
+        fn cancel(self: Box<Self>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    impl kalcode_kalvoice::audio::AudioSource for HeldMic {
+        fn start(
+            &self,
+            _max: Duration,
+        ) -> Result<
+            Box<dyn kalcode_kalvoice::audio::ActiveCapture>,
+            kalcode_kalvoice::audio::CaptureError,
+        > {
+            Ok(Box::new(HeldCapture(self.stopped.clone())))
+        }
+    }
+    struct ReadyModel;
+    impl RecognizerSource for ReadyModel {
+        fn ready(&self) -> Result<(), SttError> {
+            Ok(())
+        }
+        fn recognizer(&self) -> Result<Arc<dyn SpeechRecognizer>, SttError> {
+            Err(SttError::ModelNotInstalled)
+        }
+    }
+
+    /// A talk-key session held open, as while the push-to-talk key is down.
+    fn held_session(
+        dir: &std::path::Path,
+    ) -> (VoiceController, Arc<std::sync::atomic::AtomicUsize>) {
+        let core = Core::open(kalcode_core::CoreConfig {
+            paths: kalcode_core::Paths::new(dir),
+            app_version: "0.1.0-test".into(),
+            channel: kalcode_core::flags::BuildChannel::Development,
+        })
+        .unwrap_or_else(|error| panic!("core: {error}"));
+        let mic = HeldMic::default();
+        let stopped = mic.stopped.clone();
+        let voice = VoiceController::new(Arc::new(core), Arc::new(mic), Arc::new(ReadyModel));
+        voice
+            .begin(KalVoiceMode::Talk)
+            .unwrap_or_else(|error| panic!("begin: {error}"));
+        (voice, stopped)
+    }
+
+    #[test]
+    fn reloading_the_page_while_the_key_is_held_closes_the_microphone() {
+        // The reload releases the key (no subscriber), so its key-up is never recognized; the
+        // session must end here instead of recording invisibly until the two-minute cap.
+        let dir = tempfile::tempdir().unwrap_or_else(|error| panic!("tempdir: {error}"));
+        let (voice, stopped) = held_session(dir.path());
+        assert!(end_orphaned_session(&voice, Unsubscribed::LastGone));
+        assert_eq!(voice.listening(), None);
+        assert_eq!(stopped.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_child_webview_load_or_a_remaining_page_leaves_the_session_alone() {
+        let dir = tempfile::tempdir().unwrap_or_else(|error| panic!("tempdir: {error}"));
+        let (voice, stopped) = held_session(dir.path());
+        assert!(!end_orphaned_session(&voice, Unsubscribed::NotSubscribed));
+        assert!(!end_orphaned_session(&voice, Unsubscribed::OthersRemain));
+        assert!(voice.listening().is_some());
+        assert_eq!(stopped.load(Ordering::SeqCst), 0);
+    }
+
     #[test]
     fn a_webview_has_exactly_one_channel_and_a_new_subscription_replaces_it() {
         let signals = KalVoiceSignals::default();
@@ -2080,8 +2208,14 @@ mod tests {
             1
         );
         assert!(signals.connected());
-        signals.unsubscribe("main");
+        assert_eq!(
+            signals.unsubscribe("browser-1"),
+            Unsubscribed::NotSubscribed
+        );
+        assert!(signals.connected());
+        assert_eq!(signals.unsubscribe("main"), Unsubscribed::LastGone);
         assert!(!signals.connected(), "the talk key needs a live subscriber");
+        assert_eq!(signals.unsubscribe("main"), Unsubscribed::NotSubscribed);
         signals.send(&KalVoiceSignal::Reveal);
         assert_eq!(
             *second_delivered
