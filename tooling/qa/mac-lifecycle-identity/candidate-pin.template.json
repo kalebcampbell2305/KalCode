@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "role": "candidate",
+  "version": "0.1.5",
+  "commit": "<B-PRIME-40-HEX-SOURCE-COMMIT>",
+  "dmgSha256": "<B-PRIME-FINAL-STAPLED-DMG-SHA256>",
+  "executableSha256": "<B-PRIME-Contents/MacOS/kalcode-SHA256>",
+  "bundleTreeSha256": "<REQUIRED: --digest-bundle OUTPUT FOR THE MOUNTED B-PRIME DMG APP>"
+}
