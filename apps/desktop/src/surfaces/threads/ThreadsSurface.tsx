@@ -2,14 +2,14 @@ import { Button, EmptyState } from "@kalcode/ui/components";
 import { MessagesSquare, Plus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { setSelectedThread, useRebindRequest } from "./accountIntent.ts";
-import { useThreadsIntent } from "./intent.tsx";
+import { type NewThreadPrefill, useThreadsIntent } from "./intent.tsx";
 import { NewThread } from "./NewThread.tsx";
 import { ThreadDetail } from "./ThreadDetail.tsx";
 import { ThreadList } from "./ThreadList.tsx";
 import styles from "./ThreadsSurface.module.css";
 import { useThreadList } from "./useThreads.ts";
 
-type Pane = { kind: "detail"; threadId: string | null } | { kind: "new" };
+type Pane = { kind: "detail"; threadId: string | null } | { kind: "new"; prefill?: NewThreadPrefill };
 
 export function ThreadsSurface() {
   const { intent } = useThreadsIntent();
@@ -36,7 +36,7 @@ export function ThreadsSurface() {
   useEffect(() => {
     if (!intent || intent.nonce === handledNonce.current) return;
     handledNonce.current = intent.nonce;
-    if (intent.kind === "new") setPane({ kind: "new" });
+    if (intent.kind === "new") setPane(intent.prefill ? { kind: "new", prefill: intent.prefill } : { kind: "new" });
     else if (intent.kind === "open" && intent.threadId) setPane({ kind: "detail", threadId: intent.threadId });
     else requestAnimationFrame(() => searchRef.current?.focus());
   }, [intent]);
@@ -100,6 +100,8 @@ export function ThreadsSurface() {
         <section className={styles.detailPane} aria-label={pane.kind === "new" ? "New thread" : "Thread"}>
           {pane.kind === "new" ? (
             <NewThread
+              key={pane.prefill ? JSON.stringify(pane.prefill) : "new"}
+              {...(pane.prefill ? { prefill: pane.prefill } : {})}
               onCreated={(thread) => {
                 void list.reload();
                 setPane({ kind: "detail", threadId: thread.id });

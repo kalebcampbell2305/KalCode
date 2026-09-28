@@ -1,4 +1,4 @@
-import type { ProviderAccount, SettingsPatch, SurfaceId } from "@kalcode/protocol";
+import type { ProviderAccount, SettingsPatch, SurfaceId, ThreadSummary } from "@kalcode/protocol";
 import { useToast } from "@kalcode/ui/components";
 import { Command } from "cmdk";
 import {
@@ -17,6 +17,7 @@ import {
   KeyRound,
   LayoutGrid,
   Maximize2,
+  MessageSquare,
   MessageSquarePlus,
   Monitor,
   Moon,
@@ -36,6 +37,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { toKalCodeError } from "../ipc/errors.ts";
 import { useOptionalKalVoice } from "../kalvoice/KalVoiceProvider.tsx";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
+import { useOptionalUiIntents } from "../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../runtime/WorkspaceProvider.tsx";
 import { CODE_SHORTCUT_LABELS } from "../surfaces/code/shortcuts.ts";
 import { requestProvidersTab } from "../surfaces/providers/providersTab.ts";
@@ -62,9 +64,30 @@ interface CommandPaletteProps {
   onOpenChange: (open: boolean) => void;
 }
 
+/** How many open threads the palette lists by name. */
+const PALETTE_THREADS = 50;
+
+/** "Name · Provider · Account" (the account part only when the thread has one). */
+export function paletteThreadLabel(thread: Pick<ThreadSummary, "name" | "providerName" | "accountLabel">): string {
+  const account = thread.accountLabel?.trim();
+  return account ? `${thread.name} · ${thread.providerName} · ${account}` : `${thread.name} · ${thread.providerName}`;
+}
+
+/** Unique cmdk values for the listed threads (two threads may share a label). */
+function threadItems(threads: readonly ThreadSummary[]): { thread: ThreadSummary; label: string; value: string }[] {
+  const seen = new Map<string, number>();
+  return threads.map((thread) => {
+    const label = paletteThreadLabel(thread);
+    const count = (seen.get(label) ?? 0) + 1;
+    seen.set(label, count);
+    return { thread, label, value: count === 1 ? label : `${label} · ${thread.workspaceName} · ${count}` };
+  });
+}
+
 function namedCommand(root: HTMLElement, typed: string): HTMLElement | undefined {
+  // Search results (locator matches, threads by name) are ranked by cmdk; only commands are "named".
   const commandItems = [...root.querySelectorAll<HTMLElement>("[cmdk-item]")].filter(
-    (el) => !el.dataset.value?.startsWith("locator:"),
+    (el) => !el.dataset.value?.startsWith("locator:") && el.dataset.paletteThread === undefined,
   );
   const normalized = (item: HTMLElement) => item.dataset.value?.toLowerCase() ?? "";
   return (
@@ -193,6 +216,29 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         });
       }
     });
+  // Open threads by name when the Session Locator (which lists them itself) isn't in this build,
+  // as on Stable. Read when the palette opens and listed once the person types, so the default
+  // list is unchanged.
+  const uiIntents = useOptionalUiIntents();
+  const [threads, setThreads] = useState<ThreadSummary[]>([]);
+  const threadsVisible = visible.has("threads");
+  useEffect(() => {
+    if (!open || !threadsVisible || locatorVisible) return;
+    let live = true;
+    client
+      .listThreads({ includeArchived: false })
+      .then((listed) => live && setThreads(listed.filter((t) => t.archivedAt === null).slice(0, PALETTE_THREADS)))
+      .catch(() => live && setThreads([]));
+    return () => {
+      live = false;
+    };
+  }, [client, open, threadsVisible, locatorVisible]);
+  const focusThread = (thread: ThreadSummary) =>
+    run(() => {
+      if (uiIntents) return uiIntents.focus({ kind: "thread", threadId: thread.id, workspaceId: thread.workspaceId });
+      navigate("threads");
+      threadsIntent.request("open", thread.id);
+    });
   const destinations = [...PRIMARY_ORDER, "settings" as const].filter((id): id is SurfaceId => visible.has(id));
   const views = (["home", "folder"] as const).filter((view) => viewVisible(view, info.flags.features));
 
@@ -265,6 +311,27 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
             >
               Search threads
             </Item>
+            {typed && !locatorVisible
+              ? threadItems(threads).map(({ thread, label, value }) => (
+                  <Item
+                    key={thread.id}
+                    icon={<MessageSquare />}
+                    value={value}
+                    thread
+                    onSelect={focusThread(thread)}
+                    keywords={[
+                      "thread",
+                      "go to",
+                      thread.name,
+                      thread.providerName,
+                      thread.accountLabel ?? "",
+                      thread.workspaceName,
+                    ].filter(Boolean)}
+                  >
+                    {label}
+                  </Item>
+                ))
+              : null}
           </Command.Group>
         ) : null}
 
@@ -554,11 +621,21 @@ interface ItemProps {
   current?: boolean;
   /** A short state shown after the label ("Signed out"). */
   badge?: string | undefined;
+  /** cmdk's value when the label alone isn't unique (defaults to the label). */
+  value?: string;
+  /** A thread by name: a search result, never preferred as a named command. */
+  thread?: boolean;
 }
 
-function Item({ icon, children, onSelect, keywords, shortcut, current, badge }: ItemProps) {
+function Item({ icon, children, onSelect, keywords, shortcut, current, badge, value, thread }: ItemProps) {
   return (
-    <Command.Item className={styles.item} onSelect={onSelect} value={children} {...(keywords ? { keywords } : {})}>
+    <Command.Item
+      className={styles.item}
+      onSelect={onSelect}
+      value={value ?? children}
+      {...(thread ? { "data-palette-thread": "" } : {})}
+      {...(keywords ? { keywords } : {})}
+    >
       <span className={styles.itemIcon} aria-hidden="true">
         {icon}
       </span>

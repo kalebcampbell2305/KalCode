@@ -103,6 +103,8 @@ export interface ProviderAccountsMemory {
   handlers: DashboardHandlers;
   /** Resolves active public metadata for the fixture thread runtime. */
   resolve(accountId: string, providerId: string): ProviderAccount;
+  /** Deletes every binding scoped to a removed workspace (native `remove_workspace` does too). */
+  forgetWorkspace(workspaceId: string): void;
 }
 
 export function createProviderAccountsMemory(requireCore: () => void, empty = false): ProviderAccountsMemory {
@@ -161,6 +163,11 @@ export function createProviderAccountsMemory(requireCore: () => void, empty = fa
 
   return {
     resolve,
+    forgetWorkspace(workspaceId) {
+      for (const [key, binding] of bindings) {
+        if (binding.kind === "workspace" && binding.scopeId === workspaceId) bindings.delete(key);
+      }
+    },
     handlers: {
       provider_accounts_list: (args) => {
         requireCore();

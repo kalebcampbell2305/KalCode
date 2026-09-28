@@ -37,6 +37,7 @@ import type {
   IpcError,
   ProviderStatus,
   SecureStoreCheck,
+  SessionResolution,
   Settings,
   SettingsPatch,
   SurfaceFlag,
@@ -206,6 +207,8 @@ export interface MemoryTransport extends Transport {
   health: HealthControls;
   /** Test hooks for pane layouts (Z7-W1): what is stored, save counts, failures. */
   layouts: LayoutControls;
+  /** Test hooks for KalVoice (what the fake recognizer hears next). */
+  kalvoice: { setTranscript(text: string): void };
 }
 
 export function createMemoryTransport(
@@ -677,6 +680,25 @@ export function createMemoryTransport(
   handlers.session_resolve = sessionResolveHandler(() =>
     handlers.thread_list?.({ workspaceId: null, includeArchived: false }),
   );
+  // KalVoice resolves spoken session names through the same command ("tell <name> to …").
+  kalvoice.setSessionResolver(
+    async (query, context) =>
+      (await handlers.session_resolve?.({
+        query,
+        workspaceId: context.workspaceId,
+        focusedThreadId: context.focusedThreadId,
+        lastTargetId: null,
+      })) as SessionResolution,
+  );
+  // Like native `remove_workspace`: removing a workspace deletes its account bindings too.
+  const removeWorkspace = handlers.workspace_remove;
+  if (removeWorkspace) {
+    handlers.workspace_remove = (args) => {
+      const removed = removeWorkspace(args);
+      providerAccounts.forgetWorkspace(String(args.workspaceId));
+      return removed;
+    };
+  }
   // KalVoice's approval requests are answered like any other: `approval_decide` (actor: user).
   const decideOther = handlers.approval_decide;
   handlers.approval_decide = (args) => {
@@ -732,6 +754,7 @@ export function createMemoryTransport(
     panes: panes.controls,
     health: health.controls,
     layouts: layouts.controls,
+    kalvoice: kalvoice.controls,
   };
   // UI tests drive the fake folder picker and filesystem, live Dashboard changes and agents
   // asking for approval through this hook (ui-test builds only).
@@ -743,6 +766,7 @@ export function createMemoryTransport(
       panes: transport.panes,
       health: transport.health,
       layouts: transport.layouts,
+      kalvoice: transport.kalvoice,
       // Z7-W3: records an event as the runtime would (e.g. `provider.disconnected`), so tests can
       // drive notifications from any event the native runtime emits.
       simulate: (event: EventPayload, options: EmitOptions = {}) => emit(event, options),

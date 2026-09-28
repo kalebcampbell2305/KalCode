@@ -60,3 +60,60 @@ describe("memory KalVoice browser parity", () => {
     expect(events).not.toContainEqual(expect.objectContaining({ type: "kalvoice.command_executed" }));
   });
 });
+
+describe("memory KalVoice composer and session commands (TK-3 subset)", () => {
+  const THREAD = "0192f3c4-0000-7000-8000-00000000000b";
+  const talk = (memory: ReturnType<typeof createMemoryKalVoice>, text: string, target: "field" | "terminal" | "none") =>
+    invoke(memory, "kalvoice_talk", {
+      request: {
+        requestId: crypto.randomUUID(),
+        sessionId: crypto.randomUUID(),
+        text,
+        target,
+        durationMs: 400,
+        workspaceId: null,
+        threadId: THREAD,
+      },
+    }) as Promise<{ route: string; response: KalVoiceResponse | null }>;
+
+  it("“send that” / “clear that” from a composer target the focused thread's composer", async () => {
+    const memory = createMemoryKalVoice(() => undefined, "");
+    expect((await talk(memory, "send that", "field")).response?.directive).toEqual({
+      kind: "submit_composer",
+      threadId: THREAD,
+    });
+    expect((await talk(memory, "don't send that", "field")).response?.directive).toEqual({
+      kind: "clear_composer",
+      threadId: THREAD,
+    });
+  });
+
+  it("refuses to submit or clear a raw terminal", async () => {
+    const memory = createMemoryKalVoice(() => undefined, "");
+    const talked = await talk(memory, "send that", "terminal");
+    expect(talked.response?.directive).toBeNull();
+    expect(talked.response?.outcome).toMatchObject({ kind: "failed", code: "terminal_submit_refused" });
+  });
+
+  it("“tell <name> to …” is dictated into a focused box, and resolved when nothing has focus", async () => {
+    const memory = createMemoryKalVoice(() => undefined, "");
+    memory.setSessionResolver(async (query) =>
+      query === "release"
+        ? {
+            kind: "ambiguous",
+            question: "Which one — Release Windows or Release Mac?",
+            choices: [],
+            total: 2,
+          }
+        : { kind: "not_found", message: "KalCode couldn't find an open session with that name." },
+    );
+    expect((await talk(memory, "tell release to bump the version", "field")).route).toBe("dictation");
+    const asked = await talk(memory, "tell release to Bump the version.", "none");
+    expect(asked.response?.directive).toEqual({
+      kind: "choose_session",
+      question: "Which one — Release Windows or Release Mac?",
+      choices: [],
+      followUp: { kind: "compose", text: "Bump the version.", submit: true },
+    });
+  });
+});

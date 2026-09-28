@@ -1,4 +1,10 @@
 import type { ThreadStatus } from "@kalcode/protocol";
+import {
+  type ComposerRegistration,
+  composerForElement,
+  composerForThread,
+  isCurrentComposer,
+} from "./composerRegistry.ts";
 
 /**
  * Dictation targets: where a transcript goes. The target is resolved when the dictation
@@ -170,6 +176,8 @@ const TEXT_INPUT_TYPES = new Set(["text", "search", "url", "email", ""]);
 
 export type DictationTarget =
   | { kind: "field"; element: HTMLInputElement | HTMLTextAreaElement; paneId: string | null }
+  /** A thread's message box, bound to its thread id (never re-found by DOM id). */
+  | { kind: "composer"; element: HTMLTextAreaElement; composer: ComposerRegistration; paneId: string | null }
   | { kind: "sink"; element: Element; sink: DictationSink; generation: number; paneId: string | null };
 
 function owningPaneId(element: Element): string | null {
@@ -193,27 +201,50 @@ export function resolveDictationTarget(active: Element | null): DictationTarget 
     const registration = sinks.get(node);
     if (registration) return { kind: "sink", element: node, paneId: owningPaneId(active), ...registration };
   }
-  if (isEditableField(active)) return { kind: "field", element: active, paneId: owningPaneId(active) };
-  return null;
+  if (!isEditableField(active)) return null;
+  // A thread composer is its own registered target, carrying the thread it belongs to.
+  const composer = composerForElement(active);
+  if (composer && active instanceof HTMLTextAreaElement) {
+    return { kind: "composer", element: active, composer, paneId: owningPaneId(active) };
+  }
+  return { kind: "field", element: active, paneId: owningPaneId(active) };
 }
 
 /** Whether the target can still receive text (it may have closed while the user spoke). */
 export function targetIsAlive(target: DictationTarget): boolean {
   if (!target.element.isConnected) return false;
   if (target.kind === "field") return isEditableField(target.element);
+  if (target.kind === "composer") {
+    return (
+      isEditableField(target.element) &&
+      isCurrentComposer(target.composer) &&
+      target.composer.handle.element() === target.element
+    );
+  }
   const registration = sinks.get(target.element);
   return registration?.generation === target.generation && registration.sink === target.sink;
 }
 
 /**
- * The same target after a page change: a page re-creates its fields, so a field with an id is
- * found again by that id. Null when it's gone for good.
+ * The same target after a page change. A thread composer is found again only through its own
+ * thread's registration (every thread's composer shares one DOM id, so an id lookup could land in
+ * another thread). Other fields are re-created by their page and found again by their id. Null
+ * when it's gone for good (or not on screen).
  */
 export function reconnectTarget(target: DictationTarget): DictationTarget | null {
   if (targetIsAlive(target)) return target;
+  if (target.kind === "composer") {
+    const again = composerForThread(target.composer.handle.threadId);
+    const element = again?.handle.element() ?? null;
+    return again && element?.isConnected && isEditableField(element)
+      ? { kind: "composer", element, composer: again, paneId: owningPaneId(element) }
+      : null;
+  }
   if (target.kind !== "field" || !target.element.id) return null;
   const again = document.getElementById(target.element.id);
-  return again && isEditableField(again) ? { kind: "field", element: again, paneId: owningPaneId(again) } : null;
+  // A registered composer is never a stand-in for a plain field.
+  if (!again || !isEditableField(again) || composerForElement(again)) return null;
+  return { kind: "field", element: again, paneId: owningPaneId(again) };
 }
 
 /**

@@ -61,6 +61,51 @@ test.describe("KalVoice terminal destinations", () => {
       .toBeGreaterThanOrEqual(2);
   });
 
+  test("raw-shell dictation collapses line breaks and escapes into one line and never runs it", async ({ page }) => {
+    await openWorkspace(page, "placeholder", "voice-raw-lines");
+    await page.getByRole("button", { name: /^New PowerShell 7 terminal$/ }).click();
+    const terminal = page.locator('[role="tabpanel"]:not([hidden]) [data-terminal-id]');
+    await expect(terminal.locator("textarea")).toBeFocused();
+    const before = await runningProcesses(page);
+    await page.evaluate(() => {
+      (
+        window as unknown as { __kalcodeMemory: { kalvoice: { setTranscript: (t: string) => void } } }
+      ).__kalcodeMemory.kalvoice.setTranscript("echo first-line\r\nwhoami\u001b[31m second-line");
+    });
+
+    await talk(page);
+
+    await expect(terminal.locator(".xterm-rows")).toContainText("echo first-line whoami second-line");
+    await expectVoiceState(page, "Done");
+    expect(await runningProcesses(page)).toBe(before);
+  });
+
+  test("“send that” in a raw shell is refused: nothing is written and Enter is never pressed", async ({ page }) => {
+    await openWorkspace(page, "echo keep-me-unsent", "voice-raw-send");
+    await page.getByRole("button", { name: /^New PowerShell 7 terminal$/ }).click();
+    const terminal = page.locator('[role="tabpanel"]:not([hidden]) [data-terminal-id]');
+    await expect(terminal.locator("textarea")).toBeFocused();
+    await talk(page);
+    await expect(terminal.locator(".xterm-rows")).toContainText("echo keep-me-unsent");
+    const before = await runningProcesses(page);
+    const screen = await terminal.locator(".xterm-rows").innerText();
+
+    await page.evaluate(() => {
+      (
+        window as unknown as { __kalcodeMemory: { kalvoice: { setTranscript: (t: string) => void } } }
+      ).__kalcodeMemory.kalvoice.setTranscript("send that");
+    });
+    await terminal.locator("textarea").focus();
+    await talk(page);
+
+    await expectVoiceState(page, "Error");
+    await expect(
+      widget(page).getByText("KalVoice never presses Enter in a terminal. Press Enter yourself to run it.").first(),
+    ).toBeVisible();
+    expect(await terminal.locator(".xterm-rows").innerText()).toBe(screen);
+    expect(await runningProcesses(page)).toBe(before);
+  });
+
   test("an unverified provider prompt receives no text and starts no replacement session", async ({ page }) => {
     await openWorkspace(page, "say voice-provider", "voice-provider");
     await page.getByRole("button", { name: "New Claude Code pane" }).click();

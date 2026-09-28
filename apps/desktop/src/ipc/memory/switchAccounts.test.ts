@@ -120,4 +120,22 @@ describe("switch accounts memory contract", () => {
       { providerId: "gemini-cli", kind: "workspace", scopeId: WORKSPACE_A, accountId: GEMINI_PERSONAL },
     ]);
   });
+
+  it("deletes a removed workspace's account bindings, like native remove_workspace (N2)", async () => {
+    const transport = createMemoryTransport("default", { detectDelayMs: 0 });
+    const client = new KalCodeClient(transport);
+    transport.workspaces.queueFolders("kept", "removed");
+    const kept = await client.openWorkspaceDialog();
+    const removed = await client.openWorkspaceDialog();
+    if (!kept || !removed) throw new Error("fixture folders did not open");
+    const work = await client.createProviderAccount("claude-code", "Work");
+    await client.bindProviderAccount("claude-code", "workspace", kept.id, work.id);
+    await client.bindProviderAccount("claude-code", "workspace", removed.id, work.id);
+
+    await client.removeWorkspace(removed.id);
+
+    expect(await client.listProviderAccountBindings({ kind: "workspace" })).toEqual([
+      { providerId: "claude-code", kind: "workspace", scopeId: kept.id, accountId: work.id },
+    ]);
+  });
 });

@@ -39,7 +39,9 @@ import {
 import { useOptionalSearch } from "../shell/rail/search/SearchProvider.tsx";
 import { usePermissions } from "../surfaces/permissions/index.ts";
 import { getSelectedThread, requestRebind } from "../surfaces/threads/accountIntent.ts";
+import { useOptionalThreadsIntent } from "../surfaces/threads/intent.tsx";
 import { type AssistantState, INITIAL_STATE, reduce } from "./assistantState.ts";
+import { composerForThread, setListeningComposer, waitForComposer } from "./composerRegistry.ts";
 import {
   type DictationTarget,
   insertTranscript,
@@ -50,6 +52,16 @@ import {
 import { type DictationSession, DictationSessions } from "./dictationSessions.ts";
 import { placementFor, sizeClassFor } from "./panelGeometry.ts";
 import { type LocalReasoningState, type TalkKeyState, withReasoningState, withTalkKeyState } from "./readiness.ts";
+import { CHOICE_TTL_MS, choiceIsLive, pickSpokenChoice, type SessionChoiceState } from "./sessionChoice.ts";
+import {
+  type ComposerDirectiveDeps,
+  clearComposer,
+  composeInThread,
+  type DirectiveReport,
+  followUpChoice,
+  isOpenNewThreadDirective,
+  submitComposer,
+} from "./voiceDirectives.ts";
 
 export interface HistoryItem {
   requestId: string;
@@ -75,8 +87,8 @@ interface KalVoiceValue {
   /** Reconnects signals if needed, then re-reads status ("Try again"). */
   retryConnection: () => Promise<void>;
   state: AssistantState;
-  /** The immutable pane destination captured for the active native dictation session. */
-  dictationTarget: { sessionId: string; paneId: string | null } | null;
+  /** The immutable destination captured for the active native dictation session. */
+  dictationTarget: DictationTargetView | null;
   /** Latest microphone level (0–1), for animation without re-rendering. */
   levelRef: MutableRefObject<number>;
   /** A typed request (KalVoice page, for people who can't or don't want to speak). */
@@ -107,7 +119,31 @@ interface KalVoiceValue {
   };
   setPanel: (next: { anchor?: PanelAnchor; x?: number; y?: number; view?: PanelView }) => void;
   setPanelVisible: (visible: boolean) => void;
+  /** A pending "Which one?" (`choose_session`), answered by a click or by saying the name. */
+  sessionChoice: SessionChoiceState | null;
+  chooseSession: (threadId: string) => void;
+  dismissSessionChoice: () => void;
 }
+
+/** What the UI shows about the active push-to-talk destination (ids only). */
+export interface DictationTargetView {
+  sessionId: string;
+  paneId: string | null;
+  /** The thread whose composer receives the words (null for other targets). */
+  composerThreadId: string | null;
+}
+
+function targetView(sessionId: string, target: DictationTarget | null): DictationTargetView {
+  return {
+    sessionId,
+    paneId: target?.paneId ?? null,
+    composerThreadId: target?.kind === "composer" ? target.composer.handle.threadId : null,
+  };
+}
+
+/** Voice never presses Enter in a raw terminal or provider pane, and never edits its line. */
+const TERMINAL_SUBMIT_REFUSED = "KalVoice never presses Enter in a terminal. Press Enter yourself to run it.";
+const TERMINAL_CLEAR_REFUSED = "KalVoice doesn't edit a terminal's line. Nothing was changed.";
 
 const KalVoiceContext = createContext<KalVoiceValue | null>(null);
 
@@ -125,6 +161,7 @@ function useWindowWidth(): number {
 
 function targetKind(target: DictationTarget | null): TalkTarget {
   if (!target) return "none";
+  // A thread composer is a text field to native routing (only High-confidence commands run).
   return target.kind === "sink" ? "terminal" : "field";
 }
 
@@ -170,10 +207,17 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   } | null>(null);
   const levelRef = useRef(0);
   const dictationSessions = useRef(new DictationSessions<DictationTarget>());
-  const [dictationTarget, setDictationTarget] = useState<{
-    sessionId: string;
-    paneId: string | null;
-  } | null>(null);
+  const [dictationTarget, setDictationTarget] = useState<DictationTargetView | null>(null);
+  // The composer hint ("KALVOICE TARGET · …") follows the active session's captured target.
+  const listeningComposer = dictationTarget?.composerThreadId ?? null;
+  useEffect(() => {
+    setListeningComposer(listeningComposer);
+  }, [listeningComposer]);
+  useEffect(() => () => setListeningComposer(null), []);
+  const [sessionChoice, setSessionChoice] = useState<SessionChoiceState | null>(null);
+  const choiceRef = useRef(sessionChoice);
+  choiceRef.current = sessionChoice;
+  const choiceId = useRef(0);
   /** For "Type it instead": where the words would have gone and the page before a navigation. */
   const undo = useRef<{ requestId: string; target: DictationTarget | null; previous: Destination | null } | null>(null);
   const statusRef = useRef({ status, error: statusError });
@@ -243,12 +287,33 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
     [client, withNativeState],
   );
 
+  const threadsIntent = useOptionalThreadsIntent();
   // The UI side of a command's result (the native side already did the work).
-  const surfaces = useRef({ workspaces, permissions, toast, uiIntents });
-  surfaces.current = { workspaces, permissions, toast, uiIntents };
+  const surfaces = useRef({ workspaces, permissions, toast, uiIntents, threadsIntent });
+  surfaces.current = { workspaces, permissions, toast, uiIntents, threadsIntent };
+
+  const report = useCallback((result: DirectiveReport) => dispatch({ type: "action_result", ...result }), []);
+  /** Composer directives act on a thread's own message box, which lives in Threads. */
+  const composerDeps = useCallback(
+    (): ComposerDirectiveDeps => ({
+      openThread: (threadId) => {
+        if (currentRef.current === "threads" && composerForThread(threadId)?.handle.element()?.isConnected) return;
+        const { threadsIntent: threads, uiIntents: intents } = surfaces.current;
+        if (threads) {
+          navigate("threads");
+          threads.request("open", threadId);
+        } else {
+          void intents.focus({ kind: "thread", threadId });
+        }
+      },
+      report,
+    }),
+    [navigate, report],
+  );
+
   const runDirective = useCallback(
-    (directive: UiDirective | null) => {
-      const { workspaces, permissions, toast, uiIntents: intents } = surfaces.current;
+    (directive: UiDirective | null, origin: { target: DictationTarget | null } | null = null) => {
+      const { workspaces, permissions, toast, uiIntents: intents, threadsIntent: threads } = surfaces.current;
       // Pane layout commands (Z7-W1) run on the Code canvas; they wait for it when Code isn't on
       // screen yet. Layout only: nothing starts, stops or closes a process.
       const pane = (command: PaneCommand) => {
@@ -343,27 +408,104 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
         case "confirm_thread_rebind":
           // 0.1.5: KalVoice never rebinds a thread. It asks Threads to show the Rebind dialog;
           // only the person's confirmation there switches the account.
+          // Always Threads (never a pane), and the request expires if the person moves on (S4).
           requestRebind(directive.threadId, directive.accountId);
-          if (getSelectedThread()?.threadId === directive.threadId) navigate("threads");
-          else void intents.focus({ kind: "thread", threadId: directive.threadId });
+          navigate("threads");
           break;
-        default:
+        case "submit_composer":
+          if (origin?.target?.kind === "sink") report({ ok: false, message: TERMINAL_SUBMIT_REFUSED });
+          else void submitComposer(composerDeps(), directive.threadId);
           break;
+        case "clear_composer":
+          if (origin?.target?.kind === "sink") report({ ok: false, message: TERMINAL_CLEAR_REFUSED });
+          else clearComposer(composerDeps(), directive.threadId);
+          break;
+        case "compose_in_thread":
+          void composeInThread(composerDeps(), directive);
+          break;
+        case "focus_previous":
+          void intents.focusPrevious().then((focused) => {
+            if (!focused) report({ ok: false, message: "There's no earlier thread or terminal to go back to." });
+          });
+          break;
+        case "choose_session":
+          // Non-modal: the question stays up beside the widget until answered or expired.
+          setSessionChoice({
+            id: ++choiceId.current,
+            question: directive.question,
+            choices: directive.choices,
+            followUp: directive.followUp,
+            expiresAt: Date.now() + CHOICE_TTL_MS,
+          });
+          break;
+        default: {
+          // Lane B1 adds `open_new_thread` on the wire before the generated union does. On Stable
+          // it only opens New thread, prefilled: nothing starts until the person sends (S3).
+          const wire: unknown = directive;
+          if (isOpenNewThreadDirective(wire)) {
+            navigate("threads");
+            threads?.request("new", undefined, {
+              providerId: wire.providerId,
+              providerAccountId: wire.providerAccountId,
+              workspaceId: wire.workspaceId,
+            });
+          }
+          break;
+        }
       }
     },
-    [navigate],
+    [navigate, report, composerDeps],
   );
 
   const applyResponse = useCallback(
-    (response: KalVoiceResponse) => {
+    (response: KalVoiceResponse, origin: { target: DictationTarget | null } | null = null) => {
       dispatch({ type: "response", response });
       setHistory((items) =>
         items.map((item) => (item.requestId === response.requestId ? { ...item, response } : item)),
       );
       setStatus((s) => (s ? { ...s, usage: response.usage } : s));
-      runDirective(response.directive);
+      runDirective(response.directive, origin);
     },
     [runDirective],
+  );
+
+  // A clarification waits 30 s for an answer, then goes away on its own.
+  useEffect(() => {
+    if (!sessionChoice) return;
+    const timer = setTimeout(
+      () => setSessionChoice((current) => (current?.id === sessionChoice.id ? null : current)),
+      Math.max(0, sessionChoice.expiresAt - Date.now()),
+    );
+    return () => clearTimeout(timer);
+  }, [sessionChoice]);
+
+  const dismissSessionChoice = useCallback(() => setSessionChoice(null), []);
+  /** Follows up on the session the person picked (a click or its spoken name). */
+  const followUp = useCallback(
+    (threadId: string): boolean => {
+      const pending = choiceRef.current;
+      if (!choiceIsLive(pending)) return false;
+      const choice = pending.choices.find((candidate) => candidate.threadId === threadId);
+      if (!choice) return false;
+      choiceRef.current = null;
+      setSessionChoice(null);
+      void followUpChoice(
+        {
+          ...composerDeps(),
+          focusThread: (id) => void surfaces.current.uiIntents.focus({ kind: "thread", threadId: id }),
+        },
+        choice,
+        pending.followUp,
+      );
+      return true;
+    },
+    [composerDeps],
+  );
+  const chooseSession = useCallback(
+    (threadId: string) => {
+      followUp(threadId);
+    },
+    [followUp],
   );
 
   const submit = useCallback(
@@ -401,6 +543,13 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       const recordAction = () =>
         afterPaint(() => void client.kalvoiceLatencyRecord(performance.now() - started).catch(() => undefined));
       try {
+        // An answer to "Which one?" is handled here: native keeps no conversation state.
+        const pending = choiceRef.current;
+        const picked = choiceIsLive(pending) ? pickSpokenChoice(text, pending.choices) : null;
+        if (picked && followUp(picked.threadId)) {
+          recordAction();
+          return;
+        }
         const previous = currentRef.current;
         const talked = await client.kalvoiceTalk({
           requestId,
@@ -409,7 +558,9 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           target: targetKind(target),
           durationMs,
           workspaceId: workspaces.active?.id ?? null,
-          threadId: getSelectedThread()?.threadId ?? null,
+          // The captured composer's thread wins over whatever Threads shows by now.
+          threadId:
+            target?.kind === "composer" ? target.composer.handle.threadId : (getSelectedThread()?.threadId ?? null),
         });
         if (signal.aborted) return;
         if (talked.route === "dictation") {
@@ -436,7 +587,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           type: "talked",
           talk: { requestId, text, route: talked.route, hadTarget: target !== null },
         });
-        applyResponse(response);
+        applyResponse(response, { target });
         recordAction();
       } catch (error) {
         if (signal.aborted) return;
@@ -446,7 +597,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
         dictationSessions.current.finish(sessionId);
       }
     },
-    [client, applyResponse, workspaces.active?.id],
+    [client, applyResponse, followUp, workspaces.active?.id],
   );
 
   const onSignal = useCallback(
@@ -459,9 +610,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           levelRef.current = 0;
           {
             const session = dictationSessions.current.open(signal.sessionId);
-            setDictationTarget(
-              session ? { sessionId: session.sessionId, paneId: session.target?.paneId ?? null } : null,
-            );
+            setDictationTarget(session ? targetView(session.sessionId, session.target) : null);
           }
           break;
         case "talk_key": {
@@ -691,7 +840,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
     try {
       const sessionId = await client.kalvoiceListenStart("talk");
       const session = dictationSessions.current.open(sessionId, capture);
-      setDictationTarget(session ? { sessionId: session.sessionId, paneId: session.target?.paneId ?? null } : null);
+      setDictationTarget(session ? targetView(session.sessionId, session.target) : null);
     } catch {
       dictationSessions.current.abandonCapture(capture);
       setDictationTarget(null);
@@ -719,7 +868,14 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       await nextFrame();
       await nextFrame();
     }
-    const target = reconnectTarget(saved.target);
+    let target = reconnectTarget(saved.target);
+    if (!target && saved.target.kind === "composer") {
+      // The words belong to that thread's message box only: open that thread (never whichever
+      // thread is on screen now) and wait for its composer.
+      const threadId = saved.target.composer.handle.threadId;
+      composerDeps().openThread(threadId);
+      if (await waitForComposer(threadId)) target = reconnectTarget(saved.target);
+    }
     if (!target) {
       dispatch({ type: "dictation_blocked", message: dictationFailure(saved.target) });
       return;
@@ -743,7 +899,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       message: refunded ? "Typed instead." : "Typed instead. Its KalVoice Request remains counted.",
     });
     if (refunded) void refreshStatus();
-  }, [client, navigate, refreshStatus]);
+  }, [client, navigate, refreshStatus, composerDeps]);
 
   const dismiss = useCallback(() => dispatch({ type: "dismiss" }), []);
 
@@ -867,6 +1023,9 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       panel,
       setPanel,
       setPanelVisible,
+      sessionChoice,
+      chooseSession,
+      dismissSessionChoice,
     }),
     [
       status,
@@ -896,6 +1055,9 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       panel,
       setPanel,
       setPanelVisible,
+      sessionChoice,
+      chooseSession,
+      dismissSessionChoice,
     ],
   );
 

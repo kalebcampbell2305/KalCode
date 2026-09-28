@@ -19,6 +19,10 @@ vi.mock("@xterm/xterm", () => ({ Terminal: class {} }));
 
 const CLAUDE_PERSONAL = "0192f3c4-0000-7000-8000-000000000101";
 
+/** Replaces one command's answer (a failed create, a failed provider start). */
+let intercept: ((command: CommandName, args: Record<string, unknown> | undefined) => Promise<unknown> | null) | null =
+  null;
+
 beforeEach(() => {
   vi.stubGlobal(
     "ResizeObserver",
@@ -29,7 +33,10 @@ beforeEach(() => {
     },
   );
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  intercept = null;
+});
 
 interface Harness {
   client: KalCodeClient;
@@ -37,15 +44,19 @@ interface Harness {
   alpha: Workspace;
   beta: Workspace;
   claudeWork: string;
+  /** The transport's own answer, without recording or interception. */
+  raw: <T>(command: CommandName, args?: Record<string, unknown>) => Promise<T>;
   user: ReturnType<typeof userEvent.setup>;
 }
 
-async function mountStable(prepare?: (h: Omit<Harness, "user">) => Promise<void>): Promise<Harness> {
+async function mountStable(prepare?: (h: Omit<Harness, "user" | "raw">) => Promise<void>): Promise<Harness> {
   const transport = createMemoryTransport("account-ready", { detectDelayMs: 0 });
   const calls: Harness["calls"] = [];
   const invoke = transport.invoke.bind(transport);
   transport.invoke = (<T,>(command: CommandName, args?: Record<string, unknown>): Promise<T> => {
     calls.push({ command, args });
+    const replaced = intercept?.(command, args);
+    if (replaced) return replaced as Promise<T>;
     return invoke<T>(command, args);
   }) as typeof transport.invoke;
   const client = new KalCodeClient(transport);
@@ -79,7 +90,7 @@ async function mountStable(prepare?: (h: Omit<Harness, "user">) => Promise<void>
       </TooltipProvider>
     </ToastProvider>,
   );
-  return { ...base, user: userEvent.setup() };
+  return { ...base, raw: invoke, user: userEvent.setup() };
 }
 
 async function openNewThread(user: Harness["user"]) {
@@ -215,5 +226,40 @@ describe("New thread account defaults (Stable)", () => {
     expect(await h.client.listProviderAccountBindings({ kind: "workspace" })).toEqual([
       { providerId: "claude-code", kind: "workspace", scopeId: h.beta.id, accountId: CLAUDE_PERSONAL },
     ]);
+  });
+
+  it("remembers the workspace account only after the thread was created and started (N5)", async () => {
+    const h = await mountStable();
+    const form = await openNewThread(h.user);
+    await waitFor(() => expect(workspace(form)).toHaveValue(h.beta.id));
+    await h.user.selectOptions(account(form), h.claudeWork);
+    await h.user.click(remember(form));
+    await h.user.type(form.getByRole("textbox", { name: "Task" }), "summarize the README");
+
+    // 1. The create is refused: nothing is remembered and the form says why.
+    intercept = (command) =>
+      command === "thread_create"
+        ? Promise.reject({
+            category: "provider",
+            code: "provider_account_not_authenticated",
+            message: "Work isn't signed in.",
+            retryable: false,
+          })
+        : null;
+    await h.user.click(form.getByRole("button", { name: "Start thread" }));
+    expect(await form.findByRole("alert")).toHaveTextContent("Work isn't signed in.");
+
+    // 2. The thread is created but its provider fails to start: still nothing remembered.
+    intercept = (command, args) =>
+      command === "thread_create"
+        ? h
+            .raw<Record<string, unknown>>("thread_create", args)
+            .then((thread) => ({ ...thread, status: "failed", error: { code: "provider_exited", message: "Exited." } }))
+        : null;
+    await h.user.click(form.getByRole("button", { name: "Start thread" }));
+    expect(await screen.findByText("The provider couldn't start")).toBeInTheDocument();
+    await screen.findByRole("region", { name: "Thread" });
+    expect(h.calls.some((c) => c.command === "provider_account_bind")).toBe(false);
+    expect(await h.client.listProviderAccountBindings({ kind: "workspace" })).toEqual([]);
   });
 });

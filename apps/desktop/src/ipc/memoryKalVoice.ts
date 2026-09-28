@@ -14,7 +14,9 @@
  * alias retained for app-control coverage), kalvoice-slow (stages last long enough to observe).
  * App-control commands run immediately; provider sessions keep their own native permission
  * prompts. Thread commands report fixed test-double results.
- * `?transcript=` sets what the fake recognizer "hears".
+ * `?transcript=` sets what the fake recognizer "hears" (`__kalcodeMemory.kalvoice.setTranscript` changes
+ * it between utterances). Composer and session commands ("send that", "clear that", "tell <name>
+ * to …", "go back") mirror the 0.1.5 TK-3 grammar closely enough for UI tests.
  */
 import type {
   CommandRequest,
@@ -31,6 +33,7 @@ import type {
   KalVoiceUsage,
   PanelPlacement,
   ReservedShortcut,
+  SessionResolution,
   SpeechModelInfo,
   StageTimings,
   SurfaceId,
@@ -165,6 +168,40 @@ interface Parsed {
   outcome?: KalVoiceOutcome;
   directive?: UiDirective;
   consequential?: boolean;
+  /** "tell <session> to <prompt>": the session query and the verbatim prompt. */
+  direct?: { query: string; prompt: string };
+}
+
+/** Resolves a spoken session name the way `session_resolve` does. */
+export type MemorySessionResolver = (
+  query: string,
+  context: { workspaceId: string | null; focusedThreadId: string | null },
+) => Promise<SessionResolution>;
+
+/** "send that", "clear that", "go back", "tell <name> to <prompt>" (TK-3 subset). */
+function sessionCommand(text: string, t: string): Parsed | null {
+  if (/^(?:send|submit) (?:that|it|this)(?: now)?$/.test(t)) return { kind: "submit_focused", high: true };
+  if (/^(?:(?:clear|scratch) (?:that|it|this)|don'?t send (?:that|it|this))$/.test(t)) {
+    return { kind: "clear_focused", high: true };
+  }
+  if (
+    /^(?:go back(?: to (?:the )?(?:terminal|thread|session|one) i was (?:just )?using)?|focus (?:the )?previous(?: terminal| thread| session)?)$/.test(
+      t,
+    )
+  ) {
+    return {
+      kind: "focus_previous",
+      high: true,
+      outcome: { kind: "completed", summary: "Going back." },
+      directive: { kind: "focus_previous" },
+    };
+  }
+  // The prompt keeps the person's own casing and punctuation.
+  const direct = text.trim().match(/^(?:hey kal[,.]?\s+)?(?:tell|ask)\s+(.+?)\s+to\s+(\S.*)$/iu);
+  if (direct?.[1] && direct[2]) {
+    return { kind: "direct_prompt", high: false, direct: { query: direct[1], prompt: direct[2] } };
+  }
+  return null;
 }
 
 function normalize(text: string): string {
@@ -356,6 +393,8 @@ const FILTER_SUMMARY: Record<DashboardChip, string> = {
 function understand(text: string): Parsed | null {
   const t = normalize(text);
   if (!t) return { kind: "empty", high: false };
+  const session = sessionCommand(text, t);
+  if (session) return session;
   if (/\b(don't|dont|not|never)\b/.test(t)) return null;
   const browser = browserCommand(text, t);
   if (browser) return browser;
@@ -469,6 +508,10 @@ function defaults(): KalVoicePreferences {
 export interface MemoryKalVoice {
   handlers: Record<string, (args: Record<string, unknown>) => unknown>;
   subscribe(onSignal: (signal: KalVoiceSignal) => void): void;
+  /** Test hooks: what the fake recognizer hears next. */
+  controls: { setTranscript(text: string): void };
+  /** Wires spoken session names to the transport's `session_resolve`. */
+  setSessionResolver(resolver: MemorySessionResolver): void;
   /** KalVoice does not own approval requests; always returns `undefined`. */
   decideApproval(args: Record<string, unknown>): unknown;
 }
@@ -490,7 +533,8 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
   const latency: StageTimings[] = [];
   // Like native: one channel per window, replaced on every subscribe.
   let subscriber: ((signal: KalVoiceSignal) => void) | null = null;
-  const transcript =
+  let resolveSession: MemorySessionResolver | null = null;
+  let transcript =
     transcriptOverride ??
     (typeof location !== "undefined" ? new URLSearchParams(location.search).get("transcript") : null) ??
     "Add a unit test for the parser";
@@ -653,7 +697,10 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
     directive: UiDirective | null = null,
   ): KalVoiceResponse => ({ requestId, intent: kind, outcome, usage: usage(), counted: wasCounted, directive });
 
-  const handleRequest = async (request: CommandRequest): Promise<KalVoiceResponse> => {
+  const handleRequest = async (
+    request: CommandRequest,
+    target: TalkRequest["target"] = "none",
+  ): Promise<KalVoiceResponse> => {
     const { requestId } = request;
     if (counted.has(requestId)) {
       return respond(
@@ -703,6 +750,51 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
       }
       parsed.directive = { ...parsed.directive, workspaceId: request.workspaceId };
     }
+    if (parsed.kind === "submit_focused" || parsed.kind === "clear_focused") {
+      // Like native: a raw terminal is never submitted or edited by voice.
+      if (target === "terminal") {
+        return failed(
+          "terminal_submit_refused",
+          "KalVoice never presses Enter in a terminal. Press Enter yourself to run it.",
+          parsed.kind,
+        );
+      }
+      if (!request.threadId) {
+        return failed("no_focused_composer", "Click in a thread's message box first, then try again.", parsed.kind);
+      }
+      const submit = parsed.kind === "submit_focused";
+      parsed.outcome = { kind: "completed", summary: submit ? "Sending that." : "Clearing that." };
+      parsed.directive = submit
+        ? { kind: "submit_composer", threadId: request.threadId }
+        : { kind: "clear_composer", threadId: request.threadId };
+    }
+    if (parsed.direct) {
+      const resolution: SessionResolution = resolveSession
+        ? await resolveSession(parsed.direct.query, {
+            workspaceId: request.workspaceId,
+            focusedThreadId: request.threadId ?? null,
+          })
+        : { kind: "not_found", message: "KalCode couldn't find an open session with that name." };
+      if (resolution.kind === "not_found") return failed("session_not_found", resolution.message, parsed.kind);
+      const followUp = { kind: "compose" as const, text: parsed.direct.prompt, submit: true };
+      if (resolution.kind === "ambiguous") {
+        parsed.outcome = { kind: "completed", summary: resolution.question };
+        parsed.directive = {
+          kind: "choose_session",
+          question: resolution.question,
+          choices: resolution.choices,
+          followUp,
+        };
+      } else {
+        parsed.outcome = { kind: "completed", summary: `Sending to “${resolution.target.name}”.` };
+        parsed.directive = {
+          kind: "compose_in_thread",
+          threadId: resolution.target.threadId,
+          text: followUp.text,
+          submit: followUp.submit,
+        };
+      }
+    }
     if (parsed.outcome?.kind === "failed") return failed(parsed.outcome.code, parsed.outcome.message, parsed.kind);
     used += 1;
     counted.set(requestId, parsed.kind);
@@ -739,13 +831,16 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
       });
       return { route: which, response: null, recognizedMs };
     }
-    const response = await handleRequest({
-      requestId: request.requestId,
-      text: request.text,
-      input: "voice",
-      workspaceId: request.workspaceId,
-      threadId: request.threadId ?? null,
-    });
+    const response = await handleRequest(
+      {
+        requestId: request.requestId,
+        text: request.text,
+        input: "voice",
+        workspaceId: request.workspaceId,
+        threadId: request.threadId ?? null,
+      },
+      request.target,
+    );
     return { route: which, response, recognizedMs };
   };
 
@@ -914,6 +1009,14 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
   return {
     handlers,
     decideApproval,
+    controls: {
+      setTranscript(text: string) {
+        transcript = text;
+      },
+    },
+    setSessionResolver(resolver) {
+      resolveSession = resolver;
+    },
     subscribe(onSignal) {
       subscriber = onSignal;
       installKeys();

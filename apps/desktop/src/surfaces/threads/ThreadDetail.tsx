@@ -31,7 +31,12 @@ import { ContextTray } from "../../context/ContextTray.tsx";
 import { PromptWarningDialog } from "../../context/PromptWarningDialog.tsx";
 import { useContextDrop } from "../../context/useContextDrop.ts";
 import { usePromptConfirmation } from "../../context/usePromptConfirmation.ts";
-import { toKalCodeError } from "../../ipc/errors.ts";
+import {
+  type ComposerSubmitOutcome,
+  registerComposer,
+  useComposerListening,
+  voiceTargetLabel,
+} from "../../kalvoice/composerRegistry.ts";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { MOD_LABEL } from "../../shell/shortcuts.ts";
@@ -39,7 +44,7 @@ import { ApprovalPrompt, usePermissions } from "../permissions/index.ts";
 import { AccountSwitcher } from "./AccountSwitcher.tsx";
 import { buildTimeline, PERMISSION_MODES, presentStatus, TOOL_STATUS, threadActions } from "./model.ts";
 import styles from "./ThreadDetail.module.css";
-import { useThreadAccountChanges } from "./useThreadAccount.ts";
+import { describeSendError, useThreadAccountChanges } from "./useThreadAccount.ts";
 import { type LiveMessage, useThreadDetail } from "./useThreads.ts";
 
 interface ThreadDetailProps {
@@ -84,7 +89,7 @@ export function ThreadDetail({ threadId, archived, onArchived }: ThreadDetailPro
       void detail.reload();
       return true;
     } catch (error) {
-      toast.show({ tone: "danger", title: FAILURE_TITLES[action], description: toKalCodeError(error).message });
+      toast.show({ tone: "danger", title: FAILURE_TITLES[action], description: describeSendError(error) });
       return false;
     } finally {
       setBusy(null);
@@ -486,7 +491,14 @@ function Composer({
   const { client } = useRuntime();
   const account = useAccount();
   const toast = useToast();
-  const [text, setText] = useState("");
+  const [text, setTextState] = useState("");
+  // The latest text, readable synchronously by a voice send right after a dictated insert.
+  const draft = useRef("");
+  const setText = (next: string) => {
+    draft.current = next;
+    setTextState(next);
+  };
+  const boxRef = useRef<HTMLTextAreaElement>(null);
   const blocked = mode === "blocked";
   const promptScope = [
     account.generation,
@@ -501,43 +513,59 @@ function Composer({
   const context = useContextDrop(thread, confirmation.cancel);
   const sending = busy || context.busy || confirmation.busy;
 
-  const submit = async (event?: FormEvent) => {
-    event?.preventDefault();
-    if (blocked || sending || !text.trim()) return;
-    const submittedText = text;
+  /** The composer's own Send (form, Ctrl+Enter and KalVoice all use it). */
+  const send = async (): Promise<ComposerSubmitOutcome> => {
+    const submittedText = draft.current;
+    if (blocked) return "blocked";
+    if (sending) return "busy";
+    if (!submittedText.trim()) return "empty";
     const hasContext = context.preview !== null;
+    // Settled by the callbacks below; still "confirm" afterwards means the warning dialog is open.
+    let outcome: ComposerSubmitOutcome = "confirm";
     await confirmation.request({
       review: () => client.reviewThreadPrompt(thread.id, submittedText),
       effect: async (promptReviewId) => {
         if (!hasContext) return { kind: "plain" as const, sent: await onSubmit(submittedText, promptReviewId) };
         return { kind: "context" as const, result: await context.send(submittedText, promptReviewId) };
       },
-      onComplete: (outcome) => {
-        if (outcome.kind === "plain") {
-          if (outcome.sent) setText("");
+      onComplete: (result) => {
+        if (result.kind === "plain") {
+          outcome = result.sent ? "sent" : "not_sent";
+          if (result.sent) setText("");
           return;
         }
-        if (outcome.result?.kind === "sent") {
-          onContextSent(outcome.result.thread);
+        if (result.result?.kind === "sent") {
+          outcome = "sent";
+          onContextSent(result.result.thread);
           setText("");
-        } else if (outcome.result?.kind === "stale") {
-          toast.show({
-            tone: "info",
-            title: "Context changed",
-            description: "Review the refreshed preview before sending.",
-          });
+        } else {
+          outcome = "not_sent";
+          if (result.result?.kind === "stale") {
+            toast.show({
+              tone: "info",
+              title: "Context changed",
+              description: "Review the refreshed preview before sending.",
+            });
+          }
         }
       },
       onError: (error) => {
-        toast.show({ tone: "danger", title: "Message not sent", description: toKalCodeError(error).message });
+        outcome = "not_sent";
+        toast.show({ tone: "danger", title: "Message not sent", description: describeSendError(error) });
       },
     });
+    return outcome;
+  };
+
+  const submit = (event?: FormEvent) => {
+    event?.preventDefault();
+    void send();
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
       event.preventDefault();
-      void submit();
+      void send();
     }
   };
 
@@ -550,14 +578,68 @@ function Composer({
           : "Archived threads are read-only."
         : `${MOD_LABEL} Enter to send`;
 
+  // KalVoice finds this thread's message box only through this registration (TK-2): dictation,
+  // "send that", "clear that" and messages to a named thread. Read fresh on every call.
+  const live = useRef({ thread, mode, hint, send, cancel: confirmation.cancel });
+  live.current = { thread, mode, hint, send, cancel: confirmation.cancel };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: registered per thread; the rest is read through `live`.
+  useEffect(
+    () =>
+      registerComposer({
+        threadId: thread.id,
+        identity: () => {
+          const current = live.current.thread;
+          return {
+            threadId: current.id,
+            threadName: current.name,
+            providerId: current.providerId,
+            providerName: current.providerName,
+            accountLabel: current.accountLabel,
+          };
+        },
+        element: () => boxRef.current,
+        mode: () => live.current.mode,
+        blockedReason: () => (live.current.mode === "blocked" ? live.current.hint : null),
+        hasText: () => draft.current.trim() !== "",
+        submit: () => live.current.send(),
+        clear: () => {
+          live.current.cancel();
+          setText("");
+        },
+      }),
+    [thread.id],
+  );
+  const voiceTarget = useComposerListening(thread.id);
+
   return (
     <>
       <form className={styles.composer} onSubmit={submit}>
         <label htmlFor="thread-composer" className="visually-hidden">
           Message
         </label>
-        <div className={styles.well} data-disabled={blocked || undefined}>
+        {/* Text, not colour: which box KalVoice will type into while the talk key is held. */}
+        <p
+          className={styles.voiceTarget}
+          aria-live="polite"
+          data-kalvoice-target={voiceTarget ? "listening" : undefined}
+        >
+          {voiceTarget
+            ? voiceTargetLabel({
+                threadId: thread.id,
+                threadName: thread.name,
+                providerId: thread.providerId,
+                providerName: thread.providerName,
+                accountLabel: thread.accountLabel,
+              })
+            : ""}
+        </p>
+        <div
+          className={styles.well}
+          data-disabled={blocked || undefined}
+          data-kalvoice-target={voiceTarget ? "listening" : undefined}
+        >
           <TextArea
+            ref={boxRef}
             id="thread-composer"
             rows={3}
             value={text}

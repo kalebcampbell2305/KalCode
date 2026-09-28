@@ -100,6 +100,16 @@ export function describeRebindError(
   }
 }
 
+/** What the composer says when native refuses a message because the thread was rebound meanwhile. */
+export const THREAD_ACCOUNT_CHANGED_MESSAGE =
+  "This thread's account changed before your message was sent. Nothing was sent — send it again.";
+
+/** Human copy for a refused send or resume (native copy unless KalCode has its own). */
+export function describeSendError(error: unknown): string {
+  const err = toKalCodeError(error);
+  return err.code === "thread_account_changed" ? THREAD_ACCOUNT_CHANGED_MESSAGE : err.message;
+}
+
 /** The active (non-archived) accounts of one provider, re-read on demand (e.g. when a menu opens). */
 export function useProviderAccountList(providerId: string) {
   const { client } = useRuntime();

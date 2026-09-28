@@ -33,16 +33,19 @@ import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { MOD_LABEL } from "../../shell/shortcuts.ts";
 import { openProviderAccounts } from "../providers/providersTab.ts";
+import type { NewThreadPrefill } from "./intent.tsx";
 import { PERMISSION_MODES, providerModeNote, type UnavailableProvider, unavailableProviders } from "./model.ts";
 import styles from "./NewThread.module.css";
 
 interface NewThreadProps {
   onCreated: (thread: ThreadSummary) => void;
   onCancel: () => void;
+  /** Choices to start from (KalVoice); the person still reviews them and presses Start thread. */
+  prefill?: NewThreadPrefill;
 }
 
 /** New thread flow: provider, model, workspace, permission mode (Approve by default), task. */
-export function NewThread({ onCreated, onCancel }: NewThreadProps) {
+export function NewThread({ onCreated, onCancel, prefill }: NewThreadProps) {
   const { client } = useRuntime();
   const { navigate } = useNavigation();
   const [options, setOptions] = useState<ThreadOptions | null>(null);
@@ -145,6 +148,7 @@ export function NewThread({ onCreated, onCancel }: NewThreadProps) {
             unavailable={unavailable}
             onCreated={onCreated}
             onCancel={onCancel}
+            {...(prefill ? { prefill } : {})}
           />
         )}
       </div>
@@ -175,6 +179,7 @@ function NewThreadForm({
   unavailable,
   onCreated,
   onCancel,
+  prefill,
 }: {
   options: ThreadOptions;
   accounts: readonly ProviderAccount[];
@@ -190,12 +195,24 @@ function NewThreadForm({
   const activeWorkspaceId = useWorkspaces().active?.id ?? null;
   const offered = (workspace: string | null): workspace is string =>
     workspace !== null && options.workspaces.some((w) => w.id === workspace);
-  const initialProvider = options.providers[0]?.id ?? "";
-  const initialWorkspace = offered(activeWorkspaceId) ? activeWorkspaceId : (options.workspaces[0]?.id ?? "");
+  // A prefill (KalVoice) wins where it names something this form offers; nothing starts until
+  // the person presses Start thread.
+  const initialProvider =
+    prefill && options.providers.some((p) => p.id === prefill.providerId)
+      ? prefill.providerId
+      : (options.providers[0]?.id ?? "");
+  const prefillWorkspace = prefill?.workspaceId ?? null;
+  const initialWorkspace = offered(prefillWorkspace)
+    ? prefillWorkspace
+    : offered(activeWorkspaceId)
+      ? activeWorkspaceId
+      : (options.workspaces[0]?.id ?? "");
   const [providerId, setProviderId] = useState(initialProvider);
-  const [providerAccountId, setProviderAccountId] = useState(() =>
-    preselectAccount(accounts, bindings, initialProvider, initialWorkspace),
-  );
+  const [providerAccountId, setProviderAccountId] = useState(() => {
+    const asked = prefill?.providerAccountId;
+    if (asked && accounts.some((a) => a.id === asked && a.providerId === initialProvider)) return asked;
+    return preselectAccount(accounts, bindings, initialProvider, initialWorkspace);
+  });
   const [model, setModel] = useState("");
   const [workspaceId, setWorkspaceId] = useState(initialWorkspace);
   const [remember, setRemember] = useState(false);
@@ -277,7 +294,9 @@ function NewThreadForm({
         ? { account: providerAccount, workspace, providerName: provider.displayName }
         : null;
     const finish = async (thread: ThreadSummary) => {
-      if (rememberFor) {
+      // Remembered only once the thread was created and its provider started: a refused create
+      // (onError) or a failed start writes no workspace default.
+      if (rememberFor && thread.status !== "failed") {
         try {
           await client.bindProviderAccount(providerId, "workspace", rememberFor.workspace.id, rememberFor.account.id);
           toast.show({

@@ -21,7 +21,12 @@ export interface RebindRequest {
   accountId: string;
   /** Distinguishes repeated requests for the same pair. */
   nonce: number;
+  /** After this (epoch ms) the request is dropped unanswered: a stale ask never opens the dialog. */
+  expiresAt: number;
 }
+
+/** How long a rebind request waits for the Threads surface to show its dialog. */
+export const REBIND_REQUEST_TTL_MS = 30_000;
 
 interface AccountIntentState {
   selected: SelectedThread | null;
@@ -30,11 +35,31 @@ interface AccountIntentState {
 
 let state: AccountIntentState = { selected: null, rebind: null };
 let nextNonce = 1;
+let expiryTimer: ReturnType<typeof setTimeout> | null = null;
 const listeners = new Set<() => void>();
 
 function update(next: AccountIntentState): void {
+  if (next.rebind !== state.rebind && expiryTimer !== null) {
+    clearTimeout(expiryTimer);
+    expiryTimer = null;
+  }
   state = next;
+  if (next.rebind !== null && expiryTimer === null) {
+    const nonce = next.rebind.nonce;
+    expiryTimer = setTimeout(
+      () => {
+        expiryTimer = null;
+        if (state.rebind?.nonce === nonce) update({ ...state, rebind: null });
+      },
+      Math.max(0, next.rebind.expiresAt - Date.now()),
+    );
+  }
   for (const listener of listeners) listener();
+}
+
+/** The pending request, unless it has expired. */
+function liveRebind(): RebindRequest | null {
+  return state.rebind !== null && Date.now() < state.rebind.expiresAt ? state.rebind : null;
 }
 
 function sameSelection(a: SelectedThread | null, b: SelectedThread | null): boolean {
@@ -53,11 +78,19 @@ export function getSelectedThread(): SelectedThread | null {
   return state.selected;
 }
 
-/** Opens the Rebind dialog for `threadId` → `accountId` once the Threads surface shows it. */
+/**
+ * Opens the Rebind dialog for `threadId` → `accountId` once the Threads surface shows it. The
+ * caller navigates to Threads; the request expires after 30 s or when the person leaves Threads.
+ */
 export function requestRebind(threadId: string, accountId: string): RebindRequest {
-  const request = { threadId, accountId, nonce: nextNonce++ };
+  const request = { threadId, accountId, nonce: nextNonce++, expiresAt: Date.now() + REBIND_REQUEST_TTL_MS };
   update({ ...state, rebind: request });
   return request;
+}
+
+/** Drops any pending request (the person moved to another surface). */
+export function expireRebindRequest(): void {
+  if (state.rebind !== null) update({ ...state, rebind: null });
 }
 
 /** Marks a request handled (confirmed or cancelled) so it doesn't reopen the dialog. */
@@ -68,7 +101,7 @@ export function consumeRebindRequest(nonce: number): void {
 
 /** The latest pending request, for non-React callers and tests. */
 export function getRebindRequest(): RebindRequest | null {
-  return state.rebind;
+  return liveRebind();
 }
 
 function subscribe(listener: () => void) {
@@ -80,11 +113,7 @@ function subscribe(listener: () => void) {
 
 /** The latest pending rebind request (null when none is waiting). */
 export function useRebindRequest(): RebindRequest | null {
-  return useSyncExternalStore(
-    subscribe,
-    () => state.rebind,
-    () => state.rebind,
-  );
+  return useSyncExternalStore(subscribe, liveRebind, liveRebind);
 }
 
 /** The thread the Threads surface shows. */

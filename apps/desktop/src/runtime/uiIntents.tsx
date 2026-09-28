@@ -2,7 +2,7 @@ import type { DashboardChip } from "@kalcode/protocol";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigation } from "../shell/navigation.tsx";
 import { usePermissions } from "../surfaces/permissions/PermissionsProvider.tsx";
-import { useSelectedThread } from "../surfaces/threads/accountIntent.ts";
+import { expireRebindRequest, useSelectedThread } from "../surfaces/threads/accountIntent.ts";
 import { useThreadsIntent } from "../surfaces/threads/intent.tsx";
 import { focusHistory, forgetFocus, recordFocus } from "./focusHistory.ts";
 import { useRuntime } from "./RuntimeProvider.tsx";
@@ -67,7 +67,7 @@ type IntentSession = ReturnType<typeof createSession>;
  */
 export function UiIntentsProvider({ children }: { children: ReactNode }) {
   const { client, info } = useRuntime();
-  const { navigate } = useNavigation();
+  const { navigate, current: surface } = useNavigation();
   const workspaces = useWorkspaces();
   const permissions = usePermissions();
   const threadsIntent = useThreadsIntent();
@@ -213,6 +213,15 @@ export function UiIntentsProvider({ children }: { children: ReactNode }) {
     },
     [isLive, session],
   );
+
+  // A rebind request (palette, KalVoice) is answered on Threads; leaving Threads drops it, so a
+  // stale request can never open the Rebind dialog later.
+  const shownSurface = useRef(surface);
+  useEffect(() => {
+    if (shownSurface.current === surface) return;
+    shownSurface.current = surface;
+    if (surface !== "threads") expireRebindRequest();
+  }, [surface]);
 
   // The thread the Threads surface shows counts as used, however it was opened.
   const shownThread = useSelectedThread()?.threadId ?? null;

@@ -64,10 +64,26 @@ it("asks for the Rebind dialog of the shown thread and sends that thread with th
   expect(mocks.client.rebindThreadAccount).not.toHaveBeenCalled();
 });
 
-it("opens a named thread that isn't on screen before asking", async () => {
+it("always opens Threads for a named thread that isn't on screen (never a pane) before asking", async () => {
   await say("switch the login fix thread to Gemini B");
   expect(mocks.request).toHaveBeenCalledWith(expect.objectContaining({ threadId: null }));
+  // Threads shows the request's thread itself; a focus intent could open a Code pane instead (S4).
   expect(getRebindRequest()).toMatchObject({ threadId: "thread-1", accountId: "account-b" });
-  expect(mocks.focus).toHaveBeenCalledWith({ kind: "thread", threadId: "thread-1" });
+  expect(mocks.navigate).toHaveBeenCalledWith("threads");
+  expect(mocks.focus).not.toHaveBeenCalled();
   expect(mocks.client.rebindThreadAccount).not.toHaveBeenCalled();
+});
+
+it("drops a rebind request that nobody answered within 30 seconds", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    await say("switch the login fix thread to Gemini B");
+    expect(getRebindRequest()).not.toBeNull();
+    await act(async () => {
+      vi.advanceTimersByTime(30_001);
+    });
+    expect(getRebindRequest()).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
 });

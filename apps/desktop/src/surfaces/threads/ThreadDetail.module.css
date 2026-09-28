@@ -388,6 +388,27 @@
   font-size: var(--type-small);
 }
 
+/* KalVoice target hint: text first (it names the thread), the outline only reinforces it. */
+.voiceTarget {
+  color: var(--color-accent);
+  font-size: var(--type-small);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.04em;
+}
+
+/* Empty, it stays in the accessibility tree (so the polite announcement is heard) but takes no space. */
+.voiceTarget:empty {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.well[data-kalvoice-target="listening"] {
+  border-color: var(--color-border-lit);
+}
+
 /* ---------------- approvals ---------------- */
 .approvals {
   display: grid;

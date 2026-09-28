@@ -53,6 +53,8 @@ export type AssistantEvent =
   | { type: "dictation_inserted"; characters: number }
   | { type: "dictation_blocked"; message: string }
   | { type: "typed_instead"; message: string }
+  /** The UI finished (or refused) what a directive asked for: a send, a clear, a choice. */
+  | { type: "action_result"; ok: boolean; message: string }
   | { type: "dismiss" }
   | { type: "settle" };
 
@@ -125,6 +127,16 @@ export function reduce(state: AssistantState, event: AssistantEvent): AssistantS
       };
     case "typed_instead":
       return { ...state, phase: "done", message: event.message, code: null, lastTalk: null };
+    case "action_result":
+      return {
+        ...state,
+        phase: event.ok ? "done" : "error",
+        mode: null,
+        sessionId: null,
+        partial: null,
+        message: event.message,
+        code: event.ok ? null : "action_refused",
+      };
     case "dismiss":
       return { ...state, phase: "idle", message: null, code: null, partial: null };
     case "settle":
