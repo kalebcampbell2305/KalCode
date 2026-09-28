@@ -100,6 +100,7 @@ const spokes = Array.from({ length: compact ? 40 : 56 }, (_, i) => VOICE.amplitu
       <p class="kc-vs__done" data-kc-vs-done data-testid="kalvoice-result"><span class="kc-i" data-i="done" aria-hidden="true"></span><span data-kc-vs-result>{VOICE_FLOW.done}</span></p>
     </div>
   </div>
+  {/* Keep this label even after KalVoice ships in Stable: the scripted multi-agent delegation is not shipped. */}
   {compact && <StageLabel class="kc-vs__compactlabel" tag="In development" />}
   <p class="visually-hidden" aria-live="polite" data-kc-vs-live data-testid={`live-${id}`}></p>
 </div>

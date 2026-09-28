@@ -63,22 +63,33 @@ function text(html: string) {
 // KalVoice interprets commands with its on-device interpreter only (docs/KALVOICE.md, "KalVoice
 // intelligence"): missing local reasoning fails closed and never falls back to a connected provider.
 const PROVIDER_ROUTING = [
-  /requests that need reasoning run on the provider you choose/i,
-  /Commands that need a model use the provider you choose/i,
-  /Reasoning uses an account you connected/i,
+  /KalVoice[^.]*\b(reasoning|interpret\w*|model)\b[^.]*\bprovider you (chose|choose|connected)/i,
+  /\b(reasoning|a model)\b[^.]*\b(provider you (chose|choose|connected)|account you connected)/i,
   /needs reasoning, the request goes to the AI provider/i,
+  // No shipped KalVoice command sends a task or prompt to a provider.
+  /a command sends/i,
 ];
 
 describe.each([
   { name: "KalVoice page", component: KalVoicePage as Component, path: "/kalvoice" },
   { name: "provider docs", component: ProvidersDocs as Component, path: "/docs/providers" },
   { name: "privacy page", component: Privacy as Component, path: "/privacy" },
+  { name: "local-first docs", component: LocalFirstDocs as Component, path: "/docs/local-first" },
 ])("the $name", ({ component, path }) => {
-  it("never says KalVoice sends requests to a connected provider for interpretation", async () => {
-    const copy = text(await render(component, path));
-    for (const claim of PROVIDER_ROUTING) expect(copy).not.toMatch(claim);
-    expect(copy).toMatch(/on your (computer|device)/i);
-  });
+  it.each([false, true])(
+    "never says KalVoice sends requests to a connected provider for interpretation (Stable %s)",
+    async (stable) => {
+      if (stable) selectSignedStable();
+      const copy = text(await render(component, path));
+      for (const claim of PROVIDER_ROUTING) expect(copy).not.toMatch(claim);
+      expect(copy).toMatch(/(interpret\w*|understood)[^.]*on your (computer|device)/i);
+    },
+  );
+});
+
+it("states on the local-first docs that KalVoice interpretation stays on the computer", async () => {
+  const copy = text(await render(LocalFirstDocs, "/docs/local-first"));
+  expect(copy).toContain("KalVoice interprets commands on your computer and never sends them to a provider");
 });
 
 it("states that KalVoice interpretation does not reach connected providers on the privacy page", async () => {
@@ -90,39 +101,62 @@ it("states that KalVoice interpretation does not reach connected providers on th
 });
 
 /** KalVoice copy that is true only until a signed Stable build is served from /download. */
-const DEVELOPMENT_LABELS: { name: string; component: Component; path: string; label: RegExp }[] = [
-  { name: "home KalVoice section", component: Home as Component, path: "/", label: /KalVoice · in development/ },
+const DEVELOPMENT_LABELS: { name: string; component: Component; path: string; label: RegExp; stable: RegExp }[] = [
+  {
+    name: "home KalVoice section",
+    component: Home as Component,
+    path: "/",
+    label: /KalVoice · in development/,
+    stable: /KalVoice Speak it\. See it done\./,
+  },
   // The hero status chip; the sample app window's rail keeps its own scripted "In development" group.
   {
     name: "KalVoice page",
     component: KalVoicePage as Component,
     path: "/kalvoice",
     label: /In development KalVoice: Speak your prompts/,
+    stable: /Available in KalCode Stable 0\.1\.5 KalVoice: Speak your prompts/,
   },
-  { name: "security page", component: Security as Component, path: "/security", label: /KalVoice, in development,/ },
-  { name: "privacy page", component: Privacy as Component, path: "/privacy", label: /KalVoice \(in development\)/ },
+  {
+    name: "security page",
+    component: Security as Component,
+    path: "/security",
+    label: /KalVoice, in development,/,
+    stable: /KalVoice transcribes dictation with a speech model/,
+  },
+  {
+    name: "privacy page",
+    component: Privacy as Component,
+    path: "/privacy",
+    label: /KalVoice \(in development\)/,
+    stable: /In the KalCode app, KalVoice transcribes dictation on your device/,
+  },
   {
     name: "local-first docs",
     component: LocalFirstDocs as Component,
     path: "/docs/local-first",
     label: /KalVoice dictation, in development,/,
+    stable: /KalVoice dictation uses a speech-recognition model/,
   },
   {
     name: "KalVoice demo",
     component: KalVoiceDemo as Component,
     path: "/kalvoice",
     label: /KalVoice is in development/,
+    stable: /Scripted demo · no microphone is used here/,
   },
 ];
 
-describe.each(DEVELOPMENT_LABELS)("the $name", ({ component, path, label }) => {
+describe.each(DEVELOPMENT_LABELS)("the $name", ({ component, path, label, stable }) => {
   it("labels KalVoice as in development while /download serves the preview", async () => {
     expect(text(await render(component, path))).toMatch(label);
   });
 
   it("drops the in-development label once /download serves signed Stable", async () => {
     selectSignedStable();
-    expect(text(await render(component, path))).not.toMatch(label);
+    const copy = text(await render(component, path));
+    expect(copy).not.toMatch(label);
+    expect(copy).toMatch(stable);
   });
 });
 
