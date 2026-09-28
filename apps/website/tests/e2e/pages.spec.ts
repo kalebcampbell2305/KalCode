@@ -155,7 +155,7 @@ test.describe("every page", () => {
     // Provider constellation: honest adapter status.
     const providers = page.getByRole("list", { name: "Works with the coding agents you already use" });
     await expect(providers).toContainText("Adapter built");
-    await expect(providers).toContainText("adapter planned");
+    await expect(providers).not.toContainText("planned");
   });
 
   test("the header offers Download (plain label) in every manifest state", async ({ page }) => {

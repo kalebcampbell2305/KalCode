@@ -266,12 +266,12 @@ const policies = [
     <Backdrop variant="nebula" intensity="low" />
     <Backdrop variant="vault" intensity="high" />
     <div class="container container--wide">
-      <h2 id="control-title" class="visually-hidden">Your keys, your rules, your machine</h2>
+      <h2 id="control-title" class="visually-hidden">Your accounts, your rules, your machine</h2>
       <div class="trio">
         <article class="frame frame--tile" aria-labelledby="keys-title">
           <p class="eyebrow">Your providers</p>
-          <h3 id="keys-title" class="headline">Bring your own keys. Use your own accounts.</h3>
-          <p>Claude Code, Codex and Gemini CLI run on your own accounts: sign in from KalCode, or bring an API key.</p>
+          <h3 id="keys-title" class="headline">Use your own accounts. Sign in from KalCode.</h3>
+          <p>Claude Code, Codex and Gemini CLI run on your own accounts: sign in to each from KalCode, with a separate managed profile for every account.</p>
           {
             hasStage("ProviderSwitch") ? (
               <StageSlot name="ProviderSwitch" width="compact" />
@@ -325,7 +325,7 @@ const policies = [
           </p>
           <ul class="tile-checks" role="list">
             <li><Icon name="check" /> Local database, on your device</li>
-            <li><Icon name="check" /> Secrets in your OS keychain</li>
+            <li><Icon name="check" /> KalCode session in your OS credential store</li>
             <li><Icon name="check" /> Nothing proxied through KalCode</li>
             <li><Icon name="check" /> No telemetry in current builds</li>
           </ul>
