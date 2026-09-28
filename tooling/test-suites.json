@@ -170,8 +170,8 @@
           "platforms": ["win32", "darwin"],
           "environment": {},
           "minimumExecuted": 1258,
-          "skippedMinimum": 22,
-          "skippedMaximum": 22,
+          "skippedMinimum": 23,
+          "skippedMaximum": 23,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         },
@@ -179,8 +179,8 @@
           "platforms": ["linux"],
           "environment": {},
           "minimumExecuted": 1258,
-          "skippedMinimum": 20,
-          "skippedMaximum": 20,
+          "skippedMinimum": 21,
+          "skippedMaximum": 21,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         }
@@ -220,7 +220,7 @@
         {
           "platforms": ["win32", "darwin", "linux"],
           "environment": {},
-          "minimumExecuted": 250,
+          "minimumExecuted": 257,
           "skippedMinimum": 0,
           "skippedMaximum": 0,
           "allowedSkipReasons": [],
@@ -337,6 +337,10 @@
     }
   ],
   "rustIntentionalIgnores": [
+    {
+      "path": "apps/desktop/src-tauri/src/session_resolver_tests.rs",
+      "reason": "latency report, not a gate"
+    },
     { "path": "crates/context/tests/folder_budgets.rs", "reason": "performance: run in release with --ignored" },
     {
       "path": "crates/git/tests/perf.rs",
