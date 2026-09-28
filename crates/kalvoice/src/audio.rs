@@ -267,9 +267,19 @@ mod mic {
         }
     }
 
+    /// Windows refuses WASAPI activation with `E_ACCESSDENIED` when microphone privacy settings
+    /// block the app. cpal reports that as a backend error carrying the HRESULT (or its Win32
+    /// code), so the numeric code is matched rather than the localized text.
+    fn access_denied(error: &cpal::Error) -> bool {
+        error.message().is_some_and(|message| {
+            message.contains("(os error -2147024891)") || message.contains("(os error 5)")
+        })
+    }
+
     fn map_error(error: &cpal::Error) -> CaptureError {
         match error.kind() {
             cpal::ErrorKind::PermissionDenied => CaptureError::PermissionDenied,
+            cpal::ErrorKind::BackendError if access_denied(error) => CaptureError::PermissionDenied,
             cpal::ErrorKind::DeviceBusy => CaptureError::Busy,
             cpal::ErrorKind::DeviceNotAvailable | cpal::ErrorKind::HostUnavailable => {
                 CaptureError::NoDevice
@@ -461,44 +471,108 @@ mod mic {
             #[cfg(target_os = "macos")]
             super::microphone_permission::authorize_for_capture()?;
 
-            let shared = Arc::new(Shared::default());
-            let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), CaptureError>>(1);
-            let (stop_tx, stop_rx) = mpsc::channel::<()>();
-            let thread_shared = shared.clone();
-            // cpal streams are not `Send` on every platform, so the stream lives on its own
-            // thread until it is told to stop.
-            let thread = std::thread::Builder::new()
-                .name("kalvoice-capture".into())
-                .spawn(move || match open(&thread_shared, max) {
-                    Ok(stream) => {
-                        let _ = ready_tx.send(Ok(()));
-                        let _ = stop_rx.recv();
-                        drop(stream);
-                    }
-                    Err(e) => {
-                        let _ = ready_tx.send(Err(e));
-                    }
-                })
-                .map_err(|e| CaptureError::Failed(e.to_string()))?;
-            let mut capture = MicCapture {
-                shared,
-                stop: Some(stop_tx),
-                thread: Some(thread),
-            };
-            match ready_rx.recv_timeout(Duration::from_secs(8)) {
-                Ok(Ok(())) => Ok(Box::new(capture)),
-                Ok(Err(e)) => {
-                    capture.stop_thread();
-                    Err(e)
+            start_with(move |shared| open(shared, max), START_TIMEOUT)
+                .map(|capture| Box::new(capture) as Box<dyn ActiveCapture>)
+        }
+    }
+
+    /// How long a microphone may take to start before the press fails.
+    const START_TIMEOUT: Duration = Duration::from_secs(8);
+
+    /// Opens a stream with `open` on a dedicated capture thread and waits up to `timeout` for it.
+    fn start_with<S, F>(open: F, timeout: Duration) -> Result<MicCapture, CaptureError>
+    where
+        S: 'static,
+        F: FnOnce(&Arc<Shared>) -> Result<S, CaptureError> + Send + 'static,
+    {
+        let shared = Arc::new(Shared::default());
+        let (ready_tx, ready_rx) = mpsc::sync_channel::<Result<(), CaptureError>>(1);
+        let (stop_tx, stop_rx) = mpsc::channel::<()>();
+        let thread_shared = shared.clone();
+        // cpal streams are not `Send` on every platform, so the stream lives on its own
+        // thread until it is told to stop.
+        let thread = std::thread::Builder::new()
+            .name("kalvoice-capture".into())
+            .spawn(move || match open(&thread_shared) {
+                Ok(stream) => {
+                    let _ = ready_tx.send(Ok(()));
+                    let _ = stop_rx.recv();
+                    drop(stream);
                 }
-                Err(_) => Err(CaptureError::Failed("the microphone did not start".into())),
+                Err(e) => {
+                    let _ = ready_tx.send(Err(e));
+                }
+            })
+            .map_err(|e| CaptureError::Failed(e.to_string()))?;
+        let mut capture = MicCapture {
+            shared,
+            stop: Some(stop_tx),
+            thread: Some(thread),
+        };
+        match ready_rx.recv_timeout(timeout) {
+            Ok(Ok(())) => Ok(capture),
+            Ok(Err(e)) => {
+                capture.stop_thread();
+                Err(e)
+            }
+            Err(_) => {
+                // Never wait on a device that hasn't answered: that would hold the talk key's
+                // press (and the session lock) until the driver or a privacy prompt responds.
+                // The capture thread is detached; if the device opens late, the missing stop
+                // sender makes it drop the stream at once, and nothing it hears is kept.
+                capture
+                    .shared
+                    .fail(CaptureError::Failed("the microphone did not start".into()));
+                drop(capture.stop.take());
+                drop(capture.thread.take());
+                Err(CaptureError::Failed("the microphone did not start".into()))
             }
         }
     }
 
     #[cfg(test)]
     mod tests {
+        use std::time::Instant;
+
         use super::*;
+
+        #[test]
+        fn a_microphone_that_never_starts_fails_without_blocking_the_press() {
+            let (release_tx, release_rx) = mpsc::channel::<()>();
+            let started = Instant::now();
+            // A device whose activation hangs (it answers only after the test ends).
+            let result = start_with(
+                move |_shared| {
+                    let _ = release_rx.recv_timeout(Duration::from_secs(10));
+                    Ok(())
+                },
+                Duration::from_millis(100),
+            );
+            let waited = started.elapsed();
+            drop(release_tx);
+            assert!(
+                matches!(result, Err(CaptureError::Failed(_))),
+                "a stalled start must fail"
+            );
+            assert!(
+                waited < Duration::from_secs(2),
+                "start waited {waited:?} for a stalled device instead of its timeout"
+            );
+        }
+
+        #[cfg(windows)]
+        #[test]
+        fn windows_privacy_denial_is_reported_as_microphone_denied() {
+            // Windows privacy settings refuse WASAPI activation with E_ACCESSDENIED, which cpal
+            // reports as a generic backend error carrying the HRESULT.
+            let denied = std::io::Error::from_raw_os_error(0x8007_0005_u32 as i32);
+            let error = cpal::Error::with_message(
+                cpal::ErrorKind::BackendError,
+                format!("Failed to get audio client: {denied}"),
+            );
+            assert_eq!(map_error(&error), CaptureError::PermissionDenied);
+            assert_eq!(map_error(&error).code(), "microphone_denied");
+        }
 
         #[test]
         fn fatal_stream_error_wipes_audio_and_rejects_later_frames() {
