@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use crate::claude::MANAGED_CLAUDE_VERSION;
+use crate::claude::managed_version_supported;
 use crate::detect::DetectEnv;
 use crate::managed::{ManagedProfiles, ProfileLease};
 #[cfg(test)]
@@ -45,7 +45,10 @@ pub enum ClaudeAccountAuthError {
     #[error("Claude Code could not be started")]
     StartFailed,
     #[error("the installed Claude Code version is not certified for managed profiles")]
-    UnsupportedVersion,
+    UnsupportedVersion {
+        /// Public release number reported by `claude --version`, when one was found.
+        found: Option<String>,
+    },
     #[error("Claude Code did not return valid account status")]
     InvalidResponse,
     #[error("the Claude Code account operation did not finish in time")]
@@ -62,6 +65,69 @@ pub enum ClaudeAccountAuthError {
     LogoutNotConfirmed,
     #[error("KalCode could not record the provider account result")]
     StateUpdateFailed,
+    #[error("Claude Code rejected the official sign-in command")]
+    UnsupportedAuthCommand,
+    #[error("Claude Code sign-in exited (code {exit_code:?}) before opening the browser")]
+    BrowserHandoffFailed { exit_code: Option<i32> },
+    #[error("Claude Code sign-in exited (code {exit_code:?}) before confirming an account")]
+    LoginExited { exit_code: Option<i32> },
+    #[error("Claude Code sign-in finished but its account status could not be refreshed")]
+    StatusRefreshFailed,
+}
+
+impl ClaudeAccountAuthError {
+    /// Stable, credential-free reason code for logs and user-visible errors. It never carries
+    /// provider output, URLs or account material.
+    pub fn reason_code(&self) -> &'static str {
+        match self {
+            Self::ProfileUnavailable => "account_profile_invalid",
+            Self::StartFailed => "spawn_failed",
+            Self::UnsupportedVersion { .. } => "provider_version_unsupported",
+            Self::InvalidResponse => "auth_status_invalid",
+            Self::TimedOut => "auth_process_timeout",
+            Self::ConnectionEnded => "auth_process_ended",
+            Self::AlreadyConnected => "already_connected",
+            Self::Canceled => "canceled",
+            Self::AccountNotConfirmed => "account_not_confirmed",
+            Self::LogoutNotConfirmed => "logout_not_confirmed",
+            Self::StateUpdateFailed => "account_state_update_failed",
+            Self::UnsupportedAuthCommand => "unsupported_auth_command",
+            Self::BrowserHandoffFailed { .. } => "browser_handoff_failed",
+            Self::LoginExited { .. } => "auth_process_exited",
+            Self::StatusRefreshFailed => "auth_status_refresh_failed",
+        }
+    }
+
+    /// Exit code of the official sign-in process, when it exited on its own.
+    pub fn exit_code(&self) -> Option<i32> {
+        match self {
+            Self::BrowserHandoffFailed { exit_code } | Self::LoginExited { exit_code } => {
+                *exit_code
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Classifies one stdout line of `claude auth login`. Only this fixed prefix is inspected; the
+/// line itself (which can include a one-time sign-in URL) is never stored or logged.
+fn is_browser_handoff_line(line: &str) -> bool {
+    line.trim_start().starts_with("Opening browser to sign in")
+}
+
+/// Whether the redacted stderr tail shows Claude's own command parser rejecting the arguments.
+fn is_unsupported_command_output(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    lower.contains("unknown option") || lower.contains("unknown command")
+}
+
+fn trace_failure(operation: &'static str, error: &ClaudeAccountAuthError) {
+    tracing::warn!(
+        event = "provider.claude_auth.failed",
+        operation,
+        reason = error.reason_code(),
+        exit_code = error.exit_code(),
+    );
 }
 
 #[derive(Clone, Copy)]
@@ -189,8 +255,12 @@ impl ClaudeAccountAuthManager {
             + Send
             + 'static,
     {
-        let prepared = self.prepare(account_id, lease)?;
-        let before = self.read_prepared(&prepared)?;
+        let prepared = self
+            .prepare(account_id, lease)
+            .inspect_err(|error| trace_failure("login", error))?;
+        let before = self
+            .read_prepared(&prepared)
+            .inspect_err(|error| trace_failure("login", error))?;
         if before.logged_in {
             let result = Ok(before);
             if observe(&result).is_err() {
@@ -205,13 +275,16 @@ impl ClaudeAccountAuthManager {
                 let job = prepared
                     ._lease
                     .prepare_guarded_job("claude-auth-login")
-                    .map_err(|_| ClaudeAccountAuthError::StartFailed)?;
+                    .map_err(|_| ClaudeAccountAuthError::StartFailed)
+                    .inspect_err(|error| trace_failure("login", error))?;
                 SupervisedChild::spawn_guarded(&spec, job)
             }
             #[cfg(test)]
             LaunchMode::Test { .. } => SupervisedChild::spawn(&spec),
         };
-        let (child, output) = spawned.map_err(|_| ClaudeAccountAuthError::StartFailed)?;
+        let (child, output) = spawned
+            .map_err(|_| ClaudeAccountAuthError::StartFailed)
+            .inspect_err(|error| trace_failure("login", error))?;
         #[cfg(test)]
         let force_output_thread_failure = match &self.launch_mode {
             LaunchMode::Test { extra_env, .. } => extra_env
@@ -241,6 +314,9 @@ impl ClaudeAccountAuthManager {
         let force_cleanup_failure = false;
         // Login output may include a one-time browser URL. Drain it so the provider never sees a
         // broken pipe, but discard every bounded line without logging or crossing the WebView.
+        // Only Claude's fixed browser hand-off prefix is recognised, as a reason code.
+        let handoff_started = Arc::new(AtomicBool::new(false));
+        let output_handoff = Arc::clone(&handoff_started);
         let output_thread = if force_output_thread_failure {
             Err(std::io::Error::other(
                 "injected Claude output-thread start failure",
@@ -248,7 +324,17 @@ impl ClaudeAccountAuthManager {
         } else {
             thread::Builder::new()
                 .name("claude-account-login-output".into())
-                .spawn(move || while output.recv().is_ok() {})
+                .spawn(move || {
+                    while let Ok(line) = output.recv() {
+                        if let crate::process::OutputLine::Line(line) = line
+                            && !output_handoff.load(Ordering::Acquire)
+                            && is_browser_handoff_line(&line)
+                        {
+                            output_handoff.store(true, Ordering::Release);
+                            tracing::info!(event = "provider.claude_auth.browser_handoff_started");
+                        }
+                    }
+                })
         };
         if output_thread.is_err() {
             cleanup_failed_login_start(
@@ -257,9 +343,11 @@ impl ClaudeAccountAuthManager {
                 self.timeouts.terminate_grace,
                 force_cleanup_failure,
             );
+            trace_failure("login", &ClaudeAccountAuthError::StartFailed);
             return Err(ClaudeAccountAuthError::StartFailed);
         }
         let child = Arc::new(child);
+        let worker_handoff = Arc::clone(&handoff_started);
         let worker_child = Arc::clone(&child);
         let outcome = Arc::new(LoginOutcome::default());
         let worker_outcome = Arc::clone(&outcome);
@@ -305,7 +393,23 @@ impl ClaudeAccountAuthManager {
                             Ok(Some(_)) if worker_canceled.load(Ordering::Acquire) => {
                                 break Err(ClaudeAccountAuthError::Canceled);
                             }
-                            Ok(Some(_)) => break Err(ClaudeAccountAuthError::ConnectionEnded),
+                            Ok(Some(status)) => {
+                                let exit_code = status.code();
+                                // The stderr reader may still be appending the child's final
+                                // line; give it one short, bounded chance before classifying.
+                                let rejected =
+                                    is_unsupported_command_output(&worker_child.stderr_tail()) || {
+                                        thread::sleep(Duration::from_millis(50));
+                                        is_unsupported_command_output(&worker_child.stderr_tail())
+                                    };
+                                break Err(if rejected {
+                                    ClaudeAccountAuthError::UnsupportedAuthCommand
+                                } else if worker_handoff.load(Ordering::Acquire) {
+                                    ClaudeAccountAuthError::LoginExited { exit_code }
+                                } else {
+                                    ClaudeAccountAuthError::BrowserHandoffFailed { exit_code }
+                                });
+                            }
                             Ok(None) if Instant::now() >= deadline => {
                                 #[cfg(test)]
                                 if force_cleanup_failure {
@@ -330,6 +434,7 @@ impl ClaudeAccountAuthManager {
                     let mut final_result = match result {
                         Ok(()) => {
                             read_status(&executable, &launch_mode, &prepared, timeouts.status)
+                                .map_err(|_| ClaudeAccountAuthError::StatusRefreshFailed)
                                 .and_then(|state| {
                                     state
                                         .logged_in
@@ -341,6 +446,9 @@ impl ClaudeAccountAuthManager {
                     };
                     if observe(&final_result).is_err() {
                         final_result = Err(ClaudeAccountAuthError::StateUpdateFailed);
+                    }
+                    if let Err(error) = &final_result {
+                        trace_failure("login", error);
                     }
                     if cleanup_proven {
                         drop(prepared);
@@ -367,6 +475,7 @@ impl ClaudeAccountAuthManager {
         Ok(PendingClaudeLogin {
             outcome,
             canceled,
+            handoff_started,
             wait_timeout: self.timeouts.login + self.timeouts.status.saturating_mul(2),
             terminate_grace: self.timeouts.terminate_grace,
         })
@@ -481,6 +590,7 @@ fn cleanup_failed_login_start(
 pub struct PendingClaudeLogin {
     outcome: Arc<LoginOutcome>,
     canceled: Arc<AtomicBool>,
+    handoff_started: Arc<AtomicBool>,
     wait_timeout: Duration,
     terminate_grace: Duration,
 }
@@ -519,6 +629,11 @@ impl PendingClaudeLogin {
 
     pub fn is_finished(&self) -> bool {
         self.outcome.is_quiesced()
+    }
+
+    /// Whether Claude Code reported handing sign-in off to the browser.
+    pub fn browser_handoff_started(&self) -> bool {
+        self.handoff_started.load(Ordering::Acquire)
     }
 }
 
@@ -676,10 +791,17 @@ fn verify_certified_version(
     )
     .map_err(map_process_error)?;
     let found = Version::find_in(&output.stdout)
-        .filter(|version| version.suffix.is_empty())
-        .ok_or(ClaudeAccountAuthError::UnsupportedVersion)?;
-    if !output.status.success() || found != MANAGED_CLAUDE_VERSION {
-        return Err(ClaudeAccountAuthError::UnsupportedVersion);
+        .ok_or(ClaudeAccountAuthError::UnsupportedVersion { found: None })?;
+    if !output.status.success() || !managed_version_supported(&found) {
+        // The version string is public release metadata, never account material.
+        tracing::warn!(
+            event = "provider.claude_auth.version_unsupported",
+            found = %found,
+            certified = %crate::claude::certified_managed_versions_label(),
+        );
+        return Err(ClaudeAccountAuthError::UnsupportedVersion {
+            found: Some(found.to_string()),
+        });
     }
     Ok(())
 }
@@ -737,6 +859,7 @@ mod tests {
     struct Fixture {
         _temp: tempfile::TempDir,
         profiles: Arc<ManagedProfiles>,
+        managed_root: PathBuf,
         manager: ClaudeAccountAuthManager,
         state_marker: PathBuf,
         // Fields drop in declaration order. Keep the shared slot last so it covers the child,
@@ -752,8 +875,8 @@ mod tests {
         } else {
             temp.path().to_path_buf()
         };
-        let profiles =
-            Arc::new(ManagedProfiles::new(temp_root.join("managed-profiles")).expect("profiles"));
+        let managed_root = temp_root.join("managed-profiles");
+        let profiles = Arc::new(ManagedProfiles::new(managed_root.clone()).expect("profiles"));
         let state_marker = temp_root.join("connected");
         let mut extra_env: BTreeMap<OsString, OsString> = [
             ("CLAUDE_AUTH_TEST_SCENARIO".into(), scenario.into()),
@@ -807,6 +930,7 @@ mod tests {
         Fixture {
             _temp: temp,
             profiles,
+            managed_root,
             manager,
             state_marker,
             _recursive_test_process_slot: recursive_test_process_slot,
@@ -1053,6 +1177,206 @@ mod tests {
         );
     }
 
+    fn login_error(scenario: &str) -> (Fixture, ClaudeAccountAuthError) {
+        let fixture = fixture(scenario);
+        let lease = fixture
+            .profiles
+            .acquire_sign_in_lease("claude-code", ACCOUNT_ID)
+            .expect("lease");
+        let pending = fixture
+            .manager
+            .start_login_with_lease_observed(ACCOUNT_ID, lease, |_| Ok(()))
+            .expect("login starts");
+        let error = pending.wait().expect_err("login must fail");
+        assert!(
+            pending.is_finished(),
+            "{scenario}: failure must be quiescent"
+        );
+        (fixture, error)
+    }
+
+    #[test]
+    fn login_exit_before_browser_handoff_reports_handoff_failure_with_exit_code() {
+        let (fixture, error) = login_error("login_exit_before_handoff");
+        assert_eq!(
+            error,
+            ClaudeAccountAuthError::BrowserHandoffFailed { exit_code: Some(3) }
+        );
+        assert_eq!(error.reason_code(), "browser_handoff_failed");
+        assert_eq!(error.exit_code(), Some(3));
+        let _lease = fixture
+            .profiles
+            .acquire_session_lease("claude-code", ACCOUNT_ID)
+            .expect("an exited login releases the profile");
+    }
+
+    #[test]
+    fn login_exit_after_browser_handoff_reports_process_exit_with_exit_code() {
+        let (_fixture, error) = login_error("login_exit_after_handoff");
+        assert_eq!(
+            error,
+            ClaudeAccountAuthError::LoginExited { exit_code: Some(4) }
+        );
+        assert_eq!(error.reason_code(), "auth_process_exited");
+    }
+
+    #[test]
+    fn login_rejected_by_claudes_command_parser_reports_unsupported_auth_command() {
+        let (_fixture, error) = login_error("login_unknown_option");
+        assert_eq!(error, ClaudeAccountAuthError::UnsupportedAuthCommand);
+        assert_eq!(error.reason_code(), "unsupported_auth_command");
+    }
+
+    #[test]
+    fn login_whose_status_refresh_fails_reports_refresh_failure() {
+        let (_fixture, error) = login_error("login_success_status_broken");
+        assert_eq!(error, ClaudeAccountAuthError::StatusRefreshFailed);
+        assert_eq!(error.reason_code(), "auth_status_refresh_failed");
+    }
+
+    #[test]
+    fn login_that_never_signs_in_is_not_reported_as_connected() {
+        let (_fixture, error) = login_error("login_success_not_signed_in");
+        assert_eq!(error, ClaudeAccountAuthError::AccountNotConfirmed);
+    }
+
+    #[test]
+    fn pending_login_reports_browser_handoff_without_exposing_output() {
+        let fixture = fixture("login_handoff_then_hang");
+        let lease = fixture
+            .profiles
+            .acquire_sign_in_lease("claude-code", ACCOUNT_ID)
+            .expect("lease");
+        let pending = fixture
+            .manager
+            .start_login_with_lease_observed(ACCOUNT_ID, lease, |_| Ok(()))
+            .expect("login");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !pending.browser_handoff_started() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(pending.browser_handoff_started());
+        assert!(
+            !pending.is_finished(),
+            "a browser hand-off is an expected waiting state, not a failure"
+        );
+        pending.cancel().expect("cancel");
+        assert_eq!(pending.wait(), Err(ClaudeAccountAuthError::Canceled));
+    }
+
+    #[test]
+    fn successful_login_is_refreshed_observed_and_survives_a_restart() {
+        let fixture = fixture("login_success");
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&observed);
+        let lease = fixture
+            .profiles
+            .acquire_sign_in_lease("claude-code", ACCOUNT_ID)
+            .expect("lease");
+        let pending = fixture
+            .manager
+            .start_login_with_lease_observed(ACCOUNT_ID, lease, move |result| {
+                lock(&recorder).push(result.clone());
+                Ok(())
+            })
+            .expect("login");
+        let state = pending.wait().expect("signed in");
+        assert!(state.logged_in);
+        assert_eq!(state.identity.as_deref(), Some("person@example.test"));
+        assert_eq!(
+            lock(&observed).as_slice(),
+            &[Ok(state.clone())],
+            "the refreshed signed-in state is published exactly once"
+        );
+        drop(pending);
+
+        // A full quit/reopen builds a new manager over the same managed profile root. Signed-in
+        // state is re-read from Claude's own profile store, never cached by KalCode.
+        let reopened = ClaudeAccountAuthManager::new_for_test(
+            fixture.manager.executable.clone(),
+            fixture.manager.source_env.clone(),
+            Arc::new(
+                ManagedProfiles::new(fixture.managed_root.clone()).expect("reopened profiles"),
+            ),
+            match &fixture.manager.launch_mode {
+                LaunchMode::Test { args, .. } => args.clone(),
+                LaunchMode::Production => unreachable!("test fixture"),
+            },
+            match &fixture.manager.launch_mode {
+                LaunchMode::Test { extra_env, .. } => extra_env.clone(),
+                LaunchMode::Production => unreachable!("test fixture"),
+            },
+            fixture.manager.timeouts,
+        );
+        let lease = reopened
+            .profiles
+            .acquire_sign_in_lease("claude-code", ACCOUNT_ID)
+            .expect("lease after restart");
+        let after_restart = reopened
+            .read_account_with_lease_observed(ACCOUNT_ID, lease, |_| Ok(()))
+            .expect("status after restart");
+        assert_eq!(after_restart, state);
+    }
+
+    #[test]
+    fn every_failure_has_a_distinct_credential_free_reason_code() {
+        let errors = [
+            ClaudeAccountAuthError::ProfileUnavailable,
+            ClaudeAccountAuthError::StartFailed,
+            ClaudeAccountAuthError::UnsupportedVersion { found: None },
+            ClaudeAccountAuthError::InvalidResponse,
+            ClaudeAccountAuthError::TimedOut,
+            ClaudeAccountAuthError::ConnectionEnded,
+            ClaudeAccountAuthError::AlreadyConnected,
+            ClaudeAccountAuthError::Canceled,
+            ClaudeAccountAuthError::AccountNotConfirmed,
+            ClaudeAccountAuthError::LogoutNotConfirmed,
+            ClaudeAccountAuthError::StateUpdateFailed,
+            ClaudeAccountAuthError::UnsupportedAuthCommand,
+            ClaudeAccountAuthError::BrowserHandoffFailed { exit_code: Some(1) },
+            ClaudeAccountAuthError::LoginExited { exit_code: None },
+            ClaudeAccountAuthError::StatusRefreshFailed,
+        ];
+        let codes: std::collections::BTreeSet<_> = errors
+            .iter()
+            .map(ClaudeAccountAuthError::reason_code)
+            .collect();
+        assert_eq!(codes.len(), errors.len());
+        for code in codes {
+            assert!(
+                code.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+                "{code}"
+            );
+        }
+        assert_eq!(
+            ClaudeAccountAuthError::ProfileUnavailable.reason_code(),
+            "account_profile_invalid"
+        );
+        assert_eq!(
+            ClaudeAccountAuthError::StartFailed.reason_code(),
+            "spawn_failed"
+        );
+        assert_eq!(
+            ClaudeAccountAuthError::TimedOut.reason_code(),
+            "auth_process_timeout"
+        );
+    }
+
+    #[test]
+    fn handoff_and_command_classifiers_inspect_only_fixed_markers() {
+        assert!(is_browser_handoff_line("Opening browser to sign in…"));
+        assert!(!is_browser_handoff_line(
+            "If the browser didn't open, visit: https://example.test/"
+        ));
+        assert!(is_unsupported_command_output(
+            "error: unknown option '--claudeai'"
+        ));
+        assert!(is_unsupported_command_output(
+            "error: unknown command 'auth'"
+        ));
+        assert!(!is_unsupported_command_output("network unavailable"));
+    }
+
     #[test]
     fn decoder_fails_closed_on_ambiguous_or_unbounded_status() {
         for value in [
@@ -1087,11 +1411,29 @@ mod tests {
             {
                 std::thread::sleep(Duration::from_secs(60));
             }
+            "login" if scenario == "login_exit_before_handoff" => std::process::exit(3),
+            "login" if scenario == "login_exit_after_handoff" => {
+                println!("Opening browser to sign in…");
+                println!("If the browser didn't open, visit: https://example.test/never-real");
+                std::process::exit(4);
+            }
+            "login" if scenario == "login_unknown_option" => {
+                eprintln!("error: unknown option '--claudeai'");
+                std::process::exit(1);
+            }
+            "login" if scenario == "login_handoff_then_hang" => {
+                println!("Opening browser to sign in…");
+                std::thread::sleep(Duration::from_secs(60));
+            }
+            "login" if scenario == "login_success_not_signed_in" => {}
             "login" => std::fs::write(&marker, b"connected").expect("login marker"),
             "logout" => {
                 if marker.exists() {
                     std::fs::remove_file(&marker).expect("logout marker");
                 }
+            }
+            "status" if scenario == "login_success_status_broken" && marker.exists() => {
+                println!("not json");
             }
             "status" => {
                 let connected = scenario == "status_connected" || marker.exists();

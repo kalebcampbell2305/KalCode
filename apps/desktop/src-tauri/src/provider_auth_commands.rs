@@ -63,9 +63,10 @@ impl RuntimeAuthError {
             Self::Provider(_) => ProviderError::Start(
                 "the official Codex account check did not complete safely".into(),
             ),
-            Self::Claude(_) => ProviderError::Start(
-                "the official Claude Code account check did not complete safely".into(),
-            ),
+            Self::Claude(error) => ProviderError::Start(format!(
+                "the official Claude Code account check did not complete safely (reason: {})",
+                error.reason_code()
+            )),
             Self::Gemini(_) => ProviderError::Start(
                 "the official Gemini CLI account check did not complete safely".into(),
             ),
@@ -81,6 +82,11 @@ impl RuntimeAuthError {
     }
 
     fn into_ipc(self, command: &'static str) -> IpcError {
+        if let Self::Claude(error) = &self
+            && let Some((code, message)) = claude_failure_ipc(error)
+        {
+            return KalError::new(ErrorCategory::Provider, code, message).log_and_convert(command);
+        }
         let (code, message) = match self {
             Self::Account(error) => return error.log_and_convert(command),
             Self::ProviderUnavailable => (
@@ -98,6 +104,11 @@ impl RuntimeAuthError {
             Self::Provider(CodexAccountAuthError::Canceled) => {
                 ("provider_login_canceled", "Codex sign-in was canceled.")
             }
+            Self::Provider(CodexAccountAuthError::UnsupportedVersion) => (
+                "provider_version_unsupported",
+                "Managed Codex accounts need a certified Codex CLI release. Install a certified \
+                 release, then try again.",
+            ),
             Self::Provider(_) => (
                 "provider_auth_failed",
                 "The official Codex account operation did not complete safely.",
@@ -153,6 +164,38 @@ impl RuntimeAuthError {
             ),
         };
         KalError::new(ErrorCategory::Provider, code, message).log_and_convert(command)
+    }
+}
+
+/// User-visible Claude account failures carry a stable, credential-free reason code so a failed
+/// sign-in is diagnosable from the toast and the log alone. Returns `None` for the outcomes that
+/// already have their own dedicated copy.
+fn claude_failure_ipc(error: &ClaudeAccountAuthError) -> Option<(&'static str, String)> {
+    match error {
+        ClaudeAccountAuthError::AlreadyConnected | ClaudeAccountAuthError::Canceled => None,
+        ClaudeAccountAuthError::UnsupportedVersion { found } => Some((
+            "provider_version_unsupported",
+            format!(
+                "Managed Claude Code accounts need Claude Code {}; this computer has {}. Install \
+                 a supported release, then try again. (reason: provider_version_unsupported)",
+                kalcode_providers::claude::certified_managed_versions_label(),
+                found
+                    .as_deref()
+                    .unwrap_or("a version KalCode couldn't read")
+            ),
+        )),
+        error => Some((
+            "provider_auth_failed",
+            format!(
+                "The official Claude Code account operation did not complete safely. \
+                 (reason: {}{})",
+                error.reason_code(),
+                error
+                    .exit_code()
+                    .map(|code| format!(", exit {code}"))
+                    .unwrap_or_default()
+            ),
+        )),
     }
 }
 
@@ -2046,6 +2089,77 @@ mod tests {
             assert_eq!(ipc.code, code);
             assert!(ipc.message.contains("Gemini"), "{}", ipc.message);
         }
+    }
+
+    #[test]
+    fn claude_auth_errors_surface_a_specific_credential_free_reason_code() {
+        for (error, code, detail) in [
+            (
+                ClaudeAccountAuthError::UnsupportedVersion {
+                    found: Some("2.2.0".into()),
+                },
+                "provider_version_unsupported",
+                "(reason: provider_version_unsupported)",
+            ),
+            (
+                ClaudeAccountAuthError::StartFailed,
+                "provider_auth_failed",
+                "(reason: spawn_failed)",
+            ),
+            (
+                ClaudeAccountAuthError::ProfileUnavailable,
+                "provider_auth_failed",
+                "(reason: account_profile_invalid)",
+            ),
+            (
+                ClaudeAccountAuthError::BrowserHandoffFailed { exit_code: Some(3) },
+                "provider_auth_failed",
+                "(reason: browser_handoff_failed, exit 3)",
+            ),
+            (
+                ClaudeAccountAuthError::LoginExited { exit_code: Some(1) },
+                "provider_auth_failed",
+                "(reason: auth_process_exited, exit 1)",
+            ),
+            (
+                ClaudeAccountAuthError::TimedOut,
+                "provider_auth_failed",
+                "(reason: auth_process_timeout)",
+            ),
+            (
+                ClaudeAccountAuthError::StatusRefreshFailed,
+                "provider_auth_failed",
+                "(reason: auth_status_refresh_failed)",
+            ),
+            (
+                ClaudeAccountAuthError::UnsupportedAuthCommand,
+                "provider_auth_failed",
+                "(reason: unsupported_auth_command)",
+            ),
+            (
+                ClaudeAccountAuthError::Canceled,
+                "provider_login_canceled",
+                "Claude Code sign-in was canceled.",
+            ),
+        ] {
+            let ipc = RuntimeAuthError::Claude(error).into_ipc("provider_claude_login_start");
+            assert_eq!(ipc.code, code);
+            assert!(ipc.message.contains("Claude Code"), "{}", ipc.message);
+            assert!(ipc.message.contains(detail), "{}", ipc.message);
+        }
+        let version = RuntimeAuthError::Claude(ClaudeAccountAuthError::UnsupportedVersion {
+            found: Some("2.2.0".into()),
+        })
+        .into_ipc("provider_claude_login_start");
+        assert!(
+            version.message.contains("2.1.282 or a later 2.1.x release")
+                && version.message.contains("this computer has 2.2.0"),
+            "the supported and found versions are named: {}",
+            version.message
+        );
+        let codex = RuntimeAuthError::Provider(CodexAccountAuthError::UnsupportedVersion)
+            .into_ipc("provider_codex_login_start");
+        assert_eq!(codex.code, "provider_version_unsupported");
     }
 
     #[cfg(any(windows, target_os = "macos"))]

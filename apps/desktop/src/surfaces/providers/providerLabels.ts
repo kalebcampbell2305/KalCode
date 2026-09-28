@@ -194,3 +194,14 @@ export function settingGroups(setting: string): string[] {
   }
   return groups;
 }
+
+/**
+ * Toast title for a failed browser sign-in. An installed CLI release outside the certified range
+ * is not a sign-in failure the person can retry past, so it is named for what it is; the native
+ * message (which names the found and supported versions, or a safe reason code) is the detail.
+ */
+export function signInFailureTitle(providerName: string, errorCode: string): string {
+  return errorCode === "provider_version_unsupported"
+    ? `${providerName} version isn't supported yet`
+    : `${providerName} sign-in didn't finish`;
+}

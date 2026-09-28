@@ -16,18 +16,46 @@ use crate::detect::{DetectEnv, detect, detect_guarded};
 use crate::version::Version;
 use session::{ClaudeSession, LaunchSpec, SessionTimeouts};
 
-/// Exact Claude Code release whose managed profile selectors, settings precedence, auth
-/// commands, and permission flags were certified together. Standalone compatibility continues
-/// to use the catalog minimum; account-isolated launches fail closed on any other release.
-pub(crate) const MANAGED_CLAUDE_VERSION: Version = Version::new(2, 1, 282);
+/// Oldest Claude Code release whose managed profile selectors (`CLAUDE_CONFIG_DIR` and
+/// `CLAUDE_SECURESTORAGE_CONFIG_DIR`), settings precedence, `auth` commands, and the session flags
+/// and permission modes KalCode passes were certified on the real binary.
+pub const MANAGED_CLAUDE_FLOOR: Version = Version::new(2, 1, 282);
+
+/// First release of the next Claude Code compatibility line. Managed profiles never run it
+/// until that line is certified; standalone compatibility continues to use the catalog minimum.
+pub const MANAGED_CLAUDE_CEILING: Version = Version::new(2, 2, 0);
+
+/// Claude Code's native installer updates itself, so an exact pin fails for real users within
+/// days. Managed profiles instead accept the certified floor through the rest of its compatibility
+/// line and fail closed everywhere else, including every pre-release or build suffix.
+///
+/// Certified on real binaries on 2026-09-28: 2.1.282 (floor) and 2.1.283 (the latest published
+/// release) have identical `auth`, `auth login`, `auth status` help, `auth status --json` shape
+/// and exit code, `auth login --claudeai` browser hand-off with piped stdio under
+/// `CLAUDE_CONFIG_DIR` + `CLAUDE_SECURESTORAGE_CONFIG_DIR`, and every session flag and permission
+/// mode KalCode passes (top-level `--help` gained only the unrelated `--client-data-url`).
+pub(crate) fn managed_version_supported(version: &Version) -> bool {
+    version.suffix.is_empty()
+        && *version >= MANAGED_CLAUDE_FLOOR
+        && *version < MANAGED_CLAUDE_CEILING
+}
+
+/// Human-readable supported range, for fail-closed messages.
+pub fn certified_managed_versions_label() -> String {
+    format!(
+        "{MANAGED_CLAUDE_FLOOR} or a later {}.{}.x release",
+        MANAGED_CLAUDE_FLOOR.major, MANAGED_CLAUDE_FLOOR.minor
+    )
+}
 
 pub(crate) fn require_managed_version(reported: Option<&str>) -> Result<(), ProviderError> {
     let version = reported.and_then(Version::parse).ok_or_else(|| {
         ProviderError::Start("Claude Code did not report a version KalCode can verify".into())
     })?;
-    if version != MANAGED_CLAUDE_VERSION {
+    if !managed_version_supported(&version) {
         return Err(ProviderError::Start(format!(
-            "managed Claude profiles currently require certified Claude Code {MANAGED_CLAUDE_VERSION}; found {version}"
+            "managed Claude profiles currently require certified Claude Code {}; found {version}",
+            certified_managed_versions_label()
         )));
     }
     Ok(())
@@ -181,5 +209,44 @@ impl AgentProvider for ClaudeCodeProvider {
             return Ok(crate::managed::hold_session_lease(session, lease));
         }
         self.start_native_session(config, sink, false, None, None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn managed_profiles_accept_the_certified_line_and_fail_closed_outside_it() {
+        for supported in ["2.1.282", "2.1.283", "2.1.299", "2.1.1000"] {
+            assert!(
+                require_managed_version(Some(supported)).is_ok(),
+                "{supported} must be accepted for managed profiles"
+            );
+        }
+        for rejected in [
+            Some("2.1.281"),
+            Some("2.1.259"),
+            Some("2.2.0"),
+            Some("3.0.0"),
+            Some("2.0.999"),
+            Some("2.1.283-beta.1"),
+            Some("2.1.290+build.7"),
+            Some("not a version"),
+            None,
+        ] {
+            assert!(
+                require_managed_version(rejected).is_err(),
+                "{rejected:?} must fail closed for managed profiles"
+            );
+        }
+        let message = require_managed_version(Some("2.2.0"))
+            .expect_err("next line")
+            .to_string();
+        assert!(
+            message.contains("2.1.282 or a later 2.1.x release"),
+            "{message}"
+        );
+        assert!(message.contains("found 2.2.0"), "{message}");
     }
 }

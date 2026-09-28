@@ -605,7 +605,7 @@ fn managed_claude_pane_fails_closed_without_a_native_guardian() {
 fn managed_claude_pane_rejects_an_unreviewed_version_before_pty_launch() {
     let rig = Rig::new_managed(
         DecisionRouting::ProviderPrompt,
-        json!({"version": "2.1.300 (Claude Code)"}),
+        json!({"version": "2.2.0 (Claude Code)"}),
         SessionLimits::default(),
     );
     let mut config = rig.config(PermissionMode::Approve);

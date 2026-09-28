@@ -191,7 +191,7 @@ fn managed_claude_requires_an_account_and_holds_its_profile_until_session_cleanu
 #[cfg(any(windows, target_os = "macos"))]
 #[test]
 fn managed_claude_rejects_an_unreviewed_version_before_session_launch() {
-    let fake = FakeInstall::new("claude", json!({"version": "2.1.300 (Claude Code)"}));
+    let fake = FakeInstall::new("claude", json!({"version": "2.2.0 (Claude Code)"}));
     let storage = tempfile::tempdir().expect("storage");
     let storage_root = if cfg!(target_os = "macos") {
         storage.path().canonicalize().expect("canonical storage")

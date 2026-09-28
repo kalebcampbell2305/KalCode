@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { KalCodeClient } from "../../ipc/client.ts";
 import { toKalCodeError } from "../../ipc/errors.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
+import { signInFailureTitle } from "./providerLabels.ts";
 
 /** Providers whose own official sign-in KalCode runs natively for one managed account. */
 export type BrowserAuthProvider = "claude-code" | "codex" | "gemini-cli";
@@ -187,10 +188,11 @@ export function useProviderAccounts(enabled: boolean) {
         replace(await commands.wait(handle));
       } catch (error) {
         if (handle === null || !cancelledLogins.current.delete(handle)) {
+          const failure = toKalCodeError(error);
           toast.show({
             tone: "danger",
-            title: `${AUTH_PROVIDER_NAMES[providerId]} sign-in didn't finish`,
-            description: toKalCodeError(error).message,
+            title: signInFailureTitle(AUTH_PROVIDER_NAMES[providerId], failure.code),
+            description: failure.message,
           });
         }
       } finally {

@@ -13,6 +13,7 @@ import {
   needsInstall,
   needsSignIn,
   settingGroups,
+  signInFailureTitle,
   summarizeProviders,
 } from "./providerLabels.ts";
 
@@ -200,5 +201,19 @@ describe("summarizeProviders", () => {
       installedNames: ["Claude Code", "Codex"],
     });
     expect(needsFirstDetection(statuses)).toBe(false);
+  });
+});
+
+describe("signInFailureTitle", () => {
+  it("names an unsupported CLI release instead of a generic sign-in failure", () => {
+    expect(signInFailureTitle("Claude Code", "provider_version_unsupported")).toBe(
+      "Claude Code version isn't supported yet",
+    );
+    expect(signInFailureTitle("Codex", "provider_version_unsupported")).toBe("Codex version isn't supported yet");
+  });
+
+  it("keeps the sign-in title for every other failure", () => {
+    expect(signInFailureTitle("Claude Code", "provider_auth_failed")).toBe("Claude Code sign-in didn't finish");
+    expect(signInFailureTitle("Gemini", "provider_login_timed_out")).toBe("Gemini sign-in didn't finish");
   });
 });
