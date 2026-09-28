@@ -46,7 +46,7 @@ async function geminiThreadWithTwoAccounts(page: Page) {
   await page.getByRole("button", { name: "New thread" }).first().click();
   const form = page.getByRole("region", { name: "New thread" });
   await form.getByLabel("Provider").selectOption("gemini-cli");
-  await form.getByLabel("Account").selectOption({ label: "Personal (default)" });
+  await form.getByLabel("Account", { exact: true }).selectOption({ label: "Personal (default)" });
   await form.getByLabel("Task").fill("tighten the release notes wording");
   await form.getByLabel("Name").fill("Release notes pass");
   await form.getByRole("button", { name: "Start thread" }).click();
