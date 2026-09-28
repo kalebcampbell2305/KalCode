@@ -3,9 +3,13 @@ import { PLANS, formatKalVoiceAllowance } from "@kalcode/protocol/plans";
 import PageHead from "../components/PageHead.astro";
 import XLink from "../components/XLink.astro";
 import Base from "../layouts/Base.astro";
+import { RELEASES, channelLabel, formatReleaseDate, signedStableRelease } from "../lib/releases";
 import { getPage } from "../lib/site";
 
 const page = getPage("/updates");
+const signedStable = signedStableRelease(RELEASES);
+const stable015 = signedStable?.version === "0.1.5" ? signedStable : null;
+const servesPreview = channelLabel(RELEASES) === "Preview";
 const allowances = PLANS.map((plan) => `${plan.name} ${formatKalVoiceAllowance(plan.limits)}`).join(", ");
 ---
 <Base title={page.title} description={page.description} path={page.path} world>
@@ -16,6 +20,7 @@ const allowances = PLANS.map((plan) => `${plan.name} ${formatKalVoiceAllowance(p
     backdrop="orbital"
   >
     <nav class="updates-index" aria-label="Update archive">
+      {stable015 && <a href="#release-0-1-5">0.1.5 Stable</a>}
       <a href="#release-0-1-1">Windows preview</a>
       <a href="#release-website-2026-09-24">New website</a>
       <a href="#release-kalvoice">KalVoice</a>
@@ -27,7 +32,56 @@ const allowances = PLANS.map((plan) => `${plan.name} ${formatKalVoiceAllowance(p
     <div class="container">
       <h2 class="sr-only" id="updates-heading">KalCode product updates</h2>
       <div class="updates-feed">
-        <article class="update update--featured" id="release-0-1-1" aria-labelledby="release-0-1-1-title">
+        {stable015 && (
+          <article class="update update--featured" id="release-0-1-5" aria-labelledby="release-0-1-5-title">
+            <div class="update__signal" aria-hidden="true"><span></span></div>
+            <header class="update__meta">
+              <p class="update__edition">KalCode 0.1.5</p>
+              <p><time datetime={stable015.publishedAt}>{formatReleaseDate(stable015.publishedAt)}</time></p>
+              <p class="chip chip--built">Stable · Windows and macOS</p>
+            </header>
+            <div class="update__story">
+              <p class="update__kicker">Your workspace, ready when you return</p>
+              <h2 id="release-0-1-5-title">KalCode Stable brings local voice to your coding workspace.</h2>
+              <p class="update__lead">
+                Work with Claude Code, Codex and Gemini through their official accounts, use local
+                dictation, and keep track of your projects in one desktop application.
+              </p>
+              <div class="update__groups">
+                <section>
+                  <h3>Account and recovery</h3>
+                  <ul>
+                    <li>Browser sign-in returns to KalCode automatically.</li>
+                    <li>Valid saved sessions restore when you reopen the app.</li>
+                    <li>Interrupted workspaces recover automatically when KalCode can verify that previous processes and cleanup have finished.</li>
+                  </ul>
+                </section>
+                <section>
+                  <h3>KalVoice</h3>
+                  <ul>
+                    <li>Push-to-talk controls, a floating widget and voice settings in the Stable app.</li>
+                    <li>Unlimited local dictation on every plan.</li>
+                    <li>Signed local components with guided setup for speech and local command interpretation.</li>
+                  </ul>
+                </section>
+                <section>
+                  <h3>Verified downloads</h3>
+                  <ul>
+                    <li>A signed installer for Windows and a signed, notarized app for Apple silicon.</li>
+                    <li>Version, platform and SHA-256 details on the download page.</li>
+                    <li>Provider permissions and account isolation remain in effect.</li>
+                  </ul>
+                </section>
+              </div>
+              <p class="update__action"><a class="button button--primary" href="/download">Download KalCode</a></p>
+            </div>
+          </article>
+        )}
+        <article
+          class:list={["update", { "update--featured": !stable015 }]}
+          id="release-0-1-1"
+          aria-labelledby="release-0-1-1-title"
+        >
           <div class="update__signal" aria-hidden="true"><span></span></div>
           <header class="update__meta">
             <p class="update__edition">KalCode 0.1.1</p>
@@ -65,7 +119,12 @@ const allowances = PLANS.map((plan) => `${plan.name} ${formatKalVoiceAllowance(p
                 </ul>
               </section>
             </div>
-            <p class="update__action"><a class="button button--primary" href="/download">Download the Windows preview</a></p>
+            {
+              // Only while /download serves the preview; any Stable (even Windows-only) replaces it there.
+              servesPreview && (
+                <p class="update__action"><a class="button button--primary" href="/download">Download the Windows preview</a></p>
+              )
+            }
           </div>
         </article>
 
@@ -124,8 +183,8 @@ const allowances = PLANS.map((plan) => `${plan.name} ${formatKalVoiceAllowance(p
               <section>
                 <h3>Still in development</h3>
                 <ul>
-                  <li>KalVoice is not part of the current public Windows preview.</li>
-                  <li>Availability will be announced here when its release gates pass.</li>
+                  <li>The September 24 Windows preview did not include KalVoice.</li>
+                  <li>This entry records the development state at that milestone.</li>
                 </ul>
               </section>
             </div>

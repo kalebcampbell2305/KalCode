@@ -6,10 +6,11 @@ import PageHead from "../components/PageHead.astro";
 import StageSlot from "../components/StageSlot.astro";
 import { hasStage } from "../lib/stage";
 import Base from "../layouts/Base.astro";
-import { buildStatus } from "../lib/releases";
+import { RELEASES, buildStatus, signedStableRelease } from "../lib/releases";
 import { KALVOICE, PROVIDERS, getPage } from "../lib/site";
 
 const page = getPage("/product");
+const stableKalVoice = signedStableRelease(RELEASES) !== null;
 
 const runs: Record<(typeof PROVIDERS)[number]["id"], string> = {
   claude: "Headless stream mode: threads you can resume and interrupt",
@@ -46,7 +47,7 @@ const roadmap: { capability: string; state: State; note: string }[] = [
   { capability: "Codex and Gemini CLI", state: "dev", note: "Detected today; adapters planned" },
   { capability: "Dashboard", state: "built", note: "Design built; live thread data in development" },
   { capability: "Approvals and permission modes", state: "dev", note: "Engine and approval card in development" },
-  { capability: "KalVoice dictation and commands", state: "dev", note: "On-device recognition and command grammar in development" },
+  { capability: "KalVoice dictation and commands", state: stableKalVoice ? "built" : "dev", note: stableKalVoice ? "Available in Stable with signed local component setup" : "On-device recognition and command grammar in development" },
   { capability: "Split panes, file tree, Git and diff views, browser preview", state: "planned", note: "Shown in previews with a Planned label" },
   { capability: "Agents, Missions, Automations", state: "planned", note: "Listed in plans as available at launch" },
 ];

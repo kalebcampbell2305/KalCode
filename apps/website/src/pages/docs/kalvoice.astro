@@ -1,7 +1,11 @@
 ---
 import { PLANS, formatKalVoiceAllowance } from "@kalcode/protocol/plans";
 import Docs from "../../layouts/Docs.astro";
+import { RELEASES, servedStableRelease } from "../../lib/releases";
 import { KALVOICE } from "../../lib/site";
+
+// KalVoice is announced as shipped only while /download serves a signed Stable release.
+const stable = servedStableRelease(RELEASES);
 ---
 <Docs
   path="/docs/kalvoice"
@@ -9,8 +13,13 @@ import { KALVOICE } from "../../lib/site";
   lead="The reference for KalVoice, the voice layer built into KalCode: the push-to-talk key, counting, providers and privacy."
 >
   <p>
-    {KALVOICE.summary} KalVoice is in development and not available in any build yet. For the
-    overview, see the <a href="/kalvoice">KalVoice page</a>.
+    {KALVOICE.summary}
+    {
+      stable
+        ? `KalVoice ships in KalCode Stable ${stable.version}. Speech recognition and command interpretation run on your computer; KalCode downloads their signed local components in the app when you set up KalVoice.`
+        : "KalVoice is in development and not available in a public build yet."
+    }
+    For the overview, see the <a href="/kalvoice">KalVoice page</a>.
   </p>
 
   <h2>One key</h2>
