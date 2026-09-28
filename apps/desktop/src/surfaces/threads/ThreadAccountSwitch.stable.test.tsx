@@ -15,8 +15,8 @@ import { getRebindRequest, getSelectedThread, requestRebind, resetAccountIntentF
 import { describeRebindError } from "./useThreadAccount.ts";
 
 // Switch accounts on the Stable Threads surface (lane 2). Stable flags follow
-// shell/Shell.stable.test.tsx: ProviderProfiles / AccountSignIn stay Gated there, and nothing here
-// may depend on them.
+// shell/Shell.stable.test.tsx: ProviderProfiles / AccountSignIn are Available (flags.rs), and nothing
+// here reads either flag.
 vi.mock("@xterm/xterm", () => ({ Terminal: class {} }));
 
 const GEMINI_PERSONAL = "0192f3c4-0000-7000-8000-000000000301";

@@ -76,7 +76,8 @@ crates re-export them so their Rust paths still work.
   red; paused amber (the only amber); recovering blue. `interrupted` and `waiting_for_dependency`
   show as IDLE with a qualifier; FAILED counts under "Waiting for you".
 - **Features:** `SurfaceId::CommandCenter` (gated) and per-feature flags (`FeatureFlags.features`,
-  every feature gated today). Plan placement (`FeatureId::placement`, source of truth
+  gated until its campaign merges; Available today: pane system, provider health, provider
+  profiles, notification center and account sign-in). Plan placement (`FeatureId::placement`, source of truth
   `packages/protocol/src/features.ts`): **safety, every plan** — Trust Kernel explain, Context
   Firewall, host-key verification, Environment Doctor, safe restore, automation kill switch;
   **Free** — provider health, session locator, process continuity, Utility Dock, Git core,

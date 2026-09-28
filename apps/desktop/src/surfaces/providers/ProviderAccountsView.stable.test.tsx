@@ -16,7 +16,7 @@ import { openProviderAccounts } from "./providersTab.ts";
 // Providers → Accounts on the Stable channel: every account shows its thread use, the workspaces
 // that remember it, Set default, Manage, sign in/out, and each provider can connect another
 // account through the same add-then-official-sign-in flow. ProviderProfiles and AccountSignIn are
-// Gated (hidden) on Stable, so none of this may depend on them.
+// Available on Stable (flags.rs); the view ships unconditionally and reads neither flag.
 vi.mock("@xterm/xterm", () => ({ Terminal: class {} }));
 
 const IDS = {
@@ -69,8 +69,9 @@ async function mountStable({ openAccounts = true }: { openAccounts?: boolean } =
     ...flag,
     visible: flag.state === "available",
   }));
-  expect(boot.info.flags.features.find((f) => f.id === "provider_profiles")?.visible).toBe(false);
-  expect(boot.info.flags.features.find((f) => f.id === "account_sign_in")?.visible).toBe(false);
+  expect(boot.info.flags.features.find((f) => f.id === "provider_profiles")?.visible).toBe(true);
+  expect(boot.info.flags.features.find((f) => f.id === "account_sign_in")?.visible).toBe(true);
+  expect(boot.info.flags.features.find((f) => f.id === "provider_panes")?.visible).toBe(false);
 
   transport.workspaces.queueFolders("beta", "alpha");
   const beta = (await client.openWorkspaceDialog()) as Workspace;

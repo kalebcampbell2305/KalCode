@@ -63,13 +63,15 @@ async function mountStable(prepare?: (h: Omit<Harness, "user" | "raw">) => Promi
   const boot = await client.boot();
   boot.info.channel = "stable";
   boot.info.flags.surfaces = (nativeStableSurfaces as SurfaceFlag[]).map((flag) => ({ ...flag }));
-  // Stable: ProviderProfiles and AccountSignIn are Gated (hidden). The account UI must not need them.
+  // Stable (flags.rs): ProviderProfiles and AccountSignIn are Available; the account UI shipped
+  // before the flip and still reads neither flag.
   boot.info.flags.features = boot.info.flags.features.map((flag) => ({
     ...flag,
     visible: flag.state === "available",
   }));
-  expect(boot.info.flags.features.find((f) => f.id === "provider_profiles")?.visible).toBe(false);
-  expect(boot.info.flags.features.find((f) => f.id === "account_sign_in")?.visible).toBe(false);
+  expect(boot.info.flags.features.find((f) => f.id === "provider_profiles")?.visible).toBe(true);
+  expect(boot.info.flags.features.find((f) => f.id === "account_sign_in")?.visible).toBe(true);
+  expect(boot.info.flags.features.find((f) => f.id === "provider_panes")?.visible).toBe(false);
 
   transport.workspaces.queueFolders("alpha", "beta");
   const alpha = (await client.openWorkspaceDialog()) as Workspace;

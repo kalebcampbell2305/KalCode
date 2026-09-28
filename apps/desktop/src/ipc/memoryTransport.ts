@@ -109,6 +109,15 @@ const AVAILABLE_SURFACES: ReadonlySet<SurfaceFlag["id"]> = new Set([
   "settings",
 ]);
 
+/** Features available in every channel (mirrors `feature_state` in crates/native-core/src/flags.rs). */
+const AVAILABLE_FEATURES: ReadonlySet<string> = new Set([
+  "pane_system",
+  "provider_health",
+  "provider_profiles",
+  "notification_center",
+  "account_sign_in",
+]);
+
 /** Latest schema version (mirrors crates/native-core/src/db.rs). */
 const SCHEMA_VERSION = 4;
 
@@ -229,12 +238,13 @@ export function createMemoryTransport(
         visible: true,
       })),
       // Every product feature is gated until its campaign merges (crates/native-core/src/flags.rs);
-      // development builds show gated features. The pane system (Z7-W1) is available.
+      // development builds show gated features. Available everywhere, as in flags.rs: the pane
+      // system (Z7-W1) and the 0.1.5 features whose UI ships unconditionally.
       // Only the explicit context-test scenario enables both sharing and its safety authority.
       features: PRODUCT_FEATURES.map((id) => ({
         id,
         state:
-          id === "pane_system" ||
+          AVAILABLE_FEATURES.has(id) ||
           (scenario === "threads-context" && (id === "context_drop" || id === "context_firewall"))
             ? "available"
             : "gated",

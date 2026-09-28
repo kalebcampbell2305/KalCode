@@ -65,9 +65,7 @@ fn visible(state: SurfaceState, channel: BuildChannel) -> bool {
 /// merges and flips its row here (a hot file: writers list their line in the hand-off).
 fn feature_state(feature: FeatureId) -> SurfaceState {
     match feature {
-        FeatureId::ProviderHealth
-        | FeatureId::ProviderProfiles
-        | FeatureId::ContextDrop
+        FeatureId::ContextDrop
         | FeatureId::UtilityDock
         | FeatureId::ResourceGovernor
         | FeatureId::SessionLocator
@@ -92,14 +90,18 @@ fn feature_state(feature: FeatureId) -> SurfaceState {
         | FeatureId::WorkspaceHome
         | FeatureId::WorkspaceRail
         | FeatureId::ProviderPanes
-        | FeatureId::NotificationCenter
-        | FeatureId::AccountSignIn
         | FeatureId::ContextFirewall
         | FeatureId::HostKeyVerification
         | FeatureId::SafeRestore
         | FeatureId::AutomationKillSwitch => SurfaceState::Gated,
         // Z7-W1: the pane canvas is the Code surface.
         FeatureId::PaneSystem => SurfaceState::Available,
+        // 0.1.5 zero-setup (E1-E3, E7): these ship unconditionally on Stable (Providers › Health
+        // and Accounts, the Notifications panel, the sign-in gate); nothing gates on the flag.
+        FeatureId::ProviderHealth
+        | FeatureId::ProviderProfiles
+        | FeatureId::NotificationCenter
+        | FeatureId::AccountSignIn => SurfaceState::Available,
     }
 }
 
@@ -219,6 +221,15 @@ mod tests {
 
     #[test]
     fn every_feature_has_one_flag_and_advanced_features_are_gated() {
+        // Shipped in every channel: the pane system (Z7-W1) and the 0.1.5 features whose UI is
+        // unconditional (provider health and accounts, notifications, KalCode sign-in).
+        const AVAILABLE: [FeatureId; 5] = [
+            FeatureId::PaneSystem,
+            FeatureId::ProviderHealth,
+            FeatureId::ProviderProfiles,
+            FeatureId::NotificationCenter,
+            FeatureId::AccountSignIn,
+        ];
         for channel in [
             BuildChannel::Stable,
             BuildChannel::Beta,
@@ -228,10 +239,9 @@ mod tests {
             assert_eq!(flags.features.len(), FeatureId::ALL.len());
             for feature in FeatureId::ALL {
                 let flag = flags.feature(feature).expect("flag");
-                if feature == FeatureId::PaneSystem {
-                    // Z7-W1: available in every channel.
-                    assert_eq!(flag.state, SurfaceState::Available);
-                    assert!(flag.visible);
+                if AVAILABLE.contains(&feature) {
+                    assert_eq!(flag.state, SurfaceState::Available, "{feature:?}");
+                    assert!(flag.visible, "{feature:?}");
                     continue;
                 }
                 assert_eq!(flag.state, SurfaceState::Gated, "{feature:?}");
