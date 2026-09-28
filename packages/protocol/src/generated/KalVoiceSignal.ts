@@ -6,7 +6,11 @@ import type { RequestStage } from "./RequestStage.ts";
 import type { StageTimings } from "./StageTimings.ts";
 import type { VoiceResult } from "./VoiceResult.ts";
 
-export type KalVoiceSignal = { "kind": "local_reasoning_status", status: LocalReasoningStatus, } | { "kind": "listening_started", sessionId: string, mode: KalVoiceMode, } | { "kind": "level", sessionId: string, level: number, } | { "kind": "partial", sessionId: string, text: string, } | { "kind": "transcribing", sessionId: string, mode: KalVoiceMode, } | { "kind": "result", result: VoiceResult,
+export type KalVoiceSignal = { "kind": "local_reasoning_status", status: LocalReasoningStatus,
+/**
+ * Safe reason code while `waiting` or `failed`.
+ */
+issue?: string, } | { "kind": "listening_started", sessionId: string, mode: KalVoiceMode, } | { "kind": "level", sessionId: string, level: number, } | { "kind": "partial", sessionId: string, text: string, } | { "kind": "transcribing", sessionId: string, mode: KalVoiceMode, } | { "kind": "result", result: VoiceResult,
 /**
  * Stage timings measured natively (key-down to final transcript).
  */

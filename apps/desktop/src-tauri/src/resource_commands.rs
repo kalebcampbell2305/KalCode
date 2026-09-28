@@ -26,7 +26,7 @@ use kalcode_resources::{
     ResourceMode, ResourceSnapshot, RunningWork, SamplerStats, WorkspaceRoot, admission_max_age,
     capacity, evaluate_admission,
 };
-#[cfg(feature = "e2e")]
+#[cfg(any(test, feature = "e2e"))]
 use kalcode_resources::{SystemClock, SystemProbe};
 use serde::Serialize;
 
@@ -794,6 +794,39 @@ impl ResourceGovernorState {
             }
         }
         self.set_workspaces(roots);
+    }
+
+    /// Streams the sampler's updates to an event-driven consumer, such as a held local start
+    /// that re-evaluates admission on the next fresh sample instead of on a timer. `None` when
+    /// no sampler is running (it could not start, or it stopped), so no sample will ever come.
+    pub(crate) fn subscribe(
+        &self,
+        buffer: usize,
+    ) -> Option<std::sync::mpsc::Receiver<kalcode_resources::GovernorUpdate>> {
+        self.lock()
+            .handle
+            .as_ref()
+            .map(|handle| handle.subscribe(buffer))
+    }
+
+    /// A governor over an injected probe, so admission can be exercised against scripted
+    /// readings (for example the first sample's CPU warm-up) instead of the host's load.
+    #[cfg(test)]
+    pub(crate) fn start_with_probe(probe: Box<dyn SystemProbe>) -> Self {
+        Self {
+            runtime: Mutex::new(Runtime {
+                handle: Some(
+                    Governor::start_with(
+                        GovernorConfig::default(),
+                        probe,
+                        Arc::new(SystemClock::default()),
+                    )
+                    .expect("default governor configuration"),
+                ),
+                activity: ActivityTracker::default(),
+                fallback_status: GovernorStatus::Starting,
+            }),
+        }
     }
 
     pub fn track_process(&self, pid: u32, role: ProcessRole) {

@@ -3,4 +3,4 @@
 /**
  * Readiness of the separately consented on-device interpreter. Dictation is independent.
  */
-export type LocalReasoningStatus = "not_installed" | "installed" | "warming" | "ready" | "unavailable";
+export type LocalReasoningStatus = "not_installed" | "installed" | "waiting" | "warming" | "ready" | "failed" | "unavailable";

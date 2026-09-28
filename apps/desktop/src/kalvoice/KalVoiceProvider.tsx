@@ -48,7 +48,7 @@ import {
 } from "./dictation.ts";
 import { type DictationSession, DictationSessions } from "./dictationSessions.ts";
 import { placementFor, sizeClassFor } from "./panelGeometry.ts";
-import { type TalkKeyState, withTalkKeyState } from "./readiness.ts";
+import { type LocalReasoningState, type TalkKeyState, withReasoningState, withTalkKeyState } from "./readiness.ts";
 
 export interface HistoryItem {
   requestId: string;
@@ -217,23 +217,29 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   // subscribe, so it is newer than any status read and is applied on top of every status.
   const [talkKey, setTalkKey] = useState<TalkKeyState | null>(null);
   const talkKeyRef = useRef<TalkKeyState | null>(null);
+  // The latest native `local_reasoning_status`, applied over every status read the same way.
+  const reasoningRef = useRef<LocalReasoningState | null>(null);
+  const withNativeState = useCallback(
+    (next: KalVoiceStatus) => withReasoningState(withTalkKeyState(next, talkKeyRef.current), reasoningRef.current),
+    [],
+  );
 
   const refreshStatus = useCallback(async () => {
     try {
-      setStatus(withTalkKeyState(await client.kalvoiceStatus(), talkKeyRef.current));
+      setStatus(withNativeState(await client.kalvoiceStatus()));
       setStatusError(null);
     } catch (error) {
       setStatusError(toKalCodeError(error));
     }
-  }, [client]);
+  }, [client, withNativeState]);
 
   const updatePreferences = useCallback(
     async (patch: KalVoicePreferencesPatch) => {
       const next = await client.kalvoiceUpdatePreferences(patch);
-      setStatus(withTalkKeyState(next, talkKeyRef.current));
+      setStatus(withNativeState(next));
       return next;
     },
-    [client],
+    [client, withNativeState],
   );
 
   // The UI side of a command's result (the native side already did the work).
@@ -488,9 +494,15 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
             [signal.modelId]: { received: signal.receivedBytes, total: signal.totalBytes },
           }));
           return;
-        case "local_reasoning_status":
-          setStatus((current) => (current ? { ...current, localReasoning: signal.status } : current));
+        case "local_reasoning_status": {
+          const update: LocalReasoningState = {
+            status: signal.status,
+            ...(signal.issue === undefined ? {} : { issue: signal.issue }),
+          };
+          reasoningRef.current = update;
+          setStatus((current) => withReasoningState(current, update));
           return;
+        }
         case "model_installed":
           setDownloads(({ [signal.modelId]: _, ...rest }) => rest);
           toast.show({

@@ -13,6 +13,10 @@ import type { SpeechModelInfo } from "./SpeechModelInfo.ts";
  */
 export type KalVoiceStatus = { usage: KalVoiceUsage, preferences: KalVoicePreferences, models: Array<SpeechModelInfo>, localReasoning?: LocalReasoningStatus,
 /**
+ * Safe reason code while local reasoning is `waiting` or `failed` (never a path or message).
+ */
+localReasoningIssue?: string,
+/**
  * The model dictation will use (the selected one, or another installed one).
  */
 activeModel: string | null,

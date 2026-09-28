@@ -7,6 +7,7 @@ import { toKalCodeError } from "../ipc/errors.ts";
 import { formatBytes } from "./assistantState.ts";
 import { useKalVoice, useOptionalKalVoice } from "./KalVoiceProvider.tsx";
 import styles from "./KalVoiceSettings.module.css";
+import { localIntelligence } from "./localIntelligence.ts";
 import { ANCHOR_LABELS } from "./panelGeometry.ts";
 import { pushToTalkReadiness } from "./readiness.ts";
 import { checkReserved, displayKey, isModifierOnly, talkKeyChoiceHint, talkKeyFromEvent } from "./shortcutModel.ts";
@@ -239,13 +240,7 @@ function IntelligenceRow() {
   const [error, setError] = useState<string | null>(null);
   const progress = downloads["local-reasoning"];
   const readiness = status?.localReasoning ?? "unavailable";
-  const labels = {
-    not_installed: "Not installed",
-    installed: "Installed; not running",
-    warming: "Starting",
-    ready: "Ready",
-    unavailable: "Unavailable",
-  };
+  const view = localIntelligence(status);
   const review = async () => {
     setLoading(true);
     setError(null);
@@ -273,9 +268,7 @@ function IntelligenceRow() {
         help="Simple commands run locally immediately. The optional on-device interpreter handles supported phrasing outside the command grammar. Local dictation is unlimited on every plan and needs only a speech model."
       >
         <span>
-          {progress
-            ? `Downloading ${formatBytes(progress.received)} / ${formatBytes(progress.total)}`
-            : labels[readiness]}
+          {progress ? `Downloading ${formatBytes(progress.received)} / ${formatBytes(progress.total)}` : view.label}
         </span>
         {progress ? (
           <Button size="sm" onClick={() => void cancelDownload("local-reasoning")}>
@@ -285,12 +278,21 @@ function IntelligenceRow() {
           <Button size="sm" busy={loading} onClick={() => void review()}>
             Review download
           </Button>
-        ) : readiness === "installed" || readiness === "unavailable" ? (
+        ) : view.retry ? (
           <Button size="sm" variant="ghost" onClick={() => void retry()}>
             Retry local startup
           </Button>
         ) : null}
       </Row>
+      {readiness === "waiting" ? (
+        <p className={styles.note} role="note">
+          {view.detail}
+        </p>
+      ) : readiness === "failed" ? (
+        <p className={styles.issue} role="status">
+          {view.detail}
+        </p>
+      ) : null}
       {error ? (
         <p className={styles.fieldError} role="alert">
           {error}

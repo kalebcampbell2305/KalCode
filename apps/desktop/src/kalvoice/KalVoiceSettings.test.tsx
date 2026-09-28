@@ -84,3 +84,31 @@ describe("signed local interpreter download consent", () => {
     expect(download).not.toHaveBeenCalled();
   });
 });
+
+describe("automatic local startup status", () => {
+  it("says what a held start is waiting for and needs no retry", () => {
+    seams.value.status = {
+      ...(seams.value.status as object),
+      localReasoning: "waiting",
+      localReasoningIssue: "cpu_headroom",
+    };
+    render(<KalVoiceSettings />);
+    expect(screen.getByText("Waiting for CPU headroom")).toBeInTheDocument();
+    expect(screen.getByRole("note")).toHaveTextContent(/starts the on-device interpreter automatically/);
+    expect(screen.queryByRole("button", { name: "Retry local startup" })).not.toBeInTheDocument();
+  });
+
+  it("shows why startup gave up and keeps retry available", () => {
+    seams.value.status = {
+      ...(seams.value.status as object),
+      localReasoning: "failed",
+      localReasoningIssue: "worker_health_timeout",
+    };
+    render(<KalVoiceSettings />);
+    expect(screen.getByText("Couldn't start: worker_health_timeout")).toBeInTheDocument();
+    expect(screen.getByText(/The interpreter didn't become ready in time\./)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry local startup" }));
+    expect(retry).toHaveBeenCalledOnce();
+    expect(download).not.toHaveBeenCalled();
+  });
+});

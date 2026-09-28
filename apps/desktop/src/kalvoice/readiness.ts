@@ -60,6 +60,27 @@ export function withTalkKeyState(status: KalVoiceStatus | null, update: TalkKeyS
   return { ...status, talkKeyActive: update.active, shortcutIssues: issues };
 }
 
+export type LocalReasoningState = Omit<Extract<KalVoiceSignal, { kind: "local_reasoning_status" }>, "kind">;
+
+/**
+ * Applies the latest native `local_reasoning_status`. Native publishes every transition as it
+ * happens and answers each subscribe with the current state, so the signal is newer than a status
+ * read that was computed before it (such a read can resolve after the signal and would otherwise
+ * leave the interpreter shown as starting or not running after it became ready).
+ */
+export function withReasoningState(
+  status: KalVoiceStatus | null,
+  update: LocalReasoningState | null,
+): KalVoiceStatus | null {
+  if (!status || !update) return status;
+  const { localReasoningIssue: _previous, ...rest } = status;
+  return {
+    ...rest,
+    localReasoning: update.status,
+    ...(update.issue === undefined ? {} : { localReasoningIssue: update.issue }),
+  };
+}
+
 /**
  * `signalsError`: the window has no live KalVoice signal channel, so Listening, Processing and
  * results could never be shown. `statusError`: the latest status read failed; an older status

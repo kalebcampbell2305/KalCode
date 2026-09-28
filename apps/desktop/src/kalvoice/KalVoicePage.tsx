@@ -1,3 +1,4 @@
+import type { KalVoiceStatus } from "@kalcode/protocol";
 import { Badge, Button, EmptyState, Section } from "@kalcode/ui/components";
 import { AudioLines, MessageSquareText, Sparkles } from "lucide-react";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
@@ -8,6 +9,7 @@ import { usageLine } from "./assistantState.ts";
 import styles from "./KalVoicePage.module.css";
 import { useKalVoice } from "./KalVoiceProvider.tsx";
 import { LatencyDiagnostics } from "./LatencyDiagnostics.tsx";
+import { localIntelligence } from "./localIntelligence.ts";
 import { pushToTalkReadiness } from "./readiness.ts";
 import { displayKey } from "./shortcutModel.ts";
 import { KalVoiceWordmark, Orb } from "./Visuals.tsx";
@@ -16,38 +18,11 @@ function Key({ name }: { name: string }) {
   return <kbd>{displayKey(name)}</kbd>;
 }
 
-const LOCAL_INTELLIGENCE = {
-  not_installed: {
-    tone: "waiting",
-    label: "Not installed",
-    detail: "Direct commands work now. Download the on-device interpreter for other supported phrasing.",
-    action: "Set up local intelligence",
-  },
-  installed: {
-    tone: "waiting",
-    label: "Installed; not running",
-    detail: "The local interpreter is installed. Retry startup in KalVoice settings.",
-    action: "Open KalVoice settings",
-  },
-  warming: {
-    tone: "waiting",
-    label: "Starting",
-    detail: "The on-device interpreter is starting. Direct commands remain available.",
-    action: null,
-  },
-  ready: {
-    tone: "success",
-    label: "Ready",
-    detail: "The on-device interpreter handles supported phrasing without a connected provider.",
-    action: null,
-  },
-  unavailable: {
-    tone: "outline",
-    label: "Unavailable",
-    detail: "Direct commands remain available. Check local interpreter startup in KalVoice settings.",
-    action: "Open KalVoice settings",
-  },
-} as const;
+/** The Intelligence tile's call to action for each state (settings holds the controls). */
+function intelligenceAction(status: KalVoiceStatus): string | null {
+  if (status.localReasoning === "not_installed") return "Set up local intelligence";
+  return localIntelligence(status).retry ? "Open KalVoice settings" : null;
+}
 
 /** The KalVoice surface: ask, see what's ready, and this session's requests. */
 export function KalVoicePage() {
@@ -97,7 +72,7 @@ export function KalVoicePage() {
           action: readiness.fix === "retry" ? ("retry" as const) : ("settings" as const),
         };
 
-  const intelligence = status ? LOCAL_INTELLIGENCE[status.localReasoning ?? "unavailable"] : null;
+  const intelligence = status ? { ...localIntelligence(status), action: intelligenceAction(status) } : null;
 
   return (
     <Page

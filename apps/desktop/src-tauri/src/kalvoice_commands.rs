@@ -55,7 +55,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, S
 use crate::kalvoice_components::{
     ComponentManagerError, KalVoiceComponentManager, REASONING_DOWNLOAD_ID,
 };
-use kalcode_kalvoice::signals::LocalReasoningDownload;
+use kalcode_kalvoice::signals::{LocalReasoningDownload, LocalReasoningStatus};
 #[path = "kalvoice_reasoning.rs"]
 mod reasoning;
 use reasoning::DesktopLocalInterpreter;
@@ -160,16 +160,18 @@ pub struct KalVoiceState(pub Option<Arc<KalVoiceRuntime>>, &'static str);
 impl kalcode_doctor::context::LocalVoiceSource for KalVoiceState {
     fn current(&self) -> kalcode_doctor::context::LocalVoiceState {
         use kalcode_doctor::context::LocalVoiceState as DoctorState;
-        use kalcode_kalvoice::signals::LocalReasoningStatus;
         let Some(runtime) = &self.0 else {
             return DoctorState::Unavailable;
         };
         match runtime.reasoning.status() {
             LocalReasoningStatus::Ready => DoctorState::Ready,
-            LocalReasoningStatus::Warming => DoctorState::Warming,
+            // A start pending on governor admission is on its way, like one already starting.
+            LocalReasoningStatus::Warming | LocalReasoningStatus::Waiting => DoctorState::Warming,
             LocalReasoningStatus::Installed => DoctorState::Installed,
             LocalReasoningStatus::NotInstalled => DoctorState::NotInstalled,
-            LocalReasoningStatus::Unavailable => DoctorState::Unavailable,
+            LocalReasoningStatus::Unavailable | LocalReasoningStatus::Failed => {
+                DoctorState::Unavailable
+            }
         }
     }
 }
@@ -305,6 +307,7 @@ impl KalVoiceRuntime {
     fn status(&self) -> Result<KalVoiceStatus, KalError> {
         let preferences = self.orchestrator.preferences()?;
         let active_model = self.recognizers.active_model(&preferences);
+        let (local_reasoning, local_reasoning_issue) = self.reasoning.snapshot();
         let registered = self
             .shortcuts
             .lock()
@@ -313,7 +316,8 @@ impl KalVoiceRuntime {
             usage: self.orchestrator.usage()?,
             preferences,
             models: self.components.speech_models(),
-            local_reasoning: Some(self.reasoning.status()),
+            local_reasoning: Some(local_reasoning),
+            local_reasoning_issue: local_reasoning_issue.map(str::to_owned),
             active_model,
             speech_engine: ENGINE_AVAILABLE,
             microphone_supported: self.microphone_supported,
@@ -776,7 +780,24 @@ fn synchronize_usage(runtime: &Arc<KalVoiceRuntime>) {
     });
 }
 
-/// Loads the speech model in the background so the first key press doesn't wait for it.
+/// A local interpreter status transition as a signal.
+fn reasoning_signal(status: LocalReasoningStatus, issue: Option<&'static str>) -> KalVoiceSignal {
+    KalVoiceSignal::LocalReasoningStatus {
+        status,
+        issue: issue.map(str::to_owned),
+    }
+}
+
+/// The local interpreter's current state, for a page that subscribes after a transition was
+/// published (each transition is published once, as it happens).
+fn current_reasoning_signal(reasoning: &DesktopLocalInterpreter) -> KalVoiceSignal {
+    let (status, issue) = reasoning.snapshot();
+    reasoning_signal(status, issue)
+}
+
+/// Loads the speech model in the background so the first key press doesn't wait for it, then
+/// drives the installed local interpreter to ready, publishing each status transition. The
+/// interpreter keeps a held start pending until the Resource Governor admits it.
 fn keep_warm(runtime: &Arc<KalVoiceRuntime>) {
     let Some(task) = runtime.background.start() else {
         return;
@@ -796,10 +817,9 @@ fn keep_warm(runtime: &Arc<KalVoiceRuntime>) {
                     tracing::info!(event = "kalvoice.model_not_warm", code = error.code())
                 }
             }
-            runtime.reasoning.warm();
-            runtime.signal(&KalVoiceSignal::LocalReasoningStatus {
-                status: runtime.reasoning.status(),
-            });
+            runtime
+                .reasoning
+                .autostart(&|status, issue| runtime.signal(&reasoning_signal(status, issue)));
         });
 }
 
@@ -1577,6 +1597,9 @@ pub fn kalvoice_subscribe(
             .unwrap_or_else(PoisonError::into_inner)
             .last = None;
         sync_talk_key(&app, &runtime, "subscribe");
+        // And the local interpreter's current state: a transition published before this page
+        // subscribed (a warm that finished first) would otherwise never reach it.
+        runtime.signal(&current_reasoning_signal(&runtime.reasoning));
     }
     Ok(())
 }

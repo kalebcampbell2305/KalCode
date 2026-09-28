@@ -35,6 +35,10 @@ pub struct KalVoiceStatus {
     #[serde(default)]
     #[ts(optional)]
     pub local_reasoning: Option<LocalReasoningStatus>,
+    /// Safe reason code while local reasoning is `waiting` or `failed` (never a path or message).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub local_reasoning_issue: Option<String>,
     /// The model dictation will use (the selected one, or another installed one).
     pub active_model: Option<String>,
     /// Whether this build includes the on-device speech engine.
@@ -62,8 +66,12 @@ pub struct KalVoiceStatus {
 pub enum LocalReasoningStatus {
     NotInstalled,
     Installed,
+    /// Installed; the automatic start is pending until the Resource Governor admits it.
+    Waiting,
     Warming,
     Ready,
+    /// Installed; the automatic start gave up (the issue code says why). Retry is available.
+    Failed,
     Unavailable,
 }
 
@@ -96,6 +104,10 @@ pub struct ListeningSession {
 pub enum KalVoiceSignal {
     LocalReasoningStatus {
         status: LocalReasoningStatus,
+        /// Safe reason code while `waiting` or `failed`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        issue: Option<String>,
     },
     /// The microphone is live.
     ListeningStarted {
