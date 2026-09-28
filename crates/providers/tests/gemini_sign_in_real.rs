@@ -125,11 +125,100 @@ fn real_sign_in_probe_reaches_geminis_own_consent_without_signing_in() {
     let home = profiles
         .profile_home("gemini-cli", &account_id)
         .expect("home");
-    assert!(
-        !home.join(".gemini/oauth_creds.json").exists(),
-        "declining must not sign in"
-    );
+    for credential in ["oauth_creds.json", "gemini-credentials.json"] {
+        assert!(
+            !home.join(".gemini").join(credential).exists(),
+            "declining must not sign in ({credential})"
+        );
+    }
     drop(lease);
+}
+
+fn headless_launch(
+    root: &std::path::Path,
+    profiles: &ManagedProfiles,
+    account_id: &str,
+) -> (
+    ManagedGeminiLaunch,
+    Vec<std::ffi::OsString>,
+    std::collections::BTreeMap<std::ffi::OsString, std::ffi::OsString>,
+) {
+    let workspace = root.join("repo");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    let launch = ManagedGeminiLaunch::prepare(
+        profiles,
+        &source(root),
+        account_id,
+        &kalcode_contracts::ids::new_id(),
+        &workspace,
+        PermissionMode::Plan,
+    )
+    .expect("managed launch");
+    let mut args =
+        kalcode_providers::gemini::headless_args(PermissionMode::Plan, None, None).expect("args");
+    launch
+        .append_security_args(&mut args)
+        .expect("security args");
+    let mut env = launch.environment().clone();
+    // As the headless adapter does: a turn must never start the browser sign-in.
+    env.insert("NO_BROWSER".into(), "true".into());
+    (launch, args, env)
+}
+
+/// Uses a synthetic, never-valid token written by this test (no real credential exists). Gemini
+/// makes one token-info request to Google, which rejects it.
+#[test]
+#[ignore = "needs a real Gemini CLI 0.61.0 (KALCODE_REAL_GEMINI); no sign-in, prompt or quota"]
+fn real_managed_launch_keeps_google_sign_in_only_in_the_encrypted_profile_store() {
+    let Some(gemini) = real_gemini() else { return };
+    let temp = tempfile::tempdir().expect("temp");
+    let root = std::fs::canonicalize(temp.path()).expect("canonical temp");
+    std::fs::create_dir_all(root.join("person")).expect("person");
+    let profiles = ManagedProfiles::new(root.join("managed")).expect("profiles");
+    let account_id = kalcode_contracts::ids::new_id();
+    let gemini_dir = profiles
+        .profile_home("gemini-cli", &account_id)
+        .expect("home")
+        .join(".gemini");
+    std::fs::create_dir_all(&gemini_dir).expect("gemini dir");
+    let synthetic = "kalcode-synthetic-never-valid-token";
+    std::fs::write(
+        gemini_dir.join("oauth_creds.json"),
+        format!(
+            r#"{{"access_token":"{synthetic}","refresh_token":"{synthetic}-refresh","token_type":"Bearer","expiry_date":4102444800000}}"#
+        ),
+    )
+    .expect("legacy plaintext fixture");
+
+    let (launch, args, env) = headless_launch(&root, &profiles, &account_id);
+    let first = run(&gemini, &env, launch.cwd(), &args, b"unused prompt\n");
+    let stderr = String::from_utf8_lossy(&first.stderr);
+    eprintln!("first exit {:?}\n{stderr}", first.status.code());
+    assert_eq!(first.status.code(), Some(41), "{stderr}");
+    assert!(
+        !gemini_dir.join("oauth_creds.json").exists(),
+        "Gemini migrates a plaintext sign-in into encrypted storage and deletes it"
+    );
+    let store = std::fs::read(gemini_dir.join("gemini-credentials.json"))
+        .expect("encrypted store in this account's profile");
+    assert!(
+        !String::from_utf8_lossy(&store).contains(synthetic),
+        "the store is encrypted, not plaintext"
+    );
+
+    // A later launch of the same account reads the same encrypted store (the only copy left).
+    let mut debug_args = args.clone();
+    debug_args.push("--debug".into());
+    let second = run(&gemini, &env, launch.cwd(), &debug_args, b"unused prompt\n");
+    let stderr = String::from_utf8_lossy(&second.stderr);
+    let stdout = String::from_utf8_lossy(&second.stdout);
+    eprintln!("second exit {:?}\n{stderr}\n{stdout}", second.status.code());
+    assert_eq!(second.status.code(), Some(41), "{stderr}");
+    assert!(
+        format!("{stderr}{stdout}").contains("Cached credentials are not valid"),
+        "the second launch loaded the credential from the encrypted store"
+    );
+    assert!(!gemini_dir.join("oauth_creds.json").exists());
 }
 
 #[test]

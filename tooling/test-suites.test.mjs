@@ -26,16 +26,16 @@ test("the registered Rust release gate includes the production speech engine and
   const rust = inventory.suites.find(({ id }) => id === "rust-workspace");
   assert.deepEqual(rust.command, ["cargo", "test", "--workspace", "--features", "kalcode-desktop/kalvoice-whisper"]);
   for (const [platform, expected] of [
-    ["win32", 18],
-    ["darwin", 18],
+    ["win32", 19],
+    ["darwin", 19],
     // The pinned runtime and local-reasoning probes only compile on Windows x64/Mac ARM64.
-    ["linux", 16],
+    ["linux", 17],
   ]) {
     const profile = selectProfile(rust, platform, {});
     assert.equal(profile.skippedMinimum, expected);
     assert.equal(profile.skippedMaximum, expected);
   }
-  assert.equal(inventory.rustIntentionalIgnores.length, 18);
+  assert.equal(inventory.rustIntentionalIgnores.length, 19);
 });
 
 test("the registered Vitest command writes and validates its real JSON report", () => {

@@ -4,7 +4,9 @@
 //! selected auth type is "Sign in with Google" and no cached credential exists: headless Gemini
 //! asks `Opening authentication page in your browser. Do you want to continue? [Y/n]` on stdin,
 //! opens Google's page in the system browser, receives the OAuth callback on a loopback port,
-//! and caches the result in `<GEMINI_CLI_HOME>/.gemini/oauth_creds.json`.
+//! and caches the result. Managed profiles select Gemini's encrypted file storage (see
+//! `managed_policy::select_credential_storage`), so the credential lands AES-256-GCM encrypted in
+//! `<GEMINI_CLI_HOME>/.gemini/gemini-credentials.json`, never in plaintext `oauth_creds.json`.
 //!
 //! KalCode runs exactly that flow, and nothing else, inside one account's exclusively leased
 //! managed profile ([`ManagedGeminiSignIn`]): a neutral directory in the profile (never a
@@ -43,18 +45,21 @@ const CERTIFIED_VERSION: Version = Version::new(0, 61, 0);
 
 /// Gemini's own configuration directory below `GEMINI_CLI_HOME`.
 const GEMINI_DIR: &str = ".gemini";
-/// Gemini CLI 0.61.0's cached "Sign in with Google" credential (`Storage.getOAuthCredsPath`).
-pub const OAUTH_CREDENTIALS_FILE: &str = "oauth_creds.json";
+/// Gemini CLI 0.61.0's plaintext "Sign in with Google" cache (`Storage.getOAuthCredsPath`), used
+/// only without encrypted storage. Managed launches never write it; Gemini migrates a legacy copy
+/// into the encrypted store and deletes it, and sign-out removes any that remains.
+const LEGACY_PLAINTEXT_CREDENTIALS_FILE: &str = "oauth_creds.json";
 /// Gemini's cached Google account email list, cleared by Gemini's own credential reset.
 const GOOGLE_ACCOUNTS_FILE: &str = "google_accounts.json";
-/// Gemini's file-backed keychain (`GEMINI_FORCE_FILE_STORAGE`): stored API keys and encrypted
-/// credentials. In a managed profile it holds only this account's provider credentials.
-const FILE_KEYCHAIN_FILE: &str = "gemini-credentials.json";
+/// Gemini's AES-256-GCM `FileKeychain` (`GEMINI_FORCE_ENCRYPTED_FILE_STORAGE` with
+/// `GEMINI_FORCE_FILE_STORAGE`): the managed Google sign-in. Gemini deletes the file itself when
+/// its last entry is removed. In a managed profile it holds only this account's credentials.
+pub const ENCRYPTED_CREDENTIALS_FILE: &str = "gemini-credentials.json";
 /// Every provider-owned credential file sign-out removes. Nothing else in the profile changes.
 const SIGN_OUT_FILES: [&str; 3] = [
-    OAUTH_CREDENTIALS_FILE,
+    ENCRYPTED_CREDENTIALS_FILE,
+    LEGACY_PLAINTEXT_CREDENTIALS_FILE,
     GOOGLE_ACCOUNTS_FILE,
-    FILE_KEYCHAIN_FILE,
 ];
 
 /// Account truth derived from Gemini's own credential files (existence only).
@@ -94,14 +99,12 @@ pub enum GeminiAccountAuthError {
     StateUpdateFailed,
 }
 
-/// Reads one managed account's Gemini sign-in state from file metadata alone.
+/// Reads one managed account's Gemini sign-in state from file metadata alone: `Authenticated`
+/// when Gemini's encrypted credential store exists as an ordinary file, `NotAuthenticated`
+/// otherwise. A plaintext `oauth_creds.json` never counts (managed launches don't use it; signing
+/// in lets Gemini migrate a legacy copy into the encrypted store and delete it).
 ///
-/// - `Authenticated`: Gemini's Google sign-in cache exists as an ordinary file.
-/// - `Unknown`: only Gemini's file keychain exists (for example an API key saved through
-///   Gemini's own `/auth` dialog), which KalCode cannot inspect without reading it.
-/// - `NotAuthenticated`: neither exists.
-///
-/// A link, reparse point or non-file at any of these paths fails closed as an error.
+/// A link, reparse point or non-file where the store should be fails closed as an error.
 pub fn credential_state(
     profiles: &ManagedProfiles,
     account_id: &str,
@@ -110,11 +113,8 @@ pub fn credential_state(
     let Some(directory) = gemini_directory(&home)? else {
         return Ok(AuthState::NotAuthenticated);
     };
-    if ordinary_file_exists(&directory.join(OAUTH_CREDENTIALS_FILE))? {
+    if ordinary_file_exists(&directory.join(ENCRYPTED_CREDENTIALS_FILE))? {
         return Ok(AuthState::Authenticated);
-    }
-    if ordinary_file_exists(&directory.join(FILE_KEYCHAIN_FILE))? {
-        return Ok(AuthState::Unknown);
     }
     Ok(AuthState::NotAuthenticated)
 }
@@ -721,8 +721,11 @@ mod tests {
         };
         let ordinary = temp_root.join("ordinary");
         std::fs::create_dir_all(ordinary.join(".gemini")).expect("ordinary home");
-        std::fs::write(ordinary.join(".gemini").join(OAUTH_CREDENTIALS_FILE), b"{}")
-            .expect("standalone credential that must never be used");
+        std::fs::write(
+            ordinary.join(".gemini").join(ENCRYPTED_CREDENTIALS_FILE),
+            b"opaque",
+        )
+        .expect("standalone credential that must never be used");
         let profiles =
             Arc::new(ManagedProfiles::new(temp_root.join("managed-profiles")).expect("profiles"));
         let extra_env: BTreeMap<OsString, OsString> = [
@@ -790,13 +793,14 @@ mod tests {
             credential_state(&fixture.profiles, ACCOUNT_ID).expect("state"),
             AuthState::NotAuthenticated
         );
-        std::fs::write(directory.join(FILE_KEYCHAIN_FILE), b"opaque").expect("keychain");
+        std::fs::write(directory.join(LEGACY_PLAINTEXT_CREDENTIALS_FILE), b"opaque")
+            .expect("legacy plaintext");
         assert_eq!(
             credential_state(&fixture.profiles, ACCOUNT_ID).expect("state"),
-            AuthState::Unknown,
-            "an opaque keychain file is never guessed to be a valid sign-in"
+            AuthState::NotAuthenticated,
+            "a plaintext credential is never what a managed account signs in with"
         );
-        std::fs::write(directory.join(OAUTH_CREDENTIALS_FILE), b"opaque").expect("oauth");
+        std::fs::write(directory.join(ENCRYPTED_CREDENTIALS_FILE), b"opaque").expect("store");
         assert_eq!(
             credential_state(&fixture.profiles, ACCOUNT_ID).expect("state"),
             AuthState::Authenticated
@@ -812,7 +816,7 @@ mod tests {
     fn credential_state_fails_closed_on_a_non_file_credential() {
         let fixture = fixture("unused");
         let directory = credentials(&fixture.profiles, ACCOUNT_ID);
-        std::fs::create_dir_all(directory.join(OAUTH_CREDENTIALS_FILE)).expect("directory");
+        std::fs::create_dir_all(directory.join(ENCRYPTED_CREDENTIALS_FILE)).expect("directory");
         assert!(credential_state(&fixture.profiles, ACCOUNT_ID).is_err());
     }
 
@@ -864,7 +868,7 @@ mod tests {
         let fixture = fixture("unused");
         let directory = credentials(&fixture.profiles, ACCOUNT_ID);
         std::fs::create_dir_all(&directory).expect("gemini dir");
-        std::fs::write(directory.join(OAUTH_CREDENTIALS_FILE), b"opaque").expect("oauth");
+        std::fs::write(directory.join(ENCRYPTED_CREDENTIALS_FILE), b"opaque").expect("store");
 
         let shared = fixture
             .profiles
@@ -877,7 +881,7 @@ mod tests {
             .acquire_sign_in_lease("gemini-cli", OTHER_ACCOUNT_ID)
             .expect("other lease");
         assert!(remove_credentials(&fixture.profiles, ACCOUNT_ID, &other).is_err());
-        assert!(directory.join(OAUTH_CREDENTIALS_FILE).exists());
+        assert!(directory.join(ENCRYPTED_CREDENTIALS_FILE).exists());
     }
 
     #[test]
@@ -900,10 +904,11 @@ mod tests {
         );
         let state = pending.wait().expect("confirmed sign-in");
         assert_eq!(state.auth, AuthState::Authenticated);
+        let directory = credentials(&fixture.profiles, ACCOUNT_ID);
+        assert!(directory.join(ENCRYPTED_CREDENTIALS_FILE).is_file());
         assert!(
-            credentials(&fixture.profiles, ACCOUNT_ID)
-                .join(OAUTH_CREDENTIALS_FILE)
-                .is_file()
+            !directory.join(LEGACY_PLAINTEXT_CREDENTIALS_FILE).exists(),
+            "Google sign-in is never stored in plaintext"
         );
         assert_eq!(
             credential_state(&fixture.profiles, OTHER_ACCOUNT_ID).expect("state"),
@@ -946,7 +951,7 @@ mod tests {
         let fixture = fixture("login_must_not_run");
         let directory = credentials(&fixture.profiles, ACCOUNT_ID);
         std::fs::create_dir_all(&directory).expect("gemini dir");
-        std::fs::write(directory.join(OAUTH_CREDENTIALS_FILE), b"opaque").expect("oauth");
+        std::fs::write(directory.join(ENCRYPTED_CREDENTIALS_FILE), b"opaque").expect("store");
         let lease = fixture
             .profiles
             .acquire_sign_in_lease("gemini-cli", ACCOUNT_ID)
@@ -1003,10 +1008,12 @@ mod tests {
         for forbidden in ["GEMINI_API_KEY", "GOOGLE_API_KEY", "NO_BROWSER"] {
             assert!(std::env::var_os(forbidden).is_none(), "{forbidden} leaked");
         }
-        assert_eq!(
-            std::env::var("GEMINI_FORCE_FILE_STORAGE").as_deref(),
-            Ok("true")
-        );
+        for storage in [
+            "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE",
+            "GEMINI_FORCE_FILE_STORAGE",
+        ] {
+            assert_eq!(std::env::var(storage).as_deref(), Ok("true"), "{storage}");
+        }
         assert_eq!(std::env::var("GOOGLE_GENAI_USE_GCA").as_deref(), Ok("true"));
         let home = PathBuf::from(std::env::var_os("GEMINI_CLI_HOME").expect("profile selector"));
         assert!(
@@ -1033,7 +1040,9 @@ mod tests {
             Ok("login_success") => {
                 let directory = home.join(GEMINI_DIR);
                 std::fs::create_dir_all(&directory).expect("gemini dir");
-                std::fs::write(directory.join(OAUTH_CREDENTIALS_FILE), b"{}").expect("cache");
+                // Gemini's encrypted FileKeychain; the fake never writes a plaintext cache.
+                std::fs::write(directory.join(ENCRYPTED_CREDENTIALS_FILE), b"opaque")
+                    .expect("encrypted store");
             }
             Ok("login_declined") => {}
             Ok("login_hang") => std::thread::sleep(Duration::from_secs(60)),

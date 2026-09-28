@@ -145,7 +145,7 @@ impl Rig {
         }
     }
 
-    /// Stands in for Gemini's own cached Google sign-in in this account's managed profile. Its
+    /// Stands in for Gemini's encrypted Google sign-in in this account's managed profile. Its
     /// contents are never read by KalCode; only its presence marks the account signed in.
     #[cfg(any(windows, target_os = "macos"))]
     fn sign_in(&self) {
@@ -155,7 +155,8 @@ impl Rig {
             .expect("profile home")
             .join(".gemini");
         std::fs::create_dir_all(&directory).expect("gemini dir");
-        std::fs::write(directory.join("oauth_creds.json"), b"{}").expect("synthetic sign-in");
+        std::fs::write(directory.join("gemini-credentials.json"), b"opaque")
+            .expect("synthetic encrypted sign-in");
     }
 
     #[cfg(any(windows, target_os = "macos"))]
@@ -484,6 +485,7 @@ fn managed_headless_turn_runs_from_neutral_profile_and_repairs_the_floor() {
         "GEMINI_CLI_SYSTEM_SETTINGS_PATH",
         "GEMINI_CLI_SYSTEM_DEFAULTS_PATH",
         "GEMINI_FORCE_FILE_STORAGE",
+        "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE",
         "GOOGLE_GENAI_USE_GCA",
         "NO_BROWSER",
     ] {
@@ -494,14 +496,12 @@ fn managed_headless_turn_runs_from_neutral_profile_and_repairs_the_floor() {
             "missing {required}: {env_names:?}"
         );
     }
-    for forbidden in ["GEMINI_API_KEY", "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE"] {
-        assert!(
-            !env_names
-                .iter()
-                .any(|name| name.eq_ignore_ascii_case(forbidden)),
-            "inherited {forbidden}: {env_names:?}"
-        );
-    }
+    assert!(
+        !env_names
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case("GEMINI_API_KEY")),
+        "inherited GEMINI_API_KEY: {env_names:?}"
+    );
 
     let settings = rig.neutral().join(".gemini/settings.json");
     std::fs::write(

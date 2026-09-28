@@ -118,14 +118,7 @@ impl ManagedGeminiLaunch {
             "GEMINI_CLI_SYSTEM_DEFAULTS_PATH",
             plain_path(&system_defaults_path),
         );
-        // Gemini 0.61.0 caches Google sign-in in `<GEMINI_CLI_HOME>/.gemini/oauth_creds.json`
-        // unless GEMINI_FORCE_ENCRYPTED_FILE_STORAGE moves it into its keychain service. That
-        // keychain (also used for stored API keys) is one process-user service/account, which
-        // would collide across KalCode profiles; its supported file fallback resolves
-        // `gemini-credentials.json` below the exact GEMINI_CLI_HOME selected by the managed
-        // profile. Set this explicitly instead of relying on keychain availability.
-        remove_env(&mut environment, "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE");
-        insert_env(&mut environment, "GEMINI_FORCE_FILE_STORAGE", "true");
+        select_credential_storage(&mut environment);
         insert_env(&mut environment, DEFAULT_AUTH_ENV, "true");
 
         let mcp_sentinel = format!("kalcode-no-mcp-{}", uuid::Uuid::new_v4());
@@ -216,6 +209,21 @@ impl ManagedGeminiLaunch {
 /// default: Gemini skips system settings whose directory is not administrator/root owned, which
 /// a per-user managed profile never is.
 pub const DEFAULT_AUTH_ENV: &str = "GOOGLE_GENAI_USE_GCA";
+
+/// Selects Gemini CLI 0.61.0's encrypted, per-profile credential storage for every managed process
+/// (sign-in, headless turns and panes alike, so all of them read and write the same store):
+///
+/// - `GEMINI_FORCE_ENCRYPTED_FILE_STORAGE=true`: Google sign-in is saved through Gemini's keychain
+///   service (`OAuthCredentialStorage`) instead of the plaintext
+///   `<GEMINI_CLI_HOME>/.gemini/oauth_creds.json` Gemini writes otherwise; Gemini also migrates an
+///   existing plaintext file into that store and deletes it on first load.
+/// - `GEMINI_FORCE_FILE_STORAGE=true`: that keychain service uses Gemini's own AES-256-GCM
+///   `FileKeychain` at `<GEMINI_CLI_HOME>/.gemini/gemini-credentials.json`, never the OS keychain,
+///   whose single per-user service/account would be shared by every KalCode profile.
+fn select_credential_storage(environment: &mut BTreeMap<OsString, OsString>) {
+    insert_env(environment, "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE", "true");
+    insert_env(environment, "GEMINI_FORCE_FILE_STORAGE", "true");
+}
 
 /// Flags shared by every managed Gemini process. Every path Gemini receives is in its plain form
 /// (see [`plain_path`]): Gemini CLI 0.61.0 is Node.js and does not handle Windows verbatim paths
@@ -314,8 +322,7 @@ impl ManagedGeminiSignIn {
             "GEMINI_CLI_SYSTEM_DEFAULTS_PATH",
             plain_path(&system_defaults_path),
         );
-        remove_env(&mut environment, "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE");
-        insert_env(&mut environment, "GEMINI_FORCE_FILE_STORAGE", "true");
+        select_credential_storage(&mut environment);
         insert_env(&mut environment, DEFAULT_AUTH_ENV, "true");
         // The browser flow is the only sign-in this session may use: a suppressed browser would
         // switch Gemini to its interactive user-code flow, which a non-TTY process cannot answer.
@@ -808,12 +815,15 @@ mod tests {
             env_value(&launch, "GEMINI_FORCE_FILE_STORAGE"),
             Some(OsStr::new("true"))
         );
-        for forbidden in ["GEMINI_API_KEY", "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE"] {
-            assert!(
-                env_value(&launch, forbidden).is_none(),
-                "inherited {forbidden}"
-            );
-        }
+        assert_eq!(
+            env_value(&launch, "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE"),
+            Some(OsStr::new("true")),
+            "Google sign-in is never read from or written to a plaintext file"
+        );
+        assert!(
+            env_value(&launch, "GEMINI_API_KEY").is_none(),
+            "inherited GEMINI_API_KEY"
+        );
         assert_eq!(
             std::fs::read(fixture.workspace.join(".gemini/settings.json"))
                 .expect("repo settings unchanged"),
@@ -964,6 +974,7 @@ mod tests {
                 .expect("other home")
         );
         for (name, value) in [
+            ("GEMINI_FORCE_ENCRYPTED_FILE_STORAGE", "true"),
             ("GEMINI_FORCE_FILE_STORAGE", "true"),
             ("GEMINI_CLI_TRUST_WORKSPACE", "true"),
             (DEFAULT_AUTH_ENV, "true"),
@@ -976,7 +987,6 @@ mod tests {
         }
         for forbidden in [
             "GEMINI_API_KEY",
-            "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE",
             "NO_BROWSER",
             "CLAUDE_CONFIG_DIR",
             "CODEX_HOME",

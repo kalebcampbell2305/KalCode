@@ -1927,7 +1927,8 @@ mod tests {
 
         let directory = gemini_credentials(&fixture.runtime, &personal.id);
         std::fs::create_dir_all(&directory).expect("gemini dir");
-        std::fs::write(directory.join("oauth_creds.json"), b"opaque").expect("synthetic sign-in");
+        std::fs::write(directory.join("gemini-credentials.json"), b"opaque")
+            .expect("synthetic encrypted sign-in");
         assert_eq!(
             fixture
                 .runtime
@@ -1961,7 +1962,7 @@ mod tests {
         for account in [&personal, &work] {
             let directory = gemini_credentials(&fixture.runtime, &account.id);
             std::fs::create_dir_all(&directory).expect("gemini dir");
-            std::fs::write(directory.join("oauth_creds.json"), b"opaque").expect("sign-in");
+            std::fs::write(directory.join("gemini-credentials.json"), b"opaque").expect("sign-in");
             std::fs::write(directory.join("settings.json"), b"{}").expect("settings");
         }
 
@@ -1985,11 +1986,11 @@ mod tests {
             .expect("sign out without Gemini installed");
         assert_eq!(signed_out.authentication_state, AuthState::NotAuthenticated);
         let mine = gemini_credentials(&fixture.runtime, &personal.id);
-        assert!(!mine.join("oauth_creds.json").exists());
+        assert!(!mine.join("gemini-credentials.json").exists());
         assert!(mine.join("settings.json").exists());
         assert!(
             gemini_credentials(&fixture.runtime, &work.id)
-                .join("oauth_creds.json")
+                .join("gemini-credentials.json")
                 .exists(),
             "another account's sign-in is untouched"
         );

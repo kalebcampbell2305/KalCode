@@ -503,24 +503,34 @@ auth type is selected and no credential is cached. Providers → Accounts → Si
 (`provider_gemini_login_start/wait/cancel`) runs exactly that, under the account's exclusive
 sign-in lease: the certified `gemini` from a neutral `sign-in/neutral` directory inside the
 account's profile (no repository, no include directories), the read-only Plan floor, the account's
-`GEMINI_CLI_HOME`, `GEMINI_FORCE_FILE_STORAGE=true`, `GOOGLE_GENAI_USE_GCA=true` (the documented
-"Sign in with Google" selector, used only when the profile saved no auth type) and
-`--list-extensions`, which exits right after startup authentication without a model request.
-KalCode answers only Gemini's own consent line (`Opening authentication page in your browser. Do
-you want to continue? [Y/n]`) with `y`; Gemini opens Google's page in the system browser and
-receives the loopback callback itself. Provider output (it holds the one-time URL) is drained and
-discarded natively. Gemini writes the credential to `<GEMINI_CLI_HOME>/.gemini/oauth_creds.json`
-(and the account email to `google_accounts.json`); KalCode checks **existence only**:
-`oauth_creds.json` → signed in, only the file keychain `gemini-credentials.json` → unknown, neither
-→ signed out. A managed thread for a signed-out account refuses before any turn starts
-(`provider_not_authenticated`: "Sign in to this Gemini CLI account in Providers"), and headless
-turns set `NO_BROWSER=true` so an expired sign-in ends with Gemini's own exit 41 (reported the same
-way) instead of reading the prompt as a consent answer. Sign out (`provider_gemini_logout`) removes
-exactly those three files from that account's `.gemini` directory under the exclusive lease, like
-Gemini's own credential reset; refresh and sign-out need no provider process.
+`GEMINI_CLI_HOME`, `GOOGLE_GENAI_USE_GCA=true` (the documented "Sign in with Google" selector, used
+only when the profile saved no auth type) and `--list-extensions`, which exits right after startup
+authentication without a model request. KalCode answers only Gemini's own consent line (`Opening
+authentication page in your browser. Do you want to continue? [Y/n]`) with `y`; Gemini opens
+Google's page in the system browser and receives the loopback callback itself. Provider output (it
+holds the one-time URL) is drained and discarded natively.
+
+**No plaintext credentials.** Every managed Gemini process (sign-in, headless turns, panes) sets
+`GEMINI_FORCE_ENCRYPTED_FILE_STORAGE=true` and `GEMINI_FORCE_FILE_STORAGE=true`. Without the first,
+0.61.0 writes Google sign-in as plaintext `<GEMINI_CLI_HOME>/.gemini/oauth_creds.json`; with it,
+sign-in goes through Gemini's keychain service, and the second pins that service to Gemini's own
+AES-256-GCM `FileKeychain` at `<GEMINI_CLI_HOME>/.gemini/gemini-credentials.json` instead of the OS
+keychain (one per-user service/account that every KalCode profile would share). Gemini migrates a
+legacy plaintext `oauth_creds.json` into that store and deletes it on the account's next launch.
+The key is Gemini's own (derived from host and user names): it keeps credentials out of plaintext,
+not away from other processes of the same OS user. KalCode checks **existence only**:
+`gemini-credentials.json` → signed in, otherwise signed out (a plaintext file never counts). A
+managed thread for a signed-out account refuses before any turn starts (`provider_not_authenticated`:
+"Sign in to this Gemini CLI account in Providers"), and headless turns set `NO_BROWSER=true` so an
+expired sign-in ends with Gemini's own exit 41 (reported the same way) instead of reading the prompt
+as a consent answer. Sign out (`provider_gemini_logout`) removes exactly `gemini-credentials.json`,
+any legacy `oauth_creds.json` and `google_accounts.json` from that account's `.gemini` directory
+under the exclusive lease; refresh and sign-out need no provider process.
 
 Real Gemini CLI 0.61.0 findings behind this launch shape (`tests/gemini_sign_in_real.rs`, ignored,
-no sign-in or quota): it rejects `--ignore-env` ("Unknown arguments"), so the floor's
+no sign-in or quota; the storage probe uses a synthetic token it writes itself): it migrates a
+plaintext sign-in into the encrypted per-account store and later launches read it from there; it
+rejects `--ignore-env` ("Unknown arguments"), so the floor's
 `advanced.ignoreLocalEnv` setting replaces it; it crashes at startup ("EISDIR … lstat 'C:'") on a
 Windows verbatim `\\?\` `GEMINI_CLI_HOME`, so every path Gemini receives is in its plain form; and it
 skips system settings/defaults files whose directory is not administrator/root owned, so KalCode
