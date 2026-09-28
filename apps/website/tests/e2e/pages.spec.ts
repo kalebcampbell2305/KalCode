@@ -1,7 +1,9 @@
 import { PLANS } from "@kalcode/protocol/plans";
 import { expect, test } from "@playwright/test";
 import { NOT_FOUND_PAGE, PAGES, SITE_ORIGIN, SOCIAL } from "../../src/lib/site";
-import { MANIFEST, WINDOWS_BUILD } from "./helpers";
+import { CHANNEL_LABEL, MANIFEST, SIGNED_STABLE, WINDOWS_BUILD } from "./helpers";
+
+const STABLE_015 = SIGNED_STABLE && MANIFEST.latest?.version === "0.1.5";
 
 test.describe("every page", () => {
   for (const page of PAGES) {
@@ -98,7 +100,10 @@ test.describe("every page", () => {
   test("Updates is a concise product-news page with meaningful release sections", async ({ page }) => {
     await page.goto("/updates");
     await expect(page.getByRole("heading", { level: 1, name: "Updates" })).toBeVisible();
-    await expect(page.locator("article")).toHaveCount(4);
+    // The 0.1.5 notes render only from a complete signed Stable 0.1.5 manifest (the page's own rule).
+    await expect(page.locator("article")).toHaveCount(STABLE_015 ? 5 : 4);
+    if (STABLE_015) await expect(page.locator("#release-0-1-5")).toBeVisible();
+    else await expect(page.locator("#release-0-1-5")).toHaveCount(0);
     await expect(page.locator("#release-0-1-1")).toBeVisible();
     await expect(page.locator("#release-website-2026-09-24")).toBeVisible();
     await expect(page.locator("#release-kalvoice")).toBeVisible();
@@ -136,7 +141,7 @@ test.describe("every page", () => {
     if (WINDOWS_BUILD && MANIFEST.latest) {
       // A published Windows build: the primary action is the real download (Windows visitors).
       await expect(primary).toHaveAttribute("data-download-state", "download");
-      await expect(hero).toContainText(`Preview ${MANIFEST.latest.version}`);
+      await expect(hero).toContainText(`${CHANNEL_LABEL} ${MANIFEST.latest.version}`);
     } else {
       // No public build: the button goes to the honest download page, the status line says so,
       // and nothing links to a file.

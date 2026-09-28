@@ -5,7 +5,7 @@
  * says so and carries the early-access form (home) or links to it (other pages). Only one
  * early-access form ever appears on a page.
  */
-import { downloadCta } from "../lib/releases";
+import { RELEASES, channelLabel, downloadCta, releaseSystems } from "../lib/releases";
 import type { PagePath } from "../lib/site";
 import Backdrop from "./Backdrop.astro";
 import BrandMark from "./BrandMark.astro";
@@ -19,8 +19,13 @@ interface Props {
   title?: string;
 }
 const { formSource, title } = Astro.props;
-const cta = downloadCta();
+const cta = downloadCta(RELEASES);
 const heading = title ?? "Be first to run KalCode.";
+// Named from the manifest's channel and platforms, so a Stable release never reads as a preview.
+const released =
+  channelLabel(RELEASES) === "Stable"
+    ? `KalCode ${RELEASES.latest?.version} is out for ${releaseSystems(RELEASES)}.`
+    : `The preview is out for ${releaseSystems(RELEASES)}.`;
 ---
 <section class="finale" id="early-access" aria-labelledby="closing-title">
   <Backdrop variant="horizon" />
@@ -30,7 +35,7 @@ const heading = title ?? "Be first to run KalCode.";
     {
       cta.kind === "download" ? (
         <>
-          <p>The preview is out for Windows. Your providers, your projects, one workspace.</p>
+          <p>{released} Your providers, your projects, one workspace.</p>
           <div class="button-row">
             <DownloadButton />
             <a class="button button--secondary button--lg" href="/download">All platforms</a>
