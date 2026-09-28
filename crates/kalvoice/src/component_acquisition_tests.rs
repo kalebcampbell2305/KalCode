@@ -244,6 +244,9 @@ fn loopback_body(
                 Err(error) => panic!("fixture accept failed: {error:?}"),
             }
         };
+        // macOS can inherit the listener's nonblocking mode on accepted sockets.
+        // Restore blocking I/O so the bounded read/write timeouts below govern the fixture.
+        socket.set_nonblocking(false).expect("blocking fixture I/O");
         socket
             .set_read_timeout(Some(Duration::from_secs(3)))
             .expect("read bound");
