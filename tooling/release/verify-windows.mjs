@@ -50,6 +50,7 @@ import {
   sameAuthenticodeSigner,
 } from "./signing.mjs";
 import { verifyUpdaterArtifact } from "./updater-signing.mjs";
+import { canonicalInstallDirectory } from "./windows-install-path.mjs";
 import { windowsProtocolProblems } from "./windows-protocol.mjs";
 
 if (process.platform !== "win32") fail("The Windows installer can only be verified on Windows.");
@@ -300,25 +301,35 @@ async function uninstall(installDir) {
 async function pass(name, extraArgs, expectShortcuts, { rehearseUpdate = false } = {}) {
   console.log(`\nPass "${name}": silent install ${["/S", ...extraArgs].join(" ")} /D=<temp>`);
   const root = mkdtempSync(join(tmpdir(), "kalcode-release-verify-"));
-  const installDir = join(root, PRODUCT);
-  if (/\s/.test(installDir)) throw new Error(`temp path contains spaces, which /D= cannot take: ${installDir}`);
+  const requestedInstallDir = join(root, PRODUCT);
+  if (/\s/.test(requestedInstallDir))
+    throw new Error(`temp path contains spaces, which /D= cannot take: ${requestedInstallDir}`);
+  let installDir = requestedInstallDir;
   const shortcuts = shortcutPaths();
-  const result = { name, args: ["/S", ...extraArgs, "/D=<temp>\\KalCode"], installDir };
-  const updateSentinel = join(installDir, ".kalcode-update-rehearsal");
+  const result = { name, args: ["/S", ...extraArgs, "/D=<temp>\\KalCode"], requestedInstallDir, installDir };
+  let updateSentinel = join(installDir, ".kalcode-update-rehearsal");
+  function resolveInstalledDirectory() {
+    result.installDirectoryIdentity = canonicalInstallDirectory(requestedInstallDir);
+    installDir = result.installDirectoryIdentity.canonicalPath;
+    result.installDir = installDir;
+    updateSentinel = join(installDir, ".kalcode-update-rehearsal");
+  }
   report.passes.push(result);
   let after = {};
   try {
     if (rehearseUpdate) {
-      const baseline = spawnSync(installer, ["/S", "/NS", `/D=${installDir}`], QUIET_PROCESS_OPTIONS);
+      const baseline = spawnSync(installer, ["/S", "/NS", `/D=${requestedInstallDir}`], QUIET_PROCESS_OPTIONS);
       if (baseline.error) throw baseline.error;
       check(`${name}: baseline installer exit code 0`, baseline.status === 0, `exit ${baseline.status}`);
+      resolveInstalledDirectory();
       check(`${name}: baseline kalcode.exe installed`, existsSync(join(installDir, "kalcode.exe")));
       writeFileSync(updateSentinel, "preserve-across-update\n", "utf8");
     }
     // /D= must be the last argument and unquoted (NSIS rule).
-    const install = spawnSync(installer, ["/S", ...extraArgs, `/D=${installDir}`], QUIET_PROCESS_OPTIONS);
+    const install = spawnSync(installer, ["/S", ...extraArgs, `/D=${requestedInstallDir}`], QUIET_PROCESS_OPTIONS);
     if (install.error) throw install.error;
     check(`${name}: installer exit code 0`, install.status === 0, `exit ${install.status}`);
+    resolveInstalledDirectory();
 
     check(`${name}: kalcode.exe installed`, existsSync(join(installDir, "kalcode.exe")));
     check(`${name}: uninstall.exe installed`, existsSync(join(installDir, "uninstall.exe")));
