@@ -2,9 +2,11 @@
 import PageHead from "../components/PageHead.astro";
 import RemovalForm from "../components/RemovalForm.astro";
 import Base from "../layouts/Base.astro";
+import { RELEASES, servedStableRelease } from "../lib/releases";
 import { CONTACT_EMAIL, EARLY_ACCESS_EMAIL, EMAIL_FROM, getPage } from "../lib/site";
 
 const page = getPage("/privacy");
+const kalvoiceShipped = servedStableRelease(RELEASES) !== null;
 const hours = EARLY_ACCESS_EMAIL.linkTtlHours;
 const sender = EMAIL_FROM.replace(/^.*<|>$/g, "");
 ---
@@ -13,7 +15,7 @@ const sender = EMAIL_FROM.replace(/^.*<|>$/g, "");
     title="Privacy"
     lead="This site collects one thing: the email address you give us to join early access."
   >
-    <p class="muted small">Last updated September 24, 2026</p>
+    <p class="muted small">Last updated September 28, 2026</p>
   </PageHead>
   <section class="section">
     <div class="container prose">
@@ -84,15 +86,16 @@ const sender = EMAIL_FROM.replace(/^.*<|>$/g, "");
 
       <h2>Your voice and KalVoice</h2>
       <p>
-        This site never uses your microphone. In the KalCode app, KalVoice (in development)
-        transcribes dictation on your device. Voice audio is held in memory only while it is
-        transcribed, then discarded. It is not retained, not uploaded, and never reaches us or this
+        This site never uses your microphone. In the KalCode app,
+        {kalvoiceShipped ? "KalVoice" : "KalVoice (in development)"} transcribes dictation on your
+        device. Voice audio is held in memory only while it is transcribed, then discarded. It is not retained, not uploaded, and never reaches us or this
         site. The speech model is downloaded only if you agree to it.
       </p>
       <p>
-        When you ask KalVoice something that needs reasoning, the request goes to the AI provider
-        you connected, under your own account and that provider's terms, exactly as if you used
-        the provider directly. It does not pass through KalCode's servers.
+        KalVoice interprets commands on your device. It never uses the AI providers you connected, or
+        KalCode's servers, to understand what you said. Words you dictate into a provider thread, and
+        coding tasks a command sends to Claude Code, Codex or Gemini CLI, go to that provider under
+        your own account and that provider's terms, exactly as if you typed them yourself.
       </p>
 
       <h2 id="email-delivery">Resend delivers our emails</h2>
