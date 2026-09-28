@@ -127,6 +127,15 @@ const DETECTORS: &[Detector] = &[
     det("cloud_access_key_id", r"(?:AKIA|ASIA)[0-9A-Z]{16}\b", 0),
     det("cloud_api_key", r"AIza[0-9A-Za-z_-]{35}", 0),
     det("cloud_token", r"do[por]_v1_[a-f0-9]{64}\b", 0),
+    // OAuth access and refresh tokens (`ya29.…`, `1//0…`) that appear without a key name.
+    det(
+        "oauth_access_token",
+        r"ya29\.[A-Za-z0-9_-]{20,}(?:\.[A-Za-z0-9_-]+)*",
+        0,
+    ),
+    det("oauth_refresh_token", r"\b1//0[A-Za-z0-9_-]{20,}", 0),
+    // KalCode account session tokens (`kcs_` + 43 base64url characters).
+    det("session_token", r"kcs_[A-Za-z0-9_-]{43,}", 0),
     // Chat platform tokens.
     det("chat_token", r"xox[abprse]-[A-Za-z0-9-]{10,}", 0),
     det("chat_token", r"xapp-[A-Za-z0-9-]{10,}", 0),
@@ -143,6 +152,12 @@ const DETECTORS: &[Detector] = &[
     det(
         "connection_string_key",
         r#"(?i)\b(?:AccountKey|SharedAccessKey|SharedAccessSignature|sig)=([^;"'\s&]{8,})"#,
+        1,
+    ),
+    // OAuth redirect / token parameters in a URL query or fragment (`?code=…`, `#state=…`).
+    det(
+        "oauth_url_param",
+        r#"[?&#](?:code|state|id_token|access_token|refresh_token)=([^&#\s"'<>\\]{8,})"#,
         1,
     ),
     // key=value / "key": "value" where the key name ends in a sensitive word
@@ -643,7 +658,11 @@ fn specificity(detector: &str) -> u8 {
     match detector {
         ENTROPY_DETECTOR => 0,
         "sensitive_assignment" => 1,
-        "url_credentials" | "bearer_token" | "basic_auth" | "connection_string_key" => 2,
+        "url_credentials"
+        | "bearer_token"
+        | "basic_auth"
+        | "connection_string_key"
+        | "oauth_url_param" => 2,
         _ => 3,
     }
 }
@@ -1041,6 +1060,142 @@ mod tests {
         assert_eq!(merged.len(), 2);
         assert_eq!((merged[0].start, merged[0].end), (5, 12));
         assert_eq!(merged[0].detector, "b");
+    }
+
+    fn log_redact(text: &str) -> String {
+        crate::redact::redact_log_line(text).into_owned()
+    }
+
+    /// Bare credential shapes that reach logs through provider stderr tails, with no key name.
+    #[test]
+    fn redacts_bare_oauth_and_session_token_shapes() {
+        let google_access = format!("ya29.{}", "a0FakeAccessTokenValue_0123456789-abcdefXYZ");
+        let google_refresh = format!("1//0{}", "gFakeRefreshTokenValue_0123456789-abcXYZ");
+        let session = format!("kcs_{}", "FakeSessionTokenValue_0123456789-abcdefghij");
+        assert_eq!(session.len(), 4 + 43, "kcs_ + 43 base64url chars");
+        for (line, secret, detector) in [
+            (
+                format!("gcloud: request failed with {google_access} (401)"),
+                google_access.as_str(),
+                "oauth_access_token",
+            ),
+            (
+                format!("stderr tail: refreshing {google_refresh}\n"),
+                google_refresh.as_str(),
+                "oauth_refresh_token",
+            ),
+            (
+                format!("account: cached {session} expired"),
+                session.as_str(),
+                "session_token",
+            ),
+        ] {
+            let output = log_redact(&line);
+            assert!(!output.contains(secret), "{line:?} -> {output:?}");
+            assert!(output.contains("[REDACTED]"), "{line:?} -> {output:?}");
+            assert_eq!(log_redact(&output), output, "idempotent");
+            assert!(
+                scan(&line).iter().any(|f| f.detector == detector),
+                "{line:?} names {detector}"
+            );
+        }
+    }
+
+    /// OAuth redirect and token parameters in URLs and fragments, keyed only by the parameter.
+    #[test]
+    fn redacts_oauth_redirect_query_parameters() {
+        let code = format!("4/0{}", "AfFakeAuthorizationCode_0123456789abcdef");
+        let state = "FakeStateNonce0123456789abcdef";
+        let cases = [
+            (
+                format!("callback http://127.0.0.1:54545/callback?code={code}&scope=email"),
+                vec![code.as_str()],
+            ),
+            (
+                format!("redirect https://example.test/cb?state={state}&code={code}"),
+                vec![state, code.as_str()],
+            ),
+            (
+                format!(r#"{{"url":"https://example.test/cb#state={state}&code={code}"}}"#),
+                vec![state, code.as_str()],
+            ),
+            (
+                "fragment https://example.test/cb#access_token=FakeAccess0123456789&token_type=bearer".to_string(),
+                vec!["FakeAccess0123456789"],
+            ),
+            (
+                "https://example.test/cb?id_token=FakeIdToken0123456789&refresh_token=FakeRefresh0123456789".to_string(),
+                vec!["FakeIdToken0123456789", "FakeRefresh0123456789"],
+            ),
+        ];
+        for (line, secrets) in &cases {
+            let output = log_redact(line);
+            for secret in secrets {
+                assert!(!output.contains(secret), "{line:?} -> {output:?}");
+            }
+            assert!(output.contains("[REDACTED]"), "{line:?} -> {output:?}");
+            assert_eq!(log_redact(&output), output, "idempotent");
+        }
+        // Non-secret parameters and the URL structure survive.
+        let output = log_redact(&cases[0].0);
+        assert!(output.contains("?code=[REDACTED]&scope=email"), "{output}");
+    }
+
+    /// Ordinary log text that merely resembles the new shapes is left alone.
+    #[test]
+    fn leaves_lookalike_log_text_unchanged() {
+        for line in [
+            "fetched https://api.example.test/v1/models?limit=20&page=2#section-3 in 120ms",
+            "GET https://example.test/search?q=error+code&lang=en returned 200",
+            "process exited with code=1 after state=running",
+            "turn failed: exit code 1; see https://docs.example.test/errors#code",
+            "provider version 1//0 build ya29 kcs_ ok",
+            "url https://example.test/cb?code=short&state=abc",
+            "path C:\\Users\\dev\\kcs_notes\\ya29.txt",
+        ] {
+            assert!(
+                matches!(
+                    crate::redact::redact_log_line(line),
+                    std::borrow::Cow::Borrowed(_)
+                ),
+                "{line:?} -> {:?}",
+                log_redact(line)
+            );
+        }
+    }
+
+    /// Credential shapes the redactor already covered, pinned here next to the new ones.
+    #[test]
+    fn existing_provider_shapes_stay_covered() {
+        let jwt = format!(
+            "eyJ{}.eyJ{}.{}",
+            "hbGciOiJIUzI1NiJ9", "zdWIiOiIxMjM0In0", "FakeSignature0123"
+        );
+        for (line, secret) in [
+            (
+                format!(
+                    "key {}{} used",
+                    "sk-ant-api03-", "FakeAnthropicKey0123456789"
+                ),
+                "FakeAnthropicKey",
+            ),
+            (
+                format!("key {}{} used", "sk-proj-", "FakeOpenAiKey0123456789ab"),
+                "FakeOpenAiKey",
+            ),
+            (
+                format!("key {}{} used", "sk-", "FakeLegacyOpenAiKey0123456789"),
+                "FakeLegacyOpenAiKey",
+            ),
+            (format!("id {jwt} end"), "FakeSignature0123"),
+            (
+                "Authorization: Bearer FakeOpaqueBearer0123456789".to_string(),
+                "FakeOpaqueBearer",
+            ),
+        ] {
+            let output = log_redact(&line);
+            assert!(!output.contains(secret), "{line:?} -> {output:?}");
+        }
     }
 
     #[test]
