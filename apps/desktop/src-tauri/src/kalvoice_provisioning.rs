@@ -9,8 +9,10 @@
 //!
 //! The owner stays in charge: removing or cancelling a speech model stores an opt-out, local
 //! intelligence has its own "prepare automatically" preference and a Pause that survives restarts.
-//! A failed attempt is never final: the next follows on a bounded exponential backoff (1, 5, 15,
-//! 60 minutes, then hourly), or at once when KalCode comes back to the front.
+//! A transient failure is never final: the next attempt follows on a bounded exponential backoff
+//! (1, 5, 15, 60 minutes, then hourly), or at once when KalCode comes back to the front. A
+//! permanent one (an unsupported system, a component that fails verification, missing consent)
+//! stops automatic attempts until the next launch; the manual download stays available.
 
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -84,6 +86,8 @@ enum Stage {
     Paused,
     /// The last attempt failed; the next starts at `at` (or when KalCode is focused).
     Retry { code: &'static str, at: Instant },
+    /// A permanent failure: no automatic attempt until the next launch.
+    Stopped { code: &'static str },
 }
 
 #[derive(Default)]
@@ -92,6 +96,8 @@ struct State {
     nudged: bool,
     failures: u32,
     current: Option<(Component, Stage)>,
+    /// A component whose automatic provisioning stopped for good in this runtime, and why.
+    stopped: Option<(Component, &'static str)>,
     /// The last published list and when, so progress is throttled but phases are not.
     published: Option<(Vec<ComponentProvisioning>, Instant)>,
 }
@@ -166,6 +172,11 @@ impl Provisioner {
                 }
                 Step::Download(component) => component,
             };
+            let stopped = self.lock().stopped;
+            if let Some((_, code)) = stopped.filter(|(which, _)| *which == component) {
+                self.set(Some((component, Stage::Stopped { code })), host);
+                return;
+            }
             self.set(Some((component, Stage::Preparing)), host);
             tracing::info!(
                 event = "kalvoice.provisioning_started",
@@ -196,6 +207,17 @@ impl Provisioner {
                         && !matches!(self.next_step(host), Step::Download(next) if next == component)
                     {
                         continue;
+                    }
+                    if let Some(code) = error.terminal_reason() {
+                        self.lock().stopped = Some((component, code));
+                        self.set(Some((component, Stage::Stopped { code })), host);
+                        tracing::warn!(
+                            event = "kalvoice.provisioning_stopped",
+                            component = component.model_id(),
+                            code,
+                            cause = error.code()
+                        );
+                        return;
                     }
                     let round = {
                         let mut state = self.lock();
@@ -335,6 +357,7 @@ impl Provisioner {
                     let (received, total) = paused_bytes();
                     (ProvisioningPhase::Paused, received, total, None, None)
                 }
+                Stage::Stopped { code } => (ProvisioningPhase::Unavailable, 0, 0, Some(code), None),
                 Stage::Retry { code, at } => {
                     let remaining = at.saturating_duration_since(Instant::now());
                     let seconds = remaining.as_secs() + u64::from(remaining.subsec_nanos() > 0);

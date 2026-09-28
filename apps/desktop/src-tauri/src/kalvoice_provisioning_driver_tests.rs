@@ -387,3 +387,61 @@ fn progress_is_throttled_but_phase_changes_publish_at_once() {
     std::thread::sleep(PROGRESS_INTERVAL);
     assert!(provisioner.should_publish(&[item(ProvisioningPhase::Downloading, 5)]));
 }
+
+#[test]
+fn a_permanent_failure_stops_automatic_attempts_with_a_truthful_reason() {
+    for (error, reason) in [
+        (
+            ComponentManagerError::CatalogInvalid,
+            "components_unverified",
+        ),
+        (
+            ComponentManagerError::AcquisitionFailed(
+                crate::kalvoice_components::ComponentAcquisitionFailure::WrongTarget,
+            ),
+            "components_unsupported",
+        ),
+        (ComponentManagerError::ConsentRequired, "consent_required"),
+    ] {
+        let host = FakeHost::new(false);
+        host.script([Err(error)]);
+        // An hour-long backoff would hang this test if a permanent failure were retried.
+        let provisioner = Provisioner::with_delay(an_hour);
+        provisioner.run(host.as_ref());
+        assert_eq!(host.downloads(), vec![Component::Speech], "{error:?}");
+        let items = provisioner.snapshot(&[], || (0, 0));
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].phase, ProvisioningPhase::Unavailable);
+        assert_eq!(items[0].reason.as_deref(), Some(reason));
+        assert_eq!(items[0].retry_in_seconds, None);
+        // Focus, preference changes and keep_warm do not restart it in this runtime.
+        provisioner.nudge();
+        provisioner.run(host.as_ref());
+        assert_eq!(host.downloads().len(), 1);
+        // The next launch (a new runtime) tries again.
+        Provisioner::default().run(host.as_ref());
+        assert_eq!(
+            host.downloads(),
+            vec![
+                Component::Speech,
+                Component::Speech,
+                Component::Intelligence
+            ]
+        );
+    }
+}
+
+#[test]
+fn a_manual_install_after_a_permanent_stop_continues_with_the_next_component() {
+    let host = FakeHost::new(false);
+    host.script([Err(ComponentManagerError::CatalogInvalid)]);
+    let provisioner = Provisioner::with_delay(an_hour);
+    provisioner.run(host.as_ref());
+    // The owner downloads the speech model manually; its completion asks for the next step.
+    host.speech.store(true, Ordering::SeqCst);
+    provisioner.run(host.as_ref());
+    assert_eq!(
+        host.downloads(),
+        vec![Component::Speech, Component::Intelligence]
+    );
+}

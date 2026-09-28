@@ -206,7 +206,7 @@ describe("zero-setup local intelligence", () => {
 describe("zero-setup speech model", () => {
   it("says the model comes from KalCode's signed catalog on kalcoded.com, not whisper.cpp", () => {
     render(<KalVoiceSettings />);
-    expect(screen.getByText(/signed component catalog on kalcoded\.com/)).toBeInTheDocument();
+    expect(screen.getAllByText(/signed component catalog on kalcoded\.com/).length).toBeGreaterThan(0);
     expect(screen.queryByText(/official whisper\.cpp/)).not.toBeInTheDocument();
     expect(screen.queryByText(/only when you choose/)).not.toBeInTheDocument();
   });
@@ -264,5 +264,40 @@ describe("zero-setup speech model", () => {
     expect(screen.getByText(/Downloaded when you choose/)).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "Download" }).length).toBe(5);
     expect(screen.getByRole("status", { name: "Push-to-talk readiness" })).toHaveTextContent("Needs a speech model");
+  });
+});
+
+describe("first-run disclosure", () => {
+  it("notes the one-time verified downloads and the automatic-preparation preference", () => {
+    render(<KalVoiceSettings />);
+    const note = screen.getByText(/On first use, KalCode downloads its English speech model/);
+    expect(note).toHaveTextContent("about 78 MB");
+    expect(note).toHaveTextContent("about 850 MB");
+    expect(note).toHaveTextContent("Prepare local intelligence automatically");
+    expect(note).toHaveTextContent("once from its signed component catalog on kalcoded.com");
+    expect(note).toHaveTextContent("verifies each before use");
+  });
+
+  it("says where local intelligence comes from while it prepares", () => {
+    withStatus(
+      { provisioning: [intelligence({ phase: "preparing", receivedBytes: 0 })] },
+      { localIntelligenceAuto: true },
+    );
+    render(<KalVoiceSettings />);
+    expect(screen.getByRole("note")).toHaveTextContent(
+      "Preparing local intelligence (852 MB) from KalCode's signed component catalog…",
+    );
+  });
+
+  it("a permanent stop offers the owner's own reviewed download and no automatic retry", () => {
+    withStatus(
+      { provisioning: [intelligence({ phase: "unavailable", reason: "components_unverified", receivedBytes: 0 })] },
+      { localIntelligenceAuto: true },
+    );
+    render(<KalVoiceSettings />);
+    expect(screen.getByText(/Couldn't verify KalVoice components\. Try again later/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Pause" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Review download" }));
+    expect(prepare).toHaveBeenCalledOnce();
   });
 });

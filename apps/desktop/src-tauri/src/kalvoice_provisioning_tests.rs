@@ -223,6 +223,8 @@ impl CatalogFetcher for FakeFetcher {
 #[derive(Default)]
 struct AcquisitionSpy {
     tokens: Mutex<Vec<String>>,
+    /// The consent each acquisition would record on its receipt.
+    consents: Mutex<Vec<InstallConsent>>,
     cancel_first: AtomicBool,
 }
 impl AcquisitionService for AcquisitionSpy {
@@ -230,11 +232,14 @@ impl AcquisitionService for AcquisitionSpy {
         &self,
         token: &str,
         _: i64,
-        consent: bool,
+        consent: InstallConsent,
         cancel: &AtomicBool,
         progress: &mut dyn FnMut(u64, u64),
     ) -> Result<(), ComponentAcquisitionError> {
-        assert!(consent);
+        self.consents
+            .lock()
+            .map_err(|_| ComponentAcquisitionError::Storage(std::io::ErrorKind::Other))?
+            .push(consent);
         if cancel.load(Ordering::SeqCst) {
             return Err(ComponentAcquisitionError::Cancelled);
         }
@@ -713,6 +718,14 @@ fn automatic_default_download_fetches_only_tiny_en_once_under_automatic_default_
         acquired_ids(&manager, &acquisition),
         vec![DEFAULT_SPEECH_COMPONENT_ID.to_owned()]
     );
+    // The consent kind reaches the store, which persists it on the component's receipt.
+    assert_eq!(
+        *acquisition
+            .consents
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner),
+        vec![InstallConsent::AutomaticDefault]
+    );
     assert_eq!(admission.calls.load(Ordering::SeqCst), 1);
     assert_eq!(admission.live.load(Ordering::SeqCst), 0);
     let consents = seen
@@ -758,6 +771,13 @@ fn system_consent_never_downloads_another_model_and_the_dialog_consent_is_user()
     assert!(acquisition.tokens.lock().unwrap().is_empty());
     assert!(seen.lock().unwrap().is_empty(), "nothing was registered");
     manager.download_speech("base.en", true, |_, _| {}).unwrap();
+    assert_eq!(
+        *acquisition
+            .consents
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner),
+        vec![InstallConsent::User]
+    );
     assert!(
         seen.lock()
             .unwrap()
@@ -815,7 +835,18 @@ fn an_installed_speech_model_is_detected_and_reused_never_fetched_again() {
         .store
         .install_from_file(&manifest, &artifact, now)
         .unwrap();
+    // `install_from_file` writes the legacy receipt shape (no consent field): pre-existing
+    // receipts on the owner's machine are detected and reused.
     assert!(manager.speech_present());
+    assert!(matches!(
+        manager
+            .store
+            .status(&manager.speech_selector(SPEECH_COMPONENTS[0]), now),
+        ComponentReceiptStatus::Present {
+            consent: InstallConsent::User,
+            ..
+        }
+    ));
     manager.download_default_speech(|_, _| {}).unwrap();
     assert!(acquisition.tokens.lock().unwrap().is_empty());
     assert_eq!(admission.calls.load(Ordering::SeqCst), 0);
@@ -910,11 +941,11 @@ impl AcquisitionService for TalkMidDownload {
         &self,
         _: &str,
         _: i64,
-        consent: bool,
+        consent: InstallConsent,
         _: &AtomicBool,
         progress: &mut dyn FnMut(u64, u64),
     ) -> Result<(), ComponentAcquisitionError> {
-        assert!(consent);
+        assert_eq!(consent, InstallConsent::AutomaticDefault);
         self.0.store(true, Ordering::SeqCst);
         progress(512, 1024);
         progress(1024, 1024);
@@ -968,10 +999,66 @@ fn automatic_local_intelligence_uses_the_same_signed_pipeline_under_automatic_co
         ]
     );
     assert_eq!(reservations.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        *acquisition
+            .consents
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner),
+        vec![InstallConsent::AutomaticDefault; 2]
+    );
     assert!(seen.lock().unwrap().iter().all(|download| {
         download.model_id == REASONING_DOWNLOAD_ID
             && download.consent == DownloadConsent::AutomaticDefault
     }));
     // The catalog it used is now current, so a paused download can report its signed size.
     assert_eq!(manager.reasoning_on_disk(), (0, 2048));
+}
+
+#[test]
+fn permanent_failures_are_terminal_and_transient_ones_keep_the_backoff() {
+    for (error, reason) in [
+        (ComponentManagerError::ConsentRequired, "consent_required"),
+        (
+            ComponentManagerError::AcquisitionFailed(ComponentAcquisitionFailure::WrongTarget),
+            "components_unsupported",
+        ),
+        (
+            ComponentManagerError::CatalogInvalid,
+            "components_unverified",
+        ),
+        (
+            ComponentManagerError::CatalogRollback,
+            "components_unverified",
+        ),
+        (
+            ComponentManagerError::AcquisitionFailed(ComponentAcquisitionFailure::Manifest(
+                VerifyError::BadSignature,
+            )),
+            "components_unverified",
+        ),
+        (
+            ComponentManagerError::AcquisitionFailed(ComponentAcquisitionFailure::Manifest(
+                VerifyError::UnknownKey,
+            )),
+            "components_unverified",
+        ),
+    ] {
+        assert_eq!(error.terminal_reason(), Some(reason), "{error:?}");
+    }
+    for transient in [
+        ComponentManagerError::CatalogUnavailable,
+        ComponentManagerError::CatalogStorage,
+        ComponentManagerError::ResourceUnavailable,
+        ComponentManagerError::CapacityHeld(ComponentCapacityReason::DiskSpace),
+        ComponentManagerError::StorageUnavailable,
+        ComponentManagerError::InUse,
+        ComponentManagerError::AcquisitionFailed(ComponentAcquisitionFailure::Network),
+        ComponentManagerError::AcquisitionFailed(ComponentAcquisitionFailure::Server(503)),
+        ComponentManagerError::AcquisitionFailed(ComponentAcquisitionFailure::ChecksumMismatch),
+        ComponentManagerError::AcquisitionFailed(ComponentAcquisitionFailure::Manifest(
+            VerifyError::Expired,
+        )),
+    ] {
+        assert_eq!(transient.terminal_reason(), None, "{transient:?}");
+    }
 }

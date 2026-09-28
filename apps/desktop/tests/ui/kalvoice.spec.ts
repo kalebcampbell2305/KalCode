@@ -209,11 +209,16 @@ test.describe("Push to talk (fake recognizer)", () => {
     const readiness = page.getByRole("status", { name: "Push-to-talk readiness" });
     // Truthful states while it downloads and verifies; never Ready early.
     await expect(readiness).toContainText(/Preparing speech|Verifying speech/);
+    await expect(readiness).toContainText(/from KalCode's signed component catalog|signature and checksum/);
     await expect(readiness).not.toContainText(/^Ready/);
     await expect(page.getByText("Speech model installed").first()).toBeVisible();
     await expect(readiness).toContainText("Ready. Hold F8 to talk to KalVoice.");
     const section = page.getByRole("region", { name: "KalVoice", exact: true });
-    await expect(section.getByText("signed component catalog on kalcoded.com", { exact: false })).toBeVisible();
+    // First-run disclosure: one-time, verified downloads from the signed catalog, and the preference.
+    await expect(
+      section.getByText("On first use, KalCode downloads its English speech model", { exact: false }),
+    ).toBeVisible();
+    await expect(section.getByText("signed component catalog on kalcoded.com", { exact: false }).first()).toBeVisible();
     await expect(section.getByRole("switch", { name: "Prepare local intelligence automatically" })).toHaveAttribute(
       "aria-checked",
       "true",

@@ -15,6 +15,7 @@ import {
   provisioningFor,
   pushToTalkReadiness,
   retryWhen,
+  stoppedReason,
   waitingReason,
 } from "./readiness.ts";
 import { checkReserved, displayKey, isModifierOnly, talkKeyChoiceHint, talkKeyFromEvent } from "./shortcutModel.ts";
@@ -94,6 +95,12 @@ function KalVoiceSettingsSection() {
               </p>
             ))}
           <TalkEnabledRow />
+          <p className={styles.rowHelp} id="kalvoice-first-run-note">
+            On first use, KalCode downloads its English speech model (about 78 MB) and, while "Prepare local
+            intelligence automatically" is on, local intelligence (about 850 MB) once from its signed component catalog
+            on kalcoded.com, and verifies each before use. Nothing else is downloaded, and your speech stays on this
+            computer.
+          </p>
           <IntelligenceRow />
           <IntelligenceAutoRow />
           <ModelsRow />
@@ -294,7 +301,7 @@ function IntelligenceRow() {
           <Button size="sm" variant="ghost" onClick={() => void setIntelligencePaused(true)}>
             Pause
           </Button>
-        ) : readiness === "not_installed" ? (
+        ) : readiness === "not_installed" && (!view.pausable || view.manual) ? (
           <Button size="sm" busy={loading} onClick={() => void review()}>
             Review download
           </Button>
@@ -320,7 +327,7 @@ function IntelligenceRow() {
         <p className={styles.note} role="note">
           {view.detail}
         </p>
-      ) : readiness === "failed" || view.label === "Unavailable" ? (
+      ) : readiness === "failed" || view.label === "Unavailable" || view.manual ? (
         <p className={styles.issue} role="status">
           {view.detail}
         </p>
@@ -408,6 +415,8 @@ function modelProgressNote(item: ComponentProvisioning | null, model: SpeechMode
       return `Paused at ${formatBytes(item.receivedBytes)}.`;
     case "retry_scheduled":
       return `Couldn't download ${model.displayName}: ${failureReason(item.reason)}. KalCode retries ${retryWhen(item.retryInSeconds)}.`;
+    case "unavailable":
+      return `${stoppedReason(item.reason)}. Download it yourself below.`;
   }
 }
 

@@ -24,7 +24,8 @@ use crate::component_manifest::{
     ComponentArch, ComponentPlatform, ComponentVerifier, VerifiedComponentManifest, VerifyError,
 };
 use crate::component_store::{
-    ComponentStore, ComponentStoreError, InstalledComponent, TrustedComponentDirectory,
+    ComponentStore, ComponentStoreError, InstallConsent, InstalledComponent,
+    TrustedComponentDirectory,
 };
 
 const BUFFER_BYTES: usize = 1024 * 1024;
@@ -262,11 +263,30 @@ impl ComponentAcquirer {
         now_unix: i64,
         consent: bool,
         cancel: &AtomicBool,
-        mut progress: impl FnMut(u64, u64),
+        progress: impl FnMut(u64, u64),
     ) -> Result<InstalledComponent, ComponentAcquisitionError> {
         if !consent {
             return Err(ComponentAcquisitionError::ConsentRequired);
         }
+        self.acquire_as(
+            signed_manifest,
+            now_unix,
+            InstallConsent::User,
+            cancel,
+            progress,
+        )
+    }
+
+    /// [`Self::acquire`] under a granted consent, which is recorded on the installed receipt.
+    /// The pipeline (signature, target, size, digest, atomic store) is identical for every grant.
+    pub fn acquire_as(
+        &self,
+        signed_manifest: &str,
+        now_unix: i64,
+        consent: InstallConsent,
+        cancel: &AtomicBool,
+        mut progress: impl FnMut(u64, u64),
+    ) -> Result<InstalledComponent, ComponentAcquisitionError> {
         let verified = self.verifier.verify(signed_manifest, now_unix)?;
         if verified.manifest().platform != host_platform()
             || verified.manifest().arch != host_arch()
@@ -321,6 +341,7 @@ impl ComponentAcquirer {
             &verified,
             &partial,
             now_unix,
+            consent,
             cancel,
             &mut progress,
         );
@@ -328,19 +349,22 @@ impl ComponentAcquirer {
         result
     }
 
+    // The install consent joins the existing, already-verified inputs of this one step.
+    #[allow(clippy::too_many_arguments)]
     fn acquire_locked(
         &self,
         signed_manifest: &str,
         verified: &VerifiedComponentManifest,
         partial: &Path,
         now_unix: i64,
+        consent: InstallConsent,
         cancel: &AtomicBool,
         progress: &mut impl FnMut(u64, u64),
     ) -> Result<InstalledComponent, ComponentAcquisitionError> {
         self.download(verified, partial, cancel, progress)?;
         let result = self
             .store
-            .install_from_file(signed_manifest, partial, now_unix)
+            .install_from_file_with_consent(signed_manifest, partial, now_unix, consent)
             .map_err(ComponentAcquisitionError::Install);
         let _ = fs::remove_file(partial);
         result

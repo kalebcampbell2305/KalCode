@@ -1,6 +1,14 @@
 import type { ComponentProvisioning, KalVoiceStatus, LocalReasoningStatus } from "@kalcode/protocol";
 import { formatBytes } from "./assistantState.ts";
-import { failureReason, LOCAL_REASONING_ID, provisioningFor, retryWhen, waitingReason } from "./readiness.ts";
+import {
+  failureReason,
+  LOCAL_REASONING_ID,
+  provisioningFor,
+  retryWhen,
+  SIGNED_CATALOG,
+  stoppedReason,
+  waitingReason,
+} from "./readiness.ts";
 
 /** The on-device interpreter's state as shown to the owner. */
 export interface LocalIntelligenceView {
@@ -14,6 +22,8 @@ export interface LocalIntelligenceView {
   pausable?: boolean;
   /** The automatic download is paused: it can be resumed. */
   resumable?: boolean;
+  /** Automatic preparation stopped: offer the owner's own reviewed download. */
+  manual?: boolean;
   /** Bytes so far while downloading. */
   progress?: { received: number; total: number };
 }
@@ -97,7 +107,7 @@ function preparing(item: ComponentProvisioning): LocalIntelligenceView {
       return {
         tone: "waiting",
         label: `Preparing local intelligence (${size})…`,
-        detail: `KalCode is getting the on-device interpreter from its signed component catalog. ${DIRECT}`,
+        detail: `Preparing local intelligence (${size}) from ${SIGNED_CATALOG}… It is downloaded once and verified before use. ${DIRECT}`,
         retry: false,
         pausable,
       };
@@ -105,7 +115,7 @@ function preparing(item: ComponentProvisioning): LocalIntelligenceView {
       return {
         tone: "waiting",
         label: `Preparing local intelligence (${size})…`,
-        detail: `Downloading ${formatBytes(item.receivedBytes)} of ${size} from KalCode's signed component catalog. ${DIRECT}`,
+        detail: `Preparing local intelligence (${size}) from ${SIGNED_CATALOG}… Downloading ${formatBytes(item.receivedBytes)} of ${size}. It is verified before use. ${DIRECT}`,
         retry: false,
         pausable,
         progress: { received: item.receivedBytes, total: item.totalBytes },
@@ -146,6 +156,14 @@ function preparing(item: ComponentProvisioning): LocalIntelligenceView {
         retry: false,
         pausable,
       };
+    case "unavailable":
+      return {
+        tone: "outline",
+        label: "Unavailable",
+        detail: `${stoppedReason(item.reason)}. KalCode won't retry automatically until it restarts; you can still use Review download. ${DIRECT}`,
+        retry: false,
+        manual: true,
+      };
   }
 }
 
@@ -165,7 +183,7 @@ export function localIntelligence(status: LocalIntelligenceStatus | null | undef
         ? {
             tone: "waiting",
             label: `Preparing local intelligence (${APPROXIMATE_SIZE})…`,
-            detail: `KalCode is getting the on-device interpreter from its signed component catalog. ${DIRECT}`,
+            detail: `Preparing local intelligence (${APPROXIMATE_SIZE}) from ${SIGNED_CATALOG}… It is downloaded once and verified before use. ${DIRECT}`,
             retry: false,
             pausable: true,
           }

@@ -422,8 +422,36 @@ pub enum ComponentReceiptStatus {
         version: String,
         sequence: u64,
         freshness: InstalledManifestFreshness,
+        /// Who authorized this installation, from its receipt.
+        consent: InstallConsent,
     },
     Invalid,
+}
+
+/// Who authorized a component installation, persisted on its signed-store receipt. A receipt
+/// without the field (every receipt written before zero-setup provisioning) reads as `User`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstallConsent {
+    /// The owner confirmed a download dialog (and every legacy receipt).
+    #[default]
+    User,
+    /// KalCode's zero-setup provisioning of a default component (system-granted consent).
+    AutomaticDefault,
+}
+
+impl InstallConsent {
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::AutomaticDefault => "automatic_default",
+        }
+    }
+
+    /// `User` is left off the receipt, so it stays byte-for-byte in the legacy shape.
+    const fn is_user(&self) -> bool {
+        matches!(self, Self::User)
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -556,6 +584,8 @@ struct Receipt {
     artifact_file: String,
     extracted_files: Vec<String>,
     entrypoint: Option<String>,
+    #[serde(default, skip_serializing_if = "InstallConsent::is_user")]
+    consent: InstallConsent,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -612,6 +642,17 @@ impl ComponentStore {
         artifact: &Path,
         now_unix: i64,
     ) -> Result<InstalledComponent, ComponentStoreError> {
+        self.install_from_file_with_consent(token, artifact, now_unix, InstallConsent::User)
+    }
+
+    /// [`Self::install_from_file`], recording who authorized the installation on its receipt.
+    pub fn install_from_file_with_consent(
+        &self,
+        token: &str,
+        artifact: &Path,
+        now_unix: i64,
+        consent: InstallConsent,
+    ) -> Result<InstalledComponent, ComponentStoreError> {
         let candidate = self.verifier.verify(token, now_unix)?;
         self.authority.verify()?;
         let manifest = candidate.manifest();
@@ -623,7 +664,9 @@ impl ComponentStore {
         let track = self.ensure_track_dir(&selector)?;
         let lock_file = self.open_track_lock(&selector)?;
         lock_file.lock_exclusive().map_err(storage)?;
-        let result = self.install_locked(token, artifact, now_unix, candidate, selector, &track);
+        let result = self.install_locked(
+            token, artifact, now_unix, candidate, selector, &track, consent,
+        );
         let _ = lock_file.unlock();
         result
     }
@@ -660,6 +703,7 @@ impl ComponentStore {
                     version: manifest.version.clone(),
                     sequence: manifest.sequence,
                     freshness: verified.freshness(),
+                    consent: receipt.consent,
                 }
             }
             _ => ComponentReceiptStatus::Invalid,
@@ -718,6 +762,8 @@ impl ComponentStore {
         }
     }
 
+    // The install consent joins the existing, already-verified inputs of this one step.
+    #[allow(clippy::too_many_arguments)]
     fn install_locked(
         &self,
         token: &str,
@@ -726,6 +772,7 @@ impl ComponentStore {
         candidate: VerifiedComponentManifest,
         selector: ComponentSelector,
         track: &Path,
+        consent: InstallConsent,
     ) -> Result<InstalledComponent, ComponentStoreError> {
         let revision_id = revision_name(candidate.manifest());
         let final_dir = track.join(&revision_id);
@@ -799,7 +846,8 @@ impl ComponentStore {
 
         let staging = track.join(format!(".staging-{}", Uuid::now_v7().simple()));
         fs::create_dir(&staging).map_err(storage)?;
-        let install_result = self.populate_staging(token, artifact, candidate.manifest(), &staging);
+        let install_result =
+            self.populate_staging(token, artifact, candidate.manifest(), &staging, consent);
         if let Err(error) = install_result {
             let _ = fs::remove_dir_all(&staging);
             return Err(error);
@@ -825,6 +873,7 @@ impl ComponentStore {
         artifact: &Path,
         manifest: &ComponentManifest,
         staging: &Path,
+        consent: InstallConsent,
     ) -> Result<(), ComponentStoreError> {
         let (artifact_file, extracted_files, entrypoint) = match manifest.kind {
             ComponentKind::Model => {
@@ -860,6 +909,7 @@ impl ComponentStore {
             artifact_file,
             extracted_files,
             entrypoint,
+            consent,
         };
         write_json_synced(&staging.join("receipt.json"), &receipt)
     }

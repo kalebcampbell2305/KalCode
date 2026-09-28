@@ -24,6 +24,17 @@ surface. See "Implementation" below and `docs/campaigns/Z12.md`.
 3. **Private by default.** Audio is captured into memory, transcribed on the device, and
    discarded. Recordings are not stored or uploaded. Events never contain transcripts or request
    text.
+   **Network (disclosed default-on exception).** KalVoice's inference makes no network calls and
+   costs $0. The one exception is a one-time download of its default components on first use,
+   on by default: the English speech model (`tiny.en`, about 78 MB) and, while "Prepare local
+   intelligence automatically" is on, local intelligence (about 850 MB). Both come only from
+   KalCode's signed component catalog on kalcoded.com and are verified (signatures, size,
+   SHA-256, rollback floor) before use. While they download, the widget and Settings say what is
+   downloading, its size and its source ("Downloading the English speech model (78 MB) from
+   KalCode's signed component catalog…", "Preparing local intelligence (852 MB) from KalCode's
+   signed component catalog…"), and KalVoice Settings carries a standing note about these
+   one-time, verified downloads. Removing the speech model, pausing, or turning the preference
+   off stops them. Nothing else is downloaded without a click, and audio never leaves the device.
 4. **Immediate.** The microphone starts on key-down, recognition streams while you speak, and
    a command runs the moment you let go.
 
@@ -175,8 +186,11 @@ MIT (whisper.cpp and the converted OpenAI Whisper weights).
 
 **Zero setup.** After the runtime starts, KalCode fetches the default model (`tiny.en`) on its
 own through that same pipeline, with system-granted consent recorded as `automatic_default`
-(the only model it may fetch without a click; every other model keeps its download dialog). An
-installed speech model is always reused and never fetched again. If the owner removes (or
+(the only model it may fetch without a click; every other model keeps its download dialog). The
+consent kind (`automatic_default` or `user`) is persisted on the component's signed-store
+receipt; receipts written before this change have no such field and read as `user`, so they are
+still detected, loaded and reused. An installed speech model is always reused and never fetched
+again. If the owner removes (or
 cancels) a speech model, KalCode stores an opt-out and never re-downloads one on its own;
 Settings shows the manual Download again. Every component download waits (up to 10 minutes,
 re-evaluated on each Resource Governor sample) instead of failing when the governor has no
@@ -233,7 +247,11 @@ connection, then use Review download). Settings shows "Preparing local intellige
 with progress and a Pause/Resume control; a pause is stored and survives restarts. A failed
 download or interpreter start is never final: KalCode retries after 1, 5, 15 and 60 minutes, then
 hourly, and at once when KalCode comes back to the front (no Retry click needed; Retry local
-startup still works). KalCode does not detect metered networks. Other components (non-default
+startup still works). Permanent failures do not retry: an unsupported system ("KalVoice
+components aren't available for this system"), a catalog or component that fails signature or
+trust verification ("Couldn't verify KalVoice components. Try again later"), or missing consent
+stop automatic attempts until the next launch; the manual download stays available. A download
+deferred for push to talk is traced every 60 seconds while it waits. KalCode does not detect metered networks. Other components (non-default
 speech models) still require the owner's consent in their download dialog.
 
 ## Implementation (Z12)

@@ -165,7 +165,10 @@ describe("push to talk while its speech model is prepared automatically", () => 
   it("shows download progress, then verification, and never Ready before the model is active", () => {
     const downloading = preparing({});
     expect(downloading).toMatchObject({ ready: false, code: "model_preparing", label: "Preparing speech 39%" });
-    expect(downloading.message).toMatch(/Downloading the English \(fastest\) speech model: 31 MB of 78 MB/);
+    // First-run disclosure: what is downloading, its size, and where it comes from.
+    expect(downloading.message).toMatch(
+      /^Downloading the English speech model \(78 MB\) from KalCode's signed component catalog… 31 MB so far\./,
+    );
     expect(downloading.attention).toBe(false);
     expect(preparing({ phase: "verifying", receivedBytes: 77_704_715 })).toMatchObject({
       ready: false,
@@ -212,5 +215,35 @@ describe("push to talk while its speech model is prepared automatically", () => 
 
   it("is Ready once the model is installed and active", () => {
     expect(pushToTalkReadiness(status({ provisioning: [] }), null).ready).toBe(true);
+  });
+});
+
+describe("first-run disclosure and permanent failures", () => {
+  it("discloses the automatic download before it starts, with size and source", () => {
+    const pending = pushToTalkReadiness(status({ activeModel: null, provisioning: [] }), null);
+    expect(pending.message).toBe(
+      "Downloading the English speech model (78 MB) from KalCode's signed component catalog… It is downloaded once and verified before use.",
+    );
+  });
+
+  it("stops with a truthful reason instead of promising a retry", () => {
+    for (const [reason, text] of [
+      ["components_unsupported", "KalVoice components aren't available for this system"],
+      ["components_unverified", "Couldn't verify KalVoice components. Try again later"],
+      ["consent_required", "Downloading this component needs your permission first"],
+    ] as const) {
+      const stopped = pushToTalkReadiness(
+        status({
+          activeModel: null,
+          provisioning: [
+            { modelId: "tiny.en", automatic: true, phase: "unavailable", reason, receivedBytes: 0, totalBytes: 0 },
+          ],
+        }),
+        null,
+      );
+      expect(stopped).toMatchObject({ ready: false, code: "model_unavailable", fix: "settings", attention: true });
+      expect(stopped.message).toContain(text);
+      expect(stopped.message).not.toMatch(/retries/);
+    }
   });
 });

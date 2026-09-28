@@ -136,6 +136,26 @@ export function retryWhen(seconds: number | undefined): string {
   return `automatically in about ${Math.round(seconds / 60)} minutes`;
 }
 
+/** Why automatic provisioning stopped for good (until KalCode restarts), in owner terms. */
+export function stoppedReason(reason: string | undefined): string {
+  switch (reason) {
+    case "components_unsupported":
+      return "KalVoice components aren't available for this system";
+    case "consent_required":
+      return "Downloading this component needs your permission first";
+    default:
+      return "Couldn't verify KalVoice components. Try again later";
+  }
+}
+
+/** Where every automatic download comes from (disclosed while it runs). */
+export const SIGNED_CATALOG = "KalCode's signed component catalog";
+
+/** "English (fastest)" → "English": the language, for disclosure sentences. */
+function modelLanguage(displayName: string): string {
+  return displayName.replace(/\s*\(.*\)\s*$/u, "");
+}
+
 /** Why a download attempt failed, in owner terms (the safe code otherwise). */
 export function failureReason(reason: string | undefined): string {
   switch (reason) {
@@ -160,31 +180,36 @@ function speechNotReady(status: KalVoiceStatus): {
   attention: boolean;
 } | null {
   const item = speechProvisioning(status);
-  const model = item ? (status.models.find((m) => m.id === item.modelId)?.displayName ?? item.modelId) : null;
+  const info = item ? status.models.find((m) => m.id === item.modelId) : undefined;
+  const model = item ? (info?.displayName ?? item.modelId) : null;
   if (!item) {
+    const fallback = status.models.find((m) => m.id === status.preferences.speechModel) ?? status.models[0];
+    const size = fallback ? ` (${formatBytes(fallback.sizeBytes)})` : "";
     return status.preferences.speechModelAutoDownload
       ? {
           code: "model_preparing",
           label: "Preparing speech",
-          message: "KalCode is getting its English speech model from its signed component catalog.",
+          message: `Downloading the English speech model${size} from ${SIGNED_CATALOG}… It is downloaded once and verified before use.`,
           attention: false,
         }
       : null;
   }
+  const size = item.totalBytes > 0 ? formatBytes(item.totalBytes) : info ? formatBytes(info.sizeBytes) : null;
+  const what = `the ${modelLanguage(model ?? "")} speech model${size ? ` (${size})` : ""}`;
   const percent = item.totalBytes > 0 ? Math.min(100, Math.floor((item.receivedBytes / item.totalBytes) * 100)) : 0;
   switch (item.phase) {
     case "preparing":
       return {
         code: "model_preparing",
         label: "Preparing speech",
-        message: `Getting the ${model} speech model from KalCode's signed component catalog.`,
+        message: `Downloading ${what} from ${SIGNED_CATALOG}… It is downloaded once and verified before use.`,
         attention: false,
       };
     case "downloading":
       return {
         code: "model_preparing",
         label: `Preparing speech ${percent}%`,
-        message: `Downloading the ${model} speech model: ${formatBytes(item.receivedBytes)} of ${formatBytes(item.totalBytes)}. Push to talk works when it's ready.`,
+        message: `Downloading ${what} from ${SIGNED_CATALOG}… ${formatBytes(item.receivedBytes)} so far. Push to talk works when it's ready.`,
         attention: false,
       };
     case "verifying":
@@ -220,6 +245,13 @@ function speechNotReady(status: KalVoiceStatus): {
         code: "model_unavailable",
         label: "Speech unavailable",
         message: `Couldn't get the ${model} speech model: ${failureReason(item.reason)}. KalCode retries ${retryWhen(item.retryInSeconds)}, and when you return to KalCode.`,
+        attention: true,
+      };
+    case "unavailable":
+      return {
+        code: "model_unavailable",
+        label: "Speech unavailable",
+        message: `${stoppedReason(item.reason)}. You can still download a speech model in Settings, KalVoice.`,
         attention: true,
       };
   }

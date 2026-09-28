@@ -25,8 +25,8 @@ use kalcode_kalvoice::component_manifest::{
 };
 use kalcode_kalvoice::component_store::{
     ComponentLease, ComponentReceiptStatus, ComponentSelector, ComponentStore, ComponentStoreError,
-    LOCAL_REASONING_MODEL_ID, LOCAL_REASONING_RUNTIME_ABI, LOCAL_REASONING_RUNTIME_ID,
-    TrustedComponentDirectory, host_local_reasoning_contract,
+    InstallConsent, LOCAL_REASONING_MODEL_ID, LOCAL_REASONING_RUNTIME_ABI,
+    LOCAL_REASONING_RUNTIME_ID, TrustedComponentDirectory, host_local_reasoning_contract,
 };
 use kalcode_kalvoice::models::{self, SpeechModelInfo, SpeechModelState};
 use kalcode_kalvoice::signals::LocalReasoningDownload;
@@ -55,6 +55,8 @@ const CATALOG_PRUNE_MINIMUM_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 const ADMISSION_WAIT: Duration = Duration::from_secs(10 * 60);
 /// How often a waiting download looks for cancellation, a deadline, or the end of push to talk.
 const WAIT_SLICE: Duration = Duration::from_millis(100);
+/// While a download stays deferred for push to talk, it is traced this often (durations only).
+const DEFERRAL_HEARTBEAT: Duration = Duration::from_secs(60);
 const CAPACITY_EVENT_BUFFER: usize = 16;
 
 pub(crate) const SPEECH_COMPONENT_IDS: [&str; 5] = [
@@ -93,8 +95,13 @@ impl DownloadConsent {
         }
     }
 
-    const fn granted(self) -> bool {
-        !matches!(self, Self::Declined)
+    /// The consent recorded on the installed receipt; `None` when nothing may be fetched.
+    pub(crate) const fn install(self) -> Option<InstallConsent> {
+        match self {
+            Self::Declined => None,
+            Self::User => Some(InstallConsent::User),
+            Self::AutomaticDefault => Some(InstallConsent::AutomaticDefault),
+        }
     }
 }
 
@@ -218,6 +225,32 @@ impl ComponentManagerError {
             Self::StorageUnavailable => "component_storage_failed",
             Self::InUse => "component_in_use",
             Self::NotInstalled => "model_not_installed",
+        }
+    }
+
+    /// Why automatic provisioning must stop until the next launch (a manual download still
+    /// works), or `None` when a later attempt can succeed unchanged (network, capacity, storage
+    /// contention, an expired or not-yet-valid window).
+    pub(crate) const fn terminal_reason(self) -> Option<&'static str> {
+        match self {
+            Self::ConsentRequired | Self::UnknownSpeechModel => Some("consent_required"),
+            Self::AcquisitionFailed(ComponentAcquisitionFailure::WrongTarget) => {
+                Some("components_unsupported")
+            }
+            Self::CatalogInvalid
+            | Self::CatalogRollback
+            | Self::AcquisitionFailed(
+                ComponentAcquisitionFailure::Manifest(
+                    VerifyError::BadSignature
+                    | VerifyError::UnknownKey
+                    | VerifyError::UnsupportedHeader
+                    | VerifyError::Malformed
+                    | VerifyError::InvalidDocument
+                    | VerifyError::InvalidUrl,
+                )
+                | ComponentAcquisitionFailure::UnsafeStaging,
+            ) => Some("components_unverified"),
+            _ => None,
         }
     }
 }
@@ -487,7 +520,7 @@ trait AcquisitionService: Send + Sync {
         &self,
         token: &str,
         now_unix: i64,
-        consent: bool,
+        consent: InstallConsent,
         cancel: &AtomicBool,
         progress: &mut dyn FnMut(u64, u64),
     ) -> Result<(), ComponentAcquisitionError>;
@@ -500,12 +533,13 @@ impl AcquisitionService for SignedAcquisitionService {
         &self,
         token: &str,
         now_unix: i64,
-        consent: bool,
+        consent: InstallConsent,
         cancel: &AtomicBool,
         progress: &mut dyn FnMut(u64, u64),
     ) -> Result<(), ComponentAcquisitionError> {
+        // The consent kind is persisted on the component's receipt.
         self.0
-            .acquire(token, now_unix, consent, cancel, progress)
+            .acquire_as(token, now_unix, consent, cancel, progress)
             .map(|_| ())
     }
 }
@@ -988,7 +1022,7 @@ impl KalVoiceComponentManager {
             manager: self,
             preference_id: REASONING_DOWNLOAD_ID.into(),
         };
-        self.install_reasoning(&token, &catalog, &cancel, progress)
+        self.install_reasoning(&token, &catalog, InstallConsent::User, &cancel, progress)
     }
 
     /// Zero-setup provisioning of the local-intelligence pair: the signed catalog is fetched
@@ -1012,7 +1046,13 @@ impl KalVoiceComponentManager {
         )?;
         let catalog = verify_catalog(&self.verifier, &token, unix_seconds(), self.contract())
             .map_err(map_catalog_error)?;
-        self.install_reasoning(&token, &catalog, &cancel, progress)
+        self.install_reasoning(
+            &token,
+            &catalog,
+            InstallConsent::AutomaticDefault,
+            &cancel,
+            progress,
+        )
     }
 
     /// The one acquisition path for the reasoning pair, whoever consented.
@@ -1020,6 +1060,7 @@ impl KalVoiceComponentManager {
         &self,
         token: &str,
         catalog: &VerifiedComponentCatalog,
+        consent: InstallConsent,
         cancel: &Arc<AtomicBool>,
         mut progress: impl FnMut(u64, u64),
     ) -> Result<(), ComponentManagerError> {
@@ -1062,7 +1103,7 @@ impl KalVoiceComponentManager {
                 .acquire(
                     entry.token(),
                     unix_seconds(),
-                    true,
+                    consent,
                     cancel,
                     &mut |received, _| {
                         let received = completed + received;
@@ -1108,6 +1149,9 @@ impl KalVoiceComponentManager {
         mut progress: impl FnMut(u64, u64),
     ) -> Result<(), ComponentManagerError> {
         let component = authorize_download(preference_id, consent)?;
+        let granted = consent
+            .install()
+            .ok_or(ComponentManagerError::ConsentRequired)?;
         let cancel = self.register(preference_id, consent)?;
         let _registration = DownloadRegistration {
             manager: self,
@@ -1170,7 +1214,7 @@ impl KalVoiceComponentManager {
         let result = self.acquisition.acquire(
             &signed_manifest,
             now_unix,
-            consent.granted(),
+            granted,
             &cancel,
             &mut |received, total| {
                 self.progressed(preference_id, received, total, &cancel);
@@ -1289,21 +1333,42 @@ impl KalVoiceComponentManager {
 
     /// Parks while push to talk is in use. Returns `false` if the download was cancelled.
     fn wait_for_talk(&self, preference_id: &str, cancel: &AtomicBool) -> bool {
-        let mut logged = false;
+        let mut deferred: Option<(Instant, Instant)> = None;
         while self.talk_active() {
             if cancel.load(Ordering::SeqCst) {
                 return false;
             }
-            if !logged {
-                logged = true;
-                self.set_phase(preference_id, DownloadPhase::WaitingForTalk);
-                tracing::info!(
-                    event = "kalvoice.component_download_deferred",
-                    component = preference_id,
-                    reason = "push_to_talk"
-                );
+            match deferred.as_mut() {
+                None => {
+                    let now = Instant::now();
+                    deferred = Some((now, now));
+                    self.set_phase(preference_id, DownloadPhase::WaitingForTalk);
+                    tracing::info!(
+                        event = "kalvoice.component_download_deferred",
+                        component = preference_id,
+                        reason = "push_to_talk"
+                    );
+                }
+                // An indefinitely deferred download stays observable (durations only).
+                Some((since, beat)) if beat.elapsed() >= DEFERRAL_HEARTBEAT => {
+                    *beat = Instant::now();
+                    tracing::info!(
+                        event = "kalvoice.component_download_still_deferred",
+                        component = preference_id,
+                        reason = "push_to_talk",
+                        deferred_s = since.elapsed().as_secs()
+                    );
+                }
+                Some(_) => {}
             }
             std::thread::sleep(WAIT_SLICE);
+        }
+        if let Some((since, _)) = deferred {
+            tracing::info!(
+                event = "kalvoice.component_download_resumed",
+                component = preference_id,
+                deferred_ms = u64::try_from(since.elapsed().as_millis()).unwrap_or(u64::MAX)
+            );
         }
         !cancel.load(Ordering::SeqCst)
     }

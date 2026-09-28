@@ -3,4 +3,4 @@
 /**
  * Where one component download stands. Every phase is a fact native observed, never a guess.
  */
-export type ProvisioningPhase = "preparing" | "waiting_for_resources" | "waiting_for_talk" | "downloading" | "verifying" | "paused" | "retry_scheduled";
+export type ProvisioningPhase = "preparing" | "waiting_for_resources" | "waiting_for_talk" | "downloading" | "verifying" | "paused" | "retry_scheduled" | "unavailable";

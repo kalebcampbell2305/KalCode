@@ -667,7 +667,13 @@ fn explicit_install_retry_recovers_a_verified_revision_after_activation_failure(
     let staging = track.join(".staging-interrupted-install");
     fs::create_dir(&staging).expect("staging");
     store
-        .populate_staging(&second_token, &artifact, candidate.manifest(), &staging)
+        .populate_staging(
+            &second_token,
+            &artifact,
+            candidate.manifest(),
+            &staging,
+            InstallConsent::User,
+        )
         .expect("verified staged candidate");
     fs::rename(&staging, track.join(&revision)).expect("publish revision");
     let blocked_backup = track.join(POINTER_BACKUP);
@@ -748,6 +754,7 @@ fn explicit_install_retry_recovers_a_verified_revision_after_activation_failure(
             &artifact,
             conflicting_manifest.manifest(),
             &conflicting_dir,
+            InstallConsent::User,
         )
         .expect("valid conflicting revision bytes");
     write(&artifact, second);
@@ -1223,4 +1230,126 @@ fn pinned_runtime_archive_round_trips_the_exact_extraction_policy() {
         extract_runtime(Path::new(&source), &payload, &policy).expect("exact policy extraction");
     verify_runtime(Path::new(&source), &payload, &policy, &files)
         .expect("extracted bytes equal the signed archive");
+}
+
+/// Every `receipt.json` under `root`.
+fn receipts_under(root: &Path) -> Vec<std::path::PathBuf> {
+    let mut found = Vec::new();
+    let mut pending = vec![root.to_owned()];
+    while let Some(dir) = pending.pop() {
+        for entry in fs::read_dir(&dir).expect("read dir").flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.file_name().is_some_and(|name| name == "receipt.json") {
+                found.push(path);
+            }
+        }
+    }
+    found
+}
+
+#[test]
+fn install_consent_round_trips_on_the_receipt_and_legacy_receipts_read_as_user() {
+    let temp = TempDir::new().expect("temp");
+    let key = signing_key(7);
+    let root = temp.path().join("store");
+    let store = ComponentStore::new(test_directory(&root), verifier(&key), []).expect("store");
+    let bytes = b"automatic default model";
+    let artifact = temp.path().join("model.gguf");
+    write(&artifact, bytes);
+
+    // Zero-setup provisioning records its system-granted consent on the receipt.
+    let automatic = token(
+        &key,
+        "kalvoice.speech.auto",
+        ComponentKind::Model,
+        "1.0.0",
+        1,
+        bytes,
+    );
+    store
+        .install_from_file_with_consent(
+            &automatic,
+            &artifact,
+            NOW,
+            InstallConsent::AutomaticDefault,
+        )
+        .expect("automatic install");
+    let automatic_selector = selector("kalvoice.speech.auto", ComponentKind::Model);
+    assert!(matches!(
+        store.status(&automatic_selector, NOW),
+        ComponentReceiptStatus::Present {
+            consent: InstallConsent::AutomaticDefault,
+            ..
+        }
+    ));
+
+    // A dialog-consented install keeps the exact legacy receipt shape (no consent field).
+    let user = token(
+        &key,
+        "kalvoice.speech.user",
+        ComponentKind::Model,
+        "1.0.0",
+        1,
+        bytes,
+    );
+    store
+        .install_from_file(&user, &artifact, NOW)
+        .expect("user install");
+    let user_selector = selector("kalvoice.speech.user", ComponentKind::Model);
+    assert!(matches!(
+        store.status(&user_selector, NOW),
+        ComponentReceiptStatus::Present {
+            consent: InstallConsent::User,
+            ..
+        }
+    ));
+
+    let receipts = receipts_under(&root);
+    assert_eq!(receipts.len(), 2);
+    let mut consents = Vec::new();
+    for path in &receipts {
+        let value: serde_json::Value =
+            serde_json::from_slice(&fs::read(path).expect("receipt")).expect("receipt json");
+        let mut keys = value
+            .as_object()
+            .expect("receipt object")
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        keys.sort();
+        consents.push(value.get("consent").cloned());
+        let mut legacy = vec![
+            "artifactFile",
+            "entrypoint",
+            "extractedFiles",
+            "schemaVersion",
+            "token",
+        ];
+        if value.get("consent").is_some() {
+            legacy.push("consent");
+            legacy.sort_unstable();
+        }
+        assert_eq!(keys, legacy);
+    }
+    consents.sort_by_key(|consent| consent.is_some());
+    assert_eq!(
+        consents,
+        vec![None, Some(serde_json::Value::from("automatic_default"))]
+    );
+
+    // A pre-existing (legacy) receipt, reopened by a new store, is still installed and loads:
+    // the owner's installed model is reused, never fetched again.
+    drop(store);
+    let reopened = ComponentStore::new(test_directory(&root), verifier(&key), []).expect("reopen");
+    assert!(matches!(
+        reopened.status(&user_selector, NOW),
+        ComponentReceiptStatus::Present {
+            consent: InstallConsent::User,
+            ..
+        }
+    ));
+    assert!(reopened.acquire(&user_selector, NOW).is_ok());
+    assert!(reopened.acquire(&automatic_selector, NOW).is_ok());
 }

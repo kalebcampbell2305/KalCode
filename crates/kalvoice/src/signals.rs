@@ -83,6 +83,10 @@ pub enum ProvisioningPhase {
     /// The last attempt failed (`reason`); KalCode retries on its own after `retry_in_seconds`
     /// and whenever KalCode comes back to the front.
     RetryScheduled,
+    /// A permanent failure (`reason`: `components_unsupported`, `components_unverified` or
+    /// `consent_required`): no automatic retry until KalCode restarts; a manual download still
+    /// works.
+    Unavailable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
