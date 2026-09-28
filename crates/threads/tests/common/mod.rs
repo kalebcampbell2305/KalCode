@@ -414,6 +414,8 @@ impl PermissionGate for TestGate {
 
 pub struct FakeWorkspaces {
     pub workspaces: Mutex<Vec<ResolvedWorkspace>>,
+    /// Runs once on the next `resolve` (to interleave a concurrent change mid-operation).
+    resolve_observer: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 impl FakeWorkspaces {
@@ -425,8 +427,13 @@ impl FakeWorkspaces {
                 name: "kalcode".into(),
                 root,
             }]),
+            resolve_observer: Mutex::new(None),
         });
         (workspaces, id)
+    }
+
+    pub fn on_next_resolve(&self, observer: impl FnOnce() + Send + 'static) {
+        *self.resolve_observer.lock().unwrap() = Some(Box::new(observer));
     }
 
     pub fn remove_all(&self) {
@@ -440,6 +447,10 @@ impl WorkspaceResolver for FakeWorkspaces {
     }
 
     fn resolve(&self, workspace_id: &str) -> kalcode_core::Result<ResolvedWorkspace> {
+        let observer = self.resolve_observer.lock().unwrap().take();
+        if let Some(observer) = observer {
+            observer();
+        }
         self.workspaces
             .lock()
             .unwrap()

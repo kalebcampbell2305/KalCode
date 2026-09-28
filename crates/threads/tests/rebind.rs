@@ -352,3 +352,102 @@ fn a_rebind_persists_across_restart() {
     );
     assert_eq!(session.config.resume_session_id, None);
 }
+
+/// Review S1: a rebind that commits after a resume admitted its prompt (under account A) but
+/// before the resume's `starting` write must refuse the resume cleanly, not strand the thread in
+/// `starting` (which a rebind then refuses as busy and only Stop recovers).
+#[test]
+fn a_rebind_racing_a_resume_refuses_the_resume_without_stranding_the_thread() {
+    let h = Harness::new();
+    let accounts = gemini_accounts(&h);
+    let id = idle_thread_on_a(&h, &accounts);
+    h.runtime.stop(&id).expect("stop");
+
+    // The resume resolves the workspace after admitting the prompt and before its `starting`
+    // write: commit a rebind to B exactly there (as `rebind_account`'s transaction would).
+    let core = h.core.clone();
+    let (thread, b) = (id.clone(), accounts.b.clone());
+    h.workspaces.on_next_resolve(move || {
+        core.transact(|tx| {
+            kalcode_threads::store::set_account(tx, &thread, &b, Some("Gemini B"))?;
+            Ok(((), Vec::new()))
+        })
+        .expect("concurrent rebind");
+    });
+
+    assert_code(
+        h.runtime.resume(&id, Some("continue")),
+        "thread_account_changed",
+    );
+    let thread = h.runtime.get(&id).unwrap();
+    assert_eq!(thread.status, ThreadStatus::Interrupted, "status unchanged");
+    assert_eq!(accounts.provider.session_count(), 1, "nothing launched");
+
+    // Nothing is stuck: the person can simply resume (now under B).
+    h.runtime
+        .resume(&id, Some("continue"))
+        .expect("resume under b");
+    assert_eq!(
+        accounts
+            .provider
+            .last_session()
+            .config
+            .provider_account_id
+            .as_deref(),
+        Some(accounts.b.as_str())
+    );
+}
+
+/// Review S2: when the account write is refused after the idle session was ended (the target
+/// account was archived meanwhile), the thread must not claim it switched accounts.
+#[test]
+fn a_refused_account_write_after_ending_the_session_does_not_claim_a_switch() {
+    let h = Harness::new();
+    let accounts = gemini_accounts(&h);
+    let id = idle_thread_on_a(&h, &accounts);
+
+    // Ending the session expires the thread's approvals: archive B exactly then.
+    let core = h.core.clone();
+    let b = accounts.b.clone();
+    h.gate.set_expire_observer(Arc::new(move |_thread: &str| {
+        core.transact(|tx| {
+            tx.execute(
+                "UPDATE provider_accounts SET archived_at = '2026-09-28T03:00:00Z' WHERE id = ?1",
+                [&b],
+            )?;
+            Ok(((), Vec::new()))
+        })
+        .expect("archive b meanwhile");
+    }));
+
+    assert_code(
+        h.runtime.rebind_account(&id, &accounts.b),
+        "provider_account_archived",
+    );
+    let thread = h.runtime.get(&id).unwrap();
+    assert_eq!(
+        thread.provider_account_id.as_deref(),
+        Some(accounts.a.as_str())
+    );
+    assert_ne!(
+        thread.current_activity.as_deref(),
+        Some(kalcode_threads::runtime::ACCOUNT_SWITCHED_ACTIVITY)
+    );
+    assert!(account_changes(&h, &id).is_empty());
+    assert!(
+        thread.resumable,
+        "A's resume id is kept when nothing changed"
+    );
+}
+
+#[test]
+fn a_committed_switch_records_the_switched_activity() {
+    let h = Harness::new();
+    let accounts = gemini_accounts(&h);
+    let id = idle_thread_on_a(&h, &accounts);
+    let rebound = h.runtime.rebind_account(&id, &accounts.b).expect("rebind");
+    assert_eq!(
+        rebound.current_activity.as_deref(),
+        Some(kalcode_threads::runtime::ACCOUNT_SWITCHED_ACTIVITY)
+    );
+}

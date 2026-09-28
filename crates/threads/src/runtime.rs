@@ -2167,11 +2167,9 @@ impl Inner {
                     EndReason::Stopped { activity } => {
                         (ThreadStatus::Interrupted, Some((*activity).to_owned()), None)
                     }
-                    EndReason::AccountSwitched => (
-                        ThreadStatus::Completed,
-                        Some(ACCOUNT_SWITCHED_ACTIVITY.to_owned()),
-                        None,
-                    ),
+                    // Neutral here: the rebind records "switched" only once the account change
+                    // itself commits (it can still be refused after the session ends).
+                    EndReason::AccountSwitched => (ThreadStatus::Completed, None, None),
                     EndReason::Failed { code, message } => (
                         ThreadStatus::Failed,
                         None,
@@ -2469,10 +2467,19 @@ impl Inner {
         self.core.write_with_events(|tx| {
             // A thread keeps its own account: when that account was removed from KalCode, say
             // so instead of launching (or falling back to another account).
-            if let Some(account_id) = store::get(tx, thread_id)?.provider_account_id
-                && store::account(tx, &account_id)?.is_some_and(|account| account.archived)
+            let current = store::get(tx, thread_id)?;
+            if let Some(account_id) = &current.provider_account_id
+                && store::account(tx, account_id)?.is_some_and(|account| account.archived)
             {
                 return Err(thread_account_archived());
+            }
+            // A prompt is admitted for the account the thread had when it was reviewed. If a
+            // rebind committed since, refuse here, before `starting`, so the thread keeps its
+            // status and the person can simply resume again under the new account.
+            if let Some(admitted) = &text
+                && admitted.target.provider_account_id != current.provider_account_id
+            {
+                return Err(thread_account_changed());
             }
             store::set_cwd(tx, thread_id, &cwd, &workspace.name)?;
             let from = store::set_status(
@@ -2522,11 +2529,15 @@ impl Inner {
         let row = self.row(thread_id)?;
         let pending = state.as_ref().map_or(0, |state| state.pending.len());
         rebind_ready(&row, pending)?;
-        if let (Some(live), Some(state)) = (&live, state.as_mut())
+        let ended_session = if let (Some(live), Some(state)) = (&live, state.as_mut())
             && state.session.is_some()
         {
             self.end_session(live, state, EndReason::AccountSwitched)?;
-        }
+            true
+        } else {
+            false
+        };
+        let now = now_rfc3339();
         let ctx = Ctx::from_row(&row);
         let (row, _) = self.core.write_with_events(|tx| {
             // Authoritative re-checks in the write transaction: a resume that marked the thread
@@ -2539,6 +2550,9 @@ impl Inner {
             rebind_ready(&current, 0)?;
             let account = rebind_target(store::account(tx, account_id)?, &current.provider_id)?;
             store::set_account(tx, thread_id, account_id, Some(&account.display_name))?;
+            if ended_session {
+                store::set_activity(tx, thread_id, Some(ACCOUNT_SWITCHED_ACTIVITY), &now)?;
+            }
             let row = store::get(tx, thread_id)?;
             let event = ctx.event(
                 EventSource::Ui,
@@ -2629,6 +2643,13 @@ impl Inner {
 
 fn archived() -> KalError {
     KalError::validation("thread_archived", "This thread is archived.")
+}
+
+fn thread_account_changed() -> KalError {
+    KalError::validation(
+        "thread_account_changed",
+        "This thread was switched to another account while your message was being sent. Nothing was sent; send it again.",
+    )
 }
 
 fn thread_account_archived() -> KalError {
