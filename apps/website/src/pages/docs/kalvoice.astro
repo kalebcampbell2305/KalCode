@@ -44,7 +44,7 @@ const stable = servedStableRelease(RELEASES);
           <td>Never counted. Unlimited on every plan.</td>
         </tr>
         <tr>
-          <th scope="row">A command, such as “Open four Codex threads”</th>
+          <th scope="row">A command, such as “Pause every active thread”</th>
           <td>KalCode does it and reports back.</td>
           <td>One KalVoice Request.</td>
         </tr>
@@ -78,9 +78,9 @@ const stable = servedStableRelease(RELEASES);
   <h2>Command mode</h2>
   <p>Hold the key and say what you want done, for example:</p>
   <ul>
-    <li>“Open four Codex threads.”</li>
+    <li>“Go to the dashboard.”</li>
     <li>“Pause every active thread.”</li>
-    <li>“Show me anything waiting for permission.”</li>
+    <li>“What needs permission?”</li>
     <li>“What are my threads doing?”</li>
   </ul>
   <p>
@@ -93,8 +93,8 @@ const stable = servedStableRelease(RELEASES);
   <h2>KalVoice Requests</h2>
   <p>
     Each top-level request in command mode counts as one KalVoice Request, however many steps it
-    takes. “Open four Codex threads” is one request. “Have Claude implement this, Codex review it,
-    then run the tests” is also one request.
+    takes. “Open a terminal” is one request. “Pause every active thread” is also one request,
+    however many threads it pauses.
   </p>
   <ul>
     {

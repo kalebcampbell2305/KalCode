@@ -859,7 +859,7 @@ export const STORY: readonly StoryStep[] = [
     id: "codex",
     title: "Add Codex without leaving the window.",
     line: "Split, stack, keep both in view.",
-    tag: "Preview · splits are planned",
+    tag: "Preview · provider panes not in Stable yet",
     describe: "The window splits. A Codex pane below edits the signup route to validate input.",
     scene: {
       panes: ["claude-checkout", "codex-signup"],
@@ -877,7 +877,7 @@ export const STORY: readonly StoryStep[] = [
     id: "browser",
     title: "Check the result where the code is.",
     line: "A localhost preview docks beside the agents.",
-    tag: "Planned",
+    tag: "Preview",
     describe: "A browser docks on the right showing localhost:3000 with the signup limits page of the sample app.",
     scene: { panes: ["claude-checkout", "codex-signup"], dock: "browser", approval: "none", voice: "off", mission: 0 },
     still: "browser",
@@ -987,8 +987,8 @@ export const DEMO_TABS: readonly DemoTab[] = [
     id: "multi-agent",
     label: "Multi-agent",
     title: "Four agents, one window.",
-    line: "Claude Code, Codex and Gemini CLI work side by side, and a mission ties them to one objective.",
-    tag: "Preview · missions are planned",
+    line: "Claude Code, Codex and Gemini CLI work at the same time, and a mission ties them to one objective.",
+    tag: "Preview · missions and provider panes are not in Stable yet",
     scene: {
       view: "code",
       panes: ["claude-checkout", "codex-signup", "gemini-research", "claude-e2e"],
@@ -1053,7 +1053,7 @@ export const DEMO_TABS: readonly DemoTab[] = [
     label: "Code Mode",
     title: "Real terminals in your workspace.",
     line: "A PowerShell tab runs the dev server while Claude Code fixes a test, with the preview beside them.",
-    tag: "Development build · browser is planned",
+    tag: "Development build · sample data",
     scene: {
       view: "code",
       panes: ["shell", "claude-checkout"],
