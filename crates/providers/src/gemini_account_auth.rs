@@ -18,6 +18,15 @@
 //! Account state is the presence of Gemini's own credential files, checked by metadata only:
 //! KalCode never opens, reads, copies or stores their contents. Sign-out removes only the
 //! files Gemini itself uses for this account's credentials, below this account's profile.
+//!
+//! One display-only exception (release-lead security sign-off): for a signed-in account, KalCode
+//! reads the `active` field of `<GEMINI_CLI_HOME>/.gemini/google_accounts.json` in that account's
+//! own managed profile, and only that field, as the provider-reported identity. The file must be
+//! an ordinary file (no link or reparse point, checked before and after opening) of at most
+//! [`MAX_GOOGLE_ACCOUNTS_BYTES`] bytes that parses as JSON with an `active` string that looks like
+//! an email of at most `MAX_PROVIDER_IDENTITY_CHARS` characters; anything else yields no identity.
+//! `old` is never kept or exposed, no other file is opened (the credential stores never are), and
+//! the identity is never logged.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -29,6 +38,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use kalcode_contracts::agent::{AuthState, ProviderError, ProviderId};
+use kalcode_contracts::provider_accounts::MAX_PROVIDER_IDENTITY_CHARS;
 
 use crate::detect::DetectEnv;
 use crate::gemini::managed_policy::ManagedGeminiSignIn;
@@ -46,8 +56,11 @@ const GEMINI_DIR: &str = ".gemini";
 /// only without encrypted storage. Managed launches never write it; Gemini migrates a legacy copy
 /// into the encrypted store and deletes it, and sign-out removes any that remains.
 const LEGACY_PLAINTEXT_CREDENTIALS_FILE: &str = "oauth_creds.json";
-/// Gemini's cached Google account email list, cleared by Gemini's own credential reset.
+/// Gemini's cached Google account email list, cleared by Gemini's own credential reset. Its
+/// `active` field is the only content KalCode ever reads from a managed profile (display only).
 const GOOGLE_ACCOUNTS_FILE: &str = "google_accounts.json";
+/// Largest `google_accounts.json` KalCode will parse; a larger file yields no identity.
+pub const MAX_GOOGLE_ACCOUNTS_BYTES: u64 = 16 * 1024;
 /// Gemini's AES-256-GCM `FileKeychain` (`GEMINI_FORCE_ENCRYPTED_FILE_STORAGE` with
 /// `GEMINI_FORCE_FILE_STORAGE`): the managed Google sign-in. Gemini deletes the file itself when
 /// its last entry is removed. In a managed profile it holds only this account's credentials.
@@ -59,15 +72,29 @@ const SIGN_OUT_FILES: [&str; 3] = [
     GOOGLE_ACCOUNTS_FILE,
 ];
 
-/// Account truth derived from Gemini's own credential files (existence only).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Account truth derived from Gemini's own credential files (existence only), plus the display-only
+/// Google account email Gemini recorded for a signed-in profile.
+#[derive(Clone, PartialEq, Eq)]
 pub struct GeminiAccountState {
     pub auth: AuthState,
+    /// `google_accounts.json` `active` email; `None` unless signed in and the file is valid.
+    /// Display metadata only: never logged (the `Debug` form redacts it).
+    pub identity: Option<String>,
 }
 
 impl GeminiAccountState {
-    pub fn logged_in(self) -> bool {
+    pub fn logged_in(&self) -> bool {
         self.auth == AuthState::Authenticated
+    }
+}
+
+impl fmt::Debug for GeminiAccountState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GeminiAccountState")
+            .field("auth", &self.auth)
+            .field("identity", &self.identity.as_ref().map(|_| "[redacted]"))
+            .finish()
     }
 }
 
@@ -114,6 +141,121 @@ pub fn credential_state(
         return Ok(AuthState::Authenticated);
     }
     Ok(AuthState::NotAuthenticated)
+}
+
+/// Reads one account's full Gemini state: [`credential_state`], plus, only when signed in, the
+/// display identity from [`reported_identity`]. Identity problems never fail the read.
+pub fn account_state(
+    profiles: &ManagedProfiles,
+    account_id: &str,
+) -> Result<GeminiAccountState, ProviderError> {
+    let auth = credential_state(profiles, account_id)?;
+    let identity = if auth == AuthState::Authenticated {
+        reported_identity(profiles, account_id)
+    } else {
+        None
+    };
+    Ok(GeminiAccountState { auth, identity })
+}
+
+/// The `active` email of this account's own `google_accounts.json`, or `None` when the file is
+/// missing, not an ordinary file (link, reparse point, directory), larger than
+/// [`MAX_GOOGLE_ACCOUNTS_BYTES`], not JSON, or its `active` is not an email-shaped string. No
+/// other field (`old`) is kept and no other file is opened. Never logged.
+pub fn reported_identity(profiles: &ManagedProfiles, account_id: &str) -> Option<String> {
+    #[derive(serde::Deserialize)]
+    struct GoogleAccounts {
+        // Only `active` is declared: serde skips every other field (`old`) without keeping it.
+        active: Option<serde_json::Value>,
+    }
+
+    let home = profiles
+        .profile_home(ProviderId::GEMINI_CLI, account_id)
+        .ok()?;
+    let directory = gemini_directory(&home).ok()??;
+    let bytes = read_bounded_ordinary_file(
+        &directory.join(GOOGLE_ACCOUNTS_FILE),
+        MAX_GOOGLE_ACCOUNTS_BYTES,
+    )?;
+    let parsed: GoogleAccounts = serde_json::from_slice(&bytes).ok()?;
+    let active = parsed.active?;
+    let active = active.as_str()?;
+    looks_like_email(active).then(|| active.to_owned())
+}
+
+/// A conservative display check, not RFC 5322: printable ASCII without spaces, exactly one `@`,
+/// a non-empty local part and a dotted domain, at most `MAX_PROVIDER_IDENTITY_CHARS` long.
+fn looks_like_email(value: &str) -> bool {
+    if value.is_empty()
+        || value.len() > MAX_PROVIDER_IDENTITY_CHARS
+        || !value.bytes().all(|byte| byte.is_ascii_graphic())
+    {
+        return false;
+    }
+    let mut parts = value.split('@');
+    let (Some(local), Some(domain), None) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    !local.is_empty()
+        && local.len() <= 64
+        && domain.contains('.')
+        && !domain.starts_with('.')
+        && !domain.ends_with('.')
+        && !domain.contains("..")
+}
+
+/// Reads at most `cap` bytes from an ordinary file without following a link or reparse point: the
+/// path is inspected before opening, opened without following a final reparse point (Windows),
+/// and the opened handle must still be the same ordinary file within the cap.
+fn read_bounded_ordinary_file(path: &Path, cap: u64) -> Option<Vec<u8>> {
+    use std::io::Read as _;
+
+    let before = std::fs::symlink_metadata(path).ok()?;
+    if !before.is_file() || is_link_or_reparse(&before) || before.len() > cap {
+        return None;
+    }
+    let file = open_without_following(path).ok()?;
+    let opened = file.metadata().ok()?;
+    if !opened.is_file()
+        || is_link_or_reparse(&opened)
+        || opened.len() > cap
+        || !same_file(&before, &opened)
+    {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(cap + 1).read_to_end(&mut bytes).ok()?;
+    (u64::try_from(bytes.len()).ok()? <= cap).then_some(bytes)
+}
+
+#[cfg(windows)]
+fn open_without_following(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+}
+
+#[cfg(not(windows))]
+fn open_without_following(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::File::open(path)
+}
+
+#[cfg(unix)]
+fn same_file(before: &std::fs::Metadata, opened: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+
+    before.dev() == opened.dev() && before.ino() == opened.ino()
+}
+
+#[cfg(not(unix))]
+fn same_file(_before: &std::fs::Metadata, _opened: &std::fs::Metadata) -> bool {
+    // The Windows handle is opened on a reparse point itself rather than its target, so a swap to
+    // a link after the first check is caught by the handle's own attributes above.
+    true
 }
 
 /// Removes this account's Gemini credential files. Requires the account's exclusive lease so no
@@ -204,9 +346,7 @@ fn read_leased(
     if !lease.is_exclusive_for(profiles, ProviderId::GEMINI_CLI, account_id) {
         return Err(GeminiAccountAuthError::ProfileUnavailable);
     }
-    credential_state(profiles, account_id)
-        .map(|auth| GeminiAccountState { auth })
-        .map_err(|_| GeminiAccountAuthError::ProfileUnavailable)
+    account_state(profiles, account_id).map_err(|_| GeminiAccountAuthError::ProfileUnavailable)
 }
 
 fn gemini_directory(home: &Path) -> Result<Option<PathBuf>, ProviderError> {
@@ -430,8 +570,7 @@ impl GeminiAccountAuthManager {
                 // Gemini exits 0 after `--list-extensions` even when the person declined or the
                 // browser flow failed, so its own credential cache is the only success signal.
                 let mut result = exited.and_then(|succeeded| {
-                    let state = credential_state(&profiles, &account)
-                        .map(|auth| GeminiAccountState { auth })
+                    let state = account_state(&profiles, &account)
                         .map_err(|_| GeminiAccountAuthError::ProfileUnavailable)?;
                     match (state.logged_in(), succeeded) {
                         (true, _) => Ok(state),
@@ -946,6 +1085,11 @@ mod tests {
         );
         let state = pending.wait().expect("confirmed sign-in");
         assert_eq!(state.auth, AuthState::Authenticated);
+        assert_eq!(
+            state.identity.as_deref(),
+            Some("signed.in@example.com"),
+            "a confirmed sign-in reports Gemini's active Google account"
+        );
         let directory = credentials(&fixture.profiles, ACCOUNT_ID);
         assert!(directory.join(ENCRYPTED_CREDENTIALS_FILE).is_file());
         assert!(
@@ -1041,6 +1185,310 @@ mod tests {
         assert_eq!(pending.wait(), Err(GeminiAccountAuthError::Canceled));
     }
 
+    /// Writes a signed-in managed profile for `account_id`, with `google_accounts` when given.
+    fn signed_in(profiles: &ManagedProfiles, account_id: &str, google_accounts: Option<&[u8]>) {
+        let directory = credentials(profiles, account_id);
+        std::fs::create_dir_all(&directory).expect("gemini dir");
+        std::fs::write(directory.join(ENCRYPTED_CREDENTIALS_FILE), b"opaque").expect("store");
+        if let Some(contents) = google_accounts {
+            std::fs::write(directory.join(GOOGLE_ACCOUNTS_FILE), contents).expect("accounts");
+        }
+    }
+
+    fn refreshed(profiles: &ManagedProfiles, account_id: &str) -> GeminiAccountState {
+        let lease = profiles
+            .acquire_sign_in_lease("gemini-cli", account_id)
+            .expect("lease");
+        read_account_with_lease_observed(profiles, account_id, lease, |_| Ok(())).expect("refresh")
+    }
+
+    #[test]
+    fn identity_is_the_active_google_account_of_a_signed_in_profile() {
+        let fixture = fixture("unused");
+        signed_in(
+            &fixture.profiles,
+            ACCOUNT_ID,
+            Some(br#"{"active":"person@example.com","old":[]}"#),
+        );
+        let state = refreshed(&fixture.profiles, ACCOUNT_ID);
+        assert_eq!(state.auth, AuthState::Authenticated);
+        assert_eq!(state.identity.as_deref(), Some("person@example.com"));
+    }
+
+    #[test]
+    fn identity_never_comes_from_old_accounts() {
+        let fixture = fixture("unused");
+        signed_in(
+            &fixture.profiles,
+            ACCOUNT_ID,
+            Some(br#"{"old":["former@example.com"],"active":"current@example.com"}"#),
+        );
+        assert_eq!(
+            refreshed(&fixture.profiles, ACCOUNT_ID).identity.as_deref(),
+            Some("current@example.com")
+        );
+        for contents in [
+            &br#"{"active":null,"old":["former@example.com"]}"#[..],
+            br#"{"old":["former@example.com"]}"#,
+            br#"{"active":["former@example.com"]}"#,
+        ] {
+            signed_in(&fixture.profiles, ACCOUNT_ID, Some(contents));
+            let state = refreshed(&fixture.profiles, ACCOUNT_ID);
+            assert_eq!(state.auth, AuthState::Authenticated);
+            assert_eq!(
+                state.identity,
+                None,
+                "{}",
+                String::from_utf8_lossy(contents)
+            );
+        }
+    }
+
+    #[test]
+    fn identity_ignores_an_oversized_accounts_file() {
+        let fixture = fixture("unused");
+        let mut contents = br#"{"active":"person@example.com","pad":""#.to_vec();
+        let cap = usize::try_from(MAX_GOOGLE_ACCOUNTS_BYTES).expect("cap");
+        contents.resize(cap + 16, b'x');
+        contents.extend_from_slice(br#""}"#);
+        signed_in(&fixture.profiles, ACCOUNT_ID, Some(&contents));
+        let state = refreshed(&fixture.profiles, ACCOUNT_ID);
+        assert_eq!(
+            state.auth,
+            AuthState::Authenticated,
+            "label-only, still signed in"
+        );
+        assert_eq!(state.identity, None);
+
+        let mut at_cap = br#"{"active":"person@example.com","pad":""#.to_vec();
+        at_cap.resize(cap - 2, b'x');
+        at_cap.extend_from_slice(br#""}"#);
+        assert_eq!(at_cap.len(), cap);
+        signed_in(&fixture.profiles, ACCOUNT_ID, Some(&at_cap));
+        assert_eq!(
+            refreshed(&fixture.profiles, ACCOUNT_ID).identity.as_deref(),
+            Some("person@example.com"),
+            "a file exactly at the cap is still read"
+        );
+    }
+
+    #[test]
+    fn identity_rejects_garbage_and_non_email_values() {
+        let fixture = fixture("unused");
+        let too_long = format!(
+            r#"{{"active":"{}@example.com"}}"#,
+            "a".repeat(MAX_PROVIDER_IDENTITY_CHARS)
+        );
+        let long_domain = format!(
+            r#"{{"active":"a@{}.com"}}"#,
+            "d".repeat(MAX_PROVIDER_IDENTITY_CHARS)
+        );
+        for contents in [
+            "",
+            "not json",
+            "[]",
+            r#"{"active":42}"#,
+            r#"{"active":""}"#,
+            r#"{"active":"not-an-email"}"#,
+            r#"{"active":"two@@example.com"}"#,
+            r#"{"active":"a@b@example.com"}"#,
+            r#"{"active":"@example.com"}"#,
+            r#"{"active":"person@localhost"}"#,
+            r#"{"active":"person@.example.com"}"#,
+            r#"{"active":"person@example..com"}"#,
+            r#"{"active":"person name@example.com"}"#,
+            r#"{"active":"person@example.com\n"}"#,
+            r#"{"active":"person\u0000@example.com"}"#,
+            r#"{"active":"person\u202e@example.com"}"#,
+            r#"{"active":"pérson@example.com"}"#,
+            too_long.as_str(),
+            long_domain.as_str(),
+        ] {
+            signed_in(&fixture.profiles, ACCOUNT_ID, Some(contents.as_bytes()));
+            let state = refreshed(&fixture.profiles, ACCOUNT_ID);
+            assert_eq!(state.auth, AuthState::Authenticated);
+            assert_eq!(state.identity, None, "{contents}");
+        }
+    }
+
+    #[test]
+    fn identity_is_absent_when_the_accounts_file_is_missing_or_not_a_file() {
+        let fixture = fixture("unused");
+        signed_in(&fixture.profiles, ACCOUNT_ID, None);
+        let state = refreshed(&fixture.profiles, ACCOUNT_ID);
+        assert_eq!(state.auth, AuthState::Authenticated);
+        assert_eq!(state.identity, None);
+
+        std::fs::create_dir_all(
+            credentials(&fixture.profiles, ACCOUNT_ID).join(GOOGLE_ACCOUNTS_FILE),
+        )
+        .expect("directory in place of the file");
+        let state = refreshed(&fixture.profiles, ACCOUNT_ID);
+        assert_eq!(state.auth, AuthState::Authenticated);
+        assert_eq!(state.identity, None);
+    }
+
+    #[test]
+    fn identity_is_never_read_for_a_signed_out_profile() {
+        let fixture = fixture("unused");
+        let directory = credentials(&fixture.profiles, ACCOUNT_ID);
+        std::fs::create_dir_all(&directory).expect("gemini dir");
+        std::fs::write(
+            directory.join(GOOGLE_ACCOUNTS_FILE),
+            br#"{"active":"stale@example.com"}"#,
+        )
+        .expect("accounts");
+        let state = refreshed(&fixture.profiles, ACCOUNT_ID);
+        assert_eq!(state.auth, AuthState::NotAuthenticated);
+        assert_eq!(state.identity, None);
+    }
+
+    #[test]
+    fn identity_never_follows_a_linked_accounts_file() {
+        let fixture = fixture("unused");
+        signed_in(&fixture.profiles, ACCOUNT_ID, None);
+        let outside = fixture._temp.path().join("outside-accounts.json");
+        std::fs::write(&outside, br#"{"active":"outside@example.com"}"#).expect("outside");
+        let link = credentials(&fixture.profiles, ACCOUNT_ID).join(GOOGLE_ACCOUNTS_FILE);
+        #[cfg(unix)]
+        let linked = std::os::unix::fs::symlink(&outside, &link);
+        #[cfg(windows)]
+        let linked = std::os::windows::fs::symlink_file(&outside, &link);
+        if linked.is_err() {
+            // Windows without symlink privilege (no Developer Mode) cannot create a file symlink;
+            // the directory-in-place and junction cases still exercise the same checks here.
+            eprintln!("skipping: this host cannot create file symlinks");
+            return;
+        }
+        let state = refreshed(&fixture.profiles, ACCOUNT_ID);
+        assert_eq!(state.auth, AuthState::Authenticated);
+        assert_eq!(
+            state.identity, None,
+            "a linked accounts file is never followed"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn identity_never_follows_a_junctioned_gemini_directory() {
+        let fixture = fixture("unused");
+        let outside = fixture._temp.path().join("outside-gemini");
+        std::fs::create_dir_all(&outside).expect("outside");
+        std::fs::write(outside.join(ENCRYPTED_CREDENTIALS_FILE), b"opaque").expect("store");
+        std::fs::write(
+            outside.join(GOOGLE_ACCOUNTS_FILE),
+            br#"{"active":"outside@example.com"}"#,
+        )
+        .expect("accounts");
+        let home = fixture
+            .profiles
+            .profile_home("gemini-cli", ACCOUNT_ID)
+            .expect("home");
+        std::fs::create_dir_all(&home).expect("home dir");
+        let junction = home.join(GEMINI_DIR);
+        let created = std::process::Command::new("cmd")
+            .arg("/C")
+            .arg("mklink")
+            .arg("/J")
+            .arg(&junction)
+            .arg(&outside)
+            .output()
+            .expect("mklink");
+        assert!(created.status.success(), "junction");
+        assert_eq!(reported_identity(&fixture.profiles, ACCOUNT_ID), None);
+        assert!(
+            account_state(&fixture.profiles, ACCOUNT_ID).is_err(),
+            "a junctioned profile directory fails closed"
+        );
+        std::fs::remove_dir(&junction).expect("remove junction");
+    }
+
+    #[test]
+    fn sign_out_clears_the_identity() {
+        let fixture = fixture("unused");
+        signed_in(
+            &fixture.profiles,
+            ACCOUNT_ID,
+            Some(br#"{"active":"person@example.com"}"#),
+        );
+        assert!(refreshed(&fixture.profiles, ACCOUNT_ID).identity.is_some());
+        let lease = fixture
+            .profiles
+            .acquire_sign_in_lease("gemini-cli", ACCOUNT_ID)
+            .expect("lease");
+        let observed = Arc::new(Mutex::new(None));
+        let record = Arc::clone(&observed);
+        let state =
+            logout_with_lease_observed(&fixture.profiles, ACCOUNT_ID, lease, move |result| {
+                *lock(&record) = Some(result.clone());
+                Ok(())
+            })
+            .expect("signed out");
+        assert_eq!(state.auth, AuthState::NotAuthenticated);
+        assert_eq!(state.identity, None);
+        assert_eq!(
+            lock(&observed).clone(),
+            Some(Ok(GeminiAccountState {
+                auth: AuthState::NotAuthenticated,
+                identity: None,
+            })),
+            "the recorded sign-out carries no identity"
+        );
+        assert_eq!(refreshed(&fixture.profiles, ACCOUNT_ID).identity, None);
+    }
+
+    #[test]
+    fn each_account_reports_only_its_own_identity() {
+        let fixture = fixture("unused");
+        signed_in(
+            &fixture.profiles,
+            ACCOUNT_ID,
+            Some(br#"{"active":"first@example.com"}"#),
+        );
+        signed_in(
+            &fixture.profiles,
+            OTHER_ACCOUNT_ID,
+            Some(br#"{"active":"second@example.com"}"#),
+        );
+        assert_eq!(
+            refreshed(&fixture.profiles, ACCOUNT_ID).identity.as_deref(),
+            Some("first@example.com")
+        );
+        assert_eq!(
+            refreshed(&fixture.profiles, OTHER_ACCOUNT_ID)
+                .identity
+                .as_deref(),
+            Some("second@example.com")
+        );
+        std::fs::remove_file(
+            credentials(&fixture.profiles, OTHER_ACCOUNT_ID).join(GOOGLE_ACCOUNTS_FILE),
+        )
+        .expect("remove");
+        assert_eq!(
+            refreshed(&fixture.profiles, OTHER_ACCOUNT_ID).identity,
+            None,
+            "one account's identity never fills in for another"
+        );
+        assert_eq!(
+            refreshed(&fixture.profiles, ACCOUNT_ID).identity.as_deref(),
+            Some("first@example.com")
+        );
+    }
+
+    #[test]
+    fn identity_is_redacted_from_debug_output() {
+        let state = GeminiAccountState {
+            auth: AuthState::Authenticated,
+            identity: Some("person@example.com".into()),
+        };
+        let debug = format!(
+            "{state:?} {:?}",
+            Ok::<_, GeminiAccountAuthError>(state.clone())
+        );
+        assert!(!debug.contains("person"), "{debug}");
+        assert!(!debug.contains("example.com"), "{debug}");
+    }
+
     #[test]
     fn fake_gemini_cli() {
         let Ok(operation) = std::env::var("GEMINI_AUTH_TEST_OPERATION") else {
@@ -1085,6 +1533,11 @@ mod tests {
                 // Gemini's encrypted FileKeychain; the fake never writes a plaintext cache.
                 std::fs::write(directory.join(ENCRYPTED_CREDENTIALS_FILE), b"opaque")
                     .expect("encrypted store");
+                std::fs::write(
+                    directory.join(GOOGLE_ACCOUNTS_FILE),
+                    br#"{"active":"signed.in@example.com","old":["previous@example.com"]}"#,
+                )
+                .expect("google accounts");
             }
             Ok("login_declined") => {}
             Ok("login_hang") => std::thread::sleep(Duration::from_secs(60)),

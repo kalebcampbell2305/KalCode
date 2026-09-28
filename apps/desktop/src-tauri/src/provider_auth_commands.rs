@@ -578,13 +578,15 @@ impl ProviderRuntimeAuthority {
         account_id: &str,
         result: &Result<GeminiAccountState, GeminiAccountAuthError>,
     ) -> Result<(), GeminiAccountAuthError> {
-        let (state, error_code) = match result {
-            Ok(state) => (state.auth, None),
-            Err(_) => (AuthState::Unknown, Some("gemini_auth_failed")),
+        // The identity is Gemini's `active` Google account (display only, never logged); it is
+        // present only for a signed-in profile, so sign-out and failures clear it.
+        let (state, identity, error_code) = match result {
+            Ok(state) => (state.auth, state.identity.as_deref(), None),
+            Err(_) => (AuthState::Unknown, None, Some("gemini_auth_failed")),
         };
         self.inner
             .accounts
-            .mark_authentication(account_id, state, None, error_code)
+            .mark_authentication(account_id, state, identity, error_code)
             .map(|_| ())
             .map_err(|_| GeminiAccountAuthError::StateUpdateFailed)
     }
@@ -2067,6 +2069,67 @@ mod tests {
                 .join("gemini-credentials.json")
                 .exists(),
             "another account's sign-in is untouched"
+        );
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn gemini_identity_is_recorded_per_account_and_cleared_on_sign_out() {
+        let fixture = Fixture::new();
+        let store = fixture.runtime.account_store();
+        let personal = store
+            .create(ProviderId::GEMINI_CLI, "Personal")
+            .expect("gemini account");
+        let work = store
+            .create(ProviderId::GEMINI_CLI, "Work")
+            .expect("second gemini account");
+        for (account, email) in [
+            (&personal, "personal@example.com"),
+            (&work, "work@example.com"),
+        ] {
+            let directory = gemini_credentials(&fixture.runtime, &account.id);
+            std::fs::create_dir_all(&directory).expect("gemini dir");
+            std::fs::write(directory.join("gemini-credentials.json"), b"opaque").expect("sign-in");
+            std::fs::write(
+                directory.join("google_accounts.json"),
+                format!(r#"{{"active":"{email}","old":["former@example.com"]}}"#),
+            )
+            .expect("google accounts");
+        }
+
+        let refreshed = fixture
+            .runtime
+            .refresh_gemini_account(&personal.id)
+            .expect("refresh");
+        assert_eq!(refreshed.authentication_state, AuthState::Authenticated);
+        assert_eq!(
+            refreshed.provider_reported_identity.as_deref(),
+            Some("personal@example.com")
+        );
+        assert_eq!(
+            fixture
+                .runtime
+                .refresh_gemini_account(&work.id)
+                .expect("refresh other")
+                .provider_reported_identity
+                .as_deref(),
+            Some("work@example.com"),
+            "each account reports only its own Google account"
+        );
+
+        let signed_out = fixture
+            .runtime
+            .logout_gemini(&personal.id)
+            .expect("sign out");
+        assert_eq!(signed_out.authentication_state, AuthState::NotAuthenticated);
+        assert_eq!(signed_out.provider_reported_identity, None);
+        assert_eq!(
+            store
+                .get(&work.id)
+                .expect("work")
+                .provider_reported_identity
+                .as_deref(),
+            Some("work@example.com")
         );
     }
 

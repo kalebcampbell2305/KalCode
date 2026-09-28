@@ -519,7 +519,18 @@ keychain (one per-user service/account that every KalCode profile would share). 
 legacy plaintext `oauth_creds.json` into that store and deletes it on the account's next launch.
 The key is Gemini's own (derived from host and user names): it keeps credentials out of plaintext,
 not away from other processes of the same OS user. KalCode checks **existence only**:
-`gemini-credentials.json` → signed in, otherwise signed out (a plaintext file never counts). A
+`gemini-credentials.json` → signed in, otherwise signed out (a plaintext file never counts); it
+never opens, reads, copies or stores any credential file. **One display-only exception** (release-lead
+security sign-off): for a signed-in account, KalCode reads only the `active` field of
+`<GEMINI_CLI_HOME>/.gemini/google_accounts.json` inside that account's own managed profile and shows
+it as the account's provider-reported identity (as Claude Code's `auth status --json` email and
+Codex's `account/read` email are). The file must be an ordinary file (no symlink, junction or reparse
+point, checked before and after opening) of at most 16 KiB that parses as JSON with an `active`
+string that looks like an email (at most 320 characters, printable ASCII, one `@`, dotted domain);
+a missing, oversized, linked or invalid file yields no identity (the account label only). `old` is
+never kept or exposed, no other file is opened, and the identity is never logged. It is refreshed
+whenever the account's Gemini status is (after sign-in, and on Refresh, including after a restart)
+and cleared on sign-out or a failed check. A
 managed thread for a signed-out account refuses before any turn starts (`provider_not_authenticated`:
 "Sign in to this Gemini CLI account in Providers"), and headless turns set `NO_BROWSER=true` so an
 expired sign-in ends with Gemini's own exit 41 (reported the same way) instead of reading the prompt
