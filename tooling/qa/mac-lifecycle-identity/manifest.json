@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 1,
+  "status": "proposed-verifier-helper-not-staged",
+  "toolBaseCommit": "60a17a80dd98ff9766494256d2438d8579094d19",
+  "appliesCleanlyOn": "60a17a80dd98ff9766494256d2438d8579094d19",
+  "profile": "/Users/kalcodeqa2",
+  "user": "kalcodeqa2",
+  "installedApp": "/Users/kalcodeqa2/Applications/KalCode.app",
+  "appDataRoot": "/Users/kalcodeqa2/Library/Application Support/com.kalcode.desktop",
+  "journal": "<appDataRoot>/updates/updater.json",
+  "rollbackReceipt": "<appDataRoot>/updates/rollback/rollback-receipt.json (+ previous-<sha256>.bin)",
+  "derivedFrom": "Structure of tooling/release/qa/windows-lifecycle-identity (16a3da6); handler semantics of reviewed mac-prep scheme-binding query; guards of mac-prep qa-mac-common.sh",
+  "complementsNotReplaces": "Generic helpers-305a917c36fc/collect-installed-mac-identity.sh remains the DMG-mount/full-bundle-diff artifact binding; this packet adds journal, rollback retention, handler/singleton and bundle-tree digest per lifecycle checkpoint",
+  "baselinePin": {
+    "version": "0.1.4",
+    "commit": "0ee34938d6543bba3679cb008174231d0e9544ec",
+    "dmgSha256": "918646e4b26f39463a6bd841c2f705ed7a18b42ec271668932a97b7d65c8c987",
+    "executableSha256": "7dd8a8225967d43c5fe925061ac536db8a56dee9fef1daa1b2a14a1e21e6265a",
+    "compiledStableEndpoint": "https://kalcoded.com/releases/updater/stable/0.1.5.json"
+  },
+  "candidatePin": {
+    "file": "candidate-pin.json beside the collector, written by Primary from the B-prime build records; SHA-256 recorded in every receipt",
+    "template": "candidate-pin.template.json",
+    "keys": [
+      "schemaVersion",
+      "role",
+      "version",
+      "commit",
+      "dmgSha256",
+      "executableSha256",
+      "bundleTreeSha256"
+    ],
+    "versionMustEqual": "0.1.5 (retained baseline's compiled Stable endpoint)",
+    "bundleTreeSha256": "required (non-null); --digest-bundle of the mounted certified candidate DMG app",
+    "mustDifferFromBaseline": [
+      "dmgSha256",
+      "executableSha256",
+      "bundleTreeSha256 when the baseline tree is pinned"
+    ],
+    "schemaVersionType": "integer 1 (JSON true rejected)",
+    "hardcodedCandidateValues": "none"
+  },
+  "files": [
+    {
+      "file": "COLLECT-BASELINE-IDENTITY.command",
+      "bytes": 736,
+      "sha256": "048d8f45bd122d9fc2f77c0c125eb55a092707d26ba7cfeb59445738c14659d2"
+    },
+    {
+      "file": "COLLECT-CANDIDATE-IDENTITY.command",
+      "bytes": 731,
+      "sha256": "3202e6e985429f33dc837232b5171dcd7842eae0e75764e6e32fc856204f12c0"
+    },
+    {
+      "file": "candidate-pin.template.json",
+      "bytes": 326,
+      "sha256": "063efef081a516c7b3a9a0597be089c7e7bf03cec6b3baddaeca2370cc8698bb"
+    },
+    {
+      "file": "collect_lifecycle_identity.py",
+      "bytes": 35818,
+      "sha256": "afdb6e86b4b270cccbcc7c402ea7c2d6f55706496ff0d78a67d03e3218a84e3e"
+    },
+    {
+      "file": "collector_test.py",
+      "bytes": 28721,
+      "sha256": "5cf7d592dfd4f138b72af318cdf69a176aef3091fc3df088d232a07a069fefc0"
+    }
+  ],
+  "baselineCommand": "COLLECT-BASELINE-IDENTITY.command (checkpoints B0, rollback)",
+  "candidateCommand": "COLLECT-CANDIDATE-IDENTITY.command (checkpoints update, reupdate)",
+  "bundleDigestCommand": "/usr/bin/python3 -I -B collect_lifecycle_identity.py --digest-bundle /Volumes/<mounted B-prime DMG>/KalCode.app",
+  "receiptLocation": "Unique lifecycle-identity-kalcodeqa2-<step>-<version>-<UTC>-<uuid32>.json beside the collector (O_EXCL, no linked ancestors); directory must be writable by kalcodeqa2",
+  "testCommand": "python -B tooling/qa/mac-lifecycle-identity/collector_test.py",
+  "validation": {
+    "hosts": [
+      "Windows 11, Python 3.14 (fake-home fixtures; OS boundaries mocked)",
+      "macOS 27.0 /usr/bin/python3 3.9.6 -I -B (same fixtures, native symlink semantics)"
+    ],
+    "fixtureTests": 35,
+    "fixtureStatus": "PASS",
+    "realProfileCollected": false,
+    "productExecuted": false
+  },
+  "limitations": [
+    "Fixtures run natively on macOS, but codesign/spctl/lipo parsing and the JXA NSWorkspace handler query are fixture-verified only. If handler.queryOk is false, Primary uses the reviewed helpers-826cab4acee7/scheme-binding query kalcode instead; never 'set'.",
+    "Requires Apple Command Line Tools for /usr/bin/python3 (wrappers stop before the install prompt if absent).",
+    "Executes the installed binary only as '<app>/Contents/MacOS/kalcode --build-info' (answered in main.rs before Tauri starts). Verified in main.rs at 0ee34938, f81d3eb7 and 60a17a80 (main.rs byte-identical across all three); re-verify for any later candidate source.",
+    "Path/symlink guards are point-in-time; Primary allocates an exclusive QA2 window. Receipts are observations, not lifecycle PASS; Primary correlates them with visible UI transitions and the durable stage receipt.",
+    "No integration into application B, T or N is implied; Primary selects helper authority and stages exact bytes."
+  ],
+  "reviewedSource": {
+    "commit": "ce1e9ab432240f028bf22480161b046c275477f6",
+    "branch": "deputy/lifecycle-readiness-20260928",
+    "unchangedBytes": [
+      "COLLECT-BASELINE-IDENTITY.command",
+      "COLLECT-CANDIDATE-IDENTITY.command",
+      "candidate-pin.template.json",
+      "collect_lifecycle_identity.py"
+    ],
+    "changed": {
+      "collector_test.py": "fixture temp roots canonicalized with os.path.realpath so the collector's linked-path guards pass on macOS (/var -> /private/var); no collector change"
+    }
+  }
+}
