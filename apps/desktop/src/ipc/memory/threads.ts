@@ -16,6 +16,7 @@ import type {
   EventSource,
   IpcError,
   PermissionMode,
+  ProviderAccount,
   ProviderOption,
   ThreadMessage,
   ThreadOptions,
@@ -262,7 +263,12 @@ export function createThreadsMemory(
   /** The permission gate (Z4). Without it, a waiting thread can only be interrupted or stopped. */
   gate: ThreadsGate | null = null,
   /** Public active account metadata; ui-test wiring uses the managed account fixture store. */
-  accountFor: ((accountId: string, providerId: string) => { displayName: string }) | null = null,
+  accountFor:
+    | ((
+        accountId: string,
+        providerId: string,
+      ) => { displayName: string; authenticationState?: ProviderAccount["authenticationState"] })
+    | null = null,
 ): ThreadsMemory {
   const threads = new Map<string, MemThread>();
   const streams = new Map<string, Set<(event: AgentEvent) => void>>();
@@ -931,6 +937,49 @@ export function createThreadsMemory(
       t.archived = true;
       t.summary = { ...t.summary, archivedAt: now() };
       emit({ type: "thread.archived", payload: { threadId: t.summary.id } }, corr(t), "ui");
+      return summary(t);
+    },
+    // Like native `thread_rebind_account`: future provider requests use the new account, past
+    // messages stay, and the account-scoped resume id is cleared so the next start is fresh.
+    thread_rebind_account: (args) => {
+      const t = get(args);
+      if (t.archived) invalid("thread_archived", "This thread is archived.");
+      const accountId = typeof args.providerAccountId === "string" ? args.providerAccountId : "";
+      if (!UUID.test(accountId)) invalid("provider_account_id_invalid", "That account or binding id isn't valid.");
+      if (
+        t.summary.status === "starting" ||
+        LIVE.has(t.summary.status) ||
+        t.summary.status === "waiting_for_permission" ||
+        t.summary.pendingApprovals > 0
+      ) {
+        invalid("thread_rebind_busy", "Wait for the current turn to finish or stop the thread first.");
+      }
+      if (accountFor === null) {
+        return error(
+          "internal",
+          "thread_rebind_unavailable",
+          "Switching a thread's provider account isn't available in this build yet.",
+        );
+      }
+      const target = accountFor(accountId, t.summary.providerId);
+      if (target.authenticationState === "not_authenticated") {
+        return error(
+          "provider",
+          "provider_account_not_authenticated",
+          `${target.displayName} isn't signed in. Sign in to ${target.displayName} in Providers, then switch.`,
+        );
+      }
+      if (t.summary.providerAccountId === accountId) return summary(t);
+      t.providerSessionId = null;
+      t.summary = { ...t.summary, providerAccountId: accountId, accountLabel: target.displayName };
+      emit(
+        {
+          type: "thread.account_changed",
+          payload: { threadId: t.summary.id, providerAccountId: accountId, accountLabel: target.displayName },
+        },
+        corr(t),
+        "ui",
+      );
       return summary(t);
     },
     thread_stream: () => error("internal", "use_stream_thread", "Use streamThread()."),

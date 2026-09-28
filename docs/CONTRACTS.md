@@ -153,6 +153,8 @@ with their own SQL.
 | `thread_interrupt` / `thread_stop` | Z3 | `{ threadId }` | `ThreadSummary` |
 | `thread_rename` | Z3 | `{ threadId, name }` | `ThreadSummary` |
 | `thread_archive` | Z3 | `{ threadId }` | `ThreadSummary` |
+| `thread_rebind_account` | 0.1.5 | `{ threadId, providerAccountId }` (only after the person confirms the Rebind dialog; same provider, signed-in account, thread not busy) | `ThreadSummary` — future provider requests use the new account, past messages are unchanged, the account-scoped resume id is cleared; records `thread.account_changed { threadId, providerAccountId, accountLabel }` |
+| `provider_account_bindings_list` | 0.1.5 | `{ providerId?, kind?: ProviderAccountBindingKind, scopeId? }` | `ProviderAccountBinding[]` (bindings of active accounts only; ordered by provider, kind, scope) |
 | `thread_stream` | Z3 | `{ threadId }` + channel | `AgentEvent` stream (message deltas; live only) |
 | `approval_list` | Z4 | `{ status?: "pending" \| "approved" \| "denied" \| "expired" }` | `ApprovalView[]` (= `ApprovalRequest`, which carries `allowedDecisions`, `grantCoverage`, `context`, `createdAt`, `expireReason` since CA-1) |
 | `approval_decide` | Z4 | `{ requestId, decision: ApprovalDecision }` | `ApprovalView` |

@@ -8,4 +8,9 @@ export type TalkRequest = {
 /**
  * Client-generated UUID for the request, if it becomes one.
  */
-requestId: string, sessionId: string, text: string, target: TalkTarget, durationMs: number, workspaceId: string | null, };
+requestId: string, sessionId: string, text: string, target: TalkTarget, durationMs: number, workspaceId: string | null,
+/**
+ * The thread the user is looking at, if any ("switch this thread to …"). Missing on the
+ * wire decodes as `None`.
+ */
+threadId: string | null, };

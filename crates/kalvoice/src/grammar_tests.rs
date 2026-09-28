@@ -42,6 +42,7 @@ fn create(provider: &str, count: u8) -> KalVoiceIntent {
         provider_id: ProviderId::new(provider),
         count,
         workspace_id: None,
+        account_query: None,
     }
 }
 
@@ -326,7 +327,8 @@ fn threads_in_a_named_workspace() {
         KalVoiceIntent::CreateThreads {
             provider_id: ProviderId::new(ProviderId::CLAUDE_CODE),
             count: 2,
-            workspace_id: Some("ws-1".into())
+            workspace_id: Some("ws-1".into()),
+            account_query: None,
         }
     );
 }

@@ -144,6 +144,7 @@ fn exhausted_account_does_not_charge_or_execute_but_dictation_is_unlimited() {
                     target,
                     duration_ms: 400,
                     workspace_id: None,
+                    thread_id: None,
                 },
                 &|_| {},
             )
@@ -427,6 +428,7 @@ fn request(text: &str) -> CommandRequest {
         text: text.into(),
         input: KalVoiceInput::Text,
         workspace_id: None,
+        thread_id: None,
     }
 }
 
@@ -500,6 +502,7 @@ fn talk(text: &str, target: TalkTarget) -> TalkRequest {
         target,
         duration_ms: 1200,
         workspace_id: None,
+        thread_id: None,
     }
 }
 
@@ -1478,6 +1481,7 @@ fn invalid_local_action_fields_are_rejected_before_execution() {
             provider_id: ProviderId::new("../../powershell"),
             count: u8::MAX,
             workspace_id: None,
+            account_query: None,
         },
     ))));
     let h = harness_with_interpreter(
@@ -1838,6 +1842,7 @@ fn required_push_to_talk_commands_run_without_the_local_interpreter() {
         provider_id: ProviderId::new(ProviderId::CODEX),
         count: 4,
         workspace_id: None,
+        account_query: None,
     };
     let cases = [
         ("Open settings", &settings),
@@ -1972,7 +1977,8 @@ fn named_targets_resolve_or_fail_uncounted() {
         KalVoiceIntent::CreateThreads {
             provider_id: ProviderId::new(ProviderId::CLAUDE_CODE),
             count: 2,
-            workspace_id: Some("0192f3c4-0000-7000-8000-00000000000a".into())
+            workspace_id: Some("0192f3c4-0000-7000-8000-00000000000a".into()),
+            account_query: None,
         }
     );
     let missing = h
@@ -2044,6 +2050,12 @@ fn invalid_requests_are_refused() {
     assert_eq!(
         h.orchestrator.handle(ws).expect_err("ws").code,
         "invalid_workspace"
+    );
+    let mut thread = request("status");
+    thread.thread_id = Some("../x".into());
+    assert_eq!(
+        h.orchestrator.handle(thread).expect_err("thread").code,
+        "invalid_thread"
     );
     let empty = h.orchestrator.handle(request("   ")).expect("empty");
     assert!(

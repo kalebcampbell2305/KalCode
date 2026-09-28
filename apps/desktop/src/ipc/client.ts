@@ -411,6 +411,20 @@ export class KalCodeClient {
     return this.call("provider_account_unbind", { providerId, kind, scopeId });
   }
 
+  /**
+   * Scoped account bindings (for example each workspace's default account). Every filter is
+   * optional; bindings of archived accounts are never listed.
+   */
+  listProviderAccountBindings(
+    filter: { providerId?: string; kind?: ProviderAccountBindingKind; scopeId?: string } = {},
+  ): Promise<ProviderAccountBinding[]> {
+    return this.call("provider_account_bindings_list", {
+      providerId: filter.providerId ?? null,
+      kind: filter.kind ?? null,
+      scopeId: filter.scopeId ?? null,
+    });
+  }
+
   refreshCodexAccount(accountId: string): Promise<ProviderAccount> {
     return this.call("provider_codex_account_refresh", { accountId });
   }
@@ -592,6 +606,14 @@ export class KalCodeClient {
 
   stopThread(threadId: string): Promise<ThreadSummary> {
     return this.call("thread_stop", { threadId });
+  }
+
+  /**
+   * Explicitly rebinds a thread to another account of the same provider (the person confirmed
+   * the Rebind dialog). Future provider requests use the new account; past history is unchanged.
+   */
+  rebindThreadAccount(threadId: string, providerAccountId: string): Promise<ThreadSummary> {
+    return this.call("thread_rebind_account", { threadId, providerAccountId });
   }
 
   renameThread(threadId: string, name: string): Promise<ThreadSummary> {

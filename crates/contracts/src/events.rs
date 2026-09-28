@@ -283,6 +283,15 @@ pub enum EventPayload {
     },
     #[serde(rename = "thread.archived")]
     ThreadArchived { thread_id: String },
+    /// A thread was explicitly rebound to another provider account. Only future provider
+    /// requests use the new account; past messages are unchanged. Carries the owner-visible
+    /// account label snapshot, never provider identity or credentials.
+    #[serde(rename = "thread.account_changed")]
+    ThreadAccountChanged {
+        thread_id: String,
+        provider_account_id: String,
+        account_label: Option<String>,
+    },
     /// A message was added to a thread. Content is stored with the thread, not in the event.
     #[serde(rename = "agent.message")]
     AgentMessage {
@@ -628,6 +637,7 @@ impl EventPayload {
             Self::ThreadCompleted { .. } => "thread.completed",
             Self::ThreadFailed { .. } => "thread.failed",
             Self::ThreadArchived { .. } => "thread.archived",
+            Self::ThreadAccountChanged { .. } => "thread.account_changed",
             Self::AgentMessage { .. } => "agent.message",
             Self::ToolRequested { .. } => "tool.requested",
             Self::ToolStarted { .. } => "tool.started",
@@ -843,6 +853,11 @@ mod tests {
                 message: s(),
             },
             EventPayload::ThreadArchived { thread_id: s() },
+            EventPayload::ThreadAccountChanged {
+                thread_id: s(),
+                provider_account_id: s(),
+                account_label: Some(s()),
+            },
             EventPayload::AgentMessage {
                 thread_id: s(),
                 message_id: s(),
@@ -1113,7 +1128,7 @@ mod tests {
         }
         // Keep in step with the enum: the `type_name` match is exhaustive, so a new variant
         // compiles only once named there — and this count must be raised with a new sample.
-        assert_eq!(samples.len(), 78);
+        assert_eq!(samples.len(), 79);
     }
 
     #[test]
@@ -1167,6 +1182,20 @@ mod tests {
         .expect("serialize");
         assert_eq!(json["payload"]["closedByUser"], true);
         assert_eq!(json["payload"]["terminalId"], "t");
+    }
+
+    #[test]
+    fn thread_account_changed_uses_the_stable_wire_shape() {
+        let json = serde_json::to_value(EventPayload::ThreadAccountChanged {
+            thread_id: "thr".into(),
+            provider_account_id: "pa".into(),
+            account_label: Some("Gemini B".into()),
+        })
+        .expect("serialize");
+        assert_eq!(json["type"], "thread.account_changed");
+        assert_eq!(json["payload"]["threadId"], "thr");
+        assert_eq!(json["payload"]["providerAccountId"], "pa");
+        assert_eq!(json["payload"]["accountLabel"], "Gemini B");
     }
 
     #[test]

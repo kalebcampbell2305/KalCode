@@ -12,4 +12,9 @@ requestId: string, text: string, input: KalVoiceInput,
 /**
  * The workspace the user is looking at, if any.
  */
-workspaceId: string | null, };
+workspaceId: string | null,
+/**
+ * The thread the user is looking at, if any ("switch this thread to …"). Missing on the
+ * wire decodes as `None`.
+ */
+threadId: string | null, };

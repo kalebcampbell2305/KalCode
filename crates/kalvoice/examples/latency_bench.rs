@@ -242,6 +242,7 @@ fn main() {
                         target: TalkTarget::None,
                         duration_ms: (secs * 1000.0) as u64,
                         workspace_id: None,
+                        thread_id: None,
                     },
                     &|_| {},
                 )

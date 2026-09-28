@@ -8,6 +8,7 @@ function request(text: string): CommandRequest {
     text,
     input: "voice",
     workspaceId: "0192f3c4-0000-7000-8000-00000000000a",
+    threadId: null,
   };
 }
 

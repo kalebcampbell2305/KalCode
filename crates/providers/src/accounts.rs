@@ -354,6 +354,59 @@ impl AccountStore {
         Ok(removed)
     }
 
+    /// Lists scoped bindings whose account is still active, optionally narrowed by provider,
+    /// kind and scope. Ordered by provider, kind, scope for stable display. Metadata only: this
+    /// never resolves defaults and never touches provider profiles.
+    pub fn list_bindings(
+        &self,
+        provider: Option<&str>,
+        kind: Option<ProviderAccountBindingKind>,
+        scope_id: Option<&str>,
+    ) -> Result<Vec<ProviderAccountBinding>> {
+        let provider = provider.map(checked_provider).transpose()?;
+        if let Some(scope_id) = scope_id {
+            check_id(scope_id)?;
+        }
+        let rows: Vec<(String, String, String, String)> = self.core.read(|conn| {
+            let mut statement = conn.prepare(
+                "SELECT b.provider_id, b.kind, b.scope_id, b.account_id
+                 FROM provider_account_bindings b
+                 JOIN provider_accounts a
+                   ON a.id = b.account_id AND a.provider_id = b.provider_id
+                 WHERE a.archived_at IS NULL
+                   AND (?1 IS NULL OR b.provider_id = ?1)
+                   AND (?2 IS NULL OR b.kind = ?2)
+                   AND (?3 IS NULL OR b.scope_id = ?3)
+                 ORDER BY b.provider_id, b.kind, b.scope_id",
+            )?;
+            let rows = statement.query_map(
+                params![
+                    provider.as_ref().map(ProviderId::as_str),
+                    kind.map(ProviderAccountBindingKind::as_str),
+                    scope_id
+                ],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )?;
+            Ok(rows.collect::<std::result::Result<_, _>>()?)
+        })?;
+        rows.into_iter()
+            .map(|(provider_id, kind, scope_id, account_id)| {
+                let kind = ProviderAccountBindingKind::parse(&kind).ok_or_else(|| {
+                    provider_error(
+                        "provider_account_binding_invalid",
+                        "A stored account binding has an unknown scope.",
+                    )
+                })?;
+                Ok(ProviderAccountBinding {
+                    provider_id: ProviderId::new(provider_id),
+                    kind,
+                    scope_id,
+                    account_id,
+                })
+            })
+            .collect()
+    }
+
     /// Resolves the first active owner-backed binding in this fixed order: thread, workspace,
     /// provider default. Unsupported polymorphic scopes fail closed until they have canonical
     /// owner stores. A missing scope or corrupt dangling/archived binding is an error rather than
@@ -950,6 +1003,70 @@ mod tests {
             Some(&selected.id)
         );
         assert_eq!(fixture.store.list(None).expect("all providers").len(), 4);
+    }
+
+    #[test]
+    fn list_bindings_filters_by_provider_kind_and_scope() {
+        let fixture = Fixture::new();
+        let codex = fixture.store.create("codex", "Work").expect("codex");
+        let gemini = fixture
+            .store
+            .create("gemini-cli", "Gemini A")
+            .expect("gemini");
+        let first = kalcode_contracts::ids::new_id();
+        let second = kalcode_contracts::ids::new_id();
+        insert_workspace(&fixture, &first);
+        insert_workspace(&fixture, &second);
+        fixture
+            .store
+            .bind("codex", Kind::Workspace, &first, &codex.id)
+            .expect("codex binding");
+        fixture
+            .store
+            .bind("gemini-cli", Kind::Workspace, &first, &gemini.id)
+            .expect("gemini first");
+        fixture
+            .store
+            .bind("gemini-cli", Kind::Workspace, &second, &gemini.id)
+            .expect("gemini second");
+
+        let all = fixture.store.list_bindings(None, None, None).expect("all");
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].provider_id.as_str(), "codex");
+        let gemini_only = fixture
+            .store
+            .list_bindings(Some("gemini-cli"), Some(Kind::Workspace), None)
+            .expect("gemini");
+        assert_eq!(gemini_only.len(), 2);
+        assert!(gemini_only.iter().all(|b| b.account_id == gemini.id));
+        let scoped = fixture
+            .store
+            .list_bindings(None, Some(Kind::Workspace), Some(&first))
+            .expect("scoped");
+        assert_eq!(scoped.len(), 2);
+        assert!(
+            fixture
+                .store
+                .list_bindings(None, Some(Kind::Thread), None)
+                .expect("threads")
+                .is_empty()
+        );
+        assert_eq!(
+            fixture
+                .store
+                .list_bindings(Some("unknown"), None, None)
+                .expect_err("provider")
+                .code,
+            "provider_account_provider_invalid"
+        );
+        assert_eq!(
+            fixture
+                .store
+                .list_bindings(None, None, Some("../x"))
+                .expect_err("scope")
+                .code,
+            "provider_account_id_invalid"
+        );
     }
 
     #[test]

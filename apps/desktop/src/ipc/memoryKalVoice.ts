@@ -744,6 +744,7 @@ export function createMemoryKalVoice(emit: Emit, scenario: string, transcriptOve
       text: request.text,
       input: "voice",
       workspaceId: request.workspaceId,
+      threadId: request.threadId ?? null,
     });
     return { route: which, response, recognizedMs };
   };

@@ -231,10 +231,12 @@ pub(crate) fn validate_action(
             provider_id,
             count,
             workspace_id,
+            account_query,
         } => {
             valid_provider(provider_id)
                 && (1..=MAX_THREADS_PER_REQUEST).contains(&u32::from(*count))
                 && valid_workspace_id(workspace_id, workspaces)
+                && valid_optional_text(account_query)
         }
         KalVoiceIntent::CreateProviderPanes {
             groups,
@@ -258,6 +260,26 @@ pub(crate) fn validate_action(
         KalVoiceIntent::SwitchProvider { provider_id } => valid_provider(provider_id),
         KalVoiceIntent::RequestPermissionMode { thread_query, .. } => {
             valid_optional_text(thread_query)
+        }
+        // Account switches only resolve names; a rebind still needs the person's confirmation
+        // in KalCode's own dialog, and a workspace default is metadata that never signs in.
+        KalVoiceIntent::RebindThreadAccount {
+            thread_query,
+            provider_id,
+            account_query,
+        } => {
+            valid_optional_text(thread_query)
+                && provider_id.as_ref().is_none_or(valid_provider)
+                && valid_text(account_query)
+        }
+        KalVoiceIntent::SetWorkspaceAccount {
+            provider_id,
+            account_query,
+            workspace_id,
+        } => {
+            valid_provider(provider_id)
+                && valid_text(account_query)
+                && valid_workspace_id(workspace_id, workspaces)
         }
     };
     if valid {

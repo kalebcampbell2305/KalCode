@@ -551,12 +551,13 @@ impl Executor for DesktopExecutor {
                 provider_id,
                 count,
                 workspace_id,
+                account_query,
             } => self
                 .prepare_provider_panes(
                     &[ProviderPaneRequest {
                         provider_id: Some(provider_id.clone()),
                         count: *count,
-                        account_query: None,
+                        account_query: account_query.clone(),
                         model: None,
                     }],
                     workspace_id.as_deref(),
@@ -595,6 +596,9 @@ impl Executor for DesktopExecutor {
                 "not_in_this_build",
                 "Provider switching isn't in this build yet, so KalVoice can't do that.",
             )),
+            // Phase 0 contract only; the switch-accounts executor lane replaces these refusals.
+            KalVoiceIntent::RebindThreadAccount { .. }
+            | KalVoiceIntent::SetWorkspaceAccount { .. } => Err(account_switch_unavailable()),
             KalVoiceIntent::ShowApprovals if self.permissions.is_none() => Err(ExecError::new(
                 "approvals_unavailable",
                 "KalCode's permission engine isn't running, so there's nothing KalVoice can show.",
@@ -659,11 +663,12 @@ impl Executor for DesktopExecutor {
                 provider_id,
                 count,
                 workspace_id,
+                account_query,
             } => self.create_provider_panes(
                 &[ProviderPaneRequest {
                     provider_id: Some(provider_id.clone()),
                     count: *count,
-                    account_query: None,
+                    account_query: account_query.clone(),
                     model: None,
                 }],
                 workspace_id.as_deref(),
@@ -829,8 +834,17 @@ impl Executor for DesktopExecutor {
                 "not_in_this_build",
                 "Provider switching isn't in this build yet, so KalVoice can't do that.",
             )),
+            KalVoiceIntent::RebindThreadAccount { .. }
+            | KalVoiceIntent::SetWorkspaceAccount { .. } => Err(account_switch_unavailable()),
         }
     }
+}
+
+fn account_switch_unavailable() -> ExecError {
+    ExecError::new(
+        "not_in_this_build",
+        "Switching provider accounts by voice isn't in this build yet, so KalVoice can't do that.",
+    )
 }
 
 fn browser_summary(command: &BrowserControl) -> String {
@@ -981,6 +995,7 @@ mod tests {
         ExecContext {
             request_id: String::new(),
             workspace_id: None,
+            thread_id: None,
             providers: Vec::new(),
         }
     }

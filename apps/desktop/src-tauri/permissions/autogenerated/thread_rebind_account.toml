@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-thread-rebind-account"
+description = "Enables the thread_rebind_account command without any pre-configured scope."
+commands.allow = ["thread_rebind_account"]
+
+[[permission]]
+identifier = "deny-thread-rebind-account"
+description = "Denies the thread_rebind_account command without any pre-configured scope."
+commands.deny = ["thread_rebind_account"]

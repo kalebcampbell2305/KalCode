@@ -158,6 +158,22 @@ pub fn provider_account_bind(
         .map_err(|error| error.log_and_convert("provider_account_bind"))
 }
 
+/// Lists scoped account bindings (for example each workspace's default account), optionally
+/// narrowed by provider, kind and scope. Bindings of archived accounts are never listed.
+#[tauri::command(async)]
+pub fn provider_account_bindings_list(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    state: State<'_, AppState>,
+    provider_id: Option<String>,
+    kind: Option<ProviderAccountBindingKind>,
+    scope_id: Option<String>,
+) -> Result<Vec<ProviderAccountBinding>, IpcError> {
+    _runtime_access.revalidate()?;
+    AccountStore::new(state.core()?.clone())
+        .list_bindings(provider_id.as_deref(), kind, scope_id.as_deref())
+        .map_err(|error| error.log_and_convert("provider_account_bindings_list"))
+}
+
 /// Removes one validated selection-scope binding.
 #[tauri::command(async)]
 pub fn provider_account_unbind(

@@ -203,6 +203,10 @@ pub enum KalVoiceIntent {
         provider_id: ProviderId,
         count: u8,
         workspace_id: Option<String>,
+        /// Owner-visible account label or suffix ("work", "Gemini B"), resolved to one of the
+        /// provider's accounts by label. `None` keeps the workspace default / provider default.
+        /// Missing on the wire decodes as `None` (pre-0.1.5 payloads).
+        account_query: Option<String>,
     },
     CreateProviderPanes {
         groups: Vec<ProviderPaneRequest>,
@@ -273,6 +277,23 @@ pub enum KalVoiceIntent {
     FilterDashboard {
         chip: DashboardChip,
     },
+    // ---- Added in 0.1.5 (switch accounts) ----
+    /// "Switch this Gemini thread to Gemini B." Never rebinds by itself: the executor resolves
+    /// the thread and account, then asks the person to confirm in KalCode's Rebind dialog.
+    /// `thread_query: None` means the focused thread (`CommandRequest.thread_id`).
+    RebindThreadAccount {
+        thread_query: Option<String>,
+        provider_id: Option<ProviderId>,
+        account_query: String,
+    },
+    /// "Use Gemini A in this workspace." Writes the workspace default binding (metadata only;
+    /// launching still requires that account to be signed in). `workspace_id: None` means the
+    /// active workspace.
+    SetWorkspaceAccount {
+        provider_id: ProviderId,
+        account_query: String,
+        workspace_id: Option<String>,
+    },
 }
 
 impl KalVoiceIntent {
@@ -301,6 +322,8 @@ impl KalVoiceIntent {
             Self::SwitchProvider { .. } => "switch_provider",
             Self::RequestPermissionMode { .. } => "request_permission_mode",
             Self::FilterDashboard { .. } => "filter_dashboard",
+            Self::RebindThreadAccount { .. } => "rebind_thread_account",
+            Self::SetWorkspaceAccount { .. } => "set_workspace_account",
         }
     }
 
@@ -373,7 +396,8 @@ mod tests {
             !KalVoiceIntent::CreateThreads {
                 provider_id: ProviderId::new(ProviderId::CODEX),
                 count: 4,
-                workspace_id: None
+                workspace_id: None,
+                account_query: None,
             }
             .needs_reasoning()
         );
@@ -435,6 +459,22 @@ mod tests {
             },
             KalVoiceIntent::FilterDashboard {
                 chip: DashboardChip::WaitingForYou,
+            },
+            KalVoiceIntent::RebindThreadAccount {
+                thread_query: None,
+                provider_id: Some(ProviderId::new(ProviderId::GEMINI_CLI)),
+                account_query: "Gemini B".into(),
+            },
+            KalVoiceIntent::SetWorkspaceAccount {
+                provider_id: ProviderId::new(ProviderId::GEMINI_CLI),
+                account_query: "Gemini A".into(),
+                workspace_id: None,
+            },
+            KalVoiceIntent::CreateThreads {
+                provider_id: ProviderId::new(ProviderId::CODEX),
+                count: 1,
+                workspace_id: None,
+                account_query: Some("work".into()),
             },
         ]
     }
@@ -514,6 +554,37 @@ mod tests {
             serde_json::to_value(TalkRoute::Dictation).expect("json"),
             "dictation"
         );
+    }
+
+    #[test]
+    fn switch_account_intents_use_stable_names_and_old_create_threads_still_decode() {
+        let rebind = serde_json::to_value(KalVoiceIntent::RebindThreadAccount {
+            thread_query: None,
+            provider_id: None,
+            account_query: "Gemini B".into(),
+        })
+        .expect("json");
+        assert_eq!(rebind["kind"], "rebind_thread_account");
+        assert_eq!(rebind["accountQuery"], "Gemini B");
+        let workspace = serde_json::to_value(KalVoiceIntent::SetWorkspaceAccount {
+            provider_id: ProviderId::new(ProviderId::GEMINI_CLI),
+            account_query: "Gemini A".into(),
+            workspace_id: Some("ws".into()),
+        })
+        .expect("json");
+        assert_eq!(workspace["kind"], "set_workspace_account");
+        assert_eq!(workspace["workspaceId"], "ws");
+        let old: KalVoiceIntent = serde_json::from_value(serde_json::json!({
+            "kind": "create_threads", "providerId": "codex", "count": 2, "workspaceId": null
+        }))
+        .expect("pre-0.1.5 create_threads decodes");
+        assert!(matches!(
+            old,
+            KalVoiceIntent::CreateThreads {
+                account_query: None,
+                ..
+            }
+        ));
     }
 
     #[test]

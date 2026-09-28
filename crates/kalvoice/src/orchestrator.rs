@@ -100,6 +100,9 @@ pub struct TalkRequest {
     pub target: TalkTarget,
     pub duration_ms: u64,
     pub workspace_id: Option<String>,
+    /// The thread the user is looking at, if any ("switch this thread to …"). Missing on the
+    /// wire decodes as `None`.
+    pub thread_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -140,6 +143,9 @@ pub struct CommandRequest {
     pub input: KalVoiceInput,
     /// The workspace the user is looking at, if any.
     pub workspace_id: Option<String>,
+    /// The thread the user is looking at, if any ("switch this thread to …"). Missing on the
+    /// wire decodes as `None`.
+    pub thread_id: Option<String>,
 }
 
 /// Something the UI does as part of a result (navigation lives in the UI).
@@ -209,6 +215,12 @@ pub enum UiDirective {
     Search {
         query: String,
     },
+    /// Opens the thread and asks the person to confirm the Rebind dialog (0.1.5). KalVoice
+    /// never rebinds a thread itself; the dialog's confirm calls `thread_rebind_account`.
+    ConfirmThreadRebind {
+        thread_id: String,
+        account_id: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -251,6 +263,8 @@ pub struct Executed {
 pub struct ExecContext {
     pub request_id: String,
     pub workspace_id: Option<String>,
+    /// The focused thread from the request, validated as an id (never trusted as existing).
+    pub thread_id: Option<String>,
     /// Providers a pane layout command named ("split Claude and Codex side by side"), in order.
     pub providers: Vec<ProviderId>,
 }
@@ -645,6 +659,12 @@ impl Orchestrator {
                 "That workspace id is invalid.",
             ));
         }
+        if req.thread_id.as_deref().is_some_and(|t| !is_valid_id(t)) {
+            return Err(KalError::validation(
+                "invalid_thread",
+                "That thread id is invalid.",
+            ));
+        }
 
         let (allowance, anchor) = self.allowance();
         let now = (self.clock)();
@@ -822,6 +842,7 @@ impl Orchestrator {
                     text: req.text,
                     input: KalVoiceInput::Voice,
                     workspace_id: req.workspace_id,
+                    thread_id: req.thread_id,
                 },
                 on_stage,
             )?),
@@ -1303,6 +1324,7 @@ impl Run<'_> {
         let ctx = ExecContext {
             request_id: self.req.request_id.clone(),
             workspace_id: self.req.workspace_id.clone(),
+            thread_id: self.req.thread_id.clone(),
             providers,
         };
         // Claim immediately before execution. The claim and allowance check are atomic, so a

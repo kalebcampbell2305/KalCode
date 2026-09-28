@@ -38,6 +38,7 @@ import {
 } from "../shell/panes/paneCommands.ts";
 import { useOptionalSearch } from "../shell/rail/search/SearchProvider.tsx";
 import { usePermissions } from "../surfaces/permissions/index.ts";
+import { getSelectedThread } from "../surfaces/threads/accountIntent.ts";
 import { type AssistantState, INITIAL_STATE, reduce } from "./assistantState.ts";
 import {
   type DictationTarget,
@@ -367,7 +368,13 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
       dispatch({ type: "submitted", requestId });
       try {
         applyResponse(
-          await client.kalvoiceRequest({ requestId, text: trimmed, input, workspaceId: workspaces.active?.id ?? null }),
+          await client.kalvoiceRequest({
+            requestId,
+            text: trimmed,
+            input,
+            workspaceId: workspaces.active?.id ?? null,
+            threadId: getSelectedThread()?.threadId ?? null,
+          }),
         );
       } catch (error) {
         const e = toKalCodeError(error);
@@ -395,6 +402,7 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
           target: targetKind(target),
           durationMs,
           workspaceId: workspaces.active?.id ?? null,
+          threadId: getSelectedThread()?.threadId ?? null,
         });
         if (signal.aborted) return;
         if (talked.route === "dictation") {

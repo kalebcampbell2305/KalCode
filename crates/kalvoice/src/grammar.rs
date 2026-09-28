@@ -534,11 +534,15 @@ pub fn bind_target(intent: KalVoiceIntent, id: String) -> KalVoiceIntent {
             workspace_id: Some(id),
         },
         KalVoiceIntent::CreateThreads {
-            provider_id, count, ..
+            provider_id,
+            count,
+            account_query,
+            ..
         } => KalVoiceIntent::CreateThreads {
             provider_id,
             count,
             workspace_id: Some(id),
+            account_query,
         },
         KalVoiceIntent::CreateTerminal { .. } => KalVoiceIntent::CreateTerminal {
             workspace_id: Some(id),
@@ -1759,6 +1763,7 @@ fn create_threads(c: &Caps) -> Understood {
             provider_id: ProviderId::new(provider),
             count,
             workspace_id: None,
+            account_query: None,
         },
         c.names.first(),
     )

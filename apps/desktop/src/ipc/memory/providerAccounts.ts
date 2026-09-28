@@ -47,6 +47,27 @@ function accountId(value: unknown): string {
   return next;
 }
 
+const BINDING_KINDS: readonly ProviderAccountBindingKind[] = [
+  "workspace",
+  "agent",
+  "mission",
+  "thread",
+  "provider_profile",
+];
+
+/** Like native: every kind decodes, but only workspace and thread bindings can be written. */
+function bindingKind(value: unknown, anyKnown = false): ProviderAccountBindingKind {
+  const kind = BINDING_KINDS.find((candidate) => candidate === value);
+  if (!kind) fail("ipc_rejected", "KalCode couldn't complete that request.", "internal");
+  if (!anyKnown && kind !== "workspace" && kind !== "thread") {
+    fail(
+      "provider_account_binding_kind_unsupported",
+      "That account binding scope isn't available in this KalCode build.",
+    );
+  }
+  return kind;
+}
+
 function seed(): ProviderAccount[] {
   return [
     account(IDS.claudePersonal, "claude-code", "Personal", "authenticated", true),
@@ -198,6 +219,8 @@ export function createProviderAccountsMemory(requireCore: () => void, empty = fa
           (candidate) => candidate.providerId === current.providerId && candidate.archivedAt === null,
         );
         if (current.isDefault && survivor) replace({ ...survivor, isDefault: true });
+        // Like native: archiving removes every binding that selected the account.
+        for (const [key, binding] of bindings) if (binding.accountId === current.id) bindings.delete(key);
         return archived;
       },
       provider_account_bind: (args) => {
@@ -206,8 +229,8 @@ export function createProviderAccountsMemory(requireCore: () => void, empty = fa
         const selected = resolve(String(args.accountId), provider);
         const binding: ProviderAccountBinding = {
           providerId: provider,
-          kind: args.kind as ProviderAccountBindingKind,
-          scopeId: String(args.scopeId),
+          kind: bindingKind(args.kind),
+          scopeId: accountId(args.scopeId),
           accountId: selected.id,
         };
         bindings.set(`${provider}:${binding.kind}:${binding.scopeId}`, binding);
@@ -216,7 +239,23 @@ export function createProviderAccountsMemory(requireCore: () => void, empty = fa
       provider_account_unbind: (args) => {
         requireCore();
         const provider = providerId(args.providerId);
-        return bindings.delete(`${provider}:${String(args.kind)}:${String(args.scopeId)}`);
+        return bindings.delete(`${provider}:${bindingKind(args.kind)}:${accountId(args.scopeId)}`);
+      },
+      provider_account_bindings_list: (args) => {
+        requireCore();
+        const provider = args.providerId == null ? null : providerId(args.providerId);
+        const kind = args.kind == null ? null : bindingKind(args.kind, true);
+        const scope = args.scopeId == null ? null : accountId(args.scopeId);
+        const order = (binding: ProviderAccountBinding) => `${binding.providerId} ${binding.kind} ${binding.scopeId}`;
+        return [...bindings.values()]
+          .filter(
+            (binding) =>
+              (provider === null || binding.providerId === provider) &&
+              (kind === null || binding.kind === kind) &&
+              (scope === null || binding.scopeId === scope) &&
+              accounts.some((candidate) => candidate.id === binding.accountId && candidate.archivedAt === null),
+          )
+          .sort((a, b) => (order(a) < order(b) ? -1 : order(a) > order(b) ? 1 : 0));
       },
       provider_codex_account_refresh: (args) => {
         requireCore();

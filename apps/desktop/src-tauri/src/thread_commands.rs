@@ -903,6 +903,35 @@ pub fn thread_resume(
         .map_err(|e| e.log_and_convert("thread_resume"))
 }
 
+/// Explicitly rebinds a thread to another account of the same provider. Future provider
+/// requests use the new account; past messages are unchanged and the provider resume id is
+/// cleared (resume ids are account-scoped), so the next turn starts a fresh provider session.
+/// Refused while a turn is running, starting or awaiting approval. Emits
+/// `thread.account_changed` and returns the updated summary.
+///
+/// Phase 0 contract: the final signature and registration, with the body landing in the
+/// switch-accounts runtime lane. Until then it refuses without changing anything.
+#[tauri::command(async)]
+pub fn thread_rebind_account(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    app: State<'_, AppState>,
+    state: crate::runtime_coordinator::RuntimeState<ThreadsState>,
+    thread_id: String,
+    provider_account_id: String,
+) -> Result<ThreadSummary, IpcError> {
+    _runtime_access.revalidate()?;
+    let _ = (&app, &state, &thread_id, &provider_account_id);
+    Err(thread_rebind_unavailable().to_ipc())
+}
+
+fn thread_rebind_unavailable() -> KalError {
+    KalError::new(
+        ErrorCategory::Internal,
+        "thread_rebind_unavailable",
+        "Switching a thread's provider account isn't available in this build yet.",
+    )
+}
+
 #[tauri::command(async)]
 pub fn thread_stop(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
