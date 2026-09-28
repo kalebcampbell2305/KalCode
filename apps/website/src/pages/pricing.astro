@@ -12,7 +12,7 @@ import Closing from "../components/Closing.astro";
 import Icon from "../components/Icon.astro";
 import PageHead from "../components/PageHead.astro";
 import Base from "../layouts/Base.astro";
-import { getPage } from "../lib/site";
+import { getPage, planSummary } from "../lib/site";
 
 const page = getPage("/pricing");
 
@@ -33,24 +33,17 @@ const meterWidth = (limits: PlanLimits) => {
 };
 
 type Cell = { kind: "tick" } | { kind: "dash" } | { kind: "text"; text: string };
-const tick: Cell = { kind: "tick" };
-const dash: Cell = { kind: "dash" };
-const yes = (value: boolean): Cell => (value ? tick : dash);
-const automations: Record<PlanLimits["automations"], Cell> = {
-  none: dash,
-  scheduled: { kind: "text", text: "Scheduled" },
-  scheduled_and_event: { kind: "text", text: "Scheduled + event" },
-};
 
+/**
+ * Only what differs between plans in the Stable app. Persistent agents, pair and team workflows,
+ * automations and advanced missions are Gated on Stable 0.1.5 (crates/native-core/src/flags.rs),
+ * so the ladder does not list them.
+ */
 const rows: { label: string; value: (limits: PlanLimits) => Cell }[] = [
   {
     label: "Threads running at once",
     value: (l) => ({ kind: "text", text: l.concurrentThreads === null ? "Unlimited" : String(l.concurrentThreads) }),
   },
-  { label: "Persistent agents", value: (l) => yes(l.persistentAgents) },
-  { label: "Pair and team workflows", value: (l) => yes(l.multiAgentWorkflows) },
-  { label: "Automations", value: (l) => automations[l.automations] },
-  { label: "Advanced missions with verification", value: (l) => yes(l.advancedMissions) },
 ];
 
 // "Every plan includes" is stated once instead of repeated per column, so check it is true.
@@ -73,7 +66,7 @@ const everyPlan = [
 const faq = [
   {
     q: "What is a KalVoice Request?",
-    a: "One top-level request to KalVoice in command mode, however many steps it takes. “Open four Codex threads” is one request. “Have Claude implement this, Codex review it, then run the tests” is also one request.",
+    a: "One top-level request to KalVoice in command mode, however many steps it takes. “Open a terminal” is one request. “Pause every active thread” is also one request, however many threads it pauses.",
   },
   {
     q: "Does dictation count?",
@@ -109,7 +102,7 @@ const faq = [
   <PageHead
     backdrop="nebula"
     title="Pricing"
-    lead="Every plan runs every provider with every permission mode. Plans differ in KalVoice Requests and workspace features — your AI usage stays on your own account."
+    lead="Every plan runs every provider with every permission mode. Plans differ in KalVoice Requests and threads running at once — your AI usage stays on your own account."
     status="Plans open at launch · nothing is for sale today"
   />
 
@@ -142,7 +135,7 @@ const faq = [
                         {formatPrice(plan.price)}
                         <small>{formatInterval(plan.price)}</small>
                       </span>
-                      <span class="ladder__summary">{plan.summary}</span>
+                      <span class="ladder__summary">{planSummary(plan)}</span>
                     </div>
                   </th>
                 ))

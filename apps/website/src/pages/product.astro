@@ -42,13 +42,14 @@ const modes = [
 
 const roadmap: { capability: string; state: State; note: string }[] = [
   { capability: "App shell, search and palette, light and dark themes", state: "built", note: "In the development build" },
-  { capability: "Workspaces and real terminals (tabs)", state: "built", note: "PowerShell, Command Prompt, Git Bash; restore after restart" },
+  { capability: "Workspaces and real terminals", state: "built", note: "PowerShell, Command Prompt, Git Bash; restore after restart" },
   { capability: "Claude Code, Codex and Gemini CLI adapters", state: "built", note: "Sign-in per account from KalCode, streamed threads, resume, interrupt" },
   { capability: "Dashboard", state: "built", note: "Design built; live thread data in development" },
-  { capability: "Approvals and permission modes", state: "dev", note: "Engine and approval card in development" },
+  { capability: "Approvals and permission modes", state: "built", note: "Permission engine, the Approvals panel and a mode for every thread" },
   { capability: "KalVoice dictation and commands", state: stableKalVoice ? "built" : "dev", note: stableKalVoice ? "Available in Stable with signed local component setup" : "On-device recognition and command grammar in development" },
-  { capability: "Split panes, file tree, Git and diff views, browser preview", state: "planned", note: "Shown in previews with a Planned label" },
-  { capability: "Agents, Missions, Automations", state: "planned", note: "Listed in plans as available at launch" },
+  { capability: "Split panes and the Browser pane", state: "built", note: "In Code: terminals, the browser and threads in panes you can split and resize" },
+  { capability: "File tree, Git and diff views", state: "planned", note: "Shown in previews with a Planned label" },
+  { capability: "Agents, Missions, Automations", state: "planned", note: "Not in the Stable app yet" },
 ];
 ---
 <Base title={page.title} description={page.description} path={page.path} world>
@@ -134,11 +135,11 @@ const roadmap: { capability: string; state: State; note: string }[] = [
         <div class="chapter__body">
           <p>
             Open a project folder and KalCode starts real terminals inside it — PowerShell, Command
-            Prompt, Git Bash — with full colour, exit codes, and tabs that come back after a restart.
-            Type <code>claude</code> or <code>codex</code> in a tab and the CLI runs exactly as it
+            Prompt, Git Bash — with full colour, exit codes, and a layout that comes back after a restart.
+            Type <code>claude</code> or <code>codex</code> in a terminal and the CLI runs exactly as it
             does anywhere else.
           </p>
-          <p>Terminals are tabs today. Split panes are planned.</p>
+          <p>Terminals, the browser and threads open in panes you can split and resize.</p>
         </div>
       </article>
 
@@ -204,7 +205,7 @@ const roadmap: { capability: string; state: State; note: string }[] = [
 
       <article class="chapter" id="permissions" aria-labelledby="permissions-title">
         <div class="chapter__head">
-          <p class="chip chip--dev">In development</p>
+          <p class="chip chip--built">Built</p>
           <h2 id="permissions-title" class="h2 h2--sm">You set the rules. Agents follow them.</h2>
           <p>Every mode is on every plan.</p>
         </div>
@@ -241,7 +242,7 @@ const roadmap: { capability: string; state: State; note: string }[] = [
 
       <article class="chapter" id="kalvoice" aria-labelledby="voice-title">
         <div class="chapter__head">
-          <p class="chip chip--dev">In development</p>
+          <p class:list={["chip", stableKalVoice ? "chip--built" : "chip--dev"]}>{stableKalVoice ? "Built" : "In development"}</p>
           <h2 id="voice-title" class="h2 h2--sm">KalVoice: speak, don't type.</h2>
         </div>
         <div class="chapter__body">
