@@ -412,8 +412,10 @@ impl DesktopExecutor {
 enum TargetUse {
     /// Open or focus: any unique answer, including a unique partial name or provider.
     Open,
-    /// Put the person's words in a thread's composer: a provider alone ("ask Codex") is
-    /// confirmed first, even when only one thread fits.
+    /// Put the person's words in a thread's composer: only an exact name (alone or with its
+    /// provider/account words), an id, the focused thread or the remembered one goes direct; a
+    /// partial or misheard name or a provider alone is confirmed first, even when only one
+    /// thread fits in any workspace.
     Compose,
     /// Pause, stop, resume or switch the account of a thread: never a partial name or a
     /// provider alone, and never a guess between several.
@@ -555,7 +557,13 @@ impl DesktopExecutor {
             SessionResolution::Resolved { target, tier } => {
                 let loose = match use_ {
                     TargetUse::Open => false,
-                    TargetUse::Compose => tier == SessionMatchTier::ProviderOnly,
+                    // A prompt is sent without further review, so only a name the person
+                    // said exactly (or the session in front of them / just used) goes direct:
+                    // a partial or misheard name, or a provider alone, is confirmed first.
+                    TargetUse::Compose => matches!(
+                        tier,
+                        SessionMatchTier::ProviderOnly | SessionMatchTier::Fuzzy
+                    ),
                     TargetUse::Destructive => {
                         matches!(
                             tier,
@@ -2828,6 +2836,99 @@ mod tests {
             target: target.into(),
             prompt: prompt.into(),
         }
+    }
+
+    /// Security review (0.1.5): a partial or misheard name never sends a prompt, even when it
+    /// fits exactly one thread, in this workspace or another one on another account.
+    #[test]
+    fn a_fuzzy_compose_target_is_confirmed_and_never_sent() {
+        let s = sessions();
+        let ctx = s.f.ctx();
+        // A thread in another workspace, on another account.
+        let other_project = tempfile::tempdir().expect("project");
+        let other =
+            s.f.executor
+                .core
+                .open_workspace(other_project.path())
+                .expect("open");
+        let billing_account =
+            s.f.account(ProviderId::CODEX, "Billing Team", AuthState::Authenticated);
+        let billing =
+            s.f.runtime
+                .create_idle(CreateIdleThread {
+                    provider_id: ProviderId::CODEX.into(),
+                    provider_account_id: Some(billing_account.id.clone()),
+                    account_label: Some(billing_account.display_name.clone()),
+                    workspace_id: other.id.clone(),
+                    model: None,
+                    permission_mode: PermissionMode::Approve,
+                    name: Some("Billing Webhook".into()),
+                })
+                .expect("thread");
+        s.f.set_status(&billing, ThreadStatus::Idle);
+
+        let unconfirmed = |query: &str| {
+            let error =
+                s.f.run(&tell(query, "delete the old tables"), &ctx)
+                    .expect_err(query);
+            assert_eq!(error.code, "target_unconfirmed", "{query}");
+            assert!(
+                error.message.starts_with("Did you mean \u{201c}"),
+                "{query}: {}",
+                error.message
+            );
+            match error.directive.as_deref() {
+                Some(UiDirective::ChooseSession {
+                    choices,
+                    follow_up: SessionFollowUp::Compose { text, submit: true },
+                    ..
+                }) => {
+                    assert_eq!(text, "delete the old tables");
+                    choices
+                        .iter()
+                        .map(|c| c.thread_id.clone())
+                        .collect::<Vec<_>>()
+                }
+                other => panic!("{query}: expected ChooseSession, got {other:?}"),
+            }
+        };
+        // A word-start fragment in this workspace.
+        assert_eq!(unconfirmed("auth"), vec![s.auth.id.clone()]);
+        // A misheard name (one typo) and a fragment that fit one thread in another workspace.
+        assert_eq!(unconfirmed("billing webhok"), vec![billing.id.clone()]);
+        assert_eq!(unconfirmed("billing"), vec![billing.id.clone()]);
+        // Never routed as a command from a focused text box either.
+        assert!(!s.f.executor.names_one_session("billing webhok", &ctx));
+        assert!(!s.f.executor.names_one_session("auth", &ctx));
+
+        // Exact names (alone or with their provider/account words), the focused thread and the
+        // remembered one still compose directly.
+        let composed = |query: &str, ctx: &ExecContext| match s
+            .f
+            .run(&tell(query, "continue"), ctx)
+            .expect(query)
+            .directive
+        {
+            Some(UiDirective::ComposeInThread {
+                thread_id,
+                submit: true,
+                ..
+            }) => thread_id,
+            other => panic!("{query}: expected ComposeInThread, got {other:?}"),
+        };
+        assert_eq!(composed("Authentication", &ctx), s.auth.id);
+        assert_eq!(composed("Billing Webhook", &ctx), billing.id);
+        assert_eq!(composed("codex work authentication", &ctx), s.auth.id);
+        let focused = ExecContext {
+            thread_id: Some(s.release_mac.id.clone()),
+            ..s.f.ctx()
+        };
+        assert_eq!(composed("it", &focused), s.release_mac.id);
+        let remembered = ExecContext {
+            last_target_id: Some(s.research_b.id.clone()),
+            ..s.f.ctx()
+        };
+        assert_eq!(composed("it", &remembered), s.research_b.id);
     }
 
     #[test]

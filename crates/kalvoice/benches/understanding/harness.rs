@@ -325,7 +325,15 @@ fn session_effect(intent: Value, target: Target, world: &World) -> Stage {
         },
         Some("direct_prompt") => {
             let name = intent["target"].as_str().unwrap_or_default().to_owned();
+            // A prompt goes direct only to an exact name; a partial name is confirmed first.
+            let exact = world
+                .threads
+                .iter()
+                .any(|t| t.name.eq_ignore_ascii_case(name.trim_start_matches("my ")));
             match world.resolve_thread_strict(&name) {
+                Resolved::Id(_) if !exact => Stage::Rejected {
+                    code: "target_unconfirmed",
+                },
                 Resolved::Id(id) => Stage::Fast {
                     intent,
                     target: Target::Thread(name, Resolved::Id(id)),
