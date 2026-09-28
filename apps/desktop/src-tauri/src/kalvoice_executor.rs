@@ -934,6 +934,16 @@ impl Executor for DesktopExecutor {
 
     fn execute(&self, intent: &KalVoiceIntent, ctx: &ExecContext) -> Result<Executed, ExecError> {
         match intent {
+            // Terminal-aware KalVoice contract only (TK-0); the voice lane replaces this refusal.
+            KalVoiceIntent::SubmitFocused
+            | KalVoiceIntent::ClearFocused
+            | KalVoiceIntent::DirectPrompt { .. }
+            | KalVoiceIntent::FocusByState { .. }
+            | KalVoiceIntent::FocusPrevious
+            | KalVoiceIntent::WhichSessions { .. } => Err(ExecError::new(
+                "not_in_this_build",
+                "That KalVoice session command isn't in this build yet.",
+            )),
             KalVoiceIntent::Navigate { surface } => Ok(Executed {
                 summary: format!(
                     "Opened {}.",

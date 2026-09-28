@@ -281,6 +281,15 @@ pub(crate) fn validate_action(
                 && valid_text(account_query)
                 && valid_workspace_id(workspace_id, workspaces)
         }
+        // Read-only lookups and focus changes are safe to interpret.
+        KalVoiceIntent::FocusByState { .. }
+        | KalVoiceIntent::FocusPrevious
+        | KalVoiceIntent::WhichSessions { .. } => true,
+        // Anything that sends or removes prompt text comes only from the deterministic
+        // grammar: an interpreted guess must never put words into a provider session.
+        KalVoiceIntent::SubmitFocused
+        | KalVoiceIntent::ClearFocused
+        | KalVoiceIntent::DirectPrompt { .. } => false,
     };
     if valid {
         Ok(ValidatedLocalAction(intent))

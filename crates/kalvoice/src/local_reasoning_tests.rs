@@ -182,3 +182,39 @@ fn model_controlled_text_bounds_apply_to_the_original_canonical_value() {
         " ".repeat(MAX_WORKSPACE_NAME_CHARS + 1)
     )));
 }
+
+#[test]
+fn the_local_interpreter_can_never_send_or_clear_prompt_text() {
+    use kalcode_contracts::sessions::SessionAttention;
+    let workspaces = vec![WorkspaceOption {
+        id: WORKSPACE_ID.into(),
+        name: "KalCode".into(),
+    }];
+    for intent in [
+        KalVoiceIntent::SubmitFocused,
+        KalVoiceIntent::ClearFocused,
+        KalVoiceIntent::DirectPrompt {
+            target: "Authentication".into(),
+            prompt: "review the login failure".into(),
+        },
+    ] {
+        assert!(
+            validate_action(intent.clone(), &workspaces).is_err(),
+            "{intent:?}"
+        );
+    }
+    for intent in [
+        KalVoiceIntent::FocusPrevious,
+        KalVoiceIntent::FocusByState {
+            state: SessionAttention::WaitingForPermission,
+        },
+        KalVoiceIntent::WhichSessions {
+            state: SessionAttention::Failed,
+        },
+    ] {
+        assert!(
+            validate_action(intent.clone(), &workspaces).is_ok(),
+            "{intent:?}"
+        );
+    }
+}

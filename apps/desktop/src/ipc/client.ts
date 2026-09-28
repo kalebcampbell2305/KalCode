@@ -49,6 +49,7 @@ import type {
   RecentWorkWhen,
   SavedLayoutPreset,
   SecureStoreCheck,
+  SessionResolution,
   Settings,
   SettingsPatch,
   ShellOption,
@@ -515,6 +516,24 @@ export class KalCodeClient {
 
   getThread(threadId: string): Promise<ThreadSummary> {
     return this.call("thread_get", { threadId });
+  }
+
+  /**
+   * Resolves a session name the way KalVoice does (explicit id, exact name in the current
+   * workspace, exact name anywhere, provider/account + name, "this/it", provider only, then
+   * fuzzy only when exactly one fits). Never guesses: more than one fit is `ambiguous` with at
+   * most four labelled choices. Reads only open threads; changes nothing.
+   */
+  resolveSession(
+    query: string,
+    context: { workspaceId?: string | null; focusedThreadId?: string | null; lastTargetId?: string | null } = {},
+  ): Promise<SessionResolution> {
+    return this.call("session_resolve", {
+      query,
+      workspaceId: context.workspaceId ?? null,
+      focusedThreadId: context.focusedThreadId ?? null,
+      lastTargetId: context.lastTargetId ?? null,
+    });
   }
 
   threadMessages(threadId: string, limit: number, before?: string): Promise<ThreadMessage[]> {

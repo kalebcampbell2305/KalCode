@@ -2,6 +2,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { Activity, type ReactNode, useEffect, useLayoutEffect } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { focusHistory, recordFocus, resetFocusHistoryForTests } from "./focusHistory.ts";
 import { UiIntentsProvider, useUiIntents } from "./uiIntents.tsx";
 
 const mocks = vi.hoisted(() => ({
@@ -12,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
   request: vi.fn(),
   setPanelOpen: vi.fn(),
+  selectTerminal: vi.fn(),
+  running: [] as { id: string }[],
 }));
 vi.mock("../shell/navigation.tsx", () => ({ useNavigation: () => ({ navigate: mocks.navigate }) }));
 vi.mock("./RuntimeProvider.tsx", () => {
@@ -24,7 +27,12 @@ vi.mock("./RuntimeProvider.tsx", () => {
   };
 });
 vi.mock("./WorkspaceProvider.tsx", () => ({
-  useWorkspaces: () => ({ active: { id: "workspace-a" }, activate: mocks.activate }),
+  useWorkspaces: () => ({
+    active: { id: "workspace-a" },
+    activate: mocks.activate,
+    running: mocks.running,
+    selectTerminal: mocks.selectTerminal,
+  }),
 }));
 vi.mock("../surfaces/permissions/PermissionsProvider.tsx", () => ({
   usePermissions: () => ({ setPanelOpen: mocks.setPanelOpen }),
@@ -360,5 +368,76 @@ describe("UI focus intent lifecycle", () => {
     expect(mocks.navigate.mock.calls).toEqual([["threads"]]);
     expect(mocks.request).toHaveBeenCalledWith("open", "headless");
     expect(result.current.paneFocus).toBeNull();
+  });
+});
+
+describe("go back to what I was just using", () => {
+  const headless = (threadId: string, archivedAt: string | null = null) => ({
+    id: threadId,
+    workspaceId: "workspace-a",
+    runtimeKind: null,
+    terminalId: null,
+    archivedAt,
+  });
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    resetFocusHistoryForTests();
+    mocks.clientIndex = 0;
+    mocks.running = [];
+    mocks.getThread.mockImplementation(async (id: string) => headless(id));
+    mocks.activate.mockResolvedValue(true);
+    mocks.invoke.mockResolvedValue(null);
+  });
+
+  it("records focused threads and returns to the previous one", async () => {
+    const view = mount();
+    await act(async () => view.result.current.focus({ kind: "thread", threadId: "a" }));
+    await act(async () => view.result.current.focus({ kind: "thread", threadId: "b" }));
+    expect(focusHistory().map((e) => (e.kind === "thread" ? e.threadId : e.terminalId))).toEqual(["b", "a"]);
+    let went = false;
+    await act(async () => {
+      went = await view.result.current.focusPrevious();
+    });
+    expect(went).toBe(true);
+    expect(mocks.request).toHaveBeenLastCalledWith("open", "a");
+    // Going back twice toggles, like switching windows.
+    await act(async () => {
+      await view.result.current.focusPrevious();
+    });
+    expect(mocks.request).toHaveBeenLastCalledWith("open", "b");
+  });
+
+  it("returns to a terminal in its workspace and skips ones that closed", async () => {
+    recordFocus({ kind: "terminal", terminalId: "closed", workspaceId: "workspace-b" });
+    recordFocus({ kind: "terminal", terminalId: "shell", workspaceId: "workspace-b" });
+    recordFocus({ kind: "thread", threadId: "gone", workspaceId: null });
+    recordFocus({ kind: "thread", threadId: "now", workspaceId: null });
+    mocks.running = [{ id: "shell" }];
+    mocks.getThread.mockImplementation(async (id: string) =>
+      headless(id, id === "gone" ? "2026-09-28T12:00:00Z" : null),
+    );
+    const view = mount();
+    let went = false;
+    await act(async () => {
+      went = await view.result.current.focusPrevious();
+    });
+    expect(went).toBe(true);
+    expect(mocks.activate).toHaveBeenCalledWith("workspace-b");
+    expect(mocks.navigate).toHaveBeenLastCalledWith("code");
+    expect(mocks.selectTerminal).toHaveBeenCalledWith("shell", true, "workspace-b");
+    expect(focusHistory().some((e) => e.kind === "thread" && e.threadId === "gone")).toBe(false);
+  });
+
+  it("does nothing when there is nothing to go back to", async () => {
+    const view = mount();
+    await act(async () => view.result.current.focus({ kind: "thread", threadId: "only" }));
+    mocks.request.mockClear();
+    let went = true;
+    await act(async () => {
+      went = await view.result.current.focusPrevious();
+    });
+    expect(went).toBe(false);
+    expect(mocks.request).not.toHaveBeenCalled();
   });
 });

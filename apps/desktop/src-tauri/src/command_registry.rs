@@ -112,6 +112,7 @@ pub(crate) const COMMANDS: &[&str] = &[
     "terminal_set_active",
     "terminals_running",
     "thread_list",
+    "session_resolve",
     "thread_get",
     "thread_messages",
     "thread_tool_calls",

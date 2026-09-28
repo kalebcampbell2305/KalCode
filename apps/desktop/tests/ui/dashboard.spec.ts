@@ -150,6 +150,16 @@ test.describe("cards", () => {
     await expect(fix.locator("time")).toHaveText(/just now|minute/);
   });
 
+  test("show the provider account each agent runs on, in words", async ({ page }) => {
+    await open(page, "busy");
+    const fix = card(page, "Fix flaky checkout test");
+    await expect(fix.getByTitle("Account: Work")).toHaveText("account Work");
+    await expect(fix.getByTitle("Account: Work")).toBeVisible();
+    const auth = card(page, "Refactor auth middleware");
+    await expect(auth.getByTitle("Account: Personal")).toBeVisible();
+    await expect(auth.getByTitle("Account: Work")).toHaveCount(0);
+  });
+
   test("DONE is unmistakable, with its follow-ups", async ({ page }) => {
     await open(page, "busy");
     const done = card(page, "Add light theme tokens");

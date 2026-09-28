@@ -4,10 +4,12 @@ import type { DashboardChip } from "./DashboardChip.ts";
 import type { PaneControl } from "./PaneControl.ts";
 import type { PaneDirection } from "./PaneDirection.ts";
 import type { ProviderId } from "./ProviderId.ts";
+import type { SessionCandidate } from "./SessionCandidate.ts";
+import type { SessionFollowUp } from "./SessionFollowUp.ts";
 import type { SplitAxis } from "./SplitAxis.ts";
 import type { SurfaceId } from "./SurfaceId.ts";
 
 /**
  * Something the UI does as part of a result (navigation lives in the UI).
  */
-export type UiDirective = { "kind": "navigate", surface: SurfaceId, } | { "kind": "open_workspace", workspaceId: string, } | { "kind": "open_thread", threadId: string, } | { "kind": "open_terminal", workspaceId: string, terminalId: string, } | { "kind": "open_provider_panes", workspaceId: string, threadIds: Array<string>, } | { "kind": "control_pane", workspaceId: string, command: PaneControl, } | { "kind": "control_browser", workspaceId: string, command: BrowserControl, } | { "kind": "show_approvals" } | { "kind": "split_pane", axis: SplitAxis, } | { "kind": "arrange_panes", axis: SplitAxis, providerIds: Array<ProviderId>, } | { "kind": "resize_pane", direction: PaneDirection, steps: number, } | { "kind": "close_pane", query: string | null, } | { "kind": "filter_dashboard", chip: DashboardChip, } | { "kind": "search", query: string, } | { "kind": "confirm_thread_rebind", threadId: string, accountId: string, };
+export type UiDirective = { "kind": "navigate", surface: SurfaceId, } | { "kind": "open_workspace", workspaceId: string, } | { "kind": "open_thread", threadId: string, } | { "kind": "open_terminal", workspaceId: string, terminalId: string, } | { "kind": "open_provider_panes", workspaceId: string, threadIds: Array<string>, } | { "kind": "control_pane", workspaceId: string, command: PaneControl, } | { "kind": "control_browser", workspaceId: string, command: BrowserControl, } | { "kind": "show_approvals" } | { "kind": "split_pane", axis: SplitAxis, } | { "kind": "arrange_panes", axis: SplitAxis, providerIds: Array<ProviderId>, } | { "kind": "resize_pane", direction: PaneDirection, steps: number, } | { "kind": "close_pane", query: string | null, } | { "kind": "filter_dashboard", chip: DashboardChip, } | { "kind": "search", query: string, } | { "kind": "confirm_thread_rebind", threadId: string, accountId: string, } | { "kind": "submit_composer", threadId: string, } | { "kind": "clear_composer", threadId: string, } | { "kind": "compose_in_thread", threadId: string, text: string, submit: boolean, } | { "kind": "focus_previous" } | { "kind": "choose_session", question: string, choices: Array<SessionCandidate>, followUp: SessionFollowUp, };

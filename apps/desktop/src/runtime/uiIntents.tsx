@@ -2,7 +2,9 @@ import type { DashboardChip } from "@kalcode/protocol";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigation } from "../shell/navigation.tsx";
 import { usePermissions } from "../surfaces/permissions/PermissionsProvider.tsx";
+import { useSelectedThread } from "../surfaces/threads/accountIntent.ts";
 import { useThreadsIntent } from "../surfaces/threads/intent.tsx";
+import { focusHistory, forgetFocus, recordFocus } from "./focusHistory.ts";
 import { useRuntime } from "./RuntimeProvider.tsx";
 import { useWorkspaces } from "./WorkspaceProvider.tsx";
 
@@ -45,6 +47,11 @@ export interface UiIntents {
   paneFocus: PaneFocusRequest | null;
   /** Marks a pane-focus request handled (it is then cleared). */
   consumePaneFocus: (nonce: number) => void;
+  /**
+   * Focuses the thread or terminal used before the current one ("go back to the terminal I was
+   * just using"). Skips targets that no longer exist. Resolves false when there is none.
+   */
+  focusPrevious: () => Promise<boolean>;
 }
 
 const UiIntentsContext = createContext<UiIntents | null>(null);
@@ -125,6 +132,9 @@ export function UiIntentsProvider({ children }: { children: ReactNode }) {
   const focus = useCallback(
     async (target: FocusTarget) => {
       if (!isLive()) return;
+      if (target.kind === "thread") {
+        recordFocus({ kind: "thread", threadId: target.threadId, workspaceId: target.workspaceId ?? null });
+      }
       const generation = ++focusGeneration.current;
       const isCurrent = () => isLive() && generation === focusGeneration.current;
       setPaneState(null);
@@ -204,9 +214,54 @@ export function UiIntentsProvider({ children }: { children: ReactNode }) {
     [isLive, session],
   );
 
+  // The thread the Threads surface shows counts as used, however it was opened.
+  const shownThread = useSelectedThread()?.threadId ?? null;
+  useEffect(() => {
+    if (shownThread && isLive()) recordFocus({ kind: "thread", threadId: shownThread, workspaceId: null });
+  }, [shownThread, isLive]);
+
+  const focusPrevious = useCallback(async () => {
+    // The newest entry is the current target; walk back past anything that no longer exists.
+    for (const entry of focusHistory().slice(1)) {
+      if (!isLive()) return false;
+      const { navigate, workspaces, client } = live.current;
+      if (entry.kind === "terminal") {
+        if (!workspaces.running.some((t) => t.id === entry.terminalId)) {
+          forgetFocus("terminal", entry.terminalId);
+          continue;
+        }
+        if (workspaces.active?.id !== entry.workspaceId && !(await workspaces.activate(entry.workspaceId)))
+          return false;
+        if (!isLive()) return false;
+        navigate("code");
+        workspaces.selectTerminal(entry.terminalId, true, entry.workspaceId);
+        return true;
+      }
+      const open = await client
+        .getThread(entry.threadId)
+        .then((thread) => thread.archivedAt === null)
+        .catch(() => false);
+      if (!open) {
+        forgetFocus("thread", entry.threadId);
+        continue;
+      }
+      await focus({ kind: "thread", threadId: entry.threadId, workspaceId: entry.workspaceId });
+      return true;
+    }
+    return false;
+  }, [focus, isLive]);
+
   const value = useMemo<UiIntents>(
-    () => ({ focus, registerFocusHandler, filterDashboard, dashboardFilter, paneFocus, consumePaneFocus }),
-    [focus, registerFocusHandler, filterDashboard, dashboardFilter, paneFocus, consumePaneFocus],
+    () => ({
+      focus,
+      registerFocusHandler,
+      filterDashboard,
+      dashboardFilter,
+      paneFocus,
+      consumePaneFocus,
+      focusPrevious,
+    }),
+    [focus, registerFocusHandler, filterDashboard, dashboardFilter, paneFocus, consumePaneFocus, focusPrevious],
   );
   return <UiIntentsContext.Provider value={value}>{children}</UiIntentsContext.Provider>;
 }

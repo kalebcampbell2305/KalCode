@@ -221,6 +221,34 @@ pub enum UiDirective {
         thread_id: String,
         account_id: String,
     },
+    // ---- Terminal-aware KalVoice (0.1.5). Every send goes through the thread composer's own
+    // Send (prompt review, warnings, busy/permission refusals); KalVoice never sends natively
+    // and never confirms a warned prompt. ----
+    /// "Send that": press Send in this thread's composer.
+    SubmitComposer {
+        thread_id: String,
+    },
+    /// "Clear that": remove the span KalVoice last dictated into this thread's composer (only
+    /// while it is unchanged).
+    ClearComposer {
+        thread_id: String,
+    },
+    /// Open the thread, put `text` in its composer and, when `submit`, press its Send. `text`
+    /// is transient: directives are never stored, logged or spoken.
+    ComposeInThread {
+        thread_id: String,
+        text: String,
+        submit: bool,
+    },
+    /// Focus the thread or terminal the person used before the current one.
+    FocusPrevious,
+    /// "Which one — Release Windows or Release Mac?" Nothing has happened yet: the UI shows
+    /// `choices` and runs `follow_up` on the one the person picks.
+    ChooseSession {
+        question: String,
+        choices: Vec<kalcode_contracts::sessions::SessionCandidate>,
+        follow_up: kalcode_contracts::sessions::SessionFollowUp,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

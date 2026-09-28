@@ -16,6 +16,7 @@ use ts_rs::TS;
 use crate::agent::ProviderId;
 use crate::app::SurfaceId;
 use crate::permissions::PermissionMode;
+use crate::sessions::SessionAttention;
 use crate::workspace_ui::{DashboardChip, SplitAxis};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -294,6 +295,32 @@ pub enum KalVoiceIntent {
         account_query: String,
         workspace_id: Option<String>,
     },
+    // ---- Added in 0.1.5 (terminal-aware KalVoice). Deterministic grammar only: the local
+    // interpreter may never produce the three prompt-carrying intents. ----
+    /// "Send that / send it / submit that": presses the focused thread composer's own Send, so
+    /// prompt review and warnings still run. Refused for a raw terminal (KalVoice never presses
+    /// Enter in a shell). Not counted against the KalVoice allowance.
+    SubmitFocused,
+    /// "Don't send that / clear that / scratch that": removes the text KalVoice just dictated
+    /// into the focused composer (only while unchanged). Not counted against the allowance.
+    ClearFocused,
+    /// "Tell <target> [to] <prompt>" / "ask <target> <prompt>": resolves `target` with the
+    /// session resolver (clarifying when it is ambiguous) and submits `prompt` verbatim through
+    /// that thread's composer. `prompt` is transient: never stored, logged or spoken.
+    DirectPrompt {
+        target: String,
+        prompt: String,
+    },
+    /// "Focus the one waiting for permission / that failed / that's stuck".
+    FocusByState {
+        state: SessionAttention,
+    },
+    /// "Go back to the terminal / thread I was just using."
+    FocusPrevious,
+    /// "Which agent failed? / which one is stuck?": reads back up to three names with status.
+    WhichSessions {
+        state: SessionAttention,
+    },
 }
 
 impl KalVoiceIntent {
@@ -324,12 +351,25 @@ impl KalVoiceIntent {
             Self::FilterDashboard { .. } => "filter_dashboard",
             Self::RebindThreadAccount { .. } => "rebind_thread_account",
             Self::SetWorkspaceAccount { .. } => "set_workspace_account",
+            Self::SubmitFocused => "submit_focused",
+            Self::ClearFocused => "clear_focused",
+            Self::DirectPrompt { .. } => "direct_prompt",
+            Self::FocusByState { .. } => "focus_by_state",
+            Self::FocusPrevious => "focus_previous",
+            Self::WhichSessions { .. } => "which_sessions",
         }
     }
 
     /// True when the intent needs the configured on-device reasoning model.
     pub fn needs_reasoning(&self) -> bool {
         matches!(self, Self::Reasoning { .. })
+    }
+
+    /// Whether executing this intent counts as one KalVoice Request against the plan
+    /// allowance. "Send that" and "clear that" are the voice equivalent of pressing Send or
+    /// clearing a text box, so they never count (owner ruling, 0.1.5).
+    pub fn counts_against_allowance(&self) -> bool {
+        !matches!(self, Self::SubmitFocused | Self::ClearFocused)
     }
 }
 
@@ -476,6 +516,19 @@ mod tests {
                 workspace_id: None,
                 account_query: Some("work".into()),
             },
+            KalVoiceIntent::SubmitFocused,
+            KalVoiceIntent::ClearFocused,
+            KalVoiceIntent::DirectPrompt {
+                target: "Release Mac".into(),
+                prompt: "Bump the version, don't touch CI.".into(),
+            },
+            KalVoiceIntent::FocusByState {
+                state: SessionAttention::WaitingForPermission,
+            },
+            KalVoiceIntent::FocusPrevious,
+            KalVoiceIntent::WhichSessions {
+                state: SessionAttention::Failed,
+            },
         ]
     }
 
@@ -585,6 +638,58 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn terminal_kalvoice_intents_use_stable_names_and_keep_the_prompt_verbatim() {
+        let direct = serde_json::to_value(KalVoiceIntent::DirectPrompt {
+            target: "Authentication".into(),
+            prompt: "Review the latest login failure, and don't send secrets.".into(),
+        })
+        .expect("json");
+        assert_eq!(direct["kind"], "direct_prompt");
+        assert_eq!(direct["target"], "Authentication");
+        assert_eq!(
+            direct["prompt"],
+            "Review the latest login failure, and don't send secrets."
+        );
+        assert_eq!(
+            serde_json::to_value(KalVoiceIntent::SubmitFocused).expect("json"),
+            serde_json::json!({ "kind": "submit_focused" })
+        );
+        assert_eq!(
+            serde_json::to_value(KalVoiceIntent::FocusPrevious).expect("json"),
+            serde_json::json!({ "kind": "focus_previous" })
+        );
+        let by_state = serde_json::to_value(KalVoiceIntent::FocusByState {
+            state: SessionAttention::Stuck,
+        })
+        .expect("json");
+        assert_eq!(by_state["state"], "stuck");
+        let which: KalVoiceIntent = serde_json::from_value(serde_json::json!({
+            "kind": "which_sessions", "state": "waiting_for_permission"
+        }))
+        .expect("decodes");
+        assert_eq!(
+            which,
+            KalVoiceIntent::WhichSessions {
+                state: SessionAttention::WaitingForPermission
+            }
+        );
+    }
+
+    #[test]
+    fn only_send_that_and_clear_that_are_free_of_the_allowance() {
+        assert!(!KalVoiceIntent::SubmitFocused.counts_against_allowance());
+        assert!(!KalVoiceIntent::ClearFocused.counts_against_allowance());
+        for intent in ca1_intents() {
+            let free = matches!(
+                intent,
+                KalVoiceIntent::SubmitFocused | KalVoiceIntent::ClearFocused
+            );
+            assert_eq!(intent.counts_against_allowance(), !free, "{intent:?}");
+        }
+        assert!(KalVoiceIntent::StatusReport.counts_against_allowance());
     }
 
     #[test]

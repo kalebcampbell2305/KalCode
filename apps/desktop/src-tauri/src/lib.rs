@@ -43,6 +43,7 @@ mod provider_health_commands;
 mod provider_pane_commands;
 mod resource_commands;
 mod runtime_shutdown;
+mod session_resolver;
 mod thread_commands;
 mod updater_commands;
 mod utility_commands;
@@ -646,6 +647,7 @@ pub fn run(removed_overrides: Vec<String>) {
                 code_commands::terminal_set_active,
                 code_commands::terminals_running,
                 thread_commands::thread_list,
+                session_resolver::session_resolve,
                 thread_commands::thread_get,
                 thread_commands::thread_messages,
                 thread_commands::thread_tool_calls,

@@ -2078,3 +2078,56 @@ fn voice_output_events_carry_ids_only() {
         ]
     );
 }
+
+#[test]
+fn terminal_kalvoice_directives_use_stable_tags() {
+    use kalcode_contracts::sessions::{SessionCandidate, SessionFollowUp};
+    let tag = |d: UiDirective| serde_json::to_value(d).expect("json");
+    let submit = tag(UiDirective::SubmitComposer {
+        thread_id: "t1".into(),
+    });
+    assert_eq!(submit["kind"], "submit_composer");
+    assert_eq!(submit["threadId"], "t1");
+    assert_eq!(
+        tag(UiDirective::ClearComposer {
+            thread_id: "t1".into()
+        })["kind"],
+        "clear_composer"
+    );
+    let compose = tag(UiDirective::ComposeInThread {
+        thread_id: "t1".into(),
+        text: "Bump the version.".into(),
+        submit: true,
+    });
+    assert_eq!(compose["kind"], "compose_in_thread");
+    assert_eq!(compose["text"], "Bump the version.");
+    assert_eq!(compose["submit"], true);
+    assert_eq!(
+        tag(UiDirective::FocusPrevious),
+        serde_json::json!({ "kind": "focus_previous" })
+    );
+    let choose = tag(UiDirective::ChooseSession {
+        question: "Which one \u{2014} Release Windows or Release Mac?".into(),
+        choices: vec![SessionCandidate {
+            thread_id: "t1".into(),
+            name: "Release Windows".into(),
+            provider_id: ProviderId::new(ProviderId::CODEX),
+            provider_name: "Codex".into(),
+            account_label: None,
+            workspace_id: "w1".into(),
+            workspace_name: "kalcode".into(),
+            status: kalcode_contracts::threads::ThreadStatus::Idle,
+            label: "Release Windows \u{b7} Codex".into(),
+        }],
+        follow_up: SessionFollowUp::Compose {
+            text: "bump".into(),
+            submit: true,
+        },
+    });
+    assert_eq!(choose["kind"], "choose_session");
+    assert_eq!(choose["followUp"]["kind"], "compose");
+    assert_eq!(
+        choose["choices"][0]["label"],
+        "Release Windows \u{b7} Codex"
+    );
+}

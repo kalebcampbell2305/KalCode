@@ -61,6 +61,7 @@ import { createPanesMemory, type PaneControls } from "./memory/panes.ts";
 import { createPermissionMemory, type PermissionMemory } from "./memory/permissions.ts";
 import { createProviderAccountsMemory } from "./memory/providerAccounts.ts";
 import { createRailMemory } from "./memory/rail.ts";
+import { sessionResolveHandler } from "./memory/sessionResolve.ts";
 import { createThreadsMemory } from "./memory/threads.ts";
 import { createUpdaterMemory } from "./memory/updater.ts";
 import { createMemoryKalVoice, isKalVoiceScenario, type KalVoiceScenario } from "./memoryKalVoice.ts";
@@ -671,6 +672,11 @@ export function createMemoryTransport(
     ...dashboard?.handlers,
     ...(kalvoice.handlers as DashboardHandlers),
   };
+  // The session resolver (0.1.5) reads the same listing every surface shows (Dashboard
+  // scenarios replace `thread_list` with their fixtures).
+  handlers.session_resolve = sessionResolveHandler(() =>
+    handlers.thread_list?.({ workspaceId: null, includeArchived: false }),
+  );
   // KalVoice's approval requests are answered like any other: `approval_decide` (actor: user).
   const decideOther = handlers.approval_decide;
   handlers.approval_decide = (args) => {

@@ -97,6 +97,7 @@ export type CommandName =
   | "thread_resume"
   | "thread_stop"
   | "thread_rebind_account"
+  | "session_resolve"
   | "thread_rename"
   | "thread_archive"
   | "thread_stream"

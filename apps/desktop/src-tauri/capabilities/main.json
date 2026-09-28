@@ -119,6 +119,7 @@
     "allow-terminal-set-active",
     "allow-terminals-running",
     "allow-thread-list",
+    "allow-session-resolve",
     "allow-thread-get",
     "allow-thread-messages",
     "allow-thread-tool-calls",

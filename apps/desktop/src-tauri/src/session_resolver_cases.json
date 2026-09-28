@@ -1,0 +1,398 @@
+{
+  "comment": "Shared cases for the session resolver: session_resolver_tests.rs (native) and apps/desktop/src/ipc/memory/sessionResolve.test.ts (memory transport mirror) must both pass every case. Thread keys expand to 0192f3c4-0000-7000-8000-0000000000<key>; ws1/ws2 to the two workspaces. Threads are listed most recent first, like the store listing.",
+  "workspaces": {
+    "ws1": { "id": "0192f3c4-0000-7000-8000-00000000a001", "name": "kalcode" },
+    "ws2": { "id": "0192f3c4-0000-7000-8000-00000000a002", "name": "atlas-api" }
+  },
+  "threads": [
+    {
+      "key": "01",
+      "name": "Authentication",
+      "provider": "claude-code",
+      "providerName": "Claude Code",
+      "account": "Personal",
+      "workspace": "ws1",
+      "status": "idle"
+    },
+    {
+      "key": "02",
+      "name": "Release Windows",
+      "provider": "codex",
+      "providerName": "Codex",
+      "account": null,
+      "workspace": "ws1",
+      "status": "active"
+    },
+    {
+      "key": "03",
+      "name": "Release Mac",
+      "provider": "codex",
+      "providerName": "Codex",
+      "account": null,
+      "workspace": "ws1",
+      "status": "waiting_for_permission"
+    },
+    {
+      "key": "04",
+      "name": "Research",
+      "provider": "gemini-cli",
+      "providerName": "Gemini CLI",
+      "account": "Gemini A",
+      "workspace": "ws1",
+      "status": "idle"
+    },
+    {
+      "key": "05",
+      "name": "Research",
+      "provider": "gemini-cli",
+      "providerName": "Gemini CLI",
+      "account": "Gemini B",
+      "workspace": "ws1",
+      "status": "thinking"
+    },
+    {
+      "key": "06",
+      "name": "Backend",
+      "provider": "claude-code",
+      "providerName": "Claude Code",
+      "account": "Work",
+      "workspace": "ws2",
+      "status": "failed"
+    },
+    {
+      "key": "07",
+      "name": "Backend",
+      "provider": "codex",
+      "providerName": "Codex",
+      "account": null,
+      "workspace": "ws1",
+      "status": "idle"
+    },
+    {
+      "key": "08",
+      "name": "Café Menu",
+      "provider": "claude-code",
+      "providerName": "Claude Code",
+      "account": "Personal",
+      "workspace": "ws2",
+      "status": "idle"
+    },
+    {
+      "key": "09",
+      "name": "Old Spike",
+      "provider": "codex",
+      "providerName": "Codex",
+      "account": null,
+      "workspace": "ws1",
+      "status": "idle",
+      "archived": true
+    },
+    {
+      "key": "10",
+      "name": "Docs",
+      "provider": "gemini-cli",
+      "providerName": "Gemini CLI",
+      "account": "Gemini A",
+      "workspace": "ws2",
+      "status": "waiting_for_dependency"
+    },
+    {
+      "key": "11",
+      "name": "API Fix",
+      "provider": "codex",
+      "providerName": "Codex",
+      "account": null,
+      "workspace": "ws2",
+      "status": "completed"
+    },
+    {
+      "key": "12",
+      "name": "New thread",
+      "provider": "claude-code",
+      "providerName": "Claude Code",
+      "account": "Personal",
+      "workspace": "ws1",
+      "status": "idle"
+    },
+    {
+      "key": "13",
+      "name": "New thread",
+      "provider": "claude-code",
+      "providerName": "Claude Code",
+      "account": "Personal",
+      "workspace": "ws1",
+      "status": "idle"
+    }
+  ],
+  "cases": [
+    {
+      "name": "explicit id",
+      "queryThread": "03",
+      "expect": { "kind": "resolved", "thread": "03", "tier": "explicit_id" }
+    },
+    { "name": "explicit id of an archived thread", "queryThread": "09", "expect": { "kind": "not_found" } },
+    {
+      "name": "exact name in the current workspace",
+      "query": "Release Mac",
+      "workspace": "ws1",
+      "expect": { "kind": "resolved", "thread": "03", "tier": "exact_name_in_workspace" }
+    },
+    {
+      "name": "exact name, any workspace, case-insensitive",
+      "query": "release mac",
+      "expect": { "kind": "resolved", "thread": "03", "tier": "exact_name" }
+    },
+    {
+      "name": "exact name outside the current workspace",
+      "query": "Release Mac",
+      "workspace": "ws2",
+      "expect": { "kind": "resolved", "thread": "03", "tier": "exact_name" }
+    },
+    {
+      "name": "similar names clarify (Release Windows / Release Mac)",
+      "query": "Release",
+      "workspace": "ws1",
+      "expect": {
+        "kind": "ambiguous",
+        "threads": ["02", "03"],
+        "total": 2,
+        "question": "Which one — Release Windows or Release Mac?"
+      }
+    },
+    {
+      "name": "a typo in a unique name",
+      "query": "Relase Mac",
+      "expect": { "kind": "resolved", "thread": "03", "tier": "fuzzy" }
+    },
+    {
+      "name": "a word-start fragment of a unique name",
+      "query": "Mac",
+      "expect": { "kind": "resolved", "thread": "03", "tier": "fuzzy" }
+    },
+    {
+      "name": "same name on two accounts clarifies by account",
+      "query": "Research",
+      "workspace": "ws1",
+      "expect": {
+        "kind": "ambiguous",
+        "threads": ["04", "05"],
+        "total": 2,
+        "question": "Which one — Research on Gemini A or Research on Gemini B?"
+      }
+    },
+    {
+      "name": "account + name picks Gemini B",
+      "query": "Gemini B Research",
+      "expect": { "kind": "resolved", "thread": "05", "tier": "provider_account_name" }
+    },
+    {
+      "name": "name + account picks Gemini A",
+      "query": "Research on Gemini A",
+      "expect": { "kind": "resolved", "thread": "04", "tier": "provider_account_name" }
+    },
+    {
+      "name": "provider + name without the account still clarifies",
+      "query": "Gemini Research",
+      "expect": {
+        "kind": "ambiguous",
+        "threads": ["04", "05"],
+        "total": 2,
+        "question": "Which one — Research on Gemini A or Research on Gemini B?"
+      }
+    },
+    {
+      "name": "provider + name across workspaces",
+      "query": "Claude Backend",
+      "workspace": "ws1",
+      "expect": { "kind": "resolved", "thread": "06", "tier": "provider_account_name" }
+    },
+    {
+      "name": "the current workspace wins an exact name",
+      "query": "Backend",
+      "workspace": "ws1",
+      "expect": { "kind": "resolved", "thread": "07", "tier": "exact_name_in_workspace" }
+    },
+    {
+      "name": "same name, different providers, no workspace",
+      "query": "Backend",
+      "expect": {
+        "kind": "ambiguous",
+        "threads": ["06", "07"],
+        "total": 2,
+        "question": "Which one — Backend on Claude Code or Backend on Codex?"
+      }
+    },
+    {
+      "name": "same name, other workspace in front",
+      "query": "Backend",
+      "workspace": "ws2",
+      "expect": { "kind": "resolved", "thread": "06", "tier": "exact_name_in_workspace" }
+    },
+    {
+      "name": "diacritics fold (cafe finds Café)",
+      "query": "cafe menu",
+      "workspace": "ws1",
+      "expect": { "kind": "resolved", "thread": "08", "tier": "exact_name" }
+    },
+    {
+      "name": "upper case with diacritics",
+      "query": "CAFÉ MENU",
+      "expect": { "kind": "resolved", "thread": "08", "tier": "exact_name" }
+    },
+    {
+      "name": "decomposed diacritics",
+      "query": "Café menu",
+      "expect": { "kind": "resolved", "thread": "08", "tier": "exact_name" }
+    },
+    {
+      "name": "archived threads never match",
+      "query": "Old Spike",
+      "workspace": "ws1",
+      "expect": { "kind": "not_found" }
+    },
+    {
+      "name": "it = the focused thread",
+      "query": "it",
+      "focused": "05",
+      "expect": { "kind": "resolved", "thread": "05", "tier": "focused" }
+    },
+    {
+      "name": "this, nothing focused = the last target",
+      "query": "this",
+      "last": "02",
+      "expect": { "kind": "resolved", "thread": "02", "tier": "last_target" }
+    },
+    {
+      "name": "focus beats the last target",
+      "query": "that one",
+      "focused": "01",
+      "last": "02",
+      "expect": { "kind": "resolved", "thread": "01", "tier": "focused" }
+    },
+    { "name": "that, with nothing focused or remembered", "query": "that", "expect": { "kind": "not_found" } },
+    {
+      "name": "an archived focused thread is not a target",
+      "query": "it",
+      "focused": "09",
+      "expect": { "kind": "not_found" }
+    },
+    {
+      "name": "a name beats the focused thread",
+      "query": "Release Mac",
+      "focused": "01",
+      "expect": { "kind": "resolved", "thread": "03", "tier": "exact_name" }
+    },
+    { "name": "empty query", "query": "   ", "expect": { "kind": "not_found" } },
+    {
+      "name": "exact name elsewhere when the current workspace has none",
+      "query": "Docs",
+      "workspace": "ws1",
+      "expect": { "kind": "resolved", "thread": "10", "tier": "exact_name" }
+    },
+    {
+      "name": "indistinguishable idle threads",
+      "query": "New thread",
+      "workspace": "ws1",
+      "expect": {
+        "kind": "ambiguous",
+        "threads": ["12", "13"],
+        "total": 2,
+        "question": "Which one? 2 sessions match that name."
+      }
+    },
+    {
+      "name": "provider only, unique in the current workspace",
+      "query": "Codex",
+      "workspace": "ws2",
+      "expect": { "kind": "resolved", "thread": "11", "tier": "provider_only" }
+    },
+    {
+      "name": "provider only, several in the current workspace",
+      "query": "Codex",
+      "workspace": "ws1",
+      "expect": {
+        "kind": "ambiguous",
+        "threads": ["02", "03", "07"],
+        "total": 3,
+        "question": "Which one — Release Windows, Release Mac or Backend?"
+      }
+    },
+    {
+      "name": "provider + account only",
+      "query": "Gemini B",
+      "expect": { "kind": "resolved", "thread": "05", "tier": "provider_only" }
+    },
+    {
+      "name": "at most four choices",
+      "query": "Claude",
+      "expect": {
+        "kind": "ambiguous",
+        "threads": ["01", "06", "08", "12"],
+        "total": 5,
+        "question": "Which one — Authentication, Backend, Café Menu or New thread? 5 sessions match; say more of the name."
+      }
+    },
+    {
+      "name": "filler words are dropped",
+      "query": "the Authentication thread",
+      "workspace": "ws1",
+      "expect": { "kind": "resolved", "thread": "01", "tier": "exact_name_in_workspace" }
+    },
+    {
+      "name": "a typo in a long name",
+      "query": "Authentcation",
+      "expect": { "kind": "resolved", "thread": "01", "tier": "fuzzy" }
+    },
+    { "name": "a short fragment", "query": "auth", "expect": { "kind": "resolved", "thread": "01", "tier": "fuzzy" } },
+    {
+      "name": "provider only prefers the current workspace",
+      "query": "Gemini",
+      "workspace": "ws2",
+      "expect": { "kind": "resolved", "thread": "10", "tier": "provider_only" }
+    },
+    {
+      "name": "account label only",
+      "query": "Personal",
+      "workspace": "ws1",
+      "expect": {
+        "kind": "ambiguous",
+        "threads": ["01", "12", "13"],
+        "total": 3,
+        "question": "Which one? 3 sessions match that name."
+      }
+    },
+    {
+      "name": "a palette label resolves",
+      "query": "Research · Gemini CLI · Gemini B",
+      "expect": { "kind": "resolved", "thread": "05", "tier": "provider_account_name" }
+    },
+    {
+      "name": "provider + multi-word name",
+      "query": "Codex API Fix",
+      "expect": { "kind": "resolved", "thread": "11", "tier": "provider_account_name" }
+    },
+    {
+      "name": "the Codex one",
+      "query": "the Codex one",
+      "workspace": "ws2",
+      "expect": { "kind": "resolved", "thread": "11", "tier": "provider_only" }
+    },
+    {
+      "name": "same name only elsewhere still clarifies",
+      "query": "Research",
+      "workspace": "ws2",
+      "expect": {
+        "kind": "ambiguous",
+        "threads": ["04", "05"],
+        "total": 2,
+        "question": "Which one — Research on Gemini A or Research on Gemini B?"
+      }
+    },
+    { "name": "an unknown name", "query": "Payments", "workspace": "ws1", "expect": { "kind": "not_found" } },
+    {
+      "name": "a wrong account never falls back to another account",
+      "query": "Gemini C Research",
+      "expect": { "kind": "not_found" }
+    }
+  ]
+}

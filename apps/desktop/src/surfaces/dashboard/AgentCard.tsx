@@ -55,7 +55,7 @@ function isInteractive(target: EventTarget | null): boolean {
 }
 
 /**
- * One agent (thread) on the Dashboard: provider, name, workspace and branch, what it is doing now,
+ * One agent (thread) on the Dashboard: provider, name, workspace, account and branch, what it is doing now,
  * its status, permission mode and last activity. PERMISSION REQUIRED carries the inline approval;
  * DONE is marked "Completed" with its follow-ups. Clicking the card focuses the thread's pane.
  */
@@ -73,6 +73,8 @@ export const AgentCard = memo(function AgentCard({
 }: AgentCardProps) {
   const display = displayStatusOf(thread.status);
   const tone = DISPLAY_STATUS_TONE[display.status];
+  // The provider account the thread runs on (text, never a credential), e.g. "Gemini B".
+  const accountLabel = thread.accountLabel?.trim() || null;
   const [confirmStop, setConfirmStop] = useState(false);
   const stopRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLButtonElement>(null);
@@ -150,6 +152,12 @@ export const AgentCard = memo(function AgentCard({
 
       <p className={styles.where}>
         <span className={styles.workspace}>{thread.workspaceName}</span>
+        {accountLabel ? (
+          <span className={styles.account} title={`Account: ${accountLabel}`}>
+            <span className="visually-hidden">account </span>
+            {accountLabel}
+          </span>
+        ) : null}
         {thread.branch ? (
           <span className={styles.branch}>
             <GitBranch aria-hidden="true" className={styles.branchGlyph} />

@@ -3,6 +3,7 @@ import { useToast } from "@kalcode/ui/components";
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { TerminalSize } from "../ipc/client.ts";
 import { type KalCodeError, toKalCodeError } from "../ipc/errors.ts";
+import { recordFocus } from "./focusHistory.ts";
 import { useRuntime } from "./RuntimeProvider.tsx";
 import { isWorkspaceEvent, neighbourAfterClose, pickActiveTerminal } from "./workspaceState.ts";
 
@@ -294,6 +295,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         pending.terminalId === terminalId;
       if (!reconcilesPending) lifecycle.focusIntent += 1;
       setSelected({ workspaceId, terminalId });
+      recordFocus({ kind: "terminal", terminalId, workspaceId });
       if (focus) requestFocus(terminalId);
       // Remembered natively so the same tab is in front after a restart.
       client.setActiveTerminal(workspaceId, terminalId).catch(() => undefined);
