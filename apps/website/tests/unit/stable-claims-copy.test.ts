@@ -147,7 +147,9 @@ describe("KalVoice voice-to-thread docs", () => {
   it("lists only phrases the 0.1.5 grammar understands", async () => {
     const docs = text(await render(KalVoiceDocs, "/docs/kalvoice"));
     for (const phrase of [
-      "“Send that” sends what is in the focused thread's message box, and “Clear that” empties it without sending. Neither counts as a KalVoice Request.",
+      "“Send that” sends what is in the focused thread's message box.",
+      "“Clear that” removes only the text KalVoice typed there since the last send or clear, and never text you typed yourself; if KalVoice can't tell which text it typed, it changes nothing and says so.",
+      "neither counts as a KalVoice Request.",
       "“Tell Authentication to run the tests” or “Ask Research why the build failed” opens that thread",
       "“Research on Gemini B”",
       "“Which one — Release Windows or Release Mac?”",
@@ -158,6 +160,9 @@ describe("KalVoice voice-to-thread docs", () => {
     ]) {
       expect(docs).toContain(phrase);
     }
+    // B5 fix/voice-clear-scope (582ab5b, voiceDirectives.ts clearComposer): "clear that" never
+    // empties the whole message box.
+    expect(docs).not.toMatch(/Clear that[^.]*\bempties\b/i);
   });
 
   it("describes the automatic speech model and local intelligence preparation", async () => {

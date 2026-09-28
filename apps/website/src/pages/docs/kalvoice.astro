@@ -108,8 +108,10 @@ const stable = servedStableRelease(RELEASES);
   <p>KalVoice can put your words into a thread and send them, always through that thread's own Send:</p>
   <ul>
     <li>
-      “Send that” sends what is in the focused thread's message box, and “Clear that” empties it
-      without sending. Neither counts as a KalVoice Request.
+      “Send that” sends what is in the focused thread's message box. “Clear that” removes only the
+      text KalVoice typed there since the last send or clear, and never text you typed yourself; if
+      KalVoice can't tell which text it typed, it changes nothing and says so. Neither sends
+      anything else, and neither counts as a KalVoice Request.
     </li>
     <li>
       “Tell Authentication to run the tests” or “Ask Research why the build failed” opens that
