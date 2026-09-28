@@ -7,9 +7,13 @@ import Icon from "../components/Icon.astro";
 import SectionHead from "../components/SectionHead.astro";
 import StageSlot from "../components/StageSlot.astro";
 import Base from "../layouts/Base.astro";
+import { RELEASES, servedStableRelease } from "../lib/releases";
 import { KALVOICE, getPage } from "../lib/site";
 
 const page = getPage("/kalvoice");
+// KalVoice is described as shipped only while /download serves a signed Stable release.
+const stable = servedStableRelease(RELEASES);
+const description = stable ? page.description.replace(/ In development\.$/, "") : page.description;
 
 const allowances = PLANS.map((plan) => plan.limits.kalvoiceRequestsPerMonth ?? 0);
 const logMax = Math.log10(Math.max(...allowances));
@@ -28,20 +32,26 @@ const privacy = [
     body: "KalCode's event log notes that a dictation or request happened. Your words are not written to it.",
   },
   {
-    label: "your provider",
-    title: "Reasoning uses an account you connected.",
-    body: "Commands that need a model use the provider you choose. Structured commands run without any model at all.",
+    label: "local interpretation",
+    title: "Commands are understood on your computer.",
+    body: "Structured commands run without any model at all. Other commands use KalVoice's on-device interpreter; when it is not ready, KalVoice says so instead of sending your request to a provider.",
   },
 ];
 ---
-<Base title={page.title} description={page.description} path={page.path} world>
+<Base title={page.title} description={description} path={page.path} world>
   <section class="voice-hero" aria-labelledby="kv-title">
     <Backdrop variant="nebula" />
     <div class="voice-hero__orb" aria-hidden="true">
       <Globe variant="kalvoice" hero alt="" sizes="(min-width: 60rem) 30rem, 78vw" />
     </div>
     <div class="container voice-hero__content">
-      <p class="chip chip--dev">{KALVOICE.status}</p>
+      {
+        stable ? (
+          <p class="chip chip--built">Available in KalCode Stable {stable.version}</p>
+        ) : (
+          <p class="chip chip--dev">{KALVOICE.status}</p>
+        )
+      }
       <h1 id="kv-title" class="voice-hero__title">
         <span class="visually-hidden">KalVoice: </span>
         <span class="voice-hero__wordmark" aria-hidden="true"></span>

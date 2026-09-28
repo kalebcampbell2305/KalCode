@@ -94,7 +94,7 @@ it("does not announce signed Windows and Mac availability from an incomplete Sta
 });
 
 const STABLE_KALVOICE =
-  "KalVoice ships in KalCode Stable 0.1.5. Speech recognition and command interpretation run on your computer; KalCode downloads their signed local components in the app when you set up KalVoice.";
+  "KalVoice ships in KalCode Stable 0.1.5. Speech recognition and command interpretation run on your computer; KalCode downloads their signed local components in the app when you set up KalVoice, with no separate Python or Ollama installation.";
 const PREVIEW_KALVOICE = "KalVoice is in development and not available in a public build yet.";
 
 /**
