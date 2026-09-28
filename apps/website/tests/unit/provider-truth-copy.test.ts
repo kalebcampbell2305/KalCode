@@ -16,8 +16,10 @@ import DocsIndex from "../../src/pages/docs/index.astro";
 import LocalFirstDocs from "../../src/pages/docs/local-first.astro";
 import ProvidersDocs from "../../src/pages/docs/providers.astro";
 import Home from "../../src/pages/index.astro";
+import KalVoicePage from "../../src/pages/kalvoice.astro";
 import Product from "../../src/pages/product.astro";
 import Security from "../../src/pages/security.astro";
+import Updates from "../../src/pages/updates.astro";
 
 beforeEach(() => Object.assign(fixture.manifest, structuredClone(publishedManifest)));
 
@@ -49,7 +51,7 @@ function metaDescription(html: string) {
   return match ? decode(match[1]) : "";
 }
 
-const PAGES_UNDER_TEST = [
+const PAGES_UNDER_TEST: { name: string; component: Component; path: string; credentials?: boolean }[] = [
   { name: "home page", component: Home as Component, path: "/" },
   { name: "product page", component: Product as Component, path: "/product" },
   { name: "provider docs", component: ProvidersDocs as Component, path: "/docs/providers" },
@@ -57,6 +59,10 @@ const PAGES_UNDER_TEST = [
   { name: "security page", component: Security as Component, path: "/security" },
   { name: "docs index", component: DocsIndex as Component, path: "/docs" },
   { name: "account page", component: Account as Component, path: "/account" },
+  { name: "KalVoice page", component: KalVoicePage as Component, path: "/kalvoice" },
+  // The Updates archive keeps its dated "Foundation" entry ("OS keychain secrets", true of KalCode's
+  // own secret store at the time), so only the provider-status list applies there.
+  { name: "updates page", component: Updates as Component, path: "/updates", credentials: false },
 ];
 
 // KalCode account sign-in is Google, Microsoft or a one-time email link (B4 8d6c133:
@@ -101,11 +107,11 @@ const STALE_CREDENTIAL_STORAGE = [
   /Secret Service on Linux/i,
 ];
 
-describe.each(PAGES_UNDER_TEST)("the $name", ({ component, path }) => {
+describe.each(PAGES_UNDER_TEST)("the $name", ({ component, path, credentials = true }) => {
   it("carries no stale provider-status or credential-storage claim", async () => {
     const html = await render(component, path);
     const copy = `${text(html)} ${metaDescription(html)}`;
-    for (const pattern of [...STALE_PROVIDER_STATUS, ...STALE_CREDENTIAL_STORAGE]) {
+    for (const pattern of [...STALE_PROVIDER_STATUS, ...(credentials ? STALE_CREDENTIAL_STORAGE : [])]) {
       expect(copy).not.toMatch(pattern);
     }
   });
@@ -161,7 +167,7 @@ describe("credential storage", () => {
     expect(copy).toContain(
       "Each provider account you add gets its own KalCode-managed provider profile on your device",
     );
-    expect(copy).toContain("Gemini CLI in its own AES-256-GCM encrypted file, never in plaintext");
+    expect(copy).toContain("Gemini CLI keeps its sign-in in its own AES-256-GCM encrypted file, never in plaintext");
     expect(copy).toContain("KalCode never reads or copies these credentials");
   });
 
@@ -169,6 +175,7 @@ describe("credential storage", () => {
     for (const [component, path] of [
       [LocalFirstDocs, "/docs/local-first"],
       [Security, "/security"],
+      [ProvidersDocs, "/docs/providers"],
     ] as const) {
       const copy = text(await render(component as Component, path));
       expect(copy).toMatch(/key from your computer and user names/);

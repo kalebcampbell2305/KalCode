@@ -13,7 +13,7 @@ import Base from "../layouts/Base.astro";
 import { HERO_POSTER_PRELOADS } from "../lib/hero";
 import { RELEASES, downloadCta, servedStableRelease } from "../lib/releases";
 import { structuredData } from "../lib/seo";
-import { KALVOICE, PROVIDERS, getPage } from "../lib/site";
+import { KALVOICE, PROVIDERS, getPage, planSummary } from "../lib/site";
 import { firstStage, hasStage } from "../lib/stage";
 
 const page = getPage("/");
@@ -26,18 +26,17 @@ const workspaceStage = firstStage("TryKalCode", "AppWindow");
 const voiceStage = firstStage("KalVoiceStage", "KalVoiceDemo");
 const commandStage = firstStage("CommandCenterStage", "DemoCenter");
 
-/** Plan cards: three honest highlights each, straight from the catalog. */
+/**
+ * Plan cards: three honest highlights each, straight from the catalog. Agents, team workflows and
+ * missions are Gated on Stable 0.1.5 (crates/native-core/src/flags.rs), so no card offers them.
+ */
 const FEATURED = "pro";
 const planPoints = (plan: (typeof PLANS)[number]) => [
   `${formatKalVoiceAllowance(plan.limits)} KalVoice Requests a month`,
   plan.limits.concurrentThreads === null
     ? "Unlimited threads at once"
     : `${plan.limits.concurrentThreads} threads running at once`,
-  plan.limits.advancedMissions
-    ? "Advanced missions with verification"
-    : plan.limits.persistentAgents
-      ? "Persistent agents and team workflows"
-      : "Every provider and permission mode",
+  "Every provider and permission mode",
 ];
 
 /** Permission policy as it reads in Approve mode (the default). */
@@ -167,8 +166,8 @@ const policies = [
               <h2 id="workspace-title" class="h2">A real workspace. Not a chatbot.</h2>
               <div class="statement__side">
                 <p class="body-lg">
-                  Open a project, connect your providers, and get to work. Real terminals, provider panes
-                  and your agents, side by side.
+                  Open a project, connect your providers, and get to work. Real terminals, a browser pane
+                  and your agents' threads, in one workspace.
                 </p>
                 <a class="button button--secondary" href="/product">
                   Explore the product <Icon name="arrow-right" />
@@ -215,7 +214,7 @@ const policies = [
     </div>
   </section>
 
-  <!-- Command center: the full-width dashboard moment. -->
+  <!-- Dashboard: the full-width dashboard moment. -->
   {
     commandStage && (
       <section class="world-section world-section--tall" id="command" aria-labelledby="command-title">
@@ -223,7 +222,7 @@ const policies = [
         <Backdrop variant="planet" side="left" size="xl" intensity="high" />
         <div class="container">
           <header class="statement statement--center" data-reveal>
-            <p class="eyebrow">Command center</p>
+            <p class="eyebrow">Dashboard</p>
             <h2 id="command-title" class="h2">Every thread. One dashboard.</h2>
             <p class="body-lg">
               What is running, what needs you, what is done — from runtime events, not from what a model
@@ -364,7 +363,7 @@ const policies = [
                   {formatPrice(plan.price)}
                   <small>{formatInterval(plan.price)}</small>
                 </p>
-                <p class="plan-card__summary">{plan.summary}</p>
+                <p class="plan-card__summary">{planSummary(plan)}</p>
                 <ul class="plan-card__points" role="list">
                   {planPoints(plan).map((point) => (
                     <li>

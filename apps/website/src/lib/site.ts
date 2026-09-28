@@ -3,6 +3,8 @@
  * Keep this module free of Astro or Worker imports so both runtimes can use it.
  */
 
+import type { Plan, PlanId } from "@kalcode/protocol/plans";
+
 export const SITE_ORIGIN = "https://kalcoded.com";
 export const SITE_NAME = "KalCode";
 
@@ -81,6 +83,19 @@ export const KALVOICE = {
   globeAlt: "KalVoice globe: a sphere of connected points of light",
 } as const;
 
+/**
+ * Website wording for a plan's one-line summary. The shared catalog (packages/protocol/src/plans.ts,
+ * also read by the desktop app) describes MAX by features that are Gated on Stable 0.1.5 (missions:
+ * crates/native-core/src/flags.rs), so the site says what the plan gives today instead.
+ */
+const PLAN_SUMMARY_OVERRIDES: Partial<Record<PlanId, string>> = {
+  max: "For heavy daily KalVoice use across many projects.",
+};
+
+export function planSummary(plan: Pick<Plan, "id" | "summary">): string {
+  return PLAN_SUMMARY_OVERRIDES[plan.id] ?? plan.summary;
+}
+
 export interface PageInfo {
   path: string;
   title: string;
@@ -104,13 +119,13 @@ export const PAGES = [
     path: "/",
     title: "KalCode — One intelligence that operates your entire AI workspace",
     description:
-      "KalCode is a desktop workspace in private development. Connect the coding agents you already use — Claude Code, Codex and Gemini CLI — run them side by side, approve every action, and speak your prompts with KalVoice.",
+      "KalCode is a desktop workspace in private development. Connect the coding agents you already use — Claude Code, Codex and Gemini CLI — run their threads at the same time, approve every action, and speak your prompts with KalVoice.",
   },
   {
     path: "/product",
     title: "Product — KalCode",
     description:
-      "The KalCode workspace piece by piece: provider panes, threads, the Dashboard, permission modes, KalVoice and local-first storage, with an honest table of what is built today and what is planned.",
+      "The KalCode workspace piece by piece: terminals and panes, provider threads, the Dashboard, permission modes, KalVoice and local-first storage, with an honest table of what is built today and what is planned.",
   },
   {
     path: "/kalvoice",
@@ -122,7 +137,7 @@ export const PAGES = [
     path: "/pricing",
     title: "Pricing — KalCode",
     description:
-      "KalCode plans: Free, Pro, MAX and MAX 2X. Every plan includes all providers, all permission modes and unlimited local dictation; plans differ in KalVoice Requests and workspace features. AI usage stays on your own provider account.",
+      "KalCode plans: Free, Pro, MAX and MAX 2X. Every plan includes all providers, all permission modes and unlimited local dictation; plans differ in KalVoice Requests and threads running at once. AI usage stays on your own provider account.",
   },
   {
     path: "/download",

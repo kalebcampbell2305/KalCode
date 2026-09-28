@@ -36,7 +36,9 @@ import Docs from "../../layouts/Docs.astro";
     Each account has its own managed provider profile. Signing a CLI in from a separate terminal signs
     in a different profile that KalCode threads don't use, so there is nothing to run by hand. The
     provider keeps the credentials in that account's profile and KalCode never sees them. Gemini CLI
-    keeps its sign-in in its own encrypted credential store, never in plaintext.
+    keeps its sign-in in its own encrypted credential store, never in plaintext. Gemini derives that
+    store's key from your computer and user names, so it keeps the sign-in out of plaintext but not
+    away from other programs running as your user.
   </p>
   <p>
     Your usage of each provider is billed by that provider under your account, exactly as it is when
