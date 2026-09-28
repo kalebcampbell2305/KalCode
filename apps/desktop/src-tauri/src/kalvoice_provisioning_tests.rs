@@ -12,6 +12,178 @@ use std::sync::atomic::AtomicUsize;
 
 type FixtureResult<T> = Result<T, Box<dyn std::error::Error>>;
 
+fn assert_safe_acquisition_message(error: ComponentAcquisitionError, expected: &str) {
+    let mapped = map_acquisition_error(error);
+    assert_eq!(mapped.code(), "component_acquisition_failed");
+    let message = mapped.to_string();
+    assert!(message.contains(expected), "missing {expected}: {message}");
+    assert!(message.len() < 240);
+    for sensitive in ["https://", "C:\\", "Bearer", "token=", "signature="] {
+        assert!(
+            !message.contains(sensitive),
+            "message must not expose transport inputs"
+        );
+    }
+}
+
+macro_rules! acquisition_message_test {
+    ($name:ident, $error:expr, $expected:literal) => {
+        #[test]
+        fn $name() {
+            assert_safe_acquisition_message($error, $expected);
+        }
+    };
+}
+
+acquisition_message_test!(
+    acquisition_signature_failure_is_specific,
+    ComponentAcquisitionError::Manifest(
+        kalcode_kalvoice::component_manifest::VerifyError::BadSignature
+    ),
+    "signature"
+);
+acquisition_message_test!(
+    acquisition_expired_manifest_is_specific,
+    ComponentAcquisitionError::Manifest(kalcode_kalvoice::component_manifest::VerifyError::Expired),
+    "expired"
+);
+acquisition_message_test!(
+    acquisition_not_yet_valid_manifest_is_specific,
+    ComponentAcquisitionError::Manifest(
+        kalcode_kalvoice::component_manifest::VerifyError::NotYetValid
+    ),
+    "not valid yet"
+);
+acquisition_message_test!(
+    acquisition_wrong_target_is_specific,
+    ComponentAcquisitionError::WrongTarget,
+    "operating system"
+);
+acquisition_message_test!(
+    acquisition_invalid_response_is_specific,
+    ComponentAcquisitionError::InvalidResponse,
+    "invalid download response"
+);
+acquisition_message_test!(
+    acquisition_http_status_is_specific,
+    ComponentAcquisitionError::Server(503),
+    "503"
+);
+acquisition_message_test!(
+    acquisition_connection_failure_is_specific,
+    ComponentAcquisitionError::Network,
+    "connection"
+);
+acquisition_message_test!(
+    acquisition_checksum_failure_is_specific,
+    ComponentAcquisitionError::ChecksumMismatch,
+    "integrity"
+);
+acquisition_message_test!(
+    acquisition_unsafe_staging_is_specific,
+    ComponentAcquisitionError::UnsafeStaging,
+    "download storage"
+);
+
+#[test]
+fn acquisition_storage_and_control_failures_keep_their_existing_classification() {
+    let cases = [
+        (
+            ComponentAcquisitionError::ConsentRequired,
+            "consent_required",
+        ),
+        (ComponentAcquisitionError::Cancelled, "download_cancelled"),
+        (
+            ComponentAcquisitionError::NotEnoughSpace,
+            "resource_capacity_unavailable",
+        ),
+        (
+            ComponentAcquisitionError::Install(ComponentStoreError::InUse),
+            "component_in_use",
+        ),
+        (
+            ComponentAcquisitionError::Install(ComponentStoreError::UnsafeArchive),
+            "component_storage_failed",
+        ),
+        (
+            ComponentAcquisitionError::Storage(io::ErrorKind::PermissionDenied),
+            "component_storage_failed",
+        ),
+    ];
+    for (error, expected_code) in cases {
+        assert_eq!(map_acquisition_error(error).code(), expected_code);
+    }
+}
+
+#[test]
+fn acquisition_diagnostics_preserve_typed_manifest_causes_and_numeric_http_status() {
+    for cause in [
+        VerifyError::Malformed,
+        VerifyError::UnsupportedHeader,
+        VerifyError::UnknownKey,
+        VerifyError::BadSignature,
+        VerifyError::InvalidDocument,
+        VerifyError::InvalidUrl,
+        VerifyError::NotYetValid,
+        VerifyError::Expired,
+    ] {
+        let mapped = map_acquisition_error(ComponentAcquisitionError::Manifest(cause));
+        let ComponentManagerError::AcquisitionFailed(reason) = mapped else {
+            panic!("typed manifest cause was lost");
+        };
+        assert_eq!(reason, ComponentAcquisitionFailure::Manifest(cause));
+        assert_eq!(
+            reason.diagnostic(),
+            ("manifest_validation", cause.code(), None)
+        );
+    }
+    for status in [0, 403, 404, 429, 500, 503, u16::MAX] {
+        let ComponentManagerError::AcquisitionFailed(reason) =
+            map_acquisition_error(ComponentAcquisitionError::Server(status))
+        else {
+            panic!("HTTP status was lost");
+        };
+        assert_eq!(
+            reason.diagnostic(),
+            ("download", "http_status", Some(status))
+        );
+        assert!(reason.to_string().contains(&status.to_string()));
+    }
+}
+
+#[test]
+fn acquisition_diagnostic_fields_have_only_allowlisted_stage_and_cause_values() {
+    let cases = [
+        (
+            ComponentAcquisitionError::WrongTarget,
+            "target_validation",
+            "wrong_target",
+        ),
+        (
+            ComponentAcquisitionError::InvalidResponse,
+            "download",
+            "invalid_response",
+        ),
+        (ComponentAcquisitionError::Network, "download", "network"),
+        (
+            ComponentAcquisitionError::ChecksumMismatch,
+            "integrity_validation",
+            "checksum_mismatch",
+        ),
+        (
+            ComponentAcquisitionError::UnsafeStaging,
+            "download_staging",
+            "unsafe_staging",
+        ),
+    ];
+    for (error, expected_stage, expected_cause) in cases {
+        let ComponentManagerError::AcquisitionFailed(reason) = map_acquisition_error(error) else {
+            panic!("acquisition cause was lost");
+        };
+        assert_eq!(reason.diagnostic(), (expected_stage, expected_cause, None));
+    }
+}
+
 #[derive(Default)]
 struct MemorySecrets(Mutex<HashMap<SecretKey, SecretString>>);
 impl SecretStore for MemorySecrets {

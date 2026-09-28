@@ -21,7 +21,7 @@ use kalcode_kalvoice::component_catalog::{
 };
 use kalcode_kalvoice::component_floor::{CatalogFloorTrack, ComponentFloorAuthority};
 use kalcode_kalvoice::component_manifest::{
-    ComponentArch, ComponentKind, ComponentPlatform, ComponentVerifier,
+    ComponentArch, ComponentKind, ComponentPlatform, ComponentVerifier, VerifyError,
 };
 use kalcode_kalvoice::component_store::{
     ComponentLease, ComponentReceiptStatus, ComponentSelector, ComponentStore, ComponentStoreError,
@@ -110,7 +110,7 @@ pub(crate) enum ComponentManagerError {
     CatalogRollback,
     ResourceUnavailable,
     CapacityHeld(ComponentCapacityReason),
-    AcquisitionFailed,
+    AcquisitionFailed(ComponentAcquisitionFailure),
     StorageUnavailable,
     InUse,
     NotInstalled,
@@ -129,7 +129,7 @@ impl std::fmt::Display for ComponentManagerError {
             Self::CatalogRollback => "KalVoice blocked a component catalog rollback.",
             Self::ResourceUnavailable => "KalVoice could not verify enough system capacity. This download attempt ended. Allow resource readings to refresh, then retry the download.",
             Self::CapacityHeld(reason) => reason.message(),
-            Self::AcquisitionFailed => "The signed component download failed. Try again.",
+            Self::AcquisitionFailed(reason) => return reason.fmt(formatter),
             Self::StorageUnavailable => "KalVoice's signed component storage is unavailable.",
             Self::InUse => "That speech model is still in use.",
             Self::NotInstalled => "That speech model isn't installed.",
@@ -151,11 +151,58 @@ impl ComponentManagerError {
             Self::CatalogStorage => "component_catalog_storage_failed",
             Self::CatalogRollback => "component_catalog_rollback",
             Self::ResourceUnavailable | Self::CapacityHeld(_) => "resource_capacity_unavailable",
-            Self::AcquisitionFailed => "component_acquisition_failed",
+            Self::AcquisitionFailed(_) => "component_acquisition_failed",
             Self::StorageUnavailable => "component_storage_failed",
             Self::InUse => "component_in_use",
             Self::NotInstalled => "model_not_installed",
         }
+    }
+}
+
+/// Only typed, bounded causes cross into the UI and diagnostic event. Never retain an artifact
+/// URL, signed token, filesystem path, or transport error string here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ComponentAcquisitionFailure {
+    Manifest(VerifyError),
+    WrongTarget,
+    InvalidResponse,
+    Server(u16),
+    Network,
+    ChecksumMismatch,
+    UnsafeStaging,
+}
+
+impl ComponentAcquisitionFailure {
+    fn diagnostic(self) -> (&'static str, &'static str, Option<u16>) {
+        match self {
+            Self::Manifest(reason) => ("manifest_validation", reason.code(), None),
+            Self::WrongTarget => ("target_validation", "wrong_target", None),
+            Self::InvalidResponse => ("download", "invalid_response", None),
+            Self::Server(status) => ("download", "http_status", Some(status)),
+            Self::Network => ("download", "network", None),
+            Self::ChecksumMismatch => ("integrity_validation", "checksum_mismatch", None),
+            Self::UnsafeStaging => ("download_staging", "unsafe_staging", None),
+        }
+    }
+}
+
+impl std::fmt::Display for ComponentAcquisitionFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Manifest(VerifyError::Expired) => "KalVoice rejected expired signed component metadata. Try again after the component catalog is refreshed.",
+            Self::Manifest(VerifyError::NotYetValid) => "KalVoice's signed component metadata is not valid yet. Check your system date and time, then retry.",
+            Self::Manifest(VerifyError::BadSignature) => "KalVoice rejected the component metadata because its signature verification failed. This component was not installed.",
+            Self::Manifest(VerifyError::UnknownKey) => "KalVoice rejected the component metadata because its signing key is not trusted. This component was not installed.",
+            Self::Manifest(VerifyError::InvalidUrl) => "KalVoice rejected a component download address that is not authorized by its signed metadata. This component was not installed.",
+            Self::Manifest(VerifyError::UnsupportedHeader) => "KalVoice rejected an unsupported component signature format. This component was not installed.",
+            Self::Manifest(VerifyError::Malformed | VerifyError::InvalidDocument) => "KalVoice rejected malformed signed component metadata. This component was not installed.",
+            Self::WrongTarget => "This component does not support your operating system and processor. This component was not installed.",
+            Self::InvalidResponse => "The component server returned an invalid download response. Retry the download.",
+            Self::Server(status) => return write!(formatter, "The component server returned HTTP {status}. Try again later."),
+            Self::Network => "The component download could not complete over the network. Check your connection, then retry to resume saved download progress.",
+            Self::ChecksumMismatch => "KalVoice rejected the downloaded component because its integrity check failed. Retry the download.",
+            Self::UnsafeStaging => "KalVoice could not safely use its download storage. This component was not installed.",
+        })
     }
 }
 
@@ -1244,20 +1291,40 @@ fn map_catalog_error(error: CatalogVerifyError) -> ComponentManagerError {
 }
 
 fn map_acquisition_error(error: ComponentAcquisitionError) -> ComponentManagerError {
-    match error {
-        ComponentAcquisitionError::ConsentRequired => ComponentManagerError::ConsentRequired,
-        ComponentAcquisitionError::Cancelled => ComponentManagerError::Cancelled,
+    let reason = match error {
+        ComponentAcquisitionError::ConsentRequired => {
+            return ComponentManagerError::ConsentRequired;
+        }
+        ComponentAcquisitionError::Cancelled => return ComponentManagerError::Cancelled,
         ComponentAcquisitionError::NotEnoughSpace => {
-            ComponentManagerError::CapacityHeld(ComponentCapacityReason::DiskSpace)
+            return ComponentManagerError::CapacityHeld(ComponentCapacityReason::DiskSpace);
         }
         ComponentAcquisitionError::Install(ComponentStoreError::InUse) => {
-            ComponentManagerError::InUse
+            return ComponentManagerError::InUse;
         }
         ComponentAcquisitionError::Install(_) | ComponentAcquisitionError::Storage(_) => {
-            ComponentManagerError::StorageUnavailable
+            return ComponentManagerError::StorageUnavailable;
         }
-        _ => ComponentManagerError::AcquisitionFailed,
-    }
+        ComponentAcquisitionError::Manifest(reason) => {
+            ComponentAcquisitionFailure::Manifest(reason)
+        }
+        ComponentAcquisitionError::WrongTarget => ComponentAcquisitionFailure::WrongTarget,
+        ComponentAcquisitionError::InvalidResponse => ComponentAcquisitionFailure::InvalidResponse,
+        ComponentAcquisitionError::Server(status) => ComponentAcquisitionFailure::Server(status),
+        ComponentAcquisitionError::Network => ComponentAcquisitionFailure::Network,
+        ComponentAcquisitionError::ChecksumMismatch => {
+            ComponentAcquisitionFailure::ChecksumMismatch
+        }
+        ComponentAcquisitionError::UnsafeStaging => ComponentAcquisitionFailure::UnsafeStaging,
+    };
+    let (stage, cause, http_status) = reason.diagnostic();
+    tracing::warn!(
+        event = "kalvoice.component_acquisition_failed",
+        stage,
+        cause,
+        http_status,
+    );
+    ComponentManagerError::AcquisitionFailed(reason)
 }
 
 fn map_store_error(error: ComponentStoreError) -> ComponentManagerError {
