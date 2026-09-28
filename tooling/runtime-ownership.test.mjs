@@ -77,6 +77,11 @@ test("every registered non-bootstrap native command holds epoch admission", () =
     "secure_store_check",
     "runtime_status",
     "updater_status",
+    // Retries a failed runtime startup, so it must work while no runtime epoch is admitted.
+    "runtime_retry",
+    // Registers the main page's KalVoice signal channel in the app-level hub so it survives runtime
+    // generations; it starts no work and reads nothing, and only account-gated runtimes send signals.
+    "kalvoice_subscribe",
   ]);
   const registered = [...source("lib").matchAll(/(\w+_commands|commands|runtime_coordinator)::(\w+),/g)];
   const unguarded = [];
