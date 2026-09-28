@@ -15,6 +15,10 @@ use std::time::Duration;
 
 use fs2::FileExt as _;
 use sha2::{Digest as _, Sha256};
+use ureq::unversioned::resolver::DefaultResolver;
+use ureq::unversioned::transport::{
+    Buffers, ConnectionDetails, Connector, DefaultConnector, NextTimeout, Transport,
+};
 
 use crate::component_manifest::{
     ComponentArch, ComponentPlatform, ComponentVerifier, VerifiedComponentManifest, VerifyError,
@@ -28,6 +32,7 @@ const MAX_REDIRECTS: usize = 3;
 const MAX_RESPONSE_HEADER_BYTES: usize = 64 * 1024;
 const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const DOWNLOAD_ADMISSION_MARGIN: u64 = 64 * 1024 * 1024;
+const INPUT_IDLE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[cfg(test)]
 type LockConflictObserver = Arc<dyn Fn() + Send + Sync>;
@@ -89,20 +94,78 @@ struct UreqTransport {
     agent: ureq::Agent,
 }
 
+/// Retain ureq's normal proxy/TLS connector and bound each wait for input, rather than the
+/// entire signed artifact transfer. Existing shorter phase deadlines always win.
+#[derive(Debug)]
+struct BoundedInputConnector;
+
+impl Connector<Box<dyn Transport>> for BoundedInputConnector {
+    type Out = BoundedInputTransport;
+
+    fn connect(
+        &self,
+        _: &ConnectionDetails,
+        chained: Option<Box<dyn Transport>>,
+    ) -> Result<Option<Self::Out>, ureq::Error> {
+        Ok(chained.map(|inner| BoundedInputTransport { inner }))
+    }
+}
+
+#[derive(Debug)]
+struct BoundedInputTransport {
+    inner: Box<dyn Transport>,
+}
+
+impl Transport for BoundedInputTransport {
+    fn buffers(&mut self) -> &mut dyn Buffers {
+        self.inner.buffers()
+    }
+
+    fn transmit_output(&mut self, amount: usize, timeout: NextTimeout) -> Result<(), ureq::Error> {
+        self.inner.transmit_output(amount, timeout)
+    }
+
+    fn await_input(&mut self, timeout: NextTimeout) -> Result<bool, ureq::Error> {
+        let idle = ureq::unversioned::transport::time::Duration::Exact(INPUT_IDLE_TIMEOUT);
+        let timeout = if timeout.after > idle {
+            NextTimeout {
+                after: idle,
+                reason: ureq::Timeout::RecvBody,
+            }
+        } else {
+            timeout
+        };
+        self.inner.await_input(timeout)
+    }
+
+    fn is_open(&mut self) -> bool {
+        self.inner.is_open()
+    }
+
+    fn is_tls(&self) -> bool {
+        self.inner.is_tls()
+    }
+}
+
 impl UreqTransport {
     fn new() -> Self {
-        let agent = ureq::Agent::config_builder()
+        let config = ureq::Agent::config_builder()
             .https_only(true)
             .http_status_as_error(false)
             .max_redirects(0)
             .timeout_connect(Some(Duration::from_secs(20)))
             .timeout_recv_response(Some(Duration::from_secs(30)))
-            // A blocked body read must return to the cancellation loop within a bounded window.
-            .timeout_recv_body(Some(Duration::from_secs(5)))
+            // ureq's body timeout is TOTAL, not per-read. Large models may progress for minutes.
+            // BoundedInputTransport bounds idle reads; signed size/hash and cancellation stay enforced.
+            .timeout_recv_body(None)
             .max_response_header_size(MAX_RESPONSE_HEADER_BYTES)
             .user_agent("KalCode")
-            .build()
-            .into();
+            .build();
+        let agent = ureq::Agent::with_parts(
+            config,
+            DefaultConnector::default().chain(BoundedInputConnector),
+            DefaultResolver::default(),
+        );
         Self { agent }
     }
 }
@@ -358,10 +421,13 @@ impl ComponentAcquirer {
                     file.flush().map_err(storage)?;
                     return Err(ComponentAcquisitionError::Cancelled);
                 }
-                let count = response
-                    .body
-                    .read(&mut buffer)
-                    .map_err(|_| ComponentAcquisitionError::Network)?;
+                let count = response.body.read(&mut buffer).map_err(|_| {
+                    if cancel.load(Ordering::SeqCst) {
+                        ComponentAcquisitionError::Cancelled
+                    } else {
+                        ComponentAcquisitionError::Network
+                    }
+                })?;
                 if count == 0 {
                     break;
                 }

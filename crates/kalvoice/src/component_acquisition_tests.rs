@@ -186,6 +186,271 @@ fn staging_is_empty(temp: &TempDir) -> bool {
         .is_none()
 }
 
+// The real production ureq agent/connector and HTTP body reader, with HTTP permitted ONLY for
+// this test's loopback request. Signed manifest verification and ComponentStore remain real.
+struct LoopbackArtifactTransport {
+    agent: ureq::Agent,
+    url: String,
+}
+
+impl ArtifactTransport for LoopbackArtifactTransport {
+    fn get(&self, _: &str, _: Option<u64>) -> Result<ArtifactResponse, TransportFailure> {
+        let response = self
+            .agent
+            .get(&self.url)
+            .config()
+            .https_only(false)
+            .build()
+            .call()
+            .map_err(|_| TransportFailure::Network)?;
+        Ok(ArtifactResponse {
+            status: response.status().as_u16(),
+            location: None,
+            content_length: response
+                .headers()
+                .get("content-length")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse().ok()),
+            content_range: None,
+            body: Box::new(response.into_body().into_reader()),
+        })
+    }
+}
+
+fn loopback_body(
+    bytes: &'static [u8],
+    between_bytes: Duration,
+) -> (LoopbackArtifactTransport, std::thread::JoinHandle<()>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("loopback bind");
+    let url = format!(
+        "http://{}/component",
+        listener.local_addr().expect("address")
+    );
+    listener
+        .set_nonblocking(true)
+        .expect("bounded fixture accept");
+    let worker = std::thread::spawn(move || {
+        let accept_deadline = std::time::Instant::now() + Duration::from_secs(3);
+        let mut socket = loop {
+            match listener.accept() {
+                Ok((socket, _)) => break socket,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    assert!(
+                        std::time::Instant::now() < accept_deadline,
+                        "fixture accept timed out"
+                    );
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("fixture accept failed: {error:?}"),
+            }
+        };
+        socket
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .expect("read bound");
+        socket
+            .set_write_timeout(Some(Duration::from_secs(3)))
+            .expect("write bound");
+        let mut request = [0; 4096];
+        let mut received = 0;
+        while !request[..received].windows(4).any(|end| end == b"\r\n\r\n") {
+            assert!(received < request.len(), "fixture request exceeded bound");
+            let count = socket.read(&mut request[received..]).expect("request");
+            assert!(count > 0, "fixture request ended early");
+            received += count;
+        }
+        write!(
+            socket,
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            bytes.len()
+        )
+        .expect("headers");
+        for (index, byte) in bytes.iter().enumerate() {
+            if index > 0 {
+                std::thread::sleep(between_bytes);
+            }
+            if socket.write_all(&[*byte]).is_err() {
+                break;
+            }
+        }
+    });
+    (
+        LoopbackArtifactTransport {
+            agent: UreqTransport::new().agent,
+            url,
+        },
+        worker,
+    )
+}
+
+#[test]
+fn production_transport_installs_a_verified_body_progressing_longer_than_five_seconds() {
+    let temp = TempDir::new().expect("temp");
+    let key = signing_key(7);
+    let bytes = b"12345678";
+    let (mut acquirer, store, _) = harness(&temp, &key, FakeTransport::new(vec![]));
+    let (transport, worker) = loopback_body(bytes, Duration::from_millis(900));
+    acquirer.transport = Arc::new(transport);
+    let started = std::time::Instant::now();
+    let result = acquirer.acquire(
+        &token(&key, bytes),
+        NOW,
+        true,
+        &AtomicBool::new(false),
+        |_, _| {},
+    );
+    worker.join().expect("joined loopback fixture");
+    assert!(started.elapsed() >= Duration::from_secs(6));
+    result.expect("steady progress must not exhaust a five-second total body budget");
+    let lease = store
+        .acquire(&selector(), NOW)
+        .expect("verified installed lease");
+    assert_eq!(
+        lease.model_path().and_then(|path| std::fs::read(path).ok()),
+        Some(bytes.to_vec())
+    );
+}
+
+#[test]
+fn production_transport_stalled_body_is_bounded_and_cancel_is_not_a_network_failure() {
+    for cancelled in [false, true] {
+        let temp = TempDir::new().expect("temp");
+        let key = signing_key(7);
+        let bytes = b"ab";
+        let (mut acquirer, store, _) = harness(&temp, &key, FakeTransport::new(vec![]));
+        let (transport, worker) = loopback_body(bytes, Duration::from_secs(7));
+        acquirer.transport = Arc::new(transport);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancellation = cancel.clone();
+        let (progress_tx, progress_rx) = std::sync::mpsc::sync_channel(1);
+        let canceller = std::thread::spawn(move || {
+            progress_rx
+                .recv_timeout(Duration::from_secs(3))
+                .expect("first byte received");
+            std::thread::sleep(Duration::from_millis(250));
+            if cancelled {
+                cancellation.store(true, Ordering::SeqCst);
+            }
+        });
+        let started = std::time::Instant::now();
+        let result = acquirer.acquire(&token(&key, bytes), NOW, true, &cancel, |received, _| {
+            if received == 1 {
+                let _ = progress_tx.try_send(());
+            }
+        });
+        let elapsed = started.elapsed();
+        canceller.join().expect("joined canceller");
+        worker.join().expect("joined loopback fixture");
+        assert!(
+            elapsed < Duration::from_millis(6500),
+            "blocked read was not bounded: {elapsed:?}"
+        );
+        if cancelled {
+            assert!(
+                matches!(result, Err(ComponentAcquisitionError::Cancelled)),
+                "{result:?}"
+            );
+        } else {
+            assert!(
+                matches!(result, Err(ComponentAcquisitionError::Network)),
+                "{result:?}"
+            );
+        }
+        assert_eq!(
+            store.status(&selector(), NOW),
+            ComponentReceiptStatus::Missing
+        );
+        let digest = format!("{:x}", Sha256::digest(bytes));
+        assert_eq!(
+            std::fs::read(
+                temp.path()
+                    .join("acquisition")
+                    .join(format!("{digest}.partial"))
+            )
+            .expect("bounded partial"),
+            b"a"
+        );
+        let lock = open_acquisition_lock(
+            &temp
+                .path()
+                .join("acquisition")
+                .join(format!("{digest}.lock")),
+        )
+        .expect("lock");
+        lock.try_lock_exclusive()
+            .expect("acquisition releases ownership after failure/cancel");
+        lock.unlock().expect("unlock test handle");
+    }
+}
+
+#[test]
+fn production_transport_retains_https_only() {
+    let response = UreqTransport::new()
+        .agent
+        .get("http://127.0.0.1:1/component")
+        .call();
+    assert!(matches!(response, Err(ureq::Error::RequireHttpsOnly(_))));
+}
+
+#[test]
+fn input_wait_wrapper_preserves_tls_and_earlier_phase_deadlines() {
+    use ureq::unversioned::transport::{LazyBuffers, time::Duration as TransportDuration};
+
+    #[derive(Debug)]
+    struct ProbeTransport {
+        buffers: LazyBuffers,
+        observed: Arc<Mutex<Vec<NextTimeout>>>,
+    }
+    impl Transport for ProbeTransport {
+        fn buffers(&mut self) -> &mut dyn Buffers {
+            &mut self.buffers
+        }
+        fn transmit_output(&mut self, _: usize, _: NextTimeout) -> Result<(), ureq::Error> {
+            Ok(())
+        }
+        fn await_input(&mut self, timeout: NextTimeout) -> Result<bool, ureq::Error> {
+            self.observed.lock().expect("observed").push(timeout);
+            Ok(true)
+        }
+        fn is_open(&mut self) -> bool {
+            false
+        }
+        fn is_tls(&self) -> bool {
+            true
+        }
+    }
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let mut transport = BoundedInputTransport {
+        inner: Box::new(ProbeTransport {
+            buffers: LazyBuffers::new(1024, 1024),
+            observed: observed.clone(),
+        }),
+    };
+    assert!(transport.is_tls());
+    assert!(!transport.is_open());
+    let earlier = NextTimeout {
+        after: TransportDuration::from_millis(80),
+        reason: ureq::Timeout::RecvResponse,
+    };
+    transport.await_input(earlier).expect("earlier bound");
+    // With no configured total body timeout, ureq supplies Global/NotHappening.
+    transport
+        .await_input(NextTimeout {
+            after: TransportDuration::NotHappening,
+            reason: ureq::Timeout::Global,
+        })
+        .expect("idle bound");
+    assert_eq!(
+        *observed.lock().expect("observed"),
+        vec![
+            earlier,
+            NextTimeout {
+                after: TransportDuration::from_secs(5),
+                reason: ureq::Timeout::RecvBody,
+            }
+        ]
+    );
+}
+
 #[test]
 fn a_valid_signature_for_another_platform_is_rejected_before_fetch() {
     let temp = TempDir::new().expect("temp");
