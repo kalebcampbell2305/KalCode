@@ -165,4 +165,12 @@ pub enum KalVoiceSignal {
         request_id: String,
         active: bool,
     },
+    /// The push-to-talk key's registration changed (registered, released, skipped or refused).
+    /// When inactive, `reason` is a code: `not_focused`, `disabled`, `shutting_down`,
+    /// `prefs_error`, `os_refused` or `unparseable`.
+    TalkKey {
+        active: bool,
+        reason: Option<String>,
+        accelerator: String,
+    },
 }
