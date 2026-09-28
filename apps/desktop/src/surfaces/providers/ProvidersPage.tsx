@@ -77,7 +77,7 @@ export function ProvidersPage() {
   return (
     <Page
       title="Providers"
-      description="KalCode runs each provider through its own command-line tool, signed in with your own account, subscription or API key. KalCode never pays for or proxies your AI usage."
+      description="KalCode runs each provider through its own command-line tool, signed in with your own provider account. KalCode never pays for or proxies your AI usage."
       actions={
         <div className={styles.headerActions}>
           <p className={styles.checked} role="status">
