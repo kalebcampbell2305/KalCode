@@ -48,6 +48,38 @@ import Docs from "../../layouts/Docs.astro";
     there is no provider fallback.
   </p>
 
+  <h2>Supported CLI versions</h2>
+  <p>
+    Managed accounts run the provider CLI release lines KalCode has certified: Claude Code 2.1.282
+    or a later 2.1 release, Codex CLI 0.155.1 or a later release in the 0.155 to 0.158 lines, and
+    Gemini CLI 0.61. Pre-release builds aren't supported. With any other version, sign-in and
+    threads stop with a message that names the supported versions and how to install one.
+  </p>
+
+  <h2>Several accounts per provider</h2>
+  <p>
+    You can add more than one account for each provider, such as a personal and a work account.
+    Providers, then Accounts, shows each account's active threads and the workspaces where it is
+    the default. <strong>Set default</strong> chooses the account new threads use where a workspace
+    has no default of its own, and
+    <strong>Connect another account</strong> adds an account and starts its sign-in. Gemini CLI
+    accounts show the Google email they are signed in with.
+  </p>
+  <p>
+    In New thread, <strong>Remember these accounts for this workspace</strong> keeps the accounts
+    you chose, and KalCode selects them the next time you start a thread in that workspace.
+  </p>
+
+  <h2>Switching a thread's account</h2>
+  <p>
+    Each thread stays on the account it started with, and never changes account on its own, even
+    when you change the default. To move a thread to another signed-in account, use the account
+    menu in its header, the command palette (“switch gemini b”) or KalVoice (“Switch this Gemini
+    thread to Gemini B”). KalCode asks you to confirm first. The thread's past conversation stays
+    as it is; only future messages use the new account, starting a new provider session. An
+    account that is signed out has to be signed in before a thread can move to it.
+  </p>
+
   <h2>Detection</h2>
   <p>
     To find installed providers, KalCode looks for their executables on your <code>PATH</code> and in
