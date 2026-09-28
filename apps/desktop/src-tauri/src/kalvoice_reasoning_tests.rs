@@ -312,8 +312,8 @@ fn installed_components_reach_ready_on_the_governors_next_sample_without_a_retry
     // UI stayed "Installed; not running" until the owner pressed Retry.
     let (probe, release) = GatedProbe::new();
     let resources = Arc::new(ResourceGovernorState::start_with_probe(Box::new(probe)));
-    // An open resource view samples every second, so the second sample follows promptly.
-    resources.set_view_open(true);
+    // Idle machine, no resource view: the governor takes its second CPU measurement at the
+    // fast cadence because the first was the warm-up, not a full idle interval (15 s) later.
     let host = FakeHost::new(Admission::Real(resources.clone()), None);
     let reasoning = interpreter(host.clone(), AutostartPolicy::default());
     let (driver, published) = spawn_autostart(&reasoning);
@@ -327,8 +327,14 @@ fn installed_components_reach_ready_on_the_governors_next_sample_without_a_retry
     });
     assert_eq!(host.launches.load(Ordering::SeqCst), 0);
     // The CPU gets its second measurement; that sample alone re-evaluates the start.
+    let released = Instant::now();
     release.send(()).unwrap();
     driver.join().unwrap();
+    assert!(
+        released.elapsed() < Duration::from_secs(3),
+        "ready {:?} after the second sample was allowed",
+        released.elapsed()
+    );
 
     assert_eq!(reasoning.snapshot(), (LocalReasoningStatus::Ready, None));
     assert_eq!(host.launches.load(Ordering::SeqCst), 1);
@@ -339,6 +345,29 @@ fn installed_components_reach_ready_on_the_governors_next_sample_without_a_retry
             .last(),
         Some(&(LocalReasoningStatus::Ready, None))
     );
+    drop(reasoning);
+    assert!(resources.shutdown_checked());
+}
+
+#[test]
+fn a_cold_start_on_an_idle_machine_is_ready_within_seconds_of_launch() {
+    // Launch -> Ready without a visible wait: the second CPU measurement follows the warm-up at
+    // the fast cadence, and that sample admits the start. At the idle cadence this took 15 s.
+    let (probe, release) = GatedProbe::new();
+    release.send(()).unwrap();
+    let launched = Instant::now();
+    let resources = Arc::new(ResourceGovernorState::start_with_probe(Box::new(probe)));
+    let host = FakeHost::new(Admission::Real(resources.clone()), None);
+    let reasoning = interpreter(host.clone(), AutostartPolicy::default());
+    let (driver, _published) = spawn_autostart(&reasoning);
+    driver.join().unwrap();
+    assert_eq!(reasoning.snapshot(), (LocalReasoningStatus::Ready, None));
+    assert!(
+        launched.elapsed() < Duration::from_secs(4),
+        "ready {:?} after launch",
+        launched.elapsed()
+    );
+    assert_eq!(host.launches.load(Ordering::SeqCst), 1);
     drop(reasoning);
     assert!(resources.shutdown_checked());
 }

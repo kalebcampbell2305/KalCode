@@ -3,4 +3,4 @@
 /**
  * Why the sampler ran at its current rate.
  */
-export type CadenceReason = "idle" | "pressure_developing" | "active_work" | "resource_view_open" | "backoff";
+export type CadenceReason = "idle" | "pressure_developing" | "active_work" | "resource_view_open" | "backoff" | "warming_up";

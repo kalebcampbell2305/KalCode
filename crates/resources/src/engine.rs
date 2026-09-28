@@ -166,6 +166,8 @@ pub struct Engine {
     carried: Carried,
     seq: u64,
     failures: u32,
+    /// The last sample's CPU reading was the probe's first-measurement warm-up.
+    cpu_warming_up: bool,
     pressure: PressureSummary,
 }
 
@@ -191,6 +193,7 @@ impl Engine {
             carried: Carried::default(),
             seq: 0,
             failures: 0,
+            cpu_warming_up: false,
             pressure: PressureSummary::default(),
         })
     }
@@ -272,9 +275,19 @@ impl Engine {
     }
 
     /// The delay until the next sample, from activity, the last pressure and failures.
+    ///
+    /// The one exception: after the probe's CPU warm-up sample (no CPU reading until a second
+    /// measurement), the second measurement is taken at the active cadence rather than a full
+    /// idle interval later, since governed work is held until it exists. Thresholds, admission
+    /// and every later interval are unchanged.
     pub fn next_delay(&self) -> (Duration, CadenceReason) {
-        self.cadence
-            .next_delay(self.activity, &self.pressure, self.failures)
+        let (delay, reason) = self
+            .cadence
+            .next_delay(self.activity, &self.pressure, self.failures);
+        if self.cpu_warming_up && self.failures == 0 && self.cadence.active < delay {
+            return (self.cadence.active, CadenceReason::WarmingUp);
+        }
+        (delay, reason)
     }
 
     /// Ingests a probe sample taken at `now` (monotonic) / `unix_ms` (wall clock).
@@ -355,6 +368,7 @@ impl Engine {
             self.carried.gpu = gpu;
         }
 
+        self.cpu_warming_up = matches!(&cpu, Reading::Unknown(reason) if reason == WARMING_UP);
         let hard_failure = !cpu.is_value()
             && !memory.is_value()
             && !matches!(&cpu, Reading::Unknown(reason) if reason == WARMING_UP);
@@ -401,6 +415,7 @@ impl Engine {
     pub fn ingest_failure(&mut self, unix_ms: i64, reason: &str) -> Ingested {
         self.seq += 1;
         self.failures = self.failures.saturating_add(1);
+        self.cpu_warming_up = false;
         self.disk_base = None;
         self.net_base = None;
         let mut snapshot = ResourceSnapshot::unknown(reason, self.limits.kind);

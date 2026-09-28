@@ -471,6 +471,8 @@ pub enum CadenceReason {
     ActiveWork,
     ResourceViewOpen,
     Backoff,
+    /// The CPU needs a second measurement before it has a reading; it is taken promptly.
+    WarmingUp,
 }
 
 /// Which tiers a sample refreshed. Slow tiers are carried forward between refreshes.

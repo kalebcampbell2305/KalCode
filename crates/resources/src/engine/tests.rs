@@ -84,6 +84,32 @@ fn step(engine: &mut Engine, now: Duration, raw: RawSample) -> Ingested {
 }
 
 #[test]
+fn a_cpu_warm_up_sample_takes_the_second_measurement_at_the_fast_cadence() {
+    // The OS probe's first CPU reading is always "warming up": admission is held until the
+    // second measurement, which the idle cadence would otherwise delay by 15 s at every launch.
+    let mut e = engine(ResourceMode::Balanced);
+    let mut warming = fast(10.0, 40.0);
+    warming.cpu = Reading::unknown("warming up: needs a second measurement");
+    let out = step(&mut e, secs(0), warming);
+    assert_eq!(out.snapshot.sampling.reason, CadenceReason::WarmingUp);
+    assert_eq!(out.snapshot.sampling.next_interval_ms, 1_000);
+    assert_eq!(out.snapshot.sampling.consecutive_failures, 0);
+    assert_eq!(e.next_delay(), (secs(1), CadenceReason::WarmingUp));
+
+    // The second measurement arrives: the normal idle cadence resumes.
+    let out = step(&mut e, secs(1), fast(10.0, 40.0));
+    assert_eq!(out.snapshot.sampling.reason, CadenceReason::Idle);
+    assert_eq!(out.snapshot.sampling.next_interval_ms, 15_000);
+
+    // Any other unknown CPU reading keeps the ordinary cadence.
+    let mut unknown = fast(10.0, 40.0);
+    unknown.cpu = Reading::unknown("CPU counter returned an invalid value");
+    let out = step(&mut e, secs(16), unknown);
+    assert_eq!(out.snapshot.sampling.reason, CadenceReason::Idle);
+    assert_eq!(out.snapshot.sampling.next_interval_ms, 15_000);
+}
+
+#[test]
 fn adaptive_interval_follows_activity_pressure_and_failures() {
     let mut e = engine(ResourceMode::Balanced);
     // Idle and calm: 15 s.
