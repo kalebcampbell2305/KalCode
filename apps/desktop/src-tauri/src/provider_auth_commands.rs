@@ -25,6 +25,7 @@ use kalcode_providers::gemini_account_auth::{
 };
 use kalcode_providers::guardian::{GenerationQuiescenceProof, GuardianError, GuardianRuntime};
 use kalcode_providers::managed::ManagedProfiles;
+use kalcode_providers::version_window::VersionWindow;
 use kalcode_providers::{ClaudeCodeProvider, CodexProvider, DetectEnv, GeminiProvider, catalog};
 use serde::Serialize;
 use tauri::WebviewWindow;
@@ -87,6 +88,23 @@ impl RuntimeAuthError {
         {
             return KalError::new(ErrorCategory::Provider, code, message).log_and_convert(command);
         }
+        let unsupported_window = match &self {
+            Self::Provider(CodexAccountAuthError::UnsupportedVersion) => {
+                Some(&kalcode_providers::codex::MANAGED_VERSIONS)
+            }
+            Self::Gemini(GeminiAccountAuthError::UnsupportedVersion) => {
+                Some(&kalcode_providers::gemini::MANAGED_VERSIONS)
+            }
+            _ => None,
+        };
+        if let Some(window) = unsupported_window {
+            return KalError::new(
+                ErrorCategory::Provider,
+                "provider_version_unsupported",
+                window_unsupported_message(window),
+            )
+            .log_and_convert(command);
+        }
         let (code, message) = match self {
             Self::Account(error) => return error.log_and_convert(command),
             Self::ProviderUnavailable => (
@@ -104,11 +122,6 @@ impl RuntimeAuthError {
             Self::Provider(CodexAccountAuthError::Canceled) => {
                 ("provider_login_canceled", "Codex sign-in was canceled.")
             }
-            Self::Provider(CodexAccountAuthError::UnsupportedVersion) => (
-                "provider_version_unsupported",
-                "Managed Codex accounts need a certified Codex CLI release. Install a certified \
-                 release, then try again.",
-            ),
             Self::Provider(_) => (
                 "provider_auth_failed",
                 "The official Codex account operation did not complete safely.",
@@ -141,11 +154,6 @@ impl RuntimeAuthError {
                 "Gemini CLI finished without saving a Google sign-in. Try again and finish \
                  signing in in your browser.",
             ),
-            Self::Gemini(GeminiAccountAuthError::UnsupportedVersion) => (
-                "provider_version_unsupported",
-                "Managed Gemini accounts need Gemini CLI 0.61.0. Install that version, then \
-                 try again.",
-            ),
             Self::Gemini(GeminiAccountAuthError::TimedOut) => (
                 "provider_login_timed_out",
                 "Gemini sign-in didn't finish in time. Try again.",
@@ -165,6 +173,26 @@ impl RuntimeAuthError {
         };
         KalError::new(ErrorCategory::Provider, code, message).log_and_convert(command)
     }
+}
+
+/// `provider_version_unsupported` copy for a provider whose certified lines live in a
+/// [`VersionWindow`], in the same shape as the Claude refusal. Codex and Gemini account errors do
+/// not carry the found version, so the refusal names the supported window and install command.
+fn window_unsupported_message(window: &VersionWindow) -> String {
+    let mut message = format!(
+        "Managed {profile} accounts need {cli} {range}; pre-release builds aren't supported.",
+        profile = window.profile_name,
+        cli = window.cli_name,
+        range = window.supported_range(),
+    );
+    match window.install_command() {
+        Some(command) => message.push_str(&format!(
+            " Install the newest supported version with `{command}`, then try again."
+        )),
+        None => message.push_str(" Install a supported release, then try again."),
+    }
+    message.push_str(" (reason: provider_version_unsupported)");
+    message
 }
 
 /// User-visible Claude account failures carry a stable, credential-free reason code so a failed
@@ -2160,9 +2188,52 @@ mod tests {
             "the supported and found versions are named: {}",
             version.message
         );
-        let codex = RuntimeAuthError::Provider(CodexAccountAuthError::UnsupportedVersion)
-            .into_ipc("provider_codex_login_start");
-        assert_eq!(codex.code, "provider_version_unsupported");
+    }
+
+    #[test]
+    fn codex_and_gemini_version_refusals_name_the_certified_window_and_install_command() {
+        for (error, window) in [
+            (
+                RuntimeAuthError::Provider(CodexAccountAuthError::UnsupportedVersion),
+                &kalcode_providers::codex::MANAGED_VERSIONS,
+            ),
+            (
+                RuntimeAuthError::Gemini(GeminiAccountAuthError::UnsupportedVersion),
+                &kalcode_providers::gemini::MANAGED_VERSIONS,
+            ),
+        ] {
+            let ipc = error.into_ipc("provider_login_start");
+            assert_eq!(ipc.code, "provider_version_unsupported");
+            assert!(
+                ipc.message.starts_with(&format!(
+                    "Managed {} accounts need {} {}",
+                    window.profile_name,
+                    window.cli_name,
+                    window.supported_range()
+                )),
+                "{}",
+                ipc.message
+            );
+            let command = window.install_command().expect("install command");
+            assert!(
+                ipc.message.contains(&format!("`{command}`")),
+                "{}",
+                ipc.message
+            );
+            assert!(
+                ipc.message
+                    .ends_with("(reason: provider_version_unsupported)"),
+                "{}",
+                ipc.message
+            );
+        }
+        let gemini = RuntimeAuthError::Gemini(GeminiAccountAuthError::UnsupportedVersion)
+            .into_ipc("provider_gemini_login_start");
+        assert!(
+            gemini.message.contains("0.61.x"),
+            "the certified line, not one exact release: {}",
+            gemini.message
+        );
     }
 
     #[cfg(any(windows, target_os = "macos"))]
