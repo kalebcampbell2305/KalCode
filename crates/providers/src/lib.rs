@@ -32,6 +32,8 @@ pub mod interactive;
 pub mod launch;
 pub mod managed;
 pub mod model;
+#[cfg(unix)]
+mod node_managers;
 pub mod process;
 pub mod registry;
 pub(crate) mod turns;

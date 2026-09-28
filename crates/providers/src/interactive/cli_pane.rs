@@ -252,6 +252,8 @@ impl InteractiveCliProvider {
                 self.cli.name()
             )));
         }
+        #[cfg(unix)]
+        crate::launch::apply_launch_env(&launch, &mut env);
 
         let shared = Shared::new(SessionParts {
             ctx: ActionContext {

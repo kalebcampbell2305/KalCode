@@ -520,6 +520,29 @@ pub fn missing_node_message(
     })
 }
 
+/// Unix: for an [`LaunchKind::EnvNode`] launch, puts the (absolute) folder of the `node` it
+/// starts at the front of the child `PATH`, once, so the provider's own subprocesses (a shell
+/// tool running `npm`, an `npx` MCP server) find the same Node.js under a Finder-style `PATH`.
+/// Only absolute entries are kept, as [`crate::env::harden`] does. Every other launch, and
+/// every other variable, is left as is.
+#[cfg(unix)]
+pub fn apply_launch_env(launch: &Launch, env: &mut BTreeMap<OsString, OsString>) {
+    if launch.kind != LaunchKind::EnvNode {
+        return;
+    }
+    let Some(node_dir) = launch.program.parent().filter(|dir| dir.is_absolute()) else {
+        return;
+    };
+    let rest = lookup(env, "PATH")
+        .map(absolute_path_entries)
+        .unwrap_or_default();
+    let dirs = std::iter::once(node_dir.to_path_buf())
+        .chain(rest.into_iter().filter(|dir| dir != node_dir));
+    if let Ok(path) = std::env::join_paths(dirs) {
+        env.insert(OsString::from("PATH"), path);
+    }
+}
+
 #[cfg(test)]
 #[cfg(unix)]
 mod unix_tests {
@@ -653,6 +676,42 @@ mod unix_tests {
             resolve(&root.path().join("missing"), &BTreeMap::new()).kind,
             LaunchKind::Direct
         );
+    }
+
+    /// The provider's own subprocesses (a shell tool running `npm`, an `npx` MCP server) find
+    /// the same `node`: its folder leads the child `PATH`. Other launches keep `PATH` as is.
+    #[test]
+    fn an_env_node_child_path_starts_with_the_node_folder() {
+        use crate::process::{ProcessSpec, run_probe};
+        let (root, link, _script) = npm_layout("#!/usr/bin/env node");
+        let bin = root.path().join("bin");
+        write_mode(&bin.join("node"), b"#!/bin/sh\necho \"$PATH\"\n", 0o755);
+        let finder = root.path().join("finder");
+        std::fs::create_dir_all(&finder).expect("mkdir");
+        let path_of = |program: &Path, dirs: &[&Path]| {
+            let spec = ProcessSpec {
+                program: program.to_path_buf(),
+                args: Vec::new(),
+                cwd: None,
+                env: env_with_path(dirs),
+            };
+            let out =
+                run_probe(&spec, std::time::Duration::from_secs(20), true, 4096).expect("probe");
+            out.stdout.trim().to_owned()
+        };
+        let joined = |dirs: &[&Path]| {
+            std::env::join_paths(dirs)
+                .expect("join")
+                .into_string()
+                .expect("utf8")
+        };
+        assert_eq!(path_of(&link, &[&finder]), joined(&[&bin, &finder]));
+        // Already on PATH: moved to the front, not repeated.
+        assert_eq!(path_of(&link, &[&finder, &bin]), joined(&[&bin, &finder]));
+        // A launch that isn't an env-node script is unchanged.
+        let plain_script = root.path().join("plain");
+        write_mode(&plain_script, b"#!/bin/sh\necho \"$PATH\"\n", 0o755);
+        assert_eq!(path_of(&plain_script, &[&finder]), joined(&[&finder]));
     }
 
     #[test]

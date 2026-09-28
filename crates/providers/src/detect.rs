@@ -156,6 +156,14 @@ impl DetectEnv {
                 }
             }
         }
+        // Unix: user-level Node.js install folders (npm's user prefix, Volta, nvm's default
+        // version), which a Finder-launched app's `PATH` never has.
+        #[cfg(unix)]
+        if !self.windows
+            && let Some(home) = &home
+        {
+            dirs.extend(crate::node_managers::user_bin_dirs(home));
+        }
         dirs.retain(|d| !d.as_os_str().is_empty() && d.is_absolute());
         dirs
     }
@@ -719,5 +727,85 @@ mod tests {
             found.detection.message
         );
         assert_eq!(found.detection.version.as_deref(), Some("1.2.3"));
+    }
+
+    /// npm's layout under `bin`: `bin/tool` -> `../lib/node_modules/tool/bin/cli.js`, and a
+    /// stand-in `bin/node` that reports `tool <version>` for `--version`.
+    #[cfg(unix)]
+    fn npm_install(bin: &Path, version: &str) {
+        let pkg = bin.join("../lib/node_modules/tool/bin");
+        std::fs::create_dir_all(&pkg).expect("mkdir");
+        write_executable(&pkg.join("cli.js"), "#!/usr/bin/env node\n");
+        std::os::unix::fs::symlink("../lib/node_modules/tool/bin/cli.js", bin.join("tool"))
+            .expect("symlink");
+        write_executable(
+            &bin.join("node"),
+            &format!("#!/bin/sh\n[ \"$2\" = --version ] || exit 8\necho 'tool {version}'\n"),
+        );
+    }
+
+    /// Detection with a Finder-style `PATH` and `home` as the home folder.
+    #[cfg(unix)]
+    fn detect_in_home(home: &Path) -> Detected {
+        let finder_path = home.join("finder-path");
+        std::fs::create_dir_all(&finder_path).expect("mkdir");
+        let e = env(
+            &[
+                ("PATH", finder_path.to_str().expect("utf8")),
+                ("HOME", home.to_str().expect("utf8")),
+            ],
+            false,
+        );
+        detect(&SPEC, &e)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn npm_global_and_volta_user_folders_are_searched() {
+        for rel in [".npm-global/bin", ".volta/bin"] {
+            let home = tempfile::tempdir().expect("tempdir");
+            let bin = home.path().join(rel);
+            std::fs::create_dir_all(&bin).expect("mkdir");
+            npm_install(&bin, "4.5.6");
+            let found = detect_in_home(home.path());
+            assert_eq!(
+                found.detection.state,
+                DetectionState::Installed,
+                "{rel}: {:?} {:?}",
+                found.error_code,
+                found.detection.message
+            );
+            assert_eq!(found.detection.version.as_deref(), Some("4.5.6"), "{rel}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn only_nvms_default_version_is_searched() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let versions = home.path().join(".nvm/versions/node");
+        for version in ["20.5.0", "22.1.0"] {
+            let bin = versions.join(format!("v{version}/bin"));
+            std::fs::create_dir_all(&bin).expect("mkdir");
+            npm_install(&bin, version);
+        }
+        // No default alias: nothing is guessed.
+        assert_eq!(
+            detect_in_home(home.path()).detection.state,
+            DetectionState::NotInstalled
+        );
+        // default -> lts/* -> lts/iron -> v20.5.0, although 22.1.0 is newer.
+        let alias = home.path().join(".nvm/alias");
+        std::fs::create_dir_all(alias.join("lts")).expect("mkdir");
+        std::fs::write(alias.join("default"), "lts/*\n").expect("alias");
+        std::fs::write(alias.join("lts/*"), "lts/iron\n").expect("alias");
+        std::fs::write(alias.join("lts/iron"), "v20.5.0\n").expect("alias");
+        let found = detect_in_home(home.path());
+        assert_eq!(found.detection.state, DetectionState::Installed);
+        assert_eq!(found.detection.version.as_deref(), Some("20.5.0"));
+        // default -> node: the highest installed version.
+        std::fs::write(alias.join("default"), "node").expect("alias");
+        let found = detect_in_home(home.path());
+        assert_eq!(found.detection.version.as_deref(), Some("22.1.0"));
     }
 }

@@ -320,6 +320,8 @@ impl InteractiveClaudeProvider {
                 "KalCode couldn't resolve how to start Claude Code safely.".into(),
             ));
         }
+        #[cfg(unix)]
+        crate::launch::apply_launch_env(&launch, &mut env);
 
         let start = match config.resume_session_id.clone() {
             Some(session_id) => SessionStart::Resume { session_id },

@@ -81,6 +81,8 @@ fn command(spec: &ProcessSpec) -> Command {
     let mut env = spec.env.clone();
     crate::env::harden(&mut env);
     let launch = crate::launch::resolve(&spec.program, &env);
+    #[cfg(unix)]
+    crate::launch::apply_launch_env(&launch, &mut env);
     let mut command = Command::new(&launch.program);
     command
         .args(&launch.prefix_args)
