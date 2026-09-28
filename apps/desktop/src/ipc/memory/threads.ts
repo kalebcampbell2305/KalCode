@@ -956,7 +956,17 @@ export function createThreadsMemory(
           "Switching a thread's provider account isn't available in this build yet.",
         );
       }
-      const target = accountFor(accountId, t.summary.providerId);
+      let target: ReturnType<NonNullable<typeof accountFor>>;
+      try {
+        target = accountFor(accountId, t.summary.providerId);
+      } catch (e) {
+        // Native rebind names an id it never had `provider_account_unknown` (create keeps
+        // `provider_account_not_found` for an account it can't resolve).
+        if ((e as { code?: string }).code === "provider_account_not_found") {
+          invalid("provider_account_unknown", "That provider account no longer exists.");
+        }
+        throw e;
+      }
       if (t.summary.providerAccountId === accountId) return summary(t);
       if (target.authenticationState === "not_authenticated") {
         return error(

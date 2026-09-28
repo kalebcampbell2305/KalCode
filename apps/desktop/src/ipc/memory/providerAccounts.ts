@@ -145,6 +145,13 @@ export function createProviderAccountsMemory(requireCore: () => void, empty = fa
   };
 
   const resolve = (id: string, provider: string): ProviderAccount => {
+    // Like native thread create and rebind: a removed (archived) account has its own code.
+    if (accounts.some((candidate) => candidate.id === accountId(id) && candidate.archivedAt !== null)) {
+      fail(
+        "provider_account_archived",
+        "That account was removed from KalCode. Reconnect it or choose an active account.",
+      );
+    }
     const selected = active(id);
     if (selected.providerId !== provider) {
       fail("provider_account_mismatch", "That account belongs to a different provider.");

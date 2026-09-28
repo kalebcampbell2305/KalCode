@@ -300,6 +300,13 @@ describe("thread account switch on Stable", () => {
       "Gemini B belongs to a different provider. Choose a Gemini CLI account for this thread.",
     );
     expect(describe("thread_archived").description).toMatch(/Archived threads/);
+    // The native rebind codes (SA lane 1) get the same plain copy as the memory contract's.
+    for (const code of ["provider_account_unknown", "provider_account_archived", "provider_account_not_found"]) {
+      expect(describe(code).description).toBe("Gemini B isn't connected any more. Choose another Gemini CLI account.");
+    }
+    expect(describe("provider_account_plan_unsupported").description).toBe(
+      "Gemini B uses an organization plan KalCode can't run yet. Choose another Gemini CLI account.",
+    );
     expect(describe("something_new").description).toBe("native copy");
     const waiting = describeRebindError(
       { category: "validation", code: "thread_rebind_busy", message: "", retryable: false },

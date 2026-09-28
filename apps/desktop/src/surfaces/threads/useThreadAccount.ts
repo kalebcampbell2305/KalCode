@@ -74,9 +74,17 @@ export function describeRebindError(
         signIn: false,
       };
     case "provider_account_not_found":
+    case "provider_account_unknown":
+    case "provider_account_archived":
       return {
         title,
         description: `${target} isn't connected any more. Choose another ${providerName} account.`,
+        signIn: false,
+      };
+    case "provider_account_plan_unsupported":
+      return {
+        title,
+        description: `${target} uses an organization plan KalCode can't run yet. Choose another ${providerName} account.`,
         signIn: false,
       };
     case "thread_archived":

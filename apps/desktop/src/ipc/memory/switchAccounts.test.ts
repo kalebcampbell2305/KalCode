@@ -84,6 +84,20 @@ describe("switch accounts memory contract", () => {
     expect((await client.resumeThread(idle.id)).providerAccountId).toBe(target.id);
   });
 
+  it("refuses removed and unknown accounts with the native rebind codes", async () => {
+    const client = new KalCodeClient(createMemoryTransport("threads"));
+    const thread = settled(await client.listThreads());
+    const removed = await client.createProviderAccount(thread.providerId, "Removed");
+    await client.archiveProviderAccount(removed.id);
+    await expect(client.rebindThreadAccount(thread.id, removed.id)).rejects.toMatchObject({
+      code: "provider_account_archived",
+    });
+    await expect(client.rebindThreadAccount(thread.id, "0192f3c4-0000-7000-8000-000000000999")).rejects.toMatchObject({
+      code: "provider_account_unknown",
+    });
+    expect((await client.getThread(thread.id)).providerAccountId).toBe(thread.providerAccountId);
+  });
+
   it("lists workspace bindings with filters and drops them when the account is archived", async () => {
     const client = new KalCodeClient(createMemoryTransport("threads"));
     const geminiB = await client.createProviderAccount("gemini-cli", "Gemini B");
