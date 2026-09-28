@@ -7,6 +7,15 @@
 //! been activated, so a missing credential after activation fails closed instead of looking like
 //! first use.
 //!
+//! The marker protects only that one direction (credential lost while app data survives). The
+//! opposite one-sided state, a valid credential without a marker, is what an uninstall that
+//! deletes app data followed by a reinstall leaves behind, because the OS credential outlives the
+//! app-data tree. That state is adopted: the credential's exact floor is kept (never lowered or
+//! rewritten) and a fresh marker binds the new app-data tree to it. Adoption can never be weaker
+//! than genuine first use (no marker, no credential), which accepts any valid signed catalog;
+//! lowering the floor still requires write access to the credential itself, which the marker
+//! could never detect. An unreadable, oversized, or wrong-track credential is never adopted.
+//!
 //! A hardened file lock serializes every read/transition/write across KalCode processes. The
 //! lock wait has an absolute deadline and observes caller cancellation. OS credential operations
 //! themselves are synchronous platform calls and are not made falsely cancellable here.
@@ -156,7 +165,8 @@ impl StoredFloorEnvelope {
 /// `private_app_data` must be the canonical OS-owned application-data capability. This type
 /// creates only validated direct children below it. It deliberately offers no reset or delete
 /// operation: clearing an activated floor is a separate owner recovery operation, not a normal
-/// catalog transition.
+/// catalog transition. Reinstalling over deleted app data needs no reset: the surviving
+/// credential is adopted as-is (see the module documentation).
 #[derive(Clone)]
 pub struct ComponentFloorAuthority {
     store: Arc<dyn SecretStore>,
@@ -201,7 +211,9 @@ impl ComponentFloorAuthority {
     }
 
     /// Loads and validates the authoritative floor. Both a missing marker and a missing
-    /// credential mean the track has never been activated. Any one-sided absence fails closed.
+    /// credential mean the track has never been activated. A missing credential after activation
+    /// fails closed. A valid credential without a marker (app data deleted, credential kept) is
+    /// adopted exactly and the marker is recreated; an invalid one fails closed.
     pub fn load(
         &self,
         deadline: Instant,
@@ -287,9 +299,28 @@ impl ComponentFloorAuthority {
         match (activated, stored) {
             (false, None) => Ok(None),
             (true, None) => Err(ComponentFloorError::MissingAfterActivation),
-            (false, Some(_)) => Err(ComponentFloorError::Corrupt),
+            (false, Some(value)) => self.adopt_surviving_floor(&value).map(Some),
             (true, Some(value)) => self.decode(&value).map(Some),
         }
+    }
+
+    /// Binds a fresh app-data tree to a credential that survived it. Runs under the floor lock.
+    /// The credential is validated first and is never written here, so the floor can only stay
+    /// exactly where it was; a marker failure leaves the credential untouched and fails closed.
+    fn adopt_surviving_floor(
+        &self,
+        value: &SecretString,
+    ) -> Result<CatalogFloor, ComponentFloorError> {
+        let floor = self.decode(value)?;
+        self.create_activation_marker()?;
+        tracing::info!(
+            event = "kalvoice.catalog_floor_adopted",
+            channel = %self.track.channel,
+            platform = platform_segment(self.track.platform),
+            arch = arch_segment(self.track.arch),
+            sequence = floor.sequence(),
+        );
+        Ok(floor)
     }
 
     fn decode(&self, value: &SecretString) -> Result<CatalogFloor, ComponentFloorError> {

@@ -350,17 +350,207 @@ fn missing_after_activation_and_one_sided_authorities_fail_closed() {
         Err(ComponentFloorError::MissingAfterActivation)
     );
 
+    // Marker present with the credential gone stays fail-closed on every restart; adoption
+    // never applies in this direction.
+    let restarted = make_authority(&temp, store.clone());
+    assert_eq!(
+        restarted.load(deadline(), &cancel),
+        Err(ComponentFloorError::MissingAfterActivation)
+    );
+    assert!(matches!(
+        restarted.advance(&catalog, NOW, deadline(), &cancel),
+        Err(ComponentFloorError::MissingAfterActivation)
+    ));
+    assert!(store.raw(restarted.credential_key()).is_none());
+}
+
+/// Uninstall with "Delete app data" (Windows NSIS) or deleting
+/// `~/Library/Application Support/com.kalcode.desktop` (macOS) removes the marker but leaves the
+/// OS credential. The surviving credential is still the authority: it is adopted exactly, never
+/// lowered or rewritten, and the new app-data tree is bound to it with a fresh marker.
+#[test]
+fn reinstall_with_a_surviving_credential_adopts_the_exact_floor() {
+    let cancel = AtomicBool::new(false);
+    let store = Arc::new(TestSecretStore::default());
+    let (_, one) = verified_catalog(1);
+    let (_, two) = verified_catalog(2);
+    let (_, three) = verified_catalog(3);
+
+    let original_install = tempfile::tempdir().expect("tempdir");
+    let original = make_authority(&original_install, store.clone());
+    let floor = original
+        .advance(&two, NOW, deadline(), &cancel)
+        .expect("activate");
+    let credential = store
+        .raw(original.credential_key())
+        .expect("credential")
+        .expose_secret()
+        .to_owned();
+    drop(original);
+    drop(original_install);
+
+    let reinstalled_data = tempfile::tempdir().expect("tempdir");
+    let reinstalled = make_authority(&reinstalled_data, store.clone());
+    assert!(!reinstalled.marker_path().exists());
+    assert_eq!(
+        reinstalled.load(deadline(), &cancel).expect("adopt"),
+        Some(floor.clone())
+    );
+    assert!(reinstalled.marker_path().is_file());
+    assert_eq!(store.sets.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        store
+            .raw(reinstalled.credential_key())
+            .expect("credential")
+            .expose_secret(),
+        credential
+    );
+
+    // Adoption is a binding, not a reset: rollback is still denied and the floor is unchanged.
+    assert!(matches!(
+        reinstalled.advance(&one, NOW, deadline(), &cancel),
+        Err(ComponentFloorError::Transition(
+            super::component_catalog::CatalogTransitionError::RollbackDenied
+        ))
+    ));
+    let restarted = make_authority(&reinstalled_data, store.clone());
+    assert_eq!(
+        restarted.load(deadline(), &cancel).expect("restart"),
+        Some(floor.clone())
+    );
+    assert_eq!(
+        restarted
+            .advance(&two, NOW, deadline(), &cancel)
+            .expect("exact replay"),
+        floor
+    );
+    assert_eq!(store.sets.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        restarted
+            .advance(&three, NOW, deadline(), &cancel)
+            .expect("forward")
+            .sequence(),
+        3
+    );
+
+    // A first `advance` straight after reinstall (no prior load) adopts too and refuses rollback.
+    let second_reinstall = tempfile::tempdir().expect("tempdir");
+    let fresh = make_authority(&second_reinstall, store.clone());
+    assert!(matches!(
+        fresh.advance(&two, NOW, deadline(), &cancel),
+        Err(ComponentFloorError::Transition(
+            super::component_catalog::CatalogTransitionError::RollbackDenied
+        ))
+    ));
+    assert!(fresh.marker_path().is_file());
+    assert_eq!(
+        fresh
+            .load(deadline(), &cancel)
+            .expect("floor retained")
+            .expect("floor")
+            .sequence(),
+        3
+    );
+
+    // Losing only the marker in an otherwise intact app-data tree is the same recoverable state.
+    fs::remove_file(fresh.marker_path()).expect("remove marker for test");
+    assert_eq!(
+        fresh
+            .load(deadline(), &cancel)
+            .expect("re-adopt")
+            .expect("floor")
+            .sequence(),
+        3
+    );
+    assert!(fresh.marker_path().is_file());
+}
+
+#[test]
+fn reinstall_never_adopts_an_invalid_or_unreadable_credential() {
+    let cancel = AtomicBool::new(false);
+    let (_, catalog) = verified_catalog(2);
+    for replacement in [
+        "{}".to_owned(),
+        "x".repeat(4 * 1024 + 1),
+        serde_json::json!({
+            "schemaVersion": 1,
+            "channel": "beta",
+            "platform": "windows",
+            "arch": "x86_64",
+            "floor": catalog.floor(),
+        })
+        .to_string(),
+    ] {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(TestSecretStore::default());
+        let authority = make_authority(&temp, store.clone());
+        store
+            .set(authority.credential_key(), &SecretString::new(replacement))
+            .expect("plant test floor");
+        assert_eq!(
+            authority.load(deadline(), &cancel),
+            Err(ComponentFloorError::Corrupt)
+        );
+        assert!(matches!(
+            authority.advance(&catalog, NOW, deadline(), &cancel),
+            Err(ComponentFloorError::Corrupt)
+        ));
+        assert!(!authority.marker_path().exists());
+        assert_eq!(store.sets.load(Ordering::SeqCst), 1);
+    }
+
     let temp = tempfile::tempdir().expect("tempdir");
     let store = Arc::new(TestSecretStore::default());
-    let authority = make_authority(&temp, store.clone());
-    authority
-        .advance(&catalog, NOW, deadline(), &cancel)
-        .expect("activate");
-    fs::remove_file(authority.marker_path()).expect("remove marker for test");
+    store.fail_get.store(true, Ordering::SeqCst);
+    let authority = make_authority(&temp, store);
     assert_eq!(
         authority.load(deadline(), &cancel),
-        Err(ComponentFloorError::Corrupt)
+        Err(ComponentFloorError::SecureStoreUnavailable)
     );
+    assert!(!authority.marker_path().exists());
+}
+
+#[test]
+fn adoption_marker_failure_fails_closed_without_touching_the_credential() {
+    let cancel = AtomicBool::new(false);
+    let store = Arc::new(TestSecretStore::default());
+    let (_, one) = verified_catalog(1);
+    let (_, two) = verified_catalog(2);
+    let original = tempfile::tempdir().expect("tempdir");
+    let floor = make_authority(&original, store.clone())
+        .advance(&two, NOW, deadline(), &cancel)
+        .expect("activate");
+
+    for failure in [
+        MarkerFailure::Create,
+        MarkerFailure::Write,
+        MarkerFailure::Sync,
+    ] {
+        let reinstalled = tempfile::tempdir().expect("tempdir");
+        let authority = make_authority(&reinstalled, store.clone()).with_marker_failure(failure);
+        assert!(matches!(
+            authority.load(deadline(), &cancel),
+            Err(ComponentFloorError::Storage(io::ErrorKind::Other))
+        ));
+        let other_reinstall = tempfile::tempdir().expect("tempdir");
+        let advancing =
+            make_authority(&other_reinstall, store.clone()).with_marker_failure(failure);
+        assert!(matches!(
+            advancing.advance(&one, NOW, deadline(), &cancel),
+            Err(ComponentFloorError::Storage(io::ErrorKind::Other))
+        ));
+        assert_eq!(store.sets.load(Ordering::SeqCst), 1);
+        if failure == MarkerFailure::Write {
+            // A torn (empty) marker is the pre-existing crash-during-marker-write state and
+            // stays fail-closed, exactly as it does for a first activation.
+            continue;
+        }
+        let healthy = make_authority(&reinstalled, store.clone());
+        assert!(matches!(
+            healthy.load(deadline(), &cancel),
+            Ok(Some(ref adopted)) if adopted == &floor
+        ));
+    }
 }
 
 #[test]
