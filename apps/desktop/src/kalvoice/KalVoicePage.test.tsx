@@ -10,7 +10,9 @@ vi.mock("./KalVoiceProvider.tsx", () => ({
   useOptionalKalVoice: () => seams.value,
 }));
 vi.mock("../shell/navigation.tsx", () => ({ useNavigation: () => ({ navigate: seams.navigate }) }));
-vi.mock("../runtime/RuntimeProvider.tsx", () => ({ useRuntime: () => ({ info: { channel: "stable" } }) }));
+vi.mock("../runtime/RuntimeProvider.tsx", () => ({
+  useRuntime: () => ({ info: { channel: "stable", flags: { surfaces: [], features: [] } } }),
+}));
 
 const quote = {
   catalogIdentity: "a".repeat(64),

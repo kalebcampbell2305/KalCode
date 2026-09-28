@@ -74,13 +74,20 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   const kalvoice = useOptionalKalVoice();
   const workspaces = useWorkspaces();
   const threadsIntent = useThreadsIntent();
-  // Z7-W2: typed text also searches the Session Locator (threads, workspaces, terminals, …).
+  // Z7-W2: typed text also searches the Session Locator (threads, workspaces, terminals, …) when
+  // the build shows it; gated features stay unreachable on Stable.
+  const featureVisible = (id: string) => info.flags.features?.some((f) => f.id === id && f.visible) ?? false;
+  const locatorVisible = featureVisible("session_locator");
   const search = useSearch();
   const rail = useOptionalRail();
-  const locator = useLocatorSearch(search.query, { kinds: search.kinds, limit: 12, enabled: open });
+  const locator = useLocatorSearch(search.query, {
+    kinds: search.kinds,
+    limit: 12,
+    enabled: open && locatorVisible,
+  });
   const openLocated = useOpenLocated();
   const openInPane = useOpenInPane();
-  const searching = search.query.trim() !== "";
+  const searching = locatorVisible && search.query.trim() !== "";
   // Results for older text are held back while the new answer is on its way, so they never take
   // the selection the command list gives the text now.
   const current = searching && locator.forText === search.query.trim();
@@ -350,18 +357,20 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                 Show workspaces in a pane
               </Item>
             ) : null}
-            <Item
-              icon={<GitCommitHorizontal />}
-              onSelect={run(() => {
-                const workspaceId = workspaces.active?.id;
-                return workspaceId
-                  ? openInPane({ kind: "git", workspaceId }, { workspaceId, placement: "split" })
-                  : null;
-              })}
-              keywords={["pane", "changes", "status", workspaces.active.name]}
-            >
-              Show Git status in a pane
-            </Item>
+            {featureVisible("git_core") ? (
+              <Item
+                icon={<GitCommitHorizontal />}
+                onSelect={run(() => {
+                  const workspaceId = workspaces.active?.id;
+                  return workspaceId
+                    ? openInPane({ kind: "git", workspaceId }, { workspaceId, placement: "split" })
+                    : null;
+                })}
+                keywords={["pane", "changes", "status", workspaces.active.name]}
+              >
+                Show Git status in a pane
+              </Item>
+            ) : null}
           </Command.Group>
         ) : null}
 

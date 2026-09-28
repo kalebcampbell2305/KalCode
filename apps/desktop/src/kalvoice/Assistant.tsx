@@ -7,7 +7,15 @@ import { usageLine } from "./assistantState.ts";
 import { useKalVoice } from "./KalVoiceProvider.tsx";
 import { displayKey } from "./shortcutModel.ts";
 
-const EXAMPLES = ["Go to settings", "Open four Codex threads", "What needs permission?", "Pause every active thread"];
+/** Requests this build can run: provider panes are gated on Stable, so it offers a page instead. */
+function examples(providerPanes: boolean): string[] {
+  return [
+    "Go to settings",
+    providerPanes ? "Open four Codex threads" : "Open Dashboard",
+    "What needs permission?",
+    "Pause every active thread",
+  ];
+}
 
 /** Type or speak a request. Shared by the floating panel and the KalVoice page. */
 export function RequestForm({ id }: { id: string }) {
@@ -40,10 +48,10 @@ export function RequestForm({ id }: { id: string }) {
   );
 }
 
-export function Examples({ onPick }: { onPick: (text: string) => void }) {
+export function Examples({ onPick, providerPanes }: { onPick: (text: string) => void; providerPanes: boolean }) {
   return (
     <ul className={styles.examples} aria-label="Examples">
-      {EXAMPLES.map((example) => (
+      {examples(providerPanes).map((example) => (
         <li key={example}>
           <button type="button" className={styles.example} onClick={() => onPick(example)}>
             {example}

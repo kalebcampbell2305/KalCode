@@ -4,6 +4,7 @@ import { AudioLines, MessageSquareText, Sparkles } from "lucide-react";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { useNavigation } from "../shell/navigation.tsx";
 import { Page } from "../shell/Page.tsx";
+import { useProviderPanesEnabled } from "../surfaces/code/panes/useProviderPanes.ts";
 import { Examples, RequestForm, ResultView, UsageFooter } from "./Assistant.tsx";
 import { usageLine } from "./assistantState.ts";
 import styles from "./KalVoicePage.module.css";
@@ -41,6 +42,7 @@ export function KalVoicePage() {
   } = kv;
   const { navigate } = useNavigation();
   const { info } = useRuntime();
+  const providerPanes = useProviderPanesEnabled();
 
   // "Ready" only when the native talk key is registered; otherwise the exact reason.
   const readiness = pushToTalkReadiness(status, statusError, signalsError, talkKey);
@@ -104,7 +106,7 @@ export function KalVoicePage() {
         <div className={styles.ask}>
           <RequestForm id="kalvoice-page-request" />
           <ResultView />
-          <Examples onPick={(text) => void submit(text, "text")} />
+          <Examples onPick={(text) => void submit(text, "text")} providerPanes={providerPanes} />
           <UsageFooter />
         </div>
       </Section>
@@ -132,8 +134,9 @@ export function KalVoicePage() {
               <p className={styles.tileTitle}>Commands</p>
               <Badge tone="success">Available</Badge>
               <p className={styles.tileDetail}>
-                Say “Open Dashboard” or “Open four Codex terminals”: KalCode acts the moment you let go. Provider
-                sessions keep their own native permission prompts.
+                {providerPanes
+                  ? "Say “Open Dashboard” or “Open four Codex terminals”: KalCode acts the moment you let go. Provider sessions keep their own native permission prompts."
+                  : "Say “Open Dashboard” or “Go to settings”: KalCode acts the moment you let go."}
               </p>
               <p className={styles.tileMeta}>Dictation is never counted</p>
             </li>

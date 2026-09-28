@@ -31,7 +31,7 @@ import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { usePaneFocusRequests } from "../../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { defaultShell, describeTerminalStatus, tabLabels } from "../../runtime/workspaceState.ts";
-import { useNavigation } from "../../shell/navigation.tsx";
+import { useNavigation, viewVisible } from "../../shell/navigation.tsx";
 import { PaneNotice } from "../../shell/panes/builtinContent.tsx";
 import type { PaneRenderContext, TabInfo } from "../../shell/panes/contentRegistry.ts";
 import { registeredWidgets } from "../../shell/panes/contentRegistry.ts";
@@ -56,6 +56,7 @@ import {
   selectDistinctProviderThreads,
 } from "../../shell/panes/paneCommands.ts";
 import { type PaneController, usePaneController } from "../../shell/panes/usePaneController.ts";
+import { HOME_WIDGET, PROJECT_WIDGET, WORKSPACES_WIDGET } from "../../shell/rail/paneIds.ts";
 import { useResolvedTheme } from "../../shell/useResolvedTheme.ts";
 import { useThreadsIntent } from "../threads/intent.tsx";
 import { UtilityDockRegistration } from "../utilities/UtilityDockPane.tsx";
@@ -151,7 +152,7 @@ export function CodeCanvas({ workspace, children }: CodeCanvasProps) {
 function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & { providerPanes: ProviderPanes }) {
   const [browserBridge] = useState(createBrowserBridge);
   const initialBrowserUrls = useRef(new Map<string, string>());
-  const { client } = useRuntime();
+  const { client, info } = useRuntime();
   const { current, navigate } = useNavigation();
   const threadsIntent = useThreadsIntent();
   const theme = useResolvedTheme();
@@ -494,6 +495,21 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
     [shell, providerPanes, background, newTerminal, newProviderPane],
   );
 
+  // Z7-W2's widgets stay registered (saved layouts restore them) but are offered only when their
+  // views are visible, like the palette's "Show in a pane" commands.
+  const features = info.flags.features;
+  const addableWidgets = useCallback(
+    () =>
+      registeredWidgets().filter((w) =>
+        w.widgetId === HOME_WIDGET
+          ? viewVisible("home", features)
+          : w.widgetId === PROJECT_WIDGET || w.widgetId === WORKSPACES_WIDGET
+            ? viewVisible("folder", features)
+            : true,
+      ),
+    [features],
+  );
+
   const addMenu = useCallback(
     (paneId: string) => (
       <>
@@ -544,8 +560,8 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
         >
           Dashboard
         </DropdownMenuItem>
-        {registeredWidgets().length > 0 ? <DropdownMenuLabel>Widgets</DropdownMenuLabel> : null}
-        {registeredWidgets().map((w) => (
+        {addableWidgets().length > 0 ? <DropdownMenuLabel>Widgets</DropdownMenuLabel> : null}
+        {addableWidgets().map((w) => (
           <DropdownMenuItem
             key={w.widgetId}
             icon={<LayoutPanelLeft />}
@@ -590,7 +606,16 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
         </DropdownMenuItem>
       </>
     ),
-    [shells, providerPanes.enabled, providerPanes.offered, background, newTerminal, newProviderPane, paneById],
+    [
+      shells,
+      providerPanes.enabled,
+      providerPanes.offered,
+      background,
+      newTerminal,
+      newProviderPane,
+      paneById,
+      addableWidgets,
+    ],
   );
 
   const onCommand = useCallback(
