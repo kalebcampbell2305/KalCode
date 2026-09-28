@@ -3,12 +3,14 @@
  * "Ready" means the native key is registered, enabled, and a speech model is active; anything
  * else names the exact reason and where to fix it.
  */
-import type { KalVoiceStatus } from "@kalcode/protocol";
+import type { KalVoiceStatus, ShortcutIssue } from "@kalcode/protocol";
 import { displayKey } from "./shortcutModel.ts";
 
 export type PushToTalkIssue =
   | "checking"
+  | "signals_unavailable"
   | "status_unavailable"
+  | "status_unverified"
   | "speech_engine_unavailable"
   | "microphone_unsupported"
   | "talk_disabled"
@@ -20,12 +22,34 @@ export type PushToTalkReadiness =
   | { ready: true; code: null; label: "Ready"; message: string; fix: null }
   | { ready: false; code: PushToTalkIssue; label: string; message: string; fix: "settings" | "retry" | null };
 
+/**
+ * `signalsError`: the window has no live KalVoice signal channel, so Listening, Processing and
+ * results could never be shown. `statusError`: the latest status read failed; an older status
+ * is no longer proof of readiness.
+ */
 export function pushToTalkReadiness(
   status: KalVoiceStatus | null,
   statusError: { message: string } | null,
+  signalsError: { message: string } | null = null,
 ): PushToTalkReadiness {
   const not = (code: PushToTalkIssue, label: string, message: string, fix: "settings" | "retry" | null = null) =>
     ({ ready: false, code, label, message, fix }) as const;
+  if (signalsError) {
+    return not(
+      "signals_unavailable",
+      "Not connected",
+      `KalVoice can't show push-to-talk progress in this window: ${signalsError.message}`,
+      "retry",
+    );
+  }
+  if (status && statusError) {
+    return not(
+      "status_unverified",
+      "Unverified",
+      `KalVoice status couldn't be refreshed: ${statusError.message}`,
+      "retry",
+    );
+  }
   if (!status) {
     return statusError
       ? not("status_unavailable", "Unavailable", `KalVoice status couldn't be read: ${statusError.message}`, "retry")
@@ -71,4 +95,20 @@ export function pushToTalkReadiness(
     );
   }
   return { ready: true, code: null, label: "Ready", message: `Hold ${key} to talk to KalVoice.`, fix: null };
+}
+
+/** Native talk-key registration as reported by the runtime (key registered, or why not). */
+export interface TalkKeyState {
+  active: boolean;
+  issues: ShortcutIssue[];
+}
+
+/**
+ * Applies a native talk-key registration change to the last status, so readiness follows focus
+ * and OS registration without re-reading everything. The signal carrying it is adapted to this
+ * shape where it is received.
+ */
+export function withTalkKeyState(status: KalVoiceStatus | null, update: TalkKeyState): KalVoiceStatus | null {
+  if (!status) return status;
+  return { ...status, talkKeyActive: update.active, shortcutIssues: update.issues };
 }

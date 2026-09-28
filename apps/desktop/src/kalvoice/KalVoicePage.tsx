@@ -52,12 +52,12 @@ const LOCAL_INTELLIGENCE = {
 /** The KalVoice surface: ask, see what's ready, and this session's requests. */
 export function KalVoicePage() {
   const kv = useKalVoice();
-  const { status, statusError, refreshStatus, state, levelRef, history, submit, setPanelVisible } = kv;
+  const { status, statusError, signalsError, retryConnection, state, levelRef, history, submit, setPanelVisible } = kv;
   const { navigate } = useNavigation();
   const { info } = useRuntime();
 
   // "Ready" only when the native talk key is registered; otherwise the exact reason.
-  const readiness = pushToTalkReadiness(status, statusError);
+  const readiness = pushToTalkReadiness(status, statusError, signalsError);
   const dictation = !status
     ? null
     : readiness.ready
@@ -79,7 +79,9 @@ export function KalVoicePage() {
               ? "Set up speech"
               : readiness.fix === "settings"
                 ? "Open KalVoice settings"
-                : null,
+                : readiness.fix === "retry"
+                  ? "Try again"
+                  : null,
         };
 
   const intelligence = status ? LOCAL_INTELLIGENCE[status.localReasoning ?? "unavailable"] : null;
@@ -130,7 +132,10 @@ export function KalVoicePage() {
                 Hold <Key name={status.preferences.talkKey} /> to talk to KalVoice
               </p>
               {dictation?.fix ? (
-                <Button size="sm" onClick={() => navigate("settings")}>
+                <Button
+                  size="sm"
+                  onClick={() => (dictation.fix === "Try again" ? void retryConnection() : navigate("settings"))}
+                >
                   {dictation.fix}
                 </Button>
               ) : null}
@@ -178,10 +183,10 @@ export function KalVoicePage() {
               <p className={styles.tileMeta}>Provider usage: Handled by your connected provider</p>
             </li>
           </ul>
-        ) : statusError ? (
+        ) : statusError || signalsError ? (
           <div role="alert">
             <p className={styles.tileDetail}>{readiness.message}</p>
-            <Button size="sm" onClick={() => void refreshStatus()}>
+            <Button size="sm" onClick={() => void retryConnection()}>
               Try again
             </Button>
           </div>

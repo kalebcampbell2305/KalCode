@@ -41,23 +41,30 @@ afterEach(() => {
 interface MountOptions {
   statusPatch?: () => Partial<KalVoiceStatus>;
   strict?: boolean;
-  /** Native `kalvoice_status` refuses (e.g. the KalVoice runtime did not start). */
-  statusFailure?: object;
+  /** Native `kalvoice_status` refuses while this returns an error (e.g. runtime not started). */
+  statusFailure?: () => object | null;
+  /** Native `kalvoice_subscribe` refuses while this returns an error. */
+  subscribeFailure?: () => object | null;
 }
 
-async function mount({ statusPatch, strict = false, statusFailure }: MountOptions = {}) {
+async function mount({ statusPatch, strict = false, statusFailure, subscribeFailure }: MountOptions = {}) {
   const transport = createMemoryTransport("account-ready", { detectDelayMs: 0 });
   let deliver: ((signal: KalVoiceSignal) => void) | null = null;
   const nativeSubscribe = transport.subscribeKalVoice.bind(transport);
   const subscribe = vi.fn(async (onSignal: (signal: KalVoiceSignal) => void) => {
+    const refused = subscribeFailure?.();
+    if (refused) throw refused;
     deliver = onSignal;
     await nativeSubscribe(onSignal);
   });
   transport.subscribeKalVoice = subscribe;
-  if (statusPatch || statusFailure) {
+  const invoked: string[] = [];
+  {
     const invoke = transport.invoke.bind(transport);
     transport.invoke = (async (command: string, args?: Record<string, unknown>) => {
-      if (statusFailure && command === "kalvoice_status") throw statusFailure;
+      invoked.push(command);
+      const refused = command === "kalvoice_status" ? statusFailure?.() : null;
+      if (refused) throw refused;
       const result = await invoke(command as never, args);
       return command === "kalvoice_status" || command === "kalvoice_update_preferences"
         ? { ...(result as object), ...statusPatch?.() }
@@ -84,14 +91,22 @@ async function mount({ statusPatch, strict = false, statusFailure }: MountOption
     </Root>,
   );
   const user = userEvent.setup();
-  if (!statusFailure) await screen.findByRole("region", { name: "KalVoice widget" });
+  if (!statusFailure?.()) await screen.findByRole("region", { name: "KalVoice widget" });
   const primary = within(screen.getByRole("navigation", { name: "Primary" }));
   const go = async (name: string) => {
     await user.click(primary.getByRole("button", { name }));
   };
   const inject = (signal: KalVoiceSignal) => act(() => deliver?.(signal));
-  return { transport, subscribe, user, go, inject };
+  const talks = () => invoked.filter((c) => c === "kalvoice_talk").length;
+  return { transport, subscribe, user, go, inject, talks };
 }
+
+const NOT_STARTED = {
+  category: "internal",
+  code: "kalvoice_unavailable",
+  message: "KalVoice Requests need a verified KalCode account.",
+  retryable: false,
+};
 
 const widget = () => screen.getByRole("region", { name: "KalVoice widget" });
 const widgetState = async (label: string) =>
@@ -100,7 +115,7 @@ const press = () => fireEvent.keyDown(window, { code: "F8", key: "F8" });
 const release = () => fireEvent.keyUp(window, { code: "F8", key: "F8" });
 
 describe("push to talk is always visible", () => {
-  it("keeps exactly one live subscription across navigation, page mount/unmount and dialogs", async () => {
+  it("regression guard: one live subscription across navigation, page mount/unmount and dialogs", async () => {
     const { subscribe, user, go } = await mount();
     await go("KalVoice");
     await go("Settings");
@@ -134,16 +149,19 @@ describe("push to talk is always visible", () => {
     await widgetState("Processing");
   });
 
-  it.each(["Dashboard", "Threads", "Settings"])("shows Listening, Processing and the result from %s", async (page) => {
-    const { go } = await mount();
-    await go(page);
-    press();
-    await widgetState("Listening");
-    release();
-    await widgetState("Processing");
-    await widgetState("Done");
-    expect(widget()).toHaveTextContent(/settings/i);
-  });
+  it.each(["Dashboard", "Threads", "Settings"])(
+    "regression guard: Listening, Processing and the result from %s",
+    async (page) => {
+      const { go } = await mount();
+      await go(page);
+      press();
+      await widgetState("Listening");
+      release();
+      await widgetState("Processing");
+      await widgetState("Done");
+      expect(widget()).toHaveTextContent(/settings/i);
+    },
+  );
 
   it("shows an actionable listening failure even when the widget is hidden", async () => {
     const { transport, user, go } = await mount();
@@ -217,21 +235,85 @@ describe("push-to-talk readiness is truthful", () => {
   });
 
   it("says why when native KalVoice never started, instead of an invisible widget", async () => {
-    const { go } = await mount({
-      statusFailure: {
-        category: "internal",
-        code: "kalvoice_unavailable",
-        message: "KalVoice Requests need a verified KalCode account.",
-        retryable: false,
-      },
-    });
+    const { go } = await mount({ statusFailure: () => NOT_STARTED });
     const notice = await screen.findByRole("status", { name: "Push to talk" });
     expect(notice).toHaveTextContent("KalVoice: Unavailable");
     expect(notice).toHaveTextContent("KalVoice Requests need a verified KalCode account.");
     expect(within(notice).getByRole("button", { name: "Try again" })).toBeInTheDocument();
     await go("KalVoice");
-    const status = await screen.findByText(/KalVoice status couldn.t be read/);
+    const section = await screen.findByRole("region", { name: "Status" });
+    const status = within(section).getByRole("alert");
+    expect(status).toHaveTextContent(/KalVoice status couldn.t be read/);
     expect(status).toHaveTextContent("verified KalCode account");
     expect(screen.queryByText("Ready")).toBeNull();
+  });
+});
+
+describe("signals that aren't connected are never masked", () => {
+  it("a refused subscribe with a successful status read never shows Ready, and reconnects on focus", async () => {
+    let refused = true;
+    const { talks } = await mount({ subscribeFailure: () => (refused ? NOT_STARTED : null) });
+    await widgetState("Not connected");
+    expect(within(widget()).queryByText("Ready", { selector: "span" })).toBeNull();
+    expect(widget()).toHaveTextContent("KalVoice can't show push-to-talk progress");
+
+    refused = false;
+    fireEvent.focus(window);
+    await widgetState("Ready");
+    press();
+    await widgetState("Listening");
+    release();
+    await widgetState("Done");
+    expect(talks()).toBe(1);
+  });
+
+  it("runtime not ready at launch: once it is, the subscription is established and push to talk works", async () => {
+    let runtimeReady = false;
+    const { subscribe, talks } = await mount({
+      statusFailure: () => (runtimeReady ? null : NOT_STARTED),
+      subscribeFailure: () => (runtimeReady ? null : NOT_STARTED),
+    });
+    // (The "Not connected" notice itself is covered above; this test is about recovery.)
+    await waitFor(() => expect(subscribe).toHaveBeenCalled());
+    expect(screen.queryByText("Ready")).toBeNull();
+
+    runtimeReady = true;
+    // Coming forward is the runtime-status trigger available today (no timer-driven polling).
+    fireEvent.focus(window);
+    await widgetState("Ready");
+    expect(screen.queryByRole("status", { name: "Push to talk" })).toBeNull();
+    const attempts = subscribe.mock.calls.length;
+    press();
+    await widgetState("Listening");
+    release();
+    await widgetState("Processing");
+    await widgetState("Done");
+    expect(talks()).toBe(1);
+    expect(subscribe.mock.calls.length).toBe(attempts);
+  });
+
+  it("renewing the channel mid-utterance delivers the result once and routes it once", async () => {
+    const { subscribe, talks } = await mount();
+    press();
+    await widgetState("Listening");
+    fireEvent.focus(window);
+    await waitFor(() => expect(subscribe).toHaveBeenCalledTimes(2));
+    release();
+    await widgetState("Processing");
+    await widgetState("Done");
+    expect(talks()).toBe(1);
+  });
+
+  it("an older Ready status is not trusted once a refresh fails", async () => {
+    let failing = false;
+    await mount({ statusFailure: () => (failing ? NOT_STARTED : null) });
+    await widgetState("Ready");
+    failing = true;
+    fireEvent.focus(window);
+    await widgetState("Unverified");
+    expect(widget()).toHaveTextContent("KalVoice status couldn't be refreshed");
+    failing = false;
+    await userEvent.click(within(widget()).getByRole("button", { name: "Try again" }));
+    await widgetState("Ready");
   });
 });

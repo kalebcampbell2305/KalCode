@@ -77,11 +77,14 @@ function KalVoiceSettingsSection() {
         <div className={styles.rows}>
           <PushToTalkReadinessRow />
           <TalkKeyRow />
-          {status.shortcutIssues.map((issue) => (
-            <p key={issue.accelerator} className={styles.issue} role="alert">
-              {displayKey(issue.accelerator)} unavailable: {issue.message}
-            </p>
-          ))}
+          {/* The talk key's issue is in the readiness row above; list only the others. */}
+          {status.shortcutIssues
+            .filter((issue) => issue.mode !== "talk")
+            .map((issue) => (
+              <p key={issue.accelerator} className={styles.issue} role="alert">
+                {displayKey(issue.accelerator)} unavailable: {issue.message}
+              </p>
+            ))}
           <TalkEnabledRow />
           <IntelligenceRow />
           <ModelsRow />
@@ -95,8 +98,8 @@ function KalVoiceSettingsSection() {
 
 /** Whether holding the key works right now, from native status (never assumed). */
 function PushToTalkReadinessRow() {
-  const { status, statusError, refreshStatus } = useKalVoice();
-  const readiness = pushToTalkReadiness(status, statusError);
+  const { status, statusError, signalsError, refreshStatus, retryConnection } = useKalVoice();
+  const readiness = pushToTalkReadiness(status, statusError, signalsError);
   return (
     <div className={styles.readiness} role="status" aria-label="Push-to-talk readiness" data-ready={readiness.ready}>
       <p>
@@ -106,6 +109,10 @@ function PushToTalkReadinessRow() {
       {readiness.code === "talk_key_inactive" ? (
         <Button size="sm" variant="ghost" onClick={() => void refreshStatus()}>
           Check again
+        </Button>
+      ) : readiness.fix === "retry" ? (
+        <Button size="sm" variant="ghost" onClick={() => void retryConnection()}>
+          Try again
         </Button>
       ) : null}
     </div>

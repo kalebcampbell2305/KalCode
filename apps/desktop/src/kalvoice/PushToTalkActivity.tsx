@@ -4,6 +4,7 @@ import { useNavigation } from "../shell/navigation.tsx";
 import { STATE_LABELS } from "./assistantState.ts";
 import { useKalVoice } from "./KalVoiceProvider.tsx";
 import styles from "./PushToTalkActivity.module.css";
+import { pushToTalkReadiness } from "./readiness.ts";
 
 /** The in-app fix for a KalVoice error code, when KalCode has one. */
 export function FixAction({ code }: { code: string | null }) {
@@ -38,26 +39,31 @@ export function FixAction({ code }: { code: string | null }) {
  * or the exact failure appears here on every page. It reflects only real native signals.
  */
 export function PushToTalkActivity() {
-  const { state, panel, status, statusError, refreshStatus, dismiss } = useKalVoice();
-  const [dismissedError, setDismissedError] = useState<string | null>(null);
+  const { state, panel, status, statusError, signalsError, retryConnection, dismiss } = useKalVoice();
+  const [dismissed, setDismissed] = useState<string | null>(null);
   const widgetShowsDetail = panel.visible && status !== null && panel.view !== "orb";
   const phase = state.phase;
-  if (phase === "idle" && !status && statusError) {
-    // No native KalVoice status (e.g. the runtime didn't start): the widget can't render, and
-    // the push-to-talk key won't work. Say why instead of showing nothing.
-    if (dismissedError === statusError.message) return null;
+  const readiness = pushToTalkReadiness(status, statusError, signalsError);
+  const disconnected =
+    readiness.code === "status_unavailable" ||
+    readiness.code === "signals_unavailable" ||
+    readiness.code === "status_unverified";
+  if (phase === "idle" && disconnected && !widgetShowsDetail) {
+    // No live signals or no verified native status (e.g. the runtime isn't up yet): the widget
+    // can't show it, and the push-to-talk key may do nothing. Say why instead of showing nothing.
+    if (dismissed === readiness.message) return null;
     return (
       <section className={styles.activity} data-phase="error" role="status" aria-label="Push to talk">
         <p className={styles.state}>
           <span className={styles.dot} aria-hidden="true" />
-          <span>KalVoice: Unavailable</span>
+          <span>KalVoice: {readiness.label}</span>
         </p>
-        <p className={styles.detail}>{statusError.message}</p>
+        <p className={styles.detail}>{readiness.message}</p>
         <div className={styles.actions}>
-          <Button size="sm" onClick={() => void refreshStatus()}>
+          <Button size="sm" onClick={() => void retryConnection()}>
             Try again
           </Button>
-          <Button size="sm" variant="ghost" onClick={() => setDismissedError(statusError.message)}>
+          <Button size="sm" variant="ghost" onClick={() => setDismissed(readiness.message)}>
             Dismiss
           </Button>
         </div>
@@ -79,7 +85,12 @@ export function PushToTalkActivity() {
         <span className={styles.dot} aria-hidden="true" />
         <span>KalVoice: {STATE_LABELS[phase]}</span>
       </p>
-      {detail ? <p className={styles.detail}>{detail}</p> : null}
+      {detail ? (
+        // Live partial words are not read out one by one; the state line is.
+        <p className={styles.detail} aria-live={phase === "listening" || phase === "transcribing" ? "off" : undefined}>
+          {detail}
+        </p>
+      ) : null}
       {failed ? (
         <div className={styles.actions}>
           <FixAction code={state.code} />

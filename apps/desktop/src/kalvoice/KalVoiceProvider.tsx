@@ -64,7 +64,11 @@ export interface DownloadProgress {
 interface KalVoiceValue {
   status: KalVoiceStatus | null;
   statusError: KalCodeError | null;
+  /** No live signal channel: push-to-talk progress can't be shown until this clears. */
+  signalsError: KalCodeError | null;
   refreshStatus: () => Promise<void>;
+  /** Reconnects signals if needed, then re-reads status ("Try again"). */
+  retryConnection: () => Promise<void>;
   state: AssistantState;
   /** The immutable pane destination captured for the active native dictation session. */
   dictationTarget: { sessionId: string; paneId: string | null } | null;
@@ -150,6 +154,8 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   const toast = useToast();
   const [status, setStatus] = useState<KalVoiceStatus | null>(null);
   const [statusError, setStatusError] = useState<KalCodeError | null>(null);
+  /** The window has no live KalVoice signal channel (subscribe was refused). */
+  const [signalsError, setSignalsError] = useState<KalCodeError | null>(null);
   const [state, dispatch] = useReducer(reduce, INITIAL_STATE);
   const [downloads, setDownloads] = useState<Record<string, DownloadProgress>>({});
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -505,50 +511,83 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
 
   // The client keeps one native channel for the window; this provider only adds a listener, so
   // remounts never replace or drop the live channel. The latest handler is read through a ref.
+  // A channel that couldn't be opened is its own state (`signalsError`), never masked by a
+  // successful status read, and is retried whenever the window comes forward or on "Try again".
+  const connectSignals = useRef<() => Promise<void>>(async () => undefined);
   useEffect(() => {
     let active = true;
     let remove: (() => void) | null = null;
-    void (async () => {
-      try {
-        const unsubscribe = await client.subscribeKalVoice((signal) => {
-          if (active) onSignalRef.current(signal);
-        });
-        if (active) remove = unsubscribe;
-        else unsubscribe();
-      } catch (error) {
-        if (active) setStatusError(toKalCodeError(error));
-      }
-      if (active) await refreshStatus();
-    })();
-    return () => {
-      active = false;
-      remove?.();
+    let pending: Promise<void> | null = null;
+    const listener = (signal: KalVoiceSignal) => {
+      if (active) onSignalRef.current(signal);
     };
-  }, [client, refreshStatus]);
-
-  // The native talk key is registered only while KalCode is in front, and native sends no signal
-  // when that changes: re-read status when the window comes forward (after native's own focus
-  // handler has run) and renew the signal channel in case native dropped it.
-  useEffect(() => {
+    const attempt = async () => {
+      try {
+        if (remove) {
+          // Attached already: re-register the window's channel in case native dropped it.
+          await client.renewKalVoiceSubscription();
+        } else {
+          const unsubscribe = await client.subscribeKalVoice(listener);
+          if (!active) {
+            unsubscribe();
+            return;
+          }
+          remove = unsubscribe;
+        }
+        if (active) setSignalsError(null);
+      } catch (error) {
+        // A refused renewal keeps the attached listener and native's existing channel; only a
+        // listener that never attached means signals can't arrive.
+        if (active && !remove) setSignalsError(toKalCodeError(error));
+      }
+    };
+    const connect = () => {
+      pending ??= attempt().finally(() => {
+        pending = null;
+      });
+      return pending;
+    };
+    connectSignals.current = connect;
+    void connect().then(() => {
+      if (active) void refreshStatus();
+    });
+    // Coming forward: renew (or retry) the channel now, and re-read status once native's own
+    // focus handler has (re)registered the talk key.
     let timer: ReturnType<typeof setTimeout> | null = null;
     const onForeground = () => {
       if (document.visibilityState === "hidden") return;
+      void connect();
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
         timer = null;
-        // A refused renewal leaves the existing native channel in place (native replaces only on success).
-        void client.renewKalVoiceSubscription().catch(() => undefined);
         void refreshStatus();
       }, FOREGROUND_REFRESH_MS);
     };
     window.addEventListener("focus", onForeground);
     document.addEventListener("visibilitychange", onForeground);
     return () => {
+      active = false;
+      remove?.();
       if (timer) clearTimeout(timer);
       window.removeEventListener("focus", onForeground);
       document.removeEventListener("visibilitychange", onForeground);
     };
   }, [client, refreshStatus]);
+
+  // A status read that succeeds while signals are down means the native runtime is up: retry the
+  // channel once per such read (bounded by status events, never by a timer loop).
+  const retriedForStatus = useRef<KalVoiceStatus | null>(null);
+  useEffect(() => {
+    if (!signalsError || !status || retriedForStatus.current === status) return;
+    retriedForStatus.current = status;
+    void connectSignals.current();
+  }, [status, signalsError]);
+
+  /** "Try again": reconnect signals (if needed) and re-read status. */
+  const retryConnection = useCallback(async () => {
+    await connectSignals.current();
+    await refreshStatus();
+  }, [refreshStatus]);
 
   // Done is shown briefly, then the widget returns to Ready on its own.
   useEffect(() => {
@@ -747,7 +786,9 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
     () => ({
       status,
       statusError,
+      signalsError,
       refreshStatus,
+      retryConnection,
       state,
       dictationTarget,
       levelRef,
@@ -774,7 +815,9 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
     [
       status,
       statusError,
+      signalsError,
       refreshStatus,
+      retryConnection,
       state,
       dictationTarget,
       submit,

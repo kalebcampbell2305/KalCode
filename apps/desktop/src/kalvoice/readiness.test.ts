@@ -1,7 +1,7 @@
 import type { KalVoiceStatus } from "@kalcode/protocol";
 import { describe, expect, it } from "vitest";
 import { createMemoryKalVoice } from "../ipc/memoryKalVoice.ts";
-import { pushToTalkReadiness } from "./readiness.ts";
+import { pushToTalkReadiness, withTalkKeyState } from "./readiness.ts";
 
 function status(patch: Partial<KalVoiceStatus> = {}): KalVoiceStatus {
   const voice = createMemoryKalVoice(() => undefined, "");
@@ -63,5 +63,27 @@ describe("push-to-talk readiness is derived only from native status", () => {
     expect(r).toMatchObject({ ready: false, code: "status_unavailable", fix: "retry" });
     expect(r.message).toContain("KalVoice is starting.");
     expect(pushToTalkReadiness(null, null)).toMatchObject({ ready: false, code: "checking" });
+  });
+
+  it("is not Ready while signals aren't connected, even with a perfect status", () => {
+    const r = pushToTalkReadiness(status(), null, { message: "KalVoice is starting." });
+    expect(r).toMatchObject({ ready: false, code: "signals_unavailable", label: "Not connected", fix: "retry" });
+    expect(r.message).toContain("KalVoice is starting.");
+  });
+
+  it("an older Ready status is Unverified once a refresh fails", () => {
+    const r = pushToTalkReadiness(status(), { message: "Runtime restarting." });
+    expect(r).toMatchObject({ ready: false, code: "status_unverified", label: "Unverified", fix: "retry" });
+  });
+});
+
+describe("native talk-key registration updates", () => {
+  it("apply to the last status without touching anything else", () => {
+    const before = status();
+    const issue = { mode: "talk" as const, accelerator: "F8", message: "Another app is using this key." };
+    const after = withTalkKeyState(before, { active: false, issues: [issue] });
+    expect(after).toMatchObject({ talkKeyActive: false, shortcutIssues: [issue], usage: before.usage });
+    expect(pushToTalkReadiness(after, null).code).toBe("talk_key_unavailable");
+    expect(withTalkKeyState(null, { active: true, issues: [] })).toBeNull();
   });
 });

@@ -279,12 +279,15 @@ export class KalCodeClient {
    */
   async renewKalVoiceSubscription(): Promise<void> {
     if (this.kalvoiceListeners.size === 0) return;
-    this.kalvoiceChannel = this.openKalVoiceChannel();
+    // The current channel stays the client's channel until native accepts the new one: a refused
+    // renewal leaves native's existing channel (and this client's record of it) in place.
+    const opening = this.openKalVoiceChannel();
     try {
-      await this.kalvoiceChannel;
+      await opening;
     } catch (error) {
       throw toKalCodeError(error);
     }
+    this.kalvoiceChannel = opening;
   }
 
   private openKalVoiceChannel(): Promise<void> {

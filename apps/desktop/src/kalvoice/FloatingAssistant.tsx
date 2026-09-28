@@ -64,9 +64,9 @@ function useViewport(): Size {
  */
 export function FloatingAssistant() {
   const kv = useKalVoice();
-  const { state, panel, setPanel, setPanelVisible, levelRef, status, statusError } = kv;
+  const { state, panel, setPanel, setPanelVisible, levelRef, status, statusError, signalsError } = kv;
   // "Ready" only when the native key is really registered; otherwise the exact reason.
-  const readiness = pushToTalkReadiness(status, statusError);
+  const readiness = pushToTalkReadiness(status, statusError, signalsError);
   const notReady = state.phase === "idle" && !readiness.ready;
   const { navigate } = useNavigation();
   const viewport = useViewport();
@@ -225,9 +225,12 @@ export function FloatingAssistant() {
       aria-label="KalVoice widget"
       style={{ left: position.left, top: position.top }}
     >
-      <p className="visually-hidden" role="status" aria-live="polite">
-        {announcement(state)}
-      </p>
+      {/* Collapsed to the orb, the push-to-talk bar announces activity instead (no double reading). */}
+      {view === "orb" ? null : (
+        <p className="visually-hidden" role="status" aria-live="polite">
+          {announcement(state)}
+        </p>
+      )}
       {view === "orb" ? (
         <button
           type="button"
@@ -356,6 +359,10 @@ export function FloatingAssistant() {
                     {readiness.fix === "settings" ? (
                       <Button size="sm" onClick={() => navigate("settings")}>
                         {readiness.code === "model_not_installed" ? "Set up speech" : "Open KalVoice settings"}
+                      </Button>
+                    ) : readiness.fix === "retry" ? (
+                      <Button size="sm" onClick={() => void kv.retryConnection()}>
+                        Try again
                       </Button>
                     ) : null}
                   </div>

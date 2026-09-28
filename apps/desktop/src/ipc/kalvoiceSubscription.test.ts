@@ -1,59 +1,60 @@
 import type { KalVoiceSignal } from "@kalcode/protocol";
 import { describe, expect, it, vi } from "vitest";
 import { KalCodeClient } from "./client.ts";
-import { createMemoryTransport } from "./memoryTransport.ts";
+import type { Transport } from "./transport.ts";
 
-const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
-
-function setup() {
-  const transport = createMemoryTransport("default");
-  const subscribe = vi.spyOn(transport, "subscribeKalVoice");
-  return { transport, subscribe, client: new KalCodeClient(transport) };
+/**
+ * A transport with the native runtime's channel semantics (kalvoice_commands.rs,
+ * `kalvoice_subscribe`): one channel per window, replaced by every subscribe.
+ */
+function nativeLikeTransport() {
+  let channel: ((signal: KalVoiceSignal) => void) | null = null;
+  const subscribeKalVoice = vi.fn(async (onSignal: (signal: KalVoiceSignal) => void) => {
+    channel = onSignal;
+  });
+  const transport = { kind: "tauri", subscribeKalVoice } as unknown as Transport;
+  const send = (signal: KalVoiceSignal) => channel?.(signal);
+  return { transport, subscribeKalVoice, send };
 }
 
-describe("KalVoice signal subscription", () => {
-  it("opens exactly one native channel per client, however many listeners attach and detach", async () => {
-    const { client, subscribe } = setup();
-    const a: string[] = [];
-    const b: string[] = [];
-    const removeA = await client.subscribeKalVoice((s) => a.push(s.kind));
-    const removeB = await client.subscribeKalVoice((s) => b.push(s.kind));
-    removeA();
-    const removeC = await client.subscribeKalVoice(() => undefined);
-    removeC();
-    expect(subscribe).toHaveBeenCalledTimes(1);
+const started = (sessionId: string): KalVoiceSignal => ({ kind: "listening_started", sessionId, mode: "talk" });
 
-    await client.kalvoiceListenStart("talk");
-    await tick();
-    expect(b).toContain("listening_started");
-    expect(a).toEqual([]);
-    await client.kalvoiceListenCancel();
-    removeB();
+describe("KalVoice signal subscription (native replace-on-subscribe semantics)", () => {
+  it("a second listener (a remount) does not steal the channel from the first", async () => {
+    const { transport, subscribeKalVoice, send } = nativeLikeTransport();
+    const client = new KalCodeClient(transport);
+    const first: string[] = [];
+    const second: string[] = [];
+    await client.subscribeKalVoice((s) => first.push(s.kind));
+    await client.subscribeKalVoice((s) => second.push(s.kind));
+    send(started("a"));
+    expect(first).toEqual(["listening_started"]);
+    expect(second).toEqual(["listening_started"]);
+    expect(subscribeKalVoice).toHaveBeenCalledTimes(1);
   });
 
-  it("renewing replaces the window's channel without duplicating signals (native replace semantics)", async () => {
-    const { client, subscribe } = setup();
-    const seen: KalVoiceSignal[] = [];
-    await client.subscribeKalVoice((s) => seen.push(s));
-    await client.renewKalVoiceSubscription();
-    await client.renewKalVoiceSubscription();
-    expect(subscribe).toHaveBeenCalledTimes(3);
-    await client.kalvoiceListenStart("talk");
-    await tick();
-    expect(seen.filter((s) => s.kind === "listening_started")).toHaveLength(1);
-    await client.kalvoiceListenCancel();
-  });
-
-  it("a failed native subscribe is retried by the next listener instead of leaving no channel", async () => {
-    const { client, subscribe } = setup();
-    subscribe.mockRejectedValueOnce({ category: "internal", code: "kalvoice_off", message: "Off.", retryable: true });
-    await expect(client.subscribeKalVoice(() => undefined)).rejects.toMatchObject({ code: "kalvoice_off" });
+  it("a renewal that native refuses keeps delivering on the existing channel", async () => {
+    const { transport, subscribeKalVoice, send } = nativeLikeTransport();
+    const client = new KalCodeClient(transport);
     const seen: string[] = [];
     await client.subscribeKalVoice((s) => seen.push(s.kind));
-    expect(subscribe).toHaveBeenCalledTimes(2);
-    await client.kalvoiceListenStart("talk");
-    await tick();
-    expect(seen).toContain("listening_started");
-    await client.kalvoiceListenCancel();
+    subscribeKalVoice.mockRejectedValueOnce({ category: "internal", code: "x", message: "No.", retryable: true });
+    await expect(client.renewKalVoiceSubscription()).rejects.toMatchObject({ code: "x" });
+    send(started("a"));
+    expect(seen).toEqual(["listening_started"]);
+    // A later listener still shares the one live channel instead of opening another.
+    await client.subscribeKalVoice(() => undefined);
+    expect(subscribeKalVoice).toHaveBeenCalledTimes(2);
+  });
+
+  it("a successful renewal replaces the channel and each signal still arrives exactly once", async () => {
+    const { transport, subscribeKalVoice, send } = nativeLikeTransport();
+    const client = new KalCodeClient(transport);
+    const seen: string[] = [];
+    await client.subscribeKalVoice((s) => seen.push(s.kind));
+    await client.renewKalVoiceSubscription();
+    send(started("a"));
+    expect(seen).toEqual(["listening_started"]);
+    expect(subscribeKalVoice).toHaveBeenCalledTimes(2);
   });
 });
