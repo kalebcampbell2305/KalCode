@@ -1,5 +1,6 @@
 ---
 import Docs from "../../layouts/Docs.astro";
+import { GEMINI_AVAILABILITY } from "../../lib/site";
 ---
 <Docs
   path="/docs/providers"
@@ -11,8 +12,14 @@ import Docs from "../../layouts/Docs.astro";
   <ul>
     <li><strong>Claude Code</strong> — the local CLI, signed in with your own Claude account.</li>
     <li><strong>Codex</strong> — the local CLI, signed in with your own personal ChatGPT plan, with its documented approval and sandbox settings.</li>
-    <li><strong>Gemini CLI</strong> — the local CLI, signed in with your own Google account, with its documented non-interactive output modes.</li>
   </ul>
+  <h3>Gemini CLI is unavailable in 0.1.5</h3>
+  <p>{GEMINI_AVAILABILITY.notice}</p>
+  <p>
+    KalCode 0.1.5 still includes its Gemini CLI adapter, which runs the local CLI signed in with
+    Google's own sign-in and uses its documented non-interactive output modes. The sign-in and
+    storage details below describe that adapter.
+  </p>
   <p>
     More providers can be added later through a documented adapter contract. Each integration is
     verified against the provider's current official documentation before it ships.
@@ -74,8 +81,8 @@ import Docs from "../../layouts/Docs.astro";
   <p>
     Each thread stays on the account it started with, and never changes account on its own, even
     when you change the default. To move a thread to another signed-in account, use the account
-    menu in its header, the command palette (“switch gemini b”) or KalVoice (“Switch this Gemini
-    thread to Gemini B”). KalCode asks you to confirm first. The thread's past conversation stays
+    menu in its header, the command palette (“switch codex b”) or KalVoice (“Switch this Codex
+    thread to Codex B”). KalCode asks you to confirm first. The thread's past conversation stays
     as it is; only future messages use the new account, starting a new provider session. An
     account that is signed out has to be signed in before a thread can move to it.
   </p>
