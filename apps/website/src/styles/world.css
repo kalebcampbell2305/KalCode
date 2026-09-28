@@ -441,6 +441,14 @@
   letter-spacing: 0.02em;
 }
 
+.providers__note {
+  max-width: 44rem;
+  margin: clamp(1.5rem, 1rem + 1.5vw, 2.5rem) auto 0;
+  color: var(--color-text-secondary);
+  font-size: var(--site-text-small);
+  text-align: center;
+}
+
 @media (min-width: 56rem) {
   .providers__list {
     grid-template-columns: repeat(3, auto) minmax(0, auto);

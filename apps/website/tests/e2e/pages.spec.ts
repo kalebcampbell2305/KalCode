@@ -135,7 +135,8 @@ test.describe("every page", () => {
     await expect(h1).toContainText("KalCode");
     await expect(h1).toContainText("One intelligence that operates your entire AI workspace.");
     const hero = page.locator(".hero");
-    await expect(hero).toContainText("Claude Code, Codex, Gemini");
+    await expect(hero).toContainText("Claude Code, Codex and the coding tools you already use");
+    await expect(hero).not.toContainText("Gemini");
     const primary = hero.locator(".button--primary");
     await expect(primary).toHaveText("Download KalCode");
     if (WINDOWS_BUILD && MANIFEST.latest) {

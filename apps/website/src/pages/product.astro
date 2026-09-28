@@ -7,7 +7,7 @@ import StageSlot from "../components/StageSlot.astro";
 import { hasStage } from "../lib/stage";
 import Base from "../layouts/Base.astro";
 import { RELEASES, buildStatus, signedStableRelease } from "../lib/releases";
-import { KALVOICE, PROVIDERS, getPage } from "../lib/site";
+import { GEMINI_AVAILABILITY, KALVOICE, PROVIDERS, getPage } from "../lib/site";
 
 const page = getPage("/product");
 const stableKalVoice = signedStableRelease(RELEASES) !== null;
@@ -43,7 +43,7 @@ const modes = [
 const roadmap: { capability: string; state: State; note: string }[] = [
   { capability: "App shell, search and palette, light and dark themes", state: "built", note: "In the development build" },
   { capability: "Workspaces and real terminals", state: "built", note: "PowerShell, Command Prompt, Git Bash; restore after restart" },
-  { capability: "Claude Code, Codex and Gemini CLI adapters", state: "built", note: "Sign-in per account from KalCode, streamed threads, resume, interrupt" },
+  { capability: "Claude Code, Codex and Gemini CLI adapters", state: "built", note: "Sign-in per account from KalCode, streamed threads, resume, interrupt. Gemini CLI is unavailable in 0.1.5 after Google ended personal-account access" },
   { capability: "Dashboard", state: "built", note: "Design built; live thread data in development" },
   { capability: "Approvals and permission modes", state: "built", note: "Permission engine, the Approvals panel and a mode for every thread" },
   { capability: "KalVoice dictation and commands", state: stableKalVoice ? "built" : "dev", note: stableKalVoice ? "Available in Stable with signed local component setup" : "On-device recognition and command grammar in development" },
@@ -145,7 +145,7 @@ const roadmap: { capability: string; state: State; note: string }[] = [
 
       <article class="chapter" id="providers" aria-labelledby="providers-title">
         <div class="chapter__head">
-          <p class="chip chip--built">Built · Claude Code, Codex, Gemini CLI</p>
+          <p class="chip chip--built">Built · Claude Code, Codex</p>
           <h2 id="providers-title" class="h2 h2--sm">Your providers, on your own accounts.</h2>
           <p>Connecting a provider is free on every plan.</p>
         </div>
@@ -177,6 +177,7 @@ const roadmap: { capability: string; state: State; note: string }[] = [
               </tbody>
             </table>
           </div>
+          <p>{GEMINI_AVAILABILITY.notice}</p>
           <p>
             KalCode uses documented integration methods only: each provider's own sign-in, run from
             KalCode for your account. It never copies hidden credentials or scrapes browser sessions. Usage is
