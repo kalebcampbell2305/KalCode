@@ -166,7 +166,8 @@ describe("supported provider CLI versions", () => {
     expect(copy).toContain(
       "Claude Code 2.1.282 or a later 2.1 release, Codex CLI 0.155.1 or a later release in the 0.155 to 0.158 lines, and Gemini CLI 0.61. Pre-release builds aren't supported.",
     );
-    expect(copy).toContain("a message that names the supported versions and how to install one");
+    // Claude Code refusals name the supported versions but no install command.
+    expect(copy).toContain("threads stop with a message that names the supported versions.");
   });
 });
 
