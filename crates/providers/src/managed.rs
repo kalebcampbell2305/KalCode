@@ -224,6 +224,20 @@ impl ManagedProfiles {
         ])
     }
 
+    /// Returns a stable provider/account directory used only by that account's supported sign-in
+    /// flow. It is a sibling of the account's thread directories, outside every repository.
+    pub fn sign_in_dir(&self, provider: &str, account_id: &str) -> Result<PathBuf, ProviderError> {
+        let provider = ManagedProvider::parse(provider)?;
+        self.account_root(provider, account_id)?;
+        self.ensure_directory(&[
+            "providers",
+            provider.id(),
+            "accounts",
+            account_id,
+            "sign-in",
+        ])
+    }
+
     /// Returns a cloned detection environment whose variables are also safe to launch.
     /// `HOME` and `USERPROFILE` remain unchanged so executable discovery still uses the person's
     /// normal installation locations; provider auth/config selectors are replaced by exactly one
@@ -261,9 +275,16 @@ impl ManagedProfiles {
         remove_variable(&mut env, "CLAUDE_SECURESTORAGE_CONFIG_DIR");
         remove_variable(&mut env, "CODEX_HOME");
         remove_variable(&mut env, "GEMINI_CLI_HOME");
+        let selected_home = match provider {
+            // Gemini CLI 0.61.0 (Node.js) crashes at startup ("EISDIR: illegal operation on a
+            // directory, lstat 'C:'") when GEMINI_CLI_HOME carries the Windows verbatim prefix
+            // that `std::fs::canonicalize` returns. The plain form names the same directory.
+            ManagedProvider::Gemini => plain_path(&home),
+            ManagedProvider::Claude | ManagedProvider::Codex => home.clone(),
+        };
         env.insert(
             provider.home_variable().into(),
-            home.clone().into_os_string(),
+            selected_home.into_os_string(),
         );
         if matches!(provider, ManagedProvider::Claude) {
             // Claude Code resolves its credential store independently from general config in
@@ -558,6 +579,24 @@ fn guardian_provider_error(error: crate::guardian::GuardianError) -> ProfileLeas
     ProfileLeaseError::Unavailable(ProviderError::Start(error.to_string()))
 }
 
+/// The ordinary form of a canonical path for a provider that cannot take Windows verbatim paths
+/// (`\\?\C:\…` becomes `C:\…`, `\\?\UNC\server\share\…` becomes `\\server\share\…`). Every
+/// other path, including other verbatim forms, is returned unchanged.
+pub(crate) fn plain_path(path: &Path) -> PathBuf {
+    let Some(text) = path.to_str() else {
+        return path.to_path_buf();
+    };
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = text.strip_prefix(r"\\?\")
+        && rest.as_bytes().get(1) == Some(&b':')
+    {
+        return PathBuf::from(rest);
+    }
+    path.to_path_buf()
+}
+
 fn canonical_uuid(value: &str) -> bool {
     uuid::Uuid::try_parse(value).is_ok_and(|id| id.hyphenated().to_string().as_str() == value)
 }
@@ -723,6 +762,51 @@ mod tests {
     }
 
     #[test]
+    fn plain_path_strips_only_drive_and_unc_verbatim_prefixes() {
+        assert_eq!(
+            plain_path(Path::new(r"\\?\C:\data\home")),
+            PathBuf::from(r"C:\data\home")
+        );
+        assert_eq!(
+            plain_path(Path::new(r"\\?\UNC\server\share\home")),
+            PathBuf::from(r"\\server\share\home")
+        );
+        assert_eq!(
+            plain_path(Path::new(r"\\?\GLOBALROOT\x")),
+            PathBuf::from(r"\\?\GLOBALROOT\x")
+        );
+        assert_eq!(
+            plain_path(Path::new("/tmp/home")),
+            PathBuf::from("/tmp/home")
+        );
+    }
+
+    #[test]
+    fn gemini_home_selector_is_never_a_verbatim_path() {
+        let temp = tempfile::tempdir().expect("temp");
+        let temp_root = fixture_root(&temp);
+        let profiles = ManagedProfiles::new(temp_root.join("managed")).expect("profiles");
+        let account_id = kalcode_contracts::ids::new_id();
+        let env = profiles
+            .launch_env("gemini-cli", &account_id, &source(&[]))
+            .expect("env");
+        let home = env
+            .get(OsStr::new("GEMINI_CLI_HOME"))
+            .expect("gemini home selector");
+        assert!(
+            !home.to_string_lossy().starts_with(r"\\?\"),
+            "{}",
+            home.to_string_lossy()
+        );
+        assert_eq!(
+            std::fs::canonicalize(home).expect("same directory"),
+            profiles
+                .profile_home("gemini-cli", &account_id)
+                .expect("profile home")
+        );
+    }
+
+    #[test]
     fn root_must_be_an_absolute_child_of_an_existing_directory() {
         assert!(ManagedProfiles::new(PathBuf::from("relative/profiles")).is_err());
 
@@ -876,10 +960,12 @@ mod tests {
         assert_eq!(
             value(&gemini, "GEMINI_CLI_HOME"),
             Some(
-                profiles
-                    .profile_home("gemini-cli", &account_a)
-                    .expect("home")
-                    .as_os_str()
+                plain_path(
+                    &profiles
+                        .profile_home("gemini-cli", &account_a)
+                        .expect("home")
+                )
+                .as_os_str()
             )
         );
         assert!(value(&gemini, "CODEX_HOME").is_none());

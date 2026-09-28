@@ -119,7 +119,8 @@ export interface RecoveryHint {
 
 /** What would make the provider healthy again, or null when nothing needs doing. */
 export function recoveryHint(
-  health: Pick<ProviderHealth, "recoverability" | "displayName" | "minimumVersion" | "reasonCode">,
+  health: Pick<ProviderHealth, "recoverability" | "displayName" | "minimumVersion" | "reasonCode"> &
+    Partial<Pick<ProviderHealth, "providerId">>,
   status?: Pick<ProviderStatus, "installCommand" | "signInCommand"> | null,
 ): RecoveryHint | null {
   const name = health.displayName;
@@ -139,6 +140,14 @@ export function recoveryHint(
         command: null,
       };
     case "sign_in":
+      // Managed Gemini accounts sign in only from their account card; a terminal `gemini`
+      // signs in a standalone profile that KalCode threads never use.
+      if (health.providerId === "gemini-cli") {
+        return {
+          text: `Sign in to the ${name} account in Providers, Accounts, then choose Check again.`,
+          command: null,
+        };
+      }
       return {
         text: `Sign in with ${name}'s own command in a terminal, then choose Check again.`,
         command: status?.signInCommand ?? null,

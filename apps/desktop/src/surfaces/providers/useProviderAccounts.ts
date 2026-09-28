@@ -1,12 +1,52 @@
 import type { ProviderAccount } from "@kalcode/protocol";
 import { useToast } from "@kalcode/ui/components";
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { KalCodeClient } from "../../ipc/client.ts";
 import { toKalCodeError } from "../../ipc/errors.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
-import { useUiIntents } from "../../runtime/uiIntents.tsx";
-import { PaneChannel } from "../code/panes/paneChannel.ts";
 
-type BrowserAuthProvider = "claude-code" | "codex";
+/** Providers whose own official sign-in KalCode runs natively for one managed account. */
+export type BrowserAuthProvider = "claude-code" | "codex" | "gemini-cli";
+
+export function isBrowserAuthProvider(providerId: string): providerId is BrowserAuthProvider {
+  return providerId === "claude-code" || providerId === "codex" || providerId === "gemini-cli";
+}
+
+const AUTH_PROVIDER_NAMES: Record<BrowserAuthProvider, string> = {
+  "claude-code": "Claude Code",
+  codex: "Codex",
+  "gemini-cli": "Gemini",
+};
+
+/** The native account-auth commands for one provider. Every call is Rust-owned and opaque. */
+function authCommands(client: KalCodeClient, providerId: BrowserAuthProvider) {
+  switch (providerId) {
+    case "codex":
+      return {
+        refresh: (id: string) => client.refreshCodexAccount(id),
+        start: (id: string) => client.startCodexLogin(id),
+        wait: (handle: string) => client.waitForCodexLogin(handle),
+        cancel: (handle: string) => client.cancelCodexLogin(handle),
+        logout: (id: string) => client.logoutCodexAccount(id),
+      };
+    case "claude-code":
+      return {
+        refresh: (id: string) => client.refreshClaudeAccount(id),
+        start: (id: string) => client.startClaudeLogin(id),
+        wait: (handle: string) => client.waitForClaudeLogin(handle),
+        cancel: (handle: string) => client.cancelClaudeLogin(handle),
+        logout: (id: string) => client.logoutClaudeAccount(id),
+      };
+    case "gemini-cli":
+      return {
+        refresh: (id: string) => client.refreshGeminiAccount(id),
+        start: (id: string) => client.startGeminiLogin(id),
+        wait: (handle: string) => client.waitForGeminiLogin(handle),
+        cancel: (handle: string) => client.cancelGeminiLogin(handle),
+        logout: (id: string) => client.logoutGeminiAccount(id),
+      };
+  }
+}
 
 interface ActiveLogin {
   accountId: string;
@@ -16,7 +56,6 @@ interface ActiveLogin {
 
 export function useProviderAccounts(enabled: boolean) {
   const { client } = useRuntime();
-  const intents = useUiIntents();
   const toast = useToast();
   const [accounts, setAccounts] = useState<ProviderAccount[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -34,9 +73,9 @@ export function useProviderAccounts(enabled: boolean) {
         // cancellation races the pending wait, so the wait rejection cannot surface as a false
         // sign-in failure toast on the next screen.
         cancelledLogins.current.add(login.handle);
-        const cancel =
-          login.providerId === "codex" ? client.cancelCodexLogin(login.handle) : client.cancelClaudeLogin(login.handle);
-        void cancel.catch(() => undefined);
+        void authCommands(client, login.providerId)
+          .cancel(login.handle)
+          .catch(() => undefined);
       }
     },
     [client],
@@ -112,49 +151,45 @@ export function useProviderAccounts(enabled: boolean) {
     [client, run],
   );
   const refreshAuth = useCallback(
-    (account: ProviderAccount) =>
-      run(
-        `refresh:${account.id}`,
-        `${account.providerId === "codex" ? "Codex" : "Claude Code"} status couldn't be refreshed`,
-        () =>
-          account.providerId === "codex"
-            ? client.refreshCodexAccount(account.id)
-            : client.refreshClaudeAccount(account.id),
-      ),
+    async (account: ProviderAccount) => {
+      if (!isBrowserAuthProvider(account.providerId)) return null;
+      const providerId = account.providerId;
+      return run(`refresh:${account.id}`, `${AUTH_PROVIDER_NAMES[providerId]} status couldn't be refreshed`, () =>
+        authCommands(client, providerId).refresh(account.id),
+      );
+    },
     [client, run],
   );
   const logoutAuth = useCallback(
-    (account: ProviderAccount) =>
-      run(
-        `logout:${account.id}`,
-        `${account.providerId === "codex" ? "Codex" : "Claude Code"} couldn't sign out`,
-        () =>
-          account.providerId === "codex"
-            ? client.logoutCodexAccount(account.id)
-            : client.logoutClaudeAccount(account.id),
-      ),
+    async (account: ProviderAccount) => {
+      if (!isBrowserAuthProvider(account.providerId)) return null;
+      const providerId = account.providerId;
+      return run(`logout:${account.id}`, `${AUTH_PROVIDER_NAMES[providerId]} couldn't sign out`, () =>
+        authCommands(client, providerId).logout(account.id),
+      );
+    },
     [client, run],
   );
 
   const signInAuth = useCallback(
     async (account: ProviderAccount) => {
-      if (account.providerId !== "codex" && account.providerId !== "claude-code") return;
+      if (!isBrowserAuthProvider(account.providerId)) return;
       const providerId = account.providerId;
+      const commands = authCommands(client, providerId);
       const key = `login:${account.id}`;
       setBusyKey(key);
       let handle: string | null = null;
       try {
-        const started =
-          providerId === "codex" ? await client.startCodexLogin(account.id) : await client.startClaudeLogin(account.id);
+        const started = await commands.start(account.id);
         handle = started.loginHandle;
         setActiveLogin({ accountId: account.id, handle, providerId });
         setBusyKey(null);
-        replace(await (providerId === "codex" ? client.waitForCodexLogin(handle) : client.waitForClaudeLogin(handle)));
+        replace(await commands.wait(handle));
       } catch (error) {
         if (handle === null || !cancelledLogins.current.delete(handle)) {
           toast.show({
             tone: "danger",
-            title: `${providerId === "codex" ? "Codex" : "Claude Code"} sign-in didn't finish`,
+            title: `${AUTH_PROVIDER_NAMES[providerId]} sign-in didn't finish`,
             description: toKalCodeError(error).message,
           });
         }
@@ -171,8 +206,7 @@ export function useProviderAccounts(enabled: boolean) {
     cancelledLogins.current.add(activeLogin.handle);
     setBusyKey(`cancel:${activeLogin.accountId}`);
     try {
-      if (activeLogin.providerId === "codex") await client.cancelCodexLogin(activeLogin.handle);
-      else await client.cancelClaudeLogin(activeLogin.handle);
+      await authCommands(client, activeLogin.providerId).cancel(activeLogin.handle);
       setActiveLogin(null);
     } catch (error) {
       cancelledLogins.current.delete(activeLogin.handle);
@@ -181,43 +215,6 @@ export function useProviderAccounts(enabled: boolean) {
       setBusyKey(null);
     }
   }, [activeLogin, client, toast]);
-
-  const openGeminiAuth = useCallback(
-    async (account: ProviderAccount) => {
-      const key = `gemini-auth:${account.id}`;
-      setBusyKey(key);
-      try {
-        const workspace = await client.activeWorkspace();
-        if (!workspace) {
-          toast.show({
-            tone: "info",
-            title: "Open a workspace first",
-            description: "Gemini sign-in runs inside a managed Gemini CLI pane in the active workspace.",
-          });
-          return;
-        }
-        const channel = new PaneChannel(client);
-        const thread = await channel.create({
-          providerId: "gemini-cli",
-          providerAccountId: account.id,
-          workspaceId: workspace.id,
-          permissionMode: "approve",
-          name: "Gemini sign-in",
-        });
-        await channel.write(thread.id, "/auth\r");
-        await intents.focus({ kind: "thread", threadId: thread.id, workspaceId: workspace.id });
-      } catch (error) {
-        toast.show({
-          tone: "danger",
-          title: "Gemini sign-in pane couldn't open",
-          description: toKalCodeError(error).message,
-        });
-      } finally {
-        setBusyKey((current) => (current === key ? null : current));
-      }
-    },
-    [client, intents, toast],
-  );
 
   return {
     accounts,
@@ -233,6 +230,5 @@ export function useProviderAccounts(enabled: boolean) {
     signInAuth,
     cancelLogin,
     logoutAuth,
-    openGeminiAuth,
   };
 }

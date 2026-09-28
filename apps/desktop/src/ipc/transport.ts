@@ -56,6 +56,11 @@ export type CommandName =
   | "provider_claude_login_wait"
   | "provider_claude_login_cancel"
   | "provider_claude_logout"
+  | "provider_gemini_account_refresh"
+  | "provider_gemini_login_start"
+  | "provider_gemini_login_wait"
+  | "provider_gemini_login_cancel"
+  | "provider_gemini_logout"
   // Provider Health (PROVIDERS-2): in-memory snapshots, never a provider process
   | "provider_health_list"
   | "provider_health_get"

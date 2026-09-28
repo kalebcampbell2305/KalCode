@@ -13,7 +13,7 @@ import {
 import { LogIn, Plus, RefreshCw, ShieldCheck } from "lucide-react";
 import { type FormEvent, useId, useMemo, useState } from "react";
 import styles from "./ProviderAccountsView.module.css";
-import { useProviderAccounts } from "./useProviderAccounts.ts";
+import { isBrowserAuthProvider, useProviderAccounts } from "./useProviderAccounts.ts";
 
 const PROVIDERS = [
   { id: "claude-code", name: "Claude Code" },
@@ -65,8 +65,9 @@ export function ProviderAccountsView({ enabled, statuses }: { enabled: boolean; 
         className={styles.safety}
       >
         <p className={styles.note}>
-          Claude Code and Codex use their official browser sign-in flows. Gemini CLI authentication stays in a managed
-          provider pane through <code>/auth</code>; its status remains Not checked until Gemini reports it natively.
+          Sign in runs each provider's own official sign-in for that account only: Claude Code and Codex use their
+          browser sign-in, and Gemini CLI opens Google sign-in in your browser. The provider keeps the credentials in
+          the account's managed profile; KalCode never sees them.
         </p>
       </Panel>
 
@@ -107,7 +108,6 @@ export function ProviderAccountsView({ enabled, statuses }: { enabled: boolean; 
                     signInAuth={state.signInAuth}
                     cancelLogin={state.cancelLogin}
                     logoutAuth={state.logoutAuth}
-                    openGeminiAuth={state.openGeminiAuth}
                   />
                 ))}
               </div>
@@ -186,7 +186,6 @@ function AccountCard({
   signInAuth,
   cancelLogin,
   logoutAuth,
-  openGeminiAuth,
 }: {
   account: ProviderAccount;
   providerName: string;
@@ -200,7 +199,6 @@ function AccountCard({
   signInAuth: (account: ProviderAccount) => Promise<void>;
   cancelLogin: () => Promise<void>;
   logoutAuth: (account: ProviderAccount) => Promise<ProviderAccount | null>;
-  openGeminiAuth: (account: ProviderAccount) => Promise<void>;
 }) {
   const id = useId();
   const [renaming, setRenaming] = useState(false);
@@ -292,7 +290,7 @@ function AccountCard({
           >
             Rename
           </Button>
-          {account.providerId === "codex" || account.providerId === "claude-code" ? (
+          {isBrowserAuthProvider(account.providerId) ? (
             <>
               {account.authenticationState === "authenticated" ? (
                 <Button
@@ -329,18 +327,6 @@ function AccountCard({
                 Refresh
               </Button>
             </>
-          ) : null}
-          {account.providerId === "gemini-cli" ? (
-            <Button
-              size="sm"
-              icon={<LogIn />}
-              onClick={() => void openGeminiAuth(account)}
-              busy={busyKey === `gemini-auth:${account.id}`}
-              disabled={busy}
-              aria-label={`Open ${account.displayName} Gemini sign-in pane`}
-            >
-              Open /auth pane
-            </Button>
           ) : null}
           <Button
             size="sm"

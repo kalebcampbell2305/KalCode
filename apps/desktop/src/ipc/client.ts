@@ -451,6 +451,26 @@ export class KalCodeClient {
     return this.call("provider_claude_logout", { accountId });
   }
 
+  refreshGeminiAccount(accountId: string): Promise<ProviderAccount> {
+    return this.call("provider_gemini_account_refresh", { accountId });
+  }
+
+  startGeminiLogin(accountId: string): Promise<ProviderLoginStart> {
+    return this.call("provider_gemini_login_start", { accountId });
+  }
+
+  waitForGeminiLogin(loginHandle: string): Promise<ProviderAccount> {
+    return this.call("provider_gemini_login_wait", { loginHandle });
+  }
+
+  cancelGeminiLogin(loginHandle: string): Promise<void> {
+    return this.call("provider_gemini_login_cancel", { loginHandle });
+  }
+
+  logoutGeminiAccount(accountId: string): Promise<ProviderAccount> {
+    return this.call("provider_gemini_logout", { accountId });
+  }
+
   // ---- Provider Health (PROVIDERS-2) ----
   // Cheap in-memory snapshots: reading health never starts a provider process or a detection.
 

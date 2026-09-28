@@ -115,6 +115,13 @@ export function createProviderAccountsMemory(requireCore: () => void, empty = fa
     }
     return found;
   };
+  const ensureGemini = (id: unknown): ProviderAccount => {
+    const found = active(id);
+    if (found.providerId !== "gemini-cli") {
+      fail("provider_account_mismatch", "That account belongs to a different provider.");
+    }
+    return found;
+  };
 
   const resolve = (id: string, provider: string): ProviderAccount => {
     const selected = active(id);
@@ -297,6 +304,62 @@ export function createProviderAccountsMemory(requireCore: () => void, empty = fa
       provider_claude_logout: (args) => {
         requireCore();
         const current = ensureClaude(args.accountId);
+        return replace({
+          ...current,
+          authenticationState: "not_authenticated",
+          providerReportedIdentity: null,
+          lastCheckedAt: new Date().toISOString(),
+          lastErrorCode: null,
+        });
+      },
+      provider_gemini_account_refresh: (args) => {
+        requireCore();
+        const current = ensureGemini(args.accountId);
+        return replace({
+          ...current,
+          authenticationState: current.authenticationState === "authenticated" ? "authenticated" : "not_authenticated",
+          lastCheckedAt: new Date().toISOString(),
+          lastErrorCode: null,
+        });
+      },
+      provider_gemini_login_start: (args) => {
+        requireCore();
+        const current = ensureGemini(args.accountId);
+        if (current.authenticationState === "authenticated") {
+          fail("provider_account_already_connected", "This managed Gemini account is already signed in.", "provider");
+        }
+        if ([...logins.values()].some((login) => login.accountId === current.id && !login.cancelled)) {
+          fail("provider_account_busy", "That account already has a sign-in in progress.", "provider");
+        }
+        const loginHandle = `login-${nextLogin++}`;
+        logins.set(loginHandle, { accountId: current.id, cancelled: false });
+        return { loginHandle };
+      },
+      provider_gemini_login_wait: (args) => {
+        requireCore();
+        const handle = typeof args.loginHandle === "string" ? args.loginHandle : "";
+        const login = logins.get(handle);
+        if (!login || login.cancelled)
+          fail("provider_login_unknown", "That Gemini sign-in is no longer active.", "provider");
+        logins.delete(handle);
+        const current = ensureGemini(login.accountId);
+        return replace({
+          ...current,
+          authenticationState: "authenticated",
+          lastCheckedAt: new Date().toISOString(),
+          lastErrorCode: null,
+        });
+      },
+      provider_gemini_login_cancel: (args) => {
+        requireCore();
+        const handle = typeof args.loginHandle === "string" ? args.loginHandle : "";
+        const login = logins.get(handle);
+        if (!login) fail("provider_login_unknown", "That Gemini sign-in is no longer active.", "provider");
+        logins.set(handle, { ...login, cancelled: true });
+      },
+      provider_gemini_logout: (args) => {
+        requireCore();
+        const current = ensureGemini(args.accountId);
         return replace({
           ...current,
           authenticationState: "not_authenticated",

@@ -50,6 +50,9 @@ test.describe("providers", () => {
     await expect(
       gemini.getByText("Gemini CLI has no documented way to check sign-in without starting a session."),
     ).toBeVisible();
+    // Gemini signs in only from its managed account card; a terminal `gemini` uses another profile.
+    await expect(gemini.getByText(/^Open Accounts, add a Gemini CLI account and choose Sign in\./)).toBeVisible();
+    await expect(gemini.getByText(/in a terminal to sign in to Gemini CLI/)).toHaveCount(0);
     await expect(gemini.getByText("Auto (default) (default), Pro, Flash, Flash-Lite")).toBeVisible();
     await expect(gemini.getByText("https://geminicli.com/docs/", { exact: true })).toBeVisible();
 
@@ -136,13 +139,14 @@ test.describe("providers", () => {
     await expect(page.getByRole("region", { name: "Gemini CLI account Side project" })).toBeVisible();
 
     const gemini = page.getByRole("region", { name: "Gemini CLI account Personal" });
-    await expect(gemini.getByRole("button", { name: "Open Personal Gemini sign-in pane" })).toBeVisible();
-    await expect(page.getByText(/Gemini CLI authentication stays in a managed provider pane/i)).toBeVisible();
+    await expect(gemini.getByRole("button", { name: "Sign in Personal" })).toBeVisible();
+    await expect(gemini.getByRole("button", { name: /auth pane/i })).toHaveCount(0);
+    await expect(page.getByText(/Gemini CLI opens Google sign-in in your browser/)).toBeVisible();
     await expectNoSeriousA11yViolations(page);
   });
 
-  test("Gemini sign-in keeps the exact selected account visible through pane focus and KalVoice", async ({ page }) => {
-    await openProviders(page, "code&transcript=check%20this%20account");
+  test("Gemini signs in and out from its account card without a provider pane", async ({ page }) => {
+    await openProviders(page);
     await page.getByRole("tab", { name: "Accounts" }).click();
 
     const add = page.getByRole("region", { name: "Add provider account" });
@@ -150,29 +154,18 @@ test.describe("providers", () => {
     await add.getByLabel("Account name").fill("Side project");
     await add.getByRole("button", { name: "Add account" }).click();
     const gemini = page.getByRole("region", { name: "Gemini CLI account Side project" });
-    await gemini.getByRole("button", { name: "Open Side project Gemini sign-in pane" }).click();
+    await expect(gemini.getByText("Not checked", { exact: true })).toBeVisible();
 
-    const frame = page.locator("[data-pane-id][data-focused]");
-    const pane = frame.locator("[data-provider-pane]");
-    await expect(page.getByRole("heading", { level: 1, name: "kalcode-site" })).toBeVisible();
-    await expect(pane).toHaveAttribute("aria-label", "Gemini sign-in, Gemini CLI pane, account Side project");
-    await expect(pane.getByTitle("Provider account: Side project", { exact: true })).toHaveText(
-      "Provider Account · Side project",
-    );
-    await expect(pane.locator("[data-pane-terminal] .xterm-rows")).toContainText("/auth");
+    await gemini.getByRole("button", { name: "Sign in Side project" }).click();
+    await expect(gemini.getByText("Signed in", { exact: true })).toBeVisible();
+    // Sign-in stays on the Providers page: no workspace, thread or pane is opened for it.
+    await expect(page.getByRole("heading", { level: 1, name: "Providers" })).toBeVisible();
+    await expect(page.locator("[data-provider-pane]")).toHaveCount(0);
 
-    await page.keyboard.down("F8");
-    await expect(frame).toHaveAttribute("data-kalvoice-target", "listening");
+    await gemini.getByRole("button", { name: "Sign out Side project" }).click();
+    await expect(gemini.getByText("Signed out", { exact: true })).toBeVisible();
     await expect(
-      page.getByRole("status").filter({ hasText: "KalVoice is listening to Gemini sign-in · Side project." }),
-    ).toHaveCount(1);
-    await page.keyboard.press("Escape");
-    await page.keyboard.up("F8");
-
-    await page.getByRole("button", { name: "Providers" }).click();
-    await page.getByRole("tab", { name: "Accounts" }).click();
-    await expect(
-      page.getByRole("region", { name: "Gemini CLI account Side project" }).getByText("Not checked", { exact: true }),
+      page.getByRole("region", { name: "Gemini CLI account Personal" }).getByText("Not checked", { exact: true }),
     ).toBeVisible();
   });
 

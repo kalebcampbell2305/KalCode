@@ -1067,7 +1067,7 @@ fn describe_provider_error(error: &ProviderError, provider: &str) -> (String, St
         ProviderError::NotAuthenticated => (
             "provider_not_authenticated",
             format!(
-                "{provider} isn't signed in. Sign in with {provider}, then resume this thread."
+                "{provider} isn't signed in for this account. Sign in to this {provider} account in Providers, then resume this thread."
             ),
         ),
         ProviderError::Unsupported => (
@@ -2596,5 +2596,18 @@ mod tests {
         assert_eq!(code, "provider_start_failed");
         assert!(!message.contains("secret"));
         assert!(message.contains("Claude Code"));
+    }
+
+    #[test]
+    fn a_signed_out_account_points_to_its_providers_sign_in() {
+        let (code, message) =
+            describe_provider_error(&ProviderError::NotAuthenticated, "Gemini CLI");
+        assert_eq!(code, "provider_not_authenticated");
+        assert_eq!(
+            message,
+            "Gemini CLI isn't signed in for this account. Sign in to this Gemini CLI account in \
+             Providers, then resume this thread."
+        );
+        assert!(!message.contains("terminal"), "{message}");
     }
 }

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-provider-gemini-account-refresh"
+description = "Enables the provider_gemini_account_refresh command without any pre-configured scope."
+commands.allow = ["provider_gemini_account_refresh"]
+
+[[permission]]
+identifier = "deny-provider-gemini-account-refresh"
+description = "Denies the provider_gemini_account_refresh command without any pre-configured scope."
+commands.deny = ["provider_gemini_account_refresh"]

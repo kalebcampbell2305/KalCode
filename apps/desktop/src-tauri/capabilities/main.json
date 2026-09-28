@@ -30,6 +30,11 @@
     "allow-provider-claude-login-wait",
     "allow-provider-claude-login-cancel",
     "allow-provider-claude-logout",
+    "allow-provider-gemini-account-refresh",
+    "allow-provider-gemini-login-start",
+    "allow-provider-gemini-login-wait",
+    "allow-provider-gemini-login-cancel",
+    "allow-provider-gemini-logout",
 
     "allow-updater-status",
     "allow-updater-set-channel",

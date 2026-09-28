@@ -10,7 +10,6 @@ use std::time::{Duration, Instant};
 
 #[cfg(any(windows, target_os = "macos"))]
 use kalcode_contracts::agent::AgentInput;
-#[cfg(all(not(windows), not(target_os = "macos")))]
 use kalcode_contracts::agent::ProviderError;
 use kalcode_contracts::agent::{AgentEvent, AgentEventSink, AgentProvider, SessionConfig};
 use kalcode_contracts::permissions::PermissionMode;
@@ -144,6 +143,19 @@ impl Rig {
             resume_session_id: None,
             secret_ref: None,
         }
+    }
+
+    /// Stands in for Gemini's own cached Google sign-in in this account's managed profile. Its
+    /// contents are never read by KalCode; only its presence marks the account signed in.
+    #[cfg(any(windows, target_os = "macos"))]
+    fn sign_in(&self) {
+        let directory = self
+            .profiles
+            .profile_home("gemini-cli", &self.account_id)
+            .expect("profile home")
+            .join(".gemini");
+        std::fs::create_dir_all(&directory).expect("gemini dir");
+        std::fs::write(directory.join("oauth_creds.json"), b"{}").expect("synthetic sign-in");
     }
 
     #[cfg(any(windows, target_os = "macos"))]
@@ -386,8 +398,29 @@ fn managed_headless_launch_fails_closed_without_a_native_guardian() {
 
 #[cfg(any(windows, target_os = "macos"))]
 #[test]
+fn managed_headless_turn_refuses_up_front_without_a_gemini_sign_in() {
+    let rig = Rig::new();
+    let provider = GeminiProvider::new_managed(rig.env(), rig.profiles.clone());
+    let error = match provider.start_session(rig.config(), Box::new(|_| {})) {
+        Ok(_) => panic!("an unauthenticated managed Gemini account must not start a session"),
+        Err(error) => error,
+    };
+    assert_eq!(error, ProviderError::NotAuthenticated);
+    assert!(
+        !rig.bin.join("last-args.json").exists(),
+        "no Gemini turn process may start for an account that isn't signed in"
+    );
+    let _lease = rig
+        .profiles
+        .acquire_sign_in_lease("gemini-cli", &rig.account_id)
+        .expect("the refused start releases its shared lease, so the person can sign in");
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+#[test]
 fn managed_headless_turn_runs_from_neutral_profile_and_repairs_the_floor() {
     let rig = Rig::new();
+    rig.sign_in();
     let provider = GeminiProvider::new_managed(rig.env(), rig.profiles.clone());
     let (tx, rx) = mpsc::channel();
     let lifecycle = Arc::new(LifecycleControl::default());
@@ -427,7 +460,6 @@ fn managed_headless_turn_runs_from_neutral_profile_and_repairs_the_floor() {
         "stream-json",
         "--approval-mode",
         "plan",
-        "--ignore-env",
         "--skip-trust",
         "--include-directories",
         "--allowed-mcp-server-names",
@@ -439,6 +471,8 @@ fn managed_headless_turn_runs_from_neutral_profile_and_repairs_the_floor() {
         assert!(args.iter().any(|arg| arg == required), "{args:?}");
     }
     assert!(!args.iter().any(|arg| arg == "--yolo"), "{args:?}");
+    // Gemini CLI 0.61.0 rejects `--ignore-env` as an unknown argument and exits before the turn.
+    assert!(!args.iter().any(|arg| arg == "--ignore-env"), "{args:?}");
     let cwd = std::fs::read_to_string(rig.bin.join("last-cwd.txt")).expect("cwd");
     assert_eq!(canonical(cwd.trim()), canonical(rig.neutral()));
     assert_ne!(canonical(cwd.trim()), canonical(&rig.workspace));
@@ -450,6 +484,8 @@ fn managed_headless_turn_runs_from_neutral_profile_and_repairs_the_floor() {
         "GEMINI_CLI_SYSTEM_SETTINGS_PATH",
         "GEMINI_CLI_SYSTEM_DEFAULTS_PATH",
         "GEMINI_FORCE_FILE_STORAGE",
+        "GOOGLE_GENAI_USE_GCA",
+        "NO_BROWSER",
     ] {
         assert!(
             env_names

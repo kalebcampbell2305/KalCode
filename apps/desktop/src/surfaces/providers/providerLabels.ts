@@ -76,6 +76,20 @@ export function needsSignIn(status: ProviderStatus): boolean {
   return detection.auth !== "authenticated";
 }
 
+/**
+ * Sign-in guidance for a provider whose only supported sign-in for KalCode threads is the
+ * managed account card. Threads never use a CLI's standalone profile, so a terminal command
+ * would sign in the wrong place. `null` keeps the provider's own command guidance.
+ */
+export function accountSignInHint(status: Pick<ProviderStatus, "id" | "displayName">): string | null {
+  if (status.id !== "gemini-cli") return null;
+  return (
+    `Open Accounts, add a ${status.displayName} account and choose Sign in. Gemini opens Google sign-in in ` +
+    "your browser for that account only. Running gemini in a terminal signs in a separate profile that " +
+    "KalCode threads don't use."
+  );
+}
+
 /** Whether to show install guidance. */
 export function needsInstall(status: ProviderStatus): boolean {
   return status.detection?.state === "not_installed";

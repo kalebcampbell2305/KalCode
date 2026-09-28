@@ -64,6 +64,12 @@ pub(crate) trait TurnAdapter: Send + Sync + 'static {
     /// known. The message is sent on stdin.
     fn turn_args(&self, resume: Option<&str>) -> Result<Vec<OsString>, ProviderError>;
     fn normalizer(&self) -> Box<dyn TurnNormalizer>;
+    /// A provider-documented, user-safe error for a turn process that exited without ending its
+    /// turn (for example a provider's own authentication exit code). `None` keeps the generic
+    /// "stopped unexpectedly" error.
+    fn exit_error(&self, _exit_code: Option<i32>) -> Option<(&'static str, String)> {
+        None
+    }
 }
 
 /// Everything a session needs to launch turns (resolved natively, never from the UI).
@@ -362,12 +368,20 @@ impl Shared {
         }
         let stderr = child.stderr_tail();
         tracing::warn!(event = "provider.turn_crashed", provider_id = self.adapter.provider_id(), exit_code = ?exit_code, stderr = %stderr);
+        let (code, message) = self.adapter.exit_error(exit_code).unwrap_or_else(|| {
+            (
+                "process_exited",
+                match exit_code {
+                    Some(code) => {
+                        format!("{} stopped unexpectedly (exit code {code}).", self.name())
+                    }
+                    None => format!("{} stopped unexpectedly.", self.name()),
+                },
+            )
+        });
         self.sink.emit(AgentEvent::Error {
-            code: "process_exited".into(),
-            message: match exit_code {
-                Some(code) => format!("{} stopped unexpectedly (exit code {code}).", self.name()),
-                None => format!("{} stopped unexpectedly.", self.name()),
-            },
+            code: code.into(),
+            message,
             recoverable: true,
         });
         self.sink.emit(AgentEvent::TurnCompleted { ok: false });

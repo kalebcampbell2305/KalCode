@@ -25,6 +25,7 @@ pub mod codex;
 pub mod detect;
 pub mod env;
 pub mod gemini;
+pub mod gemini_account_auth;
 pub mod guardian;
 pub mod health;
 pub mod interactive;

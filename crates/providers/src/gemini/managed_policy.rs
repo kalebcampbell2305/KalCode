@@ -20,7 +20,7 @@ use kalcode_contracts::agent::{ProviderError, ProviderId};
 use kalcode_contracts::permissions::PermissionMode;
 
 use crate::detect::DetectEnv;
-use crate::managed::{ManagedProfiles, ProfileLease};
+use crate::managed::{ManagedProfiles, ProfileLease, plain_path};
 
 const MAX_SYSTEM_POLICY_ENTRIES: usize = 4_096;
 const UNSAFE_MANAGED_PATH: &str =
@@ -111,35 +111,33 @@ impl ManagedGeminiLaunch {
         insert_env(
             &mut environment,
             "GEMINI_CLI_SYSTEM_SETTINGS_PATH",
-            system_settings_path.as_os_str(),
+            plain_path(&system_settings_path),
         );
         insert_env(
             &mut environment,
             "GEMINI_CLI_SYSTEM_DEFAULTS_PATH",
-            system_defaults_path.as_os_str(),
+            plain_path(&system_defaults_path),
         );
-        // Gemini 0.61.0 otherwise prefers one process-user keychain service/account for OAuth,
-        // which would collide across KalCode profiles. Its supported file fallback is encrypted
-        // and resolves `gemini-credentials.json` below the exact GEMINI_CLI_HOME selected by the
-        // managed profile. Set this explicitly instead of relying on keychain availability.
+        // Gemini 0.61.0 caches Google sign-in in `<GEMINI_CLI_HOME>/.gemini/oauth_creds.json`
+        // unless GEMINI_FORCE_ENCRYPTED_FILE_STORAGE moves it into its keychain service. That
+        // keychain (also used for stored API keys) is one process-user service/account, which
+        // would collide across KalCode profiles; its supported file fallback resolves
+        // `gemini-credentials.json` below the exact GEMINI_CLI_HOME selected by the managed
+        // profile. Set this explicitly instead of relying on keychain availability.
         remove_env(&mut environment, "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE");
         insert_env(&mut environment, "GEMINI_FORCE_FILE_STORAGE", "true");
+        insert_env(&mut environment, DEFAULT_AUTH_ENV, "true");
 
         let mcp_sentinel = format!("kalcode-no-mcp-{}", uuid::Uuid::new_v4());
-        let security_args = vec![
-            "--ignore-env".into(),
-            "--skip-trust".into(),
+        let mut security_args = vec![
             "--include-directories".into(),
-            workspace.into_os_string(),
-            "--allowed-mcp-server-names".into(),
-            mcp_sentinel.clone().into(),
-            "--policy".into(),
-            policy_dir.as_os_str().to_os_string(),
-            "--admin-policy".into(),
-            admin_policy_dir.as_os_str().to_os_string(),
-            "--extensions".into(),
-            "none".into(),
+            plain_path(&workspace).into_os_string(),
         ];
+        security_args.extend(profile_security_args(
+            &mcp_sentinel,
+            &policy_dir,
+            &admin_policy_dir,
+        ));
         let floor = floor_settings(mode)?;
         let launch = Self {
             environment,
@@ -209,6 +207,140 @@ impl ManagedGeminiLaunch {
         self.refresh()?;
         args.extend(self.security_args.iter().cloned());
         Ok(())
+    }
+}
+
+/// Gemini CLI 0.61.0's documented environment selector for its "Sign in with Google" auth type.
+/// Gemini consults it only when no auth type is saved in the profile's own settings, so an
+/// explicit provider-side choice still wins. KalCode's system settings files cannot carry this
+/// default: Gemini skips system settings whose directory is not administrator/root owned, which
+/// a per-user managed profile never is.
+pub const DEFAULT_AUTH_ENV: &str = "GOOGLE_GENAI_USE_GCA";
+
+/// Flags shared by every managed Gemini process. Every path Gemini receives is in its plain form
+/// (see [`plain_path`]): Gemini CLI 0.61.0 is Node.js and does not handle Windows verbatim paths
+/// consistently. `--ignore-env` is deliberately absent: Gemini CLI
+/// 0.61.0 rejects it as an unknown argument. The neutral floor's `advanced.ignoreLocalEnv` setting
+/// is the supported equivalent (Gemini reads it from the trusted, merged neutral settings before
+/// loading any `.env` file).
+fn profile_security_args(
+    mcp_sentinel: &str,
+    policy_dir: &Path,
+    admin_policy_dir: &Path,
+) -> Vec<OsString> {
+    vec![
+        "--skip-trust".into(),
+        "--allowed-mcp-server-names".into(),
+        mcp_sentinel.into(),
+        "--policy".into(),
+        plain_path(policy_dir).into_os_string(),
+        "--admin-policy".into(),
+        plain_path(admin_policy_dir).into_os_string(),
+        "--extensions".into(),
+        "none".into(),
+    ]
+}
+
+/// Launch material for one account's official Gemini sign-in, and nothing else.
+///
+/// The process runs from a neutral directory inside the account's managed profile (never a
+/// repository; no include directories), with the read-only Plan floor, no MCP servers,
+/// extensions, hooks or skills, and the same profile selector (`GEMINI_CLI_HOME`) as the
+/// account's threads. `--list-extensions` makes Gemini finish its own startup authentication
+/// and then exit before any model request or tool registry can run. The caller must hold the
+/// account's exclusive sign-in lease for the whole process lifetime.
+pub struct ManagedGeminiSignIn {
+    environment: BTreeMap<OsString, OsString>,
+    cwd: PathBuf,
+    args: Vec<OsString>,
+}
+
+impl ManagedGeminiSignIn {
+    pub fn prepare(
+        profiles: &ManagedProfiles,
+        source: &DetectEnv,
+        account_id: &str,
+        lease: &ProfileLease,
+    ) -> Result<Self, ProviderError> {
+        Self::prepare_with_system_policies(
+            profiles,
+            source,
+            account_id,
+            lease,
+            &platform_system_policies_dir(),
+        )
+    }
+
+    pub(crate) fn prepare_with_system_policies(
+        profiles: &ManagedProfiles,
+        source: &DetectEnv,
+        account_id: &str,
+        lease: &ProfileLease,
+        system_policies_dir: &Path,
+    ) -> Result<Self, ProviderError> {
+        if !lease.is_exclusive_for(profiles, ProviderId::GEMINI_CLI, account_id) {
+            return Err(ProviderError::Start(
+                "Gemini sign-in requires this account's exclusive profile lease".into(),
+            ));
+        }
+        inspect_system_policies(system_policies_dir)?;
+        let root = profiles.sign_in_dir(ProviderId::GEMINI_CLI, account_id)?;
+        let cwd = ensure_child_directory(&root, "neutral")?;
+        let gemini_dir = ensure_child_directory(&cwd, ".gemini")?;
+        let neutral_policy_dir = ensure_child_directory(&gemini_dir, "policies")?;
+        let policy_dir = ensure_child_directory(&root, "managed-policy")?;
+        let admin_policy_dir = ensure_child_directory(&root, "managed-admin-policy")?;
+        let system_settings_path = root.join("system-settings.json");
+        let system_defaults_path = root.join("system-defaults.json");
+        require_empty_directory(&neutral_policy_dir)?;
+        require_empty_directory(&policy_dir)?;
+        require_empty_directory(&admin_policy_dir)?;
+        write_controlled_file(&system_settings_path, b"{}\n")?;
+        write_controlled_file(&system_defaults_path, b"{}\n")?;
+        write_controlled_file(
+            &gemini_dir.join("settings.json"),
+            &floor_settings(PermissionMode::Plan)?,
+        )?;
+
+        let mut environment = profiles.launch_env(ProviderId::GEMINI_CLI, account_id, source)?;
+        insert_env(&mut environment, "GEMINI_CLI_TRUST_WORKSPACE", "true");
+        insert_env(
+            &mut environment,
+            "GEMINI_CLI_SYSTEM_SETTINGS_PATH",
+            plain_path(&system_settings_path),
+        );
+        insert_env(
+            &mut environment,
+            "GEMINI_CLI_SYSTEM_DEFAULTS_PATH",
+            plain_path(&system_defaults_path),
+        );
+        remove_env(&mut environment, "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE");
+        insert_env(&mut environment, "GEMINI_FORCE_FILE_STORAGE", "true");
+        insert_env(&mut environment, DEFAULT_AUTH_ENV, "true");
+        // The browser flow is the only sign-in this session may use: a suppressed browser would
+        // switch Gemini to its interactive user-code flow, which a non-TTY process cannot answer.
+        remove_env(&mut environment, "NO_BROWSER");
+
+        let mcp_sentinel = format!("kalcode-no-mcp-{}", uuid::Uuid::new_v4());
+        let mut args = profile_security_args(&mcp_sentinel, &policy_dir, &admin_policy_dir);
+        args.push("--list-extensions".into());
+        Ok(Self {
+            environment,
+            cwd,
+            args,
+        })
+    }
+
+    pub fn environment(&self) -> &BTreeMap<OsString, OsString> {
+        &self.environment
+    }
+
+    pub fn cwd(&self) -> &Path {
+        &self.cwd
+    }
+
+    pub fn args(&self) -> &[OsString] {
+        &self.args
     }
 }
 
@@ -631,7 +763,6 @@ mod tests {
 
         let args = strings(launch.security_args());
         for expected in [
-            "--ignore-env",
             "--skip-trust",
             "--include-directories",
             "--allowed-mcp-server-names",
@@ -642,6 +773,14 @@ mod tests {
         ] {
             assert!(args.iter().any(|arg| arg == expected), "{args:?}");
         }
+        // Gemini CLI 0.61.0 rejects `--ignore-env` ("Unknown arguments"); the floor setting
+        // `advanced.ignoreLocalEnv` is the supported equivalent.
+        assert!(!args.iter().any(|arg| arg == "--ignore-env"), "{args:?}");
+        assert_eq!(settings["advanced"]["ignoreLocalEnv"], true);
+        assert_eq!(
+            env_value(&launch, DEFAULT_AUTH_ENV),
+            Some(OsStr::new("true"))
+        );
         let include = args
             .iter()
             .position(|arg| arg == "--include-directories")
@@ -778,6 +917,163 @@ mod tests {
                     .expect("prefix")
             )
             .is_ok()
+        );
+    }
+
+    fn sign_in_env<'a>(sign_in: &'a ManagedGeminiSignIn, name: &str) -> Option<&'a OsStr> {
+        sign_in.environment().iter().find_map(|(key, value)| {
+            key.to_str()
+                .is_some_and(|key| key.eq_ignore_ascii_case(name))
+                .then_some(value.as_os_str())
+        })
+    }
+
+    #[test]
+    fn sign_in_uses_only_the_account_profile_and_never_a_workspace() {
+        let fixture = Fixture::new();
+        let other_account = kalcode_contracts::ids::new_id();
+        let lease = fixture
+            .profiles
+            .acquire_sign_in_lease("gemini-cli", &fixture.account_id)
+            .expect("exclusive lease");
+        let sign_in = ManagedGeminiSignIn::prepare_with_system_policies(
+            &fixture.profiles,
+            &fixture.source,
+            &fixture.account_id,
+            &lease,
+            &fixture.system_policies,
+        )
+        .expect("sign-in launch");
+
+        let home = fixture
+            .profiles
+            .profile_home("gemini-cli", &fixture.account_id)
+            .expect("profile home");
+        let selected = sign_in_env(&sign_in, "GEMINI_CLI_HOME").expect("profile selector");
+        assert!(
+            !selected.to_string_lossy().starts_with(r"\\?\"),
+            "Gemini crashes on a verbatim home"
+        );
+        let selected = std::fs::canonicalize(selected).expect("selected home");
+        assert_eq!(selected, home);
+        assert_ne!(
+            selected,
+            fixture
+                .profiles
+                .profile_home("gemini-cli", &other_account)
+                .expect("other home")
+        );
+        for (name, value) in [
+            ("GEMINI_FORCE_FILE_STORAGE", "true"),
+            ("GEMINI_CLI_TRUST_WORKSPACE", "true"),
+            (DEFAULT_AUTH_ENV, "true"),
+        ] {
+            assert_eq!(
+                sign_in_env(&sign_in, name),
+                Some(OsStr::new(value)),
+                "{name}"
+            );
+        }
+        for forbidden in [
+            "GEMINI_API_KEY",
+            "GEMINI_FORCE_ENCRYPTED_FILE_STORAGE",
+            "NO_BROWSER",
+            "CLAUDE_CONFIG_DIR",
+            "CODEX_HOME",
+        ] {
+            assert!(
+                sign_in_env(&sign_in, forbidden).is_none(),
+                "inherited {forbidden}"
+            );
+        }
+
+        let sign_in_root = fixture
+            .profiles
+            .sign_in_dir("gemini-cli", &fixture.account_id)
+            .expect("sign-in dir");
+        assert!(sign_in.cwd().starts_with(&sign_in_root));
+        assert!(!sign_in.cwd().starts_with(&fixture.workspace));
+        let settings: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(sign_in.cwd().join(".gemini/settings.json")).expect("floor"),
+        )
+        .expect("floor json");
+        assert_eq!(
+            settings["tools"]["core"],
+            serde_json::json!(PLAN_CORE_TOOLS),
+            "sign-in runs with the read-only floor"
+        );
+        assert_eq!(settings["advanced"]["ignoreLocalEnv"], true);
+
+        let args = strings(sign_in.args());
+        assert_eq!(args.last().map(String::as_str), Some("--list-extensions"));
+        for forbidden in [
+            "--include-directories",
+            "--ignore-env",
+            "--yolo",
+            "--prompt",
+            "-p",
+        ] {
+            assert!(!args.iter().any(|arg| arg == forbidden), "{args:?}");
+        }
+        let workspace = fixture.workspace.to_string_lossy().into_owned();
+        assert!(
+            !args.iter().any(|arg| arg.contains(&workspace)),
+            "no workspace path reaches the sign-in process: {args:?}"
+        );
+        for expected in ["--skip-trust", "--allowed-mcp-server-names", "--extensions"] {
+            assert!(args.iter().any(|arg| arg == expected), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn sign_in_requires_this_accounts_exclusive_lease() {
+        let fixture = Fixture::new();
+        let other_account = kalcode_contracts::ids::new_id();
+        let shared = fixture
+            .profiles
+            .acquire_session_lease("gemini-cli", &fixture.account_id)
+            .expect("shared lease");
+        assert!(
+            ManagedGeminiSignIn::prepare_with_system_policies(
+                &fixture.profiles,
+                &fixture.source,
+                &fixture.account_id,
+                &shared,
+                &fixture.system_policies,
+            )
+            .is_err(),
+            "a shared session lease cannot authorize sign-in"
+        );
+        drop(shared);
+        let unrelated = fixture
+            .profiles
+            .acquire_sign_in_lease("gemini-cli", &other_account)
+            .expect("other lease");
+        assert!(
+            ManagedGeminiSignIn::prepare_with_system_policies(
+                &fixture.profiles,
+                &fixture.source,
+                &fixture.account_id,
+                &unrelated,
+                &fixture.system_policies,
+            )
+            .is_err(),
+            "another account's lease cannot authorize this account's sign-in"
+        );
+        let claude = fixture
+            .profiles
+            .acquire_sign_in_lease("claude-code", &fixture.account_id)
+            .expect("claude lease");
+        assert!(
+            ManagedGeminiSignIn::prepare_with_system_policies(
+                &fixture.profiles,
+                &fixture.source,
+                &fixture.account_id,
+                &claude,
+                &fixture.system_policies,
+            )
+            .is_err(),
+            "another provider's lease cannot authorize Gemini sign-in"
         );
     }
 

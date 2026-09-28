@@ -20,6 +20,9 @@ use kalcode_providers::claude_account_auth::{
     ClaudeAccountAuthError, ClaudeAccountAuthManager, ClaudeAccountState, PendingClaudeLogin,
 };
 use kalcode_providers::codex::managed_policy::CloudConfigEligibility;
+use kalcode_providers::gemini_account_auth::{
+    self, GeminiAccountAuthError, GeminiAccountAuthManager, GeminiAccountState, PendingGeminiLogin,
+};
 use kalcode_providers::guardian::{GenerationQuiescenceProof, GuardianError, GuardianRuntime};
 use kalcode_providers::managed::ManagedProfiles;
 use kalcode_providers::{ClaudeCodeProvider, CodexProvider, DetectEnv, GeminiProvider, catalog};
@@ -43,6 +46,8 @@ enum RuntimeAuthError {
     Busy,
     Provider(CodexAccountAuthError),
     Claude(ClaudeAccountAuthError),
+    Gemini(GeminiAccountAuthError),
+    GeminiUnavailable,
     OrganizationPlan,
     PlanUnverified,
 }
@@ -61,6 +66,10 @@ impl RuntimeAuthError {
             Self::Claude(_) => ProviderError::Start(
                 "the official Claude Code account check did not complete safely".into(),
             ),
+            Self::Gemini(_) => ProviderError::Start(
+                "the official Gemini CLI account check did not complete safely".into(),
+            ),
+            Self::GeminiUnavailable => ProviderError::NotInstalled,
             Self::OrganizationPlan => ProviderError::Start(
                 "this Codex organization plan is not yet supported by KalCode managed profiles"
                     .into(),
@@ -105,6 +114,35 @@ impl RuntimeAuthError {
                 "provider_auth_failed",
                 "The official Claude Code account operation did not complete safely.",
             ),
+            Self::GeminiUnavailable => (
+                "provider_auth_unavailable",
+                "Gemini CLI isn't installed, so KalCode can't run its official sign-in.",
+            ),
+            Self::Gemini(GeminiAccountAuthError::AlreadyConnected) => (
+                "provider_account_already_connected",
+                "This managed Gemini account is already signed in.",
+            ),
+            Self::Gemini(GeminiAccountAuthError::Canceled) => {
+                ("provider_login_canceled", "Gemini sign-in was canceled.")
+            }
+            Self::Gemini(GeminiAccountAuthError::AccountNotConfirmed) => (
+                "provider_login_not_confirmed",
+                "Gemini CLI finished without saving a Google sign-in. Try again and finish \
+                 signing in in your browser.",
+            ),
+            Self::Gemini(GeminiAccountAuthError::UnsupportedVersion) => (
+                "provider_version_unsupported",
+                "Managed Gemini accounts need Gemini CLI 0.61.0. Install that version, then \
+                 try again.",
+            ),
+            Self::Gemini(GeminiAccountAuthError::TimedOut) => (
+                "provider_login_timed_out",
+                "Gemini sign-in didn't finish in time. Try again.",
+            ),
+            Self::Gemini(_) => (
+                "provider_auth_failed",
+                "The official Gemini CLI account operation did not complete safely.",
+            ),
             Self::OrganizationPlan => (
                 "provider_account_plan_unsupported",
                 "This Codex organization plan isn't supported by managed profiles yet.",
@@ -139,6 +177,7 @@ struct RuntimeInner {
     source_env: DetectEnv,
     claude_auth: Option<Arc<ClaudeAccountAuthManager>>,
     codex_auth: Option<Arc<CodexAccountAuthManager>>,
+    gemini_auth: Option<Arc<GeminiAccountAuthManager>>,
     codex_truth: Mutex<CodexTruth>,
 }
 
@@ -229,6 +268,15 @@ impl ProviderRuntimeAuthority {
                     Arc::clone(&profiles),
                 ))
             });
+        let gemini_auth = source_env
+            .resolve_executable_only(&catalog::gemini_spec())
+            .map(|executable| {
+                Arc::new(GeminiAccountAuthManager::new(
+                    executable,
+                    source_env.clone(),
+                    Arc::clone(&profiles),
+                ))
+            });
         Ok(Self {
             inner: Arc::new(RuntimeInner {
                 guardian,
@@ -237,6 +285,7 @@ impl ProviderRuntimeAuthority {
                 source_env,
                 claude_auth,
                 codex_auth,
+                gemini_auth,
                 codex_truth: Mutex::new(CodexTruth::default()),
             }),
         })
@@ -444,6 +493,137 @@ impl ProviderRuntimeAuthority {
                 None => RuntimeAuthError::Busy,
             });
         }
+        self.inner
+            .accounts
+            .get(account_id)
+            .map_err(RuntimeAuthError::Account)
+    }
+
+    fn observe_gemini(
+        &self,
+        account_id: &str,
+        result: &Result<GeminiAccountState, GeminiAccountAuthError>,
+    ) -> Result<(), GeminiAccountAuthError> {
+        let (state, error_code) = match result {
+            Ok(state) => (state.auth, None),
+            Err(_) => (AuthState::Unknown, Some("gemini_auth_failed")),
+        };
+        self.inner
+            .accounts
+            .mark_authentication(account_id, state, None, error_code)
+            .map(|_| ())
+            .map_err(|_| GeminiAccountAuthError::StateUpdateFailed)
+    }
+
+    fn gemini_manager(&self) -> Result<Arc<GeminiAccountAuthManager>, RuntimeAuthError> {
+        self.inner
+            .gemini_auth
+            .as_ref()
+            .cloned()
+            .ok_or(RuntimeAuthError::GeminiUnavailable)
+    }
+
+    /// Runs one Gemini account operation under the account's exclusive lease and records a
+    /// bounded failure when the provider operation (or the lease itself) did not succeed.
+    fn with_gemini_account<T>(
+        &self,
+        account_id: &str,
+        operation: impl FnOnce(
+            kalcode_providers::managed::ProfileLease,
+        ) -> Result<T, GeminiAccountAuthError>,
+    ) -> Result<T, RuntimeAuthError> {
+        let recorded_failure = Arc::new(Mutex::new(None));
+        let provider_failure = Arc::clone(&recorded_failure);
+        let result = self.inner.accounts.authenticate_with_active_account(
+            &self.inner.profiles,
+            ProviderId::GEMINI_CLI,
+            account_id,
+            move |_, lease| {
+                operation(lease).map_err(|error| {
+                    *provider_failure
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner) = Some(error.clone());
+                    ProviderError::Start(error.to_string())
+                })
+            },
+        );
+        if let Ok(value) = result {
+            return Ok(value);
+        }
+        let failure = recorded_failure
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        // Record only a failure of Gemini's own operation. A busy profile or an account that isn't
+        // an active Gemini account changes nothing (never another provider's account state).
+        if failure
+            .as_ref()
+            .is_some_and(|error| *error != GeminiAccountAuthError::AlreadyConnected)
+        {
+            let _ = self.inner.accounts.mark_authentication(
+                account_id,
+                AuthState::Unknown,
+                None,
+                Some("gemini_auth_failed"),
+            );
+        }
+        Err(match failure {
+            Some(error) => RuntimeAuthError::Gemini(error),
+            None => RuntimeAuthError::Busy,
+        })
+    }
+
+    /// Reads Gemini's own credential presence for the account. No provider process runs, so this
+    /// works even when Gemini CLI isn't installed.
+    fn refresh_gemini_account(
+        &self,
+        account_id: &str,
+    ) -> Result<ProviderAccount, RuntimeAuthError> {
+        let observer = self.clone();
+        let profiles = Arc::clone(&self.inner.profiles);
+        self.with_gemini_account(account_id, |lease| {
+            gemini_account_auth::read_account_with_lease_observed(
+                &profiles,
+                account_id,
+                lease,
+                |result| observer.observe_gemini(account_id, result),
+            )
+        })?;
+        self.inner
+            .accounts
+            .get(account_id)
+            .map_err(RuntimeAuthError::Account)
+    }
+
+    fn start_gemini_login(
+        &self,
+        account_id: &str,
+    ) -> Result<Arc<PendingGeminiLogin>, RuntimeAuthError> {
+        let manager = self.gemini_manager()?;
+        let observer = self.clone();
+        let observed_account_id = account_id.to_owned();
+        self.with_gemini_account(account_id, move |lease| {
+            manager
+                .start_login_with_lease_observed(account_id, lease, move |result| {
+                    observer.observe_gemini(&observed_account_id, result)
+                })
+                .map(Arc::new)
+        })
+    }
+
+    /// Removes only this account's Gemini credential files. No provider process runs, so a person
+    /// can always sign out, even after uninstalling Gemini CLI.
+    fn logout_gemini(&self, account_id: &str) -> Result<ProviderAccount, RuntimeAuthError> {
+        let observer = self.clone();
+        let profiles = Arc::clone(&self.inner.profiles);
+        self.with_gemini_account(account_id, |lease| {
+            gemini_account_auth::logout_with_lease_observed(
+                &profiles,
+                account_id,
+                lease,
+                |result| observer.observe_gemini(account_id, result),
+            )
+        })?;
         self.inner
             .accounts
             .get(account_id)
@@ -770,6 +950,7 @@ impl ProviderRuntimeAuthority {
 enum PendingProviderLogin {
     Codex(Arc<PendingCodexLogin>),
     Claude(Arc<PendingClaudeLogin>),
+    Gemini(Arc<PendingGeminiLogin>),
     #[cfg(test)]
     Synthetic(Arc<SyntheticPendingLogin>),
 }
@@ -822,6 +1003,7 @@ impl PendingProviderLogin {
         match self {
             Self::Codex(_) => ProviderId::CODEX,
             Self::Claude(_) => ProviderId::CLAUDE_CODE,
+            Self::Gemini(_) => ProviderId::GEMINI_CLI,
             #[cfg(test)]
             Self::Synthetic(pending) => pending.provider_id,
         }
@@ -831,6 +1013,7 @@ impl PendingProviderLogin {
         match self {
             Self::Codex(pending) => pending.is_finished(),
             Self::Claude(pending) => pending.is_finished(),
+            Self::Gemini(pending) => pending.is_finished(),
             #[cfg(test)]
             Self::Synthetic(pending) => pending.finished.load(Ordering::Acquire),
         }
@@ -840,6 +1023,7 @@ impl PendingProviderLogin {
         match (self, other) {
             (Self::Codex(left), Self::Codex(right)) => Arc::ptr_eq(left, right),
             (Self::Claude(left), Self::Claude(right)) => Arc::ptr_eq(left, right),
+            (Self::Gemini(left), Self::Gemini(right)) => Arc::ptr_eq(left, right),
             #[cfg(test)]
             (Self::Synthetic(left), Self::Synthetic(right)) => Arc::ptr_eq(left, right),
             _ => false,
@@ -853,6 +1037,7 @@ impl PendingProviderLogin {
                 .map(|_| ())
                 .map_err(RuntimeAuthError::Provider),
             Self::Claude(pending) => pending.wait().map(|_| ()).map_err(RuntimeAuthError::Claude),
+            Self::Gemini(pending) => pending.wait().map(|_| ()).map_err(RuntimeAuthError::Gemini),
             #[cfg(test)]
             Self::Synthetic(_) => Ok(()),
         }
@@ -862,6 +1047,7 @@ impl PendingProviderLogin {
         match self {
             Self::Codex(pending) => pending.cancel().map_err(RuntimeAuthError::Provider),
             Self::Claude(pending) => pending.cancel().map_err(RuntimeAuthError::Claude),
+            Self::Gemini(pending) => pending.cancel().map_err(RuntimeAuthError::Gemini),
             #[cfg(test)]
             Self::Synthetic(pending) => pending.cancel(),
         }
@@ -1484,6 +1670,166 @@ pub async fn provider_codex_logout(
     .map_err(|error| error.into_ipc("provider_codex_logout"))
 }
 
+/// Records whether this managed Gemini account has Gemini's own cached sign-in (file presence
+/// only; KalCode never reads provider credentials).
+#[tauri::command(async)]
+pub async fn provider_gemini_account_refresh(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    state: crate::runtime_coordinator::RuntimeState<ProviderAuthState>,
+    account_id: String,
+) -> Result<ProviderAccount, IpcError> {
+    _runtime_access.revalidate()?;
+    let runtime = state.runtime("provider_gemini_account_refresh")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        _runtime_access
+            .revalidate_core()
+            .map_err(RuntimeAuthError::Account)?;
+        runtime.refresh_gemini_account(&account_id)
+    })
+    .await
+    .map_err(|_| {
+        KalError::internal(
+            "provider_auth_task_failed",
+            "The provider account task stopped.",
+        )
+        .to_ipc()
+    })?
+    .map_err(|error| error.into_ipc("provider_gemini_account_refresh"))
+}
+
+/// Starts Gemini CLI's own Google sign-in for one managed account. Gemini opens the official
+/// page in the system browser itself; the URL and all provider output stay native.
+#[tauri::command(async)]
+pub async fn provider_gemini_login_start(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    state: crate::runtime_coordinator::RuntimeState<ProviderAuthState>,
+    account_id: String,
+) -> Result<ProviderLoginStart, IpcError> {
+    _runtime_access.revalidate()?;
+    let mut reservation = state
+        .reserve_login(account_id.clone())
+        .map_err(|error| error.into_ipc("provider_gemini_login_start"))?;
+    let login_handle = reservation.handle.clone();
+    let runtime = state.runtime("provider_gemini_login_start")?;
+    let pending_result = tauri::async_runtime::spawn_blocking(move || {
+        _runtime_access
+            .revalidate_core()
+            .map_err(RuntimeAuthError::Account)?;
+        runtime.start_gemini_login(&account_id)
+    })
+    .await;
+    let pending = match pending_result {
+        Ok(Ok(pending)) => pending,
+        Ok(Err(error)) => return Err(error.into_ipc("provider_gemini_login_start")),
+        Err(_) => {
+            return Err(KalError::internal(
+                "provider_auth_task_failed",
+                "The provider account task stopped.",
+            )
+            .to_ipc());
+        }
+    };
+    if !reservation.activate(PendingProviderLogin::Gemini(Arc::clone(&pending))) {
+        let _ = pending.cancel();
+        return Err(KalError::internal(
+            "provider_auth_task_failed",
+            "The provider account task stopped.",
+        )
+        .to_ipc());
+    }
+    Ok(ProviderLoginStart { login_handle })
+}
+
+#[tauri::command(async)]
+pub async fn provider_gemini_login_wait(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    state: crate::runtime_coordinator::RuntimeState<ProviderAuthState>,
+    login_handle: String,
+) -> Result<ProviderAccount, IpcError> {
+    _runtime_access.revalidate()?;
+    let (account_id, pending) = state
+        .pending()
+        .get(&login_handle)
+        .and_then(|entry| match entry {
+            PendingLoginEntry::Active {
+                account_id,
+                pending: PendingProviderLogin::Gemini(pending),
+            } => Some((
+                account_id.clone(),
+                PendingProviderLogin::Gemini(Arc::clone(pending)),
+            )),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            KalError::validation(
+                "provider_login_unknown",
+                "That Gemini sign-in is no longer active.",
+            )
+            .to_ipc()
+        })?;
+    let wait_login = pending.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || wait_login.wait())
+        .await
+        .map_err(|_| {
+            KalError::internal(
+                "provider_auth_task_failed",
+                "The provider account task stopped.",
+            )
+            .to_ipc()
+        })?;
+    let _ = remove_finished_login(&state.pending, &login_handle, &pending);
+    result.map_err(|error| error.into_ipc("provider_gemini_login_wait"))?;
+    state
+        .runtime("provider_gemini_login_wait")?
+        .account_store()
+        .get(&account_id)
+        .map_err(|error| error.log_and_convert("provider_gemini_login_wait"))
+}
+
+#[tauri::command(async)]
+pub async fn provider_gemini_login_cancel(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    state: crate::runtime_coordinator::RuntimeState<ProviderAuthState>,
+    login_handle: String,
+) -> Result<(), IpcError> {
+    _runtime_access.revalidate()?;
+    cancel_tracked_login(
+        &state,
+        &login_handle,
+        ProviderId::GEMINI_CLI,
+        "provider_gemini_login_cancel",
+        "That Gemini sign-in is no longer active.",
+    )
+    .await
+}
+
+/// Signs one managed Gemini account out by removing only Gemini's own credential files in that
+/// account's profile, under the account's exclusive lease.
+#[tauri::command(async)]
+pub async fn provider_gemini_logout(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    state: crate::runtime_coordinator::RuntimeState<ProviderAuthState>,
+    account_id: String,
+) -> Result<ProviderAccount, IpcError> {
+    _runtime_access.revalidate()?;
+    let runtime = state.runtime("provider_gemini_logout")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        _runtime_access
+            .revalidate_core()
+            .map_err(RuntimeAuthError::Account)?;
+        runtime.logout_gemini(&account_id)
+    })
+    .await
+    .map_err(|_| {
+        KalError::internal(
+            "provider_auth_task_failed",
+            "The provider account task stopped.",
+        )
+        .to_ipc()
+    })?
+    .map_err(|error| error.into_ipc("provider_gemini_logout"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1545,6 +1891,159 @@ mod tests {
     impl Drop for Fixture {
         fn drop(&mut self) {
             self.core.shutdown();
+        }
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    fn gemini_credentials(
+        runtime: &ProviderRuntimeAuthority,
+        account_id: &str,
+    ) -> std::path::PathBuf {
+        runtime
+            .managed_profiles()
+            .profile_home(ProviderId::GEMINI_CLI, account_id)
+            .expect("profile home")
+            .join(".gemini")
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn gemini_account_state_is_known_from_its_own_managed_profile_only() {
+        let fixture = Fixture::new();
+        let store = fixture.runtime.account_store();
+        let personal = store
+            .create(ProviderId::GEMINI_CLI, "Personal")
+            .expect("gemini account");
+        let work = store
+            .create(ProviderId::GEMINI_CLI, "Work")
+            .expect("second gemini account");
+
+        let refreshed = fixture
+            .runtime
+            .refresh_gemini_account(&personal.id)
+            .expect("refresh without Gemini installed");
+        assert_eq!(refreshed.authentication_state, AuthState::NotAuthenticated);
+        assert_eq!(refreshed.last_error_code, None);
+
+        let directory = gemini_credentials(&fixture.runtime, &personal.id);
+        std::fs::create_dir_all(&directory).expect("gemini dir");
+        std::fs::write(directory.join("oauth_creds.json"), b"opaque").expect("synthetic sign-in");
+        assert_eq!(
+            fixture
+                .runtime
+                .refresh_gemini_account(&personal.id)
+                .expect("refresh")
+                .authentication_state,
+            AuthState::Authenticated
+        );
+        assert_eq!(
+            fixture
+                .runtime
+                .refresh_gemini_account(&work.id)
+                .expect("refresh other")
+                .authentication_state,
+            AuthState::NotAuthenticated,
+            "one account's sign-in never counts for another"
+        );
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn gemini_sign_out_removes_only_that_accounts_credentials_under_its_lease() {
+        let fixture = Fixture::new();
+        let store = fixture.runtime.account_store();
+        let personal = store
+            .create(ProviderId::GEMINI_CLI, "Personal")
+            .expect("gemini account");
+        let work = store
+            .create(ProviderId::GEMINI_CLI, "Work")
+            .expect("second gemini account");
+        for account in [&personal, &work] {
+            let directory = gemini_credentials(&fixture.runtime, &account.id);
+            std::fs::create_dir_all(&directory).expect("gemini dir");
+            std::fs::write(directory.join("oauth_creds.json"), b"opaque").expect("sign-in");
+            std::fs::write(directory.join("settings.json"), b"{}").expect("settings");
+        }
+
+        let session = fixture
+            .runtime
+            .managed_profiles()
+            .acquire_session_lease(ProviderId::GEMINI_CLI, &personal.id)
+            .expect("running session");
+        assert!(
+            matches!(
+                fixture.runtime.logout_gemini(&personal.id),
+                Err(RuntimeAuthError::Busy)
+            ),
+            "sign-out waits for sessions using the profile"
+        );
+        drop(session);
+
+        let signed_out = fixture
+            .runtime
+            .logout_gemini(&personal.id)
+            .expect("sign out without Gemini installed");
+        assert_eq!(signed_out.authentication_state, AuthState::NotAuthenticated);
+        let mine = gemini_credentials(&fixture.runtime, &personal.id);
+        assert!(!mine.join("oauth_creds.json").exists());
+        assert!(mine.join("settings.json").exists());
+        assert!(
+            gemini_credentials(&fixture.runtime, &work.id)
+                .join("oauth_creds.json")
+                .exists(),
+            "another account's sign-in is untouched"
+        );
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn gemini_sign_in_is_refused_for_another_providers_account() {
+        let fixture = Fixture::new();
+        // The fixture account is a Codex account: a Gemini operation must never touch it.
+        let before = fixture
+            .runtime
+            .account_store()
+            .get(&fixture.account.id)
+            .expect("codex account");
+        assert!(
+            fixture
+                .runtime
+                .refresh_gemini_account(&fixture.account.id)
+                .is_err()
+        );
+        assert!(fixture.runtime.logout_gemini(&fixture.account.id).is_err());
+        let after = fixture
+            .runtime
+            .account_store()
+            .get(&fixture.account.id)
+            .expect("codex account");
+        assert_eq!(after.authentication_state, before.authentication_state);
+        assert_eq!(after.last_error_code, before.last_error_code);
+    }
+
+    #[test]
+    fn gemini_auth_errors_are_actionable_and_credential_free() {
+        for (error, code) in [
+            (
+                RuntimeAuthError::GeminiUnavailable,
+                "provider_auth_unavailable",
+            ),
+            (
+                RuntimeAuthError::Gemini(GeminiAccountAuthError::AccountNotConfirmed),
+                "provider_login_not_confirmed",
+            ),
+            (
+                RuntimeAuthError::Gemini(GeminiAccountAuthError::UnsupportedVersion),
+                "provider_version_unsupported",
+            ),
+            (
+                RuntimeAuthError::Gemini(GeminiAccountAuthError::Canceled),
+                "provider_login_canceled",
+            ),
+        ] {
+            let ipc = error.into_ipc("provider_gemini_login_start");
+            assert_eq!(ipc.code, code);
+            assert!(ipc.message.contains("Gemini"), "{}", ipc.message);
         }
     }
 

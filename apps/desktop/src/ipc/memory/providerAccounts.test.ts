@@ -63,6 +63,32 @@ describe("provider account memory contract", () => {
     expect((await api.refreshClaudeAccount(signedInClaude.id)).lastCheckedAt).not.toBeNull();
   });
 
+  it("runs Gemini's native sign-in with an opaque handle and no pane", async () => {
+    const api = client();
+    const gemini = (await api.listProviderAccounts("gemini-cli"))[0];
+    expect(gemini?.authenticationState).toBe("unknown");
+    const login = await api.startGeminiLogin(gemini?.id ?? "");
+    expect(Object.keys(login)).toEqual(["loginHandle"]);
+    const signedIn = await api.waitForGeminiLogin(login.loginHandle);
+    expect(signedIn).toMatchObject({ id: gemini?.id, authenticationState: "authenticated" });
+    await expect(api.startGeminiLogin(signedIn.id)).rejects.toMatchObject({
+      code: "provider_account_already_connected",
+    });
+    const signedOut = await api.logoutGeminiAccount(signedIn.id);
+    expect(signedOut.authenticationState).toBe("not_authenticated");
+    expect((await api.refreshGeminiAccount(signedOut.id)).authenticationState).toBe("not_authenticated");
+
+    const cancelled = await api.startGeminiLogin(signedOut.id);
+    await api.cancelGeminiLogin(cancelled.loginHandle);
+    await expect(api.waitForGeminiLogin(cancelled.loginHandle)).rejects.toMatchObject({
+      code: "provider_login_unknown",
+    });
+    const codex = (await api.listProviderAccounts("codex"))[0];
+    await expect(api.startGeminiLogin(codex?.id ?? "")).rejects.toMatchObject({
+      code: "provider_account_mismatch",
+    });
+  });
+
   it("rejects invalid providers, duplicate labels and provider-mismatched auth", async () => {
     const api = client();
     await expect(api.createProviderAccount("Bad Provider", "Personal")).rejects.toMatchObject({

@@ -431,8 +431,8 @@ fn managed_gemini_panes_use_the_neutral_profile_policy_and_account_lease() {
         .expect("managed Gemini pane");
 
     let args = rig.args();
+    assert!(!args.iter().any(|arg| arg == "--ignore-env"), "{args:?}");
     for expected in [
-        "--ignore-env",
         "--skip-trust",
         "--include-directories",
         "--allowed-mcp-server-names",

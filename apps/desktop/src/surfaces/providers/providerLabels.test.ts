@@ -2,6 +2,7 @@ import type { ProviderDetection, ProviderStatus } from "@kalcode/protocol";
 import { describe, expect, it } from "vitest";
 import { providerCatalog } from "../../ipc/memoryProviders.ts";
 import {
+  accountSignInHint,
   adapterLabel,
   authLabel,
   capabilityItems,
@@ -115,6 +116,15 @@ describe("guidance", () => {
     expect(needsSignIn(detected(gemini, { auth: "unknown" }))).toBe(true);
     expect(needsSignIn(detected(claude, { state: "not_installed", auth: "unknown" }))).toBe(false);
     expect(needsSignIn(claude)).toBe(false);
+  });
+
+  it("sends Gemini sign-in to the managed account card, not a terminal", () => {
+    const hint = accountSignInHint(gemini);
+    expect(hint).toMatch(/^Open Accounts, add a Gemini CLI account and choose Sign in\./);
+    expect(hint).toContain("Google sign-in in your browser for that account only");
+    expect(hint).not.toMatch(/^Run /);
+    expect(accountSignInHint(claude)).toBeNull();
+    expect(accountSignInHint(codex)).toBeNull();
   });
 
   it("offers install guidance only when the CLI is missing", () => {

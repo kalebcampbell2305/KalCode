@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-provider-gemini-login-cancel"
+description = "Enables the provider_gemini_login_cancel command without any pre-configured scope."
+commands.allow = ["provider_gemini_login_cancel"]
+
+[[permission]]
+identifier = "deny-provider-gemini-login-cancel"
+description = "Denies the provider_gemini_login_cancel command without any pre-configured scope."
+commands.deny = ["provider_gemini_login_cancel"]

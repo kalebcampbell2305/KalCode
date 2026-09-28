@@ -25,6 +25,7 @@ import { ProviderAccountsView } from "./ProviderAccountsView.tsx";
 import { ProviderHealthView } from "./ProviderHealthView.tsx";
 import styles from "./ProvidersPage.module.css";
 import {
+  accountSignInHint,
   adapterLabel,
   authLabel,
   capabilityItems,
@@ -184,10 +185,13 @@ function ProviderSection({ status, checking, now }: { status: ProviderStatus; ch
   ];
   if (auth) setup.push({ key: "auth", label: "Sign-in", value: <StatusValue label={auth} /> });
   if (needsSignIn(status)) {
+    const accountHint = accountSignInHint(status);
     setup.push({
       key: "sign-in",
       label: "How to sign in",
-      value: (
+      value: accountHint ? (
+        <span className={styles.prose}>{accountHint}</span>
+      ) : (
         <span className={styles.prose}>
           Run <code data-selectable>{status.signInCommand}</code> in a terminal to sign in to {status.displayName} with
           your own account, then choose Check again.

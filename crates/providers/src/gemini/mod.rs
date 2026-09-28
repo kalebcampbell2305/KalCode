@@ -176,7 +176,21 @@ impl TurnAdapter for GeminiTurns {
     fn normalizer(&self) -> Box<dyn TurnNormalizer> {
         Box::new(stream::GeminiNormalizer::new(self.cwd.clone()))
     }
+
+    fn exit_error(&self, exit_code: Option<i32>) -> Option<(&'static str, String)> {
+        (exit_code == Some(FATAL_AUTHENTICATION_EXIT)).then(|| {
+            (
+                "provider_not_authenticated",
+                NOT_SIGNED_IN_MESSAGE.to_owned(),
+            )
+        })
+    }
 }
+
+/// Gemini CLI's `ExitCodes.FATAL_AUTHENTICATION_ERROR` (packages/cli/src/utils/exitCodes.ts).
+const FATAL_AUTHENTICATION_EXIT: i32 = 41;
+const NOT_SIGNED_IN_MESSAGE: &str = "Gemini CLI isn't signed in for this account. Sign in to this \
+     Gemini account in Providers, then resume this thread.";
 
 impl AgentProvider for GeminiProvider {
     fn id(&self) -> ProviderId {
@@ -258,10 +272,26 @@ impl AgentProvider for GeminiProvider {
             .as_mut()
             .map(managed_policy::ManagedGeminiLaunch::take_session_lease)
             .transpose()?;
-        let launch_env = managed.as_ref().map_or_else(
+        if let (Some(profiles), Some(account_id)) = (&self.managed_profiles, account_id) {
+            // Checked while the shared account lease is held, so sign-out cannot race it. A
+            // profile with no Gemini credential refuses up front instead of starting a turn
+            // Gemini can only fail.
+            if crate::gemini_account_auth::credential_state(profiles, account_id)?
+                == AuthState::NotAuthenticated
+            {
+                return Err(ProviderError::NotAuthenticated);
+            }
+        }
+        let mut launch_env = managed.as_ref().map_or_else(
             || self.env.provider_env(&spec.env_policy),
             |launch| launch.environment().clone(),
         );
+        if managed.is_some() {
+            // A headless turn must never start Gemini's browser sign-in: its consent question
+            // would read the person's prompt from stdin. With the browser suppressed, a missing
+            // or expired sign-in fails with Gemini's own authentication exit code instead.
+            launch_env.insert(OsString::from("NO_BROWSER"), OsString::from("true"));
+        }
         let launch_cwd = managed
             .as_ref()
             .map_or_else(|| workspace.clone(), |launch| launch.cwd().to_path_buf());
@@ -295,6 +325,22 @@ impl AgentProvider for GeminiProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn geminis_authentication_exit_is_reported_as_an_actionable_sign_in() {
+        let turns = GeminiTurns {
+            mode: PermissionMode::Plan,
+            model: None,
+            cwd: String::new(),
+            managed: None,
+        };
+        let (code, message) = turns.exit_error(Some(41)).expect("auth exit is recognized");
+        assert_eq!(code, "provider_not_authenticated");
+        assert!(message.contains("Sign in to this Gemini account in Providers"));
+        for other in [None, Some(0), Some(1), Some(42), Some(130)] {
+            assert!(turns.exit_error(other).is_none(), "{other:?}");
+        }
+    }
 
     const ALL: [PermissionMode; 5] = [
         PermissionMode::Plan,
@@ -448,10 +494,12 @@ mod tests {
         assert_eq!(
             find("GEMINI_CLI_HOME"),
             Some(
-                profiles
-                    .profile_home("gemini-cli", &account_id)
-                    .expect("profile")
-                    .as_os_str()
+                crate::managed::plain_path(
+                    &profiles
+                        .profile_home("gemini-cli", &account_id)
+                        .expect("profile")
+                )
+                .as_os_str()
             )
         );
     }

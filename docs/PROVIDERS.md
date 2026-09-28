@@ -494,8 +494,37 @@ tool (`run_shell_command` → running command, `write_file`/`replace` → editin
 tool), `tool_result` → `ToolCompleted`, plus `FileChanged` after a successful write, `error` →
 `Error(provider_warning | provider_error, recoverable)`, `result` → `Usage`, `TurnCompleted`,
 and on error `rate_limited` (`RetryableQuotaError`), `quota_exhausted` (`TerminalQuotaError`) or
-`turn_error` — from the structured `result.error.type` only [17]. Sign-in is always **unknown**
-(no documented side-effect-free status command), which does not stop threads.
+`turn_error` — from the structured `result.error.type` only [17]. The standalone CLI's sign-in is
+always **unknown** (no documented side-effect-free status command).
+
+**Managed Gemini accounts (Stable sign-in, `crates/providers/src/gemini_account_auth.rs`).** Gemini
+CLI 0.61.0 has no `auth login` command; its own "Sign in with Google" runs at startup when that
+auth type is selected and no credential is cached. Providers → Accounts → Sign in
+(`provider_gemini_login_start/wait/cancel`) runs exactly that, under the account's exclusive
+sign-in lease: the certified `gemini` from a neutral `sign-in/neutral` directory inside the
+account's profile (no repository, no include directories), the read-only Plan floor, the account's
+`GEMINI_CLI_HOME`, `GEMINI_FORCE_FILE_STORAGE=true`, `GOOGLE_GENAI_USE_GCA=true` (the documented
+"Sign in with Google" selector, used only when the profile saved no auth type) and
+`--list-extensions`, which exits right after startup authentication without a model request.
+KalCode answers only Gemini's own consent line (`Opening authentication page in your browser. Do
+you want to continue? [Y/n]`) with `y`; Gemini opens Google's page in the system browser and
+receives the loopback callback itself. Provider output (it holds the one-time URL) is drained and
+discarded natively. Gemini writes the credential to `<GEMINI_CLI_HOME>/.gemini/oauth_creds.json`
+(and the account email to `google_accounts.json`); KalCode checks **existence only**:
+`oauth_creds.json` → signed in, only the file keychain `gemini-credentials.json` → unknown, neither
+→ signed out. A managed thread for a signed-out account refuses before any turn starts
+(`provider_not_authenticated`: "Sign in to this Gemini CLI account in Providers"), and headless
+turns set `NO_BROWSER=true` so an expired sign-in ends with Gemini's own exit 41 (reported the same
+way) instead of reading the prompt as a consent answer. Sign out (`provider_gemini_logout`) removes
+exactly those three files from that account's `.gemini` directory under the exclusive lease, like
+Gemini's own credential reset; refresh and sign-out need no provider process.
+
+Real Gemini CLI 0.61.0 findings behind this launch shape (`tests/gemini_sign_in_real.rs`, ignored,
+no sign-in or quota): it rejects `--ignore-env` ("Unknown arguments"), so the floor's
+`advanced.ignoreLocalEnv` setting replaces it; it crashes at startup ("EISDIR … lstat 'C:'") on a
+Windows verbatim `\\?\` `GEMINI_CLI_HOME`, so every path Gemini receives is in its plain form; and it
+skips system settings/defaults files whose directory is not administrator/root owned, so KalCode
+never relies on them for Gemini behavior.
 
 ### 8.8 `codex app-server` — the long-term Codex surface (plan)
 

@@ -170,8 +170,8 @@
           "platforms": ["win32", "darwin"],
           "environment": {},
           "minimumExecuted": 1258,
-          "skippedMinimum": 16,
-          "skippedMaximum": 16,
+          "skippedMinimum": 18,
+          "skippedMaximum": 18,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         },
@@ -179,8 +179,8 @@
           "platforms": ["linux"],
           "environment": {},
           "minimumExecuted": 1258,
-          "skippedMinimum": 14,
-          "skippedMaximum": 14,
+          "skippedMinimum": 16,
+          "skippedMaximum": 16,
           "allowedSkipReasons": [],
           "maximumFlaky": 0
         }
@@ -362,6 +362,14 @@
     {
       "path": "crates/providers/src/codex/managed_policy.rs",
       "reason": "run explicitly when certifying installed Codex CLI 0.157.0"
+    },
+    {
+      "path": "crates/providers/tests/gemini_sign_in_real.rs",
+      "reason": "needs a real Gemini CLI 0.61.0 (KALCODE_REAL_GEMINI); no sign-in, prompt or quota"
+    },
+    {
+      "path": "crates/providers/tests/gemini_sign_in_real.rs",
+      "reason": "needs a real Gemini CLI 0.61.0 (KALCODE_REAL_GEMINI); no sign-in, prompt or quota"
     },
     {
       "path": "crates/providers/tests/interactive_cli_real.rs",

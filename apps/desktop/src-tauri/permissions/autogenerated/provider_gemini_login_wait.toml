@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-provider-gemini-login-wait"
+description = "Enables the provider_gemini_login_wait command without any pre-configured scope."
+commands.allow = ["provider_gemini_login_wait"]
+
+[[permission]]
+identifier = "deny-provider-gemini-login-wait"
+description = "Denies the provider_gemini_login_wait command without any pre-configured scope."
+commands.deny = ["provider_gemini_login_wait"]
