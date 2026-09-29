@@ -1,7 +1,7 @@
 import { PLANS } from "@kalcode/protocol/plans";
 import { expect, test } from "@playwright/test";
 import { NOT_FOUND_PAGE, PAGES, SITE_ORIGIN, SOCIAL } from "../../src/lib/site";
-import { CHANNEL_LABEL, MANIFEST, SIGNED_STABLE, WINDOWS_BUILD } from "./helpers";
+import { CHANNEL_LABEL, MANIFEST, SERVED_STABLE, SIGNED_STABLE, WINDOWS_BUILD, renderedDescription } from "./helpers";
 
 const STABLE_015 = SIGNED_STABLE && MANIFEST.latest?.version === "0.1.5";
 
@@ -19,7 +19,13 @@ test.describe("every page", () => {
       await expect(tab).toHaveTitle(page.title);
 
       const head = tab.locator("head");
-      await expect(head.locator('meta[name="description"]')).toHaveAttribute("content", page.description);
+      await expect(head.locator('meta[name="description"]')).toHaveAttribute("content", renderedDescription(page));
+      if (page.path === "/kalvoice") {
+        // Preview or no release: KalVoice is still in development. Stable served: it has shipped.
+        const description = head.locator('meta[name="description"]');
+        if (SERVED_STABLE) await expect(description).not.toHaveAttribute("content", /In development/);
+        else await expect(description).toHaveAttribute("content", / In development\.$/);
+      }
       await expect(head.locator('link[rel="canonical"]')).toHaveAttribute("href", new URL(page.path, SITE_ORIGIN).href);
       await expect(head.locator('meta[property="og:title"]')).toHaveAttribute("content", page.title);
       await expect(head.locator('meta[property="og:image"]')).toHaveAttribute("content", `${SITE_ORIGIN}/og.png`);
