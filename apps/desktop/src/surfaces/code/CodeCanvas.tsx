@@ -480,6 +480,9 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
   }, [terminals, providerPanes.panes, shown, titleOf]);
 
   const shell = defaultShell(shells);
+  // Git in a pane hasn't shipped. Builds that show the Git feature (Development) name it as coming;
+  // Stable and Beta never advertise it.
+  const gitTeaser = info.flags.features?.some((f) => f.id === "git_core" && f.visible) ?? false;
 
   const renderEmpty = useCallback(
     (paneId: string) => (
@@ -487,12 +490,13 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
         shell={shell}
         providerPanes={providerPanes}
         background={background}
+        gitTeaser={gitTeaser}
         onTerminal={() => newTerminal(null)}
         onProviderPane={() => void newProviderPane()}
         onShow={(content) => controllerRef.current.show(content, { paneId, focus: true })}
       />
     ),
-    [shell, providerPanes, background, newTerminal, newProviderPane],
+    [shell, providerPanes, background, gitTeaser, newTerminal, newProviderPane],
   );
 
   // Z7-W2's widgets stay registered (saved layouts restore them) but are offered only when their
@@ -527,6 +531,13 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
             {`New ${s.name} terminal`}
           </DropdownMenuItem>
         ))}
+        {/* Near the top: at small window heights the menu scrolls, and Browser must not be below it. */}
+        <DropdownMenuItem
+          icon={<Globe />}
+          onSelect={() => controllerRef.current.show(browserContent(), { paneId, focus: true })}
+        >
+          Browser
+        </DropdownMenuItem>
         {providerPanes.enabled ? (
           <DropdownMenuItem
             icon={<ProviderGlyph provider="claude-code" size="xs" />}
@@ -594,16 +605,14 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
             ))}
           </>
         ) : null}
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          icon={<Globe />}
-          onSelect={() => controllerRef.current.show(browserContent(), { paneId, focus: true })}
-        >
-          Browser
-        </DropdownMenuItem>
-        <DropdownMenuItem icon={<GitBranch />} disabled description="Not in this build yet">
-          Git
-        </DropdownMenuItem>
+        {gitTeaser ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem icon={<GitBranch />} disabled description="Not in this build yet">
+              Git
+            </DropdownMenuItem>
+          </>
+        ) : null}
       </>
     ),
     [
@@ -615,6 +624,7 @@ function LoadedCanvas({ workspace, providerPanes, children }: CodeCanvasProps & 
       newProviderPane,
       paneById,
       addableWidgets,
+      gitTeaser,
     ],
   );
 
@@ -837,6 +847,7 @@ function EmptyPane({
   onTerminal,
   onProviderPane,
   onShow,
+  gitTeaser,
 }: {
   shell: ShellOption | null;
   providerPanes: ProviderPanes;
@@ -844,6 +855,7 @@ function EmptyPane({
   onTerminal: () => void;
   onProviderPane: () => void;
   onShow: (content: PaneContent) => void;
+  gitTeaser: boolean;
 }) {
   return (
     <div className={styles.emptyPane}>
@@ -890,14 +902,16 @@ function EmptyPane({
           </ul>
         </div>
       ) : null}
-      <div className={styles.emptyGroup}>
-        <h3 className={styles.emptyLabel}>Not in this build yet</h3>
-        <p className={styles.emptyComing}>
-          <Badge tone="outline">
-            <GitBranch aria-hidden="true" /> Git
-          </Badge>
-        </p>
-      </div>
+      {gitTeaser ? (
+        <div className={styles.emptyGroup}>
+          <h3 className={styles.emptyLabel}>Not in this build yet</h3>
+          <p className={styles.emptyComing}>
+            <Badge tone="outline">
+              <GitBranch aria-hidden="true" /> Git
+            </Badge>
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }
