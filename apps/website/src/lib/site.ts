@@ -302,5 +302,5 @@ export const PROVIDERS = [
 export const GEMINI_AVAILABILITY = {
   short: "Gemini CLI is unavailable in KalCode 0.1.5.",
   notice:
-    "On June 18, 2026, Google ended Gemini CLI access through Sign in with Google for personal Google accounts: Gemini Code Assist for individuals, Google AI Pro and Google AI Ultra. KalCode 0.1.5 also can't set the Google Cloud project that Gemini Code Assist Standard and Enterprise licenses need, so Gemini CLI is currently unavailable in KalCode. A personal Google account can still finish sign-in and show as signed in, but its threads fail. Claude Code and Codex are unaffected. KalCode will follow Google's replacement in a later update.",
+    "On June 18, 2026, Google ended Gemini CLI access through Sign in with Google for personal Google accounts: Gemini Code Assist for individuals, Google AI Pro and Google AI Ultra. KalCode 0.1.5 also can't set the Google Cloud project that Gemini Code Assist Standard and Enterprise licenses need, so Gemini CLI is currently unavailable in KalCode. A personal Google account can still finish sign-in and show as signed in, but its threads fail. Claude Code and Codex are unaffected. Updates will say when Gemini CLI can be used in KalCode again.",
 } as const;
