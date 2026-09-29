@@ -606,6 +606,13 @@ impl RuntimeCoordinator {
         }
     }
 
+    /// App-exit preflight: seal admission for good, then wait (bounded) for every command lease
+    /// and the retained bundle. A caller that still holds a lease can never satisfy it.
+    pub fn drain_for_exit(&self, timeout: Duration) -> bool {
+        self.request_drain(true);
+        self.wait_drained(timeout)
+    }
+
     pub fn acquire<T: RuntimeService>(&self) -> Result<RuntimeState<T>, IpcError> {
         if self.bundle.is_poisoned() {
             self.lifecycle.block_unclean();
@@ -638,7 +645,7 @@ impl RuntimeCoordinator {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use super::*;
@@ -672,7 +679,7 @@ mod tests {
         }
     }
 
-    fn test_coordinator() -> Arc<RuntimeCoordinator> {
+    pub(crate) fn test_coordinator() -> Arc<RuntimeCoordinator> {
         RuntimeCoordinator::new(Arc::new(AccountRuntime::production(Arc::new(
             UntouchedStore,
         ))))

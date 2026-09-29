@@ -875,11 +875,10 @@ fn shutdown_runtime(handle: &tauri::AppHandle) -> bool {
 }
 
 fn shutdown_runtime_once(handle: &tauri::AppHandle) -> bool {
-    if let Some(coordinator) = handle.try_state::<Arc<RuntimeCoordinator>>() {
-        coordinator.request_drain(true);
-        if !coordinator.wait_drained(Duration::from_secs(30)) {
-            return false;
-        }
+    if let Some(coordinator) = handle.try_state::<Arc<RuntimeCoordinator>>()
+        && !coordinator.drain_for_exit(Duration::from_secs(30))
+    {
+        return false;
     }
     shutdown_services(handle);
     true
