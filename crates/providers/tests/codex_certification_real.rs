@@ -55,6 +55,7 @@ fn source(root: &std::path::Path) -> DetectEnv {
         vars,
         windows: cfg!(windows),
         probe_timeout: None,
+        system_root: None,
     }
 }
 

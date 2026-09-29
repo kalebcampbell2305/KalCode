@@ -342,6 +342,7 @@ mod tests {
             ],
             windows: cfg!(windows),
             probe_timeout: None,
+            system_root: None,
         };
         (temp, profiles, source, account_id, workspace)
     }

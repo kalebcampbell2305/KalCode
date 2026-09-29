@@ -531,6 +531,7 @@ mod tests {
             ],
             windows: false,
             probe_timeout: None,
+            system_root: None,
         };
 
         let isolated = managed_detection_env(&profiles, &account_id, &source).expect("environment");

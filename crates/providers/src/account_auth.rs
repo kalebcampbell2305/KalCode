@@ -1046,6 +1046,7 @@ mod tests {
             ],
             windows: cfg!(windows),
             probe_timeout: Some(Duration::from_secs(2)),
+            system_root: None,
         };
         let mut extra_env: BTreeMap<OsString, OsString> = [
             (

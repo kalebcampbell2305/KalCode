@@ -156,6 +156,7 @@ impl Stack {
             vars,
             windows: cfg!(windows),
             probe_timeout: Some(Duration::from_secs(10)),
+            system_root: None,
         };
         let endpoint = Endpoint::generate(Some(dir.path())).expect("endpoint");
         let bridge = Arc::new(BridgeServer::start(ServerConfig::new(endpoint)).expect("bridge"));

@@ -66,6 +66,9 @@ impl FakeInstall {
             vars,
             windows: cfg!(windows),
             probe_timeout: Some(Duration::from_secs(10)),
+            // Homebrew's `/opt/homebrew/bin` and `/usr/local/bin` are searched under this empty
+            // folder, so a real `codex` or `gemini` installed on the host can't leak in.
+            system_root: Some(self.work.path().join("no-system-installs")),
         }
     }
 

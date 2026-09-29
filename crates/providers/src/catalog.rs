@@ -11,7 +11,7 @@ use crate::model::{AdapterState, ModelSource, ProviderStatus};
 
 /// Homebrew prefixes (Apple silicon and Intel) — GUI apps on macOS don't inherit the shell
 /// `PATH`, so these are checked explicitly.
-const HOMEBREW: [&str; 2] = ["/opt/homebrew/bin", "/usr/local/bin"];
+pub(crate) const HOMEBREW: [&str; 2] = ["/opt/homebrew/bin", "/usr/local/bin"];
 
 pub fn claude_spec() -> DetectionSpec {
     DetectionSpec {

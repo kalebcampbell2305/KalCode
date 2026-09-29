@@ -214,6 +214,7 @@ impl InteractiveCliProvider {
                             .collect(),
                         windows: self.env.windows,
                         probe_timeout: self.env.probe_timeout,
+                        system_root: self.env.system_root.clone(),
                     };
                     let executable =
                         managed_gemini_executable(&spec, &detection_env, &probe_guardian)?;

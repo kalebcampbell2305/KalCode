@@ -187,6 +187,7 @@ fn production_detection_probe_uses_the_internal_guardian_namespace() {
         ],
         windows: true,
         probe_timeout: Some(Duration::from_secs(5)),
+        system_root: None,
     };
     let spec = DetectionSpec {
         provider_id: "probe",
@@ -234,6 +235,7 @@ fn sealed_probe_admission_fails_closed_before_the_cli_starts() {
         ],
         windows: true,
         probe_timeout: Some(Duration::from_secs(5)),
+        system_root: None,
     };
     let spec = DetectionSpec {
         provider_id: "denied",

@@ -74,6 +74,11 @@ pub struct DetectEnv {
     pub windows: bool,
     /// Overrides [`VERSION_TIMEOUT`] and [`AUTH_TIMEOUT`] (tests).
     pub probe_timeout: Option<Duration>,
+    /// Tests only: resolves the specs' root-anchored install folders (Homebrew's
+    /// `/opt/homebrew/bin` and `/usr/local/bin`) under this folder instead of the machine's root,
+    /// so a CLI installed on the host can't leak into a hermetic test. `None` (production)
+    /// searches them as they are.
+    pub system_root: Option<PathBuf>,
 }
 
 impl DetectEnv {
@@ -82,6 +87,7 @@ impl DetectEnv {
             vars: std::env::vars_os().collect(),
             windows: cfg!(windows),
             probe_timeout: None,
+            system_root: None,
         }
     }
 
@@ -140,7 +146,9 @@ impl DetectEnv {
         let home = self.home();
         for dir in spec.install_dirs {
             let path = Path::new(dir);
-            if path.is_absolute() {
+            if let (Some(root), Some(below_root)) = (&self.system_root, dir.strip_prefix('/')) {
+                dirs.push(root.join(below_root));
+            } else if path.is_absolute() {
                 dirs.push(path.to_path_buf());
             } else if let Some(home) = &home {
                 dirs.push(home.join(path));
@@ -492,6 +500,7 @@ mod tests {
                 .collect(),
             windows,
             probe_timeout: None,
+            system_root: None,
         }
     }
 
@@ -544,6 +553,68 @@ mod tests {
         );
     }
 
+    /// Production detection (no `system_root`) still searches Homebrew's folders for every
+    /// provider: a Finder-launched macOS app has no Homebrew folder on its `PATH`.
+    #[test]
+    fn production_detection_still_searches_the_homebrew_dirs() {
+        use crate::catalog::{HOMEBREW, claude_spec, codex_spec, gemini_spec};
+        assert_eq!(DetectEnv::from_process().system_root, None);
+        let home = abs("home");
+        let e = env(&[("HOME", home.to_str().expect("utf8"))], false);
+        for spec in [claude_spec(), codex_spec(), gemini_spec()] {
+            let dirs = e.search_dirs(&spec);
+            for dir in HOMEBREW {
+                assert!(spec.install_dirs.contains(&dir), "{}", spec.provider_id);
+                // Root-anchored on macOS and Linux; Windows has no Homebrew, and there the
+                // folder is drive-relative (anchored at the home folder's drive), as before.
+                let expected = if Path::new(dir).is_absolute() {
+                    PathBuf::from(dir)
+                } else {
+                    home.join(dir)
+                };
+                assert!(
+                    dirs.contains(&expected),
+                    "{} misses {dir}: {dirs:?}",
+                    spec.provider_id
+                );
+            }
+        }
+        #[cfg(unix)]
+        {
+            let dirs = DetectEnv::from_process().search_dirs(&codex_spec());
+            for dir in HOMEBREW {
+                assert!(dirs.contains(&PathBuf::from(dir)), "{dir}: {dirs:?}");
+            }
+        }
+    }
+
+    /// Tests inject `system_root`, so a CLI in the host's `/opt/homebrew/bin` or
+    /// `/usr/local/bin` can't change their results; the Homebrew folders are still searched,
+    /// under that root.
+    #[test]
+    fn a_system_root_keeps_host_homebrew_installs_out_of_detection() {
+        use crate::catalog::{HOMEBREW, codex_spec};
+        let root = tempfile::tempdir().expect("root");
+        let mut e = env(&[], false);
+        e.system_root = Some(root.path().to_path_buf());
+        let dirs = e.search_dirs(&codex_spec());
+        assert_eq!(
+            dirs,
+            HOMEBREW.map(|dir| root.path().join(dir.trim_start_matches('/')))
+        );
+        for dir in HOMEBREW {
+            assert!(!dirs.contains(&PathBuf::from(dir)), "{dirs:?}");
+        }
+        assert_eq!(e.resolve_executable_only(&codex_spec()), None);
+        let brew = root.path().join("usr/local/bin");
+        std::fs::create_dir_all(&brew).expect("mkdir");
+        std::fs::write(brew.join("codex"), b"fixture").expect("fixture");
+        assert_eq!(
+            e.resolve_executable_only(&codex_spec()),
+            Some(brew.join("codex"))
+        );
+    }
+
     #[test]
     fn path_only_resolution_does_not_require_a_provider_probe() {
         let temp = tempfile::tempdir().expect("temp");
@@ -558,6 +629,7 @@ mod tests {
             ],
             windows: cfg!(windows),
             probe_timeout: None,
+            system_root: None,
         };
         let spec = DetectionSpec {
             executable: "tool",

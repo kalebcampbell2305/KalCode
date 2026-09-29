@@ -97,6 +97,7 @@ impl Setup {
             vars,
             windows: true,
             probe_timeout: Some(Duration::from_secs(15)),
+            system_root: None,
         }
     }
 
