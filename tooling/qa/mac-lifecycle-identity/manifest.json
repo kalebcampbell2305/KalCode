@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "status": "proposed-verifier-helper-not-staged",
-  "toolBaseCommit": "8d6c133ce720281fe74b3bebd3ec0d9227c39ed4",
-  "appliesCleanlyOn": "8d6c133ce720281fe74b3bebd3ec0d9227c39ed4",
+  "toolBaseCommit": "536efd7e9eacd8cabe6201374dc4e223814e19b5",
+  "appliesCleanlyOn": "536efd7e9eacd8cabe6201374dc4e223814e19b5",
   "profile": "/Users/kalcodeqa2",
   "user": "kalcodeqa2",
   "installedApp": "/Users/kalcodeqa2/Applications/KalCode.app",
@@ -85,7 +85,7 @@
   "limitations": [
     "Fixtures run natively on macOS, but codesign/spctl/lipo parsing and the JXA NSWorkspace handler query are fixture-verified only. If handler.queryOk is false, Primary uses the reviewed helpers-826cab4acee7/scheme-binding query kalcode instead; never 'set'.",
     "Requires Apple Command Line Tools for /usr/bin/python3 (wrappers stop before the install prompt if absent).",
-    "Executes the installed binary only as '<app>/Contents/MacOS/kalcode --build-info' (answered in main.rs before Tauri starts). Verified in main.rs at 0ee34938, f81d3eb7, 60a17a80, 41f58b0c and 8d6c133c (main.rs byte-identical across all five); re-verify for any later candidate source.",
+    "Executes the installed binary only as '<app>/Contents/MacOS/kalcode --build-info' (answered in main.rs before Tauri starts). Verified in main.rs at 0ee34938, f81d3eb7, 60a17a80, 41f58b0c, 8d6c133c and 536efd7e (main.rs byte-identical across all six); re-verify for any later candidate source.",
     "Path/symlink guards are point-in-time; Primary allocates an exclusive QA2 window. Receipts are observations, not lifecycle PASS; Primary correlates them with visible UI transitions and the durable stage receipt.",
     "No integration into application B, T or N is implied; Primary selects helper authority and stages exact bytes."
   ],
