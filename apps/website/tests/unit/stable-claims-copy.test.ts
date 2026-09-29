@@ -235,13 +235,52 @@ describe("KalVoice command examples", () => {
   });
 });
 
+// B9 536efd7 enforces no per-plan thread limit: limits::CONCURRENT_THREADS is read only inside
+// crates/entitlements (document.rs and its tests); the only limit the app consumes is
+// KALVOICE_REQUESTS_PER_MONTH (apps/desktop/src-tauri/src/kalvoice_accounting.rs:49,
+// crates/entitlements/src/usage.rs:104). Admission is capped by the Resource Governor, which starts
+// in Balanced (crates/resources/src/mode.rs:28, max_agents 4 at :277) for every plan, and its view
+// is Gated on Stable (crates/native-core/src/flags.rs:70). So no page may promise a thread count
+// by plan.
+const PLAN_CONCURRENCY_CLAIMS = [
+  /threads running at once/i,
+  /\bthreads at once\b/i,
+  /\b(concurrent|simultaneous|parallel) threads\b/i,
+  /Plans differ in KalVoice Requests and threads/i,
+];
+
 describe("plans", () => {
   it("compare only what the plans differ in today", async () => {
     const html = await render(Pricing, "/pricing");
     const copy = text(html);
-    expect(copy).toContain("Plans differ in KalVoice Requests and threads running at once");
+    expect(copy).toContain(
+      "Every plan runs every provider in Plan, Approve and Auto modes. Plans differ in KalVoice Requests — your AI usage stays on your own account.",
+    );
     const rowHeads = [...html.matchAll(/<th scope="row"[^>]*>([^<]*)<\/th>/g)].map((m) => m[1].trim());
-    expect(rowHeads).toEqual(["KalVoice Requests a month", "Threads running at once"]);
+    expect(rowHeads).toEqual(["KalVoice Requests a month"]);
+    expect(PAGES.find((p) => p.path === "/pricing")?.description).toContain(
+      "plans differ in KalVoice Requests. AI usage stays on your own provider account.",
+    );
+  });
+
+  it.each([
+    { name: "home page", component: Home as Component, path: "/" },
+    { name: "pricing page", component: Pricing as Component, path: "/pricing" },
+  ])("the $name promises no thread count by plan", async ({ component, path }) => {
+    const html = await render(component, path);
+    const copy = `${text(html)} ${metaDescription(html)}`;
+    for (const pattern of PLAN_CONCURRENCY_CLAIMS) expect(copy).not.toMatch(pattern);
+  });
+
+  it("give each home plan card only what Stable enforces", async () => {
+    const html = await render(Home, "/");
+    const cards = [...html.matchAll(/<ul class="plan-card__points"[^>]*>([\s\S]*?)<\/ul>/g)].map((m) => text(m[1]));
+    expect(cards).toHaveLength(4);
+    for (const card of cards) {
+      expect(card).toMatch(/KalVoice Requests a month/);
+      expect(card).toContain("Every provider; Plan, Approve and Auto modes");
+      expect(card).not.toMatch(/\bthreads?\b/i);
+    }
   });
 
   it("render a website summary for MAX instead of the catalog's objectives claim", async () => {
