@@ -32,7 +32,7 @@ const askFirstDenied = `Edit,Write,NotebookEdit,WebFetch,WebSearch,${remoteDenie
 const claudeEnforced =
   "KalCode always denies git push, package publishes, deploy and cloud CLIs, gh and ssh, and reading credential files such as .env and SSH keys, whatever your Claude Code settings allow.";
 const claudeNotYet =
-  "Other commands follow Claude Code's own rules, including your Claude Code user settings (allow rules and hooks), and a push written in an unusual form is decided by them. KalCode approvals and Custom rules for each action arrive with provider panes.";
+  "Other commands follow Claude Code's own rules, including your Claude Code user settings (allow rules and hooks), and a push written in an unusual form is decided by them. KalCode doesn't ask you about each of these actions, and Custom rules don't apply to them.";
 
 /** Mirrors `crates/providers/src/codex/argv.rs` `permission_setting` (generated from the argv). */
 function codexSetting(mode: PermissionMapping["mode"]): string {
@@ -78,7 +78,7 @@ export function providerCatalog(): ProviderStatus[] {
           stricter(
             "approve",
             `--setting-sources user --permission-mode default --permission-prompts none --disallowedTools ${askFirstDenied}`,
-            `Reads and Claude Code's read-only commands run. Edits and web access are removed, and anything else that would ask is refused, because KalCode can't answer Claude Code's approval prompts yet. ${claudeEnforced} ${claudeNotYet}`,
+            `Reads and Claude Code's read-only commands run. Edits and web access are removed, and anything else that would ask is refused, because KalCode doesn't answer Claude Code's approval prompts. ${claudeEnforced} ${claudeNotYet}`,
           ),
           stricter(
             "auto",

@@ -196,6 +196,29 @@
 
 /* ---------- Permission mapping table (Table language: LABEL heads, hairline rows) ---------- */
 
+/* Collapsed by default: the raw flags are reference detail below each provider's setup facts. */
+.mappings {
+  min-width: 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.mappingsSummary {
+  padding: var(--space-3) var(--space-5);
+  color: var(--color-text-secondary);
+  font-size: var(--type-ui);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+}
+
+.mappingsSummary:hover {
+  color: var(--color-text);
+}
+
+.mappingsSummary:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: -2px;
+}
+
 .tableWrap {
   min-width: 0;
   border-top: 1px solid var(--color-border);

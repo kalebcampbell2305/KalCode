@@ -247,7 +247,12 @@ function ProviderSection({ status, checking, now }: { status: ProviderStatus; ch
       className={styles.provider}
       title={<ProviderMark provider={status.id} name={status.displayName} tile size="md" />}
       description={adapter.description}
-      actions={<Badge tone={status.adapter === "implemented" ? "accent" : "outline"}>{adapter.badge}</Badge>}
+      // "Adapter ready" beside "Not installed" reads as a contradiction; the status row says it all.
+      actions={
+        needsInstall(status) ? null : (
+          <Badge tone={status.adapter === "implemented" ? "accent" : "outline"}>{adapter.badge}</Badge>
+        )
+      }
       padding="none"
     >
       <div className={styles.overview}>
@@ -311,62 +316,69 @@ function Capabilities({ status }: { status: ProviderStatus }) {
   );
 }
 
+/**
+ * The exact flags KalCode passes per mode. Reference detail, so it is collapsed: the setup facts
+ * above it (and the next provider) stay on the first screen.
+ */
 function MappingTable({ status }: { status: ProviderStatus }) {
   const mappings = status.capabilities.permissionMappings;
   if (mappings.length === 0) return null;
   return (
-    <div className={styles.tableWrap}>
-      <table className={styles.table}>
-        <caption className={styles.caption}>
-          <span className={styles.captionTitle}>Permission modes in {status.displayName}</span>
-          <span className={styles.captionText}>
-            The setting KalCode passes for each mode. When {status.displayName} can't match a mode exactly, KalCode uses
-            a stricter setting, never a broader one.
-          </span>
-        </caption>
-        <colgroup>
-          <col className={styles.colMode} />
-          <col className={styles.colSetting} />
-          <col className={styles.colFidelity} />
-          <col />
-        </colgroup>
-        <thead>
-          <tr>
-            <th scope="col">KalCode mode</th>
-            <th scope="col">{status.displayName} setting</th>
-            <th scope="col">Fidelity</th>
-            <th scope="col">What happens</th>
-          </tr>
-        </thead>
-        <tbody>
-          {mappings.map((mapping) => (
-            <tr key={mapping.mode}>
-              <th scope="row">
-                <span className={styles.mode} data-mode={mapping.mode}>
-                  {modeLabel(mapping.mode)}
-                </span>
-              </th>
-              <td>
-                <code data-selectable className={styles.setting}>
-                  {settingGroups(mapping.providerSetting).map((group, index) => (
-                    // biome-ignore lint/suspicious/noArrayIndexKey: groups are static text; a flag may repeat.
-                    <span key={index} className={styles.flag}>
-                      {withCommaBreaks(group)}
-                    </span>
-                  ))}
-                </code>
-              </td>
-              <td>
-                <span className={styles.fidelity} data-fidelity={mapping.fidelity}>
-                  {fidelityLabel(mapping.fidelity)}
-                </span>
-              </td>
-              <td className={styles.notes}>{mapping.notes}</td>
+    <details className={styles.mappings}>
+      <summary className={styles.mappingsSummary}>Permission modes in {status.displayName}</summary>
+      <div className={styles.tableWrap}>
+        <table className={styles.table}>
+          <caption className={styles.caption}>
+            <span className={styles.captionTitle}>Permission modes in {status.displayName}</span>
+            <span className={styles.captionText}>
+              The setting KalCode passes for each mode. When {status.displayName} can't match a mode exactly, KalCode
+              uses a stricter setting, never a broader one.
+            </span>
+          </caption>
+          <colgroup>
+            <col className={styles.colMode} />
+            <col className={styles.colSetting} />
+            <col className={styles.colFidelity} />
+            <col />
+          </colgroup>
+          <thead>
+            <tr>
+              <th scope="col">KalCode mode</th>
+              <th scope="col">{status.displayName} setting</th>
+              <th scope="col">Fidelity</th>
+              <th scope="col">What happens</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+          </thead>
+          <tbody>
+            {mappings.map((mapping) => (
+              <tr key={mapping.mode}>
+                <th scope="row">
+                  <span className={styles.mode} data-mode={mapping.mode}>
+                    {modeLabel(mapping.mode)}
+                  </span>
+                </th>
+                <td>
+                  <code data-selectable className={styles.setting}>
+                    {settingGroups(mapping.providerSetting).map((group, index) => (
+                      // biome-ignore lint/suspicious/noArrayIndexKey: groups are static text; a flag may repeat.
+                      <span key={index} className={styles.flag}>
+                        {withCommaBreaks(group)}
+                      </span>
+                    ))}
+                  </code>
+                </td>
+                <td>
+                  <span className={styles.fidelity} data-fidelity={mapping.fidelity}>
+                    {fidelityLabel(mapping.fidelity)}
+                  </span>
+                </td>
+                <td className={styles.notes}>{mapping.notes}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </details>
   );
 }
 

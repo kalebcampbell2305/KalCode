@@ -73,6 +73,7 @@ for (const theme of ["dark", "light"] as const) {
       await expect(page.getByText("Installed, version 2.1.282")).toBeVisible();
       await shot(page, `providers-${theme}-${size.name}`);
       // Review aids: the lower part of the page (permission table, a provider that isn't installed).
+      await page.locator("#provider-claude-code summary").click();
       await page.locator("#provider-claude-code table").scrollIntoViewIfNeeded();
       await shot(page, `providers-table-${theme}-${size.name}`);
       await page.locator("#provider-gemini-cli").scrollIntoViewIfNeeded();
