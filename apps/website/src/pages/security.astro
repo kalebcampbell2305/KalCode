@@ -2,7 +2,7 @@
 import PageHead from "../components/PageHead.astro";
 import Base from "../layouts/Base.astro";
 import { RELEASES, buildStatus, servedStableRelease } from "../lib/releases";
-import { CONTACT_EMAIL, getPage } from "../lib/site";
+import { CONTACT_EMAIL, GEMINI_AVAILABILITY, getPage } from "../lib/site";
 
 const page = getPage("/security");
 const kalvoiceShipped = servedStableRelease(RELEASES) !== null;
@@ -82,8 +82,9 @@ const kalvoiceShipped = servedStableRelease(RELEASES) !== null;
 
       <h2>Zero company AI cost: your provider, your account</h2>
       <p>
-        KalCode connects Claude Code, Codex and Gemini CLI through their documented integration
-        methods, using your own accounts. Model usage is billed by each provider under your
+        KalCode connects Claude Code and Codex through their documented integration methods,
+        using your own accounts; Codex runs on personal ChatGPT plans (Free, Go, Plus and Pro).
+        {GEMINI_AVAILABILITY.short} Model usage is billed by each provider under your
         account. KalCode holds no company provider credentials for your use, does not charge for,
         resell or meter provider usage, and never falls back to a KalCode-paid service. Your
         provider sign-ins stay with each provider's own CLI, separately for every account you add.

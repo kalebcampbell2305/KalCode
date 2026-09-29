@@ -13,6 +13,11 @@ import { GEMINI_AVAILABILITY } from "../../lib/site";
     <li><strong>Claude Code</strong> — the local CLI, signed in with your own Claude account.</li>
     <li><strong>Codex</strong> — the local CLI, signed in with your own personal ChatGPT plan, with its documented approval and sandbox settings.</li>
   </ul>
+  <p>
+    Codex threads run on personal ChatGPT plans: Free, Go, Plus and Pro. KalCode doesn't start
+    Codex threads on ChatGPT Business (formerly Team), Enterprise or Edu plans, or on an account
+    whose plan it can't confirm.
+  </p>
   <h3>Gemini CLI is unavailable in 0.1.5</h3>
   <p>{GEMINI_AVAILABILITY.notice}</p>
   <p>
@@ -90,10 +95,10 @@ import { GEMINI_AVAILABILITY } from "../../lib/site";
   <h2>Detection</h2>
   <p>
     To find installed providers, KalCode looks for their executables on your <code>PATH</code> and in
-    documented install locations, then runs only version and status commands, with a timeout. It
-    reports whether each provider is installed, its version, whether it is signed in where the CLI
-    exposes that, and what it can do. Detection never changes your machine; installing a provider
-    only happens when you ask for it.
+    documented install locations, then runs only each CLI's version command, with a timeout. It
+    reports whether each provider is installed, its version and what it can do. Detection doesn't
+    check sign-in: whether each account is signed in shows on its card in Providers, then Accounts.
+    Detection never changes your machine; installing a provider only happens when you ask for it.
   </p>
 
   <h2>Isolation</h2>
