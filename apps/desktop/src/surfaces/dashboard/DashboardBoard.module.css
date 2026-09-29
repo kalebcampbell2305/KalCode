@@ -293,3 +293,33 @@
   border-radius: var(--radius-panel);
   background: var(--panel-sheen), var(--color-surface-1);
 }
+
+/* Archived sessions (read-only cards with Unarchive), opened from the archived empty state. */
+.archived {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+.archivedHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.archivedTitle {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--type-ui);
+  font-weight: 600;
+}
+
+.archivedGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
+  gap: 12px;
+}

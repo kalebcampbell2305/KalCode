@@ -127,6 +127,16 @@
   color: var(--status-done-text);
 }
 
+.band[data-kind="archived"] {
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
+}
+
+.card[data-archived] {
+  cursor: default;
+}
+
 .band[data-kind="action"] {
   border-bottom: 1px solid var(--status-waiting-line);
   background: var(--status-waiting-soft);
@@ -189,6 +199,15 @@
   overflow: hidden;
   text-overflow: ellipsis;
   cursor: pointer;
+}
+
+.nameText {
+  display: block;
+  max-width: 100%;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .nameButton:hover {
@@ -388,8 +407,9 @@
 
 .foot {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-2-5);
+  gap: var(--space-1-5) var(--space-2-5);
   margin-top: auto;
   padding-top: var(--space-2-5);
   border-top: 1px solid var(--color-border-subtle);

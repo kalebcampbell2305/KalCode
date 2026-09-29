@@ -10,9 +10,10 @@ import {
   TextInput,
 } from "@kalcode/ui/components";
 import { ChevronDown, Search, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useOptionalUiIntents } from "../../runtime/uiIntents.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
+import { useProviderPanesEnabled } from "../code/panes/useProviderPanes.ts";
 import { usePermissions } from "../permissions/PermissionsProvider.tsx";
 import { useThreadsIntent } from "../threads/intent.tsx";
 import { AgentCard } from "./AgentCard.tsx";
@@ -30,7 +31,7 @@ import {
   summaryLine,
   type ThreadGroup,
 } from "./data/board.ts";
-import { useThreadSummaries } from "./data/DashboardData.tsx";
+import { useArchivedThreads, useThreadSummaries } from "./data/DashboardData.tsx";
 import { useNow } from "./useNow.ts";
 import { useVirtualRows } from "./useVirtualRows.ts";
 
@@ -99,11 +100,16 @@ export interface DashboardBoardProps {
  */
 export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
   const { state, reload, pendingActions, runAction } = useThreadSummaries();
+  const archivedThreads = useArchivedThreads();
   const permissions = usePermissions();
   const intents = useOptionalUiIntents();
   const threadsIntent = useThreadsIntent();
   const { navigate } = useNavigation();
+  // Provider panes (gated on Stable) are the only way a CLI started from Code becomes a session.
+  const providerPanes = useProviderPanesEnabled();
   const now = useNow(30_000);
+  const [showArchived, setShowArchived] = useState(false);
+  const archivedId = useId();
 
   const [chip, setChip] = useState<DashboardChip>("all");
   const [query, setQuery] = useState("");
@@ -115,6 +121,11 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
 
   const threads = state.status === "ready" ? state.data : null;
   const counts: ChipCounts = useMemo(() => chipCounts(threads ?? []), [threads]);
+  const archived = archivedThreads.state.status === "ready" ? archivedThreads.state.data : NO_THREADS;
+  // Nothing left to show once the last archived session is restored: close the archived view.
+  useEffect(() => {
+    if (archived.length === 0) setShowArchived(false);
+  }, [archived.length]);
 
   const announce = useCallback((text: string) => {
     announceSeq.current += 1;
@@ -287,32 +298,65 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
       </ErrorState>
     );
   } else if (counts.all === 0) {
-    body = (
-      <EmptyState
-        title="No active sessions yet."
-        className={styles.state}
-        actions={
-          <>
-            <Button variant="primary" onClick={() => navigate("code")}>
-              Open Code
-            </Button>
-            <Button
-              onClick={() => {
-                navigate("threads");
-                threadsIntent.request("new");
-              }}
-            >
-              New Session
-            </Button>
-          </>
-        }
+    const newSession = (
+      <Button
+        variant="primary"
+        onClick={() => {
+          navigate("threads");
+          threadsIntent.request("new");
+        }}
       >
-        <p>
-          Open <ProviderMark provider="claude-code" size="sm" />, <ProviderMark provider="codex" size="sm" />, or{" "}
-          <ProviderMark provider="gemini-cli" name="Gemini" size="sm" /> to start working.
-        </p>
-      </EmptyState>
+        New Session
+      </Button>
     );
+    body =
+      archived.length > 0 ? (
+        <EmptyState
+          title={
+            archived.length === 1 ? "Your only session is archived" : `All ${archived.length} sessions are archived`
+          }
+          className={styles.state}
+          actions={
+            <>
+              {newSession}
+              <Button
+                aria-pressed={showArchived}
+                aria-controls={showArchived ? archivedId : undefined}
+                onClick={() => setShowArchived((shown) => !shown)}
+              >
+                Show archived
+              </Button>
+            </>
+          }
+        >
+          <p>Archived sessions stay off the Dashboard. Show them to look back, or unarchive one to bring it back.</p>
+        </EmptyState>
+      ) : (
+        <EmptyState
+          title="No sessions yet"
+          className={styles.state}
+          actions={
+            <>
+              {newSession}
+              {providerPanes ? <Button onClick={() => navigate("code")}>Open Code</Button> : null}
+            </>
+          }
+        >
+          {providerPanes ? (
+            <p>
+              Start a session, or open <ProviderMark provider="claude-code" size="sm" />,{" "}
+              <ProviderMark provider="codex" size="sm" /> or{" "}
+              <ProviderMark provider="gemini-cli" name="Gemini" size="sm" /> in a provider pane from Code. A CLI you
+              type into a plain terminal isn't tracked here.
+            </p>
+          ) : (
+            <p>
+              Start a session and it shows up here with what it's doing and whether it needs you. This build tracks
+              sessions started from Threads; a CLI you run yourself in a Code terminal isn't tracked.
+            </p>
+          )}
+        </EmptyState>
+      );
   } else if (groups.length === 0) {
     body = (
       <div className={styles.noMatch} role="status">
@@ -425,6 +469,34 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
         </div>
       ) : null}
       {body}
+      {showArchived && archived.length > 0 ? (
+        <section id={archivedId} className={styles.archived} aria-labelledby={`${archivedId}-heading`}>
+          <div className={styles.archivedHead}>
+            <h2 className={styles.archivedTitle} id={`${archivedId}-heading`}>
+              Archived <span className={styles.groupCount}>{archived.length}</span>
+            </h2>
+            <Button size="sm" variant="ghost" onClick={() => setShowArchived(false)}>
+              Hide archived
+            </Button>
+          </div>
+          <div className={styles.archivedGrid}>
+            {archived.map((thread) => (
+              <AgentCard
+                key={thread.id}
+                thread={thread}
+                now={now}
+                archived
+                approvals={NO_APPROVALS}
+                pendingAction={archivedThreads.pendingActions.get(thread.id)}
+                onFocus={onFocus}
+                onAction={archivedThreads.runAction}
+                onDecide={permissions.decide}
+                onReviewApprovals={onReviewApprovals}
+              />
+            ))}
+          </div>
+        </section>
+      ) : null}
       <div className="visually-hidden" aria-live="polite" aria-atomic="true">
         {announcement ? <p key={announcement.id}>{announcement.text}</p> : null}
       </div>
@@ -433,6 +505,7 @@ export function DashboardBoard({ inPane = false }: DashboardBoardProps) {
 }
 
 const NO_APPROVALS: readonly ApprovalView[] = [];
+const NO_THREADS: readonly ThreadSummary[] = [];
 
 function GroupHeader({ group, collapsed, onToggle }: { group: ThreadGroup; collapsed: boolean; onToggle: () => void }) {
   const count = group.threads.length;

@@ -9,8 +9,9 @@ one product family.
   enables an action, improves navigation, or supports the KalCode brand without distracting
   from work. No decorative node networks, fake graphs, random sparklines, fabricated analytics,
   or placeholder technical art. Charts require a real, identified data source; unavailable
-  telemetry stays unavailable. The Dashboard's true empty state is plain guidance plus
-  Open Code and New Session actions, without an illustration. This rule applies throughout
+  telemetry stays unavailable. The Dashboard's true empty state is plain guidance with a
+  New Session action (plus Open Code where provider panes exist), without an illustration; when
+  every session is archived it says so and offers them read-only. This rule applies throughout
   the desktop app; the marketing website may retain its cinematic brand treatment.
 - **Dark, polished, cinematic, technical.** Near-black space, navy panels, fine hairlines, and
   electric blue used sparingly. The brand artwork is the one bold element; the product UI is

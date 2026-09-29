@@ -121,7 +121,11 @@ describe("approval_decide", () => {
 });
 
 describe("thread actions", () => {
-  const COMMANDS: Record<Exclude<ThreadAction, "open">, (c: KalCodeClient, id: string) => Promise<unknown>> = {
+  // Unarchive is offered only on archived cards (never by status); it has its own test below.
+  const COMMANDS: Record<
+    Exclude<ThreadAction, "open" | "unarchive">,
+    (c: KalCodeClient, id: string) => Promise<unknown>
+  > = {
     interrupt: (c, id) => c.interruptThread(id),
     stop: (c, id) => c.stopThread(id),
     resume: (c, id) => c.resumeThread(id),
@@ -134,7 +138,7 @@ describe("thread actions", () => {
     const threads = await probe.listThreads();
     for (const thread of threads) {
       const offered = availableActions(thread.status);
-      for (const action of Object.keys(COMMANDS) as Exclude<ThreadAction, "open">[]) {
+      for (const action of Object.keys(COMMANDS) as (keyof typeof COMMANDS)[]) {
         // Retry and Resume share `thread_resume`; only check the one this state offers.
         const sharesCommand =
           (action === "retry" && !offered.includes("retry")) || (action === "resume" && offered.includes("retry"));
@@ -170,6 +174,28 @@ describe("thread actions", () => {
     await expect(client.archiveThread(done.id)).rejects.toMatchObject({ code: "thread_not_found" });
   });
 
+  it("unarchiving restores the thread to the open list and records thread.unarchived", async () => {
+    const client = new KalCodeClient(createMemoryTransport("busy"));
+    const done = (await client.listThreads()).find((t) => t.status === "completed");
+    if (!done) throw new Error("fixture has a completed thread");
+    const archived = await client.archiveThread(done.id);
+    expect(archived.archivedAt).not.toBeNull();
+    const all = await client.listThreads({ includeArchived: true });
+    expect(all.find((t) => t.id === done.id)?.archivedAt).not.toBeNull();
+
+    const events = await recorder(client);
+    const restored = await client.unarchiveThread(done.id);
+    expect(restored.archivedAt).toBeNull();
+    expect(restored.status).toBe("completed");
+    expect((await client.listThreads()).map((t) => t.id)).toContain(done.id);
+    await tick();
+    expect(events.map((e) => e.type)).toEqual(["thread.unarchived"]);
+    // Idempotent, like native: an open thread is returned as is and records nothing.
+    await expect(client.unarchiveThread(done.id)).resolves.toMatchObject({ archivedAt: null });
+    await tick();
+    expect(events).toHaveLength(1);
+  });
+
   it("rejects malformed ids before anything runs", async () => {
     const client = new KalCodeClient(createMemoryTransport("busy"));
     await expect(client.stopThread("not-an-id")).rejects.toMatchObject({ code: "invalid_id" });
@@ -182,6 +208,15 @@ describe("scenarios", () => {
     await expect(client.listThreads()).resolves.toEqual([]);
     await expect(client.listApprovals()).resolves.toEqual([]);
     await expect(client.runningTerminals()).resolves.toEqual([]);
+  });
+
+  it("archived: nothing is open, and the archived threads are listed with their archive time", async () => {
+    const client = new KalCodeClient(createMemoryTransport("archived"));
+    await expect(client.listThreads()).resolves.toEqual([]);
+    const all = await client.listThreads({ includeArchived: true });
+    expect(all).toHaveLength(3);
+    expect(all.every((t) => t.archivedAt !== null)).toBe(true);
+    await expect(client.listApprovals()).resolves.toEqual([]);
   });
 
   it("approvals-flood: many requests across several threads", async () => {

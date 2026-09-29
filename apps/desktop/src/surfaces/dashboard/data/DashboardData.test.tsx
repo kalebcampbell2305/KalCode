@@ -108,6 +108,52 @@ describe("Dashboard data layer", () => {
     expect(text("urgent")).toBe("");
   });
 
+  it("re-reads threads once when the event tracker starts, so an event before the history load isn't missed", async () => {
+    const transport = createMemoryTransport("busy");
+    const client = new KalCodeClient(transport);
+    const boot = await client.boot();
+    // Hold the event history back until after the first thread read and a live status change.
+    const recent = client.recentEvents.bind(client);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.spyOn(client, "recentEvents").mockImplementationOnce(async (...args) => {
+      await gate;
+      return recent(...args);
+    });
+    render(
+      <ToastProvider>
+        <RuntimeProvider client={client} info={boot.info} initialSettings={SETTINGS}>
+          <PermissionsProvider>
+            <DashboardDataProvider>
+              <Probe />
+            </DashboardDataProvider>
+          </PermissionsProvider>
+        </RuntimeProvider>
+      </ToastProvider>,
+    );
+    await waitFor(() => expect(text("target")).toBe("running_command"));
+    act(() => transport.dashboard?.setThreadStatus("01999a4e-0002-7002-8a2e-000000002002", "testing", "Running tests"));
+    // The history that loads now already contains that change, so it sits under the watermark.
+    await act(async () => {
+      release();
+      await gate;
+    });
+    await waitFor(() => expect(text("target")).toBe("testing"));
+  });
+
+  it("keeps archived threads off the board and lists them on their own side", async () => {
+    const transport = await mount("archived");
+    await waitFor(() => expect(text("threads")).toBe("ready:0"));
+    const client = new KalCodeClient(transport);
+    const [first] = await client.listThreads({ includeArchived: true });
+    if (!first) throw new Error("fixture has archived threads");
+    await client.unarchiveThread(first.id);
+    // thread.unarchived refreshes the list like any thread event.
+    await waitFor(() => expect(text("threads")).toBe("ready:1"));
+  });
+
   it("shows a typed error, then recovers on retry", async () => {
     const transport = await mount("errors");
     await waitFor(() => expect(text("threads")).toBe("error"));
@@ -171,6 +217,10 @@ async function lifecycleHarness() {
   const view = render(tree(first));
   await waitFor(() => expect(current.state.status).toBe("ready"));
   await waitFor(() => expect(eventsReady).toBe(true));
+  // Let the one refresh that follows the tracker's start (see DashboardDataProvider) settle.
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 180));
+  });
   return {
     first,
     second,
@@ -337,15 +387,17 @@ describe("Dashboard client and action lifetimes", () => {
   it("does not let the previous runtime's scheduled debounce refresh the replacement runtime", async () => {
     const h = await lifecycleHarness();
     act(() => h.first.transport.dashboard?.setThreadStatus(h.first.thread.id, "testing", "old event"));
+    const reads = vi.spyOn(h.second.client, "listThreads");
     h.replace(h.second);
     await waitFor(() => expect(h.current.state.status).toBe("ready"));
-    const reads = vi.spyOn(h.second.client, "listThreads");
+    // The replacement reads once, then once more when its own event tracker starts.
+    await waitFor(() => expect(reads).toHaveBeenCalledTimes(2));
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 180));
     });
-    expect(reads).not.toHaveBeenCalled();
+    expect(reads).toHaveBeenCalledTimes(2);
     act(() => h.second.transport.dashboard?.setThreadStatus(h.second.thread.id, "testing", "live event"));
-    await waitFor(() => expect(reads).toHaveBeenCalledOnce());
+    await waitFor(() => expect(reads).toHaveBeenCalledTimes(3));
   });
 
   it("a current failure reports the error, clears pending state and reconciles threads", async () => {

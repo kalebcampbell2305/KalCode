@@ -16,7 +16,7 @@
  *   providers-outdated — Claude Code is installed but too old, and signed out
  *   providers-signed-out — Codex is signed out and Gemini CLI isn't installed
  *   providers-backoff  — the default machine; Provider Health shows a reported rate limit
- *   busy | empty | approvals-flood | errors | loading
+ *   busy | empty | archived | approvals-flood | errors | loading
  *                      — Dashboard data scenarios (see ./memory/dashboard.ts)
  *   kalvoice-*         — KalVoice scenarios (see ./memoryKalVoice.ts, a labelled test double)
  *   rail | home        — many workspaces (pinned, a folder group, archived, a missing folder) with
