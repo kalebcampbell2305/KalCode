@@ -988,7 +988,24 @@ async fn run_blocking_update<T: Send + 'static>(
 /// admission and waits for every outstanding lease, so one held here would always time out.
 /// A command admitted in the gap is either waited for by that drain or, if it outlives it,
 /// fails the update closed with `update_shutdown_failed`; nothing is admitted once it begins.
-async fn run_update_after_admission<A: Send, T: Send + 'static>(
+async fn run_update_after_admission<T: Send + 'static>(
+    // By value, never `&RuntimeAccess`: a borrowed lease stays held across the drain below.
+    admission: crate::runtime_coordinator::RuntimeAccess,
+    work: impl FnOnce() -> Result<T, UpdateError> + Send + 'static,
+) -> Result<T, UpdateError> {
+    release_then_update(admission, work).await
+}
+
+/// An owned lease the exit drain counts. Never implemented for references, so a borrowed lease
+/// cannot reach `release_then_update`. Tests use the lifecycle leases a `RuntimeAccess` wraps.
+trait OwnedAdmission: Send {}
+impl OwnedAdmission for crate::runtime_coordinator::RuntimeAccess {}
+#[cfg(test)]
+impl OwnedAdmission for crate::runtime_lifecycle::Lease {}
+#[cfg(test)]
+impl OwnedAdmission for crate::runtime_lifecycle::MutationLease {}
+
+async fn release_then_update<A: OwnedAdmission, T: Send + 'static>(
     admission: A,
     work: impl FnOnce() -> Result<T, UpdateError> + Send + 'static,
 ) -> Result<T, UpdateError> {
@@ -1283,46 +1300,51 @@ mod tests {
         Arc::new(move || coordinator.drain_for_exit(timeout))
     }
 
+    /// Runs the update body that `run_update_after_admission` delegates to while `admission`
+    /// is the only outstanding lease, and asserts that the production preflight drains.
+    fn assert_admission_released_before_preflight<A: OwnedAdmission>(
+        coordinator: &Arc<crate::runtime_coordinator::RuntimeCoordinator>,
+        admission: A,
+        kind: &str,
+    ) {
+        assert_eq!(coordinator.lifecycle.pending(), (false, 1));
+        let preflight = exit_preflight(coordinator, Duration::from_secs(2));
+        let launched = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&launched);
+        let started = Instant::now();
+
+        let result = tauri::async_runtime::block_on(release_then_update(admission, move || {
+            launch_after_quiescence(&preflight, || {
+                observed.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            })
+        }));
+
+        assert!(
+            result.is_ok(),
+            "{kind} admission blocked the preflight: {:?}",
+            result.err().map(|error| error.code())
+        );
+        assert_eq!(launched.load(Ordering::SeqCst), 1);
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(coordinator.lifecycle.pending(), (false, 0));
+        assert_eq!(coordinator.lifecycle.phase(), Phase::AppExiting);
+    }
+
     #[test]
     fn install_and_restore_release_their_admission_before_the_shutdown_preflight() {
         // `RuntimeAccess` holds an epoch lease; account admission holds a mutation lease. The
         // exit drain counts both, so either one held across the preflight could never drain.
-        for kind in ["epoch", "mutation"] {
-            let coordinator = ready_coordinator();
-            let admission: Box<dyn Send> = if kind == "epoch" {
-                Box::new(coordinator.lifecycle.acquire(7).expect("command lease"))
-            } else {
-                Box::new(
-                    coordinator
-                        .lifecycle
-                        .acquire_mutation()
-                        .expect("mutation lease"),
-                )
-            };
-            assert_eq!(coordinator.lifecycle.pending(), (false, 1));
-            let preflight = exit_preflight(&coordinator, Duration::from_secs(2));
-            let launched = Arc::new(AtomicUsize::new(0));
-            let observed = Arc::clone(&launched);
-            let started = Instant::now();
+        let coordinator = ready_coordinator();
+        let epoch = coordinator.lifecycle.acquire(7).expect("command lease");
+        assert_admission_released_before_preflight(&coordinator, epoch, "epoch");
 
-            let result =
-                tauri::async_runtime::block_on(run_update_after_admission(admission, move || {
-                    launch_after_quiescence(&preflight, || {
-                        observed.fetch_add(1, Ordering::SeqCst);
-                        Ok(())
-                    })
-                }));
-
-            assert!(
-                result.is_ok(),
-                "{kind} admission blocked the preflight: {:?}",
-                result.err().map(|error| error.code())
-            );
-            assert_eq!(launched.load(Ordering::SeqCst), 1);
-            assert!(started.elapsed() < Duration::from_secs(1));
-            assert_eq!(coordinator.lifecycle.pending(), (false, 0));
-            assert_eq!(coordinator.lifecycle.phase(), Phase::AppExiting);
-        }
+        let coordinator = ready_coordinator();
+        let mutation = coordinator
+            .lifecycle
+            .acquire_mutation()
+            .expect("mutation lease");
+        assert_admission_released_before_preflight(&coordinator, mutation, "mutation");
     }
 
     #[test]
@@ -1344,7 +1366,7 @@ mod tests {
             let observed = Arc::clone(&launched);
 
             let result =
-                tauri::async_runtime::block_on(run_update_after_admission(admission, move || {
+                tauri::async_runtime::block_on(release_then_update(admission, move || {
                     // Another command is admitted in the gap after the updater's release.
                     let other = concurrent.lifecycle.acquire(7).expect("concurrent lease");
                     let running = std::thread::spawn(move || {
