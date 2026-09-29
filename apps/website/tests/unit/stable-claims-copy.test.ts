@@ -115,6 +115,16 @@ const NOT_IN_015 = [
   /Context Drop/i,
   /\b(rewrite|rewrites|rewriting|rephrase|rephrases|rephrasing|polish|polishes|polishing) (your |the )?prompts?\b/i,
   /\b(aliases|nicknames?)\b/i,
+  // Gated on Stable 0.1.5 (a8c4855 crates/native-core/src/flags.rs) and not switched on for it:
+  // the Utility Dock, Environment Doctor, the Resource Governor view, workspace Home and its
+  // widgets, and Git worktree views. Git and diff views may appear only as Planned.
+  /Utility Dock/i,
+  /Environment Doctor/i,
+  /Resource Governor/i,
+  /Workspace Home/i,
+  /\bwidgets?\b/i,
+  /\bworktrees?\b/i,
+  /Git and diff views (?!Planned)/i,
 ];
 
 // B5 zero-setup: the default English speech model downloads by itself after install, so no page may
