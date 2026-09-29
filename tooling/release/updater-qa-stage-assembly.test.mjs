@@ -1,12 +1,103 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { assembleRelease, validateBaselineSourceAuthority } from "./updater-qa-stage-assembly.mjs";
+import {
+  assembleRelease,
+  validateBaselineSourceAuthority,
+  validateCandidateToolAuthority,
+} from "./updater-qa-stage-assembly.mjs";
 
-function fixture(t, mutateBaseline = () => {}) {
+function authorityFixture(t) {
+  const root = mkdtempSync(join(tmpdir(), "kalcode-tool-authority-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const toolSource = join(root, "tool");
+  const candidateSource = join(root, "notes");
+  mkdirSync(toolSource);
+  const git = (source, ...args) => {
+    const result = spawnSync("git", ["-C", source, ...args], { encoding: "utf8", windowsHide: true });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  const write = (source, path, text) => {
+    mkdirSync(dirname(join(source, path)), { recursive: true });
+    writeFileSync(join(source, path), text);
+  };
+  const commit = (source) => {
+    git(source, "add", ".");
+    git(source, "commit", "-m", "fixture");
+    return git(source, "rev-parse", "HEAD");
+  };
+  git(toolSource, "init", "-b", "tool");
+  git(toolSource, "config", "user.name", "KalCode test");
+  git(toolSource, "config", "user.email", "test@example.invalid");
+  write(toolSource, "apps/desktop/product.txt", "signed product\n");
+  const candidateCommit = commit(toolSource);
+  git(toolSource, "worktree", "add", "-b", "notes", candidateSource, candidateCommit);
+  write(candidateSource, "docs/releases/0.1.5.md", "exact hashes\n");
+  const notesCommit = commit(candidateSource);
+  write(toolSource, "tooling/release/updater-manifest.mjs", "reviewed tool\n");
+  const approvedToolCommit = commit(toolSource);
+  return { toolSource, candidateSource, candidateCommit, notesCommit, approvedToolCommit, git, write, commit };
+}
+
+test("explicit tool authority separates approved tooling from unchanged product and notes", (t) => {
+  const f = authorityFixture(t);
+  assert.deepEqual(validateCandidateToolAuthority(f), {
+    toolCommit: f.approvedToolCommit,
+    productCommit: f.candidateCommit,
+    candidateNotesCommit: f.notesCommit,
+  });
+  assert.throws(() => validateCandidateToolAuthority({ ...f, approvedToolCommit: undefined }), /owns the executing/);
+  assert.throws(
+    () => validateCandidateToolAuthority({ ...f, approvedToolCommit: "a".repeat(40) }),
+    /approved tool commit/,
+  );
+  assert.throws(
+    () => validateCandidateToolAuthority({ ...f, approvedToolCommit: f.approvedToolCommit.slice(0, 12) }),
+    /approved tool commit/,
+  );
+  assert.equal(
+    validateCandidateToolAuthority({ ...f, toolSource: f.candidateSource, approvedToolCommit: undefined }),
+    null,
+  );
+});
+
+test("tool authority rejects dirty or unreviewed tool files and product changes", (t) => {
+  for (const path of ["apps/desktop/product.txt", "tooling/release/publish.mjs", "tooling/release/unreviewed.mjs"]) {
+    const f = authorityFixture(t);
+    f.write(f.toolSource, path, "changed\n");
+    assert.throws(() => validateCandidateToolAuthority(f), /tool.*clean/);
+    f.approvedToolCommit = f.commit(f.toolSource);
+    assert.throws(() => validateCandidateToolAuthority(f), /six reviewed release-tool files/);
+  }
+});
+
+test("separate tooling never relaxes notes source cleanliness or notes-only history", (t) => {
+  for (const path of ["apps/desktop/product.txt", "tooling/release/updater-manifest.mjs"]) {
+    const f = authorityFixture(t);
+    f.write(f.candidateSource, path, "changed\n");
+    assert.throws(() => validateCandidateToolAuthority(f), /candidate source must be clean/);
+    f.commit(f.candidateSource);
+    assert.throws(() => validateCandidateToolAuthority(f), /beyond release notes/);
+  }
+});
+
+test("tool authority rejects unrelated tool and notes ancestry", (t) => {
+  for (const lane of ["toolSource", "candidateSource"]) {
+    const f = authorityFixture(t);
+    f.git(f[lane], "checkout", "--orphan", "unrelated");
+    f.write(f[lane], "unrelated.txt", "unrelated\n");
+    const unrelated = f.commit(f[lane]);
+    if (lane === "toolSource") f.approvedToolCommit = unrelated;
+    assert.throws(() => validateCandidateToolAuthority(f), /exact signed build commit/);
+  }
+});
+
+function fixture(t, mutateBaseline = () => {}, populateBase = () => {}) {
   const source = mkdtempSync(join(tmpdir(), "kalcode-baseline-authority-"));
   t.after(() => rmSync(source, { recursive: true, force: true }));
   const git = (...args) => {
@@ -39,6 +130,7 @@ function fixture(t, mutateBaseline = () => {}) {
   git("config", "core.autocrlf", "false");
   versionFiles("1.2.3", "stable.json");
   write("src/lib.rs", "pub fn unchanged() {}\n");
+  populateBase({ source, write });
   const base = commit();
   git("checkout", "-b", "baseline");
   versionFiles("1.2.2", "stable/1.2.3.json");
@@ -50,6 +142,161 @@ function fixture(t, mutateBaseline = () => {}) {
   git("checkout", "baseline");
   return { source, git, write, commit, base, baseline, candidate };
 }
+
+function cliFixture(t) {
+  const f = fixture(t, undefined, ({ source }) => {
+    cpSync(import.meta.dirname, join(source, "tooling", "release"), { recursive: true });
+    cpSync(join(import.meta.dirname, "../../apps/website/worker"), join(source, "apps/website/worker"), {
+      recursive: true,
+    });
+  });
+  const root = mkdtempSync(join(tmpdir(), "kalcode-tool-cli-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const notes = join(root, "notes");
+  const tool = join(root, "tool");
+  f.git("worktree", "add", "-b", "cli-notes", notes, f.candidate.commit);
+  f.git("worktree", "add", "-b", "cli-tool", tool, f.candidate.commit);
+  const gitAt = (source, ...args) => {
+    const result = spawnSync("git", ["-C", source, ...args], { encoding: "utf8", windowsHide: true });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim();
+  };
+  const commitAt = (source) => {
+    gitAt(source, "add", ".");
+    gitAt(source, "commit", "-m", "CLI fixture");
+    return gitAt(source, "rev-parse", "HEAD");
+  };
+  const digest = createHash("sha256").update("fixture artifact").digest("hex");
+  mkdirSync(join(notes, "docs/releases"), { recursive: true });
+  writeFileSync(join(notes, "docs/releases/1.2.3.md"), digest);
+  commitAt(notes);
+  const toolFile = join(tool, "tooling/release/updater-manifest.mjs");
+  writeFileSync(toolFile, `${readFileSync(toolFile, "utf8")}\n// Reviewed isolated tool fixture.\n`);
+  const approved = commitAt(tool);
+  const stage = (release, lane) => {
+    const path = join(root, lane);
+    mkdirSync(path);
+    for (const platform of ["windows", "macos"]) {
+      const windows = platform === "windows";
+      const file = `KalCode_${release.version}_${windows ? "x64-setup.exe" : "arm64.dmg"}`;
+      const build = {
+        ...release,
+        file,
+        requestedReleaseChannel: "stable",
+        size: 16,
+        sha256: digest,
+        builtAt: "2026-01-01T00:00:00.000Z",
+      };
+      writeFileSync(join(path, windows ? "build.json" : "macos-arm64-build.json"), JSON.stringify(build));
+      writeFileSync(join(path, windows ? "verify.json" : "macos-arm64-verify.json"), "{}");
+      writeFileSync(join(path, windows ? "windows-x86_64-qa.json" : "macos-arm64-qa.json"), "{}");
+      writeFileSync(join(path, file), "fixture artifact");
+      writeFileSync(join(path, `${file}${windows ? ".windows-x86_64" : ""}.sig`), "uncertified fixture signature");
+    }
+    return path;
+  };
+  const baselineStaging = stage(f.baseline, "baseline-stage");
+  const candidateStaging = stage(f.candidate, "candidate-stage");
+  const args = [
+    join(tool, "tooling/release/stage-updater-qa.mjs"),
+    "--baseline-source",
+    f.source,
+    "--baseline-staging",
+    baselineStaging,
+    "--candidate-source",
+    notes,
+    "--candidate-staging",
+    candidateStaging,
+    "--receipt",
+    join(root, "receipt.json"),
+    "--dry-run",
+  ];
+  const run = (extra = []) => {
+    const result = spawnSync(process.execPath, [...args, ...extra], {
+      cwd: notes,
+      encoding: "utf8",
+      windowsHide: true,
+    });
+    assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+    for (const path of [
+      join(root, "receipt.json"),
+      join(baselineStaging, "publication.json"),
+      join(candidateStaging, "publication.json"),
+    ]) {
+      assert.equal(existsSync(path), false, "dry-run must not freeze or publish evidence");
+    }
+    return result.stderr;
+  };
+  return { run, approved, toolFile, baselineStaging, candidateStaging };
+}
+
+test("real staging CLI binds its actual tool checkout and leaves uncertified packets blocked", (t) => {
+  const { run, approved, toolFile } = cliFixture(t);
+  assert.match(run(), /owns the executing release tooling/);
+  assert.match(run(["--approved-tool-commit", "a".repeat(40)]), /exact approved tool commit/);
+  assert.match(run(["--approved-tool-commit", approved]), /build is not eligible for a release descriptor/);
+  writeFileSync(toolFile, `${readFileSync(toolFile, "utf8")}\n// Uncommitted change.\n`);
+  assert.match(run(["--approved-tool-commit", approved]), /tool source must be clean/);
+});
+
+test("staging refuses a baseline account isolation waiver until the same platform candidate proves isolation", (t) => {
+  const { run, approved, baselineStaging, candidateStaging } = cliFixture(t);
+  const qaFile = { "windows-x86_64": "windows-x86_64-qa.json", "darwin-aarch64": "macos-arm64-qa.json" };
+  const waiver = { reason: "baseline-provider-cli-incompatible", candidateProofRequired: true };
+  const candidate = (target, accountIsolation) => ({ target, checks: { accountIsolation } });
+  for (const target of Object.keys(qaFile)) {
+    const other = target === "windows-x86_64" ? "darwin-aarch64" : "windows-x86_64";
+    writeFileSync(
+      join(baselineStaging, qaFile[target]),
+      JSON.stringify({ target, accountIsolationUnavailable: waiver }),
+    );
+    writeFileSync(join(baselineStaging, qaFile[other]), "{}");
+    writeFileSync(join(candidateStaging, qaFile[other]), JSON.stringify(candidate(other, true)));
+    for (const value of [false, null]) {
+      writeFileSync(join(candidateStaging, qaFile[target]), JSON.stringify(candidate(target, value)));
+      assert.match(
+        run(["--approved-tool-commit", approved]),
+        new RegExp(`${target} baseline account isolation waiver requires the candidate record for the same platform`),
+      );
+    }
+    // With the candidate proof present the waiver no longer blocks; the uncertified packets still do.
+    writeFileSync(join(candidateStaging, qaFile[target]), JSON.stringify(candidate(target, true)));
+    const stderr = run(["--approved-tool-commit", approved]);
+    assert.doesNotMatch(stderr, /account isolation waiver/);
+    assert.match(stderr, /build is not eligible for a release descriptor/);
+  }
+});
+
+test("staging refuses the macOS baseline browser waiver until the macOS candidate proves browser", (t) => {
+  const { run, approved, baselineStaging, candidateStaging } = cliFixture(t);
+  const waiver = { reason: "baseline-webview-nil-url-abort", candidateProofRequired: true };
+  const macQa = "macos-arm64-qa.json";
+  const target = "darwin-aarch64";
+  writeFileSync(join(baselineStaging, macQa), JSON.stringify({ target, browserUnavailable: waiver }));
+  writeFileSync(join(baselineStaging, "windows-x86_64-qa.json"), "{}");
+  writeFileSync(
+    join(candidateStaging, "windows-x86_64-qa.json"),
+    JSON.stringify({ target: "windows-x86_64", checks: { browser: true } }),
+  );
+  const refused = new RegExp(`${target} baseline browser waiver requires the candidate record for the same platform`);
+  // The fixture's empty macOS candidate record ({}) carries no browser proof at all.
+  assert.match(run(["--approved-tool-commit", approved]), refused);
+  for (const candidate of [
+    { target },
+    { target, checks: { browser: false } },
+    { target, checks: { browser: null } },
+    { target, checks: { browser: true }, browserUnavailable: waiver },
+    { target: "windows-x86_64", checks: { browser: true } },
+  ]) {
+    writeFileSync(join(candidateStaging, macQa), JSON.stringify(candidate));
+    assert.match(run(["--approved-tool-commit", approved]), refused);
+  }
+  // With the candidate proof present the waiver no longer blocks; the uncertified packets still do.
+  writeFileSync(join(candidateStaging, macQa), JSON.stringify({ target, checks: { browser: true } }));
+  const stderr = run(["--approved-tool-commit", approved]);
+  assert.doesNotMatch(stderr, /browser waiver/);
+  assert.match(stderr, /build is not eligible for a release descriptor/);
+});
 
 test("preserves a signed baseline derived from a historical ancestor of the final candidate", (t) => {
   const f = fixture(t);
