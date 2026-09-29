@@ -10,6 +10,7 @@ vi.mock("../../src/lib/releases", async (importOriginal) => ({
 }));
 
 import ProviderSwitch from "../../src/components/stage/ProviderSwitch.astro";
+import { structuredData } from "../../src/lib/seo";
 import { ACCOUNT_PAGE, KALVOICE, PAGES, PROVIDERS } from "../../src/lib/site";
 import Account from "../../src/pages/account.astro";
 import DocsIndex from "../../src/pages/docs/index.astro";
@@ -94,6 +95,12 @@ const STALE_PROVIDER_STATUS = [
   /Bring your own keys/i,
   /enterprise credentials/i,
   /being built to connect/i,
+  // Threads use a KalCode-managed per-account profile, never the CLI's own terminal sign-in, and
+  // desktop detection is installation-only (a8c4855: crates/providers/src/registry.rs
+  // installation_only_guarded clears every spec's auth probe).
+  /signed-in session/i,
+  /signed in where the CLI exposes/i,
+  /version and status commands/i,
 ];
 
 // Provider sign-ins live in each provider's own storage for a KalCode-managed per-account profile;
@@ -165,6 +172,29 @@ describe("provider support status", () => {
     expect(copy).toContain("Codex — the local CLI, signed in with your own personal ChatGPT plan");
     expect(copy).not.toContain("Gemini CLI — the local CLI, signed in with your own Google account");
     expect(copy).toContain("Gemini CLI is unavailable in 0.1.5");
+  });
+
+  // a8c4855 crates/providers/src/account_auth.rs cloud_config_eligibility: free, go, plus, pro and
+  // prolite run; team, business, enterprise and edu plans, and unknown plans, are refused at launch.
+  it("names the ChatGPT plans Codex threads run on and the ones KalCode refuses", async () => {
+    const copy = text(await render(ProvidersDocs, "/docs/providers"));
+    expect(copy).toContain("Codex threads run on personal ChatGPT plans: Free, Go, Plus and Pro.");
+    expect(copy).toContain(
+      "KalCode doesn't start Codex threads on ChatGPT Business (formerly Team), Enterprise or Edu plans, or on an account whose plan it can't confirm.",
+    );
+    const security = text(await render(Security, "/security"));
+    expect(security).toContain("Codex runs on personal ChatGPT plans (Free, Go, Plus and Pro).");
+    const graph = JSON.stringify(structuredData()["@graph"]);
+    expect(graph).toContain("Claude Code, and Codex on a personal ChatGPT plan");
+    expect(graph).not.toMatch(/Gemini/);
+  });
+
+  it("says detection finds installs only and sign-in shows per account", async () => {
+    const copy = text(await render(ProvidersDocs, "/docs/providers"));
+    expect(copy).toContain("then runs only each CLI's version command, with a timeout.");
+    expect(copy).toContain(
+      "Detection doesn't check sign-in: whether each account is signed in shows on its card in Providers, then Accounts.",
+    );
   });
 });
 
@@ -261,6 +291,7 @@ const GEMINI_OVERCLAIMS = [
   /Claude Code, Codex,? and Gemini CLI (run|connect|use)\b/i,
   /Connect Claude Code, Codex, Gemini/i,
   /Built · Claude Code, Codex, Gemini CLI/,
+  /Claude Code, Codex,? and Gemini CLI through/i,
   /Antigravity/i,
 ];
 
@@ -292,6 +323,7 @@ describe("Gemini CLI availability", () => {
     { name: "pricing page", component: Pricing as Component, path: "/pricing" },
     { name: "download page", component: Download as Component, path: "/download" },
     { name: "KalVoice page", component: KalVoicePage as Component, path: "/kalvoice" },
+    { name: "security page", component: Security as Component, path: "/security" },
   ])(
     "the $name never claims Gemini CLI works in 0.1.5 or that Antigravity is supported",
     async ({ component, path }) => {

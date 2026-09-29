@@ -22,7 +22,7 @@ export function structuredData(manifest: ReleaseManifest = RELEASES): Record<str
     url: `${SITE_ORIGIN}/`,
     applicationCategory: "DeveloperApplication",
     description:
-      "A desktop workspace that connects the coding agents you already use — Claude Code and Codex — on your own accounts.",
+      "A desktop workspace that connects the coding agents you already use — Claude Code, and Codex on a personal ChatGPT plan — on your own accounts.",
     publisher: { "@id": organizationId },
     offers: PLANS.map((plan) => ({
       "@type": "Offer",
