@@ -27,7 +27,7 @@ use std::sync::{Arc, Condvar, LazyLock, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use kalcode_contracts::agent::{AgentProvider, ProviderId, SessionConfig};
-use kalcode_contracts::app::SurfaceId;
+use kalcode_contracts::app::{FeatureId, SurfaceId};
 use kalcode_contracts::kalvoice::{KalVoiceMode, KalVoiceOutcome};
 use kalcode_contracts::permissions::PermissionMode;
 use kalcode_contracts::provider_accounts::ProviderAccountScopes;
@@ -55,6 +55,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, S
 use crate::kalvoice_components::{
     ComponentManagerError, KalVoiceComponentManager, REASONING_DOWNLOAD_ID,
 };
+use crate::kalvoice_executor::feature_enabled;
 use kalcode_kalvoice::signals::{LocalReasoningDownload, LocalReasoningStatus};
 #[path = "kalvoice_reasoning.rs"]
 mod reasoning;
@@ -741,6 +742,7 @@ pub fn init(
         .filter(|s| s.visible)
         .map(|s| s.id)
         .collect();
+    let session_locator_enabled = feature_enabled(&info.flags, FeatureId::SessionLocator);
     let Ok(accounting) = crate::kalvoice_accounting::AccountKalVoice::new(core.clone(), account)
     else {
         return KalVoiceState(None, "KalVoice Requests need a verified KalCode account.");
@@ -750,14 +752,13 @@ pub fn init(
         accounting.clone(),
         Arc::new(crate::kalvoice_executor::DesktopExecutor {
             visible,
-            provider_panes_enabled: info
-                .flags
-                .feature(kalcode_contracts::app::FeatureId::ProviderPanes)
-                .is_some_and(|flag| flag.visible),
+            provider_panes_enabled: feature_enabled(&info.flags, FeatureId::ProviderPanes),
+            session_locator_enabled,
             core: core.clone(),
             threads,
             permissions,
-            locator,
+            // A gated Session Locator is never read by voice (it still runs for other callers).
+            locator: locator.filter(|_| session_locator_enabled),
         }),
     )
     .with_local_interpreter(reasoning.clone());
