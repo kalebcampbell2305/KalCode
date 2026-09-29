@@ -448,8 +448,15 @@ fn windows_established_tuple_owners(
     Ok(owners)
 }
 
-/// Returns `pid` once per descriptor of the exact process that holds an ESTABLISHED IPv4 TCP
-/// socket whose local end is `server` and whose remote end is `client`.
+/// Returns `[pid]` when the exact process `pid` holds an ESTABLISHED IPv4 TCP socket whose local
+/// end is `server` and whose remote end is `client`, and `[]` when it holds none (yet).
+///
+/// Unlike Windows, which scans the system-wide owner table, this inspects only the expected
+/// child's descriptor table. That is sufficient because TCP forbids two kernel sockets from
+/// sharing one ESTABLISHED 4-tuple, so a match in the child is the one server end of our
+/// connection; another process can hold a descriptor to that same socket only through the
+/// child's cooperation (inheritance or descriptor passing), never by binding or accepting it.
+/// Several matching descriptors (a dup in the child) are still the one socket and prove once.
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 fn macos_established_tuple_owners(
@@ -462,7 +469,8 @@ fn macos_established_tuple_owners(
     use std::ptr;
 
     // <sys/proc_info.h> layouts that libc does not export. Only the TCP arm of `soi_proto` is
-    // read; the rest of that union (sized by `un_sockinfo`) stays opaque.
+    // read; the rest of that union (sized by `un_sockinfo`) stays opaque. The assertions below pin
+    // the layout, but any change to these structs must still be validated on macOS hardware or CI.
     const PROC_PIDFDSOCKETINFO: c_int = 3;
     const SOCKINFO_TCP: i32 = 2;
     const TSI_S_ESTABLISHED: i32 = 4;
@@ -605,7 +613,6 @@ fn macos_established_tuple_owners(
     let expected_server_port = i32::from(server.port().to_be());
     let expected_client_port = i32::from(client.port().to_be());
     let info_size = size_of::<SocketFdInfo>() as c_int;
-    let mut owners = Vec::new();
     for fd in &fds[..written / entry] {
         if fd.proc_fdtype != libc::PROX_FDTYPE_SOCKET as u32 {
             continue;
@@ -636,10 +643,10 @@ fn macos_established_tuple_owners(
             && ini.insi_faddr.i46a_addr4 == expected_client_addr
             && ini.insi_fport == expected_client_port
         {
-            owners.push(pid);
+            return Ok(vec![pid]);
         }
     }
-    Ok(owners)
+    Ok(Vec::new())
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
@@ -745,8 +752,9 @@ mod macos_tests {
         }
     }
 
-    /// Accepts one connection and holds it until the peer closes, all within `limit`.
-    fn serve_one(listener: &TcpListener, limit: Duration) {
+    /// Accepts one connection and holds it until the peer closes, all within `limit`. With
+    /// `duplicate`, a second descriptor to the accepted socket stays open alongside the first.
+    fn serve_one(listener: &TcpListener, limit: Duration, duplicate: bool) {
         let deadline = Instant::now() + limit;
         listener
             .set_nonblocking(true)
@@ -765,6 +773,7 @@ mod macos_tests {
             }
         };
         accepted.set_nonblocking(false).expect("blocking stream");
+        let _duplicate = duplicate.then(|| accepted.try_clone().expect("dup server socket"));
         accepted
             .set_read_timeout(Some(
                 deadline
@@ -776,8 +785,8 @@ mod macos_tests {
         let _ = accepted.read(&mut byte);
     }
 
-    fn accept_one(listener: TcpListener) -> JoinHandle<()> {
-        thread::spawn(move || serve_one(&listener, FIXTURE_WAIT))
+    fn accept_one(listener: TcpListener, duplicate: bool) -> JoinHandle<()> {
+        thread::spawn(move || serve_one(&listener, FIXTURE_WAIT, duplicate))
     }
 
     fn deadline() -> Instant {
@@ -827,13 +836,27 @@ mod macos_tests {
         }
         let (listener, endpoint) = loopback_listener();
         println!("fixture-port={}", endpoint.port());
-        serve_one(&listener, FIXTURE_WAIT * 2);
+        serve_one(&listener, FIXTURE_WAIT * 2, false);
     }
 
     #[test]
     fn established_tuple_proof_finds_the_exact_server_owner() {
         let (listener, endpoint) = loopback_listener();
-        let server = accept_one(listener);
+        let server = accept_one(listener, false);
+        let stream = TcpStream::connect(endpoint).expect("connect");
+        assert_eq!(
+            prove_established_server_owner(&stream, endpoint, std::process::id(), deadline()),
+            Ok(())
+        );
+        drop(stream);
+        server.join().expect("server");
+    }
+
+    #[test]
+    fn established_tuple_proof_accepts_a_duplicated_server_descriptor() {
+        let (listener, endpoint) = loopback_listener();
+        // Two descriptors in the owner refer to the one accepted socket; it still proves once.
+        let server = accept_one(listener, true);
         let stream = TcpStream::connect(endpoint).expect("connect");
         assert_eq!(
             prove_established_server_owner(&stream, endpoint, std::process::id(), deadline()),
@@ -846,7 +869,7 @@ mod macos_tests {
     #[test]
     fn established_tuple_proof_rejects_an_impostor_pid() {
         let (listener, endpoint) = loopback_listener();
-        let server = accept_one(listener);
+        let server = accept_one(listener, false);
         // A live same-user process that does not hold the accepted socket.
         let impostor = KillOnDrop(
             Command::new("/bin/sleep")
@@ -882,7 +905,7 @@ mod macos_tests {
     #[test]
     fn established_tuple_proof_rejects_an_exited_owner() {
         let (listener, endpoint) = loopback_listener();
-        let server = accept_one(listener);
+        let server = accept_one(listener, false);
         let mut exited = Command::new("/usr/bin/true").spawn().expect("spawn");
         let pid = exited.id();
         exited.wait().expect("reap");
