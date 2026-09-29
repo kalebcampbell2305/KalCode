@@ -722,6 +722,9 @@ mod tests {
 }
 
 #[cfg(all(test, target_os = "macos"))]
+// clippy.toml exempts only `#[test]` bodies under a plain `cfg(test)`; the fixture helpers here
+// run only in tests too.
+#[allow(clippy::expect_used)]
 mod macos_tests {
     use std::io::{BufRead as _, BufReader, ErrorKind, Read as _};
     use std::net::{Ipv4Addr, TcpListener};
