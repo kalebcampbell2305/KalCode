@@ -29,19 +29,14 @@ const meterWidth = (limits: PlanLimits) => {
   return Math.max(6, Math.round(((Math.log10(value) - logMin) / (logMax - logMin)) * 94 + 6));
 };
 
-type Cell = { kind: "tick" } | { kind: "dash" } | { kind: "text"; text: string };
-
 /**
- * Only what differs between plans in the Stable app. Persistent agents, pair and team workflows,
- * automations and advanced missions are Gated on Stable 0.1.5 (crates/native-core/src/flags.rs),
- * so the ladder does not list them.
+ * The ladder lists only what differs between plans in the Stable app: KalVoice Requests. Persistent
+ * agents, pair and team workflows, automations and advanced missions are Gated on Stable 0.1.5
+ * (crates/native-core/src/flags.rs), so the ladder does not list them. Nor does it list threads
+ * running at once: B9 536efd7 enforces no per-plan thread limit (the catalog's concurrentThreads
+ * has no consumer outside crates/entitlements), and the Resource Governor's Balanced mode caps
+ * every plan alike (crates/resources/src/mode.rs max_agents).
  */
-const rows: { label: string; value: (limits: PlanLimits) => Cell }[] = [
-  {
-    label: "Threads running at once",
-    value: (l) => ({ kind: "text", text: l.concurrentThreads === null ? "Unlimited" : String(l.concurrentThreads) }),
-  },
-];
 
 // "Every plan includes" is stated once instead of repeated per column, so check it is true.
 for (const plan of PLANS) {
@@ -99,7 +94,7 @@ const faq = [
   <PageHead
     backdrop="nebula"
     title="Pricing"
-    lead="Every plan runs every provider in Plan, Approve and Auto modes. Plans differ in KalVoice Requests and threads running at once — your AI usage stays on your own account."
+    lead="Every plan runs every provider in Plan, Approve and Auto modes. Plans differ in KalVoice Requests — your AI usage stays on your own account."
     status="Plans open at launch · nothing is for sale today"
   />
 
@@ -156,33 +151,6 @@ const faq = [
                 ))
               }
             </tr>
-            {
-              rows.map((row) => (
-                <tr>
-                  <th scope="row">{row.label}</th>
-                  {PLANS.map((plan) => {
-                    const cell = row.value(plan.limits);
-                    return (
-                      <td class:list={{ "ladder__col--featured": plan.id === FEATURED }}>
-                        {cell.kind === "tick" && (
-                          <span class="tick">
-                            <Icon name="check" />
-                            <span class="visually-hidden">Included</span>
-                          </span>
-                        )}
-                        {cell.kind === "dash" && (
-                          <span class="dash">
-                            <span aria-hidden="true">—</span>
-                            <span class="visually-hidden">Not included</span>
-                          </span>
-                        )}
-                        {cell.kind === "text" && cell.text}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))
-            }
           </tbody>
         </table>
       </div>

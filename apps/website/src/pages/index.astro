@@ -27,15 +27,13 @@ const voiceStage = firstStage("KalVoiceStage", "KalVoiceDemo");
 const commandStage = firstStage("CommandCenterStage", "DemoCenter");
 
 /**
- * Plan cards: three honest highlights each, straight from the catalog. Agents, team workflows and
+ * Plan cards: two honest highlights each, straight from the catalog. Agents, team workflows and
  * missions are Gated on Stable 0.1.5 (crates/native-core/src/flags.rs), so no card offers them.
+ * Stable enforces no per-plan thread limit, so no card offers a thread count.
  */
 const FEATURED = "pro";
 const planPoints = (plan: (typeof PLANS)[number]) => [
   `${formatKalVoiceAllowance(plan.limits)} KalVoice Requests a month`,
-  plan.limits.concurrentThreads === null
-    ? "Unlimited threads at once"
-    : `${plan.limits.concurrentThreads} threads running at once`,
   "Every provider; Plan, Approve and Auto modes",
 ];
 

@@ -137,7 +137,7 @@ export const PAGES = [
     path: "/pricing",
     title: "Pricing — KalCode",
     description:
-      "KalCode plans: Free, Pro, MAX and MAX 2X. Every plan includes all providers, the Plan, Approve and Auto modes and unlimited local dictation; plans differ in KalVoice Requests and threads running at once. AI usage stays on your own provider account.",
+      "KalCode plans: Free, Pro, MAX and MAX 2X. Every plan includes all providers, the Plan, Approve and Auto modes and unlimited local dictation; plans differ in KalVoice Requests. AI usage stays on your own provider account.",
   },
   {
     path: "/download",
