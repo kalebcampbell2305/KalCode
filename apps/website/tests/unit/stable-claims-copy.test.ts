@@ -353,6 +353,42 @@ describe("shipped features are not called planned", () => {
   });
 });
 
+// Stable 0.1.5 ships the app shell, palette, terminals, Dashboard and the local-first and security
+// controls these pages describe, so none may frame them as a development build or pre-release only.
+// The sample-data stage labels ("Development build · sample data") describe the demos, not the app.
+const DEV_BUILD_FRAMING = [
+  /current development builds?/i,
+  /In the development build/i,
+  /Built · development build/i,
+  /ahead of the public preview/i,
+  /planned before release\./i,
+];
+
+describe("Stable features are not framed as a development build", () => {
+  it.each([
+    { name: "product page", component: Product as Component, path: "/product" },
+    { name: "security page", component: Security as Component, path: "/security" },
+    { name: "local-first docs", component: LocalFirstDocs as Component, path: "/docs/local-first" },
+  ])("the $name", async ({ component, path }) => {
+    const html = await render(component, path);
+    const copy = `${text(html)} ${metaDescription(html)}`;
+    for (const pattern of DEV_BUILD_FRAMING) expect(copy).not.toMatch(pattern);
+  });
+
+  it("states the current-build claims plainly", async () => {
+    const product = text(await render(Product, "/product"));
+    expect(product).toContain("App shell, search and palette, light and dark themes Built In the app today");
+    expect(product).toContain("Built Real terminals in a real workspace.");
+    expect(product).toContain("Updated with every milestone. Built means in the app you can download today.");
+    const security = text(await render(Security, "/security"));
+    expect(security).toContain("This page lists the controls in current builds and the ones still planned.");
+    expect(security).toContain("Current builds send no user data off the device.");
+    expect(text(await render(LocalFirstDocs, "/docs/local-first"))).toContain(
+      "Current builds send no telemetry and no user data off your device.",
+    );
+  });
+});
+
 describe("credential storage caveats", () => {
   it("says Claude Code and Codex sign-ins can be ordinary files", async () => {
     const copy = text(await render(LocalFirstDocs, "/docs/local-first"));
