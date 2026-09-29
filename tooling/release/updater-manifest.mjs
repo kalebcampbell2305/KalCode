@@ -45,6 +45,160 @@ const QA_SAFEGUARDS = Object.freeze([
   "tlsBypassed",
 ]);
 
+// Explicit historical-baseline capability policy, not a generic failed-check exception.
+// This reviewed source hides Preview KalVoice on Stable and refuses its runtime. Both
+// immutable signed artifact identities are required; no successor inherits this authority.
+const BASELINE_KALVOICE_ARTIFACTS = Object.freeze({
+  "windows-x86_64": "4d4d8897ab376b5532e3940d79c13a2a2674614ade729ace211dba7f662ebb70",
+  "darwin-aarch64": "918646e4b26f39463a6bd841c2f705ed7a18b42ec271668932a97b7d65c8c987",
+});
+
+function baselineKalvoiceAuthority(expected) {
+  if (
+    expected?.channel !== "stable" ||
+    expected?.release?.version !== "0.1.4" ||
+    expected?.release?.commit !== "0ee34938d6543bba3679cb008174231d0e9544ec" ||
+    !Object.hasOwn(BASELINE_KALVOICE_ARTIFACTS, expected?.target ?? "") ||
+    expected.release.sha256 !== BASELINE_KALVOICE_ARTIFACTS[expected.target]
+  )
+    return null;
+  return { release: { ...expected.release }, target: expected.target, reason: "stable-surface-hidden" };
+}
+
+// The tool-created baseline capability context: present only for the two pinned 0.1.4 artifacts,
+// after their real byte and signature checks. Every baseline waiver requires it.
+function approvedBaselineContext(expected, authority) {
+  const approved = baselineKalvoiceAuthority(expected);
+  if (
+    !approved ||
+    !exactKeys(authority, ["release", "target", "reason"]) ||
+    authority.target !== approved.target ||
+    authority.reason !== approved.reason ||
+    releaseIdentityProblems(authority.release, approved.release, "baseline capability").length > 0
+  )
+    return null;
+  return approved;
+}
+
+function baselineObservationIsExact(observed, approved, flags) {
+  return (
+    exactKeys(observed, ["release", "target", "profile", "receiptSha256", "observedAt", ...flags]) &&
+    releaseIdentityProblems(observed.release, approved.release, "installed baseline observation").length === 0 &&
+    observed.target === approved.target &&
+    typeof observed.profile === "string" &&
+    /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(observed.profile) &&
+    SHA256.test(observed.receiptSha256 ?? "") &&
+    typeof observed.observedAt === "string" &&
+    !Number.isNaN(Date.parse(observed.observedAt)) &&
+    new Date(observed.observedAt).toISOString() === observed.observedAt &&
+    flags.every((flag) => observed[flag] === true)
+  );
+}
+
+// Explicit historical-baseline defect, not a generic failed-check exception. The immutable 0.1.4
+// source pins Gemini CLI 0.61.0 and launches every Gemini thread with --ignore-env, which that CLI
+// rejects, so no baseline Gemini thread can run and multi-account isolation cannot be exercised on
+// the baseline. The waiver is limited to the two pinned 0.1.4 artifacts, requires observed
+// per-account storage isolation, and never passes staging unless the candidate record for the
+// same platform proves accountIsolation === true (baselineWaiverCandidateProblems).
+const BASELINE_ACCOUNT_ISOLATION_REASON = "baseline-provider-cli-incompatible";
+const BASELINE_ACCOUNT_ISOLATION_DEFECT =
+  "0ee3493:crates/providers/src/gemini/managed_policy.rs:130 --ignore-env rejected by Gemini CLI 0.61.0";
+
+function baselineAccountIsolationUnavailable(record, expected, authority) {
+  const approved = approvedBaselineContext(expected, authority);
+  const proof = record?.accountIsolationUnavailable;
+  return (
+    approved !== null &&
+    exactKeys(proof, ["release", "target", "reason", "defectReference", "candidateProofRequired", "observation"]) &&
+    proof.target === approved.target &&
+    proof.reason === BASELINE_ACCOUNT_ISOLATION_REASON &&
+    proof.defectReference === BASELINE_ACCOUNT_ISOLATION_DEFECT &&
+    proof.candidateProofRequired === true &&
+    releaseIdentityProblems(proof.release, approved.release, "baseline account isolation evidence").length === 0 &&
+    baselineObservationIsExact(proof.observation, approved, ["storageIsolationProven"])
+  );
+}
+
+// Explicit historical-baseline defect, not a generic failed-check exception, and macOS only. On the
+// immutable 0.1.4 source, browser_info reads child.url() (browser_commands.rs:1403); when the first
+// load fails and WKWebView has a nil URL, wry 0.55.1 unwraps it (wkwebview/mod.rs:1349) and the app
+// aborts (SIGABRT). The waiver is limited to the pinned 0.1.4 macOS artifact, records the observed
+// crash as browser === false (never a pass), and never passes staging unless the candidate record
+// for the same platform proves browser === true (baselineWaiverCandidateProblems). Windows and
+// every candidate record must still prove browser === true.
+const BASELINE_BROWSER_TARGET = "darwin-aarch64";
+const BASELINE_BROWSER_REASON = "baseline-webview-nil-url-abort";
+const BASELINE_BROWSER_DEFECT =
+  "0ee3493:apps/desktop/src-tauri/src/browser_commands.rs:1403 child.url() -> wry-0.55.1 wkwebview/mod.rs:1349 URL().unwrap() aborts on nil URL (macOS)";
+
+function baselineBrowserUnavailable(record, expected, authority) {
+  const approved = approvedBaselineContext(expected, authority);
+  const proof = record?.browserUnavailable;
+  return (
+    approved !== null &&
+    approved.target === BASELINE_BROWSER_TARGET &&
+    exactKeys(proof, ["release", "target", "reason", "defectReference", "candidateProofRequired", "observation"]) &&
+    proof.target === approved.target &&
+    proof.reason === BASELINE_BROWSER_REASON &&
+    proof.defectReference === BASELINE_BROWSER_DEFECT &&
+    proof.candidateProofRequired === true &&
+    releaseIdentityProblems(proof.release, approved.release, "baseline browser evidence").length === 0 &&
+    baselineObservationIsExact(proof.observation, approved, ["crashObserved"])
+  );
+}
+
+// Each baseline waiver only defers its check to the candidate record for the same platform.
+const BASELINE_WAIVERS = Object.freeze([
+  Object.freeze({
+    proof: "accountIsolationUnavailable",
+    check: "accountIsolation",
+    problem:
+      "baseline account isolation waiver requires the candidate record for the same platform to prove accountIsolation",
+  }),
+  Object.freeze({
+    proof: "browserUnavailable",
+    check: "browser",
+    problem: "baseline browser waiver requires the candidate record for the same platform to prove browser",
+  }),
+]);
+
+/**
+ * A baseline waiver is only a deferral: for every waiver the baseline carries, the candidate record
+ * for the same platform must itself prove that check === true, with no waiver of its own.
+ */
+export function baselineWaiverCandidateProblems(baselineQa, candidateQa) {
+  const problems = [];
+  for (const { proof, check, problem } of BASELINE_WAIVERS) {
+    if (!Object.hasOwn(baselineQa ?? {}, proof)) continue;
+    if (
+      candidateQa === null ||
+      typeof candidateQa !== "object" ||
+      Array.isArray(candidateQa) ||
+      candidateQa.target !== baselineQa.target ||
+      Object.hasOwn(candidateQa, proof) ||
+      candidateQa.checks?.[check] !== true
+    ) {
+      problems.push(problem);
+    }
+  }
+  return problems;
+}
+
+function baselineKalvoiceUnavailable(record, expected, authority) {
+  const approved = approvedBaselineContext(expected, authority);
+  const proof = record?.kalvoiceUnavailable;
+  if (
+    !approved ||
+    !exactKeys(proof, ["release", "target", "reason", "observation"]) ||
+    proof.target !== approved.target ||
+    proof.reason !== approved.reason ||
+    releaseIdentityProblems(proof.release, approved.release, "baseline capability evidence").length > 0
+  )
+    return false;
+  return baselineObservationIsExact(proof.observation, approved, ["surfaceAbsent", "activationUnavailable"]);
+}
+
 function fail(message) {
   throw new Error(`updater manifest blocked: ${message}`);
 }
@@ -78,8 +232,12 @@ function releaseIdentityProblems(value, expected, label) {
  * only by the unlisted updater-QA staging tool; the normal publisher requires the complete
  * lower-to-newer, rollback and re-update sequence.
  */
-export function updaterQaProblems(record, expected, phase = "final") {
+export function updaterQaProblems(record, expected, phase = "final", baselineCapability = null) {
   const problems = [];
+  const baselinePreliminary = phase === "baseline-preliminary";
+  const hasUnavailableProof = Object.hasOwn(record ?? {}, "kalvoiceUnavailable");
+  const hasIsolationProof = Object.hasOwn(record ?? {}, "accountIsolationUnavailable");
+  const hasBrowserProof = Object.hasOwn(record ?? {}, "browserUnavailable");
   if (
     !exactKeys(record, [
       "channel",
@@ -90,6 +248,9 @@ export function updaterQaProblems(record, expected, phase = "final") {
       "status",
       "target",
       "updateTrial",
+      ...(baselinePreliminary && hasUnavailableProof ? ["kalvoiceUnavailable"] : []),
+      ...(baselinePreliminary && hasIsolationProof ? ["accountIsolationUnavailable"] : []),
+      ...(baselinePreliminary && hasBrowserProof ? ["browserUnavailable"] : []),
     ])
   ) {
     return ["updater QA record has unexpected fields"];
@@ -102,13 +263,39 @@ export function updaterQaProblems(record, expected, phase = "final") {
     problems.push("updater QA channel does not match the release");
   }
   problems.push(...releaseIdentityProblems(record.release, expected?.release, "updater QA release"));
-  if (!exactKeys(record.checks, QA_CHECKS) || QA_CHECKS.some((key) => record.checks?.[key] !== true)) {
+  const unavailable =
+    baselinePreliminary &&
+    record.checks?.kalvoice === false &&
+    baselineKalvoiceUnavailable(record, expected, baselineCapability);
+  if (hasUnavailableProof && !unavailable) problems.push("baseline KalVoice unavailability evidence is invalid");
+  const isolationWaived =
+    baselinePreliminary &&
+    record.checks?.accountIsolation === false &&
+    baselineAccountIsolationUnavailable(record, expected, baselineCapability);
+  if (hasIsolationProof && !isolationWaived) {
+    problems.push("baseline account isolation unavailability evidence is invalid");
+  }
+  const browserWaived =
+    baselinePreliminary &&
+    record.checks?.browser === false &&
+    baselineBrowserUnavailable(record, expected, baselineCapability);
+  if (hasBrowserProof && !browserWaived) problems.push("baseline browser unavailability evidence is invalid");
+  if (
+    !exactKeys(record.checks, QA_CHECKS) ||
+    QA_CHECKS.some(
+      (key) =>
+        record.checks?.[key] !== true &&
+        !(key === "kalvoice" && unavailable) &&
+        !(key === "accountIsolation" && isolationWaived) &&
+        !(key === "browser" && browserWaived),
+    )
+  ) {
     problems.push("updater QA product checks are incomplete");
   }
   if (!exactKeys(record.safeguards, QA_SAFEGUARDS) || QA_SAFEGUARDS.some((key) => record.safeguards?.[key] !== false)) {
     problems.push("updater QA used a test hook, cache seed, bypass, or fixture-only proof");
   }
-  if (phase === "preliminary") {
+  if (phase === "preliminary" || baselinePreliminary) {
     if (record.channel !== "stable") problems.push("preliminary updater QA staging is Stable-only");
     if (record.status !== "preliminary-passed" || record.updateTrial !== null) {
       problems.push("preliminary updater QA must leave the real update trial pending");
@@ -326,15 +513,19 @@ async function createWindowsManifest(
   if (requestedChannel === "stable" && build.version.includes("-")) fail("prerelease versions cannot enter stable");
   if (!COMMIT.test(build?.commit ?? "")) fail("build commit is invalid");
   if (!SHA256.test(build?.sha256 ?? "")) fail("build SHA-256 is invalid");
-  const qaProblems = updaterQaProblems(
-    qa,
-    {
-      target: "windows-x86_64",
-      channel: requestedChannel,
-      release: { version: build.version, commit: build.commit, sha256: build.sha256 },
-    },
-    qaPhase,
-  );
+  // The baseline-only capability context is created below, after real byte/signature checks.
+  const qaProblems =
+    qaPhase === "baseline-preliminary"
+      ? []
+      : updaterQaProblems(
+          qa,
+          {
+            target: "windows-x86_64",
+            channel: requestedChannel,
+            release: { version: build.version, commit: build.commit, sha256: build.sha256 },
+          },
+          qaPhase,
+        );
   if (requestedChannel === "stable") {
     const problems = [...publicSigningProblems(build), ...publicVerificationProblems(build, verify)];
     problems.push(...qaProblems);
@@ -367,6 +558,15 @@ async function createWindowsManifest(
   const sha256 = await sha256File(artifactPath);
   if (artifact.size !== build.size || sha256 !== build.sha256) {
     fail("updater artifact does not match the exact build size and SHA-256");
+  }
+  if (qaPhase === "baseline-preliminary") {
+    const expected = {
+      target: "windows-x86_64",
+      channel: requestedChannel,
+      release: { version: build.version, commit: build.commit, sha256: build.sha256 },
+    };
+    const problems = updaterQaProblems(qa, expected, qaPhase, baselineKalvoiceAuthority(expected));
+    if (problems.length > 0) fail(problems.join("; "));
   }
   return {
     version: build.version,
@@ -475,15 +675,18 @@ async function validateMacUpdateArtifact(input, channel, qaPhase) {
     if (verify[key] !== build[key]) fail("Mac verification does not bind the exact artifact and source");
   }
   // Signing alone does not certify the actual application or its update/recovery path.
-  const qaProblems = updaterQaProblems(
-    qa,
-    {
-      target: input.target,
-      channel,
-      release: { version: build.version, commit: build.commit, sha256: build.sha256 },
-    },
-    qaPhase,
-  );
+  const qaProblems =
+    qaPhase === "baseline-preliminary"
+      ? []
+      : updaterQaProblems(
+          qa,
+          {
+            target: input.target,
+            channel,
+            release: { version: build.version, commit: build.commit, sha256: build.sha256 },
+          },
+          qaPhase,
+        );
   if (qaProblems.length > 0) fail(`Mac physical-device QA is incomplete: ${qaProblems.join("; ")}`);
   const file = basename(artifactPath ?? "");
   const expectedKey = `releases/updater/${channel}/${build.version}/${build.sha256}/${file}`;
@@ -500,5 +703,14 @@ async function validateMacUpdateArtifact(input, channel, qaPhase) {
   await validateSignature(signature, publicKeyBase64, artifactPath, build.version, file, input.target, channel);
   if (info.size !== build.size || (await sha256File(artifactPath)) !== build.sha256)
     fail("Mac artifact does not match the exact build size and SHA-256");
+  if (qaPhase === "baseline-preliminary") {
+    const expected = {
+      target: input.target,
+      channel,
+      release: { version: build.version, commit: build.commit, sha256: build.sha256 },
+    };
+    const problems = updaterQaProblems(qa, expected, qaPhase, baselineKalvoiceAuthority(expected));
+    if (problems.length > 0) fail(`Mac physical-device QA is incomplete: ${problems.join("; ")}`);
+  }
   return { url: `https://kalcoded.com/${artifactKey}`, signature, size: info.size, sha256: build.sha256 };
 }
