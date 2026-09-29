@@ -7,7 +7,7 @@
  */
 import StageStyles from "./parts/StageStyles.astro";
 import { BASE_SCENE, DEMO_TABS } from "../../data/story";
-import { stageTag } from "../../lib/stage-status";
+import { stageLine, stageTag, stageThreads } from "../../lib/stage-status";
 import AppWindow from "./AppWindow.astro";
 import StageLabel from "./parts/StageLabel.astro";
 
@@ -45,7 +45,7 @@ const first = DEMO_TABS[0];
       {DEMO_TABS.map((t, i) => (
         <div class="kc-demo__copy" data-kc-demo-copy={t.id} hidden={i !== 0}>
           <Heading class="kc-demo__title">{t.title}</Heading>
-          <p class="kc-demo__line">{t.line}</p>
+          <p class="kc-demo__line">{stageLine(t)}</p>
           <span class="kc-tag">{stageTag(t)}</span>
           <slot name={`video-${t.id}`} />
           <button type="button" class="kc-btn kc-btn--ghost" data-kc-demo-replay data-testid={`demo-replay-${t.id}`}>
@@ -56,7 +56,7 @@ const first = DEMO_TABS[0];
     </div>
     <div class="kc-demo__stage">
       <StageLabel />
-      <AppWindow id={`${id}-app`} interactive={true} scene={{ ...BASE_SCENE, ...first?.scene }} size="section" />
+      <AppWindow id={`${id}-app`} interactive={true} scene={{ ...BASE_SCENE, ...first?.scene }} size="section" threads={stageThreads()} />
     </div>
   </div>
 </div>

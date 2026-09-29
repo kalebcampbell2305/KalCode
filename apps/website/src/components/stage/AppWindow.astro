@@ -59,6 +59,8 @@ interface Props {
   docksUsed?: readonly DockTab[];
   /** "workspace": explorer in the rail, a Threads tab in the dock and a status bar (round-3 workspace). */
   chrome?: "app" | "workspace";
+  /** The sample threads to draw (lib/stage-status.ts stageThreads for Stable-labelled stages). */
+  threads?: readonly Thread[];
   class?: string;
 }
 
@@ -74,13 +76,18 @@ const {
   panesUsed,
   docksUsed,
   chrome = "app",
+  threads = THREADS,
   class: className,
 } = Astro.props;
+// A window drawn without Gemini CLI (Stable) offers no Gemini CLI pane to open either.
+const freshProviders = (["claude", "codex", "gemini"] as const).filter(
+  (p) => p !== "gemini" || threads.some((t) => t.provider === "gemini"),
+);
 
 const scene: Scene = { ...FINAL_SCENE, ...sceneProp };
 const spawns: readonly string[] = VOICE.spawns;
 const present = spawns.filter((s) => scene.panes.includes(s) || scene.voice === "spawned" || scene.mission > 0);
-const focusThread = THREADS.find((t) => t.id === scene.focus);
+const focusThread = threads.find((t) => t.id === scene.focus);
 const dock = scene.view === "dashboard" && scene.dock === "dashboard" ? "browser" : scene.dock;
 const usePane = (tid: string) => interactive || (panesUsed ?? scene.panes).includes(tid);
 const useDock = (d: DockTab) => interactive || (docksUsed ?? [dock]).includes(d);
@@ -146,7 +153,7 @@ const statusBy = (t: Thread) =>
     </div>
 
     <div class="kc-app__tabs" data-kc-mtabs role={interactive ? "tablist" : undefined} aria-label={interactive ? "Open panes" : undefined}>
-      {THREADS.map((t) => (
+      {threads.map((t) => (
         interactive ? (
           <button type="button" role="tab" class="kc-mtab" data-kc-mtab={t.id} hidden={!scene.panes.includes(t.id)} aria-selected={scene.focus === t.id ? "true" : "false"} tabindex={scene.focus === t.id ? 0 : -1}>
             <Glyph provider={t.provider} />{t.provider === "shell" ? "PowerShell" : PROVIDERS[t.provider].name}
@@ -169,13 +176,13 @@ const statusBy = (t: Thread) =>
     </div>
 
     <div class="kc-app__body">
-      <Rail threads={THREADS} approval={scene.approval} interactive={interactive} focus={scene.focus} view={scene.view} present={present} explorer={workspaceChrome} />
+      <Rail threads={threads} approval={scene.approval} interactive={interactive} focus={scene.focus} view={scene.view} present={present} explorer={workspaceChrome} />
 
       <div class="kc-app__main" data-kc-main>
         <div class="kc-app__center">
           <MissionStrip stage={scene.mission} />
           <div class="kc-grid" data-kc-grid>
-            {THREADS.map((t) => {
+            {threads.map((t) => {
               const slot = scene.panes.indexOf(t.id);
               // Closed panes wait in templates: parsed, but no style or layout work until opened.
               if (slot < 0 && !usePane(t.id)) return null;
@@ -190,7 +197,7 @@ const statusBy = (t: Thread) =>
           </div>
           <KalVoicePanel state={scene.voice} interactive={interactive} target={focusThread ? PROVIDERS[focusThread.provider].name : "Claude Code"} />
           <div class="kc-dashview" data-kc-dashview>
-            {scene.view === "dashboard" && <DashboardPanel uid={id} approval={scene.approval} interactive={interactive} present={present} />}
+            {scene.view === "dashboard" && <DashboardPanel uid={id} approval={scene.approval} interactive={interactive} present={present} threads={threads} />}
           </div>
         </div>
 
@@ -242,10 +249,10 @@ const statusBy = (t: Thread) =>
           <div class="kc-dock__panel" data-kc-panel="dashboard" id={`${id}-panel-dashboard`} role={interactive ? "tabpanel" : undefined} aria-labelledby={interactive ? `${id}-tab-dashboard` : undefined} hidden={dock !== "dashboard"} data-kc-dash-home>
             {scene.view !== "dashboard" &&
               (dock === "dashboard" ? (
-                <DashboardPanel uid={id} approval={scene.approval} interactive={interactive} present={present} />
+                <DashboardPanel uid={id} approval={scene.approval} interactive={interactive} present={present} threads={threads} />
               ) : (
                 useDock("dashboard") && (
-                  <template data-kc-lazy><DashboardPanel uid={id} approval={scene.approval} interactive={interactive} present={present} /></template>
+                  <template data-kc-lazy><DashboardPanel uid={id} approval={scene.approval} interactive={interactive} present={present} threads={threads} /></template>
                 )
               ))}
           </div>
@@ -267,7 +274,7 @@ const statusBy = (t: Thread) =>
 
   {interactive && (
     <>
-      {(["claude", "codex", "gemini"] as const).map((p) => (
+      {freshProviders.map((p) => (
         <template data-kc-fresh={p}>
           <Pane thread={fresh(p)} approval="none" interactive={true} open={false} fresh={true} />
         </template>

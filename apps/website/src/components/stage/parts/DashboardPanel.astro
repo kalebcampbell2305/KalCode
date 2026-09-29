@@ -14,6 +14,7 @@ import {
   summaryLead,
   TERMINALS,
   THREADS,
+  type Thread,
   ZOD_APPROVAL,
 } from "../../../data/story";
 import { stageBuildLabel } from "../../../lib/stage-status";
@@ -25,10 +26,12 @@ interface Props {
   approval: ApprovalState;
   interactive: boolean;
   present: readonly string[];
+  /** The sample threads to list (defaults to the preview set). */
+  threads?: readonly Thread[];
 }
 
-const { uid, approval, interactive, present } = Astro.props;
-const agents = THREADS.filter((t) => t.provider !== "shell");
+const { uid, approval, interactive, present, threads = THREADS } = Astro.props;
+const agents = threads.filter((t) => t.provider !== "shell");
 const shown = agents.filter((t) => !t.spawned || present.includes(t.id));
 const summary = summarize(
   shown.map((t) => statusFor(t, approval)),

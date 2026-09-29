@@ -49,7 +49,9 @@ function wire(story: HTMLElement): void {
       else el.removeAttribute("data-active");
     }
     story.dataset.step = String(index);
-    root.setAttribute("aria-label", `Preview: ${step.describe}`);
+    // The step carries the description for the served release (lib/stage-status.ts stageDescribe).
+    const describe = steps.find((el) => Number(el.dataset.kcStep) === index)?.dataset.kcDescribe ?? step.describe;
+    root.setAttribute("aria-label", `Preview: ${describe}`);
     app.apply(cumulative(index), { animate: forward, play: forward ? step.play : undefined });
     current = index;
   };
