@@ -16,6 +16,40 @@ use crate::model::{
 };
 use crate::tree::{ProcEntry, TrackedRoot, build_tree};
 
+#[cfg(target_os = "macos")]
+mod macos;
+
+/// The kernel's "normal" memory pressure level (`kern.memorystatus_vm_pressure_level`, the
+/// values of `DISPATCH_MEMORYPRESSURE_NORMAL` / `_WARN` / `_CRITICAL`: 1, 2, 4).
+pub const MACOS_PRESSURE_NORMAL: u32 = 1;
+
+/// Available memory as admission should see it on macOS.
+///
+/// `sysinfo`'s macOS figure is free + inactive + purgeable pages minus compressor-held pages. It
+/// leaves out file-backed cache and compressible anonymous memory that macOS hands back without
+/// any pressure, so a healthy Mac routinely reads a few GiB "available" while the kernel reports
+/// three quarters of memory free (`memory_pressure`: "System-wide memory free percentage").
+///
+/// The kernel's own level (`kern.memorystatus_level`, percent of memory available) is used only
+/// while the kernel also reports *normal* pressure; under warning or critical pressure, or when
+/// either kernel value is unreadable, the conservative `sysinfo` figure stands. The result never
+/// goes below `sysinfo`'s figure or above `total_bytes`.
+pub fn reconcile_available_memory(
+    total_bytes: u64,
+    sysinfo_available_bytes: u64,
+    kernel_free_percent: Option<u32>,
+    kernel_pressure_level: Option<u32>,
+) -> u64 {
+    let conservative = sysinfo_available_bytes.min(total_bytes);
+    match (kernel_free_percent, kernel_pressure_level) {
+        (Some(percent), Some(MACOS_PRESSURE_NORMAL)) if percent <= 100 => {
+            let kernel = u128::from(total_bytes) * u128::from(percent) / 100;
+            conservative.max(u64::try_from(kernel).unwrap_or(total_bytes))
+        }
+        _ => conservative,
+    }
+}
+
 /// A folder whose volume's free space is governed (a workspace root, or KalCode's data folder
 /// with `workspace_id: None`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -166,9 +200,17 @@ impl SysinfoProbe {
         if total == 0 {
             return Reading::unknown("no memory information from the operating system");
         }
+        let available = self.system.available_memory().min(total);
+        #[cfg(target_os = "macos")]
+        let available = reconcile_available_memory(
+            total,
+            available,
+            macos::memorystatus_level(),
+            macos::memorystatus_pressure_level(),
+        );
         Reading::Value(RawMemory {
             total_bytes: total,
-            available_bytes: self.system.available_memory().min(total),
+            available_bytes: available,
         })
     }
 
@@ -409,6 +451,53 @@ pub fn volume_for(mounts: &[PathBuf], path: &Path) -> Option<usize> {
         })
         .max()
         .map(|(_, index)| index)
+}
+
+#[cfg(test)]
+mod macos_memory_tests {
+    use super::*;
+
+    const GIB: u64 = 1024 * 1024 * 1024;
+    const MIB: u64 = 1024 * 1024;
+
+    /// The owner's M1 (16 GiB): sysinfo reads ~3,694 MiB available while the kernel reports 74%
+    /// free at normal pressure.
+    #[test]
+    fn a_healthy_mac_counts_the_memory_the_kernel_reports_free() {
+        let available = reconcile_available_memory(16 * GIB, 3_694 * MIB, Some(74), Some(1));
+        assert_eq!(available, 16 * GIB * 74 / 100);
+        assert!(available / MIB > 12_000);
+    }
+
+    #[test]
+    fn pressure_or_missing_kernel_data_keeps_the_conservative_figure() {
+        for (percent, level) in [
+            (Some(74), Some(2)),
+            (Some(74), Some(4)),
+            (Some(74), None),
+            (None, Some(1)),
+            (Some(101), Some(1)),
+        ] {
+            assert_eq!(
+                reconcile_available_memory(16 * GIB, 3_694 * MIB, percent, level),
+                3_694 * MIB,
+                "{percent:?} {level:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_result_is_bounded_by_sysinfo_below_and_total_above() {
+        // The kernel reporting less than sysinfo never lowers the figure.
+        assert_eq!(
+            reconcile_available_memory(16 * GIB, 8 * GIB, Some(10), Some(1)),
+            8 * GIB
+        );
+        assert_eq!(
+            reconcile_available_memory(16 * GIB, 20 * GIB, Some(100), Some(1)),
+            16 * GIB
+        );
+    }
 }
 
 #[cfg(test)]

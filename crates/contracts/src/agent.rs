@@ -287,6 +287,15 @@ pub enum ProviderError {
     Io(String),
     #[error("the provider sent output KalCode could not understand: {0}")]
     Protocol(String),
+    /// KalCode's Resource Governor held this launch (or turn) before any provider process
+    /// started. The thread runtime waits and re-checks; it is never a provider failure.
+    #[error("the resource governor held this launch ({})", .0.kind.code())]
+    ResourcesHeld(crate::resources::LaunchHold),
+    /// KalCode refused the launch for a known reason before starting the provider (account in
+    /// use, unsupported plan or version). `code` is stable and `message` is fixed, user-safe
+    /// KalCode copy; neither ever contains provider output, paths or credentials.
+    #[error("the launch was refused ({code}): {message}")]
+    Refused { code: String, message: String },
 }
 
 /// Receives a session's events. Implementations must be cheap and non-blocking.

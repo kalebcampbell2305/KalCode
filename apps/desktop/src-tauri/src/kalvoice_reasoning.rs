@@ -32,7 +32,9 @@ use kalcode_resources::{
 
 use crate::kalvoice_components::{ComponentManagerError, KalVoiceComponentManager};
 use crate::kalvoice_guardian::KalVoiceGuardianLauncher;
-use crate::resource_commands::{LocalWorkloadEstimate, ResourceGovernorState};
+use crate::resource_commands::{
+    LocalTaskReservation, LocalWorkloadEstimate, ResourceGovernorState,
+};
 
 /// Governor updates buffered for a waiting start. Each evaluation drains the buffer first, so a
 /// burst never turns into back-to-back evaluations.
@@ -222,8 +224,13 @@ trait InterpreterHost: Send + Sync {
     fn acquire(
         &self,
     ) -> Result<(Box<dyn PreparedInterpreter>, LocalWorkloadEstimate), StartFailure>;
-    /// Atomically admits and reserves the workload for the resident process's lifetime.
-    fn reserve(&self, estimate: LocalWorkloadEstimate) -> Result<Box<dyn Send>, AdmissionDecision>;
+    /// Atomically admits and reserves the workload. The reservation is held for the resident
+    /// process's lifetime, but once the worker is resident it holds no agent slot and projects
+    /// nothing the sampler already measures (see [`ResidentCapacity`]).
+    fn reserve(
+        &self,
+        estimate: LocalWorkloadEstimate,
+    ) -> Result<Box<dyn ResidentCapacity>, AdmissionDecision>;
     /// The governor's updates, whose fresh samples re-evaluate a held start. `None`: no sampler.
     fn capacity_events(&self) -> Option<Receiver<GovernorUpdate>>;
     /// Waits while push-to-talk is listening or transcribing, for at most
@@ -295,10 +302,13 @@ impl InterpreterHost for DesktopHost {
         ))
     }
 
-    fn reserve(&self, estimate: LocalWorkloadEstimate) -> Result<Box<dyn Send>, AdmissionDecision> {
+    fn reserve(
+        &self,
+        estimate: LocalWorkloadEstimate,
+    ) -> Result<Box<dyn ResidentCapacity>, AdmissionDecision> {
         self.resources
             .reserve_local_task(estimate)
-            .map(|capacity| Box::new(capacity) as Box<dyn Send>)
+            .map(|capacity| Box::new(capacity) as Box<dyn ResidentCapacity>)
     }
 
     fn capacity_events(&self) -> Option<Receiver<GovernorUpdate>> {
@@ -312,10 +322,31 @@ impl InterpreterHost for DesktopHost {
     }
 }
 
+/// The governor capacity a resident local worker holds. Admission happens at start with the full
+/// workload; afterwards the idle worker must not look like running agent work.
+trait ResidentCapacity: Send {
+    /// The worker is resident and idle: release its agent slot. Its memory is measured by the
+    /// sampler from now on and is never subtracted a second time.
+    fn settle_resident(&self) {}
+    /// A request starts now: project the worker's CPU until the sampler measures it. Never
+    /// blocks or refuses the request.
+    fn arm_request(&self) {}
+}
+
+impl ResidentCapacity for LocalTaskReservation {
+    fn settle_resident(&self) {
+        LocalTaskReservation::settle_resident(self);
+    }
+
+    fn arm_request(&self) {
+        LocalTaskReservation::arm_request(self);
+    }
+}
+
 struct Resident {
     worker: Arc<dyn ManagedInterpreter>,
     // Mutex makes the Send-only owner shareable without ever releasing it during an operation.
-    _capacity: Mutex<Box<dyn Send>>,
+    capacity: Mutex<Box<dyn ResidentCapacity>>,
 }
 
 #[derive(Default)]
@@ -687,15 +718,16 @@ impl DesktopLocalInterpreter {
             tracing::warn!(event = "kalvoice.runtime_spawn_failed", code = failure.code);
             Attempt::Failed(failure)
         })?;
+        capacity.settle_resident();
         Ok(Arc::new(Resident {
             worker,
-            _capacity: Mutex::new(capacity),
+            capacity: Mutex::new(capacity),
         }))
     }
 
     /// Admits the workload. A start held for the same reason on consecutive samples logs that
     /// once; each re-check is still traced at debug level.
-    fn check(&self, estimate: LocalWorkloadEstimate) -> Result<Box<dyn Send>, Attempt> {
+    fn check(&self, estimate: LocalWorkloadEstimate) -> Result<Box<dyn ResidentCapacity>, Attempt> {
         let previous = self.lock().last_hold;
         if previous.is_none() {
             tracing::info!(event = "kalvoice.resource_check_started");
@@ -880,6 +912,11 @@ impl LocalInterpreter for DesktopLocalInterpreter {
             .clone()
             .ok_or(LocalInterpretationError::Unavailable)?;
         drop(state);
+        resident
+            .capacity
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .arm_request();
         resident.worker.interpret(request, deadline, cancellation)
     }
 }

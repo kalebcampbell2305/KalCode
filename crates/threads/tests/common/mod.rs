@@ -9,6 +9,7 @@
     clippy::large_enum_variant
 )]
 
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -58,6 +59,8 @@ pub struct FakeSession {
     interrupted: AtomicBool,
     ended: AtomicBool,
     fail_send: AtomicBool,
+    /// Errors the next sends return, in order (for example Resource Governor holds).
+    send_errors: Mutex<VecDeque<ProviderError>>,
     terminate_failures: AtomicUsize,
     interrupt_supported: bool,
     /// Set when the runtime drops its handle: a real adapter releases the account's shared
@@ -77,6 +80,17 @@ impl FakeSession {
 
     pub fn fail_next_sends(&self) {
         self.fail_send.store(true, Ordering::SeqCst);
+    }
+
+    /// The next `count` sends return `error` before anything is delivered.
+    pub fn fail_sends_with(&self, count: usize, error: ProviderError) {
+        let mut errors = self.send_errors.lock().unwrap();
+        errors.extend(std::iter::repeat_n(error, count));
+    }
+
+    /// Admits every held send from now on.
+    pub fn admit_sends(&self) {
+        self.send_errors.lock().unwrap().clear();
     }
 
     pub fn fail_next_terminate(&self) {
@@ -119,6 +133,9 @@ impl AgentSession for SessionHandle {
         }
         if self.0.fail_send.load(Ordering::SeqCst) {
             return Err(ProviderError::Io("pipe closed".into()));
+        }
+        if let Some(error) = self.0.send_errors.lock().unwrap().pop_front() {
+            return Err(error);
         }
         self.0.calls.lock().unwrap().push(Call::Send(text.clone()));
         if let Some(script) = &self.0.script {
@@ -192,7 +209,7 @@ pub struct FakeProvider {
     pub interrupt: bool,
     models: Vec<ModelInfo>,
     script: Mutex<Option<Script>>,
-    start_error: Mutex<Option<ProviderError>>,
+    start_error: Mutex<VecDeque<ProviderError>>,
     pub sessions: Mutex<Vec<Arc<FakeSession>>>,
 }
 
@@ -216,7 +233,7 @@ impl FakeProvider {
                 },
             ],
             script: Mutex::new(None),
-            start_error: Mutex::new(None),
+            start_error: Mutex::new(VecDeque::new()),
             sessions: Mutex::new(Vec::new()),
         })
     }
@@ -233,7 +250,25 @@ impl FakeProvider {
     }
 
     pub fn fail_next_start(&self, error: ProviderError) {
-        *self.start_error.lock().unwrap() = Some(error);
+        self.start_error.lock().unwrap().push_back(error);
+    }
+
+    /// The next `count` starts return `error` (for example a Resource Governor hold).
+    pub fn fail_starts_with(&self, count: usize, error: ProviderError) {
+        self.start_error
+            .lock()
+            .unwrap()
+            .extend(std::iter::repeat_n(error, count));
+    }
+
+    /// Admits every held start from now on.
+    pub fn admit_starts(&self) {
+        self.start_error.lock().unwrap().clear();
+    }
+
+    /// Start attempts refused so far are not recorded; this counts started sessions only.
+    pub fn started_sessions(&self) -> usize {
+        self.session_count()
     }
 
     pub fn session(&self, index: usize) -> Arc<FakeSession> {
@@ -294,7 +329,7 @@ impl AgentProvider for FakeProvider {
         config: SessionConfig,
         sink: Box<dyn AgentEventSink>,
     ) -> Result<Box<dyn AgentSession>, ProviderError> {
-        if let Some(error) = self.start_error.lock().unwrap().take() {
+        if let Some(error) = self.start_error.lock().unwrap().pop_front() {
             return Err(error);
         }
         let session = Arc::new(FakeSession {
@@ -305,6 +340,7 @@ impl AgentProvider for FakeProvider {
             interrupted: AtomicBool::new(false),
             ended: AtomicBool::new(false),
             fail_send: AtomicBool::new(false),
+            send_errors: Mutex::new(VecDeque::new()),
             terminate_failures: AtomicUsize::new(0),
             interrupt_supported: self.interrupt,
             released: AtomicBool::new(false),

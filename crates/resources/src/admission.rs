@@ -8,6 +8,9 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use kalcode_contracts::resources::{LaunchHold, LaunchHoldKind};
+
+use crate::cadence::CadenceConfig;
 use crate::capacity::{CapacityAdvice, HoldReason};
 use crate::governor::GovernorStatus;
 use crate::mode::ModeKind;
@@ -19,6 +22,19 @@ use crate::model::{
 pub const MIN_ADMISSION_SAMPLE_AGE: Duration = Duration::from_secs(5);
 pub const MAX_ADMISSION_SAMPLE_AGE: Duration = Duration::from_secs(45);
 const FRESHNESS_INTERVALS: u64 = 3;
+
+/// A held launch is re-checked no faster than the sampler's active floor: admission reads only
+/// the latest sample, so a faster poll would re-read the same evidence.
+pub const ADMISSION_RETRY_MIN: Duration = CadenceConfig::ACTIVE_FLOOR;
+/// ...and no slower than the default watch cadence, so a waiting launch notices a freed slot or
+/// a recovered sampler within one watch interval even while the sampler idles at 15 s.
+pub const ADMISSION_RETRY_MAX: Duration = Duration::from_secs(5);
+/// How long a held provider launch waits in total before it ends as "resources unavailable":
+/// two full freshness windows. That covers the sampler's longest failure backoff (60 s) plus a
+/// fresh sample, and a pressure level's 20 s minimum dwell with room to spare, without leaving a
+/// thread waiting indefinitely on a machine that stays busy.
+pub const ADMISSION_WAIT_LIMIT: Duration =
+    Duration::from_secs(MAX_ADMISSION_SAMPLE_AGE.as_secs() * 2);
 
 /// Sensors a class of newly-started work requires.
 ///
@@ -340,4 +356,128 @@ fn invalid_reading(
 
 fn duration_ms(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}
+
+/// How soon a held launch should look again: the sampler's own next interval, bounded to
+/// [`ADMISSION_RETRY_MIN`]..=[`ADMISSION_RETRY_MAX`]. Without a sample, the longest bound.
+pub fn admission_retry_interval(snapshot: Option<&ResourceSnapshot>) -> Duration {
+    let Some(snapshot) = snapshot.filter(|snapshot| snapshot.seq > 0) else {
+        return ADMISSION_RETRY_MAX;
+    };
+    Duration::from_millis(snapshot.sampling.next_interval_ms)
+        .clamp(ADMISSION_RETRY_MIN, ADMISSION_RETRY_MAX)
+}
+
+impl AdmissionReason {
+    /// A stable, log-friendly code for this reason (never contains values or text).
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::GovernorNotReady { .. } | Self::SnapshotMissing => "sampler_unavailable",
+            Self::SnapshotFromFuture { .. }
+            | Self::SnapshotStale { .. }
+            | Self::SnapshotModeMismatch { .. } => "stale_snapshot",
+            Self::RequiredTelemetryUnknown { .. } => "telemetry_unknown",
+            Self::RequiredTelemetryUnavailable { .. } => "telemetry_unavailable",
+            Self::CapacityUnavailable => "slot_unavailable",
+            Self::Capacity { .. } => "capacity",
+        }
+    }
+}
+
+/// A stable, log-friendly code for one capacity hold.
+pub fn hold_reason_code(reason: &HoldReason) -> &'static str {
+    match reason {
+        HoldReason::UserLimit { .. } => "concurrency_limit",
+        HoldReason::ProviderLimit { .. } => "provider_limit",
+        HoldReason::Pressure { .. } => "pressure",
+        HoldReason::CpuHeadroom { .. } => "cpu_headroom",
+        HoldReason::MemoryHeadroom { .. } => "memory_headroom",
+        HoldReason::KalCodeMemoryCap { .. } => "memory_cap",
+        HoldReason::GpuLimit { .. } => "gpu_limit",
+    }
+}
+
+fn hold_reason_kind(reason: &HoldReason) -> LaunchHoldKind {
+    match reason {
+        HoldReason::UserLimit { .. } => LaunchHoldKind::ConcurrencyLimit,
+        HoldReason::ProviderLimit { .. } => LaunchHoldKind::ProviderLimit,
+        HoldReason::Pressure { resource, .. } => match resource {
+            ResourceKind::Cpu => LaunchHoldKind::CpuBusy,
+            ResourceKind::Memory => LaunchHoldKind::MemoryLow,
+            _ => LaunchHoldKind::Pressure,
+        },
+        HoldReason::CpuHeadroom { .. } => LaunchHoldKind::CpuBusy,
+        HoldReason::MemoryHeadroom { .. } => LaunchHoldKind::MemoryLow,
+        HoldReason::KalCodeMemoryCap { .. } => LaunchHoldKind::MemoryCap,
+        HoldReason::GpuLimit { .. } => LaunchHoldKind::Pressure,
+    }
+}
+
+fn reason_kinds(reason: &AdmissionReason) -> Vec<LaunchHoldKind> {
+    match reason {
+        AdmissionReason::GovernorNotReady { .. }
+        | AdmissionReason::SnapshotMissing
+        | AdmissionReason::RequiredTelemetryUnknown { .. }
+        | AdmissionReason::RequiredTelemetryUnavailable { .. }
+        | AdmissionReason::CapacityUnavailable => vec![LaunchHoldKind::TelemetryUnavailable],
+        AdmissionReason::SnapshotFromFuture { .. }
+        | AdmissionReason::SnapshotStale { .. }
+        | AdmissionReason::SnapshotModeMismatch { .. } => vec![LaunchHoldKind::TelemetryStale],
+        AdmissionReason::Capacity { holds } => holds.iter().map(hold_reason_kind).collect(),
+    }
+}
+
+/// Every log code of a held decision, with capacity holds expanded (`cpu_headroom`,
+/// `concurrency_limit`, ...), in decision order without duplicates.
+pub fn decision_codes(decision: &AdmissionDecision) -> Vec<&'static str> {
+    let mut codes = Vec::new();
+    for reason in &decision.reasons {
+        let expanded: Vec<&'static str> = match reason {
+            AdmissionReason::Capacity { holds } => holds.iter().map(hold_reason_code).collect(),
+            other => vec![other.code()],
+        };
+        for code in expanded {
+            if !codes.contains(&code) {
+                codes.push(code);
+            }
+        }
+    }
+    codes
+}
+
+/// The owner-facing summary of a held provider launch: the most actionable reason by
+/// [`LaunchHoldKind::PRECEDENCE`], the counts behind a count limit, and the wait policy.
+pub fn launch_hold(
+    decision: &AdmissionDecision,
+    retry_after: Duration,
+    wait_limit: Duration,
+) -> LaunchHold {
+    let kinds: Vec<LaunchHoldKind> = decision.reasons.iter().flat_map(reason_kinds).collect();
+    let kind = LaunchHoldKind::PRECEDENCE
+        .into_iter()
+        .find(|kind| kinds.contains(kind))
+        .unwrap_or(LaunchHoldKind::TelemetryUnavailable);
+    let counts = decision.reasons.iter().find_map(|reason| match reason {
+        AdmissionReason::Capacity { holds } => holds.iter().find_map(|hold| match hold {
+            HoldReason::UserLimit { running, limit, .. }
+                if kind == LaunchHoldKind::ConcurrencyLimit =>
+            {
+                Some((*running, *limit))
+            }
+            HoldReason::ProviderLimit { running, limit, .. }
+                if kind == LaunchHoldKind::ProviderLimit =>
+            {
+                Some((*running, *limit))
+            }
+            _ => None,
+        }),
+        _ => None,
+    });
+    LaunchHold {
+        kind,
+        running: counts.map(|(running, _)| running),
+        limit: counts.map(|(_, limit)| limit),
+        retry_after,
+        wait_limit,
+    }
 }

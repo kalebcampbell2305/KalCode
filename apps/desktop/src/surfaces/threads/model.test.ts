@@ -11,8 +11,12 @@ import { providerCatalog } from "../../ipc/memoryProviders.ts";
 import {
   buildTimeline,
   isThreadEvent,
+  isWaitingForResources,
+  LAST_TURN_FAILED_ACTIVITY,
   matchesQuery,
+  presentProblem,
   presentStatus,
+  presentThread,
   providerModeNote,
   threadActions,
   unavailableReason,
@@ -100,7 +104,14 @@ describe("threadActions", () => {
       archive: false,
       compose: "send",
     });
-    expect(threadActions({ status: "idle" })).toMatchObject({ interrupt: false, stop: true, compose: "send" });
+    // Stop only while something runs; a quiet thread is archived instead (its idle session ends).
+    expect(threadActions({ status: "idle" })).toMatchObject({
+      interrupt: false,
+      stop: false,
+      archive: true,
+      compose: "send",
+    });
+    expect(threadActions({ status: "waiting_for_user" })).toMatchObject({ stop: false, archive: true });
     expect(threadActions({ status: "waiting_for_permission" })).toMatchObject({
       interrupt: true,
       stop: true,
@@ -119,6 +130,27 @@ describe("threadActions", () => {
     expect(threadActions({ status: "paused" })).toMatchObject({ resume: true, stop: true, compose: "resume" });
   });
 
+  it("a thread waiting for system resources can only be stopped", () => {
+    const waiting = {
+      status: "waiting_for_dependency" as const,
+      error: { code: "waiting_for_resources", message: "KalCode is waiting for system resources (CPU busy)." },
+    };
+    expect(threadActions(waiting)).toEqual({
+      interrupt: false,
+      stop: true,
+      resume: false,
+      archive: false,
+      compose: "blocked",
+    });
+    // Its wait ran out: resumable, not failed.
+    expect(
+      threadActions({
+        status: "interrupted",
+        error: { code: "resources_unavailable", message: "Codex didn't start." },
+      }),
+    ).toMatchObject({ stop: false, resume: true, archive: true, compose: "resume" });
+  });
+
   it("archived threads are read-only", () => {
     expect(threadActions({ status: "completed" }, true)).toEqual({
       interrupt: false,
@@ -127,6 +159,59 @@ describe("threadActions", () => {
       archive: false,
       compose: "blocked",
     });
+  });
+});
+
+describe("thread problems", () => {
+  const error = (code: string, message = "Details from the runtime.") => ({ code, message });
+
+  it("a launch waiting for system resources reads as waiting, not as another task or a failure", () => {
+    const thread = {
+      status: "waiting_for_dependency" as const,
+      currentActivity: "Waiting for system resources (CPU busy)",
+      error: error("waiting_for_resources"),
+    };
+    expect(isWaitingForResources(thread)).toBe(true);
+    expect(presentThread(thread)).toMatchObject({ label: "Waiting for system resources", tone: "waiting" });
+    expect(presentProblem(thread)).toEqual({ title: "Waiting for system resources", tone: "waiting" });
+    // A provider's own dependency wait keeps its generic label.
+    expect(presentThread({ status: "waiting_for_dependency", error: null }).label).toBe("Waiting on another task");
+  });
+
+  it("a wait that ran out is resumable and never looks like a provider failure", () => {
+    const thread = { status: "interrupted" as const, error: error("resources_unavailable") };
+    expect(presentThread(thread)).toMatchObject({ label: "Not started", tone: "waiting" });
+    expect(presentProblem(thread)).toEqual({ title: "Not started: system resources were busy", tone: "waiting" });
+  });
+
+  it("an idle thread whose last turn failed says so next to the error", () => {
+    const thread = {
+      status: "idle" as const,
+      currentActivity: LAST_TURN_FAILED_ACTIVITY,
+      error: error("process_exited", "Gemini CLI stopped unexpectedly (exit code 1)."),
+    };
+    expect(presentThread(thread)).toMatchObject({ label: "Last turn failed", tone: "failed" });
+    expect(presentProblem(thread)).toEqual({ title: "The last turn failed", tone: "danger" });
+    expect(threadActions(thread)).toMatchObject({ stop: false, archive: true, compose: "send" });
+  });
+
+  it("distinguishes each kind of launch problem", () => {
+    const titles = (code: string) => presentProblem({ status: "active", error: error(code) })?.title;
+    expect(titles("provider_start_failed")).toBe("The provider couldn't start");
+    expect(titles("provider_exited")).toBe("The provider stopped unexpectedly");
+    expect(titles("process_exited")).toBe("The provider stopped unexpectedly");
+    expect(titles("provider_not_authenticated")).toBe("Sign-in needed");
+    expect(titles("provider_account_busy")).toBe("This account can't be used right now");
+    expect(titles("provider_account_ineligible")).toBe("This account can't be used right now");
+    expect(titles("provider_version_unsupported")).toBe("Unsupported provider version");
+    expect(titles("codex_approve_requires_git")).toBe("Needs a Git folder");
+    expect(titles("codex_item_error")).toBe("The provider reported a problem");
+    // A failed thread keeps its failure title (older persisted codes included).
+    expect(presentProblem({ status: "failed", error: error("provider_start_failed") })).toEqual({
+      title: "This thread failed",
+      tone: "danger",
+    });
+    expect(presentProblem({ status: "idle", error: null })).toBeNull();
   });
 });
 

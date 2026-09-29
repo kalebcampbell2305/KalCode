@@ -54,30 +54,65 @@ enum RuntimeAuthError {
 }
 
 impl RuntimeAuthError {
+    /// A launch refusal with a stable code and fixed, user-safe copy. Only a provider that is
+    /// missing maps to a plain provider error; nothing here is a provider start failure.
     fn into_provider_error(self) -> ProviderError {
+        use kalcode_contracts::threads::error_codes;
+        let refused = |code: &str, message: String| ProviderError::Refused {
+            code: code.to_owned(),
+            message,
+        };
+        let version = |window: &VersionWindow| {
+            refused(
+                error_codes::PROVIDER_VERSION_UNSUPPORTED,
+                window_unsupported_message(window),
+            )
+        };
         match self {
-            Self::Account(error) => ProviderError::Start(error.message),
-            Self::ProviderUnavailable => ProviderError::NotInstalled,
-            Self::Busy => ProviderError::Start(
-                "another account operation is still using this managed provider profile".into(),
-            ),
-            Self::Provider(_) => ProviderError::Start(
-                "the official Codex account check did not complete safely".into(),
-            ),
-            Self::Claude(error) => ProviderError::Start(format!(
-                "the official Claude Code account check did not complete safely (reason: {})",
-                error.reason_code()
-            )),
-            Self::Gemini(_) => ProviderError::Start(
-                "the official Gemini CLI account check did not complete safely".into(),
-            ),
-            Self::GeminiUnavailable => ProviderError::NotInstalled,
-            Self::OrganizationPlan => ProviderError::Start(
-                "this Codex organization plan is not yet supported by KalCode managed profiles"
+            Self::Account(error) => refused(error.code, error.message),
+            Self::ProviderUnavailable | Self::GeminiUnavailable => ProviderError::NotInstalled,
+            Self::Busy => refused(
+                error_codes::PROVIDER_ACCOUNT_BUSY,
+                "This account is busy with a sign-in or account change in KalCode. Finish it, then resume this thread."
                     .into(),
             ),
-            Self::PlanUnverified => ProviderError::Start(
-                "Codex managed sessions require a current verified consumer account plan".into(),
+            Self::Provider(CodexAccountAuthError::UnsupportedVersion) => {
+                version(&kalcode_providers::codex::MANAGED_VERSIONS)
+            }
+            Self::Gemini(GeminiAccountAuthError::UnsupportedVersion) => {
+                version(&kalcode_providers::gemini::MANAGED_VERSIONS)
+            }
+            Self::Claude(error) => match claude_failure_ipc(&error) {
+                Some((code, message)) if code == error_codes::PROVIDER_VERSION_UNSUPPORTED => {
+                    refused(code, message)
+                }
+                _ => refused(
+                    error_codes::PROVIDER_ACCOUNT_CHECK_FAILED,
+                    format!(
+                        "KalCode couldn't confirm this Claude Code account with Claude Code's official account check (reason: {}). Check your connection, then resume this thread.",
+                        error.reason_code()
+                    ),
+                ),
+            },
+            Self::Provider(_) => refused(
+                error_codes::PROVIDER_ACCOUNT_CHECK_FAILED,
+                "KalCode couldn't confirm this Codex account with Codex's official account check. Check your connection, then resume this thread."
+                    .into(),
+            ),
+            Self::Gemini(_) => refused(
+                error_codes::PROVIDER_ACCOUNT_CHECK_FAILED,
+                "KalCode couldn't confirm this Gemini CLI account with Gemini CLI's official account check. Check your connection, then resume this thread."
+                    .into(),
+            ),
+            Self::OrganizationPlan => refused(
+                error_codes::PROVIDER_ACCOUNT_PLAN_UNSUPPORTED,
+                "KalCode doesn't support Codex organization plans (Business, Enterprise, Edu) yet. Use a personal ChatGPT plan for this Codex account."
+                    .into(),
+            ),
+            Self::PlanUnverified => refused(
+                error_codes::PROVIDER_ACCOUNT_PLAN_UNVERIFIED,
+                "KalCode couldn't verify this Codex account's plan. Sign in to this Codex account again in Providers, then resume this thread."
+                    .into(),
             ),
         }
     }
@@ -843,6 +878,11 @@ impl ProviderRuntimeAuthority {
             ProviderError::NotInstalled => RuntimeAuthError::ProviderUnavailable,
             ProviderError::Start(message)
                 if message.contains("already in use") || message.contains("profile is in use") =>
+            {
+                RuntimeAuthError::Busy
+            }
+            ProviderError::Refused { code, .. }
+                if code == kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_BUSY =>
             {
                 RuntimeAuthError::Busy
             }
@@ -2391,7 +2431,9 @@ mod tests {
             fixture
                 .runtime
                 .prepare_account_launch(&ProviderId::new(ProviderId::CODEX), &fixture.account.id),
-            Err(ProviderError::Start(message)) if message.contains("organization plan")
+            Err(ProviderError::Refused { code, message })
+                if code == "provider_account_plan_unsupported"
+                    && message.contains("organization plans")
         ));
 
         fixture

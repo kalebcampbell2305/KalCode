@@ -198,7 +198,9 @@ pub fn statuses() -> Vec<ProviderStatus> {
                           per turn resumed by thread id"
                 .into(),
             sign_in_command: "codex login".into(),
-            install_command: "npm install -g @openai/codex".into(),
+            install_command: crate::codex::MANAGED_VERSIONS
+                .install_command()
+                .unwrap_or_else(|| "npm install -g @openai/codex".into()),
             docs_url: "https://github.com/openai/codex".into(),
         },
         ProviderStatus {
@@ -214,7 +216,9 @@ pub fn statuses() -> Vec<ProviderStatus> {
                           resumed by session id"
                 .into(),
             sign_in_command: "gemini".into(),
-            install_command: "npm install -g @google/gemini-cli".into(),
+            install_command: crate::gemini::MANAGED_VERSIONS
+                .install_command()
+                .unwrap_or_else(|| "npm install -g @google/gemini-cli".into()),
             docs_url: "https://geminicli.com/docs/".into(),
         },
     ]

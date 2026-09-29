@@ -105,6 +105,19 @@ impl Drop for Reservation {
         self.0.fetch_sub(1, Ordering::SeqCst);
     }
 }
+impl ResidentCapacity for Reservation {}
+impl ResidentCapacity for () {}
+
+/// The governor permit (real or scripted) plus the live-reservation counter.
+struct TestCapacity(Box<dyn ResidentCapacity>, #[allow(dead_code)] Reservation);
+impl ResidentCapacity for TestCapacity {
+    fn settle_resident(&self) {
+        self.0.settle_resident();
+    }
+    fn arm_request(&self) {
+        self.0.arm_request();
+    }
+}
 
 enum Admission {
     /// Scripted governor decisions (default: admit).
@@ -185,9 +198,12 @@ impl InterpreterHost for FakeHost {
             estimate(),
         ))
     }
-    fn reserve(&self, estimate: LocalWorkloadEstimate) -> Result<Box<dyn Send>, AdmissionDecision> {
+    fn reserve(
+        &self,
+        estimate: LocalWorkloadEstimate,
+    ) -> Result<Box<dyn ResidentCapacity>, AdmissionDecision> {
         self.reserves.fetch_add(1, Ordering::SeqCst);
-        let permit: Box<dyn Send> = match &self.admission {
+        let permit: Box<dyn ResidentCapacity> = match &self.admission {
             Admission::Scripted(decisions) => {
                 if let Some(decision) = decisions
                     .lock()
@@ -201,7 +217,7 @@ impl InterpreterHost for FakeHost {
             Admission::Real(resources) => Box::new(resources.reserve_local_task(estimate)?),
         };
         self.live_reservations.fetch_add(1, Ordering::SeqCst);
-        Ok(Box::new((
+        Ok(Box::new(TestCapacity(
             permit,
             Reservation(self.live_reservations.clone()),
         )))
@@ -929,7 +945,7 @@ fn failed_cleanup_retains_capacity_and_interpreter_until_proven_retry() {
         .unwrap_or_else(PoisonError::into_inner)
         .resident = Some(Arc::new(Resident {
         worker: worker.clone(),
-        _capacity: Mutex::new(Box::new(Reservation(released.clone()))),
+        capacity: Mutex::new(Box::new(Reservation(released.clone()))),
     }));
     let cancel = LocalInterpretationCancellation::default();
     assert_eq!(

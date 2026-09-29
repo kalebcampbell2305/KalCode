@@ -14,8 +14,9 @@
 //!   forwards them to a dispatcher thread that applies them to the owning thread.
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak, mpsc};
+use std::time::Instant;
 
 use kalcode_context::{
     Firewall, FirewallPolicy, PromptAdmission, PromptGate, PromptReview, PromptTarget,
@@ -30,8 +31,9 @@ use kalcode_contracts::kalvoice::ThreadScope;
 use kalcode_contracts::permissions::{
     ApprovalDecision, NormalizedAction, PermissionGate, PermissionMode, PolicyEffect,
 };
+use kalcode_contracts::resources::{LaunchHold, LaunchHoldKind};
 use kalcode_contracts::threads::{
-    MessageRole, ThreadError, ThreadMessage, ThreadStatus, ThreadSummary,
+    MessageRole, ThreadError, ThreadMessage, ThreadStatus, ThreadSummary, error_codes,
 };
 use kalcode_core::events::SubscriptionId;
 use kalcode_core::time::now_rfc3339;
@@ -63,6 +65,14 @@ pub const PAUSED_ACTIVITY: &str = "Paused";
 /// Activity of a thread whose idle session was ended because its account was switched.
 pub const ACCOUNT_SWITCHED_ACTIVITY: &str = "Switched provider account";
 const NEW_SESSION_NOTICE: &str = "Started a new provider session. The earlier conversation couldn't be restored, so the provider won't remember the messages above.";
+/// Activity while the Resource Governor holds a launch or turn (a reason follows in brackets).
+pub const WAITING_FOR_RESOURCES_ACTIVITY: &str = "Waiting for system resources";
+/// Activity of a thread whose bounded wait for system resources ended without starting.
+pub const RESOURCES_UNAVAILABLE_ACTIVITY: &str = "Not started: system resources were busy";
+/// Activity of an idle thread whose last turn reported failure.
+pub const LAST_TURN_FAILED_ACTIVITY: &str = "Last turn failed";
+/// Activity of an idle thread whose session ended because it was archived.
+pub const ARCHIVED_ACTIVITY: &str = "Archived";
 
 type StreamSubscriber = Box<dyn Fn(&AgentEvent) -> bool + Send + Sync>;
 
@@ -176,7 +186,68 @@ struct LiveState {
     buffers: BTreeMap<String, String>,
     /// Tool calls of the current session by provider tool-call id.
     tools: HashMap<String, ToolRef>,
+    /// A launch or turn the Resource Governor is holding. While set, a waiter thread re-checks
+    /// admission on the governor's cadence until it proceeds or its bounded wait ends.
+    waiting: Option<Waiting>,
+    /// Identifies waits: a waiter acts only while its ticket is the current wait's.
+    wait_ticket: u64,
+    /// The last turn reported failure (`TurnCompleted { ok: false }`); the next turn clears it.
+    turn_failed: bool,
+    /// The user interrupted or paused the current turn: its failed completion is not a failure.
+    halted: bool,
 }
+
+/// A message on its way to the provider.
+struct TurnInput {
+    /// What the provider receives (the user's text, or that text plus previewed context).
+    payload: String,
+    /// The user's text to record in history first; `None` once it is recorded.
+    record: Option<String>,
+    /// Delivering the recorded text later is the same message (no ephemeral context attached),
+    /// so it may be kept as the thread's undelivered message.
+    redeliverable: bool,
+}
+
+impl TurnInput {
+    fn new(text: String) -> Self {
+        Self {
+            payload: text.clone(),
+            record: Some(text),
+            redeliverable: true,
+        }
+    }
+
+    fn recorded(text: String) -> Self {
+        Self {
+            payload: text,
+            record: None,
+            redeliverable: true,
+        }
+    }
+}
+
+/// What a held thread does once the governor admits it.
+enum WaitFor {
+    /// No session yet: start one, then deliver `input` (already recorded in history).
+    Start {
+        resume_session_id: Option<String>,
+        input: Option<TurnInput>,
+        notice: Option<&'static str>,
+    },
+    /// The session is up and idle: deliver this (already recorded) turn.
+    Turn { input: TurnInput },
+}
+
+struct Waiting {
+    ticket: u64,
+    /// When the bounded wait ends (`resources_unavailable`). Re-checks never extend it.
+    deadline: Instant,
+    hold: LaunchHold,
+    what: WaitFor,
+}
+
+/// The current wait being re-checked: its ticket, deadline and the hold last shown.
+type Recheck = Option<(u64, Instant, LaunchHoldKind)>;
 
 struct LiveThread {
     ctx: Ctx,
@@ -267,6 +338,9 @@ enum EndReason {
     /// The thread is resumable (`completed`, not `interrupted`) and no `thread.completed`
     /// notification is published, because nothing finished.
     AccountSwitched,
+    /// A held turn's bounded wait for system resources ended. Nothing failed: the thread is
+    /// `interrupted` (resumable) with `resources_unavailable`, and no `thread.failed` is sent.
+    ResourcesUnavailable { message: String },
 }
 
 #[derive(Default)]
@@ -337,6 +411,8 @@ struct Inner {
     live: Mutex<HashMap<String, Arc<LiveThread>>>,
     routes: Mutex<Routes>,
     streams: StreamHub,
+    /// Set by shutdown: no wait may start or re-check a provider launch any more.
+    shutting_down: AtomicBool,
     self_ref: Weak<Inner>,
 }
 
@@ -371,6 +447,7 @@ impl ThreadRuntime {
             live: Mutex::new(HashMap::new()),
             routes: Mutex::new(Routes::default()),
             streams: StreamHub::default(),
+            shutting_down: AtomicBool::new(false),
             self_ref: weak.clone(),
         });
 
@@ -1019,6 +1096,8 @@ impl ThreadRuntime {
     /// Ends every running session (app exit). `Ok` proves every provider accepted termination.
     /// Failed sessions remain owned by this runtime so a later call can retry safely.
     pub fn shutdown_checked(&self) -> Result<()> {
+        // No held launch may start a provider after this point; waits end as stopped.
+        self.inner.shutting_down.store(true, Ordering::SeqCst);
         let mut first_error = None;
         for id in self.inner.running_ids() {
             if let Err(error) = self.inner.stop(&id, SHUTDOWN_ACTIVITY) {
@@ -1134,8 +1213,85 @@ fn describe_provider_error(error: &ProviderError, provider: &str) -> (String, St
                 "{provider} sent output KalCode couldn't understand. Your conversation is saved; resume the thread to continue."
             ),
         ),
+        // Reached only where a hold cannot wait (the runtime waits on launches and turns).
+        ProviderError::ResourcesHeld(hold) => (
+            error_codes::RESOURCES_UNAVAILABLE,
+            unavailable_message(provider, hold, false, false),
+        ),
+        // KalCode's own fixed refusal copy (account in use, plan, version): shown as written.
+        ProviderError::Refused { code, message } => {
+            return (
+                validate::provider_code(code, error_codes::PROVIDER_START_FAILED),
+                validate::provider_text(message, 600),
+            );
+        }
     };
     (code.to_owned(), message)
+}
+
+/// "(CPU busy)", "(4 of 4 threads are already working)".
+fn hold_phrase(hold: &LaunchHold, provider: &str) -> String {
+    match (hold.kind, hold.running, hold.limit) {
+        (LaunchHoldKind::ConcurrencyLimit, Some(running), Some(limit)) => {
+            format!("{running} of {limit} threads are already working")
+        }
+        (LaunchHoldKind::ProviderLimit, Some(running), Some(limit)) => {
+            format!("{running} of {limit} {provider} threads are already working")
+        }
+        (kind, _, _) => kind.phrase().to_owned(),
+    }
+}
+
+/// While waiting: what is held, that KalCode re-checks, and what the person can do.
+fn waiting_message(provider: &str, hold: &LaunchHold) -> String {
+    let phrase = hold_phrase(hold, provider);
+    if hold.kind.freed_by_stopping_a_thread() {
+        format!(
+            "KalCode is waiting for system resources ({phrase}). {provider} starts as soon as one finishes; stop a thread you're not using to start it sooner."
+        )
+    } else {
+        format!(
+            "KalCode is waiting for system resources ({phrase}). {provider} starts when they free up; KalCode checks again every few seconds."
+        )
+    }
+}
+
+/// After the bounded wait: nothing started, what to do next. `has_message` says the person's
+/// message is saved and Resume sends it.
+fn unavailable_message(provider: &str, hold: &LaunchHold, has_message: bool, turn: bool) -> String {
+    let phrase = hold_phrase(hold, provider);
+    let what = if turn {
+        format!("{provider} didn't run this turn")
+    } else {
+        format!("{provider} didn't start")
+    };
+    let waited = hold.wait_limit.as_secs();
+    let saved = if has_message {
+        " Your message is saved; Resume sends it."
+    } else {
+        ""
+    };
+    if hold.kind.freed_by_stopping_a_thread() {
+        format!(
+            "{what}: KalCode waited {waited} s for system resources ({phrase}).{saved} Stop a thread you're not using, then resume this one."
+        )
+    } else {
+        format!(
+            "{what}: KalCode waited {waited} s for system resources ({phrase}).{saved} Resume this thread to try again."
+        )
+    }
+}
+
+/// The error means the message never reached the provider (nothing was spawned or written).
+fn never_delivered(error: &ProviderError) -> bool {
+    matches!(
+        error,
+        ProviderError::Start(_)
+            | ProviderError::Refused { .. }
+            | ProviderError::ResourcesHeld(_)
+            | ProviderError::NotAuthenticated
+            | ProviderError::NotInstalled
+    )
 }
 
 /// Statuses a provider may report. The rest belong to the runtime (lifecycle, approvals,
@@ -1227,7 +1383,10 @@ impl Inner {
             .cloned()
             .collect();
         all.into_iter()
-            .filter(|live| live.lock().session.is_some())
+            .filter(|live| {
+                let state = live.lock();
+                state.session.is_some() || state.waiting.is_some()
+            })
             .map(|live| live.ctx.thread_id.clone())
             .collect()
     }
@@ -1315,6 +1474,11 @@ impl Inner {
                 )?;
                 store::set_pending_approvals(tx, &row.id, 0)?;
                 store::cancel_open_tool_calls(tx, &row.id, &now)?;
+                // A wait for system resources ended with the previous process; nothing is
+                // waiting now. An undelivered message stays marked, so Resume sends it.
+                if row.error_code.as_deref() == Some(error_codes::WAITING_FOR_RESOURCES) {
+                    store::set_error(tx, &row.id, None)?;
+                }
                 Ok((
                     (),
                     ctx.status_changed(
@@ -1402,28 +1566,72 @@ impl Inner {
         tracing::info!(event = "thread.created", thread_id = %id, provider_id = %provider_id);
 
         let row = self.row(&id)?;
-        self.start_session(&row, &entry, None, prompt, None)?;
+        self.start_session(&row, &entry, None, prompt, None, None)?;
         self.summary(&id)
     }
 
-    /// Starts a provider session for `row`, then sends `first_input`. Provider failures are
-    /// recorded on the thread (`failed`) rather than returned.
+    /// Starts a provider session for `row`, then sends `first_input` (or, on a resume without
+    /// new text, `redeliver`: the thread's recorded but undelivered message). Provider failures
+    /// are recorded on the thread (`failed`) rather than returned; a launch the Resource
+    /// Governor holds waits (`waiting_for_dependency`) instead.
     fn start_session(
         &self,
         row: &ThreadRow,
         entry: &ProviderEntry,
         resume_session_id: Option<String>,
         first_input: Option<AdmittedPrompt>,
-        notice: Option<&str>,
+        notice: Option<&'static str>,
+        redeliver: Option<String>,
     ) -> Result<()> {
         let live = self.live_thread(row);
         let mut state = live.lock();
-        if state.session.is_some() {
+        if state.session.is_some() || state.waiting.is_some() {
             return Err(KalError::validation(
                 "thread_already_running",
                 "This thread is already running.",
             ));
         }
+        // Revalidate the opaque proof at the last in-process boundary before a provider starts.
+        // This also prevents a reviewed prompt from being swapped after validation.
+        let first_input = match first_input {
+            Some(admitted) => {
+                let target = if admitted.target.thread_id.is_none() {
+                    row_create_prompt_target(row)
+                } else {
+                    row_prompt_target(row)
+                };
+                self.prompt_gate
+                    .verify(admitted.admission, &target, &admitted.text)?;
+                Some(TurnInput::new(admitted.text))
+            }
+            // Admitted when it was first sent, for this thread and account (a rebind clears it).
+            None => redeliver.map(TurnInput::recorded),
+        };
+        self.launch(
+            &live,
+            &mut state,
+            row,
+            entry,
+            resume_session_id,
+            first_input,
+            notice,
+            None,
+        )
+    }
+
+    /// Starts the provider session. `recheck` is the current wait when a held launch re-checks.
+    #[allow(clippy::too_many_arguments)]
+    fn launch(
+        &self,
+        live: &Arc<LiveThread>,
+        state: &mut LiveState,
+        row: &ThreadRow,
+        entry: &ProviderEntry,
+        resume_session_id: Option<String>,
+        input: Option<TurnInput>,
+        notice: Option<&'static str>,
+        recheck: Recheck,
+    ) -> Result<()> {
         state.generation += 1;
         let generation = state.generation;
         state.pending.clear();
@@ -1444,23 +1652,8 @@ impl Inner {
             working_directory: row.cwd.clone(),
             model: row.model.clone(),
             permission_mode: row.permission_mode,
-            resume_session_id,
+            resume_session_id: resume_session_id.clone(),
             secret_ref: entry.secret_ref.clone(),
-        };
-        // Revalidate the opaque proof at the last in-process boundary before a provider starts.
-        // This also prevents a reviewed prompt from being swapped after validation.
-        let first_input = match first_input {
-            Some(admitted) => {
-                let target = if admitted.target.thread_id.is_none() {
-                    row_create_prompt_target(row)
-                } else {
-                    row_prompt_target(row)
-                };
-                self.prompt_gate
-                    .verify(admitted.admission, &target, &admitted.text)?;
-                Some(admitted.text)
-            }
-            None => None,
         };
         let provider_name = entry.provider.display_name().to_owned();
         let session: Arc<dyn AgentSession> = match entry
@@ -1468,13 +1661,31 @@ impl Inner {
             .start_session(config, Box::new(sink))
         {
             Ok(session) => Arc::from(session),
+            Err(ProviderError::ResourcesHeld(hold)) => {
+                let input = self.record_undelivered(&live.ctx, input)?;
+                return self.wait_for_resources(
+                    live,
+                    state,
+                    hold,
+                    WaitFor::Start {
+                        resume_session_id,
+                        input,
+                        notice,
+                    },
+                    recheck,
+                );
+            }
             Err(error) => {
                 tracing::warn!(event = "thread.session_start_failed", thread_id = %row.id, error = %error);
+                // The task is kept: recorded in history and delivered by Resume.
+                self.record_undelivered(&live.ctx, input)?;
                 let (code, message) = describe_provider_error(&error, &provider_name);
                 return self.fail_idle_thread(&live.ctx, &code, &message);
             }
         };
         state.session = Some(session.clone());
+        state.turn_failed = false;
+        state.halted = false;
         if let Err(error) = self.spawn_worker(live.clone(), generation, receiver) {
             let _ = session.terminate();
             state.session = None;
@@ -1497,12 +1708,250 @@ impl Inner {
         if let Some(notice) = notice {
             self.persist_message(ctx, MessageRole::System, notice, None, EventSource::Core)?;
         }
-        match first_input {
-            Some(text) => self.send_locked(&live, &mut state, text)?,
+        match input {
+            Some(input) => self.deliver_locked(live, state, input, None)?,
             // The session is up and no turn is running: the thread waits for input.
             None => self.transition(ctx, ThreadStatus::Idle, None)?,
         }
         Ok(())
+    }
+
+    /// Records `input` in history (when it isn't yet) and marks it undelivered, so the task is
+    /// visible and Resume delivers it. Returns the input as recorded.
+    fn record_undelivered(&self, ctx: &Ctx, input: Option<TurnInput>) -> Result<Option<TurnInput>> {
+        let Some(mut input) = input else {
+            return Ok(None);
+        };
+        if let Some(text) = input.record.take() {
+            let message =
+                self.persist_message(ctx, MessageRole::User, &text, None, EventSource::Ui)?;
+            if input.redeliverable {
+                self.core.write_with_events(|tx| {
+                    store::set_undelivered(tx, &ctx.thread_id, &message.id)?;
+                    Ok(((), Vec::new()))
+                })?;
+            }
+        }
+        Ok(Some(input))
+    }
+
+    /// Holds the thread while the Resource Governor re-checks: `waiting_for_dependency` with a
+    /// truthful activity and `waiting_for_resources`. A first hold starts the bounded wait and
+    /// its waiter; a re-check keeps the original deadline and only updates a changed reason.
+    fn wait_for_resources(
+        &self,
+        live: &Arc<LiveThread>,
+        state: &mut LiveState,
+        hold: LaunchHold,
+        what: WaitFor,
+        recheck: Recheck,
+    ) -> Result<()> {
+        let ctx = &live.ctx;
+        let (ticket, deadline, changed) = match recheck {
+            Some((ticket, deadline, shown)) => (ticket, deadline, shown != hold.kind),
+            None => {
+                state.wait_ticket += 1;
+                (state.wait_ticket, Instant::now() + hold.wait_limit, true)
+            }
+        };
+        let waiting = Waiting {
+            ticket,
+            deadline,
+            hold,
+            what,
+        };
+        if self.shutting_down.load(Ordering::SeqCst) || Instant::now() >= deadline {
+            return self.wait_ended(live, state, waiting);
+        }
+        if changed {
+            let provider_name = self.row(&ctx.thread_id)?.provider_name;
+            let activity = format!(
+                "{WAITING_FOR_RESOURCES_ACTIVITY} ({})",
+                hold_phrase(&waiting.hold, &provider_name)
+            );
+            let message = waiting_message(&provider_name, &waiting.hold);
+            let now = now_rfc3339();
+            self.core.write_with_events(|tx| {
+                let from = store::set_status(
+                    tx,
+                    &ctx.thread_id,
+                    ThreadStatus::WaitingForDependency,
+                    Some(&activity),
+                    &now,
+                )?;
+                store::set_error(
+                    tx,
+                    &ctx.thread_id,
+                    Some((error_codes::WAITING_FOR_RESOURCES, &message)),
+                )?;
+                Ok((
+                    (),
+                    ctx.status_changed(
+                        EventSource::Core,
+                        from,
+                        ThreadStatus::WaitingForDependency,
+                        Some(&activity),
+                    ),
+                ))
+            })?;
+            tracing::info!(
+                event = "thread.waiting_for_resources",
+                thread_id = %ctx.thread_id,
+                reason = waiting.hold.kind.code(),
+                retry_ms = u64::try_from(waiting.hold.retry_after.as_millis()).unwrap_or(u64::MAX),
+                wait_limit_ms = u64::try_from(waiting.hold.wait_limit.as_millis()).unwrap_or(u64::MAX)
+            );
+        }
+        let fresh = recheck.is_none();
+        state.waiting = Some(waiting);
+        if fresh && let Err(error) = self.spawn_waiter(live.clone(), ticket) {
+            if let Some(waiting) = state.waiting.take() {
+                self.wait_ended(live, state, waiting)?;
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// One thread per wait: sleeps on the governor's retry cadence (never past the deadline),
+    /// then re-checks. It holds the runtime weakly and stops once its wait is no longer current.
+    fn spawn_waiter(&self, live: Arc<LiveThread>, ticket: u64) -> Result<()> {
+        let runtime = self.self_ref.clone();
+        let short: String = live.ctx.thread_id.chars().take(8).collect();
+        std::thread::Builder::new()
+            .name(format!("kalcode-thread-wait-{short}"))
+            .spawn(move || {
+                loop {
+                    let delay = {
+                        let state = live.lock();
+                        let Some(waiting) = state.waiting.as_ref().filter(|w| w.ticket == ticket)
+                        else {
+                            return;
+                        };
+                        waiting
+                            .hold
+                            .retry_after
+                            .min(waiting.deadline.saturating_duration_since(Instant::now()))
+                    };
+                    std::thread::sleep(delay);
+                    let Some(inner) = runtime.upgrade() else {
+                        return;
+                    };
+                    if !inner.recheck_wait(&live, ticket) {
+                        return;
+                    }
+                }
+            })
+            .map(|_| ())
+            .map_err(|e| {
+                KalError::internal(
+                    "thread_worker_failed",
+                    "KalCode couldn't start a worker for this thread.",
+                )
+                .with_source(e)
+            })
+    }
+
+    /// Re-evaluates a held launch or turn against current admission. Returns whether the same
+    /// wait continues.
+    fn recheck_wait(&self, live: &Arc<LiveThread>, ticket: u64) -> bool {
+        let mut state = live.lock();
+        let Some(waiting) = state.waiting.take_if(|waiting| waiting.ticket == ticket) else {
+            return false;
+        };
+        let result = if self.shutting_down.load(Ordering::SeqCst)
+            || Instant::now() >= waiting.deadline
+        {
+            self.wait_ended(live, &mut state, waiting)
+        } else {
+            let recheck = Some((ticket, waiting.deadline, waiting.hold.kind));
+            match waiting.what {
+                WaitFor::Start {
+                    resume_session_id,
+                    input,
+                    notice,
+                } => match self.row(&live.ctx.thread_id).and_then(|row| {
+                    let entry = self
+                        .providers
+                        .get(&row.provider_id)
+                        .ok_or_else(|| provider_unavailable(&row.provider_name))?;
+                    Ok((row, entry))
+                }) {
+                    Ok((row, entry)) => self.launch(
+                        live,
+                        &mut state,
+                        &row,
+                        &entry,
+                        resume_session_id,
+                        input,
+                        notice,
+                        recheck,
+                    ),
+                    Err(error) => self.fail_idle_thread(&live.ctx, error.code, &error.message),
+                },
+                WaitFor::Turn { input } => self.deliver_locked(live, &mut state, input, recheck),
+            }
+        };
+        if let Err(error) = result {
+            tracing::error!(event = "thread.wait_recheck_failed", thread_id = %live.ctx.thread_id, error = %error.diagnostic());
+        }
+        state
+            .waiting
+            .as_ref()
+            .is_some_and(|waiting| waiting.ticket == ticket)
+    }
+
+    /// The bounded wait ended (or KalCode is shutting down): nothing started. The thread is
+    /// `interrupted` (resumable) with `resources_unavailable`; never `failed`.
+    fn wait_ended(
+        &self,
+        live: &Arc<LiveThread>,
+        state: &mut LiveState,
+        waiting: Waiting,
+    ) -> Result<()> {
+        let ctx = &live.ctx;
+        let provider_name = self.row(&ctx.thread_id)?.provider_name;
+        tracing::info!(
+            event = "thread.resources_unavailable",
+            thread_id = %ctx.thread_id,
+            reason = waiting.hold.kind.code()
+        );
+        match waiting.what {
+            WaitFor::Start { input, .. } => {
+                let message =
+                    unavailable_message(&provider_name, &waiting.hold, input.is_some(), false);
+                let now = now_rfc3339();
+                self.core.write_with_events(|tx| {
+                    let from = store::set_status(
+                        tx,
+                        &ctx.thread_id,
+                        ThreadStatus::Interrupted,
+                        Some(RESOURCES_UNAVAILABLE_ACTIVITY),
+                        &now,
+                    )?;
+                    store::set_error(
+                        tx,
+                        &ctx.thread_id,
+                        Some((error_codes::RESOURCES_UNAVAILABLE, &message)),
+                    )?;
+                    Ok((
+                        (),
+                        ctx.status_changed(
+                            EventSource::Core,
+                            from,
+                            ThreadStatus::Interrupted,
+                            Some(RESOURCES_UNAVAILABLE_ACTIVITY),
+                        ),
+                    ))
+                })?;
+                Ok(())
+            }
+            WaitFor::Turn { input } => {
+                let message =
+                    unavailable_message(&provider_name, &waiting.hold, input.redeliverable, true);
+                self.end_session(live, state, EndReason::ResourcesUnavailable { message })
+            }
+        }
     }
 
     fn spawn_worker(
@@ -1597,7 +2046,9 @@ impl Inner {
                 })?;
             }
             AgentEvent::Status { status, detail } => {
-                if !provider_settable(status) {
+                if !provider_settable(status) || state.waiting.is_some() {
+                    // A held turn owns the status until it is admitted (a late idle from the
+                    // previous turn must not hide the wait).
                     tracing::debug!(event = "thread.status_ignored", thread_id = %id, status = ?status);
                     return Ok(());
                 }
@@ -1605,7 +2056,12 @@ impl Inner {
                     state.resume_status = Some(status);
                     return Ok(());
                 }
-                let detail = detail.map(|d| validate::provider_text(&d, 160));
+                let detail = detail
+                    .map(|d| validate::provider_text(&d, 160))
+                    .or_else(|| {
+                        (status == ThreadStatus::Idle && state.turn_failed)
+                            .then(|| LAST_TURN_FAILED_ACTIVITY.to_owned())
+                    });
                 self.provider_transition(ctx, status, detail.as_deref())?;
             }
             AgentEvent::MessageDelta { message_id, text } => {
@@ -1799,11 +2255,17 @@ impl Inner {
                     Ok(((), Vec::new()))
                 })?;
             }
-            AgentEvent::TurnCompleted { ok: _ } => {
+            AgentEvent::TurnCompleted { ok } => {
                 // A failed turn is reported through `Error`; the turn itself is over either way.
+                // An idle thread whose last turn failed says so, so status and error agree.
                 self.flush_buffers(ctx, state)?;
+                state.turn_failed = !ok && !state.halted;
+                if state.waiting.is_some() {
+                    return Ok(());
+                }
                 if state.pending.is_empty() {
-                    self.provider_transition(ctx, ThreadStatus::Idle, None)?;
+                    let detail = state.turn_failed.then_some(LAST_TURN_FAILED_ACTIVITY);
+                    self.provider_transition(ctx, ThreadStatus::Idle, detail)?;
                 } else {
                     state.resume_status = Some(ThreadStatus::Idle);
                 }
@@ -2131,6 +2593,8 @@ impl Inner {
     ) -> Result<()> {
         let ctx = &live.ctx;
         let had_pending = !state.pending.is_empty();
+        // Ending the session ends any wait on it.
+        state.waiting = None;
         if let Some(session) = &state.session
             && !matches!(reason, EndReason::Exited(_))
         {
@@ -2183,6 +2647,14 @@ impl Inner {
                         None,
                         Some((code.clone(), message.clone())),
                     ),
+                    EndReason::ResourcesUnavailable { message } => (
+                        ThreadStatus::Interrupted,
+                        Some(RESOURCES_UNAVAILABLE_ACTIVITY.to_owned()),
+                        Some((
+                            error_codes::RESOURCES_UNAVAILABLE.to_owned(),
+                            message.clone(),
+                        )),
+                    ),
                     EndReason::Exited(code) => {
                         let finished = *code == Some(0)
                             && !had_pending
@@ -2213,14 +2685,17 @@ impl Inner {
             let mut events = ctx.status_changed(EventSource::Core, from, to, activity.as_deref());
             if let Some((code, message)) = &error {
                 store::set_error(tx, id, Some((code, message)))?;
-                events.push(ctx.event(
-                    EventSource::Core,
-                    EventPayload::ThreadFailed {
-                        thread_id: id.to_owned(),
-                        code: code.clone(),
-                        message: message.clone(),
-                    },
-                ));
+                // Waiting for resources ran out: nothing failed, so no failure notification.
+                if !matches!(reason, EndReason::ResourcesUnavailable { .. }) {
+                    events.push(ctx.event(
+                        EventSource::Core,
+                        EventPayload::ThreadFailed {
+                            thread_id: id.to_owned(),
+                            code: code.clone(),
+                            message: message.clone(),
+                        },
+                    ));
+                }
             }
             if to == ThreadStatus::Completed && !matches!(reason, EndReason::AccountSwitched) {
                 events.push(ctx.event(
@@ -2264,8 +2739,7 @@ impl Inner {
         state: &mut LiveState,
         text: String,
     ) -> Result<()> {
-        let provider_payload = text.clone();
-        self.send_locked_with_payload(live, state, text, provider_payload)
+        self.deliver_locked(live, state, TurnInput::new(text), None)
     }
 
     fn send_locked_with_payload(
@@ -2275,26 +2749,70 @@ impl Inner {
         persisted_text: String,
         provider_payload: String,
     ) -> Result<()> {
+        let redeliverable = persisted_text == provider_payload;
+        let input = TurnInput {
+            payload: provider_payload,
+            record: Some(persisted_text),
+            redeliverable,
+        };
+        self.deliver_locked(live, state, input, None)
+    }
+
+    /// Records the message (when it isn't yet) and sends it. A turn the Resource Governor holds
+    /// waits; a message that never reached the provider stays marked for Resume.
+    fn deliver_locked(
+        &self,
+        live: &Arc<LiveThread>,
+        state: &mut LiveState,
+        mut input: TurnInput,
+        recheck: Recheck,
+    ) -> Result<()> {
         let ctx = &live.ctx;
         let session = state.session.clone().ok_or_else(not_running)?;
-        self.persist_message(
-            ctx,
-            MessageRole::User,
-            &persisted_text,
-            None,
-            EventSource::Ui,
-        )?;
+        let recorded = match input.record.take() {
+            Some(text) => {
+                Some(self.persist_message(ctx, MessageRole::User, &text, None, EventSource::Ui)?)
+            }
+            None => None,
+        };
+        let mark_undelivered = |message: &Option<ThreadMessage>| -> Result<()> {
+            if let Some(message) = message
+                && input.redeliverable
+            {
+                self.core.write_with_events(|tx| {
+                    store::set_undelivered(tx, &ctx.thread_id, &message.id)?;
+                    Ok(((), Vec::new()))
+                })?;
+            }
+            Ok(())
+        };
         match session.send(AgentInput::Text {
-            text: provider_payload,
+            text: input.payload.clone(),
         }) {
             Ok(()) => {
+                state.turn_failed = false;
+                state.halted = false;
+                // Delivered: nothing is waiting to be resent, and a new turn clears the last
+                // turn's problem so status and error stay consistent.
+                self.core.write_with_events(|tx| {
+                    store::clear_undelivered(tx, &ctx.thread_id)?;
+                    store::set_error(tx, &ctx.thread_id, None)?;
+                    Ok(((), Vec::new()))
+                })?;
                 if state.pending.is_empty() {
                     self.transition(ctx, ThreadStatus::Active, None)?;
                 }
                 Ok(())
             }
+            Err(ProviderError::ResourcesHeld(hold)) => {
+                mark_undelivered(&recorded)?;
+                self.wait_for_resources(live, state, hold, WaitFor::Turn { input }, recheck)
+            }
             Err(error) => {
                 tracing::warn!(event = "thread.send_failed", thread_id = %ctx.thread_id, error = %error);
+                if never_delivered(&error) {
+                    mark_undelivered(&recorded)?;
+                }
                 let name = self.row(&ctx.thread_id)?.provider_name;
                 let (code, message) = describe_provider_error(&error, &name);
                 self.end_session(live, state, EndReason::Failed { code, message })
@@ -2331,6 +2849,9 @@ impl Inner {
                 "thread_paused",
                 "Resume this thread before sending another message.",
             ));
+        }
+        if state.waiting.is_some() {
+            return Err(waiting_for_resources());
         }
         if state.session.is_none() {
             return Err(not_running());
@@ -2391,6 +2912,8 @@ impl Inner {
         self.deny_pending(&mut state);
         state.tools.clear();
         state.resume_status = None;
+        state.halted = true;
+        state.turn_failed = false;
         self.flush_buffers(&live.ctx, &mut state)?;
         let now = now_rfc3339();
         let ctx = &live.ctx;
@@ -2414,6 +2937,21 @@ impl Inner {
         let row = self.row(thread_id)?;
         if let Some(live) = self.existing_live(thread_id) {
             let mut state = live.lock();
+            // Stopping ends a wait for system resources: its waiter sees no current ticket. The
+            // held message stays recorded and marked, so Resume sends it.
+            if state.waiting.take().is_some() {
+                self.core.write_with_events(|tx| {
+                    store::set_error(tx, thread_id, None)?;
+                    Ok(((), Vec::new()))
+                })?;
+                if state.session.is_none() {
+                    return self.transition(
+                        &Ctx::from_row(&row),
+                        ThreadStatus::Interrupted,
+                        Some(activity),
+                    );
+                }
+            }
             if state.session.is_some() {
                 return self.end_session(&live, &mut state, EndReason::Stopped { activity });
             }
@@ -2436,6 +2974,9 @@ impl Inner {
         }
         if let Some(live) = self.existing_live(thread_id) {
             let mut state = live.lock();
+            if state.waiting.is_some() {
+                return Err(waiting_for_resources());
+            }
             if state.session.is_some() {
                 if row.status != ThreadStatus::Paused {
                     return Err(KalError::validation(
@@ -2490,6 +3031,10 @@ impl Inner {
                 return Err(thread_account_changed());
             }
             store::set_cwd(tx, thread_id, &cwd, &workspace.name)?;
+            // New text supersedes a message that never reached the provider.
+            if text.is_some() {
+                store::clear_undelivered(tx, thread_id)?;
+            }
             let from = store::set_status(
                 tx,
                 thread_id,
@@ -2517,7 +3062,13 @@ impl Inner {
             None
         };
         let notice = (resume_id.is_none() && has_history).then_some(NEW_SESSION_NOTICE);
-        self.start_session(&row, &entry, resume_id, text, notice)
+        // Without new text, Resume delivers the message a held or refused start never sent.
+        let redeliver = if text.is_none() {
+            self.core.read(|conn| store::undelivered(conn, thread_id))?
+        } else {
+            None
+        };
+        self.start_session(&row, &entry, resume_id, text, notice, redeliver)
     }
 
     fn rebind_account(&self, thread_id: &str, account_id: &str) -> Result<ThreadRow> {
@@ -2536,6 +3087,12 @@ impl Inner {
         let mut state = live.as_ref().map(|live| live.lock());
         let row = self.row(thread_id)?;
         let pending = state.as_ref().map_or(0, |state| state.pending.len());
+        if state.as_ref().is_some_and(|state| state.waiting.is_some()) {
+            return Err(KalError::validation(
+                "thread_rebind_busy",
+                "Wait for the current turn to finish or stop the thread first.",
+            ));
+        }
         rebind_ready(&row, pending)?;
         let ended_session = if let (Some(live), Some(state)) = (&live, state.as_mut())
             && state.session.is_some()
@@ -2558,6 +3115,8 @@ impl Inner {
             rebind_ready(&current, 0)?;
             let account = rebind_target(store::account(tx, account_id)?, &current.provider_id)?;
             store::set_account(tx, thread_id, account_id, Some(&account.display_name))?;
+            // A message admitted for the old account is never sent automatically to the new one.
+            store::clear_undelivered(tx, thread_id)?;
             if ended_session {
                 store::set_activity(tx, thread_id, Some(ACCOUNT_SWITCHED_ACTIVITY), &now)?;
             }
@@ -2604,18 +3163,34 @@ impl Inner {
         if row.archived_at.is_some() {
             return Ok(());
         }
-        if let Some(live) = self.existing_live(thread_id)
-            && live.lock().session.is_some()
-        {
-            return Err(KalError::validation(
-                "thread_running",
-                "Stop the thread before archiving it.",
-            ));
+        if let Some(live) = self.existing_live(thread_id) {
+            let mut state = live.lock();
+            let running =
+                || KalError::validation("thread_running", "Stop the thread before archiving it.");
+            if state.waiting.is_some() {
+                return Err(running());
+            }
+            if state.session.is_some() {
+                // An idle session (no turn, no approval) ends with the archive; anything that is
+                // working or paused mid-turn must be stopped first.
+                let status = self.row(thread_id)?.status;
+                if !matches!(status, ThreadStatus::Idle | ThreadStatus::WaitingForUser) {
+                    return Err(running());
+                }
+                self.end_session(
+                    &live,
+                    &mut state,
+                    EndReason::Stopped {
+                        activity: ARCHIVED_ACTIVITY,
+                    },
+                )?;
+            }
         }
         let ctx = Ctx::from_row(&row);
         let now = now_rfc3339();
         self.core.write_with_events(|tx| {
             store::archive(tx, thread_id, &now)?;
+            store::clear_undelivered(tx, thread_id)?;
             Ok((
                 (),
                 vec![ctx.event(
@@ -2674,6 +3249,13 @@ impl Inner {
 
 fn archived() -> KalError {
     KalError::validation("thread_archived", "This thread is archived.")
+}
+
+fn waiting_for_resources() -> KalError {
+    KalError::validation(
+        "thread_waiting_for_resources",
+        "This thread is waiting for system resources and starts on its own. Stop it to cancel.",
+    )
 }
 
 fn thread_account_changed() -> KalError {

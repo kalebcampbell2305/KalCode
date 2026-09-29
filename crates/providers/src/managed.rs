@@ -52,9 +52,12 @@ enum ProfileLeaseError {
 impl ProfileLeaseError {
     fn into_provider_error(self) -> ProviderError {
         match self {
-            Self::InUse => {
-                ProviderError::Start("the managed provider profile is already in use".into())
-            }
+            Self::InUse => ProviderError::Refused {
+                code: kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_BUSY.to_owned(),
+                message: "This account is busy with a sign-in or account change in KalCode. \
+                          Finish it, then resume this thread."
+                    .to_owned(),
+            },
             Self::Unavailable(error) => error,
         }
     }

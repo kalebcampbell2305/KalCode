@@ -13,7 +13,7 @@
 //! | `item.completed` `agent_message {text}` | `MessageCompleted` |
 //! | `item.completed` `command_execution` / `mcp_tool_call` / `web_search` | `ToolCompleted { ok }` (`status == "completed"`, and exit code 0 for commands) |
 //! | `item.completed` `file_change {changes, status}` | `ToolRequested`, `Status(editing)`, `ToolCompleted`, `FileChanged` per change when it succeeded |
-//! | `item.completed` `error {message}` | `Error(codex_item_error, recoverable)` |
+//! | `item.completed` `error {message}` | `Error(codex_item_error, recoverable)`; the code-mode-host notice KalCode's policy causes is dropped |
 //! | `turn.completed {usage}` | `Usage`, `TurnCompleted { ok: true }`, `Status(idle)` |
 //! | `turn.failed {error}` | `Error(turn_failed, recoverable)`, `TurnCompleted { ok: false }`, `Status(idle)` |
 //! | `error {message}` | `Error(stream_error, recoverable)` |
@@ -31,6 +31,10 @@ use serde_json::Value;
 
 use crate::claude::actions::classify;
 use crate::turns::{TurnNormalizer, provider_message};
+
+/// The notice Codex reports as an item error because KalCode's policy floor disables its
+/// code-mode host (`features.code_mode_host=false`). Expected on every turn; never shown.
+const CODE_MODE_HOST_DISABLED: &str = "Code Mode is unavailable because code-mode host is disabled";
 
 fn status(status: ThreadStatus, detail: Option<String>) -> AgentEvent {
     AgentEvent::Status { status, detail }
@@ -189,11 +193,21 @@ impl CodexNormalizer {
                 events.push(status(ThreadStatus::Thinking, None));
                 events
             }
-            "error" => vec![AgentEvent::Error {
-                code: "codex_item_error".into(),
-                message: provider_message(required(item, "message")?),
-                recoverable: true,
-            }],
+            "error" => {
+                let message = required(item, "message")?;
+                if message.starts_with(CODE_MODE_HOST_DISABLED) {
+                    // KalCode disables Codex's code-mode host by policy (`argv::POLICY_CONFIG`,
+                    // `features.code_mode_host=false`). Codex then reports this notice as an
+                    // item error on successful turns; it is expected, not a problem to show.
+                    tracing::debug!(event = "provider.codex_code_mode_notice_dropped");
+                    return Ok(Vec::new());
+                }
+                vec![AgentEvent::Error {
+                    code: "codex_item_error".into(),
+                    message: provider_message(message),
+                    recoverable: true,
+                }]
+            }
             // reasoning, todo_list, and item types added later.
             _ => Vec::new(),
         })
@@ -413,6 +427,28 @@ mod tests {
             summary: Some("Not run".into())
         }));
         assert!(events.contains(&AgentEvent::TurnCompleted { ok: false }));
+    }
+
+    #[test]
+    fn the_policy_disabled_code_mode_notice_is_not_a_thread_error() {
+        let events = run(&[
+            r#"{"type":"thread.started","thread_id":"t-1"}"#,
+            r#"{"type":"turn.started"}"#,
+            r#"{"type":"item.completed","item":{"id":"item_0","type":"error","message":"Code Mode is unavailable because code-mode host is disabled."}}"#,
+            r#"{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"QA READY"}}"#,
+            r#"{"type":"item.completed","item":{"id":"item_2","type":"error","message":"Model provider overloaded"}}"#,
+            r#"{"type":"turn.completed","usage":{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}"#,
+        ]);
+        let errors: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::Error { message, .. } => Some(message.as_str()),
+                _ => None,
+            })
+            .collect();
+        // Only the real item error remains; the expected policy notice is dropped.
+        assert_eq!(errors, ["Model provider overloaded"]);
+        assert!(events.contains(&AgentEvent::TurnCompleted { ok: true }));
     }
 
     #[test]

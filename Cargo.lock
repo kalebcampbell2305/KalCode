@@ -3014,6 +3014,7 @@ name = "kalcode-resources"
 version = "0.1.5"
 dependencies = [
  "kalcode-contracts",
+ "libc",
  "serde",
  "serde_json",
  "sysinfo",

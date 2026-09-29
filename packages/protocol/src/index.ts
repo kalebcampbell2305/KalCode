@@ -5,4 +5,5 @@ export * from "./generated/index.ts";
 export * from "./permissions.ts";
 export * from "./plans.ts";
 export * from "./providers.ts";
+export * from "./thread-errors.ts";
 export * from "./usage-receipts.ts";

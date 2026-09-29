@@ -65,9 +65,11 @@ pub(crate) trait TurnAdapter: Send + Sync + 'static {
     fn turn_args(&self, resume: Option<&str>) -> Result<Vec<OsString>, ProviderError>;
     fn normalizer(&self) -> Box<dyn TurnNormalizer>;
     /// A provider-documented, user-safe error for a turn process that exited without ending its
-    /// turn (for example a provider's own authentication exit code). `None` keeps the generic
-    /// "stopped unexpectedly" error.
-    fn exit_error(&self, _exit_code: Option<i32>) -> Option<(&'static str, String)> {
+    /// turn (for example a provider's own authentication exit code). `stderr` is the turn's
+    /// redacted stderr tail: implementations may only *match* it against a provider's documented
+    /// refusal and must return fixed KalCode copy, never text taken from it. `None` keeps the
+    /// generic "stopped unexpectedly" error.
+    fn exit_error(&self, _exit_code: Option<i32>, _stderr: &str) -> Option<(&'static str, String)> {
         None
     }
 }
@@ -368,17 +370,20 @@ impl Shared {
         }
         let stderr = child.stderr_tail();
         tracing::warn!(event = "provider.turn_crashed", provider_id = self.adapter.provider_id(), exit_code = ?exit_code, stderr = %stderr);
-        let (code, message) = self.adapter.exit_error(exit_code).unwrap_or_else(|| {
-            (
-                "process_exited",
-                match exit_code {
-                    Some(code) => {
-                        format!("{} stopped unexpectedly (exit code {code}).", self.name())
-                    }
-                    None => format!("{} stopped unexpectedly.", self.name()),
-                },
-            )
-        });
+        let (code, message) = self
+            .adapter
+            .exit_error(exit_code, &stderr)
+            .unwrap_or_else(|| {
+                (
+                    "process_exited",
+                    match exit_code {
+                        Some(code) => {
+                            format!("{} stopped unexpectedly (exit code {code}).", self.name())
+                        }
+                        None => format!("{} stopped unexpectedly.", self.name()),
+                    },
+                )
+            });
         self.sink.emit(AgentEvent::Error {
             code: code.into(),
             message,

@@ -21,6 +21,10 @@ tracing.workspace = true
 # than it saves at our process counts), no `component` (WMI/COM temperature sensors), no `user`.
 sysinfo = { version = "0.37.2", default-features = false, features = ["system", "disk", "network"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# `sysctlbyname` for the kernel's memory status (probe/macos.rs).
+libc = "0.2"
+
 [dev-dependencies]
 serde_json.workspace = true
 

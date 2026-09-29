@@ -2,7 +2,7 @@ import type { ProviderAccount, ThreadSummary } from "@kalcode/protocol";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toKalCodeError } from "../../ipc/errors.ts";
 import { useEvents, useRuntime } from "../../runtime/RuntimeProvider.tsx";
-import { presentStatus } from "./model.ts";
+import { isWaitingForResources, presentStatus } from "./model.ts";
 
 /** How an account's sign-in state reads in the switcher (text, never colour alone). */
 export function accountStatus(state: ProviderAccount["authenticationState"]): { label: string; usable: boolean } {
@@ -24,6 +24,9 @@ export function rebindBlocker(thread: ThreadSummary, archived = false): string |
   }
   if (thread.status === "starting" || presentStatus(thread.status).working) {
     return "This thread is working. Finish or stop the current turn first, then switch accounts.";
+  }
+  if (isWaitingForResources(thread)) {
+    return "This thread is waiting for system resources to start. Stop it first, then switch accounts.";
   }
   return null;
 }

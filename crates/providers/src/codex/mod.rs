@@ -20,6 +20,7 @@ use kalcode_contracts::agent::{
 };
 use kalcode_contracts::ids::new_id;
 use kalcode_contracts::permissions::{ActionKind, NormalizedAction, PermissionMode};
+use kalcode_contracts::threads::error_codes;
 use serde_json::Value;
 
 use crate::catalog;
@@ -58,7 +59,10 @@ fn require_managed_version(version: &Version) -> Result<(), ProviderError> {
     if managed_version_supported(version) {
         Ok(())
     } else {
-        Err(ProviderError::Start(MANAGED_VERSIONS.refusal(version)))
+        Err(ProviderError::Refused {
+            code: error_codes::PROVIDER_VERSION_UNSUPPORTED.to_owned(),
+            message: MANAGED_VERSIONS.refusal(version),
+        })
     }
 }
 
@@ -184,6 +188,32 @@ impl TurnAdapter for CodexTurns {
     fn normalizer(&self) -> Box<dyn TurnNormalizer> {
         Box::new(stream::CodexNormalizer::new(self.cwd.clone()))
     }
+
+    fn exit_error(&self, _exit_code: Option<i32>, stderr: &str) -> Option<(&'static str, String)> {
+        approve_requires_git(self.mode, stderr)
+    }
+}
+
+/// Codex's own guard: outside a Git repository (or another trusted directory) `codex exec`
+/// refuses to run unless `--skip-git-repo-check` is passed, which KalCode passes only in the
+/// read-only Plan mapping (`argv::sandbox_args`). Codex prints "Not inside a trusted directory
+/// and --skip-git-repo-check was not specified." and exits before any JSON event.
+fn approve_requires_git(mode: PermissionMode, stderr: &str) -> Option<(&'static str, String)> {
+    if !(stderr.contains("--skip-git-repo-check") && stderr.contains("trusted directory")) {
+        return None;
+    }
+    let mode = match mode {
+        PermissionMode::Plan => "Plan",
+        PermissionMode::Approve | PermissionMode::Custom => "Approve",
+        PermissionMode::Auto => "Auto",
+        PermissionMode::Bypass => "Bypass",
+    };
+    Some((
+        error_codes::CODEX_APPROVE_REQUIRES_GIT,
+        format!(
+            "Codex runs in {mode} mode only inside a Git repository. Use Plan, or open a Git folder."
+        ),
+    ))
 }
 
 /// Resolves a usable executable for a turn-based provider, refusing the same states as Claude
@@ -417,6 +447,46 @@ mod tests {
     use super::*;
     use kalcode_contracts::permissions::GitOperation;
 
+    /// Codex's trusted-directory refusal, as `codex exec` prints it outside a Git repository.
+    const NOT_A_GIT_FOLDER: &str =
+        "Not inside a trusted directory and --skip-git-repo-check was not specified.\n";
+
+    #[test]
+    fn codexs_non_git_refusal_is_classified_with_precise_copy() {
+        let turns = |mode| CodexTurns {
+            mode,
+            model: None,
+            cwd: String::new(),
+            policy_overrides: Vec::new(),
+        };
+        let (code, message) = turns(PermissionMode::Approve)
+            .exit_error(Some(1), NOT_A_GIT_FOLDER)
+            .expect("the guard is recognized");
+        assert_eq!(code, "codex_approve_requires_git");
+        assert_eq!(
+            message,
+            "Codex runs in Approve mode only inside a Git repository. Use Plan, or open a Git folder."
+        );
+        let (_, auto) = turns(PermissionMode::Auto)
+            .exit_error(Some(1), NOT_A_GIT_FOLDER)
+            .expect("Auto uses the same guard");
+        assert!(auto.starts_with("Codex runs in Auto mode"));
+
+        // Plan passes --skip-git-repo-check; other crashes keep the generic exit error.
+        assert!(
+            argv::sandbox_args(PermissionMode::Plan).contains(&"--skip-git-repo-check")
+                && !argv::sandbox_args(PermissionMode::Approve).contains(&"--skip-git-repo-check")
+        );
+        for other in ["", "Error: stream disconnected", "trusted directory"] {
+            assert!(
+                turns(PermissionMode::Approve)
+                    .exit_error(Some(1), other)
+                    .is_none(),
+                "{other:?}"
+            );
+        }
+    }
+
     fn ctx() -> ActionContext {
         ActionContext {
             thread_id: new_id(),
@@ -501,11 +571,12 @@ mod tests {
     #[test]
     fn codex_refusal_names_the_found_version_the_supported_range_and_the_install_command() {
         let found = Version::parse("0.159.0").expect("version");
-        let ProviderError::Start(message) =
+        let ProviderError::Refused { code, message } =
             require_managed_version(&found).expect_err("0.159.0 must fail closed")
         else {
-            panic!("unsupported Codex must be a start error");
+            panic!("unsupported Codex must be a typed refusal");
         };
+        assert_eq!(code, "provider_version_unsupported");
         assert!(message.contains("Codex CLI 0.159.0"), "{message}");
         assert!(
             message.contains("0.155.x (0.155.1 or later), 0.156.x, 0.157.x or 0.158.x"),
@@ -517,11 +588,12 @@ mod tests {
         );
 
         let pre_release = Version::parse("0.158.0-alpha.15").expect("version");
-        let ProviderError::Start(message) =
+        let ProviderError::Refused { code, message } =
             require_managed_version(&pre_release).expect_err("pre-release must fail closed")
         else {
-            panic!("unsupported Codex must be a start error");
+            panic!("unsupported Codex must be a typed refusal");
         };
+        assert_eq!(code, "provider_version_unsupported");
         assert!(message.contains("0.158.0-alpha.15"), "{message}");
     }
 
