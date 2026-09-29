@@ -1,7 +1,7 @@
 import { Button, TextInput } from "@kalcode/ui/components";
 import { Check, Circle, Mail, ShieldCheck } from "lucide-react";
 import { type FormEvent, useId, useState } from "react";
-import { type AccountSnapshot, PLAN_CATALOG, type PurchasableTier } from "../ipc/account.ts";
+import { type AccountSnapshot, PLAN_CATALOG, type PurchasableTier, SESSION_EXPIRED_REASON } from "../ipc/account.ts";
 import { Mark } from "../shell/Brand.tsx";
 import styles from "./Account.module.css";
 import type { SocialProvider } from "./AccountProvider.tsx";
@@ -92,6 +92,19 @@ export function AccountOnboarding({ snapshot, busy, error, actions }: AccountOnb
                 Try again
               </Button>
             ) : null}
+          </div>
+        ) : snapshot.phase === "signed_out" && mode === null && snapshot.degradedReason === SESSION_EXPIRED_REASON ? (
+          // A returning person whose session ran out: say so instead of the first-run welcome.
+          <div className={styles.center}>
+            <p className={styles.eyebrow}>Session expired</p>
+            <h1 id="account-title">Your session expired — sign in again</h1>
+            <p role="status">For your security, KalCode ended this session. Sign in again to keep working.</p>
+            <SocialAuthButtons busy={busy} startSocial={actions.startSocial} />
+            <div className={styles.actions}>
+              <Button variant="primary" size="lg" disabled={busy} onClick={() => setMode("sign_in")}>
+                Continue with email
+              </Button>
+            </div>
           </div>
         ) : snapshot.phase === "signed_out" && mode === null ? (
           <div className={styles.center}>

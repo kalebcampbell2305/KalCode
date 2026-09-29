@@ -12,7 +12,8 @@ use account::api::{
     UsageResponse,
 };
 use account::model::{
-    AccountAuthority, AccountPhase, AccountTier, PendingAuthSecret, PublicAccount, SessionSecret,
+    AccountAuthority, AccountPhase, AccountTier, PendingAuthSecret, PublicAccount,
+    SESSION_EXPIRED_REASON, SessionSecret,
 };
 use account::runtime::{AccountRuntime, Clock};
 use account::session_store::{ACCOUNT_USAGE_RECEIPT_KEY, AccountSessionStore, CachedAccountSecret};
@@ -863,6 +864,11 @@ fn unauthorized_refresh_deletes_durable_session_and_returns_the_gate() {
 
     let snapshot = runtime.refresh().expect("401 becomes gate state");
     assert_eq!(snapshot.phase, AccountPhase::SignedOut);
+    // The gate says why: the session was rejected, not signed out by the person.
+    assert_eq!(
+        snapshot.degraded_reason.as_deref(),
+        Some(SESSION_EXPIRED_REASON)
+    );
     assert_eq!(runtime.authority(), AccountAuthority::SignedOut);
     assert!(
         AccountSessionStore::new(store.as_ref())
@@ -871,6 +877,44 @@ fn unauthorized_refresh_deletes_durable_session_and_returns_the_gate() {
             .expect("load")
             .is_none()
     );
+}
+
+#[test]
+fn an_expired_stored_session_bootstraps_to_a_session_expired_gate() {
+    let api = Arc::new(FakeApi::default());
+    let store = Arc::new(TestStore::default());
+    let session = SessionSecret::new(format!("kcs_{}", "a".repeat(43)), NOW - 60).expect("session");
+    AccountSessionStore::new(store.as_ref())
+        .expect("store")
+        .save_full(Some(&session), None, None, None)
+        .expect("seed");
+    let runtime = runtime(api, store.clone());
+
+    let snapshot = runtime.bootstrap().expect("bootstrap");
+    assert_eq!(snapshot.phase, AccountPhase::SignedOut);
+    assert_eq!(
+        snapshot.degraded_reason.as_deref(),
+        Some(SESSION_EXPIRED_REASON)
+    );
+    assert_eq!(runtime.authority(), AccountAuthority::SignedOut);
+    assert!(
+        AccountSessionStore::new(store.as_ref())
+            .expect("store")
+            .load()
+            .expect("load")
+            .is_none()
+    );
+
+    // A fresh start with nothing stored is a plain first-run gate, with no expiry message.
+    let fresh = runtime_with_empty_store()
+        .bootstrap()
+        .expect("fresh bootstrap");
+    assert_eq!(fresh.phase, AccountPhase::SignedOut);
+    assert_eq!(fresh.degraded_reason, None);
+}
+
+fn runtime_with_empty_store() -> AccountRuntime {
+    runtime(Arc::new(FakeApi::default()), Arc::new(TestStore::default()))
 }
 
 #[test]
