@@ -119,7 +119,7 @@ export const PAGES = [
     path: "/",
     title: "KalCode — One intelligence that operates your entire AI workspace",
     description:
-      "KalCode is a desktop workspace in private development. Connect the coding agents you already use — Claude Code and Codex — run their threads at the same time, approve every action, and speak your prompts with KalVoice.",
+      "KalCode is a desktop workspace for the coding agents you already use. Connect Claude Code and Codex, run their threads at the same time, approve every action, and speak your prompts with KalVoice.",
   },
   {
     path: "/product",

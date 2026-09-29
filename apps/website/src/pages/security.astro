@@ -1,11 +1,15 @@
 ---
 import PageHead from "../components/PageHead.astro";
 import Base from "../layouts/Base.astro";
-import { RELEASES, buildStatus, servedStableRelease } from "../lib/releases";
+import { RELEASES, buildStatus, servedStableRelease, signedStableRelease } from "../lib/releases";
 import { CONTACT_EMAIL, GEMINI_AVAILABILITY, getPage } from "../lib/site";
 
 const page = getPage("/security");
 const kalvoiceShipped = servedStableRelease(RELEASES) !== null;
+// Signed builds are claimed only while /download serves a signed Windows and Mac Stable release
+// (B9 536efd7: Authenticode-signed NSIS installer, Developer ID signed and notarized app, minisign
+// update signatures checked by apps/desktop/src-tauri/src/updater_commands and crates/updater).
+const signedBuilds = signedStableRelease(RELEASES) !== null;
 ---
 <Base title={page.title} description={page.description} path={page.path}>
   <PageHead
@@ -81,6 +85,35 @@ const kalvoiceShipped = servedStableRelease(RELEASES) !== null;
           </dd>
         </div>
         <div>
+          <dt>Workspace containment</dt>
+          <dd>
+            A path counts as inside your workspace only when it still lands inside the workspace
+            folder after <code>..</code>, symlinks and junctions are resolved. Paths KalCode cannot
+            resolve safely, such as device paths and alternate data streams, are treated as outside.
+          </dd>
+        </div>
+        <div>
+          <dt>Provider isolation</dt>
+          <dd>
+            Each provider's CLI starts with a sanitized environment: only the variables the operating
+            system and that CLI need, plus that provider's own. A Claude Code process never sees an
+            OpenAI key, and no KalCode-internal variable reaches any provider.
+          </dd>
+        </div>
+        {
+          signedBuilds && (
+            <div>
+              <dt>Signed installers and updates</dt>
+              <dd>
+                The Windows installer is Authenticode-signed, and the Mac app is signed with an Apple
+                Developer ID and notarized by Apple. Updates are signed: before installing one,
+                KalCode checks its SHA-256 checksum and its update signature, and on Windows the
+                installer's Authenticode signature too.
+              </dd>
+            </div>
+          )
+        }
+        <div>
           <dt>Supply chain</dt>
           <dd>Lockfiles are committed, and dependency audits run in continuous integration.</dd>
         </div>
@@ -111,18 +144,16 @@ const kalvoiceShipped = servedStableRelease(RELEASES) !== null;
 
       <h2>The permission model</h2>
       <p>
-        Every action an AI agent wants to take is checked against the permission mode you choose.
+        KalCode's permission engine checks every action an AI agent wants to take against the
+        permission mode you choose: Plan, Approve or Auto.
         Providers and their output are treated as untrusted input. KalVoice is not above the model:
         it cannot raise its own authority or enable Bypass. Consequential decisions are recorded in an
         audit log. Read the <a href="/docs/permissions">permission documentation</a> for details.
       </p>
 
-      <h2>Planned before release</h2>
+      <h2>Planned</h2>
       <ul>
-        <li>Workspace containment: path canonicalization and symlink-escape detection.</li>
-        <li>Provider isolation with sanitized environments.</li>
-        <li>The permission engine with an audit log of consequential decisions.</li>
-        <li>Code-signed installers and signed updates.</li>
+        {!signedBuilds && <li>Code-signed installers and signed updates.</li>}
         <li>Server-side plan and usage checks, and verified billing webhooks, when paid plans launch.</li>
       </ul>
 
