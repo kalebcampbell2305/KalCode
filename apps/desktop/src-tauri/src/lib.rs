@@ -343,29 +343,55 @@ enum ExitEventCleanup {
     AlreadyDrained,
     Drained,
     Incomplete,
+    /// The in-flight `ExitRequested` drain that this exit joined failed (or overran the join
+    /// limit). No second drain is started: the exit budget is spent.
+    JoinFailed,
 }
+
+/// How long `RunEvent::Exit` waits for an in-flight `ExitRequested` drain: that drain's own
+/// bound (`wait_drained`, 30 s) plus a margin for the service stop that follows it.
+const EXIT_JOIN_LIMIT: Duration = Duration::from_secs(35);
 
 /// Final cleanup for `RunEvent::Exit`. On macOS, `terminate:` (the default menu's Quit / Cmd+Q,
 /// Dock Quit, logout, shutdown) ends the event loop with `Exit` alone; no `ExitRequested`
 /// precedes it, so the runtime must be drained here, synchronously, before the process ends.
-/// After a completed `ExitRequested` drain this is a no-op. While one is still in flight,
-/// `shutdown` joins it (the runtime shutdown is serialized and caches success), so the runtime is
-/// never drained twice and nothing waits on the now-stopped event loop.
+/// - After a completed `ExitRequested` drain this is a no-op.
+/// - With no prior attempt it runs one bounded `shutdown`.
+/// - While an `ExitRequested` drain is in flight it only waits for that attempt's outcome (at
+///   most `join_limit`) and never starts a second drain, so the exit stays within one bound.
+///
+/// Nothing here waits on the now-stopped event loop.
 fn drain_on_exit_event(
     exit: &runtime_shutdown::ExitControl,
+    join_limit: Duration,
     shutdown: impl FnOnce() -> bool,
 ) -> ExitEventCleanup {
-    exit.event_loop_ended
-        .store(true, std::sync::atomic::Ordering::Release);
+    use std::sync::atomic::Ordering;
+
+    exit.event_loop_ended.store(true, Ordering::Release);
     match begin_exit_attempt(exit) {
         ExitAttempt::Ready => ExitEventCleanup::AlreadyDrained,
-        ExitAttempt::Start | ExitAttempt::Pending => {
+        ExitAttempt::Start => {
             let clean = shutdown();
             finish_exit_attempt(exit, clean);
             if clean {
                 ExitEventCleanup::Drained
             } else {
                 ExitEventCleanup::Incomplete
+            }
+        }
+        ExitAttempt::Pending => {
+            // The attempt's worker always ends with `finish_exit_attempt`: `ready` on success,
+            // `requested` cleared on failure. No new attempt can start once the loop has ended.
+            let deadline = Instant::now() + join_limit;
+            loop {
+                if exit.ready.load(Ordering::Acquire) {
+                    return ExitEventCleanup::Drained;
+                }
+                if !exit.requested.load(Ordering::Acquire) || Instant::now() >= deadline {
+                    return ExitEventCleanup::JoinFailed;
+                }
+                std::thread::sleep(Duration::from_millis(10));
             }
         }
     }
@@ -822,12 +848,21 @@ pub fn run(removed_overrides: Vec<String>) {
             }
         } else if let RunEvent::Exit = event {
             let exit = handle.state::<runtime_shutdown::ExitControl>();
-            if drain_on_exit_event(&exit, || shutdown_runtime(handle))
-                == ExitEventCleanup::Incomplete
-            {
-                tracing::error!(event = "app.exit_cleanup_incomplete", path = "exit_event");
+            match drain_on_exit_event(&exit, EXIT_JOIN_LIMIT, || shutdown_runtime(handle)) {
+                // The successful drain already stopped the services.
+                ExitEventCleanup::AlreadyDrained | ExitEventCleanup::Drained => {}
+                ExitEventCleanup::Incomplete => {
+                    tracing::error!(event = "app.exit_cleanup_incomplete", path = "exit_event");
+                    shutdown_services(handle);
+                }
+                ExitEventCleanup::JoinFailed => {
+                    tracing::error!(
+                        event = "app.exit_cleanup_incomplete",
+                        path = "exit_event_join_failed"
+                    );
+                    shutdown_services(handle);
+                }
             }
-            shutdown_services(handle);
         }
     });
 }
