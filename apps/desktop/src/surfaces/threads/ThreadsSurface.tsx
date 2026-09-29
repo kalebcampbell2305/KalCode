@@ -136,8 +136,8 @@ export function ThreadsSurface() {
                   }
                 >
                   <p>
-                    A thread gives Claude Code a task in one of your workspaces. You'll see what it's doing, the tools
-                    it runs and anything waiting for your approval.
+                    A thread gives a coding agent a task in one of your workspaces. You'll see what it's doing, the
+                    tools it runs and anything waiting for your approval.
                   </p>
                 </EmptyState>
               )}
