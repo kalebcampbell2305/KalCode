@@ -52,7 +52,7 @@ impl UpdateChannel {
     #[must_use]
     pub const fn endpoint(self) -> &'static str {
         match self {
-            Self::Stable => "https://kalcoded.com/releases/updater/stable.json",
+            Self::Stable => "https://kalcoded.com/releases/updater/stable/0.1.6.json",
             Self::Beta => "https://kalcoded.com/releases/updater/beta.json",
             Self::Dev => "https://kalcoded.com/releases/updater/dev.json",
         }
