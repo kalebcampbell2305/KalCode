@@ -7,6 +7,7 @@
  */
 import StageStyles from "./parts/StageStyles.astro";
 import { LOOSE_TERMINALS, PROVIDERS, summarize } from "../../data/story";
+import { stageTag } from "../../lib/stage-status";
 import Glyph from "./parts/Glyph.astro";
 import StageLabel from "./parts/StageLabel.astro";
 import StatusLabel from "./parts/StatusLabel.astro";
@@ -17,6 +18,8 @@ interface Props {
   class?: string;
 }
 const { id = "before-after", initial = "before", class: className } = Astro.props;
+// Six loose terminals include Gemini CLI; once Stable is served the label says KalCode can't run it.
+const label = stageTag({ tag: "", stableTag: "Gemini CLI unavailable in KalCode {version}" }) || undefined;
 const summary = summarize(
   LOOSE_TERMINALS.filter((t) => t.provider !== "shell").map((t) => t.status),
   LOOSE_TERMINALS.filter((t) => t.status === "waiting_for_permission").length,
@@ -40,7 +43,7 @@ const describeAfter =
       <button type="button" role="radio" class="kc-seg__btn" data-kc-ba-set="before" aria-checked={initial === "before" ? "true" : "false"} tabindex={initial === "before" ? 0 : -1} data-testid="ba-before">Six terminals</button>
       <button type="button" role="radio" class="kc-seg__btn" data-kc-ba-set="after" aria-checked={initial === "after" ? "true" : "false"} tabindex={initial === "after" ? 0 : -1} data-testid="ba-after">One KalCode workspace</button>
     </div>
-    <StageLabel />
+    <StageLabel tag={label} />
   </div>
 
   <div class="kc-ba__stage" role="img" aria-label={initial === "before" ? describeBefore : describeAfter} data-kc-ba-stage data-before={describeBefore} data-after={describeAfter}>
