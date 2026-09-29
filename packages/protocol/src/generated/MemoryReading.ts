@@ -2,7 +2,7 @@
 import type { CommitReading } from "./CommitReading.ts";
 import type { Reading } from "./Reading.ts";
 
-export type MemoryReading = { totalBytes: number, availableBytes: number, usedBytes: number, usedPercent: number, smoothedUsedPercent: number, smoothedAvailableBytes: number, 
+export type MemoryReading = { totalBytes: number, availableBytes: number, usedBytes: number, usedPercent: number, smoothedUsedPercent: number, smoothedAvailableBytes: number,
 /**
  * Committed memory (Windows). `Unavailable` elsewhere.
  */

@@ -6,11 +6,11 @@ import type { Hunk } from "./Hunk.ts";
 /**
  * A file with its hunks (the [`DiffFile`] fields, flattened).
  */
-export type FileDiff = { hunks: Array<Hunk>, 
+export type FileDiff = { hunks: Array<Hunk>,
 /**
  * Some hunks or lines of this file were left out (size caps).
  */
-hunksTruncated: boolean, 
+hunksTruncated: boolean,
 /**
  * `None` when the file lies outside the workspace (a workspace opened on a subfolder of a
  * repository) or its name isn't valid UTF-8.

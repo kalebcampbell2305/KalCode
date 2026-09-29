@@ -5,7 +5,7 @@ import type { GitFileChange } from "./GitFileChange.ts";
 /**
  * One file of a diff, for lists.
  */
-export type DiffFile = { 
+export type DiffFile = {
 /**
  * `None` when the file lies outside the workspace (a workspace opened on a subfolder of a
  * repository) or its name isn't valid UTF-8.

@@ -6,11 +6,11 @@ import type { GitFileChange } from "./GitFileChange.ts";
 /**
  * A status line as the UI receives it.
  */
-export type StatusFile = { 
+export type StatusFile = {
 /**
  * `None` when the file is outside the workspace or its name isn't a valid path.
  */
-file: FileRef | null, 
+file: FileRef | null,
 /**
  * Workspace-relative when inside the workspace, otherwise repository-relative.
  */

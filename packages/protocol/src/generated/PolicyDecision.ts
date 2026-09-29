@@ -5,7 +5,7 @@ import type { PolicyEffect } from "./PolicyEffect.ts";
 /**
  * The engine's verdict for one action, with its reason (for the approval UI and the audit log).
  */
-export type PolicyDecision = { effect: PolicyEffect, scopes: Array<PermissionScope>, reason: string, 
+export type PolicyDecision = { effect: PolicyEffect, scopes: Array<PermissionScope>, reason: string,
 /**
  * True when the user may approve (false for `Never` rules).
  */
