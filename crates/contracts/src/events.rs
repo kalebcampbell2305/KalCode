@@ -283,6 +283,10 @@ pub enum EventPayload {
     },
     #[serde(rename = "thread.archived")]
     ThreadArchived { thread_id: String },
+    /// An archived thread was restored to the open list (Dashboard, Threads). Its messages,
+    /// status and account are unchanged.
+    #[serde(rename = "thread.unarchived")]
+    ThreadUnarchived { thread_id: String },
     /// A thread was explicitly rebound to another provider account. Only future provider
     /// requests use the new account; past messages are unchanged. Carries the owner-visible
     /// account label snapshot, never provider identity or credentials.
@@ -637,6 +641,7 @@ impl EventPayload {
             Self::ThreadCompleted { .. } => "thread.completed",
             Self::ThreadFailed { .. } => "thread.failed",
             Self::ThreadArchived { .. } => "thread.archived",
+            Self::ThreadUnarchived { .. } => "thread.unarchived",
             Self::ThreadAccountChanged { .. } => "thread.account_changed",
             Self::AgentMessage { .. } => "agent.message",
             Self::ToolRequested { .. } => "tool.requested",
@@ -853,6 +858,7 @@ mod tests {
                 message: s(),
             },
             EventPayload::ThreadArchived { thread_id: s() },
+            EventPayload::ThreadUnarchived { thread_id: s() },
             EventPayload::ThreadAccountChanged {
                 thread_id: s(),
                 provider_account_id: s(),
@@ -1128,7 +1134,7 @@ mod tests {
         }
         // Keep in step with the enum: the `type_name` match is exhaustive, so a new variant
         // compiles only once named there — and this count must be raised with a new sample.
-        assert_eq!(samples.len(), 79);
+        assert_eq!(samples.len(), 80);
     }
 
     #[test]

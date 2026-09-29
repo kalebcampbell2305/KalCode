@@ -300,6 +300,16 @@ pub fn archive(conn: &Connection, id: &str, now: &str) -> Result<()> {
     Ok(())
 }
 
+/// Restores an archived thread to the open list. Returns whether a row changed (an open thread
+/// is left alone).
+pub fn unarchive(conn: &Connection, id: &str) -> Result<bool> {
+    let changed = conn.execute(
+        "UPDATE threads SET archived_at = NULL WHERE id = ?1 AND archived_at IS NOT NULL",
+        params![id],
+    )?;
+    Ok(changed > 0)
+}
+
 /// Stores a thread's permission mode and, for Custom, its profile (cleared otherwise).
 pub fn set_permission_mode(
     conn: &Connection,
@@ -766,6 +776,33 @@ mod tests {
                 .archived
         );
         assert_eq!(account(&conn, &new_id()).expect("read"), None);
+    }
+
+    #[test]
+    fn unarchive_restores_an_archived_thread_to_the_open_list_only() {
+        let conn = conn();
+        let (a, b) = (new_id(), new_id());
+        thread(&conn, &a, "2026-09-24T10:00:00.000Z");
+        thread(&conn, &b, "2026-09-24T10:00:01.000Z");
+        assert!(
+            !unarchive(&conn, &a).expect("open thread"),
+            "nothing to restore"
+        );
+        archive(&conn, &a, "2026-09-24T11:00:00.000Z").expect("archive");
+        assert_eq!(list(&conn, None, false).expect("open").len(), 1);
+        assert_eq!(
+            get(&conn, &a).expect("get").archived_at.as_deref(),
+            Some("2026-09-24T11:00:00.000Z")
+        );
+
+        assert!(unarchive(&conn, &a).expect("restore"));
+        assert_eq!(get(&conn, &a).expect("get").archived_at, None);
+        assert_eq!(list(&conn, None, false).expect("open").len(), 2);
+        assert!(!unarchive(&conn, &a).expect("again"), "idempotent");
+        assert!(
+            !unarchive(&conn, &new_id()).expect("unknown"),
+            "an unknown id changes nothing"
+        );
     }
 
     #[test]

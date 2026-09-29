@@ -129,6 +129,7 @@ pub(crate) const COMMANDS: &[&str] = &[
     "thread_rebind_account",
     "thread_rename",
     "thread_archive",
+    "thread_unarchive",
     "thread_stream",
     // Z4: permissions.
     "approval_list",

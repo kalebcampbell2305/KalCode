@@ -509,8 +509,8 @@ export class KalCodeClient {
     return this.call("provider_health_trend", { providerId, hours: safeHours });
   }
 
-  // Threads (Z3). `thread_list`, `thread_interrupt`, `thread_resume`, `thread_stop` and
-  // `thread_archive` are also consumed by the Dashboard.
+  // Threads (Z3). `thread_list`, `thread_interrupt`, `thread_resume`, `thread_stop`,
+  // `thread_archive` and `thread_unarchive` are also consumed by the Dashboard.
 
   listThreads(options: { workspaceId?: string; includeArchived?: boolean } = {}): Promise<ThreadSummary[]> {
     return this.call("thread_list", {
@@ -646,6 +646,11 @@ export class KalCodeClient {
 
   archiveThread(threadId: string): Promise<ThreadSummary> {
     return this.call("thread_archive", { threadId });
+  }
+
+  /** Restores an archived thread to the open list. Idempotent; status and history are unchanged. */
+  unarchiveThread(threadId: string): Promise<ThreadSummary> {
+    return this.call("thread_unarchive", { threadId });
   }
 
   // ---- Permissions (Z4) ----

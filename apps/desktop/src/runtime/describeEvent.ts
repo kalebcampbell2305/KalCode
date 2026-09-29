@@ -259,6 +259,8 @@ export function describeEvent(event: EventEnvelope): EventDescription {
       return { title: "Thread failed", detail: event.payload.message, tone: "danger" };
     case "thread.archived":
       return { title: "Thread archived", detail: null, tone: "idle" };
+    case "thread.unarchived":
+      return { title: "Thread restored", detail: null, tone: "idle" };
     case "thread.account_changed":
       return { title: "Thread account switched", detail: event.payload.accountLabel, tone: "idle" };
     case "agent.message":

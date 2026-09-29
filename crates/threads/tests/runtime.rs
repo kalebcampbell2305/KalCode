@@ -1438,6 +1438,44 @@ fn rename_archive_and_list() {
 }
 
 #[test]
+fn unarchive_restores_a_thread_to_the_open_list() {
+    let h = Harness::new();
+    let a = started(&h, "first task");
+    let b = started(&h, "second task");
+    h.runtime.stop(&a).expect("stop");
+    let archived = h.runtime.archive(&a).expect("archive");
+    assert!(archived.archived_at.is_some());
+    let status = archived.status;
+
+    // An open thread is returned unchanged and records nothing.
+    let open = h.runtime.unarchive(&b).expect("open thread");
+    assert!(open.archived_at.is_none());
+    assert!(
+        !h.event_types().contains(&"thread.unarchived".to_owned()),
+        "nothing was restored"
+    );
+
+    let restored = h.runtime.unarchive(&a).expect("unarchive");
+    assert_eq!(restored.id, a);
+    assert!(restored.archived_at.is_none());
+    assert_eq!(restored.status, status, "status is unchanged");
+    h.runtime.unarchive(&a).expect("idempotent");
+    assert_eq!(
+        h.event_types()
+            .iter()
+            .filter(|t| *t == "thread.unarchived")
+            .count(),
+        1
+    );
+    assert_eq!(h.runtime.list(None, false).unwrap().len(), 2);
+    // A restored thread is usable again: resume no longer refuses it as archived.
+    h.runtime.resume(&a, None).expect("resume after restore");
+
+    assert_code(h.runtime.unarchive("bad"), "invalid_thread_id");
+    assert_code(h.runtime.unarchive(&new_id()), "thread_not_found");
+}
+
+#[test]
 fn permission_modes_are_stored_for_the_permission_engine() {
     let h = Harness::new();
     let id = started(&h, "x");

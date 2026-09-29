@@ -820,6 +820,7 @@ impl Dirty {
             | EventPayload::ThreadCompleted { thread_id }
             | EventPayload::ThreadFailed { thread_id, .. }
             | EventPayload::ThreadArchived { thread_id }
+            | EventPayload::ThreadUnarchived { thread_id }
             | EventPayload::AgentMessage { thread_id, .. }
             | EventPayload::ApprovalRequested { thread_id, .. }
             | EventPayload::ApprovalApproved { thread_id, .. }

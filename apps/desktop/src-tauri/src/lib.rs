@@ -725,6 +725,7 @@ pub fn run(removed_overrides: Vec<String>) {
                 thread_commands::thread_rebind_account,
                 thread_commands::thread_rename,
                 thread_commands::thread_archive,
+                thread_commands::thread_unarchive,
                 thread_commands::thread_stream,
                 permission_commands::approval_list,
                 permission_commands::approval_decide,

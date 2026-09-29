@@ -154,6 +154,7 @@ with their own SQL.
 | `thread_interrupt` / `thread_stop` | Z3 | `{ threadId }` | `ThreadSummary` |
 | `thread_rename` | Z3 | `{ threadId, name }` | `ThreadSummary` |
 | `thread_archive` | Z3 | `{ threadId }` | `ThreadSummary` |
+| `thread_unarchive` | Z3 | `{ threadId }` | `ThreadSummary` |
 | `thread_rebind_account` | 0.1.5 | `{ threadId, providerAccountId }` (only after the person confirms the Rebind dialog; same provider, signed-in account, thread not busy) | `ThreadSummary` — future provider requests use the new account, past messages are unchanged, the account-scoped resume id is cleared; records `thread.account_changed { threadId, providerAccountId, accountLabel }` |
 | `provider_account_bindings_list` | 0.1.5 | `{ providerId?, kind?: ProviderAccountBindingKind, scopeId? }` | `ProviderAccountBinding[]` (bindings of active accounts only; ordered by provider, kind, scope) |
 | `session_resolve` | 0.1.5 | `{ query, workspaceId?, focusedThreadId?, lastTargetId? }` (context ids must be canonical ids) | `SessionResolution` — `resolved { target: SessionCandidate, tier }` \| `ambiguous { question, choices (≤4, labelled "Name · Provider · Account"), total }` \| `not_found { message }`. Order: explicit id → exact name in the current workspace → exact name anywhere → provider/account + name → "this/it" (focused, then last target) → provider/account only → fuzzy only when exactly one fits. Open threads only; never the Session Locator; changes nothing |
