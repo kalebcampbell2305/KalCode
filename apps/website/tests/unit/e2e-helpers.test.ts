@@ -57,7 +57,13 @@ describe("e2e helpers", () => {
     expect(renderedDescription(kalvoice, false)).toBe(kalvoice.description);
     expect(renderedDescription(kalvoice, true)).not.toMatch(/In development/);
     expect(renderedDescription(kalvoice, true)).toBe(kalvoice.description.replace(/ In development\.$/, ""));
-    for (const page of PAGES.filter((p) => p.path !== "/kalvoice")) {
+    const terms = PAGES.find((page) => page.path === "/terms");
+    if (!terms) throw new Error("no /terms page");
+    expect(renderedDescription(terms, false)).toBe(terms.description);
+    expect(renderedDescription(terms, true)).toBe(
+      "Terms of use for kalcoded.com, the KalCode early-access list and the KalCode app.",
+    );
+    for (const page of PAGES.filter((p) => p.path !== "/kalvoice" && p.path !== "/terms")) {
       expect(renderedDescription(page, true)).toBe(page.description);
     }
   });

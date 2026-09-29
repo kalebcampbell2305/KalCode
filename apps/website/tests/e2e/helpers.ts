@@ -41,13 +41,15 @@ export function isServedStable(manifest: ReleaseManifest): boolean {
 /** The committed manifest's release is served as Stable (KalVoice copy is then shipped). */
 export const SERVED_STABLE = isServedStable(MANIFEST);
 /**
- * The meta description a page renders: /kalvoice drops the catalog's trailing " In development."
- * once a Stable release is served (src/pages/kalvoice.astro), and every other page uses its own.
+ * The meta description a page renders once a Stable release is served: /kalvoice drops the
+ * catalog's trailing " In development." (src/pages/kalvoice.astro), /terms says "the KalCode app"
+ * instead of "the KalCode preview app" (src/pages/terms.astro), and every other page uses its own.
  */
 export function renderedDescription(page: { path: string; description: string }, servedStable = SERVED_STABLE): string {
-  return page.path === "/kalvoice" && servedStable
-    ? page.description.replace(/ In development\.$/, "")
-    : page.description;
+  if (!servedStable) return page.description;
+  if (page.path === "/kalvoice") return page.description.replace(/ In development\.$/, "");
+  if (page.path === "/terms") return page.description.replace(/ preview app\.$/, " app.");
+  return page.description;
 }
 
 const PERSIST_DIR = process.env.KALCODE_E2E_PERSIST ?? ".wrangler/e2e-state";
