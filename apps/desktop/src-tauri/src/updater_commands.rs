@@ -983,6 +983,19 @@ async fn run_blocking_update<T: Send + 'static>(
         })?
 }
 
+/// Runs an install or restore whose command admission (`revalidate` and `require_main`) has
+/// already been checked. The admission lease is released first: the quiescence preflight seals
+/// admission and waits for every outstanding lease, so one held here would always time out.
+/// A command admitted in the gap is either waited for by that drain or, if it outlives it,
+/// fails the update closed with `update_shutdown_failed`; nothing is admitted once it begins.
+async fn run_update_after_admission<A: Send, T: Send + 'static>(
+    admission: A,
+    work: impl FnOnce() -> Result<T, UpdateError> + Send + 'static,
+) -> Result<T, UpdateError> {
+    drop(admission);
+    run_blocking_update(work).await
+}
+
 fn parse_feed(
     raw: &Option<Vec<u8>>,
     target: UpdateTarget,
@@ -1202,7 +1215,7 @@ pub async fn updater_install(
     _runtime_access.revalidate()?;
     require_main(&window, "updater_install")?;
     let updater = state.inner().clone();
-    run_blocking_update(move || updater.install())
+    run_update_after_admission(_runtime_access, move || updater.install())
         .await
         .map_err(|error| into_ipc(error, "updater_install"))
 }
@@ -1216,7 +1229,7 @@ pub async fn updater_restore_previous(
     _runtime_access.revalidate()?;
     require_main(&window, "updater_restore_previous")?;
     let updater = state.inner().clone();
-    run_blocking_update(move || updater.restore_previous())
+    run_update_after_admission(_runtime_access, move || updater.restore_previous())
         .await
         .map_err(|error| into_ipc(error, "updater_restore_previous"))
 }
@@ -1227,6 +1240,7 @@ mod tests {
     use std::time::Instant;
 
     use super::*;
+    use crate::runtime_lifecycle::Phase;
 
     #[test]
     fn repeated_failed_shutdown_preflight_never_launches_an_installer() {
@@ -1249,6 +1263,116 @@ mod tests {
 
         assert_eq!(preflight_calls.load(Ordering::SeqCst), 2);
         assert_eq!(installer_calls.load(Ordering::SeqCst), 0);
+    }
+
+    /// A coordinator whose runtime is `Ready`, so commands can be admitted as in production.
+    fn ready_coordinator() -> Arc<crate::runtime_coordinator::RuntimeCoordinator> {
+        let coordinator = crate::runtime_coordinator::tests::test_coordinator();
+        let epoch = coordinator.lifecycle.begin_start(7).expect("start epoch");
+        assert!(coordinator.lifecycle.publish(epoch));
+        coordinator
+    }
+
+    /// The production preflight (`shutdown_runtime_once`) over the real coordinator, bounded
+    /// short so a lease that is never released fails fast instead of after 30 s.
+    fn exit_preflight(
+        coordinator: &Arc<crate::runtime_coordinator::RuntimeCoordinator>,
+        timeout: Duration,
+    ) -> BeforeUpdaterExit {
+        let coordinator = Arc::clone(coordinator);
+        Arc::new(move || coordinator.drain_for_exit(timeout))
+    }
+
+    #[test]
+    fn install_and_restore_release_their_admission_before_the_shutdown_preflight() {
+        // `RuntimeAccess` holds an epoch lease; account admission holds a mutation lease. The
+        // exit drain counts both, so either one held across the preflight could never drain.
+        for kind in ["epoch", "mutation"] {
+            let coordinator = ready_coordinator();
+            let admission: Box<dyn Send> = if kind == "epoch" {
+                Box::new(coordinator.lifecycle.acquire(7).expect("command lease"))
+            } else {
+                Box::new(
+                    coordinator
+                        .lifecycle
+                        .acquire_mutation()
+                        .expect("mutation lease"),
+                )
+            };
+            assert_eq!(coordinator.lifecycle.pending(), (false, 1));
+            let preflight = exit_preflight(&coordinator, Duration::from_secs(2));
+            let launched = Arc::new(AtomicUsize::new(0));
+            let observed = Arc::clone(&launched);
+            let started = Instant::now();
+
+            let result =
+                tauri::async_runtime::block_on(run_update_after_admission(admission, move || {
+                    launch_after_quiescence(&preflight, || {
+                        observed.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    })
+                }));
+
+            assert!(
+                result.is_ok(),
+                "{kind} admission blocked the preflight: {:?}",
+                result.err().map(|error| error.code())
+            );
+            assert_eq!(launched.load(Ordering::SeqCst), 1);
+            assert!(started.elapsed() < Duration::from_secs(1));
+            assert_eq!(coordinator.lifecycle.pending(), (false, 0));
+            assert_eq!(coordinator.lifecycle.phase(), Phase::AppExiting);
+        }
+    }
+
+    #[test]
+    fn a_command_admitted_after_the_release_is_waited_for_or_fails_the_update_closed() {
+        // (other command's run time, preflight bound, launches?)
+        for (busy, bound, launches) in [
+            (Duration::from_millis(50), Duration::from_secs(2), true),
+            (
+                Duration::from_millis(400),
+                Duration::from_millis(100),
+                false,
+            ),
+        ] {
+            let coordinator = ready_coordinator();
+            let admission = coordinator.lifecycle.acquire(7).expect("command lease");
+            let preflight = exit_preflight(&coordinator, bound);
+            let concurrent = Arc::clone(&coordinator);
+            let launched = Arc::new(AtomicUsize::new(0));
+            let observed = Arc::clone(&launched);
+
+            let result =
+                tauri::async_runtime::block_on(run_update_after_admission(admission, move || {
+                    // Another command is admitted in the gap after the updater's release.
+                    let other = concurrent.lifecycle.acquire(7).expect("concurrent lease");
+                    let running = std::thread::spawn(move || {
+                        std::thread::sleep(busy);
+                        drop(other);
+                    });
+                    let outcome = launch_after_quiescence(&preflight, || {
+                        observed.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    });
+                    // Once draining, admission is closed to every new command.
+                    assert!(concurrent.lifecycle.acquire(7).is_none());
+                    assert!(concurrent.lifecycle.acquire_mutation().is_none());
+                    running.join().unwrap();
+                    outcome
+                }));
+
+            if launches {
+                assert!(result.is_ok());
+            } else {
+                assert_eq!(
+                    result.err().map(|error| error.code()),
+                    Some("update_shutdown_failed")
+                );
+            }
+            assert_eq!(launched.load(Ordering::SeqCst), usize::from(launches));
+            assert_eq!(coordinator.lifecycle.pending(), (false, 0));
+        }
     }
 
     #[test]
