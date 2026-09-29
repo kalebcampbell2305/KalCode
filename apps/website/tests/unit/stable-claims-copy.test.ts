@@ -19,6 +19,7 @@ import ScrollStory from "../../src/components/stage/ScrollStory.astro";
 import TryKalCode from "../../src/components/stage/TryKalCode.astro";
 import { DEMO_TABS, MODES, STORY, THREADS } from "../../src/data/story";
 import { PAGES, planSummary } from "../../src/lib/site";
+import DocsIndex from "../../src/pages/docs/index.astro";
 import KalVoiceDocs from "../../src/pages/docs/kalvoice.astro";
 import LocalFirstDocs from "../../src/pages/docs/local-first.astro";
 import PermissionsDocs from "../../src/pages/docs/permissions.astro";
@@ -649,6 +650,62 @@ describe("Gemini CLI in stages once Stable is served", () => {
     const cc = await render(CommandCenterStage as Component, "/");
     expect(cc).toMatch(/data-agent="gemini-research" data-provider="gemini"/);
     expect(text(await render(TryKalCode as Component, "/"))).not.toContain("Gemini CLI unavailable in");
+  });
+});
+
+// The docs document features Stable 0.1.5 ships (their gated parts are marked Planned or
+// unavailable inline), so once Stable is served no docs page may call itself a design that may
+// change before release (review be0e9b4 H1). "As designed" stays where it describes Planned Bypass.
+const DOCS_PRE_RELEASE = [
+  /before release/i,
+  /Describes the design/i,
+  /details may change/i,
+  /These pages describe KalCode as designed/i,
+];
+
+describe("docs once Stable is served", () => {
+  const DOCS = [
+    { name: "docs index", component: DocsIndex as Component, path: "/docs" },
+    { name: "permissions docs", component: PermissionsDocs as Component, path: "/docs/permissions" },
+    { name: "provider docs", component: ProvidersDocs as Component, path: "/docs/providers" },
+    { name: "KalVoice docs", component: KalVoiceDocs as Component, path: "/docs/kalvoice" },
+    { name: "local-first docs", component: LocalFirstDocs as Component, path: "/docs/local-first" },
+  ];
+
+  it.each(DOCS)("the $name describes Stable 0.1.5, not a design", async ({ component, path }) => {
+    selectSignedStable();
+    const html = await render(component, path);
+    const copy = `${text(html)} ${metaDescription(html)}`;
+    expect(copy).toContain("Describes KalCode Stable 0.1.5");
+    expect(html).toMatch(/<span class="chip chip--built"[^>]*>Describes KalCode Stable 0\.1\.5<\/span>/);
+    for (const pattern of DOCS_PRE_RELEASE) expect(copy).not.toMatch(pattern);
+  });
+
+  it.each(DOCS)("the $name keeps the design notice in the preview", async ({ component, path }) => {
+    const copy = text(await render(component, path));
+    expect(copy).toContain("Describes the design");
+    expect(copy).not.toContain("Describes KalCode Stable");
+  });
+});
+
+describe("KalVoice dictation targets once Stable is served", () => {
+  it("does not offer a Gemini CLI thread as a working dictation target", async () => {
+    selectSignedStable();
+    const page = text(await render(KalVoicePage, "/kalvoice"));
+    expect(page).toContain("A Claude Code or Codex thread, a terminal, a search box.");
+    expect(page).not.toMatch(/Codex or Gemini CLI thread/);
+    const docs = text(await render(KalVoiceDocs, "/docs/kalvoice"));
+    expect(docs).toContain("a Claude Code or Codex thread composer (Gemini CLI is unavailable in this release),");
+    expect(docs).not.toMatch(/Codex or Gemini CLI thread/);
+  });
+
+  it("keeps the preview list", async () => {
+    expect(text(await render(KalVoicePage, "/kalvoice"))).toContain(
+      "A Claude Code, Codex or Gemini CLI thread, a terminal, a search box.",
+    );
+    expect(text(await render(KalVoiceDocs, "/docs/kalvoice"))).toContain(
+      "a Claude Code, Codex or Gemini CLI thread composer,",
+    );
   });
 });
 
