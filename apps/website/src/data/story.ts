@@ -682,6 +682,37 @@ export const THREADS: readonly Thread[] = [
   },
 ];
 
+/**
+ * Stable 0.1.5 ships with Gemini CLI unavailable (site.ts GEMINI_AVAILABILITY), so stages that name
+ * the Stable release draw the research thread as a Codex thread instead. It keeps the same id so
+ * the stage scripts still find it; the preview keeps the Gemini CLI thread above.
+ */
+export const STABLE_RESEARCH_THREAD: Thread = {
+  ...(THREADS.find((t) => t.id === "gemini-research") as Thread),
+  provider: "codex",
+  placeholder: "Ask Codex to change, explain or test something",
+  transcript: [
+    { t: "user", text: "compare rate-limit approaches for POST /signup, no code changes yet" },
+    { t: "item", verb: "Explored", arg: "", out: ["Read src/routes/signup.ts", "Searched 'rateLimit' in src/**"] },
+    { t: "item", verb: "Ran", arg: "redis-cli INFO keyspace", out: ["db0:keys=1284,expires=12"] },
+    {
+      t: "say",
+      text: "A sliding-window counter in Redis fits best: the API already keeps sessions there, and a fixed window would let a burst through at each minute boundary.",
+    },
+  ],
+  working: [{ verb: "Weighing sliding windows against fixed windows", sec: 12 }],
+};
+
+/** The sample threads a stage draws: Stable-labelled stages swap Gemini CLI for the Codex stand-in. */
+export function sampleThreads(stable: boolean): readonly Thread[] {
+  return stable ? THREADS.map((t) => (t.id === STABLE_RESEARCH_THREAD.id ? STABLE_RESEARCH_THREAD : t)) : THREADS;
+}
+
+/** A Gemini-styled status tail ("✦ …", "⠋ …") restyled for the Codex stand-in ("• …"). */
+export function sampleTail(tail: string | undefined, provider: ProviderId): string | undefined {
+  return tail && provider !== "gemini" ? tail.replace(/^[✦⠋]\s*/, "• ") : tail;
+}
+
 /** Threads open in a fresh, new pane ("+ New thread"). */
 export const FRESH_PLACEHOLDER: Record<ProviderId, string> = {
   claude: "Try “explain this repo”, or type / for commands",
@@ -826,6 +857,8 @@ export interface StoryStep {
   tag: string;
   /** The tag once a Stable release is served ("{version}" is its version); see lib/stage-status.ts. */
   stableTag?: string;
+  /** The description once a Stable release is served (no Gemini CLI thread is drawn then). */
+  stableDescribe?: string;
   /** Screen-reader description of what the stage shows at this step. */
   describe: string;
   scene: Partial<Scene>;
@@ -899,6 +932,8 @@ export const STORY: readonly StoryStep[] = [
     stableTag: "In Stable {version} · sample data",
     describe:
       "The dock switches to the Dashboard: Claude Code working, Codex reviewing, Gemini CLI thinking, and a Claude Code thread that needs approval.",
+    stableDescribe:
+      "The dock switches to the Dashboard: Claude Code working, Codex reviewing and researching, and a Claude Code thread that needs approval.",
     scene: {
       panes: ["claude-checkout", "codex-signup"],
       dock: "dashboard",
@@ -993,6 +1028,8 @@ export interface DemoTab {
   tag: string;
   /** The tag once a Stable release is served ("{version}" is its version); see lib/stage-status.ts. */
   stableTag?: string;
+  /** The line once a Stable release is served (no Gemini CLI thread is drawn then). */
+  stableLine?: string;
   scene: Partial<Scene>;
   play?: StoryStep["play"];
 }
@@ -1003,6 +1040,7 @@ export const DEMO_TABS: readonly DemoTab[] = [
     label: "Multi-agent",
     title: "Four agents, one window.",
     line: "Claude Code, Codex and Gemini CLI work at the same time, and a mission ties them to one objective.",
+    stableLine: "Claude Code and Codex work at the same time, and a mission ties them to one objective.",
     tag: "Preview · missions and provider panes are not in Stable yet",
     scene: {
       view: "code",

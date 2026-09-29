@@ -8,6 +8,7 @@ import {
   type AgentBeat,
   COMMAND_CENTER,
   STATUS,
+  sampleTail,
   summarize,
   summaryLead,
   type ThreadStatus,
@@ -41,7 +42,7 @@ function wire(root: HTMLElement): void {
       const l2 = thumb.querySelector<HTMLElement>("[data-kc-cc-line='2']");
       if (l1 && l2) {
         l1.textContent = l2.textContent;
-        l2.textContent = beat.tail;
+        l2.textContent = sampleTail(beat.tail, thumb.dataset.provider === "gemini" ? "gemini" : "codex") ?? "";
         if (animate && !reducedMotion()) {
           l2.removeAttribute("data-in");
           void l2.offsetWidth;

@@ -565,6 +565,56 @@ describe("product stages once Stable is served", () => {
   });
 });
 
+// 0.1.5 is variant A: Gemini CLI is unavailable (site.ts GEMINI_AVAILABILITY). A stage that names
+// the Stable release must not draw a Gemini CLI thread at work; a stage that keeps Gemini CLI must
+// say it is unavailable.
+describe("Gemini CLI in stages once Stable is served", () => {
+  const GEMINI_AT_WORK = [/Gemini CLI/, /gemini-2\.5-pro/, /✦/, /GEMINI\.md/];
+
+  it.each([
+    { name: "scroll story", component: ScrollStory as Component, path: "/product" },
+    { name: "demo center", component: DemoCenter as Component, path: "/product" },
+    { name: "home Dashboard stage", component: CommandCenterStage as Component, path: "/" },
+  ])("the Stable-labelled $name draws no Gemini CLI thread", async ({ component, path }) => {
+    selectSignedStable();
+    const copy = text(await render(component, path));
+    expect(copy).toMatch(/In Stable 0\.1\.5|Dashboard in Stable 0\.1\.5/);
+    for (const pattern of GEMINI_AT_WORK) expect(copy).not.toMatch(pattern);
+    // The research thread is still drawn, as a Codex thread.
+    expect(copy).toContain("Research rate-limit options");
+  });
+
+  it("draws the research thread as Codex on the Stable Dashboard stage", async () => {
+    selectSignedStable();
+    const html = await render(CommandCenterStage as Component, "/");
+    expect(html).toMatch(/data-agent="gemini-research" data-provider="codex"/);
+    expect(html).not.toMatch(/data-provider="gemini"/);
+    expect(text(html)).toContain("• A sliding window in Redis fits best.");
+  });
+
+  it("describes the Stable story Dashboard step without Gemini CLI", async () => {
+    selectSignedStable();
+    const html = await render(ScrollStory as Component, "/product");
+    for (const describe of html.matchAll(/data-kc-describe="([^"]*)"/g)) expect(describe[1]).not.toMatch(/Gemini/);
+    expect(html).toContain("Codex reviewing and researching");
+  });
+
+  it("marks Gemini CLI unavailable wherever a Stable page still draws it", async () => {
+    selectSignedStable();
+    expect(text(await render(TryKalCode as Component, "/"))).toContain(
+      "provider panes not in Stable yet · Gemini CLI unavailable in 0.1.5",
+    );
+  });
+
+  it("keeps the Gemini CLI research thread in the preview", async () => {
+    const story = text(await render(ScrollStory as Component, "/product"));
+    expect(story).toContain("Gemini CLI");
+    const cc = await render(CommandCenterStage as Component, "/");
+    expect(cc).toMatch(/data-agent="gemini-research" data-provider="gemini"/);
+    expect(text(await render(TryKalCode as Component, "/"))).not.toContain("Gemini CLI unavailable in");
+  });
+});
+
 // signedStableRelease requires signed Windows x64 AND macOS arm64 builds; a Windows-only Stable
 // must not claim a notarized Mac app.
 describe("signed-build claims on a Windows-only Stable", () => {

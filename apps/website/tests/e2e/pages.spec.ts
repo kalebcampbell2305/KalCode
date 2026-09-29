@@ -48,6 +48,9 @@ test.describe("every page", () => {
       const stages = page.locator("[data-stage-slot]");
       for (const text of await stages.allInnerTexts()) {
         expect(text, path).not.toMatch(/Development build|Preview · in development|\bIn development\b|\b0\.1\.0\b/i);
+        // 0.1.5 is variant A (Gemini CLI unavailable): a stage that names the Stable release draws no
+        // Gemini CLI thread.
+        if (/In Stable \d|Dashboard in Stable \d/.test(text)) expect(text, path).not.toMatch(/Gemini CLI/);
       }
     }
   });

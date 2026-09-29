@@ -10,8 +10,8 @@
  * with motion, a Play button replays a still's micro-animation.
  */
 import StageStyles from "./parts/StageStyles.astro";
-import { BASE_SCENE, type DockTab, type Scene, STORY, THREADS, threadById, VOICE, ZOD_APPROVAL } from "../../data/story";
-import { stageTag } from "../../lib/stage-status";
+import { BASE_SCENE, type DockTab, type Scene, STORY, threadById, VOICE, ZOD_APPROVAL } from "../../data/story";
+import { stageDescribe, stageTag, stageThreads } from "../../lib/stage-status";
 import AppWindow from "./AppWindow.astro";
 import ApprovalCard from "./parts/ApprovalCard.astro";
 import BrowserPreview from "./parts/BrowserPreview.astro";
@@ -36,12 +36,14 @@ const cumulative = (index: number): Scene =>
 const first = cumulative(0);
 const total = String(STORY.length).padStart(2, "0");
 const replayable = ["shell", "claude", "codex", "approval", "voice", "mission"];
+// Stages that name the Stable release draw no Gemini CLI thread (unavailable in 0.1.5).
+const threads = stageThreads();
 ---
 <StageStyles />
 <section class:list={["kc-story", className]} data-kc-story data-testid="scroll-story" aria-label="How KalCode works, step by step">
   <ol class="kc-story__steps" role="list">
     {STORY.map((step, i) => (
-      <li class="kc-step" data-kc-step={i} data-active={i === 0 ? "true" : undefined} data-testid={`story-step-${step.id}`}>
+      <li class="kc-step" data-kc-step={i} data-kc-describe={stageDescribe(step)} data-active={i === 0 ? "true" : undefined} data-testid={`story-step-${step.id}`}>
         <div class="kc-step__copy">
           <span class="kc-step__num" aria-hidden="true">{String(i + 1).padStart(2, "0")} / {total}</span>
           <Heading class="kc-step__title">{step.title}</Heading>
@@ -58,7 +60,7 @@ const replayable = ["shell", "claude", "codex", "approval", "voice", "mission"];
               step.still === "threads" && "kc-still--threads",
             ]}
             role="img"
-            aria-label={`Preview: ${step.describe}`}
+            aria-label={`Preview: ${stageDescribe(step)}`}
             data-kc-app
             data-kc-still={step.still}
             data-interactive="false"
@@ -73,7 +75,7 @@ const replayable = ["shell", "claude", "codex", "approval", "voice", "mission"];
             {step.still === "claude" && <Pane thread={threadById("claude-checkout")} approval="none" interactive={false} still focus />}
             {step.still === "codex" && <Pane thread={threadById("codex-signup")} approval="none" interactive={false} still />}
             {step.still === "browser" && <BrowserPreview interactive={false} />}
-            {step.still === "dashboard" && <DashboardPanel uid={`${id}-still`} approval="none" interactive={false} present={[]} />}
+            {step.still === "dashboard" && <DashboardPanel uid={`${id}-still`} approval="none" interactive={false} present={[]} threads={threads} />}
             {step.still === "approval" && <ApprovalCard uid={`${id}-still`} approval={ZOD_APPROVAL} state="pending" interactive={false} />}
             {step.still === "voice" && (
               <>
@@ -81,7 +83,7 @@ const replayable = ["shell", "claude", "codex", "approval", "voice", "mission"];
                 <KalVoicePanel state="done" interactive={false} still />
               </>
             )}
-            {step.still === "threads" && <Rail threads={THREADS} approval="approved" interactive={false} focus="claude-e2e" view="code" present={VOICE.spawns} />}
+            {step.still === "threads" && <Rail threads={threads} approval="approved" interactive={false} focus="claude-e2e" view="code" present={VOICE.spawns} />}
             {step.still === "mission" && <MissionStrip stage={5} still />}
           </figure>
           {replayable.includes(step.still) && (
@@ -103,7 +105,8 @@ const replayable = ["shell", "claude", "codex", "approval", "voice", "mission"];
         interactive={false}
         auto={false}
         size="hero"
-        label={`Preview: ${STORY[0]?.describe ?? ""}`}
+        label={`Preview: ${STORY[0] ? stageDescribe(STORY[0]) : ""}`}
+        threads={threads}
         panesUsed={[...new Set(STORY.flatMap((s) => s.scene.panes ?? []))]}
         docksUsed={[...new Set(STORY.map((s) => s.scene.dock).filter((d): d is DockTab => Boolean(d)))]}
       />
