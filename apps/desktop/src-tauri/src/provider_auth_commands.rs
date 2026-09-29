@@ -501,24 +501,26 @@ impl ProviderRuntimeAuthority {
                     })
             },
         );
-        if result.is_err() {
+        if let Err(error) = &result {
             let failure = recorded_failure
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .clone();
-            // A busy profile ran no Claude operation, so it changes no account state.
-            if failure.is_some() {
-                let _ = self.inner.accounts.mark_authentication(
-                    account_id,
-                    AuthState::Unknown,
-                    None,
-                    Some("claude_auth_failed"),
-                );
+            // Only a lease refused for a busy profile ran no Claude operation and changes no
+            // account state. Any other failure before the operation (an invalid, archived or
+            // other-provider account, or an unreadable profile) is not busy.
+            if failure.is_none() && is_profile_busy(error) {
+                return Err(RuntimeAuthError::Busy);
             }
-            return Err(match failure {
-                Some(error) => RuntimeAuthError::Claude(error),
-                None => RuntimeAuthError::Busy,
-            });
+            let _ = self.inner.accounts.mark_authentication(
+                account_id,
+                AuthState::Unknown,
+                None,
+                Some("claude_auth_failed"),
+            );
+            return Err(RuntimeAuthError::Claude(
+                failure.unwrap_or(ClaudeAccountAuthError::ProfileUnavailable),
+            ));
         }
         self.inner
             .accounts
@@ -558,15 +560,18 @@ impl ProviderRuntimeAuthority {
                     })
             },
         );
-        if result.is_err() {
+        if let Err(error) = &result {
             let failure = recorded_failure
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .clone();
-            if failure
-                .as_ref()
-                .is_some_and(|error| *error != ClaudeAccountAuthError::AlreadyConnected)
-            {
+            // Only a lease refused for a busy profile ran no Claude operation and changes no
+            // account state. Any other failure before the operation (an invalid, archived or
+            // other-provider account, or an unreadable profile) is not busy.
+            if failure.is_none() && is_profile_busy(error) {
+                return Err(RuntimeAuthError::Busy);
+            }
+            if failure != Some(ClaudeAccountAuthError::AlreadyConnected) {
                 let _ = self.inner.accounts.mark_authentication(
                     account_id,
                     AuthState::Unknown,
@@ -574,10 +579,9 @@ impl ProviderRuntimeAuthority {
                     Some("claude_auth_failed"),
                 );
             }
-            return Err(match failure {
-                Some(error) => RuntimeAuthError::Claude(error),
-                None => RuntimeAuthError::Busy,
-            });
+            return Err(RuntimeAuthError::Claude(
+                failure.unwrap_or(ClaudeAccountAuthError::ProfileUnavailable),
+            ));
         }
         result.map_err(|_| RuntimeAuthError::Claude(ClaudeAccountAuthError::StartFailed))
     }
@@ -609,24 +613,26 @@ impl ProviderRuntimeAuthority {
                     })
             },
         );
-        if result.is_err() {
+        if let Err(error) = &result {
             let failure = recorded_failure
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .clone();
-            // A busy profile ran no Claude operation, so it changes no account state.
-            if failure.is_some() {
-                let _ = self.inner.accounts.mark_authentication(
-                    account_id,
-                    AuthState::Unknown,
-                    None,
-                    Some("claude_auth_failed"),
-                );
+            // Only a lease refused for a busy profile ran no Claude operation and changes no
+            // account state. Any other failure before the operation (an invalid, archived or
+            // other-provider account, or an unreadable profile) is not busy.
+            if failure.is_none() && is_profile_busy(error) {
+                return Err(RuntimeAuthError::Busy);
             }
-            return Err(match failure {
-                Some(error) => RuntimeAuthError::Claude(error),
-                None => RuntimeAuthError::Busy,
-            });
+            let _ = self.inner.accounts.mark_authentication(
+                account_id,
+                AuthState::Unknown,
+                None,
+                Some("claude_auth_failed"),
+            );
+            return Err(RuntimeAuthError::Claude(
+                failure.unwrap_or(ClaudeAccountAuthError::ProfileUnavailable),
+            ));
         }
         self.inner
             .accounts
@@ -2826,6 +2832,72 @@ mod tests {
         expire_codex_plan(&fixture);
         assert_eq!(codex_launch_refusal(&fixture), None);
         drop((codex_session, claude_session));
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn claude_account_failures_before_the_lease_are_not_reported_as_busy() {
+        let mut fixture = Fixture::new();
+        install_unrunnable_auth_managers(&mut fixture);
+        let store = fixture.runtime.account_store();
+        let claude = store
+            .create(ProviderId::CLAUDE_CODE, "Claude")
+            .expect("claude account");
+        store
+            .archive(&fixture.runtime.inner.profiles, &claude.id)
+            .expect("archive");
+        let missing = kalcode_contracts::ids::new_id();
+
+        for account_id in [claude.id.as_str(), missing.as_str()] {
+            assert!(matches!(
+                fixture.runtime.refresh_claude_account(account_id),
+                Err(RuntimeAuthError::Claude(
+                    ClaudeAccountAuthError::ProfileUnavailable
+                ))
+            ));
+            assert!(matches!(
+                fixture.runtime.start_claude_login(account_id),
+                Err(RuntimeAuthError::Claude(
+                    ClaudeAccountAuthError::ProfileUnavailable
+                ))
+            ));
+            assert!(matches!(
+                fixture.runtime.logout_claude(account_id),
+                Err(RuntimeAuthError::Claude(
+                    ClaudeAccountAuthError::ProfileUnavailable
+                ))
+            ));
+        }
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn an_archived_codex_accounts_verdict_is_never_reused() {
+        let mut fixture = Fixture::new();
+        install_unrunnable_auth_managers(&mut fixture);
+        let store = fixture.runtime.account_store();
+        observe_codex_plan(&fixture, &connected("pro"));
+        store
+            .archive(&fixture.runtime.inner.profiles, &fixture.account.id)
+            .expect("archive");
+        expire_codex_plan(&fixture);
+        assert_eq!(
+            codex_launch_refusal(&fixture).as_deref(),
+            Some(kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_CHECK_FAILED),
+            "an archived account fails its check instead of reusing its verdict"
+        );
+
+        let replacement = store
+            .create(ProviderId::CODEX, "Personal")
+            .expect("new account");
+        fixture.account = replacement;
+        let session = codex_session(&fixture);
+        assert_eq!(
+            codex_launch_refusal(&fixture).as_deref(),
+            Some(kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_BUSY),
+            "a new account has no verdict of its own this run"
+        );
+        drop(session);
     }
 
     #[cfg(any(windows, target_os = "macos"))]
