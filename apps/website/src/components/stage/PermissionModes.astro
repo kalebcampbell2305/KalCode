@@ -1,9 +1,10 @@
 ---
 /**
- * PermissionModes: choose Plan, Approve, Auto, Bypass or Custom and see how much an agent may
- * do on its own (Allow / Ask / Deny per action, from /docs/permissions). Hovering or focusing a
- * mode previews it. The approval card shows what happens to Codex's `pnpm add zod` in that mode;
- * when the mode asks, Deny · Allow for thread · Approve once decide it, and "Ask again" resets.
+ * PermissionModes: choose Plan, Approve or Auto (Bypass and Custom are marked Planned; 0.1.5
+ * threads never run in them) and see how much an agent may do on its own (Allow / Ask / Deny per
+ * action, from /docs/permissions). Hovering or focusing a mode previews it. The approval card
+ * shows what happens to Codex's `pnpm add zod` in that mode; when the mode asks, Deny · Allow for
+ * thread · Approve once decide it, and "Ask again" resets.
  */
 import StageStyles from "./parts/StageStyles.astro";
 import type { PermissionMode } from "../../data/story";

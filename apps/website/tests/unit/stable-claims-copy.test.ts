@@ -387,9 +387,14 @@ describe("permission modes in 0.1.5", () => {
 describe("native code safety claim", () => {
   // B9 536efd7 Cargo.toml [workspace.lints.rust] unsafe_code = "deny" (not "forbid"), with
   // #[allow(unsafe_code)] on OS-integration modules and functions (Win32, macOS and libc calls).
+  // third_party/portable-pty (vendored, patched per KALCODE_PATCH.md) is outside the workspace lint.
   it("does not say unsafe Rust is forbidden", async () => {
     const copy = text(await render(Security, "/security"));
     expect(copy).not.toMatch(/unsafe Rust is forbidden/i);
-    expect(copy).toContain("Unsafe Rust is denied by default across KalCode's own native code.");
+    expect(copy).toContain("Unsafe Rust is denied by default across KalCode's workspace crates.");
+    expect(copy).toContain(
+      "The vendored terminal library (portable-pty, which KalCode patches for Windows job objects and macOS terminal handling) sits outside that lint.",
+    );
+    expect(copy).not.toMatch(/KalCode's own native code/);
   });
 });
