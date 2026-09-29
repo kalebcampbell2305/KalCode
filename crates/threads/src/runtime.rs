@@ -843,6 +843,14 @@ impl ThreadRuntime {
         self.inner.summary(thread_id)
     }
 
+    /// Restores an archived thread to the open list, unchanged otherwise (status, messages,
+    /// account). Records `thread.unarchived`. Idempotent: an open thread is returned as is.
+    pub fn unarchive(&self, thread_id: &str) -> Result<ThreadSummary> {
+        validate::thread_id(thread_id)?;
+        self.inner.unarchive(thread_id)?;
+        self.inner.summary(thread_id)
+    }
+
     /// Explicitly rebinds a thread to another account of its provider (switch accounts). Only
     /// future provider requests use the new account: past messages stay, and the provider resume
     /// id is cleared with the account in one transaction because it belongs to the old account's
@@ -2622,6 +2630,29 @@ impl Inner {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(thread_id);
+        Ok(())
+    }
+
+    fn unarchive(&self, thread_id: &str) -> Result<()> {
+        let row = self.row(thread_id)?;
+        if row.archived_at.is_none() {
+            return Ok(());
+        }
+        let ctx = Ctx::from_row(&row);
+        self.core.write_with_events(|tx| {
+            // Only a row that is still archived records the event (a concurrent restore wins once).
+            let events = if store::unarchive(tx, thread_id)? {
+                vec![ctx.event(
+                    EventSource::Ui,
+                    EventPayload::ThreadUnarchived {
+                        thread_id: thread_id.to_owned(),
+                    },
+                )]
+            } else {
+                Vec::new()
+            };
+            Ok(((), events))
+        })?;
         Ok(())
     }
 

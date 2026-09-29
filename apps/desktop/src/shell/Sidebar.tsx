@@ -10,7 +10,9 @@ import {
   ShieldCheck,
   TriangleAlert,
 } from "lucide-react";
+import { useId } from "react";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
+import { DashboardDataBoundary, useWaitingForYouCount } from "../surfaces/dashboard/data/DashboardData.tsx";
 import { usePermissions } from "../surfaces/permissions/PermissionsProvider.tsx";
 import { Mark, Wordmark } from "./Brand.tsx";
 import { type Destination, destinationMeta, PRIMARY_ORDER, useNavigation, viewVisible } from "./navigation.tsx";
@@ -58,9 +60,13 @@ export function Sidebar({ collapsed, onOpenPalette }: SidebarProps) {
 
       <ul className={styles.list}>
         {viewVisible("home", info.flags.features) ? <NavItem id="home" collapsed={collapsed} /> : null}
-        {available.map((id) => (
-          <NavItem key={id} id={id} collapsed={collapsed} />
-        ))}
+        {available.map((id) =>
+          id === "dashboard" ? (
+            <DashboardNavItem key={id} collapsed={collapsed} />
+          ) : (
+            <NavItem key={id} id={id} collapsed={collapsed} />
+          ),
+        )}
       </ul>
 
       {inDevelopment.length > 0 ? (
@@ -113,11 +119,20 @@ function capitalize(value: string): string {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-function NavItem({ id, collapsed, gated = false }: { id: Destination; collapsed: boolean; gated?: boolean }) {
+interface NavItemProps {
+  id: Destination;
+  collapsed: boolean;
+  gated?: boolean;
+  /** A count shown after the label (hidden at zero), and its words for assistive technology. */
+  count?: { value: number; description: string };
+}
+
+function NavItem({ id, collapsed, gated = false, count }: NavItemProps) {
   const { current, navigate } = useNavigation();
   const meta = destinationMeta(id);
   const Icon = meta.icon;
   const active = current === id;
+  const shown = count && count.value > 0 ? count : null;
   return (
     <li>
       <SidebarButton
@@ -127,8 +142,39 @@ function NavItem({ id, collapsed, gated = false }: { id: Destination; collapsed:
         onClick={() => navigate(id)}
         aria-current={active ? "page" : undefined}
         className={[styles.item, gated && styles.gated].filter(Boolean).join(" ")}
+        description={shown?.description}
+        badge={
+          shown ? (
+            <span className={styles.countBadge} aria-hidden="true">
+              {shown.value > 99 ? "99+" : shown.value}
+            </span>
+          ) : null
+        }
       />
     </li>
+  );
+}
+
+/**
+ * The Dashboard entry with a "needs you" count: the Dashboard's "Waiting for you" chip, from the
+ * same thread list (its data provider, or one of its own outside the Dashboard). Hidden at zero.
+ */
+function DashboardNavItem({ collapsed }: { collapsed: boolean }) {
+  return (
+    <DashboardDataBoundary>
+      <DashboardNavItemCount collapsed={collapsed} />
+    </DashboardDataBoundary>
+  );
+}
+
+function DashboardNavItemCount({ collapsed }: { collapsed: boolean }) {
+  const waiting = useWaitingForYouCount();
+  return (
+    <NavItem
+      id="dashboard"
+      collapsed={collapsed}
+      count={{ value: waiting, description: `${waiting} ${waiting === 1 ? "session needs" : "sessions need"} you` }}
+    />
   );
 }
 
@@ -205,6 +251,8 @@ interface SidebarButtonProps {
   accessibleLabel?: string;
   /** Shown after the label (and as a dot when collapsed). */
   badge?: React.ReactNode;
+  /** Extra words for assistive technology (`aria-describedby`); the accessible name is unchanged. */
+  description?: string;
   icon: React.ReactNode;
   hint?: string;
   onClick: () => void;
@@ -217,18 +265,21 @@ function SidebarButton({
   label,
   accessibleLabel,
   badge,
+  description,
   icon,
   hint,
   onClick,
   className,
   ...aria
 }: SidebarButtonProps) {
+  const descriptionId = useId();
   const button = (
     <button
       type="button"
       className={[styles.button, className].filter(Boolean).join(" ")}
       onClick={onClick}
       aria-label={accessibleLabel ?? (collapsed ? label : undefined)}
+      aria-describedby={description ? descriptionId : undefined}
       {...aria}
     >
       <span className={styles.icon} aria-hidden="true">
@@ -247,11 +298,24 @@ function SidebarButton({
       )}
     </button>
   );
-  return collapsed ? (
-    <Tooltip content={hint ? `${label} (${hint})` : (accessibleLabel ?? label)} side="right">
+  const withTooltip = collapsed ? (
+    <Tooltip
+      content={hint ? `${label} (${hint})` : description ? `${label}: ${description}` : (accessibleLabel ?? label)}
+      side="right"
+    >
       {button}
     </Tooltip>
   ) : (
     button
+  );
+  return description ? (
+    <>
+      {withTooltip}
+      <span id={descriptionId} className="visually-hidden">
+        {description}
+      </span>
+    </>
+  ) : (
+    withTooltip
   );
 }

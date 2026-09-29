@@ -69,6 +69,7 @@ fn thread_of(event: &EventEnvelope) -> Option<&str> {
             | EventPayload::ThreadStarted { thread_id }
             | EventPayload::ThreadCompleted { thread_id }
             | EventPayload::ThreadArchived { thread_id }
+            | EventPayload::ThreadUnarchived { thread_id }
             | EventPayload::ThreadRenamed { thread_id, .. }
             | EventPayload::ThreadFailed { thread_id, .. }
             | EventPayload::ThreadStatusChanged { thread_id, .. }

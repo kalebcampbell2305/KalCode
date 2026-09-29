@@ -4,8 +4,9 @@ import { createContext, type ReactNode, useCallback, useContext, useEffect, useM
 import { toKalCodeError } from "../../../ipc/errors.ts";
 import { useEvents, useRuntime } from "../../../runtime/RuntimeProvider.tsx";
 import { ACTION_LABELS, type ThreadAction } from "./actions.ts";
+import { chipCounts } from "./board.ts";
 import { type DashboardResource, RefreshTracker } from "./refresh.ts";
-import { type Resource, useResource } from "./resource.ts";
+import { type Resource, type ResourceState, useResource } from "./resource.ts";
 
 /** Coalesces bursts of events (a busy thread emits many) into one read per source. */
 const REFRESH_DEBOUNCE_MS = 120;
@@ -16,7 +17,10 @@ export interface Announcement {
 }
 
 interface DashboardDataValue {
+  /** Open (non-archived) threads: what the board, widgets and summary show. */
   threads: Resource<ThreadSummary[]>;
+  /** Archived threads, from the same read (shown read-only, restorable with Unarchive). */
+  archived: Resource<ThreadSummary[]>;
   terminals: Resource<TerminalInfo[]>;
   /** Thread id → action in flight. */
   pendingActions: ReadonlyMap<string, ThreadAction>;
@@ -71,6 +75,29 @@ function useInvalidation(lifetime: Lifetime, isCurrent: (session: Session) => bo
   return [versions, invalidate] as const;
 }
 
+const isArchived = (thread: ThreadSummary) => thread.archivedAt !== null;
+
+/**
+ * One side of the thread list: the open threads or the archived ones. Both come from one
+ * `thread_list` read (archived included), so the two can never disagree about a thread.
+ */
+function useThreadSide(source: Resource<ThreadSummary[]>, archived: boolean): Resource<ThreadSummary[]> {
+  const { state, reload, update } = source;
+  const side = useMemo<ResourceState<ThreadSummary[]>>(
+    () => (state.status === "ready" ? { ...state, data: state.data.filter((t) => isArchived(t) === archived) } : state),
+    [state, archived],
+  );
+  const updateSide = useCallback(
+    (change: (data: ThreadSummary[]) => ThreadSummary[]) =>
+      update((list) => [
+        ...change(list.filter((t) => isArchived(t) === archived)),
+        ...list.filter((t) => isArchived(t) !== archived),
+      ]),
+    [update, archived],
+  );
+  return useMemo(() => ({ state: side, reload, update: updateSide }), [side, reload, updateSide]);
+}
+
 /**
  * The Dashboard's data layer. Reads threads (Z3 `thread_list`) and running terminals (Z1
  * `terminals_running`) through KalCodeClient, and re-reads each whenever the event log records
@@ -113,23 +140,30 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
   const [resourceOwner, setResourceOwner] = useState(lifetime);
   useEffect(() => setResourceOwner(lifetime), [lifetime]);
 
-  const threads = useResource(
-    useCallback(() => client.listThreads(), [client]),
+  // Archived threads are read too: the empty state says when everything is archived, and the
+  // archived view restores them. The board and widgets only ever see the open side.
+  const allThreads = useResource(
+    useCallback(() => client.listThreads({ includeArchived: true }), [client]),
     versions.threads,
   );
+  const threads = useThreadSide(allThreads, false);
+  const archived = useThreadSide(allThreads, true);
   const terminals = useResource(
     useCallback(() => client.runningTerminals(), [client]),
     versions.terminals,
   );
 
   // Event-driven refresh: each new event invalidates the sources it can change. The tracker starts
-  // once the event history has loaded, at its newest event: history is covered by the first reads.
+  // once the event history has loaded, at its newest event. The first thread read can run before
+  // that history arrives, so an event recorded in between would sit under the watermark and never
+  // refresh the list: read threads once more when the tracker starts.
   useEffect(() => {
     if (eventsState !== "ready") return;
     const session = lifetime.session;
     if (!isCurrent(session)) return;
     if (!session.tracker) {
       session.tracker = new RefreshTracker(events[0]?.seq ?? 0);
+      invalidate(["threads"], session);
       return;
     }
     const stale = session.tracker.observe(events);
@@ -180,22 +214,23 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
               ? await client.stopThread(thread.id)
               : action === "archive"
                 ? await client.archiveThread(thread.id)
-                : await client.resumeThread(thread.id); // resume and retry
+                : action === "unarchive"
+                  ? await client.unarchiveThread(thread.id)
+                  : await client.resumeThread(thread.id); // resume and retry
         if (!isCurrent(session)) return;
         // Reconcile even a superseded current-client command: native effects already happened.
         invalidate(["threads"], session);
         if (!ownsAction()) return;
-        threads.update((list) =>
-          action === "archive"
-            ? list.filter((t) => t.id !== updated.id)
-            : list.map((t) => (t.id === updated.id ? updated : t)),
-        );
+        // Archive and unarchive move the thread between the open and archived sides.
+        allThreads.update((list) => list.map((t) => (t.id === updated.id ? updated : t)));
         const announcement = {
           id: ++announceSeq.current,
           text:
             action === "archive"
               ? `${thread.name} archived`
-              : `${thread.name}: ${ACTION_LABELS[action].toLowerCase()} requested`,
+              : action === "unarchive"
+                ? `${thread.name} restored`
+                : `${thread.name}: ${ACTION_LABELS[action].toLowerCase()} requested`,
         };
         setActionState((state) => (ownsAction() ? { ...state, polite: announcement } : state));
       } catch (raw) {
@@ -219,19 +254,20 @@ export function DashboardDataProvider({ children }: { children: ReactNode }) {
         }
       }
     },
-    [client, threads.update, invalidate, toast, lifetime, isCurrent, actionSession],
+    [client, allThreads.update, invalidate, toast, lifetime, isCurrent, actionSession],
   );
 
   const value = useMemo<DashboardDataValue>(
     () => ({
       threads: resourceOwner === lifetime ? threads : { ...threads, state: { status: "loading" } },
+      archived: resourceOwner === lifetime ? archived : { ...archived, state: { status: "loading" } },
       terminals: resourceOwner === lifetime ? terminals : { ...terminals, state: { status: "loading" } },
       pendingActions,
       runAction,
       urgent,
       polite,
     }),
-    [threads, terminals, pendingActions, runAction, polite, resourceOwner, lifetime],
+    [threads, archived, terminals, pendingActions, runAction, polite, resourceOwner, lifetime],
   );
 
   return <DashboardDataContext.Provider value={value}>{children}</DashboardDataContext.Provider>;
@@ -247,6 +283,21 @@ function useDashboardData(): DashboardDataValue {
 export function useThreadSummaries() {
   const { threads, pendingActions, runAction } = useDashboardData();
   return { ...threads, pendingActions, runAction };
+}
+
+/** Archived threads (read-only on the Dashboard; `runAction(thread, "unarchive")` restores one). */
+export function useArchivedThreads() {
+  const { archived, pendingActions, runAction } = useDashboardData();
+  return { ...archived, pendingActions, runAction };
+}
+
+/**
+ * How many open threads wait for the person: the Dashboard's "Waiting for you" chip count, from
+ * the same thread list. 0 until the list has loaded (and when it can't be read).
+ */
+export function useWaitingForYouCount(): number {
+  const { state } = useDashboardData().threads;
+  return useMemo(() => (state.status === "ready" ? chipCounts(state.data).waiting_for_you : 0), [state]);
 }
 
 /** Running terminals from Z1 `terminals_running`, refreshed on shell events. */

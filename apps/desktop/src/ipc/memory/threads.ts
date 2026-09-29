@@ -939,6 +939,15 @@ export function createThreadsMemory(
       emit({ type: "thread.archived", payload: { threadId: t.summary.id } }, corr(t), "ui");
       return summary(t);
     },
+    // Like native `thread_unarchive`: idempotent, and only a restore records the event.
+    thread_unarchive: (args) => {
+      const t = get(args);
+      if (!t.archived) return summary(t);
+      t.archived = false;
+      t.summary = { ...t.summary, archivedAt: null };
+      emit({ type: "thread.unarchived", payload: { threadId: t.summary.id } }, corr(t), "ui");
+      return summary(t);
+    },
     // Like native `thread_rebind_account`: future provider requests use the new account, past
     // messages stay, and the account-scoped resume id is cleared so the next start is fresh. Same
     // refusal order as native: archived thread, account (id, owner, removal), current account is

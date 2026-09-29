@@ -78,6 +78,7 @@ stays paused until the user resumes it.
 | resume | no live session, or paused; not archived | `thread_already_running`, `thread_archived`, `provider_unavailable`, `workspace_not_found` |
 | rename | always (1–80 characters) | `invalid_name` |
 | archive | no live session (idempotent) | `thread_running` |
+| unarchive | always (idempotent; status, messages and account unchanged) | `thread_not_found` |
 
 **Resume** re-resolves the workspace, then starts a new session. When the provider supports
 resume and the thread has a provider session id, the session is resumed
@@ -179,6 +180,7 @@ refetch of `thread_get` / `thread_messages` / `thread_tool_calls`.
 | `thread_resume` | `{ threadId, text? }` | `ThreadSummary` |
 | `thread_rename` | `{ threadId, name }` | `ThreadSummary` |
 | `thread_archive` | `{ threadId }` | `ThreadSummary` |
+| `thread_unarchive` | `{ threadId }` | `ThreadSummary` |
 | `thread_stream` | `{ threadId }` + channel | stream id; `AgentEvent`s |
 | `thread_options` *(Z3 addition)* | — | `ThreadOptions` (providers, workspaces, creatable modes, default mode) |
 | `thread_tool_calls` *(Z3 addition)* | `{ threadId, limit (1–500) }` | `ToolCallRecord[]` oldest first |

@@ -1,7 +1,8 @@
 import type { ThreadSummary } from "@kalcode/protocol";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { AgentCard } from "./AgentCard.tsx";
+import { AgentCard, startedText } from "./AgentCard.tsx";
 
 function thread(accountLabel: string | null): ThreadSummary {
   return {
@@ -72,5 +73,59 @@ describe("AgentCard account label", () => {
     unmount();
     mount(thread("   "));
     expect(screen.queryByTitle(/^Account:/)).toBeNull();
+  });
+});
+
+describe("AgentCard start time", () => {
+  it("shows when the thread started, from its real createdAt", () => {
+    mount({ ...thread(null), createdAt: "2026-09-28T11:18:00Z", lastActivityAt: "2026-09-28T12:00:30Z" });
+    const card = screen.getByRole("article", { name: "Research" });
+    const started = card.querySelector('time[data-kind="started"]');
+    expect(started?.textContent).toBe("Started 43 min ago");
+    expect(started?.getAttribute("dateTime")).toBe("2026-09-28T11:18:00Z");
+    expect(started?.getAttribute("title")).toMatch(/^Started /);
+    // Last activity stays its own, separately labelled time.
+    const last = card.querySelector('time[data-kind="last-activity"]');
+    expect(last?.textContent).toBe("Last activity just now");
+  });
+
+  it("says just now for a new thread and hides an unreadable start", () => {
+    const now = Date.parse("2026-09-28T12:01:00Z");
+    expect(startedText("2026-09-28T12:00:30Z", now)).toBe("Started just now");
+    expect(startedText("2026-09-26T09:01:00Z", now)).toBe("Started 2 d 3 h ago");
+    expect(startedText("not a date", now)).toBeNull();
+    mount({ ...thread(null), createdAt: "not a date" });
+    expect(screen.getByRole("article", { name: "Research" }).querySelector('time[data-kind="started"]')).toBeNull();
+  });
+});
+
+describe("AgentCard archived (read-only)", () => {
+  it("offers only Unarchive: no focus, menu or follow-ups", async () => {
+    const onAction = vi.fn();
+    const onFocus = vi.fn();
+    const summary: ThreadSummary = { ...thread("Gemini B"), status: "completed", archivedAt: "2026-09-28T11:59:00Z" };
+    render(
+      <AgentCard
+        thread={summary}
+        now={Date.parse("2026-09-28T12:01:00Z")}
+        archived
+        approvals={[]}
+        pendingAction={undefined}
+        onFocus={onFocus}
+        onAction={onAction}
+        onDecide={vi.fn()}
+        onReviewApprovals={vi.fn()}
+      />,
+    );
+    const card = screen.getByRole("article", { name: "Research" });
+    expect(card.textContent).toContain("Archived");
+    expect(card.textContent).not.toContain("Completed");
+    expect(screen.queryByRole("button", { name: "Research" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /More actions/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open" })).toBeNull();
+    await userEvent.click(card);
+    expect(onFocus).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Unarchive Research" }));
+    expect(onAction).toHaveBeenCalledWith(summary, "unarchive");
   });
 });

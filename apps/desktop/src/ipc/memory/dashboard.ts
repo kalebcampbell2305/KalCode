@@ -11,6 +11,7 @@
  * Scenarios (`?scenario=`):
  *   busy             threads across every state and provider, approvals, terminals, history
  *   empty            the commands exist but nothing has run yet
+ *   archived         every thread was archived: nothing is open, three are restorable
  *   approvals-flood  many approval requests across several threads
  *   errors           every Dashboard read fails until `recover()` (test hook) is called
  *   loading          every Dashboard read stays pending (skeleton review)
@@ -38,6 +39,7 @@ import type { CommandName } from "../transport.ts";
 export type DashboardScenario =
   | "busy"
   | "empty"
+  | "archived"
   | "approvals-flood"
   | "errors"
   | "loading"
@@ -49,6 +51,7 @@ export type DashboardScenario =
 export const DASHBOARD_SCENARIOS: readonly DashboardScenario[] = [
   "busy",
   "empty",
+  "archived",
   "approvals-flood",
   "errors",
   "loading",
@@ -448,6 +451,9 @@ function scaleSeeds(count: number): ThreadSeed[] {
   return seeds;
 }
 
+/** The `archived` scenario: finished threads the person archived (fixture numbers). */
+const ARCHIVED_THREADS: readonly number[] = [10, 11, 13];
+
 const SCALE_COUNTS: Partial<Record<DashboardScenario, number>> = {
   "dash-1": 1,
   "dash-6": 6,
@@ -596,8 +602,14 @@ export function createDashboardFixtures(scenario: DashboardScenario, emit: Emit,
   let extraApproval = 100;
 
   const scale = SCALE_COUNTS[scenario];
+  const allArchived = scenario === "archived";
   if (withThreads) {
-    for (const seed of scale ? scaleSeeds(scale) : BUSY_THREADS) {
+    const seeds = allArchived
+      ? BUSY_THREADS.filter((seed) => ARCHIVED_THREADS.includes(seed.n))
+      : scale
+        ? scaleSeeds(scale)
+        : BUSY_THREADS;
+    for (const seed of seeds) {
       const provider = PROVIDERS[seed.provider];
       const id = fixtureId(2, seed.n);
       threads.set(id, {
@@ -620,17 +632,18 @@ export function createDashboardFixtures(scenario: DashboardScenario, emit: Emit,
         filesChanged: seed.files,
         branch: seed.branch,
         error: seed.error ?? null,
-        archivedAt: null,
+        archivedAt: allArchived ? ago(Math.max(0, seed.lastMinAgo - 1)) : null,
         resumable: false,
         permissionProfileId: null,
         runtimeKind: null,
         terminalId: null,
-        archived: false,
+        archived: allArchived,
       });
     }
     const approvalSeeds = scenario === "approvals-flood" ? [...BUSY_APPROVALS, ...FLOOD_EXTRA] : BUSY_APPROVALS;
-    for (const seed of approvalSeeds) addApproval(seed, fixtureId(2, seed.thread), ago(seed.minAgo), false);
-    for (const t of BUSY_TERMINALS) {
+    for (const seed of allArchived ? [] : approvalSeeds)
+      addApproval(seed, fixtureId(2, seed.thread), ago(seed.minAgo), false);
+    for (const t of allArchived ? [] : BUSY_TERMINALS) {
       terminals.push({
         id: fixtureId(3, t.n),
         workspaceId: t.workspace.id,
@@ -749,16 +762,16 @@ export function createDashboardFixtures(scenario: DashboardScenario, emit: Emit,
   }
 
   const read =
-    <T>(value: () => T) =>
-    (): T | Promise<T> => {
+    <T>(value: (args: Record<string, unknown>) => T) =>
+    (args: Record<string, unknown> = {}): T | Promise<T> => {
       if (scenario === "loading") return new Promise<T>(() => {});
-      return value();
+      return value(args);
     };
 
-  const requireThread = (args: Record<string, unknown>) => {
+  const requireThread = (args: Record<string, unknown>, archivedToo = false) => {
     if (!isValidId(args.threadId)) invalidId();
     const thread = threads.get(args.threadId as string);
-    if (!thread || thread.archived) {
+    if (!thread || (thread.archived && !archivedToo)) {
       fail({
         category: "validation",
         code: "thread_not_found",
@@ -783,7 +796,7 @@ export function createDashboardFixtures(scenario: DashboardScenario, emit: Emit,
   };
 
   const handlers: DashboardHandlers = {
-    thread_list: read(() => {
+    thread_list: read((args) => {
       if (failing) {
         fail({
           category: "database",
@@ -792,7 +805,7 @@ export function createDashboardFixtures(scenario: DashboardScenario, emit: Emit,
           retryable: true,
         });
       }
-      return [...threads.values()].filter((t) => !t.archived).map(snapshot);
+      return [...threads.values()].filter((t) => args.includeArchived === true || !t.archived).map(snapshot);
     }),
     approval_list: read(() => {
       if (failing) {
@@ -924,7 +937,17 @@ export function createDashboardFixtures(scenario: DashboardScenario, emit: Emit,
       if (!["completed", "failed", "interrupted", "idle"].includes(thread.status))
         invalidTransition(thread, "archived");
       thread.archived = true;
+      thread.archivedAt = new Date().toISOString();
       emit({ type: "thread.archived", payload: { threadId: thread.id } }, { correlation: correlationFor(thread) });
+      return snapshot(thread);
+    },
+    // Like native `thread_unarchive`: idempotent; only a restore records the event.
+    thread_unarchive: (args) => {
+      const thread = requireThread(args, true);
+      if (!thread.archived) return snapshot(thread);
+      thread.archived = false;
+      thread.archivedAt = null;
+      emit({ type: "thread.unarchived", payload: { threadId: thread.id } }, { correlation: correlationFor(thread) });
       return snapshot(thread);
     },
   };
@@ -965,6 +988,30 @@ export function createDashboardFixtures(scenario: DashboardScenario, emit: Emit,
 
   function seedHistory() {
     if (!withThreads) return;
+    if (allArchived) {
+      // Each thread was created, ran, and was archived by the person.
+      const created = [...threads.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      for (const thread of created) {
+        const options = { correlation: correlationFor(thread) };
+        emit(
+          {
+            type: "thread.created",
+            payload: {
+              threadId: thread.id,
+              name: thread.name,
+              providerId: thread.providerId,
+              workspaceId: thread.workspaceId,
+            },
+          },
+          { ...options, occurredAt: thread.createdAt },
+        );
+        emit(
+          { type: "thread.archived", payload: { threadId: thread.id } },
+          { ...options, occurredAt: thread.archivedAt ?? thread.lastActivityAt, source: "ui" },
+        );
+      }
+      return;
+    }
     if (!BUSY_THREADS.every((seed) => threads.has(fixtureId(2, seed.n)))) {
       // Scale scenarios: each agent's creation, oldest first, then the pending approvals.
       const created = [...threads.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));

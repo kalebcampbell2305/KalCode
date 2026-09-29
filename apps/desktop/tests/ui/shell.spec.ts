@@ -28,7 +28,7 @@ test.describe("dashboard", () => {
   test("shows runtime health and live activity from the event log", async ({ page }) => {
     await open(page);
     await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
-    await expect(page.getByRole("region", { name: "Agents", exact: true })).toContainText("No active sessions yet.");
+    await expect(page.getByRole("region", { name: "Agents", exact: true })).toContainText("No sessions yet");
     const activity = page.getByRole("region", { name: "Activity" });
     await expect(activity.getByText("KalCode started")).toBeVisible();
     await expect(activity.getByText("Local database created")).toBeVisible();

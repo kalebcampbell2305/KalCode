@@ -116,6 +116,9 @@ export function ThreadsSurface() {
               onArchived={() => {
                 void list.reload();
               }}
+              onUnarchived={() => {
+                void list.reload();
+              }}
             />
           ) : list.state === "loading" ? null : (
             <div className={styles.placeholder}>

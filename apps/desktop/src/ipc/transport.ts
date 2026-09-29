@@ -101,6 +101,7 @@ export type CommandName =
   | "session_resolve"
   | "thread_rename"
   | "thread_archive"
+  | "thread_unarchive"
   | "thread_stream"
   // Universal Context Drop. Native resolves file handles; no file path crosses IPC.
   | "context_file_pick"

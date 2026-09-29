@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-thread-unarchive"
+description = "Enables the thread_unarchive command without any pre-configured scope."
+commands.allow = ["thread_unarchive"]
+
+[[permission]]
+identifier = "deny-thread-unarchive"
+description = "Denies the thread_unarchive command without any pre-configured scope."
+commands.deny = ["thread_unarchive"]

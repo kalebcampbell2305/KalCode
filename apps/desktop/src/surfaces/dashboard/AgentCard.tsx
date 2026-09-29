@@ -17,12 +17,13 @@ import {
   ProviderMark,
   StatusChip,
 } from "@kalcode/ui/components";
-import { CircleCheck, FileDiff, GitBranch, MoreHorizontal, ShieldAlert } from "lucide-react";
+import { Archive, CircleCheck, FileDiff, GitBranch, MoreHorizontal, ShieldAlert } from "lucide-react";
 import { type MouseEvent, memo, useEffect, useRef, useState } from "react";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
 import { MODE_LABELS } from "../permissions/labels.ts";
 import styles from "./AgentCard.module.css";
 import { ACTION_LABELS, availableActions, type ThreadAction } from "./data/actions.ts";
+import { formatElapsed } from "./data/format.ts";
 import { InlineApproval } from "./InlineApproval.tsx";
 
 export interface AgentCardProps {
@@ -38,7 +39,20 @@ export interface AgentCardProps {
   onReviewApprovals: () => void;
   /** Present when this build can show a thread's changes (a diff surface). */
   onViewChanges?: (thread: ThreadSummary) => void;
+  /**
+   * An archived thread, shown read-only: no focus, actions or approvals, only Unarchive
+   * (`onAction(thread, "unarchive")`).
+   */
+  archived?: boolean;
   headingLevel?: 3 | 4;
+}
+
+/** "Started 18 min ago" from the thread's real creation time; null when it can't be read. */
+export function startedText(createdAt: string, now: number): string | null {
+  const started = Date.parse(createdAt);
+  if (Number.isNaN(started)) return null;
+  const ms = now - started;
+  return ms < 60_000 ? "Started just now" : `Started ${formatElapsed(ms)} ago`;
 }
 
 /** What the thread is doing, from structured runtime state only (never model prose). */
@@ -69,6 +83,7 @@ export const AgentCard = memo(function AgentCard({
   onDecide,
   onReviewApprovals,
   onViewChanges,
+  archived = false,
   headingLevel = 3,
 }: AgentCardProps) {
   const display = displayStatusOf(thread.status);
@@ -91,15 +106,18 @@ export const AgentCard = memo(function AgentCard({
     if (confirmStop) stopRef.current?.focus();
   }, [confirmStop]);
 
-  const actions = availableActions(thread.status).filter((a) => a !== "open") as Exclude<ThreadAction, "open">[];
-  const request = approvals[0];
-  const done = display.status === "done";
-  const actionNeeded = display.status === "permission_required";
+  const actions = archived
+    ? []
+    : (availableActions(thread.status).filter((a) => a !== "open") as Exclude<ThreadAction, "open">[]);
+  const request = archived ? undefined : approvals[0];
+  const done = !archived && display.status === "done";
+  const actionNeeded = !archived && display.status === "permission_required";
   const failed = display.status === "failed";
   const canViewChanges = done && onViewChanges !== undefined && (thread.filesChanged ?? 0) > 0;
+  const started = startedText(thread.createdAt, now);
 
   const onCardClick = (event: MouseEvent<HTMLElement>) => {
-    if (isInteractive(event.target)) return;
+    if (archived || isInteractive(event.target)) return;
     if (window.getSelection()?.toString()) return;
     onFocus(thread);
   };
@@ -113,11 +131,22 @@ export const AgentCard = memo(function AgentCard({
       data-tone={tone}
       data-status={display.status}
       data-changed={changed || undefined}
+      data-archived={archived || undefined}
       aria-busy={pendingAction ? true : undefined}
       onClick={onCardClick}
     >
       {/* DONE and PERMISSION REQUIRED carry their status in a band (glyph + words) instead of a chip. */}
-      {done ? (
+      {archived ? (
+        <p className={styles.band} data-kind="archived">
+          <Archive aria-hidden="true" className={styles.bandGlyph} />
+          <span>Archived</span>
+          {thread.archivedAt ? (
+            <time className={styles.bandDetail} dateTime={thread.archivedAt} title={formatAbsolute(thread.archivedAt)}>
+              {formatRelative(thread.archivedAt, now)}
+            </time>
+          ) : null}
+        </p>
+      ) : done ? (
         <p className={styles.band} data-kind="done">
           <CircleCheck aria-hidden="true" className={styles.bandGlyph} />
           <span>Completed</span>
@@ -145,9 +174,15 @@ export const AgentCard = memo(function AgentCard({
       </header>
 
       <Heading className={styles.name} id={nameId}>
-        <button type="button" className={styles.nameButton} onClick={() => onFocus(thread)} title={thread.name}>
-          {thread.name}
-        </button>
+        {archived ? (
+          <span className={styles.nameText} title={thread.name}>
+            {thread.name}
+          </span>
+        ) : (
+          <button type="button" className={styles.nameButton} onClick={() => onFocus(thread)} title={thread.name}>
+            {thread.name}
+          </button>
+        )}
       </Heading>
 
       <p className={styles.where}>
@@ -180,7 +215,19 @@ export const AgentCard = memo(function AgentCard({
         />
       ) : null}
 
-      {done ? (
+      {archived ? (
+        <div className={styles.followUps}>
+          <Button
+            size="sm"
+            variant="secondary"
+            busy={pendingAction === "unarchive"}
+            aria-label={`Unarchive ${thread.name}`}
+            onClick={() => onAction(thread, "unarchive")}
+          >
+            Unarchive
+          </Button>
+        </div>
+      ) : done ? (
         <div className={styles.followUps}>
           <Button size="sm" variant="secondary" onClick={() => onFocus(thread)}>
             Open
@@ -260,7 +307,22 @@ export const AgentCard = memo(function AgentCard({
             {thread.filesChanged} {thread.filesChanged === 1 ? "file" : "files"}
           </span>
         ) : null}
-        <time className={styles.meta} dateTime={thread.lastActivityAt} title={formatAbsolute(thread.lastActivityAt)}>
+        {started ? (
+          <time
+            className={styles.meta}
+            data-kind="started"
+            dateTime={thread.createdAt}
+            title={`Started ${formatAbsolute(thread.createdAt)}`}
+          >
+            {started}
+          </time>
+        ) : null}
+        <time
+          className={styles.meta}
+          data-kind="last-activity"
+          dateTime={thread.lastActivityAt}
+          title={formatAbsolute(thread.lastActivityAt)}
+        >
           <span className="visually-hidden">Last activity </span>
           {formatRelative(thread.lastActivityAt, now)}
         </time>

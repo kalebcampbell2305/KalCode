@@ -1021,6 +1021,20 @@ pub fn thread_archive(
         .map_err(|e| e.log_and_convert("thread_archive"))
 }
 
+/// Restores an archived thread to the open list (Dashboard, Threads). Idempotent.
+#[tauri::command(async)]
+pub fn thread_unarchive(
+    _runtime_access: crate::runtime_coordinator::RuntimeAccess,
+    state: crate::runtime_coordinator::RuntimeState<ThreadsState>,
+    thread_id: String,
+) -> Result<ThreadSummary, IpcError> {
+    _runtime_access.revalidate()?;
+    state
+        .runtime()?
+        .unarchive(&thread_id)
+        .map_err(|e| e.log_and_convert("thread_unarchive"))
+}
+
 /// Streams a thread's live message deltas to the calling webview. Each webview holds one
 /// stream: subscribing to another thread replaces it, and a page (re)load drops it.
 #[tauri::command(async)]
@@ -1786,6 +1800,46 @@ mod tests {
                 .code,
             "thread_archived"
         );
+    }
+
+    #[test]
+    fn thread_unarchive_is_granted_and_restores_an_archived_thread() {
+        // The WebView can call it: declared for the build and granted to the main webview.
+        assert!(crate::command_registry::COMMANDS.contains(&"thread_unarchive"));
+        assert!(include_str!("../capabilities/main.json").contains("\"allow-thread-unarchive\""));
+
+        let fixture = RebindFixture::new();
+        let a = fixture.account(ProviderId::GEMINI_CLI, "Gemini A", AuthState::Authenticated);
+        let b = fixture.account(ProviderId::GEMINI_CLI, "Gemini B", AuthState::Authenticated);
+        let thread = fixture.idle_thread(ProviderId::GEMINI_CLI, &a);
+        fixture.runtime.stop(&thread.id).expect("stop");
+        fixture.runtime.archive(&thread.id).expect("archive");
+        let open = |runtime: &ThreadRuntime| {
+            runtime
+                .list(None, false)
+                .expect("list")
+                .into_iter()
+                .any(|t| t.id == thread.id)
+        };
+        assert!(!open(&fixture.runtime));
+        let archived = fixture.runtime.get(&thread.id).expect("archived");
+        assert_eq!(
+            fixture
+                .rebind(&archived, &b.id, None)
+                .expect_err("archived thread")
+                .code,
+            "thread_archived"
+        );
+
+        let restored = fixture.runtime.unarchive(&thread.id).expect("unarchive");
+        assert!(restored.archived_at.is_none());
+        assert_eq!(restored.status, archived.status);
+        assert_eq!(restored.provider_account_id.as_deref(), Some(a.id.as_str()));
+        assert!(open(&fixture.runtime));
+        // Restored threads behave like any open thread again.
+        fixture
+            .rebind(&restored, &b.id, None)
+            .expect("rebind after restore");
     }
 
     #[test]

@@ -104,6 +104,7 @@ export function samplePayloads(fx: Fixtures = createFixtures()): {
       payload: { threadId, code: "provider/process_exited", message: "The provider process stopped unexpectedly." },
     },
     "thread.archived": { type: "thread.archived", payload: { threadId } },
+    "thread.unarchived": { type: "thread.unarchived", payload: { threadId } },
     "thread.account_changed": {
       type: "thread.account_changed",
       payload: { threadId, providerAccountId: "0192f3c4-0000-7000-8000-000000000302", accountLabel: "Gemini B" },

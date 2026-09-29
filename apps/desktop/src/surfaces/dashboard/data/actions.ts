@@ -9,8 +9,9 @@ import { isLive } from "./status.ts";
  *   retry     → `thread_resume` on a failed thread (run the failed turn again)
  *   stop      → `thread_stop` (end the thread's process; asks for confirmation)
  *   archive   → `thread_archive` (hide a finished or idle thread from the Dashboard)
+ *   unarchive → `thread_unarchive` (restore an archived thread; offered only on archived cards)
  */
-export type ThreadAction = "open" | "interrupt" | "resume" | "retry" | "stop" | "archive";
+export type ThreadAction = "open" | "interrupt" | "resume" | "retry" | "stop" | "archive" | "unarchive";
 
 export const ACTION_LABELS: Record<ThreadAction, string> = {
   open: "Open",
@@ -19,6 +20,7 @@ export const ACTION_LABELS: Record<ThreadAction, string> = {
   retry: "Retry",
   stop: "Stop",
   archive: "Archive",
+  unarchive: "Unarchive",
 };
 
 /** The actions valid for a thread in `status`, in display order. Never offers an invalid action. */

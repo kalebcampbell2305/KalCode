@@ -136,6 +136,7 @@
     "allow-thread-rebind-account",
     "allow-thread-rename",
     "allow-thread-archive",
+    "allow-thread-unarchive",
     "allow-thread-stream",
     "allow-approval-list",
     "allow-approval-decide",

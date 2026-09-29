@@ -79,7 +79,7 @@ one-to-one (`EventPayload::from(GitEvent)`, `EventPayload::from(ContextEvent)`,
 | `thread.created` | 1 | I (Z3) | `{ threadId, name, providerId, workspaceId }` |
 | `thread.started` | 1 | I (Z3) | `{ threadId }` — a provider session started (create or resume) |
 | `thread.status_changed` | 1 | I (Z3) | `{ threadId, from, to, detail? }` — idle, paused, resumed and waiting states are status changes, not separate types |
-| `thread.renamed` / `.archived` / `.completed` | 1 | I (Z3) | `{ threadId, name? }` |
+| `thread.renamed` / `.archived` / `.unarchived` / `.completed` | 1 | I (Z3) | `{ threadId, name? }` |
 | `thread.failed` | 1 | I (Z3) | `{ threadId, code, message }` — user-safe message |
 | `agent.message` | 1 | I (Z3) | `{ threadId, messageId, role }` — never the message text |
 | `tool.requested` | 1 | I (Z3) | `{ threadId, toolCallId, tool, summary }` |
