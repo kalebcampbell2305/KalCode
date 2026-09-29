@@ -4,13 +4,14 @@ KalVoice is the coding assistant and voice layer built into KalCode. It turns yo
 coding prompts and KalCode commands: dictate directly into Claude Code, Codex, Gemini CLI and
 your terminals, or ask KalVoice to run your workspace. Hold one key, speak, let go.
 
-Status: implemented in campaign Z12 (`crates/kalvoice`, the desktop shell's
-`kalvoice_commands.rs`, `apps/desktop/src/kalvoice/`) and integrated on `main`; **Preview**.
-Development builds always show it. Beta builds show it only when the build includes the
-on-device speech engine (`kalvoice-whisper`); the release installer is built without it today
-(it needs LLVM/libclang, see "Building"), so KalVoice is hidden in the beta installer until the
-release build adds the engine (`FeatureFlags::require_component`). Stable hides every Preview
-surface. See "Implementation" below and `docs/campaigns/Z12.md`.
+Status: shipped in 0.1.5 and **Available on every channel, Stable included**
+(`crates/native-core/src/flags.rs`). Code: `crates/kalvoice`, the desktop shell's
+`kalvoice_commands.rs`, `apps/desktop/src/kalvoice/`. The surface needs the on-device speech
+engine (`kalvoice-whisper`). Outside development builds it is hidden only when the engine isn't
+compiled in (`FeatureFlags::require_component`). Release builds always include the engine:
+Stable Windows builds refuse to build without it (`tooling/release/build-windows.mjs`), and macOS
+release builds always add it (`tooling/release/macos-contract.mjs`). See "Implementation" below
+and `docs/campaigns/Z12.md`.
 
 ## Principles
 
@@ -68,13 +69,14 @@ When the key goes up, KalVoice decides what the words were for:
 
 | # | Condition | Result | Counted |
 | --- | --- | --- | --- |
-| 1 | The words are a KalVoice command with **high confidence** ("open dashboard", "open four Codex threads", "pause every thread") | the command runs; the widget shows the result and **Type it instead** | 1 KalVoice Request |
+| 1 | The words are a KalVoice command with **high confidence** ("open dashboard", "new terminal", "pause every thread") | the command runs; the widget shows the result and **Type it instead** | 1 KalVoice Request |
 | 2 | Otherwise, a text box or terminal had focus when the key went down | the words are typed there at the caret (terminals: written to the PTY) | never |
 | 3 | Otherwise | local interpretation into a validated KalCode action, or an explicit unavailable/uncertain response | 1 only when executed |
 
 **Type it instead** undoes a command that was meant as text: it types the words into the box
 that had focus and, when the command is reversible (navigation), goes back and un-counts it.
-Low-confidence matches (a bare "status" or "approvals" said while typing) are dictated, not run.
+Low-confidence matches (a bare "status" or "approvals", or "switch to Codex", said while typing)
+are dictated, not run.
 The route taken is recorded in `kalvoice.*` events by id and intent name only.
 
 Typed requests (the KalVoice page's "Type a request") take route 1 or 3.
@@ -123,17 +125,41 @@ request (push-to-talk transcript, or typed)
   ─▶ short report (text; optional OS speech synthesis)
 ```
 
-Deterministic intents (`KalVoiceIntent`): navigate, open workspace, create terminal, create N
-threads with a provider (1–16), open thread, focus a thread or pane ("focus the login fix
-thread", "focus the Codex pane": a thread running in a provider pane is shown in its pane on the
-Code canvas, others open in Threads), ask for a thread's permission mode ("switch
-the login fix thread to plan mode": KalVoice opens the thread and the person changes the mode in
-its permission menu; asking for Bypass is refused outright, and the contract can't even represent
-it), pause / resume / stop threads (all, workspace, one), show approvals, status report ("what
-are my threads doing?"), filter the Dashboard (Z7-W3, `filter_dashboard`, UI-only), and pane layout
-(Z7-W1, below). Everything else is `Reasoning`.
-`search` and `switch_provider` aren't in this build: the grammar doesn't produce them and the
-desktop executor refuses them uncounted.
+Deterministic intents (`KalVoiceIntent`, `crates/contracts/src/kalvoice.rs`; 30 kinds with
+`reasoning`):
+
+- **Navigation and workspaces:** navigate (surfaces this build shows; others are refused
+  `surface_unavailable`), open workspace, create terminal.
+- **Threads:** create N threads with a provider (1–16), open thread, focus a thread or pane
+  ("focus the login fix thread", "focus the Codex pane": a thread in a provider pane is shown
+  in its pane on the Code canvas, others open in Threads), pause / resume / stop threads (all,
+  workspace, one; never on a partial name). Asking for a permission mode ("switch the login fix
+  thread to plan mode") opens the thread, and the person changes the mode in its permission menu;
+  Bypass is refused outright, and the contract can't represent it.
+- **Accounts:** `rebind_thread_account` resolves the thread and account and only opens
+  KalCode's Rebind confirmation; `set_workspace_account` sets the workspace's default account.
+- **Sessions (0.1.5):** "send that" / "clear that" (`submit_focused`, `clear_focused`, scoped to
+  what KalVoice typed), "tell <session> to …" (`direct_prompt`, through the composer's own Send),
+  `focus_by_state`, `focus_previous` and `which_sessions` ("what needs permission?"). Every
+  spoken session name goes through the session resolver; several fits get a "Which one?" choice.
+- **Approvals and status:** show approvals, status report ("what are my threads doing?"),
+  filter the Dashboard (Z7-W3, `filter_dashboard`, UI-only).
+- **Layout:** pane layout (Z7-W1, below), `control_pane` (move, maximize, restore, collapse,
+  expand a named pane) and `control_browser` (open, navigate, back, forward, reload, stop).
+
+Everything else is `Reasoning`.
+
+Refused in 0.1.5, before anything is counted:
+
+- **Provider panes** (`create_provider_panes`, and `create_threads` without an account) need
+  the ProviderPanes feature, which is gated on Stable: refused `provider_panes_unavailable`.
+  "Open a new Codex thread with my work account" is not refused: it opens KalCode's New thread
+  form and starts nothing.
+- **`search`** ("search for the login fix") reads back names and statuses from the Session
+  Locator, a gated feature. Where the locator isn't shown (Stable), voice search is refused
+  `not_in_this_build` and never reads locator results.
+- **`switch_provider`** ("switch to Codex") is parsed at low confidence, so a focused text box
+  keeps the words; as a command it is refused `not_in_this_build`.
 
 **Pane layout intents** (Z7-W1). Deterministic, verb-led (high confidence), layout only: they
 never start, stop or close a process and never ask for approval (they count like navigation).
@@ -215,7 +241,7 @@ the next candidate; see the campaign doc.
 ## KalVoice Requests
 
 - One top-level request to the assistant counts once, however many internal steps it takes
-  ("Open four Codex threads" = 1; "Have Claude implement this, Codex review it, then run the
+  ("Pause every active thread" = 1; "Have Claude implement this, Codex review it, then run the
   tests" = 1).
 - Allowances per monthly cycle: Free 75 · Pro 1,500 · MAX 5,000 · MAX 2X 10,000 · OWNER unlimited
   (`packages/protocol/src/plans.ts`). Dictation is never counted. Provider tokens are never counted.
@@ -235,12 +261,9 @@ Optional spoken replies use the operating system's speech synthesis. No cloud te
 `kalvoice.command_recognized|executed`, `kalvoice.limit_reached`, `kalvoice.provider_selected`,
 `kalvoice.voice_output_started|completed` — ids and facts only (see docs/EVENT_PROTOCOL.md).
 
-## Future
+## Local intelligence
 
-On-device reasoning runtime certification, verified component acquisition, and held-out
-command benchmarks are production release gates.
-
-**Local intelligence provisioning.** Once a speech model is ready, KalCode prepares local
+**Provisioning (shipped in 0.1.5).** Once a speech model is ready, KalCode prepares local
 intelligence (llama.cpp runtime plus the Qwen model, about 850 MB) automatically through the same
 signed catalog and verified pipeline, under `automatic_default` consent, while the Settings
 preference "Prepare local intelligence automatically" is on (default; turn it off on a metered
@@ -279,14 +302,15 @@ not count. Duplicate IDs cannot execute or count twice. Local dictation never co
 
 ### Desktop
 
-- Commands (allow-listed in `build.rs` and the capability): `kalvoice_subscribe` (a per-window
-  signal channel: listening, level, partials, results with timings, stages, downloads),
-  `kalvoice_status`, `kalvoice_request`, `kalvoice_talk`, `kalvoice_type_instead`,
-  `kalvoice_latency`, `kalvoice_latency_record`,
+- Commands (registered in `lib.rs`, allow-listed in `command_registry.rs` and the capability):
+  `kalvoice_subscribe` (a per-window signal channel: listening, level, partials, results with
+  timings, stages, downloads), `kalvoice_status`, `kalvoice_request`, `kalvoice_talk`,
+  `kalvoice_type_instead`, `kalvoice_latency`, `kalvoice_latency_record`,
   `kalvoice_preferences_update`, `kalvoice_listen_start|stop|cancel`,
-  `kalvoice_model_download|cancel|delete`. There is no KalVoice-specific approval command:
-  approvals are answered with Z4's `approval_decide`, and a worker (`watch_approvals`) continues
-  the waiting command from the approval events and sends `request_resolved` to the widget.
+  `kalvoice_model_download|cancel|delete`, `kalvoice_reasoning_prepare`,
+  `kalvoice_reasoning_retry` and `kalvoice_open_microphone_settings` (opens the OS microphone
+  privacy page). There is no KalVoice approval command and no approvals worker: KalVoice never
+  answers approvals, and provider permission prompts stay native to each provider.
   Push to talk records its takes in `talk` mode (`KalVoiceMode::Talk`).
 - `kalvoice_executor.rs` runs commands through the same runtimes as the UI: workspaces and
   terminals (Z1, `kalcode_core`), threads (Z3, `ThreadRuntime`: `create_idle_threads`,
@@ -300,11 +324,11 @@ not count. Duplicate IDs cannot execute or count twice. Local dictation never co
 - KalVoice's tables are schema v6, part of every build's migrations; the first start after
   the update backs up the database and adds them.
 - The voice widget: one line, `[orb] KALVOICE ● Ready`, docked top centre by default (clear of
-  composers and terminal controls). States Ready · Listening · Processing · Executing · Needs
-  Approval · Done · Error, each as text beside a dot and announced in a polite live region; the
-  orb's motion follows the state and stops under reduced motion. It opens up only for the live
-  transcript, a brief result (with "Type it instead"), a confirmation (Deny / Approve once) or
-  an error with its fix, then settles back. There is no text box in the widget; the orb itself
+  composers and terminal controls). States Ready · Listening · Processing · Executing · Done ·
+  Error, each as text beside a dot and announced in a polite live region; the orb's motion
+  follows the state and stops under reduced motion. It opens up only for the live transcript, a
+  brief result (with "Type it instead") or an error with its fix, then settles back. It never
+  shows an approval prompt. There is no text box in the widget; the orb itself
   is a quiet press-and-hold alternative to the key. It drags anywhere inside the window, docks
   to edges and corners, collapses to the orb, hides (push to talk keeps working), remembers a
   placement per window size, and moves with the arrow keys. The push-to-talk key, Settings and
@@ -325,7 +349,8 @@ pnpm --filter @kalcode/desktop tauri build --no-bundle --features kalvoice-whisp
 ```
 
 Without the feature everything else works and push to talk says the speech engine isn't included
-in this build; outside development builds the KalVoice surface is then hidden. The release
-installer (`pnpm release:build`) doesn't pass the feature today. CMake and the MSVC build tools are also required (already needed by Tauri on
-Windows). Microphone capture and the OS voice are built on Windows and macOS; on Linux they
-report unavailable until CI installs the ALSA and speech-dispatcher development packages.
+in this build; outside development builds the KalVoice surface is then hidden. Release builds
+always include the feature (see "Status" above). CMake and the MSVC build tools are also
+required (already needed by Tauri on Windows). Microphone capture and the OS voice are built on
+Windows and macOS; on Linux they report unavailable until CI installs the ALSA and
+speech-dispatcher development packages.
