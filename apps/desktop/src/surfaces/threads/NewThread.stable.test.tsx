@@ -265,3 +265,46 @@ describe("New thread account defaults (Stable)", () => {
     expect(await h.client.listProviderAccountBindings({ kind: "workspace" })).toEqual([]);
   });
 });
+
+describe("New thread permission mode (Stable)", () => {
+  const modes = (form: ReturnType<typeof within>) => within(form.getByRole("radiogroup", { name: "Permissions" }));
+
+  it("starts in the saved default mode when a thread can start in it", async () => {
+    const h = await mountStable(async ({ client }) => {
+      await client.updatePermissionSettings("auto");
+    });
+    const form = await openNewThread(h.user);
+    await waitFor(() => expect(modes(form).getByRole("radio", { name: "Auto" })).toBeChecked());
+    expect(form.queryByRole("note")).not.toBeInTheDocument();
+
+    await h.user.type(form.getByRole("textbox", { name: "Task" }), "summarize the README");
+    await h.user.click(form.getByRole("button", { name: "Start thread" }));
+    await waitFor(() => expect(h.calls.some((c) => c.command === "thread_create")).toBe(true));
+    expect(h.calls.find((c) => c.command === "thread_create")?.args?.permissionMode).toBe("auto");
+  });
+
+  it("starts a saved Bypass default in Approve, says why, and never sends Bypass", async () => {
+    const h = await mountStable(async ({ client }) => {
+      await client.updatePermissionSettings("bypass", { confirmBypass: true });
+    });
+    const form = await openNewThread(h.user);
+    await waitFor(() => expect(modes(form).getByRole("radio", { name: "Approve" })).toBeChecked());
+    expect(modes(form).queryByRole("radio", { name: "Bypass" })).not.toBeInTheDocument();
+    expect(modes(form).queryByRole("radio", { name: "Custom" })).not.toBeInTheDocument();
+    expect(form.getByRole("note")).toHaveTextContent(
+      "Your default mode is Bypass, which threads can't start in, so this thread starts in Approve.",
+    );
+
+    // A mode the person picks is their own choice: the note goes away.
+    await h.user.click(modes(form).getByRole("radio", { name: "Plan" }));
+    expect(form.queryByRole("note")).not.toBeInTheDocument();
+    await h.user.click(modes(form).getByRole("radio", { name: "Approve" }));
+
+    await h.user.type(form.getByRole("textbox", { name: "Task" }), "summarize the README");
+    await h.user.click(form.getByRole("button", { name: "Start thread" }));
+    await waitFor(() => expect(h.calls.some((c) => c.command === "thread_create")).toBe(true));
+    const create = h.calls.find((c) => c.command === "thread_create");
+    expect(create?.args?.permissionMode).toBe("approve");
+    expect(create?.args?.confirmBypass).toBe(false);
+  });
+});

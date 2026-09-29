@@ -3,7 +3,7 @@ import { CircleAlert, CircleCheck, Send } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { useNavigation } from "../shell/navigation.tsx";
 import styles from "./Assistant.module.css";
-import { usageLine } from "./assistantState.ts";
+import { formatDay, limitReached } from "./assistantState.ts";
 import { useKalVoice } from "./KalVoiceProvider.tsx";
 import { displayKey } from "./shortcutModel.ts";
 
@@ -102,13 +102,17 @@ export function ResultView() {
   );
 }
 
-export function UsageFooter() {
+/** Shown under the request box only when this month's KalVoice Requests are used up. */
+export function LimitNotice() {
   const { status } = useKalVoice();
-  if (!status) return null;
+  if (!status || !limitReached(status.usage)) return null;
   return (
-    <p className={styles.usage}>
-      <span>{usageLine(status.usage)}</span>
-      <span className={styles.usageNote}>Dictation is never counted</span>
+    <p className={styles.limit} role="status">
+      <CircleAlert className={styles.limitIcon} aria-hidden="true" />
+      <span>
+        <strong>Monthly limit reached.</strong> KalVoice Requests renew {formatDay(status.usage.resetsAt)}. Dictation
+        keeps working.
+      </span>
     </p>
   );
 }

@@ -1,7 +1,12 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import type { AccountSnapshot, PurchasableTier, RuntimeStatus } from "../ipc/account.ts";
+import {
+  type AccountSnapshot,
+  type PurchasableTier,
+  type RuntimeStatus,
+  SESSION_EXPIRED_REASON,
+} from "../ipc/account.ts";
 import { AccountGate } from "./AccountGate.tsx";
 import { AccountOnboarding, type AccountOnboardingActions } from "./AccountOnboarding.tsx";
 import type { SocialProvider } from "./AccountProvider.tsx";
@@ -78,6 +83,27 @@ describe("AccountOnboarding", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: "Create with email" }));
     expect(screen.getByRole("button", { name: "Email me a sign-in link" })).toBeInTheDocument();
+  });
+
+  it("tells a returning person their session expired instead of showing the first-run welcome", async () => {
+    const accountActions = actions();
+    render(
+      <AccountOnboarding
+        snapshot={{ ...snapshot("signed_out"), degradedReason: SESSION_EXPIRED_REASON }}
+        busy={false}
+        error={null}
+        actions={accountActions}
+      />,
+    );
+    expect(screen.getByRole("heading", { name: "Your session expired — sign in again" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Welcome to KalCode" })).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Sign in again to keep working.");
+    await userEvent.click(screen.getByRole("button", { name: "Continue with Google" }));
+    expect(accountActions.startSocial).toHaveBeenCalledWith("google");
+    await userEvent.click(screen.getByRole("button", { name: "Continue with email" }));
+    await userEvent.type(screen.getByLabelText("Email"), "owner@example.com");
+    await userEvent.click(screen.getByRole("button", { name: "Email me a sign-in link" }));
+    expect(accountActions.startEmail).toHaveBeenCalledWith("owner@example.com");
   });
 
   it("starts fixed native social providers and shows a cancellable browser handoff", async () => {

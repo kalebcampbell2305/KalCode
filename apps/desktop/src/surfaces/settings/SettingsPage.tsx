@@ -9,6 +9,7 @@ import { formatAbsolute } from "../../runtime/describeEvent.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useDiagnostics } from "../../runtime/useDiagnostics.ts";
 import { KalCodeTagline, Wordmark } from "../../shell/Brand.tsx";
+import { viewVisible } from "../../shell/navigation.tsx";
 import { Page } from "../../shell/Page.tsx";
 import { DoctorSettings } from "../doctor/DoctorSettings.tsx";
 import { PermissionsSettings } from "../permissions/index.ts";
@@ -26,12 +27,15 @@ function formatOs(family: string): string {
 }
 
 export function SettingsPage() {
+  const { info } = useRuntime();
+  // The display name only appears on Home; without Home (Stable) the setting would do nothing.
+  const homeVisible = viewVisible("home", info.flags.features);
   return (
     <Page title="Settings" description="Changes apply immediately and are saved on this device.">
       {/* One column up to wide windows; then permissions get a column of their own. */}
       <div className={styles.layout}>
         <div className={styles.column}>
-          <ProfileSettings />
+          {homeVisible ? <ProfileSettings /> : null}
           <SettingsAccount />
           <Appearance />
           <KalVoiceSettings />

@@ -60,6 +60,9 @@ pub struct AccountUsageSnapshot {
     pub resets_at: String,
 }
 
+/// `degraded_reason` of a signed-out snapshot whose session expired or was rejected (401).
+pub const SESSION_EXPIRED_REASON: &str = "session_expired";
+
 /// The complete account value available to the WebView. Secret-bearing types below deliberately
 /// do not implement `Serialize`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -83,6 +86,15 @@ impl AccountSnapshot {
 
     pub fn signed_out() -> Self {
         Self::for_phase(AccountPhase::SignedOut)
+    }
+
+    /// Signed out because the stored session expired or the server rejected it, not because the
+    /// person signed out: the sign-in screen says so ("Your session expired").
+    pub fn session_expired() -> Self {
+        Self {
+            degraded_reason: Some(SESSION_EXPIRED_REASON.into()),
+            ..Self::signed_out()
+        }
     }
 
     fn for_phase(phase: AccountPhase) -> Self {

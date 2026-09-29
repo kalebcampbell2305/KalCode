@@ -31,6 +31,12 @@ export interface AccountSnapshot {
   degradedReason: string | null;
 }
 
+/**
+ * `degradedReason` of a signed-out snapshot whose session expired or was rejected by the server
+ * (native `SESSION_EXPIRED_REASON`): the sign-in screen says the session expired.
+ */
+export const SESSION_EXPIRED_REASON = "session_expired";
+
 export interface RuntimeStatus {
   phase: RuntimePhase;
   ready: boolean;

@@ -177,7 +177,7 @@ test.describe("permission settings", () => {
     const section = page.getByRole("region", { name: "Permissions" });
     const modes = section.getByRole("radiogroup", { name: "Default mode for new threads" });
     await modes.getByRole("radio", { name: "Bypass" }).click();
-    const dialog = page.getByRole("alertdialog", { name: "Turn on Bypass for new threads?" });
+    const dialog = page.getByRole("alertdialog", { name: "Save Bypass as your default?" });
     await expect(dialog).toBeVisible();
     const confirm = dialog.getByRole("button", { name: "Turn on Bypass" });
     await expect(confirm).toBeDisabled();
@@ -189,13 +189,16 @@ test.describe("permission settings", () => {
     await confirm.click();
     await expect(dialog).toBeHidden();
     await expect(modes.getByRole("radio", { name: "Bypass" })).toBeChecked();
-    await expect(section.getByText("Bypass is on for new threads")).toBeVisible();
-    const notice = page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: /Bypass is on/ });
-    await expect(notice).toBeVisible();
+    // Threads can't start in Bypass, so the saved default says so and the sidebar raises no alarm.
+    await expect(section.getByText("Bypass is your saved default")).toBeVisible();
+    await expect(section.getByText(/New threads start in Approve/).first()).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: /Bypass/ })).toHaveCount(
+      0,
+    );
 
     await section.getByRole("button", { name: "Switch to Approve" }).click();
     await expect(modes.getByRole("radio", { name: "Approve" })).toBeChecked();
-    await expect(notice).toHaveCount(0);
+    await expect(section.getByText("Bypass is your saved default")).toHaveCount(0);
   });
 
   test("profiles show what each mode allows", async ({ page }) => {

@@ -5,8 +5,8 @@ import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { useNavigation } from "../shell/navigation.tsx";
 import { Page } from "../shell/Page.tsx";
 import { useProviderPanesEnabled } from "../surfaces/code/panes/useProviderPanes.ts";
-import { Examples, RequestForm, ResultView, UsageFooter } from "./Assistant.tsx";
-import { usageLine } from "./assistantState.ts";
+import { Examples, LimitNotice, RequestForm, ResultView } from "./Assistant.tsx";
+import { limitReached, usageLine } from "./assistantState.ts";
 import styles from "./KalVoicePage.module.css";
 import { useKalVoice } from "./KalVoiceProvider.tsx";
 import { LatencyDiagnostics } from "./LatencyDiagnostics.tsx";
@@ -112,7 +112,8 @@ export function KalVoicePage() {
           <RequestForm id="kalvoice-page-request" />
           <ResultView />
           <Examples onPick={(text) => void submit(text, "text")} providerPanes={providerPanes} />
-          <UsageFooter />
+          {/* Usage lives in the This month card; here only the limit, when it matters. */}
+          <LimitNotice />
         </div>
       </Section>
 
@@ -157,6 +158,7 @@ export function KalVoicePage() {
             </li>
             <li className={styles.tile}>
               <p className={styles.tileTitle}>This month</p>
+              {limitReached(status.usage) ? <Badge tone="waiting">Limit reached</Badge> : null}
               <p className={styles.tileFigure}>
                 {status.usage.used.toLocaleString("en-US")}
                 <span>

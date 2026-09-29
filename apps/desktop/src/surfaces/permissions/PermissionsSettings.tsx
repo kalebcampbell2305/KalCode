@@ -3,18 +3,28 @@ import { Button, Panel, SegmentedControl } from "@kalcode/ui/components";
 import { ShieldCheck, TriangleAlert } from "lucide-react";
 import { AlertDialog } from "radix-ui";
 import { useId, useState } from "react";
-import { EFFECT_LABELS, MODE_DESCRIPTIONS, MODE_LABELS, SCOPE_LABELS } from "./labels.ts";
+import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
+import { EFFECT_LABELS, MODE_DESCRIPTIONS, MODE_LABELS, SCOPE_LABELS, START_MODES } from "./labels.ts";
 import { usePermissions } from "./PermissionsProvider.tsx";
 import styles from "./PermissionsSettings.module.css";
 
 const MODES: readonly PermissionMode[] = ["plan", "approve", "auto", "bypass", "custom"];
 
-/** Settings → Permissions: default mode for new threads, Bypass confirmation, profiles. */
+/**
+ * Settings → Permissions: default mode for new threads, Bypass confirmation, profiles.
+ *
+ * The default is what new threads (and, where shipped, provider panes) start in. They can only
+ * start in Plan, Approve or Auto, so a saved Bypass or Custom default starts them in Approve and
+ * nothing runs in Bypass because of it. Stable offers only the modes a thread can start in.
+ */
 export function PermissionsSettings() {
+  const { info } = useRuntime();
   const { settings, profiles, setDefaultMode } = usePermissions();
   const [confirming, setConfirming] = useState(false);
   const customProfiles = profiles.filter((profile) => profile.mode === "custom");
   const mode = settings?.defaultMode ?? "approve";
+  const startable = START_MODES.includes(mode);
+  const choices = info.channel === "stable" ? START_MODES : MODES;
 
   const choose = (next: PermissionMode) => {
     if (next === "bypass") {
@@ -34,16 +44,15 @@ export function PermissionsSettings() {
       padding="none"
       bodyClassName={styles.body}
       className={styles.panel}
-      data-bypass={mode === "bypass" || undefined}
     >
-      {mode === "bypass" ? (
-        <div className={styles.bypassBanner} role="status">
+      {settings && !startable ? (
+        <div className={styles.defaultNote} role="status">
           <TriangleAlert aria-hidden="true" />
           <div>
-            <p className={styles.bannerTitle}>Bypass is on for new threads</p>
+            <p className={styles.bannerTitle}>{MODE_LABELS[mode]} is your saved default</p>
             <p className={styles.bannerText}>
-              Local commands, file changes and deletions run without asking. Pushes, deploys, cloud changes, messages,
-              spending, secrets and files outside the workspace still ask.
+              New threads start in Approve: threads can only start in Plan, Approve or Auto, so nothing runs in{" "}
+              {MODE_LABELS[mode]} because of this setting.
             </p>
           </div>
           <Button size="sm" onClick={() => void setDefaultMode("approve")}>
@@ -59,7 +68,7 @@ export function PermissionsSettings() {
               Default mode for new threads
             </p>
             <p id="default-mode-help" className={styles.rowHelp}>
-              {MODE_DESCRIPTIONS[mode]}
+              {startable ? MODE_DESCRIPTIONS[mode] : "New threads start in Approve."}
             </p>
           </div>
           <SegmentedControl<PermissionMode>
@@ -67,7 +76,7 @@ export function PermissionsSettings() {
             value={mode}
             onValueChange={choose}
             disabled={settings === null}
-            options={MODES.map((value) => ({ value, label: MODE_LABELS[value] }))}
+            options={choices.map((value) => ({ value, label: MODE_LABELS[value] }))}
           />
         </div>
 
@@ -183,10 +192,13 @@ function BypassConfirm({
           <div className={styles.dialogIcon} aria-hidden="true">
             <TriangleAlert />
           </div>
-          <AlertDialog.Title className={styles.dialogTitle}>Turn on Bypass for new threads?</AlertDialog.Title>
+          <AlertDialog.Title className={styles.dialogTitle}>Save Bypass as your default?</AlertDialog.Title>
           <AlertDialog.Description asChild>
             <div className={styles.dialogBody}>
-              <p>New threads will get broad local authority. Without asking you, agents will be able to:</p>
+              <p>
+                New threads still start in Approve: threads can only start in Plan, Approve or Auto. A thread in Bypass
+                has broad local authority. Without asking you, its agents can:
+              </p>
               <ul>
                 <li>change and delete files in the workspace, including recursive deletes</li>
                 <li>run any local command and install packages</li>
@@ -198,7 +210,7 @@ function BypassConfirm({
                 check always ask.
               </p>
               <p>
-                Claude Code threads can't show KalCode's questions yet. For them, KalCode refuses pushes, publishes,
+                Claude Code threads don't show KalCode's questions. For them, KalCode refuses pushes, publishes,
                 deploys, cloud tools and reading credential files. Other commands follow Claude Code's own rules and
                 your Claude Code settings.
               </p>
@@ -212,7 +224,7 @@ function BypassConfirm({
               checked={understood}
               onChange={(event) => setUnderstood(event.target.checked)}
             />
-            I understand that agents will act without asking for local work.
+            I understand that agents in a Bypass thread act without asking for local work.
           </label>
           <div className={styles.dialogActions}>
             <AlertDialog.Cancel asChild>

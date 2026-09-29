@@ -285,6 +285,37 @@ describe("BrowserPane address editing", () => {
     expect(screen.queryByText("KalCode couldn't open this browser pane.")).not.toBeInTheDocument();
   });
 
+  it("explains a failed attach with a Retry and an external fallback, and never says Ready", async () => {
+    const attach = vi
+      .fn<BrowserBridge["attach"]>()
+      .mockRejectedValueOnce({
+        category: "internal",
+        code: "browser_unavailable",
+        message: "The embedded browser isn't available on this computer.",
+        retryable: false,
+      })
+      .mockResolvedValue(nativeState());
+    const openExternal = vi.fn<BrowserBridge["openExternal"]>(async () => undefined);
+    const bridge = testBridge({ attach, openExternal });
+
+    render(pane(bridge));
+
+    const failure = await screen.findByRole("alert");
+    expect(failure).toHaveTextContent("KalCode couldn't open this browser pane.");
+    expect(failure).toHaveTextContent("The embedded browser isn't available on this computer.");
+    expect(screen.getByText("Couldn't open")).toBeInTheDocument();
+    expect(screen.queryByText("Ready")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Open in system browser" }));
+    expect(openExternal).toHaveBeenCalledWith("http://localhost:3000/");
+
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(attach).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(screen.getByText("localhost", { selector: "span" })).toBeInTheDocument();
+    expect(screen.queryByText("Couldn't open")).not.toBeInTheDocument();
+  });
+
   it("does not retry an old visible attach after unmount during backoff", async () => {
     vi.useFakeTimers();
     try {

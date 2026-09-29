@@ -369,10 +369,15 @@ impl AccountRuntime {
         if session
             .as_ref()
             .is_some_and(|value| value.is_expired_at(now))
-            || session.is_none()
-                && pending
-                    .as_ref()
-                    .is_some_and(|value| value.is_expired_at(now))
+        {
+            // A stored session that ran out: the sign-in screen says it expired.
+            self.session_store()?.clear().map_err(store_error)?;
+            return Ok(self.publish_session_expired(generation));
+        }
+        if session.is_none()
+            && pending
+                .as_ref()
+                .is_some_and(|value| value.is_expired_at(now))
         {
             self.session_store()?.clear().map_err(store_error)?;
             return Ok(self.publish_signed_out(generation));
@@ -1349,18 +1354,26 @@ impl AccountRuntime {
         self.is_current(generation)
     }
 
+    /// The server rejected the session (401): signed out, and the sign-in screen says it expired.
     fn clear_unauthorized(&self) -> Result<AccountSnapshot, AccountRuntimeError> {
         let generation = self.advance_generation();
         self.session_store()?.clear().map_err(store_error)?;
-        Ok(self.publish_signed_out(generation))
+        Ok(self.publish_session_expired(generation))
     }
 
     fn publish_signed_out(&self, generation: u64) -> AccountSnapshot {
+        self.publish_signed_out_as(generation, AccountSnapshot::signed_out())
+    }
+
+    fn publish_session_expired(&self, generation: u64) -> AccountSnapshot {
+        self.publish_signed_out_as(generation, AccountSnapshot::session_expired())
+    }
+
+    fn publish_signed_out_as(&self, generation: u64, snapshot: AccountSnapshot) -> AccountSnapshot {
         let _effect = self.lock_generation_effect();
         if !self.is_current(generation) {
             return self.snapshot();
         }
-        let snapshot = AccountSnapshot::signed_out();
         let mut state = self.lock_state();
         *state = RuntimeState {
             snapshot: snapshot.clone(),
@@ -1407,7 +1420,7 @@ impl AccountRuntime {
         if session.is_expired_at(self.clock.now_unix()) {
             let generation = self.advance_generation();
             self.session_store()?.clear().map_err(store_error)?;
-            self.publish_signed_out(generation);
+            self.publish_session_expired(generation);
             return Err(authentication_required());
         }
         Ok(session.expose_token().to_owned())

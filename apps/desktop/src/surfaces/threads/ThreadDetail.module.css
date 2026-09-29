@@ -4,6 +4,14 @@
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  /* When the header, notices and composer leave the conversation less than its minimum (short
+     windows, down to the 620 px minimum), the whole thread scrolls instead of the transcript
+     collapsing to a sliver. */
+  overflow-y: auto;
+}
+
+.detail > :not(.timeline) {
+  flex: none;
 }
 
 .loading {
@@ -183,7 +191,7 @@
 /* ---------------- transcript ---------------- */
 .timeline {
   flex: 1;
-  min-height: 0;
+  min-height: 11rem;
   overflow-y: auto;
   padding: var(--space-5) var(--space-5);
 }
@@ -419,4 +427,30 @@
   padding: var(--space-4) var(--space-5);
   border-bottom: 1px solid var(--color-border-subtle);
   list-style: none;
+}
+
+/* Short windows: a tighter header keeps more of the conversation on screen. */
+@media (max-height: 760px) {
+  .header {
+    gap: var(--space-1-5);
+    padding-block: var(--space-2-5) var(--space-2);
+  }
+
+  .meta {
+    gap: var(--space-1) 0;
+    margin-top: 0;
+  }
+
+  .meta div {
+    flex-direction: row;
+    align-items: baseline;
+    gap: var(--space-1-5);
+    padding-right: 0;
+    margin-right: var(--space-4);
+    border-right: 0;
+  }
+
+  .notice {
+    padding-block: var(--space-2);
+  }
 }

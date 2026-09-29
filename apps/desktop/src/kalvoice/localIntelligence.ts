@@ -88,7 +88,7 @@ const FIXED: Record<Exclude<LocalReasoningStatus, "waiting" | "failed">, LocalIn
   unavailable: {
     tone: "outline",
     label: "Unavailable",
-    detail: "Direct commands remain available. Check local interpreter startup in KalVoice settings.",
+    detail: "The local interpreter didn't start. Direct commands remain available.",
     retry: true,
   },
 };

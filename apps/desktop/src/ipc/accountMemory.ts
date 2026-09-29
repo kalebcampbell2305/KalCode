@@ -2,14 +2,15 @@
  * Deterministic account adapter for the explicit UI-test memory transport.
  * It has no credentials, browser launches, email, payment, or network effects.
  */
-import type {
-  AccountCommandName,
-  AccountOpenResult,
-  AccountSnapshot,
-  AccountTier,
-  AccountUsageSnapshot,
-  PurchasableTier,
-  RuntimeStatus,
+import {
+  type AccountCommandName,
+  type AccountOpenResult,
+  type AccountSnapshot,
+  type AccountTier,
+  type AccountUsageSnapshot,
+  type PurchasableTier,
+  type RuntimeStatus,
+  SESSION_EXPIRED_REASON,
 } from "./account.ts";
 
 export type AccountMemoryScenario = "fresh" | "unactivated" | "ready" | "expired" | "offline_grace";
@@ -78,8 +79,10 @@ function offlineGrace(): AccountSnapshot {
 function initialSnapshot(scenario: AccountMemoryScenario): AccountSnapshot {
   switch (scenario) {
     case "fresh":
-    case "expired":
       return signedOut();
+    case "expired":
+      // Mirrors native `AccountSnapshot::session_expired` (a stored session ran out or got a 401).
+      return { ...signedOut(), degradedReason: SESSION_EXPIRED_REASON };
     case "unactivated":
       return unactivated();
     case "ready":

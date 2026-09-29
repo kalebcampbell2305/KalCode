@@ -221,6 +221,11 @@ export function formatDay(iso: string): string {
   return Number.isNaN(date.getTime()) ? iso : DAY.format(date);
 }
 
+/** True when a limited plan has used every KalVoice Request this month. */
+export function limitReached(usage: KalVoiceUsage): boolean {
+  return usage.allowance !== null && usage.used >= usage.allowance;
+}
+
 /** "482 / 1,500 used · 1,018 remaining · renews Oct 1" / "… · Unlimited". */
 export function usageLine(usage: KalVoiceUsage): string {
   const used = usage.used.toLocaleString("en-US");

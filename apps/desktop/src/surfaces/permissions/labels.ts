@@ -63,6 +63,19 @@ export const MODE_DESCRIPTIONS: Record<PermissionMode, string> = {
   custom: "A named rule set, such as Code Reviewer or Local Builder.",
 };
 
+/**
+ * The modes a new thread or provider pane can start in (`creation_mode` in crates/threads, the
+ * `thread_options` list). Bypass and Custom are never starting modes: a saved Bypass or Custom
+ * default starts new threads in Approve.
+ */
+export const START_MODES: readonly PermissionMode[] = ["plan", "approve", "auto"];
+
+/** The mode a new thread starts in for a saved default: the default when it can start one, else Approve. */
+export function startModeFor(defaultMode: PermissionMode | null | undefined, offered = START_MODES): PermissionMode {
+  if (defaultMode && offered.includes(defaultMode)) return defaultMode;
+  return "approve";
+}
+
 export const EFFECT_LABELS: Record<RuleEffect, string> = {
   allow: "Allowed",
   ask: "Asks",

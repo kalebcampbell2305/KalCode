@@ -32,6 +32,7 @@ import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useWorkspaces } from "../../runtime/WorkspaceProvider.tsx";
 import { useNavigation } from "../../shell/navigation.tsx";
 import { MOD_LABEL } from "../../shell/shortcuts.ts";
+import { MODE_LABELS, startModeFor, usePermissions } from "../permissions/index.ts";
 import { openProviderAccounts } from "../providers/providersTab.ts";
 import type { NewThreadPrefill } from "./intent.tsx";
 import { PERMISSION_MODES, providerModeNote, type UnavailableProvider, unavailableProviders } from "./model.ts";
@@ -44,7 +45,7 @@ interface NewThreadProps {
   prefill?: NewThreadPrefill;
 }
 
-/** New thread flow: provider, model, workspace, permission mode (Approve by default), task. */
+/** New thread flow: provider, model, workspace, permission mode (the saved default, else Approve), task. */
 export function NewThread({ onCreated, onCancel, prefill }: NewThreadProps) {
   const { client } = useRuntime();
   const { navigate } = useNavigation();
@@ -120,8 +121,11 @@ export function NewThread({ onCreated, onCancel, prefill }: NewThreadProps) {
             }
           >
             <p>
-              Threads run Claude Code with your own sign-in. Install it or sign in with its CLI, then check again on the
-              Providers page.
+              Threads run a provider's own CLI with your own sign-in.{" "}
+              {unavailable.length > 0
+                ? "Install one of the providers below or sign in to it"
+                : "Install one or sign in"}
+              , then check again on the Providers page.
             </p>
             <ProviderAvailability providers={unavailable} />
           </EmptyState>
@@ -216,7 +220,18 @@ function NewThreadForm({
   const [model, setModel] = useState("");
   const [workspaceId, setWorkspaceId] = useState(initialWorkspace);
   const [remember, setRemember] = useState(false);
-  const [mode, setMode] = useState<PermissionMode>(options.defaultPermissionMode);
+  // The saved default (Settings → Permissions) when a thread can start in it, else Approve; until
+  // the settings load, the runtime's answer (`thread_options` applies the same rule natively).
+  const { settings: permissionSettings } = usePermissions();
+  const savedDefault = permissionSettings?.defaultMode ?? null;
+  const defaultMode = savedDefault
+    ? startModeFor(savedDefault, options.permissionModes)
+    : options.defaultPermissionMode;
+  const [chosenMode, setMode] = useState<PermissionMode | null>(null);
+  const mode = chosenMode ?? defaultMode;
+  // A saved Bypass or Custom default can't start a thread; the form says so instead of hiding it.
+  const unstartableDefault =
+    savedDefault !== null && chosenMode === null && !options.permissionModes.includes(savedDefault);
   const [task, setTask] = useState("");
   const [name, setName] = useState("");
   const [error, setError] = useState<KalCodeError | null>(null);
@@ -518,6 +533,12 @@ function NewThreadForm({
             }}
             options={modes.map((m) => ({ value: m, label: PERMISSION_MODES[m].label }))}
           />
+          {unstartableDefault && savedDefault ? (
+            <p className={styles.hint} role="note">
+              Your default mode is {MODE_LABELS[savedDefault]}, which threads can't start in, so this thread starts in
+              Approve.
+            </p>
+          ) : null}
           <p className={styles.hint} aria-live="polite">
             {PERMISSION_MODES[mode].description}
             {provider ? providerModeNote(provider, mode) : ""}

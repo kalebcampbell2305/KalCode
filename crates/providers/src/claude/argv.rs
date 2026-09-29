@@ -231,11 +231,12 @@ fn deny_summary(mode: PermissionMode) -> String {
 const ENFORCED_BY_KALCODE: &str = "KalCode always denies git push, package publishes, deploy and \
                                    cloud CLIs, gh and ssh, and reading credential files such as \
                                    .env and SSH keys, whatever your Claude Code settings allow.";
-/// What it does not enforce yet (docs/PROVIDERS.md §5, docs/PROVIDER_PANES.md).
+/// What it does not enforce (docs/PROVIDERS.md §5). States the current build only: no roadmap.
 const NOT_YET_ENFORCED: &str = "Other commands follow Claude Code's own rules, including your \
                                 Claude Code user settings (allow rules and hooks), and a push \
-                                written in an unusual form is decided by them. KalCode approvals \
-                                and Custom rules for each action arrive with provider panes.";
+                                written in an unusual form is decided by them. KalCode doesn't \
+                                ask you about each of these actions, and Custom rules don't \
+                                apply to them.";
 
 /// The mapping shown to users. `provider_setting` is generated from the argv, so the
 /// description can never drift from what KalCode actually runs.
@@ -264,8 +265,8 @@ pub fn permission_mappings() -> Vec<PermissionMapping> {
             provider_setting: setting(PermissionMode::Approve),
             notes: format!(
                 "Reads and Claude Code's read-only commands run. Edits and web access are \
-                 removed, and anything else that would ask is refused, because KalCode can't \
-                 answer Claude Code's approval prompts yet. {ENFORCED_BY_KALCODE} \
+                 removed, and anything else that would ask is refused, because KalCode doesn't \
+                 answer Claude Code's approval prompts. {ENFORCED_BY_KALCODE} \
                  {NOT_YET_ENFORCED}"
             ),
         },
@@ -744,6 +745,9 @@ mod tests {
                 );
             }
             assert!(!mapping.notes.contains("most restrictive"));
+            // States the build the user has, never a roadmap (B8 visual audit D10).
+            assert!(!mapping.notes.contains(" yet"), "{:?}", mapping.mode);
+            assert!(!mapping.notes.contains("arrive with"), "{:?}", mapping.mode);
         }
     }
 

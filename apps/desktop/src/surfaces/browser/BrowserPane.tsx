@@ -74,6 +74,9 @@ export function BrowserPane({
   const attachUrl = useRef(initialUrl ?? content.url ?? DEFAULT_URL);
   const [address, setAddress] = useState(attachUrl.current);
   const [error, setError] = useState<string | null>(null);
+  // Attach failed: the pane never opened. Retry bumps `attachAttempt`, which re-runs the attach.
+  const [attachFailure, setAttachFailure] = useState<string | null>(null);
+  const [attachAttempt, setAttachAttempt] = useState(0);
   const [preset, setPreset] = useState<ViewportPreset>("fluid");
   const [customWidth, setCustomWidth] = useState(900);
   const [availableWidth, setAvailableWidth] = useState(0);
@@ -128,6 +131,7 @@ export function BrowserPane({
     return () => observer.disconnect();
   }, [viewport]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `attachAttempt` is the Retry trigger; it re-runs the attach after a failure.
   useEffect(() => {
     if (!viewport) return;
     let cancelled = false;
@@ -156,15 +160,21 @@ export function BrowserPane({
         attached.current = true;
         if (cancelled) return;
         setError(null);
+        setAttachFailure(null);
         acceptState(next);
-      } catch {
-        if (!cancelled) setError("KalCode couldn't open this browser pane.");
+      } catch (cause) {
+        if (cancelled) return;
+        if (attached.current) {
+          setError("KalCode couldn't update this browser pane.");
+          return;
+        }
+        setAttachFailure(toKalCodeError(cause, "browser_attach").message);
       }
     });
     return () => {
       cancelled = true;
     };
-  }, [acceptState, bridge, browserVisible, content.browserId, run, viewport, workspaceId]);
+  }, [acceptState, bridge, browserVisible, content.browserId, run, viewport, workspaceId, attachAttempt]);
 
   // Hiding trusted overlays cannot wait behind ordinary navigation/status work. The version makes
   // every older queued show stale at the native boundary, including an attach still in flight.
@@ -289,6 +299,26 @@ export function BrowserPane({
       });
   };
 
+  const openExternally = () => {
+    let url: string;
+    try {
+      url = normalizeBrowserAddress(state?.url ?? address);
+    } catch {
+      setError("Enter a valid web address.");
+      return;
+    }
+    void bridge.openExternal(url).catch(() => setError("KalCode couldn't open the system browser."));
+  };
+
+  // The footer never says Ready for a pane that isn't open.
+  const footerLabel = attachFailure
+    ? "Couldn't open"
+    : state?.loading
+      ? "Loading"
+      : state
+        ? state.title || "Ready"
+        : "Opening…";
+
   const desiredWidth = viewportWidth(preset, customWidth, availableWidth || 1);
   const button = (label: string, icon: React.ReactNode, onClick: () => void, disabled = false) => (
     <button
@@ -360,16 +390,7 @@ export function BrowserPane({
           />
         ) : null}
         {button("Copy URL", <Copy size={14} />, () => void navigator.clipboard.writeText(state?.url ?? address))}
-        {button("Open externally", <ExternalLink size={14} />, () => {
-          let url: string;
-          try {
-            url = normalizeBrowserAddress(state?.url ?? address);
-          } catch {
-            setError("Enter a valid web address.");
-            return;
-          }
-          void bridge.openExternal(url).catch(() => setError("KalCode couldn't open the system browser."));
-        })}
+        {button("Open externally", <ExternalLink size={14} />, openExternally)}
       </div>
       <div className={styles.stage}>
         <button
@@ -383,12 +404,34 @@ export function BrowserPane({
             if (attached.current) void bridge.focus(content.browserId).catch(() => undefined);
           }}
         >
-          {!browserVisible || error ? (
+          {attachFailure ? null : !browserVisible || error ? (
             <span className={styles.fallback}>
               {error ? <span>{error}</span> : <span>Browser preview paused</span>}
             </span>
           ) : null}
         </button>
+        {attachFailure ? (
+          <div className={styles.failure} role="alert">
+            <p className={styles.failureTitle}>KalCode couldn't open this browser pane.</p>
+            <p className={styles.failureReason}>{attachFailure}</p>
+            <div className={styles.failureActions}>
+              <button
+                type="button"
+                className={styles.failureButton}
+                onClick={() => {
+                  setAttachFailure(null);
+                  setError(null);
+                  setAttachAttempt((n) => n + 1);
+                }}
+              >
+                Retry
+              </button>
+              <button type="button" className={styles.failureButton} onClick={openExternally}>
+                Open in system browser
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
       <footer className={styles.status} aria-live="polite">
         <span className={styles.statusTitle}>
@@ -397,7 +440,7 @@ export function BrowserPane({
           ) : (
             <Maximize2 size={12} aria-hidden="true" />
           )}
-          {state?.loading ? "Loading" : (state?.title ?? "Ready")}
+          {footerLabel}
         </span>
         <span className={styles.statusUrl}>{state?.url ?? address}</span>
       </footer>

@@ -130,4 +130,20 @@ describe.each(["stable", "development"] as const)("%s build", (channel) => {
       else expect(item).toBeInTheDocument();
     }
   });
+
+  it("names the unshipped Git pane only where the Git feature is visible, and lists Browser up top (B8 D4, D7)", async () => {
+    const { user } = await mount(channel);
+    await user.click(primary().getByRole("button", { name: "Code" }));
+    await user.click(await screen.findByRole("button", { name: "Add to pane 1" }));
+    const menu = within(await screen.findByRole("menu"));
+    const items = menu.getAllByRole("menuitem").map((item) => item.textContent ?? "");
+    const browser = items.findIndex((text) => text.startsWith("Browser"));
+    const dashboard = items.findIndex((text) => text.startsWith("Dashboard"));
+    expect(browser).toBeGreaterThan(-1);
+    // Browser sits with the other "open here" items, above the Dashboard and the widget list.
+    expect(browser).toBeLessThan(dashboard);
+    const git = menu.queryByRole("menuitem", { name: /^Git/ });
+    if (stable) expect(git).toBeNull();
+    else expect(git).toBeInTheDocument();
+  });
 });

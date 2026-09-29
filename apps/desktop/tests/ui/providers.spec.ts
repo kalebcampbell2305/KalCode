@@ -63,6 +63,13 @@ test.describe("providers", () => {
 
   test("permission mappings are an accessible table", async ({ page }) => {
     await openProviders(page);
+    // The raw flags are reference detail, collapsed under each provider until asked for.
+    await expect(page.getByRole("table")).toHaveCount(0);
+    for (const name of ["Claude Code", "Codex", "Gemini CLI"]) {
+      await section(page, name)
+        .locator("summary", { hasText: `Permission modes in ${name}` })
+        .click();
+    }
     const table = page.getByRole("table", { name: /Permission modes in Claude Code/ });
     await expect(table).toBeVisible();
     await expect(table.getByRole("columnheader")).toHaveText([
@@ -233,6 +240,8 @@ test.describe("providers", () => {
     ] as const) {
       const region = section(page, name);
       await expect(region.getByText("Not installed", { exact: true })).toBeVisible();
+      // No "Adapter ready" beside "Not installed": the pair reads as a contradiction.
+      await expect(region.getByText("Adapter ready", { exact: true })).toHaveCount(0);
       await expect(region.getByText(command, { exact: true })).toBeVisible();
       await expect(region.getByText("Sign-in", { exact: true })).toHaveCount(0);
     }

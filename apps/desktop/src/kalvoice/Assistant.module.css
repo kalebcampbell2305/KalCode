@@ -150,18 +150,27 @@
   white-space: pre-wrap;
 }
 
-.usage {
+/* This month's KalVoice Requests are used up: say so where requests are typed. */
+.limit {
   display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  gap: var(--space-1) var(--space-3);
-  color: var(--color-text-muted);
+  align-items: flex-start;
+  gap: var(--space-2);
+  color: var(--color-text-secondary);
   font-size: var(--type-small);
-  font-variant-numeric: tabular-nums;
+  line-height: var(--leading-snug);
 }
 
-.usageNote {
-  color: var(--color-text-faint);
+.limit strong {
+  color: var(--color-text);
+  font-weight: var(--weight-semibold);
+}
+
+.limitIcon {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  margin-top: 0.125rem;
+  color: var(--status-waiting);
 }
 
 .hint {

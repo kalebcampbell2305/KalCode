@@ -315,7 +315,13 @@ export function PaneFrame(props: PaneFrameProps) {
                 <IconButton size="sm" label={`Add to pane ${index + 1}`} icon={<Plus />} />
               </DropdownMenuTrigger>
             </Tooltip>
-            <DropdownMenuContent align="start" minWidth={16}>
+            {/* The add menu is long (shells, Browser, widgets): it uses the room the window has and
+                scrolls only when that runs out, instead of the default 28rem cap. */}
+            <DropdownMenuContent
+              align="start"
+              minWidth={16}
+              style={{ maxHeight: "var(--radix-dropdown-menu-content-available-height)" }}
+            >
               {addMenu(leaf.paneId)}
             </DropdownMenuContent>
           </DropdownMenu>

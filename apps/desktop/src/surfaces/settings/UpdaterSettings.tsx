@@ -5,12 +5,12 @@ import { toKalCodeError } from "../../ipc/errors.ts";
 import type { UpdateChannel, UpdateStatus } from "../../ipc/updater.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import styles from "./UpdaterSettings.module.css";
-import { restartAndInstall, updatePresentation } from "./updaterModel.ts";
+import { channelOptions, restartAndInstall, updatePresentation } from "./updaterModel.ts";
 
 type Operation = "channel" | "check" | "cancel" | "install" | "restore";
 
 export function UpdaterSettings() {
-  const { client } = useRuntime();
+  const { client, info } = useRuntime();
   const toast = useToast();
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [loadingError, setLoadingError] = useState<string | null>(null);
@@ -82,7 +82,11 @@ export function UpdaterSettings() {
       id="updates"
       title="Updates"
       icon={<RefreshCw />}
-      description="Stable is recommended. Beta and Dev may contain unfinished changes."
+      description={
+        info.channel === "stable"
+          ? "Stable is recommended. Beta may contain unfinished changes."
+          : "Stable is recommended. Beta and Dev may contain unfinished changes."
+      }
       padding="none"
     >
       <div className={styles.content}>
@@ -98,11 +102,7 @@ export function UpdaterSettings() {
             value={status.channel}
             onValueChange={changeChannel}
             disabled={busy || status.phase === "installing"}
-            options={[
-              { value: "stable", label: "Stable" },
-              { value: "beta", label: "Beta" },
-              { value: "dev", label: "Dev" },
-            ]}
+            options={channelOptions(info.channel, status.channel)}
           />
         </div>
 

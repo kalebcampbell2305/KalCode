@@ -213,7 +213,7 @@
   white-space: nowrap;
 }
 
-/* ---- Z4: approvals indicator and Bypass notice ---- */
+/* ---- Z4: approvals indicator ---- */
 
 .approvalsWaiting {
   color: var(--color-text);
@@ -248,16 +248,4 @@
   border-radius: var(--radius-full);
   background: var(--status-waiting);
   box-shadow: 0 0 0 2px var(--color-bg-sunken);
-}
-
-.bypassNotice {
-  border: 1px solid var(--status-failed-line);
-  background: var(--status-failed-soft);
-  color: var(--status-failed-text);
-  font-weight: var(--weight-medium);
-}
-
-.bypassNotice:hover {
-  background: color-mix(in srgb, var(--status-failed) 18%, transparent);
-  color: var(--status-failed-text);
 }
