@@ -1,5 +1,20 @@
 import type { KalCodeClient } from "../../ipc/client.ts";
-import type { UpdateStatus } from "../../ipc/updater.ts";
+import type { UpdateChannel, UpdateStatus } from "../../ipc/updater.ts";
+
+const CHANNEL_LABELS: Record<UpdateChannel, string> = { stable: "Stable", beta: "Beta", dev: "Dev" };
+
+/**
+ * The update channels Settings offers. A Stable build never offers Dev (engineering builds with
+ * unfinished changes); a channel already selected stays listed so the control shows the truth.
+ */
+export function channelOptions(
+  buildChannel: string,
+  current: UpdateChannel,
+): { value: UpdateChannel; label: string }[] {
+  const offered: UpdateChannel[] = buildChannel === "stable" ? ["stable", "beta"] : ["stable", "beta", "dev"];
+  if (!offered.includes(current)) offered.push(current);
+  return offered.map((value) => ({ value, label: CHANNEL_LABELS[value] }));
+}
 
 export interface UpdatePresentation {
   label: string;

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { UpdateStatus } from "../../ipc/updater.ts";
-import { restartAndInstall, updatePresentation } from "./updaterModel.ts";
+import { channelOptions, restartAndInstall, updatePresentation } from "./updaterModel.ts";
 
 const base: UpdateStatus = {
   channel: "stable",
@@ -38,6 +38,28 @@ describe("updatePresentation", () => {
       detail: "The update signature is invalid.",
       progress: null,
     });
+  });
+});
+
+describe("channelOptions", () => {
+  const values = (options: { value: string }[]) => options.map((option) => option.value);
+
+  it("never offers the Dev channel on a Stable build", () => {
+    expect(values(channelOptions("stable", "stable"))).toEqual(["stable", "beta"]);
+    expect(values(channelOptions("stable", "beta"))).toEqual(["stable", "beta"]);
+  });
+
+  it("keeps an already selected Dev channel visible on Stable so the control shows the truth", () => {
+    expect(values(channelOptions("stable", "dev"))).toEqual(["stable", "beta", "dev"]);
+  });
+
+  it("offers every channel on Beta and Development builds", () => {
+    expect(channelOptions("beta", "beta")).toEqual([
+      { value: "stable", label: "Stable" },
+      { value: "beta", label: "Beta" },
+      { value: "dev", label: "Dev" },
+    ]);
+    expect(values(channelOptions("development", "dev"))).toEqual(["stable", "beta", "dev"]);
   });
 });
 
