@@ -361,7 +361,8 @@ const DEV_BUILD_FRAMING = [
   /In the development build/i,
   /Built · development build/i,
   /ahead of the public preview/i,
-  /planned before release\./i,
+  /planned before release/i,
+  /in private development/i,
 ];
 
 describe("Stable features are not framed as a development build", () => {
@@ -386,6 +387,99 @@ describe("Stable features are not framed as a development build", () => {
     expect(text(await render(LocalFirstDocs, "/docs/local-first"))).toContain(
       "Current builds send no telemetry and no user data off your device.",
     );
+  });
+});
+
+/** A signed Stable 0.1.5 selection for Windows and Apple silicon, as the publisher generates it. */
+function selectSignedStable() {
+  const latest = fixture.manifest.latest;
+  const windows = latest?.platforms[0];
+  if (!latest || !windows) throw new Error("fixture has no Windows release");
+  latest.version = "0.1.5";
+  latest.channel = "stable";
+  windows.signed = true;
+  latest.platforms.push({
+    os: "macos",
+    arch: "arm64",
+    label: "macOS 14 or later, Apple silicon",
+    kind: "dmg",
+    file: "KalCode_0.1.5_arm64.dmg",
+    url: "/download/macos-arm64",
+    pinnedUrl: "/download/0.1.5/KalCode_0.1.5_arm64.dmg",
+    size: 14_048_116,
+    sha256: "d".repeat(64),
+    signed: true,
+  });
+  fixture.manifest.unavailable = fixture.manifest.unavailable.filter((entry) => entry.os !== "macos");
+}
+
+/** The items under the security page's "Planned" heading. */
+function plannedItems(html: string) {
+  const list = html.match(/<h2[^>]*>Planned<\/h2>\s*<ul[^>]*>([\s\S]*?)<\/ul>/)?.[1];
+  if (list === undefined) throw new Error("no Planned list on /security");
+  return [...list.matchAll(/<li[^>]*>([\s\S]*?)<\/li>/g)].map((m) => text(m[1]).trim());
+}
+
+// B9 536efd7 ships workspace containment (crates/permissions/src/paths.rs), sanitized provider
+// environments (crates/providers/src/env.rs) and the permission engine with its audit trail
+// (crates/permissions/src/service.rs). The certified 0.1.5 artifacts are an Authenticode-signed
+// Windows installer, a Developer ID signed and notarized Mac app, and minisign update signatures.
+describe("security controls that shipped are not listed as planned", () => {
+  const SHIPPED = [
+    /Workspace containment: path canonicalization/i,
+    /Provider isolation with sanitized environments/i,
+    /The permission engine with an audit log/i,
+  ];
+
+  it("states the shipped controls in the present tense in every release state", async () => {
+    const html = await render(Security, "/security");
+    const copy = text(html);
+    expect(copy).toContain(
+      "Workspace containment A path counts as inside your workspace only when it still lands inside the workspace folder after",
+    );
+    expect(copy).toContain("symlinks and junctions are resolved. Paths KalCode cannot resolve safely");
+    expect(copy).toContain("Provider isolation Each provider's CLI starts with a sanitized environment");
+    expect(copy).toContain(
+      "KalCode's permission engine checks every action an AI agent wants to take against the permission mode you choose: Plan, Approve or Auto.",
+    );
+    expect(copy).toContain("Consequential decisions are recorded in an audit log.");
+    const planned = plannedItems(html);
+    for (const pattern of SHIPPED) expect(planned.join(" ")).not.toMatch(pattern);
+    expect(planned).toContain(
+      "Server-side plan and usage checks, and verified billing webhooks, when paid plans launch.",
+    );
+  });
+
+  it("claims signed installers and updates only while a signed Stable release is served", async () => {
+    const preview = await render(Security, "/security");
+    expect(text(preview)).not.toContain("Signed installers and updates");
+    expect(plannedItems(preview)).toContain("Code-signed installers and signed updates.");
+
+    selectSignedStable();
+    const stable = await render(Security, "/security");
+    const copy = text(stable);
+    expect(copy).toContain(
+      "Signed installers and updates The Windows installer is Authenticode-signed, and the Mac app is signed with an Apple Developer ID and notarized by Apple.",
+    );
+    expect(copy).toContain(
+      "before installing one, KalCode checks its SHA-256 checksum and its update signature, and on Windows the installer's Authenticode signature too.",
+    );
+    expect(plannedItems(stable)).toEqual([
+      "Server-side plan and usage checks, and verified billing webhooks, when paid plans launch.",
+    ]);
+    for (const pattern of DEV_BUILD_FRAMING) expect(`${copy} ${metaDescription(stable)}`).not.toMatch(pattern);
+  });
+});
+
+describe("home meta description", () => {
+  it("describes KalCode as released, not in private development", async () => {
+    const home = PAGES.find((p) => p.path === "/")?.description ?? "";
+    expect(home).toBe(
+      "KalCode is a desktop workspace for the coding agents you already use. Connect Claude Code and Codex, run their threads at the same time, approve every action, and speak your prompts with KalVoice.",
+    );
+    expect(home).not.toMatch(/private development/i);
+    selectSignedStable();
+    expect(metaDescription(await render(Home, "/"))).toBe(home);
   });
 });
 
