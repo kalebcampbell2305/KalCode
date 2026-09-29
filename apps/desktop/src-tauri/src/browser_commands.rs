@@ -1005,6 +1005,9 @@ pub async fn browser_attach(
         }
         false
     })
+    // On macOS, wry 0.55.1 calls this handler only from `didCommitNavigation` and
+    // `didFinishNavigation`, when `WKWebView.URL` is the committed, non-nil URL. It reads that URL
+    // with an unwrap, but failed or cancelled provisional navigations never reach this handler.
     .on_page_load(move |_, payload| {
         if safe_runtime_url(payload.url())
             && let Some(record) = page_views.lock().get_mut(&page_id).filter(|record| {
@@ -1373,6 +1376,28 @@ pub fn browser_focus(
     })
 }
 
+/// Whether `browser_info` may ask the native webview for its current URL.
+///
+/// Not on macOS. wry 0.55.1 reads `WKWebView.URL` with `Option::unwrap()` (`url_from_webview`,
+/// reached through tauri's `Webview::url()`). That property is nil until a navigation commits:
+/// for example, when the first load of an unreachable address such as `http://localhost:3000/`
+/// fails, or when the navigation policy cancels it. The panic happens inside wry, so `.ok()`
+/// can't catch it, and the release profile aborts. On macOS the pane's URL comes only from the
+/// navigation and page-load events recorded in `BrowserRecord::url`.
+const NATIVE_URL_QUERY_IS_SAFE: bool = !cfg!(target_os = "macos");
+
+/// The native webview's current URL, if it is safe to ask for it and the answer is a URL the
+/// Browser may show. `read_native` is never called when `query_is_safe` is false.
+fn native_browser_url(
+    query_is_safe: bool,
+    read_native: impl FnOnce() -> Option<url::Url>,
+) -> Option<url::Url> {
+    if !query_is_safe {
+        return None;
+    }
+    read_native().filter(safe_runtime_url)
+}
+
 #[tauri::command]
 pub fn browser_info(
     _runtime_access: crate::runtime_coordinator::RuntimeAccess,
@@ -1400,7 +1425,7 @@ pub fn browser_info(
             _runtime_access.generation(),
         ))
         .ok_or_else(|| unavailable("browser_not_found", "That browser pane is not open."))?;
-    let current_url = child.url().ok().filter(safe_runtime_url);
+    let current_url = native_browser_url(NATIVE_URL_QUERY_IS_SAFE, || child.url().ok());
     let mut records = views.lock();
     let record = records
         .get_mut(&browser_id)
@@ -1996,5 +2021,43 @@ mod tests {
         assert_eq!(title, "Trustedevil moc.live x");
         assert!(!title.chars().any(char::is_control));
         assert!(!title.chars().any(is_bidi_format));
+    }
+
+    #[test]
+    fn browser_info_never_asks_macos_webkit_for_its_url() {
+        // wry 0.55.1 unwraps a nil `WKWebView.URL` when the first load failed, aborting the app.
+        #[cfg(target_os = "macos")]
+        const {
+            assert!(!NATIVE_URL_QUERY_IS_SAFE)
+        };
+        #[cfg(windows)]
+        const {
+            assert!(NATIVE_URL_QUERY_IS_SAFE)
+        };
+        let current = native_browser_url(false, || {
+            panic!("the native URL must not be read when the query is unsafe")
+        });
+        assert_eq!(current, None);
+    }
+
+    #[test]
+    fn browser_info_keeps_only_safe_native_urls_where_the_query_is_safe() {
+        let page = url::Url::parse("https://example.com/docs").unwrap();
+        assert_eq!(native_browser_url(true, || Some(page.clone())), Some(page));
+        let file = url::Url::parse("file:///etc/passwd").unwrap();
+        assert_eq!(native_browser_url(true, || Some(file)), None);
+        assert_eq!(native_browser_url(true, || None), None);
+    }
+
+    #[test]
+    fn browser_child_url_is_read_only_through_the_platform_guard() {
+        let source = include_str!("browser_commands.rs");
+        let needle = concat!("child", ".url()");
+        let calls: Vec<&str> = source
+            .lines()
+            .filter(|line| line.contains(needle))
+            .collect();
+        assert_eq!(calls.len(), 1, "unguarded child URL reads: {calls:?}");
+        assert!(calls[0].contains("native_browser_url(NATIVE_URL_QUERY_IS_SAFE"));
     }
 }
