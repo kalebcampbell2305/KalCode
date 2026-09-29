@@ -1,0 +1,1356 @@
+{
+  "schema": "kalcode-release-kit/v1",
+  "name": "b10-0.1.6",
+  "description": "Binds the proven B10 release scripts (candidate 0.1.6 = b3b1009, derived baseline 0.1.3) to the canonical phases. The scripts live in the ignored target/ recovery folders and are sha256-pinned here; several of them hard-code 0.1.6/B10, so this kit binds exactly that release. B10 phases that already ran outside the orchestrator are recorded with `run --execute --adopt --phase <p>`.",
+  "binds": {
+    "version": "0.1.6",
+    "commit": "b3b10093f0dbdf5603e729bae547310e2c6e2ce2",
+    "baselineVersion": "0.1.3"
+  },
+  "vars": {
+    "gitBash": "C:/Program Files/Git/bin/bash.exe",
+    "sshExe": "C:/Windows/System32/OpenSSH/ssh.exe",
+    "sshKey": "C:/Users/Kaleb/.ssh/kalcode_mac_ed25519",
+    "macHost": "kalebcampbell@10.35.7.40",
+    "macDev": "/Users/kalebcampbell/Developer",
+    "macPrep": "/Users/kalebcampbell/Developer/KalCode-next-release-prep",
+    "macLauncherSha256": "bdeb156791e97edb7c08ccb8090195e74ca1a12e125772795458d64fcb517ba7",
+    "macBase": "536efd7e9eacd8cabe6201374dc4e223814e19b5",
+    "publish": "{repo}/target/recovery-B10-release/publish",
+    "winBuildWorktree": "{repo}/.worktrees/release-build-windows-b10",
+    "winBaselineWorktree": "{repo}/.worktrees/release-build-windows-b10-baseline-013",
+    "winDir": "target/recovery-B10-windows",
+    "winBaselineDir": "target/recovery-B10-windows-baseline-013",
+    "macDir": "target/recovery-B10-mac-final",
+    "macBaselineDir": "target/recovery-B10-mac-baseline-013",
+    "toolWorktree": "{repo}/.worktrees/release-staging-tool-authority-{commit7}",
+    "notesWorktree": "{repo}/.worktrees/release-publication-{version}-{commit7}",
+    "websiteWorktree": "{repo}/.worktrees/prep-website-w-{commit7}",
+    "candidateStaging": "{repo}/.worktrees/release-publication-{version}-{commit7}/dist/release/{version}",
+    "baselineStaging": "{repo}/.worktrees/recovery-qa-baseline-013-{commit7}/dist/release/{baselineVersion}",
+    "websiteReviewed": "0ad5027aa91e4744d2c6d7c8b50e00489f709304",
+    "notesBaseReviewed": "0281f2156e273417e6cb41f2bbcaa84ed7c7280b",
+    "tValidatorSha256": "13c196486b2bd95cb5aba8056b72bd1b385cee78a23df488c41a32137c73740c",
+    "nValidatorSha256": "a60ae6fd61c035f39d335963fc7065839da447724ba161cec0243b11bbacc011",
+    "releaseDocs": "target/recovery-B10/B10-PLAN.md"
+  },
+  "scripts": {
+    "tooling/release/updater-key.mjs": "d4d0bbd66371ca59f281001132b5eb6d6e0db51659b27fa56d4f2d77fe0fa852",
+    "target/recovery-B10/t0-repin.mjs": "82c451e4d2ac016a93ce99c4c9c64bbe293dcc9e4c6c7b0df0c42829495bce08",
+    "target/recovery-B10/derive-baseline-013.mjs": "115aaa6997d9c7ccefa80d4566143031c99169fe4e2aac6ea12bff21228d6725",
+    "target/recovery-B10/gates/run-gates-windows.ps1": "3c4ced207881e389c0d8dd74955cab0d3692f12585c1e86519a2386ae969088a",
+    "target/recovery-B10/gates/run-gates-windows.mjs": "77824d01ab94097b18f91c051bae8bfc35b36e2ee5126c142a71edc19484a717",
+    "target/recovery-20260928-next-release/gates/launch-mac-gates.sh": "3553fba7d679cacb6f7e63f77a75240df3f9b83dfa1c2fc2f8934acc0749df54",
+    "target/recovery-20260928-next-release/gates/run-gates-mac.py": "52f970593f5664ace13d3252855f2826bcfe7d9c050b4ef20eb5f9f0d3515f94",
+    "target/recovery-20260928-next-release/gates/run-gates-mac.sh": "c45c1f39f74a8bfbff6fae14600f5edd5224ed167240d68cb8180caee147ab3d",
+    "target/recovery-B10/windows/WINDOWS-REBUILD.ps1": "eca9ae2eaa5948ebbec77a6a9229793a2a9144f492a93fb274f8193ebd02128f",
+    "target/recovery-B10/windows/rebuild-helpers.mjs": "ebca3435d51501231ee6e7c76a7ca7f070473abb20a6e81edc927be9a8c73030",
+    "target/recovery-B10/tooling/certify-b10-artifact.mjs": "a2dd3a23c2dff14a0a12e95e8d7356a8cca33d6106723a71277acb6a51672e1a",
+    "target/recovery-B10/tooling/certify-b10-baseline-013-artifact.mjs": "5e3c9208e09a8a7a8fa7b270f2061acbe7bdd0dd36c5085d5ee008202b58811d",
+    "target/recovery-20260928-next-release/make-and-transfer-bundle.sh": "d0788f6c1659a3c29afaff6e996ee9f492b199cbc20656b8a9afdb04f657bb8f",
+    "target/recovery-20260928-next-release/mac-release-next.sh": "bdeb156791e97edb7c08ccb8090195e74ca1a12e125772795458d64fcb517ba7",
+    "target/recovery-B10/fill-b10-pins.mjs": "944100b094f11aac3d0df8f8e2ed1bb6117ee2bd9657f49f5f47e1f037dad242",
+    "target/recovery-B10-release/publish/00-preflight.ps1": "f4778a16e2e246c4fdc811f88620d89563e2f6923ae3e23a3e26b32fd444bc5e",
+    "target/recovery-B10-release/publish/01-fill-notes.ps1": "149c240b1580f1f84171c6d7a1e1eabdab4b0e2d41a75fecf7f4f94645483a02",
+    "target/recovery-B10-release/publish/02-stage-unlisted.ps1": "7e7700c0ff62a363badf5ca172377e01f1523352fd819301bcfea280cb21af61",
+    "target/recovery-B10-release/publish/03-readback-staged.ps1": "c70750c9b42a65ac710bdf1aa931f83cc16fb82df9f2f2c5d41f1cbf472658ba",
+    "target/recovery-B10-release/publish/04-publish-stable.ps1": "eb8026cba81d47516c87a8dce6a87523ad959caa282060b0e0469d44a74411c9",
+    "target/recovery-B10-release/publish/05-deploy-website.ps1": "53e5bd2825cc6d9270ae2dfe5e34cd5476846acbda300a6feeb61fc7b5579722",
+    "target/recovery-B10-release/publish/06-live-verify.ps1": "251bca70b62d52760400d077a0c86e30ef6ee1b555710f05cfa17283032d916c",
+    "target/recovery-B10-release/publish/lib/preflight.mjs": "0c0ace897d8585a91aff6c7b2e93869cd8cf174cd525ee1dc02f9cbdfb153239",
+    "target/recovery-B10-release/publish/lib/staged-readback.mjs": "6e8e0b8cfd935f02cdba82f5545669a14bb08dfbce4a978fece214d1092b55ef",
+    "target/recovery-B10-release/publish/lib/live-verify.mjs": "4ff601767ac9218ba83fd5fc692437de20f0692d8169110032be05767e122e60",
+    "target/recovery-B10-release/publish/lib/qa-validate.mjs": "359f3779a7f5bdcfe85c1b7ba460374be97f65d9503a3c39191e2e5799ff3831",
+    "target/recovery-B10-release/publish/lib/authority.mjs": "5e09b17c29993f82f420f34eebe942b77792b7baddea34cd04b1bdd4a9e0699f",
+    "target/recovery-B10-release/publish/lib/http.mjs": "afa7c75b50ce65efb3c68389dd7a5afaef20e0ba3e0269f5798f32c8581b639a",
+    "target/recovery-B10-release/publish/lib/minisign.mjs": "8e70bf276722fb1219fc3c9dc52cccc5a051d23c11b661658bdcbabd6c0e18d5"
+  },
+  "identity": {
+    "movingEndpoint": {
+      "file": "crates/updater/src/lib.rs",
+      "contains": "Self::Stable => \"https://kalcoded.com/releases/updater/stable.json\""
+    }
+  },
+  "pins": {},
+  "phases": {
+    "prereqs": {
+      "steps": [
+        {
+          "id": "node",
+          "run": ["node", "--version"],
+          "outputs": [{ "key": "node", "type": "stdout", "pattern": "^(v24\\.\\d+\\.\\d+)" }]
+        },
+        {
+          "id": "updater-key",
+          "run": ["node", "tooling/release/updater-key.mjs", "status"],
+          "uses": ["tooling/release/updater-key.mjs"],
+          "outputs": [{ "key": "updaterKey", "type": "stdout", "pattern": "(matches the tracked public key)" }]
+        },
+        {
+          "id": "azure-token",
+          "note": "Prints only the expiry; the token stays in the Azure CLI store. A failure means the owner runs az login.",
+          "run": [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            "az account get-access-token --resource https://codesigning.azure.net --query expiresOn -o tsv"
+          ],
+          "outputs": [
+            {
+              "key": "azureTokenExpires",
+              "type": "stdout",
+              "pattern": "^(\\d{4}-\\d\\d-\\d\\d[ T]\\d\\d:\\d\\d:\\d\\d)"
+            }
+          ]
+        },
+        {
+          "id": "mac-identity",
+          "run": [
+            "{sshExe}",
+            "-i",
+            "{sshKey}",
+            "-o",
+            "IdentitiesOnly=yes",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=15",
+            "{macHost}",
+            "security find-identity -v -p codesigning"
+          ],
+          "outputs": [
+            { "key": "macDeveloperId", "type": "stdout", "pattern": "(Developer ID Application: .*\\(JG5K9T47ZF\\))" }
+          ]
+        },
+        {
+          "id": "mac-launcher",
+          "run": [
+            "{sshExe}",
+            "-i",
+            "{sshKey}",
+            "-o",
+            "IdentitiesOnly=yes",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=15",
+            "{macHost}",
+            "shasum -a 256 {macPrep}/mac-release-next.sh"
+          ],
+          "outputs": [{ "key": "macLauncher", "type": "stdout", "pattern": "^({macLauncherSha256})\\s" }]
+        }
+      ]
+    },
+    "branches": {
+      "steps": [
+        {
+          "id": "t0-repin",
+          "note": "Creates baseline (derive-baseline-013), T, N0, W, LW, LM branches in new worktrees; never pushes. Refuses if any exists.",
+          "run": ["node", "target/recovery-B10/t0-repin.mjs", "--b10", "{commit}", "--apply"],
+          "uses": ["target/recovery-B10/t0-repin.mjs", "target/recovery-B10/derive-baseline-013.mjs"],
+          "outputs": [
+            {
+              "key": "repin",
+              "type": "match",
+              "dir": "target/recovery-B10/receipts",
+              "pattern": "^t0-repin-{commit7}-\\d{8}T\\d{6}Z\\.json$",
+              "expect": { "schema": "kalcode-b10-t0-repin/v1", "status": "PASS", "scratch": false, "b10": "{commit}" },
+              "pick": { "toolCommit": "stageAFillPairs.T_SHA40", "baselineCommit": "stageAFillPairs.BASELINE013_SHA40" }
+            }
+          ]
+        },
+        {
+          "id": "tool-commit",
+          "run": ["git", "-C", "{toolWorktree}", "rev-parse", "HEAD"],
+          "outputs": [{ "key": "toolCommit", "type": "stdout", "pattern": "^({this.repin.toolCommit})$" }]
+        },
+        {
+          "id": "baseline-commit",
+          "run": ["git", "-C", "{repo}", "rev-parse", "--verify", "{this.repin.baselineCommit}^{{commit}}"],
+          "outputs": [{ "key": "baselineCommit", "type": "stdout", "pattern": "^([0-9a-f]{40})$" }]
+        },
+        {
+          "id": "baseline-short",
+          "run": ["git", "-C", "{repo}", "rev-parse", "--short=12", "{this.baselineCommit}"],
+          "outputs": [{ "key": "baselineCommit12", "type": "stdout", "pattern": "^([0-9a-f]{12})$" }]
+        },
+        {
+          "id": "website-commit",
+          "note": "W and N0 were re-pinned after the B10 branch review (TOOLING-REPIN.md section 7); the reviewed commits are kit vars.",
+          "run": ["git", "-C", "{repo}", "merge-base", "--is-ancestor", "{commit}", "{websiteReviewed}"],
+          "outputs": []
+        },
+        {
+          "id": "website-head",
+          "run": ["git", "-C", "{websiteWorktree}", "rev-parse", "HEAD"],
+          "outputs": [{ "key": "websiteCommit", "type": "stdout", "pattern": "^({websiteReviewed})$" }]
+        },
+        {
+          "id": "notes-base",
+          "run": ["git", "-C", "{repo}", "rev-parse", "--verify", "{notesBaseReviewed}^{{commit}}"],
+          "outputs": [{ "key": "notesBaseCommit", "type": "stdout", "pattern": "^({notesBaseReviewed})$" }]
+        }
+      ]
+    },
+    "gates-windows": {
+      "steps": [
+        {
+          "id": "gates",
+          "run": [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "target/recovery-B10/gates/run-gates-windows.ps1",
+            "-Sha",
+            "{commit}"
+          ],
+          "uses": [
+            "target/recovery-B10/gates/run-gates-windows.ps1",
+            "target/recovery-B10/gates/run-gates-windows.mjs"
+          ],
+          "outputs": [
+            {
+              "key": "gates",
+              "type": "json",
+              "path": "target/recovery-B10/gates/windows-{commit}/passed.json",
+              "expect": { "status": "PASS", "passed": true, "source": "{commit}" },
+              "pick": { "gateCount": "gateCount" }
+            }
+          ]
+        }
+      ]
+    },
+    "gates-mac": {
+      "steps": [
+        {
+          "id": "launch",
+          "run": ["{gitBash}", "target/recovery-20260928-next-release/gates/launch-mac-gates.sh", "{commit}"],
+          "uses": [
+            "target/recovery-20260928-next-release/gates/launch-mac-gates.sh",
+            "target/recovery-20260928-next-release/gates/run-gates-mac.py",
+            "target/recovery-20260928-next-release/gates/run-gates-mac.sh"
+          ]
+        },
+        {
+          "id": "result",
+          "run": [
+            "{sshExe}",
+            "-i",
+            "{sshKey}",
+            "-o",
+            "IdentitiesOnly=yes",
+            "-o",
+            "BatchMode=yes",
+            "{macHost}",
+            "cat {macDev}/KalCode-native-{commit7}-gates/receipt.json"
+          ],
+          "poll": { "everySeconds": 60, "timeoutMinutes": 120, "doneWhen": "\"status\"\\s*:\\s*\"(PASS|FAIL)\"" },
+          "stdoutTo": "{state}/evidence/mac-gates-{commit12}.json",
+          "outputs": [
+            { "key": "gates", "type": "stdoutJson", "expect": { "status": "PASS", "expectedCommit": "{commit}" } }
+          ]
+        }
+      ]
+    },
+    "build-windows": {
+      "steps": [
+        { "id": "checkout-candidate", "run": ["git", "-C", "{winBuildWorktree}", "checkout", "--detach", "{commit}"] },
+        {
+          "id": "clean-providers-candidate",
+          "run": ["cargo", "clean", "-p", "kalcode-providers", "--release"],
+          "cwd": "{winBuildWorktree}",
+          "envUnset": ["CARGO_TARGET_DIR", "RUSTFLAGS"]
+        },
+        {
+          "id": "guards-candidate",
+          "run": [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "target/recovery-B10/windows/WINDOWS-REBUILD.ps1",
+            "-Sha",
+            "{commit}",
+            "-Mode",
+            "GuardsOnly",
+            "-Worktree",
+            "{winBuildWorktree}",
+            "-ExpectVersion",
+            "{version}"
+          ],
+          "uses": [
+            "target/recovery-B10/windows/WINDOWS-REBUILD.ps1",
+            "target/recovery-B10/windows/rebuild-helpers.mjs"
+          ],
+          "envUnset": ["CARGO_TARGET_DIR", "RUSTFLAGS"]
+        },
+        {
+          "id": "build-candidate",
+          "note": "build-windows.mjs (Authenticode via Azure Artifact Signing + updater Minisign) and verify-windows.mjs; exit 10 = signed, clean-machine verify deferred to verify-windows.",
+          "run": [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "target/recovery-B10/windows/WINDOWS-REBUILD.ps1",
+            "-Sha",
+            "{commit}",
+            "-Mode",
+            "Build",
+            "-Jobs",
+            "4",
+            "-Worktree",
+            "{winBuildWorktree}",
+            "-ExpectVersion",
+            "{version}",
+            "-ReceiptDirName",
+            "recovery-B10-windows"
+          ],
+          "uses": [
+            "target/recovery-B10/windows/WINDOWS-REBUILD.ps1",
+            "target/recovery-B10/windows/rebuild-helpers.mjs"
+          ],
+          "envUnset": ["CARGO_TARGET_DIR", "RUSTFLAGS"],
+          "okExitCodes": [0, 10],
+          "outputs": [
+            { "key": "candidateDir", "type": "dir", "path": "{winDir}" },
+            { "key": "candidateInstaller", "type": "file", "path": "{winDir}/KalCode_{version}_x64-setup.exe" },
+            { "key": "candidateSig", "type": "file", "path": "{winDir}/KalCode_{version}_x64-setup.exe.sig" },
+            {
+              "key": "candidateTargetSig",
+              "type": "file",
+              "path": "{winDir}/KalCode_{version}_x64-setup.exe.windows-x86_64.sig"
+            },
+            {
+              "key": "candidateBuild",
+              "type": "json",
+              "path": "{winDir}/build.json",
+              "expect": {
+                "commit": "{commit}",
+                "version": "{version}",
+                "signed": true,
+                "signatureStatus": "Valid",
+                "file": "KalCode_{version}_x64-setup.exe"
+              },
+              "pick": { "installerSha256": "sha256", "installerSize": "size" }
+            }
+          ]
+        },
+        {
+          "id": "checkout-baseline",
+          "run": ["git", "-C", "{winBaselineWorktree}", "checkout", "--detach", "{out.branches.baselineCommit}"]
+        },
+        {
+          "id": "guards-baseline",
+          "run": [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "target/recovery-B10/windows/WINDOWS-REBUILD.ps1",
+            "-Sha",
+            "{out.branches.baselineCommit}",
+            "-Mode",
+            "GuardsOnly",
+            "-Worktree",
+            "{winBaselineWorktree}",
+            "-ExpectVersion",
+            "{baselineVersion}"
+          ],
+          "uses": [
+            "target/recovery-B10/windows/WINDOWS-REBUILD.ps1",
+            "target/recovery-B10/windows/rebuild-helpers.mjs"
+          ],
+          "envUnset": ["CARGO_TARGET_DIR", "RUSTFLAGS"]
+        },
+        {
+          "id": "build-baseline",
+          "run": [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "target/recovery-B10/windows/WINDOWS-REBUILD.ps1",
+            "-Sha",
+            "{out.branches.baselineCommit}",
+            "-Mode",
+            "Build",
+            "-Jobs",
+            "4",
+            "-Worktree",
+            "{winBaselineWorktree}",
+            "-ExpectVersion",
+            "{baselineVersion}",
+            "-ReceiptDirName",
+            "recovery-B10-windows-baseline-013"
+          ],
+          "uses": [
+            "target/recovery-B10/windows/WINDOWS-REBUILD.ps1",
+            "target/recovery-B10/windows/rebuild-helpers.mjs"
+          ],
+          "envUnset": ["CARGO_TARGET_DIR", "RUSTFLAGS"],
+          "okExitCodes": [0, 10],
+          "outputs": [
+            { "key": "baselineDir", "type": "dir", "path": "{winBaselineDir}" },
+            {
+              "key": "baselineInstaller",
+              "type": "file",
+              "path": "{winBaselineDir}/KalCode_{baselineVersion}_x64-setup.exe"
+            },
+            {
+              "key": "baselineSig",
+              "type": "file",
+              "path": "{winBaselineDir}/KalCode_{baselineVersion}_x64-setup.exe.sig"
+            },
+            {
+              "key": "baselineTargetSig",
+              "type": "file",
+              "path": "{winBaselineDir}/KalCode_{baselineVersion}_x64-setup.exe.windows-x86_64.sig"
+            },
+            {
+              "key": "baselineBuild",
+              "type": "json",
+              "path": "{winBaselineDir}/build.json",
+              "expect": {
+                "commit": "{out.branches.baselineCommit}",
+                "version": "{baselineVersion}",
+                "signed": true,
+                "signatureStatus": "Valid"
+              },
+              "pick": { "installerSha256": "sha256", "installerSize": "size" }
+            }
+          ]
+        }
+      ]
+    },
+    "verify-windows": {
+      "steps": [
+        {
+          "id": "clean-verify",
+          "operator": "Run `node tooling/release/verify-windows.mjs` for both installers on a clean Windows state: the private CI runner (.github/workflows/windows-release-verify.yml, draft-release inputs as in docs/RELEASING.md section 2), a VM, or a disposable data root with the owner's install set aside. Attest both verify.json files.",
+          "outputs": [
+            {
+              "key": "candidateVerify",
+              "type": "json",
+              "expect": {
+                "status": "passed",
+                "commit": "{commit}",
+                "version": "{version}",
+                "sha256": "{out.build-windows.candidateBuild.installerSha256}"
+              }
+            },
+            {
+              "key": "baselineVerify",
+              "type": "json",
+              "expect": {
+                "status": "passed",
+                "commit": "{out.branches.baselineCommit}",
+                "version": "{baselineVersion}",
+                "sha256": "{out.build-windows.baselineBuild.installerSha256}"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "bundle-mac": {
+      "steps": [
+        {
+          "id": "candidate",
+          "note": "Requires refs/heads/main == the candidate commit (the Mac has no GitHub credentials; commits travel as verified bundles).",
+          "run": ["{gitBash}", "target/recovery-20260928-next-release/make-and-transfer-bundle.sh", "{commit}", "main"],
+          "uses": ["target/recovery-20260928-next-release/make-and-transfer-bundle.sh"],
+          "outputs": [
+            {
+              "key": "candidateBundle",
+              "type": "stdoutJson",
+              "expect": { "sha": "{commit}" },
+              "pick": { "remote": "remote", "bundleSha256": "sha256" }
+            }
+          ]
+        },
+        {
+          "id": "baseline",
+          "run": [
+            "{gitBash}",
+            "target/recovery-20260928-next-release/make-and-transfer-bundle.sh",
+            "{out.branches.baselineCommit}",
+            "release/baseline-{baselineVersion}-{commit7}"
+          ],
+          "uses": ["target/recovery-20260928-next-release/make-and-transfer-bundle.sh"],
+          "outputs": [
+            {
+              "key": "baselineBundle",
+              "type": "stdoutJson",
+              "expect": { "sha": "{out.branches.baselineCommit}" },
+              "pick": { "remote": "remote", "bundleSha256": "sha256" }
+            }
+          ]
+        }
+      ]
+    },
+    "package-mac": {
+      "steps": [
+        {
+          "id": "check-candidate",
+          "run": [
+            "{sshExe}",
+            "-i",
+            "{sshKey}",
+            "-o",
+            "IdentitiesOnly=yes",
+            "-o",
+            "BatchMode=yes",
+            "{macHost}",
+            "KALCODE_NEXT_BASE={macBase} KALCODE_NEXT_VERSION={version} /bin/zsh {macPrep}/mac-release-next.sh {commit} {out.bundle-mac.candidateBundle.remote} --check"
+          ],
+          "uses": ["target/recovery-20260928-next-release/mac-release-next.sh"]
+        },
+        {
+          "id": "go-candidate",
+          "note": "Bootstraps the launchd package job into the owner's GUI session (login keychain: Developer ID + KalCode-release notary profile). The Mac must be logged in at the console.",
+          "run": [
+            "{sshExe}",
+            "-i",
+            "{sshKey}",
+            "-o",
+            "IdentitiesOnly=yes",
+            "-o",
+            "BatchMode=yes",
+            "{macHost}",
+            "KALCODE_NEXT_BASE={macBase} KALCODE_NEXT_VERSION={version} /bin/zsh {macPrep}/mac-release-next.sh {commit} {out.bundle-mac.candidateBundle.remote} --go"
+          ],
+          "uses": ["target/recovery-20260928-next-release/mac-release-next.sh"]
+        },
+        {
+          "id": "wait-candidate",
+          "run": [
+            "{sshExe}",
+            "-i",
+            "{sshKey}",
+            "-o",
+            "IdentitiesOnly=yes",
+            "-o",
+            "BatchMode=yes",
+            "{macHost}",
+            "cat {macDev}/KalCode-final-evidence-{commit12}-package/macos-package-{commit12}.status"
+          ],
+          "poll": { "everySeconds": 60, "timeoutMinutes": 90, "doneWhen": "^(passed|failed)" },
+          "outputs": [{ "key": "candidatePackage", "type": "stdout", "pattern": "^(passed)" }]
+        },
+        {
+          "id": "check-baseline",
+          "run": [
+            "{sshExe}",
+            "-i",
+            "{sshKey}",
+            "-o",
+            "IdentitiesOnly=yes",
+            "-o",
+            "BatchMode=yes",
+            "{macHost}",
+            "KALCODE_NEXT_BASE={commit} KALCODE_NEXT_VERSION={baselineVersion} /bin/zsh {macPrep}/mac-release-next.sh {out.branches.baselineCommit} {out.bundle-mac.baselineBundle.remote} --check"
+          ],
+          "uses": ["target/recovery-20260928-next-release/mac-release-next.sh"]
+        },
+        {
+          "id": "go-baseline",
+          "run": [
+            "{sshExe}",
+            "-i",
+            "{sshKey}",
+            "-o",
+            "IdentitiesOnly=yes",
+            "-o",
+            "BatchMode=yes",
+            "{macHost}",
+            "KALCODE_NEXT_BASE={commit} KALCODE_NEXT_VERSION={baselineVersion} /bin/zsh {macPrep}/mac-release-next.sh {out.branches.baselineCommit} {out.bundle-mac.baselineBundle.remote} --go"
+          ],
+          "uses": ["target/recovery-20260928-next-release/mac-release-next.sh"]
+        },
+        {
+          "id": "wait-baseline",
+          "run": [
+            "{sshExe}",
+            "-i",
+            "{sshKey}",
+            "-o",
+            "IdentitiesOnly=yes",
+            "-o",
+            "BatchMode=yes",
+            "{macHost}",
+            "cat {macDev}/KalCode-final-evidence-{out.branches.baselineCommit12}-package/macos-package-{out.branches.baselineCommit12}.status"
+          ],
+          "poll": { "everySeconds": 60, "timeoutMinutes": 90, "doneWhen": "^(passed|failed)" },
+          "outputs": [{ "key": "baselinePackage", "type": "stdout", "pattern": "^(passed)" }]
+        }
+      ]
+    },
+    "certify-windows": {
+      "steps": [
+        {
+          "id": "candidate",
+          "run": [
+            "node",
+            "target/recovery-B10/tooling/certify-b10-artifact.mjs",
+            "--sha",
+            "{commit}",
+            "--installer-sha256",
+            "{out.build-windows.candidateBuild.installerSha256}",
+            "--installer-size",
+            "{out.build-windows.candidateBuild.installerSize}",
+            "--scratch",
+            "{state}/scratch/certify-windows-candidate"
+          ],
+          "uses": ["target/recovery-B10/tooling/certify-b10-artifact.mjs"],
+          "outputs": [
+            {
+              "key": "candidateCert",
+              "type": "json",
+              "path": "{winDir}/independent-artifact/independent-certification.json",
+              "expect": { "status": "PASS", "commit": "{commit}", "version": "{version}" }
+            }
+          ]
+        },
+        {
+          "id": "baseline",
+          "run": [
+            "node",
+            "target/recovery-B10/tooling/certify-b10-baseline-013-artifact.mjs",
+            "--sha",
+            "{out.branches.baselineCommit}",
+            "--installer-sha256",
+            "{out.build-windows.baselineBuild.installerSha256}",
+            "--installer-size",
+            "{out.build-windows.baselineBuild.installerSize}",
+            "--scratch",
+            "{state}/scratch/certify-windows-baseline"
+          ],
+          "uses": ["target/recovery-B10/tooling/certify-b10-baseline-013-artifact.mjs"],
+          "outputs": [
+            {
+              "key": "baselineCert",
+              "type": "json",
+              "path": "{winBaselineDir}/independent-artifact/independent-certification.json",
+              "expect": { "status": "PASS", "commit": "{out.branches.baselineCommit}", "version": "{baselineVersion}" }
+            }
+          ]
+        }
+      ]
+    },
+    "certify-mac": {
+      "steps": [
+        {
+          "id": "post-package",
+          "operator": "Run P0-P8 of target/recovery-B10-mac-prep/MAC-B10-POST-PACKAGE.md for the candidate and the baseline profile: harvest + transfer equality, retain-notary capture, the Mac updater signature on Windows (target/recovery-B10-release/sign-mac-updater-b3b1009.mjs), fresh verifier, remote certification, assemble-certification (24/24). These are still hand-run shell snippets in B10; the check step below gates on their results."
+        },
+        {
+          "id": "results",
+          "check": "certified Mac packets for the candidate and the baseline",
+          "outputs": [
+            { "key": "candidateDir", "type": "dir", "path": "{macDir}" },
+            { "key": "candidateDmg", "type": "file", "path": "{macDir}/KalCode_{version}_arm64.dmg" },
+            { "key": "candidateDmgSig", "type": "file", "path": "{macDir}/KalCode_{version}_arm64.dmg.sig" },
+            {
+              "key": "candidateBuild",
+              "type": "json",
+              "path": "{macDir}/macos-arm64-build.json",
+              "expect": {
+                "commit": "{commit}",
+                "version": "{version}",
+                "notarized": true,
+                "stapled": true,
+                "signed": true
+              }
+            },
+            {
+              "key": "candidateVerify",
+              "type": "json",
+              "path": "{macDir}/macos-arm64-verify.json",
+              "expect": { "status": "passed", "commit": "{commit}", "version": "{version}" }
+            },
+            {
+              "key": "candidateCert",
+              "type": "json",
+              "path": "{macDir}/independent-certification.json",
+              "expect": { "status": "PASS", "sourceCommit": "{commit}", "version": "{version}" }
+            },
+            { "key": "baselineDmg", "type": "file", "path": "{macBaselineDir}/KalCode_{baselineVersion}_arm64.dmg" },
+            {
+              "key": "baselineDmgSig",
+              "type": "file",
+              "path": "{macBaselineDir}/KalCode_{baselineVersion}_arm64.dmg.sig"
+            },
+            {
+              "key": "baselineBuild",
+              "type": "json",
+              "path": "{macBaselineDir}/macos-arm64-build.json",
+              "expect": {
+                "commit": "{out.branches.baselineCommit}",
+                "version": "{baselineVersion}",
+                "notarized": true,
+                "stapled": true
+              }
+            },
+            {
+              "key": "baselineVerify",
+              "type": "json",
+              "path": "{macBaselineDir}/macos-arm64-verify.json",
+              "expect": {
+                "status": "passed",
+                "commit": "{out.branches.baselineCommit}",
+                "version": "{baselineVersion}"
+              }
+            },
+            {
+              "key": "baselineCert",
+              "type": "json",
+              "path": "{macBaselineDir}/independent-certification.json",
+              "expect": {
+                "status": "PASS",
+                "sourceCommit": "{out.branches.baselineCommit}",
+                "version": "{baselineVersion}"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "pins": {
+      "steps": [
+        {
+          "id": "baseline-packet",
+          "copy": {
+            "to": "{baselineStaging}",
+            "files": [
+              {
+                "from": "{out.build-windows.baselineInstaller.path}",
+                "sha256": "{out.build-windows.baselineInstaller.sha256}"
+              },
+              { "from": "{out.build-windows.baselineSig.path}", "sha256": "{out.build-windows.baselineSig.sha256}" },
+              {
+                "from": "{out.build-windows.baselineTargetSig.path}",
+                "sha256": "{out.build-windows.baselineTargetSig.sha256}"
+              },
+              {
+                "from": "{out.build-windows.baselineBuild.path}",
+                "sha256": "{out.build-windows.baselineBuild.sha256}"
+              },
+              {
+                "from": "{out.verify-windows.baselineVerify.path}",
+                "sha256": "{out.verify-windows.baselineVerify.sha256}",
+                "as": "verify.json"
+              },
+              { "from": "{out.certify-mac.baselineDmg.path}", "sha256": "{out.certify-mac.baselineDmg.sha256}" },
+              { "from": "{out.certify-mac.baselineDmgSig.path}", "sha256": "{out.certify-mac.baselineDmgSig.sha256}" },
+              { "from": "{out.certify-mac.baselineBuild.path}", "sha256": "{out.certify-mac.baselineBuild.sha256}" },
+              { "from": "{out.certify-mac.baselineVerify.path}", "sha256": "{out.certify-mac.baselineVerify.sha256}" }
+            ]
+          }
+        },
+        {
+          "id": "derive",
+          "run": [
+            "node",
+            "target/recovery-B10/fill-b10-pins.mjs",
+            "derive-artifacts",
+            "--windows-dir-rel",
+            "{out.build-windows.candidateDir.rel}",
+            "--mac-dir-rel",
+            "{out.certify-mac.candidateDir.rel}",
+            "--qa7-verify",
+            "{out.verify-windows.candidateVerify.path}",
+            "--win-cert-rel",
+            "{out.certify-windows.candidateCert.rel}",
+            "--mac-cert-rel",
+            "{out.certify-mac.candidateCert.rel}",
+            "--baseline-staging",
+            "{baselineStaging}"
+          ],
+          "uses": ["target/recovery-B10/fill-b10-pins.mjs"],
+          "stdoutTo": "{state}/pins/stage-b-artifacts.env"
+        },
+        {
+          "id": "apply-dry-run",
+          "run": [
+            "node",
+            "target/recovery-B10/fill-b10-pins.mjs",
+            "apply",
+            "--dry-run",
+            "--pairs",
+            "{this.deriveStdout.path}"
+          ],
+          "uses": ["target/recovery-B10/fill-b10-pins.mjs"]
+        },
+        {
+          "id": "apply",
+          "run": ["node", "target/recovery-B10/fill-b10-pins.mjs", "apply", "--pairs", "{this.deriveStdout.path}"],
+          "uses": ["target/recovery-B10/fill-b10-pins.mjs"]
+        },
+        {
+          "id": "status",
+          "run": ["node", "target/recovery-B10/fill-b10-pins.mjs", "status"],
+          "uses": ["target/recovery-B10/fill-b10-pins.mjs"],
+          "outputs": [{ "key": "openAfterArtifacts", "type": "stdout", "pattern": "^(1) open token\\(s\\)$" }]
+        },
+        {
+          "id": "collectors",
+          "operator": "Fill the Windows (LW) and Mac (LM) lifecycle collectors with `fill-b10-pins.mjs collectors --worktree ...` (TOOLING-REPIN.md section 4, steps 2-3) and write the Mac candidate-pin.json. The EXE/guardian/bundle-tree values come from the certification records; this is the one pin fill not yet derived automatically in B10."
+        }
+      ]
+    },
+    "qa-sittings": {
+      "instructions": "Run the B10 sittings (target/recovery-B10/B10-PLAN.md section 4, S1-S3) on a disposable data root / clean-state aside on the main account (no extra Windows accounts): clean install + launch, provider sign-ins (OAuth/2FA), KalVoice microphone, physical sleep/wake, Mac GUI rows. Attest once the evidence roots are sealed with their SHA256SUMS."
+    },
+    "qa-records": {
+      "steps": [
+        {
+          "id": "bind",
+          "operator": "Bind the sealed sittings into the four records with target/recovery-B10/filler/fill-b10-records.mjs (set / BASE-CITE / finalize) and place them as windows-x86_64-qa.json and macos-arm64-qa.json in both staging directories. The validate step below re-checks all four with the byte-pinned T validator."
+        },
+        {
+          "id": "validate",
+          "run": [
+            "node",
+            "target/recovery-B10-release/publish/lib/qa-validate.mjs",
+            "--phase",
+            "preliminary",
+            "--validator",
+            "{toolWorktree}/tooling/release/updater-manifest.mjs",
+            "--validator-sha256",
+            "{tValidatorSha256}",
+            "baseline:windows-x86_64={baselineStaging}/windows-x86_64-qa.json",
+            "baseline:darwin-aarch64={baselineStaging}/macos-arm64-qa.json",
+            "candidate:windows-x86_64={candidateStaging}/windows-x86_64-qa.json",
+            "candidate:darwin-aarch64={candidateStaging}/macos-arm64-qa.json"
+          ],
+          "uses": ["target/recovery-B10-release/publish/lib/qa-validate.mjs"],
+          "outputs": [
+            { "key": "baselineWindowsRecord", "type": "file", "path": "{baselineStaging}/windows-x86_64-qa.json" },
+            { "key": "baselineMacRecord", "type": "file", "path": "{baselineStaging}/macos-arm64-qa.json" },
+            { "key": "candidateWindowsRecord", "type": "file", "path": "{candidateStaging}/windows-x86_64-qa.json" },
+            { "key": "candidateMacRecord", "type": "file", "path": "{candidateStaging}/macos-arm64-qa.json" }
+          ]
+        }
+      ]
+    },
+    "notes": {
+      "steps": [
+        {
+          "id": "preview",
+          "run": [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "{publish}/01-fill-notes.ps1",
+            "-SourceCommit",
+            "{commit}",
+            "-NotesBaseCommit",
+            "{out.branches.notesBaseCommit}",
+            "-WhatIf"
+          ],
+          "uses": ["target/recovery-B10-release/publish/01-fill-notes.ps1"]
+        },
+        {
+          "id": "fill",
+          "run": [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "{publish}/01-fill-notes.ps1",
+            "-SourceCommit",
+            "{commit}",
+            "-NotesBaseCommit",
+            "{out.branches.notesBaseCommit}"
+          ],
+          "uses": ["target/recovery-B10-release/publish/01-fill-notes.ps1"],
+          "outputs": [
+            { "key": "notesReceipt", "type": "receipt", "expect": { "status": "PASS", "productCommit": "{commit}" } }
+          ]
+        },
+        {
+          "id": "notes-head",
+          "run": ["git", "-C", "{notesWorktree}", "rev-parse", "HEAD"],
+          "outputs": [{ "key": "notesCommit", "type": "stdout", "pattern": "^([0-9a-f]{40})$" }]
+        },
+        {
+          "id": "pin-notes",
+          "run": ["node", "target/recovery-B10/fill-b10-pins.mjs", "apply", "N_SHA40={this.notesCommit}"],
+          "uses": ["target/recovery-B10/fill-b10-pins.mjs"]
+        },
+        {
+          "id": "all-pinned",
+          "run": ["node", "target/recovery-B10/fill-b10-pins.mjs", "status"],
+          "uses": ["target/recovery-B10/fill-b10-pins.mjs"],
+          "outputs": [{ "key": "openTokens", "type": "stdout", "pattern": "^(0) open token\\(s\\)$" }]
+        },
+        {
+          "id": "filled-pins",
+          "check": "the filled publish pins; later phases refuse if they change",
+          "outputs": [
+            { "key": "commonPins", "type": "file", "path": "{publish}/_common.ps1" },
+            { "key": "libPins", "type": "file", "path": "{publish}/lib/pins.mjs" }
+          ]
+        }
+      ]
+    },
+    "preflight-prod": {
+      "steps": [
+        {
+          "id": "preflight",
+          "run": [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "{publish}/00-preflight.ps1",
+            "-SourceCommit",
+            "{commit}"
+          ],
+          "uses": [
+            "target/recovery-B10-release/publish/00-preflight.ps1",
+            "target/recovery-B10-release/publish/lib/preflight.mjs",
+            "target/recovery-B10-release/publish/lib/authority.mjs",
+            "target/recovery-B10-release/publish/lib/http.mjs"
+          ],
+          "outputs": [
+            {
+              "key": "preflightReceipt",
+              "type": "receipt",
+              "expect": {
+                "status": "PASS",
+                "productCommit": "{commit}",
+                "schema": "kalcode-{version}-{commit7}-preflight/v1"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "stage-preconditions": {
+      "steps": [
+        {
+          "id": "receipt",
+          "write": {
+            "path": "{state}/generated/stage-preconditions.json",
+            "json": {
+              "schema": "kalcode-{version}-{commit7}-stage-preconditions/v1",
+              "status": "PASS",
+              "productCommit": "{commit}",
+              "toolCommit": "{out.branches.toolCommit}",
+              "notesCommit": "{out.notes.notesCommit}",
+              "acceptedBy": "{approval.by}",
+              "acceptedAt": "{approval.at}",
+              "productionPreflight": "PASS",
+              "productionPreflightReceipt": "{out.preflight-prod.preflightReceipt.path}",
+              "productionPreflightReceiptSha256": "{out.preflight-prod.preflightReceipt.sha256}",
+              "records": {
+                "baseline-windows-x86_64": {
+                  "path": "{out.qa-records.baselineWindowsRecord.path}",
+                  "sha256": "{out.qa-records.baselineWindowsRecord.sha256}",
+                  "contractPassed": true
+                },
+                "baseline-darwin-aarch64": {
+                  "path": "{out.qa-records.baselineMacRecord.path}",
+                  "sha256": "{out.qa-records.baselineMacRecord.sha256}",
+                  "contractPassed": true
+                },
+                "candidate-windows-x86_64": {
+                  "path": "{out.qa-records.candidateWindowsRecord.path}",
+                  "sha256": "{out.qa-records.candidateWindowsRecord.sha256}",
+                  "contractPassed": true
+                },
+                "candidate-darwin-aarch64": {
+                  "path": "{out.qa-records.candidateMacRecord.path}",
+                  "sha256": "{out.qa-records.candidateMacRecord.sha256}",
+                  "contractPassed": true
+                }
+              },
+              "generatedBy": "tooling/release/ship.mjs (records validated in phase qa-records)"
+            }
+          }
+        }
+      ]
+    },
+    "stage": {
+      "steps": [
+        {
+          "id": "dry-run",
+          "run": [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "{publish}/02-stage-unlisted.ps1",
+            "-SourceCommit",
+            "{commit}",
+            "-ToolCommit",
+            "{out.branches.toolCommit}",
+            "-NotesCommit",
+            "{out.notes.notesCommit}",
+            "-PreconditionsReceipt",
+            "{out.stage-preconditions.receipt.path}"
+          ],
+          "uses": [
+            "target/recovery-B10-release/publish/02-stage-unlisted.ps1",
+            "target/recovery-B10-release/publish/lib/qa-validate.mjs"
+          ]
+        },
+        {
+          "id": "execute",
+          "run": [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "{publish}/02-stage-unlisted.ps1",
+            "-SourceCommit",
+            "{commit}",
+            "-ToolCommit",
+            "{out.branches.toolCommit}",
+            "-NotesCommit",
+            "{out.notes.notesCommit}",
+            "-PreconditionsReceipt",
+            "{out.stage-preconditions.receipt.path}",
+            "-Execute"
+          ],
+          "uses": [
+            "target/recovery-B10-release/publish/02-stage-unlisted.ps1",
+            "target/recovery-B10-release/publish/lib/qa-validate.mjs"
+          ],
+          "outputs": [
+            { "key": "stageReceipt", "type": "receipt", "expect": { "status": "PASS", "productCommit": "{commit}" } }
+          ]
+        }
+      ]
+    },
+    "readback": {
+      "steps": [
+        {
+          "id": "readback",
+          "run": [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "{publish}/03-readback-staged.ps1",
+            "-SourceCommit",
+            "{commit}",
+            "-ToolCommit",
+            "{out.branches.toolCommit}",
+            "-NotesCommit",
+            "{out.notes.notesCommit}",
+            "-StagePhaseReceipt",
+            "{out.stage.stageReceipt.path}"
+          ],
+          "uses": [
+            "target/recovery-B10-release/publish/03-readback-staged.ps1",
+            "target/recovery-B10-release/publish/lib/staged-readback.mjs",
+            "target/recovery-B10-release/publish/lib/minisign.mjs"
+          ],
+          "outputs": [
+            { "key": "readbackReceipt", "type": "receipt", "expect": { "status": "PASS", "productCommit": "{commit}" } }
+          ]
+        }
+      ]
+    },
+    "lifecycle": {
+      "instructions": "B10-PLAN.md section 5 on Windows and Mac against the unlisted staged descriptors: LC-A (installer over the previous install, data preserved) and LC-B (baseline 0.1.3 -> in-app update 0.1.6 -> Restore -> reupdate). Attest with the two lifecycle receipts.",
+      "evidence": [{ "key": "windowsLifecycle", "type": "file" }, { "key": "macLifecycle", "type": "file" }]
+    },
+    "release-review": {
+      "instructions": "An independent reviewer (not the operator) reviews the final QA records, notes and receipts and writes a review file ending in PASS.",
+      "evidence": [{ "key": "review", "type": "file" }]
+    },
+    "release-preconditions": {
+      "steps": [
+        {
+          "id": "validate-final",
+          "run": [
+            "node",
+            "target/recovery-B10-release/publish/lib/qa-validate.mjs",
+            "--phase",
+            "final",
+            "--validator",
+            "{notesWorktree}/tooling/release/updater-manifest.mjs",
+            "--validator-sha256",
+            "{nValidatorSha256}",
+            "candidate:windows-x86_64={candidateStaging}/windows-x86_64-qa.json",
+            "candidate:darwin-aarch64={candidateStaging}/macos-arm64-qa.json"
+          ],
+          "uses": ["target/recovery-B10-release/publish/lib/qa-validate.mjs"],
+          "outputs": [
+            { "key": "candidateWindowsFinal", "type": "file", "path": "{candidateStaging}/windows-x86_64-qa.json" },
+            { "key": "candidateMacFinal", "type": "file", "path": "{candidateStaging}/macos-arm64-qa.json" }
+          ]
+        },
+        {
+          "id": "receipt",
+          "write": {
+            "path": "{state}/generated/release-preconditions.json",
+            "json": {
+              "schema": "kalcode-{version}-{commit7}-release-preconditions/v1",
+              "status": "PASS",
+              "productCommit": "{commit}",
+              "toolCommit": "{out.branches.toolCommit}",
+              "notesCommit": "{out.notes.notesCommit}",
+              "lifecycles": {
+                "windows-x86_64": {
+                  "status": "PASS",
+                  "evidence": "{out.lifecycle.windowsLifecycle.path}",
+                  "sha256": "{out.lifecycle.windowsLifecycle.sha256}",
+                  "attestedBy": "{attest.lifecycle.by}"
+                },
+                "darwin-aarch64": {
+                  "status": "PASS",
+                  "evidence": "{out.lifecycle.macLifecycle.path}",
+                  "sha256": "{out.lifecycle.macLifecycle.sha256}",
+                  "attestedBy": "{attest.lifecycle.by}"
+                }
+              },
+              "independentReview": {
+                "status": "PASS",
+                "reviewer": "{attest.release-review.by}",
+                "evidence": "{out.release-review.review.path}",
+                "sha256": "{out.release-review.review.sha256}"
+              },
+              "finalRecords": {
+                "candidate-windows-x86_64": {
+                  "path": "{this.candidateWindowsFinal.path}",
+                  "sha256": "{this.candidateWindowsFinal.sha256}"
+                },
+                "candidate-darwin-aarch64": {
+                  "path": "{this.candidateMacFinal.path}",
+                  "sha256": "{this.candidateMacFinal.sha256}"
+                }
+              },
+              "acceptedBy": "{approval.by}",
+              "acceptedAt": "{approval.at}",
+              "generatedBy": "tooling/release/ship.mjs"
+            }
+          }
+        }
+      ]
+    },
+    "publish-dry-run": {
+      "steps": [
+        {
+          "id": "dry-run",
+          "run": [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "{publish}/04-publish-stable.ps1",
+            "-Phase",
+            "DryRun",
+            "-SourceCommit",
+            "{commit}",
+            "-NotesCommit",
+            "{out.notes.notesCommit}",
+            "-ReleasePreconditionsReceipt",
+            "{out.release-preconditions.receipt.path}",
+            "-ReadbackReceipt",
+            "{out.readback.readbackReceipt.path}"
+          ],
+          "uses": ["target/recovery-B10-release/publish/04-publish-stable.ps1"],
+          "outputs": [
+            { "key": "dryRunReceipt", "type": "receipt", "expect": { "status": "PASS", "productCommit": "{commit}" } }
+          ]
+        }
+      ]
+    },
+    "publish": {
+      "steps": [
+        {
+          "id": "bootstrap",
+          "note": "First D1 cutover (flag still false): the one-time bootstrap-authority pointer. Later releases replace this step with the normal publisher.",
+          "run": [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "{publish}/04-publish-stable.ps1",
+            "-Phase",
+            "Bootstrap",
+            "-SourceCommit",
+            "{commit}",
+            "-NotesCommit",
+            "{out.notes.notesCommit}",
+            "-ReleasePreconditionsReceipt",
+            "{out.release-preconditions.receipt.path}",
+            "-ReadbackReceipt",
+            "{out.readback.readbackReceipt.path}",
+            "-DryRunReceipt",
+            "{out.publish-dry-run.dryRunReceipt.path}",
+            "-Execute"
+          ],
+          "uses": ["target/recovery-B10-release/publish/04-publish-stable.ps1"],
+          "outputs": [
+            {
+              "key": "bootstrapReceipt",
+              "type": "receipt",
+              "expect": { "status": "PASS", "productCommit": "{commit}" }
+            }
+          ]
+        }
+      ]
+    },
+    "website-assemble": {
+      "steps": [
+        {
+          "id": "assemble",
+          "run": [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "{publish}/05-deploy-website.ps1",
+            "-Phase",
+            "Assemble",
+            "-SourceCommit",
+            "{commit}",
+            "-NotesCommit",
+            "{out.notes.notesCommit}",
+            "-WebsiteCommit",
+            "{out.branches.websiteCommit}",
+            "-BootstrapReceipt",
+            "{out.publish.bootstrapReceipt.path}"
+          ],
+          "uses": ["target/recovery-B10-release/publish/05-deploy-website.ps1"],
+          "outputs": [
+            { "key": "assembleReceipt", "type": "receipt", "expect": { "status": "PASS", "productCommit": "{commit}" } }
+          ]
+        }
+      ]
+    },
+    "website-merge": {
+      "instructions": "Push release/website-{version}-{commit7}, open the PR (never push to main), get the independent review of the assembled commit, merge. Attest with the review receipt and a JSON file {\"mergedCommit\": \"<origin/main sha40>\"}.",
+      "evidence": [
+        { "key": "reviewReceipt", "type": "json", "expect": { "status": "PASS" } },
+        { "key": "mergeRecord", "type": "json", "pick": { "mergedCommit": "mergedCommit" } }
+      ]
+    },
+    "deploy": {
+      "steps": [
+        {
+          "id": "deploy",
+          "run": [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "{publish}/05-deploy-website.ps1",
+            "-Phase",
+            "Deploy",
+            "-SourceCommit",
+            "{commit}",
+            "-NotesCommit",
+            "{out.notes.notesCommit}",
+            "-WebsiteCommit",
+            "{out.branches.websiteCommit}",
+            "-BootstrapReceipt",
+            "{out.publish.bootstrapReceipt.path}",
+            "-AssembleReceipt",
+            "{out.website-assemble.assembleReceipt.path}",
+            "-ReviewReceipt",
+            "{out.website-merge.reviewReceipt.path}",
+            "-MergedCommit",
+            "{out.website-merge.mergeRecord.mergedCommit}",
+            "-Execute"
+          ],
+          "uses": ["target/recovery-B10-release/publish/05-deploy-website.ps1"],
+          "outputs": [
+            { "key": "deployReceipt", "type": "receipt", "expect": { "status": "PASS", "productCommit": "{commit}" } }
+          ]
+        }
+      ]
+    },
+    "confirm": {
+      "steps": [
+        {
+          "id": "confirm",
+          "run": [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "{publish}/04-publish-stable.ps1",
+            "-Phase",
+            "ConfirmAfterDeploy",
+            "-SourceCommit",
+            "{commit}",
+            "-NotesCommit",
+            "{out.notes.notesCommit}",
+            "-ReleasePreconditionsReceipt",
+            "{out.release-preconditions.receipt.path}",
+            "-ReadbackReceipt",
+            "{out.readback.readbackReceipt.path}",
+            "-DeployReceipt",
+            "{out.deploy.deployReceipt.path}",
+            "-Execute"
+          ],
+          "uses": ["target/recovery-B10-release/publish/04-publish-stable.ps1"],
+          "outputs": [
+            { "key": "confirmReceipt", "type": "receipt", "expect": { "status": "PASS", "productCommit": "{commit}" } }
+          ]
+        }
+      ]
+    },
+    "live-verify": {
+      "steps": [
+        {
+          "id": "live",
+          "run": [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "{publish}/06-live-verify.ps1",
+            "-SourceCommit",
+            "{commit}",
+            "-NotesCommit",
+            "{out.notes.notesCommit}",
+            "-DeployReceipt",
+            "{out.deploy.deployReceipt.path}",
+            "-ConfirmReceipt",
+            "{out.confirm.confirmReceipt.path}"
+          ],
+          "uses": [
+            "target/recovery-B10-release/publish/06-live-verify.ps1",
+            "target/recovery-B10-release/publish/lib/live-verify.mjs",
+            "target/recovery-B10-release/publish/lib/minisign.mjs",
+            "target/recovery-B10-release/publish/lib/http.mjs"
+          ],
+          "outputs": [
+            { "key": "liveReceipt", "type": "receipt", "expect": { "status": "PASS", "productCommit": "{commit}" } }
+          ]
+        }
+      ]
+    },
+    "live-human": {
+      "instructions": "B10-PLAN.md S5: download from kalcoded.com on a clean state (disposable data root / VM), install, launch, confirm 0.1.6 and that the updater offers nothing newer. Attest with the LV evidence file.",
+      "evidence": [{ "key": "liveEvidence", "type": "file", "optional": true }]
+    }
+  }
+}

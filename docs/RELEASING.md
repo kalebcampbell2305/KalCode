@@ -18,6 +18,10 @@ and the site shows "no public build yet".
 
 ## Pipeline
 
+The canonical way to run a release is `node tooling/release/ship.mjs --version X.Y.Z --commit <sha40>`
+([RELEASE-PIPELINE.md](RELEASE-PIPELINE.md)). It chains the steps below with receipts and hard gates and is
+a dry run unless `--execute` is given. This section describes what the individual tools prove.
+
 ```
 pnpm release:updater-key:status                              prove DPAPI key matches tracked public key
 pnpm release:build --channel stable
