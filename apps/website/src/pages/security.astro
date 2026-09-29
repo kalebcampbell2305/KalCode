@@ -73,9 +73,11 @@ const kalvoiceShipped = servedStableRelease(RELEASES) !== null;
         <div>
           <dt>Memory-safe native code</dt>
           <dd>
-            Unsafe Rust is denied by default across KalCode's own native code. The only exceptions
+            Unsafe Rust is denied by default across KalCode's workspace crates. The only exceptions
             are operating-system integration points (Windows, macOS and Unix system interfaces),
-            each explicitly allowed for a single module or function.
+            each explicitly allowed for a single module or function. The vendored terminal library
+            (portable-pty, which KalCode patches for Windows job objects and macOS terminal
+            handling) sits outside that lint.
           </dd>
         </div>
         <div>
