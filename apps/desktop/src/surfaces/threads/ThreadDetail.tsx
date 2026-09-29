@@ -15,6 +15,7 @@ import {
 } from "@kalcode/ui/components";
 import {
   Archive,
+  ArchiveRestore,
   CirclePause,
   CircleX,
   Info,
@@ -52,23 +53,26 @@ interface ThreadDetailProps {
   threadId: string;
   archived: boolean;
   onArchived: () => void;
+  /** The thread was restored to the open list (`thread_unarchive`). */
+  onUnarchived: () => void;
 }
 
 /** Prefix of the runtime's structured activity while a thread waits for approval. */
 const APPROVAL_PREFIX = "Waiting for approval: ";
 
-type Action = "interrupt" | "stop" | "resume" | "archive" | "send" | "rename";
+type Action = "interrupt" | "stop" | "resume" | "archive" | "unarchive" | "send" | "rename";
 
 const FAILURE_TITLES: Record<Action, string> = {
   interrupt: "Couldn't interrupt the thread",
   stop: "Couldn't stop the thread",
   resume: "Couldn't resume the thread",
   archive: "Couldn't archive the thread",
+  unarchive: "Couldn't unarchive the thread",
   send: "Message not sent",
   rename: "Couldn't rename the thread",
 };
 
-export function ThreadDetail({ threadId, archived, onArchived }: ThreadDetailProps) {
+export function ThreadDetail({ threadId, archived, onArchived, onUnarchived }: ThreadDetailProps) {
   const { client } = useRuntime();
   const { pending, decide } = usePermissions();
   const toast = useToast();
@@ -186,6 +190,25 @@ export function ThreadDetail({ threadId, archived, onArchived }: ThreadDetailPro
                 }}
               >
                 Archive
+              </Button>
+            ) : null}
+            {archived ? (
+              <Button
+                size="sm"
+                icon={<ArchiveRestore />}
+                busy={busy === "unarchive"}
+                onClick={async () => {
+                  if (await run("unarchive", () => client.unarchiveThread(thread.id))) {
+                    toast.show({
+                      tone: "success",
+                      title: "Thread restored",
+                      description: "It's back in your threads and on the Dashboard.",
+                    });
+                    onUnarchived();
+                  }
+                }}
+              >
+                Unarchive
               </Button>
             ) : null}
           </div>
