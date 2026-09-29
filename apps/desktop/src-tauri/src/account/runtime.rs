@@ -193,6 +193,26 @@ impl Default for RuntimeState {
     }
 }
 
+/// Sign-outs in progress, and whether an exit has committed. Exit waits for running sign-outs
+/// (not a lifecycle lease, so a sign-out's own drain never waits on itself), then seals so none
+/// starts that the exit would cut off before credentials are cleared.
+#[derive(Default)]
+struct SignOutGate {
+    running: usize,
+    sealed_for_exit: bool,
+}
+
+/// Held for one sign-out's credential clearing and revocation; releasing it wakes the exit.
+struct SignOutObligation<'a>(&'a AccountRuntime);
+
+impl Drop for SignOutObligation<'_> {
+    fn drop(&mut self) {
+        let mut gate = self.0.lock_sign_outs();
+        gate.running -= 1;
+        self.0.sign_outs_settled.notify_all();
+    }
+}
+
 pub struct AccountRuntime {
     api: Arc<dyn AccountApi>,
     store: Arc<dyn SecretStore>,
@@ -205,6 +225,8 @@ pub struct AccountRuntime {
     request_lane: Mutex<()>,
     state: Mutex<RuntimeState>,
     authority_subscribers: Mutex<Vec<Weak<AuthorityWatchSlot>>>,
+    sign_outs: Mutex<SignOutGate>,
+    sign_outs_settled: Condvar,
 }
 
 impl AccountRuntime {
@@ -235,6 +257,8 @@ impl AccountRuntime {
             request_lane: Mutex::new(()),
             state: Mutex::new(RuntimeState::default()),
             authority_subscribers: Mutex::new(Vec::new()),
+            sign_outs: Mutex::new(SignOutGate::default()),
+            sign_outs_settled: Condvar::new(),
         }
     }
 
@@ -925,6 +949,9 @@ impl AccountRuntime {
     }
 
     pub fn logout(&self) -> Result<AccountSnapshot, AccountRuntimeError> {
+        // Registered before revoking, so an exit preflight either waits for this sign-out to
+        // clear credentials or has already sealed and this sign-out never starts.
+        let _obligation = self.begin_sign_out()?;
         let generation = self.advance_generation();
         let _lane = self.lock_lane()?;
         if !self.is_current(generation) {
@@ -937,6 +964,46 @@ impl AccountRuntime {
             let _ = self.api.logout(token.expose_token());
         }
         Ok(snapshot)
+    }
+
+    fn lock_sign_outs(&self) -> MutexGuard<'_, SignOutGate> {
+        self.sign_outs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn begin_sign_out(&self) -> Result<SignOutObligation<'_>, AccountRuntimeError> {
+        let mut gate = self.lock_sign_outs();
+        if gate.sealed_for_exit {
+            return Err(AccountRuntimeError {
+                code: "account_exit_in_progress",
+                message: "KalCode is closing. Sign out after it reopens.",
+                retryable: true,
+            });
+        }
+        gate.running += 1;
+        Ok(SignOutObligation(self))
+    }
+
+    /// Exit preflight: waits up to `timeout` for every running sign-out to finish clearing
+    /// credentials, then seals so no sign-out starts that the exit would interrupt. `false`
+    /// means one is still running; nothing is sealed and the exit must not proceed.
+    pub fn seal_sign_outs_for_exit(&self, timeout: Duration) -> bool {
+        let gate = self.lock_sign_outs();
+        let (mut gate, _) = self
+            .sign_outs_settled
+            .wait_timeout_while(gate, timeout, |gate| gate.running > 0)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if gate.running > 0 {
+            return false;
+        }
+        gate.sealed_for_exit = true;
+        true
+    }
+
+    /// Reopens sign-out after an exit preflight that sealed it did not complete.
+    pub fn reopen_sign_outs(&self) {
+        self.lock_sign_outs().sealed_for_exit = false;
     }
 
     pub fn usage(&self) -> Result<AccountUsageSnapshot, AccountRuntimeError> {

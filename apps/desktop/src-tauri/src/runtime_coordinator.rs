@@ -606,11 +606,22 @@ impl RuntimeCoordinator {
         }
     }
 
-    /// App-exit preflight: seal admission for good, then wait (bounded) for every command lease
-    /// and the retained bundle. A caller that still holds a lease can never satisfy it.
+    /// App-exit preflight: wait (bounded) for any running sign-out to finish clearing
+    /// credentials and seal sign-out, then seal admission for good and wait for every command
+    /// lease and the retained bundle, all within `timeout`. A caller that still holds a lease can
+    /// never satisfy it. Sign-out holds no lease: `account_logout` drains without waiting on
+    /// itself, and this waits for its credential clearing through the account's own obligation.
     pub fn drain_for_exit(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        if !self.account.seal_sign_outs_for_exit(timeout) {
+            return false;
+        }
         self.request_drain(true);
-        self.wait_drained(timeout)
+        if self.wait_drained(deadline.saturating_duration_since(Instant::now())) {
+            return true;
+        }
+        self.account.reopen_sign_outs();
+        false
     }
 
     pub fn acquire<T: RuntimeService>(&self) -> Result<RuntimeState<T>, IpcError> {
