@@ -1389,6 +1389,9 @@ const LOW_CONFIDENCE: &[&str] = &[
     "[are there|is there] any [pending] (approvals|approval requests|permission requests)",
     "[pending] (approvals|approval requests|permission requests)",
     "<surface> [page|view|screen|tab|section]",
+    // Provider switching isn't in this build (the executor refuses it), so in a focused text
+    // box "switch to Codex" is typed as words rather than run as a command that fails.
+    "switch to <provider>",
 ];
 
 const OPEN_VERB: &str =
@@ -1622,6 +1625,7 @@ fn build_rules() -> Vec<Rule> {
 
     // Change the provider selected for the next thread or provider pane. Provider names are a
     // closed local vocabulary, so this never starts a provider process or guesses an account.
+    // Low confidence (`LOW_CONFIDENCE`): refused in this build, so dictation keeps the words.
     add(
         "switch to <provider>".into(),
         Box::new(|c| match c.provider {

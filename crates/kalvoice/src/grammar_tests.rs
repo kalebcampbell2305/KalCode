@@ -464,14 +464,27 @@ fn navigation() {
 }
 
 #[test]
-fn switching_the_active_provider_is_a_deterministic_command() {
+fn switching_the_active_provider_is_a_deterministic_low_confidence_command() {
+    use crate::orchestrator::{TalkRoute, TalkTarget, talk_route};
     for (text, provider) in [
         ("switch to Claude Code", ProviderId::CLAUDE_CODE),
         ("switch to Codex", ProviderId::CODEX),
         ("switch to Gemini CLI", ProviderId::GEMINI_CLI),
     ] {
+        // G2: provider switching is refused in this build, so it is low confidence: a focused
+        // text box keeps the words, and with nothing focused it is still the (refused) command.
         let (understood, confidence) = understand_with_confidence(text);
-        assert_eq!(confidence, Confidence::High, "{text}: {understood:?}");
+        assert_eq!(confidence, Confidence::Low, "{text}: {understood:?}");
+        assert_eq!(
+            talk_route(text, TalkTarget::Field),
+            TalkRoute::Dictation,
+            "{text}"
+        );
+        assert_eq!(
+            talk_route(text, TalkTarget::None),
+            TalkRoute::Command,
+            "{text}"
+        );
         assert_eq!(
             understood,
             Understood::Intent {
