@@ -1,15 +1,6 @@
 import type { SurfaceId } from "@kalcode/protocol";
 import { IconButton, Tooltip } from "@kalcode/ui/components";
-import {
-  Bell,
-  BellDot,
-  PanelLeftClose,
-  PanelLeftOpen,
-  Search,
-  ShieldAlert,
-  ShieldCheck,
-  TriangleAlert,
-} from "lucide-react";
+import { Bell, BellDot, PanelLeftClose, PanelLeftOpen, Search, ShieldAlert, ShieldCheck } from "lucide-react";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { usePermissions } from "../surfaces/permissions/PermissionsProvider.tsx";
 import { Mark, Wordmark } from "./Brand.tsx";
@@ -81,7 +72,6 @@ export function Sidebar({ collapsed, onOpenPalette }: SidebarProps) {
       ) : null}
 
       <div className={styles.footer}>
-        <BypassNotice collapsed={collapsed} />
         <ul className={styles.list}>
           <ApprovalsItem collapsed={collapsed} />
           <NotificationsItem collapsed={collapsed} />
@@ -178,23 +168,6 @@ function NotificationsItem({ collapsed }: { collapsed: boolean }) {
         }
       />
     </li>
-  );
-}
-
-/** Z4: persistent indicator while Bypass is the default for new threads. */
-function BypassNotice({ collapsed }: { collapsed: boolean }) {
-  const { settings } = usePermissions();
-  const { navigate } = useNavigation();
-  if (settings?.defaultMode !== "bypass") return null;
-  return (
-    <SidebarButton
-      collapsed={collapsed}
-      label="Bypass is on"
-      accessibleLabel="Bypass is on for new threads. Open permission settings"
-      icon={<TriangleAlert />}
-      onClick={() => navigate("settings")}
-      className={styles.bypassNotice}
-    />
   );
 }
 

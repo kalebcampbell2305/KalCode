@@ -16,7 +16,9 @@ export {
   MODE_DESCRIPTIONS,
   MODE_LABELS,
   SCOPE_LABELS,
+  START_MODES,
   scopeTone,
+  startModeFor,
   statusText,
 } from "./labels.ts";
 export { PermissionsProvider, type PermissionsValue, usePermissions } from "./PermissionsProvider.tsx";
