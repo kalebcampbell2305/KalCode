@@ -160,6 +160,98 @@ pub struct ThreadError {
     pub message: String,
 }
 
+/// Stable `ThreadError.code` values the runtime and the provider adapters write. Codes persisted
+/// by older builds keep their meaning; [`ThreadErrorKind::of_code`] classifies both.
+pub mod error_codes {
+    /// The Resource Governor is holding the launch or turn; KalCode re-checks on each sample.
+    pub const WAITING_FOR_RESOURCES: &str = "waiting_for_resources";
+    /// The bounded wait for system resources ended; nothing was started. Resume retries.
+    pub const RESOURCES_UNAVAILABLE: &str = "resources_unavailable";
+    pub const PROVIDER_START_FAILED: &str = "provider_start_failed";
+    /// The session's provider process ended unexpectedly.
+    pub const PROVIDER_EXITED: &str = "provider_exited";
+    /// One turn's provider process ended unexpectedly (turn-based providers).
+    pub const PROCESS_EXITED: &str = "process_exited";
+    pub const PROVIDER_NOT_AUTHENTICATED: &str = "provider_not_authenticated";
+    pub const PROVIDER_NOT_INSTALLED: &str = "provider_not_installed";
+    pub const PROVIDER_VERSION_UNSUPPORTED: &str = "provider_version_unsupported";
+    /// Codex refused Approve/Auto outside a Git repository (its own trusted-directory guard).
+    pub const CODEX_APPROVE_REQUIRES_GIT: &str = "codex_approve_requires_git";
+    /// The provider's service no longer accepts this account type (e.g. Gemini CLI for
+    /// "Gemini Code Assist for individuals").
+    pub const PROVIDER_ACCOUNT_INELIGIBLE: &str = "provider_account_ineligible";
+    pub const PROVIDER_ACCOUNT_BUSY: &str = "provider_account_busy";
+    pub const PROVIDER_ACCOUNT_PLAN_UNSUPPORTED: &str = "provider_account_plan_unsupported";
+    pub const PROVIDER_ACCOUNT_PLAN_UNVERIFIED: &str = "provider_account_plan_unverified";
+    pub const PROVIDER_ACCOUNT_CHECK_FAILED: &str = "provider_account_check_failed";
+}
+
+/// What kind of problem a `ThreadError` reports, derived from its stable code. Surfaces use it
+/// to title and tone the problem; the message itself always comes from the runtime. Mirrored by
+/// `threadErrorKindOf` in `packages/protocol` (a Rust test keeps the two identical).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum ThreadErrorKind {
+    /// Waiting for system resources (not a failure; KalCode keeps checking).
+    WaitingForResources,
+    /// The wait for system resources ended without starting anything; Resume retries.
+    ResourcesUnavailable,
+    /// The provider process could not be started.
+    ProviderStartFailed,
+    /// The provider process ended unexpectedly.
+    ProviderProcessExited,
+    /// The account is not signed in for this provider.
+    AuthRequired,
+    /// KalCode or the provider's service refused this account (in use, plan, account type).
+    AccountRefused,
+    /// The installed provider version is not supported.
+    UnsupportedVersion,
+    /// Codex refused Approve mode outside a Git repository.
+    NonGitApproveGuard,
+    /// The provider is not installed.
+    ProviderNotInstalled,
+    /// Any other problem the provider or KalCode reported.
+    Other,
+}
+
+impl ThreadErrorKind {
+    pub fn of_code(code: &str) -> Self {
+        use error_codes as c;
+        match code {
+            c::WAITING_FOR_RESOURCES => Self::WaitingForResources,
+            c::RESOURCES_UNAVAILABLE => Self::ResourcesUnavailable,
+            c::PROVIDER_START_FAILED => Self::ProviderStartFailed,
+            c::PROVIDER_EXITED | c::PROCESS_EXITED => Self::ProviderProcessExited,
+            c::PROVIDER_NOT_AUTHENTICATED => Self::AuthRequired,
+            c::PROVIDER_ACCOUNT_INELIGIBLE
+            | c::PROVIDER_ACCOUNT_BUSY
+            | c::PROVIDER_ACCOUNT_PLAN_UNSUPPORTED
+            | c::PROVIDER_ACCOUNT_PLAN_UNVERIFIED
+            | c::PROVIDER_ACCOUNT_CHECK_FAILED => Self::AccountRefused,
+            c::PROVIDER_VERSION_UNSUPPORTED => Self::UnsupportedVersion,
+            c::CODEX_APPROVE_REQUIRES_GIT => Self::NonGitApproveGuard,
+            c::PROVIDER_NOT_INSTALLED => Self::ProviderNotInstalled,
+            _ => Self::Other,
+        }
+    }
+
+    /// Nothing reached the provider: the launch was held or refused before a provider process
+    /// received the message.
+    pub fn before_delivery(self) -> bool {
+        matches!(
+            self,
+            Self::WaitingForResources
+                | Self::ResourcesUnavailable
+                | Self::ProviderStartFailed
+                | Self::AuthRequired
+                | Self::AccountRefused
+                | Self::UnsupportedVersion
+                | Self::ProviderNotInstalled
+        )
+    }
+}
+
 /// The thread fields every surface shows (Threads list, Dashboard cards, KalVoice status reports).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -412,6 +504,69 @@ mod tests {
                 assert_eq!(status.chip(), DashboardChip::WaitingForYou, "{status:?}");
             }
         }
+    }
+
+    /// `packages/protocol/src/thread-errors.ts` mirrors `ThreadErrorKind::of_code` row for row,
+    /// and codes persisted by older builds keep their kinds.
+    #[test]
+    fn thread_error_kinds_match_the_protocol_mirror_and_old_codes() {
+        let ts = include_str!("../../../packages/protocol/src/thread-errors.ts");
+        let start = ts
+            .find("export const THREAD_ERROR_KIND_OF_CODE = {")
+            .expect("table");
+        let body = &ts[start..];
+        let body = &body[..body.find("} as const").expect("end of table")];
+        let rows: Vec<(String, String)> = body
+            .lines()
+            .skip(1)
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(|line| {
+                let (code, kind) = line.split_once(':').expect("row");
+                (
+                    code.trim().to_owned(),
+                    kind.trim().trim_end_matches(',').trim_matches('"').to_owned(),
+                )
+            })
+            .collect();
+        use error_codes as c;
+        let codes = [
+            c::WAITING_FOR_RESOURCES,
+            c::RESOURCES_UNAVAILABLE,
+            c::PROVIDER_START_FAILED,
+            c::PROVIDER_EXITED,
+            c::PROCESS_EXITED,
+            c::PROVIDER_NOT_AUTHENTICATED,
+            c::PROVIDER_ACCOUNT_INELIGIBLE,
+            c::PROVIDER_ACCOUNT_BUSY,
+            c::PROVIDER_ACCOUNT_PLAN_UNSUPPORTED,
+            c::PROVIDER_ACCOUNT_PLAN_UNVERIFIED,
+            c::PROVIDER_ACCOUNT_CHECK_FAILED,
+            c::PROVIDER_VERSION_UNSUPPORTED,
+            c::CODEX_APPROVE_REQUIRES_GIT,
+            c::PROVIDER_NOT_INSTALLED,
+        ];
+        assert_eq!(rows.len(), codes.len(), "every known code is mirrored");
+        for ((code, kind), expected) in rows.iter().zip(codes) {
+            assert_eq!(code, expected, "table order");
+            let wire = serde_json::to_value(ThreadErrorKind::of_code(code)).expect("json");
+            assert_eq!(wire.as_str(), Some(kind.as_str()), "{code}");
+        }
+        // Persisted before this build: still classified, and unknown codes are "other".
+        assert_eq!(
+            ThreadErrorKind::of_code("provider_start_failed"),
+            ThreadErrorKind::ProviderStartFailed
+        );
+        assert_eq!(
+            ThreadErrorKind::of_code("provider_exited"),
+            ThreadErrorKind::ProviderProcessExited
+        );
+        assert_eq!(
+            ThreadErrorKind::of_code("turn_success"),
+            ThreadErrorKind::Other
+        );
+        assert!(ThreadErrorKind::ResourcesUnavailable.before_delivery());
+        assert!(!ThreadErrorKind::ProviderProcessExited.before_delivery());
     }
 
     #[test]

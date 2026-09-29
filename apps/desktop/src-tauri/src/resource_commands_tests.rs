@@ -7,7 +7,9 @@ use kalcode_contracts::agent::{
     ProviderCapabilities, ProviderDetection, ProviderError, ProviderId, SessionConfig,
 };
 use kalcode_contracts::permissions::{ApprovalDecision, PermissionMode};
-use kalcode_contracts::resources::{CpuReading, MemoryReading, ResourcePressure, VolumeReading};
+use kalcode_contracts::resources::{
+    CpuReading, LaunchHoldKind, MemoryReading, ResourcePressure, VolumeReading,
+};
 use kalcode_resources::{
     AdmissionDecision, AdmissionReason, AdmissionRequirements, AdmissionState, GovernorStatus,
     ModeKind, ModeLimits, PressureLevel, PressureSummary, Reading, ResourceKind, ResourceMode,
@@ -718,6 +720,7 @@ struct FakeAdmission {
     reservations: Arc<AtomicUsize>,
     child_active: Arc<AtomicBool>,
     released_while_active: Arc<AtomicBool>,
+    hold: Arc<AtomicBool>,
 }
 
 struct FakePermit {
@@ -742,6 +745,18 @@ impl ProviderAdmission for FakeAdmission {
         &self,
         _provider: ProviderId,
     ) -> Result<Box<dyn ProviderAdmissionPermit>, ProviderError> {
+        if self.hold.load(Ordering::SeqCst) {
+            return Err(ProviderError::ResourcesHeld(
+                kalcode_resources::launch_hold(
+                    &held(AdmissionReason::SnapshotStale {
+                        age_ms: 50_000,
+                        max_age_ms: 45_000,
+                    }),
+                    Duration::from_secs(1),
+                    kalcode_resources::ADMISSION_WAIT_LIMIT,
+                ),
+            ));
+        }
         self.reservations.fetch_add(1, Ordering::SeqCst);
         self.active.fetch_add(1, Ordering::SeqCst);
         Ok(Box::new(FakePermit {
@@ -811,22 +826,34 @@ impl AgentProvider for FakeProvider {
                     exit_on_terminate: false,
                 }))
             }
-            FakeStart::Live { exit_on_terminate } => {
-                self.child_active.store(true, Ordering::SeqCst);
-                Ok(Box::new(FakeSession {
-                    child_active: Arc::clone(&self.child_active),
-                    sink: Mutex::new(Some(sink)),
-                    exit_on_terminate,
-                }))
-            }
+            FakeStart::Live { exit_on_terminate } => Ok(Box::new(FakeSession {
+                child_active: Arc::clone(&self.child_active),
+                sink: Mutex::new(Some(sink)),
+                exit_on_terminate,
+            })),
         }
     }
 }
 
+/// A turn-based session: each `send` runs a turn process (`child_active`) until the turn ends.
+/// "fail" is refused before anything runs; "quick" completes before `send` returns.
 struct FakeSession {
     child_active: Arc<AtomicBool>,
     sink: Mutex<Option<Box<dyn AgentEventSink>>>,
     exit_on_terminate: bool,
+}
+
+impl FakeSession {
+    fn emit(&self, event: AgentEvent) {
+        if let Some(sink) = self
+            .sink
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+        {
+            sink.emit(event);
+        }
+    }
 }
 
 impl AgentSession for FakeSession {
@@ -834,25 +861,33 @@ impl AgentSession for FakeSession {
         Some("fixture-session".into())
     }
 
-    fn send(&self, _input: AgentInput) -> Result<(), ProviderError> {
+    fn send(&self, input: AgentInput) -> Result<(), ProviderError> {
+        let AgentInput::Text { text } = input;
+        if text == "fail" {
+            return Err(ProviderError::Start("spawn failed".into()));
+        }
+        self.child_active.store(true, Ordering::SeqCst);
+        if text == "quick" {
+            self.child_active.store(false, Ordering::SeqCst);
+            self.emit(AgentEvent::TurnCompleted { ok: true });
+        }
         Ok(())
     }
 
     fn interrupt(&self) -> Result<(), ProviderError> {
+        // The turn process is killed and reaped before the provider reports the interrupt.
+        self.child_active.store(false, Ordering::SeqCst);
+        self.emit(AgentEvent::Status {
+            status: kalcode_contracts::threads::ThreadStatus::Interrupted,
+            detail: None,
+        });
         Ok(())
     }
 
     fn terminate(&self) -> Result<(), ProviderError> {
         if self.exit_on_terminate {
             self.child_active.store(false, Ordering::SeqCst);
-            if let Some(sink) = self
-                .sink
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .as_ref()
-            {
-                sink.emit(AgentEvent::Exited { exit_code: Some(0) });
-            }
+            self.emit(AgentEvent::Exited { exit_code: Some(0) });
         }
         Ok(())
     }
@@ -879,6 +914,7 @@ struct WrapperFixture {
     starts: Arc<AtomicUsize>,
     child_active: Arc<AtomicBool>,
     released_while_active: Arc<AtomicBool>,
+    hold: Arc<AtomicBool>,
 }
 
 fn wrapper_fixture(start: FakeStart) -> WrapperFixture {
@@ -887,11 +923,13 @@ fn wrapper_fixture(start: FakeStart) -> WrapperFixture {
     let starts = Arc::new(AtomicUsize::new(0));
     let child_active = Arc::new(AtomicBool::new(false));
     let released_while_active = Arc::new(AtomicBool::new(false));
+    let hold = Arc::new(AtomicBool::new(false));
     let admission: Arc<dyn ProviderAdmission> = Arc::new(FakeAdmission {
         active: Arc::clone(&active),
         reservations: Arc::clone(&reservations),
         child_active: Arc::clone(&child_active),
         released_while_active: Arc::clone(&released_while_active),
+        hold: Arc::clone(&hold),
     });
     let inner: Arc<dyn AgentProvider> = Arc::new(FakeProvider {
         start,
@@ -905,6 +943,7 @@ fn wrapper_fixture(start: FakeStart) -> WrapperFixture {
         starts,
         child_active,
         released_while_active,
+        hold,
     }
 }
 
@@ -921,6 +960,10 @@ fn session_config() -> SessionConfig {
     }
 }
 
+fn text(text: &str) -> AgentInput {
+    AgentInput::Text { text: text.into() }
+}
+
 #[test]
 fn failed_provider_start_releases_its_reservation() {
     let fixture = wrapper_fixture(FakeStart::Fail);
@@ -928,7 +971,7 @@ fn failed_provider_start_releases_its_reservation() {
         .provider
         .start_session(session_config(), Box::new(|_: AgentEvent| {}));
 
-    assert!(result.is_err());
+    assert!(matches!(result, Err(ProviderError::Start(_))));
     assert_eq!(fixture.reservations.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.starts.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.active.load(Ordering::SeqCst), 0);
@@ -949,8 +992,96 @@ fn exit_before_start_returns_releases_exactly_once() {
     assert!(!fixture.released_while_active.load(Ordering::SeqCst));
 }
 
+/// A launch the governor holds is `ResourcesHeld` (never `Start`) and spawns nothing.
 #[test]
-fn terminate_request_does_not_release_until_exit_or_inner_drop() {
+fn a_held_launch_is_resources_held_and_starts_nothing() {
+    let fixture = wrapper_fixture(FakeStart::Live {
+        exit_on_terminate: true,
+    });
+    fixture.hold.store(true, Ordering::SeqCst);
+    let Err(ProviderError::ResourcesHeld(hold)) = fixture
+        .provider
+        .start_session(session_config(), Box::new(|_: AgentEvent| {}))
+    else {
+        panic!("a held launch must be ResourcesHeld");
+    };
+    assert_eq!(hold.kind, LaunchHoldKind::TelemetryStale);
+    assert_eq!(hold.wait_limit, kalcode_resources::ADMISSION_WAIT_LIMIT);
+    assert_eq!(fixture.starts.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.active.load(Ordering::SeqCst), 0);
+}
+
+/// Capacity is held per turn: an idle session holds nothing; a turn holds one slot from `send`
+/// until the provider reports its end; the next turn is admitted again.
+#[test]
+fn turns_hold_capacity_and_idle_sessions_hold_none() {
+    let fixture = wrapper_fixture(FakeStart::Live {
+        exit_on_terminate: true,
+    });
+    let session = fixture
+        .provider
+        .start_session(session_config(), Box::new(|_: AgentEvent| {}))
+        .expect("live session");
+    assert_eq!(
+        fixture.reservations.load(Ordering::SeqCst),
+        1,
+        "start admitted"
+    );
+    assert_eq!(
+        fixture.active.load(Ordering::SeqCst),
+        0,
+        "idle holds nothing"
+    );
+
+    session.send(text("work")).expect("turn");
+    assert_eq!(fixture.active.load(Ordering::SeqCst), 1);
+    session.interrupt().expect("interrupt");
+    assert_eq!(fixture.active.load(Ordering::SeqCst), 0);
+
+    session.send(text("quick")).expect("turn");
+    assert_eq!(
+        fixture.active.load(Ordering::SeqCst),
+        0,
+        "completed turn returned"
+    );
+    assert_eq!(fixture.reservations.load(Ordering::SeqCst), 3);
+
+    // A held turn is refused before anything runs.
+    fixture.hold.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        session.send(text("work")),
+        Err(ProviderError::ResourcesHeld(_))
+    ));
+    assert!(!fixture.child_active.load(Ordering::SeqCst));
+    assert!(!fixture.released_while_active.load(Ordering::SeqCst));
+}
+
+/// A send the provider refuses returns only the capacity that send took.
+#[test]
+fn a_failed_send_returns_only_its_own_reservation() {
+    let fixture = wrapper_fixture(FakeStart::Live {
+        exit_on_terminate: true,
+    });
+    let session = fixture
+        .provider
+        .start_session(session_config(), Box::new(|_: AgentEvent| {}))
+        .expect("live session");
+    assert!(matches!(
+        session.send(text("fail")),
+        Err(ProviderError::Start(_))
+    ));
+    assert_eq!(fixture.active.load(Ordering::SeqCst), 0);
+
+    session.send(text("work")).expect("turn");
+    // A second message while the turn runs reuses the turn's slot, and its failure does not
+    // release the running turn's capacity.
+    assert!(session.send(text("fail")).is_err());
+    assert_eq!(fixture.active.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.reservations.load(Ordering::SeqCst), 3);
+}
+
+#[test]
+fn terminate_request_does_not_release_a_running_turn_until_exit_or_inner_drop() {
     let fixture = wrapper_fixture(FakeStart::Live {
         exit_on_terminate: false,
     });
@@ -958,6 +1089,7 @@ fn terminate_request_does_not_release_until_exit_or_inner_drop() {
         .provider
         .start_session(session_config(), Box::new(|_: AgentEvent| {}))
         .expect("live session");
+    session.send(text("work")).expect("turn");
 
     assert_eq!(fixture.active.load(Ordering::SeqCst), 1);
     session.terminate().expect("terminate request");
@@ -982,6 +1114,7 @@ fn canonical_exit_event_releases_before_session_object_is_dropped() {
         .provider
         .start_session(session_config(), Box::new(|_: AgentEvent| {}))
         .expect("live session");
+    session.send(text("work")).expect("turn");
 
     session.terminate().expect("terminate and exit");
     assert_eq!(fixture.active.load(Ordering::SeqCst), 0);
@@ -997,4 +1130,417 @@ fn read_only_provider_metadata_does_not_consume_admission() {
     assert!(fixture.provider.capabilities().streaming);
     assert_eq!(fixture.reservations.load(Ordering::SeqCst), 0);
     assert_eq!(fixture.starts.load(Ordering::SeqCst), 0);
+}
+
+// ------------------------------------------------------------------------------------------
+// The real governor: slots, KalVoice's resident worker, and memory accounting.
+
+/// A healthy machine the sampler reads the same way every time.
+struct SteadyProbe {
+    cpu_percent: f32,
+    cores: u32,
+    total_bytes: u64,
+    available_bytes: u64,
+}
+
+impl kalcode_resources::SystemProbe for SteadyProbe {
+    fn sample(
+        &mut self,
+        _plan: &kalcode_resources::probe::ProbePlan<'_>,
+    ) -> kalcode_resources::probe::RawSample {
+        use kalcode_resources::probe::{Counters, RawCpu, RawMemory, RawSample};
+        RawSample {
+            cpu: Reading::Value(RawCpu {
+                total_percent: self.cpu_percent,
+                logical_cores: self.cores,
+            }),
+            memory: Reading::Value(RawMemory {
+                total_bytes: self.total_bytes,
+                available_bytes: self.available_bytes,
+            }),
+            disk_io: Reading::Value(Counters {
+                generation: 1,
+                a_bytes: 0,
+                b_bytes: 0,
+            }),
+            commit: None,
+            network: None,
+            volumes: None,
+            processes: None,
+            gpu: None,
+        }
+    }
+}
+
+const GIB: u64 = 1024 * 1024 * 1024;
+const MIB: u64 = 1024 * 1024;
+
+/// The owner's 24-thread, 31 GiB PC on a quiet moment.
+fn healthy_governor() -> Arc<ResourceGovernorState> {
+    let state = Arc::new(ResourceGovernorState::start_with_probe(Box::new(
+        SteadyProbe {
+            cpu_percent: 12.0,
+            cores: 24,
+            total_bytes: 31 * GIB,
+            available_bytes: 20 * GIB,
+        },
+    )));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while state.report().admission.state != AdmissionState::Allowed {
+        assert!(Instant::now() < deadline, "healthy governor never admitted");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    state
+}
+
+fn governed_codex(governor: &Arc<ResourceGovernorState>) -> WrapperFixture {
+    let mut fixture = wrapper_fixture(FakeStart::Live {
+        exit_on_terminate: true,
+    });
+    let inner: Arc<dyn AgentProvider> = Arc::new(FakeProvider {
+        start: FakeStart::Live {
+            exit_on_terminate: true,
+        },
+        starts: Arc::clone(&fixture.starts),
+        child_active: Arc::clone(&fixture.child_active),
+    });
+    fixture.provider = ResourceAdmissionProvider::wrap(inner, Arc::clone(governor));
+    fixture
+}
+
+/// (A)(G) Five idle threads hold nothing, so a new thread starts; and the KalVoice reasoner,
+/// resident and idle, holds no agent slot.
+#[test]
+fn idle_sessions_and_an_idle_resident_reasoner_leave_room_for_a_new_thread() {
+    let governor = healthy_governor();
+    // KalVoice's local reasoner as it reserves today: 8 threads and GGUF + 1 GiB, then resident.
+    let reasoner = governor
+        .reserve_local_task(
+            LocalWorkloadEstimate::inference(Some(8_000), Some(1_819)).expect("estimate"),
+        )
+        .expect("the reasoner is admitted on a healthy machine");
+    reasoner.settle_resident();
+    assert_eq!(governor.running_work_for_test().agents, 0);
+
+    let codex = governed_codex(&governor);
+    let mut idle = Vec::new();
+    for _ in 0..5 {
+        let session = codex
+            .provider
+            .start_session(session_config(), Box::new(|_: AgentEvent| {}))
+            .expect("admitted");
+        session.send(text("quick")).expect("turn admitted");
+        idle.push(session);
+    }
+    assert_eq!(
+        governor.running_work_for_test().agents,
+        0,
+        "no phantom slots"
+    );
+
+    let sixth = codex
+        .provider
+        .start_session(session_config(), Box::new(|_: AgentEvent| {}))
+        .expect("a sixth thread starts");
+    sixth.send(text("work")).expect("its turn is admitted");
+    assert_eq!(governor.running_work_for_test().agents, 1);
+    drop(sixth);
+    drop(idle);
+    drop(reasoner);
+    assert_eq!(governor.running_work_for_test().agents, 0);
+    governor.shutdown();
+}
+
+/// (F)(G) Four running turns fill Balanced mode; the fifth is held with the concurrency reason
+/// and the counts, and proceeds as soon as one turn finishes.
+#[test]
+fn a_fifth_running_turn_waits_for_a_slot_and_proceeds_when_one_frees() {
+    let governor = healthy_governor();
+    let codex = governed_codex(&governor);
+    let limit = ModeLimits::balanced().max_agents;
+    let running: Vec<_> = (0..limit)
+        .map(|_| {
+            let session = codex
+                .provider
+                .start_session(session_config(), Box::new(|_: AgentEvent| {}))
+                .expect("admitted");
+            session.send(text("work")).expect("turn admitted");
+            session
+        })
+        .collect();
+    assert_eq!(governor.running_work_for_test().agents, limit);
+
+    let Err(ProviderError::ResourcesHeld(hold)) = codex
+        .provider
+        .start_session(session_config(), Box::new(|_: AgentEvent| {}))
+    else {
+        panic!("the fifth launch must wait for a slot");
+    };
+    assert_eq!(hold.kind, LaunchHoldKind::ConcurrencyLimit);
+    assert_eq!((hold.running, hold.limit), (Some(limit), Some(limit)));
+    assert!(hold.retry_after >= kalcode_resources::ADMISSION_RETRY_MIN);
+    assert!(hold.retry_after <= kalcode_resources::ADMISSION_RETRY_MAX);
+
+    running[0].interrupt().expect("one turn ends");
+    let fifth = codex
+        .provider
+        .start_session(session_config(), Box::new(|_: AgentEvent| {}))
+        .expect("a freed slot admits the waiting launch");
+    fifth.send(text("work")).expect("turn admitted");
+    assert_eq!(governor.running_work_for_test().agents, limit);
+    drop(fifth);
+    drop(running);
+    governor.shutdown();
+}
+
+/// (E) No sampler: the hold is "telemetry unavailable", never a provider failure.
+#[test]
+fn a_missing_sampler_is_a_telemetry_hold() {
+    let state = deterministic_state();
+    let Err(decision) = state.reserve_provider_task(ProviderId::new(ProviderId::CODEX)) else {
+        panic!("no sampler must hold");
+    };
+    let hold = kalcode_resources::launch_hold(
+        &decision,
+        state.admission_retry_interval(),
+        kalcode_resources::ADMISSION_WAIT_LIMIT,
+    );
+    assert_eq!(hold.kind, LaunchHoldKind::TelemetryUnavailable);
+    assert_eq!(hold.retry_after, kalcode_resources::ADMISSION_RETRY_MAX);
+    assert!(kalcode_resources::decision_codes(&decision).contains(&"sampler_unavailable"));
+}
+
+/// (B)(C)(D) Each hold reason is classified from the governor's own decision, with the codes
+/// the log records.
+#[test]
+fn hold_reasons_are_classified_and_logged_by_code() {
+    let cases = [
+        (
+            AdmissionReason::Capacity {
+                holds: vec![kalcode_resources::HoldReason::CpuHeadroom {
+                    cpu_percent: 80.0,
+                    target_percent: 75.0,
+                    per_agent_percent: 2.0,
+                    mode: ModeKind::Balanced,
+                }],
+            },
+            LaunchHoldKind::CpuBusy,
+            "cpu_headroom",
+        ),
+        (
+            AdmissionReason::Capacity {
+                holds: vec![kalcode_resources::HoldReason::MemoryHeadroom {
+                    available_mb: 1_900,
+                    reserve_mb: 2_048,
+                    per_agent_mb: 512,
+                    mode: ModeKind::Balanced,
+                }],
+            },
+            LaunchHoldKind::MemoryLow,
+            "memory_headroom",
+        ),
+        (
+            AdmissionReason::Capacity {
+                holds: vec![kalcode_resources::HoldReason::KalCodeMemoryCap {
+                    used_mb: 16_000,
+                    cap_mb: 15_872,
+                    per_agent_mb: 512,
+                    mode: ModeKind::Balanced,
+                }],
+            },
+            LaunchHoldKind::MemoryCap,
+            "memory_cap",
+        ),
+        (
+            AdmissionReason::Capacity {
+                holds: vec![kalcode_resources::HoldReason::Pressure {
+                    resource: ResourceKind::Cpu,
+                    level: PressureLevel::High,
+                    mode: ModeKind::Balanced,
+                    signal: Signal::CpuPercent,
+                    value: 90.0,
+                    threshold: Some(85.0),
+                }],
+            },
+            LaunchHoldKind::CpuBusy,
+            "pressure",
+        ),
+        (
+            AdmissionReason::SnapshotStale {
+                age_ms: 50_000,
+                max_age_ms: 45_000,
+            },
+            LaunchHoldKind::TelemetryStale,
+            "stale_snapshot",
+        ),
+        (
+            AdmissionReason::CapacityUnavailable,
+            LaunchHoldKind::TelemetryUnavailable,
+            "slot_unavailable",
+        ),
+    ];
+    for (reason, kind, code) in cases {
+        let decision = held(reason);
+        let hold = kalcode_resources::launch_hold(
+            &decision,
+            Duration::from_secs(1),
+            kalcode_resources::ADMISSION_WAIT_LIMIT,
+        );
+        assert_eq!(hold.kind, kind, "{code}");
+        assert_eq!(kalcode_resources::decision_codes(&decision), [code]);
+        // The structured log line carries the governor's values (smoke: it serializes).
+        super::provider::log_launch_hold(&ProviderId::new(ProviderId::CODEX), &decision);
+    }
+    // The most actionable reason wins when several hold.
+    let mixed = AdmissionDecision {
+        reasons: vec![
+            AdmissionReason::SnapshotStale {
+                age_ms: 50_000,
+                max_age_ms: 45_000,
+            },
+            AdmissionReason::Capacity {
+                holds: vec![kalcode_resources::HoldReason::UserLimit {
+                    running: 4,
+                    limit: 4,
+                    mode: ModeKind::Balanced,
+                }],
+            },
+        ],
+        ..held(AdmissionReason::CapacityUnavailable)
+    };
+    let hold = kalcode_resources::launch_hold(
+        &mixed,
+        Duration::from_secs(1),
+        kalcode_resources::ADMISSION_WAIT_LIMIT,
+    );
+    assert_eq!(hold.kind, LaunchHoldKind::ConcurrencyLimit);
+    assert_eq!((hold.running, hold.limit), (Some(4), Some(4)));
+}
+
+/// A budget is projected only until a sample can reflect it; the slot stays until release.
+#[test]
+fn reservations_are_not_counted_twice_once_measured() {
+    let mut tracker = ActivityTracker::default();
+    let budget = ReservationBudget {
+        cpu_millicores: 500,
+        memory_mib: 1_819,
+        disk_mib: 0,
+    };
+    let id = tracker
+        .reserve(super::ReservationKind::Local, budget, NOW_MS)
+        .expect("reserve");
+    assert_eq!(tracker.unmeasured_budget(Some(NOW_MS + 1_000)), budget);
+    assert_eq!(tracker.unmeasured_budget(None), budget);
+    assert_eq!(
+        tracker.unmeasured_budget(Some(NOW_MS + 10_000)),
+        ReservationBudget::default(),
+        "a sample 10 s later measures the process: its memory is not subtracted again"
+    );
+    assert_eq!(
+        tracker.running().agents,
+        1,
+        "the slot is held until release"
+    );
+
+    // A resident worker gives up its slot; a request re-arms only its CPU.
+    tracker.settle_resident(id);
+    assert_eq!(tracker.running().agents, 0);
+    tracker.arm_cpu(id, 8_000, NOW_MS + 60_000);
+    assert_eq!(
+        tracker.unmeasured_budget(Some(NOW_MS + 61_000)),
+        ReservationBudget {
+            cpu_millicores: 8_000,
+            memory_mib: 0,
+            disk_mib: 0,
+        }
+    );
+    tracker.release(id);
+    assert_eq!(tracker.pending_budget(), ReservationBudget::default());
+}
+
+/// The owner's M1 (8 cores, 16 GiB): sysinfo reads ~3,694 MiB available while macOS reports
+/// 74% free, and the local reasoner is resident. On an otherwise idle Mac a Codex launch is
+/// admitted; before this fix the raw figure minus the reasoner's re-subtracted 1,819 MiB fell
+/// under the 2,560 MiB floor and every launch was held.
+#[test]
+fn an_m1_with_a_resident_reasoner_admits_codex() {
+    let available = kalcode_resources::probe::reconcile_available_memory(
+        16 * GIB,
+        3_694 * MIB,
+        Some(74),
+        Some(kalcode_resources::probe::MACOS_PRESSURE_NORMAL),
+    );
+    let mut mac = measured_snapshot();
+    mac.cpu = Reading::Value(CpuReading {
+        total_percent: 8.0,
+        smoothed_percent: 8.0,
+        logical_cores: 8,
+    });
+    mac.memory = Reading::Value(MemoryReading {
+        total_bytes: 16 * GIB,
+        available_bytes: available,
+        used_bytes: 16 * GIB - available,
+        used_percent: 26.0,
+        smoothed_used_percent: 26.0,
+        smoothed_available_bytes: available,
+        commit: Reading::unavailable("not exposed by this platform"),
+    });
+
+    let mut tracker = ActivityTracker::default();
+    // The reasoner was admitted and loaded a minute before this launch.
+    let reasoner = tracker
+        .reserve(
+            super::ReservationKind::Local,
+            ReservationBudget {
+                cpu_millicores: 4_000,
+                memory_mib: 1_819,
+                disk_mib: 0,
+            },
+            NOW_MS - 60_000,
+        )
+        .expect("reasoner");
+    tracker.settle_resident(reasoner);
+
+    let codex = ReservationBudget {
+        cpu_millicores: 500,
+        memory_mib: 512,
+        disk_mib: 0,
+    };
+    let decide = |snapshot: &ResourceSnapshot, pending: ReservationBudget| {
+        projected_admission(
+            &GovernorStatus::Running,
+            Some(snapshot),
+            &ModeLimits::balanced(),
+            &tracker.running(),
+            &kalcode_resources::CapacityRequest {
+                provider: Some(ProviderId::new(ProviderId::CODEX)),
+            },
+            AdmissionRequirements::provider_task(),
+            pending,
+            codex,
+            NOW_MS,
+        )
+    };
+    let admitted = decide(&mac, tracker.unmeasured_budget(Some(NOW_MS)));
+    assert_eq!(admitted.state, AdmissionState::Allowed, "{admitted:?}");
+
+    // The old accounting: raw sysinfo memory and the reasoner's memory subtracted again.
+    let mut raw = mac.clone();
+    if let Reading::Value(memory) = &mut raw.memory {
+        memory.available_bytes = 3_694 * MIB;
+        memory.smoothed_available_bytes = 3_694 * MIB;
+    }
+    let old = decide(
+        &raw,
+        ReservationBudget {
+            cpu_millicores: 4_000,
+            memory_mib: 1_819,
+            disk_mib: 0,
+        },
+    );
+    assert_eq!(
+        old.state,
+        AdmissionState::Held,
+        "the regression this guards"
+    );
 }

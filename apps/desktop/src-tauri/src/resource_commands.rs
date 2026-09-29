@@ -151,15 +151,31 @@ enum ReservationKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ReservationClaim {
     kind: ReservationKind,
+    /// What the work may still add that no sample has measured yet.
     budget: ReservationBudget,
+    /// The claim counts toward the mode's simultaneous-agent and per-provider limits. A resident
+    /// local worker that is idle between requests does not.
+    counts_slot: bool,
+    /// When `budget` was (re)armed. Once a sample taken at least [`RESERVATION_SETTLE`] later
+    /// exists, the work's real usage is part of the measured readings and the budget stops being
+    /// projected on top of them.
+    armed_at_unix_ms: i64,
 }
 
-/// Resources promised to admitted work but not safely attributable to one sampler reading.
+/// How long a reservation's budget is projected on top of measured usage. Smoothed CPU and
+/// memory need a few samples to reflect a new process, and the KalCode process tree (which
+/// attributes provider memory) is refreshed at most every 10 s (`CadenceConfig::process_tier_min`).
+/// After that, the process is measured; projecting its budget as well would count it twice
+/// (e.g. a resident local model's memory would be subtracted from available memory again).
+const RESERVATION_SETTLE: Duration = Duration::from_secs(10);
+
+/// Resources promised to admitted work but not yet reflected in a sampler reading.
 ///
 /// The sampler reports whole-machine usage, so subtracting a reservation when usage rises could
-/// accidentally credit unrelated work. Reservations therefore remain projected until their
-/// owner proves process/download settlement by releasing the permit. This is intentionally
-/// conservative and prevents a fresh sample from making the same capacity available twice.
+/// accidentally credit unrelated work. A budget therefore stays projected until a sample taken
+/// [`RESERVATION_SETTLE`] after it was armed exists (by then the work is measured), and a slot is
+/// held until its owner releases the permit. This prevents a fresh sample from making the same
+/// capacity available twice without counting running work twice.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct ReservationBudget {
     cpu_millicores: u64,
@@ -269,7 +285,12 @@ impl ActivityTracker {
         self.reported = running;
     }
 
-    fn reserve(&mut self, kind: ReservationKind, budget: ReservationBudget) -> Option<u64> {
+    fn reserve(
+        &mut self,
+        kind: ReservationKind,
+        budget: ReservationBudget,
+        now_unix_ms: i64,
+    ) -> Option<u64> {
         let agents = self.reservations.agents.checked_add(1)?;
         let provider_count = match &kind {
             ReservationKind::Provider(provider) => Some((
@@ -292,10 +313,47 @@ impl ActivityTracker {
         if let Some((provider, count)) = provider_count {
             self.reservations.per_provider.insert(provider, count);
         }
-        self.reservation_claims
-            .insert(id, ReservationClaim { kind, budget });
+        self.reservation_claims.insert(
+            id,
+            ReservationClaim {
+                kind,
+                budget,
+                counts_slot: true,
+                armed_at_unix_ms: now_unix_ms,
+            },
+        );
         self.next_reservation_id = id;
         Some(id)
+    }
+
+    /// A local worker is resident and idle: it no longer holds an agent slot, and it adds
+    /// nothing beyond what the sampler measures. Its claim stays open until released.
+    fn settle_resident(&mut self, id: u64) {
+        let Some(claim) = self
+            .reservation_claims
+            .get_mut(&id)
+            .filter(|claim| claim.kind == ReservationKind::Local)
+        else {
+            return;
+        };
+        claim.budget = ReservationBudget::default();
+        if claim.counts_slot {
+            claim.counts_slot = false;
+            self.reservations.agents = self.reservations.agents.saturating_sub(1);
+        }
+    }
+
+    /// Re-arms a claim's CPU projection for work that starts now inside an already measured
+    /// process (a resident local model answering a request). No slot is taken.
+    fn arm_cpu(&mut self, id: u64, cpu_millicores: u64, now_unix_ms: i64) {
+        if let Some(claim) = self.reservation_claims.get_mut(&id) {
+            claim.budget = ReservationBudget {
+                cpu_millicores,
+                memory_mib: 0,
+                disk_mib: 0,
+            };
+            claim.armed_at_unix_ms = now_unix_ms;
+        }
     }
 
     fn release(&mut self, id: u64) {
@@ -307,6 +365,10 @@ impl ActivityTracker {
             );
             return;
         };
+        if !claim.counts_slot {
+            self.reservation_claims.remove(&id);
+            return;
+        }
 
         if self.reservations.agents == 0
             || matches!(
@@ -347,9 +409,25 @@ impl ActivityTracker {
         self.reservations.agents -= 1;
     }
 
+    /// Every open claim's budget, whether or not a sample has measured it yet.
     fn pending_budget(&self) -> ReservationBudget {
         self.reservation_claims
             .values()
+            .fold(ReservationBudget::default(), |pending, claim| {
+                pending.saturating_add(claim.budget)
+            })
+    }
+
+    /// The budgets a snapshot sampled at `sampled_at_unix_ms` cannot reflect yet: claims armed
+    /// less than [`RESERVATION_SETTLE`] before it. Without a snapshot, every claim is pending.
+    fn unmeasured_budget(&self, sampled_at_unix_ms: Option<i64>) -> ReservationBudget {
+        let Some(sampled_at) = sampled_at_unix_ms else {
+            return self.pending_budget();
+        };
+        let settle = i64::try_from(RESERVATION_SETTLE.as_millis()).unwrap_or(i64::MAX);
+        self.reservation_claims
+            .values()
+            .filter(|claim| sampled_at < claim.armed_at_unix_ms.saturating_add(settle))
             .fold(ReservationBudget::default(), |pending, claim| {
                 pending.saturating_add(claim.budget)
             })
@@ -387,6 +465,8 @@ pub(crate) struct LocalTaskReservation {
     governor: Weak<ResourceGovernorState>,
     reservation_id: u64,
     released: AtomicBool,
+    /// The admitted CPU, re-projected while a resident worker answers a request.
+    cpu_millicores: u64,
 }
 
 impl LocalTaskReservation {
@@ -396,6 +476,28 @@ impl LocalTaskReservation {
         }
         if let Some(governor) = self.governor.upgrade() {
             governor.release_task(self.reservation_id);
+        }
+    }
+
+    /// The admitted worker is now resident and idle: it stops holding an agent slot and its
+    /// memory is measured by the sampler from here on (never subtracted a second time).
+    pub(crate) fn settle_resident(&self) {
+        if self.released.load(Ordering::Acquire) {
+            return;
+        }
+        if let Some(governor) = self.governor.upgrade() {
+            governor.settle_resident(self.reservation_id);
+        }
+    }
+
+    /// The resident worker starts a request now: project its admitted CPU until the sampler
+    /// measures it, so a concurrent launch cannot take the same CPU. Never blocks the request.
+    pub(crate) fn arm_request(&self) {
+        if self.released.load(Ordering::Acquire) {
+            return;
+        }
+        if let Some(governor) = self.governor.upgrade() {
+            governor.arm_cpu(self.reservation_id, self.cpu_millicores);
         }
     }
 }
@@ -560,7 +662,6 @@ impl ResourceGovernorState {
         let request = CapacityRequest {
             provider: Some(provider.clone()),
         };
-        let pending = runtime.activity.pending_budget();
         let Some(handle) = runtime.handle.as_ref() else {
             return Err(capacity_unavailable(
                 &runtime,
@@ -570,6 +671,12 @@ impl ResourceGovernorState {
         let status = handle.status();
         let latest = handle.latest();
         let limits = handle.limits();
+        let now = unix_ms();
+        let pending = runtime.activity.unmeasured_budget(
+            latest
+                .as_deref()
+                .map(|snapshot| snapshot.sampled_at_unix_ms),
+        );
         let Some(budget) = provider_budget(latest.as_deref(), &limits) else {
             return Err(capacity_unavailable(
                 &runtime,
@@ -585,13 +692,14 @@ impl ResourceGovernorState {
             AdmissionRequirements::provider_task(),
             pending,
             budget,
-            unix_ms(),
+            now,
         );
         let reservation_id = reserve_claim(
             &mut runtime,
             ReservationKind::Provider(provider),
             budget,
             decision,
+            now,
         )?;
         publish_activity(&runtime);
         drop(runtime);
@@ -621,6 +729,7 @@ impl ResourceGovernorState {
             ReservationKind::Provider(provider),
             ReservationBudget::default(),
             decision,
+            unix_ms(),
         )?;
         publish_activity(&runtime);
         drop(runtime);
@@ -647,6 +756,7 @@ impl ResourceGovernorState {
             ReservationKind::Provider(provider),
             budget,
             decision,
+            unix_ms(),
         )?;
         publish_activity(&runtime);
         drop(runtime);
@@ -683,13 +793,19 @@ impl ResourceGovernorState {
     ) -> Result<LocalTaskReservation, AdmissionDecision> {
         let mut runtime = self.lock();
         let running = runtime.activity.running();
-        let pending = runtime.activity.pending_budget();
+        let sampled_at = runtime
+            .handle
+            .as_ref()
+            .and_then(GovernorHandle::latest)
+            .map(|snapshot| snapshot.sampled_at_unix_ms);
+        let pending = runtime.activity.unmeasured_budget(sampled_at);
         let decision = decide(&runtime, &running, pending);
         let reservation_id = reserve_claim(
             &mut runtime,
             ReservationKind::Local,
             estimate.budget(),
             decision,
+            unix_ms(),
         )?;
         publish_activity(&runtime);
         drop(runtime);
@@ -697,6 +813,7 @@ impl ResourceGovernorState {
             governor: Arc::downgrade(self),
             reservation_id,
             released: AtomicBool::new(false),
+            cpu_millicores: estimate.budget().cpu_millicores,
         })
     }
 
@@ -713,6 +830,25 @@ impl ResourceGovernorState {
         let mut runtime = self.lock();
         runtime.activity.release(reservation_id);
         publish_activity(&runtime);
+    }
+
+    fn settle_resident(&self, reservation_id: u64) {
+        let mut runtime = self.lock();
+        runtime.activity.settle_resident(reservation_id);
+        publish_activity(&runtime);
+    }
+
+    fn arm_cpu(&self, reservation_id: u64, cpu_millicores: u64) {
+        self.lock()
+            .activity
+            .arm_cpu(reservation_id, cpu_millicores, unix_ms());
+    }
+
+    /// How soon a held provider launch should look again, from the sampler's own cadence.
+    pub(super) fn admission_retry_interval(&self) -> Duration {
+        let runtime = self.lock();
+        let latest = runtime.handle.as_ref().and_then(GovernorHandle::latest);
+        kalcode_resources::admission_retry_interval(latest.as_deref())
     }
 
     #[cfg(test)]
@@ -922,11 +1058,12 @@ fn reserve_claim(
     kind: ReservationKind,
     budget: ReservationBudget,
     mut decision: AdmissionDecision,
+    now_unix_ms: i64,
 ) -> Result<u64, AdmissionDecision> {
     if decision.state != AdmissionState::Allowed || decision.additional == 0 {
         return Err(decision);
     }
-    let Some(reservation_id) = runtime.activity.reserve(kind, budget) else {
+    let Some(reservation_id) = runtime.activity.reserve(kind, budget, now_unix_ms) else {
         decision.state = AdmissionState::Held;
         decision.additional = 0;
         if !decision

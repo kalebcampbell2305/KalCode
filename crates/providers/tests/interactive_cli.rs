@@ -523,7 +523,10 @@ fn managed_gemini_acquires_the_profile_lease_before_any_account_scoped_probe() {
 
     let error = rejected_start(&rig, Some(account_id));
 
-    assert!(error.to_string().contains("already in use"), "{error}");
+    assert!(
+        matches!(&error, ProviderError::Refused { code, .. } if code == "provider_account_busy"),
+        "{error}"
+    );
     rig.assert_no_provider_process_started();
     drop(sign_in);
 }

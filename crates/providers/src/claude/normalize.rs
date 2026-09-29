@@ -202,9 +202,22 @@ impl Normalizer {
                     },
                 }];
                 if !ok {
+                    // `subtype: "success"` with `is_error: true` is a turn that completed with an
+                    // error result (an API or account error). It is not a "turn_success" code.
+                    let (code, message) = if subtype == "success" {
+                        (
+                            "turn_error_result".to_owned(),
+                            "Claude Code reported an error for this turn.".to_owned(),
+                        )
+                    } else {
+                        (
+                            format!("turn_{}", sanitize_code(&subtype)),
+                            result_error_message(&subtype),
+                        )
+                    };
                     events.push(AgentEvent::Error {
-                        code: format!("turn_{}", sanitize_code(&subtype)),
-                        message: result_error_message(&subtype),
+                        code,
+                        message,
                         recoverable: true,
                     });
                 }
@@ -465,6 +478,22 @@ mod tests {
                 status(ThreadStatus::Idle, None),
             ]
         );
+    }
+
+    #[test]
+    fn a_success_subtype_with_an_error_result_is_not_a_turn_success_code() {
+        let events = run(&[
+            r#"{"type":"result","subtype":"success","is_error":true,"session_id":"s","usage":{"input_tokens":1,"output_tokens":0},"total_cost_usd":0.0,"permission_denials":[]}"#,
+        ]);
+        assert!(events.contains(&AgentEvent::Error {
+            code: "turn_error_result".into(),
+            message: "Claude Code reported an error for this turn.".into(),
+            recoverable: true
+        }));
+        assert!(events.contains(&AgentEvent::TurnCompleted { ok: false }));
+        assert!(!events.iter().any(
+            |event| matches!(event, AgentEvent::Error { code, .. } if code == "turn_success")
+        ));
     }
 
     #[test]

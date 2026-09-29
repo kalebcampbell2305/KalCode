@@ -2,6 +2,13 @@
 //!
 //! This is deliberately attached only to the provider adapters registered for thread execution.
 //! Provider detection, sign-in, account maintenance, and status probes do not acquire a slot.
+//!
+//! Admission is accounted per **turn**, not per session. A slot (and its projected budget) is
+//! taken when a session starts and when a message is sent, and it is returned when the turn ends
+//! (`TurnCompleted`, an interrupted/finished status, or `Exited`). An idle session between turns
+//! therefore holds no capacity: turn-based providers (Codex, Gemini CLI) have no process then, and
+//! an idle persistent process (Claude Code) is measured by the sampler like any other process.
+//! This is admission accounting only; process custody and lifetime are unchanged.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -10,12 +17,15 @@ use kalcode_contracts::agent::{
     ProviderDetection, ProviderError, ProviderId, SessionConfig,
 };
 use kalcode_contracts::permissions::ApprovalDecision;
+use kalcode_contracts::threads::ThreadStatus;
+use kalcode_resources::AdmissionDecision;
 
 use super::{ProviderTaskReservation, ResourceGovernorState};
 
 pub(super) trait ProviderAdmissionPermit: Send + Sync {}
 
 pub(super) trait ProviderAdmission: Send + Sync {
+    /// Reserves one turn's capacity. A hold is `ProviderError::ResourcesHeld`, never `Start`.
     fn reserve(
         &self,
         provider: ProviderId,
@@ -42,20 +52,36 @@ impl ProviderAdmission for GovernorAdmission {
                 _reservation: reservation,
             })),
             Err(decision) => {
-                tracing::info!(
-                    event = "resources.provider_launch_held",
-                    provider_id = %provider,
-                    snapshot_seq = ?decision.snapshot_seq,
-                    reasons = decision.reasons.len(),
-                    "resource admission held a managed provider start"
-                );
-                Err(ProviderError::Start(
-                    "KalCode could not start this provider because current resource telemetry or capacity is unavailable. Check resource availability, then retry the thread."
-                        .into(),
+                log_launch_hold(&provider, &decision);
+                Err(ProviderError::ResourcesHeld(
+                    kalcode_resources::launch_hold(
+                        &decision,
+                        self.governor.admission_retry_interval(),
+                        kalcode_resources::ADMISSION_WAIT_LIMIT,
+                    ),
                 ))
             }
         }
     }
+}
+
+/// Logs every hold reason with the values the governor used. The payload is the governor's own
+/// typed decision: percentages, MiB, sample ages, counts, the mode and fixed telemetry notes. It
+/// never contains paths, prompts, account data or credentials.
+pub(super) fn log_launch_hold(provider: &ProviderId, decision: &AdmissionDecision) {
+    let codes = kalcode_resources::decision_codes(decision).join(",");
+    let detail = serde_json::to_string(&decision.reasons).unwrap_or_default();
+    tracing::info!(
+        event = "resources.provider_launch_held",
+        provider_id = %provider,
+        snapshot_seq = ?decision.snapshot_seq,
+        sampled_at_unix_ms = ?decision.sampled_at_unix_ms,
+        mode = ?decision.mode,
+        reason_count = decision.reasons.len(),
+        reasons = %codes,
+        detail = %detail,
+        "resource admission held a managed provider start"
+    );
 }
 
 /// Wraps one registered provider adapter with the process-wide resource admission authority.
@@ -80,22 +106,52 @@ impl ResourceAdmissionProvider {
     }
 }
 
+/// The capacity one session holds for its current turn, if any.
 struct AdmissionLifecycle {
+    provider: ProviderId,
+    admission: Arc<dyn ProviderAdmission>,
     permit: Mutex<Option<Box<dyn ProviderAdmissionPermit>>>,
 }
 
 impl AdmissionLifecycle {
-    fn new(permit: Box<dyn ProviderAdmissionPermit>) -> Self {
+    fn new(provider: ProviderId, admission: Arc<dyn ProviderAdmission>) -> Self {
         Self {
-            permit: Mutex::new(Some(permit)),
+            provider,
+            admission,
+            permit: Mutex::new(None),
         }
     }
 
+    /// Reserves capacity for a turn unless this session already holds it. Returns whether this
+    /// call took the reservation.
+    fn acquire(&self) -> Result<bool, ProviderError> {
+        let mut permit = self.permit.lock().unwrap_or_else(PoisonError::into_inner);
+        if permit.is_some() {
+            return Ok(false);
+        }
+        *permit = Some(self.admission.reserve(self.provider.clone())?);
+        Ok(true)
+    }
+
     fn release(&self) {
-        self.permit
+        let permit = self
+            .permit
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .take();
+        drop(permit);
+    }
+}
+
+/// The provider reports that no turn is running any more (or never will again).
+fn ends_turn(event: &AgentEvent) -> bool {
+    match event {
+        AgentEvent::TurnCompleted { .. } | AgentEvent::Exited { .. } => true,
+        AgentEvent::Status { status, .. } => matches!(
+            status,
+            ThreadStatus::Interrupted | ThreadStatus::Completed | ThreadStatus::Failed
+        ),
+        _ => false,
     }
 }
 
@@ -106,9 +162,10 @@ struct AdmissionSink {
 
 impl AgentEventSink for AdmissionSink {
     fn emit(&self, event: AgentEvent) {
-        if matches!(event, AgentEvent::Exited { .. }) {
-            // Provider adapters emit Exited only after their supervised child/PTY exit path has
-            // completed. Update capacity before downstream state observes that terminal event.
+        if ends_turn(&event) {
+            // Provider adapters report a turn's end only after its process work is done, and
+            // `Exited` only after the supervised child/PTY exit path completed. Update capacity
+            // before downstream state observes the event, so the next turn can be admitted.
             self.lifecycle.release();
         }
         self.inner.emit(event);
@@ -121,7 +178,7 @@ struct AdmissionSession {
     // sink retains another lifecycle reference until canonical process exit.
     // Struct fields drop in declaration order. Keep this owning session first.
     inner: Box<dyn AgentSession>,
-    _lifecycle: Arc<AdmissionLifecycle>,
+    lifecycle: Arc<AdmissionLifecycle>,
 }
 
 impl AgentSession for AdmissionSession {
@@ -130,7 +187,17 @@ impl AgentSession for AdmissionSession {
     }
 
     fn send(&self, input: AgentInput) -> Result<(), ProviderError> {
-        self.inner.send(input)
+        let acquired = self.lifecycle.acquire()?;
+        match self.inner.send(input) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                // No turn started: return the capacity this call took (never a running turn's).
+                if acquired {
+                    self.lifecycle.release();
+                }
+                Err(error)
+            }
+        }
     }
 
     fn interrupt(&self) -> Result<(), ProviderError> {
@@ -178,21 +245,25 @@ impl AgentProvider for ResourceAdmissionProvider {
         sink: Box<dyn AgentEventSink>,
     ) -> Result<Box<dyn AgentSession>, ProviderError> {
         let lifecycle = Arc::new(AdmissionLifecycle::new(
-            self.admission.reserve(self.inner.id())?,
+            self.inner.id(),
+            Arc::clone(&self.admission),
         ));
+        // Starting may spawn a process (Claude Code's persistent session), so it is admitted
+        // like a turn. A hold returns before anything is spawned.
+        lifecycle.acquire()?;
         let admitted_sink = Box::new(AdmissionSink {
             inner: sink,
             lifecycle: Arc::clone(&lifecycle),
         });
-        match self.inner.start_session(config, admitted_sink) {
-            Ok(session) => Ok(Box::new(AdmissionSession {
+        let started = self.inner.start_session(config, admitted_sink);
+        // The session is up (or failed) and no turn runs yet: an idle session holds nothing.
+        // The first message is admitted by `send`.
+        lifecycle.release();
+        started.map(|session| {
+            Box::new(AdmissionSession {
                 inner: session,
-                _lifecycle: lifecycle,
-            })),
-            Err(error) => {
-                lifecycle.release();
-                Err(error)
-            }
-        }
+                lifecycle,
+            }) as Box<dyn AgentSession>
+        })
     }
 }

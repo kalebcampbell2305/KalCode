@@ -445,6 +445,48 @@ pub fn messages(
     Ok(page)
 }
 
+// ---- Undelivered message ----
+//
+// A user message that is in the thread's history but never reached the provider: its launch or
+// turn was held for system resources, or the provider was refused or could not start before the
+// message was delivered. Resume (without new text) delivers it. The marker lives in `app_meta`
+// (one key per thread, no schema change) and names the message by id; it is cleared once the
+// message is delivered, when new text supersedes it, and on account rebind or archive.
+
+fn undelivered_key(thread_id: &str) -> String {
+    format!("thread.undelivered_message:{thread_id}")
+}
+
+pub fn set_undelivered(conn: &Connection, thread_id: &str, message_id: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO app_meta (key, value, updated_at) VALUES (?1, ?2, datetime('now'))
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+        params![undelivered_key(thread_id), message_id],
+    )?;
+    Ok(())
+}
+
+pub fn clear_undelivered(conn: &Connection, thread_id: &str) -> Result<()> {
+    conn.execute(
+        "DELETE FROM app_meta WHERE key = ?1",
+        params![undelivered_key(thread_id)],
+    )?;
+    Ok(())
+}
+
+/// The text of the thread's undelivered user message, if any (and if it still exists).
+pub fn undelivered(conn: &Connection, thread_id: &str) -> Result<Option<String>> {
+    Ok(conn
+        .query_row(
+            "SELECT m.content FROM app_meta a
+             JOIN thread_messages m ON m.id = a.value AND m.thread_id = ?2 AND m.role = 'user'
+             WHERE a.key = ?1",
+            params![undelivered_key(thread_id), thread_id],
+            |r| r.get(0),
+        )
+        .optional()?)
+}
+
 /// Marks every current message of the thread as seen.
 pub fn mark_read(conn: &Connection, thread_id: &str) -> Result<()> {
     conn.execute(

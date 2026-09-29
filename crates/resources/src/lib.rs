@@ -37,8 +37,10 @@ pub mod probe;
 pub mod tree;
 
 pub use admission::{
-    AdmissionDecision, AdmissionReason, AdmissionRequirements, AdmissionState,
-    MAX_ADMISSION_SAMPLE_AGE, MIN_ADMISSION_SAMPLE_AGE, admission_max_age, evaluate_admission,
+    ADMISSION_RETRY_MAX, ADMISSION_RETRY_MIN, ADMISSION_WAIT_LIMIT, AdmissionDecision,
+    AdmissionReason, AdmissionRequirements, AdmissionState, MAX_ADMISSION_SAMPLE_AGE,
+    MIN_ADMISSION_SAMPLE_AGE, admission_max_age, admission_retry_interval, decision_codes,
+    evaluate_admission, hold_reason_code, launch_hold,
 };
 pub use cadence::{Activity, CadenceConfig};
 pub use capacity::{

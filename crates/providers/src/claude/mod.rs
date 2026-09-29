@@ -48,15 +48,28 @@ pub fn certified_managed_versions_label() -> String {
     )
 }
 
+/// The npm command that installs the certified floor release. Claude Code's native installer
+/// always installs the newest release (which may be outside the certified line), so a refusal
+/// names the pinned npm package instead, as the Codex and Gemini refusals do.
+pub fn managed_install_command() -> String {
+    format!("npm install -g @anthropic-ai/claude-code@{MANAGED_CLAUDE_FLOOR}")
+}
+
 pub(crate) fn require_managed_version(reported: Option<&str>) -> Result<(), ProviderError> {
-    let version = reported.and_then(Version::parse).ok_or_else(|| {
-        ProviderError::Start("Claude Code did not report a version KalCode can verify".into())
-    })?;
+    let refusal = |found: &str| ProviderError::Refused {
+        code: kalcode_contracts::threads::error_codes::PROVIDER_VERSION_UNSUPPORTED.to_owned(),
+        message: format!(
+            "Managed Claude Code accounts need Claude Code {}; this computer has {found}. \
+             Install a supported version with `{}`, then try again.",
+            certified_managed_versions_label(),
+            managed_install_command()
+        ),
+    };
+    let Some(version) = reported.and_then(Version::parse) else {
+        return Err(refusal("a version KalCode couldn't read"));
+    };
     if !managed_version_supported(&version) {
-        return Err(ProviderError::Start(format!(
-            "managed Claude profiles currently require certified Claude Code {}; found {version}",
-            certified_managed_versions_label()
-        )));
+        return Err(refusal(&version.to_string()));
     }
     Ok(())
 }
@@ -247,6 +260,14 @@ mod tests {
             message.contains("2.1.282 or a later 2.1.x release"),
             "{message}"
         );
-        assert!(message.contains("found 2.2.0"), "{message}");
+        assert!(message.contains("this computer has 2.2.0"), "{message}");
+        assert!(
+            message.contains("`npm install -g @anthropic-ai/claude-code@2.1.282`"),
+            "{message}"
+        );
+        assert!(matches!(
+            require_managed_version(None),
+            Err(ProviderError::Refused { code, .. }) if code == "provider_version_unsupported"
+        ));
     }
 }

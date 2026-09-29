@@ -395,6 +395,17 @@ fn provider_error(error: kalcode_contracts::agent::ProviderError) -> IpcError {
         ProviderError::Start(_) => "The provider could not start. Try resuming the thread.",
         ProviderError::Io(_) => "KalCode could not communicate with this provider pane.",
         ProviderError::Protocol(_) => "The provider returned an unreadable response.",
+        ProviderError::ResourcesHeld(_) => {
+            return KalError::validation(
+                kalcode_contracts::threads::error_codes::WAITING_FOR_RESOURCES,
+                "KalCode is waiting for system resources. Try again in a moment.",
+            )
+            .to_ipc();
+        }
+        // KalCode's own fixed refusal copy (account in use, plan, version).
+        ProviderError::Refused { message, .. } => {
+            return KalError::validation("provider_launch_refused", message).to_ipc();
+        }
     };
     KalError::validation("provider_pane_failed", message).to_ipc()
 }

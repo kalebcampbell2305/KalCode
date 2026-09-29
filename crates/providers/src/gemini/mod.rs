@@ -36,6 +36,7 @@ use kalcode_contracts::agent::{
     SessionConfig,
 };
 use kalcode_contracts::permissions::PermissionMode;
+use kalcode_contracts::threads::error_codes;
 
 use crate::catalog;
 use crate::claude::argv::working_directory;
@@ -118,7 +119,10 @@ pub(crate) fn require_managed_version(version: &Version) -> Result<(), ProviderE
     if managed_version_supported(version) {
         Ok(())
     } else {
-        Err(ProviderError::Start(MANAGED_VERSIONS.refusal(version)))
+        Err(ProviderError::Refused {
+            code: error_codes::PROVIDER_VERSION_UNSUPPORTED.to_owned(),
+            message: MANAGED_VERSIONS.refusal(version),
+        })
     }
 }
 
@@ -193,15 +197,36 @@ impl TurnAdapter for GeminiTurns {
         Box::new(stream::GeminiNormalizer::new(self.cwd.clone()))
     }
 
-    fn exit_error(&self, exit_code: Option<i32>) -> Option<(&'static str, String)> {
-        (exit_code == Some(FATAL_AUTHENTICATION_EXIT)).then(|| {
-            (
-                "provider_not_authenticated",
+    fn exit_error(&self, exit_code: Option<i32>, stderr: &str) -> Option<(&'static str, String)> {
+        if exit_code == Some(FATAL_AUTHENTICATION_EXIT) {
+            return Some((
+                error_codes::PROVIDER_NOT_AUTHENTICATED,
                 NOT_SIGNED_IN_MESSAGE.to_owned(),
-            )
-        })
+            ));
+        }
+        ineligible_account(stderr)
     }
 }
+
+/// Google's Code Assist setup refuses some account tiers for Gemini CLI with an
+/// `IneligibleTierError` (reason `UNSUPPORTED_CLIENT`), then the CLI exits 1. The tier name is
+/// only repeated when Google named that exact tier; nothing else from stderr is used.
+fn ineligible_account(stderr: &str) -> Option<(&'static str, String)> {
+    if !(stderr.contains("IneligibleTierError") || stderr.contains("UNSUPPORTED_CLIENT")) {
+        return None;
+    }
+    let account = if stderr.contains(INDIVIDUAL_TIER) {
+        format!("this account type ({INDIVIDUAL_TIER})")
+    } else {
+        "this account type".to_owned()
+    };
+    Some((
+        error_codes::PROVIDER_ACCOUNT_INELIGIBLE,
+        format!("Google no longer lets Gemini CLI use {account}. Use Claude Code or Codex."),
+    ))
+}
+
+const INDIVIDUAL_TIER: &str = "Gemini Code Assist for individuals";
 
 /// Gemini CLI's `ExitCodes.FATAL_AUTHENTICATION_ERROR` (packages/cli/src/utils/exitCodes.ts).
 const FATAL_AUTHENTICATION_EXIT: i32 = 41;
@@ -350,12 +375,64 @@ mod tests {
             cwd: String::new(),
             managed: None,
         };
-        let (code, message) = turns.exit_error(Some(41)).expect("auth exit is recognized");
+        let (code, message) = turns
+            .exit_error(Some(41), "")
+            .expect("auth exit is recognized");
         assert_eq!(code, "provider_not_authenticated");
         assert!(message.contains("Sign in to this Gemini account in Providers"));
         for other in [None, Some(0), Some(1), Some(42), Some(130)] {
-            assert!(turns.exit_error(other).is_none(), "{other:?}");
+            assert!(turns.exit_error(other, "").is_none(), "{other:?}");
         }
+    }
+
+    /// The B7 stderr (docs/release/certification-B5/evidence-main-B7/gemini-a2-diagnosis.txt):
+    /// Google refused the account tier and the CLI exited 1.
+    const B7_INELIGIBLE_STDERR: &str = "Warning: 256-color support not detected.\n\
+        Error authenticating: IneligibleTierError: This client is no longer supported for Gemini \
+        Code Assist for individuals. To continue using Gemini, please migrate to the Antigravity \
+        suite of products: https://antigravity.google\n    at throwIneligibleOrProjectIdError \
+        (file:///C:/Users/[REDACTED]/chunk.js:311090:11)\n  ineligibleTiers: [\n    {\n      \
+        reasonCode: 'UNSUPPORTED_CLIENT',\n      tierId: 'free-tier',\n      tierName: 'Gemini \
+        Code Assist for individuals'\n    }\n  ]\n}\nAn unexpected critical error occurred:\
+        IneligibleTierError: This client is no longer supported";
+
+    #[test]
+    fn googles_ineligible_tier_refusal_is_classified_with_fixed_copy() {
+        let turns = GeminiTurns {
+            mode: PermissionMode::Approve,
+            model: None,
+            cwd: String::new(),
+            managed: None,
+        };
+        let (code, message) = turns
+            .exit_error(Some(1), B7_INELIGIBLE_STDERR)
+            .expect("the tier refusal is recognized");
+        assert_eq!(code, "provider_account_ineligible");
+        assert_eq!(
+            message,
+            "Google no longer lets Gemini CLI use this account type (Gemini Code Assist for \
+             individuals). Use Claude Code or Codex."
+        );
+        // Fixed copy only: nothing from stderr (URLs, paths, Google's own wording) is echoed.
+        assert!(!message.contains("antigravity"));
+        assert!(!message.contains("chunk.js"));
+
+        // Negative: an ordinary crash stays a generic exit, and an unrelated stderr that merely
+        // mentions an account is not treated as a refusal.
+        assert!(
+            turns
+                .exit_error(Some(1), "TypeError: fetch failed")
+                .is_none()
+        );
+        assert!(
+            turns
+                .exit_error(Some(1), "Loaded cached credentials for this account.")
+                .is_none()
+        );
+        let (_, generic) = turns
+            .exit_error(Some(1), "reasonCode: 'UNSUPPORTED_CLIENT'")
+            .expect("the reason code alone is recognized");
+        assert!(generic.contains("use this account type. Use Claude Code or Codex."));
     }
 
     const ALL: [PermissionMode; 5] = [
@@ -493,11 +570,12 @@ mod tests {
     #[test]
     fn gemini_refusal_names_the_found_version_the_supported_range_and_the_install_command() {
         let found = crate::version::Version::parse("0.62.0").expect("version");
-        let ProviderError::Start(message) =
+        let ProviderError::Refused { code, message } =
             require_managed_version(&found).expect_err("0.62.0 must fail closed")
         else {
-            panic!("unsupported Gemini CLI must be a start error");
+            panic!("unsupported Gemini CLI must be a typed refusal");
         };
+        assert_eq!(code, "provider_version_unsupported");
         assert!(message.contains("Gemini CLI 0.62.0"), "{message}");
         assert!(message.contains("0.61.x"), "{message}");
         assert!(
