@@ -1,17 +1,17 @@
 {
     "schemaVersion":  1,
     "status":  "proposed-verifier-helper-not-staged",
-    "applicationBaseCommit":  "8d6c133ce720281fe74b3bebd3ec0d9227c39ed4",
+    "applicationBaseCommit":  "536efd7e9eacd8cabe6201374dc4e223814e19b5",
     "profile":  "C:\\Users\\kalcodeqa2",
     "user":  "kalcodeqa2",
     "sid":  "S-1-5-21-3404246868-1146769781-4289962219-1008",
     "sidAuthority":  "Existing approved baseline-0.1.4-0ee34938d654/start-baseline-qa.ps1; confirmed enabled local user metadata during preparation",
-    "derivedFrom":  "Reviewed QA2 lifecycle collector e6e008459a7182ee667300874cb32649f9df8f6c (41f58b0 pins); only candidate source/hash pins updated to B4 8d6c133",
+    "derivedFrom":  "Reviewed QA2 lifecycle collector 6f3d6b073a135c28819a05f1487367cff1cd9eb5 (8d6c133 pins); only candidate source/hash pins updated to B5 536efd7",
     "files":  [
                   {
                       "file":  "collect-installed-identity.ps1",
                       "bytes":  8806,
-                      "sha256":  "99df642ada04f6d32b06e765dad45fc0b1de6e41af2aa0053d8f9610f78aec37"
+                      "sha256":  "b13661048d5acbaaf877c55e2d44e7700a8f6d9d6f12f18cfc755763eb32f8ea"
                   },
                   {
                       "file":  "COLLECT-BASELINE-IDENTITY.cmd",
@@ -26,7 +26,7 @@
                   {
                       "file":  "collector.test.ps1",
                       "bytes":  11645,
-                      "sha256":  "1861438a901e0889ae3318e4dda063bf62f9dcc1f512ad320386982c1c4402a0"
+                      "sha256":  "86b877b16214d578cc9eaf4b8578ecd13ace5998b1d3fecd8340aa1b35d98965"
                   }
               ],
     "baselineCommand":  "COLLECT-BASELINE-IDENTITY.cmd",
@@ -48,15 +48,15 @@
                         "Receipt directory must be ordinary and writable by QA2. Shared packet permissions and actual identity runs remain unproven.",
                         "Profile/path checks are point-in-time guards, not protection against a malicious concurrent same-user filesystem replacement. Primary allocates an exclusive QA2 window."
                     ],
-    "previousHelperCommit":  "e6e008459a7182ee667300874cb32649f9df8f6c",
+    "previousHelperCommit":  "6f3d6b073a135c28819a05f1487367cff1cd9eb5",
     "candidate":  {
-                      "commit":  "8d6c133ce720281fe74b3bebd3ec0d9227c39ed4",
-                      "installer":  "5cb6261894cc84caa711e5e18623ba545d0a9901a2406909d1836ec9082e6f5d",
-                      "exe":  "f0aea6713e21554a17503612551dec4c1e8a4cf28daef352f9a2a7a93f6c8a47",
-                      "guardian":  "37d8086142a810760e4250c2d3a920cdfedd148d0498c931418a989100180be7"
+                      "commit":  "536efd7e9eacd8cabe6201374dc4e223814e19b5",
+                      "installer":  "8532759098ac878135e078592b983fc372ef9d247b758905f98455c7c774da11",
+                      "exe":  "b9950404b92dffeb04b1cdc67a39cf65084c46c7c2ba4f6e3d836a6b449eb0ed",
+                      "guardian":  "24eb71a59199fad5a82006c910d7738d70f318e23b0a18e019c1532b8e3efc99"
                   },
     "candidateCertification":  {
-                                   "path":  "C:\\Users\\Kaleb\\Downloads\\KalCode\\target\\recovery-20260928-8d6c133-windows\\production-verified.json",
-                                   "sha256":  "dfe8db0c8683ff8d57b367d853a5105eb135408f146eee598c0f3f57fa399c91"
+                                   "path":  "C:\\Users\\Kaleb\\Downloads\\KalCode\\target\\recovery-20260929-536efd7-windows\\independent-artifact\\independent-certification.json",
+                                   "sha256":  "ca0e7b42c010881778f48857c61399f2cfab5571cfceef9d2cceef9907e3e7ee"
                                }
 }

@@ -25,12 +25,12 @@ Check 'baseline pins select original signed embedded payload' {
  Equal $p.exe '6d23263f74597aa83866be04c910460f6cecbbc64b207d7f4c24e1d73d7a6af4'
  Equal $p.guardian '0aa8f901a518a7c64b46d62660e5b22aa622cd3cd8094c8ee1b648a829969c7a'
 }
-Check 'candidate selects final 8d6c133 rather than same-version historical bytes' {
+Check 'candidate selects final 536efd7 rather than same-version historical bytes' {
  $p=Get-ReleasePin '0.1.5'
- Equal $p.commit '8d6c133ce720281fe74b3bebd3ec0d9227c39ed4'
- Equal $p.installer '5cb6261894cc84caa711e5e18623ba545d0a9901a2406909d1836ec9082e6f5d'
- Equal $p.exe 'f0aea6713e21554a17503612551dec4c1e8a4cf28daef352f9a2a7a93f6c8a47'
- Equal $p.guardian '37d8086142a810760e4250c2d3a920cdfedd148d0498c931418a989100180be7'
+ Equal $p.commit '536efd7e9eacd8cabe6201374dc4e223814e19b5'
+ Equal $p.installer '8532759098ac878135e078592b983fc372ef9d247b758905f98455c7c774da11'
+ Equal $p.exe 'b9950404b92dffeb04b1cdc67a39cf65084c46c7c2ba4f6e3d836a6b449eb0ed'
+ Equal $p.guardian '24eb71a59199fad5a82006c910d7738d70f318e23b0a18e019c1532b8e3efc99'
 }
 Check 'unsupported version refused' {Reject {Get-ReleasePin '0.1.6'}}
 # Replace only OS boundaries. No fixture points at or reads a real user profile.
@@ -47,7 +47,7 @@ Check 'outside profile refused' {Reject {SafeProfilePath 'C:\Users\kalcodeqa6\ka
 Check 'dot traversal refused' {Reject {SafeProfilePath 'C:\Users\kalcodeqa2\..\kalcodeqa6\kalcode.exe'}}
 Check 'parent reparse refused' {$script:reparse='C:\Users\kalcodeqa2\AppData';Reject {SafeProfilePath 'C:\Users\kalcodeqa2\AppData\Local\KalCode\kalcode.exe'};$script:reparse=$null}
 $script:publisherOid='1.3.6.1.4.1.311.97.208143396.135769116.211620001.449325895'
-$script:fileHash='f0aea6713e21554a17503612551dec4c1e8a4cf28daef352f9a2a7a93f6c8a47'
+$script:fileHash='b9950404b92dffeb04b1cdc67a39cf65084c46c7c2ba4f6e3d836a6b449eb0ed'
 $script:signatureStatus='Valid';$script:timestamp=$true;$script:publicTrust=$true;$script:publisher=$script:publisherOid
 function Get-FileHash {param($LiteralPath,$Algorithm) @{Hash=$script:fileHash}}
 function Get-AuthenticodeSignature {
@@ -59,7 +59,7 @@ function Get-AuthenticodeSignature {
  return @{Status=$script:signatureStatus;TimeStamperCertificate=$(if($script:timestamp){@{}}else{$null});SignerCertificate=@{Extensions=@($extension);Subject='fixture';Thumbprint='fixture'}}
 }
 function FixtureReport {
- $file=SignedFile 'C:\Users\kalcodeqa2\AppData\Local\KalCode\kalcode.exe' 'f0aea6713e21554a17503612551dec4c1e8a4cf28daef352f9a2a7a93f6c8a47'
+ $file=SignedFile 'C:\Users\kalcodeqa2\AppData\Local\KalCode\kalcode.exe' 'b9950404b92dffeb04b1cdc67a39cf65084c46c7c2ba4f6e3d836a6b449eb0ed'
  return @{registrationVersion='0.1.5';app=$file;guardian=$file}
 }
 Check 'exact signed installed identity accepted' {Equal (Test-InstalledIdentity (FixtureReport) '0.1.5') $true}
@@ -68,7 +68,7 @@ foreach($case in @('hash','signature','timestamp','publisher','trust','missing',
   switch($case){hash{$script:fileHash='0'*64}signature{$script:signatureStatus='NotTrusted'}timestamp{$script:timestamp=$false}publisher{$script:publisher='1.2.3.4'}trust{$script:publicTrust=$false}missing{$script:missing=$true}}
   $r=FixtureReport;if($case -eq 'version'){$r.registrationVersion='0.1.4'}
   Equal (Test-InstalledIdentity $r '0.1.5') $false
-  $script:fileHash='f0aea6713e21554a17503612551dec4c1e8a4cf28daef352f9a2a7a93f6c8a47';$script:signatureStatus='Valid';$script:timestamp=$true;$script:publisher=$script:publisherOid;$script:publicTrust=$true;$script:missing=$false
+  $script:fileHash='b9950404b92dffeb04b1cdc67a39cf65084c46c7c2ba4f6e3d836a6b449eb0ed';$script:signatureStatus='Valid';$script:timestamp=$true;$script:publisher=$script:publisherOid;$script:publicTrust=$true;$script:missing=$false
  }
 }
 Check 'journal projects only bounded safe fields' {
@@ -101,7 +101,7 @@ foreach($v in @('0.1.4','0.1.5')){
   $script:fixtureVersion=$v;$ExpectedVersion=$v;$script:captured=$null
   & $entry
   Equal $script:captured.status 'installed-identity-matched';Equal $script:captured.applicationExecuted $false
-  Equal $script:captured.expectedCommit $(if($v -eq '0.1.4'){'0ee34938d6543bba3679cb008174231d0e9544ec'}else{'8d6c133ce720281fe74b3bebd3ec0d9227c39ed4'})
+  Equal $script:captured.expectedCommit $(if($v -eq '0.1.4'){'0ee34938d6543bba3679cb008174231d0e9544ec'}else{'536efd7e9eacd8cabe6201374dc4e223814e19b5'})
  }
 }
 Check 'entrypoint rejects wrong SID before producing receipt' {$script:fixtureContext.sid='wrong';$script:captured=$null;$ExpectedVersion='0.1.5';Reject {& $entry};Equal $script:captured $null;$script:fixtureContext=$goodContext.Clone()}

@@ -15,7 +15,7 @@ function Assert-Qa2Context($context){
 function Get-ReleasePin([string]$version){
  switch($version){
   '0.1.4' {return @{commit='0ee34938d6543bba3679cb008174231d0e9544ec';installer='4d4d8897ab376b5532e3940d79c13a2a2674614ade729ace211dba7f662ebb70';exe='6d23263f74597aa83866be04c910460f6cecbbc64b207d7f4c24e1d73d7a6af4';guardian='0aa8f901a518a7c64b46d62660e5b22aa622cd3cd8094c8ee1b648a829969c7a'}}
-  '0.1.5' {return @{commit='8d6c133ce720281fe74b3bebd3ec0d9227c39ed4';installer='5cb6261894cc84caa711e5e18623ba545d0a9901a2406909d1836ec9082e6f5d';exe='f0aea6713e21554a17503612551dec4c1e8a4cf28daef352f9a2a7a93f6c8a47';guardian='37d8086142a810760e4250c2d3a920cdfedd148d0498c931418a989100180be7'}}
+  '0.1.5' {return @{commit='536efd7e9eacd8cabe6201374dc4e223814e19b5';installer='8532759098ac878135e078592b983fc372ef9d247b758905f98455c7c774da11';exe='b9950404b92dffeb04b1cdc67a39cf65084c46c7c2ba4f6e3d836a6b449eb0ed';guardian='24eb71a59199fad5a82006c910d7738d70f318e23b0a18e019c1532b8e3efc99'}}
   default {throw 'Unsupported release version'}
  }
 }
