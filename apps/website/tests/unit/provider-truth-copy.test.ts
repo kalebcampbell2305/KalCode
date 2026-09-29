@@ -148,11 +148,14 @@ describe("provider support status", () => {
   });
 
   it("never implies provider panes are in the Stable app", async () => {
-    for (const width of ["contained", "compact"]) {
-      const copy = text(await render(ProviderSwitch as Component, "/", { width }));
-      expect(copy).toMatch(/panes not in Stable yet/);
-      expect(copy).not.toMatch(/planned/i);
-    }
+    const contained = text(await render(ProviderSwitch as Component, "/", { width: "contained" }));
+    expect(contained).toMatch(/panes not in Stable yet/);
+    // The compact switch sits on / under the Gemini notice, so it names itself a preview and
+    // never claims all three providers work.
+    const compact = text(await render(ProviderSwitch as Component, "/", { width: "compact" }));
+    expect(compact).toContain("Preview · Gemini CLI unavailable in 0.1.5");
+    expect(compact).not.toMatch(/All three built/);
+    for (const copy of [contained, compact]) expect(copy).not.toMatch(/planned/i);
   });
 
   it("names the account each provider signs in with in the provider docs", async () => {
@@ -249,7 +252,7 @@ const GEMINI_NOTICE = [
   "KalCode 0.1.5 also can't set the Google Cloud project that Gemini Code Assist Standard and Enterprise licenses need, so Gemini CLI is currently unavailable in KalCode.",
   "A personal Google account can still finish sign-in and show as signed in, but its threads fail.",
   "Claude Code and Codex are unaffected.",
-  "KalCode will follow Google's replacement in a later update.",
+  "Updates will say when Gemini CLI can be used in KalCode again.",
 ];
 
 // Claims that Gemini CLI works in 0.1.5 or that KalCode supports Google's replacement. Stage
@@ -315,7 +318,7 @@ describe("Gemini CLI availability", () => {
   it("says on the download page that Gemini CLI is unavailable", async () => {
     const copy = text(await render(Download as Component, "/download"));
     expect(copy).toContain(
-      "Claude Code and Codex connect free on every plan. Gemini CLI is unavailable in 0.1.5 after Google ended personal-account access.",
+      "Claude Code and Codex connect free on every plan. Gemini CLI is unavailable in 0.1.5 after Google ended Sign in with Google for personal accounts.",
     );
   });
 
