@@ -70,7 +70,7 @@ const FAILURE_TITLES: Record<Action, string> = {
 
 export function ThreadDetail({ threadId, archived, onArchived }: ThreadDetailProps) {
   const { client } = useRuntime();
-  const { pending, decide } = usePermissions();
+  const { pending, pendingState, decide, refreshPending, setPanelOpen } = usePermissions();
   const toast = useToast();
   const detail = useThreadDetail(threadId);
   const [busy, setBusy] = useState<Action | null>(null);
@@ -257,7 +257,31 @@ export function ThreadDetail({ threadId, archived, onArchived }: ThreadDetailPro
           {requests.length === 0 && thread.currentActivity?.startsWith(APPROVAL_PREFIX) ? (
             <p>Requested: {thread.currentActivity.slice(APPROVAL_PREFIX.length)}</p>
           ) : null}
-          <p>Answer below, or interrupt the turn to deny it and keep the thread.</p>
+          {requests.length > 0 ? (
+            <p>Answer below, or interrupt the turn to deny it and keep the thread.</p>
+          ) : pendingState === "loading" ? (
+            <p>Loading the request…</p>
+          ) : (
+            // No request for this thread is loaded here (it failed to load, or hasn't arrived yet):
+            // never point at controls that aren't on screen.
+            <>
+              <p>
+                {pendingState === "error" ? "The request couldn't load here." : "The request isn't showing here yet."}{" "}
+                Check Approvals, or interrupt the turn to deny it and keep the thread.
+              </p>
+              <p>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setPanelOpen(true);
+                    void refreshPending();
+                  }}
+                >
+                  Open Approvals
+                </Button>
+              </p>
+            </>
+          )}
         </div>
       ) : null}
       {requests.length > 0 ? (
