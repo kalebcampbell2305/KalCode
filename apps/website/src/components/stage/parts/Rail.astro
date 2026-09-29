@@ -2,9 +2,12 @@
 /**
  * The workspace rail, as in the desktop shell: KalCode mark, workspace switcher, search,
  * Dashboard / Code / Threads / KalVoice, the open threads under Code (provider glyph, name,
- * status dot), then the "In development" group, dimmed.
+ * status dot), then the group of surfaces the app does not ship yet, dimmed. While a Stable
+ * release is served the rail follows Stable's surface flags (crates/native-core/src/flags.rs, B9
+ * 536efd7): Providers is Available; Agents, Missions and Automations are Gated.
  */
 import { type ApprovalState, PROVIDERS, statusFor, type Thread, WORKSPACE } from "../../../data/story";
+import { stageBuildLabel, stageShowsStable } from "../../../lib/stage-status";
 import Btn from "./Btn.astro";
 import Explorer from "./Explorer.astro";
 import Glyph from "./Glyph.astro";
@@ -24,12 +27,15 @@ interface Props {
 
 const { threads, approval, interactive, focus, view, present, explorer = false } = Astro.props;
 const agents = threads.filter((t) => t.provider !== "shell");
-const inDevelopment = [
+const stable = stageShowsStable();
+const later = [
   { icon: "agents", label: "Agents" },
   { icon: "missions", label: "Missions" },
   { icon: "automations", label: "Automations" },
-  { icon: "providers", label: "Providers" },
+  ...(stable ? [] : [{ icon: "providers", label: "Providers" }]),
 ];
+const laterGroup = stable ? "Not in Stable yet" : "In development";
+const buildLabel = stageBuildLabel();
 ---
 <nav class="kc-rail" aria-label={interactive ? "Workspace" : undefined}>
   <div class="kc-rail__brand">
@@ -86,15 +92,20 @@ const inDevelopment = [
         <span class="kc-i" data-i="voice" aria-hidden="true"></span>KalVoice
       </Btn>
     </li>
+    {stable && (
+      <li>
+        <span class="kc-rail__item kc-rail__item--static"><span class="kc-i" data-i="providers" aria-hidden="true"></span>Providers</span>
+      </li>
+    )}
   </ul>
 
   {explorer ? (
     <Explorer />
   ) : (
     <>
-      <p class="kc-rail__group">In development</p>
+      <p class="kc-rail__group">{laterGroup}</p>
       <ul class="kc-rail__nav kc-rail__nav--dim" role="list">
-        {inDevelopment.map((item) => (
+        {later.map((item) => (
           <li><span class="kc-rail__item kc-rail__item--static"><span class="kc-i" data-i={item.icon} aria-hidden="true"></span>{item.label}</span></li>
         ))}
       </ul>
@@ -103,6 +114,6 @@ const inDevelopment = [
 
   <div class="kc-rail__foot">
     <span class="kc-i" data-i="settings" aria-hidden="true"></span>
-    <span>Development build 0.1.0</span>
+    <span>{buildLabel}</span>
   </div>
 </nav>

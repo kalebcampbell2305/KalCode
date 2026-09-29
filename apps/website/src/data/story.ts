@@ -824,6 +824,8 @@ export interface StoryStep {
   title: string;
   line: string;
   tag: string;
+  /** The tag once a Stable release is served ("{version}" is its version); see lib/stage-status.ts. */
+  stableTag?: string;
   /** Screen-reader description of what the stage shows at this step. */
   describe: string;
   scene: Partial<Scene>;
@@ -839,6 +841,7 @@ export const STORY: readonly StoryStep[] = [
     title: "One workspace for the whole project.",
     line: "Open a folder. Real terminals start inside it.",
     tag: "Development build",
+    stableTag: "In Stable {version}",
     describe: "The KalCode window opens on the atlas-api workspace with a PowerShell terminal running the dev server.",
     scene: { panes: ["shell"], focus: "shell", dock: "none", approval: "none", voice: "off", mission: 0 },
     play: "reveal",
@@ -893,6 +896,7 @@ export const STORY: readonly StoryStep[] = [
     title: "See every thread at once.",
     line: "Status comes from runtime events, not from what a model says.",
     tag: "Development build · sample data",
+    stableTag: "In Stable {version} · sample data",
     describe:
       "The dock switches to the Dashboard: Claude Code working, Codex reviewing, Gemini CLI thinking, and a Claude Code thread that needs approval.",
     scene: {
@@ -909,6 +913,7 @@ export const STORY: readonly StoryStep[] = [
     title: "Approve every action that matters.",
     line: "Nothing leaves your rules without asking.",
     tag: "Development build · sample data",
+    stableTag: "In Stable {version} · sample data",
     describe:
       "Codex asks to run pnpm add zod. The approval card offers Deny, Allow for thread and Approve once; Approve once is chosen and Codex continues.",
     scene: {
@@ -926,6 +931,7 @@ export const STORY: readonly StoryStep[] = [
     title: "Speak your prompts.",
     line: `Hold ${PUSH_TO_TALK_KEY}, talk, release. The words land in the focused agent.`,
     tag: "Preview · in development",
+    stableTag: "In Stable {version}",
     describe:
       "The KalVoice panel listens, transcribes on the device, and types “also cover the 429 response in the signup test” into Claude Code.",
     scene: {
@@ -944,6 +950,7 @@ export const STORY: readonly StoryStep[] = [
     title: "Say what you need. Agents appear.",
     line: `Same key. Hold ${PUSH_TO_TALK_KEY}, say “Open two more agents”, and KalCode runs the command.`,
     tag: "Preview · in development",
+    stableTag: "Preview · creating agents by voice is not in Stable yet",
     describe:
       "A KalVoice command opens two more threads: Claude Code covering the 429 in the e2e suite, and Codex reviewing the change.",
     scene: {
@@ -984,6 +991,8 @@ export interface DemoTab {
   title: string;
   line: string;
   tag: string;
+  /** The tag once a Stable release is served ("{version}" is its version); see lib/stage-status.ts. */
+  stableTag?: string;
   scene: Partial<Scene>;
   play?: StoryStep["play"];
 }
@@ -1012,6 +1021,7 @@ export const DEMO_TABS: readonly DemoTab[] = [
     title: "Speak into the focused agent.",
     line: `Hold ${PUSH_TO_TALK_KEY}, talk, release. Say a command and KalCode runs it instead.`,
     tag: "Preview · in development",
+    stableTag: "In Stable {version}",
     scene: {
       view: "code",
       panes: ["claude-checkout", "codex-signup"],
@@ -1029,6 +1039,7 @@ export const DEMO_TABS: readonly DemoTab[] = [
     title: "Approve every action that matters.",
     line: "Pick a mode. Anything it doesn’t cover waits for Deny, Allow for thread or Approve once.",
     tag: "Development build · sample data",
+    stableTag: "In Stable {version} · sample data",
     scene: {
       view: "code",
       panes: ["codex-signup"],
@@ -1045,6 +1056,7 @@ export const DEMO_TABS: readonly DemoTab[] = [
     title: "See every thread. Approve every action.",
     line: "Working, waiting and failed threads, with approvals first.",
     tag: "Development build · sample data",
+    stableTag: "In Stable {version} · sample data",
     scene: {
       view: "dashboard",
       panes: ["claude-checkout", "codex-signup"],
@@ -1060,6 +1072,7 @@ export const DEMO_TABS: readonly DemoTab[] = [
     title: "Real terminals in your workspace.",
     line: "A PowerShell tab runs the dev server while Claude Code fixes a test, with the preview beside them.",
     tag: "Development build · sample data",
+    stableTag: "In Stable {version} · sample data",
     scene: {
       view: "code",
       panes: ["shell", "claude-checkout"],

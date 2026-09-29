@@ -16,6 +16,7 @@ import {
   THREADS,
   ZOD_APPROVAL,
 } from "../../../data/story";
+import { stageBuildLabel } from "../../../lib/stage-status";
 import ApprovalCard from "./ApprovalCard.astro";
 import ThreadRow from "./ThreadRow.astro";
 
@@ -42,6 +43,9 @@ const segments = [
   { key: "failed", label: "Failed", icon: "failed", tone: "danger" },
   { key: "terminals", label: "Terminals", icon: "terminal", tone: "idle" },
 ] as const;
+// The sample runtime card names the served release (lib/stage-status.ts), never a stale build.
+const buildValue = stageBuildLabel();
+const runtime = RUNTIME.map((row) => (row.label === "Build" ? { ...row, value: buildValue } : row));
 ---
 <div class="kc-dash" data-kc-dash data-testid="dashboard">
   <div class="kc-dash__head">
@@ -90,7 +94,7 @@ const segments = [
       <div class="kc-dash__section">
         <p class="kc-dash__h">Runtime</p>
         <dl class="kc-runtime">
-          {RUNTIME.map((r) => (
+          {runtime.map((r) => (
             <div>
               <dt>{r.label}</dt>
               <dd>
