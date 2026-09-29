@@ -899,26 +899,18 @@ export function createDashboardFixtures(scenario: DashboardScenario, emit: Emit,
     thread_interrupt: (args) => {
       const thread = requireThread(args);
       const s = thread.status;
-      const live = [
-        "starting",
-        "active",
-        "thinking",
-        "running_tool",
-        "running_command",
-        "editing",
-        "testing",
-        "reviewing",
-        "recovering",
-      ];
-      if (!live.includes(s) && s !== "waiting_for_permission" && s !== "waiting_for_dependency")
-        invalidTransition(thread, "paused");
+      // Like native: only a running turn (or one waiting for approval) can be paused; a start,
+      // a recovery or a wait has no turn to halt.
+      const turn = ["active", "thinking", "running_tool", "running_command", "editing", "testing", "reviewing"];
+      if (!turn.includes(s) && s !== "waiting_for_permission") invalidTransition(thread, "paused");
       expireApprovals(thread);
       transition(thread, "paused", "Paused by you");
       return snapshot(thread);
     },
     thread_stop: (args) => {
       const thread = requireThread(args);
-      if (["completed", "failed", "interrupted", "offline"].includes(thread.status))
+      // Stop ends something in progress (a turn, a start or a wait); a quiet thread is archived instead.
+      if (["completed", "failed", "interrupted", "offline", "idle", "waiting_for_user"].includes(thread.status))
         invalidTransition(thread, "stopped");
       expireApprovals(thread);
       transition(thread, "interrupted", "Stopped by you");
@@ -934,7 +926,8 @@ export function createDashboardFixtures(scenario: DashboardScenario, emit: Emit,
     },
     thread_archive: (args) => {
       const thread = requireThread(args);
-      if (!["completed", "failed", "interrupted", "idle"].includes(thread.status))
+      // Like native: finished threads and quiet open ones (whose idle session the archive ends).
+      if (!["completed", "failed", "interrupted", "idle", "waiting_for_user"].includes(thread.status))
         invalidTransition(thread, "archived");
       thread.archived = true;
       thread.archivedAt = new Date().toISOString();

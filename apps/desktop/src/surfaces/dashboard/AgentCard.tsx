@@ -17,10 +17,11 @@ import {
   ProviderMark,
   StatusChip,
 } from "@kalcode/ui/components";
-import { Archive, CircleCheck, FileDiff, GitBranch, MoreHorizontal, ShieldAlert } from "lucide-react";
+import { Archive, CircleCheck, FileDiff, GitBranch, Hourglass, MoreHorizontal, ShieldAlert } from "lucide-react";
 import { type MouseEvent, memo, useEffect, useRef, useState } from "react";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
 import { MODE_LABELS } from "../permissions/labels.ts";
+import { isWaitingForResources, presentThread } from "../threads/model.ts";
 import styles from "./AgentCard.module.css";
 import { ACTION_LABELS, availableActions, type ThreadAction } from "./data/actions.ts";
 import { formatElapsed } from "./data/format.ts";
@@ -60,6 +61,8 @@ function activityLine(thread: ThreadSummary): string {
   const display = displayStatusOf(thread.status);
   if (display.status === "failed" && thread.error) return thread.error.message;
   if (thread.currentActivity) return thread.currentActivity;
+  // A launch held for system resources is not "waiting on another task": say what the runtime said.
+  if (isWaitingForResources(thread) && thread.error) return thread.error.message;
   if (display.qualifier) return DISPLAY_QUALIFIER_LABEL[display.qualifier];
   return "No current activity reported";
 }
@@ -87,7 +90,11 @@ export const AgentCard = memo(function AgentCard({
   headingLevel = 3,
 }: AgentCardProps) {
   const display = displayStatusOf(thread.status);
-  const tone = DISPLAY_STATUS_TONE[display.status];
+  // The runtime holds this thread's launch for system resources (its `waiting_for_resources`
+  // error), so the shared "waiting on another task" qualifier would be untrue. Same words and
+  // tone as the Threads surface.
+  const resourceWait = isWaitingForResources(thread) ? presentThread(thread) : null;
+  const tone = resourceWait?.tone ?? DISPLAY_STATUS_TONE[display.status];
   // The provider account the thread runs on (text, never a credential), e.g. "Gemini B".
   const accountLabel = thread.accountLabel?.trim() || null;
   const [confirmStop, setConfirmStop] = useState(false);
@@ -169,7 +176,15 @@ export const AgentCard = memo(function AgentCard({
           className={styles.provider}
         />
         {done || actionNeeded ? null : (
-          <StatusChip status={display.status} qualifier={display.qualifier} size="sm" className={styles.status} />
+          <StatusChip
+            status={display.status}
+            qualifier={resourceWait ? null : display.qualifier}
+            label={resourceWait?.label}
+            tone={resourceWait?.tone}
+            icon={resourceWait ? Hourglass : undefined}
+            size="sm"
+            className={styles.status}
+          />
         )}
       </header>
 

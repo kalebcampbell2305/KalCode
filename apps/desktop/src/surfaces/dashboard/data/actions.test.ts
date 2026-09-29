@@ -6,13 +6,14 @@ import { ALL_STATUSES } from "./testing.ts";
 
 describe("availableActions", () => {
   it.each<[ThreadStatus, ThreadAction[]]>([
-    ["starting", ["open", "interrupt", "stop"]],
+    ["starting", ["open", "stop"]],
     ["running_command", ["open", "interrupt", "stop"]],
-    ["recovering", ["open", "interrupt", "stop"]],
+    ["recovering", ["open", "stop"]],
     ["waiting_for_permission", ["open", "interrupt", "stop"]],
-    ["waiting_for_user", ["open", "stop"]],
-    ["waiting_for_dependency", ["open", "interrupt", "stop"]],
-    ["idle", ["open", "stop", "archive"]],
+    ["waiting_for_user", ["open", "archive"]],
+    // Includes a launch held for system resources: only Stop cancels the wait.
+    ["waiting_for_dependency", ["open", "stop"]],
+    ["idle", ["open", "archive"]],
     ["paused", ["open", "resume", "stop"]],
     ["offline", ["open", "resume"]],
     ["completed", ["open", "archive"]],
@@ -39,6 +40,10 @@ describe("availableActions", () => {
         expect(actions).not.toContain("retry");
       }
       if (status !== "failed") expect(actions).not.toContain("retry");
+      // Nothing is running on a quiet open thread: it is archived, never stopped.
+      if (status === "idle" || status === "waiting_for_user") expect(actions).not.toContain("stop");
+      // A thread is either stopped (something is in progress) or archived, never both.
+      expect(actions.includes("stop") && actions.includes("archive")).toBe(false);
       // Resume and Retry both call `thread_resume`; a state never offers both.
       expect(actions.includes("resume") && actions.includes("retry")).toBe(false);
     }

@@ -129,3 +129,51 @@ describe("AgentCard archived (read-only)", () => {
     expect(onAction).toHaveBeenCalledWith(summary, "unarchive");
   });
 });
+
+describe("AgentCard waiting states", () => {
+  const WAITING: Partial<ThreadSummary> = {
+    status: "waiting_for_dependency",
+    currentActivity: "Waiting for system resources (CPU busy)",
+    error: {
+      code: "waiting_for_resources",
+      message:
+        "KalCode is waiting for system resources (CPU busy). Codex starts when they free up; KalCode checks again every few seconds.",
+    },
+  };
+
+  it("a launch held for system resources says so, not 'waiting on another task'", () => {
+    mount({ ...thread(null), ...WAITING });
+    const card = screen.getByRole("article", { name: "Research" });
+    expect(card.textContent).toContain("Waiting for system resources");
+    expect(card.textContent).toContain("CPU busy");
+    expect(card.textContent).not.toMatch(/waiting on another task/i);
+    expect(card.textContent).not.toMatch(/\bIdle\b/);
+    expect(card.getAttribute("data-tone")).toBe("waiting");
+  });
+
+  it("without an activity, the held launch reads the runtime's own message", () => {
+    mount({ ...thread(null), ...WAITING, currentActivity: null });
+    const card = screen.getByRole("article", { name: "Research" });
+    expect(card.textContent).toContain("KalCode is waiting for system resources (CPU busy).");
+    expect(card.textContent).not.toMatch(/waiting on another task/i);
+  });
+
+  it("a wait on another task keeps the shared qualifier (nothing is invented)", () => {
+    mount({ ...thread(null), status: "waiting_for_dependency", currentActivity: null });
+    const card = screen.getByRole("article", { name: "Research" });
+    expect(card.textContent).toMatch(/waiting on another task/i);
+    expect(card.textContent).not.toContain("system resources");
+  });
+
+  it("a held launch offers Stop, never Pause or Archive", async () => {
+    mount({ ...thread(null), ...WAITING });
+    await userEvent.click(screen.getByRole("button", { name: "More actions for Research" }));
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Open", "Stop…"]);
+  });
+
+  it("an idle thread offers Archive, not Stop", async () => {
+    mount(thread(null));
+    await userEvent.click(screen.getByRole("button", { name: "More actions for Research" }));
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Open", "Archive"]);
+  });
+});
