@@ -129,6 +129,7 @@ impl Rig {
             vars,
             windows: cfg!(windows),
             probe_timeout: Some(Duration::from_secs(5)),
+            system_root: None,
         }
     }
 

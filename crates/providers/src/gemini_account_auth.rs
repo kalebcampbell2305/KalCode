@@ -898,6 +898,7 @@ mod tests {
                 ],
                 windows: cfg!(windows),
                 probe_timeout: Some(Duration::from_secs(2)),
+                system_root: None,
             },
             Arc::clone(&profiles),
             vec![

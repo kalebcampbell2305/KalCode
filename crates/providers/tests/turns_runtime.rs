@@ -106,6 +106,7 @@ impl Stack {
             vars,
             windows: cfg!(windows),
             probe_timeout: Some(Duration::from_secs(10)),
+            system_root: None,
         };
         let monitor = Arc::new(HealthMonitor::new());
         let detection = kalcode_providers::ProviderRegistry::new(env.clone());

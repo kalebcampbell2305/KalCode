@@ -61,6 +61,7 @@ fn source(root: &Path) -> DetectEnv {
         vars,
         windows: cfg!(windows),
         probe_timeout: None,
+        system_root: None,
     }
 }
 

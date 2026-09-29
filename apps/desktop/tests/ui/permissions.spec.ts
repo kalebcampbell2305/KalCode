@@ -1,9 +1,19 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
 
+/**
+ * Booting the app (Vite module load, the in-memory runtime, the account gate, first render) can
+ * take longer than the default 5 s assertion timeout under `--workers=4` on a loaded machine. The
+ * boot gets its own bounded budget; every assertion after it keeps the default timeout.
+ */
+const APP_READY_TIMEOUT = 30_000;
+
 async function open(page: Page, scenario?: string) {
   await page.goto(scenario ? `/?scenario=${scenario}` : "/");
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  // Ready: the shell replaced the boot screen and rendered the Dashboard.
+  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible({
+    timeout: APP_READY_TIMEOUT,
+  });
 }
 
 async function expectNoSeriousA11yViolations(page: Page) {

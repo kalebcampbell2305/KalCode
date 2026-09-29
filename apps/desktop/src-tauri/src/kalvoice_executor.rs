@@ -8,8 +8,8 @@
 //! `request_permission_mode` opens the thread so the person can change its mode themselves
 //! (never Bypass: the contract can't represent it). `split`, `resize` and `close` are pane
 //! layout commands (Z7-W1): they return a directive the pane canvas carries out; nothing starts,
-//! stops or closes a process. `search` and `switch_provider` aren't in this build, so they're
-//! refused before anything is counted.
+//! stops or closes a process. `switch_provider` isn't in this build, and `search` needs the
+//! Session Locator feature (gated on Stable), so both are refused before anything is counted.
 //!
 //! Z7-W3: `filter_dashboard` only changes what the Dashboard shows; its summary counts the
 //! runtime's non-archived threads by Dashboard chip (`ThreadStatus::chip`).
@@ -33,7 +33,7 @@
 use std::sync::Arc;
 
 use kalcode_contracts::agent::{AuthState, ProviderId};
-use kalcode_contracts::app::SurfaceId;
+use kalcode_contracts::app::{FeatureId, SurfaceId};
 use kalcode_contracts::kalvoice::{
     BrowserControl, KalVoiceIntent, PaneDirection, ProviderPaneRequest,
 };
@@ -67,6 +67,9 @@ pub struct DesktopExecutor {
     /// Surfaces this build shows (navigation to others is refused).
     pub visible: Vec<SurfaceId>,
     pub provider_panes_enabled: bool,
+    /// Whether this build shows the Session Locator (`FeatureId::SessionLocator`). When it is
+    /// off (Stable), voice Search is refused and the locator is never read.
+    pub session_locator_enabled: bool,
     pub core: Arc<Core>,
     /// `None` when the thread runtime didn't start (then thread commands explain why).
     pub threads: Option<Arc<ThreadRuntime>>,
@@ -85,6 +88,22 @@ fn threads_unavailable() -> ExecError {
     ExecError::new(
         "threads_unavailable",
         "KalCode's thread runtime isn't running, so KalVoice can't manage threads. Restart KalCode; if this keeps happening, export diagnostics.",
+    )
+}
+
+/// Whether `feature` is shown in this build (a gated feature is hidden on Stable and Beta).
+pub(crate) fn feature_enabled(
+    flags: &kalcode_core::flags::FeatureFlags,
+    feature: FeatureId,
+) -> bool {
+    flags.feature(feature).is_some_and(|flag| flag.visible)
+}
+
+/// Voice Search when the Session Locator isn't in this build: refused before anything counts.
+fn search_not_in_this_build() -> ExecError {
+    ExecError::new(
+        "not_in_this_build",
+        "Search isn't available in this version, so KalVoice can't look that up.",
     )
 }
 
@@ -833,6 +852,9 @@ impl DesktopExecutor {
 
     /// Search by voice: names and statuses are read back, never content (LOC-04).
     fn search(&self, query: &str) -> Result<Executed, ExecError> {
+        if !self.session_locator_enabled {
+            return Err(search_not_in_this_build());
+        }
         let locator = self.locator.as_ref().ok_or_else(search_unavailable)?;
         let response = locator
             .search(&kalcode_locator::LocatorQuery {
@@ -1338,6 +1360,9 @@ impl Executor for DesktopExecutor {
                 }
                 Ok(())
             }
+            KalVoiceIntent::Search { .. } if !self.session_locator_enabled => {
+                Err(search_not_in_this_build())
+            }
             KalVoiceIntent::Search { .. } if self.locator.is_none() => Err(search_unavailable()),
             KalVoiceIntent::SwitchProvider { .. } => Err(ExecError::new(
                 "not_in_this_build",
@@ -1819,6 +1844,7 @@ mod tests {
         DesktopExecutor {
             visible: vec![SurfaceId::Dashboard, SurfaceId::Settings, SurfaceId::Code],
             provider_panes_enabled: false,
+            session_locator_enabled: true,
             core: Arc::new(core),
             threads: None,
             permissions: None,
@@ -1888,6 +1914,61 @@ mod tests {
             )
             .expect("search");
         assert_eq!(none.summary, "Nothing matched \u{201c}zebracorn\u{201d}.");
+        locator.shutdown();
+    }
+
+    /// G1: the Session Locator is gated on Stable (the palette hides it), so voice Search is
+    /// refused truthfully before anything counts and never reads locator results, even with a
+    /// running locator that would match. Development builds show it and search as before.
+    #[test]
+    fn search_follows_the_session_locator_flag_of_the_channel() {
+        use kalcode_core::flags::{BuildChannel, FeatureFlags};
+        let stable = FeatureFlags::for_channel(BuildChannel::Stable);
+        let development = FeatureFlags::for_channel(BuildChannel::Development);
+        assert!(!feature_enabled(&stable, FeatureId::SessionLocator));
+        assert!(feature_enabled(&development, FeatureId::SessionLocator));
+
+        let dir = tempfile::tempdir().expect("data");
+        let projects = tempfile::tempdir().expect("projects");
+        let mut executor = executor(dir.path());
+        let folder = projects.path().join("orbit-payments");
+        std::fs::create_dir_all(&folder).expect("folder");
+        executor.core.open_workspace(&folder).expect("open");
+        let locator = kalcode_locator::Locator::start(executor.core.clone(), Arc::new(NoSources))
+            .expect("locator");
+        assert!(locator.wait_ready(std::time::Duration::from_secs(20)));
+        executor.locator = Some(locator.clone());
+        let search = KalVoiceIntent::Search {
+            query: "orbit".into(),
+        };
+
+        // Stable: refused in `check` (the orchestrator counts nothing), and `execute` refuses
+        // too, so no path reads back a locator result.
+        executor.session_locator_enabled = feature_enabled(&stable, FeatureId::SessionLocator);
+        let refused = executor.check(&search).expect_err("gated on Stable");
+        assert_eq!(refused.code, "not_in_this_build");
+        assert!(
+            refused
+                .message
+                .starts_with("Search isn't available in this version"),
+            "{}",
+            refused.message
+        );
+        let refused = executor
+            .execute(&search, &ctx())
+            .expect_err("never reads the locator on Stable");
+        assert_eq!(refused.code, "not_in_this_build");
+        assert!(!refused.message.contains("orbit"), "{}", refused.message);
+
+        // Development: the locator is shown, so Search reads back names as before.
+        executor.session_locator_enabled = feature_enabled(&development, FeatureId::SessionLocator);
+        assert!(executor.check(&search).is_ok());
+        let done = executor.execute(&search, &ctx()).expect("search");
+        assert!(
+            done.summary.starts_with("Found 1: orbit-payments"),
+            "{}",
+            done.summary
+        );
         locator.shutdown();
     }
 

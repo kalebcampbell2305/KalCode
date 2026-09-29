@@ -122,6 +122,7 @@ impl Rig {
                 vars,
                 windows: cfg!(windows),
                 probe_timeout: Some(Duration::from_secs(10)),
+                system_root: None,
             },
             bridge,
             InteractiveConfig {
@@ -781,6 +782,7 @@ fn the_router_starts_marked_threads_in_a_pane_and_others_headless() {
             vars: vec![("PATH".into(), rig.dir.path().into())],
             windows: cfg!(windows),
             probe_timeout: Some(Duration::from_secs(10)),
+            system_root: None,
         }));
     let router =
         RuntimeRouter::for_provider(headless, rig.provider.clone(), rig.provider.sessions_dir());

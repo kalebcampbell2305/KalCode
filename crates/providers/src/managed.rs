@@ -255,6 +255,7 @@ impl ManagedProfiles {
                 .collect(),
             windows: source.windows,
             probe_timeout: source.probe_timeout,
+            system_root: source.system_root.clone(),
         })
     }
 
@@ -740,6 +741,7 @@ mod tests {
                 .collect(),
             windows: cfg!(windows),
             probe_timeout: Some(Duration::from_millis(17)),
+            system_root: None,
         }
     }
 

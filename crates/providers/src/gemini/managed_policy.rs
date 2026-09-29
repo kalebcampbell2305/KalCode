@@ -631,6 +631,7 @@ mod tests {
             ],
             windows: cfg!(windows),
             probe_timeout: Some(Duration::from_millis(10)),
+            system_root: None,
         }
     }
 
