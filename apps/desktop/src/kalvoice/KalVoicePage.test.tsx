@@ -107,6 +107,17 @@ describe("KalVoice local intelligence first use", () => {
     },
   );
 
+  it("never points at KalVoice settings from inside KalVoice settings", () => {
+    seams.value.status = { ...(seams.value.status as object), localReasoning: "unavailable" };
+    const page = render(<KalVoicePage />);
+    expect(
+      intelligenceCard().getByText("The local interpreter didn't start. Direct commands remain available."),
+    ).toBeInTheDocument();
+    page.unmount();
+    render(<KalVoiceSettings />);
+    expect(screen.queryByText(/in KalVoice settings/)).not.toBeInTheDocument();
+  });
+
   it("prepares local intelligence and speech on its own with no setup click", () => {
     seams.value.status = { ...(seams.value.status as object), activeModel: null };
     render(<KalVoicePage />);
@@ -132,5 +143,42 @@ describe("KalVoice local intelligence first use", () => {
     expect(seams.navigate).toHaveBeenCalledExactlyOnceWith("settings");
     expect(screen.getByText("Commands").closest("li")).toHaveTextContent("Available");
     expect(screen.getByText("Commands").closest("li")).not.toHaveTextContent("Ready");
+  });
+});
+
+describe("KalVoice usage", () => {
+  function usage(used: number, allowance: number | null) {
+    const current = seams.value.status as KalVoiceStatus;
+    seams.value.status = {
+      ...current,
+      localReasoning: "ready",
+      usage: { ...current.usage, used, allowance, resetsAt: "2030-10-01T00:00:00.000Z" },
+    };
+  }
+
+  it("shows the usage line once, in the This month card", () => {
+    usage(3, 75);
+    render(<KalVoicePage />);
+    expect(screen.getAllByText(/3 \/ 75 used/)).toHaveLength(1);
+    expect(screen.queryByText("Limit reached")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Monthly limit reached/)).not.toBeInTheDocument();
+  });
+
+  it("says the monthly limit is reached, when it renews, and that dictation keeps working", () => {
+    usage(75, 75);
+    render(<KalVoicePage />);
+    const month = screen.getByText("This month").closest("li");
+    if (!month) throw new Error("This month card missing");
+    expect(within(month).getByText("Limit reached")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Monthly limit reached. KalVoice Requests renew Oct 1. Dictation keeps working.",
+    );
+  });
+
+  it("never shows a limit on an unlimited plan", () => {
+    usage(9000, null);
+    render(<KalVoicePage />);
+    expect(screen.queryByText("Limit reached")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Monthly limit reached/)).not.toBeInTheDocument();
   });
 });
