@@ -50,6 +50,22 @@ pub fn core_with_v11(dir: &Path) -> Arc<Core> {
     )
 }
 
+/// A core with every registered migration (the schema a current build has). Workspace removal
+/// needs it: `remove_workspace` also clears v12 `provider_account_bindings`.
+pub fn core_current(dir: &Path) -> Arc<Core> {
+    Arc::new(
+        Core::open_with_migrations(
+            CoreConfig {
+                paths: Paths::new(dir),
+                app_version: "0.0.0-test".into(),
+                channel: BuildChannel::Development,
+            },
+            MIGRATIONS,
+        )
+        .expect("open core"),
+    )
+}
+
 pub fn core_without_v11(dir: &Path) -> Arc<Core> {
     let before: &'static [Migration] = Box::leak(migrations_before_v11().into_boxed_slice());
     Arc::new(

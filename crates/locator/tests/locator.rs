@@ -7,7 +7,7 @@ mod common;
 
 use std::time::Duration;
 
-use common::{FakeSources, core_with_v11, core_without_v11, thread, workspace};
+use common::{FakeSources, core_current, core_with_v11, core_without_v11, thread, workspace};
 use kalcode_contracts::events::{Correlation, EventPayload};
 use kalcode_contracts::threads::ThreadStatus;
 use kalcode_core::db::MIGRATIONS;
@@ -304,7 +304,7 @@ fn what_was_i_working_on_yesterday() {
 #[test]
 fn indexes_incrementally_from_events_and_forgets_removed_items() {
     let dir = tempfile::tempdir().unwrap();
-    let core = core_with_v11(dir.path());
+    let core = core_current(dir.path());
     let ws = workspace(&core, dir.path(), "orbit");
     let sources = FakeSources::new();
     let locator = Locator::start(core.clone(), sources.clone()).expect("start");
@@ -698,7 +698,7 @@ fn observe_removed_workspace_before_index_cleanup(
     session_only: bool,
 ) -> (Vec<String>, Option<String>, Option<String>) {
     let dir = tempfile::tempdir().unwrap();
-    let core = core_with_v11(dir.path());
+    let core = core_current(dir.path());
     let ws = workspace(&core, dir.path(), "removed-before-cleanup");
     let sources = FakeSources::new();
     let stale_thread = thread(
@@ -808,7 +808,7 @@ fn removed_workspace_is_hidden_before_session_index_cleanup() {
 #[test]
 fn workspace_removal_purges_all_derived_rows_and_stale_events_cannot_restore_them() {
     let dir = tempfile::tempdir().unwrap();
-    let core = core_with_v11(dir.path());
+    let core = core_current(dir.path());
     let ws = workspace(&core, dir.path(), "removed-private-workspace");
     let sources = FakeSources::new();
     let stale_thread = thread(
