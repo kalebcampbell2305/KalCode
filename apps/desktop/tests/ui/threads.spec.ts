@@ -423,7 +423,10 @@ test.describe("threads", () => {
     await expect(alert.getByText("Error code: provider_exited")).toBeVisible();
     await detail(page).getByRole("button", { name: "Resume", exact: true }).click();
     await expect(detail(page).getByRole("alert")).toHaveCount(0);
-    await expect(detail(page).getByRole("button", { name: "Stop" })).toBeVisible();
+    // Resumed and idle: nothing runs, so it is archived rather than stopped.
+    await expect(detail(page).getByText("Ready", { exact: true })).toBeVisible();
+    await expect(detail(page).getByRole("button", { name: "Stop" })).toHaveCount(0);
+    await expect(detail(page).getByRole("button", { name: "Archive" })).toBeVisible();
   });
 
   test("a provider crash fails only that thread", async ({ page }) => {

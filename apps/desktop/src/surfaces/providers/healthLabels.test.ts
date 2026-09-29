@@ -123,7 +123,7 @@ describe("provider health labels", () => {
     expect(recoveryHint(health())).toBeNull();
     expect(recoveryHint(health({ displayName: "Gemini CLI", recoverability: "install" }), gemini)).toEqual({
       text: "Install Gemini CLI in a terminal, then choose Check again.",
-      command: "npm install -g @google/gemini-cli",
+      command: "npm install -g @google/gemini-cli@0.61.0",
     });
     expect(recoveryHint(health({ recoverability: "sign_in" }), codex)?.command).toBe("codex login");
     // A terminal `gemini` signs in a standalone profile that managed Gemini threads never use.

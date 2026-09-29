@@ -933,7 +933,13 @@ export function createThreadsMemory(
     thread_archive: (args) => {
       const t = get(args);
       if (t.archived) return summary(t);
-      if (t.live) invalid("thread_running", "Stop the thread before archiving it.");
+      // Like native: an idle session (no turn, no approval) ends with the archive.
+      if (t.live) {
+        if (t.summary.status !== "idle" && t.summary.status !== "waiting_for_user") {
+          invalid("thread_running", "Stop the thread before archiving it.");
+        }
+        endSession(t, "Archived");
+      }
       t.archived = true;
       t.summary = { ...t.summary, archivedAt: now() };
       emit({ type: "thread.archived", payload: { threadId: t.summary.id } }, corr(t), "ui");

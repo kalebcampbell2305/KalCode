@@ -69,7 +69,7 @@ impl RuntimeAuthError {
             )
         };
         match self {
-            Self::Account(error) => refused(&error.code, error.message),
+            Self::Account(error) => refused(error.code, error.message),
             Self::ProviderUnavailable | Self::GeminiUnavailable => ProviderError::NotInstalled,
             Self::Busy => refused(
                 error_codes::PROVIDER_ACCOUNT_BUSY,

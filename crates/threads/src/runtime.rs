@@ -1879,7 +1879,7 @@ impl Inner {
                         notice,
                         recheck,
                     ),
-                    Err(error) => self.fail_idle_thread(&live.ctx, &error.code, &error.message),
+                    Err(error) => self.fail_idle_thread(&live.ctx, error.code, &error.message),
                 },
                 WaitFor::Turn { input } => self.deliver_locked(live, &mut state, input, recheck),
             }

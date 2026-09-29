@@ -6,11 +6,13 @@ import {
   type PermissionMode,
   type ProviderOption,
   type ProviderStatus,
+  type ThreadErrorKind,
   type ThreadMessage,
   type ThreadStatus,
   type ThreadSummary,
   type ToolCallRecord,
   type ToolCallStatus,
+  threadErrorKindOf,
 } from "@kalcode/protocol";
 
 export interface StatusPresentation {
@@ -54,6 +56,80 @@ const STATUS = Object.fromEntries(
 
 export function presentStatus(status: ThreadStatus): StatusPresentation {
   return STATUS[status];
+}
+
+/** The runtime's activity for an idle thread whose last turn failed (`LAST_TURN_FAILED_ACTIVITY`). */
+export const LAST_TURN_FAILED_ACTIVITY = "Last turn failed";
+
+type ThreadState = Pick<ThreadSummary, "status"> & Partial<Pick<ThreadSummary, "error" | "currentActivity">>;
+
+/** The kind of the thread's current problem, from its stable code; null without one. */
+export function threadErrorKind(thread: Pick<ThreadSummary, "error">): ThreadErrorKind | null {
+  return thread.error ? threadErrorKindOf(thread.error.code) : null;
+}
+
+/** The Resource Governor is holding this thread's launch or turn; KalCode re-checks on its own. */
+export function isWaitingForResources(thread: ThreadState): boolean {
+  return (
+    thread.status === "waiting_for_dependency" &&
+    threadErrorKind({ error: thread.error ?? null }) === "waiting_for_resources"
+  );
+}
+
+/**
+ * The status as a thread surface shows it. Same as `presentStatus`, except where the runtime
+ * status alone would read wrong next to the thread's problem: a launch waiting for system
+ * resources (not "another task"), one whose wait ran out (not "Stopped"), and an idle thread
+ * whose last turn failed (not "Ready" beside a red banner).
+ */
+export function presentThread(thread: ThreadState): StatusPresentation {
+  const base = STATUS[thread.status];
+  if (isWaitingForResources(thread)) {
+    return { ...base, label: "Waiting for system resources", tone: "waiting" };
+  }
+  const kind = threadErrorKind({ error: thread.error ?? null });
+  if (thread.status === "interrupted" && kind === "resources_unavailable") {
+    return { ...base, label: "Not started", tone: "waiting" };
+  }
+  if (thread.status === "idle" && thread.currentActivity === LAST_TURN_FAILED_ACTIVITY) {
+    return { ...base, label: "Last turn failed", tone: "failed" };
+  }
+  return base;
+}
+
+export interface ProblemPresentation {
+  /** Short title for the thread's problem notice. */
+  title: string;
+  /** Waiting and "didn't start" are not failures: they use the neutral waiting tone. */
+  tone: "danger" | "waiting";
+}
+
+const PROBLEM_TITLES: Record<ThreadErrorKind, string> = {
+  waiting_for_resources: "Waiting for system resources",
+  resources_unavailable: "Not started: system resources were busy",
+  provider_start_failed: "The provider couldn't start",
+  provider_process_exited: "The provider stopped unexpectedly",
+  auth_required: "Sign-in needed",
+  account_refused: "This account can't be used right now",
+  unsupported_version: "Unsupported provider version",
+  non_git_approve_guard: "Needs a Git folder",
+  provider_not_installed: "The provider isn't installed",
+  other: "The provider reported a problem",
+};
+
+/** Title and tone of the notice for a thread's problem (its message comes from the runtime). */
+export function presentProblem(thread: ThreadState & Pick<ThreadSummary, "error">): ProblemPresentation | null {
+  const kind = threadErrorKind(thread);
+  if (!kind) return null;
+  if (kind === "waiting_for_resources" || kind === "resources_unavailable") {
+    return { title: PROBLEM_TITLES[kind], tone: "waiting" };
+  }
+  // The state leads; the runtime's message says precisely what happened and what to do.
+  if (thread.status === "failed") return { title: "This thread failed", tone: "danger" };
+  if (thread.status === "idle" && thread.currentActivity === LAST_TURN_FAILED_ACTIVITY) {
+    return { title: "The last turn failed", tone: "danger" };
+  }
+  return { title: PROBLEM_TITLES[kind], tone: "danger" };
 }
 
 export const PERMISSION_MODES: Record<PermissionMode, { label: string; description: string }> = {
@@ -100,20 +176,33 @@ export interface ThreadActions {
   compose: "send" | "resume" | "blocked";
 }
 
-/** Which actions are valid for a thread in its current state (mirrors the native rules). */
-export function threadActions(thread: Pick<ThreadSummary, "status">, archived = false): ThreadActions {
+/** An open session with no turn running: it can take a message, or be archived (which ends it). */
+const QUIET: ReadonlySet<ThreadStatus> = new Set(["idle", "waiting_for_user"]);
+
+/**
+ * Which actions are valid for a thread in its current state (mirrors the native rules). Stop
+ * appears only while a turn, a start or a wait for system resources is in progress; a quiet
+ * thread is archived instead (the runtime ends its idle session).
+ */
+export function threadActions(thread: ThreadState, archived = false): ThreadActions {
   const status = thread.status;
   const terminal = TERMINAL.has(status);
   const working = STATUS[status].working;
   if (archived) {
     return { interrupt: false, stop: false, resume: false, archive: false, compose: "blocked" };
   }
+  const waitingForResources = isWaitingForResources(thread);
   return {
     interrupt: (working && status !== "starting" && status !== "recovering") || status === "waiting_for_permission",
-    stop: !terminal,
+    stop: working || status === "waiting_for_permission" || status === "paused" || status === "waiting_for_dependency",
     resume: terminal || status === "paused",
-    archive: terminal,
-    compose: terminal || status === "paused" ? "resume" : status === "waiting_for_permission" ? "blocked" : "send",
+    archive: terminal || QUIET.has(status),
+    compose:
+      terminal || status === "paused"
+        ? "resume"
+        : status === "waiting_for_permission" || waitingForResources
+          ? "blocked"
+          : "send",
   };
 }
 
@@ -148,7 +237,7 @@ export function matchesQuery(thread: ThreadSummary, query: string): boolean {
     thread.providerName,
     thread.workspaceName,
     thread.currentActivity ?? "",
-    presentStatus(thread.status).label,
+    presentThread(thread).label,
   ]
     .join("\n")
     .toLowerCase()

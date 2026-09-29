@@ -211,10 +211,11 @@ describe("memory thread runtime", () => {
     const { client } = await setup();
     const thread = await create(client, "slow task");
     await vi.advanceTimersByTimeAsync(1_000);
+    // A working thread must be stopped first; an idle one is archived directly (like native).
+    expect(await code(client.archiveThread(thread.id))).toBe("thread_running");
     let t: ThreadSummary = await client.interruptThread(thread.id);
     expect(t).toMatchObject({ status: "idle", currentActivity: "Interrupted by you" });
     expect(await code(client.interruptThread(thread.id))).toBe("thread_not_working");
-    expect(await code(client.archiveThread(thread.id))).toBe("thread_running");
 
     t = await client.stopThread(thread.id);
     expect(t).toMatchObject({ status: "interrupted", currentActivity: "Stopped by you" });

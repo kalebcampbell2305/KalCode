@@ -2,7 +2,7 @@ import { Badge, Button, ErrorState, ProviderGlyph, Skeleton, StatusChip, TextInp
 import { Search } from "lucide-react";
 import { type KeyboardEvent, type RefObject, useEffect, useState } from "react";
 import { formatAbsolute, formatRelative } from "../../runtime/describeEvent.ts";
-import { matchesQuery, presentStatus } from "./model.ts";
+import { matchesQuery, presentThread } from "./model.ts";
 import styles from "./ThreadList.module.css";
 import type { useThreadList } from "./useThreads.ts";
 
@@ -117,7 +117,7 @@ export function ThreadList({
       ) : (
         <ul className={styles.list} aria-label="Threads" onKeyDown={onListKeyDown}>
           {shown.map(({ thread, archived }) => {
-            const status = presentStatus(thread.status);
+            const status = presentThread(thread);
             const selected = thread.id === selectedId;
             return (
               <li key={thread.id}>

@@ -136,7 +136,7 @@ export function providerCatalog(): ProviderStatus[] {
       integration:
         "Headless mode (codex exec --json) with JSON Lines events, one process per turn resumed by thread id",
       signInCommand: "codex login",
-      installCommand: "npm install -g @openai/codex",
+      installCommand: "npm install -g @openai/codex@0.158.0",
       docsUrl: "https://github.com/openai/codex",
     },
     {
@@ -176,7 +176,7 @@ export function providerCatalog(): ProviderStatus[] {
       modelSource: "documented_aliases",
       integration: "Headless mode with --output-format stream-json, one process per turn resumed by session id",
       signInCommand: "gemini",
-      installCommand: "npm install -g @google/gemini-cli",
+      installCommand: "npm install -g @google/gemini-cli@0.61.0",
       docsUrl: "https://geminicli.com/docs/",
     },
   ];

@@ -17,6 +17,7 @@ import {
   Archive,
   CirclePause,
   CircleX,
+  Hourglass,
   Info,
   Pencil,
   Play,
@@ -43,7 +44,15 @@ import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { MOD_LABEL } from "../../shell/shortcuts.ts";
 import { ApprovalPrompt, usePermissions } from "../permissions/index.ts";
 import { AccountSwitcher } from "./AccountSwitcher.tsx";
-import { buildTimeline, PERMISSION_MODES, presentStatus, TOOL_STATUS, threadActions } from "./model.ts";
+import {
+  buildTimeline,
+  isWaitingForResources,
+  PERMISSION_MODES,
+  presentProblem,
+  presentThread,
+  TOOL_STATUS,
+  threadActions,
+} from "./model.ts";
 import styles from "./ThreadDetail.module.css";
 import { describeSendError, useThreadAccountChanges } from "./useThreadAccount.ts";
 import { type LiveMessage, useThreadDetail } from "./useThreads.ts";
@@ -125,7 +134,8 @@ export function ThreadDetail({ threadId, archived, onArchived }: ThreadDetailPro
   const thread = detail.thread;
   const actions = threadActions(thread, archived);
   const requests = pending.filter((request) => request.action.threadId === thread.id);
-  const status = presentStatus(thread.status);
+  const status = presentThread(thread);
+  const problem = presentProblem(thread);
 
   return (
     <article className={styles.detail} aria-labelledby="thread-title">
@@ -192,7 +202,9 @@ export function ThreadDetail({ threadId, archived, onArchived }: ThreadDetailPro
         </div>
         <p className={styles.status} aria-live="polite">
           <StatusChip status={status.display} tone={status.tone} label={status.label} />
-          {thread.currentActivity ? <span className={styles.activity}>{thread.currentActivity}</span> : null}
+          {thread.currentActivity && thread.currentActivity !== status.label ? (
+            <span className={styles.activity}>{thread.currentActivity}</span>
+          ) : null}
           {archived ? <Badge tone="outline">Archived</Badge> : null}
         </p>
         <dl className={styles.meta}>
@@ -236,14 +248,18 @@ export function ThreadDetail({ threadId, archived, onArchived }: ThreadDetailPro
         </dl>
       </header>
 
-      {thread.error ? (
-        <div className={styles.notice} data-tone="danger" role="alert">
-          <CircleX className={styles.noticeIcon} aria-hidden="true" />
-          <p className={styles.noticeTitle}>
-            {thread.status === "failed" ? "This thread failed" : "The provider reported a problem"}
-          </p>
+      {thread.error && problem ? (
+        <div className={styles.notice} data-tone={problem.tone} role={problem.tone === "danger" ? "alert" : "status"}>
+          {problem.tone === "danger" ? (
+            <CircleX className={styles.noticeIcon} aria-hidden="true" />
+          ) : (
+            <Hourglass className={styles.noticeIcon} aria-hidden="true" />
+          )}
+          <p className={styles.noticeTitle}>{problem.title}</p>
           <p>{thread.error.message}</p>
-          <p className={styles.noticeCode}>Error code: {thread.error.code}</p>
+          <p className={styles.noticeCode}>
+            {problem.tone === "danger" ? "Error code" : "Code"}: {thread.error.code}
+          </p>
         </div>
       ) : null}
       {thread.status === "waiting_for_permission" ? (
@@ -578,7 +594,9 @@ function Composer({
       : blocked
         ? thread.status === "waiting_for_permission"
           ? "Messages can be sent once the permission decision is made."
-          : "Archived threads are read-only."
+          : isWaitingForResources(thread)
+            ? "Messages can be sent once this thread starts. Stop it to cancel."
+            : "Archived threads are read-only."
         : `${MOD_LABEL} Enter to send`;
 
   // KalVoice finds this thread's message box only through this registration (TK-2): dictation,

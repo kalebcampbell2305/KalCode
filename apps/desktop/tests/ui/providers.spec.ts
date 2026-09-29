@@ -208,7 +208,7 @@ test.describe("providers", () => {
     await openProviders(page, "providers-none");
     await section(page, "Gemini CLI").getByRole("button", { name: "Copy install command for Gemini CLI" }).click();
     await expect(page.getByText("Install command copied")).toBeVisible();
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("npm install -g @google/gemini-cli");
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("npm install -g @google/gemini-cli@0.61.0");
   });
 
   test("a failed check is explained and can be retried", async ({ page }) => {
@@ -228,8 +228,8 @@ test.describe("providers", () => {
     await openProviders(page, "providers-none");
     for (const [name, command] of [
       ["Claude Code", "irm https://claude.ai/install.ps1 | iex"],
-      ["Codex", "npm install -g @openai/codex"],
-      ["Gemini CLI", "npm install -g @google/gemini-cli"],
+      ["Codex", "npm install -g @openai/codex@0.158.0"],
+      ["Gemini CLI", "npm install -g @google/gemini-cli@0.61.0"],
     ] as const) {
       const region = section(page, name);
       await expect(region.getByText("Not installed", { exact: true })).toBeVisible();
@@ -303,7 +303,7 @@ test.describe("providers", () => {
     const gemini = view.locator("#health-gemini-cli");
     await expect(gemini).toHaveAttribute("data-health-state", "unavailable");
     await expect(gemini.getByText("Gemini CLI isn't installed.")).toBeVisible();
-    await expect(gemini.getByText("npm install -g @google/gemini-cli", { exact: true })).toBeVisible();
+    await expect(gemini.getByText("npm install -g @google/gemini-cli@0.61.0", { exact: true })).toBeVisible();
     await expect(gemini.getByText("No sessions in the last 15 minutes")).toBeVisible();
     await expect(gemini.getByText("No sessions in the last 24 hours")).toBeVisible();
 
