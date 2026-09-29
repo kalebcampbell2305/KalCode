@@ -230,6 +230,20 @@ fn window_unsupported_message(window: &VersionWindow) -> String {
     message
 }
 
+/// Whether an account operation was refused only because its profile is busy: a session or
+/// another account operation holds the lease, so the operation never started.
+fn is_profile_busy(error: &ProviderError) -> bool {
+    match error {
+        ProviderError::Start(message) => {
+            message.contains("already in use") || message.contains("profile is in use")
+        }
+        ProviderError::Refused { code, .. } => {
+            code == kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_BUSY
+        }
+        _ => false,
+    }
+}
+
 /// User-visible Claude account failures carry a stable, credential-free reason code so a failed
 /// sign-in is diagnosable from the toast and the log alone. Returns `None` for the outcomes that
 /// already have their own dedicated copy.
@@ -277,6 +291,9 @@ struct CodexTruth {
     cache: HashMap<String, EligibilityEntry>,
     generations: HashMap<String, u64>,
     active_operations: HashSet<String>,
+    /// The latest plan verdict this app run observed per account. Unlike `cache`, starting an
+    /// operation doesn't clear it; a sign-in or sign-out that takes the exclusive lease does.
+    last_known: HashMap<String, CloudConfigEligibility>,
 }
 
 struct RuntimeInner {
@@ -489,12 +506,15 @@ impl ProviderRuntimeAuthority {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .clone();
-            let _ = self.inner.accounts.mark_authentication(
-                account_id,
-                AuthState::Unknown,
-                None,
-                Some("claude_auth_failed"),
-            );
+            // A busy profile ran no Claude operation, so it changes no account state.
+            if failure.is_some() {
+                let _ = self.inner.accounts.mark_authentication(
+                    account_id,
+                    AuthState::Unknown,
+                    None,
+                    Some("claude_auth_failed"),
+                );
+            }
             return Err(match failure {
                 Some(error) => RuntimeAuthError::Claude(error),
                 None => RuntimeAuthError::Busy,
@@ -543,7 +563,10 @@ impl ProviderRuntimeAuthority {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .clone();
-            if failure != Some(ClaudeAccountAuthError::AlreadyConnected) {
+            if failure
+                .as_ref()
+                .is_some_and(|error| *error != ClaudeAccountAuthError::AlreadyConnected)
+            {
                 let _ = self.inner.accounts.mark_authentication(
                     account_id,
                     AuthState::Unknown,
@@ -591,12 +614,15 @@ impl ProviderRuntimeAuthority {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .clone();
-            let _ = self.inner.accounts.mark_authentication(
-                account_id,
-                AuthState::Unknown,
-                None,
-                Some("claude_auth_failed"),
-            );
+            // A busy profile ran no Claude operation, so it changes no account state.
+            if failure.is_some() {
+                let _ = self.inner.accounts.mark_authentication(
+                    account_id,
+                    AuthState::Unknown,
+                    None,
+                    Some("claude_auth_failed"),
+                );
+            }
             return Err(match failure {
                 Some(error) => RuntimeAuthError::Claude(error),
                 None => RuntimeAuthError::Busy,
@@ -810,6 +836,7 @@ impl ProviderRuntimeAuthority {
             return Err(CodexAccountAuthError::StateUpdateFailed);
         }
         truth.cache.remove(account_id);
+        truth.last_known.remove(account_id);
         if let Some(eligibility) = eligibility {
             truth.cache.insert(
                 account_id.to_owned(),
@@ -819,7 +846,50 @@ impl ProviderRuntimeAuthority {
                     checked_at: Instant::now(),
                 },
             );
+            truth.last_known.insert(account_id.to_owned(), eligibility);
         }
+        Ok(())
+    }
+
+    /// Called once a sign-in or sign-out holds the exclusive lease: from here the profile may
+    /// change, so no earlier verdict may be reused for it.
+    fn forget_codex_verdict(&self, account_id: &str) {
+        self.inner
+            .codex_truth
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .last_known
+            .remove(account_id);
+    }
+
+    /// Re-admits this run's last verdict when a plan check was refused only because the profile
+    /// is busy. Sign-in and sign-out both need the exclusive lease, so while live sessions hold
+    /// the shared lease neither can have changed this profile: the verdict is the one those
+    /// sessions launched under. It's refused while any account operation is in flight, is
+    /// forgotten by a sign-in or sign-out that took the lease, and only preserves the decision
+    /// (an organization or unknown plan still refuses). With no verdict this run, it stays busy.
+    /// The restored entry is dated now so the launch can resolve it under its shared lease.
+    fn reuse_codex_verdict(&self, account_id: &str) -> Result<(), RuntimeAuthError> {
+        let mut truth = self
+            .inner
+            .codex_truth
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if truth.active_operations.contains(account_id) {
+            return Err(RuntimeAuthError::Busy);
+        }
+        let Some(eligibility) = truth.last_known.get(account_id).copied() else {
+            return Err(RuntimeAuthError::Busy);
+        };
+        let generation = truth.generations.get(account_id).copied().unwrap_or(0);
+        truth.cache.insert(
+            account_id.to_owned(),
+            EligibilityEntry {
+                eligibility,
+                generation,
+                checked_at: Instant::now(),
+            },
+        );
         Ok(())
     }
 
@@ -866,28 +936,22 @@ impl ProviderRuntimeAuthority {
             },
         );
         drop(operation);
-        if result.is_err() {
+        if let Err(error) = result {
+            // A busy profile ran no account check, so it changes no account state.
+            if is_profile_busy(&error) {
+                return Err(RuntimeAuthError::Busy);
+            }
             let _ = self.inner.accounts.mark_authentication(
                 account_id,
                 AuthState::Unknown,
                 None,
                 Some("codex_auth_failed"),
             );
+            return Err(match error {
+                ProviderError::NotInstalled => RuntimeAuthError::ProviderUnavailable,
+                _ => RuntimeAuthError::Provider(CodexAccountAuthError::ConnectionEnded),
+            });
         }
-        result.map_err(|error| match error {
-            ProviderError::NotInstalled => RuntimeAuthError::ProviderUnavailable,
-            ProviderError::Start(message)
-                if message.contains("already in use") || message.contains("profile is in use") =>
-            {
-                RuntimeAuthError::Busy
-            }
-            ProviderError::Refused { code, .. }
-                if code == kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_BUSY =>
-            {
-                RuntimeAuthError::Busy
-            }
-            _ => RuntimeAuthError::Provider(CodexAccountAuthError::ConnectionEnded),
-        })?;
         self.inner
             .accounts
             .get(account_id)
@@ -905,8 +969,15 @@ impl ProviderRuntimeAuthority {
             return Ok(());
         }
         if self.cached_codex_eligibility(account_id).is_err() {
-            self.refresh_codex_account(account_id)
-                .map_err(RuntimeAuthError::into_provider_error)?;
+            match self.refresh_codex_account(account_id) {
+                Ok(_) => {}
+                // Live sessions on this account hold its shared lease, so the check can't take the
+                // exclusive one. See `reuse_codex_verdict` for why their verdict still holds.
+                Err(RuntimeAuthError::Busy) => self
+                    .reuse_codex_verdict(account_id)
+                    .map_err(RuntimeAuthError::into_provider_error)?,
+                Err(error) => return Err(error.into_provider_error()),
+            }
         }
         match self
             .cached_codex_eligibility(account_id)
@@ -978,32 +1049,44 @@ impl ProviderRuntimeAuthority {
             &self.inner.profiles,
             ProviderId::CODEX,
             account_id,
-            move |_, lease| match manager.start_chatgpt_login_with_lease_observed(
-                account_id,
-                lease,
-                move |result| {
-                    let observed = observer.observe_codex(&observed_account_id, generation, result);
-                    completed_operation
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .take();
-                    observed
-                },
-            ) {
-                Ok(pending) => Ok(Arc::new(pending)),
-                Err(error) => {
-                    *recorded_failure
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner) = Some(error.clone());
-                    Err(ProviderError::Start(error.to_string()))
+            move |_, lease| {
+                self.forget_codex_verdict(account_id);
+                match manager.start_chatgpt_login_with_lease_observed(
+                    account_id,
+                    lease,
+                    move |result| {
+                        let observed =
+                            observer.observe_codex(&observed_account_id, generation, result);
+                        completed_operation
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .take();
+                        observed
+                    },
+                ) {
+                    Ok(pending) => Ok(Arc::new(pending)),
+                    Err(error) => {
+                        *recorded_failure
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner) = Some(error.clone());
+                        Err(ProviderError::Start(error.to_string()))
+                    }
                 }
             },
         );
-        if result.is_err() {
+        if let Err(error) = &result {
             let failure = provider_failure
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .clone();
+            // The lease was refused before sign-in began, so nothing about the account changed.
+            if failure.is_none() && is_profile_busy(error) {
+                operation
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .take();
+                return Err(RuntimeAuthError::Busy);
+            }
             if failure != Some(CodexAccountAuthError::AlreadyConnected) {
                 let _ = self.inner.accounts.mark_authentication(
                     account_id,
@@ -1038,6 +1121,7 @@ impl ProviderRuntimeAuthority {
             ProviderId::CODEX,
             account_id,
             move |_, lease| {
+                self.forget_codex_verdict(account_id);
                 manager
                     .logout_with_lease_observed(account_id, lease, move |result| {
                         observer.observe_codex(account_id, generation, result)
@@ -1046,15 +1130,20 @@ impl ProviderRuntimeAuthority {
             },
         );
         drop(operation);
-        if result.is_err() {
+        if let Err(error) = result {
+            if is_profile_busy(&error) {
+                return Err(RuntimeAuthError::Busy);
+            }
             let _ = self.inner.accounts.mark_authentication(
                 account_id,
                 AuthState::Unknown,
                 None,
                 Some("codex_auth_failed"),
             );
+            return Err(RuntimeAuthError::Provider(
+                CodexAccountAuthError::ConnectionEnded,
+            ));
         }
-        result.map_err(|_| RuntimeAuthError::Provider(CodexAccountAuthError::ConnectionEnded))?;
         self.inner
             .accounts
             .get(account_id)
@@ -2504,6 +2593,239 @@ mod tests {
                 .as_str(),
             ProviderId::CODEX
         );
+    }
+
+    /// Installs Codex and Claude account managers whose executable doesn't exist. A busy profile
+    /// refuses at the exclusive lease before any process could start, and an operation that does
+    /// get the lease fails the version check without running anything.
+    #[cfg(any(windows, target_os = "macos"))]
+    fn install_unrunnable_auth_managers(fixture: &mut Fixture) {
+        let missing = fixture._temp.path().join("missing-provider-cli");
+        let inner = Arc::get_mut(&mut fixture.runtime.inner).expect("sole runtime owner");
+        inner.codex_auth = Some(Arc::new(CodexAccountAuthManager::new(
+            missing.clone(),
+            inner.source_env.clone(),
+            Arc::clone(&inner.profiles),
+        )));
+        inner.claude_auth = Some(Arc::new(ClaudeAccountAuthManager::new(
+            missing,
+            inner.source_env.clone(),
+            Arc::clone(&inner.profiles),
+        )));
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    fn observe_codex_plan(
+        fixture: &Fixture,
+        state: &Result<CodexAccountState, CodexAccountAuthError>,
+    ) {
+        let operation = fixture
+            .runtime
+            .begin_codex_operation(&fixture.account.id)
+            .expect("operation");
+        fixture
+            .runtime
+            .observe_codex(&fixture.account.id, operation.generation, state)
+            .expect("observe");
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    fn expire_codex_plan(fixture: &Fixture) {
+        if let Some(entry) = fixture
+            .runtime
+            .inner
+            .codex_truth
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .cache
+            .get_mut(&fixture.account.id)
+        {
+            entry.checked_at = Instant::now() - CODEX_TRUTH_TTL - Duration::from_secs(1);
+        }
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    fn codex_launch_refusal(fixture: &Fixture) -> Option<String> {
+        match fixture
+            .runtime
+            .prepare_account_launch(&ProviderId::new(ProviderId::CODEX), &fixture.account.id)
+        {
+            Ok(()) => None,
+            Err(ProviderError::Refused { code, .. }) => Some(code),
+            Err(error) => panic!("unexpected launch failure: {error:?}"),
+        }
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    fn codex_session(fixture: &Fixture) -> kalcode_providers::managed::ProfileLease {
+        fixture
+            .runtime
+            .managed_profiles()
+            .acquire_session_lease(ProviderId::CODEX, &fixture.account.id)
+            .expect("live session")
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn codex_launch_reuses_this_runs_plan_verdict_while_live_sessions_hold_the_profile() {
+        let mut fixture = Fixture::new();
+        install_unrunnable_auth_managers(&mut fixture);
+        let store = fixture.runtime.account_store();
+        observe_codex_plan(&fixture, &connected("pro"));
+        let session = codex_session(&fixture);
+        expire_codex_plan(&fixture);
+
+        assert_eq!(
+            codex_launch_refusal(&fixture),
+            None,
+            "an idle session's lease must not block another launch on the same account"
+        );
+        assert_eq!(
+            fixture
+                .runtime
+                .codex_cloud_config(&fixture.account.id)
+                .expect("the launch resolves its plan under the shared lease"),
+            CloudConfigEligibility::Ineligible
+        );
+        let account = store.get(&fixture.account.id).expect("account");
+        assert_eq!(account.authentication_state, AuthState::Authenticated);
+        assert_eq!(
+            account.last_error_code, None,
+            "a busy check is not a failure"
+        );
+
+        // Reuse preserves the decision; it never upgrades it.
+        observe_codex_plan(&fixture, &connected("business"));
+        expire_codex_plan(&fixture);
+        assert_eq!(
+            codex_launch_refusal(&fixture).as_deref(),
+            Some("provider_account_plan_unsupported")
+        );
+        observe_codex_plan(&fixture, &connected("mystery"));
+        expire_codex_plan(&fixture);
+        assert_eq!(
+            codex_launch_refusal(&fixture).as_deref(),
+            Some("provider_account_plan_unverified")
+        );
+        drop(session);
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn busy_codex_plan_check_without_a_verdict_fails_busy_and_marks_nothing() {
+        let mut fixture = Fixture::new();
+        install_unrunnable_auth_managers(&mut fixture);
+        let store = fixture.runtime.account_store();
+        let before = store.get(&fixture.account.id).expect("account");
+        let session = codex_session(&fixture);
+
+        assert!(matches!(
+            fixture.runtime.refresh_codex_account(&fixture.account.id),
+            Err(RuntimeAuthError::Busy)
+        ));
+        assert_eq!(
+            codex_launch_refusal(&fixture).as_deref(),
+            Some(kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_BUSY)
+        );
+        let after = store.get(&fixture.account.id).expect("account");
+        assert_eq!(after.authentication_state, before.authentication_state);
+        assert_eq!(after.last_error_code, None);
+        assert_eq!(after.last_checked_at, before.last_checked_at);
+        drop(session);
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn codex_sign_in_or_sign_out_forgets_the_reusable_plan_verdict() {
+        let mut fixture = Fixture::new();
+        install_unrunnable_auth_managers(&mut fixture);
+        let busy = Some(kalcode_contracts::threads::error_codes::PROVIDER_ACCOUNT_BUSY);
+
+        // A completed sign-out observes a signed-out profile, so no earlier verdict survives it.
+        observe_codex_plan(&fixture, &connected("pro"));
+        observe_codex_plan(
+            &fixture,
+            &Ok(CodexAccountState {
+                account: None,
+                requires_openai_auth: true,
+            }),
+        );
+        let session = codex_session(&fixture);
+        assert_eq!(codex_launch_refusal(&fixture).as_deref(), busy);
+        drop(session);
+
+        // A sign-out or sign-in that took the exclusive lease may have changed the profile, so the
+        // verdict is forgotten even when the provider operation then fails.
+        observe_codex_plan(&fixture, &connected("pro"));
+        assert!(fixture.runtime.logout_codex(&fixture.account.id).is_err());
+        let session = codex_session(&fixture);
+        assert_eq!(codex_launch_refusal(&fixture).as_deref(), busy);
+        drop(session);
+
+        observe_codex_plan(&fixture, &connected("pro"));
+        assert!(
+            fixture
+                .runtime
+                .start_codex_login(&fixture.account.id)
+                .is_err()
+        );
+        let session = codex_session(&fixture);
+        assert_eq!(codex_launch_refusal(&fixture).as_deref(), busy);
+        drop(session);
+    }
+
+    #[cfg(any(windows, target_os = "macos"))]
+    #[test]
+    fn account_operations_while_sessions_run_are_busy_and_mark_nothing() {
+        let mut fixture = Fixture::new();
+        install_unrunnable_auth_managers(&mut fixture);
+        let store = fixture.runtime.account_store();
+        let claude = store
+            .create(ProviderId::CLAUDE_CODE, "Claude")
+            .expect("claude account");
+        observe_codex_plan(&fixture, &connected("pro"));
+        let codex_session = codex_session(&fixture);
+        let claude_session = fixture
+            .runtime
+            .managed_profiles()
+            .acquire_session_lease(ProviderId::CLAUDE_CODE, &claude.id)
+            .expect("live claude session");
+
+        assert!(matches!(
+            fixture.runtime.start_codex_login(&fixture.account.id),
+            Err(RuntimeAuthError::Busy)
+        ));
+        assert!(matches!(
+            fixture.runtime.logout_codex(&fixture.account.id),
+            Err(RuntimeAuthError::Busy)
+        ));
+        assert!(matches!(
+            fixture.runtime.refresh_claude_account(&claude.id),
+            Err(RuntimeAuthError::Busy)
+        ));
+        assert!(matches!(
+            fixture.runtime.start_claude_login(&claude.id),
+            Err(RuntimeAuthError::Busy)
+        ));
+        assert!(matches!(
+            fixture.runtime.logout_claude(&claude.id),
+            Err(RuntimeAuthError::Busy)
+        ));
+
+        let codex = store.get(&fixture.account.id).expect("codex account");
+        assert_eq!(codex.authentication_state, AuthState::Authenticated);
+        assert_eq!(codex.last_error_code, None);
+        let claude_after = store.get(&claude.id).expect("claude account");
+        assert_eq!(
+            claude_after.authentication_state,
+            claude.authentication_state
+        );
+        assert_eq!(claude_after.last_error_code, None);
+
+        // A refused sign-in never touched the profile, so the live sessions' verdict still stands.
+        expire_codex_plan(&fixture);
+        assert_eq!(codex_launch_refusal(&fixture), None);
+        drop((codex_session, claude_session));
     }
 
     #[cfg(any(windows, target_os = "macos"))]
