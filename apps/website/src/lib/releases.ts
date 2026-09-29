@@ -150,7 +150,7 @@ export function downloadCta(manifest: ReleaseManifest = RELEASES): DownloadCta {
 /**
  * The one-line build status used in the footer and on pages that describe the product:
  * "In private development" until a build is public, then "Preview 0.1.0 for Windows" or
- * "Stable 0.1.5 for Windows and macOS".
+ * "Stable 0.1.6 for Windows and macOS".
  */
 export function buildStatus(manifest: ReleaseManifest = RELEASES): string {
   const latest = manifest.latest;

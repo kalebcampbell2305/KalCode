@@ -36,7 +36,7 @@ const cumulative = (index: number): Scene =>
 const first = cumulative(0);
 const total = String(STORY.length).padStart(2, "0");
 const replayable = ["shell", "claude", "codex", "approval", "voice", "mission"];
-// Stages that name the Stable release draw no Gemini CLI thread (unavailable in 0.1.5).
+// Stages that name the Stable release draw no Gemini CLI thread (unavailable in 0.1.6).
 const threads = stageThreads();
 ---
 <StageStyles />

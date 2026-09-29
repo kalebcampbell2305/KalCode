@@ -58,7 +58,7 @@ function metaDescription(html: string) {
   return match ? decode(match[1]) : "";
 }
 
-// Stable 0.1.5 (B4 8d6c133, crates/native-core/src/flags.rs) gates every FeatureId except
+// Stable 0.1.6 (unchanged since B4 8d6c133, crates/native-core/src/flags.rs) gates every FeatureId except
 // PaneSystem and hides the Agents, Missions, Automations and Command Center surfaces. KalVoice's
 // CreateThreads / CreateProviderPanes intents need ProviderPanes and are refused on Stable
 // (apps/desktop/src-tauri/src/kalvoice_executor.rs:218-223). None of these may read as shipped.
@@ -114,10 +114,10 @@ describe.each(PAGES_UNDER_TEST)("the $name", ({ component, path }) => {
   });
 });
 
-// Post-0.1.5 KalVoice and thread work (primary ruling on target/TERMINAL-KALVOICE-GAP.md): naming
+// Post-0.1.6 KalVoice and thread work (primary ruling on target/TERMINAL-KALVOICE-GAP.md): naming
 // raw terminals, passing context from one agent to another, rewriting prompts, fuzzy nicknames or
-// aliases, and the Session Locator (Gated on Stable) are not in 0.1.5.
-const NOT_IN_015 = [
+// aliases, and the Session Locator (Gated on Stable) are not in 0.1.6.
+const NOT_IN_016 = [
   /Session Locator/i,
   /\bnam(e|es|ing) (your |a |the )?terminals?\b/i,
   /\bterminals? by name\b/i,
@@ -126,7 +126,7 @@ const NOT_IN_015 = [
   /Context Drop/i,
   /\b(rewrite|rewrites|rewriting|rephrase|rephrases|rephrasing|polish|polishes|polishing) (your |the )?prompts?\b/i,
   /\b(aliases|nicknames?)\b/i,
-  // Gated on Stable 0.1.5 (a8c4855 crates/native-core/src/flags.rs) and not switched on for it:
+  // Gated on Stable 0.1.6 (unchanged since a8c4855 crates/native-core/src/flags.rs) and not switched on for it:
   // the Utility Dock, Environment Doctor, the Resource Governor view, workspace Home and its
   // widgets, and Git worktree views. Git and diff views may appear only as Planned.
   /Utility Dock/i,
@@ -154,18 +154,18 @@ const B5_PAGES_UNDER_TEST = [
   { name: "privacy page", component: Privacy as Component, path: "/privacy" },
 ];
 
-describe.each(B5_PAGES_UNDER_TEST)("the $name for 0.1.5", ({ component, path }) => {
-  it("claims no post-0.1.5 voice or thread feature and no consent-gated speech download", async () => {
+describe.each(B5_PAGES_UNDER_TEST)("the $name for 0.1.6", ({ component, path }) => {
+  it("claims no post-0.1.6 voice or thread feature and no consent-gated speech download", async () => {
     const html = await render(component, path);
     const copy = `${text(html)} ${metaDescription(html)}`;
-    for (const pattern of [...NOT_IN_015, ...STALE_SPEECH_CONSENT]) expect(copy).not.toMatch(pattern);
+    for (const pattern of [...NOT_IN_016, ...STALE_SPEECH_CONSENT]) expect(copy).not.toMatch(pattern);
   });
 });
 
 // B5 voice-to-thread phrases, checked against crates/kalvoice/src/grammar_sessions.rs (lane B1) and
 // apps/desktop/src-tauri/src/{kalvoice_executor,session_resolver}.rs on staging/b5.
 describe("KalVoice voice-to-thread docs", () => {
-  it("lists only phrases the 0.1.5 grammar understands", async () => {
+  it("lists only phrases the 0.1.6 grammar understands", async () => {
     const docs = text(await render(KalVoiceDocs, "/docs/kalvoice"));
     for (const phrase of [
       "“Send that” sends what is in the focused thread's message box.",
@@ -357,7 +357,7 @@ describe("shipped features are not called planned", () => {
   });
 });
 
-// Stable 0.1.5 ships the app shell, palette, terminals, Dashboard and the local-first and security
+// Stable 0.1.6 ships the app shell, palette, terminals, Dashboard and the local-first and security
 // controls these pages describe, so none may frame them as a development build or pre-release only.
 const DEV_BUILD_FRAMING = [
   /current development builds?/i,
@@ -393,12 +393,12 @@ describe("Stable features are not framed as a development build", () => {
   });
 });
 
-/** A signed Stable 0.1.5 selection for Windows and Apple silicon, as the publisher generates it. */
+/** A signed Stable 0.1.6 selection for Windows and Apple silicon, as the publisher generates it. */
 function selectSignedStable() {
   const latest = fixture.manifest.latest;
   const windows = latest?.platforms[0];
   if (!latest || !windows) throw new Error("fixture has no Windows release");
-  latest.version = "0.1.5";
+  latest.version = "0.1.6";
   latest.channel = "stable";
   windows.signed = true;
   latest.platforms.push({
@@ -406,9 +406,9 @@ function selectSignedStable() {
     arch: "arm64",
     label: "macOS 14 or later, Apple silicon",
     kind: "dmg",
-    file: "KalCode_0.1.5_arm64.dmg",
+    file: "KalCode_0.1.6_arm64.dmg",
     url: "/download/macos-arm64",
-    pinnedUrl: "/download/0.1.5/KalCode_0.1.5_arm64.dmg",
+    pinnedUrl: "/download/0.1.6/KalCode_0.1.6_arm64.dmg",
     size: 14_048_116,
     sha256: "d".repeat(64),
     signed: true,
@@ -425,7 +425,7 @@ function plannedItems(html: string) {
 
 // B9 536efd7 ships workspace containment (crates/permissions/src/paths.rs), sanitized provider
 // environments (crates/providers/src/env.rs) and the permission engine with its audit trail
-// (crates/permissions/src/service.rs). The certified 0.1.5 artifacts are an Authenticode-signed
+// (crates/permissions/src/service.rs). The certified 0.1.6 artifacts are an Authenticode-signed
 // Windows installer, a Developer ID signed and notarized Mac app, and minisign update signatures.
 describe("security controls that shipped are not listed as planned", () => {
   const SHIPPED = [
@@ -525,34 +525,34 @@ describe("product stages once Stable is served", () => {
   it("renders the stages on the Stable /product page", async () => {
     selectSignedStable();
     const copy = text(await render(Product, "/product"));
-    expect(copy).toContain("The words land in the focused agent. In Stable 0.1.5");
+    expect(copy).toContain("The words land in the focused agent. In Stable 0.1.6");
     expect(copy).toContain("Real terminals in your workspace.");
   });
 
   it("tags the Stable-shipped steps and demos with the served release", async () => {
     selectSignedStable();
     const story = text(await render(ScrollStory as Component, "/product"));
-    expect(story).toContain("Real terminals start inside it. In Stable 0.1.5");
+    expect(story).toContain("Real terminals start inside it. In Stable 0.1.6");
     expect(story).toContain(
-      "Status comes from runtime events, not from what a model says. In Stable 0.1.5 · sample data",
+      "Status comes from runtime events, not from what a model says. In Stable 0.1.6 · sample data",
     );
-    expect(story).toContain("Nothing leaves your rules without asking. In Stable 0.1.5 · sample data");
-    expect(story).toContain("The words land in the focused agent. In Stable 0.1.5");
+    expect(story).toContain("Nothing leaves your rules without asking. In Stable 0.1.6 · sample data");
+    expect(story).toContain("The words land in the focused agent. In Stable 0.1.6");
     // Voice-created threads need ProviderPanes, which Stable gates (kalvoice_executor.rs).
     expect(story).toContain("Preview · creating agents by voice is not in Stable yet");
     expect(story).toContain("Preview · provider panes not in Stable yet");
     const demos = text(await render(DemoCenter as Component, "/product"));
-    expect(demos.match(/In Stable 0\.1\.5/g)?.length).toBe(4);
+    expect(demos.match(/In Stable 0.1.6/g)?.length).toBe(4);
     expect(demos).toContain("Preview · missions and provider panes are not in Stable yet");
     expect(text(await render(CommandCenterStage as Component, "/"))).toContain(
-      "Dashboard in Stable 0.1.5 · the KPI tiles are illustrative",
+      "Dashboard in Stable 0.1.6 · the KPI tiles are illustrative",
     );
   });
 
   it("draws the rail with Stable's surfaces and the served build", async () => {
     selectSignedStable();
     const rail = await renderRail();
-    expect(rail).toMatch(/KalVoice Providers Not in Stable yet Agents Missions Automations Stable 0\.1\.5/);
+    expect(rail).toMatch(/KalVoice Providers Not in Stable yet Agents Missions Automations Stable 0.1.6/);
     expect(rail).not.toMatch(/In development/i);
   });
 
@@ -583,7 +583,7 @@ function stageSlots(html: string): string[] {
   return slots;
 }
 
-// 0.1.5 is variant A: Gemini CLI is unavailable (site.ts GEMINI_AVAILABILITY). A stage that names
+// 0.1.6 is variant A: Gemini CLI is unavailable (site.ts GEMINI_AVAILABILITY). A stage that names
 // the Stable release must not draw a Gemini CLI thread at work; a stage that keeps Gemini CLI must
 // say it is unavailable.
 describe("Gemini CLI in stages once Stable is served", () => {
@@ -596,7 +596,7 @@ describe("Gemini CLI in stages once Stable is served", () => {
   ])("the Stable-labelled $name draws no Gemini CLI thread", async ({ component, path }) => {
     selectSignedStable();
     const copy = text(await render(component, path));
-    expect(copy).toMatch(/In Stable 0\.1\.5|Dashboard in Stable 0\.1\.5/);
+    expect(copy).toMatch(/In Stable 0.1.6|Dashboard in Stable 0.1.6/);
     for (const pattern of GEMINI_AT_WORK) expect(copy).not.toMatch(pattern);
     // The research thread is still drawn, as a Codex thread.
     expect(copy).toContain("Research rate-limit options");
@@ -620,7 +620,7 @@ describe("Gemini CLI in stages once Stable is served", () => {
   it("marks Gemini CLI unavailable wherever a Stable page still draws it", async () => {
     selectSignedStable();
     expect(text(await render(TryKalCode as Component, "/"))).toContain(
-      "provider panes not in Stable yet · Gemini CLI unavailable in 0.1.5",
+      "provider panes not in Stable yet · Gemini CLI unavailable in 0.1.6",
     );
   });
 
@@ -639,7 +639,7 @@ describe("Gemini CLI in stages once Stable is served", () => {
         const name = slot.match(/^"([^"]+)"/)?.[1];
         const copy = text(slot);
         if (/In Stable \d|Dashboard in Stable \d/.test(copy)) expect(copy, name).not.toMatch(/Gemini CLI/);
-        if (/Gemini CLI/.test(copy)) expect(copy, name).toMatch(/Gemini CLI unavailable in (KalCode )?0\.1\.5/);
+        if (/Gemini CLI/.test(copy)) expect(copy, name).toMatch(/Gemini CLI unavailable in (KalCode )?0.1.6/);
       }
     },
   );
@@ -653,7 +653,7 @@ describe("Gemini CLI in stages once Stable is served", () => {
   });
 });
 
-// The docs document features Stable 0.1.5 ships (their gated parts are marked Planned or
+// The docs document features Stable 0.1.6 ships (their gated parts are marked Planned or
 // unavailable inline), so once Stable is served no docs page may call itself a design that may
 // change before release (review be0e9b4 H1). "As designed" stays where it describes Planned Bypass.
 const DOCS_PRE_RELEASE = [
@@ -672,12 +672,12 @@ describe("docs once Stable is served", () => {
     { name: "local-first docs", component: LocalFirstDocs as Component, path: "/docs/local-first" },
   ];
 
-  it.each(DOCS)("the $name describes Stable 0.1.5, not a design", async ({ component, path }) => {
+  it.each(DOCS)("the $name describes Stable 0.1.6, not a design", async ({ component, path }) => {
     selectSignedStable();
     const html = await render(component, path);
     const copy = `${text(html)} ${metaDescription(html)}`;
-    expect(copy).toContain("Describes KalCode Stable 0.1.5");
-    expect(html).toMatch(/<span class="chip chip--built"[^>]*>Describes KalCode Stable 0\.1\.5<\/span>/);
+    expect(copy).toContain("Describes KalCode Stable 0.1.6");
+    expect(html).toMatch(/<span class="chip chip--built"[^>]*>Describes KalCode Stable 0.1.6<\/span>/);
     for (const pattern of DOCS_PRE_RELEASE) expect(copy).not.toMatch(pattern);
   });
 
@@ -715,15 +715,15 @@ describe("stage status tags once Stable is served", () => {
     const html = await render(ScrollStory as Component, "/product");
     const tags = [...html.matchAll(/<span class="kc-tag kc-step__tag"[^>]*>([^<]*)<\/span>/g)].map((m) => m[1]?.trim());
     expect(tags).toHaveLength(9);
-    for (const tag of tags) expect(tag).toMatch(/Stable 0\.1\.5|not in Stable yet|^Planned$/);
-    expect(tags).toContain("In Stable 0.1.5 as threads and terminals · provider panes not yet");
-    expect(tags).toContain("Browser pane in Stable 0.1.5 · provider panes not yet");
+    for (const tag of tags) expect(tag).toMatch(/Stable 0.1.6|not in Stable yet|^Planned$/);
+    expect(tags).toContain("In Stable 0.1.6 as threads and terminals · provider panes not yet");
+    expect(tags).toContain("Browser pane in Stable 0.1.6 · provider panes not yet");
   });
 
   it("labels the home permission modes with the shipped and planned modes", async () => {
     selectSignedStable();
     const home = text(await render(Home, "/"));
-    expect(home).toContain("Plan, Approve and Auto in Stable 0.1.5 · Bypass and Custom planned");
+    expect(home).toContain("Plan, Approve and Auto in Stable 0.1.6 · Bypass and Custom planned");
     expect(home).not.toContain("Modes as designed");
   });
 });
@@ -734,7 +734,7 @@ describe("signed-build claims on a Windows-only Stable", () => {
   it("keeps signed installers planned on /security", async () => {
     const latest = fixture.manifest.latest;
     if (!latest?.platforms[0]) throw new Error("fixture has no Windows release");
-    latest.version = "0.1.5";
+    latest.version = "0.1.6";
     latest.channel = "stable";
     latest.platforms[0].signed = true;
     const html = await render(Security, "/security");
@@ -766,10 +766,10 @@ describe("credential storage caveats", () => {
   });
 });
 
-// Stable 0.1.5 threads start only in Plan, Approve or Auto (B9 536efd7:
+// Stable 0.1.6 threads start only in Plan, Approve or Auto (unchanged since B9 536efd7:
 // crates/threads/src/runtime.rs ThreadOptions.permission_modes; apps/desktop/src/surfaces/permissions
 // START_MODES, the only modes Stable's Settings offers). Bypass and Custom are not available in
-// 0.1.5, so no page may present every mode as available or leave either unmarked.
+// 0.1.6, so no page may present every mode as available or leave either unmarked.
 const EVERY_MODE_CLAIMS = [
   /every mode is available/i,
   /every mode (is )?on every plan/i,
@@ -783,7 +783,7 @@ const EVERY_MODE_CLAIMS = [
   /Bypass activation/i,
 ];
 
-describe("permission modes in 0.1.5", () => {
+describe("permission modes in 0.1.6", () => {
   it.each([
     ...PAGES_UNDER_TEST,
     { name: "permissions docs", component: PermissionsDocs as Component, path: "/docs/permissions" },
@@ -794,10 +794,10 @@ describe("permission modes in 0.1.5", () => {
     for (const pattern of EVERY_MODE_CLAIMS) expect(copy).not.toMatch(pattern);
   });
 
-  it("says in the permissions docs which modes 0.1.5 threads start in and marks the rest Planned", async () => {
+  it("says in the permissions docs which modes 0.1.6 threads start in and marks the rest Planned", async () => {
     const copy = text(await render(PermissionsDocs, "/docs/permissions"));
-    expect(copy).toContain("In KalCode 0.1.5, threads start in Plan, Approve or Auto, on every plan.");
-    expect(copy).toContain("Bypass and Custom are planned and not available in 0.1.5.");
+    expect(copy).toContain("In KalCode 0.1.6, threads start in Plan, Approve or Auto, on every plan.");
+    expect(copy).toContain("Bypass and Custom are planned and not available in 0.1.6.");
     expect(copy).toContain("Bypass Planned");
     expect(copy).toContain("Custom Planned");
     expect(copy).not.toMatch(/Plan Planned|Approve Planned|Auto Planned/);
@@ -819,7 +819,7 @@ describe("permission modes in 0.1.5", () => {
     }
     const pricing = text(await render(Pricing, "/pricing"));
     expect(pricing).toContain(
-      "In 0.1.5, threads run in Plan, Approve or Auto on every plan; Bypass and Custom are planned.",
+      "In 0.1.6, threads run in Plan, Approve or Auto on every plan; Bypass and Custom are planned.",
     );
   });
 

@@ -8,7 +8,7 @@ import { getPage } from "../lib/site";
 
 const page = getPage("/updates");
 const signedStable = signedStableRelease(RELEASES);
-const stable015 = signedStable?.version === "0.1.5" ? signedStable : null;
+const stable016 = signedStable?.version === "0.1.6" ? signedStable : null;
 const servesPreview = channelLabel(RELEASES) === "Preview";
 const allowances = PLANS.map((plan) => `${plan.name} ${formatKalVoiceAllowance(plan.limits)}`).join(", ");
 ---
@@ -20,7 +20,7 @@ const allowances = PLANS.map((plan) => `${plan.name} ${formatKalVoiceAllowance(p
     backdrop="orbital"
   >
     <nav class="updates-index" aria-label="Update archive">
-      {stable015 && <a href="#release-0-1-5">0.1.5 Stable</a>}
+      {stable016 && <a href="#release-0-1-6">0.1.6 Stable</a>}
       <a href="#release-0-1-1">Windows preview</a>
       <a href="#release-website-2026-09-24">New website</a>
       <a href="#release-kalvoice">KalVoice</a>
@@ -32,17 +32,17 @@ const allowances = PLANS.map((plan) => `${plan.name} ${formatKalVoiceAllowance(p
     <div class="container">
       <h2 class="sr-only" id="updates-heading">KalCode product updates</h2>
       <div class="updates-feed">
-        {stable015 && (
-          <article class="update update--featured" id="release-0-1-5" aria-labelledby="release-0-1-5-title">
+        {stable016 && (
+          <article class="update update--featured" id="release-0-1-6" aria-labelledby="release-0-1-6-title">
             <div class="update__signal" aria-hidden="true"><span></span></div>
             <header class="update__meta">
-              <p class="update__edition">KalCode 0.1.5</p>
-              <p><time datetime={stable015.publishedAt}>{formatReleaseDate(stable015.publishedAt)}</time></p>
+              <p class="update__edition">KalCode 0.1.6</p>
+              <p><time datetime={stable016.publishedAt}>{formatReleaseDate(stable016.publishedAt)}</time></p>
               <p class="chip chip--built">Stable · Windows and macOS</p>
             </header>
             <div class="update__story">
               <p class="update__kicker">Your workspace, ready when you return</p>
-              <h2 id="release-0-1-5-title">KalCode Stable brings local voice to your coding workspace.</h2>
+              <h2 id="release-0-1-6-title">KalCode Stable brings local voice to your coding workspace.</h2>
               <p class="update__lead">
                 Work with Claude Code and Codex through their official accounts, use local
                 dictation, and keep track of your projects in one desktop application.
@@ -71,7 +71,7 @@ const allowances = PLANS.map((plan) => `${plan.name} ${formatKalVoiceAllowance(p
                     <li>Several accounts per provider, with a switcher in each thread's header.</li>
                     <li>Accounts remembered for each workspace.</li>
                     <li>Sign-in and threads with Claude Code 2.1.282 and later 2.1 releases and Codex 0.155.1 through 0.158.</li>
-                    <li>Gemini CLI is unavailable: on June 18, 2026, Google ended Gemini CLI access through Sign in with Google for personal accounts, and 0.1.5 can't set the Google Cloud project that Standard and Enterprise licenses need.</li>
+                    <li>Gemini CLI is unavailable: on June 18, 2026, Google ended Gemini CLI access through Sign in with Google for personal accounts, and 0.1.6 can't set the Google Cloud project that Standard and Enterprise licenses need.</li>
                   </ul>
                 </section>
                 <section>
@@ -82,13 +82,20 @@ const allowances = PLANS.map((plan) => `${plan.name} ${formatKalVoiceAllowance(p
                     <li>Provider permissions and account isolation remain in effect.</li>
                   </ul>
                 </section>
+                <section>
+                  <h3>Updates and earlier builds</h3>
+                  <ul>
+                    <li>In-app Update and Restore previous version now finish: the updater no longer waits on a shutdown lock it holds itself.</li>
+                    <li>KalCode 0.1.5 was never released. To move an earlier build to 0.1.6, download the installer from the download page and run it over your current app.</li>
+                  </ul>
+                </section>
               </div>
               <p class="update__action"><a class="button button--primary" href="/download">Download KalCode</a></p>
             </div>
           </article>
         )}
         <article
-          class:list={["update", { "update--featured": !stable015 }]}
+          class:list={["update", { "update--featured": !stable016 }]}
           id="release-0-1-1"
           aria-labelledby="release-0-1-1-title"
         >

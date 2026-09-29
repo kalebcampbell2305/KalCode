@@ -21,17 +21,17 @@ async function renderUpdates() {
   return container.renderToString(Updates, { request: new Request("https://kalcoded.com/updates") });
 }
 
-it("does not announce 0.1.5 while the generated manifest still selects Preview", async () => {
+it("does not announce 0.1.6 while the generated manifest still selects Preview", async () => {
   const html = await renderUpdates();
-  expect(html).not.toContain('id="release-0-1-5"');
-  expect(html).not.toContain('href="#release-0-1-5"');
+  expect(html).not.toContain('id="release-0-1-6"');
+  expect(html).not.toContain('href="#release-0-1-6"');
   expect(html).toContain('id="release-0-1-1"');
 });
 
-/** A Stable 0.1.5 selection with a signed Windows build and a signed, unsigned or absent Mac build. */
+/** A Stable 0.1.6 selection with a signed Windows build and a signed, unsigned or absent Mac build. */
 function selectStable(mac: "signed" | "unsigned" | "none") {
   if (!fixture.manifest.latest) throw new Error("fixture has no release");
-  fixture.manifest.latest.version = "0.1.5";
+  fixture.manifest.latest.version = "0.1.6";
   fixture.manifest.latest.channel = "stable";
   fixture.manifest.latest.publishedAt = "2026-10-02T01:23:45.000Z";
   const windows = fixture.manifest.latest.platforms[0];
@@ -43,9 +43,9 @@ function selectStable(mac: "signed" | "unsigned" | "none") {
     arch: "arm64",
     label: "macOS 14 or later, Apple silicon",
     kind: "dmg",
-    file: "KalCode_0.1.5_arm64.dmg",
+    file: "KalCode_0.1.6_arm64.dmg",
     url: "/download/macos-arm64",
-    pinnedUrl: "/download/0.1.5/KalCode_0.1.5_arm64.dmg",
+    pinnedUrl: "/download/0.1.6/KalCode_0.1.6_arm64.dmg",
     size: 4_200_000,
     sha256: "d".repeat(64),
     signed: mac === "signed",
@@ -60,8 +60,8 @@ function selectSignedStable() {
 it("renders the Stable notes anchor and uses the publication date from the manifest", async () => {
   selectSignedStable();
   const html = await renderUpdates();
-  expect(html).toContain('id="release-0-1-5"');
-  expect(html).toContain('href="#release-0-1-5"');
+  expect(html).toContain('id="release-0-1-6"');
+  expect(html).toContain('href="#release-0-1-6"');
   expect(html).toContain('datetime="2026-10-02T01:23:45.000Z"');
   expect(html).toContain("October 2, 2026");
   expect(html).toContain('href="/download"');
@@ -88,56 +88,56 @@ it.each([false, true])(
 
 it("does not announce signed Windows and Mac availability from an incomplete Stable manifest", async () => {
   if (!fixture.manifest.latest) throw new Error("fixture has no release");
-  fixture.manifest.latest.version = "0.1.5";
+  fixture.manifest.latest.version = "0.1.6";
   fixture.manifest.latest.channel = "stable";
-  expect(await renderUpdates()).not.toContain('id="release-0-1-5"');
+  expect(await renderUpdates()).not.toContain('id="release-0-1-6"');
 });
 
 const STABLE_KALVOICE =
-  "KalVoice ships in KalCode Stable 0.1.5. Speech recognition and command interpretation run on your computer; KalCode downloads and verifies their signed local components by itself when you first open it, with no separate Python or Ollama installation.";
+  "KalVoice ships in KalCode Stable 0.1.6. Speech recognition and command interpretation run on your computer; KalCode downloads and verifies their signed local components by itself when you first open it, with no separate Python or Ollama installation.";
 const PREVIEW_KALVOICE = "KalVoice is in development and not available in a public build yet.";
 
 /**
  * What /download serves decides the preview download button and the KalVoice docs sentence; the
- * 0.1.5 notes (and so the un-featured 0.1.1 entry) need the complete signed Windows and Mac release.
+ * 0.1.6 notes (and so the un-featured 0.1.1 entry) need the complete signed Windows and Mac release.
  * A Windows-only Stable or one with an unsigned Mac build still serves Stable from /download.
  */
 const selections = [
-  { name: "preview", mac: null, notes015: false, closing: "The preview is out for Windows.", stable: false },
+  { name: "preview", mac: null, notes016: false, closing: "The preview is out for Windows.", stable: false },
   {
     name: "signed Windows and Mac Stable",
     mac: "signed",
-    notes015: true,
-    closing: "KalCode 0.1.5 is out for Windows and macOS.",
+    notes016: true,
+    closing: "KalCode 0.1.6 is out for Windows and macOS.",
     stable: true,
   },
   {
     name: "Windows-only Stable",
     mac: "none",
-    notes015: false,
-    closing: "KalCode 0.1.5 is out for Windows.",
+    notes016: false,
+    closing: "KalCode 0.1.6 is out for Windows.",
     stable: true,
   },
   {
     name: "Stable with an unsigned Mac build",
     mac: "unsigned",
-    notes015: false,
-    closing: "KalCode 0.1.5 is out for Windows and macOS.",
+    notes016: false,
+    closing: "KalCode 0.1.6 is out for Windows and macOS.",
     stable: true,
   },
 ] as const;
 
-describe.each(selections)("with a $name manifest", ({ mac, notes015, closing, stable }) => {
+describe.each(selections)("with a $name manifest", ({ mac, notes016, closing, stable }) => {
   beforeEach(() => {
     if (mac) selectStable(mac);
   });
 
-  it("features 0.1.1 unless the 0.1.5 notes render, and offers its download only while /download serves the preview", async () => {
+  it("features 0.1.1 unless the 0.1.6 notes render, and offers its download only while /download serves the preview", async () => {
     const html = await renderUpdates();
-    expect(html.includes('id="release-0-1-5"')).toBe(notes015);
+    expect(html.includes('id="release-0-1-6"')).toBe(notes016);
     const preview = html.match(/<article[^>]*id="release-0-1-1"[\s\S]*?<\/article>/)?.[0];
     expect(preview).toBeDefined();
-    expect(preview?.includes("update--featured")).toBe(!notes015);
+    expect(preview?.includes("update--featured")).toBe(!notes016);
     expect(preview?.includes("Download the Windows preview")).toBe(!stable);
   });
 

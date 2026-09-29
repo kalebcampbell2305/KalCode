@@ -31,7 +31,7 @@ const meterWidth = (limits: PlanLimits) => {
 
 /**
  * The ladder lists only what differs between plans in the Stable app: KalVoice Requests. Persistent
- * agents, pair and team workflows, automations and advanced missions are Gated on Stable 0.1.5
+ * agents, pair and team workflows, automations and advanced missions are Gated on Stable 0.1.6
  * (crates/native-core/src/flags.rs), so the ladder does not list them. Nor does it list threads
  * running at once: B9 536efd7 enforces no per-plan thread limit (the catalog's concurrentThreads
  * has no consumer outside crates/entitlements), and the Resource Governor's Balanced mode caps
@@ -74,7 +74,7 @@ const faq = [
   },
   {
     q: "Are permission modes limited by plan?",
-    a: "No. Permission modes are safety controls, never a paid extra. In 0.1.5, threads run in Plan, Approve or Auto on every plan; Bypass and Custom are planned.",
+    a: "No. Permission modes are safety controls, never a paid extra. In 0.1.6, threads run in Plan, Approve or Auto on every plan; Bypass and Custom are planned.",
   },
   {
     q: "When can I buy a plan?",

@@ -20,12 +20,12 @@ import Security from "../../src/pages/security.astro";
 
 beforeEach(() => Object.assign(fixture.manifest, structuredClone(publishedManifest)));
 
-/** A signed Stable 0.1.5 selection for Windows and Apple silicon, as the publisher generates it. */
+/** A signed Stable 0.1.6 selection for Windows and Apple silicon, as the publisher generates it. */
 function selectSignedStable() {
   const latest = fixture.manifest.latest;
   const windows = latest?.platforms[0];
   if (!latest || !windows) throw new Error("fixture has no Windows release");
-  latest.version = "0.1.5";
+  latest.version = "0.1.6";
   latest.channel = "stable";
   windows.signed = true;
   latest.platforms.push({
@@ -33,9 +33,9 @@ function selectSignedStable() {
     arch: "arm64",
     label: "macOS 14 or later, Apple silicon",
     kind: "dmg",
-    file: "KalCode_0.1.5_arm64.dmg",
+    file: "KalCode_0.1.6_arm64.dmg",
     url: "/download/macos-arm64",
-    pinnedUrl: "/download/0.1.5/KalCode_0.1.5_arm64.dmg",
+    pinnedUrl: "/download/0.1.6/KalCode_0.1.6_arm64.dmg",
     size: 13_840_849,
     sha256: "d".repeat(64),
     signed: true,
@@ -116,7 +116,7 @@ const DEVELOPMENT_LABELS: { name: string; component: Component; path: string; la
     component: KalVoicePage as Component,
     path: "/kalvoice",
     label: /In development KalVoice: Speak your prompts/,
-    stable: /Available in KalCode Stable 0\.1\.5 KalVoice: Speak your prompts/,
+    stable: /Available in KalCode Stable 0.1.6 KalVoice: Speak your prompts/,
   },
   {
     name: "security page",
@@ -164,7 +164,7 @@ describe.each(DEVELOPMENT_LABELS)("the $name", ({ component, path, label, stable
 it("describes KalVoice as available in Stable on the KalVoice page and in its metadata", async () => {
   selectSignedStable();
   const html = await render(KalVoicePage, "/kalvoice");
-  expect(text(html)).toContain("Available in KalCode Stable 0.1.5");
+  expect(text(html)).toContain("Available in KalCode Stable 0.1.6");
   const description = html.match(/<meta name="description" content="([^"]*)"/)?.[1];
   expect(description).toBeDefined();
   expect(description).not.toMatch(/In development/);

@@ -1,0 +1,149 @@
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
+import { experimental_AstroContainer as AstroContainer } from "astro/container";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReleaseManifest } from "../../src/data/releases";
+import { publishedManifest } from "./fixtures/releases";
+
+// B10 truth (owner decisions 2026-09-29, target/recovery-B10/B10-PLAN.md): the public Stable build is
+// 0.1.6. 0.1.4 and 0.1.5 hold immutable, never-pointed QA rows and 0.1.3 is a private, unlisted QA
+// baseline derived from B10. None of the three may ever be offered or announced as a public build.
+
+const fixture = vi.hoisted(() => ({ manifest: {} as ReleaseManifest }));
+vi.mock("../../src/lib/releases", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/lib/releases")>()),
+  RELEASES: fixture.manifest,
+}));
+
+import DownloadPlatforms from "../../src/components/DownloadPlatforms.astro";
+import { assertManifest, buildStatus, downloadCta, platformRows, signedStableRelease } from "../../src/lib/releases";
+import Download from "../../src/pages/download.astro";
+import Home from "../../src/pages/index.astro";
+import Product from "../../src/pages/product.astro";
+import Updates from "../../src/pages/updates.astro";
+
+const NEVER_PUBLIC = ["0.1.3", "0.1.4", "0.1.5"] as const;
+
+/** A complete signed Stable selection for Windows and Apple silicon, as the publisher generates it. */
+function signedStable(version: string): ReleaseManifest {
+  const manifest = structuredClone(publishedManifest) as ReleaseManifest;
+  if (!manifest.latest) throw new Error("fixture has no release");
+  manifest.latest.version = version;
+  manifest.latest.channel = "stable";
+  manifest.latest.publishedAt = "2026-10-02T01:23:45.000Z";
+  manifest.latest.notesUrl = `/updates#release-${version.replaceAll(".", "-")}`;
+  const windows = manifest.latest.platforms[0];
+  if (!windows) throw new Error("fixture has no Windows platform");
+  windows.signed = true;
+  windows.file = `KalCode_${version}_x64-setup.exe`;
+  windows.pinnedUrl = `/download/${version}/KalCode_${version}_x64-setup.exe`;
+  manifest.latest.platforms.push({
+    os: "macos",
+    arch: "arm64",
+    label: "macOS 14 or later, Apple silicon",
+    kind: "dmg",
+    file: `KalCode_${version}_arm64.dmg`,
+    url: "/download/macos-arm64",
+    pinnedUrl: `/download/${version}/KalCode_${version}_arm64.dmg`,
+    size: 4_200_000,
+    sha256: "d".repeat(64),
+    signed: true,
+  });
+  manifest.unavailable = manifest.unavailable.filter((entry) => entry.os !== "macos");
+  return manifest;
+}
+
+function select(manifest: ReleaseManifest) {
+  for (const key of Object.keys(fixture.manifest)) delete (fixture.manifest as Record<string, unknown>)[key];
+  Object.assign(fixture.manifest, manifest);
+}
+
+async function render(component: Parameters<AstroContainer["renderToString"]>[0], path: string) {
+  const container = await AstroContainer.create();
+  return container.renderToString(component, { request: new Request(`https://kalcoded.com${path}`) });
+}
+
+beforeEach(() => select(structuredClone(publishedManifest) as ReleaseManifest));
+
+describe("the 0.1.6 release data", () => {
+  it("accepts a signed Stable 0.1.6 manifest and labels it everywhere as Stable 0.1.6", () => {
+    const manifest = assertManifest(signedStable("0.1.6"));
+    expect(signedStableRelease(manifest)?.version).toBe("0.1.6");
+    expect(buildStatus(manifest)).toBe("Stable 0.1.6 for Windows and macOS");
+    expect(downloadCta(manifest).note).toContain("Stable 0.1.6");
+    const files = platformRows(manifest).flatMap((row) => ("build" in row && row.build ? [row.build.file] : []));
+    expect(files.sort()).toEqual(["KalCode_0.1.6_arm64.dmg", "KalCode_0.1.6_x64-setup.exe"]);
+  });
+
+  it("keeps the committed preview manifest (the Stable one is generated at bootstrap)", async () => {
+    const committed = (await import("../../src/data/releases.json")).default as ReleaseManifest;
+    expect(committed.latest?.version).toBe("0.1.1");
+    expect(committed.latest?.channel).not.toBe("stable");
+  });
+});
+
+describe("the Updates page", () => {
+  it("renders the 0.1.6 entry, with the earlier-build guidance, from a signed Stable 0.1.6 manifest", async () => {
+    select(signedStable("0.1.6"));
+    const html = await render(Updates, "/updates");
+    expect(html).toContain('id="release-0-1-6"');
+    expect(html).toContain('href="#release-0-1-6"');
+    expect(html).toContain("KalCode 0.1.6");
+    expect(html).toContain("In-app Update and Restore previous version now finish");
+    expect(html).toContain("KalCode 0.1.5 was never released.");
+    expect(html).toContain("download the installer from the download page and run it over your current app");
+    expect(html).toContain("Codex 0.155.1 through 0.158");
+  });
+
+  it.each([...NEVER_PUBLIC, "0.1.7"])("renders no release entry for a signed Stable %s manifest", async (version) => {
+    select(signedStable(version));
+    const html = await render(Updates, "/updates");
+    expect(html).not.toContain('id="release-0-1-6"');
+    for (const hidden of NEVER_PUBLIC) expect(html).not.toContain(`release-${hidden.replaceAll(".", "-")}`);
+  });
+});
+
+describe("pages rendered from a signed Stable 0.1.6 manifest", () => {
+  const pages = [
+    { name: "download page", component: Download, path: "/download" },
+    { name: "home page", component: Home, path: "/" },
+    { name: "product page", component: Product, path: "/product" },
+    { name: "Updates page", component: Updates, path: "/updates" },
+    { name: "download platforms", component: DownloadPlatforms, path: "/download" },
+  ];
+
+  it.each(pages)("the $name offers only 0.1.6 files and never 0.1.3, 0.1.4 or 0.1.5", async ({ component, path }) => {
+    select(signedStable("0.1.6"));
+    const html = await render(component, path);
+    for (const hidden of NEVER_PUBLIC) {
+      expect(html).not.toContain(`KalCode_${hidden}_`);
+      expect(html).not.toContain(`/download/${hidden}/`);
+      expect(html).not.toMatch(new RegExp(`(Stable|Preview) ${hidden.replaceAll(".", "\\.")}\\b`));
+    }
+  });
+});
+
+describe("website sources", () => {
+  const root = join(__dirname, "../../src");
+  const files: string[] = [];
+  const walk = (dir: string) => {
+    for (const name of readdirSync(dir)) {
+      const path = join(dir, name);
+      if (statSync(path).isDirectory()) walk(path);
+      else if (/\.(astro|ts|tsx|json|md|mdx)$/.test(name)) files.push(path);
+    }
+  };
+  walk(root);
+
+  it("name 0.1.3, 0.1.4 and 0.1.5 only to say that 0.1.5 was never released", () => {
+    const hits = files.flatMap((path) =>
+      readFileSync(path, "utf8")
+        .split("\n")
+        .flatMap((line, index) =>
+          /\b0\.1\.[345]\b|0-1-[345]\b/.test(line) ? [`${relative(root, path)}:${index + 1}: ${line.trim()}`] : [],
+        ),
+    );
+    expect(hits).toHaveLength(1);
+    expect(hits[0]).toMatch(/^pages[\\/]updates\.astro:\d+: <li>KalCode 0\.1\.5 was never released\. /);
+  });
+});

@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 import { NOT_FOUND_PAGE, PAGES, SITE_ORIGIN, SOCIAL } from "../../src/lib/site";
 import { CHANNEL_LABEL, MANIFEST, renderedDescription, SERVED_STABLE, SIGNED_STABLE, WINDOWS_BUILD } from "./helpers";
 
-const STABLE_015 = SIGNED_STABLE && MANIFEST.latest?.version === "0.1.5";
+const STABLE_016 = SIGNED_STABLE && MANIFEST.latest?.version === "0.1.6";
 
 test.describe("every page", () => {
   for (const page of PAGES) {
@@ -48,11 +48,11 @@ test.describe("every page", () => {
       const stages = page.locator("[data-stage-slot]");
       for (const text of await stages.allInnerTexts()) {
         expect(text, path).not.toMatch(/Development build|Preview · in development|\bIn development\b|\b0\.1\.0\b/i);
-        // 0.1.5 is variant A (Gemini CLI unavailable): a stage that names the Stable release draws no
+        // 0.1.6 is variant A (Gemini CLI unavailable): a stage that names the Stable release draws no
         // Gemini CLI thread.
         if (/In Stable \d|Dashboard in Stable \d/.test(text)) expect(text, path).not.toMatch(/Gemini CLI/);
         // Any other stage that still shows Gemini CLI says it is unavailable.
-        if (/Gemini CLI/.test(text)) expect(text, path).toMatch(/Gemini CLI unavailable in (KalCode )?0\.1\.5/);
+        if (/Gemini CLI/.test(text)) expect(text, path).toMatch(/Gemini CLI unavailable in (KalCode )?0.1.6/);
       }
     }
   });
@@ -122,10 +122,10 @@ test.describe("every page", () => {
   test("Updates is a concise product-news page with meaningful release sections", async ({ page }) => {
     await page.goto("/updates");
     await expect(page.getByRole("heading", { level: 1, name: "Updates" })).toBeVisible();
-    // The 0.1.5 notes render only from a complete signed Stable 0.1.5 manifest (the page's own rule).
-    await expect(page.locator("article")).toHaveCount(STABLE_015 ? 5 : 4);
-    if (STABLE_015) await expect(page.locator("#release-0-1-5")).toBeVisible();
-    else await expect(page.locator("#release-0-1-5")).toHaveCount(0);
+    // The 0.1.6 notes render only from a complete signed Stable 0.1.6 manifest (the page's own rule).
+    await expect(page.locator("article")).toHaveCount(STABLE_016 ? 5 : 4);
+    if (STABLE_016) await expect(page.locator("#release-0-1-6")).toBeVisible();
+    else await expect(page.locator("#release-0-1-6")).toHaveCount(0);
     await expect(page.locator("#release-0-1-1")).toBeVisible();
     await expect(page.locator("#release-website-2026-09-24")).toBeVisible();
     await expect(page.locator("#release-kalvoice")).toBeVisible();

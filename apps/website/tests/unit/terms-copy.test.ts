@@ -14,12 +14,12 @@ import Terms from "../../src/pages/terms.astro";
 
 beforeEach(() => Object.assign(fixture.manifest, structuredClone(publishedManifest)));
 
-/** A signed Stable 0.1.5 selection for Windows and Apple silicon, as the publisher generates it. */
+/** A signed Stable 0.1.6 selection for Windows and Apple silicon, as the publisher generates it. */
 function selectSignedStable() {
   const latest = fixture.manifest.latest;
   const windows = latest?.platforms[0];
   if (!latest || !windows) throw new Error("fixture has no Windows release");
-  latest.version = "0.1.5";
+  latest.version = "0.1.6";
   latest.channel = "stable";
   windows.signed = true;
   latest.platforms.push({
@@ -27,9 +27,9 @@ function selectSignedStable() {
     arch: "arm64",
     label: "macOS 14 or later, Apple silicon",
     kind: "dmg",
-    file: "KalCode_0.1.5_arm64.dmg",
+    file: "KalCode_0.1.6_arm64.dmg",
     url: "/download/macos-arm64",
-    pinnedUrl: "/download/0.1.5/KalCode_0.1.5_arm64.dmg",
+    pinnedUrl: "/download/0.1.6/KalCode_0.1.6_arm64.dmg",
     size: 14_048_116,
     sha256: "d".repeat(64),
     signed: true,

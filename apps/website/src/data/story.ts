@@ -683,7 +683,7 @@ export const THREADS: readonly Thread[] = [
 ];
 
 /**
- * Stable 0.1.5 ships with Gemini CLI unavailable (site.ts GEMINI_AVAILABILITY), so stages that name
+ * Stable 0.1.6 ships with Gemini CLI unavailable (site.ts GEMINI_AVAILABILITY), so stages that name
  * the Stable release draw the research thread as a Codex thread instead. It keeps the same id so
  * the stage scripts still find it; the preview keeps the Gemini CLI thread above.
  */

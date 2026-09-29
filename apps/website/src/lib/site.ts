@@ -85,7 +85,7 @@ export const KALVOICE = {
 
 /**
  * Website wording for a plan's one-line summary. The shared catalog (packages/protocol/src/plans.ts,
- * also read by the desktop app) describes MAX by features that are Gated on Stable 0.1.5 (missions:
+ * also read by the desktop app) describes MAX by features that are Gated on Stable 0.1.6 (missions:
  * crates/native-core/src/flags.rs), so the site says what the plan gives today instead.
  */
 const PLAN_SUMMARY_OVERRIDES: Partial<Record<PlanId, string>> = {
@@ -155,13 +155,13 @@ export const PAGES = [
     path: "/docs/permissions",
     title: "Permissions — KalCode Docs",
     description:
-      "How KalCode permission modes decide what agents and KalVoice may do: threads in 0.1.5 run in Plan, Approve or Auto; Bypass and Custom are planned.",
+      "How KalCode permission modes decide what agents and KalVoice may do: threads in 0.1.6 run in Plan, Approve or Auto; Bypass and Custom are planned.",
   },
   {
     path: "/docs/providers",
     title: "Providers — KalCode Docs",
     description:
-      "How KalCode connects Claude Code and Codex through documented integration methods using your own accounts, on every plan, and why Gemini CLI is unavailable in 0.1.5.",
+      "How KalCode connects Claude Code and Codex through documented integration methods using your own accounts, on every plan, and why Gemini CLI is unavailable in 0.1.6.",
   },
   {
     path: "/docs/kalvoice",
@@ -286,21 +286,21 @@ export const TAGLINE = "One intelligence. A brighter tomorrow.";
 export const PROVIDERS = [
   { id: "claude", name: "Claude Code", access: "Claude account sign-in", status: "Adapter built", state: "built" },
   { id: "codex", name: "Codex", access: "ChatGPT sign-in (personal plans)", status: "Adapter built", state: "built" },
-  { id: "gemini", name: "Gemini CLI", access: "Google sign-in", status: "Unavailable in 0.1.5", state: "unavailable" },
+  { id: "gemini", name: "Gemini CLI", access: "Google sign-in", status: "Unavailable in 0.1.6", state: "unavailable" },
 ] as const;
 
 /**
- * Gemini CLI availability in KalCode 0.1.5 (B5 65be519). On June 18, 2026 Google stopped serving
+ * Gemini CLI availability in KalCode 0.1.6 (unchanged since B5 65be519). On June 18, 2026 Google stopped serving
  * Gemini CLI "Login with Google" for Gemini Code Assist for individuals, Google AI Pro and Ultra
  * (developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals); Standard and
- * Enterprise licenses are unaffected but need a Google Cloud project, which 0.1.5 cannot pass:
+ * Enterprise licenses are unaffected but need a Google Cloud project, which 0.1.6 cannot pass:
  * managed launches keep only the base environment (crates/providers/src/env.rs BASE_ALLOW,
  * managed.rs launch_env) and ignore local .env files (gemini/managed_policy.rs floor_settings).
  * B5 reports "Signed in" from the credential file alone (gemini_account_auth.rs credential_state),
  * so a refused personal account still looks signed in. No Antigravity support is claimed.
  */
 export const GEMINI_AVAILABILITY = {
-  short: "Gemini CLI is unavailable in KalCode 0.1.5.",
+  short: "Gemini CLI is unavailable in KalCode 0.1.6.",
   notice:
-    "On June 18, 2026, Google ended Gemini CLI access through Sign in with Google for personal Google accounts: Gemini Code Assist for individuals, Google AI Pro and Google AI Ultra. KalCode 0.1.5 also can't set the Google Cloud project that Gemini Code Assist Standard and Enterprise licenses need, so Gemini CLI is currently unavailable in KalCode. A personal Google account can still finish sign-in and show as signed in, but its threads fail. Claude Code and Codex are unaffected. Updates will say when Gemini CLI can be used in KalCode again.",
+    "On June 18, 2026, Google ended Gemini CLI access through Sign in with Google for personal Google accounts: Gemini Code Assist for individuals, Google AI Pro and Google AI Ultra. KalCode 0.1.6 also can't set the Google Cloud project that Gemini Code Assist Standard and Enterprise licenses need, so Gemini CLI is currently unavailable in KalCode. A personal Google account can still finish sign-in and show as signed in, but its threads fail. Claude Code and Codex are unaffected. Updates will say when Gemini CLI can be used in KalCode again.",
 } as const;
