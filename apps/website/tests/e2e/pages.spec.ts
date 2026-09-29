@@ -51,6 +51,8 @@ test.describe("every page", () => {
         // 0.1.5 is variant A (Gemini CLI unavailable): a stage that names the Stable release draws no
         // Gemini CLI thread.
         if (/In Stable \d|Dashboard in Stable \d/.test(text)) expect(text, path).not.toMatch(/Gemini CLI/);
+        // Any other stage that still shows Gemini CLI says it is unavailable.
+        if (/Gemini CLI/.test(text)) expect(text, path).toMatch(/Gemini CLI unavailable in (KalCode )?0\.1\.5/);
       }
     }
   });

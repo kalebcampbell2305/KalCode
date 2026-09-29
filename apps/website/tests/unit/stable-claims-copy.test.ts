@@ -565,6 +565,23 @@ describe("product stages once Stable is served", () => {
   });
 });
 
+/** Each rendered stage slot's own markup (div-balanced), prefixed by its name in quotes. */
+function stageSlots(html: string): string[] {
+  const slots: string[] = [];
+  for (const start of html.matchAll(/<div class="stage-slot"[^>]*data-stage-slot=/g)) {
+    const from = start.index ?? 0;
+    let depth = 0;
+    for (const tag of html.slice(from).matchAll(/<(\/?)div\b[^>]*>/g)) {
+      depth += tag[1] ? -1 : 1;
+      if (depth === 0) {
+        slots.push(html.slice(from + start[0].length, from + (tag.index ?? 0)));
+        break;
+      }
+    }
+  }
+  return slots;
+}
+
 // 0.1.5 is variant A: Gemini CLI is unavailable (site.ts GEMINI_AVAILABILITY). A stage that names
 // the Stable release must not draw a Gemini CLI thread at work; a stage that keeps Gemini CLI must
 // say it is unavailable.
@@ -605,6 +622,26 @@ describe("Gemini CLI in stages once Stable is served", () => {
       "provider panes not in Stable yet · Gemini CLI unavailable in 0.1.5",
     );
   });
+
+  it.each([
+    { name: "home page", component: Home as Component, path: "/" },
+    { name: "product page", component: Product as Component, path: "/product" },
+    { name: "KalVoice page", component: KalVoicePage as Component, path: "/kalvoice" },
+  ])(
+    "every stage on the Stable $name either draws no Gemini CLI or says it is unavailable",
+    async ({ component, path }) => {
+      selectSignedStable();
+      const html = await render(component, path);
+      const slots = stageSlots(html);
+      expect(slots.length).toBeGreaterThan(0);
+      for (const slot of slots) {
+        const name = slot.match(/^"([^"]+)"/)?.[1];
+        const copy = text(slot);
+        if (/In Stable \d|Dashboard in Stable \d/.test(copy)) expect(copy, name).not.toMatch(/Gemini CLI/);
+        if (/Gemini CLI/.test(copy)) expect(copy, name).toMatch(/Gemini CLI unavailable in (KalCode )?0\.1\.5/);
+      }
+    },
+  );
 
   it("keeps the Gemini CLI research thread in the preview", async () => {
     const story = text(await render(ScrollStory as Component, "/product"));

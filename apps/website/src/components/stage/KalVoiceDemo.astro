@@ -11,6 +11,7 @@
 import StageStyles from "./parts/StageStyles.astro";
 import { VOICE } from "../../data/story";
 import { RELEASES, servedStableRelease } from "../../lib/releases";
+import { stageThreads } from "../../lib/stage-status";
 import AppWindow from "./AppWindow.astro";
 import StageLabel from "./parts/StageLabel.astro";
 
@@ -48,6 +49,7 @@ const tag = servedStableRelease(RELEASES)
     interactive={true}
     size="compact"
     scene={{ view: "code", panes: ["claude-checkout", "codex-signup"], focus: "claude-checkout", layout: "rows", dock: "none", approval: "approved", voice: "off", mission: 0 }}
+    threads={stageThreads()}
   />
 </div>
 
