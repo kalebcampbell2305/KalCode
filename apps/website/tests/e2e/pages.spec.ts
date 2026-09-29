@@ -1,7 +1,7 @@
 import { PLANS } from "@kalcode/protocol/plans";
 import { expect, test } from "@playwright/test";
 import { NOT_FOUND_PAGE, PAGES, SITE_ORIGIN, SOCIAL } from "../../src/lib/site";
-import { CHANNEL_LABEL, MANIFEST, SERVED_STABLE, SIGNED_STABLE, WINDOWS_BUILD, renderedDescription } from "./helpers";
+import { CHANNEL_LABEL, MANIFEST, renderedDescription, SERVED_STABLE, SIGNED_STABLE, WINDOWS_BUILD } from "./helpers";
 
 const STABLE_015 = SIGNED_STABLE && MANIFEST.latest?.version === "0.1.5";
 
