@@ -452,6 +452,111 @@ test("CLI requires explicit safe mode and absolute independent inputs", () => {
   assert.throws(() => parseQaStageArguments(argv.slice(0, -1)), /explicit/);
   assert.throws(() => parseQaStageArguments([...argv, "--remote"]), /mutually exclusive/);
   assert.throws(() => parseQaStageArguments(argv.with(1, "relative")), /absolute/);
+  assert.equal(
+    parseQaStageArguments([...argv, "--approved-tool-commit", "a".repeat(40)]).approvedToolCommit,
+    "a".repeat(40),
+  );
+  for (const value of ["a".repeat(12), "G".repeat(40), "", "--remote"]) {
+    assert.throws(() => parseQaStageArguments([...argv, "--approved-tool-commit", value]));
+  }
+  assert.throws(
+    () =>
+      parseQaStageArguments([
+        ...argv,
+        "--approved-tool-commit",
+        "a".repeat(40),
+        "--approved-tool-commit",
+        "a".repeat(40),
+      ]),
+    /exactly once/,
+  );
+});
+
+function toolAuthority() {
+  return {
+    toolCommit: "a".repeat(40),
+    productCommit: CANDIDATE_COMMIT,
+    candidateNotesCommit: "b".repeat(40),
+    baselineQaSha256: { "windows-x86_64": "c".repeat(64), "darwin-aarch64": "d".repeat(64) },
+  };
+}
+
+test("separate tool receipt binds source and baseline observation identities and resumes exactly", async () => {
+  const baseline = release(BASELINE_VERSION, "3", BASELINE_COMMIT);
+  const candidate = release(CANDIDATE_VERSION, "5", CANDIDATE_COMMIT);
+  const pointerRows = [pointerRow()];
+  const sourceAuthority = toolAuthority();
+  const receipt = createQaStageReceipt({ baseline, candidate, pointerRows, sourceAuthority });
+  assert.equal(receipt.schemaVersion, 2);
+  assert.deepEqual(receipt.sourceAuthority, sourceAuthority);
+  const legacy = createQaStageReceipt({ baseline, candidate, pointerRows, createdAt: receipt.createdAt });
+  assert.equal(legacy.schemaVersion, 1);
+  assert.equal(legacy.sourceAuthority, undefined);
+  assert.notEqual(legacy.planSha256, receipt.planSha256);
+  const remote = remoteFixture(pointerRows[0]);
+  await runQaStagePublication({ baseline, candidate, receipt, sourceAuthority, remote });
+  await runQaStagePublication({ baseline, candidate, receipt, sourceAuthority, remote });
+  for (const mutate of [
+    (a) => {
+      a.toolCommit = "e".repeat(40);
+    },
+    (a) => {
+      a.productCommit = "e".repeat(40);
+    },
+    (a) => {
+      a.candidateNotesCommit = "e".repeat(40);
+    },
+    (a) => {
+      a.baselineQaSha256["windows-x86_64"] = "e".repeat(64);
+    },
+    (a) => {
+      a.baselineQaSha256["darwin-aarch64"] = "e".repeat(64);
+    },
+  ]) {
+    const changed = structuredClone(sourceAuthority);
+    mutate(changed);
+    await assert.rejects(
+      runQaStagePublication({ baseline, candidate, receipt, sourceAuthority: changed, remote }),
+      /authority|receipt/,
+    );
+  }
+  await assert.rejects(runQaStagePublication({ baseline, candidate, receipt, remote }), /receipt/);
+  await assert.rejects(
+    runQaStagePublication({ baseline, candidate, receipt: legacy, sourceAuthority, remote }),
+    /receipt/,
+  );
+});
+
+test("tool receipts reject incomplete, substituted, and extra authority fields before writes", () => {
+  const baseline = release(BASELINE_VERSION, "3", BASELINE_COMMIT);
+  const candidate = release(CANDIDATE_VERSION, "5", CANDIDATE_COMMIT);
+  for (const mutate of [
+    (a) => {
+      delete a.toolCommit;
+    },
+    (a) => {
+      a.toolCommit = "short";
+    },
+    (a) => {
+      a.productCommit = "e".repeat(40);
+    },
+    (a) => {
+      delete a.baselineQaSha256["darwin-aarch64"];
+    },
+    (a) => {
+      a.baselineQaSha256["windows-x86_64"] = "short";
+    },
+    (a) => {
+      a.baselineQaSha256.extra = "e".repeat(64);
+    },
+    (a) => {
+      a.unreviewed = true;
+    },
+  ]) {
+    const sourceAuthority = toolAuthority();
+    mutate(sourceAuthority);
+    assert.throws(() => createQaStageReceipt({ baseline, candidate, pointerRows: [], sourceAuthority }), /authority/);
+  }
 });
 
 test("stage executable has no pointer-write or mutable-feed publication capability", () => {

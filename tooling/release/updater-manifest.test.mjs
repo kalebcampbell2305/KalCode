@@ -6,7 +6,13 @@ import { join } from "node:path";
 import { test } from "node:test";
 
 import { parseUpdaterDescriptor } from "../../apps/website/worker/updater-descriptor.ts";
-import { createPlatformUpdaterManifest, createUpdaterManifest } from "./updater-manifest.mjs";
+import {
+  baselineWaiverCandidateProblems,
+  createPlatformUpdaterManifest,
+  createUpdaterManifest,
+  updaterQaProblems,
+} from "./updater-manifest.mjs";
+import { assembleRelease } from "./updater-qa-stage-assembly.mjs";
 
 const commit = "a".repeat(40);
 const artifactBytes = Buffer.from("updater artifact");
@@ -57,6 +63,586 @@ function qaEvidence(target, version = "1.2.3", candidateCommit = commit, candida
     },
   };
 }
+
+function unavailableBaselineQa(target) {
+  const sha256 =
+    target === "windows-x86_64"
+      ? "4d4d8897ab376b5532e3940d79c13a2a2674614ade729ace211dba7f662ebb70"
+      : "918646e4b26f39463a6bd841c2f705ed7a18b42ec271668932a97b7d65c8c987";
+  const record = qaEvidence(target, "0.1.4", "0ee34938d6543bba3679cb008174231d0e9544ec", sha256);
+  record.status = "preliminary-passed";
+  record.updateTrial = null;
+  record.checks.kalvoice = false;
+  record.kalvoiceUnavailable = {
+    release: { ...record.release },
+    target,
+    reason: "stable-surface-hidden",
+    observation: {
+      release: { ...record.release },
+      target,
+      profile: "kalcodeqa2",
+      receiptSha256: "f".repeat(64),
+      observedAt: "2026-09-28T01:00:00.000Z",
+      surfaceAbsent: true,
+      activationUnavailable: true,
+    },
+  };
+  return record;
+}
+
+function baselineAuthority(record) {
+  return { release: { ...record.release }, target: record.target, reason: "stable-surface-hidden" };
+}
+
+test("baseline preliminary QA preserves observed, exact-bound KalVoice unavailability as false", () => {
+  for (const target of ["windows-x86_64", "darwin-aarch64"]) {
+    const record = unavailableBaselineQa(target);
+    const expected = { target, channel: "stable", release: { ...record.release } };
+    const before = structuredClone(record);
+    assert.deepEqual(updaterQaProblems(record, expected, "baseline-preliminary", baselineAuthority(record)), []);
+    assert.deepEqual(record, before, "validation must never normalize unavailable into a passed check");
+  }
+});
+
+test("unavailable baseline evidence cannot authorize candidate preliminary or final QA", () => {
+  const record = unavailableBaselineQa("windows-x86_64");
+  const expected = { target: record.target, channel: "stable", release: { ...record.release } };
+  for (const phase of ["preliminary", "final"]) {
+    assert.notDeepEqual(updaterQaProblems(record, expected, phase), []);
+  }
+});
+
+test("baseline unavailability requires complete exact-bound source and physical absence evidence", () => {
+  for (const mutate of [
+    (r) => delete r.kalvoiceUnavailable,
+    (r) => (r.kalvoiceUnavailable.target = "darwin-aarch64"),
+    (r) => (r.kalvoiceUnavailable.release.commit = "e".repeat(40)),
+    (r) => (r.kalvoiceUnavailable.release.sha256 = "e".repeat(64)),
+    (r) => (r.kalvoiceUnavailable.release.version = "1.2.1"),
+    (r) => (r.kalvoiceUnavailable.reason = "not-tested"),
+    (r) => delete r.kalvoiceUnavailable.observation,
+    (r) => (r.kalvoiceUnavailable.observation.release.sha256 = "e".repeat(64)),
+    (r) => (r.kalvoiceUnavailable.observation.release.commit = "e".repeat(40)),
+    (r) => (r.kalvoiceUnavailable.observation.release.version = "0.1.3"),
+    (r) => (r.kalvoiceUnavailable.observation.target = "darwin-aarch64"),
+    (r) => (r.kalvoiceUnavailable.observation.profile = ""),
+    (r) => (r.kalvoiceUnavailable.observation.receiptSha256 = "not-a-hash"),
+    (r) => (r.kalvoiceUnavailable.observation.observedAt = "invalid"),
+    (r) => (r.kalvoiceUnavailable.observation.surfaceAbsent = false),
+    (r) => (r.kalvoiceUnavailable.observation.activationUnavailable = false),
+    (r) => (r.kalvoiceUnavailable.observation.unreviewed = true),
+    (r) => (r.checks.kalvoice = true),
+    (r) => (r.checks.kalvoice = null),
+    (r) => (r.channel = "beta"),
+    (r) => (r.status = "passed"),
+    (r) => (r.updateTrial = {}),
+  ]) {
+    const record = unavailableBaselineQa("windows-x86_64");
+    const expected = { target: record.target, channel: "stable", release: { ...record.release } };
+    mutate(record);
+    assert.notDeepEqual(updaterQaProblems(record, expected, "baseline-preliminary", baselineAuthority(record)), []);
+  }
+});
+
+test("baseline role never waives authentication, another product check, or a safeguard", () => {
+  const original = unavailableBaselineQa("windows-x86_64");
+  const expected = { target: original.target, channel: "stable", release: { ...original.release } };
+  for (const key of Object.keys(original.checks).filter((key) => key !== "kalvoice")) {
+    const record = structuredClone(original);
+    record.checks[key] = false;
+    assert.notDeepEqual(
+      updaterQaProblems(record, expected, "baseline-preliminary", baselineAuthority(record)),
+      [],
+      key,
+    );
+  }
+  for (const key of Object.keys(original.safeguards)) {
+    const record = structuredClone(original);
+    record.safeguards[key] = true;
+    assert.notDeepEqual(
+      updaterQaProblems(record, expected, "baseline-preliminary", baselineAuthority(record)),
+      [],
+      key,
+    );
+  }
+});
+
+test("baseline capability authority is mandatory and limited to reviewed source and platform bytes", () => {
+  for (const target of ["windows-x86_64", "darwin-aarch64"]) {
+    const record = unavailableBaselineQa(target);
+    const expected = { target, channel: "stable", release: { ...record.release } };
+    assert.notDeepEqual(updaterQaProblems(record, expected, "baseline-preliminary"), []);
+    for (const mutate of [
+      (r) => (r.release.commit = "a".repeat(40)),
+      (r) => (r.release.sha256 = "a".repeat(64)),
+      (r) => (r.release.version = "0.1.5"),
+    ]) {
+      const substituted = structuredClone(record);
+      mutate(substituted);
+      substituted.kalvoiceUnavailable.release = { ...substituted.release };
+      substituted.kalvoiceUnavailable.observation.release = { ...substituted.release };
+      assert.notDeepEqual(
+        updaterQaProblems(
+          substituted,
+          { ...expected, release: substituted.release },
+          "baseline-preliminary",
+          baselineAuthority(substituted),
+        ),
+        [],
+      );
+    }
+    const wrongTarget = baselineAuthority(record);
+    wrongTarget.target = target === "windows-x86_64" ? "darwin-aarch64" : "windows-x86_64";
+    assert.notDeepEqual(updaterQaProblems(record, expected, "baseline-preliminary", wrongTarget), []);
+    for (const phase of ["preliminary", "final"]) {
+      assert.notDeepEqual(updaterQaProblems(record, expected, phase, baselineAuthority(record)), []);
+    }
+  }
+});
+
+const otherTarget = (target) => (target === "windows-x86_64" ? "darwin-aarch64" : "windows-x86_64");
+const ISOLATION_DEFECT =
+  "0ee3493:crates/providers/src/gemini/managed_policy.rs:130 --ignore-env rejected by Gemini CLI 0.61.0";
+
+function isolationWaivedBaselineQa(target) {
+  const record = unavailableBaselineQa(target);
+  record.checks.accountIsolation = false;
+  record.accountIsolationUnavailable = {
+    release: { ...record.release },
+    target,
+    reason: "baseline-provider-cli-incompatible",
+    defectReference: ISOLATION_DEFECT,
+    candidateProofRequired: true,
+    observation: {
+      release: { ...record.release },
+      target,
+      profile: "kalcodeqa2",
+      receiptSha256: "e".repeat(64),
+      observedAt: "2026-09-28T02:00:00.000Z",
+      storageIsolationProven: true,
+    },
+  };
+  return record;
+}
+
+test("baseline preliminary QA accepts the exact-bound account isolation waiver, with and without KalVoice", () => {
+  for (const target of ["windows-x86_64", "darwin-aarch64"]) {
+    const record = isolationWaivedBaselineQa(target);
+    const expected = { target, channel: "stable", release: { ...record.release } };
+    const before = structuredClone(record);
+    assert.deepEqual(updaterQaProblems(record, expected, "baseline-preliminary", baselineAuthority(record)), []);
+    assert.deepEqual(record, before, "validation must never normalize the waiver into a passed check");
+    const kalvoicePassed = structuredClone(record);
+    delete kalvoicePassed.kalvoiceUnavailable;
+    kalvoicePassed.checks.kalvoice = true;
+    assert.deepEqual(
+      updaterQaProblems(kalvoicePassed, expected, "baseline-preliminary", baselineAuthority(record)),
+      [],
+    );
+  }
+});
+
+test("account isolation waiver never authorizes a candidate preliminary or final record", () => {
+  for (const target of ["windows-x86_64", "darwin-aarch64"]) {
+    const record = isolationWaivedBaselineQa(target);
+    const expected = { target, channel: "stable", release: { ...record.release } };
+    for (const phase of ["preliminary", "final"]) {
+      assert.deepEqual(updaterQaProblems(record, expected, phase, baselineAuthority(record)), [
+        "updater QA record has unexpected fields",
+      ]);
+    }
+    // A candidate-shaped record (all checks true) carrying only the waiver is still refused.
+    const candidate = qaEvidence(target);
+    candidate.status = "preliminary-passed";
+    candidate.updateTrial = null;
+    candidate.accountIsolationUnavailable = structuredClone(record.accountIsolationUnavailable);
+    const candidateExpected = { target, channel: "stable", release: { ...candidate.release } };
+    assert.notDeepEqual(updaterQaProblems(candidate, candidateExpected, "preliminary"), []);
+    assert.notDeepEqual(
+      updaterQaProblems(candidate, candidateExpected, "baseline-preliminary", baselineAuthority(candidate)),
+      [],
+    );
+  }
+});
+
+test("account isolation waiver requires every exact field and nothing more", () => {
+  const mutations = [
+    (r) => delete r.accountIsolationUnavailable,
+    (r) => (r.accountIsolationUnavailable = null),
+    (r) => (r.accountIsolationUnavailable.extra = true),
+    (r) => (r.accountIsolationUnavailable.target = otherTarget(r.target)),
+    (r) => (r.accountIsolationUnavailable.release.commit = "e".repeat(40)),
+    (r) => (r.accountIsolationUnavailable.release.sha256 = "e".repeat(64)),
+    (r) => (r.accountIsolationUnavailable.release.version = "0.1.5"),
+    (r) => (r.accountIsolationUnavailable.release.extra = "x"),
+    (r) => (r.accountIsolationUnavailable.reason = "stable-surface-hidden"),
+    (r) => (r.accountIsolationUnavailable.reason = "not-tested"),
+    (r) => (r.accountIsolationUnavailable.defectReference = ISOLATION_DEFECT.replace(":130", ":634")),
+    (r) => (r.accountIsolationUnavailable.defectReference = `${ISOLATION_DEFECT} `),
+    (r) => (r.accountIsolationUnavailable.candidateProofRequired = false),
+    (r) => (r.accountIsolationUnavailable.candidateProofRequired = "true"),
+    (r) => (r.accountIsolationUnavailable.observation.storageIsolationProven = false),
+    (r) => (r.accountIsolationUnavailable.observation.release.sha256 = "e".repeat(64)),
+    (r) => (r.accountIsolationUnavailable.observation.release.commit = "e".repeat(40)),
+    (r) => (r.accountIsolationUnavailable.observation.release.version = "0.1.3"),
+    (r) => (r.accountIsolationUnavailable.observation.target = otherTarget(r.target)),
+    (r) => (r.accountIsolationUnavailable.observation.profile = ""),
+    (r) => (r.accountIsolationUnavailable.observation.profile = "bad profile"),
+    (r) => (r.accountIsolationUnavailable.observation.receiptSha256 = "not-a-hash"),
+    (r) => (r.accountIsolationUnavailable.observation.observedAt = "invalid"),
+    (r) => (r.accountIsolationUnavailable.observation.observedAt = "2026-09-28T02:00:00Z"),
+    (r) => (r.accountIsolationUnavailable.observation.unreviewed = true),
+    (r) => (r.accountIsolationUnavailable.observation.surfaceAbsent = true),
+    (r) => (r.checks.accountIsolation = true),
+    (r) => (r.checks.accountIsolation = null),
+    (r) => (r.checks.auth = false),
+    (r) => (r.safeguards.fixtureOnly = true),
+    (r) => (r.channel = "beta"),
+    (r) => (r.status = "passed"),
+    (r) => (r.updateTrial = {}),
+  ];
+  for (const field of ["release", "target", "reason", "defectReference", "candidateProofRequired", "observation"]) {
+    mutations.push((r) => delete r.accountIsolationUnavailable[field]);
+  }
+  for (const field of ["release", "target", "profile", "receiptSha256", "observedAt", "storageIsolationProven"]) {
+    mutations.push((r) => delete r.accountIsolationUnavailable.observation[field]);
+  }
+  for (const target of ["windows-x86_64", "darwin-aarch64"]) {
+    for (const mutate of mutations) {
+      const record = isolationWaivedBaselineQa(target);
+      const expected = { target, channel: "stable", release: { ...record.release } };
+      mutate(record);
+      assert.notDeepEqual(
+        updaterQaProblems(record, expected, "baseline-preliminary", baselineAuthority(record)),
+        [],
+        mutate.toString(),
+      );
+    }
+  }
+});
+
+test("account isolation waiver requires the tool baseline context and the two pinned baseline artifacts", () => {
+  for (const target of ["windows-x86_64", "darwin-aarch64"]) {
+    const record = isolationWaivedBaselineQa(target);
+    const expected = { target, channel: "stable", release: { ...record.release } };
+    assert.notDeepEqual(updaterQaProblems(record, expected, "baseline-preliminary"), []);
+    const wrongTarget = baselineAuthority(record);
+    wrongTarget.target = target === "windows-x86_64" ? "darwin-aarch64" : "windows-x86_64";
+    assert.notDeepEqual(updaterQaProblems(record, expected, "baseline-preliminary", wrongTarget), []);
+    for (const mutate of [
+      (r) => (r.release.commit = "a".repeat(40)),
+      (r) => (r.release.sha256 = "a".repeat(64)),
+      (r) => (r.release.version = "0.1.5"),
+    ]) {
+      const substituted = structuredClone(record);
+      mutate(substituted);
+      for (const proof of [substituted.kalvoiceUnavailable, substituted.accountIsolationUnavailable]) {
+        proof.release = { ...substituted.release };
+        proof.observation.release = { ...substituted.release };
+      }
+      assert.notDeepEqual(
+        updaterQaProblems(
+          substituted,
+          { ...expected, release: substituted.release },
+          "baseline-preliminary",
+          baselineAuthority(substituted),
+        ),
+        [],
+      );
+    }
+  }
+});
+
+test("a baseline isolation waiver is refused unless the same platform candidate proves isolation", () => {
+  const candidateQa = (target) => {
+    const record = qaEvidence(target);
+    record.status = "preliminary-passed";
+    record.updateTrial = null;
+    return record;
+  };
+  for (const target of ["windows-x86_64", "darwin-aarch64"]) {
+    const baseline = isolationWaivedBaselineQa(target);
+    assert.deepEqual(baselineWaiverCandidateProblems(baseline, candidateQa(target)), []);
+    const other = target === "windows-x86_64" ? "darwin-aarch64" : "windows-x86_64";
+    for (const candidate of [
+      undefined,
+      null,
+      [],
+      {},
+      Object.assign(candidateQa(target), { checks: { ...candidateQa(target).checks, accountIsolation: false } }),
+      Object.assign(candidateQa(target), { checks: { ...candidateQa(target).checks, accountIsolation: null } }),
+      Object.assign(candidateQa(target), { checks: { ...candidateQa(target).checks, accountIsolation: "true" } }),
+      Object.assign(candidateQa(target), { accountIsolationUnavailable: baseline.accountIsolationUnavailable }),
+      candidateQa(other),
+    ]) {
+      assert.deepEqual(baselineWaiverCandidateProblems(baseline, candidate), [
+        "baseline account isolation waiver requires the candidate record for the same platform to prove accountIsolation",
+      ]);
+    }
+    // Without a waiver the candidate is judged only by its own preliminary contract.
+    assert.deepEqual(baselineWaiverCandidateProblems(unavailableBaselineQa(target), {}), []);
+  }
+});
+
+const BROWSER_DEFECT =
+  "0ee3493:apps/desktop/src-tauri/src/browser_commands.rs:1403 child.url() -> wry-0.55.1 wkwebview/mod.rs:1349 URL().unwrap() aborts on nil URL (macOS)";
+const BROWSER_CANDIDATE_PROBLEM =
+  "baseline browser waiver requires the candidate record for the same platform to prove browser";
+const ISOLATION_CANDIDATE_PROBLEM =
+  "baseline account isolation waiver requires the candidate record for the same platform to prove accountIsolation";
+
+function browserUnavailableProof(record) {
+  return {
+    release: { ...record.release },
+    target: record.target,
+    reason: "baseline-webview-nil-url-abort",
+    defectReference: BROWSER_DEFECT,
+    candidateProofRequired: true,
+    observation: {
+      release: { ...record.release },
+      target: record.target,
+      profile: "kalcodeqa2",
+      receiptSha256: "9".repeat(64),
+      observedAt: "2026-09-28T19:50:11.000Z",
+      crashObserved: true,
+    },
+  };
+}
+
+// The historical macOS 0.1.4 baseline (mac014): Browser observed crashing, recorded as false.
+function browserWaivedBaselineQa(target = "darwin-aarch64") {
+  const record = unavailableBaselineQa(target);
+  record.checks.browser = false;
+  record.browserUnavailable = browserUnavailableProof(record);
+  return record;
+}
+
+test("macOS baseline preliminary QA accepts the exact-bound browser waiver and keeps browser false", () => {
+  const record = browserWaivedBaselineQa();
+  const expected = { target: record.target, channel: "stable", release: { ...record.release } };
+  const before = structuredClone(record);
+  assert.deepEqual(updaterQaProblems(record, expected, "baseline-preliminary", baselineAuthority(record)), []);
+  assert.deepEqual(record, before, "validation must never normalize the observed crash into a passed check");
+  assert.equal(record.checks.browser, false);
+  // It composes with the account isolation waiver (the real mac014 shape) and with KalVoice passing.
+  const combined = isolationWaivedBaselineQa("darwin-aarch64");
+  combined.checks.browser = false;
+  combined.browserUnavailable = browserUnavailableProof(combined);
+  assert.deepEqual(updaterQaProblems(combined, expected, "baseline-preliminary", baselineAuthority(combined)), []);
+  const kalvoicePassed = structuredClone(record);
+  delete kalvoicePassed.kalvoiceUnavailable;
+  kalvoicePassed.checks.kalvoice = true;
+  assert.deepEqual(updaterQaProblems(kalvoicePassed, expected, "baseline-preliminary", baselineAuthority(record)), []);
+});
+
+test("browser waiver is refused on the Windows baseline, which must still prove browser", () => {
+  const record = browserWaivedBaselineQa("windows-x86_64");
+  const expected = { target: record.target, channel: "stable", release: { ...record.release } };
+  assert.deepEqual(updaterQaProblems(record, expected, "baseline-preliminary", baselineAuthority(record)), [
+    "baseline browser unavailability evidence is invalid",
+    "updater QA product checks are incomplete",
+  ]);
+  // Even a Windows proof claiming the macOS target is refused: it cannot bind the Windows artifact.
+  const retargeted = browserWaivedBaselineQa("windows-x86_64");
+  retargeted.browserUnavailable.target = "darwin-aarch64";
+  retargeted.browserUnavailable.observation.target = "darwin-aarch64";
+  assert.notDeepEqual(
+    updaterQaProblems(retargeted, expected, "baseline-preliminary", baselineAuthority(retargeted)),
+    [],
+  );
+  // A Windows browser false without any proof stays a failed check; browser true is unchanged.
+  const withoutProof = browserWaivedBaselineQa("windows-x86_64");
+  delete withoutProof.browserUnavailable;
+  assert.deepEqual(updaterQaProblems(withoutProof, expected, "baseline-preliminary", baselineAuthority(withoutProof)), [
+    "updater QA product checks are incomplete",
+  ]);
+  assert.deepEqual(
+    updaterQaProblems(
+      unavailableBaselineQa("windows-x86_64"),
+      expected,
+      "baseline-preliminary",
+      baselineAuthority(record),
+    ),
+    [],
+  );
+});
+
+test("browser waiver never authorizes a candidate preliminary or final record", () => {
+  for (const target of ["windows-x86_64", "darwin-aarch64"]) {
+    const record = browserWaivedBaselineQa(target);
+    const expected = { target, channel: "stable", release: { ...record.release } };
+    for (const phase of ["preliminary", "final"]) {
+      assert.deepEqual(updaterQaProblems(record, expected, phase, baselineAuthority(record)), [
+        "updater QA record has unexpected fields",
+      ]);
+    }
+    // A 0.1.5 candidate-shaped record with browser false and a proof is refused in every phase.
+    const candidate = qaEvidence(target);
+    candidate.status = "preliminary-passed";
+    candidate.updateTrial = null;
+    candidate.checks.browser = false;
+    candidate.browserUnavailable = browserUnavailableProof(candidate);
+    const candidateExpected = { target, channel: "stable", release: { ...candidate.release } };
+    for (const phase of ["preliminary", "final"]) {
+      assert.deepEqual(updaterQaProblems(candidate, candidateExpected, phase), [
+        "updater QA record has unexpected fields",
+      ]);
+    }
+    assert.notDeepEqual(
+      updaterQaProblems(candidate, candidateExpected, "baseline-preliminary", baselineAuthority(candidate)),
+      [],
+    );
+    // Nor does a candidate that proves browser but carries the baseline's proof alongside.
+    const carrying = qaEvidence(target);
+    carrying.status = "preliminary-passed";
+    carrying.updateTrial = null;
+    carrying.browserUnavailable = structuredClone(record.browserUnavailable);
+    assert.deepEqual(updaterQaProblems(carrying, candidateExpected, "preliminary"), [
+      "updater QA record has unexpected fields",
+    ]);
+  }
+});
+
+test("browser waiver requires every exact field and nothing more", () => {
+  const mutations = [
+    (r) => delete r.browserUnavailable,
+    (r) => (r.browserUnavailable = null),
+    (r) => (r.browserUnavailable = []),
+    (r) => (r.browserUnavailable.extra = true),
+    (r) => (r.browserUnavailable.target = "windows-x86_64"),
+    (r) => (r.browserUnavailable.release.commit = "e".repeat(40)),
+    (r) => (r.browserUnavailable.release.sha256 = "e".repeat(64)),
+    (r) => (r.browserUnavailable.release.sha256 = "4d4d8897ab376b5532e3940d79c13a2a2674614ade729ace211dba7f662ebb70"),
+    (r) => (r.browserUnavailable.release.version = "0.1.5"),
+    (r) => (r.browserUnavailable.release.extra = "x"),
+    (r) => (r.browserUnavailable.reason = "stable-surface-hidden"),
+    (r) => (r.browserUnavailable.reason = "baseline-provider-cli-incompatible"),
+    (r) => (r.browserUnavailable.reason = "not-tested"),
+    (r) => (r.browserUnavailable.defectReference = ISOLATION_DEFECT),
+    (r) => (r.browserUnavailable.defectReference = BROWSER_DEFECT.replace(":1403", ":1402")),
+    (r) => (r.browserUnavailable.defectReference = BROWSER_DEFECT.replace("mod.rs:1349", "mod.rs:1350")),
+    (r) => (r.browserUnavailable.defectReference = BROWSER_DEFECT.replace(" -> ", " → ")),
+    (r) => (r.browserUnavailable.defectReference = BROWSER_DEFECT.replace("0.55.1", "0.55.2")),
+    (r) => (r.browserUnavailable.defectReference = `${BROWSER_DEFECT} `),
+    (r) => (r.browserUnavailable.defectReference = BROWSER_DEFECT.toLowerCase()),
+    (r) => (r.browserUnavailable.candidateProofRequired = false),
+    (r) => (r.browserUnavailable.candidateProofRequired = "true"),
+    (r) => (r.browserUnavailable.observation.crashObserved = false),
+    (r) => (r.browserUnavailable.observation.crashObserved = "true"),
+    (r) => (r.browserUnavailable.observation.release.sha256 = "e".repeat(64)),
+    (r) => (r.browserUnavailable.observation.release.commit = "e".repeat(40)),
+    (r) => (r.browserUnavailable.observation.release.version = "0.1.3"),
+    (r) => (r.browserUnavailable.observation.target = "windows-x86_64"),
+    (r) => (r.browserUnavailable.observation.profile = ""),
+    (r) => (r.browserUnavailable.observation.profile = "bad profile"),
+    (r) => (r.browserUnavailable.observation.receiptSha256 = "not-a-hash"),
+    (r) => (r.browserUnavailable.observation.observedAt = "invalid"),
+    (r) => (r.browserUnavailable.observation.observedAt = "2026-09-28T19:50:11Z"),
+    (r) => (r.browserUnavailable.observation.unreviewed = true),
+    (r) => (r.browserUnavailable.observation.storageIsolationProven = true),
+    (r) => (r.checks.browser = true),
+    (r) => (r.checks.browser = null),
+    (r) => (r.checks.browser = "false"),
+    (r) => (r.checks.workspace = false),
+    (r) => (r.checks.auth = false),
+    (r) => (r.safeguards.fixtureOnly = true),
+    (r) => (r.channel = "beta"),
+    (r) => (r.status = "passed"),
+    (r) => (r.updateTrial = {}),
+  ];
+  for (const field of ["release", "target", "reason", "defectReference", "candidateProofRequired", "observation"]) {
+    mutations.push((r) => delete r.browserUnavailable[field]);
+  }
+  for (const field of ["release", "target", "profile", "receiptSha256", "observedAt", "crashObserved"]) {
+    mutations.push((r) => delete r.browserUnavailable.observation[field]);
+  }
+  for (const mutate of mutations) {
+    const record = browserWaivedBaselineQa();
+    const expected = { target: record.target, channel: "stable", release: { ...record.release } };
+    mutate(record);
+    assert.notDeepEqual(
+      updaterQaProblems(record, expected, "baseline-preliminary", baselineAuthority(record)),
+      [],
+      mutate.toString(),
+    );
+  }
+});
+
+test("browser waiver requires the tool baseline context and the pinned macOS 0.1.4 artifact", () => {
+  const record = browserWaivedBaselineQa();
+  const expected = { target: record.target, channel: "stable", release: { ...record.release } };
+  assert.notDeepEqual(updaterQaProblems(record, expected, "baseline-preliminary"), []);
+  const wrongTarget = baselineAuthority(record);
+  wrongTarget.target = "windows-x86_64";
+  assert.notDeepEqual(updaterQaProblems(record, expected, "baseline-preliminary", wrongTarget), []);
+  for (const mutate of [
+    (r) => (r.release.commit = "a".repeat(40)),
+    (r) => (r.release.sha256 = "a".repeat(64)),
+    (r) => (r.release.sha256 = "4d4d8897ab376b5532e3940d79c13a2a2674614ade729ace211dba7f662ebb70"),
+    (r) => (r.release.version = "0.1.5"),
+  ]) {
+    const substituted = structuredClone(record);
+    mutate(substituted);
+    for (const proof of [substituted.kalvoiceUnavailable, substituted.browserUnavailable]) {
+      proof.release = { ...substituted.release };
+      proof.observation.release = { ...substituted.release };
+    }
+    assert.notDeepEqual(
+      updaterQaProblems(
+        substituted,
+        { ...expected, release: substituted.release },
+        "baseline-preliminary",
+        baselineAuthority(substituted),
+      ),
+      [],
+    );
+  }
+});
+
+test("a baseline browser waiver is refused unless the same platform candidate proves browser", () => {
+  const candidateQa = (target) => {
+    const record = qaEvidence(target);
+    record.status = "preliminary-passed";
+    record.updateTrial = null;
+    return record;
+  };
+  const baseline = browserWaivedBaselineQa();
+  assert.deepEqual(baselineWaiverCandidateProblems(baseline, candidateQa("darwin-aarch64")), []);
+  for (const candidate of [
+    undefined,
+    null,
+    [],
+    {},
+    Object.assign(candidateQa("darwin-aarch64"), {
+      checks: { ...candidateQa("darwin-aarch64").checks, browser: false },
+    }),
+    Object.assign(candidateQa("darwin-aarch64"), {
+      checks: { ...candidateQa("darwin-aarch64").checks, browser: null },
+    }),
+    Object.assign(candidateQa("darwin-aarch64"), {
+      checks: { ...candidateQa("darwin-aarch64").checks, browser: "true" },
+    }),
+    Object.assign(candidateQa("darwin-aarch64"), { browserUnavailable: baseline.browserUnavailable }),
+    candidateQa("windows-x86_64"),
+  ]) {
+    assert.deepEqual(baselineWaiverCandidateProblems(baseline, candidate), [BROWSER_CANDIDATE_PROBLEM]);
+  }
+  // Both waivers on the real mac014 shape: each is deferred independently to the candidate.
+  const both = isolationWaivedBaselineQa("darwin-aarch64");
+  both.checks.browser = false;
+  both.browserUnavailable = browserUnavailableProof(both);
+  assert.deepEqual(baselineWaiverCandidateProblems(both, candidateQa("darwin-aarch64")), []);
+  assert.deepEqual(baselineWaiverCandidateProblems(both, null), [
+    ISOLATION_CANDIDATE_PROBLEM,
+    BROWSER_CANDIDATE_PROBLEM,
+  ]);
+  const noBrowser = candidateQa("darwin-aarch64");
+  noBrowser.checks.browser = false;
+  assert.deepEqual(baselineWaiverCandidateProblems(both, noBrowser), [BROWSER_CANDIDATE_PROBLEM]);
+  const noIsolation = candidateQa("darwin-aarch64");
+  noIsolation.checks.accountIsolation = false;
+  assert.deepEqual(baselineWaiverCandidateProblems(both, noIsolation), [ISOLATION_CANDIDATE_PROBLEM]);
+});
 
 function signer() {
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
@@ -701,6 +1287,60 @@ test("v2 publishes only the verified platforms without inventing parity", async 
     createPlatformUpdaterManifest({ ...options, artifacts: [windows, mac] }),
     /exact version and source commit/,
   );
+});
+
+test("stage assembly selects baseline capability validation only for the explicit baseline role", async () => {
+  const windows = { ...fixture(), target: "windows-x86_64" };
+  windows.signaturePath = `${windows.artifactPath}.windows-x86_64.sig`;
+  writeFileSync(
+    windows.signaturePath,
+    signature("1.2.3", artifactBytes, releaseSigner, ["target:windows-x86_64", "channel:stable"]),
+  );
+  const packets = [windows, macFixture()];
+  for (const packet of packets) {
+    packet.build.builtAt = "2026-01-01T00:00:00.000Z";
+    packet.qa = unavailableBaselineQa(packet.target);
+  }
+  const staging = mkdtempSync(join(tmpdir(), "kalcode-stage-baseline-role-"));
+  const options = { staging, source: staging, packets, version: "1.2.3", notes: "Private test baseline", write: false };
+  // The fixtures deliberately use another signing key. Baseline selection must reach
+  // real signature verification before creating any trusted capability context.
+  await assert.rejects(assembleRelease({ ...options, role: "baseline" }), /updater signature is invalid/);
+  await assert.rejects(assembleRelease(options), /QA record has unexpected fields/);
+  await assert.rejects(assembleRelease({ ...options, role: "candidate" }), /QA record has unexpected fields/);
+  await assert.rejects(assembleRelease({ ...options, role: "unknown" }), /role is invalid/);
+});
+
+test("baseline phase keeps real artifact, signature, and Mac notarization guards", async () => {
+  for (const target of ["windows-x86_64", "darwin-aarch64"]) {
+    const input = target === "darwin-aarch64" ? macFixture() : { ...fixture(), target };
+    if (target === "windows-x86_64") {
+      input.signaturePath = `${input.artifactPath}.${target}.sig`;
+      writeFileSync(
+        input.signaturePath,
+        signature("1.2.3", artifactBytes, releaseSigner, [`target:${target}`, "channel:stable"]),
+      );
+    }
+    input.qa = unavailableBaselineQa(target);
+    const options = {
+      artifacts: [input],
+      requestedChannel: "stable",
+      notes: "Private test baseline",
+      publishedAt: "2026-01-01T00:00:00.000Z",
+      qaPhase: "baseline-preliminary",
+    };
+    // Even correctly signed unapproved bytes/source cannot claim the pinned disposition.
+    await assert.rejects(createPlatformUpdaterManifest(options), /unavailability evidence is invalid/);
+    writeFileSync(input.artifactPath, Buffer.from("changed artifact"));
+    await assert.rejects(createPlatformUpdaterManifest(options), /signature is invalid/);
+    if (target === "darwin-aarch64") {
+      input.verify.notaryAccepted = false;
+      await assert.rejects(createPlatformUpdaterManifest(options), /notarization verification is incomplete/);
+    } else {
+      input.build.signatureStatus = "Invalid";
+      await assert.rejects(createPlatformUpdaterManifest(options), /Authenticode signature is not valid/);
+    }
+  }
 });
 
 test("v2 Mac feed refuses incomplete signing, physical QA and channel evidence", async () => {
