@@ -380,6 +380,41 @@ test("staging claims only immutable versions, supports receipt-authorized partia
   assert.equal(remote.versions.size, 2);
 });
 
+test("staging a new private pair leaves unrelated burned immutable versions untouched and unread", async () => {
+  // B10 shape: stable/0.1.4 and stable/0.1.5 are already claimed (burned, never pointed); the new
+  // pair is a lower derived baseline (0.1.3) and a newer candidate (0.1.6), staged with no pointer.
+  const burned = [release("0.1.4", "burned-4", "d".repeat(40)), release("0.1.5", "burned-5", "e".repeat(40))];
+  const baseline = release("0.1.3", "3", BASELINE_COMMIT);
+  const candidate = release("0.1.6", "6", CANDIDATE_COMMIT);
+  const remote = remoteFixture(null);
+  const burnedRows = new Map();
+  for (const old of burned) {
+    const [row] = await remote.claimVersion({ ...old.candidate, precedenceKey: semverPrecedenceKey(old.version) });
+    burnedRows.set(old.version, row);
+  }
+  const reads = [];
+  const readVersion = remote.readVersion;
+  remote.readVersion = async (channel, version) => {
+    reads.push(version);
+    return readVersion(channel, version);
+  };
+  const receipt = createQaStageReceipt({ baseline, candidate, pointerRows: [] });
+  const result = await runQaStagePublication({ baseline, candidate, receipt, remote });
+  assert.deepEqual(result.pointerRows, []);
+  assert.deepEqual(result.versions, ["0.1.3", "0.1.6"]);
+  assert.deepEqual([...new Set(reads)].sort(), ["0.1.3", "0.1.6"]);
+  assert.deepEqual([...remote.versions.keys()].sort(), ["0.1.3", "0.1.4", "0.1.5", "0.1.6"]);
+  for (const [version, row] of burnedRows) assert.deepEqual(remote.versions.get(version), row);
+
+  // A pre-existing row for the new candidate version without the exact receipt still refuses.
+  const squatted = remoteFixture(null);
+  await squatted.claimVersion({ ...candidate.candidate, precedenceKey: semverPrecedenceKey(candidate.version) });
+  await assert.rejects(
+    runQaStagePublication({ baseline, candidate, receipt: null, remote: squatted }),
+    /durable receipt/,
+  );
+});
+
 test("staging fails closed for unreceipted collisions, byte mismatch, and pointer races", async () => {
   const baseline = release(BASELINE_VERSION, "3", BASELINE_COMMIT);
   const candidate = release(CANDIDATE_VERSION, "5", CANDIDATE_COMMIT);
