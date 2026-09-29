@@ -11,6 +11,7 @@
  */
 import StageStyles from "./parts/StageStyles.astro";
 import { BASE_SCENE, type DockTab, type Scene, STORY, THREADS, threadById, VOICE, ZOD_APPROVAL } from "../../data/story";
+import { stageTag } from "../../lib/stage-status";
 import AppWindow from "./AppWindow.astro";
 import ApprovalCard from "./parts/ApprovalCard.astro";
 import BrowserPreview from "./parts/BrowserPreview.astro";
@@ -45,7 +46,7 @@ const replayable = ["shell", "claude", "codex", "approval", "voice", "mission"];
           <span class="kc-step__num" aria-hidden="true">{String(i + 1).padStart(2, "0")} / {total}</span>
           <Heading class="kc-step__title">{step.title}</Heading>
           <p class="kc-step__line">{step.line}</p>
-          <span class="kc-tag kc-step__tag">{step.tag}</span>
+          <span class="kc-tag kc-step__tag">{stageTag(step)}</span>
         </div>
         <div class="kc-still-wrap">
           <figure

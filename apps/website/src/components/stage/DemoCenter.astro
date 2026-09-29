@@ -7,6 +7,7 @@
  */
 import StageStyles from "./parts/StageStyles.astro";
 import { BASE_SCENE, DEMO_TABS } from "../../data/story";
+import { stageTag } from "../../lib/stage-status";
 import AppWindow from "./AppWindow.astro";
 import StageLabel from "./parts/StageLabel.astro";
 
@@ -45,7 +46,7 @@ const first = DEMO_TABS[0];
         <div class="kc-demo__copy" data-kc-demo-copy={t.id} hidden={i !== 0}>
           <Heading class="kc-demo__title">{t.title}</Heading>
           <p class="kc-demo__line">{t.line}</p>
-          <span class="kc-tag">{t.tag}</span>
+          <span class="kc-tag">{stageTag(t)}</span>
           <slot name={`video-${t.id}`} />
           <button type="button" class="kc-btn kc-btn--ghost" data-kc-demo-replay data-testid={`demo-replay-${t.id}`}>
             <span class="kc-i" data-i="replay" aria-hidden="true"></span>Replay

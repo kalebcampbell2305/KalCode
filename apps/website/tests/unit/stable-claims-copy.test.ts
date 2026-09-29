@@ -9,12 +9,15 @@ vi.mock("../../src/lib/releases", async (importOriginal) => ({
   RELEASES: fixture.manifest,
 }));
 
+import CommandCenterStage from "../../src/components/stage/CommandCenterStage.astro";
 import DemoCenter from "../../src/components/stage/DemoCenter.astro";
 import KalVoiceStage from "../../src/components/stage/KalVoiceStage.astro";
 import BrowserPreview from "../../src/components/stage/parts/BrowserPreview.astro";
 import PermissionsPanel from "../../src/components/stage/parts/PermissionsPanel.astro";
+import Rail from "../../src/components/stage/parts/Rail.astro";
+import ScrollStory from "../../src/components/stage/ScrollStory.astro";
 import TryKalCode from "../../src/components/stage/TryKalCode.astro";
-import { MODES } from "../../src/data/story";
+import { DEMO_TABS, MODES, STORY, THREADS } from "../../src/data/story";
 import { PAGES, planSummary } from "../../src/lib/site";
 import KalVoiceDocs from "../../src/pages/docs/kalvoice.astro";
 import LocalFirstDocs from "../../src/pages/docs/local-first.astro";
@@ -355,7 +358,6 @@ describe("shipped features are not called planned", () => {
 
 // Stable 0.1.5 ships the app shell, palette, terminals, Dashboard and the local-first and security
 // controls these pages describe, so none may frame them as a development build or pre-release only.
-// The sample-data stage labels ("Development build · sample data") describe the demos, not the app.
 const DEV_BUILD_FRAMING = [
   /current development builds?/i,
   /In the development build/i,
@@ -468,6 +470,115 @@ describe("security controls that shipped are not listed as planned", () => {
       "Server-side plan and usage checks, and verified billing webhooks, when paid plans launch.",
     ]);
     for (const pattern of DEV_BUILD_FRAMING) expect(`${copy} ${metaDescription(stable)}`).not.toMatch(pattern);
+  });
+});
+
+// The product stages draw Stable-shipped features: terminals, the Dashboard, approvals, KalVoice
+// dictation and commands, and the Providers surface (B9 536efd7 crates/native-core/src/flags.rs:113-125:
+// Dashboard, KalVoice, Code, Threads, Providers and Settings Available). Once Stable is served no
+// stage may tag them as a development build or in development, or show a stale build number.
+const STAGE_UNDERSTATEMENTS = [
+  /Development build/i,
+  /Preview · in development/i,
+  /\b0\.1\.0\b/,
+  /KPIs are sample data/i,
+  /In development Agents/i,
+];
+// Inside a stage nothing Stable ships is "in development". (Whole pages keep the footer's true
+// "More in development.", so this stricter rule applies to the stage components only.)
+const STAGE_ONLY = [/\bIn development\b/i];
+
+/** The rail as the story and demos draw it: nav, then the dimmed group, then the build line. */
+async function renderRail() {
+  return text(
+    await render(Rail as Component, "/", {
+      threads: THREADS,
+      approval: "none",
+      interactive: false,
+      focus: "claude-checkout",
+      view: "code",
+      present: [],
+    }),
+  );
+}
+
+describe("product stages once Stable is served", () => {
+  const STAGES = [
+    { name: "scroll story", component: ScrollStory as Component, path: "/product", stage: true },
+    { name: "demo center", component: DemoCenter as Component, path: "/product", stage: true },
+    { name: "home Dashboard stage", component: CommandCenterStage as Component, path: "/", stage: true },
+    { name: "try-it window", component: TryKalCode as Component, path: "/", stage: true },
+    { name: "product page", component: Product as Component, path: "/product", stage: false },
+    { name: "home page", component: Home as Component, path: "/", stage: false },
+    { name: "KalVoice page", component: KalVoicePage as Component, path: "/kalvoice", stage: false },
+  ];
+
+  it.each(STAGES)("the $name calls no Stable feature in development", async ({ component, path, stage }) => {
+    selectSignedStable();
+    const copy = text(await render(component, path));
+    for (const pattern of [...STAGE_UNDERSTATEMENTS, ...(stage ? STAGE_ONLY : [])]) {
+      expect(copy).not.toMatch(pattern);
+    }
+  });
+
+  it("renders the stages on the Stable /product page", async () => {
+    selectSignedStable();
+    const copy = text(await render(Product, "/product"));
+    expect(copy).toContain("The words land in the focused agent. In Stable 0.1.5");
+    expect(copy).toContain("Real terminals in your workspace.");
+  });
+
+  it("tags the Stable-shipped steps and demos with the served release", async () => {
+    selectSignedStable();
+    const story = text(await render(ScrollStory as Component, "/product"));
+    expect(story).toContain("Real terminals start inside it. In Stable 0.1.5");
+    expect(story).toContain(
+      "Status comes from runtime events, not from what a model says. In Stable 0.1.5 · sample data",
+    );
+    expect(story).toContain("Nothing leaves your rules without asking. In Stable 0.1.5 · sample data");
+    expect(story).toContain("The words land in the focused agent. In Stable 0.1.5");
+    // Voice-created threads need ProviderPanes, which Stable gates (kalvoice_executor.rs).
+    expect(story).toContain("Preview · creating agents by voice is not in Stable yet");
+    expect(story).toContain("Preview · provider panes not in Stable yet");
+    const demos = text(await render(DemoCenter as Component, "/product"));
+    expect(demos.match(/In Stable 0\.1\.5/g)?.length).toBe(4);
+    expect(demos).toContain("Preview · missions and provider panes are not in Stable yet");
+    expect(text(await render(CommandCenterStage as Component, "/"))).toContain(
+      "Dashboard in Stable 0.1.5 · the KPI tiles are illustrative",
+    );
+  });
+
+  it("draws the rail with Stable's surfaces and the served build", async () => {
+    selectSignedStable();
+    const rail = await renderRail();
+    expect(rail).toMatch(/KalVoice Providers Not in Stable yet Agents Missions Automations Stable 0\.1\.5/);
+    expect(rail).not.toMatch(/In development/i);
+  });
+
+  it("keeps the preview-era tags while the preview is served", async () => {
+    for (const item of [...STORY, ...DEMO_TABS])
+      expect(item.stableTag ?? "").not.toMatch(/in development|Development build/i);
+    const story = text(await render(ScrollStory as Component, "/product"));
+    expect(story).toContain("The words land in the focused agent. Preview · in development");
+    expect(story).not.toContain("In Stable");
+    expect(await renderRail()).toMatch(/KalVoice In development Agents Missions Automations Providers Preview 0\.1\.0/);
+  });
+});
+
+// signedStableRelease requires signed Windows x64 AND macOS arm64 builds; a Windows-only Stable
+// must not claim a notarized Mac app.
+describe("signed-build claims on a Windows-only Stable", () => {
+  it("keeps signed installers planned on /security", async () => {
+    const latest = fixture.manifest.latest;
+    if (!latest?.platforms[0]) throw new Error("fixture has no Windows release");
+    latest.version = "0.1.5";
+    latest.channel = "stable";
+    latest.platforms[0].signed = true;
+    const html = await render(Security, "/security");
+    const copy = text(html);
+    expect(copy).not.toContain("Signed installers and updates");
+    expect(copy).not.toMatch(/notarized/i);
+    expect(plannedItems(html)).toContain("Code-signed installers and signed updates.");
   });
 });
 
