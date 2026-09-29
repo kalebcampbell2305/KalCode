@@ -9,6 +9,7 @@
 import StageStyles from "./parts/StageStyles.astro";
 import type { PermissionMode } from "../../data/story";
 import PermissionsPanel from "./parts/PermissionsPanel.astro";
+import { stageTag } from "../../lib/stage-status";
 import StageLabel from "./parts/StageLabel.astro";
 
 interface Props {
@@ -37,7 +38,12 @@ const compact = width === "compact";
 >
   {!compact && <StageLabel tag="Modes as designed · the mode switcher is in development" />}
   <PermissionsPanel uid={id} mode={mode} approval="pending" interactive={true} variant={compact ? "table" : "full"} resettable={!compact} />
-  {compact && <StageLabel class="kc-pm__label" tag="Modes as designed" />}
+  {compact && (
+    <StageLabel
+      class="kc-pm__label"
+      tag={stageTag({ tag: "Modes as designed", stableTag: "Plan, Approve and Auto in Stable {version} · Bypass and Custom planned" })}
+    />
+  )}
   <p class="visually-hidden" aria-live="polite" data-kc-live data-testid={`live-${id}`}></p>
 </div>
 

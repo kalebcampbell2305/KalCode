@@ -709,6 +709,25 @@ describe("KalVoice dictation targets once Stable is served", () => {
   });
 });
 
+describe("stage status tags once Stable is served", () => {
+  it("gives every story step a tag that names Stable, a gated part or Planned", async () => {
+    selectSignedStable();
+    const html = await render(ScrollStory as Component, "/product");
+    const tags = [...html.matchAll(/<span class="kc-tag kc-step__tag"[^>]*>([^<]*)<\/span>/g)].map((m) => m[1]?.trim());
+    expect(tags).toHaveLength(9);
+    for (const tag of tags) expect(tag).toMatch(/Stable 0\.1\.5|not in Stable yet|^Planned$/);
+    expect(tags).toContain("In Stable 0.1.5 as threads and terminals · provider panes not yet");
+    expect(tags).toContain("Browser pane in Stable 0.1.5 · provider panes not yet");
+  });
+
+  it("labels the home permission modes with the shipped and planned modes", async () => {
+    selectSignedStable();
+    const home = text(await render(Home, "/"));
+    expect(home).toContain("Plan, Approve and Auto in Stable 0.1.5 · Bypass and Custom planned");
+    expect(home).not.toContain("Modes as designed");
+  });
+});
+
 // signedStableRelease requires signed Windows x64 AND macOS arm64 builds; a Windows-only Stable
 // must not claim a notarized Mac app.
 describe("signed-build claims on a Windows-only Stable", () => {

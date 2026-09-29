@@ -885,6 +885,7 @@ export const STORY: readonly StoryStep[] = [
     title: "Claude Code, in a real workspace.",
     line: "Your own sign-in. Your own terminal.",
     tag: "Preview",
+    stableTag: "In Stable {version} as threads and terminals · provider panes not yet",
     describe: "A Claude Code pane reads the flaky test, edits reserve.ts with a four-line diff and runs the suite.",
     scene: {
       panes: ["claude-checkout"],
@@ -920,6 +921,7 @@ export const STORY: readonly StoryStep[] = [
     title: "Check the result where the code is.",
     line: "A localhost preview docks beside the agents.",
     tag: "Preview",
+    stableTag: "Browser pane in Stable {version} · provider panes not yet",
     describe: "A browser docks on the right showing localhost:3000 with the signup limits page of the sample app.",
     scene: { panes: ["claude-checkout", "codex-signup"], dock: "browser", approval: "none", voice: "off", mission: 0 },
     still: "browser",
