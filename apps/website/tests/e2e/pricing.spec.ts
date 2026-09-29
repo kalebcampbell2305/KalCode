@@ -14,7 +14,7 @@ test.describe("pricing", () => {
     await expect(table.getByRole("columnheader", { name: /MAX 2X/ })).toContainText("$50");
     await expect(table.getByRole("row", { name: /KalVoice Requests a month/ })).toContainText("10,000");
     await expect(page.getByText("Every plan includes", { exact: true })).toBeVisible();
-    for (const item of ["All providers", "All permission modes", "Unlimited on-device dictation"]) {
+    for (const item of ["All providers", "Plan, Approve and Auto modes", "Unlimited on-device dictation"]) {
       await expect(page.getByRole("listitem").filter({ hasText: item })).toBeVisible();
     }
     // Aligned plan headers: every price sits on the same line.

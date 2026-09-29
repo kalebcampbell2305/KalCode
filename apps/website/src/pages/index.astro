@@ -36,7 +36,7 @@ const planPoints = (plan: (typeof PLANS)[number]) => [
   plan.limits.concurrentThreads === null
     ? "Unlimited threads at once"
     : `${plan.limits.concurrentThreads} threads running at once`,
-  "Every provider and permission mode",
+  "Every provider; Plan, Approve and Auto modes",
 ];
 
 /** Permission policy as it reads in Approve mode (the default). */
@@ -293,7 +293,7 @@ const policies = [
         <article class="frame frame--tile" aria-labelledby="rules-title">
           <p class="eyebrow">Built for control</p>
           <h3 id="rules-title" class="headline">You set the rules. Agents follow them.</h3>
-          <p>Every mode on every plan. Anything outside your rules waits for you.</p>
+          <p>Plan, Approve and Auto on every plan. Anything outside your rules waits for you.</p>
           {hasStage("PermissionModes") ? (
             <StageSlot name="PermissionModes" width="compact" />
           ) : (
@@ -346,7 +346,7 @@ const policies = [
           <p class="eyebrow">Simple pricing</p>
           <h2 id="plans-title" class="h2">Power for every builder.</h2>
           <p class="body-lg">
-            Every plan includes every provider, every permission mode and unlimited on-device dictation.
+            Every plan includes every provider, the Plan, Approve and Auto modes and unlimited on-device dictation.
             Your AI usage stays on your own account.
           </p>
           <a class="button button--secondary" href="/pricing">Compare plans <Icon name="arrow-right" /></a>

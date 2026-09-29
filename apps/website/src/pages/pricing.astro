@@ -19,9 +19,6 @@ const page = getPage("/pricing");
 /** The plan most people should pick; drawn with an accent rule, never as a purchase button. */
 const FEATURED = "pro";
 
-const capitalize = (word: string) => word.charAt(0).toUpperCase() + word.slice(1);
-const modeNames = ALL_PERMISSION_MODES.map(capitalize).join(", ");
-
 /** KalVoice Requests on a log scale from the smallest to the largest allowance. */
 const allowances = PLANS.map((plan) => plan.limits.kalvoiceRequestsPerMonth ?? 0);
 const logMin = Math.log10(Math.min(...allowances.filter((value) => value > 0)));
@@ -57,7 +54,7 @@ for (const plan of PLANS) {
 
 const everyPlan = [
   "All providers",
-  "All permission modes",
+  "Plan, Approve and Auto modes",
   "Unlimited on-device dictation",
   "Dashboard and workspaces",
   "Your own AI account",
@@ -82,7 +79,7 @@ const faq = [
   },
   {
     q: "Are permission modes limited by plan?",
-    a: `No. ${modeNames} are safety controls, and every plan includes all of them.`,
+    a: "No. Permission modes are safety controls, never a paid extra. In 0.1.5, threads run in Plan, Approve or Auto on every plan; Bypass and Custom are planned.",
   },
   {
     q: "When can I buy a plan?",
@@ -102,7 +99,7 @@ const faq = [
   <PageHead
     backdrop="nebula"
     title="Pricing"
-    lead="Every plan runs every provider with every permission mode. Plans differ in KalVoice Requests and threads running at once — your AI usage stays on your own account."
+    lead="Every plan runs every provider in Plan, Approve and Auto modes. Plans differ in KalVoice Requests and threads running at once — your AI usage stays on your own account."
     status="Plans open at launch · nothing is for sale today"
   />
 

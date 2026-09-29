@@ -137,7 +137,7 @@ export const PAGES = [
     path: "/pricing",
     title: "Pricing — KalCode",
     description:
-      "KalCode plans: Free, Pro, MAX and MAX 2X. Every plan includes all providers, all permission modes and unlimited local dictation; plans differ in KalVoice Requests and threads running at once. AI usage stays on your own provider account.",
+      "KalCode plans: Free, Pro, MAX and MAX 2X. Every plan includes all providers, the Plan, Approve and Auto modes and unlimited local dictation; plans differ in KalVoice Requests and threads running at once. AI usage stays on your own provider account.",
   },
   {
     path: "/download",
@@ -155,7 +155,7 @@ export const PAGES = [
     path: "/docs/permissions",
     title: "Permissions — KalCode Docs",
     description:
-      "How KalCode permission modes (Plan, Approve, Auto, Bypass, Custom) decide what agents and KalVoice may do.",
+      "How KalCode permission modes decide what agents and KalVoice may do: threads in 0.1.5 run in Plan, Approve or Auto; Bypass and Custom are planned.",
   },
   {
     path: "/docs/providers",
