@@ -208,6 +208,7 @@ export function parseQaStageArguments(args) {
     "--candidate-source",
     "--candidate-staging",
     "--receipt",
+    "--approved-tool-commit",
   ];
   const allowed = new Set([...valueFlags, "--dry-run", "--remote"]);
   for (let index = 0; index < args.length; index += 1) {
@@ -226,8 +227,14 @@ export function parseQaStageArguments(args) {
     candidateStaging: flagValue(args, "--candidate-staging"),
     receiptPath: flagValue(args, "--receipt"),
   };
+  if (args.includes("--approved-tool-commit")) {
+    parsed.approvedToolCommit = flagValue(args, "--approved-tool-commit");
+    if (!COMMIT.test(parsed.approvedToolCommit))
+      throw new Error("approved tool commit must be a full lowercase commit SHA");
+  }
   for (const [key, value] of Object.entries(parsed)) {
-    if (key !== "mode" && !isAbsolute(value)) throw new Error(`${key} must be an absolute path`);
+    if (key !== "mode" && key !== "approvedToolCommit" && !isAbsolute(value))
+      throw new Error(`${key} must be an absolute path`);
   }
   const unique = new Set(
     [
@@ -253,10 +260,38 @@ function receiptRelease(release) {
   };
 }
 
-export function createQaStageReceipt({ baseline, candidate, pointerRows, createdAt = new Date().toISOString() }) {
+function assertSourceAuthority(authority, candidate) {
+  const exactKeys = (value, keys) =>
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.keys(value).sort().join(",") === [...keys].sort().join(",");
+  if (
+    !exactKeys(authority, ["toolCommit", "productCommit", "candidateNotesCommit", "baselineQaSha256"]) ||
+    ![authority.toolCommit, authority.productCommit, authority.candidateNotesCommit].every(
+      (commit) => typeof commit === "string" && COMMIT.test(commit),
+    ) ||
+    authority.productCommit !== candidate.commit ||
+    !exactKeys(authority.baselineQaSha256, ["windows-x86_64", "darwin-aarch64"]) ||
+    !Object.values(authority.baselineQaSha256).every(
+      (digest) => typeof digest === "string" && /^[a-f0-9]{64}$/u.test(digest),
+    )
+  )
+    throw new Error("tool source authority is incomplete or does not match the candidate");
+}
+
+export function createQaStageReceipt({
+  baseline,
+  candidate,
+  pointerRows,
+  sourceAuthority,
+  createdAt = new Date().toISOString(),
+}) {
+  if (sourceAuthority !== undefined) assertSourceAuthority(sourceAuthority, candidate);
   const identity = {
-    schemaVersion: 1,
+    schemaVersion: sourceAuthority === undefined ? 1 : 2,
     channel: "stable",
+    ...(sourceAuthority !== undefined && { sourceAuthority: structuredClone(sourceAuthority) }),
     baseline: receiptRelease(baseline),
     candidate: receiptRelease(candidate),
     pointerRows,
@@ -264,9 +299,15 @@ export function createQaStageReceipt({ baseline, candidate, pointerRows, created
   return { ...identity, planSha256: sha256Bytes(canonicalJson(identity)), createdAt };
 }
 
-function receiptProblems(receipt, baseline, candidate, pointerRows) {
+function receiptProblems(receipt, baseline, candidate, pointerRows, sourceAuthority) {
   if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) return ["durable receipt is missing"];
-  const expected = createQaStageReceipt({ baseline, candidate, pointerRows, createdAt: receipt.createdAt });
+  const expected = createQaStageReceipt({
+    baseline,
+    candidate,
+    pointerRows,
+    sourceAuthority,
+    createdAt: receipt.createdAt,
+  });
   return canonicalJson(receipt) === canonicalJson(expected)
     ? []
     : ["durable receipt does not match the exact QA stage plan"];
@@ -403,14 +444,14 @@ export function canonicalQaObjectPutArguments(object) {
  * Linearizes only immutable object uploads and immutable version-row claims. `remote` intentionally
  * has no pointer-write method, and the Stable pointer is compared before every claim and afterward.
  */
-export async function runQaStagePublication({ baseline, candidate, receipt, remote }) {
+export async function runQaStagePublication({ baseline, candidate, receipt, remote, sourceAuthority }) {
   assertRelease(baseline, "baseline");
   assertRelease(candidate, "candidate");
   if (semverPrecedenceKey(baseline.version) >= semverPrecedenceKey(candidate.version)) {
     throw new Error("QA baseline must be lower than the candidate");
   }
   if (!receipt) throw new Error("a durable receipt is required before updater QA stage writes");
-  const pointerRows = await preflightQaStagePublication({ baseline, candidate, receipt, remote });
+  const pointerRows = await preflightQaStagePublication({ baseline, candidate, receipt, remote, sourceAuthority });
 
   for (const release of [baseline, candidate]) {
     for (const object of release.objects) {
@@ -449,9 +490,10 @@ export async function runQaStagePublication({ baseline, candidate, receipt, remo
 }
 
 /** Read-only collision/pointer preflight. A missing receipt requires every planned key and row to be unused. */
-export async function preflightQaStagePublication({ baseline, candidate, receipt, remote }) {
+export async function preflightQaStagePublication({ baseline, candidate, receipt, remote, sourceAuthority }) {
   assertRelease(baseline, "baseline");
   assertRelease(candidate, "candidate");
+  if (sourceAuthority !== undefined) assertSourceAuthority(sourceAuthority, candidate);
   const pointerRows = await remote.readPointer();
   if (!Array.isArray(pointerRows) || pointerRows.length > 1) throw new Error("Stable pointer readback is invalid");
   if (pointerRows.length === 1) {
@@ -473,7 +515,7 @@ export async function preflightQaStagePublication({ baseline, candidate, receipt
   // Validate the entire joined pointer/version authority before any object write. The same exact
   // snapshot is embedded into each later version-claim statement to close the preflight gap.
   buildQaVersionClaimStatement(baseline.candidate, pointerRows[0] ?? null);
-  const receiptErrors = receipt ? receiptProblems(receipt, baseline, candidate, pointerRows) : [];
+  const receiptErrors = receipt ? receiptProblems(receipt, baseline, candidate, pointerRows, sourceAuthority) : [];
   if (receiptErrors.length > 0) throw new Error(receiptErrors.join("; "));
 
   for (const release of [baseline, candidate]) {
@@ -577,7 +619,7 @@ function createWranglerRemote(websiteDir) {
 
 function usageError() {
   return new Error(
-    "usage: stage-updater-qa --baseline-source ABS --baseline-staging ABS --candidate-source ABS --candidate-staging ABS --receipt ABS (--dry-run|--remote)",
+    "usage: stage-updater-qa --baseline-source ABS --baseline-staging ABS --candidate-source ABS --candidate-staging ABS --receipt ABS [--approved-tool-commit FULL_SHA] (--dry-run|--remote)",
   );
 }
 
@@ -603,11 +645,11 @@ async function main() {
     let receipt;
     if (existsSync(options.receiptPath)) {
       receipt = JSON.parse(readFileSync(options.receiptPath, "utf8"));
-      const problems = receiptProblems(receipt, bundle.baseline, bundle.candidate, pointerRows);
+      const problems = receiptProblems(receipt, bundle.baseline, bundle.candidate, pointerRows, bundle.sourceAuthority);
       if (problems.length > 0) throw new Error(problems.join("; "));
     } else {
       pointerRows = await preflightQaStagePublication({ ...bundle, receipt: null, remote });
-      receipt = createQaStageReceipt({ baseline: bundle.baseline, candidate: bundle.candidate, pointerRows });
+      receipt = createQaStageReceipt({ ...bundle, pointerRows });
       writeQaStageReceipt(options.receiptPath, receipt);
     }
     await runQaStagePublication({ ...bundle, receipt, remote });
