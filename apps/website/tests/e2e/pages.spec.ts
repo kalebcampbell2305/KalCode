@@ -41,6 +41,17 @@ test.describe("every page", () => {
     });
   }
 
+  test("stages call no Stable-shipped feature a development build once Stable is served", async ({ page }) => {
+    test.skip(!SERVED_STABLE, "the preview keeps its preview-era stage tags");
+    for (const path of ["/", "/product", "/kalvoice"]) {
+      await page.goto(path);
+      const stages = page.locator("[data-stage-slot]");
+      for (const text of await stages.allInnerTexts()) {
+        expect(text, path).not.toMatch(/Development build|Preview · in development|\bIn development\b|\b0\.1\.0\b/i);
+      }
+    }
+  });
+
   test("unknown paths return the styled 404 with status 404", async ({ page }) => {
     const response = await page.goto("/this-page-does-not-exist");
     expect(response?.status()).toBe(404);
