@@ -1,8 +1,11 @@
 ---
 import Base from "../../layouts/Base.astro";
+import { RELEASES, servedStableRelease } from "../../lib/releases";
 import { DOCS_NAV, PAGES, getPage } from "../../lib/site";
 
 const page = getPage("/docs");
+// Once a Stable release is served the docs describe it; before then they describe the design.
+const stable = servedStableRelease(RELEASES);
 const entries = DOCS_NAV.filter((item) => item.href !== "/docs").map((item) => ({
   ...item,
   description: PAGES.find((candidate) => candidate.path === item.href)?.description ?? "",
@@ -27,8 +30,14 @@ const entries = DOCS_NAV.filter((item) => item.href !== "/docs").map((item) => (
     <div class="docs__content">
       <header class="docs__head">
         <h1 class="h1">Documentation</h1>
-        <p class="lead">How KalCode is designed to work, one topic at a time.</p>
-        <p class="status-line"><span class="chip chip--dev">Describes the design</span> These pages describe KalCode as designed; details may change.</p>
+        <p class="lead">{stable ? "How KalCode works, one topic at a time." : "How KalCode is designed to work, one topic at a time."}</p>
+        {
+          stable ? (
+            <p class="status-line"><span class="chip chip--built">Describes KalCode Stable {stable.version}</span> These pages describe the current release.</p>
+          ) : (
+            <p class="status-line"><span class="chip chip--dev">Describes the design</span> These pages describe KalCode as designed; details may change.</p>
+          )
+        }
       </header>
       <ul class="doc-index" role="list">
         {
