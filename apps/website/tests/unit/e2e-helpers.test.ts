@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { type ReleaseManifest, signedStableRelease } from "../../src/lib/releases";
+import { type ReleaseManifest, servedStableRelease, signedStableRelease } from "../../src/lib/releases";
+import { PAGES } from "../../src/lib/site";
 // The e2e specs cannot import src/lib/releases.ts (Playwright rejects its JSON import), so
 // helpers.ts restates the signed Stable rule; this keeps the two from drifting apart.
-import { isSignedStable } from "../e2e/helpers";
+import { isServedStable, isSignedStable, renderedDescription } from "../e2e/helpers";
 import { publishedManifest } from "./fixtures/releases";
 
 function stable(mac: "signed" | "unsigned" | "none"): ReleaseManifest {
@@ -37,5 +38,27 @@ describe("e2e helpers", () => {
   ] as const)("isSignedStable matches signedStableRelease for a %s manifest", (_name, manifest, expected) => {
     expect(Boolean(signedStableRelease(manifest))).toBe(expected);
     expect(isSignedStable(manifest)).toBe(expected);
+  });
+
+  it.each([
+    ["preview", structuredClone(publishedManifest), false],
+    ["signed Windows and Mac Stable", stable("signed"), true],
+    ["Windows-only Stable", stable("none"), true],
+    ["Stable with an unsigned Mac build", stable("unsigned"), true],
+  ] as const)("isServedStable matches servedStableRelease for a %s manifest", (_name, manifest, expected) => {
+    expect(Boolean(servedStableRelease(manifest))).toBe(expected);
+    expect(isServedStable(manifest)).toBe(expected);
+  });
+
+  it("expects the /kalvoice description kalvoice.astro renders in both release states", () => {
+    const kalvoice = PAGES.find((page) => page.path === "/kalvoice");
+    if (!kalvoice) throw new Error("no /kalvoice page");
+    expect(kalvoice.description).toMatch(/ In development\.$/);
+    expect(renderedDescription(kalvoice, false)).toBe(kalvoice.description);
+    expect(renderedDescription(kalvoice, true)).not.toMatch(/In development/);
+    expect(renderedDescription(kalvoice, true)).toBe(kalvoice.description.replace(/ In development\.$/, ""));
+    for (const page of PAGES.filter((p) => p.path !== "/kalvoice")) {
+      expect(renderedDescription(page, true)).toBe(page.description);
+    }
   });
 });

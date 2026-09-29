@@ -30,6 +30,25 @@ export function isSignedStable(manifest: ReleaseManifest): boolean {
 }
 /** The committed manifest selects a complete signed Stable release. */
 export const SIGNED_STABLE = isSignedStable(MANIFEST);
+/**
+ * True when /download serves a Stable release (Stable channel with at least one signed build),
+ * mirroring servedStableRelease() in src/lib/releases.ts for the same reason as isSignedStable.
+ */
+export function isServedStable(manifest: ReleaseManifest): boolean {
+  const latest = manifest.latest;
+  return latest?.channel === "stable" && latest.platforms.some((p) => p.signed);
+}
+/** The committed manifest's release is served as Stable (KalVoice copy is then shipped). */
+export const SERVED_STABLE = isServedStable(MANIFEST);
+/**
+ * The meta description a page renders: /kalvoice drops the catalog's trailing " In development."
+ * once a Stable release is served (src/pages/kalvoice.astro), and every other page uses its own.
+ */
+export function renderedDescription(page: { path: string; description: string }, servedStable = SERVED_STABLE): string {
+  return page.path === "/kalvoice" && servedStable
+    ? page.description.replace(/ In development\.$/, "")
+    : page.description;
+}
 
 const PERSIST_DIR = process.env.KALCODE_E2E_PERSIST ?? ".wrangler/e2e-state";
 /** The local mail sink (tests/e2e/mail-sink.mjs); same default as playwright.config.ts. */
