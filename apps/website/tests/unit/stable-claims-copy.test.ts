@@ -85,6 +85,10 @@ const UNDERSTATEMENTS = [
   /This surface is planned/i,
   /Engine and approval card in development/i,
   /KalVoice commands and multi-agent runs are in development/i,
+  // The Dashboard is Available on Stable (B9 536efd7 crates/native-core/src/flags.rs:113) and live:
+  // Dashboard.tsx reads useEvents and useThreadSummaries (data/DashboardData.tsx).
+  /live (thread )?data in development/i,
+  /Design built/i,
 ];
 
 const PAGES_UNDER_TEST = [
@@ -333,6 +337,14 @@ describe("shipped features are not called planned", () => {
     expect(wide).toContain("KalVoice commands are in Stable · multi-agent runs are not yet");
     const compact = text(await render(KalVoiceStage as Component, "/", { width: "compact" }));
     expect(compact).toContain("Multi-agent runs not in Stable yet");
+  });
+
+  it("lists the live Dashboard as built on the product page", async () => {
+    const html = await render(Product, "/product");
+    const copy = text(html);
+    expect(copy).toContain("Dashboard Built Live thread status from runtime events, with approvals inline");
+    expect(copy).toContain("Built Every thread, one Dashboard.");
+    expect(html).toMatch(/<p class="chip chip--built"[^>]*>Built<\/p>\s*<h2 id="threads-title"/);
   });
 
   it("keeps the product demos from calling provider panes shipped", async () => {
