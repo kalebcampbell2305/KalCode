@@ -165,9 +165,11 @@ struct ReservationClaim {
 /// How long a reservation's budget is projected on top of measured usage. Smoothed CPU and
 /// memory need a few samples to reflect a new process, and the KalCode process tree (which
 /// attributes provider memory) is refreshed at most every 10 s (`CadenceConfig::process_tier_min`).
+/// The window is 15 s, not exactly that cadence, so a process-tier refresh that lands a little
+/// late (a busy machine, a sample taken just before the process started) still falls inside it.
 /// After that, the process is measured; projecting its budget as well would count it twice
 /// (e.g. a resident local model's memory would be subtracted from available memory again).
-const RESERVATION_SETTLE: Duration = Duration::from_secs(10);
+const RESERVATION_SETTLE: Duration = Duration::from_secs(15);
 
 /// Resources promised to admitted work but not yet reflected in a sampler reading.
 ///

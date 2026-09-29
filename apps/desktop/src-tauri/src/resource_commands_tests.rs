@@ -1433,8 +1433,14 @@ fn reservations_are_not_counted_twice_once_measured() {
     assert_eq!(tracker.unmeasured_budget(None), budget);
     assert_eq!(
         tracker.unmeasured_budget(Some(NOW_MS + 10_000)),
+        budget,
+        "one process-tier cadence (10 s) is not enough margin: the budget stays projected"
+    );
+    assert_eq!(tracker.unmeasured_budget(Some(NOW_MS + 14_999)), budget);
+    assert_eq!(
+        tracker.unmeasured_budget(Some(NOW_MS + 15_000)),
         ReservationBudget::default(),
-        "a sample 10 s later measures the process: its memory is not subtracted again"
+        "a sample 15 s later measures the process: its memory is not subtracted again"
     );
     assert_eq!(
         tracker.running().agents,
