@@ -7,15 +7,15 @@ import type { ProviderId } from "./ProviderId.ts";
  * The whole preview. Nothing is sent without confirming it, and the send is pinned to
  * `content_sha256` (CTX-04).
  */
-export type ContextPreview = { packageId: string, purpose: ContextPurpose, targetProviderId: ProviderId, targetThreadId: string | null, items: Array<ContextItemPreview>,
+export type ContextPreview = { packageId: string, purpose: ContextPurpose, targetProviderId: ProviderId, targetThreadId: string | null, items: Array<ContextItemPreview>, 
 /**
  * Bytes that would be sent.
  */
-totalBytes: number,
+totalBytes: number, 
 /**
  * The budget: min(provider max input, package cap).
  */
-maxBytes: number, translationNotes: Array<string>,
+maxBytes: number, translationNotes: Array<string>, 
 /**
  * Must match at send time (CTX-04).
  */

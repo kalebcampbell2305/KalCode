@@ -525,7 +525,10 @@ mod tests {
                 let (code, kind) = line.split_once(':').expect("row");
                 (
                     code.trim().to_owned(),
-                    kind.trim().trim_end_matches(',').trim_matches('"').to_owned(),
+                    kind.trim()
+                        .trim_end_matches(',')
+                        .trim_matches('"')
+                        .to_owned(),
                 )
             })
             .collect();

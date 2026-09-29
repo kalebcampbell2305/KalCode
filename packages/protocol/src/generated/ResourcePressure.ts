@@ -6,19 +6,19 @@ import type { ResourceKind } from "./ResourceKind.ts";
 /**
  * The current level of one governed resource and the signal that decided it.
  */
-export type ResourcePressure = { resource: ResourceKind, level: PressureLevel,
+export type ResourcePressure = { resource: ResourceKind, level: PressureLevel, 
 /**
  * The signal that holds the resource at `level` (the worst of its signals).
  */
-signal: PressureSignal,
+signal: PressureSignal, 
 /**
  * The signal's current (smoothed) value.
  */
-value: number,
+value: number, 
 /**
  * The threshold that was crossed to reach `level`; `None` at `Normal`.
  */
-threshold: number | null,
+threshold: number | null, 
 /**
  * Within the approach margin of the next level up: the sampler speeds up.
  */

@@ -3,11 +3,11 @@ import type { AuthState } from "./AuthState.ts";
 import type { DetectionState } from "./DetectionState.ts";
 import type { ProviderId } from "./ProviderId.ts";
 
-export type ProviderDetection = { providerId: ProviderId, displayName: string, state: DetectionState,
+export type ProviderDetection = { providerId: ProviderId, displayName: string, state: DetectionState, 
 /**
  * Executable location for display, with the home folder shown as `~`.
  */
-displayPath: string | null, version: string | null, minimumVersion: string | null, auth: AuthState,
+displayPath: string | null, version: string | null, minimumVersion: string | null, auth: AuthState, 
 /**
  * User-safe explanation when `state` is `error` or `outdated`.
  */

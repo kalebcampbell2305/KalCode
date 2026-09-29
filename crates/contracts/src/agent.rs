@@ -294,7 +294,7 @@ pub enum ProviderError {
     /// KalCode refused the launch for a known reason before starting the provider (account in
     /// use, unsupported plan or version). `code` is stable and `message` is fixed, user-safe
     /// KalCode copy; neither ever contains provider output, paths or credentials.
-    #[error("the launch was refused ({code})")]
+    #[error("the launch was refused ({code}): {message}")]
     Refused { code: String, message: String },
 }
 

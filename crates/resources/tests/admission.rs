@@ -364,3 +364,56 @@ fn freshness_window_tracks_cadence_with_safe_bounds() {
     snapshot.sampling.next_interval_ms = u64::MAX;
     assert_eq!(admission_max_age(&snapshot), Duration::from_secs(45));
 }
+
+/// A held launch re-checks on the sampler's own cadence, bounded to 1-5 s, and waits at most two
+/// freshness windows in total.
+#[test]
+fn held_launches_retry_on_the_sampler_cadence_within_bounds() {
+    use kalcode_resources::{
+        ADMISSION_RETRY_MAX, ADMISSION_RETRY_MIN, ADMISSION_WAIT_LIMIT, MAX_ADMISSION_SAMPLE_AGE,
+        admission_retry_interval,
+    };
+    let mut snapshot = provider_snapshot();
+    for (next_interval_ms, expected) in [
+        (1_000, Duration::from_secs(1)),
+        (250, ADMISSION_RETRY_MIN),
+        (5_000, Duration::from_secs(5)),
+        (15_000, ADMISSION_RETRY_MAX),
+        (60_000, ADMISSION_RETRY_MAX),
+    ] {
+        snapshot.sampling.next_interval_ms = next_interval_ms;
+        assert_eq!(admission_retry_interval(Some(&snapshot)), expected);
+    }
+    assert_eq!(admission_retry_interval(None), ADMISSION_RETRY_MAX);
+    assert_eq!(ADMISSION_WAIT_LIMIT, MAX_ADMISSION_SAMPLE_AGE * 2);
+}
+
+/// The launch summary names the most actionable reason and the counts behind a slot limit.
+#[test]
+fn a_held_decision_summarizes_to_its_most_actionable_reason() {
+    use kalcode_contracts::resources::LaunchHoldKind;
+    use kalcode_resources::{HoldReason, decision_codes, launch_hold};
+    let decision = evaluate_admission(
+        &GovernorStatus::Running,
+        Some(&provider_snapshot()),
+        Some(advice(
+            &provider_snapshot(),
+            RunningWork {
+                agents: 4,
+                ..RunningWork::default()
+            },
+        )),
+        AdmissionRequirements::provider_task(),
+        NOW_MS,
+        admission_max_age(&provider_snapshot()),
+    );
+    assert_eq!(decision.state, AdmissionState::Held);
+    let hold = launch_hold(&decision, Duration::from_secs(1), Duration::from_secs(90));
+    assert_eq!(hold.kind, LaunchHoldKind::ConcurrencyLimit);
+    assert_eq!((hold.running, hold.limit), (Some(4), Some(4)));
+    assert!(decision_codes(&decision).contains(&"concurrency_limit"));
+    assert!(matches!(
+        decision.reasons.as_slice(),
+        [AdmissionReason::Capacity { holds }] if matches!(holds[0], HoldReason::UserLimit { .. })
+    ));
+}

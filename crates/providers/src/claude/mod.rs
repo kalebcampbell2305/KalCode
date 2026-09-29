@@ -59,7 +59,7 @@ pub(crate) fn require_managed_version(reported: Option<&str>) -> Result<(), Prov
     let refusal = |found: &str| ProviderError::Refused {
         code: kalcode_contracts::threads::error_codes::PROVIDER_VERSION_UNSUPPORTED.to_owned(),
         message: format!(
-            "Managed Claude Code accounts need Claude Code {}; this computer has {found}. \
+            "Managed Claude Code accounts need certified Claude Code {}; this computer has {found}. \
              Install a supported version with `{}`, then try again.",
             certified_managed_versions_label(),
             managed_install_command()
@@ -253,9 +253,11 @@ mod tests {
                 "{rejected:?} must fail closed for managed profiles"
             );
         }
-        let message = require_managed_version(Some("2.2.0"))
-            .expect_err("next line")
-            .to_string();
+        let Err(ProviderError::Refused { code, message }) = require_managed_version(Some("2.2.0"))
+        else {
+            panic!("the next line must be a typed version refusal");
+        };
+        assert_eq!(code, "provider_version_unsupported");
         assert!(
             message.contains("2.1.282 or a later 2.1.x release"),
             "{message}"

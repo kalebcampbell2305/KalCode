@@ -15,7 +15,7 @@ import type { ThreadScope } from "./ThreadScope.ts";
  * A structured command. Everything except `Reasoning` executes deterministically without any
  * model; `Reasoning` requires the bounded on-device interpreter.
  */
-export type KalVoiceIntent = { "kind": "navigate", surface: SurfaceId, } | { "kind": "open_workspace", query: string, } | { "kind": "create_terminal", workspaceId: string | null, } | { "kind": "create_threads", providerId: ProviderId, count: number, workspaceId: string | null,
+export type KalVoiceIntent = { "kind": "navigate", surface: SurfaceId, } | { "kind": "open_workspace", query: string, } | { "kind": "create_terminal", workspaceId: string | null, } | { "kind": "create_threads", providerId: ProviderId, count: number, workspaceId: string | null, 
 /**
  * Owner-visible account label or suffix ("work", "Gemini B"), resolved to one of the
  * provider's accounts by label. `None` keeps the workspace default / provider default.
