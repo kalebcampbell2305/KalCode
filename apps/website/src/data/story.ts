@@ -118,7 +118,13 @@ export const MODES: readonly ModeInfo[] = [
   { id: "plan", label: "Plan", hint: "Read and plan only; nothing changes without a new mode", authority: 1 },
   { id: "approve", label: "Approve", hint: "Asks before changing files or running commands", authority: 2 },
   { id: "auto", label: "Auto", hint: "Runs routine work; asks for anything consequential", authority: 3 },
-  { id: "bypass", label: "Bypass", hint: "Runs without asking, except actions that leave this machine", authority: 4 },
+  {
+    id: "bypass",
+    label: "Bypass",
+    hint: "Runs without asking, except actions that leave this machine",
+    authority: 4,
+    planned: true,
+  },
   {
     id: "custom",
     label: "Custom",

@@ -72,7 +72,11 @@ const kalvoiceShipped = servedStableRelease(RELEASES) !== null;
         </div>
         <div>
           <dt>Memory-safe native code</dt>
-          <dd>Unsafe Rust is forbidden across the native codebase.</dd>
+          <dd>
+            Unsafe Rust is denied by default across KalCode's own native code. The only exceptions
+            are operating-system integration points (Windows, macOS and Unix system interfaces),
+            each explicitly allowed for a single module or function.
+          </dd>
         </div>
         <div>
           <dt>Supply chain</dt>

@@ -66,7 +66,7 @@ const outcomeLabel = (o: "allow" | "ask" | "deny", always?: boolean) => (o === "
     {MODES.map((m) => (
       <p class="kc-perms__hint" data-for={m.id} id={`${uid}-hint-${m.id}`}>
         <b>{m.label}.</b> {m.hint}.
-        <span class="kc-perms__auth">Agent authority: {m.planned ? "set by your profile" : ["", "read only", "asks first", "routine work", "broad local"][m.authority]}</span>
+        <span class="kc-perms__auth">Agent authority: {m.id === "custom" ? "set by your profile" : ["", "read only", "asks first", "routine work", "broad local"][m.authority]}</span>
       </p>
     ))}
   </div>
