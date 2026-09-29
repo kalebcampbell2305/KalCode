@@ -32,12 +32,12 @@ const statuses = [
   { label: "Done", tone: "built" },
 ] as const;
 
-const modes = [
+const modes: { name: string; text: string; planned?: boolean }[] = [
   { name: "Plan", text: "Read and plan. Nothing is modified; writes, commands and network changes are denied or asked." },
   { name: "Approve", text: "The default. Safe work proceeds; anything that needs your authority pauses for a decision." },
   { name: "Auto", text: "Actions covered by your rules run automatically. Everything else still asks." },
-  { name: "Bypass", text: "Broad local authority, only when you choose it, with a persistent indicator. Pushes, deploys and spending keep their own rules." },
-  { name: "Custom", text: "Named rule sets you define, such as a read-only reviewer or a local builder." },
+  { name: "Bypass", text: "Broad local authority, only when you choose it, with a persistent indicator. Pushes, deploys and spending keep their own rules.", planned: true },
+  { name: "Custom", text: "Named rule sets you define, such as a read-only reviewer or a local builder.", planned: true },
 ];
 
 const roadmap: { capability: string; state: State; note: string }[] = [
@@ -45,7 +45,7 @@ const roadmap: { capability: string; state: State; note: string }[] = [
   { capability: "Workspaces and real terminals", state: "built", note: "PowerShell, Command Prompt, Git Bash; restore after restart" },
   { capability: "Claude Code, Codex and Gemini CLI adapters", state: "built", note: "Sign-in per account from KalCode, streamed threads, resume, interrupt. Gemini CLI is unavailable in 0.1.5 after Google ended Sign in with Google for personal accounts" },
   { capability: "Dashboard", state: "built", note: "Design built; live thread data in development" },
-  { capability: "Approvals and permission modes", state: "built", note: "Permission engine, the Approvals panel and a mode for every thread" },
+  { capability: "Approvals and permission modes", state: "built", note: "Permission engine, the Approvals panel, and Plan, Approve or Auto for every thread. Bypass and Custom are planned" },
   { capability: "KalVoice dictation and commands", state: stableKalVoice ? "built" : "dev", note: stableKalVoice ? "Available in Stable with signed local component setup" : "On-device recognition and command grammar in development" },
   { capability: "Split panes and the Browser pane", state: "built", note: "In Code: terminals, the browser and threads in panes you can split and resize" },
   { capability: "File tree, Git and diff views", state: "planned", note: "Shown in previews with a Planned label" },
@@ -208,7 +208,7 @@ const roadmap: { capability: string; state: State; note: string }[] = [
         <div class="chapter__head">
           <p class="chip chip--built">Built</p>
           <h2 id="permissions-title" class="h2 h2--sm">You set the rules. Agents follow them.</h2>
-          <p>Every mode is on every plan.</p>
+          <p>Threads run in Plan, Approve or Auto on every plan. Bypass and Custom are planned.</p>
         </div>
         <div class="chapter__body">
           <div class="table-wrap" role="region" aria-label="Permission modes" tabindex="0">
@@ -224,7 +224,7 @@ const roadmap: { capability: string; state: State; note: string }[] = [
                 {
                   modes.map((mode) => (
                     <tr>
-                      <th scope="row">{mode.name}</th>
+                      <th scope="row">{mode.name}{mode.planned && <> <span class="chip">Planned</span></>}</th>
                       <td>{mode.text}</td>
                     </tr>
                   ))

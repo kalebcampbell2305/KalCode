@@ -12,10 +12,13 @@ vi.mock("../../src/lib/releases", async (importOriginal) => ({
 import DemoCenter from "../../src/components/stage/DemoCenter.astro";
 import KalVoiceStage from "../../src/components/stage/KalVoiceStage.astro";
 import BrowserPreview from "../../src/components/stage/parts/BrowserPreview.astro";
+import PermissionsPanel from "../../src/components/stage/parts/PermissionsPanel.astro";
 import TryKalCode from "../../src/components/stage/TryKalCode.astro";
+import { MODES } from "../../src/data/story";
 import { PAGES, planSummary } from "../../src/lib/site";
 import KalVoiceDocs from "../../src/pages/docs/kalvoice.astro";
 import LocalFirstDocs from "../../src/pages/docs/local-first.astro";
+import PermissionsDocs from "../../src/pages/docs/permissions.astro";
 import ProvidersDocs from "../../src/pages/docs/providers.astro";
 import Home from "../../src/pages/index.astro";
 import KalVoicePage from "../../src/pages/kalvoice.astro";
@@ -305,5 +308,88 @@ describe("credential storage caveats", () => {
     expect(copy).toContain(
       "Claude Code and Codex keep their sign-in in their own storage inside that profile, which can be an ordinary, unencrypted file (for example Codex's auth.json).",
     );
+  });
+});
+
+// Stable 0.1.5 threads start only in Plan, Approve or Auto (B9 536efd7:
+// crates/threads/src/runtime.rs ThreadOptions.permission_modes; apps/desktop/src/surfaces/permissions
+// START_MODES, the only modes Stable's Settings offers). Bypass and Custom are not available in
+// 0.1.5, so no page may present every mode as available or leave either unmarked.
+const EVERY_MODE_CLAIMS = [
+  /every mode is available/i,
+  /every mode (is )?on every plan/i,
+  /a mode for every thread/i,
+  /all permission modes/i,
+  // The 0.1.1 note "deny rules in every permission mode" is a true statement about deny rules.
+  /(includes|with) every permission mode/i,
+  /every provider and permission mode/i,
+  /includes all of them/i,
+  /Plan, Approve, Auto, Bypass/i,
+  /Bypass activation/i,
+];
+
+describe("permission modes in 0.1.5", () => {
+  it.each([
+    ...PAGES_UNDER_TEST,
+    { name: "permissions docs", component: PermissionsDocs as Component, path: "/docs/permissions" },
+    { name: "security page", component: Security as Component, path: "/security" },
+  ])("the $name never presents Bypass or Custom as available", async ({ component, path }) => {
+    const html = await render(component, path);
+    const copy = `${text(html)} ${metaDescription(html)}`;
+    for (const pattern of EVERY_MODE_CLAIMS) expect(copy).not.toMatch(pattern);
+  });
+
+  it("says in the permissions docs which modes 0.1.5 threads start in and marks the rest Planned", async () => {
+    const copy = text(await render(PermissionsDocs, "/docs/permissions"));
+    expect(copy).toContain("In KalCode 0.1.5, threads start in Plan, Approve or Auto, on every plan.");
+    expect(copy).toContain("Bypass and Custom are planned and not available in 0.1.5.");
+    expect(copy).toContain("Bypass Planned");
+    expect(copy).toContain("Custom Planned");
+    expect(copy).not.toMatch(/Plan Planned|Approve Planned|Auto Planned/);
+  });
+
+  it("marks Bypass and Custom Planned on the product page", async () => {
+    const copy = text(await render(Product, "/product"));
+    expect(copy).toContain("Threads run in Plan, Approve or Auto on every plan. Bypass and Custom are planned.");
+    expect(copy).toContain("Bypass Planned");
+    expect(copy).toContain("Custom Planned");
+  });
+
+  it("names only the startable modes where the plans list what every plan includes", async () => {
+    for (const [component, path] of [
+      [Home, "/"],
+      [Pricing, "/pricing"],
+    ] as const) {
+      expect(text(await render(component, path))).toContain("Plan, Approve and Auto");
+    }
+    const pricing = text(await render(Pricing, "/pricing"));
+    expect(pricing).toContain(
+      "In 0.1.5, threads run in Plan, Approve or Auto on every plan; Bypass and Custom are planned.",
+    );
+  });
+
+  it("marks Bypass and Custom Planned in the permission-modes preview", async () => {
+    expect(MODES.filter((mode) => mode.planned).map((mode) => mode.id)).toEqual(["bypass", "custom"]);
+    const panel = text(
+      await render(PermissionsPanel as Component, "/", {
+        uid: "pm",
+        mode: "approve",
+        approval: "none",
+        interactive: true,
+        variant: "full",
+      }),
+    );
+    expect(panel).toContain("Bypass Planned");
+    expect(panel).toContain("Custom Planned");
+  });
+});
+
+describe("native code safety claim", () => {
+  // B9 536efd7 Cargo.toml [workspace.lints.rust] unsafe_code = "deny" (not "forbid"), with
+  // #[allow(unsafe_code)] on OS-integration modules and functions (Win32, macOS and libc calls).
+  it("does not say unsafe Rust is forbidden", async () => {
+    const copy = text(await render(Security, "/security"));
+    expect(copy).not.toMatch(/unsafe Rust is forbidden/i);
+    expect(copy).toContain("Unsafe Rust is denied by default across KalCode's own native code.");
   });
 });
