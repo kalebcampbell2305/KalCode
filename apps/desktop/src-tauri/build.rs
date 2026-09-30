@@ -23,8 +23,8 @@ fn target_has_test_hooks() -> bool {
 /// binary without it cannot start (STATUS_ENTRYPOINT_NOT_FOUND). `/MANIFESTUAC:NO` keeps the
 /// embedded manifest exactly the file's content, as before.
 fn embed_windows_manifest() -> tauri_build::WindowsAttributes {
-    let manifest = std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").unwrap())
-        .join("windows-app-manifest.xml");
+    let manifest =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("windows-app-manifest.xml");
     println!("cargo:rerun-if-changed={}", manifest.display());
     println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
     println!("cargo:rustc-link-arg=/MANIFESTINPUT:{}", manifest.display());
