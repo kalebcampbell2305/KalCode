@@ -754,6 +754,10 @@ impl DesktopUpdaterState {
             }
             Err(error) => {
                 tracing::error!(event = "updater.launch_failed", error_code = error.code());
+                // The installer never started, so record why instead of letting the restarted
+                // build report `install_did_not_advance` (the log may already be closed).
+                #[cfg(windows)]
+                let _ = self.cancel_attempt("update_launch_failed");
                 // Active work was already quiesced. Restart the preserved current build instead
                 // of leaving a visible but inert application running.
                 self.0.app.restart();
@@ -839,6 +843,8 @@ impl DesktopUpdaterState {
                     event = "updater.rollback_launch_failed",
                     error_code = error.code()
                 );
+                #[cfg(windows)]
+                let _ = self.cancel_attempt("rollback_launch_failed");
                 self.0.app.restart();
             }
         }
