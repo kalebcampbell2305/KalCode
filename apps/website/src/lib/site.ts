@@ -3,6 +3,8 @@
  * Keep this module free of Astro or Worker imports so both runtimes can use it.
  */
 
+import type { Plan, PlanId } from "@kalcode/protocol/plans";
+
 export const SITE_ORIGIN = "https://kalcoded.com";
 export const SITE_NAME = "KalCode";
 
@@ -66,19 +68,33 @@ export const KALVOICE = {
   name: "KalVoice",
   line: "Speak your prompts. Control your workspace. Coordinate your coding agents.",
   summary:
-    "KalVoice turns your voice into coding prompts and KalCode commands. Dictate directly into Claude Code, Codex, Gemini CLI and your terminals, or ask KalVoice to run your workspace.",
+    "KalVoice turns your voice into coding prompts and KalCode commands. Dictate directly into Claude Code, Codex and your terminals, or ask KalVoice to run your workspace.",
   status: "In development",
   /**
    * One push-to-talk key: hold it, speak, release. KalVoice decides from context whether the words
-   * are dictation (typed into the focused input) or a command. Configurable to Caps Lock, another
-   * single key, or Fn on keyboards that expose it to apps.
+   * are dictation (typed into the focused input) or a command. Configurable to another function
+   * key, Pause, Scroll Lock or Insert; the app refuses Caps Lock and Fn
+   * (crates/kalvoice/src/shortcuts.rs). The key is held only while KalCode is the foreground app.
    */
   pushToTalkKey: "F8",
-  /** The one line that says the key can be changed. Never claims Fn works everywhere. */
+  /** Says the key can be changed and when it works. Offers only keys the app accepts. */
   keyNote:
-    "F8 is the default. Choose Caps Lock or another single key instead, or Fn on keyboards that pass it to apps.",
+    "F8 is the default. Choose another function key, Pause, Scroll Lock or Insert instead. The key works while KalCode is the active window, so other apps keep it otherwise.",
   globeAlt: "KalVoice globe: a sphere of connected points of light",
 } as const;
+
+/**
+ * Website wording for a plan's one-line summary. The shared catalog (packages/protocol/src/plans.ts,
+ * also read by the desktop app) describes MAX by features that are Gated on Stable 0.1.6 (missions:
+ * crates/native-core/src/flags.rs), so the site says what the plan gives today instead.
+ */
+const PLAN_SUMMARY_OVERRIDES: Partial<Record<PlanId, string>> = {
+  max: "For heavy daily KalVoice use across many projects.",
+};
+
+export function planSummary(plan: Pick<Plan, "id" | "summary">): string {
+  return PLAN_SUMMARY_OVERRIDES[plan.id] ?? plan.summary;
+}
 
 export interface PageInfo {
   path: string;
@@ -91,7 +107,7 @@ export const ACCOUNT_PAGE = {
   path: "/account",
   title: "Account — KalCode",
   description:
-    "Open your KalCode account to view your plan, KalVoice Requests and billing. Sign-in uses GitHub in the system browser; provider usage remains on your connected provider accounts.",
+    "Open your KalCode account to view your plan, KalVoice Requests and billing. Sign in with Google, Microsoft or a one-time email link; provider usage remains on your connected provider accounts.",
 } as const satisfies PageInfo;
 
 /**
@@ -103,13 +119,13 @@ export const PAGES = [
     path: "/",
     title: "KalCode — One intelligence that operates your entire AI workspace",
     description:
-      "KalCode is a desktop workspace in private development. Connect the coding agents you already use — Claude Code, Codex and Gemini CLI — run them side by side, approve every action, and speak your prompts with KalVoice.",
+      "KalCode is a desktop workspace for the coding agents you already use. Connect Claude Code and Codex, run their threads at the same time, approve every action, and speak your prompts with KalVoice.",
   },
   {
     path: "/product",
     title: "Product — KalCode",
     description:
-      "The KalCode workspace piece by piece: provider panes, threads, the Dashboard, permission modes, KalVoice and local-first storage, with an honest table of what is built today and what is planned.",
+      "The KalCode workspace piece by piece: terminals and panes, provider threads, the Dashboard, permission modes, KalVoice and local-first storage, with an honest table of what is built today and what is planned.",
   },
   {
     path: "/kalvoice",
@@ -121,7 +137,7 @@ export const PAGES = [
     path: "/pricing",
     title: "Pricing — KalCode",
     description:
-      "KalCode plans: Free, Pro, MAX and MAX 2X. Every plan includes all providers, all permission modes and unlimited local dictation; plans differ in KalVoice Requests and workspace features. AI usage stays on your own provider account.",
+      "KalCode plans: Free, Pro, MAX and MAX 2X. Every plan includes all providers, the Plan, Approve and Auto modes and unlimited local dictation; plans differ in KalVoice Requests. AI usage stays on your own provider account.",
   },
   {
     path: "/download",
@@ -139,13 +155,13 @@ export const PAGES = [
     path: "/docs/permissions",
     title: "Permissions — KalCode Docs",
     description:
-      "How KalCode permission modes (Plan, Approve, Auto, Bypass, Custom) decide what agents and KalVoice may do.",
+      "How KalCode permission modes decide what agents and KalVoice may do: threads in 0.1.6 run in Plan, Approve or Auto; Bypass and Custom are planned.",
   },
   {
     path: "/docs/providers",
     title: "Providers — KalCode Docs",
     description:
-      "How KalCode connects Claude Code, Codex and Gemini CLI through documented integration methods using your own accounts, on every plan.",
+      "How KalCode connects Claude Code and Codex through documented integration methods using your own accounts, on every plan, and why Gemini CLI is unavailable in 0.1.6.",
   },
   {
     path: "/docs/kalvoice",
@@ -157,7 +173,7 @@ export const PAGES = [
     path: "/docs/local-first",
     title: "Local-first — KalCode Docs",
     description:
-      "What KalCode keeps on your device, how it stores secrets in the OS keychain, and what never leaves your machine.",
+      "What KalCode keeps on your device, where your KalCode session and provider sign-ins are stored, and what never leaves your machine.",
   },
   {
     path: "/updates",
@@ -169,7 +185,7 @@ export const PAGES = [
     path: "/security",
     title: "Security — KalCode",
     description:
-      "KalCode security commitments: local-first data, on-device voice, your own provider accounts, an IPC allow-list, OS keychain secrets, no telemetry in current builds, and a permission model agents cannot bypass.",
+      "KalCode security commitments: local-first data, on-device voice, your own provider accounts in separate managed profiles, an IPC allow-list, your KalCode session in the OS credential store, no telemetry in current builds, and a permission model agents cannot bypass.",
   },
   {
     path: "/privacy",
@@ -260,23 +276,31 @@ export const DOCS_NAV = FOOTER_NAV.docs;
 export const TAGLINE = "One intelligence. A brighter tomorrow.";
 
 /**
- * Honest adapter status per provider (TRUTH.md, 2026-09-24). Shown wherever providers are named
- * next to each other, so no pane or bar implies more than the runtime can do today.
+ * Honest provider status on the Stable app (B4 8d6c133: crates/providers/src/catalog.rs marks all
+ * three adapters Implemented; apps/desktop/src-tauri/src/thread_commands.rs starts every thread in
+ * the account's managed profile). Access is the in-app sign-in each provider account supports:
+ * Claude Code `auth login --claudeai`, Codex ChatGPT login on personal plans (organization plans
+ * are refused), Gemini CLI "Sign in with Google". Managed launches strip provider API-key
+ * variables, so no API-key path is claimed. Provider panes are gated off Stable and not claimed.
  */
 export const PROVIDERS = [
-  { id: "claude", name: "Claude Code", access: "Claude sign-in or API key", status: "Adapter built", state: "built" },
-  {
-    id: "codex",
-    name: "Codex",
-    access: "ChatGPT sign-in or API key",
-    status: "Detected · adapter planned",
-    state: "planned",
-  },
-  {
-    id: "gemini",
-    name: "Gemini CLI",
-    access: "Google sign-in or API key",
-    status: "Detected · adapter planned",
-    state: "planned",
-  },
+  { id: "claude", name: "Claude Code", access: "Claude account sign-in", status: "Adapter built", state: "built" },
+  { id: "codex", name: "Codex", access: "ChatGPT sign-in (personal plans)", status: "Adapter built", state: "built" },
+  { id: "gemini", name: "Gemini CLI", access: "Google sign-in", status: "Unavailable in 0.1.6", state: "unavailable" },
 ] as const;
+
+/**
+ * Gemini CLI availability in KalCode 0.1.6 (unchanged since B5 65be519). On June 18, 2026 Google stopped serving
+ * Gemini CLI "Login with Google" for Gemini Code Assist for individuals, Google AI Pro and Ultra
+ * (developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals); Standard and
+ * Enterprise licenses are unaffected but need a Google Cloud project, which 0.1.6 cannot pass:
+ * managed launches keep only the base environment (crates/providers/src/env.rs BASE_ALLOW,
+ * managed.rs launch_env) and ignore local .env files (gemini/managed_policy.rs floor_settings).
+ * B5 reports "Signed in" from the credential file alone (gemini_account_auth.rs credential_state),
+ * so a refused personal account still looks signed in. No Antigravity support is claimed.
+ */
+export const GEMINI_AVAILABILITY = {
+  short: "Gemini CLI is unavailable in KalCode 0.1.6.",
+  notice:
+    "On June 18, 2026, Google ended Gemini CLI access through Sign in with Google for personal Google accounts: Gemini Code Assist for individuals, Google AI Pro and Google AI Ultra. KalCode 0.1.6 also can't set the Google Cloud project that Gemini Code Assist Standard and Enterprise licenses need, so Gemini CLI is currently unavailable in KalCode. A personal Google account can still finish sign-in and show as signed in, but its threads fail. Claude Code and Codex are unaffected. Updates will say when Gemini CLI can be used in KalCode again.",
+} as const;

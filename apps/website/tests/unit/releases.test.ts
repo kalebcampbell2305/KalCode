@@ -73,6 +73,17 @@ describe("with a published Windows preview (fixture)", () => {
   });
 });
 
+describe("with a published Stable release", () => {
+  it("labels download calls to action and shared build status from the manifest channel", () => {
+    const manifest = structuredClone(publishedManifest);
+    if (!manifest.latest) throw new Error("fixture has no release");
+    manifest.latest.channel = "stable";
+    manifest.latest.version = "0.1.6";
+    expect(downloadCta(manifest).note).toBe("Windows · Stable 0.1.6 · 3.8 MB");
+    expect(buildStatus(manifest)).toBe("Stable 0.1.6 for Windows");
+  });
+});
+
 describe("manifest guard", () => {
   const clone = (): ReleaseManifest => structuredClone(publishedManifest) as ReleaseManifest;
 

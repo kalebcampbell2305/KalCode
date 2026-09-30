@@ -1,5 +1,8 @@
 ---
 import Docs from "../../layouts/Docs.astro";
+import { RELEASES, servedStableRelease } from "../../lib/releases";
+
+const kalvoiceShipped = servedStableRelease(RELEASES) !== null;
 ---
 <Docs
   path="/docs/local-first"
@@ -19,33 +22,51 @@ import Docs from "../../layouts/Docs.astro";
 
   <h2>Secrets</h2>
   <p>
-    API keys and other credentials are stored in your operating system's credential store: Windows
-    Credential Manager, macOS Keychain, or Secret Service on Linux. They are never written to the
-    database, logs, events, or the interface, and they are cleared from memory when no longer
-    needed.
+    KalCode's own secrets, such as your KalCode account session, are stored in your operating
+    system's credential store: Windows Credential Manager or macOS Keychain. They are never written
+    to the database, logs, events, or the interface, and they are cleared from memory when no
+    longer needed.
+  </p>
+  <p>
+    Provider sign-ins are kept by each provider's own CLI, not by KalCode. Each provider account
+    you add gets its own KalCode-managed provider profile on your device, and the provider keeps
+    that account's sign-in for that profile. Claude Code and Codex keep their sign-in in their own
+    storage inside that profile, which can be an ordinary, unencrypted file (for example Codex's
+    auth.json). Gemini CLI keeps its sign-in in its own AES-256-GCM encrypted file, never in
+    plaintext. KalCode never reads or copies these credentials. Gemini derives its file's key from your computer and user names, so the file is
+    kept out of plaintext but not away from other programs running as your user.
   </p>
 
   <h2>Logs</h2>
   <p>
     Logs are structured and stay local. Before anything is written, a redaction pass removes
-    credential patterns such as API keys, authorization headers, private keys, and passwords in
-    URLs.
+    credential patterns such as API keys, authorization headers, private keys, passwords in URLs,
+    OAuth access and refresh credentials, sign-in codes in redirect URLs, and KalCode session
+    credentials.
   </p>
 
   <h2>Voice</h2>
   <p>
-    KalVoice dictation, in development, uses a speech-recognition model that runs on your
-    computer. Audio is captured into memory, transcribed on the device, and discarded; it is never
-    stored or uploaded. The model is downloaded only after you agree, and is kept in KalCode's data
-    folder.
+    {kalvoiceShipped ? "KalVoice dictation" : "KalVoice dictation, in development,"} uses a
+    speech-recognition model that runs on your computer. Audio is captured into memory, transcribed on the device, and discarded; it is never
+    stored or uploaded. KalCode downloads the default English model by itself from its signed
+    component catalog, verifies it before use, and keeps it in KalCode's data folder. If you remove
+    it, KalCode doesn't download it again on its own. Once speech is ready, KalCode also downloads
+    its on-device interpreter (about 850 MB) from the same signed catalog. Turn off Prepare local
+    intelligence automatically in Settings › KalVoice to download it yourself instead. These
+    downloads send no audio or text.
   </p>
 
   <h2>What leaves your device</h2>
   <p>
-    Current development builds send no telemetry and no user data off your device. When you run a
+    Current builds send no telemetry and no user data off your device. Apart from your
+    KalCode account (sign-in, plan and KalVoice Request counts), KalCode contacts kalcoded.com only
+    for its signed update feed, at launch and about every six hours while it is open, and to
+    download KalVoice's signed components when they are needed. None of these requests carry
+    telemetry, audio or text. When you run a
     provider, that provider's own CLI talks to its service under your account, exactly as it does
-    when you use it directly. KalVoice requests that need reasoning go the same way, to the
-    provider you chose.
+    when you use it directly. KalVoice interprets commands on your computer and never sends them
+    to a provider; words you dictate into a provider thread go to that provider.
   </p>
   <p>
     Accounts and billing will arrive with the paid plans at launch. They will be documented here

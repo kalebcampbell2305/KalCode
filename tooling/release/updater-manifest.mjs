@@ -388,6 +388,15 @@ async function createWindowsManifest(
   };
 }
 
+// An owner-waived update trial (publish.mjs verifies the waiver receipt) lowers exactly that artifact's QA record to
+// the preliminary contract: every product check and safeguard still applies and the trial must stay pending (null).
+function artifactQaPhase(input, qaPhase) {
+  if (input.updateTrialWaived === undefined) return qaPhase;
+  if (input.updateTrialWaived !== true || qaPhase !== "final")
+    fail("an update-trial waiver applies only to a final publication");
+  return "preliminary";
+}
+
 /** A v2 feed contains only explicitly supplied, independently verified platform artifacts. */
 export async function createPlatformUpdaterManifest({
   artifacts,
@@ -420,12 +429,12 @@ export async function createPlatformUpdaterManifest({
     let artifact;
     if (input.target === "windows-x86_64") {
       const legacy = await createWindowsManifest(
-        { ...input, requestedChannel, publishedAt, notes, qaPhase },
+        { ...input, requestedChannel, publishedAt, notes, qaPhase: artifactQaPhase(input, qaPhase) },
         input.target,
       );
       artifact = { ...legacy.platforms[input.target], size: legacy.kalcode.size, sha256: legacy.kalcode.sha256 };
     } else {
-      artifact = await validateMacUpdateArtifact(input, requestedChannel, qaPhase);
+      artifact = await validateMacUpdateArtifact(input, requestedChannel, artifactQaPhase(input, qaPhase));
     }
     platforms[input.target] = { url: artifact.url, signature: artifact.signature };
     metadata[input.target] = {

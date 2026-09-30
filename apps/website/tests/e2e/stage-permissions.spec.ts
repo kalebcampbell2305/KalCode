@@ -71,8 +71,12 @@ test.describe("PermissionModes", () => {
     await expect(card).toHaveAttribute("data-state", "denied");
   });
 
-  test("Custom is marked Planned", async ({ page }) => {
+  test("Bypass and Custom are marked Planned", async ({ page }) => {
     const block = await open(page);
+    await expect(block.getByTestId("mode-bypass")).toContainText("Planned");
     await expect(block.getByTestId("mode-custom")).toContainText("Planned");
+    for (const id of ["plan", "approve", "auto"]) {
+      await expect(block.getByTestId(`mode-${id}`)).not.toContainText("Planned");
+    }
   });
 });

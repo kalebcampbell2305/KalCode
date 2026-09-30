@@ -20,7 +20,9 @@ describe("release manifest (tooling ↔ worker)", () => {
     } else {
       // Whatever `pnpm release:publish` wrote must round-trip through the Worker's parser.
       expect(parseReleaseManifest(committed)).toEqual(committed);
-      expect(committed.latest.platforms.every((p: { signed: boolean }) => p.signed === false)).toBe(true);
+      // Stable releases are published only when every platform is signed; the legacy preview was not.
+      const stable = committed.latest.channel === "stable";
+      expect(committed.latest.platforms.every((p: { signed: boolean }) => p.signed === stable)).toBe(true);
     }
   });
 

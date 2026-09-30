@@ -45,7 +45,7 @@
   "vars": {
     // Keep the verified preview manifest live until a signed stable descriptor, artifacts and D1
     // pointer have all been published and probed. Only exact "true" changes release authority.
-    "RELEASE_CATALOG_ENABLED": "false",
+    "RELEASE_CATALOG_ENABLED": "true",
     // resend (production) | capture (tests: loopback mail sink) | log (local console)
     "EMAIL_TRANSPORT": "resend",
     // Site-wide cap on emails per UTC day, inside Resend's free allowance (100/day).

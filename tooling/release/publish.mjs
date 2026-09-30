@@ -2,6 +2,7 @@
 // Publishes one immutable KalCode release assembled from independently verified platform packets.
 // All platforms share one version, commit, channel, descriptor pair, and atomic D1 pointer.
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, relative } from "node:path";
@@ -64,6 +65,40 @@ try {
   mode = parsePublishMode(process.argv.slice(2));
 } catch (error) {
   fail(error instanceof Error ? error.message : String(error));
+}
+
+// Owner-waived real update trial for ONE target (KALCODE_UPDATE_TRIAL_WAIVER=<receipt path>,
+// KALCODE_UPDATE_TRIAL_WAIVER_SHA256=<its sha256>). Verified below against the release build; any mismatch refuses.
+let trialWaiver = null;
+if (process.env.KALCODE_UPDATE_TRIAL_WAIVER || process.env.KALCODE_UPDATE_TRIAL_WAIVER_SHA256) {
+  try {
+    const path = process.env.KALCODE_UPDATE_TRIAL_WAIVER ?? "";
+    const bytes = readFileSync(path);
+    if (createHash("sha256").update(bytes).digest("hex") !== process.env.KALCODE_UPDATE_TRIAL_WAIVER_SHA256)
+      throw new Error("waiver receipt sha256 mismatch");
+    const w = JSON.parse(bytes.toString("utf8"));
+    if (
+      !/^kalcode-\d+\.\d+\.\d+-[0-9a-f]{7}-lifecycle-waiver\/v1$/.test(w.schema) ||
+      w.status !== "PASS" ||
+      w.target !== "windows-x86_64" ||
+      w.waivedStep !== "B"
+    )
+      throw new Error("waiver receipt is not a PASS windows-x86_64 Step B lifecycle waiver");
+    if (
+      ![w.acceptedBy, w.acceptedAt, w.reason, w.knownIssue, w.ownerDecision?.verbatim].every(
+        (v) => typeof v === "string" && v.trim(),
+      )
+    )
+      throw new Error("waiver receipt lacks acceptance, reason, known issue or the owner's decision");
+    trialWaiver = {
+      target: w.target,
+      productCommit: w.productCommit,
+      path,
+      sha256: process.env.KALCODE_UPDATE_TRIAL_WAIVER_SHA256,
+    };
+  } catch (error) {
+    fail(`update-trial waiver refused: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 const LIVE_MANIFEST_URL = "https://kalcoded.com/releases/latest.json";
@@ -204,7 +239,25 @@ if (packets.some((packet) => packet.target === "darwin-aarch64") && mode === "lo
   packetProblems.push("macOS packets require the complete public verification path; --local is Windows-only");
 }
 packets.sort((left, right) => left.target.localeCompare(right.target));
+// The updater descriptor keeps the staging tool's fixed platform order (updater-qa-stage-assembly.mjs), so a publication
+// reproduces the frozen, immutable staged descriptor byte-for-byte.
+const UPDATER_TARGET_ORDER = ["windows-x86_64", "darwin-aarch64"];
+const inUpdaterOrder = (list) =>
+  [...list].sort(
+    (left, right) => UPDATER_TARGET_ORDER.indexOf(left.target) - UPDATER_TARGET_ORDER.indexOf(right.target),
+  );
 const releaseBuild = packets[0].build;
+if (
+  trialWaiver &&
+  (trialWaiver.productCommit !== releaseBuild?.commit ||
+    !packets.some((packet) => packet.target === trialWaiver.target))
+) {
+  fail("update-trial waiver refused: it does not bind this release build's commit and target");
+}
+if (trialWaiver)
+  console.log(
+    `  WAIVED real update trial for ${trialWaiver.target} (owner-accepted receipt ${trialWaiver.sha256}); its QA record must still pass every product check and safeguard`,
+  );
 const channel = releaseBuild.requestedReleaseChannel;
 console.log(`Publishing ${packets.map((packet) => packet.build.file).join(", ")} (${mode})`);
 
@@ -254,7 +307,15 @@ if (mode !== "local") {
     const changed = descendant
       ? git(["diff", "--name-only", releaseBuild.commit, head]).split(/\r?\n/).filter(Boolean)
       : [];
-    const other = changed.filter((file) => !file.startsWith("docs/releases/"));
+    // An update-trial waiver publication may also carry exactly the files that implement and test the waiver.
+    const waiverTooling = trialWaiver
+      ? [
+          "tooling/release/publish.mjs",
+          "tooling/release/updater-manifest.mjs",
+          "tooling/release/updater-manifest.test.mjs",
+        ]
+      : [];
+    const other = changed.filter((file) => !file.startsWith("docs/releases/") && !waiverTooling.includes(file));
     if (!descendant || other.length > 0) {
       problems.push(
         `HEAD ${head.slice(0, 12)} is not the shared build commit ${releaseBuild.commit.slice(0, 12)} plus release notes only${other.length ? ` (also changed: ${other.join(", ")})` : ""}; rebuild every platform`,
@@ -324,8 +385,9 @@ let updaterPublicKey = null;
 if (mode !== "local") {
   try {
     updaterPublicKey = readUpdaterPublicKey();
-    const artifacts = packets.map((packet) => ({
+    const artifacts = inUpdaterOrder(packets).map((packet) => ({
       ...packet,
+      ...(trialWaiver?.target === packet.target && { updateTrialWaived: true }),
       artifactKey: `releases/updater/${channel}/${version}/${packet.build.sha256}/${packet.build.file}`,
       publicKeyBase64: updaterPublicKey,
     }));
@@ -656,6 +718,7 @@ try {
     }
     downloadedInputs.push({
       ...packet,
+      ...(trialWaiver?.target === packet.target && { updateTrialWaived: true }),
       artifactPath,
       signaturePath,
       artifactKey: objects.updater.artifact,
@@ -676,7 +739,7 @@ try {
   )
     fail("immutable download descriptor read back with different metadata or bytes");
   const reverified = await createPlatformUpdaterManifest({
-    artifacts: downloadedInputs,
+    artifacts: inUpdaterOrder(downloadedInputs),
     requestedChannel: channel,
     publishedAt,
     notes: releaseNotesText,

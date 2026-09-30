@@ -14,8 +14,10 @@ import {
   summaryLead,
   TERMINALS,
   THREADS,
+  type Thread,
   ZOD_APPROVAL,
 } from "../../../data/story";
+import { stageBuildLabel } from "../../../lib/stage-status";
 import ApprovalCard from "./ApprovalCard.astro";
 import ThreadRow from "./ThreadRow.astro";
 
@@ -24,10 +26,12 @@ interface Props {
   approval: ApprovalState;
   interactive: boolean;
   present: readonly string[];
+  /** The sample threads to list (defaults to the preview set). */
+  threads?: readonly Thread[];
 }
 
-const { uid, approval, interactive, present } = Astro.props;
-const agents = THREADS.filter((t) => t.provider !== "shell");
+const { uid, approval, interactive, present, threads = THREADS } = Astro.props;
+const agents = threads.filter((t) => t.provider !== "shell");
 const shown = agents.filter((t) => !t.spawned || present.includes(t.id));
 const summary = summarize(
   shown.map((t) => statusFor(t, approval)),
@@ -42,6 +46,9 @@ const segments = [
   { key: "failed", label: "Failed", icon: "failed", tone: "danger" },
   { key: "terminals", label: "Terminals", icon: "terminal", tone: "idle" },
 ] as const;
+// The sample runtime card names the served release (lib/stage-status.ts), never a stale build.
+const buildValue = stageBuildLabel();
+const runtime = RUNTIME.map((row) => (row.label === "Build" ? { ...row, value: buildValue } : row));
 ---
 <div class="kc-dash" data-kc-dash data-testid="dashboard">
   <div class="kc-dash__head">
@@ -90,7 +97,7 @@ const segments = [
       <div class="kc-dash__section">
         <p class="kc-dash__h">Runtime</p>
         <dl class="kc-runtime">
-          {RUNTIME.map((r) => (
+          {runtime.map((r) => (
             <div>
               <dt>{r.label}</dt>
               <dd>
