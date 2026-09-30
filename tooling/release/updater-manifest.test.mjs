@@ -647,6 +647,15 @@ test("publish.mjs carries an update-trial waiver into every platform manifest it
   assert.equal(waived.length, builds.length);
 });
 
+test("publish.mjs builds every updater descriptor in the staging tool's platform order", () => {
+  // Regression: the staged, immutable stable/<version>.json lists windows-x86_64 before darwin-aarch64; an
+  // alphabetical order produces different bytes and the frozen-file check refuses the publication.
+  const source = readFileSync(new URL("./publish.mjs", import.meta.url), "utf8");
+  assert.match(source, /const UPDATER_TARGET_ORDER = \["windows-x86_64", "darwin-aarch64"\];/);
+  assert.equal((source.match(/createPlatformUpdaterManifest\(/g) ?? []).length, 2);
+  assert.equal((source.match(/inUpdaterOrder\((?:packets|downloadedInputs)\)/g) ?? []).length, 2);
+});
+
 test("stable generators reject prerelease versions before artifact I/O", async () => {
   const input = fixture();
   input.build.version = "1.2.3-beta.1";

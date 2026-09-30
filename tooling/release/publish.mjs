@@ -239,6 +239,13 @@ if (packets.some((packet) => packet.target === "darwin-aarch64") && mode === "lo
   packetProblems.push("macOS packets require the complete public verification path; --local is Windows-only");
 }
 packets.sort((left, right) => left.target.localeCompare(right.target));
+// The updater descriptor keeps the staging tool's fixed platform order (updater-qa-stage-assembly.mjs), so a publication
+// reproduces the frozen, immutable staged descriptor byte-for-byte.
+const UPDATER_TARGET_ORDER = ["windows-x86_64", "darwin-aarch64"];
+const inUpdaterOrder = (list) =>
+  [...list].sort(
+    (left, right) => UPDATER_TARGET_ORDER.indexOf(left.target) - UPDATER_TARGET_ORDER.indexOf(right.target),
+  );
 const releaseBuild = packets[0].build;
 if (
   trialWaiver &&
@@ -378,7 +385,7 @@ let updaterPublicKey = null;
 if (mode !== "local") {
   try {
     updaterPublicKey = readUpdaterPublicKey();
-    const artifacts = packets.map((packet) => ({
+    const artifacts = inUpdaterOrder(packets).map((packet) => ({
       ...packet,
       ...(trialWaiver?.target === packet.target && { updateTrialWaived: true }),
       artifactKey: `releases/updater/${channel}/${version}/${packet.build.sha256}/${packet.build.file}`,
@@ -732,7 +739,7 @@ try {
   )
     fail("immutable download descriptor read back with different metadata or bytes");
   const reverified = await createPlatformUpdaterManifest({
-    artifacts: downloadedInputs,
+    artifacts: inUpdaterOrder(downloadedInputs),
     requestedChannel: channel,
     publishedAt,
     notes: releaseNotesText,
