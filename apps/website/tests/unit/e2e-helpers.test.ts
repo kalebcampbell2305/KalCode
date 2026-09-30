@@ -64,7 +64,12 @@ describe("e2e helpers", () => {
       "Terms of use for kalcoded.com, the KalCode early-access list and the KalCode app.",
     );
     for (const page of PAGES.filter((p) => p.path !== "/kalvoice" && p.path !== "/terms")) {
-      expect(renderedDescription(page, true)).toBe(page.description);
+      expect(renderedDescription(page, true, "0.1.6")).toBe(page.description);
     }
+    // A served Stable 0.1.7 names itself where the docs catalog text says 0.1.6 (Docs.astro releaseCopy).
+    const providers = PAGES.find((page) => page.path === "/docs/providers");
+    if (!providers) throw new Error("no /docs/providers page");
+    expect(renderedDescription(providers, true, "0.1.7")).toContain("why Gemini CLI is unavailable in 0.1.7.");
+    expect(renderedDescription(providers, false, "0.1.7")).toBe(providers.description);
   });
 });

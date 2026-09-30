@@ -43,12 +43,19 @@ export const SERVED_STABLE = isServedStable(MANIFEST);
 /**
  * The meta description a page renders once a Stable release is served: /kalvoice drops the
  * catalog's trailing " In development." (src/pages/kalvoice.astro), /terms says "the KalCode app"
- * instead of "the KalCode preview app" (src/pages/terms.astro), and every other page uses its own.
+ * instead of "the KalCode preview app" (src/pages/terms.astro), a docs page names the served Stable
+ * version where its catalog text says 0.1.6 (releaseCopy in src/layouts/Docs.astro), and every other
+ * page uses its own.
  */
-export function renderedDescription(page: { path: string; description: string }, servedStable = SERVED_STABLE): string {
+export function renderedDescription(
+  page: { path: string; description: string },
+  servedStable = SERVED_STABLE,
+  version = MANIFEST.latest?.version ?? "0.1.6",
+): string {
   if (!servedStable) return page.description;
   if (page.path === "/kalvoice") return page.description.replace(/ In development\.$/, "");
   if (page.path === "/terms") return page.description.replace(/ preview app\.$/, " app.");
+  if (page.path.startsWith("/docs/")) return page.description.replaceAll("0.1.6", version);
   return page.description;
 }
 

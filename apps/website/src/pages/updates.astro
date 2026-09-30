@@ -14,6 +14,9 @@ const stable017 = signedStable?.version === "0.1.7" ? signedStable : null;
 const shows016 = Boolean(stable016 || stable017);
 // 0.1.6's Stable publication time (releases.json as deployed at f1da08b5), for when 0.1.7 is selected.
 const published016 = stable016?.publishedAt ?? "2026-09-30T02:34:07.332Z";
+// The 0.1.7 entry's KalVoice orb line (primary TODO: final wording pending).
+const KALVOICE_ORB_017 =
+  "The orb now stops listening when you let go, cancel, or it times out, so you no longer need to press Esc.";
 const servesPreview = channelLabel(RELEASES) === "Preview";
 const allowances = PLANS.map((plan) => `${plan.name} ${formatKalVoiceAllowance(plan.limits)}`).join(", ");
 ---
@@ -49,8 +52,8 @@ const allowances = PLANS.map((plan) => `${plan.name} ${formatKalVoiceAllowance(p
               <p class="update__kicker">Updates that finish on Windows</p>
               <h2 id="release-0-1-7-title">KalCode 0.1.7 fixes in-app updates on Windows.</h2>
               <p class="update__lead">
-                In-app Update and Restore previous version now launch the installer on Windows, several
-                update edge cases are fixed, and KalVoice stops listening when you let go of the orb.
+                In-app Update and Restore previous version now launch the installer on Windows, and the
+                release includes more update and KalVoice fixes.
               </p>
               <div class="update__groups">
                 <section>
@@ -63,8 +66,8 @@ const allowances = PLANS.map((plan) => `${plan.name} ${formatKalVoiceAllowance(p
                 <section>
                   <h3>Updates</h3>
                   <ul>
-                    <li>Windows: in-app Update and Restore previous version now launch the installer. In 0.1.6 the installer failed to start.</li>
-                    <li>Fixed: an update started during sign-in or while a file picker is open.</li>
+                    <li>Windows: in-app Update and Restore previous version now launch the installer. In 0.1.6 they can't start the installer.</li>
+                    <li>If a provider sign-in or a file or folder dialog is open when you update, KalCode now tells you to close it and try again.</li>
                     <li>Fixed: Restore previous version clicked while an update is installing.</li>
                     <li>Fixed: signing out while an update is starting.</li>
                     <li>Fixed on macOS: a hidden temporary copy left behind after quitting while an update was being prepared.</li>
@@ -73,7 +76,7 @@ const allowances = PLANS.map((plan) => `${plan.name} ${formatKalVoiceAllowance(p
                 <section>
                   <h3>KalVoice</h3>
                   <ul>
-                    <li>The orb now stops listening when you let go, cancel, or it times out, so you no longer need to press Esc.</li>
+                    <li>{KALVOICE_ORB_017}</li>
                   </ul>
                 </section>
               </div>

@@ -12,6 +12,7 @@ import Closing from "../components/Closing.astro";
 import Icon from "../components/Icon.astro";
 import PageHead from "../components/PageHead.astro";
 import Base from "../layouts/Base.astro";
+import { RELEASES, releaseCopy } from "../lib/releases";
 import { getPage, planSummary } from "../lib/site";
 
 const page = getPage("/pricing");
@@ -77,7 +78,10 @@ const faq = [
   },
   {
     q: "Are permission modes limited by plan?",
-    a: "No. Permission modes are safety controls, never a paid extra. In 0.1.6, threads run in Plan, Approve or Auto on every plan; Bypass and Custom are planned.",
+    a: releaseCopy(
+      "No. Permission modes are safety controls, never a paid extra. In 0.1.6, threads run in Plan, Approve or Auto on every plan; Bypass and Custom are planned.",
+      RELEASES,
+    ),
   },
   checkoutOpen
     ? {
