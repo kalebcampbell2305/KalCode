@@ -322,6 +322,21 @@ if (mode !== "local") {
       );
     }
   }
+  // Build numbers count commits along main; a build from any other history could be numbered
+  // below one already published and never reach users. Publish only builds of merged main
+  // (a dry run may rehearse any build).
+  const onMain =
+    mode === "dry-run" ||
+    spawnSync(
+      "git",
+      ["merge-base", "--is-ancestor", releaseBuild.commit, "origin/main"],
+      releaseProcessOptions({ cwd: ROOT, stdio: "ignore", timeout: 30_000 }),
+    ).status === 0;
+  if (!onMain) {
+    problems.push(
+      `build commit ${releaseBuild.commit.slice(0, 12)} is not on origin/main; merge it and fetch before publishing`,
+    );
+  }
 }
 if (publishesRemote) assertCleanTree(initializesAuthority ? "A release-authority bootstrap" : "A publish");
 

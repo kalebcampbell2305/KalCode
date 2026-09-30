@@ -151,7 +151,7 @@ export function releaseCommit(runGit = git) {
       return commit;
     }
     if (!parent) return commit;
-    const changed = runGit(["diff", "--name-only", parent, head]).split(/\r?\n/).filter(Boolean);
+    const changed = runGit(["diff", "--name-only", "--no-renames", parent, head]).split(/\r?\n/).filter(Boolean);
     if (changed.some((file) => !file.startsWith("docs/releases/"))) return commit;
     commit = parent;
   }

@@ -38,7 +38,7 @@ function fakeGit({ shallow = "false", head = "h", parents = {}, changes = {}, co
       if (parent === undefined) throw new Error("no parent");
       return parent;
     }
-    if (command === "diff") return (changes[rest[1]] ?? []).join("\n");
+    if (command === "diff") return (changes[rest.find((arg) => !arg.startsWith("--"))] ?? []).join("\n");
     if (command === "rev-list") return String(counts[rest[1]]);
     throw new Error(`unexpected git ${args.join(" ")}`);
   };
