@@ -4,21 +4,24 @@
 // kalcoded.com/updates and a macOS KalCode window offers "Restart to update".
 import type React from "react";
 import { C, FONT } from "../brand/tokens";
-import { Bloom, cf, cues, Headline, scene, useStage } from "../components/core";
+import { Bloom, cf, cues, scene, useStage } from "../components/core";
+import { KineticText, LightSweep } from "../components/fx";
 import { copy } from "../data/copy";
-import { clamp01, drift, ease, lerp, prog, shipHit, springIn } from "../motion";
-import { Symbol, Wordmark } from "../ui/kit";
-import { ApprovalCard, BrowserBody, MacWindow, UpdateCard } from "../ui/surfaces";
+import { drift, ease, lerp, prog, shipHit, springIn } from "../motion";
+import { AtlasPage } from "../ui/atlas";
+import { Panel } from "../ui/kit";
+import { ApprovalCard, BrowserBody, TerminalBody } from "../ui/surfaces";
 
-const GATES = [
+// sample project (atlas) release: the repo's own commands, run by the agents; the push waits on a KalCode approval
+const GATES: { stage: string; cmd: string; sub?: string; approval?: boolean }[] = [
   { stage: "review", cmd: "Codex review" },
   { stage: "test", cmd: "pnpm test" },
   { stage: "merge", cmd: "git merge" },
-  { stage: "build", cmd: "pnpm release:build", sub: "signed" },
+  { stage: "build", cmd: "pnpm build" },
   { stage: "approve", cmd: "git push origin main", approval: true },
-  { stage: "publish", cmd: "pnpm release:publish" },
   { stage: "deploy", cmd: "wrangler deploy" },
-  { stage: "verify", cmd: "pnpm release:verify" },
+  { stage: "smoke", cmd: "pnpm test:e2e" },
+  { stage: "live", cmd: "atlas.app" },
 ];
 
 export const ReleasePipeline: React.FC<{ frame: number }> = ({ frame }) => {
@@ -64,8 +67,8 @@ export const ReleasePipeline: React.FC<{ frame: number }> = ({ frame }) => {
     springIn(frame, cf("pipe.approval"), { damping: 16, stiffness: 230 }) *
     (1 - prog(frame, approveAt + 14, 12, ease.in));
   const press = prog(frame, approveAt - 6, 6) * (1 - prog(frame, approveAt, 8));
-  const siteS = springIn(frame, cf("pipe.site"), { damping: 16, stiffness: 150 });
-  const updS = springIn(frame, cf("pipe.update"), { damping: 15, stiffness: 150 });
+  const siteS = springIn(frame, cf("pipe.live"), { damping: 16, stiffness: 150 });
+  const updS = springIn(frame, cf("pipe.dash"), { damping: 15, stiffness: 150 });
 
   const words = [
     { at: cf("copy.w_build"), t: copy.wBuild },
@@ -98,16 +101,16 @@ export const ReleasePipeline: React.FC<{ frame: number }> = ({ frame }) => {
         }}
       >
         {words.map((w) => (
-          <Headline
+          <KineticText
             key={w.t}
             text={w.t}
             frame={frame}
-            start={w.at}
-            size={portrait ? 104 : 120}
-            weight={600}
-            gap={0}
-            tracking="-0.04em"
-            color={w.t === copy.wShip ? C.text : C.text}
+            land={w.at}
+            per={0}
+            size={portrait ? 108 : 128}
+            weight={700}
+            from={w.t === copy.wShip ? "depth" : "below"}
+            tracking="-0.045em"
           />
         ))}
       </div>
@@ -118,7 +121,7 @@ export const ReleasePipeline: React.FC<{ frame: number }> = ({ frame }) => {
           position: "absolute",
           inset: 0,
           opacity: 1 - after * 0.85,
-          transform: `scale(${(portrait ? 1 : lerp(1.0, 1.07, prog(frame, start, ship - start, ease.inOut))) * (1 - 0.08 * after)})`,
+          transform: `perspective(1700px) translateX(${portrait ? 0 : -(pkt.x - W / 2) * 0.3}px) rotateX(${portrait ? 0 : 30 - 22 * after}deg) rotateY(${portrait ? 0 : -6 + 12 * prog(frame, start, ship - start, ease.inOut)}deg) scale(${(portrait ? 1 : lerp(1.0, 1.1, prog(frame, start, ship - start, ease.inOut))) * (1 - 0.08 * after)})`,
           transformOrigin: portrait ? "50% 60%" : `${pkt.x}px ${railA.y}px`,
           filter: after > 0.01 ? `blur(${after * 4}px)` : undefined,
         }}
@@ -275,70 +278,29 @@ export const ReleasePipeline: React.FC<{ frame: number }> = ({ frame }) => {
           <ApprovalCard press={press} resolved={frame >= approveAt ? 1 : 0} />
         </div>
       ) : null}
-      {/* SHIP payoff: the release lands on the site and in the app */}
+      {/* SHIP payoff: atlas is live — the new pricing page in production, the deploy, every agent done */}
       {siteS > 0.01 ? (
         <div
           style={{
             position: "absolute",
-            left: portrait ? 60 : 150,
-            top: portrait ? 470 : 330,
-            width: portrait ? 960 : 820,
-            height: portrait ? 520 : 520,
+            left: portrait ? 60 : 110,
+            top: portrait ? 430 : 300,
+            width: portrait ? 960 : 1000,
+            height: portrait ? 640 : 600,
             opacity: siteS,
-            transform: `translateY(${(1 - siteS) * 60}px) rotateY(${portrait ? 0 : 6 * (1 - siteS)}deg)`,
+            transform: `perspective(1800px) translate3d(${(1 - siteS) * -300}px, ${(1 - siteS) * 80}px, ${-(1 - siteS) * 600}px) rotateY(${(portrait ? 0 : 14) * (1 - siteS) + (portrait ? 0 : 6)}deg)`,
             borderRadius: 14,
             overflow: "hidden",
-            border: `1px solid ${C.borderStrong}`,
-            boxShadow: "0 40px 90px -20px rgba(0,0,0,0.9)",
+            border: `1px solid ${C.borderLit}`,
+            boxShadow: "0 40px 90px -20px rgba(0,0,0,0.9), 0 0 60px -16px rgba(76,141,255,0.6)",
             background: C.surface1,
             display: "flex",
             flexDirection: "column",
           }}
         >
-          <BrowserBody url="https://kalcoded.com/updates">
-            <div
-              style={{
-                position: "absolute",
-                inset: 0,
-                background: "#05080f",
-                padding: "26px 32px",
-                fontFamily: FONT.ui,
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-                <Symbol size={34} />
-                <Wordmark width={120} />
-              </div>
-              <div style={{ fontSize: 40, color: C.text, marginTop: 30, fontWeight: 500 }}>Updates</div>
-              <div
-                style={{
-                  marginTop: 22,
-                  padding: 22,
-                  borderRadius: 14,
-                  border: `1px solid ${C.borderLitSoft}`,
-                  background: C.surface1,
-                  boxShadow: `0 0 ${30 * clamp01(siteS)}px -10px rgba(76,141,255,0.6)`,
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                  <span style={{ fontSize: 26, color: C.text }}>KalCode 0.1.7</span>
-                  <span
-                    style={{
-                      fontSize: 15,
-                      color: C.accentText,
-                      border: `1px solid ${C.borderLitSoft}`,
-                      borderRadius: 99,
-                      padding: "3px 10px",
-                    }}
-                  >
-                    Stable
-                  </span>
-                </div>
-                <div style={{ fontSize: 17, color: C.text2, marginTop: 12, lineHeight: 1.45 }}>
-                  A signed installer for Windows and a signed, notarized app for Apple silicon.
-                </div>
-              </div>
-            </div>
+          <BrowserBody url="https://atlas.app/pricing">
+            <AtlasPage variant="new" t={1} />
+            <LightSweep frame={frame} at={cf("pipe.live") + 4} dur={34} strength={0.4} />
           </BrowserBody>
         </div>
       ) : null}
@@ -346,27 +308,27 @@ export const ReleasePipeline: React.FC<{ frame: number }> = ({ frame }) => {
         <div
           style={{
             position: "absolute",
-            left: portrait ? 90 : 1000,
-            top: portrait ? 1080 : 420,
+            left: portrait ? 90 : 1160,
+            top: portrait ? 1110 : 360,
+            width: portrait ? 900 : 660,
+            height: portrait ? 360 : 400,
             opacity: updS,
-            transform: `translateY(${(1 - updS) * 60}px)`,
+            transform: `perspective(1800px) translate3d(${(1 - updS) * 300}px, ${(1 - updS) * 80}px, ${-(1 - updS) * 600}px) rotateY(${(portrait ? 0 : -14) * (1 - updS) + (portrait ? 0 : -6)}deg)`,
           }}
         >
-          <MacWindow w={portrait ? 900 : 760} h={portrait ? 420 : 400} title="KalCode">
-            <div
-              style={{
-                position: "absolute",
-                inset: 0,
-                display: "grid",
-                placeItems: "center",
-                background: "radial-gradient(70% 60% at 50% 30%, rgba(76,141,255,0.12), transparent 70%), #05080f",
-              }}
-            >
-              <div style={{ transform: `scale(${portrait ? 1.35 : 1.2})` }}>
-                <UpdateCard />
-              </div>
-            </div>
-          </MacWindow>
+          <Panel lit={1} style={{ width: "100%", height: "100%" }}>
+            <TerminalBody
+              size={portrait ? 22 : 20}
+              lines={[
+                { text: "PS ~\\Projects\\atlas> wrangler deploy", color: C.text },
+                { text: "  Uploaded atlas-web", color: C.muted },
+                { text: "  Deployed atlas-web", color: C.workingText },
+                { text: "  https://atlas.app", color: C.accentText },
+                { text: "" },
+                { text: "4 agents · 0 working · 0 waiting for you · 4 done", color: C.text2 },
+              ]}
+            />
+          </Panel>
         </div>
       ) : null}
       <div style={{ position: "absolute", right: 24, bottom: 16, fontFamily: FONT.mono, fontSize: 13, color: C.faint }}>

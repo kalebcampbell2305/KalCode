@@ -3,13 +3,15 @@
 // BROWSER. A light packet carries the change across; the browser reloads into the new hero.
 import type React from "react";
 import { C, FONT } from "../brand/tokens";
-import { Camera, camAt, LowerThird } from "../components/camera";
+import { Camera, camAt } from "../components/camera";
 import { cf, scene, useStage } from "../components/core";
+import { BeatLines, LightSweep } from "../components/fx";
 import { copy } from "../data/copy";
 import { drift, ease, lerp, prog, springIn } from "../motion";
+import { AtlasPage } from "../ui/atlas";
 import { Cockpit, CodeHeader, PaneCanvas, SURF } from "../ui/Cockpit";
 import { StatusChip } from "../ui/kit";
-import { BrowserBody, SitePage, TerminalBody } from "../ui/surfaces";
+import { BrowserBody, TerminalBody } from "../ui/surfaces";
 
 export const BuildLoop: React.FC<{ frame: number }> = ({ frame }) => {
   const { W, H, portrait } = useStage();
@@ -23,15 +25,15 @@ export const BuildLoop: React.FC<{ frame: number }> = ({ frame }) => {
   const k = cf("build.keys");
 
   const term: { text: string; color?: string }[] = [
-    { text: "PS ~\\Projects\\kalcode> pnpm dev:website", color: C.text },
-    { text: " astro  v7.3 ready", color: C.workingText },
-    { text: " ┃ Local    http://localhost:4321/", color: C.text2 },
+    { text: "PS ~\\Projects\\atlas> pnpm dev", color: C.text },
+    { text: "  VITE v8.3  ready", color: C.workingText },
+    { text: "  ➜  Local:   http://localhost:5173/", color: C.text2 },
   ];
   const ups = [
-    [k + 10, " update /src/components/DownloadHero.astro"],
-    [k + 40, " update /src/styles/download.css"],
-    [k + 72, " update /src/components/DownloadHero.astro"],
-    [refresh - 8, " page reload /download"],
+    [k + 10, "  hmr update /src/components/PlanCard.tsx"],
+    [k + 40, "  hmr update /src/routes/pricing.tsx"],
+    [k + 72, "  hmr update /src/components/PlanCard.tsx"],
+    [refresh - 8, "  page reload /pricing"],
   ] as const;
   for (const [f, t] of ups)
     if (frame >= f) term.push({ text: t, color: t.includes("reload") ? C.accentText : C.muted });
@@ -39,11 +41,11 @@ export const BuildLoop: React.FC<{ frame: number }> = ({ frame }) => {
   const editing = frame < done;
   const activity =
     frame < k + 30
-      ? "Reading apps/website/src/pages/download.astro"
+      ? "Reading apps/web/src/routes/pricing.tsx"
       : frame < refresh - 20
-        ? "Editing apps/website/src/components/DownloadHero.astro"
+        ? "Editing apps/web/src/components/PlanCard.tsx"
         : frame < done
-          ? "Running a command · pnpm --filter website check"
+          ? "Running a command · pnpm --filter web test"
           : "Ready";
 
   const dash = (
@@ -61,7 +63,7 @@ export const BuildLoop: React.FC<{ frame: number }> = ({ frame }) => {
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span style={{ fontSize: 20, color: C.text }}>Download page</span>
+          <span style={{ fontSize: 20, color: C.text }}>Pricing page</span>
           <span style={{ fontSize: 15, color: C.muted }}>Claude Code · Work</span>
           <div style={{ flex: 1 }} />
           <StatusChip
@@ -88,16 +90,19 @@ export const BuildLoop: React.FC<{ frame: number }> = ({ frame }) => {
 
   const keys = portrait
     ? [
-        { f: start - 20, s: 0.85, fx: 820, fy: 560 },
-        { f: refresh - 10, s: 0.95, fx: 1350, fy: 520 },
-        { f: end + 24, s: 1.0, fx: 1380, fy: 520 },
+        { f: start - 6, s: 1.0, fx: 620, fy: 700, ry: 10 },
+        { f: refresh - 34, s: 0.95, fx: 700, fy: 640, ry: 6 },
+        { f: refresh + 6, s: 1.0, fx: 1380, fy: 520, ry: -8 },
+        { f: end, s: 0.95, fx: 1350, fy: 520, ry: 4 },
       ]
     : [
-        { f: start - 20, s: 0.86, fx: 1060, fy: 560 },
-        { f: refresh - 10, s: 0.92, fx: 1150, fy: 540 },
-        { f: end + 24, s: 0.98, fx: 1250, fy: 530 },
+        { f: start - 6, s: 1.3, fx: 640, fy: 740, ry: 14, rx: 4 },
+        { f: refresh - 34, s: 1.12, fx: 720, fy: 660, ry: 8, rx: 2 },
+        { f: refresh + 6, s: 1.08, fx: 1350, fy: 560, ry: -8, rx: 2 },
+        { f: done, s: 1.0, fx: 1260, fy: 540, ry: -4 },
+        { f: end, s: 0.92, fx: 1100, fy: 540, ry: 6, rx: -2 },
       ];
-  const cam = camAt(keys, frame);
+  const cam = camAt(keys, frame, ease.emphasized);
   cam.fx += drift(frame, 61, 0.5) * 6;
   const sx = W / 2;
   const sy = portrait ? H * 0.42 : H * 0.455;
@@ -128,7 +133,7 @@ export const BuildLoop: React.FC<{ frame: number }> = ({ frame }) => {
     >
       <Camera cam={cam} blur={lerp(5, 0, enter)}>
         <Cockpit active="Code" status={<span>3 panes · 1 running</span>}>
-          <CodeHeader />
+          <CodeHeader workspace="atlas" path="~\Projects\atlas" />
           <PaneCanvas
             panes={[
               { id: "d", rect: { x: 0, y: 0, w: 0.38, h: 0.42 }, lit: frame < refresh - 34 ? 1 : 0, content: dash },
@@ -143,12 +148,13 @@ export const BuildLoop: React.FC<{ frame: number }> = ({ frame }) => {
                 rect: { x: 0.38, y: 0, w: 0.62, h: 1 },
                 lit: t >= 0.5 ? 1 : 0,
                 content: (
-                  <BrowserBody url="http://localhost:4321/download" spin={spin}>
+                  <BrowserBody url="http://localhost:5173/pricing" spin={spin}>
                     <div style={{ position: "absolute", inset: 0, opacity: 1 - morph, filter: `blur(${morph * 8}px)` }}>
-                      <SitePage variant="old" scale={1.05} />
+                      <AtlasPage variant="old" />
                     </div>
                     <div style={{ position: "absolute", inset: 0, opacity: morph }}>
-                      <SitePage variant="new" t={morph} scale={1.05} />
+                      <AtlasPage variant="new" t={morph} />
+                      <LightSweep frame={frame} at={comp} dur={30} strength={0.35} />
                     </div>
                     <div
                       style={{
@@ -166,17 +172,28 @@ export const BuildLoop: React.FC<{ frame: number }> = ({ frame }) => {
       </Camera>
       {pkOn ? (
         <svg width={W} height={H} style={{ position: "absolute", inset: 0 }}>
+          <path
+            d={`M ${a.x} ${a.y} L ${b.x} ${b.y} L ${c.x} ${c.y}`}
+            fill="none"
+            stroke="rgba(141,182,255,0.35)"
+            strokeWidth={3}
+            pathLength={1}
+            strokeDasharray={`${t} 1`}
+            style={{ filter: "drop-shadow(0 0 8px rgba(76,141,255,0.9))" }}
+          />
           <circle cx={seg.x} cy={seg.y} r={30} fill="rgba(76,141,255,0.25)" />
           <circle cx={seg.x} cy={seg.y} r={10} fill="#a9c8ff" />
         </svg>
       ) : null}
-      <LowerThird
+      <BeatLines
         frame={frame}
-        size={portrait ? 92 : 84}
+        portrait={portrait}
+        size={portrait ? 96 : 92}
         lines={[
           { at: cf("copy.build_it"), text: copy.buildIt },
-          { at: cf("copy.see_it"), text: copy.seeIt, until: end - 4 },
+          { at: cf("copy.see_it"), text: copy.seeIt },
         ]}
+        until={end - 6}
       />
     </div>
   );

@@ -4,53 +4,55 @@
 // a commit. One lane fails its tests (red, stalled), is fixed, and passes. Then: "Parallel."
 import type React from "react";
 import { C, FONT, R } from "../brand/tokens";
-import { Camera, camAt, LowerThird } from "../components/camera";
-import { cf, Headline, scene, useStage } from "../components/core";
+import { impactEnv } from "../components/beat";
+import { Camera, camAt } from "../components/camera";
+import { cf, scene, useStage } from "../components/core";
+import { BeatLines, KineticText } from "../components/fx";
 import { copy } from "../data/copy";
-import { agentLaunch, drift, ease, lerp, prog } from "../motion";
+import { agentLaunch, drift, ease, lerp, prog, springIn } from "../motion";
 import { Cockpit, SurfaceTitle } from "../ui/Cockpit";
 import { StatusChip, type Tone } from "../ui/kit";
 
 // Four = the verified Stable concurrency (Resource Governor, max_agents 4).
 export const LANES = [
   {
-    title: "Dashboard cards",
-    area: "Desktop UI",
+    title: "Checkout flow",
+    area: "Web app",
     provider: "Claude Code",
     account: "Personal",
     stack: "React · TypeScript",
-    file: "apps/desktop/src/surfaces/dashboard/AgentCard.tsx",
-    commit: "feat(desktop): dashboard cards",
+    file: "apps/web/src/routes/checkout.tsx",
+    commit: "feat(web): remember the last plan",
     pass: "swarm.pass.0",
   },
   {
-    title: "Checkout webhooks",
+    title: "Webhook retries",
     area: "API",
     provider: "Codex",
     account: "Personal",
     stack: "Cloudflare Workers · Stripe",
     file: "apps/api/src/stripe.ts",
-    commit: "fix(api): webhook retries",
+    commit: "fix(api): retry failed webhooks",
     pass: "swarm.pass.1",
   },
   {
-    title: "Push-to-talk hint",
-    area: "KalVoice",
+    title: "Search index",
+    area: "Search",
     provider: "Codex",
     account: "Work",
-    stack: "Rust · whisper.cpp",
-    file: "crates/kalvoice/src/shortcuts.rs",
-    commit: "feat(kalvoice): hold-F8 hint",
+    stack: "Rust · Postgres",
+    file: "crates/search/src/index.rs",
+    commit: "perf(search): incremental index",
     pass: "swarm.pass.2",
   },
   {
     title: "Pricing page copy",
-    area: "Website",
+    area: "Marketing site",
     provider: "Claude Code",
     account: "Work",
-    stack: "Astro · Cloudflare Workers",
-    file: "apps/website/src/pages/pricing.astro",
-    commit: "docs(website): pricing copy",
+    stack: "React · TypeScript",
+    file: "apps/web/src/routes/pricing.tsx",
+    commit: "docs(web): pricing copy",
     pass: "swarm.pass.3",
   },
 ] as const;
@@ -88,6 +90,7 @@ const AgentCard: React.FC<{ i: number; frame: number }> = ({ i, frame }) => {
   const l = LANES[i];
   const L = cf(`swarm.launch.${i}`);
   const a = agentLaunch(frame, L);
+  const fl = springIn(frame, L - 8, { damping: 15, stiffness: 150, mass: 0.8 }); // flight from the spawn point
   const st = laneState(i, frame);
   const y = CARD.y0 + i * CARD.pitch;
   if (frame < L - 2) return null;
@@ -99,7 +102,7 @@ const AgentCard: React.FC<{ i: number; frame: number }> = ({ i, frame }) => {
         top: y - 70,
         width: CARD.w,
         height: CARD.h,
-        transform: `scale(${a.scale})`,
+        transform: `perspective(1600px) translate3d(${(1 - fl) * 520}px, ${(1 - fl) * (-260 - i * 40)}px, ${-(1 - fl) * 700}px) rotateY(${(1 - fl) * -35}deg) rotateX(${(1 - fl) * 25}deg) scale(${a.scale})`,
         transformOrigin: "0% 50%",
         opacity: a.opacity,
         borderRadius: R.lg * 1.5,
@@ -207,7 +210,14 @@ export const AgentSwarm: React.FC<{ frame: number }> = ({ frame }) => {
     const flow = ((frame - L) * 3) % 40;
     return (
       <g key={i} opacity={frame < L ? 0 : 1}>
-        <line x1={x0} y1={y0} x2={x0 + len} y2={y0} stroke={`rgba(${col},0.55)`} strokeWidth={3} />
+        <line
+          x1={x0}
+          y1={y0}
+          x2={x0 + len}
+          y2={y0}
+          stroke={`rgba(${col},${0.55 + 0.45 * impactEnv(frame)})`}
+          strokeWidth={3 + 3 * impactEnv(frame)}
+        />
         {!st.done ? (
           <line
             x1={x0}
@@ -369,24 +379,26 @@ export const AgentSwarm: React.FC<{ frame: number }> = ({ frame }) => {
           transform: `scale(${lerp(1, 1.05, prog(frame, par, end - par, ease.linear))})`,
         }}
       >
-        <Headline
+        <KineticText
           text={copy.parallel}
           frame={frame}
-          start={par}
-          size={portrait ? 190 : 240}
-          weight={600}
-          gap={0}
-          tracking="-0.045em"
-          exit={end - 10}
-          style={{ textShadow: "0 0 60px rgba(76,141,255,0.45)" }}
+          land={par}
+          size={portrait ? 200 : 260}
+          weight={700}
+          from="depth"
+          exit={end - 12}
+          tracking="-0.05em"
+          style={{ textShadow: "0 0 80px rgba(76,141,255,0.55)" }}
         />
       </div>
-      <LowerThird
+      <BeatLines
         frame={frame}
+        portrait={portrait}
         lines={[
           { at: cf("copy.different_tasks"), text: copy.differentTasks },
-          { at: cf("copy.same_project"), text: copy.sameProject, until: par - 8 },
+          { at: cf("copy.same_project"), text: copy.sameProject },
         ]}
+        until={par - 10}
       />
     </div>
   );

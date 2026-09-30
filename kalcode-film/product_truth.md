@@ -32,12 +32,9 @@ Legend: **S** = shipped and available on Stable 0.1.6 · **D** = depicted story 
 | 17 | KalVoice dictation types into the focused thread composer ("Message Claude Code"); "send that" sends it | S | research §9 (dictation targets; grammar "send that") |
 | 18 | KalVoice speech runs on the device | S | `navigation.tsx` ("Speech and command interpretation stay on your computer."); whisper.cpp / llama.cpp |
 | 19 | Approval card with "Deny", "Allow for workspace", "Allow for thread", "Approve once"; pushing to a remote always asks | S | `surfaces/permissions/labels.ts:91-104`; site mode table |
-| 20 | The update card: "KalCode 0.1.7 is ready to install." / "Your work stays open until you restart." / "Restart to update" — shown in a **macOS** window | S (macOS) | `shell/UpdateReadyNotice.tsx`; research §10 |
-| 21 | Signed releases: Authenticode (Windows), Developer ID + notarization (macOS), minisign-signed update feed | S | `tooling/release/signing.mjs`, `macos-package.mjs`, `crates/updater` |
-| 22 | The repo's release commands: `pnpm test`, `pnpm release:build`, `pnpm release:publish`, `pnpm release:verify`, `wrangler deploy` | S | root `package.json` scripts; `apps/website` (Cloudflare Workers) |
-| 23 | Stack labels: Rust (crates/), Tauri, React, TypeScript (apps/desktop), Astro + Cloudflare Workers (apps/website), Cloudflare Workers + Stripe (apps/api), whisper.cpp + llama.cpp (KalVoice) | S | research §12 |
+| 22 | The agents run the sample project's own release commands in its workspace (`pnpm test`, `git merge`, `pnpm build`, `wrangler deploy`, `pnpm test:e2e`); pushing waits on a KalCode approval | S (approval) · D (commands) | Approvals: `surfaces/permissions/labels.ts`; commands are sample-project data |
 | 24 | CTA "Download KalCode"; "Start on Free. Upgrade any time."; **kalcoded.com**; Windows and macOS (Apple silicon) | S | live site buttons and pricing heading; `/download` |
-| 25 | The workspace in the story is **kalcode** — KalCode's own repository — with Claude Code and Codex threads working on it | D | The owner's direction for the film; the repo is a real Rust/Tauri/React/Astro monorepo. The film frames this as a story, not as a public "built with KalCode" claim |
+| 25 | The workspace in the story is **atlas**, a fictional sample product (a pricing page, checkout, webhooks, search). The film does not depict KalCode building itself (the owner's direction, 2026-09-30) | D | Sample project data, labelled on screen |
 | 26 | Thread titles, file names, terminal output, test counts, commit messages | D | Fictional and sanitized; "Sample project data" appears on screen |
 
 ## Deliberately NOT in the film (not shipped on Stable 0.1.6)
@@ -50,7 +47,8 @@ Legend: **S** = shipped and available on Stable 0.1.6 · **D** = depicted story 
 - **Worktrees, branches per agent, diff review, file tree, or code editor.** These are not built. The lanes converge as commits on `main`.
 - **The status words "Testing", "Reviewing" and "Needs your reply".** No adapter emits them.
 - **Voice thread creation ("open four Codex threads") and Fn push-to-talk.** These are gated or refused.
-- **The phrase "Update available", and the in-app update on Windows** (broken in 0.1.6, fixed in 0.1.7). The update card appears only in a macOS window.
+- **The in-app updater, and the phrase "Update available".** The film shows no KalCode update at all: 0.1.7 is unreleased, and in-app update on Windows 0.1.6 is broken.
+- **KalCode building itself.** It was removed at the owner's direction.
 - **Prices, plan limits, usage metrics, testimonials, performance numbers and "10x".**
 - **Linux or Intel Mac.**
 - **Third-party logos.** Claude Code, Codex, Cloudflare, Stripe and the others appear by name, in text only.

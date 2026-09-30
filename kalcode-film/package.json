@@ -11,6 +11,7 @@
     "@remotion/bundler": "^4.0.530",
     "@remotion/cli": "^4.0.530",
     "@remotion/fonts": "^4.0.530",
+    "@remotion/motion-blur": "^4.0.530",
     "@remotion/renderer": "^4.0.530",
     "lucide-react": "^1.48.0",
     "react": "^19.3.0",

@@ -21,7 +21,7 @@ for i, im in enumerate(ims):
 sheet.save(out)
 if kdir:
     Path(kdir).mkdir(parents=True, exist_ok=True)
-    for t in [0, 6, 10, 16, 23, 31, 37, 43, 50, 55, 59]:
+    for t in [0, 6, 10, 16, 23, 31, 37, 43, 48, 50, 52, 55, 59]:
         tt = min(t + (0.02 if t == 0 else 0), dur - 1 / 60)
         subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-ss", f"{tt:.3f}", "-i", video, "-frames:v", "1", f"{kdir}/kf_{t:02d}s.png"], check=True)
 print(len(ims), "tiles")

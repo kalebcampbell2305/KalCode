@@ -21,8 +21,6 @@ export const copy = {
   wBuild: "Build.",
   wTest: "Test.",
   wShip: "Ship.",
-  buildKalCode: "Build KalCode.",
-  inside: "Inside KalCode.",
   tagline: "One intelligence. A brighter tomorrow.",
   cta: "Download KalCode",
   ctaSub: "Start on Free. Upgrade any time.",

@@ -3,7 +3,9 @@
 // accelerates inward to a single point and half a beat of silence.
 import type React from "react";
 import { C, FONT } from "../brand/tokens";
-import { CUE, cf, cues, Headline, Scrim, useStage } from "../components/core";
+import { CUE, cf, cues, Scrim, useStage } from "../components/core";
+import { EnergyTrace, KineticText } from "../components/fx";
+import { Plane, Space } from "../components/space";
 import { copy } from "../data/copy";
 import { clamp01, drift, ease, lerp, prog, rng, springIn, terminalType } from "../motion";
 
@@ -131,93 +133,90 @@ const Body: React.FC<{ w: Win; frame: number; start: number; seed: number }> = (
 };
 
 export const Chaos: React.FC<{ frame: number }> = ({ frame }) => {
-  const { W, H, portrait } = useStage();
+  const { portrait } = useStage();
   const pops = cues("chaos.window.");
   const collapse = cf("collapse.start");
   const silence = cf("silence");
-  const k = prog(frame, collapse, silence - collapse, ease.anticipate); // inward acceleration
-  const cx = W / 2;
-  const cy = H / 2;
-  // focus jumps to the newest window on every pop
-  const lastPop = pops.filter((p) => p.frame <= frame).length - 1;
-  // slow camera drift + creeping push while chaos builds
-  const push = lerp(1, 1.08, prog(frame, 0, collapse, ease.inOut));
-  const camX = drift(frame, 3, 0.6) * 14;
-  const camY = drift(frame, 5, 0.6) * 9;
-
   if (frame >= silence) return null;
+  const k = prog(frame, collapse, silence - collapse, ease.anticipate); // implode (dips outward first)
+  const build = prog(frame, 0, collapse, ease.inOut);
+  const lastPop = pops.filter((p) => p.frame <= frame).length - 1;
+
+  // world poses: seeded, later windows nearer the camera and nearer the centre
+  const poses = pops.map((_p, i) => {
+    const r = rng(1000 + i * 31);
+    const spread = i < 3 ? 0.45 : 1 - i / (pops.length * 1.5);
+    const w = ((portrait ? 700 : 660) + r() * 260) * (i < 3 ? 1.25 : 1);
+    const h = (300 + r() * 170) * (i < 3 ? 1.25 : 1);
+    return {
+      w,
+      h,
+      x: (r() - 0.5) * (portrait ? 900 : 2300) * spread,
+      y: (r() - 0.5) * (portrait ? 1900 : 1150) * spread,
+      z: i < 3 ? -200 * i : -1300 + r() * 900 + i * 40,
+      rx: (r() - 0.5) * 22,
+      ry: (r() - 0.5) * 34,
+      rz: (r() - 0.5) * 6,
+    };
+  });
+  const focusZ = lastPop >= 0 ? poses[lastPop].z : 0;
+  // camera: dollies in and orbits as the pile grows; a handheld tremor rises with the pressure
+  const shake = 4 + 14 * build;
+  const cam = {
+    x: drift(frame, 3, 1.2) * shake,
+    y: drift(frame, 5, 1.2) * shake * 0.6,
+    z: lerp(700, -150, build),
+    rx: lerp(7, -3, build) + drift(frame, 7, 0.8) * 1.2,
+    ry: lerp(-12, 10, build),
+    rz: drift(frame, 9, 0.9) * 1.5 * build,
+  };
 
   return (
-    <div style={{ position: "absolute", inset: 0, perspective: 1800, overflow: "hidden" }}>
-      <div
-        style={{
-          position: "absolute",
-          inset: 0,
-          transform: `translate(${camX}px, ${camY}px) scale(${push})`,
-          transformStyle: "preserve-3d",
-        }}
-      >
+    <div style={{ position: "absolute", inset: 0 }}>
+      <Space cam={cam}>
         {pops.map((p, i) => {
           if (frame < p.frame) return null;
-          const r = rng(1000 + i * 31);
-          const w = WINDOWS[i % WINDOWS.length];
-          const big = i < 3 ? 1.3 : 1;
-          const ww = ((portrait ? 640 : 660) + r() * 260) * big;
-          const hh = (300 + r() * 170) * big;
-          // spread across frame; later windows land closer to centre, so the pile thickens
-          const spread = i < 3 ? 0.35 + 0.2 * i : 1 - i / (pops.length * 1.6);
-          const x0 = cx + (r() - 0.5) * (W - ww * 0.6) * spread - ww / 2;
-          const y0 = cy + (r() - 0.5) * (H - hh * 0.8) * spread - hh / 2;
-          const z = i < 3 ? 60 - i * 40 : -300 + r() * 380 + i * 12;
-          const s = springIn(frame, p.frame, { damping: 13, stiffness: 240, mass: 0.6 });
-          const rot = (r() - 0.5) * 7;
+          const P = poses[i];
+          const s = springIn(frame, p.frame, { damping: 13, stiffness: 190, mass: 0.7 });
           const focus = i === lastPop ? 1 : 0;
-          const age = clamp01((frame - p.frame) / 90);
-          // collapse: everything flies to centre, scaling down, with motion streaks
-          const tx = lerp(x0, cx - ww / 2, k);
-          const ty = lerp(y0, cy - hh / 2, k);
-          const sc = lerp(lerp(0.9, 1, s), 0.04, clamp01(k));
-          const depthBlur = focus ? 0 : Math.max(0, (-z / 300) * 2.2) * (0.4 + age);
-          const streak =
-            Math.abs(k) > 0.02
-              ? Math.min(
-                  14,
-                  Math.abs(
-                    prog(frame, collapse, silence - collapse, ease.anticipate) -
-                      prog(frame - 1, collapse, silence - collapse, ease.anticipate),
-                  ) * 300,
-                )
-              : 0;
+          const kk = clamp01(k);
+          const pose = {
+            x: lerp(P.x, 0, kk),
+            y: lerp(P.y, 0, kk),
+            z: lerp(lerp(P.z - 1200, P.z, s), 0, kk),
+            rx: P.rx * (1 - kk) + (1 - s) * 30,
+            ry: P.ry * (1 - kk) + (1 - s) * -40,
+            rz: P.rz * (1 - kk),
+            s: lerp(1, 0.04, kk),
+            o: clamp01(s * 2.5) * (1 - clamp01((k - 0.85) / 0.15)),
+          };
+          // rack focus: sharp at the newest window's depth, softer with distance from it
+          const dof = focus ? 0 : Math.min(9, Math.abs(P.z - focusZ) / 170);
           return (
-            <div
-              key={i}
-              style={{
-                position: "absolute",
-                left: 0,
-                top: 0,
-                width: ww,
-                height: hh,
-                transform: `translate3d(${tx}px, ${ty}px, ${z * (1 - clamp01(k))}px) rotate(${rot * (1 - clamp01(k))}deg) scale(${sc})`,
-                opacity: clamp01(s * 2) * (1 - clamp01((k - 0.85) / 0.15)),
-                filter: `blur(${depthBlur + streak}px) brightness(${focus ? 1.12 : 0.9 - 0.18 * age})`,
-                borderRadius: 10,
-                overflow: "hidden",
-                background: C.surface1,
-                border: `1px solid ${focus ? C.borderLit : C.border}`,
-                boxShadow: focus
-                  ? "0 0 0 1px rgba(92,150,255,0.4), 0 30px 80px -20px rgba(0,0,0,0.9), 0 0 40px -12px rgba(76,141,255,0.5)"
-                  : "0 30px 80px -24px rgba(0,0,0,0.9)",
-                zIndex: i,
-              }}
-            >
-              <TitleBar title={w.title} focus={focus} />
-              <Body w={w} frame={frame} start={p.frame} seed={i + 1} />
-            </div>
+            <Plane key={i} pose={{ ...pose, z: (pose.z ?? 0) + i * 2 }} w={P.w} h={P.h} blur={dof * (1 - kk)}>
+              <div
+                style={{
+                  width: P.w,
+                  height: P.h,
+                  borderRadius: 10,
+                  overflow: "hidden",
+                  background: "#0e1729",
+                  border: `1px solid ${focus ? C.borderLit : "rgba(142,170,220,0.24)"}`,
+                  boxShadow: focus
+                    ? "0 30px 80px -20px rgba(0,0,0,0.9), 0 0 50px -12px rgba(76,141,255,0.6)"
+                    : "0 30px 80px -24px rgba(0,0,0,0.9)",
+                  filter: `brightness(${focus ? 1.35 : 1.05})`,
+                }}
+              >
+                <TitleBar title={WINDOWS[i % WINDOWS.length].title} focus={focus} />
+                <Body w={WINDOWS[i % WINDOWS.length]} frame={frame} start={p.frame} seed={i + 1} />
+              </div>
+              {focus ? <EnergyTrace w={P.w} h={P.h} r={10} frame={frame} start={p.frame} speed={1.6} /> : null}
+            </Plane>
           );
         })}
-      </div>
-      {/* copy */}
-      <Scrim amount={0.5 * prog(frame, cf("copy.too_many") - 8, 20) * (1 - clamp01(k * 3))} />
+      </Space>
+      <Scrim amount={0.45 * prog(frame, cf("copy.too_many") - 8, 20) * (1 - clamp01(k * 3))} />
       <div
         style={{
           position: "absolute",
@@ -227,27 +226,27 @@ export const Chaos: React.FC<{ frame: number }> = ({ frame }) => {
           alignItems: "center",
           justifyContent: "center",
           gap: 26,
-          padding: portrait ? "0 80px" : 0,
+          padding: portrait ? "0 70px" : 0,
         }}
       >
-        <Headline
+        <KineticText
           text={copy.tooMany}
           frame={frame}
-          start={cf("copy.too_many")}
-          size={portrait ? 104 : 120}
+          land={cf("copy.too_many")}
+          per={6}
+          size={portrait ? 110 : 128}
           exit={collapse}
-          style={{ textShadow: "0 4px 40px rgba(3,5,11,0.95), 0 0 80px rgba(3,5,11,0.9)" }}
         />
-        <Headline
+        <KineticText
           text={copy.switching}
           frame={frame}
-          start={cf("copy.switching")}
-          size={portrait ? 50 : 52}
+          land={cf("copy.switching")}
+          per={3}
+          size={portrait ? 52 : 54}
           weight={400}
           color={C.text2}
           exit={collapse}
           tracking="-0.01em"
-          style={{ textShadow: "0 2px 24px rgba(3,5,11,0.95)" }}
         />
       </div>
     </div>

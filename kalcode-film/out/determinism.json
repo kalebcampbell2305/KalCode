@@ -2,21 +2,21 @@
  {
   "frame": 400,
   "stillVsStill_maxDiff": 0,
-  "stillVsFilm_meanDiff": 1.263
+  "stillVsFilm_meanDiff": 1.113
  },
  {
   "frame": 1500,
   "stillVsStill_maxDiff": 0,
-  "stillVsFilm_meanDiff": 1.31
+  "stillVsFilm_meanDiff": 1.579
  },
  {
   "frame": 2800,
   "stillVsStill_maxDiff": 0,
-  "stillVsFilm_meanDiff": 1.196
+  "stillVsFilm_meanDiff": 1.285
  },
  {
   "frame": 3500,
   "stillVsStill_maxDiff": 0,
-  "stillVsFilm_meanDiff": 1.339
+  "stillVsFilm_meanDiff": 1.292
  }
 ]
