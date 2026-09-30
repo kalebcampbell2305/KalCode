@@ -42,6 +42,10 @@ Useful while iterating:
 - `node scripts/render.mjs --preview --out build/preview.mp4` renders at half resolution in about 1 minute.
 - `node scripts/stills.mjs KalCodeLaunch build/sheet.png 6 22.5 48` renders review stills.
 - `npm run studio` opens Remotion Studio.
+- Low memory: add `--chunk 300 --concurrency 3` to a render. Motion-blur frames stack seven full 3D
+  renders, so a full-concurrency pass can exhaust Chrome's memory. Chunks land in `build/chunks/`,
+  a rerun skips finished ones, and they are joined losslessly. Chunks are keyed by frame range only:
+  after editing a scene, delete the chunks it spans (or all of `build/chunks/<comp>_master/`).
 
 ## How it works
 
@@ -60,11 +64,20 @@ Useful while iterating:
   - It uses the real information architecture, lucide icons (the same package and version the app uses), and tokens copied verbatim from `packages/ui/src/styles/tokens.css`.
   - Fonts are the app's bundled Lexend Deca, Lexend Exa and JetBrains Mono. Rendering blocks until they load, so no fallback-font frame can render.
   - The brand marks are the production PNGs from `assets/branding`.
-- **Scenes** (`src/scenes`), in order: Chaos, Introduce, Workspace, Providers, AgentSwarm, KalVoice, BuildLoop, ReleasePipeline, SelfHosting, EndCard.
+- **Scenes** (`src/scenes`), in order: Chaos, Assemble (the 6–16 s intro and workspace, one continuous 3D shot), Providers, AgentSwarm, KalVoice, BuildLoop, ReleasePipeline, Montage, EndCard.
+- **Motion systems:**
+  - `src/components/space.tsx` provides an orbit camera and 3D planes on CSS 3D, so text stays vector-crisp at any depth.
+  - `src/components/fx.tsx` holds the energy traces, light sweeps, the living light field, `KineticText` (words land exactly on a beat frame with anticipation, overshoot and a velocity streak) and `BeatLines`.
+  - `src/components/beat.ts` derives kicks, claps and impacts from the cue sheet's `drums`, `rolls` and `impacts` blocks. These are the same blocks the score uses, so camera punches and light flashes land on the exact sample.
+  - `@remotion/motion-blur` gives true sub-frame motion blur (10 samples, 220° shutter) in the cue sheet's `blur` windows: whips, fly-ins and zoom-throughs.
 - **Audio** (`src/audio`): synthesized from oscillators, filtered noise and FM, then processed.
   - `score.py` is the music; `instruments.py` holds the voices and the UI sound design.
   - `build_audio.py` runs a BS.1770-4 meter and a 4×-oversampled true-peak limiter.
   - No samples, loops or recordings are used anywhere.
+
+## Music
+
+The score is a high-energy electronic track at 120 BPM. It uses four-on-the-floor kicks, claps on 2 and 4, 16th hats, a rolling 16th bass pumped by a sidechain derived from the kicks, and a supersaw hook built from the mnemonic. Accelerating snare rolls drive into the drops at 6, 30 and 48 s. Every drum hit, roll and impact is defined in `cue_sheet.json`, which the picture reads too.
 
 ## Sonic identity
 
@@ -89,5 +102,5 @@ Useful while iterating:
 ## Publication notes
 
 - The film shows only Stable 0.1.6 behaviour. `product_truth.md` lists what is deliberately left out.
-- The in-story release is "KalCode 0.1.7". Its update card is shown in a macOS window because in-app update on Windows 0.1.6 is broken; the fix is planned for 0.1.7.
+- The sample project is the fictional **atlas**. The film shows no KalCode update and does not depict KalCode building itself.
 - Re-check `crates/native-core/src/flags.rs` and the live site before publishing.

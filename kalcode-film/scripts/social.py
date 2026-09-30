@@ -6,8 +6,8 @@ MASTER = "out/kalcode_launch_60s.mp4"
 CUTS = {
     # hook → hit → parallel → voice → ship → end card
     "out/kalcode_launch_30s.mp4": [(5.0, 10.0), (24.0, 30.0), (30.0, 36.0), (44.0, 50.0), (53.0, 60.0)],
-    # hit → parallel → ship → end card
-    "out/kalcode_launch_15s.mp4": [(5.5, 10.0), (27.0, 30.0), (46.0, 50.0), (56.5, 60.0)],
+    # hit (opens on the frame of the HIT) → parallel → ship → end card
+    "out/kalcode_launch_15s.mp4": [(6.0, 10.0), (26.5, 30.0), (46.0, 50.0), (56.5, 60.0)],
 }
 
 def run(args):

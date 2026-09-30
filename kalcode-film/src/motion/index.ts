@@ -146,3 +146,17 @@ export const motionBlur = (pos: (f: number) => number, frame: number, amount = 0
   Math.min(max, Math.abs(pos(frame) - pos(frame - 1)) * amount);
 
 export const interp = interpolate;
+
+/** Underdamped settle 0→1 for `f` frames after a landing (overshoot and follow-through). */
+export const spring01 = (f: number) =>
+  spring({ frame: Math.max(0, f), fps: FPS, config: { damping: 11, stiffness: 180, mass: 0.7 } });
+
+/** Pose travel on a spring from a → b starting at `start` (per-axis lerp by the spring). */
+export const flight = (
+  frame: number,
+  start: number,
+  cfg: { damping?: number; stiffness?: number; mass?: number } = {},
+) =>
+  frame < start
+    ? 0
+    : spring({ frame: frame - start, fps: FPS, config: { damping: 16, stiffness: 120, mass: 1, ...cfg } });

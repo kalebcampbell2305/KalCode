@@ -4,8 +4,9 @@
 import { CheckCircle2, Plus } from "lucide-react";
 import type React from "react";
 import { C, FONT, R } from "../brand/tokens";
-import { Camera, camAt, LowerThird } from "../components/camera";
+import { Camera, camAt } from "../components/camera";
 import { cf, scene, useStage } from "../components/core";
+import { BeatLines } from "../components/fx";
 import { copy } from "../data/copy";
 import { clamp01, drift, ease, prog, springIn } from "../motion";
 import { Cockpit, SURF, SurfaceTitle } from "../ui/Cockpit";
@@ -67,7 +68,11 @@ const Account: React.FC<{ name: string; def?: boolean; s: number }> = ({ name, d
 
 const ProviderCard: React.FC<{ name: string; s: number; rows: number[] }> = ({ name, s, rows }) => (
   <div
-    style={{ flex: 1, opacity: clamp01(s * 1.5), transform: `translateY(${(1 - s) * 60}px) scale(${0.94 + 0.06 * s})` }}
+    style={{
+      flex: 1,
+      opacity: clamp01(s * 1.5),
+      transform: `perspective(1600px) translateY(${(1 - s) * 90}px) rotateX(${(1 - s) * 50}deg) translateZ(${-(1 - s) * 300}px)`,
+    }}
   >
     <Panel style={{ padding: 26, gap: 14 }}>
       <div style={{ display: "flex", alignItems: "baseline", gap: 12 }}>
@@ -121,7 +126,7 @@ export const Providers: React.FC<{ frame: number }> = ({ frame }) => {
       lit: frame >= cf("prov.route.0") && frame < limit ? 1 : 0,
     },
     {
-      title: "Dashboard cards",
+      title: "Checkout flow",
       provider: "Claude Code",
       account: "Personal",
       status: "Editing",
@@ -129,7 +134,7 @@ export const Providers: React.FC<{ frame: number }> = ({ frame }) => {
       lit: frame >= cf("prov.route.1") && frame < limit ? 1 : 0,
     },
     {
-      title: "Checkout webhooks",
+      title: "Webhook retries",
       provider: "Codex",
       account: "Personal",
       status: "Running a command",
@@ -139,13 +144,13 @@ export const Providers: React.FC<{ frame: number }> = ({ frame }) => {
   ];
   const transcript: TLine[] = [
     { text: "> Tighten the pricing page copy.", color: C.text },
-    { text: "● Reading apps/website/src/pages/pricing.astro" },
-    { text: "● Editing apps/website/src/pages/pricing.astro" },
+    { text: "● Reading apps/web/src/routes/pricing.tsx" },
+    { text: "● Editing apps/web/src/routes/pricing.tsx" },
   ];
   if (frame >= limit)
     transcript.push({ text: "Claude's usage limit was reached. Try again later.", color: C.failedText });
   if (frame >= sw) transcript.push({ text: "Switched to Work. Past history is unchanged.", color: C.muted });
-  if (frame >= working) transcript.push({ text: "● Editing apps/website/src/pages/pricing.astro" });
+  if (frame >= working) transcript.push({ text: "● Editing apps/web/src/routes/pricing.tsx" });
 
   const menuS = springIn(frame, menu, { damping: 18, stiffness: 300 }) * (1 - prog(frame, dialog, 8));
   const dlgS = springIn(frame, dialog, { damping: 16, stiffness: 260 }) * (1 - prog(frame, sw + 4, 10, ease.in));
@@ -154,21 +159,22 @@ export const Providers: React.FC<{ frame: number }> = ({ frame }) => {
 
   const keys = portrait
     ? [
-        { f: start - 20, s: 0.95, fx: 1000, fy: 420 },
-        { f: cf("prov.card.1") + 20, s: 0.95, fx: 1300, fy: 420 },
-        { f: cf("prov.threads"), s: 0.95, fx: 1100, fy: 420 },
-        { f: limit - 10, s: 1.05, fx: 1340, fy: 420 },
-        { f: dialog + 10, s: 1.05, fx: 1250, fy: 520 },
-        { f: end + 24, s: 1.0, fx: 1300, fy: 480 },
+        { f: start - 6, s: 0.95, fx: 600, fy: 420, ry: -18, rx: 4 },
+        { f: cf("prov.card.1") + 30, s: 0.95, fx: 1300, fy: 420, ry: 6 },
+        { f: cf("prov.threads"), s: 0.95, fx: 1100, fy: 420, ry: -4 },
+        { f: limit - 10, s: 1.05, fx: 1340, fy: 420, ry: 5 },
+        { f: dialog + 10, s: 1.08, fx: 1250, fy: 520, rx: 3 },
+        { f: end, s: 1.0, fx: 1300, fy: 480, ry: -6 },
       ]
     : [
-        { f: start - 20, s: 0.9, fx: 1110, fy: 520 },
-        { f: cf("prov.threads"), s: 0.95, fx: 1110, fy: 500 },
-        { f: limit - 10, s: 1.0, fx: 1130, fy: 480 },
-        { f: dialog + 10, s: 1.04, fx: 1130, fy: 520 },
-        { f: end + 24, s: 1.0, fx: 1120, fy: 500 },
+        { f: start - 6, s: 1.0, fx: 700, fy: 480, ry: -16, rx: 4 },
+        { f: cf("prov.card.1") + 30, s: 0.95, fx: 1150, fy: 500, ry: 6, rx: 2 },
+        { f: cf("prov.threads"), s: 0.95, fx: 1110, fy: 500, ry: -4 },
+        { f: limit - 10, s: 1.08, fx: 1300, fy: 440, ry: 5 },
+        { f: dialog + 10, s: 1.12, fx: 1150, fy: 520, rx: 3 },
+        { f: end, s: 1.02, fx: 1150, fy: 500, ry: -6 },
       ];
-  const cam = camAt(keys, frame);
+  const cam = camAt(keys, frame, ease.emphasized);
   cam.fx += drift(frame, 31, 0.5) * 6;
 
   const cardS = (i: number) => springIn(frame, cf(`prov.card.${i}`), { damping: 15, stiffness: 170 });
@@ -193,7 +199,8 @@ export const Providers: React.FC<{ frame: number }> = ({ frame }) => {
               position: "absolute",
               inset: 0,
               opacity: 1 - toThreads,
-              transform: `translateX(${-toThreads * 60}px)`,
+              transformOrigin: "0% 50%",
+              transform: `perspective(2200px) rotateY(${-toThreads * 70}deg) translateZ(${-toThreads * 260}px)`,
             }}
           >
             <SurfaceTitle title="Providers" sub="Accounts stay isolated." />
@@ -207,7 +214,8 @@ export const Providers: React.FC<{ frame: number }> = ({ frame }) => {
               position: "absolute",
               inset: 0,
               opacity: toThreads,
-              transform: `translateX(${(1 - toThreads) * 60}px)`,
+              transformOrigin: "100% 50%",
+              transform: `perspective(2200px) rotateY(${(1 - toThreads) * 70}deg) translateZ(${-(1 - toThreads) * 260}px)`,
             }}
           >
             <ThreadsView
@@ -218,6 +226,9 @@ export const Providers: React.FC<{ frame: number }> = ({ frame }) => {
               transcript={transcript}
               menuHot={frame >= menu && frame < sw ? 1 : 0}
               detailLit={frame >= limit ? 1 : 0}
+              trace={
+                frame >= limit ? { start: limit, color: frame < working ? "239,95,107" : "141,182,255" } : undefined
+              }
               overlay={
                 menuS > 0.01 ? (
                   <div
@@ -251,7 +262,12 @@ export const Providers: React.FC<{ frame: number }> = ({ frame }) => {
                 placeItems: "center",
               }}
             >
-              <div style={{ opacity: dlgS, transform: `scale(${0.92 + 0.08 * dlgS})` }}>
+              <div
+                style={{
+                  opacity: dlgS,
+                  transform: `perspective(1400px) rotateX(${(1 - dlgS) * 28}deg) scale(${0.86 + 0.14 * dlgS})`,
+                }}
+              >
                 <Dialog
                   title="Rebind thread?"
                   body="Switch future messages to Work?"
@@ -277,12 +293,14 @@ export const Providers: React.FC<{ frame: number }> = ({ frame }) => {
           ) : null}
         </Cockpit>
       </Camera>
-      <LowerThird
+      <BeatLines
         frame={frame}
+        portrait={portrait}
         lines={[
-          { at: cf("copy.accounts"), text: copy.accounts, until: cf("prov.limit") - 20 },
-          { at: cf("copy.keep_going"), text: copy.keepGoing, until: end - 14 },
+          { at: cf("copy.accounts"), text: copy.accounts, end: limit - 16 },
+          { at: cf("copy.keep_going"), text: copy.keepGoing },
         ]}
+        until={end - 10}
       />
     </div>
   );

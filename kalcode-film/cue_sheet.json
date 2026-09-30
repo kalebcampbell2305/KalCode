@@ -145,7 +145,7 @@
       }
     },
     {
-      "id": "selfhost",
+      "id": "montage",
       "start": {
         "t": 50,
         "bar": 26,
@@ -394,34 +394,65 @@
       "sample": 432000
     },
     {
-      "id": "ws.open",
+      "id": "ws.dock.plate",
+      "t": 9.75,
+      "sfx": "pane_snap",
+      "pan": -0.2,
+      "bar": 5,
+      "beat": 4.5,
+      "frame": 585,
+      "sample": 468000
+    },
+    {
+      "id": "ws.dock.side",
       "t": 10,
       "sfx": "pane_snap",
+      "pan": -0.6,
       "bar": 6,
       "beat": 1,
       "frame": 600,
       "sample": 480000
     },
     {
-      "id": "ws.keys",
+      "id": "ws.dock.head",
       "t": 10.25,
-      "sfx": "key_texture",
-      "count": 16,
-      "span": 1.2,
+      "sfx": "pane_snap",
+      "pan": 0,
       "bar": 6,
       "beat": 1.5,
       "frame": 615,
       "sample": 492000
     },
     {
-      "id": "ws.split.browser",
+      "id": "ws.dock.voice",
       "t": 10.5,
       "sfx": "pane_snap",
-      "pan": 0.4,
+      "pan": 0.2,
       "bar": 6,
       "beat": 2,
       "frame": 630,
       "sample": 504000
+    },
+    {
+      "id": "ws.dock.term",
+      "t": 10.75,
+      "sfx": "pane_snap",
+      "pan": 0.3,
+      "bar": 6,
+      "beat": 2.5,
+      "frame": 645,
+      "sample": 516000
+    },
+    {
+      "id": "ws.keys",
+      "t": 10.875,
+      "sfx": "key_texture",
+      "count": 14,
+      "span": 0.9,
+      "bar": 6,
+      "beat": 2.75,
+      "frame": 653,
+      "sample": 522000
     },
     {
       "id": "copy.your_project",
@@ -432,10 +463,20 @@
       "sample": 528000
     },
     {
-      "id": "ws.split.dash",
+      "id": "ws.dock.status",
+      "t": 11,
+      "sfx": "pane_snap",
+      "pan": 0,
+      "bar": 6,
+      "beat": 3,
+      "frame": 660,
+      "sample": 528000
+    },
+    {
+      "id": "ws.split.browser",
       "t": 11.5,
       "sfx": "pane_snap",
-      "pan": 0.3,
+      "pan": 0.4,
       "bar": 6,
       "beat": 4,
       "frame": 690,
@@ -450,14 +491,14 @@
       "sample": 576000
     },
     {
-      "id": "ws.browser.load",
-      "t": 12.75,
-      "sfx": "air_sweep",
-      "gain": 0.6,
+      "id": "ws.whip",
+      "t": 12.875,
+      "sfx": "whoosh",
+      "span": 0.3,
       "bar": 7,
-      "beat": 2.5,
-      "frame": 765,
-      "sample": 612000
+      "beat": 2.75,
+      "frame": 773,
+      "sample": 618000
     },
     {
       "id": "copy.your_browser",
@@ -466,6 +507,26 @@
       "beat": 3,
       "frame": 780,
       "sample": 624000
+    },
+    {
+      "id": "ws.browser.load",
+      "t": 13,
+      "sfx": "air_sweep",
+      "gain": 0.6,
+      "bar": 7,
+      "beat": 3,
+      "frame": 780,
+      "sample": 624000
+    },
+    {
+      "id": "ws.split.dash",
+      "t": 13.5,
+      "sfx": "pane_snap",
+      "pan": 0.3,
+      "bar": 7,
+      "beat": 4,
+      "frame": 810,
+      "sample": 648000
     },
     {
       "id": "copy.your_agents",
@@ -1016,7 +1077,7 @@
       "sample": 2304000
     },
     {
-      "id": "pipe.site",
+      "id": "pipe.live",
       "t": 48.5,
       "sfx": "pane_snap",
       "pan": -0.3,
@@ -1026,7 +1087,7 @@
       "sample": 2328000
     },
     {
-      "id": "pipe.update",
+      "id": "pipe.dash",
       "t": 49,
       "sfx": "pane_snap",
       "pan": 0.3,
@@ -1036,37 +1097,76 @@
       "sample": 2352000
     },
     {
-      "id": "self.pull",
+      "id": "montage.0",
       "t": 50,
+      "label": "Threads.",
       "bar": 26,
       "beat": 1,
       "frame": 3000,
       "sample": 2400000
     },
     {
-      "id": "copy.build_kalcode",
+      "id": "montage.1",
+      "t": 50.5,
+      "label": "Accounts.",
+      "bar": 26,
+      "beat": 2,
+      "frame": 3030,
+      "sample": 2424000
+    },
+    {
+      "id": "montage.2",
       "t": 51,
+      "label": "Dashboard.",
       "bar": 26,
       "beat": 3,
       "frame": 3060,
       "sample": 2448000
     },
     {
-      "id": "copy.inside",
+      "id": "montage.3",
+      "t": 51.5,
+      "label": "KalVoice.",
+      "bar": 26,
+      "beat": 4,
+      "frame": 3090,
+      "sample": 2472000
+    },
+    {
+      "id": "montage.4",
       "t": 52,
+      "label": "Terminals.",
       "bar": 27,
       "beat": 1,
       "frame": 3120,
       "sample": 2496000
     },
     {
-      "id": "self.update",
+      "id": "montage.5",
       "t": 52.5,
-      "sfx": "test_pass",
+      "label": "Browser.",
       "bar": 27,
       "beat": 2,
       "frame": 3150,
       "sample": 2520000
+    },
+    {
+      "id": "montage.6",
+      "t": 53,
+      "label": "Approvals.",
+      "bar": 27,
+      "beat": 3,
+      "frame": 3180,
+      "sample": 2544000
+    },
+    {
+      "id": "montage.7",
+      "t": 53.5,
+      "label": "One cockpit.",
+      "bar": 27,
+      "beat": 4,
+      "frame": 3210,
+      "sample": 2568000
     },
     {
       "id": "end.collapse",
@@ -1108,5 +1208,132 @@
       "frame": 3450,
       "sample": 2760000
     }
+  ],
+  "drums": [
+    {
+      "start": 6,
+      "end": 8,
+      "kick": "half",
+      "clap": false,
+      "hats": false
+    },
+    {
+      "start": 8,
+      "end": 10,
+      "kick": "half",
+      "clap": true,
+      "hats": true
+    },
+    {
+      "start": 10,
+      "end": 28,
+      "kick": "four",
+      "clap": true,
+      "hats": true
+    },
+    {
+      "start": 28,
+      "end": 29.75,
+      "kick": "four",
+      "clap": false,
+      "hats": true
+    },
+    {
+      "start": 30,
+      "end": 48,
+      "kick": "four",
+      "clap": true,
+      "hats": true
+    },
+    {
+      "start": 48,
+      "end": 54,
+      "kick": "four",
+      "clap": true,
+      "hats": true
+    },
+    {
+      "start": 55,
+      "end": 57,
+      "kick": "half",
+      "clap": false,
+      "hats": false
+    }
+  ],
+  "rolls": [
+    {
+      "start": 3,
+      "end": 5.75,
+      "rate0": 2,
+      "rate1": 8
+    },
+    {
+      "start": 9,
+      "end": 10,
+      "rate0": 4,
+      "rate1": 8
+    },
+    {
+      "start": 15.5,
+      "end": 16,
+      "rate0": 4,
+      "rate1": 4
+    },
+    {
+      "start": 21.5,
+      "end": 22,
+      "rate0": 4,
+      "rate1": 4
+    },
+    {
+      "start": 26,
+      "end": 28,
+      "rate0": 2,
+      "rate1": 8
+    },
+    {
+      "start": 28.5,
+      "end": 29.75,
+      "rate0": 4,
+      "rate1": 8
+    },
+    {
+      "start": 46,
+      "end": 48,
+      "rate0": 2,
+      "rate1": 8
+    },
+    {
+      "start": 53.5,
+      "end": 54,
+      "rate0": 4,
+      "rate1": 8
+    }
+  ],
+  "impacts": [6, 10, 16, 22, 28, 30, 36, 42, 48, 50, 55],
+  "blur": [
+    [5.2, 5.8],
+    [9.2, 11.1],
+    [12.8, 13.25],
+    [13.95, 14.7],
+    [15.8, 16.1],
+    [17.95, 18.35],
+    [21.9, 22.15],
+    [22.35, 24.2],
+    [27.8, 28.15],
+    [29.9, 30.2],
+    [35.9, 36.15],
+    [41.9, 42.2],
+    [47.9, 48.35],
+    [48.4, 49.2],
+    [49.95, 50.2],
+    [50.45, 50.7],
+    [50.95, 51.2],
+    [51.45, 51.7],
+    [51.95, 52.2],
+    [52.45, 52.7],
+    [52.95, 53.2],
+    [53.45, 53.7],
+    [54, 54.6]
   ]
 }

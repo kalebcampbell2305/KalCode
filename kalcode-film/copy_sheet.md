@@ -11,10 +11,10 @@ strings are quoted verbatim from the app. The source is `src/data/copy.ts`.
 | 3.5 | Too much context switching. | 52 | support | framing |
 | 6.5 | Introducing KalCode. | 124 | headline | T1 |
 | 8.0 | One cockpit for AI software development. | 50 | support | positioning (see truth doc) |
-| 11.0 | Your project. | 76 | lower third | T6 |
-| 12.0 | Your terminals. | 76 | lower third | T7 |
-| 13.0 | Your browser. | 76 | lower third | T7 |
-| 14.0 | Your agents. | 76 | lower third | T8 |
+| 11.0 | Your project. | 88 | lower third, lands on the beat | T6 |
+| 12.0 | Your terminals. | 88 | lower third, lands on the beat | T7 |
+| 13.0 | Your browser. | 88 | lower third, lands on the beat | T7 |
+| 14.0 | Your agents. | 88 | lower third, lands on the beat | T8 |
 | 17.0 | Claude Code. Codex. Every account. | 76 | lower third | T8, T9 |
 | 20.5 | Switch accounts. Keep going. | 76 | lower third | T10, T11 (manual switch, shown) |
 | 25.0 | Different tasks. | 76 | lower third | T12 |
@@ -26,8 +26,7 @@ strings are quoted verbatim from the app. The source is `src/data/copy.ts`.
 | 40.0 | Build it. | 84 | headline | T7 |
 | 41.0 | See it. | 84 | headline | T7 |
 | 43.0 / 45.0 / 48.0 | Build. / Test. / Ship. | 120 | headline, one word at a time | T19–T22 (gated release shown) |
-| 51.0 | Build KalCode. | 96 | headline | T25 (story) |
-| 52.0 | Inside KalCode. | 96 | headline | T25 (story) |
+| 50.0–53.5 | Threads. · Accounts. · Dashboard. · KalVoice. · Terminals. · Browser. · Approvals. · One cockpit. | 190 | montage, one word per beat | T5, T7, T8, T9, T15, T16, T19 |
 | 56.0 | One intelligence. A brighter tomorrow. | 40 | tagline | T2 |
 | 57.0 | Download KalCode | 34 (button) | CTA | T24 |
 | 57.0 | Start on Free. Upgrade any time. | 36 | support | T24 |
@@ -43,3 +42,5 @@ strings are quoted verbatim from the app. The source is `src/data/copy.ts`.
 - "Start free." — not live wording; "Start on Free. Upgrade any time." is.
 - "Update available." — the app never says it.
 - "The future of coding.", "Revolutionary", "10x" — prohibited by the brief.
+
+- "Build KalCode. / Inside KalCode." — removed at the owner's direction; the film is a product film for KalCode, not a story about building it.

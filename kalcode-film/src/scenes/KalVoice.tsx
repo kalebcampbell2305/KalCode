@@ -5,15 +5,16 @@
 import type React from "react";
 import { Img, staticFile } from "remotion";
 import { C, FONT } from "../brand/tokens";
-import { Camera, camAt, LowerThird } from "../components/camera";
+import { Camera, camAt } from "../components/camera";
 import { Bloom, cf, scene, useStage } from "../components/core";
+import { BeatLines } from "../components/fx";
 import { copy } from "../data/copy";
 import { clamp01, drift, ease, lerp, prog, rng, springIn } from "../motion";
 import { Cockpit } from "../ui/Cockpit";
 import type { Thread, TLine } from "../ui/surfaces";
 import { ThreadsView } from "../ui/ThreadsView";
 
-const WORDS = ["Redesign", "the", "download", "page", "hero."];
+const WORDS = ["Redesign", "the", "pricing", "page."];
 
 /** Deterministic speech envelope: syllable bumps inside the key-down windows. */
 const speechLevel = (frame: number, a: number, b: number, syll: number, seed: number) => {
@@ -130,7 +131,7 @@ export const KalVoice: React.FC<{ frame: number }> = ({ frame }) => {
   const wy = lerp(portrait ? H * 0.3 : H * 0.36, portrait ? H * 0.14 : H * 0.14, settle);
 
   const thread: Thread = {
-    title: "Download page",
+    title: "Pricing page",
     provider: "Claude Code",
     account: "Work",
     status: sent ? "Thinking" : "Ready",
@@ -138,20 +139,21 @@ export const KalVoice: React.FC<{ frame: number }> = ({ frame }) => {
     lit: sent ? 1 : 0,
   };
   const transcript: TLine[] = [
-    ...(sent ? [{ text: "> Redesign the download page hero.", color: C.text }] : []),
-    ...(frame >= working + 24 ? [{ text: "● Reading apps/website/src/pages/download.astro" }] : []),
-    ...(frame >= working + 60 ? [{ text: "● Editing apps/website/src/components/DownloadHero.astro" }] : []),
+    ...(sent ? [{ text: "> Redesign the pricing page.", color: C.text }] : []),
+    ...(frame >= working + 24 ? [{ text: "● Reading apps/web/src/routes/pricing.tsx" }] : []),
+    ...(frame >= working + 60 ? [{ text: "● Editing apps/web/src/components/PlanCard.tsx" }] : []),
   ];
   const cam = camAt(
     [
-      { f: start, s: portrait ? 0.62 : 0.9, fx: 1300, fy: 700 },
-      { f: r1, s: portrait ? 0.62 : 0.92, fx: 1300, fy: 700 },
-      { f: typed + 10, s: portrait ? 0.8 : 1.12, fx: 1400, fy: 820 },
-      { f: working - 4, s: portrait ? 0.8 : 1.12, fx: 1400, fy: 820 },
-      { f: working + 30, s: portrait ? 0.9 : 1.18, fx: 1400, fy: 400 },
-      { f: end + 24, s: portrait ? 0.92 : 1.2, fx: 1400, fy: 390 },
+      { f: start, s: portrait ? 0.62 : 0.86, fx: 1300, fy: 700, ry: 10, rx: 6 },
+      { f: r1, s: portrait ? 0.64 : 0.94, fx: 1320, fy: 720, ry: 4, rx: 3 },
+      { f: typed + 10, s: portrait ? 0.8 : 1.12, fx: 1400, fy: 820, ry: -3 },
+      { f: working - 4, s: portrait ? 0.82 : 1.14, fx: 1420, fy: 820, ry: -5 },
+      { f: working + 30, s: portrait ? 0.9 : 1.18, fx: 1400, fy: 400, ry: 3, rx: -2 },
+      { f: end + 24, s: portrait ? 0.92 : 1.22, fx: 1400, fy: 390, ry: 6 },
     ],
     frame,
+    ease.emphasized,
   );
   cam.sy = portrait ? H * 0.6 : H * 0.62;
   cam.fx += drift(frame, 51, 0.4) * 5;
@@ -179,14 +181,14 @@ export const KalVoice: React.FC<{ frame: number }> = ({ frame }) => {
             active="Threads"
             hideVoice
             voice={{ state, live: listening ? 0.6 + 0.4 * level : 0 }}
-            status={<span>Download page · Claude Code · Work</span>}
+            status={<span>Pricing page · Claude Code · Work</span>}
           >
             <ThreadsView
               frame={frame}
               threads={[
                 thread,
-                { title: "Pricing page copy", provider: "Claude Code", account: "Work", status: "Ready", tone: "idle" },
-                { title: "Checkout webhooks", provider: "Codex", account: "Personal", status: "Ready", tone: "idle" },
+                { title: "Checkout flow", provider: "Claude Code", account: "Personal", status: "Ready", tone: "idle" },
+                { title: "Webhook retries", provider: "Codex", account: "Personal", status: "Ready", tone: "idle" },
               ]}
               selected={0}
               transcript={transcript}
@@ -272,6 +274,70 @@ export const KalVoice: React.FC<{ frame: number }> = ({ frame }) => {
           </div>
         </div>
       </div>
+      {/* the voice travels as light: widget → composer (dictation), then widget → Send ("send that") */}
+      {(() => {
+        const toS = (x: number, y: number) => ({
+          x: W / 2 + (x - cam.fx) * cam.s,
+          y: (cam.sy ?? H / 2) + (y - cam.fy) * cam.s,
+        });
+        const legs = [
+          { a: r1 - 2, b: typed + 4, to: toS(1300, 985) },
+          { a: r2 - 2, b: working + 2, to: toS(1830, 985) },
+        ];
+        return (
+          <svg width={W} height={H} style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
+            <defs>
+              <filter id="vroute" x="-50%" y="-50%" width="200%" height="200%">
+                <feGaussianBlur stdDeviation="7" result="b" />
+                <feMerge>
+                  <feMergeNode in="b" />
+                  <feMergeNode in="SourceGraphic" />
+                </feMerge>
+              </filter>
+            </defs>
+            {legs.map((l, i) => {
+              if (frame < l.a || frame > l.b + 24) return null;
+              const x0 = wx;
+              const y0 = wy + 60;
+              const d = `M ${x0} ${y0} C ${x0} ${(y0 + l.to.y) / 2}, ${l.to.x} ${(y0 + l.to.y) / 2}, ${l.to.x} ${l.to.y}`;
+              const t = prog(frame, l.a, l.b - l.a, ease.inOut);
+              const fade = 1 - prog(frame, l.b, 24);
+              return (
+                <g key={i} filter="url(#vroute)" opacity={fade}>
+                  <path
+                    d={d}
+                    fill="none"
+                    stroke="rgba(141,182,255,0.35)"
+                    strokeWidth={2}
+                    pathLength={1}
+                    strokeDasharray={`${t} 1`}
+                  />
+                  <path
+                    d={d}
+                    fill="none"
+                    stroke="#a9c8ff"
+                    strokeWidth={5}
+                    strokeLinecap="round"
+                    pathLength={1}
+                    strokeDasharray="0.08 1"
+                    strokeDashoffset={-(t - 0.08)}
+                  />
+                  {t >= 1 ? (
+                    <circle
+                      cx={l.to.x}
+                      cy={l.to.y}
+                      r={16 + 30 * prog(frame, l.b, 18)}
+                      fill="none"
+                      stroke={`rgba(141,182,255,${fade})`}
+                      strokeWidth={2}
+                    />
+                  ) : null}
+                </g>
+              );
+            })}
+          </svg>
+        );
+      })()}
       {/* F8 */}
       <div
         style={{
@@ -323,13 +389,16 @@ export const KalVoice: React.FC<{ frame: number }> = ({ frame }) => {
       >
         “{cmd}”
       </div>
-      <LowerThird
+      <BeatLines
         frame={frame}
-        size={portrait ? 92 : 84}
+        portrait={portrait}
+        size={portrait ? 96 : 92}
+        bottom={portrait ? 230 : 96}
         lines={[
           { at: cf("copy.say"), text: copy.say },
-          { at: cf("copy.kalvoice"), text: copy.kalvoice, until: end - 4 },
+          { at: cf("copy.kalvoice"), text: copy.kalvoice },
         ]}
+        until={end - 6}
       />
       <div
         style={{

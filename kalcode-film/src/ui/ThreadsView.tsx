@@ -3,6 +3,7 @@
 import { Plus } from "lucide-react";
 import type React from "react";
 import { C } from "../brand/tokens";
+import { EnergyTrace } from "../components/fx";
 import { springIn } from "../motion";
 import { Button, SURF, SurfaceTitle } from "./Cockpit";
 import { Icon, Panel } from "./kit";
@@ -18,7 +19,19 @@ export const ThreadsView: React.FC<{
   menuHot?: number;
   overlay?: React.ReactNode; // positioned in detail-pane coordinates
   detailLit?: number;
-}> = ({ frame, threads, selected, enterAt = -999, transcript, composer = {}, menuHot, overlay, detailLit = 0 }) => {
+  trace?: { start: number; color?: string; on?: number };
+}> = ({
+  frame,
+  threads,
+  selected,
+  enterAt = -999,
+  transcript,
+  composer = {},
+  menuHot,
+  overlay,
+  detailLit = 0,
+  trace,
+}) => {
   const listW = 640;
   const sel = threads[selected];
   return (
@@ -55,6 +68,9 @@ export const ThreadsView: React.FC<{
           <Composer provider={sel.provider} {...composer} frame={frame} />
           {overlay}
         </Panel>
+        {trace ? (
+          <EnergyTrace w={DETAIL.w} h={846} frame={frame} start={trace.start} color={trace.color} on={trace.on ?? 1} />
+        ) : null}
       </div>
     </div>
   );
