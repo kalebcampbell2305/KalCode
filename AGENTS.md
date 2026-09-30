@@ -12,6 +12,23 @@ Unless the owner explicitly says otherwise, every new KalCode or KalVoice featur
 - Account for both platforms during design, implementation, testing, and release verification. Report any unverified platform behavior honestly.
 - Only an explicit owner instruction can narrow a task to one platform.
 
+## Permanent versioning rule
+
+**Build continuously. Version deliberately. The owner declares public version milestones.**
+
+- Do not bump KalCode's public, user-facing version for a feature, fix, redesign, refactor, website change, new product or deployment. KalCode can stay on its current version (for example 0.1.7) across many merged changes and builds.
+- To tell builds apart, use internal build numbers, commit hashes, timestamps or other metadata. The public version stays put.
+- Change the public version **only** when the owner explicitly declares one, for example "Make this KalCode 0.1.8", "Cut 0.1.8" or "We are releasing 0.1.8 now". Never infer a version bump, and never bump to satisfy a tool or hook.
+- When the owner declares a new version:
+  1. bump the version consistently everywhere it appears;
+  2. gather everything added since the previous version milestone;
+  3. create or update What's New and the changelog;
+  4. update the relevant website and release references;
+  5. prepare the release notes;
+  6. ship through the normal KalCode release pipeline;
+  7. make the release ready for its marketing/video announcement.
+- Until then, desktop changes merge to `main` and wait there for the next declared version. Merging them completes the work. A lifecycle report of unshipped desktop changes means "waiting for the owner's next version", not "bump the version now".
+
 ## Definition of Done
 
 Writing code is not the end of a task. Unless the owner explicitly says "do not ship", "local only", "prototype only" or equivalent, every completed engineering task continues through its whole lifecycle:
@@ -57,7 +74,7 @@ Run `node tooling/release/ship.mjs classify --base <ref> --head <ref>` to get th
 | Change | Lifecycle |
 |---|---|
 | Website only (`apps/website/**`) | test → merge → deploy the website → verify the live site |
-| Desktop app (`apps/desktop/**`, `crates/**`, `packages/**` used by the desktop, `Cargo.*`, lockfiles) | test → merge → signed release build → automated release gates → publish the update → verify the update feed and a production install |
+| Desktop app (`apps/desktop/**`, `crates/**`, `packages/**` used by the desktop, `Cargo.*`, lockfiles) | test → merge. Then, **only when the owner declares a new version** (see the versioning rule): signed release build → automated release gates → publish the update → verify the update feed and a production install |
 | Website and desktop | both pipelines |
 | Published docs (`docs/**` that the website or release notes publish) | publish the affected docs |
 | Internal (`tooling/**`, `.github/**`, tests, agent/dev files) | test → review → merge. No customer release unless a production artifact changes |
