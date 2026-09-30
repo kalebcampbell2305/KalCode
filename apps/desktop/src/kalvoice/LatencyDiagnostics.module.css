@@ -102,7 +102,7 @@
   background: var(--color-accent);
 }
 
-/* A data series, not a status: amber stays reserved for paused. */
+/* A data series, not a status: it never borrows the amber waiting/paused colour. */
 .bar[data-stage="final_to_recognized"] {
   background: var(--term-magenta, var(--color-accent-icy));
 }
