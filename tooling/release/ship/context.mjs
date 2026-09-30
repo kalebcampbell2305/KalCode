@@ -13,13 +13,20 @@ export function refuse(message) {
 }
 
 export const PLAIN_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+/** A Stable release version: plain x.y.z, optionally with an internal build number (x.y.z+N). */
+export const STABLE_RELEASE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:\+([1-9]\d*))?$/;
 export const COMMIT40 = /^[0-9a-f]{40}$/;
 export const CHANNELS = Object.freeze(["stable"]);
 
+/** Orders x.y.z[+N] versions; a missing build number is build 0. */
 export function compareSemver(a, b) {
-  const pa = a.split(".").map(Number);
-  const pb = b.split(".").map(Number);
-  for (let i = 0; i < 3; i++) {
+  const parts = (version) => {
+    const [core, build = "0"] = version.split("+");
+    return [...core.split(".").map(Number), Number(build)];
+  };
+  const pa = parts(a);
+  const pb = parts(b);
+  for (let i = 0; i < 4; i++) {
     if (pa[i] !== pb[i]) return pa[i] < pb[i] ? -1 : 1;
   }
   return 0;
@@ -27,17 +34,19 @@ export function compareSemver(a, b) {
 
 // The only inputs a release needs from a person. Everything else is derived or read from receipts.
 export function validateIdentity({ version, commit, baselineVersion = null, channel = "stable" } = {}) {
-  if (typeof version !== "string" || !PLAIN_SEMVER.test(version)) {
+  if (typeof version !== "string" || !STABLE_RELEASE_VERSION.test(version)) {
     refuse(
-      `--version must be a plain x.y.z version (Stable refuses prereleases and build metadata), got ${JSON.stringify(version ?? null)}`,
+      `--version must be a plain x.y.z version or an x.y.z+N build (Stable refuses prereleases and other build metadata), got ${JSON.stringify(version ?? null)}`,
     );
   }
   if (typeof commit !== "string" || !COMMIT40.test(commit)) {
     refuse(`--commit must be the full 40-hex lowercase commit id, got ${JSON.stringify(commit ?? null)}`);
   }
   if (baselineVersion !== null && baselineVersion !== undefined) {
-    if (typeof baselineVersion !== "string" || !PLAIN_SEMVER.test(baselineVersion)) {
-      refuse(`--baseline-version must be a plain x.y.z version, got ${JSON.stringify(baselineVersion)}`);
+    if (typeof baselineVersion !== "string" || !STABLE_RELEASE_VERSION.test(baselineVersion)) {
+      refuse(
+        `--baseline-version must be a plain x.y.z version or an x.y.z+N build, got ${JSON.stringify(baselineVersion)}`,
+      );
     }
     if (compareSemver(baselineVersion, version) >= 0) {
       refuse(
@@ -53,6 +62,8 @@ export function identityVars(identity) {
   return {
     version: identity.version,
     versionDashed: identity.version.replaceAll(".", "-"),
+    // Artifact file names cannot contain "+": "0.1.7+779" is named "0.1.7_build779".
+    fileVersion: identity.version.replace(/\+(\d+)$/, "_build$1"),
     commit: identity.commit,
     commit7: identity.commit.slice(0, 7),
     commit12: identity.commit.slice(0, 12),

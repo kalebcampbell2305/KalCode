@@ -66,7 +66,7 @@ If KalCode is publicly 0.1.7, every new feature, fix, UI change and KalCode or K
 
 **Features ship immediately after validation. Users get them in the current version. Public version numbers are owner-declared marketing milestones only.**
 
-**Current capability status (keep this line accurate).** As of 0.1.7, the updater compares public semver only, and published versions are immutable. Internal build-revision updates are **not implemented yet**. That gap is not a reason to hold work. Shipping a finished desktop change requires the build-revision update path, so building it is part of shipping that change. Never bump the public version to get around it. When a lifecycle hook reports unshipped desktop changes, the fix is to ship them as a new internal build of the current public version.
+**Current capability status (keep this line accurate).** Builds ship as `X.Y.Z+N`: the checked-in public version plus build number N (the commit count of the merged `main` release commit). The release tooling stamps it (Windows version resources `X.Y.Z.N`, macOS `CFBundleVersion` N), the updater orders builds numerically, and installed 0.1.7 clients already accept `0.1.7+N`. The UI shows the public version, plus "build N" where versions are detailed. The first `0.1.7+N` production build is not yet published, and there is no separate Owner update channel yet: Owner-first means installing the validated build on the Owner machines before publishing it to the feed. Never bump the public version to ship a build. When a lifecycle hook reports unshipped desktop changes, ship them as a new internal build of the current public version.
 
 ## Definition of Done
 

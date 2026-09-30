@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 
+import { releaseFileVersion, releaseVersionOverlay } from "./lib.mjs";
 import { parseReleaseChannelArgs, validateReleaseBuildArgs } from "./release-channel.mjs";
 import { validateUpdaterPublicKey } from "./updater-signing.mjs";
 
@@ -33,7 +34,6 @@ export const MACOS_HELPERS = Object.freeze([
   }),
 ]);
 
-const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
 const TEAM_ID = /^[A-Z0-9]{10}$/;
 const PROFILE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const SUBMISSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -104,8 +104,13 @@ export function parseMacPackageOptions(args) {
 }
 
 export function expectedMacDmgFile(version, arch) {
-  if (!VERSION.test(String(version ?? ""))) reject("invalid_version", "The macOS release version must be SemVer.");
-  return `KalCode_${version}_${normalizeMacArchitecture(arch)}.dmg`;
+  let fileVersion;
+  try {
+    fileVersion = releaseFileVersion(version);
+  } catch {
+    reject("invalid_version", "The macOS release version must be SemVer.");
+  }
+  return `KalCode_${fileVersion}_${normalizeMacArchitecture(arch)}.dmg`;
 }
 
 export function validateMacSigningEnvironment(env) {
@@ -190,10 +195,12 @@ function validateMacBuildInputs(target, features) {
   }
 }
 
-export function macTauriBuildArgs({ target, features = [] }) {
+export function macTauriBuildArgs({ target, features = [], version }) {
   validateMacBuildInputs(target, features);
   const args = ["--filter", "@kalcode/desktop", "tauri", "build", "--bundles", "dmg", "--target", target];
   if (features.length > 0) args.push("--features", features.join(","));
+  // Stamps the release version: CFBundleShortVersionString X.Y.Z+N and CFBundleVersion N.
+  if (version !== undefined) args.push("--config", JSON.stringify(releaseVersionOverlay(version)));
   return args;
 }
 

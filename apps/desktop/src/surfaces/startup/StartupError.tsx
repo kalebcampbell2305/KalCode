@@ -3,6 +3,7 @@ import { Button, ErrorState } from "@kalcode/ui/components";
 import { FolderOpen } from "lucide-react";
 import { useState } from "react";
 import type { KalCodeClient } from "../../ipc/client.ts";
+import { formatVersion } from "../../platform/version.ts";
 import { Lockup } from "../../shell/Brand.tsx";
 import styles from "./Startup.module.css";
 
@@ -48,7 +49,7 @@ export function StartupError({ client, info, error }: StartupErrorProps) {
         </ErrorState>
         {info ? (
           <p className={styles.meta}>
-            KalCode {info.version} ({info.channel})
+            KalCode {formatVersion(info.version)} ({info.channel})
           </p>
         ) : null}
       </div>

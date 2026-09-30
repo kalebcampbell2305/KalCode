@@ -21,12 +21,12 @@ import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 
 import {
-  appVersion,
   assertCleanTree,
   capture,
   headCommit,
   productName,
   ROOT,
+  releaseVersion,
   sha256File,
   stagingDir,
   TARGET_DIR,
@@ -460,7 +460,7 @@ async function main() {
       candidatePath: options.resume,
       expected: {
         commit: headCommit(),
-        version: appVersion(),
+        version: releaseVersion(),
         arch,
         requestedReleaseChannel: options.requestedReleaseChannel,
         teamId: credentials.teamId,
@@ -478,7 +478,7 @@ async function main() {
   assertRepositoryMacConfig();
   assertCleanTree("A macOS release build");
 
-  const version = appVersion();
+  const version = releaseVersion();
   if (productName() !== "KalCode")
     throw new MacReleaseError("product_mismatch", "The release product name must remain KalCode.");
   const commit = headCommit();
@@ -558,7 +558,7 @@ async function main() {
         helper.identifier,
       );
     }
-    macProcessRunner.run("pnpm", macTauriBuildArgs({ target, features }), {
+    macProcessRunner.run("pnpm", macTauriBuildArgs({ target, features, version }), {
       cwd: ROOT,
       env: buildEnv,
       timeout: 3_600_000,

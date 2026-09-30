@@ -1,5 +1,6 @@
 import { Button, ErrorState, KeyValueList, Skeleton, StatusIndicator } from "@kalcode/ui/components";
 import { type ReactNode, useEffect, useState } from "react";
+import { formatVersion } from "../../../platform/version.ts";
 import { formatDuration, formatRelative } from "../../../runtime/describeEvent.ts";
 import { useDiagnostics } from "../../../runtime/useDiagnostics.ts";
 import type { ProvidersSummary } from "../../../surfaces/providers/providerLabels.ts";
@@ -130,7 +131,7 @@ export function RuntimeHealthWidget() {
               ),
           },
           { key: "providers", label: "Providers", value: providersValue(providers) },
-          { key: "build", label: "Build", value: `${data.app.version}, ${data.app.channel}` },
+          { key: "build", label: "Build", value: `${formatVersion(data.app.version)}, ${data.app.channel}` },
         ]}
       />
       <div>

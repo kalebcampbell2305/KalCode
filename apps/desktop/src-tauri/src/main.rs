@@ -9,7 +9,8 @@ fn main() {
             "{}",
             serde_json::json!({
                 "schemaVersion": 1,
-                "version": env!("CARGO_PKG_VERSION"),
+                // The app's runtime version (`X.Y.Z` or `X.Y.Z+N`), set by build.rs.
+                "version": env!("KALCODE_APP_VERSION"),
                 "channel": kalcode_contracts::app::BuildChannel::current(),
                 "testHooks": kalcode_desktop_lib::environment::TEST_HOOKS_ENABLED,
             })

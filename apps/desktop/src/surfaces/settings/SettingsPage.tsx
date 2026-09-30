@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import kalcodeMascot362 from "../../assets/brand/kalcode-mascot-362.webp";
 import kalcodeMascot724 from "../../assets/brand/kalcode-mascot-724.webp";
 import { KalVoiceSettings } from "../../kalvoice/KalVoiceSettings.tsx";
+import { formatVersion } from "../../platform/version.ts";
 import { formatAbsolute } from "../../runtime/describeEvent.ts";
 import { useRuntime } from "../../runtime/RuntimeProvider.tsx";
 import { useDiagnostics } from "../../runtime/useDiagnostics.ts";
@@ -170,7 +171,7 @@ function DiagnosticsSection() {
         <KeyValueList
           className={styles.kv}
           items={[
-            { key: "version", label: "Version", value: `${data.app.version} (${data.app.channel})` },
+            { key: "version", label: "Version", value: `${formatVersion(data.app.version)} (${data.app.channel})` },
             {
               key: "os",
               label: "Operating system",
@@ -221,7 +222,9 @@ function About() {
             <KalCodeTagline className={styles.aboutTagline} />
           </span>
           <p className={styles.aboutMeta}>
-            {info.channel === "stable" ? `Version ${info.version}` : `Version ${info.version}, ${info.channel} build`}
+            {info.channel === "stable"
+              ? `Version ${formatVersion(info.version)}`
+              : `Version ${formatVersion(info.version)}, ${info.channel} build`}
           </p>
         </figcaption>
       </figure>

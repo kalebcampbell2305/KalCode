@@ -10,13 +10,13 @@ import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { appVersion, fail, readJson, stagingDir, WEBSITE_DIR } from "./lib.mjs";
+import { fail, readJson, releaseVersion, stagingDir, WEBSITE_DIR } from "./lib.mjs";
 
 const portArg = process.argv.indexOf("--port");
 const PORT = portArg > 0 ? Number(process.argv[portArg + 1]) : 8790;
 const BASE = `http://127.0.0.1:${PORT}`;
 
-const version = appVersion();
+const version = releaseVersion();
 const build = readJson(join(stagingDir(version), "build.json"));
 if (!existsSync(join(WEBSITE_DIR, "dist", "index.html")))
   fail("Build the website first: pnpm --filter @kalcode/website build");

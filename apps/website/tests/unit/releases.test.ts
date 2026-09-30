@@ -3,9 +3,11 @@ import committed from "../../src/data/releases.json";
 import {
   assertManifest,
   buildStatus,
+  displayManifest,
   downloadCta,
   formatBytes,
   platformRows,
+  publicVersion,
   RELEASES,
   type ReleaseManifest,
 } from "../../src/lib/releases";
@@ -81,6 +83,21 @@ describe("with a published Stable release", () => {
     manifest.latest.version = "0.1.6";
     expect(downloadCta(manifest).note).toBe("Windows · Stable 0.1.6 · 3.8 MB");
     expect(buildStatus(manifest)).toBe("Stable 0.1.6 for Windows");
+  });
+
+  it("names a numbered build by its public version and keeps the exact pinned download", () => {
+    const manifest = structuredClone(publishedManifest);
+    if (!manifest.latest) throw new Error("fixture has no release");
+    manifest.latest.channel = "stable";
+    manifest.latest.version = "0.1.7+779";
+    const shown = displayManifest(manifest);
+    expect(shown.latest?.version).toBe("0.1.7");
+    expect(shown.latest?.platforms).toEqual(manifest.latest.platforms);
+    expect(manifest.latest.version).toBe("0.1.7+779");
+    expect(buildStatus(shown)).toBe("Stable 0.1.7 for Windows");
+    expect(publicVersion("0.1.7+779")).toBe("0.1.7");
+    expect(publicVersion("0.1.7")).toBe("0.1.7");
+    expect(displayManifest(EMPTY)).toBe(EMPTY);
   });
 });
 

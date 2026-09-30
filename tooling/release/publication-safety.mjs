@@ -14,7 +14,11 @@ function parseSemver(version) {
   if (typeof version !== "string" || version.length === 0 || version.length > MAX_VERSION_LENGTH) {
     throw new Error("release version is not a bounded canonical SemVer");
   }
-  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/.exec(version);
+  // An optional internal build number (`X.Y.Z+N`) follows the public version.
+  const match =
+    /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([1-9]\d*))?$/.exec(
+      version,
+    );
   if (!match) throw new Error("release version is not a canonical SemVer");
   const prerelease = match[4]?.split(".") ?? [];
   for (const identifier of prerelease) {
@@ -22,7 +26,7 @@ function parseSemver(version) {
       throw new Error("release version has a non-canonical numeric prerelease identifier");
     }
   }
-  return { major: match[1], minor: match[2], patch: match[3], prerelease };
+  return { major: match[1], minor: match[2], patch: match[3], prerelease, build: match[5] ?? null };
 }
 
 function canonicalTimestamp(value, label) {
@@ -210,14 +214,18 @@ function numericKey(value) {
   return `${"1".repeat(value.length)}0${value}`;
 }
 
+// A build number sorts after the same version without one, and numerically between builds. `+`
+// sorts before every character that can continue a key, so `X.Y.Z-a+N` stays below `X.Y.Z-a.b`.
+// Keys of versions without a build are unchanged, so already-stored D1 keys stay valid.
 export function semverPrecedenceKey(version) {
   const parsed = parseSemver(version);
   const base = [parsed.major, parsed.minor, parsed.patch].map(numericKey).join("!");
-  if (parsed.prerelease.length === 0) return `${base}~1`;
+  const build = parsed.build === null ? "" : `+${numericKey(parsed.build)}`;
+  if (parsed.prerelease.length === 0) return `${base}~1${build}`;
   const prerelease = parsed.prerelease
     .map((identifier) => (/^\d+$/.test(identifier) ? `0${numericKey(identifier)}` : `1${identifier}`))
     .join("!");
-  return `${base}~0${prerelease}!`;
+  return `${base}~0${prerelease}!${build}`;
 }
 
 function validatePointerCandidate(candidate) {
