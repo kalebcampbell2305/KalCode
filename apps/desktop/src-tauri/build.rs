@@ -18,6 +18,33 @@ fn target_has_test_hooks() -> bool {
 }
 
 fn main() {
+    // Fail closed for direct Cargo/CLI invocations that omit the Dev overlay. This also
+    // prevents a release binary (and its credential service) using a Dev bundle identity.
+    println!("cargo:rerun-if-env-changed=TAURI_CONFIG");
+    let debug = std::env::var_os("CARGO_CFG_DEBUG_ASSERTIONS").is_some();
+    let base: serde_json::Value = serde_json::from_str(include_str!("tauri.conf.json"))
+        .unwrap_or_else(|error| panic!("invalid base app config: {error}"));
+    let overlay: serde_json::Value =
+        serde_json::from_str(&std::env::var("TAURI_CONFIG").unwrap_or_else(|_| "{}".into()))
+            .unwrap_or_else(|error| panic!("invalid TAURI_CONFIG: {error}"));
+    let expected: serde_json::Value = if debug {
+        serde_json::from_str(include_str!("tauri.dev.conf.json"))
+            .unwrap_or_else(|error| panic!("invalid Dev app config: {error}"))
+    } else {
+        base.clone()
+    };
+    for path in [
+        "/identifier",
+        "/productName",
+        "/plugins/deep-link/desktop/schemes",
+    ] {
+        let actual = overlay.pointer(path).or_else(|| base.pointer(path));
+        assert_eq!(
+            actual,
+            expected.pointer(path),
+            "app identity/profile mismatch at {path}; use pnpm tauri dev/build, or set TAURI_CONFIG to the Dev overlay for direct debug Cargo commands"
+        );
+    }
     println!("cargo:rerun-if-changed=test-capabilities");
     println!("cargo:rerun-if-env-changed=KALCODE_AUTHENTICODE_IDENTITY_OIDS");
     let mut commands = COMMANDS.to_vec();

@@ -20,7 +20,8 @@ pub fn configure<R: Runtime>(builder: WebviewBuilder<R>, directory: PathBuf) -> 
 fn store_identifier(directory: &std::path::Path) -> [u8; 16] {
     use sha2::{Digest, Sha256};
     let mut digest = Sha256::new();
-    digest.update(b"com.kalcode.desktop/browser-store/v1\0");
+    digest.update(kalcode_contracts::identity::IDENTIFIER.as_bytes());
+    digest.update(b"/browser-store/v1\0");
     digest.update(directory.as_os_str().as_encoded_bytes());
     let bytes = digest.finalize();
     let mut id = [0; 16];

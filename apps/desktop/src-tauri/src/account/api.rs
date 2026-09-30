@@ -451,6 +451,11 @@ impl AccountApi for HttpAccountApi {
         code_challenge: &str,
     ) -> Result<SocialStartResponse, ApiError> {
         let path = format!("/v1/auth/{}/start", provider.as_str());
+        // The production service currently returns only Stable protocol links. Do not
+        // launch a Dev sign-in that would open (and deliver its callback to) Stable.
+        if kalcode_contracts::identity::URL_SCHEME != "kalcode" {
+            return Err(ApiError::Local("social_sign_in_unavailable"));
+        }
         let wire: SocialStartWire = self
             .post(
                 &path,
@@ -724,6 +729,16 @@ struct SocialStartRequest<'a> {
 #[cfg(test)]
 mod social_start_request_tests {
     use super::*;
+
+    #[test]
+    fn dev_social_sign_in_refuses_before_contacting_stable_service() {
+        if cfg!(debug_assertions) {
+            assert!(matches!(
+                HttpAccountApi::new().start_social(SocialProvider::Google, "challenge"),
+                Err(ApiError::Local("social_sign_in_unavailable"))
+            ));
+        }
+    }
 
     #[test]
     fn desktop_social_start_explicitly_requests_the_desktop_client_contract() {

@@ -18,7 +18,7 @@ fn enqueue(sender: &Sender<String>, urls: impl IntoIterator<Item = Url>) -> usiz
         // This is only an admission bound. The account owner validates the full callback and
         // its durable provider/state/PKCE/nonce binding before it can change account authority.
         if url.as_str().len() <= MAX_CALLBACK_BYTES
-            && url.scheme() == "kalcode"
+            && url.scheme() == kalcode_contracts::identity::URL_SCHEME
             && url.host_str() == Some("auth")
             && sender.try_send(url.into()).is_ok()
         {
@@ -89,9 +89,14 @@ mod tests {
                 &sender,
                 [
                     Url::parse("https://auth/google?code=synthetic").unwrap(),
-                    Url::parse("kalcode://other/google?code=synthetic").unwrap(),
                     Url::parse(&format!(
-                        "kalcode://auth/google?code={}",
+                        "{}://other/google?code=synthetic",
+                        kalcode_contracts::identity::URL_SCHEME
+                    ))
+                    .unwrap(),
+                    Url::parse(&format!(
+                        "{}://auth/google?code={}",
+                        kalcode_contracts::identity::URL_SCHEME,
                         "x".repeat(MAX_CALLBACK_BYTES)
                     ))
                     .unwrap(),
@@ -104,7 +109,11 @@ mod tests {
             enqueue(
                 &sender,
                 (0..20).map(|_| {
-                    Url::parse("kalcode://auth/google?code=synthetic&state=synthetic").unwrap()
+                    Url::parse(&format!(
+                        "{}://auth/google?code=synthetic&state=synthetic",
+                        kalcode_contracts::identity::URL_SCHEME
+                    ))
+                    .unwrap()
                 }),
             );
         }
@@ -126,7 +135,11 @@ mod tests {
         );
         assert_eq!(restores.get(), 0);
 
-        let callback = Url::parse("kalcode://auth/google?code=synthetic&state=synthetic").unwrap();
+        let callback = Url::parse(&format!(
+            "{}://auth/google?code=synthetic&state=synthetic",
+            kalcode_contracts::identity::URL_SCHEME
+        ))
+        .unwrap();
         enqueue_warm(&sender, [callback.clone()], || {
             restores.set(restores.get() + 1);
         });
@@ -144,7 +157,11 @@ mod tests {
     #[test]
     fn cold_and_warm_duplicates_are_both_left_for_one_use_account_authority() {
         let (sender, mut receiver) = channel(2);
-        let callback = Url::parse("kalcode://auth/google?code=synthetic&state=synthetic").unwrap();
+        let callback = Url::parse(&format!(
+            "{}://auth/google?code=synthetic&state=synthetic",
+            kalcode_contracts::identity::URL_SCHEME
+        ))
+        .unwrap();
         assert_eq!(enqueue(&sender, [callback.clone()]), 1);
         enqueue_warm(&sender, [callback], || {});
         assert_eq!(
