@@ -28,6 +28,7 @@ const OWNERSHIP_SUFFIX: &str = ".owner";
 const LEASE_SUFFIX: &str = ".owner.lock";
 const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const CLEANUP_CHILD_TIMEOUT: Duration = Duration::from_secs(15);
+const LEASE_SETTLE_TIMEOUT: Duration = Duration::from_millis(250);
 const MAX_CHILD_OUTPUT_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -113,6 +114,22 @@ impl PreparationLease {
             file,
             identity: expected,
         }))
+    }
+
+    /// Like `acquire_existing`, but rechecks a busy lease for `LEASE_SETTLE_TIMEOUT`. While any
+    /// unrelated process is being spawned, it briefly holds every descriptor (close-on-exec ones
+    /// included) until its exec, so a released lease can look held for a moment.
+    fn acquire_released(path: &Path, expected: FileIdentity) -> Result<Option<Self>, UpdateError> {
+        let started = Instant::now();
+        loop {
+            if let Some(lease) = Self::acquire_existing(path, expected)? {
+                return Ok(Some(lease));
+            }
+            if started.elapsed() >= LEASE_SETTLE_TIMEOUT {
+                return Ok(None);
+            }
+            thread::sleep(CHILD_POLL_INTERVAL);
+        }
     }
 
     const fn identity(&self) -> FileIdentity {
@@ -411,10 +428,6 @@ impl PreparedMacInstaller {
         prepared
     }
 
-    pub(super) fn dmg_path(&self) -> &Path {
-        &self.dmg_path
-    }
-
     pub(super) const fn binding(&self) -> &InstallBinding {
         &self.binding
     }
@@ -606,18 +619,37 @@ fn write_ownership_record(
     path: &Path,
     ownership: &PreparationOwnership,
 ) -> Result<(), UpdateError> {
+    let (next, next_identity) = write_next_ownership_record(path, ownership)?;
+    // Publish only a complete, synced record. Linking (unlike rename) never replaces an
+    // existing record at `path`.
+    let published = fs::hard_link(&next, path);
+    let _ = remove_owned_regular_file(&next, next_identity);
+    published.map_err(|_| installer_storage_failed())?;
+    sync_parent(path)
+}
+
+/// Writes and syncs the complete record beside `path`, for an atomic publish into `path`.
+fn write_next_ownership_record(
+    path: &Path,
+    ownership: &PreparationOwnership,
+) -> Result<(PathBuf, FileIdentity), UpdateError> {
+    let next = path.with_extension("owner.next");
+    if fs::symlink_metadata(&next).is_ok() {
+        return Err(installer_storage_failed());
+    }
     let bytes = ownership_record_bytes(ownership);
     let mut file = OpenOptions::new()
         .create_new(true)
         .write(true)
         .mode(0o600)
-        .open(path)
+        .open(&next)
         .map_err(|_| installer_storage_failed())?;
     file.write_all(bytes.as_bytes())
         .map_err(|_| installer_storage_failed())?;
     file.sync_all().map_err(|_| installer_storage_failed())?;
-    sync_parent(path)?;
-    Ok(())
+    let next_identity =
+        FileIdentity::from_metadata(&file.metadata().map_err(|_| installer_storage_failed())?);
+    Ok((next, next_identity))
 }
 
 fn ownership_record_bytes(ownership: &PreparationOwnership) -> String {
@@ -658,23 +690,7 @@ fn replace_ownership_record(
     if file_identity(path, FileKind::RegularFile)? != expected {
         return Err(installer_storage_failed());
     }
-    let next = path.with_extension("owner.next");
-    if fs::symlink_metadata(&next).is_ok() {
-        return Err(installer_storage_failed());
-    }
-    let bytes = ownership_record_bytes(ownership);
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(0o600)
-        .open(&next)
-        .map_err(|_| installer_storage_failed())?;
-    file.write_all(bytes.as_bytes())
-        .map_err(|_| installer_storage_failed())?;
-    file.sync_all().map_err(|_| installer_storage_failed())?;
-    let next_identity =
-        FileIdentity::from_metadata(&file.metadata().map_err(|_| installer_storage_failed())?);
-    drop(file);
+    let (next, next_identity) = write_next_ownership_record(path, ownership)?;
     if file_identity(path, FileKind::RegularFile)? != expected {
         let _ = remove_owned_regular_file(&next, next_identity);
         return Err(installer_storage_failed());
@@ -746,16 +762,30 @@ pub(super) fn cleanup_startup(
 ) -> Result<bool, UpdateError> {
     ensure_prepared_directory(root)?;
     let current_app = current_app_bundle()?;
+    sweep_preparations(root, &current_app, protected)
+}
+
+/// One unreadable, mismatched, or undetachable record never blocks the rest of the sweep: it is
+/// logged and left exactly as found. Only a preparation whose lease is still held returns
+/// `false`.
+fn sweep_preparations(
+    root: &Path,
+    current_app: &Path,
+    protected: Option<&MacSwapAttempt>,
+) -> Result<bool, UpdateError> {
     let current_parent = current_app.parent().ok_or_else(installer_storage_failed)?;
     // Both the installed bundle and its parent are ancestors of every staged bundle deletion.
     // Refuse cleanup if either can redirect traversal.
     file_identity(current_parent, FileKind::Directory)?;
-    file_identity(&current_app, FileKind::Directory)?;
+    file_identity(current_app, FileKind::Directory)?;
 
     let entries = fs::read_dir(root).map_err(|_| installer_storage_failed())?;
     let mut live_preparation = false;
     for entry in entries {
-        let entry = entry.map_err(|_| installer_storage_failed())?;
+        let Ok(entry) = entry else {
+            tracing::warn!(event = "updater.preparation_cleanup_skipped");
+            continue;
+        };
         let name = entry.file_name();
         let Some(name) = name.to_str() else {
             continue;
@@ -767,38 +797,59 @@ pub(super) fn cleanup_startup(
         if ownership_path.parent() != Some(root) {
             continue;
         }
-        let ownership_file_identity = file_identity(&ownership_path, FileKind::RegularFile)?;
-        let ownership = read_ownership_record(&ownership_path)?;
-        let dmg_path = root.join(format!("prepared-{id}.dmg"));
-        let mount_path = root.join(format!("prepared-{id}.dmg.mount"));
-        let lease_path = root.join(format!("prepared-{id}.dmg{LEASE_SUFFIX}"));
-        let staged_app = current_parent.join(format!(".KalCode-update-{id}.app"));
-        let Some(cleanup_lease) = PreparationLease::acquire_existing(&lease_path, ownership.lease)?
-        else {
-            // The previous parent or one of its inherited native children is still operating on
-            // this exact preparation. Never race its copy, mount, verification, or handoff.
-            live_preparation = true;
-            continue;
-        };
-        if is_protected_staged(&current_app, &staged_app, protected) {
-            continue;
-        }
-        cleanup_owned_preparation(
-            &current_app,
-            &dmg_path,
-            &mount_path,
-            &staged_app,
+        match cleanup_recorded_preparation(
+            root,
+            current_app,
+            current_parent,
+            id,
             &ownership_path,
-            ownership_file_identity,
-            &ownership,
-            cleanup_lease,
-        )?;
+            protected,
+        ) {
+            Ok(live) => live_preparation |= live,
+            Err(error) => tracing::warn!(
+                event = "updater.preparation_cleanup_skipped",
+                error_code = error.code()
+            ),
+        }
     }
-    if live_preparation {
-        Ok(false)
-    } else {
-        Ok(true)
+    Ok(!live_preparation)
+}
+
+/// Returns whether the recorded preparation is still live.
+fn cleanup_recorded_preparation(
+    root: &Path,
+    current_app: &Path,
+    current_parent: &Path,
+    id: &str,
+    ownership_path: &Path,
+    protected: Option<&MacSwapAttempt>,
+) -> Result<bool, UpdateError> {
+    let ownership_file_identity = file_identity(ownership_path, FileKind::RegularFile)?;
+    let ownership = read_ownership_record(ownership_path)?;
+    let dmg_path = root.join(format!("prepared-{id}.dmg"));
+    let mount_path = root.join(format!("prepared-{id}.dmg.mount"));
+    let lease_path = root.join(format!("prepared-{id}.dmg{LEASE_SUFFIX}"));
+    let staged_app = current_parent.join(format!(".KalCode-update-{id}.app"));
+    let Some(cleanup_lease) = PreparationLease::acquire_released(&lease_path, ownership.lease)?
+    else {
+        // The previous parent or one of its inherited native children is still operating on
+        // this exact preparation. Never race its copy, mount, verification, or handoff.
+        return Ok(true);
+    };
+    if is_protected_staged(current_app, &staged_app, protected) {
+        return Ok(false);
     }
+    cleanup_owned_preparation(
+        current_app,
+        &dmg_path,
+        &mount_path,
+        &staged_app,
+        ownership_path,
+        ownership_file_identity,
+        &ownership,
+        cleanup_lease,
+    )?;
+    Ok(false)
 }
 
 fn is_protected_staged(
@@ -1258,6 +1309,7 @@ fn staged_app_create_error(error: io::Error) -> UpdateError {
     }
 }
 
+#[cfg(test)]
 fn remove_staged_app(current: &Path, staged: &Path) -> Result<(), UpdateError> {
     kalcode_updater::mac_swap::validate_swap_paths(current, staged)?;
     let metadata = match fs::symlink_metadata(staged) {
@@ -1306,15 +1358,20 @@ mod tests {
     use std::os::unix::fs::PermissionsExt as _;
     use std::path::{Path, PathBuf};
     use std::process::Command;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::{Duration, Instant};
 
+    use kalcode_updater::{
+        InstallAttempt, InstallBinding, InstallKind, InstallOutcome, UpdateJournal, UpdateTarget,
+    };
     use tempfile::tempdir;
 
     use super::{
         FileIdentity, FileKind, PreparationLease, PreparationOwnership, cleanup_owned_preparation,
         create_staged_app, file_identity, inherit_lease, is_protected_staged,
         read_ownership_record, remove_staged_app, replace_ownership_record, run_cancellable_status,
-        staged_app_create_error, write_ownership_record,
+        staged_app_create_error, sweep_preparations, write_ownership_record,
     };
 
     struct RestorePermissions {
@@ -1470,7 +1527,7 @@ mod tests {
         let owner_identity = file_identity(&owner, FileKind::RegularFile)?;
         let lease_identity = lease.identity();
         drop(lease);
-        let cleanup_lease = PreparationLease::acquire_existing(&lease_path, lease_identity)?
+        let cleanup_lease = PreparationLease::acquire_released(&lease_path, lease_identity)?
             .ok_or_else(|| io::Error::other("cleanup lease stayed busy"))?;
 
         cleanup_owned_preparation(
@@ -1526,7 +1583,7 @@ mod tests {
         let owner_identity = file_identity(&owner, FileKind::RegularFile)?;
         let lease_identity = lease.identity();
         drop(lease);
-        let cleanup_lease = PreparationLease::acquire_existing(&lease_path, lease_identity)?
+        let cleanup_lease = PreparationLease::acquire_released(&lease_path, lease_identity)?
             .ok_or_else(|| io::Error::other("cleanup lease stayed busy"))?;
         fs::rename(&staged, &displaced)?;
         fs::create_dir(&staged)?;
@@ -1575,6 +1632,13 @@ mod tests {
         };
         write_ownership_record(&owner, &ownership)?;
         assert_eq!(read_ownership_record(&owner)?, ownership);
+        assert!(!owner.with_extension("owner.next").exists());
+        // A second publish never replaces an existing record.
+        let mut other = read_ownership_record(&owner)?;
+        other.staged_app = Some(other.dmg);
+        assert!(write_ownership_record(&owner, &other).is_err());
+        assert_eq!(read_ownership_record(&owner)?, ownership);
+        assert!(!owner.with_extension("owner.next").exists());
 
         let first_identity = file_identity(&owner, FileKind::RegularFile)?;
         ownership.mounted_volume = Some(FileIdentity {
@@ -1623,7 +1687,7 @@ mod tests {
         fs::remove_file(&dmg)?;
         fs::remove_dir(&staged)?;
         drop(lease);
-        let cleanup_lease = PreparationLease::acquire_existing(&lease_path, lease_identity)?
+        let cleanup_lease = PreparationLease::acquire_released(&lease_path, lease_identity)?
             .ok_or_else(|| io::Error::other("cleanup lease stayed busy"))?;
 
         cleanup_owned_preparation(
@@ -1640,6 +1704,131 @@ mod tests {
         assert!(current.exists());
         assert!(!owner.exists());
         assert!(!lease_path.exists());
+        Ok(())
+    }
+
+    /// A recorded preparation `prepared-{id}.dmg` whose lease is returned still held.
+    fn recorded_preparation(
+        prepared: &Path,
+        id: &str,
+        staged_app: Option<FileIdentity>,
+    ) -> Result<(PathBuf, PathBuf, PreparationLease), Box<dyn std::error::Error>> {
+        let dmg = prepared.join(format!("prepared-{id}.dmg"));
+        let owner = prepared.join(format!("prepared-{id}.dmg.owner"));
+        fs::write(&dmg, b"verified dmg")?;
+        let lease =
+            PreparationLease::create(&prepared.join(format!("prepared-{id}.dmg.owner.lock")))?;
+        let ownership = PreparationOwnership {
+            dmg: file_identity(&dmg, FileKind::RegularFile)?,
+            lease: lease.identity(),
+            mount_directory: FileIdentity {
+                device: 121,
+                inode: 122,
+            },
+            mounted_volume: None,
+            staged_app,
+        };
+        write_ownership_record(&owner, &ownership)?;
+        Ok((dmg, owner, lease))
+    }
+
+    #[test]
+    fn mismatched_and_truncated_records_are_skipped_without_blocking_reconcile_or_preparation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempdir()?;
+        let applications = temp.path().join("Applications");
+        let current = applications.join("KalCode.app");
+        let prepared = temp.path().join("prepared");
+        fs::create_dir_all(&current)?;
+        fs::create_dir(&prepared)?;
+
+        let (good_dmg, good_owner, lease) = recorded_preparation(&prepared, "good", None)?;
+        drop(lease);
+
+        // The swap helper leaves the old app at the recorded staged path: a different inode.
+        let swapped = applications.join(".KalCode-update-swapped.app");
+        fs::create_dir(&swapped)?;
+        let recorded = file_identity(&swapped, FileKind::Directory)?;
+        let (swapped_dmg, swapped_owner, lease) =
+            recorded_preparation(&prepared, "swapped", Some(recorded))?;
+        drop(lease);
+        fs::rename(&swapped, applications.join("displaced.app"))?;
+        fs::create_dir(&swapped)?;
+        fs::write(swapped.join("previous-app"), b"not ours")?;
+
+        let truncated_dmg = prepared.join("prepared-truncated.dmg");
+        let truncated_owner = prepared.join("prepared-truncated.dmg.owner");
+        fs::write(&truncated_dmg, b"verified dmg")?;
+        fs::write(
+            &truncated_owner,
+            b"kalcode-macos-preparation-v1\n16777220\n",
+        )?;
+
+        let sweep = sweep_preparations(&prepared, &current, None);
+        assert!(
+            matches!(sweep, Ok(true)),
+            "only a live lease may deny preparation"
+        );
+
+        assert!(!good_dmg.exists() && !good_owner.exists());
+        assert_eq!(fs::read(swapped.join("previous-app"))?, b"not ours");
+        assert!(swapped_dmg.exists() && swapped_owner.exists());
+        assert!(truncated_dmg.exists() && truncated_owner.exists());
+        assert!(current.exists());
+
+        let mut journal = UpdateJournal::load(temp.path().join("updater.json"))?;
+        journal.record_install_attempt(InstallAttempt {
+            kind: InstallKind::Upgrade,
+            from_version: "0.1.5".into(),
+            to_version: "0.1.6".into(),
+            sha256: "a".repeat(64),
+            binding: Some(InstallBinding {
+                target: UpdateTarget::DarwinAarch64,
+                source_sha256: "c".repeat(64),
+                signing_requirement_sha256: "d".repeat(64),
+            }),
+            mac_swap: Some(super::MacSwapAttempt {
+                current_app: current.clone(),
+                staged_app: swapped.clone(),
+                parent_pid: 42,
+                parent_identity_sha256: "b".repeat(64),
+                phase: super::MacSwapPhase::Prepared,
+            }),
+            started_at: "2026-09-30T12:00:00Z".into(),
+        })?;
+        let (ready, outcome) =
+            crate::updater_commands::reconcile_after_cleanup(&mut journal, sweep, true, "0.1.6");
+        assert!(ready);
+        assert!(matches!(outcome, Ok(Some(InstallOutcome::Updated))));
+        assert!(journal.state().install_attempt.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn only_a_live_lease_denies_preparation_and_the_sweep_continues_past_it()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempdir()?;
+        let current = temp.path().join("Applications").join("KalCode.app");
+        let prepared = temp.path().join("prepared");
+        fs::create_dir_all(&current)?;
+        fs::create_dir(&prepared)?;
+        let (live_dmg, live_owner, live_lease) = recorded_preparation(&prepared, "live", None)?;
+        let (stale_dmg, stale_owner, lease) = recorded_preparation(&prepared, "stale", None)?;
+        drop(lease);
+
+        assert!(matches!(
+            sweep_preparations(&prepared, &current, None),
+            Ok(false)
+        ));
+        assert!(live_dmg.exists() && live_owner.exists());
+        assert!(!stale_dmg.exists() && !stale_owner.exists());
+
+        drop(live_lease);
+        assert!(matches!(
+            sweep_preparations(&prepared, &current, None),
+            Ok(true)
+        ));
+        assert!(!live_dmg.exists() && !live_owner.exists());
         Ok(())
     }
 
@@ -1711,9 +1900,68 @@ mod tests {
         assert!(PreparationLease::acquire_existing(&path, identity)?.is_none());
         child.kill()?;
         child.wait()?;
-        let cleanup = PreparationLease::acquire_existing(&path, identity)?
+        let cleanup = PreparationLease::acquire_released(&path, identity)?
             .ok_or_else(|| io::Error::other("child did not release inherited lease"))?;
         drop(cleanup);
         Ok(())
+    }
+
+    #[test]
+    fn unrelated_children_never_inherit_the_preparation_lease()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempdir()?;
+        let path = temp.path().join("prepared-owned.dmg.owner.lock");
+        let lease = PreparationLease::create(&path)?;
+        let identity = lease.identity();
+        let other = PreparationLease::create(&temp.path().join("prepared-other.dmg.owner.lock"))?;
+        // One unrelated child through posix_spawn, and one through fork + exec that inherits a
+        // different lease, both alive after this lease's only descriptor closes.
+        let mut spawned = Command::new("/bin/sleep").arg("10").spawn()?;
+        let mut forked = Command::new("/bin/sleep");
+        forked.arg("10");
+        inherit_lease(&mut forked, &other);
+        let mut forked = forked.spawn()?;
+        drop(lease);
+
+        let released = PreparationLease::acquire_released(&path, identity);
+        for child in [&mut spawned, &mut forked] {
+            child.kill()?;
+            child.wait()?;
+        }
+        assert!(released?.is_some(), "an unrelated child kept the lease");
+        Ok(())
+    }
+
+    #[test]
+    fn concurrent_unrelated_spawns_never_make_a_released_lease_look_live()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempdir()?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let spawner = {
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                while !stop.load(Ordering::SeqCst) {
+                    let _ = Command::new("/usr/bin/true").status();
+                }
+            })
+        };
+        let mut result = Ok(());
+        for cycle in 0..200 {
+            let path = temp
+                .path()
+                .join(format!("prepared-cycle{cycle}.dmg.owner.lock"));
+            let lease = PreparationLease::create(&path)?;
+            let identity = lease.identity();
+            drop(lease);
+            if PreparationLease::acquire_released(&path, identity)?.is_none() {
+                result = Err(io::Error::other("a released lease looked live"));
+                break;
+            }
+        }
+        stop.store(true, Ordering::SeqCst);
+        spawner
+            .join()
+            .map_err(|_| io::Error::other("spawner panicked"))?;
+        Ok(result?)
     }
 }

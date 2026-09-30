@@ -3,16 +3,18 @@ use std::fs::OpenOptions;
 use std::fs::{self, File};
 #[cfg(any(windows, target_os = "macos"))]
 use std::io::Write;
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(windows)]
 use std::io::{Read, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(not(target_os = "macos"))]
+use std::path::PathBuf;
 #[cfg(windows)]
 use std::process::Command;
 
 use kalcode_updater::{FeedMetadata, InstallBinding, MacSwapAttempt, UpdateError};
 #[cfg(windows)]
 use kalcode_updater::{UpdateTarget, verify_download_reader};
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(windows)]
 use sha2::{Digest, Sha256};
 
 #[cfg(target_os = "macos")]
@@ -60,6 +62,7 @@ const CERT_E_REVOCATION_FAILURE: i32 = 0x800b_010e_u32 as i32;
 /// A verified raw NSIS installer held open without write/delete sharing from preparation until
 /// process launch. Verification and launch therefore refer to the same immutable file object.
 pub struct PreparedInstaller {
+    #[cfg(not(target_os = "macos"))]
     path: PathBuf,
     file: Option<File>,
     binding: InstallBinding,
@@ -180,7 +183,6 @@ impl PreparedInstaller {
             cancel,
         )?;
         Ok(Self {
-            path: prepared.dmg_path().to_path_buf(),
             file: None,
             binding: prepared.binding().clone(),
             macos: Some(prepared),
@@ -352,7 +354,7 @@ fn installation_binding() -> Result<InstallBinding, UpdateError> {
     })
 }
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(windows)]
 fn digest_reader(reader: &mut File) -> Result<String, UpdateError> {
     reader
         .seek(SeekFrom::Start(0))
@@ -427,7 +429,7 @@ fn is_safe_name(name: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
 }
 
-#[cfg(any(windows, target_os = "macos"))]
+#[cfg(windows)]
 fn cleanup_prepared(root: &Path) {
     let Ok(entries) = fs::read_dir(root) else {
         return;
