@@ -1,0 +1,1124 @@
+diff --git a/apps/desktop/src/ipc/memory/providerAccounts.ts b/apps/desktop/src/ipc/memory/providerAccounts.ts
+index 3a4c37c3..36826c21 100644
+--- a/apps/desktop/src/ipc/memory/providerAccounts.ts
++++ b/apps/desktop/src/ipc/memory/providerAccounts.ts
+@@ -1,426 +1,426 @@
+-/**
+- * Deterministic provider-account test double for unit tests and the ui-test build only.
+- * It models public metadata and opaque login handles; it never models or stores credentials.
+- */
+-import type { IpcError, ProviderAccount, ProviderAccountBinding, ProviderAccountBindingKind } from "@kalcode/protocol";
+-import type { DashboardHandlers } from "./dashboard.ts";
+-
+-const IDS = {
+-  claudePersonal: "0192f3c4-0000-7000-8000-000000000101",
+-  codexPersonal: "0192f3c4-0000-7000-8000-000000000201",
+-  codexWork: "0192f3c4-0000-7000-8000-000000000202",
+-  geminiPersonal: "0192f3c4-0000-7000-8000-000000000301",
+-} as const;
+-
+-const PROVIDERS = new Set(["claude-code", "codex", "gemini-cli"]);
+-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+-const PROVIDER_ID = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+-const CREATED_AT = "2026-09-24T12:00:00.000Z";
+-
+-function fail(code: string, message: string, category: IpcError["category"] = "validation"): never {
+-  throw { category, code, message, retryable: false } satisfies IpcError;
+-}
+-
+-function label(value: unknown): string {
+-  const next = typeof value === "string" ? value.trim() : "";
+-  const hasControlCharacter = [...next].some((character) => {
+-    const code = character.charCodeAt(0);
+-    return code <= 0x1f || code === 0x7f;
+-  });
+-  if (!next || [...next].length > 80 || hasControlCharacter) {
+-    fail("provider_account_label_invalid", "Account labels must be between 1 and 80 visible characters.");
+-  }
+-  return next;
+-}
+-
+-function providerId(value: unknown): string {
+-  const next = typeof value === "string" ? value : "";
+-  if (!PROVIDER_ID.test(next) || !PROVIDERS.has(next)) {
+-    fail("provider_account_provider_invalid", "That provider doesn't support account metadata.");
+-  }
+-  return next;
+-}
+-
+-function accountId(value: unknown): string {
+-  const next = typeof value === "string" ? value : "";
+-  if (!UUID.test(next)) fail("provider_account_id_invalid", "That account or binding id isn't valid.");
+-  return next;
+-}
+-
+-const BINDING_KINDS: readonly ProviderAccountBindingKind[] = [
+-  "workspace",
+-  "agent",
+-  "mission",
+-  "thread",
+-  "provider_profile",
+-];
+-
+-/** Like native: every kind decodes, but only workspace and thread bindings can be written. */
+-function bindingKind(value: unknown, anyKnown = false): ProviderAccountBindingKind {
+-  const kind = BINDING_KINDS.find((candidate) => candidate === value);
+-  if (!kind) fail("ipc_rejected", "KalCode couldn't complete that request.", "internal");
+-  if (!anyKnown && kind !== "workspace" && kind !== "thread") {
+-    fail(
+-      "provider_account_binding_kind_unsupported",
+-      "That account binding scope isn't available in this KalCode build.",
+-    );
+-  }
+-  return kind;
+-}
+-
+-function seed(): ProviderAccount[] {
+-  return [
+-    account(IDS.claudePersonal, "claude-code", "Personal", "authenticated", true),
+-    account(IDS.codexPersonal, "codex", "Personal", "authenticated", true),
+-    account(IDS.codexWork, "codex", "Work", "not_authenticated", false),
+-    account(IDS.geminiPersonal, "gemini-cli", "Personal", "unknown", true),
+-  ];
+-}
+-
+-function account(
+-  id: string,
+-  providerId: string,
+-  displayName: string,
+-  authenticationState: ProviderAccount["authenticationState"],
+-  isDefault: boolean,
+-): ProviderAccount {
+-  return {
+-    id,
+-    providerId,
+-    displayName,
+-    providerReportedIdentity: null,
+-    authenticationState,
+-    isDefault,
+-    createdAt: CREATED_AT,
+-    lastUsedAt: null,
+-    lastCheckedAt: null,
+-    lastErrorCode: null,
+-    archivedAt: null,
+-  };
+-}
+-
+-export interface ProviderAccountsMemory {
+-  handlers: DashboardHandlers;
+-  /** Resolves active public metadata for the fixture thread runtime. */
+-  resolve(accountId: string, providerId: string): ProviderAccount;
+-  /** Deletes every binding scoped to a removed workspace (native `remove_workspace` does too). */
+-  forgetWorkspace(workspaceId: string): void;
+-}
+-
+-export function createProviderAccountsMemory(requireCore: () => void, empty = false): ProviderAccountsMemory {
+-  let accounts = empty ? [] : seed();
+-  let nextAccount = 400;
+-  let nextLogin = 1;
+-  const logins = new Map<string, { accountId: string; cancelled: boolean }>();
+-  const bindings = new Map<string, ProviderAccountBinding>();
+-
+-  const active = (id: unknown): ProviderAccount => {
+-    const safeId = accountId(id);
+-    const found = accounts.find((candidate) => candidate.id === safeId && candidate.archivedAt === null);
+-    if (!found) fail("provider_account_not_found", "That provider account isn't connected.");
+-    return found;
+-  };
+-  const replace = (next: ProviderAccount) => {
+-    accounts = accounts.map((candidate) => (candidate.id === next.id ? next : candidate));
+-    return next;
+-  };
+-  const ensureCodex = (id: unknown): ProviderAccount => {
+-    const found = active(id);
+-    if (found.providerId !== "codex") {
+-      fail("provider_account_mismatch", "That account belongs to a different provider.");
+-    }
+-    return found;
+-  };
+-  const ensureClaude = (id: unknown): ProviderAccount => {
+-    const found = active(id);
+-    if (found.providerId !== "claude-code") {
+-      fail("provider_account_mismatch", "That account belongs to a different provider.");
+-    }
+-    return found;
+-  };
+-  const ensureGemini = (id: unknown): ProviderAccount => {
+-    const found = active(id);
+-    if (found.providerId !== "gemini-cli") {
+-      fail("provider_account_mismatch", "That account belongs to a different provider.");
+-    }
+-    return found;
+-  };
+-
+-  const resolve = (id: string, provider: string): ProviderAccount => {
+-    // Like native thread create and rebind: a removed (archived) account has its own code.
+-    if (accounts.some((candidate) => candidate.id === accountId(id) && candidate.archivedAt !== null)) {
+-      fail(
+-        "provider_account_archived",
+-        "That account was removed from KalCode. Reconnect it or choose an active account.",
+-      );
+-    }
+-    const selected = active(id);
+-    if (selected.providerId !== provider) {
+-      fail("provider_account_mismatch", "That account belongs to a different provider.");
+-    }
+-    return selected;
+-  };
+-
+-  return {
+-    resolve,
+-    forgetWorkspace(workspaceId) {
+-      for (const [key, binding] of bindings) {
+-        if (binding.kind === "workspace" && binding.scopeId === workspaceId) bindings.delete(key);
+-      }
+-    },
+-    handlers: {
+-      provider_accounts_list: (args) => {
+-        requireCore();
+-        const filter = args.providerId == null ? null : providerId(args.providerId);
+-        return accounts
+-          .filter((candidate) => candidate.archivedAt === null && (filter === null || candidate.providerId === filter))
+-          .sort((a, b) => Number(b.isDefault) - Number(a.isDefault) || a.displayName.localeCompare(b.displayName));
+-      },
+-      provider_account_create: (args) => {
+-        requireCore();
+-        const provider = providerId(args.providerId);
+-        const displayName = label(args.displayName);
+-        if (
+-          accounts.some(
+-            (candidate) =>
+-              candidate.archivedAt === null &&
+-              candidate.providerId === provider &&
+-              candidate.displayName.localeCompare(displayName, undefined, { sensitivity: "accent" }) === 0,
+-          )
+-        ) {
+-          fail("provider_account_label_exists", "That provider already has an account with this label.");
+-        }
+-        const isDefault = !accounts.some(
+-          (candidate) => candidate.archivedAt === null && candidate.providerId === provider && candidate.isDefault,
+-        );
+-        const suffix = String(nextAccount++).padStart(12, "0");
+-        const created = account(`0192f3c4-0000-7000-8000-${suffix}`, provider, displayName, "unknown", isDefault);
+-        accounts = [...accounts, created];
+-        return created;
+-      },
+-      provider_account_rename: (args) => {
+-        requireCore();
+-        const current = active(args.accountId);
+-        const displayName = label(args.displayName);
+-        if (
+-          accounts.some(
+-            (candidate) =>
+-              candidate.id !== current.id &&
+-              candidate.archivedAt === null &&
+-              candidate.providerId === current.providerId &&
+-              candidate.displayName.localeCompare(displayName, undefined, { sensitivity: "accent" }) === 0,
+-          )
+-        ) {
+-          fail("provider_account_label_exists", "That provider already has an account with this label.");
+-        }
+-        return replace({ ...current, displayName });
+-      },
+-      provider_account_set_default: (args) => {
+-        requireCore();
+-        const current = active(args.accountId);
+-        accounts = accounts.map((candidate) =>
+-          candidate.providerId === current.providerId && candidate.archivedAt === null
+-            ? { ...candidate, isDefault: candidate.id === current.id }
+-            : candidate,
+-        );
+-        return active(current.id);
+-      },
+-      provider_account_archive: (args) => {
+-        requireCore();
+-        const current = active(args.accountId);
+-        const archived = replace({ ...current, isDefault: false, archivedAt: new Date().toISOString() });
+-        const survivor = accounts.find(
+-          (candidate) => candidate.providerId === current.providerId && candidate.archivedAt === null,
+-        );
+-        if (current.isDefault && survivor) replace({ ...survivor, isDefault: true });
+-        // Like native: archiving removes every binding that selected the account.
+-        for (const [key, binding] of bindings) if (binding.accountId === current.id) bindings.delete(key);
+-        return archived;
+-      },
+-      provider_account_bind: (args) => {
+-        requireCore();
+-        const provider = providerId(args.providerId);
+-        const selected = resolve(String(args.accountId), provider);
+-        const binding: ProviderAccountBinding = {
+-          providerId: provider,
+-          kind: bindingKind(args.kind),
+-          scopeId: accountId(args.scopeId),
+-          accountId: selected.id,
+-        };
+-        bindings.set(`${provider}:${binding.kind}:${binding.scopeId}`, binding);
+-        return binding;
+-      },
+-      provider_account_unbind: (args) => {
+-        requireCore();
+-        const provider = providerId(args.providerId);
+-        return bindings.delete(`${provider}:${bindingKind(args.kind)}:${accountId(args.scopeId)}`);
+-      },
+-      provider_account_bindings_list: (args) => {
+-        requireCore();
+-        const provider = args.providerId == null ? null : providerId(args.providerId);
+-        const kind = args.kind == null ? null : bindingKind(args.kind, true);
+-        const scope = args.scopeId == null ? null : accountId(args.scopeId);
+-        const order = (binding: ProviderAccountBinding) => `${binding.providerId} ${binding.kind} ${binding.scopeId}`;
+-        return [...bindings.values()]
+-          .filter(
+-            (binding) =>
+-              (provider === null || binding.providerId === provider) &&
+-              (kind === null || binding.kind === kind) &&
+-              (scope === null || binding.scopeId === scope) &&
+-              accounts.some((candidate) => candidate.id === binding.accountId && candidate.archivedAt === null),
+-          )
+-          .sort((a, b) => (order(a) < order(b) ? -1 : order(a) > order(b) ? 1 : 0));
+-      },
+-      provider_codex_account_refresh: (args) => {
+-        requireCore();
+-        const current = ensureCodex(args.accountId);
+-        return replace({ ...current, lastCheckedAt: new Date().toISOString(), lastErrorCode: null });
+-      },
+-      provider_codex_login_start: (args) => {
+-        requireCore();
+-        const current = ensureCodex(args.accountId);
+-        if ([...logins.values()].some((login) => login.accountId === current.id && !login.cancelled)) {
+-          fail("provider_account_busy", "That account already has a sign-in in progress.", "provider");
+-        }
+-        const loginHandle = `login-${nextLogin++}`;
+-        logins.set(loginHandle, { accountId: current.id, cancelled: false });
+-        return { loginHandle };
+-      },
+-      provider_codex_login_wait: (args) => {
+-        requireCore();
+-        const handle = typeof args.loginHandle === "string" ? args.loginHandle : "";
+-        const login = logins.get(handle);
+-        if (!login || login.cancelled) fail("provider_login_unknown", "That sign-in is no longer active.", "provider");
+-        logins.delete(handle);
+-        const current = ensureCodex(login.accountId);
+-        return replace({
+-          ...current,
+-          authenticationState: "authenticated",
+-          lastCheckedAt: new Date().toISOString(),
+-          lastErrorCode: null,
+-        });
+-      },
+-      provider_codex_login_cancel: (args) => {
+-        requireCore();
+-        const handle = typeof args.loginHandle === "string" ? args.loginHandle : "";
+-        const login = logins.get(handle);
+-        if (!login) fail("provider_login_unknown", "That sign-in is no longer active.", "provider");
+-        logins.set(handle, { ...login, cancelled: true });
+-      },
+-      provider_codex_logout: (args) => {
+-        requireCore();
+-        const current = ensureCodex(args.accountId);
+-        return replace({
+-          ...current,
+-          authenticationState: "not_authenticated",
+-          providerReportedIdentity: null,
+-          lastCheckedAt: new Date().toISOString(),
+-          lastErrorCode: null,
+-        });
+-      },
+-      provider_claude_account_refresh: (args) => {
+-        requireCore();
+-        const current = ensureClaude(args.accountId);
+-        return replace({ ...current, lastCheckedAt: new Date().toISOString(), lastErrorCode: null });
+-      },
+-      provider_claude_login_start: (args) => {
+-        requireCore();
+-        const current = ensureClaude(args.accountId);
+-        if ([...logins.values()].some((login) => login.accountId === current.id && !login.cancelled)) {
+-          fail("provider_account_busy", "That account already has a sign-in in progress.", "provider");
+-        }
+-        const loginHandle = `login-${nextLogin++}`;
+-        logins.set(loginHandle, { accountId: current.id, cancelled: false });
+-        return { loginHandle };
+-      },
+-      provider_claude_login_wait: (args) => {
+-        requireCore();
+-        const handle = typeof args.loginHandle === "string" ? args.loginHandle : "";
+-        const login = logins.get(handle);
+-        if (!login || login.cancelled) fail("provider_login_unknown", "That sign-in is no longer active.", "provider");
+-        logins.delete(handle);
+-        const current = ensureClaude(login.accountId);
+-        return replace({
+-          ...current,
+-          authenticationState: "authenticated",
+-          lastCheckedAt: new Date().toISOString(),
+-          lastErrorCode: null,
+-        });
+-      },
+-      provider_claude_login_cancel: (args) => {
+-        requireCore();
+-        const handle = typeof args.loginHandle === "string" ? args.loginHandle : "";
+-        const login = logins.get(handle);
+-        if (!login) fail("provider_login_unknown", "That sign-in is no longer active.", "provider");
+-        logins.set(handle, { ...login, cancelled: true });
+-      },
+-      provider_claude_logout: (args) => {
+-        requireCore();
+-        const current = ensureClaude(args.accountId);
+-        return replace({
+-          ...current,
+-          authenticationState: "not_authenticated",
+-          providerReportedIdentity: null,
+-          lastCheckedAt: new Date().toISOString(),
+-          lastErrorCode: null,
+-        });
+-      },
+-      provider_gemini_account_refresh: (args) => {
+-        requireCore();
+-        const current = ensureGemini(args.accountId);
+-        return replace({
+-          ...current,
+-          authenticationState: current.authenticationState === "authenticated" ? "authenticated" : "not_authenticated",
+-          lastCheckedAt: new Date().toISOString(),
+-          lastErrorCode: null,
+-        });
+-      },
+-      provider_gemini_login_start: (args) => {
+-        requireCore();
+-        const current = ensureGemini(args.accountId);
+-        if (current.authenticationState === "authenticated") {
+-          fail("provider_account_already_connected", "This managed Gemini account is already signed in.", "provider");
+-        }
+-        if ([...logins.values()].some((login) => login.accountId === current.id && !login.cancelled)) {
+-          fail("provider_account_busy", "That account already has a sign-in in progress.", "provider");
+-        }
+-        const loginHandle = `login-${nextLogin++}`;
+-        logins.set(loginHandle, { accountId: current.id, cancelled: false });
+-        return { loginHandle };
+-      },
+-      provider_gemini_login_wait: (args) => {
+-        requireCore();
+-        const handle = typeof args.loginHandle === "string" ? args.loginHandle : "";
+-        const login = logins.get(handle);
+-        if (!login || login.cancelled)
+-          fail("provider_login_unknown", "That Gemini sign-in is no longer active.", "provider");
+-        logins.delete(handle);
+-        const current = ensureGemini(login.accountId);
+-        return replace({
+-          ...current,
+-          authenticationState: "authenticated",
+-          lastCheckedAt: new Date().toISOString(),
+-          lastErrorCode: null,
+-        });
+-      },
+-      provider_gemini_login_cancel: (args) => {
+-        requireCore();
+-        const handle = typeof args.loginHandle === "string" ? args.loginHandle : "";
+-        const login = logins.get(handle);
+-        if (!login) fail("provider_login_unknown", "That Gemini sign-in is no longer active.", "provider");
+-        logins.set(handle, { ...login, cancelled: true });
+-      },
+-      provider_gemini_logout: (args) => {
+-        requireCore();
+-        const current = ensureGemini(args.accountId);
+-        return replace({
+-          ...current,
+-          authenticationState: "not_authenticated",
+-          providerReportedIdentity: null,
+-          lastCheckedAt: new Date().toISOString(),
+-          lastErrorCode: null,
+-        });
+-      },
+-    },
+-  };
+-}
++/**
++ * Deterministic provider-account test double for unit tests and the ui-test build only.
++ * It models public metadata and opaque login handles; it never models or stores credentials.
++ */
++import type { IpcError, ProviderAccount, ProviderAccountBinding, ProviderAccountBindingKind } from "@kalcode/protocol";
++import type { DashboardHandlers } from "./dashboard.ts";
++
++const IDS = {
++  claudePersonal: "0192f3c4-0000-7000-8000-000000000101",
++  codexPersonal: "0192f3c4-0000-7000-8000-000000000201",
++  codexWork: "0192f3c4-0000-7000-8000-000000000202",
++  geminiPersonal: "0192f3c4-0000-7000-8000-000000000301",
++} as const;
++
++const PROVIDERS = new Set(["claude-code", "codex", "gemini-cli"]);
++const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
++const PROVIDER_ID = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
++const CREATED_AT = "2026-09-24T12:00:00.000Z";
++
++function fail(code: string, message: string, category: IpcError["category"] = "validation"): never {
++  throw { category, code, message, retryable: false } satisfies IpcError;
++}
++
++function label(value: unknown): string {
++  const next = typeof value === "string" ? value.trim() : "";
++  const hasControlCharacter = [...next].some((character) => {
++    const code = character.charCodeAt(0);
++    return code <= 0x1f || code === 0x7f;
++  });
++  if (!next || [...next].length > 80 || hasControlCharacter) {
++    fail("provider_account_label_invalid", "Account labels must be between 1 and 80 visible characters.");
++  }
++  return next;
++}
++
++function providerId(value: unknown): string {
++  const next = typeof value === "string" ? value : "";
++  if (!PROVIDER_ID.test(next) || !PROVIDERS.has(next)) {
++    fail("provider_account_provider_invalid", "That provider doesn't support account metadata.");
++  }
++  return next;
++}
++
++function accountId(value: unknown): string {
++  const next = typeof value === "string" ? value : "";
++  if (!UUID.test(next)) fail("provider_account_id_invalid", "That account or binding id isn't valid.");
++  return next;
++}
++
++const BINDING_KINDS: readonly ProviderAccountBindingKind[] = [
++  "workspace",
++  "agent",
++  "mission",
++  "thread",
++  "provider_profile",
++];
++
++/** Like native: every kind decodes, but only workspace and thread bindings can be written. */
++function bindingKind(value: unknown, anyKnown = false): ProviderAccountBindingKind {
++  const kind = BINDING_KINDS.find((candidate) => candidate === value);
++  if (!kind) fail("ipc_rejected", "KalCode couldn't complete that request.", "internal");
++  if (!anyKnown && kind !== "workspace" && kind !== "thread") {
++    fail(
++      "provider_account_binding_kind_unsupported",
++      "That account binding scope isn't available in this KalCode build.",
++    );
++  }
++  return kind;
++}
++
++function seed(): ProviderAccount[] {
++  return [
++    account(IDS.claudePersonal, "claude-code", "Personal", "authenticated", true),
++    account(IDS.codexPersonal, "codex", "Personal", "authenticated", true),
++    account(IDS.codexWork, "codex", "Work", "authenticated", false),
++    account(IDS.geminiPersonal, "claude-code", "Work", "authenticated", false),
++  ];
++}
++
++function account(
++  id: string,
++  providerId: string,
++  displayName: string,
++  authenticationState: ProviderAccount["authenticationState"],
++  isDefault: boolean,
++): ProviderAccount {
++  return {
++    id,
++    providerId,
++    displayName,
++    providerReportedIdentity: null,
++    authenticationState,
++    isDefault,
++    createdAt: CREATED_AT,
++    lastUsedAt: null,
++    lastCheckedAt: null,
++    lastErrorCode: null,
++    archivedAt: null,
++  };
++}
++
++export interface ProviderAccountsMemory {
++  handlers: DashboardHandlers;
++  /** Resolves active public metadata for the fixture thread runtime. */
++  resolve(accountId: string, providerId: string): ProviderAccount;
++  /** Deletes every binding scoped to a removed workspace (native `remove_workspace` does too). */
++  forgetWorkspace(workspaceId: string): void;
++}
++
++export function createProviderAccountsMemory(requireCore: () => void, empty = false): ProviderAccountsMemory {
++  let accounts = empty ? [] : seed();
++  let nextAccount = 400;
++  let nextLogin = 1;
++  const logins = new Map<string, { accountId: string; cancelled: boolean }>();
++  const bindings = new Map<string, ProviderAccountBinding>();
++
++  const active = (id: unknown): ProviderAccount => {
++    const safeId = accountId(id);
++    const found = accounts.find((candidate) => candidate.id === safeId && candidate.archivedAt === null);
++    if (!found) fail("provider_account_not_found", "That provider account isn't connected.");
++    return found;
++  };
++  const replace = (next: ProviderAccount) => {
++    accounts = accounts.map((candidate) => (candidate.id === next.id ? next : candidate));
++    return next;
++  };
++  const ensureCodex = (id: unknown): ProviderAccount => {
++    const found = active(id);
++    if (found.providerId !== "codex") {
++      fail("provider_account_mismatch", "That account belongs to a different provider.");
++    }
++    return found;
++  };
++  const ensureClaude = (id: unknown): ProviderAccount => {
++    const found = active(id);
++    if (found.providerId !== "claude-code") {
++      fail("provider_account_mismatch", "That account belongs to a different provider.");
++    }
++    return found;
++  };
++  const ensureGemini = (id: unknown): ProviderAccount => {
++    const found = active(id);
++    if (found.providerId !== "gemini-cli") {
++      fail("provider_account_mismatch", "That account belongs to a different provider.");
++    }
++    return found;
++  };
++
++  const resolve = (id: string, provider: string): ProviderAccount => {
++    // Like native thread create and rebind: a removed (archived) account has its own code.
++    if (accounts.some((candidate) => candidate.id === accountId(id) && candidate.archivedAt !== null)) {
++      fail(
++        "provider_account_archived",
++        "That account was removed from KalCode. Reconnect it or choose an active account.",
++      );
++    }
++    const selected = active(id);
++    if (selected.providerId !== provider) {
++      fail("provider_account_mismatch", "That account belongs to a different provider.");
++    }
++    return selected;
++  };
++
++  return {
++    resolve,
++    forgetWorkspace(workspaceId) {
++      for (const [key, binding] of bindings) {
++        if (binding.kind === "workspace" && binding.scopeId === workspaceId) bindings.delete(key);
++      }
++    },
++    handlers: {
++      provider_accounts_list: (args) => {
++        requireCore();
++        const filter = args.providerId == null ? null : providerId(args.providerId);
++        return accounts
++          .filter((candidate) => candidate.archivedAt === null && (filter === null || candidate.providerId === filter))
++          .sort((a, b) => Number(b.isDefault) - Number(a.isDefault) || a.displayName.localeCompare(b.displayName));
++      },
++      provider_account_create: (args) => {
++        requireCore();
++        const provider = providerId(args.providerId);
++        const displayName = label(args.displayName);
++        if (
++          accounts.some(
++            (candidate) =>
++              candidate.archivedAt === null &&
++              candidate.providerId === provider &&
++              candidate.displayName.localeCompare(displayName, undefined, { sensitivity: "accent" }) === 0,
++          )
++        ) {
++          fail("provider_account_label_exists", "That provider already has an account with this label.");
++        }
++        const isDefault = !accounts.some(
++          (candidate) => candidate.archivedAt === null && candidate.providerId === provider && candidate.isDefault,
++        );
++        const suffix = String(nextAccount++).padStart(12, "0");
++        const created = account(`0192f3c4-0000-7000-8000-${suffix}`, provider, displayName, "unknown", isDefault);
++        accounts = [...accounts, created];
++        return created;
++      },
++      provider_account_rename: (args) => {
++        requireCore();
++        const current = active(args.accountId);
++        const displayName = label(args.displayName);
++        if (
++          accounts.some(
++            (candidate) =>
++              candidate.id !== current.id &&
++              candidate.archivedAt === null &&
++              candidate.providerId === current.providerId &&
++              candidate.displayName.localeCompare(displayName, undefined, { sensitivity: "accent" }) === 0,
++          )
++        ) {
++          fail("provider_account_label_exists", "That provider already has an account with this label.");
++        }
++        return replace({ ...current, displayName });
++      },
++      provider_account_set_default: (args) => {
++        requireCore();
++        const current = active(args.accountId);
++        accounts = accounts.map((candidate) =>
++          candidate.providerId === current.providerId && candidate.archivedAt === null
++            ? { ...candidate, isDefault: candidate.id === current.id }
++            : candidate,
++        );
++        return active(current.id);
++      },
++      provider_account_archive: (args) => {
++        requireCore();
++        const current = active(args.accountId);
++        const archived = replace({ ...current, isDefault: false, archivedAt: new Date().toISOString() });
++        const survivor = accounts.find(
++          (candidate) => candidate.providerId === current.providerId && candidate.archivedAt === null,
++        );
++        if (current.isDefault && survivor) replace({ ...survivor, isDefault: true });
++        // Like native: archiving removes every binding that selected the account.
++        for (const [key, binding] of bindings) if (binding.accountId === current.id) bindings.delete(key);
++        return archived;
++      },
++      provider_account_bind: (args) => {
++        requireCore();
++        const provider = providerId(args.providerId);
++        const selected = resolve(String(args.accountId), provider);
++        const binding: ProviderAccountBinding = {
++          providerId: provider,
++          kind: bindingKind(args.kind),
++          scopeId: accountId(args.scopeId),
++          accountId: selected.id,
++        };
++        bindings.set(`${provider}:${binding.kind}:${binding.scopeId}`, binding);
++        return binding;
++      },
++      provider_account_unbind: (args) => {
++        requireCore();
++        const provider = providerId(args.providerId);
++        return bindings.delete(`${provider}:${bindingKind(args.kind)}:${accountId(args.scopeId)}`);
++      },
++      provider_account_bindings_list: (args) => {
++        requireCore();
++        const provider = args.providerId == null ? null : providerId(args.providerId);
++        const kind = args.kind == null ? null : bindingKind(args.kind, true);
++        const scope = args.scopeId == null ? null : accountId(args.scopeId);
++        const order = (binding: ProviderAccountBinding) => `${binding.providerId} ${binding.kind} ${binding.scopeId}`;
++        return [...bindings.values()]
++          .filter(
++            (binding) =>
++              (provider === null || binding.providerId === provider) &&
++              (kind === null || binding.kind === kind) &&
++              (scope === null || binding.scopeId === scope) &&
++              accounts.some((candidate) => candidate.id === binding.accountId && candidate.archivedAt === null),
++          )
++          .sort((a, b) => (order(a) < order(b) ? -1 : order(a) > order(b) ? 1 : 0));
++      },
++      provider_codex_account_refresh: (args) => {
++        requireCore();
++        const current = ensureCodex(args.accountId);
++        return replace({ ...current, lastCheckedAt: new Date().toISOString(), lastErrorCode: null });
++      },
++      provider_codex_login_start: (args) => {
++        requireCore();
++        const current = ensureCodex(args.accountId);
++        if ([...logins.values()].some((login) => login.accountId === current.id && !login.cancelled)) {
++          fail("provider_account_busy", "That account already has a sign-in in progress.", "provider");
++        }
++        const loginHandle = `login-${nextLogin++}`;
++        logins.set(loginHandle, { accountId: current.id, cancelled: false });
++        return { loginHandle };
++      },
++      provider_codex_login_wait: (args) => {
++        requireCore();
++        const handle = typeof args.loginHandle === "string" ? args.loginHandle : "";
++        const login = logins.get(handle);
++        if (!login || login.cancelled) fail("provider_login_unknown", "That sign-in is no longer active.", "provider");
++        logins.delete(handle);
++        const current = ensureCodex(login.accountId);
++        return replace({
++          ...current,
++          authenticationState: "authenticated",
++          lastCheckedAt: new Date().toISOString(),
++          lastErrorCode: null,
++        });
++      },
++      provider_codex_login_cancel: (args) => {
++        requireCore();
++        const handle = typeof args.loginHandle === "string" ? args.loginHandle : "";
++        const login = logins.get(handle);
++        if (!login) fail("provider_login_unknown", "That sign-in is no longer active.", "provider");
++        logins.set(handle, { ...login, cancelled: true });
++      },
++      provider_codex_logout: (args) => {
++        requireCore();
++        const current = ensureCodex(args.accountId);
++        return replace({
++          ...current,
++          authenticationState: "not_authenticated",
++          providerReportedIdentity: null,
++          lastCheckedAt: new Date().toISOString(),
++          lastErrorCode: null,
++        });
++      },
++      provider_claude_account_refresh: (args) => {
++        requireCore();
++        const current = ensureClaude(args.accountId);
++        return replace({ ...current, lastCheckedAt: new Date().toISOString(), lastErrorCode: null });
++      },
++      provider_claude_login_start: (args) => {
++        requireCore();
++        const current = ensureClaude(args.accountId);
++        if ([...logins.values()].some((login) => login.accountId === current.id && !login.cancelled)) {
++          fail("provider_account_busy", "That account already has a sign-in in progress.", "provider");
++        }
++        const loginHandle = `login-${nextLogin++}`;
++        logins.set(loginHandle, { accountId: current.id, cancelled: false });
++        return { loginHandle };
++      },
++      provider_claude_login_wait: (args) => {
++        requireCore();
++        const handle = typeof args.loginHandle === "string" ? args.loginHandle : "";
++        const login = logins.get(handle);
++        if (!login || login.cancelled) fail("provider_login_unknown", "That sign-in is no longer active.", "provider");
++        logins.delete(handle);
++        const current = ensureClaude(login.accountId);
++        return replace({
++          ...current,
++          authenticationState: "authenticated",
++          lastCheckedAt: new Date().toISOString(),
++          lastErrorCode: null,
++        });
++      },
++      provider_claude_login_cancel: (args) => {
++        requireCore();
++        const handle = typeof args.loginHandle === "string" ? args.loginHandle : "";
++        const login = logins.get(handle);
++        if (!login) fail("provider_login_unknown", "That sign-in is no longer active.", "provider");
++        logins.set(handle, { ...login, cancelled: true });
++      },
++      provider_claude_logout: (args) => {
++        requireCore();
++        const current = ensureClaude(args.accountId);
++        return replace({
++          ...current,
++          authenticationState: "not_authenticated",
++          providerReportedIdentity: null,
++          lastCheckedAt: new Date().toISOString(),
++          lastErrorCode: null,
++        });
++      },
++      provider_gemini_account_refresh: (args) => {
++        requireCore();
++        const current = ensureGemini(args.accountId);
++        return replace({
++          ...current,
++          authenticationState: current.authenticationState === "authenticated" ? "authenticated" : "not_authenticated",
++          lastCheckedAt: new Date().toISOString(),
++          lastErrorCode: null,
++        });
++      },
++      provider_gemini_login_start: (args) => {
++        requireCore();
++        const current = ensureGemini(args.accountId);
++        if (current.authenticationState === "authenticated") {
++          fail("provider_account_already_connected", "This managed Gemini account is already signed in.", "provider");
++        }
++        if ([...logins.values()].some((login) => login.accountId === current.id && !login.cancelled)) {
++          fail("provider_account_busy", "That account already has a sign-in in progress.", "provider");
++        }
++        const loginHandle = `login-${nextLogin++}`;
++        logins.set(loginHandle, { accountId: current.id, cancelled: false });
++        return { loginHandle };
++      },
++      provider_gemini_login_wait: (args) => {
++        requireCore();
++        const handle = typeof args.loginHandle === "string" ? args.loginHandle : "";
++        const login = logins.get(handle);
++        if (!login || login.cancelled)
++          fail("provider_login_unknown", "That Gemini sign-in is no longer active.", "provider");
++        logins.delete(handle);
++        const current = ensureGemini(login.accountId);
++        return replace({
++          ...current,
++          authenticationState: "authenticated",
++          lastCheckedAt: new Date().toISOString(),
++          lastErrorCode: null,
++        });
++      },
++      provider_gemini_login_cancel: (args) => {
++        requireCore();
++        const handle = typeof args.loginHandle === "string" ? args.loginHandle : "";
++        const login = logins.get(handle);
++        if (!login) fail("provider_login_unknown", "That Gemini sign-in is no longer active.", "provider");
++        logins.set(handle, { ...login, cancelled: true });
++      },
++      provider_gemini_logout: (args) => {
++        requireCore();
++        const current = ensureGemini(args.accountId);
++        return replace({
++          ...current,
++          authenticationState: "not_authenticated",
++          providerReportedIdentity: null,
++          lastCheckedAt: new Date().toISOString(),
++          lastErrorCode: null,
++        });
++      },
++    },
++  };
++}
+diff --git a/apps/desktop/src/ipc/memory/threads.ts b/apps/desktop/src/ipc/memory/threads.ts
+index 2268cefe..df751121 100644
+--- a/apps/desktop/src/ipc/memory/threads.ts
++++ b/apps/desktop/src/ipc/memory/threads.ts
+@@ -1152,108 +1152,43 @@ function seed(threads: Map<string, MemThread>) {
+     threads.set(id, t);
+   };
+ 
++  const tool = (t: string, summary: string, status: "completed" | "running", m: number, resultSummary: string | null = null) => ({
++    tool: t, summary, status, resultSummary, requestedAt: minutesAgo(m), startedAt: minutesAgo(m), completedAt: status === "completed" ? minutesAgo(m) : null,
++  });
+   make(
+-    { name: "Fix OAuth Callback Race", status: "running_tool", currentActivity: "Run npm test", filesChanged: 3 },
+-    claude,
+-    kalcode,
+-    1,
+-    true,
+-    [
+-      [
+-        "user",
+-        "Fix the OAuth callback race in the login flow. Two tabs finishing sign-in at once can overwrite each other's session.",
+-      ],
+-      [
+-        "assistant",
+-        "The callback handler writes the session before checking the state parameter, so the second tab wins. I'll check the state first and make the write conditional.",
+-      ],
+-    ],
++    { name: "Browser redesign", status: "running_tool", currentActivity: "Edit BrowserPane.tsx", filesChanged: 4 },
++    claude, kalcode, 1, true,
+     [
+-      {
+-        tool: "Read",
+-        summary: "Read src/auth/callback.ts",
+-        status: "completed",
+-        resultSummary: null,
+-        requestedAt: minutesAgo(20),
+-        startedAt: minutesAgo(20),
+-        completedAt: minutesAgo(20),
+-      },
+-      {
+-        tool: "Bash",
+-        summary: "Run npm test",
+-        status: "running",
+-        resultSummary: null,
+-        requestedAt: minutesAgo(1),
+-        startedAt: minutesAgo(1),
+-        completedAt: null,
+-      },
++      ["user", "Redesign the Browser pane toolbar. One row, tighter spacing, and a clear loading state."],
++      ["assistant", "I'll merge navigation and the address field into one row and add a progress line under it while a page loads."],
+     ],
++    [tool("Read", "Read src/surfaces/browser/BrowserPane.tsx", "completed", 6), tool("Edit", "Edit src/surfaces/browser/BrowserPane.tsx", "running", 1)],
+   );
+   make(
+-    {
+-      name: "Add Dark Mode Toggle",
+-      status: "waiting_for_permission",
+-      currentActivity: "Waiting for approval: Run npm install lodash",
+-      pendingApprovals: 1,
+-      permissionMode: "auto",
+-    },
+-    codex,
+-    site,
+-    4,
+-    true,
++    { name: "Updater retry", status: "running_tool", currentActivity: "Run cargo test -p updater", filesChanged: 2, accountLabel: "Work" },
++    codex, kalcode, 2, true,
+     [
+-      ["user", "Add a dark mode toggle to the settings page."],
+-      ["assistant", "I need lodash for the debounce helper, so I'm asking to install it."],
++      ["user", "Retry a failed update download once before reporting it."],
++      ["assistant", "Added one retry with backoff around the download. Running the updater tests now."],
+     ],
++    [tool("Edit", "Edit crates/updater/src/download.rs", "completed", 4), tool("Bash", "Run cargo test -p updater", "running", 1)],
+   );
+   make(
+-    { name: "Write Unit Tests for Parser Module", status: "idle", unreadMessages: 1, filesChanged: 2 },
+-    claude,
+-    kalcode,
+-    12,
+-    true,
++    { name: "KalVoice waveform", status: "idle", unreadMessages: 1, filesChanged: 3, accountLabel: "Work" },
++    claude, kalcode, 6, true,
+     [
+-      ["user", "Write unit tests for the parser module."],
+-      ["assistant", "Added 14 tests covering nested lists, escapes and malformed input. All pass."],
++      ["user", "Smooth the KalVoice waveform while it listens."],
++      ["assistant", "The waveform now eases between levels instead of jumping. Tests pass."],
+     ],
+-    [
+-      {
+-        tool: "Bash",
+-        summary: "Run cargo test -p parser",
+-        status: "completed",
+-        resultSummary: "14 passed",
+-        requestedAt: minutesAgo(13),
+-        startedAt: minutesAgo(13),
+-        completedAt: minutesAgo(12),
+-      },
+-    ],
+-  );
+-  make(
+-    {
+-      name: "Migrate API to v2",
+-      status: "failed",
+-      error: {
+-        code: "provider_exited",
+-        message:
+-          "The provider stopped unexpectedly (exit code 1). The conversation is saved; resume the thread to continue.",
+-      },
+-    },
+-    claude,
+-    kalcode,
+-    55,
+-    false,
+-    [["user", "Migrate the API client to v2."]],
++    [tool("Bash", "Run pnpm test kalvoice", "completed", 7, "Passed")],
+   );
+   make(
+-    { name: "Update README with Install Steps", status: "interrupted", currentActivity: "Stopped by you" },
+-    codex,
+-    site,
+-    180,
+-    false,
++    { name: "Download page copy", status: "waiting_for_permission", currentActivity: "Waiting for approval: Run pnpm build", pendingApprovals: 1 },
++    codex, site, 3, true,
+     [
+-      ["user", "Update the README with install steps."],
+-      ["assistant", "I've drafted the prerequisites section."],
++      ["user", "Tighten the copy on the Download page."],
++      ["assistant", "Copy is updated. I'd like to run the site build to check it."],
+     ],
+   );
+-  make({ name: "Bump Deps", status: "completed" }, claude, kalcode, 60 * 26, false, [["user", "Bump deps."]], [], true);
++  make({ name: "Release notes", status: "completed", filesChanged: 1 }, codex, kalcode, 40, false, [["user", "Draft the release notes."], ["assistant", "Drafted."]]);
+ }
+diff --git a/apps/desktop/src/ipc/memoryTransport.ts b/apps/desktop/src/ipc/memoryTransport.ts
+index e7726f5d..139a6bdd 100644
+--- a/apps/desktop/src/ipc/memoryTransport.ts
++++ b/apps/desktop/src/ipc/memoryTransport.ts
+@@ -227,15 +227,15 @@ export function createMemoryTransport(
+   const startedAt = Date.now();
+   const info: AppInfo = {
+     name: "KalCode",
+-    version: "0.1.0",
+-    channel: "development",
++    version: "0.1.7",
++    channel: "stable",
+     platform: "windows",
+     arch: "x86_64",
+     flags: {
+       surfaces: SURFACES.map((id) => ({
+         id,
+         state: AVAILABLE_SURFACES.has(id) ? "available" : "gated",
+-        visible: true,
++        visible: AVAILABLE_SURFACES.has(id),
+       })),
+       // Every product feature is gated until its campaign merges (crates/native-core/src/flags.rs);
+       // development builds show gated features. Available everywhere, as in flags.rs: the pane
+@@ -248,7 +248,7 @@ export function createMemoryTransport(
+           (scenario === "threads-context" && (id === "context_drop" || id === "context_firewall"))
+             ? "available"
+             : "gated",
+-        visible: true,
++        visible: AVAILABLE_FEATURES.has(id),
+       })),
+     },
+   };
+@@ -395,7 +395,7 @@ export function createMemoryTransport(
+   const code = createMemoryWorkspaces({
+     emit: (event, workspaceId) => emit(event, { correlation: { workspaceId } }),
+     requireCore,
+-    preload: scenario === "code",
++    preload: scenario === "code" || scenario === "threads",
+   });
+ 
+   // Pane layouts (Z7-W1), stored per workspace like native.
+diff --git a/apps/desktop/src/ipc/memoryWorkspaces.ts b/apps/desktop/src/ipc/memoryWorkspaces.ts
+index bdcdea26..4c5a3dbd 100644
+--- a/apps/desktop/src/ipc/memoryWorkspaces.ts
++++ b/apps/desktop/src/ipc/memoryWorkspaces.ts
+@@ -118,7 +118,7 @@ export function createMemoryWorkspaces({
+   const tabs = new Map<string, Tab>();
+   let activeWorkspaceId: string | null = null;
+   const pickQueue: PickedFolder[] = [];
+-  const defaultPicks = ["kalcode-site", "api-server", "design-notes"];
++  const defaultPicks = ["kalcode", "api-server", "design-notes"];
+   let clock = Date.now() - 120_000;
+   const now = () => {
+     clock += 1000;
+@@ -179,14 +179,16 @@ export function createMemoryWorkspaces({
+ 
+   const gitLog = () =>
+     [
+-      `* ${c("33", "4c8d2f1")} ${c("1;36", "(")}${c("1;36", "HEAD -> ")}${c("1;32", "main")}${c("1;36", ", ")}${c("1;31", "origin/main")}${c("1;36", ")")} Open workspaces from the native picker`,
+-      `* ${c("33", "a17be09")} Stream terminal output over raw channels`,
+-      `${c("31", "|")}${c("32", "\\")}  `,
+-      `${c("31", "|")} * ${c("33", "9f03c44")} ${c("1;36", "(")}${c("1;32", "feature/tabs")}${c("1;36", ")")} Keep tabs alive while switching`,
+-      `${c("31", "|")}${c("31", "/")}  `,
+-      `* ${c("33", "5e2a7d0")} Design terminal palettes for both themes`,
+-      `* ${c("33", "0b3f6a2")} ${c("1;33", "(tag: v0.1.0)")} First release`,
++      `* ${c("33", "643b1ef")} ${c("1;36", "(")}${c("1;36", "HEAD -> ")}${c("1;32", "main")}${c("1;36", ", ")}${c("1;31", "origin/main")}${c("1;36", ")")} fix(kalvoice): stop a quick orb tap`,
++      `* ${c("33", "cb4408d")} feat(kalvoice): in-app Fn push-to-talk`,
++      `* ${c("33", "42f699c")} fix(updater): reconcile the previous install`,
++      `* ${c("33", "8788993")} feat(desktop): isolate Dev identity from Stable`,
++      `* ${c("33", "40cab1d")} feat(website): publish a build stamp`,
++      `* ${c("33", "03eeabf")} ${c("1;33", "(tag: v0.1.7)")} KalCode 0.1.7`,
+     ].join("\r\n");
++  // Film staging (capture-only): streamed test output.
++  const stream = (session: NonNullable<Tab["session"]>, lines: string[], ms = 140) =>
++    lines.forEach((line, i) => setTimeout(() => deliver(session, `${line}\r\n`), (i + 1) * ms));
+ 
+   const endSession = (tab: Tab, code: number, closedByUser: boolean) => {
+     const session = tab.session;
+@@ -229,8 +231,43 @@ export function createMemoryWorkspaces({
+       case "dir":
+         out(listing());
+         break;
++      case "pnpm":
++        stream(session, [
++          "",
++          `${c("1;36", " RUN ")} ${c("90", "v3  ~/Projects/kalcode/apps/desktop")}`,
++          "",
++          ` ${c("32", "✓")} src/surfaces/browser/BrowserPane.test.tsx ${c("90", "(18 tests)")}`,
++          ` ${c("32", "✓")} src/surfaces/browser/toolbar.test.tsx ${c("90", "(9 tests)")}`,
++          ` ${c("32", "✓")} src/surfaces/browser/loading.test.tsx ${c("90", "(6 tests)")}`,
++          ` ${c("32", "✓")} src/shell/navigation.test.tsx ${c("90", "(12 tests)")}`,
++          "",
++          ` ${c("90", "Test Files")}  ${c("1;32", "4 passed")} ${c("90", "(4)")}`,
++          ` ${c("90", "     Tests")}  ${c("1;32", "45 passed")} ${c("90", "(45)")}`,
++        ]);
++        break;
++      case "cargo":
++        stream(session, [
++          `${c("1;32", "   Compiling")} kalcode-updater v0.1.7`,
++          `${c("1;32", "    Finished")} test profile [unoptimized + debuginfo]`,
++          `${c("1;32", "     Running")} unittests src/lib.rs`,
++          "",
++          "running 24 tests",
++          `test download::retries_once_before_reporting ... ${c("32", "ok")}`,
++          `test download::backoff_waits_between_attempts ... ${c("32", "ok")}`,
++          `test install::reconciles_previous_install ... ${c("32", "ok")}`,
++          "",
++          `test result: ${c("32", "ok")}. 24 passed; 0 failed`,
++        ]);
++        break;
+       case "git":
+         if (rest[0] === "log") out(gitLog());
++        else if (rest[0] === "push")
++          stream(session, [
++            "Enumerating objects: 23, done.",
++            "Writing objects: 100% (14/14), 3.91 KiB | 3.91 MiB/s, done.",
++            "To github.com:you/kalcode.git",
++            `   ${c("33", "643b1ef")}..${c("33", "9d2c4a7")}  ${c("32", "main -> main")}`,
++          ], 180);
+         else out(`${c("1;31", "fatal:")} only 'git log' works in this test shell`);
+         break;
+       case "colors":
+@@ -351,7 +388,7 @@ export function createMemoryWorkspaces({
+     // A tab restored after KalCode closed while its shell was running.
+     const restored = addTab(api, "pwsh");
+     restored.info = { ...restored.info, startedAt: now(), endedAt: now() };
+-    const site = openFolder("kalcode-site", { emitEvent: true });
++    const site = openFolder("kalcode", { emitEvent: true });
+     const first = addTab(site, "pwsh");
+     startSession(first);
+     input(first, "git log --oneline --graph --color\r");
