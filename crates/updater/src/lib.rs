@@ -1332,7 +1332,22 @@ impl UpdateMachine {
         Ok(())
     }
 
-    pub fn begin_install(&mut self) -> Result<Candidate, UpdateError> {
+    /// Fails the operation `token` owns. A caller that never won admission, or whose operation
+    /// was already replaced, holds no current token: it gets `stale_update_operation` and the
+    /// machine is left untouched, so it can never fail (and reopen) another worker's operation.
+    pub fn fail_operation(
+        &mut self,
+        token: OperationToken,
+        public_message: impl Into<String>,
+    ) -> Result<(), UpdateError> {
+        self.check_token(token)?;
+        self.mark_failed(public_message);
+        Ok(())
+    }
+
+    /// Admits one install. The returned token identifies the owning operation; only it may fail
+    /// the install (`fail_operation`). A refusal changes nothing.
+    pub fn begin_install(&mut self) -> Result<(Candidate, OperationToken), UpdateError> {
         if self.status.phase != UpdatePhase::Ready {
             return Err(UpdateError::new(
                 "update_not_ready",
@@ -1345,8 +1360,9 @@ impl UpdateMachine {
                 "No verified update is ready to install.",
             )
         })?;
+        self.generation = self.generation.wrapping_add(1);
         self.status.phase = UpdatePhase::Installing;
-        Ok(candidate)
+        Ok((candidate, OperationToken(self.generation)))
     }
 
     pub fn begin_recovery(&mut self) -> Result<OperationToken, UpdateError> {

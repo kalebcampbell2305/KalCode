@@ -1,7 +1,7 @@
 #[cfg(windows)]
 use std::fs::OpenOptions;
 use std::fs::{self, File};
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 use std::io::Write;
 #[cfg(any(windows, target_os = "macos"))]
 use std::io::{Read, Seek, SeekFrom};
@@ -76,12 +76,15 @@ impl PreparedInstaller {
         metadata: &FeedMetadata,
         _expected_version: &str,
         _current_version: &str,
+        cancel: &dyn Fn() -> Result<(), UpdateError>,
     ) -> Result<Self, UpdateError> {
+        cancel()?;
         if !cfg!(windows) || bytes.get(..2) != Some(b"MZ") {
             return Err(installer_invalid());
         }
         ensure_prepared_directory(root)?;
         cleanup_prepared(root);
+        cancel()?;
 
         let path = root.join(name);
         if path.parent() != Some(root) || !is_safe_name(name) {
@@ -98,20 +101,34 @@ impl PreparedInstaller {
             // Recheck after the create-new open. If an attacker raced a parent swap, never write
             // or execute through the replacement path.
             reject_reparse(root)?;
-            file.write_all(bytes)
-                .map_err(|_| installer_storage_failed())?;
+            write_all_cancellable(&mut file, bytes, cancel)?;
             file.sync_all().map_err(|_| installer_storage_failed())?;
+            cancel()?;
             file.seek(SeekFrom::Start(0))
                 .map_err(|_| installer_storage_failed())?;
             verify_download_reader(&mut file, metadata)?;
+            cancel()?;
             verify_authenticode(&file, &path)?;
+            cancel()?;
             reject_reparse(root)
         })() {
             drop(file);
             let _ = fs::remove_file(&path);
             return Err(error);
         }
-        let binding = installation_binding()?;
+        let binding = match (|| {
+            cancel()?;
+            let binding = installation_binding()?;
+            cancel()?;
+            Ok(binding)
+        })() {
+            Ok(binding) => binding,
+            Err(error) => {
+                drop(file);
+                let _ = fs::remove_file(&path);
+                return Err(error);
+            }
+        };
         Ok(Self {
             path,
             file: Some(file),
@@ -146,6 +163,7 @@ impl PreparedInstaller {
         metadata: &FeedMetadata,
         expected_version: &str,
         current_version: &str,
+        cancel: &dyn Fn() -> Result<(), UpdateError>,
     ) -> Result<Self, UpdateError> {
         let prepared = macos::PreparedMacInstaller::prepare(
             root,
@@ -154,6 +172,7 @@ impl PreparedInstaller {
             metadata,
             expected_version,
             current_version,
+            cancel,
         )?;
         Ok(Self {
             path: prepared.dmg_path().to_path_buf(),
@@ -171,7 +190,9 @@ impl PreparedInstaller {
         _metadata: &FeedMetadata,
         _expected_version: &str,
         _current_version: &str,
+        cancel: &dyn Fn() -> Result<(), UpdateError>,
     ) -> Result<Self, UpdateError> {
+        cancel()?;
         Err(installer_invalid())
     }
 
@@ -209,6 +230,46 @@ impl PreparedInstaller {
     pub fn launch(self) -> Result<(), UpdateError> {
         Err(installer_invalid())
     }
+}
+
+/// Removes only preparation artifacts whose platform-specific ownership checks succeed. A valid
+/// pending macOS swap is protected because the post-exit helper still owns its staged bundle.
+/// `false` preserves a live native worker and temporarily denies another preparation.
+pub(super) fn cleanup_startup(
+    root: &Path,
+    protected: Option<&MacSwapAttempt>,
+) -> Result<bool, UpdateError> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::cleanup_startup(root, protected)
+    }
+    #[cfg(windows)]
+    {
+        let _ = protected;
+        ensure_prepared_directory(root)?;
+        cleanup_prepared(root);
+        Ok(true)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let _ = (root, protected);
+        Ok(true)
+    }
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn write_all_cancellable(
+    writer: &mut File,
+    bytes: &[u8],
+    cancel: &dyn Fn() -> Result<(), UpdateError>,
+) -> Result<(), UpdateError> {
+    for chunk in bytes.chunks(64 * 1024) {
+        cancel()?;
+        writer
+            .write_all(chunk)
+            .map_err(|_| installer_storage_failed())?;
+    }
+    cancel()
 }
 
 #[cfg(windows)]
@@ -285,6 +346,7 @@ fn ensure_one_plain_child(path: &Path) -> Result<(), UpdateError> {
 impl Drop for PreparedInstaller {
     fn drop(&mut self) {
         drop(self.file.take());
+        #[cfg(not(target_os = "macos"))]
         let _ = fs::remove_file(&self.path);
     }
 }
@@ -1064,5 +1126,54 @@ mod tests {
             "a held installer must deny its parent rename"
         );
         drop(held);
+    }
+
+    #[test]
+    fn windows_startup_cleanup_removes_only_strict_prepared_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let prepared = temp.path().join("updates").join("prepared");
+        ensure_prepared_directory(&prepared).unwrap();
+        let owned = prepared.join("prepared-stale.exe");
+        let unrelated = prepared.join("keep.exe");
+        let owned_name_directory = prepared.join("prepared-directory.exe");
+        fs::write(&owned, b"stale installer").unwrap();
+        fs::write(&unrelated, b"owner data").unwrap();
+        fs::create_dir(&owned_name_directory).unwrap();
+        fs::write(owned_name_directory.join("keep"), b"owner data").unwrap();
+
+        cleanup_startup(&prepared, None).unwrap();
+
+        assert!(!owned.exists());
+        assert_eq!(fs::read(&unrelated).unwrap(), b"owner data");
+        assert_eq!(
+            fs::read(owned_name_directory.join("keep")).unwrap(),
+            b"owner data"
+        );
+    }
+
+    #[test]
+    fn cancellable_installer_write_stops_between_bounded_chunks() {
+        use std::cell::Cell;
+
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("prepared-cancelled.exe");
+        let mut file = File::create(&path).unwrap();
+        let calls = Cell::new(0_u8);
+        let cancel = || {
+            calls.set(calls.get() + 1);
+            if calls.get() >= 2 {
+                Err(UpdateError::new(
+                    "update_preparation_cancelled",
+                    "Update preparation was cancelled.",
+                ))
+            } else {
+                Ok(())
+            }
+        };
+
+        let error = write_all_cancellable(&mut file, &[7_u8; 128 * 1024], &cancel).unwrap_err();
+
+        assert_eq!(error.code(), "update_preparation_cancelled");
+        assert_eq!(file.metadata().unwrap().len(), 64 * 1024);
     }
 }

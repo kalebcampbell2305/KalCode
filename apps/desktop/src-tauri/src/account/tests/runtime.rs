@@ -1934,6 +1934,139 @@ fn logout_revokes_first_and_waits_for_an_inflight_account_operation() {
     logout_complete_rx.recv().expect("logout completion");
 }
 
+fn stored_session_present(store: &TestStore) -> bool {
+    AccountSessionStore::new(store)
+        .expect("store")
+        .load()
+        .expect("load")
+        .is_some_and(|stored| stored.session().is_some())
+}
+
+#[test]
+fn exit_preflight_waits_for_an_inflight_sign_out_to_clear_credentials_before_exit() {
+    let store = Arc::new(TestStore::default());
+    let session =
+        SessionSecret::new(format!("kcs_{}", "a".repeat(43)), 1_900_000_000).expect("session");
+    let cached = CachedAccountSecret::new(
+        FREE_TOKEN.into(),
+        PublicAccount {
+            id: ACCOUNT_ID.into(),
+            email: "owner@example.com".into(),
+            activated_at: Some("2026-09-25T12:00:00.000Z".into()),
+        },
+    )
+    .expect("cache");
+    AccountSessionStore::new(store.as_ref())
+        .expect("store")
+        .save_full(Some(&session), None, Some(&cached), None)
+        .expect("seed");
+    let api = Arc::new(FakeApi::default());
+    api.accounts
+        .lock()
+        .expect("queue")
+        .push_back(Err(ApiError::Transport));
+    api.refreshes
+        .lock()
+        .expect("queue")
+        .push_back(Err(ApiError::Transport));
+    let runtime = Arc::new(runtime(api.clone(), store.clone()));
+    runtime.bootstrap().expect("bootstrap");
+    let lease = runtime.acquire_active_lease().expect("lease");
+    // This is the account command's synchronous linearization point, before blocking-pool
+    // dispatch and before coordinator draining. Exit must observe the accepted sign-out even
+    // though its credential-clearing body has not started yet.
+    let sign_out = runtime
+        .begin_sign_out_command()
+        .expect("sign-out command admission");
+    let coordinator = crate::runtime_coordinator::RuntimeCoordinator::new(runtime.clone());
+    assert_eq!(coordinator.lifecycle.pending(), (false, 0));
+    assert!(!coordinator.drain_for_exit(std::time::Duration::from_millis(20)));
+    assert!(stored_session_present(&store));
+
+    let gate = Arc::new(PollGate::default());
+    *api.refresh_gate.lock().expect("refresh gate") = Some(gate.clone());
+
+    // An account request holds the request lane across a slow API call. It holds no lifecycle
+    // lease, so the exit drain does not count it.
+    let refreshing = {
+        let runtime = runtime.clone();
+        std::thread::spawn(move || runtime.refresh().expect("stale refresh"))
+    };
+    gate.wait_until_entered();
+    // Sign-out revokes authority, then waits for the lane: credentials are not cleared yet.
+    let logging_out = { std::thread::spawn(move || sign_out.logout()) };
+    for _ in 0..10_000 {
+        if !runtime.validate_active_lease(&lease) {
+            break;
+        }
+        std::thread::yield_now();
+    }
+    assert!(!runtime.validate_active_lease(&lease));
+
+    // The install/quit preflight: lifecycle work is idle, but the sign-out has not finished, so
+    // exiting now would leave a valid stored session for the next launch. It must refuse.
+    assert_eq!(coordinator.lifecycle.pending(), (false, 0));
+    assert!(!coordinator.drain_for_exit(std::time::Duration::from_millis(200)));
+    assert!(stored_session_present(&store));
+
+    // Once the lane frees, sign-out clears credentials, and only then does the preflight pass.
+    gate.release();
+    assert!(coordinator.drain_for_exit(std::time::Duration::from_secs(10)));
+    assert!(!stored_session_present(&store));
+    assert_eq!(
+        logging_out
+            .join()
+            .expect("logout thread")
+            .expect("logout")
+            .phase,
+        AccountPhase::SignedOut
+    );
+    refreshing.join().expect("refresh thread");
+
+    // After exit commits, a new sign-out is refused rather than started and cut off mid-clear.
+    let refused = runtime
+        .logout()
+        .expect_err("sign-out after the exit commit");
+    assert_eq!(refused.code, "account_exit_in_progress");
+}
+
+#[test]
+fn abandoned_sign_out_command_releases_the_exit_waiter() {
+    let store = Arc::new(TestStore::default());
+    let runtime = Arc::new(runtime(Arc::new(FakeApi::default()), store));
+    let coordinator = crate::runtime_coordinator::RuntimeCoordinator::new(runtime.clone());
+    let sign_out = runtime
+        .begin_sign_out_command()
+        .expect("sign-out command admission");
+
+    assert!(!coordinator.drain_for_exit(std::time::Duration::from_millis(20)));
+    drop(sign_out);
+    assert!(coordinator.drain_for_exit(std::time::Duration::from_secs(1)));
+}
+
+#[test]
+fn denied_sign_out_command_has_no_account_or_credential_side_effects() {
+    let store = Arc::new(TestStore::default());
+    let session =
+        SessionSecret::new(format!("kcs_{}", "a".repeat(43)), 1_900_000_000).expect("session");
+    AccountSessionStore::new(store.as_ref())
+        .expect("store")
+        .save(Some(&session), None)
+        .expect("seed");
+    let runtime = Arc::new(runtime(Arc::new(FakeApi::default()), store.clone()));
+    let before = runtime.snapshot();
+    let coordinator = crate::runtime_coordinator::RuntimeCoordinator::new(runtime.clone());
+    assert!(coordinator.drain_for_exit(std::time::Duration::from_secs(1)));
+
+    let refused = runtime
+        .begin_sign_out_command()
+        .err()
+        .expect("exit-sealed sign-out must be denied");
+    assert_eq!(refused.code, "account_exit_in_progress");
+    assert_eq!(runtime.snapshot(), before);
+    assert!(stored_session_present(&store));
+}
+
 #[test]
 fn browser_launch_is_revalidated_at_the_effect_boundary() {
     let api = Arc::new(FakeApi::default());

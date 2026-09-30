@@ -133,6 +133,58 @@ impl Runtime {
         self.prepared = None;
         self.machine.set_channel(channel)
     }
+
+    /// Admits one install of the staged update. `Err` is a refusal and changes nothing. Once
+    /// `Ok`, the caller owns the updater; the inner result says whether the staged bytes still
+    /// match the verified release (a mismatch is the owner's failure to record).
+    fn admit_install(
+        &mut self,
+    ) -> Result<(OperationToken, Result<PreparedUpdate, UpdateError>), UpdateError> {
+        let (expected, token) = self.machine.begin_install()?;
+        let prepared = match self.prepared.take() {
+            None => Err(UpdateError::new(
+                "update_not_ready",
+                "No verified update is ready to install.",
+            )),
+            Some(prepared) if prepared.candidate != expected => Err(UpdateError::new(
+                "update_state_invalid",
+                "The prepared update no longer matches the verified release.",
+            )),
+            Some(prepared) => Ok(prepared),
+        };
+        Ok((token, prepared))
+    }
+
+    /// Admits one restore of the verified previous version. `Err` is a refusal and changes
+    /// nothing.
+    fn admit_recovery(&mut self) -> Result<(OperationToken, ()), UpdateError> {
+        self.machine.begin_recovery().map(|token| (token, ()))
+    }
+}
+
+fn lock_runtime(runtime: &Mutex<Runtime>) -> MutexGuard<'_, Runtime> {
+    runtime.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Runs an install or restore that must first win the updater's exclusive admission. A refused
+/// admission returns its error without touching the machine: the phase it was refused for
+/// belongs to another worker's operation. Once admitted, only this owner's token can record the
+/// failure, so a refused or stale request can never fail (and so reopen) an operation it does
+/// not own.
+fn run_owned_operation<A, T>(
+    runtime: &Mutex<Runtime>,
+    admit: impl FnOnce(&mut Runtime) -> Result<(OperationToken, A), UpdateError>,
+    operation: impl FnOnce(OperationToken, A) -> Result<T, UpdateError>,
+) -> Result<T, UpdateError> {
+    let (token, admitted) = admit(&mut lock_runtime(runtime))?;
+    let result = operation(token, admitted);
+    if let Err(error) = &result {
+        // A stale token means the operation was already replaced; nothing is ours to fail.
+        let _ = lock_runtime(runtime)
+            .machine
+            .fail_operation(token, error.to_string());
+    }
+    result
 }
 
 struct Inner {
@@ -145,6 +197,8 @@ struct Inner {
     rollback: RollbackCache,
     prepared_dir: std::path::PathBuf,
     before_exit: BeforeUpdaterExit,
+    preparation: crate::update_preparation::UpdatePreparation,
+    preparation_ready: bool,
     /// Dropping the sender stops the periodic re-check timer.
     periodic_stop: Mutex<Option<Sender<()>>>,
 }
@@ -162,6 +216,7 @@ impl DesktopUpdaterState {
     ) -> Self {
         let update_dir = data_dir.join("updates");
         let target = UpdateTarget::current().ok();
+        let mut preparation_ready = false;
         let (journal, mut machine) = match UpdateJournal::load(update_dir.join("updater.json")) {
             Ok(mut journal) => {
                 let channel = journal.state().channel;
@@ -172,10 +227,22 @@ impl DesktopUpdaterState {
                     .as_ref()
                     .and_then(|attempt| attempt.binding.as_ref())
                     .is_none_or(|binding| Some(binding.target) == target);
-                match target_matches
-                    .then(|| journal.reconcile_startup(current_version))
-                    .transpose()
-                {
+                // The helper still owns any journaled macOS swap. Preserve it while sweeping
+                // abandoned preparations, before reconciliation changes the pending record.
+                let cleanup = installer::cleanup_startup(
+                    &update_dir.join("prepared"),
+                    journal
+                        .state()
+                        .install_attempt
+                        .as_ref()
+                        .and_then(|attempt| attempt.mac_swap.as_ref()),
+                );
+                preparation_ready = matches!(cleanup, Ok(true));
+                match cleanup.and_then(|_ready| {
+                    target_matches
+                        .then(|| journal.reconcile_startup(current_version))
+                        .transpose()
+                }) {
                     Ok(None) => {
                         machine.mark_failed("KalCode couldn't verify the previous update target.");
                     }
@@ -233,12 +300,32 @@ impl DesktopUpdaterState {
             rollback,
             prepared_dir: update_dir.join("prepared"),
             before_exit,
+            preparation: crate::update_preparation::UpdatePreparation::default(),
+            preparation_ready,
             periodic_stop: Mutex::new(None),
         }))
     }
 
     pub fn check_in_background(&self) {
         self.spawn_background_check(any_phase);
+    }
+
+    pub fn cancel_preparation_for_exit(&self, timeout: Duration) -> bool {
+        self.0.preparation.cancel_and_wait(timeout)
+    }
+
+    pub fn reopen_preparation(&self) {
+        self.0.preparation.reopen();
+    }
+
+    fn begin_preparation(&self) -> Result<crate::update_preparation::Preparation<'_>, UpdateError> {
+        if !self.0.preparation_ready {
+            return Err(UpdateError::new(
+                "update_cleanup_failed",
+                "KalCode couldn't safely recover an earlier update preparation. Restart KalCode and try again.",
+            ));
+        }
+        self.0.preparation.begin().ok_or_else(preparation_cancelled)
     }
 
     /// The launch check's pipeline, gated on `periodic_recheck_allowed`.
@@ -301,10 +388,7 @@ impl DesktopUpdaterState {
     }
 
     fn runtime(&self) -> MutexGuard<'_, Runtime> {
-        self.0
-            .runtime
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+        lock_runtime(&self.0.runtime)
     }
 
     fn journal(&self) -> MutexGuard<'_, Option<UpdateJournal>> {
@@ -685,33 +769,26 @@ impl DesktopUpdaterState {
     }
 
     fn install(&self) -> Result<(), UpdateError> {
-        let result = self.install_inner();
-        if let Err(error) = &result {
-            self.runtime().machine.mark_failed(error.to_string());
-        }
-        result
+        run_owned_operation(
+            &self.0.runtime,
+            Runtime::admit_install,
+            |token, prepared| self.install_owned(token, prepared?),
+        )
     }
 
-    fn install_inner(&self) -> Result<(), UpdateError> {
-        let update = {
-            let mut runtime = self.runtime();
-            let expected = runtime.machine.begin_install()?;
-            let prepared = runtime.prepared.take().ok_or_else(|| {
-                UpdateError::new(
-                    "update_not_ready",
-                    "No verified update is ready to install.",
-                )
-            })?;
-            if prepared.candidate != expected {
-                runtime
-                    .machine
-                    .mark_failed("The prepared update no longer matches the verified release.");
-                return Err(UpdateError::new(
-                    "update_state_invalid",
-                    "The prepared update no longer matches the verified release.",
-                ));
+    /// The admitted install. Only its owner reaches here; see `run_owned_operation`.
+    fn install_owned(
+        &self,
+        token: OperationToken,
+        update: PreparedUpdate,
+    ) -> Result<(), UpdateError> {
+        let preparation = self.begin_preparation()?;
+        let cancel = || {
+            if preparation.cancelled() {
+                Err(preparation_cancelled())
+            } else {
+                Ok(())
             }
-            prepared
         };
         let public_key = self.key()?;
         verify_download(&update.bytes, &update.candidate.metadata)?;
@@ -732,9 +809,12 @@ impl DesktopUpdaterState {
             &update.candidate.metadata,
             &update.candidate.version,
             &self.0.current_version,
+            &cancel,
         )?;
         let binding = installer.binding().clone();
         let mac_swap = installer.mac_swap_attempt();
+        cancel()?;
+        self.runtime().machine.check_token(token)?;
         self.record_attempt(
             InstallKind::Upgrade,
             &self.0.current_version,
@@ -762,20 +842,26 @@ impl DesktopUpdaterState {
     }
 
     fn restore_previous(&self) -> Result<(), UpdateError> {
-        let result = self.restore_previous_inner();
-        if let Err(error) = &result {
-            self.runtime().machine.mark_failed(error.to_string());
-        }
-        result
+        let public_key = self.key()?.to_owned();
+        run_owned_operation(&self.0.runtime, Runtime::admit_recovery, |token, ()| {
+            self.restore_owned(token, &public_key)
+        })
     }
 
-    fn restore_previous_inner(&self) -> Result<(), UpdateError> {
-        let public_key = self.key()?.to_owned();
-        let token = self.runtime().machine.begin_recovery()?;
+    /// The admitted restore. Only its owner reaches here; see `run_owned_operation`.
+    fn restore_owned(&self, token: OperationToken, public_key: &str) -> Result<(), UpdateError> {
+        let preparation = self.begin_preparation()?;
+        let cancel = || {
+            if preparation.cancelled() {
+                Err(preparation_cancelled())
+            } else {
+                Ok(())
+            }
+        };
         let (artifact, bytes) = self
             .0
             .rollback
-            .load_bytes_verified(&public_key)?
+            .load_bytes_verified(public_key)?
             .ok_or_else(|| {
                 UpdateError::new(
                     "rollback_unavailable",
@@ -802,7 +888,7 @@ impl DesktopUpdaterState {
         verify_signature_for_metadata(
             &bytes,
             artifact.receipt().signature(),
-            &public_key,
+            public_key,
             &version,
             &metadata,
         )?;
@@ -813,9 +899,11 @@ impl DesktopUpdaterState {
             &metadata,
             &version,
             &self.0.current_version,
+            &cancel,
         )?;
         let binding = installer.binding().clone();
         let mac_swap = installer.mac_swap_attempt();
+        cancel()?;
         self.runtime().machine.check_token(token)?;
         self.record_attempt(
             InstallKind::Rollback,
@@ -964,7 +1052,7 @@ fn launch_after_quiescence<T>(
     if !(before_exit)() {
         return Err(UpdateError::new(
             "update_shutdown_failed",
-            "KalCode couldn't safely stop active work. The update was not started.",
+            "KalCode couldn't safely stop active work, so the update didn't start. Close sign-in or file dialogs and finish running work, then try again.",
         ));
     }
     launch()
@@ -1154,6 +1242,13 @@ fn network_error() -> UpdateError {
     )
 }
 
+fn preparation_cancelled() -> UpdateError {
+    UpdateError::new(
+        "update_cancelled",
+        "KalCode is closing. The update preparation was cancelled.",
+    )
+}
+
 fn into_ipc(error: UpdateError, command: &'static str) -> IpcError {
     KalError::new(ErrorCategory::Update, error.code(), error.to_string()).log_and_convert(command)
 }
@@ -1276,6 +1371,10 @@ mod tests {
             })
             .expect_err("a failed quiescence proof must block the installer");
             assert_eq!(error.code(), "update_shutdown_failed");
+            // The UI shows this message as-is; it must say what to do next.
+            assert!(error.to_string().ends_with(
+                "Close sign-in or file dialogs and finish running work, then try again."
+            ));
         }
 
         assert_eq!(preflight_calls.load(Ordering::SeqCst), 2);
@@ -1628,6 +1727,71 @@ mod tests {
         runtime
     }
 
+    /// `staged_runtime` with a verified previous version available, behind the updater's mutex.
+    fn staged_runtime_with_recovery() -> Mutex<Runtime> {
+        let mut runtime = staged_runtime();
+        runtime.machine.set_recovery_available(true);
+        Mutex::new(runtime)
+    }
+
+    fn never_runs<A>(_: OperationToken, _: A) -> Result<(), UpdateError> {
+        panic!("a refused install or restore must not run its operation")
+    }
+
+    #[test]
+    fn a_refused_install_or_restore_never_fails_the_operation_that_owns_the_updater() {
+        // Install A is admitted and still preparing its installer.
+        let runtime = staged_runtime_with_recovery();
+        let (install, prepared) = lock_runtime(&runtime).admit_install().unwrap();
+        assert_eq!(prepared.unwrap().candidate, candidate("1.2.4"));
+        let owned = lock_runtime(&runtime).machine.status().clone();
+        assert_eq!(owned.phase, UpdatePhase::Installing);
+
+        // B: a second install and a restore are refused through the production wrapper.
+        let refused = run_owned_operation(&runtime, Runtime::admit_install, never_runs);
+        assert_eq!(refused.unwrap_err().code(), "update_not_ready");
+        let refused = run_owned_operation(&runtime, Runtime::admit_recovery, never_runs);
+        assert_eq!(refused.unwrap_err().code(), "rollback_unavailable");
+        // C: the follow-up restore is still refused, because A still owns the updater.
+        let refused = run_owned_operation(&runtime, Runtime::admit_recovery, never_runs);
+        assert_eq!(refused.unwrap_err().code(), "rollback_unavailable");
+        {
+            let runtime = lock_runtime(&runtime);
+            assert_eq!(runtime.machine.status(), &owned);
+            runtime.machine.check_token(install).unwrap();
+        }
+
+        // Restore A: a refused install cannot invalidate its token (it would cancel a valid
+        // restore at its pre-record `check_token`).
+        let runtime = staged_runtime_with_recovery();
+        let restored = run_owned_operation(&runtime, Runtime::admit_recovery, |token, ()| {
+            let refused = run_owned_operation(&runtime, Runtime::admit_install, never_runs);
+            assert_eq!(refused.unwrap_err().code(), "update_not_ready");
+            lock_runtime(&runtime).machine.check_token(token)
+        });
+        assert_eq!(restored, Ok(()));
+
+        // The admitted owner's own failure is recorded, and only then may a restore start.
+        let runtime = staged_runtime_with_recovery();
+        let failed =
+            run_owned_operation(&runtime, Runtime::admit_install, |_, _| -> Result<(), _> {
+                Err(UpdateError::new(
+                    "update_launch_failed",
+                    "The installer didn't start.",
+                ))
+            });
+        assert_eq!(failed.unwrap_err().code(), "update_launch_failed");
+        {
+            let runtime = lock_runtime(&runtime);
+            assert_eq!(runtime.machine.status().phase, UpdatePhase::Failed);
+            assert_eq!(
+                runtime.machine.status().last_error.as_deref(),
+                Some("The installer didn't start.")
+            );
+        }
+        assert!(lock_runtime(&runtime).admit_recovery().is_ok());
+    }
+
     #[test]
     fn periodic_recheck_runs_only_from_a_settled_phase() {
         for (phase, allowed) in [
@@ -1663,7 +1827,10 @@ mod tests {
         assert!(runtime.active_check.is_none());
         let prepared = runtime.prepared.as_ref().expect("staged bytes kept");
         assert_eq!(prepared.candidate, candidate("1.2.4"));
-        assert_eq!(runtime.machine.begin_install().unwrap(), candidate("1.2.4"));
+        assert_eq!(
+            runtime.machine.begin_install().unwrap().0,
+            candidate("1.2.4")
+        );
     }
 
     #[test]

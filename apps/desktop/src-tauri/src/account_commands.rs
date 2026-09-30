@@ -156,12 +156,16 @@ pub async fn account_logout(
     coordinator: State<'_, Arc<crate::runtime_coordinator::RuntimeCoordinator>>,
 ) -> Result<AccountSnapshot, AccountRuntimeError> {
     let runtime = runtime.inner().clone();
+    // Linearize the sign-out before blocking-pool dispatch or runtime draining. If exit has
+    // already sealed, this returns without changing coordinator or account state. If dispatch is
+    // cancelled, dropping the owned permit releases the exit waiter.
+    let sign_out = runtime.begin_sign_out_command()?;
     let coordinator = coordinator.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         // Seal admission before waiting for account/network operations. Account logout revokes
         // authority before it drains its request lane. Cleanup truth is separately queryable.
         coordinator.request_drain(false);
-        let result = runtime.logout();
+        let result = sign_out.logout();
         coordinator.request_drain(false);
         if !coordinator.wait_drained(std::time::Duration::from_secs(30)) {
             tracing::warn!(event = "account.runtime_cleanup_incomplete");
