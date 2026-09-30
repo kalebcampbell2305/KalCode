@@ -591,6 +591,47 @@ test("preliminary staging and final publication produce byte-identical candidate
   );
 });
 
+test("an owner-waived update trial lowers only that artifact to the preliminary contract", async () => {
+  const input = fixture();
+  input.signaturePath = `${input.artifactPath}.windows-x86_64.sig`;
+  writeFileSync(
+    input.signaturePath,
+    signature("1.2.3", artifactBytes, releaseSigner, ["target:windows-x86_64", "channel:stable"]),
+  );
+  const pending = { ...input.qa, status: "preliminary-passed", updateTrial: null };
+  const common = { requestedChannel: "stable", publishedAt: "2026-09-25T12:00:00.000Z", notes: "Update." };
+  const final = await createPlatformUpdaterManifest({ ...common, artifacts: [{ ...input, target: "windows-x86_64" }] });
+  const waived = await createPlatformUpdaterManifest({
+    ...common,
+    artifacts: [{ ...input, qa: pending, target: "windows-x86_64", updateTrialWaived: true }],
+  });
+  assert.equal(JSON.stringify(waived), JSON.stringify(final));
+  // The waiver never excuses product checks or safeguards, and is only an explicit boolean on a final publication.
+  const broken = { ...pending, checks: { ...pending.checks, [Object.keys(pending.checks)[0]]: false } };
+  await assert.rejects(
+    createPlatformUpdaterManifest({
+      ...common,
+      artifacts: [{ ...input, qa: broken, target: "windows-x86_64", updateTrialWaived: true }],
+    }),
+    /product checks are incomplete/,
+  );
+  await assert.rejects(
+    createPlatformUpdaterManifest({
+      ...common,
+      artifacts: [{ ...input, qa: pending, target: "windows-x86_64", updateTrialWaived: "yes" }],
+    }),
+    /waiver applies only to a final publication/,
+  );
+  await assert.rejects(
+    createPlatformUpdaterManifest({
+      ...common,
+      qaPhase: "preliminary",
+      artifacts: [{ ...input, qa: pending, target: "windows-x86_64", updateTrialWaived: true }],
+    }),
+    /waiver applies only to a final publication/,
+  );
+});
+
 test("stable generators reject prerelease versions before artifact I/O", async () => {
   const input = fixture();
   input.build.version = "1.2.3-beta.1";
