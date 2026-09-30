@@ -245,6 +245,16 @@ describe("identity and templates", () => {
     refused(() => validateIdentity({ version: "0.1.7", commit: c, baselineVersion: "0.1.7" }), /must be lower/);
     refused(() => validateIdentity({ version: "0.1.7", commit: c, baselineVersion: "0.2.0" }), /must be lower/);
     refused(() => validateIdentity({ version: "0.1.7", commit: c, channel: "beta" }), /channel/);
+    const build = validateIdentity({ version: "0.1.7+779", commit: c, baselineVersion: "0.1.7" });
+    assert.equal(build.version, "0.1.7+779");
+    assert.equal(identityVars(build).fileVersion, "0.1.7_build779");
+    assert.equal(
+      validateIdentity({ version: "0.1.7+1000", commit: c, baselineVersion: "0.1.7+999" }).version,
+      "0.1.7+1000",
+    );
+    refused(() => validateIdentity({ version: "0.1.7+779", commit: c, baselineVersion: "0.1.7+779" }), /must be lower/);
+    refused(() => validateIdentity({ version: "0.1.7+0", commit: c }), /plain x\.y\.z/);
+    refused(() => validateIdentity({ version: "0.1.7+abc", commit: c }), /plain x\.y\.z/);
   });
 
   test("templates resolve nested references strictly and refuse leftovers", () => {

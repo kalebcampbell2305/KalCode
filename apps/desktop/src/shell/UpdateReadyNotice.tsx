@@ -4,6 +4,7 @@ import { AlertDialog } from "radix-ui";
 import { useEffect, useState } from "react";
 import type { KalCodeClient } from "../ipc/client.ts";
 import { toKalCodeError } from "../ipc/errors.ts";
+import { formatVersion, publicVersion, sameVersionBuild } from "../platform/version.ts";
 import { restartAndInstall } from "../surfaces/settings/updaterModel.ts";
 import styles from "./UpdateReadyNotice.module.css";
 
@@ -15,6 +16,8 @@ export const UPDATE_STATUS_POLL_MS = 60_000;
 /** A verified update that is ready; `version` is null when native didn't name it. */
 interface ReadyUpdate {
   version: string | null;
+  /** The running version, to tell a new build of the same public version apart. */
+  currentVersion?: string;
 }
 
 /**
@@ -43,7 +46,12 @@ export function UpdateReadyNotice({
     const read = async () => {
       try {
         const status = await client.updaterStatus();
-        if (active) setReady(status.phase === "ready" ? { version: status.availableVersion } : null);
+        if (active)
+          setReady(
+            status.phase === "ready"
+              ? { version: status.availableVersion, currentVersion: status.currentVersion }
+              : null,
+          );
       } catch {
         if (active) setReady(null);
       }
@@ -58,8 +66,13 @@ export function UpdateReadyNotice({
 
   // "Later" hides this version for the session; a newer ready version is announced again.
   const visible = ready !== null && !(dismissed !== null && dismissed.version === ready.version);
-  const name = ready?.version ? `KalCode ${ready.version}` : "A KalCode update";
-  const target = ready?.version ? `KalCode ${ready.version}` : "the new version";
+  const build = ready?.version ? sameVersionBuild(ready.currentVersion, ready.version) : null;
+  const title = !ready?.version
+    ? "A KalCode update is ready to install."
+    : build === null
+      ? `KalCode ${publicVersion(ready.version)} is ready to install.`
+      : `A new KalCode ${publicVersion(ready.version)} build is ready (build ${build}).`;
+  const target = ready?.version ? `KalCode ${formatVersion(ready.version)}` : "the new version";
 
   const install = async () => {
     setInstalling(true);
@@ -83,7 +96,7 @@ export function UpdateReadyNotice({
               <RefreshCw />
             </span>
             <div className={styles.text}>
-              <p className={styles.title}>{name} is ready to install.</p>
+              <p className={styles.title}>{title}</p>
               <p className={styles.detail}>Your work stays open until you restart.</p>
               <div className={styles.actions}>
                 <Button size="sm" variant="primary" onClick={() => setConfirming(true)}>
@@ -115,7 +128,7 @@ export function UpdateReadyNotice({
                 </Button>
               </AlertDialog.Cancel>
               <Button variant="primary" busy={installing} onClick={() => void install()}>
-                Restart and install{ready?.version ? ` ${ready.version}` : ""}
+                Restart and install{ready?.version ? ` ${formatVersion(ready.version)}` : ""}
               </Button>
             </div>
           </AlertDialog.Content>

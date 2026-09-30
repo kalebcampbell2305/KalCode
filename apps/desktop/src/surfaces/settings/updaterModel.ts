@@ -1,5 +1,6 @@
 import type { KalCodeClient } from "../../ipc/client.ts";
 import type { UpdateChannel, UpdateStatus } from "../../ipc/updater.ts";
+import { formatVersion, publicVersion, sameVersionBuild } from "../../platform/version.ts";
 
 const CHANNEL_LABELS: Record<UpdateChannel, string> = { stable: "Stable", beta: "Beta", dev: "Dev" };
 
@@ -36,19 +37,25 @@ export function updatePresentation(status: UpdateStatus): UpdatePresentation {
           ? Math.min(100, Math.round((status.downloadedBytes / status.totalBytes) * 100))
           : null;
       return {
-        label: status.availableVersion ? `Downloading KalCode ${status.availableVersion}` : "Downloading update",
+        label: status.availableVersion
+          ? `Downloading KalCode ${formatVersion(status.availableVersion)}`
+          : "Downloading update",
         detail: progress === null ? "Downloading and verifying the signed release." : `${progress}% downloaded`,
         progress,
       };
     }
     case "ready":
       return {
-        label: status.availableVersion ? `KalCode ${status.availableVersion} is ready` : "Update ready",
+        label: status.availableVersion ? readyLabel(status.currentVersion, status.availableVersion) : "Update ready",
         detail: "Your work stays open until you choose to restart and install.",
         progress: 100,
       };
     case "up_to_date":
-      return { label: "KalCode is up to date", detail: `Version ${status.currentVersion}`, progress: null };
+      return {
+        label: "KalCode is up to date",
+        detail: `Version ${formatVersion(status.currentVersion)}`,
+        progress: null,
+      };
     case "installing":
       return {
         label: "Restarting to install",
@@ -63,12 +70,23 @@ export function updatePresentation(status: UpdateStatus): UpdatePresentation {
       };
     default:
       return {
-        label: `KalCode ${status.currentVersion}`,
+        label: `KalCode ${formatVersion(status.currentVersion)}`,
         detail:
           "Updates download in the background only after their signatures and release metadata pass verification.",
         progress: null,
       };
   }
+}
+
+/**
+ * "A new KalCode 0.1.7 build is ready (build 780)" for a newer build of the running public
+ * version; "KalCode 0.1.8 build 900 is ready" across public versions.
+ */
+export function readyLabel(currentVersion: string | null | undefined, availableVersion: string): string {
+  const build = sameVersionBuild(currentVersion, availableVersion);
+  return build === null
+    ? `KalCode ${formatVersion(availableVersion)} is ready`
+    : `A new KalCode ${publicVersion(availableVersion)} build is ready (build ${build})`;
 }
 
 /**

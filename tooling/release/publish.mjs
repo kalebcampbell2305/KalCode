@@ -8,7 +8,6 @@ import { tmpdir } from "node:os";
 import { basename, join, relative } from "node:path";
 
 import {
-  appVersion,
   assertCleanTree,
   fail,
   formatBytes,
@@ -18,6 +17,7 @@ import {
   RELEASE_NOTES_DIR,
   ROOT,
   readJson,
+  releaseVersion,
   run,
   sha256File,
   stagingDir,
@@ -106,7 +106,7 @@ const D1_DATABASE = "kalcode-web";
 const wranglerBin = join(WEBSITE_DIR, "node_modules", "wrangler", "bin", "wrangler.js");
 const initializesAuthority = mode === "bootstrap";
 const publishesRemote = mode === "remote" || initializesAuthority;
-const version = appVersion();
+const version = releaseVersion();
 const outDir = stagingDir(version);
 let expectedWindowsFile;
 let expectedMacFile;

@@ -68,6 +68,22 @@ describe("UpdateReadyNotice", () => {
     expect(client.updaterInstall).not.toHaveBeenCalled();
   });
 
+  it("announces a new build of the running public version by its build number", async () => {
+    const client = fakeClient(async () => ({ ...ready, currentVersion: "0.1.7", availableVersion: "0.1.7+780" }));
+    renderNotice(client);
+    const notice = await findNotice();
+    expect(notice).toHaveTextContent("A new KalCode 0.1.7 build is ready (build 780).");
+    await userEvent.click(screen.getByRole("button", { name: "Restart to update" }));
+    expect(await screen.findByRole("alertdialog")).toHaveTextContent("restart into KalCode 0.1.7 build 780.");
+    expect(screen.getByRole("button", { name: "Restart and install 0.1.7 build 780" })).toBeInTheDocument();
+  });
+
+  it("names only the public version when the update crosses public versions", async () => {
+    const client = fakeClient(async () => ({ ...ready, currentVersion: "0.1.7+780", availableVersion: "0.1.8+900" }));
+    renderNotice(client);
+    expect(await findNotice()).toHaveTextContent("KalCode 0.1.8 is ready to install.");
+  });
+
   it("Later hides the notice for this session without installing", async () => {
     const client = fakeClient(async () => ready);
     renderNotice(client);

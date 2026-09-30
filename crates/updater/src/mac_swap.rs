@@ -127,6 +127,31 @@ pub fn remove_swapped_out_app(current: &Path, staged: &Path) -> Result<(), Updat
     std::fs::remove_dir_all(staged).map_err(|_| helper_error())
 }
 
+/// Whether a staged app's `Info.plist` identifies the exact release `expected_version`.
+///
+/// Release builds are `X.Y.Z+N` (public version plus internal build number). The bundle's
+/// `CFBundleShortVersionString` must be the exact release version, or its public `X.Y.Z` part
+/// when `CFBundleVersion` is exactly the build number `N`. A plain `X.Y.Z` release needs an exact
+/// `CFBundleShortVersionString`.
+#[must_use]
+pub fn bundle_version_matches(
+    short_version: &str,
+    bundle_version: Option<&str>,
+    expected_version: &str,
+) -> bool {
+    if short_version == expected_version {
+        return true;
+    }
+    let Some((public, build)) = expected_version.split_once('+') else {
+        return false;
+    };
+    !public.is_empty()
+        && !build.is_empty()
+        && build.bytes().all(|byte| byte.is_ascii_digit())
+        && short_version == public
+        && bundle_version == Some(build)
+}
+
 fn helper_error() -> UpdateError {
     UpdateError::new(
         "update_helper_failed",
@@ -151,6 +176,31 @@ mod tests {
         ] {
             assert!(validate_swap_paths(&current, &invalid).is_err());
         }
+    }
+
+    #[test]
+    fn bundle_version_accepts_the_full_build_or_public_version_with_its_build_number() {
+        assert!(bundle_version_matches("0.1.7", None, "0.1.7"));
+        assert!(bundle_version_matches("0.1.7", Some("0.1.7"), "0.1.7"));
+        assert!(bundle_version_matches("0.1.7+780", None, "0.1.7+780"));
+        assert!(bundle_version_matches(
+            "0.1.7+780",
+            Some("780"),
+            "0.1.7+780"
+        ));
+        assert!(bundle_version_matches("0.1.7", Some("780"), "0.1.7+780"));
+
+        assert!(!bundle_version_matches("0.1.7", None, "0.1.7+780"));
+        assert!(!bundle_version_matches("0.1.7", Some("779"), "0.1.7+780"));
+        assert!(!bundle_version_matches("0.1.7", Some("0.1.7"), "0.1.7+780"));
+        assert!(!bundle_version_matches("0.1.6", Some("780"), "0.1.7+780"));
+        assert!(!bundle_version_matches(
+            "0.1.7+779",
+            Some("780"),
+            "0.1.7+780"
+        ));
+        assert!(!bundle_version_matches("", Some(""), "+"));
+        assert!(!bundle_version_matches("0.1.7", Some("x"), "0.1.7+x"));
     }
 
     #[test]

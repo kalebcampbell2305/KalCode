@@ -6,6 +6,7 @@ import type {
   ResourceKind,
   TalkRoute,
 } from "@kalcode/protocol";
+import { formatVersion } from "../platform/version.ts";
 
 export type EventTone = "live" | "success" | "waiting" | "danger" | "idle";
 
@@ -170,7 +171,7 @@ export function describeEvent(event: EventEnvelope): EventDescription {
     case "app.started":
       return {
         title: "KalCode started",
-        detail: `Version ${event.payload.version}, ${event.payload.channel} build`,
+        detail: `Version ${formatVersion(event.payload.version)}, ${event.payload.channel} build`,
         tone: "live",
       };
     case "app.stopped":

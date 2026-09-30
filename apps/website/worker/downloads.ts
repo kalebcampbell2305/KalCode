@@ -83,7 +83,8 @@ export const LATEST_CACHE = "public, max-age=300, must-revalidate";
 export const MANIFEST_CACHE = "public, max-age=60, must-revalidate";
 const NO_STORE = "no-store";
 
-const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$/;
+/** Semver, optionally with an internal build number: `0.1.7` or `0.1.7+779`. */
+const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[1-9]\d*)?$/;
 /** Conservative file-name charset: safe as an R2 key segment and inside a quoted header value. */
 const FILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const PINNED = /^\/download\/([^/]+)\/([^/]+)$/;

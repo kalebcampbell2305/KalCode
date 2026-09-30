@@ -30,12 +30,12 @@ import { join, relative } from "node:path";
 import { verifyComponentNotices } from "./component-notices.mjs";
 import { guardianInstalledProblems } from "./guardian-packaging.mjs";
 import {
-  appVersion,
   fail,
   powershell,
   powershellJson,
   psQuote,
   readJson,
+  releaseVersion,
   sha256File,
   stagingDir,
   writeJson,
@@ -67,7 +67,7 @@ const WINDOWS_KALVOICE_FEATURE = "kalvoice-whisper";
 const WINDOWS_NOTICE_RESOURCE_PATH = "third_party/kalvoice-notices";
 const WINDOWS_UPDATER_TARGET = "windows-x86_64";
 
-const version = appVersion();
+const version = releaseVersion();
 const outDir = stagingDir(version);
 const buildPath = join(outDir, "build.json");
 if (!existsSync(buildPath)) fail(`No build record at ${buildPath}. Run pnpm release:build first.`);

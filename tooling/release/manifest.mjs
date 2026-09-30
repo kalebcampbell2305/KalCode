@@ -8,7 +8,7 @@ export const WINDOWS_LABEL = "Windows 10 (1809) or later, 64-bit";
 export const MACOS_ARM64_LABEL = "macOS 14 or later, Apple silicon";
 export const OS_LIST = ["windows", "macos", "linux"];
 
-const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$/;
+const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[1-9]\d*)?$/;
 const FILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 const COMMIT = /^[0-9a-f]{40}$/;
@@ -40,9 +40,12 @@ export function emptyManifest() {
   return { schemaVersion: SCHEMA_VERSION, latest: null, unavailable: [WINDOWS_UNPUBLISHED, ...NOT_BUILT] };
 }
 
-/** Updates-page anchor for a version, matching the site's `id="release-0-1-0"` convention. */
+/**
+ * Updates-page anchor for a version, matching the site's `id="release-0-1-0"` convention. A build
+ * of a public version ("0.1.7+779") links to that public version's notes.
+ */
 export function notesAnchor(version) {
-  return `release-${version.replaceAll(".", "-")}`;
+  return `release-${version.replace(/\+\d+$/, "").replaceAll(".", "-")}`;
 }
 
 /**

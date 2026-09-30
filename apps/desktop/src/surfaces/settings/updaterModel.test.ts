@@ -22,6 +22,23 @@ describe("updatePresentation", () => {
     });
   });
 
+  it("names a new build of the same public version by its build number", () => {
+    const current = { ...base, currentVersion: "0.1.7" };
+    expect(updatePresentation({ ...current, phase: "ready", availableVersion: "0.1.7+780" }).label).toBe(
+      "A new KalCode 0.1.7 build is ready (build 780)",
+    );
+    expect(updatePresentation({ ...current, phase: "ready", availableVersion: "0.1.8+900" }).label).toBe(
+      "KalCode 0.1.8 build 900 is ready",
+    );
+    expect(updatePresentation({ ...current, phase: "downloading", availableVersion: "0.1.7+780" }).label).toBe(
+      "Downloading KalCode 0.1.7 build 780",
+    );
+    expect(updatePresentation({ ...base, phase: "up_to_date", currentVersion: "0.1.7+780" }).detail).toBe(
+      "Version 0.1.7 build 780",
+    );
+    expect(updatePresentation({ ...base, currentVersion: "0.1.7+780" }).label).toBe("KalCode 0.1.7 build 780");
+  });
+
   it("bounds download progress and keeps unknown totals indeterminate", () => {
     expect(updatePresentation({ ...base, phase: "downloading", downloadedBytes: 75, totalBytes: 100 }).progress).toBe(
       75,

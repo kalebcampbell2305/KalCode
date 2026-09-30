@@ -445,6 +445,11 @@ describe("lifecycle status", () => {
     assert.equal(compareVersions("1.0.0", "1.0.0"), 0);
     assert.equal(compareVersions("1.0.0-beta.1", "1.0.0"), -1);
     assert.equal(compareVersions("x", "1.0.0"), null);
+    assert.equal(compareVersions("0.1.7+1", "0.1.7"), 1);
+    assert.equal(compareVersions("0.1.7+779", "0.1.7+780"), -1);
+    assert.equal(compareVersions("0.1.7+1000", "0.1.7+999"), 1);
+    assert.equal(compareVersions("0.1.7+9999", "0.1.8"), -1);
+    assert.equal(compareVersions("0.1.7+779", "0.1.7+779"), 0);
   });
 
   test("observations come from the stamp, the Stable feed and the catalog, and never throw", async () => {
@@ -549,7 +554,8 @@ describe("lifecycle status", () => {
     f.setOriginMain(f.commit("fix(updater): after release"));
     const after = computeStatus(policy, f.git, current);
     assert.equal(after.targets.desktop.state, "unshipped");
-    assert.match(after.targets.desktop.reason, /need a new version/);
+    assert.match(after.targets.desktop.reason, /need a new 1\.2\.0 build/);
+    assert.doesNotMatch(after.targets.desktop.reason, /new version/);
     assert.deepEqual(
       after.targets.desktop.commits.map((c) => c.subject),
       ["fix(updater): after release"],
@@ -562,6 +568,35 @@ describe("lifecycle status", () => {
     assert.match(dark.targets.desktop.reason, /production feed unreachable/);
     assert.match(renderStatus(after), /unshipped desktop/);
     assert.match(renderStatus(after, { markdown: true }), /Unshipped production lanes: desktop/);
+  });
+
+  test("desktop: a published build of the main version is shipped until desktop changes follow it", () => {
+    const f = makeFixture({ version: "1.2.0" });
+    const release = f.base;
+    const build = obsWith({ feed: { version: "1.2.0+41", commit: release, channel: "stable" } });
+    const current = computeStatus(policy, f.git, build);
+    assert.equal(current.targets.desktop.state, "shipped");
+    assert.match(current.targets.desktop.reason, /published 1\.2\.0\+41 includes every desktop change/);
+
+    f.write("docs/releases/1.2.0+41.md", "# 1.2.0 build 41\n");
+    f.setOriginMain(f.commit("docs(release): bind build 41 notes"));
+    const notes = computeStatus(policy, f.git, build);
+    assert.equal(notes.targets.desktop.state, "shipped");
+    assert.equal(notes.targets["release-notes"].state, "shipped");
+
+    f.write("crates/updater/src/lib.rs", "pub fn fixed() {}\n");
+    f.setOriginMain(f.commit("fix(updater): after build 41"));
+    const after = computeStatus(policy, f.git, build);
+    assert.equal(after.targets.desktop.state, "unshipped");
+    assert.match(after.targets.desktop.reason, /need a new 1\.2\.0 build/);
+    assert.deepEqual(
+      after.targets.desktop.commits.map((c) => c.subject),
+      ["fix(updater): after build 41"],
+    );
+
+    f.write("docs/releases/1.2.0+43.md", "# 1.2.0 build 43\n");
+    f.setOriginMain(f.commit("docs(release): draft build 43 notes"));
+    assert.equal(computeStatus(policy, f.git, build).targets["release-notes"].state, "unshipped");
   });
 
   test("release notes: notes for the published or an older version are shipped; newer notes are not", () => {

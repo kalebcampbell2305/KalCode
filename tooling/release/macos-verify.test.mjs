@@ -403,3 +403,44 @@ test("an attach error permits workspace removal only after bounded detach succee
   assert.ok(calls.some(([, command, args]) => command === "hdiutil" && args[0] === "detach"));
   assert.equal(removed, true);
 });
+
+test("a build candidate needs its full version and the matching CFBundleVersion", async () => {
+  const buildArtifact = resolve("KalCode_1.2.3_build41_arm64.dmg");
+  const { notarySubmissionId: _id, ...base } = record;
+  const candidate = {
+    ...base,
+    version: "1.2.3+41",
+    file: "KalCode_1.2.3_build41_arm64.dmg",
+    kind: "macos-signed-candidate",
+    teamId: team,
+    releaseDescriptorEligible: false,
+    releaseDescriptorBlockedReason: "notarization_pending",
+    notarized: false,
+    stapled: false,
+    compiledChannelVerification: { ...record.compiledChannelVerification, version: "1.2.3+41" },
+  };
+  const verify = (bundleVersion) => {
+    const { runner, fs } = fixture();
+    const capture = runner.capture;
+    runner.capture = (command, args, options) => {
+      if (args[0] === "--build-info")
+        return JSON.stringify({ schemaVersion: 1, version: "1.2.3+41", channel: "stable", testHooks: false });
+      if (command === "plutil" && args[1] === "CFBundleShortVersionString") return "1.2.3+41";
+      if (command === "plutil" && args[1] === "CFBundleVersion") return bundleVersion;
+      return capture(command, args, options);
+    };
+    const lstat = fs.lstat;
+    fs.lstat = (path) => lstat(path === buildArtifact ? artifact : path);
+    return verifyMacCandidate({
+      artifactPath: buildArtifact,
+      record: candidate,
+      expectedTeamId: team,
+      runner,
+      fs,
+      hashFile: async (path) => fixtureHash(path),
+    });
+  };
+  assert.equal((await verify("41")).status, "signed-candidate-verified");
+  await assert.rejects(verify("40"), /build number/);
+  await assert.rejects(verify("1.2.3+41"), /build number/);
+});
