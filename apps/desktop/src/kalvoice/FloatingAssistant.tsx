@@ -82,7 +82,7 @@ export function FloatingAssistant() {
   const holding = useRef(false);
   const holdTimer = useRef<number | null>(null);
   const heldPointer = useRef<number | null>(null);
-  const pointerRelease = useRef<((event: PointerEvent) => void) | null>(null);
+  const removeHoldListeners = useRef<(() => void) | null>(null);
   const stopListening = useRef(kv.stopListening);
   stopListening.current = kv.stopListening;
 
@@ -109,10 +109,7 @@ export function FloatingAssistant() {
 
   useEffect(
     () => () => {
-      if (pointerRelease.current) {
-        window.removeEventListener("pointerup", pointerRelease.current, true);
-        window.removeEventListener("pointercancel", pointerRelease.current, true);
-      }
+      removeHoldListeners.current?.();
       if (holdTimer.current !== null) window.clearTimeout(holdTimer.current);
       if (holding.current) void stopListening.current();
     },
@@ -217,11 +214,8 @@ export function FloatingAssistant() {
 
   // Press and hold on the orb: the pointer alternative to the push-to-talk key.
   const clearHoldGuards = () => {
-    if (pointerRelease.current) {
-      window.removeEventListener("pointerup", pointerRelease.current, true);
-      window.removeEventListener("pointercancel", pointerRelease.current, true);
-      pointerRelease.current = null;
-    }
+    removeHoldListeners.current?.();
+    removeHoldListeners.current = null;
     heldPointer.current = null;
     if (holdTimer.current !== null) {
       window.clearTimeout(holdTimer.current);
@@ -237,15 +231,22 @@ export function FloatingAssistant() {
   const holdStart = (pointerId?: number) => {
     if (holding.current || state.phase === "listening") return;
     holding.current = true;
+    heldPointer.current = pointerId ?? null;
+    const release = (event: PointerEvent) => {
+      if (event.pointerId === heldPointer.current) holdEnd();
+    };
+    // Leaving the window (Alt-Tab, a system prompt) can swallow the key-up or pointer-up.
+    const blur = () => holdEnd();
     if (pointerId !== undefined) {
-      heldPointer.current = pointerId;
-      const release = (event: PointerEvent) => {
-        if (event.pointerId === heldPointer.current) holdEnd();
-      };
-      pointerRelease.current = release;
       window.addEventListener("pointerup", release, true);
       window.addEventListener("pointercancel", release, true);
     }
+    window.addEventListener("blur", blur);
+    removeHoldListeners.current = () => {
+      window.removeEventListener("pointerup", release, true);
+      window.removeEventListener("pointercancel", release, true);
+      window.removeEventListener("blur", blur);
+    };
     holdTimer.current = window.setTimeout(holdEnd, MAX_ORB_LISTENING_MS);
     void kv.startListening();
   };
@@ -309,6 +310,7 @@ export function FloatingAssistant() {
                 }}
                 onPointerUp={holdEnd}
                 onPointerCancel={holdEnd}
+                onLostPointerCapture={holdEnd}
                 onKeyDown={(e) => {
                   if ((e.key === " " || e.key === "Enter") && !e.repeat) {
                     e.preventDefault();

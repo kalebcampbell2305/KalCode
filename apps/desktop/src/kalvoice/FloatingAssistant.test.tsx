@@ -81,6 +81,28 @@ describe("KalVoice orb hold", () => {
     expect(stop).toHaveBeenCalledOnce();
   });
 
+  it("ends listening when the orb loses pointer capture", () => {
+    const { orb, stop } = mount();
+    fireEvent.pointerDown(orb, { button: 0, pointerId: 17 });
+
+    fireEvent.lostPointerCapture(orb, { pointerId: 17 });
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("ends a pointer or keyboard hold when the window loses focus", () => {
+    const { orb, start, stop } = mount();
+    fireEvent.pointerDown(orb, { button: 0, pointerId: 19 });
+    fireEvent.blur(window);
+    expect(stop).toHaveBeenCalledOnce();
+
+    fireEvent.keyDown(orb, { key: " " });
+    expect(start).toHaveBeenCalledTimes(2);
+    fireEvent.blur(window);
+    expect(stop).toHaveBeenCalledTimes(2);
+    fireEvent.pointerUp(orb, { button: 0, pointerId: 19 });
+    expect(stop).toHaveBeenCalledTimes(2);
+  });
+
   it("stops listening at the native 120-second recording limit", () => {
     vi.useFakeTimers();
     const { orb, stop } = mount();
