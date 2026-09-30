@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-kalvoice-fn-input"
+description = "Enables the kalvoice_fn_input command without any pre-configured scope."
+commands.allow = ["kalvoice_fn_input"]
+
+[[permission]]
+identifier = "deny-kalvoice-fn-input"
+description = "Denies the kalvoice_fn_input command without any pre-configured scope."
+commands.deny = ["kalvoice_fn_input"]

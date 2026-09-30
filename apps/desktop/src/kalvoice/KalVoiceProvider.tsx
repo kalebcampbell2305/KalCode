@@ -27,6 +27,7 @@ import {
 } from "react";
 import { useOptionalAccount } from "../account/AccountProvider.tsx";
 import { type KalCodeError, toKalCodeError } from "../ipc/errors.ts";
+import { DESKTOP_PLATFORM } from "../platform/keyboard.ts";
 import { useRuntime } from "../runtime/RuntimeProvider.tsx";
 import { useUiIntents } from "../runtime/uiIntents.tsx";
 import { useWorkspaces } from "../runtime/WorkspaceProvider.tsx";
@@ -59,6 +60,7 @@ import {
   withReasoningState,
   withTalkKeyState,
 } from "./readiness.ts";
+import { attachReportedFnInput } from "./reportedFnInput.ts";
 import {
   CHOICE_TTL_MS,
   choiceIsLive,
@@ -238,6 +240,20 @@ export function KalVoiceProvider({ children }: { children: ReactNode }) {
   const undo = useRef<{ requestId: string; target: DictationTarget | null; previous: Destination | null } | null>(null);
   const statusRef = useRef({ status, error: statusError });
   statusRef.current = { status, error: statusError };
+  useEffect(() => {
+    if (DESKTOP_PLATFORM !== "windows" || !status?.preferences.talkEnabled) return;
+    return attachReportedFnInput(
+      window,
+      (input) => client.kalvoiceFnInput(input),
+      () => {
+        toast.show({
+          tone: "info",
+          title: "Fn push to talk is unavailable",
+          description: `Use ${statusRef.current.status?.preferences.talkKey ?? "F8"}, the configured fallback key.`,
+        });
+      },
+    );
+  }, [client, status?.preferences.talkEnabled, toast]);
   const stateRef = useRef(state);
   stateRef.current = state;
   const currentRef = useRef(current);

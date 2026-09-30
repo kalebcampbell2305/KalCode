@@ -4,6 +4,7 @@ import { AudioLines } from "lucide-react";
 import { AlertDialog } from "radix-ui";
 import { type KeyboardEvent, useEffect, useId, useState } from "react";
 import { toKalCodeError } from "../ipc/errors.ts";
+import { DESKTOP_PLATFORM } from "../platform/keyboard.ts";
 import { formatBytes } from "./assistantState.ts";
 import { useKalVoice, useOptionalKalVoice } from "./KalVoiceProvider.tsx";
 import styles from "./KalVoiceSettings.module.css";
@@ -161,7 +162,7 @@ function TalkKeyRow() {
     // A modifier alone may be the start of a chord: wait for the next key (or its release).
     if (isModifierOnly(event)) return;
     setCapturing(false);
-    // Whatever the keyboard actually delivers: Fn is only ever offered if it arrives.
+    // Fn is observed separately; this setting must remain a registrable fallback key.
     const pressed = talkKeyFromEvent(event, status.talkKeys);
     const checked = pressed.ok ? checkReserved(pressed.value, status.reservedShortcuts) : pressed;
     if (!checked.ok) {
@@ -183,7 +184,7 @@ function TalkKeyRow() {
     <div className={styles.shortcutBlock}>
       <Row
         id="kalvoice-talk-key"
-        label="Push-to-talk key"
+        label="Fallback push-to-talk key"
         help="Hold it, speak, release. KalVoice runs local workspace commands or types into the box you're in. It works only while KalCode is in front, so other apps keep the key."
       >
         <span className={styles.keys}>
@@ -216,8 +217,12 @@ function TalkKeyRow() {
         </p>
       ) : (
         <p className={styles.conflictNote}>
-          {talkKeyChoiceHint(status.talkKeys)} Fn isn't offered because macOS and many keyboards handle it specially;
-          Caps Lock would switch on and off while held.
+          {DESKTOP_PLATFORM === "macos"
+            ? `Hold Fn on its own, wait for Listening, speak, then release. ${displayKey(current)} remains your fallback if your keyboard doesn't report Fn. Globe actions still work; choose Do Nothing in macOS Keyboard settings to avoid opening them on release.`
+            : DESKTOP_PLATFORM === "windows"
+              ? `Use ${displayKey(current)}. Fn also works if your keyboard reports Fn to this window; most Windows keyboards handle it in firmware and send no Fn event. If Fn does nothing, keep using ${displayKey(current)}.`
+              : `Hold ${displayKey(current)}, speak, then release.`}{" "}
+          {talkKeyChoiceHint(status.talkKeys)} Caps Lock would switch on and off while held.
         </p>
       )}
     </div>

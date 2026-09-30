@@ -5,8 +5,8 @@
 //! while a KalCode window is focused, so it never takes the key away from other apps.
 //!
 //! Not offered, and why:
-//! - **Fn** is handled by keyboard firmware on most Windows laptops and never reaches apps; the
-//!   OS can't register it as a hotkey.
+//! - **Fn** cannot be the registered fallback because OS hotkey APIs do not expose it. KalVoice
+//!   detects standalone Fn separately when the foreground app actually receives it.
 //! - **Caps Lock / Num Lock** would toggle while held; suppressing that needs a low-level
 //!   keyboard hook (unsafe Win32 code), which KalCode doesn't ship yet.
 //! - **Right Ctrl / Right Alt** are modifiers; the OS hotkey API can't register them alone.
@@ -76,7 +76,7 @@ pub fn canonicalize(input: &str) -> Result<String, ShortcutProblem> {
         "fn" | "function" => {
             return Err(unsupported(
                 "Fn",
-                "on this system it never reaches apps, so KalCode can't detect it.",
+                "KalVoice detects it separately when your keyboard reports it. Choose a fallback key here.",
             ));
         }
         "capslock" | "numlock" => {

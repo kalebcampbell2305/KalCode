@@ -346,6 +346,10 @@ export class KalCodeClient {
     return this.call("kalvoice_listen_cancel");
   }
 
+  kalvoiceFnInput(input: "down" | "up" | "other"): Promise<boolean> {
+    return this.call("kalvoice_fn_input", { input });
+  }
+
   /** `consent` must come from the user confirming the download dialog. */
   kalvoiceReasoningPrepare(): Promise<LocalReasoningDownload> {
     return this.call("kalvoice_reasoning_prepare");
