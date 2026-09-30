@@ -1,7 +1,9 @@
 import { PLANS } from "@kalcode/protocol/plans";
 import { expect, test } from "@playwright/test";
 import { NOT_FOUND_PAGE, PAGES, SITE_ORIGIN, SOCIAL } from "../../src/lib/site";
-import { MANIFEST, WINDOWS_BUILD } from "./helpers";
+import { CHANNEL_LABEL, MANIFEST, renderedDescription, SERVED_STABLE, SIGNED_STABLE, WINDOWS_BUILD } from "./helpers";
+
+const STABLE_016 = SIGNED_STABLE && MANIFEST.latest?.version === "0.1.6";
 
 test.describe("every page", () => {
   for (const page of PAGES) {
@@ -17,7 +19,13 @@ test.describe("every page", () => {
       await expect(tab).toHaveTitle(page.title);
 
       const head = tab.locator("head");
-      await expect(head.locator('meta[name="description"]')).toHaveAttribute("content", page.description);
+      await expect(head.locator('meta[name="description"]')).toHaveAttribute("content", renderedDescription(page));
+      if (page.path === "/kalvoice") {
+        // Preview or no release: KalVoice is still in development. Stable served: it has shipped.
+        const description = head.locator('meta[name="description"]');
+        if (SERVED_STABLE) await expect(description).not.toHaveAttribute("content", /In development/);
+        else await expect(description).toHaveAttribute("content", / In development\.$/);
+      }
       await expect(head.locator('link[rel="canonical"]')).toHaveAttribute("href", new URL(page.path, SITE_ORIGIN).href);
       await expect(head.locator('meta[property="og:title"]')).toHaveAttribute("content", page.title);
       await expect(head.locator('meta[property="og:image"]')).toHaveAttribute("content", `${SITE_ORIGIN}/og.png`);
@@ -32,6 +40,22 @@ test.describe("every page", () => {
       expect(errors).toEqual([]);
     });
   }
+
+  test("stages call no Stable-shipped feature a development build once Stable is served", async ({ page }) => {
+    test.skip(!SERVED_STABLE, "the preview keeps its preview-era stage tags");
+    for (const path of ["/", "/product", "/kalvoice"]) {
+      await page.goto(path);
+      const stages = page.locator("[data-stage-slot]");
+      for (const text of await stages.allInnerTexts()) {
+        expect(text, path).not.toMatch(/Development build|Preview · in development|\bIn development\b|\b0\.1\.0\b/i);
+        // 0.1.6 is variant A (Gemini CLI unavailable): a stage that names the Stable release draws no
+        // Gemini CLI thread.
+        if (/In Stable \d|Dashboard in Stable \d/.test(text)) expect(text, path).not.toMatch(/Gemini CLI/);
+        // Any other stage that still shows Gemini CLI says it is unavailable.
+        if (/Gemini CLI/.test(text)) expect(text, path).toMatch(/Gemini CLI unavailable in (KalCode )?0.1.6/);
+      }
+    }
+  });
 
   test("unknown paths return the styled 404 with status 404", async ({ page }) => {
     const response = await page.goto("/this-page-does-not-exist");
@@ -98,7 +122,18 @@ test.describe("every page", () => {
   test("Updates is a concise product-news page with meaningful release sections", async ({ page }) => {
     await page.goto("/updates");
     await expect(page.getByRole("heading", { level: 1, name: "Updates" })).toBeVisible();
-    await expect(page.locator("article")).toHaveCount(4);
+    // The 0.1.6 notes render only from a complete signed Stable 0.1.6 manifest (the page's own rule).
+    await expect(page.locator("article")).toHaveCount(STABLE_016 ? 5 : 4);
+    if (STABLE_016) {
+      await expect(page.locator("#release-0-1-6")).toBeVisible();
+      await expect(page.locator("#release-0-1-6")).toContainText(
+        "Windows: in-app Update and Restore previous version don't work in 0.1.6.",
+      );
+      await expect(page.locator("#release-0-1-6").getByRole("link", { name: "download page" })).toHaveAttribute(
+        "href",
+        "/download",
+      );
+    } else await expect(page.locator("#release-0-1-6")).toHaveCount(0);
     await expect(page.locator("#release-0-1-1")).toBeVisible();
     await expect(page.locator("#release-website-2026-09-24")).toBeVisible();
     await expect(page.locator("#release-kalvoice")).toBeVisible();
@@ -130,13 +165,14 @@ test.describe("every page", () => {
     await expect(h1).toContainText("KalCode");
     await expect(h1).toContainText("One intelligence that operates your entire AI workspace.");
     const hero = page.locator(".hero");
-    await expect(hero).toContainText("Claude Code, Codex, Gemini");
+    await expect(hero).toContainText("Claude Code, Codex and the coding tools you already use");
+    await expect(hero).not.toContainText("Gemini");
     const primary = hero.locator(".button--primary");
     await expect(primary).toHaveText("Download KalCode");
     if (WINDOWS_BUILD && MANIFEST.latest) {
       // A published Windows build: the primary action is the real download (Windows visitors).
       await expect(primary).toHaveAttribute("data-download-state", "download");
-      await expect(hero).toContainText(`Preview ${MANIFEST.latest.version}`);
+      await expect(hero).toContainText(`${CHANNEL_LABEL} ${MANIFEST.latest.version}`);
     } else {
       // No public build: the button goes to the honest download page, the status line says so,
       // and nothing links to a file.
@@ -150,7 +186,7 @@ test.describe("every page", () => {
     // Provider constellation: honest adapter status.
     const providers = page.getByRole("list", { name: "Works with the coding agents you already use" });
     await expect(providers).toContainText("Adapter built");
-    await expect(providers).toContainText("adapter planned");
+    await expect(providers).not.toContainText("planned");
   });
 
   test("the header offers Download (plain label) in every manifest state", async ({ page }) => {

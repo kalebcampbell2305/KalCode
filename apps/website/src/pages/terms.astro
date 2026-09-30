@@ -1,16 +1,36 @@
 ---
 import PageHead from "../components/PageHead.astro";
 import Base from "../layouts/Base.astro";
+import { RELEASES, servedStableRelease } from "../lib/releases";
 import { CONTACT_EMAIL, getPage } from "../lib/site";
 
 const page = getPage("/terms");
+// Owner-approved 2026-09-29 (target/recovery-B9-publish/TERMS-WORDING-PROPOSAL.md, no-price #4):
+// while a Stable release is served the terms cover every version of the app; the preview text is
+// unchanged.
+const stable = servedStableRelease(RELEASES) !== null;
+// The preview wording keeps its original line break so preview mode renders byte-identical.
+const previewScope =
+  "\nThe app is currently offered as a free preview. These terms apply to every preview version\n        until a version comes with terms of its own.\n";
+const stableScope =
+  "\nThe app is currently offered as Stable releases and preview versions. These terms apply to every version of the app\n        until a version comes with terms of its own.\n";
+const description = stable ? page.description.replace(/ preview app\.$/, " app.") : page.description;
+// Owner-approved 2026-09-30 (target/recovery-B10-release/CHECKOUT-GO-LIVE.md): paid plans open with the same strict build flag as the account page's checkout buttons
+// (docs/BILLING.md §9). Closed, §2 renders byte-identical to before (hence the "\n" endings).
+const checkoutOpen = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
+const noSale = " Nothing on the site is an offer to sell, and no\n        purchase can be made through it today.\n";
+const paidPlans =
+  " Paid plans (Pro, MAX and MAX 2X) are monthly subscriptions that you buy from your KalCode account on this site. Prices are in US dollars. Stripe processes payments on its own hosted pages; KalCode never receives your card details. A subscription renews automatically every month until you cancel it, which you can do at any time from Manage billing on your account page. Cancelling stops future renewals, and your plan stays active until the end of the period you have already paid for. Payments are non-refundable except where the law requires otherwise.\n";
+const updated = checkoutOpen ? "September 30, 2026" : stable ? "September 29, 2026" : "September 24, 2026";
 ---
-<Base title={page.title} description={page.description} path={page.path}>
+<Base title={page.title} description={description} path={page.path}>
   <PageHead
     title="Terms of use"
-    lead="These terms cover kalcoded.com, the KalCode early-access list and the KalCode preview app."
+    lead={stable
+      ? "These terms cover kalcoded.com, the KalCode early-access list and the KalCode app."
+      : "These terms cover kalcoded.com, the KalCode early-access list and the KalCode preview app."}
   >
-    <p class="muted small">Last updated September 24, 2026</p>
+    <p class="muted small">Last updated {updated}</p>
   </PageHead>
   <section class="section">
     <div class="container prose">
@@ -23,21 +43,16 @@ const page = getPage("/terms");
 
       <h2>2. The site</h2>
       <p>
-        The site describes KalCode, a product in early preview. Descriptions of features, plans and
-        prices reflect current plans and may change. Nothing on the site is an offer to sell, and no
-        purchase can be made through it today.
-      </p>
+        The site describes KalCode{stable ? "" : ", a product in early preview"}. Descriptions of features, plans and
+        prices reflect current plans and may change.{checkoutOpen ? paidPlans : noSale}</p>
       <p>
         KalCode is designed to work with AI providers through your own accounts. Your use of a
         provider is governed by your agreement with that provider and billed by it; KalCode does
         not sell, resell or meter provider usage.
       </p>
 
-      <h2 id="preview">3. The KalCode preview app</h2>
-      <p>
-        The app is currently offered as a free preview. These terms apply to every preview version
-        until a version comes with terms of its own.
-      </p>
+      <h2 id="preview">{stable ? "3. The KalCode app" : "3. The KalCode preview app"}</h2>
+      <p>{stable ? stableScope : previewScope}</p>
       <ul>
         <li>
           <strong>Licence.</strong> We give you a personal, non-exclusive, non-transferable,
@@ -62,7 +77,7 @@ const page = getPage("/terms");
         </li>
         <li>
           <strong>Preview quality.</strong> Preview versions are incomplete, may contain errors, may
-          change or remove features, and are not code-signed yet. Keep backups of work that matters,
+          change or remove features, and {stable ? "may not be code-signed" : "are not code-signed yet"}. Keep backups of work that matters,
           including your projects under version control.
         </li>
         <li>

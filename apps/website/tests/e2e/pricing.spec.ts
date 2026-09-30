@@ -14,7 +14,7 @@ test.describe("pricing", () => {
     await expect(table.getByRole("columnheader", { name: /MAX 2X/ })).toContainText("$50");
     await expect(table.getByRole("row", { name: /KalVoice Requests a month/ })).toContainText("10,000");
     await expect(page.getByText("Every plan includes", { exact: true })).toBeVisible();
-    for (const item of ["All providers", "All permission modes", "Unlimited on-device dictation"]) {
+    for (const item of ["All providers", "Plan, Approve and Auto modes", "Unlimited on-device dictation"]) {
       await expect(page.getByRole("listitem").filter({ hasText: item })).toBeVisible();
     }
     // Aligned plan headers: every price sits on the same line.
@@ -36,10 +36,13 @@ test.describe("pricing", () => {
     await expect(answer).toBeHidden();
   });
 
-  test("never lists a private tier or sells anything", async ({ page }) => {
+  test("never lists a private tier and sends buyers to their account", async ({ page }) => {
     await page.goto("/pricing");
-    await expect(page.locator("main")).not.toContainText("OWNER");
-    await expect(page.locator("main")).toContainText("nothing is for sale today");
+    const main = page.locator("main");
+    await expect(main).not.toContainText("OWNER");
+    await expect(main).toContainText("Paid plans are open");
+    await expect(main).not.toContainText("nothing is for sale today");
+    await expect(main.getByRole("link", { name: /Choose a plan in your account/ })).toHaveAttribute("href", "/account");
   });
 
   test("uses KalVoice Requests and keeps dictation and connected-provider inference outside the meter", async ({

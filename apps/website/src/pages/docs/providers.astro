@@ -1,5 +1,6 @@
 ---
 import Docs from "../../layouts/Docs.astro";
+import { GEMINI_AVAILABILITY } from "../../lib/site";
 ---
 <Docs
   path="/docs/providers"
@@ -7,12 +8,23 @@ import Docs from "../../layouts/Docs.astro";
   lead="KalCode works with the AI coding tools you already use, on your own accounts. Connecting them is free on every plan."
 >
   <h2>Supported providers</h2>
-  <p>The first providers KalCode is being built to connect:</p>
+  <p>KalCode runs threads with these providers today:</p>
   <ul>
-    <li><strong>Claude Code</strong> — the local CLI, using your own signed-in session or API key.</li>
-    <li><strong>Codex</strong> — the local CLI, with its documented approval and sandbox settings.</li>
-    <li><strong>Gemini CLI</strong> — the local CLI, with its documented non-interactive output modes.</li>
+    <li><strong>Claude Code</strong> — the local CLI, signed in with your own Claude account.</li>
+    <li><strong>Codex</strong> — the local CLI, signed in with your own personal ChatGPT plan, with its documented approval and sandbox settings.</li>
   </ul>
+  <p>
+    Codex threads run on personal ChatGPT plans: Free, Go, Plus and Pro. KalCode doesn't start
+    Codex threads on ChatGPT Business (formerly Team), Enterprise or Edu plans, or on an account
+    whose plan it can't confirm.
+  </p>
+  <h3>Gemini CLI is unavailable in 0.1.6</h3>
+  <p>{GEMINI_AVAILABILITY.notice}</p>
+  <p>
+    KalCode 0.1.6 still includes its Gemini CLI adapter, which runs the local CLI signed in with
+    Google's own sign-in and uses its documented non-interactive output modes. The sign-in and
+    storage details below describe that adapter.
+  </p>
   <p>
     More providers can be added later through a documented adapter contract. Each integration is
     verified against the provider's current official documentation before it ships.
@@ -20,25 +32,73 @@ import Docs from "../../layouts/Docs.astro";
 
   <h2>How connections work</h2>
   <p>
-    KalCode uses only legitimate, documented integration methods: an authenticated local CLI,
-    documented sign-in flows, API keys you provide, or enterprise credentials. It never scrapes
+    KalCode uses only legitimate, documented integration methods: each provider's own local CLI,
+    signed in through that provider's official sign-in flow. It never scrapes
     browser credentials, copies hidden session credentials, or reverse-engineers private
     authentication.
+  </p>
+
+  <h2>Signing in</h2>
+  <p>
+    Sign in to each provider inside KalCode: open Providers, then Accounts, add an account and choose
+    Sign in. KalCode runs that provider's own official sign-in for that account only. Claude Code and
+    Codex open their browser sign-in, and Gemini CLI opens Google sign-in in your browser.
+  </p>
+  <p>
+    Each account has its own managed provider profile. Signing a CLI in from a separate terminal signs
+    in a different profile that KalCode threads don't use, so there is nothing to run by hand. The
+    provider keeps the credentials in that account's profile and KalCode never sees them. Gemini CLI
+    keeps its sign-in in its own encrypted credential store, never in plaintext. Gemini derives that
+    store's key from your computer and user names, so it keeps the sign-in out of plaintext but not
+    away from other programs running as your user.
   </p>
   <p>
     Your usage of each provider is billed by that provider under your account, exactly as it is when
     you use it directly. KalCode does not charge for, resell or meter provider usage, holds no
-    company provider credentials for your use, and has no KalCode-paid fallback. The same applies
-    to KalVoice: requests that need reasoning run on the provider you choose.
+    company provider credentials for your use, and has no KalCode-paid fallback. KalVoice does not
+    use your provider accounts to interpret commands: interpretation runs on your computer, and
+    there is no provider fallback.
+  </p>
+
+  <h2>Supported CLI versions</h2>
+  <p>
+    Managed accounts run the provider CLI release lines KalCode has certified: Claude Code 2.1.282
+    or a later 2.1 release, Codex CLI 0.155.1 or a later release in the 0.155 to 0.158 lines, and
+    Gemini CLI 0.61. Pre-release builds aren't supported. With any other version, sign-in and
+    threads stop with a message that names the supported versions.
+  </p>
+
+  <h2>Several accounts per provider</h2>
+  <p>
+    You can add more than one account for each provider, such as a personal and a work account.
+    Providers, then Accounts, shows each account's active threads and the workspaces where it is
+    the default. <strong>Set default</strong> chooses the account new threads use where a workspace
+    has no default of its own, and
+    <strong>Connect another account</strong> adds an account and starts its sign-in. Gemini CLI
+    accounts show the Google email they are signed in with.
+  </p>
+  <p>
+    In New thread, <strong>Remember these accounts for this workspace</strong> keeps the accounts
+    you chose, and KalCode selects them the next time you start a thread in that workspace.
+  </p>
+
+  <h2>Switching a thread's account</h2>
+  <p>
+    Each thread stays on the account it started with, and never changes account on its own, even
+    when you change the default. To move a thread to another signed-in account, use the account
+    menu in its header, the command palette (“switch codex b”) or KalVoice (“Switch this Codex
+    thread to Codex B”). KalCode asks you to confirm first. The thread's past conversation stays
+    as it is; only future messages use the new account, starting a new provider session. An
+    account that is signed out has to be signed in before a thread can move to it.
   </p>
 
   <h2>Detection</h2>
   <p>
     To find installed providers, KalCode looks for their executables on your <code>PATH</code> and in
-    documented install locations, then runs only version and status commands, with a timeout. It
-    reports whether each provider is installed, its version, whether it is signed in where the CLI
-    exposes that, and what it can do. Detection never changes your machine; installing a provider
-    only happens when you ask for it.
+    documented install locations, then runs only each CLI's version command, with a timeout. It
+    reports whether each provider is installed, its version and what it can do. Detection doesn't
+    check sign-in: whether each account is signed in shows on its card in Providers, then Accounts.
+    Detection never changes your machine; installing a provider only happens when you ask for it.
   </p>
 
   <h2>Isolation</h2>

@@ -1,6 +1,6 @@
 ---
 /**
- * The docked browser (planned surface): localhost:3000 showing the sample app's signup-limits
+ * The docked browser (the Browser pane ships in Code on Stable): localhost:3000 showing the sample app's signup-limits
  * admin page, which is what the agents are changing. Chart bars are SVG attributes (no inline
  * styles under the strict CSP).
  */
@@ -67,8 +67,8 @@ const toneFor = (code: number) => (code === 201 ? "success" : code === 429 ? "wa
   </div>
   <div class="kc-browser__foot">
     <span>atlas-api · localhost:3000</span>
-    <span class="kc-tag">Planned</span>
+    <span class="kc-tag">Sample app</span>
   </div>
   <p class="kc-browser__toast" data-kc-toast aria-hidden="true"><span class="kc-i" data-i="reload"></span>{BROWSER.toast}</p>
-  {interactive && <span class="visually-hidden">Browser preview of the sample app. This surface is planned.</span>}
+  {interactive && <span class="visually-hidden">Browser preview of the sample app.</span>}
 </div>

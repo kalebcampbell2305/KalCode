@@ -38,7 +38,7 @@ const spokes = Array.from({ length: compact ? 40 : 56 }, (_, i) => VOICE.amplitu
 >
   {!compact && (
     <div class="kc-vs__head">
-      <StageLabel tag="Preview · KalVoice commands and multi-agent runs are in development" />
+      <StageLabel tag="Preview · KalVoice commands are in Stable · multi-agent runs are not yet" />
       <button type="button" class="button button--secondary button--sm" data-kc-vs-replay data-testid="kvs-replay">
         <span class="kc-i" data-i="replay" aria-hidden="true"></span>Play again
       </button>
@@ -100,7 +100,8 @@ const spokes = Array.from({ length: compact ? 40 : 56 }, (_, i) => VOICE.amplitu
       <p class="kc-vs__done" data-kc-vs-done data-testid="kalvoice-result"><span class="kc-i" data-i="done" aria-hidden="true"></span><span data-kc-vs-result>{VOICE_FLOW.done}</span></p>
     </div>
   </div>
-  {compact && <StageLabel class="kc-vs__compactlabel" tag="In development" />}
+  {/* Keep this label even after KalVoice ships in Stable: the scripted multi-agent delegation is not shipped. */}
+  {compact && <StageLabel class="kc-vs__compactlabel" tag="Multi-agent runs not in Stable yet" />}
   <p class="visually-hidden" aria-live="polite" data-kc-vs-live data-testid={`live-${id}`}></p>
 </div>
 

@@ -11,31 +11,32 @@ import ProviderGlyph from "../components/ProviderGlyph.astro";
 import StageSlot from "../components/StageSlot.astro";
 import Base from "../layouts/Base.astro";
 import { HERO_POSTER_PRELOADS } from "../lib/hero";
-import { downloadCta } from "../lib/releases";
+import { RELEASES, downloadCta, servedStableRelease } from "../lib/releases";
 import { structuredData } from "../lib/seo";
-import { KALVOICE, PROVIDERS, getPage } from "../lib/site";
+import { GEMINI_AVAILABILITY, KALVOICE, PROVIDERS, getPage, planSummary } from "../lib/site";
 import { firstStage, hasStage } from "../lib/stage";
 
 const page = getPage("/");
 const cta = downloadCta();
+// KalVoice is described as shipped only while /download serves a signed Stable release.
+const kalvoiceShipped = servedStableRelease(RELEASES) !== null;
+// Paid plans open with the account page's strict checkout build flag (docs/BILLING.md §9).
+const checkoutOpen = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
 
 // Compose the story from the demos that exist (lib/stage.ts): a section never renders empty.
 const workspaceStage = firstStage("TryKalCode", "AppWindow");
 const voiceStage = firstStage("KalVoiceStage", "KalVoiceDemo");
 const commandStage = firstStage("CommandCenterStage", "DemoCenter");
 
-/** Plan cards: three honest highlights each, straight from the catalog. */
+/**
+ * Plan cards: two honest highlights each, straight from the catalog. Agents, team workflows and
+ * missions are Gated on Stable 0.1.6 (crates/native-core/src/flags.rs), so no card offers them.
+ * Stable enforces no per-plan thread limit, so no card offers a thread count.
+ */
 const FEATURED = "pro";
 const planPoints = (plan: (typeof PLANS)[number]) => [
   `${formatKalVoiceAllowance(plan.limits)} KalVoice Requests a month`,
-  plan.limits.concurrentThreads === null
-    ? "Unlimited threads at once"
-    : `${plan.limits.concurrentThreads} threads running at once`,
-  plan.limits.advancedMissions
-    ? "Advanced missions with verification"
-    : plan.limits.persistentAgents
-      ? "Persistent agents and team workflows"
-      : "Every provider and permission mode",
+  "Every provider; Plan, Approve and Auto modes",
 ];
 
 /** Permission policy as it reads in Approve mode (the default). */
@@ -90,8 +91,8 @@ const policies = [
         <span class="visually-hidden">KalCode: </span>One intelligence that operates your entire AI workspace.
       </h1>
       <p class="hero__line">
-        Connect Claude Code, Codex, Gemini and the coding tools you already use — then operate them
-        from one workspace.
+        Connect Claude Code, Codex and the coding tools you already use — then operate them from one
+        workspace.
       </p>
       <div class="button-row hero__actions">
         <DownloadButton />
@@ -148,6 +149,7 @@ const policies = [
           <span class="providers__status">Through the same runtime</span>
         </li>
       </ul>
+      <p class="providers__note">{GEMINI_AVAILABILITY.notice}</p>
     </div>
   </section>
 
@@ -165,8 +167,8 @@ const policies = [
               <h2 id="workspace-title" class="h2">A real workspace. Not a chatbot.</h2>
               <div class="statement__side">
                 <p class="body-lg">
-                  Open a project, connect your providers, and get to work. Real terminals, provider panes
-                  and your agents, side by side.
+                  Open a project, connect your providers, and get to work. Real terminals, a browser pane
+                  and your agents' threads, in one workspace.
                 </p>
                 <a class="button button--secondary" href="/product">
                   Explore the product <Icon name="arrow-right" />
@@ -187,7 +189,7 @@ const policies = [
     <div class="container container--wide">
       <div class="frame frame--split">
         <div class="frame__copy" data-reveal>
-          <p class="eyebrow">KalVoice · in development</p>
+          <p class="eyebrow">{kalvoiceShipped ? "KalVoice" : "KalVoice · in development"}</p>
           <h2 id="kalvoice-title" class="h2">Speak it. See it done.</h2>
           <p class="body-lg">
             Hold {KALVOICE.pushToTalkKey} to talk to KalVoice. Your words land in the focused agent; say a
@@ -213,7 +215,7 @@ const policies = [
     </div>
   </section>
 
-  <!-- Command center: the full-width dashboard moment. -->
+  <!-- Dashboard: the full-width dashboard moment. -->
   {
     commandStage && (
       <section class="world-section world-section--tall" id="command" aria-labelledby="command-title">
@@ -221,7 +223,7 @@ const policies = [
         <Backdrop variant="planet" side="left" size="xl" intensity="high" />
         <div class="container">
           <header class="statement statement--center" data-reveal>
-            <p class="eyebrow">Command center</p>
+            <p class="eyebrow">Dashboard</p>
             <h2 id="command-title" class="h2">Every thread. One dashboard.</h2>
             <p class="body-lg">
               What is running, what needs you, what is done — from runtime events, not from what a model
@@ -264,12 +266,12 @@ const policies = [
     <Backdrop variant="nebula" intensity="low" />
     <Backdrop variant="vault" intensity="high" />
     <div class="container container--wide">
-      <h2 id="control-title" class="visually-hidden">Your keys, your rules, your machine</h2>
+      <h2 id="control-title" class="visually-hidden">Your accounts, your rules, your machine</h2>
       <div class="trio">
         <article class="frame frame--tile" aria-labelledby="keys-title">
           <p class="eyebrow">Your providers</p>
-          <h3 id="keys-title" class="headline">Bring your own keys. Use your own accounts.</h3>
-          <p>Claude Code, Codex and Gemini CLI run on the sign-in or API key you already have.</p>
+          <h3 id="keys-title" class="headline">Use your own accounts. Sign in from KalCode.</h3>
+          <p>Claude Code and Codex run on your own accounts: sign in to each from KalCode, with a separate managed profile for every account. {GEMINI_AVAILABILITY.short}</p>
           {
             hasStage("ProviderSwitch") ? (
               <StageSlot name="ProviderSwitch" width="compact" />
@@ -291,7 +293,7 @@ const policies = [
         <article class="frame frame--tile" aria-labelledby="rules-title">
           <p class="eyebrow">Built for control</p>
           <h3 id="rules-title" class="headline">You set the rules. Agents follow them.</h3>
-          <p>Every mode on every plan. Anything outside your rules waits for you.</p>
+          <p>Plan, Approve and Auto on every plan. Anything outside your rules waits for you.</p>
           {hasStage("PermissionModes") ? (
             <StageSlot name="PermissionModes" width="compact" />
           ) : (
@@ -323,7 +325,7 @@ const policies = [
           </p>
           <ul class="tile-checks" role="list">
             <li><Icon name="check" /> Local database, on your device</li>
-            <li><Icon name="check" /> Secrets in your OS keychain</li>
+            <li><Icon name="check" /> KalCode session in your OS credential store</li>
             <li><Icon name="check" /> Nothing proxied through KalCode</li>
             <li><Icon name="check" /> No telemetry in current builds</li>
           </ul>
@@ -344,11 +346,11 @@ const policies = [
           <p class="eyebrow">Simple pricing</p>
           <h2 id="plans-title" class="h2">Power for every builder.</h2>
           <p class="body-lg">
-            Every plan includes every provider, every permission mode and unlimited on-device dictation.
+            Every plan includes every provider, the Plan, Approve and Auto modes and unlimited on-device dictation.
             Your AI usage stays on your own account.
           </p>
           <a class="button button--secondary" href="/pricing">Compare plans <Icon name="arrow-right" /></a>
-          <p class="pricing-band__note">Plans open at launch. Nothing is for sale today.</p>
+          <p class="pricing-band__note">{checkoutOpen ? "Paid plans are open. Subscribe from your account." : "Plans open at launch. Nothing is for sale today."}</p>
         </header>
         <ul class="plan-cards" role="list">
           {
@@ -362,7 +364,7 @@ const policies = [
                   {formatPrice(plan.price)}
                   <small>{formatInterval(plan.price)}</small>
                 </p>
-                <p class="plan-card__summary">{plan.summary}</p>
+                <p class="plan-card__summary">{planSummary(plan)}</p>
                 <ul class="plan-card__points" role="list">
                   {planPoints(plan).map((point) => (
                     <li>

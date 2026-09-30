@@ -11,16 +11,17 @@
 import {
   COMMAND_CENTER,
   PROVIDERS,
+  sampleTail,
   STATUS,
   summarize,
   summaryLead,
   type Thread,
   type ThreadStatus,
-  threadById,
   ZOD_APPROVAL,
 } from "../../data/story";
 import ApprovalCard from "./parts/ApprovalCard.astro";
 import Glyph from "./parts/Glyph.astro";
+import { stageTag, stageThreadById } from "../../lib/stage-status";
 import StageLabel from "./parts/StageLabel.astro";
 import StageStyles from "./parts/StageStyles.astro";
 import StatusLabel from "./parts/StatusLabel.astro";
@@ -38,7 +39,7 @@ const snapshot: Record<string, { status: ThreadStatus; activity: string; tail: s
 for (const beat of COMMAND_CENTER.beats.slice(0, 5)) {
   snapshot[beat.agent] = { status: beat.status, activity: beat.activity, tail: beat.tail ?? snapshot[beat.agent]?.tail ?? "" };
 }
-const agents: Thread[] = COMMAND_CENTER.agents.map((a) => threadById(a));
+const agents: Thread[] = COMMAND_CENTER.agents.map((a) => stageThreadById(a));
 const statuses = agents.map((t) => snapshot[t.id]?.status ?? t.status);
 const summary = summarize(statuses, 1);
 const completed = COMMAND_CENTER.completedToday + statuses.filter((s) => s === "completed").length;
@@ -59,7 +60,12 @@ const totalActions = COMMAND_CENTER.activity.reduce((a, b) => a + b, 0);
 <StageStyles />
 <div class:list={["kc-cc", `kc-w--${width}`, className]} id={id} data-kc-cc data-testid="command-center">
   <div class="kc-cc__head">
-    <StageLabel tag="Development build · KPIs are sample data" />
+    <StageLabel
+      tag={stageTag({
+        tag: "Development build · KPIs are sample data",
+        stableTag: "Dashboard in Stable {version} · the KPI tiles are illustrative",
+      })}
+    />
     <p class="kc-cc__live"><span class="kc-cc__livedot" aria-hidden="true"></span>Live · atlas-api · 6 agents</p>
   </div>
 
@@ -131,7 +137,7 @@ const totalActions = COMMAND_CENTER.activity.reduce((a, b) => a + b, 0);
             <p class="kc-dash__h">Recent activity</p>
             <ol class="kc-cc__events" role="list" data-kc-cc-feed>
               {COMMAND_CENTER.feed.map((f) => {
-                const t = threadById(f.agent);
+                const t = stageThreadById(f.agent);
                 return (
                   <li class="kc-cc__event" data-agent={f.agent} data-provider={t.provider}>
                     <Glyph provider={t.provider} />
@@ -160,7 +166,7 @@ const totalActions = COMMAND_CENTER.activity.reduce((a, b) => a + b, 0);
                 <div class="kc-cc__tbody" aria-hidden="true">
                   <p class="kc-cc__tl kc-cc__tl--prompt">{t.provider === "codex" ? "›" : ">"} {firstUser(t)}</p>
                   <p class="kc-cc__tl" data-kc-cc-line="1">{STATUS[s?.status ?? t.status].label}</p>
-                  <p class="kc-cc__tl kc-cc__tl--last" data-kc-cc-line="2">{s?.tail}</p>
+                  <p class="kc-cc__tl kc-cc__tl--last" data-kc-cc-line="2">{sampleTail(s?.tail, t.provider)}</p>
                 </div>
               </li>
             );

@@ -20,7 +20,10 @@ import Docs from "../../layouts/Docs.astro";
   </ul>
 
   <h2>Permission modes</h2>
-  <p>Every mode is available on every plan. Permission modes are safety controls, never a paid extra.</p>
+  <p>
+    In KalCode 0.1.6, threads start in Plan, Approve or Auto, on every plan. Bypass and Custom are
+    planned and not available in 0.1.6. Permission modes are safety controls, never a paid extra.
+  </p>
   <div class="table-wrap" role="region" aria-label="Permission modes" tabindex="0">
     <table class="table">
       <caption class="visually-hidden">Permission modes and their default behaviour</caption>
@@ -48,7 +51,7 @@ import Docs from "../../layouts/Docs.astro";
           <td>Covered actions are allowed; everything else still asks. Always-ask scopes always ask.</td>
         </tr>
         <tr>
-          <th scope="row">Bypass</th>
+          <th scope="row">Bypass <span class="chip">Planned</span></th>
           <td>Broad local execution authority.</td>
           <td>
             Local workspace actions are allowed. Pushing, production deploys, cloud changes,
@@ -56,7 +59,7 @@ import Docs from "../../layouts/Docs.astro";
           </td>
         </tr>
         <tr>
-          <th scope="row">Custom</th>
+          <th scope="row">Custom <span class="chip">Planned</span></th>
           <td>Named rule sets, such as “Code reviewer” or “Local builder”.</td>
           <td>Per-scope allow, ask, deny or never.</td>
         </tr>
@@ -64,8 +67,9 @@ import Docs from "../../layouts/Docs.astro";
     </table>
   </div>
   <p>
-    Bypass requires your explicit selection, shows a warning, and keeps a persistent indicator on
-    screen while it is active. It is never enabled by an agent or by KalVoice.
+    Bypass is planned. As designed, it requires your explicit selection, shows a warning, and keeps
+    a persistent indicator on screen while it is active. It is never enabled by an agent or by
+    KalVoice.
   </p>
 
   <h2>Your choices when asked</h2>
@@ -99,7 +103,7 @@ import Docs from "../../layouts/Docs.astro";
 
   <h2>Audit</h2>
   <p>
-    Approvals, denials, mode changes and Bypass activation are written as events to the local event
+    Approvals, denials and mode changes are written as events to the local event
     log, where they cannot be edited.
   </p>
 </Docs>

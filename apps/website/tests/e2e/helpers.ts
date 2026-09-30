@@ -12,6 +12,45 @@ export const MANIFEST = JSON.parse(
 ) as ReleaseManifest;
 /** The published Windows build, or null while there is no public build. */
 export const WINDOWS_BUILD = MANIFEST.latest?.platforms.find((platform) => platform.os === "windows") ?? null;
+/** "Stable" or "Preview", as the site labels the manifest's channel (src/lib/releases.ts channelLabel). */
+export const CHANNEL_LABEL = MANIFEST.latest?.channel === "stable" ? "Stable" : "Preview";
+/**
+ * True when a manifest selects a complete signed Stable release (signed Windows x64 and macOS
+ * arm64), mirroring signedStableRelease() in src/lib/releases.ts, which specs cannot import:
+ * Playwright's loader rejects its JSON import without an import attribute.
+ * tests/unit/e2e-helpers.test.ts keeps the two rules equal.
+ */
+export function isSignedStable(manifest: ReleaseManifest): boolean {
+  const latest = manifest.latest;
+  return (
+    latest?.channel === "stable" &&
+    latest.platforms.some((p) => p.os === "windows" && p.arch === "x64" && p.signed) &&
+    latest.platforms.some((p) => p.os === "macos" && p.arch === "arm64" && p.signed)
+  );
+}
+/** The committed manifest selects a complete signed Stable release. */
+export const SIGNED_STABLE = isSignedStable(MANIFEST);
+/**
+ * True when /download serves a Stable release (Stable channel with at least one signed build),
+ * mirroring servedStableRelease() in src/lib/releases.ts for the same reason as isSignedStable.
+ */
+export function isServedStable(manifest: ReleaseManifest): boolean {
+  const latest = manifest.latest;
+  return latest?.channel === "stable" && latest.platforms.some((p) => p.signed);
+}
+/** The committed manifest's release is served as Stable (KalVoice copy is then shipped). */
+export const SERVED_STABLE = isServedStable(MANIFEST);
+/**
+ * The meta description a page renders once a Stable release is served: /kalvoice drops the
+ * catalog's trailing " In development." (src/pages/kalvoice.astro), /terms says "the KalCode app"
+ * instead of "the KalCode preview app" (src/pages/terms.astro), and every other page uses its own.
+ */
+export function renderedDescription(page: { path: string; description: string }, servedStable = SERVED_STABLE): string {
+  if (!servedStable) return page.description;
+  if (page.path === "/kalvoice") return page.description.replace(/ In development\.$/, "");
+  if (page.path === "/terms") return page.description.replace(/ preview app\.$/, " app.");
+  return page.description;
+}
 
 const PERSIST_DIR = process.env.KALCODE_E2E_PERSIST ?? ".wrangler/e2e-state";
 /** The local mail sink (tests/e2e/mail-sink.mjs); same default as playwright.config.ts. */

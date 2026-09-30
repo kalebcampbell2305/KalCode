@@ -10,6 +10,8 @@
  */
 import StageStyles from "./parts/StageStyles.astro";
 import { VOICE } from "../../data/story";
+import { RELEASES, servedStableRelease } from "../../lib/releases";
+import { stageThreads } from "../../lib/stage-status";
 import AppWindow from "./AppWindow.astro";
 import StageLabel from "./parts/StageLabel.astro";
 
@@ -18,11 +20,15 @@ interface Props {
   class?: string;
 }
 const { id = "kalvoice-demo", class: className } = Astro.props;
+// The demo is scripted either way; only the product status changes once Stable ships KalVoice.
+const tag = servedStableRelease(RELEASES)
+  ? "Scripted demo · no microphone is used here"
+  : "KalVoice is in development · no microphone is used here";
 ---
 <StageStyles />
 <div class:list={["kc-vd", className]} data-kc-vd data-say="dictation" data-testid="kalvoice-demo">
   <div class="kc-demo-head">
-    <StageLabel tag="KalVoice is in development · no microphone is used here" />
+    <StageLabel tag={tag} />
   </div>
   <div class="kc-vd__controls">
     <button type="button" class="kc-vd__key" data-kc-vd="hold" aria-describedby={`${id}-hint ${id}-next`} aria-keyshortcuts={VOICE.key} data-testid="kv-hold">
@@ -43,6 +49,7 @@ const { id = "kalvoice-demo", class: className } = Astro.props;
     interactive={true}
     size="compact"
     scene={{ view: "code", panes: ["claude-checkout", "codex-signup"], focus: "claude-checkout", layout: "rows", dock: "none", approval: "approved", voice: "off", mission: 0 }}
+    threads={stageThreads()}
   />
 </div>
 

@@ -1,4 +1,5 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
+import { SERVED_STABLE } from "./helpers";
 
 /**
  * The round-3 product moments: WorkspaceStage, CommandCenterStage, MissionGraph, KalVoiceStage
@@ -32,7 +33,10 @@ test.describe("product moments", () => {
   test("CommandCenterStage: KPIs are sample data, statuses move, the approval can be answered", async ({ page }) => {
     const block = await find(page, "command-center");
     await expect(block).toHaveAttribute("data-kc-wired", "true");
-    await expect(block.getByTestId("stage-label")).toContainText("KPIs are sample data");
+    // Stable ships the Dashboard, so once it is served the stage says so (lib/stage-status.ts).
+    await expect(block.getByTestId("stage-label")).toContainText(
+      SERVED_STABLE ? "the KPI tiles are illustrative" : "KPIs are sample data",
+    );
     const codex = block.getByTestId("cc-row-codex-signup");
     await expect(codex).toContainText("Needs approval", { timeout: 12_000 });
     const card = block.getByTestId("approval-zod");

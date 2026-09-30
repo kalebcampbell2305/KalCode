@@ -1,10 +1,15 @@
 ---
 import PageHead from "../components/PageHead.astro";
 import Base from "../layouts/Base.astro";
-import { buildStatus } from "../lib/releases";
-import { CONTACT_EMAIL, getPage } from "../lib/site";
+import { RELEASES, buildStatus, servedStableRelease, signedStableRelease } from "../lib/releases";
+import { CONTACT_EMAIL, GEMINI_AVAILABILITY, getPage } from "../lib/site";
 
 const page = getPage("/security");
+const kalvoiceShipped = servedStableRelease(RELEASES) !== null;
+// Signed builds are claimed only while /download serves a signed Windows and Mac Stable release
+// (B9 536efd7: Authenticode-signed NSIS installer, Developer ID signed and notarized app, minisign
+// update signatures checked by apps/desktop/src-tauri/src/updater_commands and crates/updater).
+const signedBuilds = signedStableRelease(RELEASES) !== null;
 ---
 <Base title={page.title} description={page.description} path={page.path}>
   <PageHead
@@ -12,7 +17,7 @@ const page = getPage("/security");
     lead="KalCode controls powerful tools on your machine, so security is part of its architecture, not a feature added later."
     status={buildStatus()}
   >
-    <p class="status-line">This page lists the controls in current development builds and the ones planned before release.</p>
+    <p class="status-line">This page lists the controls in current builds and the ones still planned.</p>
   </PageHead>
   <section class="section">
     <div class="container prose">
@@ -21,8 +26,8 @@ const page = getPage("/security");
         <div>
           <dt>Local-first</dt>
           <dd>
-            Projects, threads, events and settings are stored on your device. Current development
-            builds send no user data off the device.
+            Projects, threads, events and settings are stored on your device. Current builds send
+            no user data off the device.
           </dd>
         </div>
         <div>
@@ -46,11 +51,16 @@ const page = getPage("/security");
           </dd>
         </div>
         <div>
-          <dt>OS keychain for secrets</dt>
+          <dt>Where credentials are kept</dt>
           <dd>
-            Credentials are stored in your operating system's credential store. Secret values are
-            redacted from debug output, cleared from memory when dropped, and never written to the
-            database, logs, events or interface.
+            Your KalCode account session is kept in your operating system's credential store
+            (Windows Credential Manager or macOS Keychain). Provider sign-ins are kept by each
+            provider's own CLI, separately for every provider account through its own KalCode-managed
+            profile; KalCode never reads or copies them. Gemini CLI keeps its sign-in in its own AES-256-GCM encrypted
+            file, never in plaintext. Gemini derives that file's key from your computer and user
+            names, so it keeps the sign-in out of plaintext but not away from other programs running
+            as your user. KalCode's own secret values are redacted from debug output, cleared from
+            memory when dropped, and never written to the database, logs, events or interface.
           </dd>
         </div>
         <div>
@@ -66,8 +76,43 @@ const page = getPage("/security");
         </div>
         <div>
           <dt>Memory-safe native code</dt>
-          <dd>Unsafe Rust is forbidden across the native codebase.</dd>
+          <dd>
+            Unsafe Rust is denied by default across KalCode's workspace crates. The only exceptions
+            are operating-system integration points (Windows, macOS and Unix system interfaces),
+            each explicitly allowed for a single module or function. The vendored terminal library
+            (portable-pty, which KalCode patches for Windows job objects and macOS terminal
+            handling) sits outside that lint.
+          </dd>
         </div>
+        <div>
+          <dt>Workspace containment</dt>
+          <dd>
+            A path counts as inside your workspace only when it still lands inside the workspace
+            folder after <code>..</code>, symlinks and junctions are resolved. Paths KalCode cannot
+            resolve safely, such as device paths and alternate data streams, are treated as outside.
+          </dd>
+        </div>
+        <div>
+          <dt>Provider isolation</dt>
+          <dd>
+            Each provider's CLI starts with a sanitized environment: only the variables the operating
+            system and that CLI need, plus that provider's own. A Claude Code process never sees an
+            OpenAI key, and no KalCode-internal variable reaches any provider.
+          </dd>
+        </div>
+        {
+          signedBuilds && (
+            <div>
+              <dt>Signed installers and updates</dt>
+              <dd>
+                The Windows installer is Authenticode-signed, and the Mac app is signed with an Apple
+                Developer ID and notarized by Apple. Updates are signed: before installing one,
+                KalCode checks its SHA-256 checksum and its update signature, and on Windows the
+                installer's Authenticode signature too.
+              </dd>
+            </div>
+          )
+        }
         <div>
           <dt>Supply chain</dt>
           <dd>Lockfiles are committed, and dependency audits run in continuous integration.</dd>
@@ -76,35 +121,39 @@ const page = getPage("/security");
 
       <h2>Zero company AI cost: your provider, your account</h2>
       <p>
-        KalCode connects Claude Code, Codex and Gemini CLI through their documented integration
-        methods, using your own accounts. Model usage is billed by each provider under your
+        KalCode connects Claude Code and Codex through their documented integration methods,
+        using your own accounts; Codex runs on personal ChatGPT plans (Free, Go, Plus and Pro).
+        {GEMINI_AVAILABILITY.short} Model usage is billed by each provider under your
         account. KalCode holds no company provider credentials for your use, does not charge for,
         resell or meter provider usage, and never falls back to a KalCode-paid service. Your
-        provider credentials stay in your operating system's credential store.
+        provider sign-ins stay with each provider's own CLI, separately for every account you add.
       </p>
 
       <h2>Local voice</h2>
       <p>
-        KalVoice, in development, transcribes dictation with a speech model that runs on your own
+        {kalvoiceShipped ? "KalVoice" : "KalVoice, in development,"} transcribes dictation with a speech model that runs on your own
         computer. Audio is held in memory only while it is transcribed, then discarded: it is not
-        stored and not uploaded. The speech model is downloaded only with your consent and its
-        checksum is verified. Events record that a dictation or request happened, never its words.
+        stored and not uploaded. KalCode downloads its default speech model by itself from its signed
+        component catalog and verifies the signature and SHA-256 checksum before using it; if you
+        remove the model, it is not downloaded again on its own. Once speech is ready, KalCode also
+        downloads its on-device interpreter (about 850 MB) from the same signed catalog. Turn off
+        Prepare local intelligence automatically in Settings › KalVoice to download it yourself
+        instead. These downloads send no audio or text. Events record that a dictation or request
+        happened, never its words.
       </p>
 
       <h2>The permission model</h2>
       <p>
-        Every action an AI agent wants to take is checked against the permission mode you choose.
+        KalCode's permission engine checks every action an AI agent wants to take against the
+        permission mode you choose: Plan, Approve or Auto.
         Providers and their output are treated as untrusted input. KalVoice is not above the model:
         it cannot raise its own authority or enable Bypass. Consequential decisions are recorded in an
         audit log. Read the <a href="/docs/permissions">permission documentation</a> for details.
       </p>
 
-      <h2>Planned before release</h2>
+      <h2>Planned</h2>
       <ul>
-        <li>Workspace containment: path canonicalization and symlink-escape detection.</li>
-        <li>Provider isolation with sanitized environments and scoped credentials.</li>
-        <li>The permission engine with an audit log of consequential decisions.</li>
-        <li>Code-signed installers and signed updates.</li>
+        {!signedBuilds && <li>Code-signed installers and signed updates.</li>}
         <li>Server-side plan and usage checks, and verified billing webhooks, when paid plans launch.</li>
       </ul>
 

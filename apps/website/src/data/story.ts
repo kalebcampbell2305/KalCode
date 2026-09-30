@@ -118,7 +118,13 @@ export const MODES: readonly ModeInfo[] = [
   { id: "plan", label: "Plan", hint: "Read and plan only; nothing changes without a new mode", authority: 1 },
   { id: "approve", label: "Approve", hint: "Asks before changing files or running commands", authority: 2 },
   { id: "auto", label: "Auto", hint: "Runs routine work; asks for anything consequential", authority: 3 },
-  { id: "bypass", label: "Bypass", hint: "Runs without asking, except actions that leave this machine", authority: 4 },
+  {
+    id: "bypass",
+    label: "Bypass",
+    hint: "Runs without asking, except actions that leave this machine",
+    authority: 4,
+    planned: true,
+  },
   {
     id: "custom",
     label: "Custom",
@@ -676,6 +682,37 @@ export const THREADS: readonly Thread[] = [
   },
 ];
 
+/**
+ * Stable 0.1.6 ships with Gemini CLI unavailable (site.ts GEMINI_AVAILABILITY), so stages that name
+ * the Stable release draw the research thread as a Codex thread instead. It keeps the same id so
+ * the stage scripts still find it; the preview keeps the Gemini CLI thread above.
+ */
+export const STABLE_RESEARCH_THREAD: Thread = {
+  ...(THREADS.find((t) => t.id === "gemini-research") as Thread),
+  provider: "codex",
+  placeholder: "Ask Codex to change, explain or test something",
+  transcript: [
+    { t: "user", text: "compare rate-limit approaches for POST /signup, no code changes yet" },
+    { t: "item", verb: "Explored", arg: "", out: ["Read src/routes/signup.ts", "Searched 'rateLimit' in src/**"] },
+    { t: "item", verb: "Ran", arg: "redis-cli INFO keyspace", out: ["db0:keys=1284,expires=12"] },
+    {
+      t: "say",
+      text: "A sliding-window counter in Redis fits best: the API already keeps sessions there, and a fixed window would let a burst through at each minute boundary.",
+    },
+  ],
+  working: [{ verb: "Weighing sliding windows against fixed windows", sec: 12 }],
+};
+
+/** The sample threads a stage draws: Stable-labelled stages swap Gemini CLI for the Codex stand-in. */
+export function sampleThreads(stable: boolean): readonly Thread[] {
+  return stable ? THREADS.map((t) => (t.id === STABLE_RESEARCH_THREAD.id ? STABLE_RESEARCH_THREAD : t)) : THREADS;
+}
+
+/** A Gemini-styled status tail ("✦ …", "⠋ …") restyled for the Codex stand-in ("• …"). */
+export function sampleTail(tail: string | undefined, provider: ProviderId): string | undefined {
+  return tail && provider !== "gemini" ? tail.replace(/^[✦⠋]\s*/, "• ") : tail;
+}
+
 /** Threads open in a fresh, new pane ("+ New thread"). */
 export const FRESH_PLACEHOLDER: Record<ProviderId, string> = {
   claude: "Try “explain this repo”, or type / for commands",
@@ -818,6 +855,10 @@ export interface StoryStep {
   title: string;
   line: string;
   tag: string;
+  /** The tag once a Stable release is served ("{version}" is its version); see lib/stage-status.ts. */
+  stableTag?: string;
+  /** The description once a Stable release is served (no Gemini CLI thread is drawn then). */
+  stableDescribe?: string;
   /** Screen-reader description of what the stage shows at this step. */
   describe: string;
   scene: Partial<Scene>;
@@ -833,6 +874,7 @@ export const STORY: readonly StoryStep[] = [
     title: "One workspace for the whole project.",
     line: "Open a folder. Real terminals start inside it.",
     tag: "Development build",
+    stableTag: "In Stable {version}",
     describe: "The KalCode window opens on the atlas-api workspace with a PowerShell terminal running the dev server.",
     scene: { panes: ["shell"], focus: "shell", dock: "none", approval: "none", voice: "off", mission: 0 },
     play: "reveal",
@@ -843,6 +885,7 @@ export const STORY: readonly StoryStep[] = [
     title: "Claude Code, in a real workspace.",
     line: "Your own sign-in. Your own terminal.",
     tag: "Preview",
+    stableTag: "In Stable {version} as threads and terminals · provider panes not yet",
     describe: "A Claude Code pane reads the flaky test, edits reserve.ts with a four-line diff and runs the suite.",
     scene: {
       panes: ["claude-checkout"],
@@ -859,7 +902,7 @@ export const STORY: readonly StoryStep[] = [
     id: "codex",
     title: "Add Codex without leaving the window.",
     line: "Split, stack, keep both in view.",
-    tag: "Preview · splits are planned",
+    tag: "Preview · provider panes not in Stable yet",
     describe: "The window splits. A Codex pane below edits the signup route to validate input.",
     scene: {
       panes: ["claude-checkout", "codex-signup"],
@@ -877,7 +920,8 @@ export const STORY: readonly StoryStep[] = [
     id: "browser",
     title: "Check the result where the code is.",
     line: "A localhost preview docks beside the agents.",
-    tag: "Planned",
+    tag: "Preview",
+    stableTag: "Browser pane in Stable {version} · provider panes not yet",
     describe: "A browser docks on the right showing localhost:3000 with the signup limits page of the sample app.",
     scene: { panes: ["claude-checkout", "codex-signup"], dock: "browser", approval: "none", voice: "off", mission: 0 },
     still: "browser",
@@ -887,8 +931,11 @@ export const STORY: readonly StoryStep[] = [
     title: "See every thread at once.",
     line: "Status comes from runtime events, not from what a model says.",
     tag: "Development build · sample data",
+    stableTag: "In Stable {version} · sample data",
     describe:
       "The dock switches to the Dashboard: Claude Code working, Codex reviewing, Gemini CLI thinking, and a Claude Code thread that needs approval.",
+    stableDescribe:
+      "The dock switches to the Dashboard: Claude Code working, Codex reviewing and researching, and a Claude Code thread that needs approval.",
     scene: {
       panes: ["claude-checkout", "codex-signup"],
       dock: "dashboard",
@@ -903,6 +950,7 @@ export const STORY: readonly StoryStep[] = [
     title: "Approve every action that matters.",
     line: "Nothing leaves your rules without asking.",
     tag: "Development build · sample data",
+    stableTag: "In Stable {version} · sample data",
     describe:
       "Codex asks to run pnpm add zod. The approval card offers Deny, Allow for thread and Approve once; Approve once is chosen and Codex continues.",
     scene: {
@@ -920,6 +968,7 @@ export const STORY: readonly StoryStep[] = [
     title: "Speak your prompts.",
     line: `Hold ${PUSH_TO_TALK_KEY}, talk, release. The words land in the focused agent.`,
     tag: "Preview · in development",
+    stableTag: "In Stable {version}",
     describe:
       "The KalVoice panel listens, transcribes on the device, and types “also cover the 429 response in the signup test” into Claude Code.",
     scene: {
@@ -938,6 +987,7 @@ export const STORY: readonly StoryStep[] = [
     title: "Say what you need. Agents appear.",
     line: `Same key. Hold ${PUSH_TO_TALK_KEY}, say “Open two more agents”, and KalCode runs the command.`,
     tag: "Preview · in development",
+    stableTag: "Preview · creating agents by voice is not in Stable yet",
     describe:
       "A KalVoice command opens two more threads: Claude Code covering the 429 in the e2e suite, and Codex reviewing the change.",
     scene: {
@@ -978,6 +1028,10 @@ export interface DemoTab {
   title: string;
   line: string;
   tag: string;
+  /** The tag once a Stable release is served ("{version}" is its version); see lib/stage-status.ts. */
+  stableTag?: string;
+  /** The line once a Stable release is served (no Gemini CLI thread is drawn then). */
+  stableLine?: string;
   scene: Partial<Scene>;
   play?: StoryStep["play"];
 }
@@ -987,8 +1041,9 @@ export const DEMO_TABS: readonly DemoTab[] = [
     id: "multi-agent",
     label: "Multi-agent",
     title: "Four agents, one window.",
-    line: "Claude Code, Codex and Gemini CLI work side by side, and a mission ties them to one objective.",
-    tag: "Preview · missions are planned",
+    line: "Claude Code, Codex and Gemini CLI work at the same time, and a mission ties them to one objective.",
+    stableLine: "Claude Code and Codex work at the same time, and a mission ties them to one objective.",
+    tag: "Preview · missions and provider panes are not in Stable yet",
     scene: {
       view: "code",
       panes: ["claude-checkout", "codex-signup", "gemini-research", "claude-e2e"],
@@ -1006,6 +1061,7 @@ export const DEMO_TABS: readonly DemoTab[] = [
     title: "Speak into the focused agent.",
     line: `Hold ${PUSH_TO_TALK_KEY}, talk, release. Say a command and KalCode runs it instead.`,
     tag: "Preview · in development",
+    stableTag: "In Stable {version}",
     scene: {
       view: "code",
       panes: ["claude-checkout", "codex-signup"],
@@ -1023,6 +1079,7 @@ export const DEMO_TABS: readonly DemoTab[] = [
     title: "Approve every action that matters.",
     line: "Pick a mode. Anything it doesn’t cover waits for Deny, Allow for thread or Approve once.",
     tag: "Development build · sample data",
+    stableTag: "In Stable {version} · sample data",
     scene: {
       view: "code",
       panes: ["codex-signup"],
@@ -1039,6 +1096,7 @@ export const DEMO_TABS: readonly DemoTab[] = [
     title: "See every thread. Approve every action.",
     line: "Working, waiting and failed threads, with approvals first.",
     tag: "Development build · sample data",
+    stableTag: "In Stable {version} · sample data",
     scene: {
       view: "dashboard",
       panes: ["claude-checkout", "codex-signup"],
@@ -1053,7 +1111,8 @@ export const DEMO_TABS: readonly DemoTab[] = [
     label: "Code Mode",
     title: "Real terminals in your workspace.",
     line: "A PowerShell tab runs the dev server while Claude Code fixes a test, with the preview beside them.",
-    tag: "Development build · browser is planned",
+    tag: "Development build · sample data",
+    stableTag: "In Stable {version} · sample data",
     scene: {
       view: "code",
       panes: ["shell", "claude-checkout"],
