@@ -2,10 +2,10 @@
 // lands with the sonic logo; then the mark travels into the corner of the one KalCode window.
 import type React from "react";
 import { C } from "../brand/tokens";
-import { Bloom, Headline, cf, scene, useStage } from "../components/core";
+import { Bloom, cf, Headline, scene, useStage } from "../components/core";
+import { copy } from "../data/copy";
 import { clamp01, drift, ease, lerp, prog, shipHit, springIn } from "../motion";
 import { Symbol, Wordmark } from "../ui/kit";
-import { copy } from "../data/copy";
 
 export const Introduce: React.FC<{ frame: number }> = ({ frame }) => {
   const { W, H, portrait } = useStage();

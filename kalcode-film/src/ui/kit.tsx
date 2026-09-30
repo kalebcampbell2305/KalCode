@@ -2,6 +2,8 @@
 // Structure, labels, icons (lucide-react, same set as the app) and tokens follow the product;
 // sizes are scaled up for film legibility.
 import {
+  ArrowLeft,
+  ArrowRight,
   AudioLines,
   Bell,
   ChevronDown,
@@ -11,21 +13,19 @@ import {
   LayoutDashboard,
   type LucideIcon,
   MessagesSquare,
+  MoreHorizontal,
   PlugZap,
+  Plus,
   RotateCw,
   Search,
   Settings,
   ShieldCheck,
   SquareTerminal,
-  ArrowLeft,
-  ArrowRight,
-  Plus,
   X,
-  MoreHorizontal,
 } from "lucide-react";
 import type React from "react";
 import { Img, staticFile } from "remotion";
-import { C, FONT, R, panelSheen, shadowLit, shadowPanel } from "../brand/tokens";
+import { C, FONT, panelSheen, R, shadowLit, shadowPanel } from "../brand/tokens";
 
 export const S = 1.5; // film scale over the product's 14px body size
 

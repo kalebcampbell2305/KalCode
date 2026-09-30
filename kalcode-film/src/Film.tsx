@@ -2,16 +2,16 @@ import type React from "react";
 import { AbsoluteFill, useCurrentFrame, useVideoConfig } from "remotion";
 import "./brand/fonts";
 import { Backdrop, StageCtx } from "./components/core";
-import { Chaos } from "./scenes/Chaos";
-import { Introduce } from "./scenes/Introduce";
-import { Workspace } from "./scenes/Workspace";
-import { Providers } from "./scenes/Providers";
 import { AgentSwarm } from "./scenes/AgentSwarm";
-import { KalVoice } from "./scenes/KalVoice";
 import { BuildLoop } from "./scenes/BuildLoop";
+import { Chaos } from "./scenes/Chaos";
+import { EndCard } from "./scenes/EndCard";
+import { Introduce } from "./scenes/Introduce";
+import { KalVoice } from "./scenes/KalVoice";
+import { Providers } from "./scenes/Providers";
 import { ReleasePipeline } from "./scenes/ReleasePipeline";
 import { SelfHosting } from "./scenes/SelfHosting";
-import { EndCard } from "./scenes/EndCard";
+import { Workspace } from "./scenes/Workspace";
 
 // Every scene is a pure function of the absolute film frame; scenes decide their own
 // visibility window so overlaps and match cuts stay exact.

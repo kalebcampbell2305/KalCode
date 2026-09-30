@@ -3,7 +3,7 @@
 // accelerates inward to a single point and half a beat of silence.
 import type React from "react";
 import { C, FONT } from "../brand/tokens";
-import { CUE, Headline, Scrim, cf, cues, useStage } from "../components/core";
+import { CUE, cf, cues, Headline, Scrim, useStage } from "../components/core";
 import { copy } from "../data/copy";
 import { clamp01, drift, ease, lerp, prog, rng, springIn, terminalType } from "../motion";
 

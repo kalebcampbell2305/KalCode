@@ -5,7 +5,7 @@
 import type React from "react";
 import { Img, staticFile } from "remotion";
 import { C, FONT } from "../brand/tokens";
-import { camAt, Camera, LowerThird } from "../components/camera";
+import { Camera, camAt, LowerThird } from "../components/camera";
 import { Bloom, cf, scene, useStage } from "../components/core";
 import { copy } from "../data/copy";
 import { clamp01, drift, ease, lerp, prog, rng, springIn } from "../motion";

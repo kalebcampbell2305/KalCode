@@ -3,11 +3,11 @@
 // into a Dashboard pane; then the sidebar moves to Threads, where the agents live.
 import type React from "react";
 import { C } from "../brand/tokens";
-import { camAt, Camera, LowerThird } from "../components/camera";
+import { Camera, camAt, LowerThird } from "../components/camera";
 import { cf, scene, useStage } from "../components/core";
 import { copy } from "../data/copy";
 import { clamp01, drift, ease, lerp, magneticSnap, prog, springIn, terminalType } from "../motion";
-import { Cockpit, CodeHeader, PaneCanvas, lerpRect, type Rect } from "../ui/Cockpit";
+import { Cockpit, CodeHeader, lerpRect, PaneCanvas, type Rect } from "../ui/Cockpit";
 import { StatusChip } from "../ui/kit";
 import { BrowserBody, SitePage, TerminalBody, type Thread, type TLine } from "../ui/surfaces";
 import { ThreadsView } from "../ui/ThreadsView";

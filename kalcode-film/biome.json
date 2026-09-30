@@ -2,10 +2,18 @@
   "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
   "root": false,
   "extends": "//",
+  "files": {
+    "includes": ["**", "!out"]
+  },
   "linter": {
     "rules": {
-      "a11y": { "noSvgWithoutTitle": "off" },
-      "suspicious": { "noArrayIndexKey": "off", "noShadowRestrictedNames": "off" }
+      "a11y": {
+        "noSvgWithoutTitle": "off"
+      },
+      "suspicious": {
+        "noArrayIndexKey": "off",
+        "noShadowRestrictedNames": "off"
+      }
     }
   }
 }
