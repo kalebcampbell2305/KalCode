@@ -825,6 +825,8 @@ describe("gate", () => {
     const clean = gateForWorktree(policy, f.git, { base: "origin/main" });
     assert.equal(clean.clean, true);
     assert.equal(recordGate(f.git, clean, { status: "FAIL", results: [] }), null);
+    const subset = gateForWorktree(policy, f.git, { base: "origin/main", only: ["api"] });
+    assert.equal(recordGate(f.git, subset, { status: "PASS", results: [] }), null, "no receipt for an --only subset");
     const receipt = recordGate(f.git, clean, { status: "PASS", results: [] });
     assert.equal(JSON.parse(readFileSync(receipt, "utf8")).head, head);
     const list = spawnSync(process.execPath, [SHIP, "gate", "--list", "--repo", f.repo], { encoding: "utf8" });

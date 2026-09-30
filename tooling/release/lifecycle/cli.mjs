@@ -110,7 +110,7 @@ export async function lifecycleMain(argv, io = {}) {
     const receipt = recordGate(git, g, outcome);
     if (opts.json) log(JSON.stringify({ status: outcome.status, results: outcome.results, receipt }, null, 2));
     log(
-      `gate ${outcome.status}${receipt ? ` (receipt for ${g.head.slice(0, 12)})` : outcome.status === "PASS" ? " (no receipt: uncommitted changes)" : ""}`,
+      `gate ${outcome.status}${receipt ? ` (receipt for ${g.head.slice(0, 12)})` : outcome.status === "PASS" ? (only ? " (no receipt: --only ran a subset)" : " (no receipt: uncommitted changes)") : ""}`,
     );
     return outcome.status === "PASS" ? 0 : 1;
   }

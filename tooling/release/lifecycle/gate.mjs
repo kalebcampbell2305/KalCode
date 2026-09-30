@@ -143,14 +143,18 @@ export function gateForWorktree(policy, git, { base = "origin/main", platform = 
     base: { ref: base, commit: baseSha },
     head,
     clean,
+    partial: Boolean(only),
     classification,
     plan: selectGates(policy, classification, { platform, only }),
   };
 }
 
-/** A PASS receipt bound to HEAD, only for a clean tree (the checks ran against exactly that commit). */
+/**
+ * A PASS receipt bound to HEAD, only for a clean tree (the checks ran against exactly that commit) and only for
+ * the full gate: an `--only` subset never counts as the gate passing.
+ */
 export function recordGate(git, g, outcome, { platform = process.platform, now = Date.now } = {}) {
-  if (outcome.status !== "PASS" || !g.clean || !g.head) return null;
+  if (outcome.status !== "PASS" || !g.clean || !g.head || g.partial) return null;
   const path = join(stateDir(git.commonDir()), "gates", `${g.head}.json`);
   writeJsonAtomic(path, {
     schema: "kalcode-lifecycle-gate/v1",
