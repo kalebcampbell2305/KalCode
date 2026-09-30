@@ -534,10 +534,14 @@ impl DesktopRecognizers {
 
 impl RecognizerSource for DesktopRecognizers {
     fn ready(&self) -> Result<(), SttError> {
+        self.prepare().map(|_| ())
+    }
+
+    fn prepare(&self) -> Result<Arc<dyn SpeechRecognizer>, SttError> {
         if !ENGINE_AVAILABLE {
             return Err(SttError::EngineUnavailable);
         }
-        self.load_recognizer().map(|_| ())
+        self.load_recognizer()
     }
 
     fn recognizer(&self) -> Result<Arc<dyn SpeechRecognizer>, SttError> {
@@ -2606,12 +2610,17 @@ mod tests {
         }
     }
     struct ReadyModel;
+    impl SpeechRecognizer for ReadyModel {
+        fn transcribe(&self, _audio: &[f32]) -> Result<String, SttError> {
+            Ok(String::new())
+        }
+    }
     impl RecognizerSource for ReadyModel {
         fn ready(&self) -> Result<(), SttError> {
             Ok(())
         }
         fn recognizer(&self) -> Result<Arc<dyn SpeechRecognizer>, SttError> {
-            Err(SttError::ModelNotInstalled)
+            Ok(Arc::new(Self))
         }
     }
 
