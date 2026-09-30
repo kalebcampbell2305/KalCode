@@ -48,4 +48,4 @@ Checked 2026-09-30 against `origin/main` 210715ec and live kalcoded.com.
   | Red | #ef5f6b |
 
 - **Fonts:** Lexend Deca (UI), Lexend Exa / Giga (display, wordmark feel), JetBrains Mono (code). All are @fontsource packages in `packages/ui`.
-- **Logos:** `assets/branding/kalcode-*.png`, `kalvoice-*.png`.
+- **Logos:** the mascot is the only KalCode logo (the terminal globe is retired). The film uses `launch/assets/brand/kalcode-icon-1024.png` (the mascot app-icon tile, intro) and `kalcode-mascot-dark-1024.png` (the rim-lit mascot, end card), from brand commit 48b1881f; the KALCODE wordmark is `assets/branding/kalcode-wordmark.png`.

@@ -20,7 +20,7 @@ For the source of truth and what the film may claim, see `PRODUCTION.md`.
 | Time | Act |
 | --- | --- |
 | 0:00–0:05 | Chaos: 34 real KalCode windows in a depth tunnel. They collapse into a flash, then a black beat. |
-| 0:05–0:08 | "Now introducing" → KalCode symbol and wordmark (light-sweep reveal) → "An all-in-one AI software engineering workspace." |
+| 0:05–0:08 | "Now introducing" → KalCode mascot tile and wordmark (light-sweep reveal) → "An all-in-one AI software engineering workspace." |
 | 0:08–0:11 | The wordmark flies into the sidebar logo while the window assembles from its pieces. |
 | 0:11–0:19 | One workspace: a real terminal (`pnpm test`) → the Browser pane → Threads (Claude Code + Codex) → Providers › Accounts (Personal and Work for each). |
 | 0:19–0:27 | Multi-agent: four agent cards (Claude Code and Codex, two accounts each) lift out of the Dashboard, then the live Dashboard shows status changes. |
@@ -39,7 +39,7 @@ git apply launch/capture/film-fixture.patch            # capture-only fixture st
 (cd apps/desktop && cp ../../launch/capture/capture.mjs cap.tmp.mjs && node cap.tmp.mjs ../../launch/capture/plates)
 #    ... likewise capture_voice / capture_browser / capture_acts / capture_dashlive / capture_more
 git checkout -- apps/desktop                            # drop the staging patch
-python launch/tools/crops.py && python launch/tools/prep_proof.py && python launch/tools/prep_film.py
+python launch/tools/rebrand_plates.py && python launch/tools/crops.py && python launch/tools/prep_proof.py && python launch/tools/prep_film.py
 
 # 2. Scene, audio, render, deliver
 blender -b --factory-startup -P launch/blender/film.py   # writes launch/blender/film.blend + audio/film_cues.json
@@ -52,6 +52,7 @@ python launch/tools/deliver.py && python launch/tools/qa.py
 
 ## Honest notes
 
+- The mascot is the only KalCode logo; the retired terminal globe never appears. The UI captures predate the in-app switch, so `tools/rebrand_plates.py` puts the mascot mark into the captured sidebars and website headers (originals kept in `capture/plates_orig/`), and replaces the kalcoded.com home hero globe with the mascot for the chaos-act fragment.
 - The Browser pane's web content is composited. The `ui-test` build has no native web view, so the live kalcoded.com Download page, captured at the pane's own size, is placed into the real Browser pane.
 - Terminal output, thread names and repo content are staged fixtures: the kalcode workspace, real KalCode commit subjects, and sanitized paths (`C:\Users\you`). No emails, tokens or secrets appear.
 - KalVoice is shown with transcripts only, not a synthesized voice. Both phrases are real native grammar (`crates/kalvoice/src/grammar_sessions.rs`).
