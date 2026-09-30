@@ -45,6 +45,7 @@ mod resource_commands;
 mod runtime_shutdown;
 mod session_resolver;
 mod thread_commands;
+mod update_preparation;
 mod updater_commands;
 mod utility_commands;
 use runtime_shutdown::RuntimeShutdown;
@@ -552,7 +553,7 @@ pub fn run(removed_overrides: Vec<String>) {
                 &state.paths.data_dir,
                 &state.info.version,
                 option_env!("KALCODE_UPDATER_PUBLIC_KEY"),
-                Arc::new(move || shutdown_runtime(&updater_app)),
+                Arc::new(move || shutdown_for_update(&updater_app)),
             );
             app.manage(updater.clone());
             app.manage(state);
@@ -824,6 +825,7 @@ pub fn run(removed_overrides: Vec<String>) {
     app.run(|handle, event| {
         if let RunEvent::ExitRequested { api, code, .. } = event {
             let exit = handle.state::<runtime_shutdown::ExitControl>();
+            finish_update_restart(&exit, code);
             match begin_exit_attempt(&exit) {
                 ExitAttempt::Ready => {}
                 ExitAttempt::Pending => api.prevent_exit(),
@@ -869,14 +871,71 @@ pub fn run(removed_overrides: Vec<String>) {
 }
 
 fn shutdown_runtime(handle: &tauri::AppHandle) -> bool {
-    handle
-        .state::<RuntimeShutdown>()
-        .run(|| shutdown_runtime_once(handle))
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    if let Some(updater) = handle.try_state::<updater_commands::DesktopUpdaterState>()
+        && !updater.cancel_preparation_for_exit(Duration::from_secs(30))
+    {
+        updater.reopen_preparation();
+        return false;
+    }
+    let clean = shutdown_runtime_serialized(
+        handle,
+        deadline.saturating_duration_since(std::time::Instant::now()),
+    );
+    if !clean && let Some(updater) = handle.try_state::<updater_commands::DesktopUpdaterState>() {
+        updater.reopen_preparation();
+    }
+    clean
 }
 
-fn shutdown_runtime_once(handle: &tauri::AppHandle) -> bool {
+/// The updater owns its preparation participant until launch or cleanup. Claim exit before
+/// draining, so an ordinary quit either cancels preparation or waits for this handoff; neither
+/// path waits for its own participant while holding the serialized runtime shutdown mutex.
+fn shutdown_for_update(handle: &tauri::AppHandle) -> bool {
+    let exit = handle.state::<runtime_shutdown::ExitControl>();
+    claim_update_exit(&exit, || {
+        shutdown_runtime_serialized(handle, Duration::from_secs(30))
+    })
+}
+
+fn claim_update_exit(
+    exit: &runtime_shutdown::ExitControl,
+    shutdown: impl FnOnce() -> bool,
+) -> bool {
+    if begin_exit_attempt(exit) != ExitAttempt::Start {
+        return false;
+    }
+    if shutdown() {
+        // Keep requested=true and ready=false until the installer handoff. A simultaneous
+        // ExitRequested must not terminate the process between preflight and launch.
+        exit.update_quiesced
+            .store(true, std::sync::atomic::Ordering::Release);
+        true
+    } else {
+        finish_exit_attempt(exit, false);
+        false
+    }
+}
+
+fn finish_update_restart(exit: &runtime_shutdown::ExitControl, code: Option<i32>) {
+    if code == Some(tauri::RESTART_EXIT_CODE)
+        && exit
+            .update_quiesced
+            .load(std::sync::atomic::Ordering::Acquire)
+    {
+        finish_exit_attempt(exit, true);
+    }
+}
+
+fn shutdown_runtime_serialized(handle: &tauri::AppHandle, timeout: Duration) -> bool {
+    handle
+        .state::<RuntimeShutdown>()
+        .run(|| shutdown_runtime_once(handle, timeout))
+}
+
+fn shutdown_runtime_once(handle: &tauri::AppHandle, timeout: Duration) -> bool {
     if let Some(coordinator) = handle.try_state::<Arc<RuntimeCoordinator>>()
-        && !coordinator.drain_for_exit(Duration::from_secs(30))
+        && !coordinator.drain_for_exit(timeout)
     {
         return false;
     }

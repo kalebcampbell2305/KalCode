@@ -8,6 +8,9 @@ use std::sync::{Mutex, PoisonError};
 pub struct ExitControl {
     pub requested: std::sync::atomic::AtomicBool,
     pub ready: std::sync::atomic::AtomicBool,
+    /// The updater drained runtime work but still owns installer handoff. Only its subsequent
+    /// restart request may turn this proof into permission to exit.
+    pub update_quiesced: std::sync::atomic::AtomicBool,
     /// Set once `RunEvent::Exit` arrives: the event loop is gone and the main thread is blocked in
     /// the final cleanup, so work queued for the main thread would never run. Cleanup must not
     /// wait on it.

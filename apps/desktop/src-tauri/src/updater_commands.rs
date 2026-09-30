@@ -197,6 +197,8 @@ struct Inner {
     rollback: RollbackCache,
     prepared_dir: std::path::PathBuf,
     before_exit: BeforeUpdaterExit,
+    preparation: crate::update_preparation::UpdatePreparation,
+    preparation_ready: bool,
     /// Dropping the sender stops the periodic re-check timer.
     periodic_stop: Mutex<Option<Sender<()>>>,
 }
@@ -214,6 +216,7 @@ impl DesktopUpdaterState {
     ) -> Self {
         let update_dir = data_dir.join("updates");
         let target = UpdateTarget::current().ok();
+        let mut preparation_ready = false;
         let (journal, mut machine) = match UpdateJournal::load(update_dir.join("updater.json")) {
             Ok(mut journal) => {
                 let channel = journal.state().channel;
@@ -224,10 +227,22 @@ impl DesktopUpdaterState {
                     .as_ref()
                     .and_then(|attempt| attempt.binding.as_ref())
                     .is_none_or(|binding| Some(binding.target) == target);
-                match target_matches
-                    .then(|| journal.reconcile_startup(current_version))
-                    .transpose()
-                {
+                // The helper still owns any journaled macOS swap. Preserve it while sweeping
+                // abandoned preparations, before reconciliation changes the pending record.
+                let cleanup = installer::cleanup_startup(
+                    &update_dir.join("prepared"),
+                    journal
+                        .state()
+                        .install_attempt
+                        .as_ref()
+                        .and_then(|attempt| attempt.mac_swap.as_ref()),
+                );
+                preparation_ready = matches!(cleanup, Ok(true));
+                match cleanup.and_then(|_ready| {
+                    target_matches
+                        .then(|| journal.reconcile_startup(current_version))
+                        .transpose()
+                }) {
                     Ok(None) => {
                         machine.mark_failed("KalCode couldn't verify the previous update target.");
                     }
@@ -285,12 +300,32 @@ impl DesktopUpdaterState {
             rollback,
             prepared_dir: update_dir.join("prepared"),
             before_exit,
+            preparation: crate::update_preparation::UpdatePreparation::default(),
+            preparation_ready,
             periodic_stop: Mutex::new(None),
         }))
     }
 
     pub fn check_in_background(&self) {
         self.spawn_background_check(any_phase);
+    }
+
+    pub fn cancel_preparation_for_exit(&self, timeout: Duration) -> bool {
+        self.0.preparation.cancel_and_wait(timeout)
+    }
+
+    pub fn reopen_preparation(&self) {
+        self.0.preparation.reopen();
+    }
+
+    fn begin_preparation(&self) -> Result<crate::update_preparation::Preparation<'_>, UpdateError> {
+        if !self.0.preparation_ready {
+            return Err(UpdateError::new(
+                "update_cleanup_failed",
+                "KalCode couldn't safely recover an earlier update preparation. Restart KalCode and try again.",
+            ));
+        }
+        self.0.preparation.begin().ok_or_else(preparation_cancelled)
     }
 
     /// The launch check's pipeline, gated on `periodic_recheck_allowed`.
@@ -747,6 +782,14 @@ impl DesktopUpdaterState {
         token: OperationToken,
         update: PreparedUpdate,
     ) -> Result<(), UpdateError> {
+        let preparation = self.begin_preparation()?;
+        let cancel = || {
+            if preparation.cancelled() {
+                Err(preparation_cancelled())
+            } else {
+                Ok(())
+            }
+        };
         let public_key = self.key()?;
         verify_download(&update.bytes, &update.candidate.metadata)?;
         verify_signature_for_metadata(
@@ -766,9 +809,11 @@ impl DesktopUpdaterState {
             &update.candidate.metadata,
             &update.candidate.version,
             &self.0.current_version,
+            &cancel,
         )?;
         let binding = installer.binding().clone();
         let mac_swap = installer.mac_swap_attempt();
+        cancel()?;
         self.runtime().machine.check_token(token)?;
         self.record_attempt(
             InstallKind::Upgrade,
@@ -805,6 +850,14 @@ impl DesktopUpdaterState {
 
     /// The admitted restore. Only its owner reaches here; see `run_owned_operation`.
     fn restore_owned(&self, token: OperationToken, public_key: &str) -> Result<(), UpdateError> {
+        let preparation = self.begin_preparation()?;
+        let cancel = || {
+            if preparation.cancelled() {
+                Err(preparation_cancelled())
+            } else {
+                Ok(())
+            }
+        };
         let (artifact, bytes) = self
             .0
             .rollback
@@ -846,9 +899,11 @@ impl DesktopUpdaterState {
             &metadata,
             &version,
             &self.0.current_version,
+            &cancel,
         )?;
         let binding = installer.binding().clone();
         let mac_swap = installer.mac_swap_attempt();
+        cancel()?;
         self.runtime().machine.check_token(token)?;
         self.record_attempt(
             InstallKind::Rollback,
@@ -1184,6 +1239,13 @@ fn network_error() -> UpdateError {
     UpdateError::new(
         "update_network_failed",
         "KalCode couldn't download the update. Check your connection and try again.",
+    )
+}
+
+fn preparation_cancelled() -> UpdateError {
+    UpdateError::new(
+        "update_cancelled",
+        "KalCode is closing. The update preparation was cancelled.",
     )
 }
 

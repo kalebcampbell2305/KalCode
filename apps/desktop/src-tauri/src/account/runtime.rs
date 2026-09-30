@@ -203,13 +203,35 @@ struct SignOutGate {
 }
 
 /// Held for one sign-out's credential clearing and revocation; releasing it wakes the exit.
+#[cfg(any(test, feature = "e2e"))]
 struct SignOutObligation<'a>(&'a AccountRuntime);
 
+#[cfg(any(test, feature = "e2e"))]
 impl Drop for SignOutObligation<'_> {
     fn drop(&mut self) {
-        let mut gate = self.0.lock_sign_outs();
-        gate.running -= 1;
-        self.0.sign_outs_settled.notify_all();
+        self.0.finish_sign_out();
+    }
+}
+
+/// An account-command sign-out admitted before it is dispatched to the blocking pool.
+///
+/// Owning the runtime keeps both the admission and its release valid if the async command is
+/// cancelled before its blocking body starts. The only way to execute this permit is against the
+/// runtime that issued it, so callers cannot swap an admission between account runtimes.
+pub(crate) struct SignOutPermit(Arc<AccountRuntime>);
+
+impl SignOutPermit {
+    pub(crate) fn logout(self) -> Result<AccountSnapshot, AccountRuntimeError> {
+        let runtime = Arc::clone(&self.0);
+        let result = runtime.logout_admitted();
+        drop(self);
+        result
+    }
+}
+
+impl Drop for SignOutPermit {
+    fn drop(&mut self) {
+        self.0.finish_sign_out();
     }
 }
 
@@ -948,10 +970,16 @@ impl AccountRuntime {
         self.fetch_authority(generation)
     }
 
+    #[cfg(any(test, feature = "e2e"))]
     pub fn logout(&self) -> Result<AccountSnapshot, AccountRuntimeError> {
         // Registered before revoking, so an exit preflight either waits for this sign-out to
         // clear credentials or has already sealed and this sign-out never starts.
         let _obligation = self.begin_sign_out()?;
+        self.logout_admitted()
+    }
+
+    /// Performs the sign-out after the caller has registered an obligation with the exit gate.
+    fn logout_admitted(&self) -> Result<AccountSnapshot, AccountRuntimeError> {
         let generation = self.advance_generation();
         let _lane = self.lock_lane()?;
         if !self.is_current(generation) {
@@ -972,7 +1000,22 @@ impl AccountRuntime {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    #[cfg(any(test, feature = "e2e"))]
     fn begin_sign_out(&self) -> Result<SignOutObligation<'_>, AccountRuntimeError> {
+        self.admit_sign_out()?;
+        Ok(SignOutObligation(self))
+    }
+
+    /// Command-boundary admission. This is synchronous so an accepted IPC sign-out is visible to
+    /// exit before dispatch, coordinator draining, or credential work can race with it.
+    pub(crate) fn begin_sign_out_command(
+        self: &Arc<Self>,
+    ) -> Result<SignOutPermit, AccountRuntimeError> {
+        self.admit_sign_out()?;
+        Ok(SignOutPermit(Arc::clone(self)))
+    }
+
+    fn admit_sign_out(&self) -> Result<(), AccountRuntimeError> {
         let mut gate = self.lock_sign_outs();
         if gate.sealed_for_exit {
             return Err(AccountRuntimeError {
@@ -981,8 +1024,19 @@ impl AccountRuntime {
                 retryable: true,
             });
         }
-        gate.running += 1;
-        Ok(SignOutObligation(self))
+        gate.running = gate.running.checked_add(1).ok_or(AccountRuntimeError {
+            code: "account_runtime_unavailable",
+            message: "The account service is unavailable. Restart KalCode and try again.",
+            retryable: false,
+        })?;
+        Ok(())
+    }
+
+    fn finish_sign_out(&self) {
+        let mut gate = self.lock_sign_outs();
+        debug_assert!(gate.running > 0, "sign-out obligation released twice");
+        gate.running -= 1;
+        self.sign_outs_settled.notify_all();
     }
 
     /// Exit preflight: waits up to `timeout` for every running sign-out to finish clearing

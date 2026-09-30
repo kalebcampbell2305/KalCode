@@ -63,6 +63,37 @@ fn bounded_cleanup_coalesces_duplicates_and_a_failed_attempt_remains_retryable()
 const JOIN_LIMIT: Duration = Duration::from_secs(30);
 
 #[test]
+fn updater_handoff_excludes_quit_until_launch_and_failed_preflight_reopens_exit() {
+    let exit = ExitControl::default();
+    super::finish_update_restart(&exit, Some(tauri::RESTART_EXIT_CODE));
+    assert!(!exit.ready.load(Ordering::Acquire));
+    assert!(!super::claim_update_exit(&exit, || false));
+    assert!(!exit.requested.load(Ordering::Acquire));
+    assert!(!exit.update_quiesced.load(Ordering::Acquire));
+    assert!(super::claim_update_exit(&exit, || true));
+    assert_eq!(begin_exit_attempt(&exit), ExitAttempt::Pending);
+    assert!(!exit.ready.load(Ordering::Acquire));
+    assert!(!super::claim_update_exit(&exit, || panic!(
+        "duplicate updater must not drain"
+    )));
+    // Only the updater's restart after a launch failure completes this claim. An ordinary quit
+    // between failure and restart arming cannot steal the exit and lose the restart intent.
+    super::finish_update_restart(&exit, Some(0));
+    assert_eq!(begin_exit_attempt(&exit), ExitAttempt::Pending);
+    super::finish_update_restart(&exit, Some(tauri::RESTART_EXIT_CODE));
+    assert_eq!(begin_exit_attempt(&exit), ExitAttempt::Ready);
+}
+
+#[test]
+fn quit_winning_exit_admission_prevents_installer_handoff() {
+    let exit = ExitControl::default();
+    assert_eq!(begin_exit_attempt(&exit), ExitAttempt::Start);
+    assert!(!super::claim_update_exit(&exit, || panic!(
+        "quit owns exit"
+    )));
+}
+
+#[test]
 fn exit_event_after_a_completed_exit_request_does_not_drain_again() {
     // Red close button / app.exit / updater: ExitRequested drained, then the loop ends.
     let exit = ExitControl::default();

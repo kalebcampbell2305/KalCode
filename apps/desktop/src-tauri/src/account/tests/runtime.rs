@@ -1972,6 +1972,17 @@ fn exit_preflight_waits_for_an_inflight_sign_out_to_clear_credentials_before_exi
     let runtime = Arc::new(runtime(api.clone(), store.clone()));
     runtime.bootstrap().expect("bootstrap");
     let lease = runtime.acquire_active_lease().expect("lease");
+    // This is the account command's synchronous linearization point, before blocking-pool
+    // dispatch and before coordinator draining. Exit must observe the accepted sign-out even
+    // though its credential-clearing body has not started yet.
+    let sign_out = runtime
+        .begin_sign_out_command()
+        .expect("sign-out command admission");
+    let coordinator = crate::runtime_coordinator::RuntimeCoordinator::new(runtime.clone());
+    assert_eq!(coordinator.lifecycle.pending(), (false, 0));
+    assert!(!coordinator.drain_for_exit(std::time::Duration::from_millis(20)));
+    assert!(stored_session_present(&store));
+
     let gate = Arc::new(PollGate::default());
     *api.refresh_gate.lock().expect("refresh gate") = Some(gate.clone());
 
@@ -1983,10 +1994,7 @@ fn exit_preflight_waits_for_an_inflight_sign_out_to_clear_credentials_before_exi
     };
     gate.wait_until_entered();
     // Sign-out revokes authority, then waits for the lane: credentials are not cleared yet.
-    let logging_out = {
-        let runtime = runtime.clone();
-        std::thread::spawn(move || runtime.logout())
-    };
+    let logging_out = { std::thread::spawn(move || sign_out.logout()) };
     for _ in 0..10_000 {
         if !runtime.validate_active_lease(&lease) {
             break;
@@ -1997,7 +2005,6 @@ fn exit_preflight_waits_for_an_inflight_sign_out_to_clear_credentials_before_exi
 
     // The install/quit preflight: lifecycle work is idle, but the sign-out has not finished, so
     // exiting now would leave a valid stored session for the next launch. It must refuse.
-    let coordinator = crate::runtime_coordinator::RuntimeCoordinator::new(runtime.clone());
     assert_eq!(coordinator.lifecycle.pending(), (false, 0));
     assert!(!coordinator.drain_for_exit(std::time::Duration::from_millis(200)));
     assert!(stored_session_present(&store));
@@ -2021,6 +2028,43 @@ fn exit_preflight_waits_for_an_inflight_sign_out_to_clear_credentials_before_exi
         .logout()
         .expect_err("sign-out after the exit commit");
     assert_eq!(refused.code, "account_exit_in_progress");
+}
+
+#[test]
+fn abandoned_sign_out_command_releases_the_exit_waiter() {
+    let store = Arc::new(TestStore::default());
+    let runtime = Arc::new(runtime(Arc::new(FakeApi::default()), store));
+    let coordinator = crate::runtime_coordinator::RuntimeCoordinator::new(runtime.clone());
+    let sign_out = runtime
+        .begin_sign_out_command()
+        .expect("sign-out command admission");
+
+    assert!(!coordinator.drain_for_exit(std::time::Duration::from_millis(20)));
+    drop(sign_out);
+    assert!(coordinator.drain_for_exit(std::time::Duration::from_secs(1)));
+}
+
+#[test]
+fn denied_sign_out_command_has_no_account_or_credential_side_effects() {
+    let store = Arc::new(TestStore::default());
+    let session =
+        SessionSecret::new(format!("kcs_{}", "a".repeat(43)), 1_900_000_000).expect("session");
+    AccountSessionStore::new(store.as_ref())
+        .expect("store")
+        .save(Some(&session), None)
+        .expect("seed");
+    let runtime = Arc::new(runtime(Arc::new(FakeApi::default()), store.clone()));
+    let before = runtime.snapshot();
+    let coordinator = crate::runtime_coordinator::RuntimeCoordinator::new(runtime.clone());
+    assert!(coordinator.drain_for_exit(std::time::Duration::from_secs(1)));
+
+    let refused = runtime
+        .begin_sign_out_command()
+        .err()
+        .expect("exit-sealed sign-out must be denied");
+    assert_eq!(refused.code, "account_exit_in_progress");
+    assert_eq!(runtime.snapshot(), before);
+    assert!(stored_session_present(&store));
 }
 
 #[test]
