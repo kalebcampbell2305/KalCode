@@ -1,6 +1,6 @@
 import type { SurfaceId } from "@kalcode/protocol";
-import kalcodeGlobe362 from "../../assets/brand/kalcode-globe-362.webp";
-import kalcodeGlobe724 from "../../assets/brand/kalcode-globe-724.webp";
+import kalcodeMascot362 from "../../assets/brand/kalcode-mascot-362.webp";
+import kalcodeMascot724 from "../../assets/brand/kalcode-mascot-724.webp";
 import kalvoiceGlobe300 from "../../assets/brand/kalvoice-globe-300.webp";
 import kalvoiceGlobe600 from "../../assets/brand/kalvoice-globe-600.webp";
 import { SURFACES } from "../../shell/navigation.tsx";
@@ -62,13 +62,13 @@ export function GatedSurface({ id }: { id: SurfaceId }) {
             />
           ) : (
             <img
-              src={kalcodeGlobe362}
-              srcSet={`${kalcodeGlobe362} 362w, ${kalcodeGlobe724} 724w`}
+              src={kalcodeMascot362}
+              srcSet={`${kalcodeMascot362} 362w, ${kalcodeMascot724} 724w`}
               sizes="15rem"
               width={362}
               height={362}
               alt=""
-              className={styles.globe}
+              className={styles.mascot}
             />
           )}
         </figure>

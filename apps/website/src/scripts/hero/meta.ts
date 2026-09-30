@@ -1,12 +1,14 @@
 /**
- * Geometry of the KalCode symbol inside its square (normalised 0..1, y down), as measured by the
- * brand pipeline and used by `tooling/generate-hero-layers.py`. Keep the three in sync.
+ * Geometry of the KalCode mascot inside the hero square (normalised 0..1, y down), as placed by
+ * `tooling/generate-hero-layers.py`. Keep the two in sync. The page layout (styles/hero.css,
+ * critical.css) still anchors the square by the old symbol's centre (0.5211); the mascot's feet
+ * sit just above the entry point, clear of the wordmark below.
  */
-export const SPHERE_X = 0.493;
-export const SPHERE_Y = 0.5211;
-export const SPHERE_R = 0.2807;
-/** Where the energy stream meets the sphere: its lowest point, just inside the rim. */
-export const ENTRY_Y = SPHERE_Y + SPHERE_R * 0.985;
+export const FIGURE_X = 0.493;
+/** Where the energy stream meets the mascot: just under its feet. */
+export const ENTRY_Y = 0.762;
+/** The top of the mascot's head (the upward thread leaves from just inside it). */
+export const HEAD_Y = 0.07;
 
 /** Generated layers (public/assets/hero). */
 export const FX_URL = "/assets/hero/orb-fx-512.webp";
