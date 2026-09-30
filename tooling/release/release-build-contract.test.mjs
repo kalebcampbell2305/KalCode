@@ -112,7 +112,7 @@ test("the real Windows producer supplies the aggregate publisher's target-and-ch
   );
   assert.match(
     updaterManifestSource,
-    /createWindowsManifest\([\s\S]*\{ \.\.\.input, requestedChannel, publishedAt, notes, qaPhase \},[\s\S]*input\.target/,
+    /createWindowsManifest\([\s\S]*\{ \.\.\.input, requestedChannel, publishedAt, notes, qaPhase: artifactQaPhase\(input, qaPhase\) \},[\s\S]*input\.target/,
   );
 });
 
