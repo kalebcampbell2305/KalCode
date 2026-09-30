@@ -3,11 +3,14 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 
 test.describe("Account", () => {
-  test("holds new paid purchases until the release is enabled", async ({ page }) => {
+  // The production build opens checkout (apps/website/.env.production); checkout-enabled.spec.ts
+  // covers the purchase flow itself.
+  test("opens paid purchases in the production build", async ({ page }) => {
     await page.goto("/account");
     const purchases = page.locator("[data-checkout-tier]");
     await expect(purchases).toHaveCount(3);
-    for (const purchase of await purchases.all()) await expect(purchase).toBeDisabled();
+    for (const purchase of await purchases.all()) await expect(purchase).toBeEnabled();
+    await expect(page.locator("[data-checkout-closed]")).toHaveCount(0);
     await expect(page.locator("[data-billing-portal]")).toBeEnabled();
   });
   test("is a noindex passwordless account surface with truthful account boundaries", async ({ page }) => {

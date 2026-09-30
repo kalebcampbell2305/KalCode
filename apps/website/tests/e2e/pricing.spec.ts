@@ -36,10 +36,13 @@ test.describe("pricing", () => {
     await expect(answer).toBeHidden();
   });
 
-  test("never lists a private tier or sells anything", async ({ page }) => {
+  test("never lists a private tier and sends buyers to their account", async ({ page }) => {
     await page.goto("/pricing");
-    await expect(page.locator("main")).not.toContainText("OWNER");
-    await expect(page.locator("main")).toContainText("nothing is for sale today");
+    const main = page.locator("main");
+    await expect(main).not.toContainText("OWNER");
+    await expect(main).toContainText("Paid plans are open");
+    await expect(main).not.toContainText("nothing is for sale today");
+    await expect(main.getByRole("link", { name: /Choose a plan in your account/ })).toHaveAttribute("href", "/account");
   });
 
   test("uses KalVoice Requests and keeps dictation and connected-provider inference outside the meter", async ({

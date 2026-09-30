@@ -15,6 +15,9 @@ import Base from "../layouts/Base.astro";
 import { getPage, planSummary } from "../lib/site";
 
 const page = getPage("/pricing");
+// Paid plans open with the same strict build flag as the account page's checkout buttons
+// (docs/BILLING.md §9); closed, the page reads exactly as before.
+const checkoutOpen = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
 
 /** The plan most people should pick; drawn with an accent rule, never as a purchase button. */
 const FEATURED = "pro";
@@ -76,10 +79,15 @@ const faq = [
     q: "Are permission modes limited by plan?",
     a: "No. Permission modes are safety controls, never a paid extra. In 0.1.6, threads run in Plan, Approve or Auto on every plan; Bypass and Custom are planned.",
   },
-  {
-    q: "When can I buy a plan?",
-    a: "At launch. Billing is not open yet. Early-access members hear first when plans open.",
-  },
+  checkoutOpen
+    ? {
+        q: "How do I buy a plan?",
+        a: "Sign in on your account page and choose Pro, MAX or MAX 2X. Checkout opens on Stripe's hosted page. Plans renew monthly until you cancel them from Manage billing.",
+      }
+    : {
+        q: "When can I buy a plan?",
+        a: "At launch. Billing is not open yet. Early-access members hear first when plans open.",
+      },
   {
     q: "What do the plans include?",
     a: "The prices and monthly KalVoice Request allowances shown here are the current plan catalog. Provider connections and local dictation remain unlimited on every plan.",
@@ -95,7 +103,7 @@ const faq = [
     backdrop="nebula"
     title="Pricing"
     lead="Every plan runs every provider in Plan, Approve and Auto modes. Plans differ in KalVoice Requests — your AI usage stays on your own account."
-    status="Plans open at launch · nothing is for sale today"
+    status={checkoutOpen ? "Paid plans are open · subscribe from your account" : "Plans open at launch · nothing is for sale today"}
   />
 
   <section class="world-section" aria-labelledby="plans-title">
@@ -156,7 +164,7 @@ const faq = [
       </div>
       <p class="section-foot">
         <span>Local dictation is unlimited. Provider inference stays on your connected provider account.</span>
-        <a class="text-link" href="/docs/kalvoice">How KalVoice Requests are counted <Icon name="arrow-right" /></a>
+        <a class="text-link" href="/docs/kalvoice">How KalVoice Requests are counted <Icon name="arrow-right" /></a>{checkoutOpen && <a class="text-link" href="/account">Choose a plan in your account <Icon name="arrow-right" /></a>}
       </p>
     </div>
   </section>
@@ -180,5 +188,5 @@ const faq = [
     </div>
   </section>
 
-  <Closing title="Hear first when plans open." />
+  <Closing title={checkoutOpen ? "Start on Free. Upgrade any time." : "Hear first when plans open."} />
 </Base>

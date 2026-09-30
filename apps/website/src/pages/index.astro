@@ -20,6 +20,8 @@ const page = getPage("/");
 const cta = downloadCta();
 // KalVoice is described as shipped only while /download serves a signed Stable release.
 const kalvoiceShipped = servedStableRelease(RELEASES) !== null;
+// Paid plans open with the account page's strict checkout build flag (docs/BILLING.md §9).
+const checkoutOpen = import.meta.env.PUBLIC_CHECKOUT_ENABLED === "true";
 
 // Compose the story from the demos that exist (lib/stage.ts): a section never renders empty.
 const workspaceStage = firstStage("TryKalCode", "AppWindow");
@@ -348,7 +350,7 @@ const policies = [
             Your AI usage stays on your own account.
           </p>
           <a class="button button--secondary" href="/pricing">Compare plans <Icon name="arrow-right" /></a>
-          <p class="pricing-band__note">Plans open at launch. Nothing is for sale today.</p>
+          <p class="pricing-band__note">{checkoutOpen ? "Paid plans are open. Subscribe from your account." : "Plans open at launch. Nothing is for sale today."}</p>
         </header>
         <ul class="plan-cards" role="list">
           {
