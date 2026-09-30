@@ -22,6 +22,8 @@ tempfile = "3"
 
 [patch.crates-io]
 portable-pty = { path = "third_party/portable-pty" }
+# tao 0.35.3 + upstream c704261c (Windows reentrant input-lock deadlock); see third_party/tao/KALCODE_PATCH.md.
+tao = { path = "third_party/tao" }
 
 [workspace.lints.rust]
 # `deny`, not `forbid`: exactly one audited call site (apps/desktop/src-tauri/src/main.rs)
