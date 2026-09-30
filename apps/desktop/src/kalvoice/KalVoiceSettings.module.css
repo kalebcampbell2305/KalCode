@@ -82,7 +82,7 @@
   border-top: 0;
 }
 
-/* Needs you: neutral emphasized (amber is reserved for paused). */
+/* Needs you: amber (waiting for you), emphasized. */
 .note {
   margin-top: var(--space-2);
   max-width: 50ch;

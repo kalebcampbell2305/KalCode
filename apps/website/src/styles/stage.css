@@ -14,13 +14,13 @@
 /* ================================================================ shared bits */
 
 /*
- * Status accents (owner spec): waiting for you (Needs approval, Needs your reply) is neutral
- * grey; amber is reserved for Paused. The desktop app follows in Z7.
+ * Status accents (owner spec, same as the desktop app): waiting for you (Needs approval, Needs
+ * your reply) is amber, and Paused shares the amber.
  */
 :root,
 [data-theme] {
-  --kc-attention: var(--color-idle);
-  --kc-attention-soft: var(--color-idle-soft);
+  --kc-attention: var(--color-waiting);
+  --kc-attention-soft: var(--color-waiting-soft);
   --kc-paused: var(--color-waiting);
   --kc-paused-soft: var(--color-waiting-soft);
 }

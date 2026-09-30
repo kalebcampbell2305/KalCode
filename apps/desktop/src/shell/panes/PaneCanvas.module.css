@@ -87,7 +87,6 @@
     transparent 360deg
   );
   content: "";
-  filter: drop-shadow(0 0 4px var(--color-accent));
   opacity: 0;
   pointer-events: none;
   -webkit-mask:

@@ -88,7 +88,22 @@ test.describe("active pane focus", () => {
       await expect(second).toHaveAttribute("data-focused", "true");
       expect((await trace(second)).name).toContain("pane-trace");
       expect((await trace(first)).content).toBe("none");
+
+      // Focus coming back replays the trace on the first terminal.
+      await first.locator(".xterm-screen").click();
+      await expect(first).toHaveAttribute("data-focused", "true");
+      expect((await trace(first)).name).toContain("pane-trace");
+      expect((await trace(second)).content).toBe("none");
     });
+  });
+
+  test("reduced motion skips the edge trace", async ({ page }) => {
+    await openCode(page);
+    const pane = panes(page).nth(0);
+    await pane.locator(".xterm-screen").click();
+    await expect(pane).toHaveAttribute("data-terminal", "true");
+    const duration = await pane.evaluate((element) => getComputedStyle(element, "::after").animationDuration);
+    expect(duration).toBe("0s");
   });
 
   test("KalVoice keeps the captured pane visibly targeted while focus moves", async ({ page }) => {

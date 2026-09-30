@@ -346,7 +346,7 @@ mod tests {
         assert_eq!(DisplayStatus::Done.tone(), StatusTone::Done);
         assert_eq!(DisplayStatus::Failed.tone(), StatusTone::Failed);
         assert_eq!(DisplayStatus::Recovering.tone(), StatusTone::Recovering);
-        // Amber is reserved for PAUSED.
+        // Only PAUSED maps to the paused tone.
         let amber: Vec<_> = DisplayStatus::ALL
             .into_iter()
             .filter(|s| s.tone() == StatusTone::Paused)
