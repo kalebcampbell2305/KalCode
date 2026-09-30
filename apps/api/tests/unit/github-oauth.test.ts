@@ -63,7 +63,7 @@ describe("GitHub OAuth", () => {
       "https://api.github.com/user/emails",
     ]);
     for (const [, init] of fetcher.mock.calls) {
-      expect(init).toMatchObject({ redirect: "error" });
+      expect(init).toMatchObject({ redirect: "manual" });
       expect(init?.signal).toBeInstanceOf(AbortSignal);
     }
   });
@@ -90,15 +90,59 @@ describe("GitHub OAuth", () => {
 
     const [tokenUrl, tokenInit] = fetcher.mock.calls[0] ?? [];
     expect(tokenUrl).toBe("https://github.com/login/oauth/access_token");
-    expect(tokenInit).toMatchObject({ method: "POST", redirect: "error" });
+    expect(tokenInit).toMatchObject({ method: "POST", redirect: "manual" });
     expect(tokenInit?.signal).toBeInstanceOf(AbortSignal);
     const [revokeUrl, revokeInit] = fetcher.mock.calls[1] ?? [];
     expect(revokeUrl).toBe("https://api.github.com/applications/Iv1.testclient/token");
-    expect(revokeInit).toMatchObject({ method: "DELETE", redirect: "error" });
+    expect(revokeInit).toMatchObject({ method: "DELETE", redirect: "manual" });
     expect(revokeInit?.signal).toBeInstanceOf(AbortSignal);
     expect(JSON.parse(revokeInit?.body as string)).toEqual({ access_token: "provider-token" });
     expect(new Headers(revokeInit?.headers).get("authorization")).toMatch(/^Basic /);
   });
+
+  it.each([301, 302, 303, 307, 308])(
+    "rejects a %i redirect instead of following it at every provider endpoint",
+    async (status) => {
+      const redirect = () =>
+        new Response(null, {
+          status,
+          headers: { location: "https://redirect-target.invalid/never-requested" },
+        });
+      const cases = [
+        {
+          fetcher: vi.fn<typeof fetch>().mockResolvedValueOnce(redirect()),
+          run: (fetcher: typeof fetch) => exchangeGitHubCode(fetcher, CONFIG, "oauth-code", "a".repeat(43)),
+          urls: ["https://github.com/login/oauth/access_token"],
+        },
+        {
+          fetcher: vi.fn<typeof fetch>().mockResolvedValueOnce(redirect()),
+          run: (fetcher: typeof fetch) => fetchVerifiedGitHubIdentity(fetcher, "provider-token"),
+          urls: ["https://api.github.com/user"],
+        },
+        {
+          fetcher: vi
+            .fn<typeof fetch>()
+            .mockResolvedValueOnce(new Response(JSON.stringify({ id: 123456 }), { status: 200 }))
+            .mockResolvedValueOnce(redirect()),
+          run: (fetcher: typeof fetch) => fetchVerifiedGitHubIdentity(fetcher, "provider-token"),
+          urls: ["https://api.github.com/user", "https://api.github.com/user/emails"],
+        },
+        {
+          fetcher: vi.fn<typeof fetch>().mockResolvedValueOnce(redirect()),
+          run: (fetcher: typeof fetch) => revokeGitHubToken(fetcher, CONFIG, "provider-token"),
+          urls: ["https://api.github.com/applications/Iv1.testclient/token"],
+        },
+      ];
+      for (const { fetcher, run, urls } of cases) {
+        await expect(run(fetcher)).rejects.toThrow("identity unavailable");
+        expect(fetcher.mock.calls.map(([url]) => url)).toEqual(urls);
+        for (const [, init] of fetcher.mock.calls) {
+          expect(init).toMatchObject({ redirect: "manual" });
+          expect(init?.signal).toBeInstanceOf(AbortSignal);
+        }
+      }
+    },
+  );
 
   it("fails closed when GitHub does not confirm token revocation", async () => {
     const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(null, { status: 500 }));

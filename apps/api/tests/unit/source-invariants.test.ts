@@ -109,7 +109,7 @@ describe("zero company AI cost", () => {
     expect(oauth).toContain('"https://github.com/login/oauth/authorize"');
     expect(oauth).toContain('"https://github.com/login/oauth/access_token"');
     expect(oauth).toContain('"https://api.github.com/user"');
-    expect(oauth).toContain('redirect: "error"');
+    expect(oauth.match(/redirect: "manual"/g)).toHaveLength(4);
     const stripe = read(join(API_DIR, "worker", "lib", "stripe.ts"));
     expect(stripe).toContain('"https://api.stripe.com/v1"');
     expect(stripe).toContain('redirect: "manual"');
